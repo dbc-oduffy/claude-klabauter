@@ -21,7 +21,7 @@ from typing import Optional
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
-    HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_HELD_ROWS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
+    HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
     stamp_run_stage_at,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
@@ -73,7 +73,6 @@ def write_halt_marker(
     blocking_items: Optional[list] = None,
     reason: Optional[str] = None,
     next_action: Optional[dict] = None,
-    held_rows: Optional[list] = None,
 ) -> Path:
     """Write the `halted` marker into `record_dir` (created if absent); return its path.
 
@@ -91,8 +90,6 @@ def write_halt_marker(
         payload[HALT_BLOCKING_FIELD] = list(blocking)
     if blocking_items is not None:
         payload[HALT_BLOCKING_ITEMS_FIELD] = list(blocking_items)
-    if held_rows is not None:
-        payload[HALT_HELD_ROWS_FIELD] = list(held_rows)
     if reason:
         payload[HALT_REASON_FIELD] = reason
     if next_action is not None and (is_refire_next_action(next_action) or is_exit_next_action(next_action)):
@@ -299,12 +296,12 @@ def mark_resumed(record_dir: Path) -> bool:
 
 
 def mark_landed(record_dir: Path, sha: str) -> bool:
-    """Rewrite a `halted` or `resumed` marker as `landed` at `sha`; False and no write for any other status.
+    """Rewrite a `halted` marker as `landed` at `sha`; False and no write when no halted marker is present.
 
     A `landed` marker is skipped by `halted_run_for` / `halted_ask_run_for`, so a refire no longer resumes it.
     """
     marker = _read(Path(record_dir))
-    if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
+    if marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha})
     _index_call("remove_run", record_dir)

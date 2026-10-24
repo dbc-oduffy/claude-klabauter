@@ -152,7 +152,8 @@ def _halted(root: Path, run_id: str) -> bool:
     """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
     the TTL and its declaration contests no live write. Its declared writes stay held against
     another run's carry, while they carry hunks attributable to it, until it resumes, ages out, or
-    `halted_hold_release.release_reason` frees it (`halted_run_write_claims`). A `resumed` marker is live again."""
+    `halted_hold_release.release_reason` frees it (`halted_run_write_claims`). A `resumed` marker is
+    live again."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:

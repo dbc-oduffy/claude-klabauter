@@ -122,14 +122,67 @@ def _extra_declared(root: Path, run_id: str) -> set:
     return out
 
 
+def _head_blobs(root: Path, paths: set) -> dict:
+    """`{path: HEAD blob id or None}` for `paths`, read in-process (no spawn)."""
+    from coordinator_core.git import git_state
+
+    found = git_state.head_blobs(root, sorted(paths))
+    return {p: (found[p][1] if p in found else None) for p in paths}
+
+
+def _own_dirt(root: Path, run_id: str, path: str, head: Optional[dict] = None) -> bool:
+    """Whether the current bytes at `path` are `run_id`'s own work, judged from its records: a
+    `kept.json` chunk fingerprint equal to the file, or a manifest `write_baseline` entry (the
+    pre-stage fingerprint) the file no longer equals while HEAD still holds that baseline. A baseline
+    HEAD has moved past (`head[path]` differs; `head` None counts as moved) is no evidence: the
+    difference is the landed base, not this run's edit. A run that recorded neither, or whose
+    recorded blob differs from the file, owns none of it."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
+
+    try:
+        rdir = record_dir(root, run_id)
+    except ValueError:
+        return False
+    current = kept_work.fingerprint(root, path)
+    if current is None:
+        return False
+    for chunk in kept_work.read(rdir)["chunks"].values():
+        paths = chunk.get("paths") if isinstance(chunk, dict) else None
+        if isinstance(paths, dict) and any(_norm(k) == path and v == current for k, v in paths.items()):
+            return True
+    manifest = _read_json(rdir / "manifest.json") or _read_json(root / RUN_DIR_ROOT / run_id / "manifest.json")
+    base = manifest.get("write_baseline")
+    if isinstance(base, dict):
+        recorded = {_norm(k): v for k, v in base.items()}
+        return (
+            path in recorded and recorded[path] != current
+            and head is not None and head.get(path) == recorded[path]
+        )
+    return False
+
+
+def _own_dirty(root: Path, run_id: str, hot: set, dirty, attributable=None) -> set:
+    """The `hot` paths dirty now that carry hunks attributable to `run_id` (`attributable`, a
+    `halted_hunk_attribution.reader`; a halted run with no hunks in a path holds nothing) and whose
+    dirt `_own_dirt` credits to it; `dirty()` is read only when `hot` is non-empty."""
+    if not hot:
+        return set()
+    hot = hot & dirty()
+    if hot and attributable is not None:
+        hot = attributable(run_id, hot)
+    head = _head_blobs(root, hot) if hot else None
+    return {p for p in hot if _own_dirt(root, run_id, p, head)}
+
+
 def _held_extras(
     root: Path, run_id: str, dirty=None, wanted: Optional[set] = None, attributable=None,
 ) -> set:
     """`_extra_declared`, narrowed for a halted run to the paths its halt record withholds plus
-    those that are dirty now (`dirty()`, read at most once and only if a candidate in `wanted`
-    remains -- an extra outside the candidates must not cost the status spawn). With
-    `attributable` (`halted_hunk_attribution.reader`), only the dirty ones carrying hunks
-    attributable to the run."""
+    the run's own sizing file when dirty (no hunk evidence needed), and those dirty now with hunks
+    attributable to the run and its own dirt (`dirty()`, read at most
+    once and only if a candidate in `wanted` remains -- an extra outside the candidates must not
+    cost the status spawn)."""
     from coordinator_core.ops import warp_run_deliverable
 
     extra = _extra_declared(root, run_id)
@@ -138,10 +191,11 @@ def _held_extras(
         rest = extra - held
         if wanted is not None:
             rest &= wanted
-        if dirty is None or not rest:
+        if dirty is None:
             return held
-        now_dirty = rest & dirty()
-        return held | (attributable(run_id, now_dirty) if attributable is not None else now_dirty)
+        sizing = {warp_run_deliverable.record_sizing_rel(root, run_id)} & rest
+        sizing = sizing & dirty() if sizing else set()
+        return held | sizing | _own_dirty(root, run_id, rest - sizing, dirty, attributable)
     return extra
 
 
@@ -195,8 +249,10 @@ def sibling_run_claims(
     declares it, else by its holding session id. First claimant wins. Never raises.
 
     A halted run claims what it withholds plus the manifest/spine/extra paths it declares that are
-    dirty now with hunks attributable to it (one shared status read, spawned only when such a
-    candidate exists; one index parse for the whole call). A halted run
+    dirty now with hunks attributable to it (`halted_hunk_attribution`) and its own dirt
+    (`_own_dirt`; one shared status read, spawned only when such a candidate exists; one index
+    parse for the whole call). Dirt another run left in a declared path, or a declarer with no
+    hunks in it, claims nothing. A halted run
     whose only declaration of a path is its plan spine's `writes` does not claim it dirty when
     `own_declared` holds it: the landing run's own write is not that run's dirt."""
     root = Path(worktree_root)
@@ -215,38 +271,43 @@ def sibling_run_claims(
         attr = halted_hunk_attribution.reader(root, own_run_id, landing_plan=own_plan)
         with git_state.index_read_cache_scope():
             halted = warp_run_deliverable.halted_run_write_claims(
-                root, wanted, exclude_run=own_run_id, own_plan=own_plan, dirty=dirty, attributable=attr,
+                root, wanted, exclude_run=own_run_id, own_plan=own_plan,
             ) or {}
+            live = warp_run_deliverable.live_run_write_claims(
+                root, wanted, exclude_session="", cwd=str(root), exclude_run=own_run_id,
+                minted_before=minted_before,
+            ) or {}
+            for path, run_ids in sorted(halted.items()):
+                claims.setdefault(path, run_ids[0])
             unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
             extras = {run_id: _held_extras(root, run_id, dirty, wanted, attr) for run_id in unlanded}
-        live = warp_run_deliverable.live_run_write_claims(
-            root, wanted, exclude_session="", cwd=str(root), exclude_run=own_run_id, minted_before=minted_before,
-        ) or {}
-        for path, run_ids in sorted(halted.items()):
-            claims.setdefault(path, run_ids[0])
-        for path, sessions in sorted(live.items()):
-            owner = next((r for r in unlanded if _declares(root, r, path)), sessions[0])
-            claims.setdefault(path, owner)
-        for run_id in unlanded:
-            for path in sorted(extras[run_id] & wanted):
-                claims.setdefault(path, run_id)
-            if warp_run_deliverable._halted(root, run_id):
-                paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
-                if not (paths or prefixes):
-                    from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+            for path, sessions in sorted(live.items()):
+                owner = next((r for r in unlanded if _declares(root, r, path)), sessions[0])
+                claims.setdefault(path, owner)
+            for run_id in unlanded:
+                for path in sorted(extras[run_id] & wanted):
+                    claims.setdefault(path, run_id)
+                if warp_run_deliverable._halted(root, run_id):
+                    paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+                    if paths or prefixes:
+                        hot = {p for p in wanted if p not in claims and _declares(root, run_id, p)}
+                        for path in sorted(_own_dirty(root, run_id, hot, dirty, attr)):
+                            claims.setdefault(path, run_id)
+                    else:
+                        from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
-                    spine_all = peer_hunk_gate._spine_writes(root, run_id) & wanted
-                    spine = spine_all - own
-                    for path in sorted(spine & dirty()) if spine else ():
-                        claims.setdefault(path, run_id)
-                    freed = spine_all & own
-                    if freed:
-                        withheld = warp_run_deliverable.halted_withheld_paths(root, run_id)
-                        for path in sorted((freed - withheld) & dirty()):
-                            logging.getLogger(__name__).warning(
-                                "spine-only halted sibling %s: dirty declared path %s freed for landing run %s",
-                                run_id, path, own_run_id,
-                            )
+                        spine_all = peer_hunk_gate._spine_writes(root, run_id) & wanted
+                        spine = spine_all - own
+                        for path in sorted(_own_dirty(root, run_id, spine, dirty, attr)):
+                            claims.setdefault(path, run_id)
+                        freed = spine_all & own
+                        if freed:
+                            withheld = warp_run_deliverable.halted_withheld_paths(root, run_id)
+                            for path in sorted((freed - withheld) & dirty()):
+                                logging.getLogger(__name__).warning(
+                                    "spine-only halted sibling %s: dirty declared path %s freed for landing run %s",
+                                    run_id, path, own_run_id,
+                                )
     except Exception:  # noqa: BLE001 -- contest unknown: claim nothing further
         return claims
     return claims

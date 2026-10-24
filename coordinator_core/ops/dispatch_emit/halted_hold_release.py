@@ -3,7 +3,7 @@
 `release_reason` answers "does this run still hold against the run now committing?"; `release_calls`
 names the acts that would free a hold; `mark_plan_origins_landed` rewrites the halted runs a plan
 landing just finished. Stdlib only at module top (land_run and terminal_commit cold-import pins);
-no git, no subprocess.
+the one git spawn is `_kept_at_head`'s batched `cat-file`, reached only when no cheaper release applied.
 
 Invariants: a run with no halt marker (a live fresh-token peer) is never released here. A `resumed`
 marker can be a run executing again, so only supersession and a landed successor release it, never
@@ -24,6 +24,7 @@ RELEASE_PLAN_LANDING = "plan-landing"
 RELEASE_SUCCESSOR_LANDED = "successor-landed"
 RELEASE_RECORDED_LANDED = "recorded-landed"
 RELEASE_SIZING_SHIPPED = "sizing-shipped"
+RELEASE_KEPT_AT_HEAD = "kept-at-head"
 RELEASE_CRITERION_MET = "criterion-met-at-head"
 
 
@@ -112,9 +113,103 @@ def release_reason(
         plan = marker.get(HALT_PLAN_FIELD)
         if committing_plan and isinstance(plan, str) and wrd._norm(plan) == wrd._norm(committing_plan):
             return RELEASE_PLAN_LANDING
+        if _kept_at_head(root, record_dir(root, halted_run_id), marker):
+            return RELEASE_KEPT_AT_HEAD
     except Exception:
         return None
     return None
+
+
+def _squash(text: str) -> str:
+    return "".join(text.split())
+
+
+def _blob_batch(root: Path, specs: list) -> Optional[dict]:
+    """`{spec: bytes | None}` for each git object spec, one `git cat-file --batch` spawn; None when git fails."""
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch"], cwd=str(root), input="".join(s + "\n" for s in specs).encode(),
+            capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out, data, pos = proc.stdout, {}, 0
+    for spec in specs:
+        end = out.find(b"\n", pos)
+        if end < 0:
+            return None
+        header = out[pos:end].split()
+        pos = end + 1
+        if len(header) == 3 and header[1] == b"blob":
+            size = int(header[2])
+            data[spec] = out[pos:pos + size]
+            pos += size + 1
+        else:
+            data[spec] = None
+    return data
+
+
+def _hunks_present(base: str, kept: str, head: str) -> bool:
+    """Every block the kept text adds over `base` sits in `head` (whitespace-insensitive, so a reflow still
+    matches), and every block it removes is gone from `head`."""
+    import difflib
+
+    base_lines, kept_lines = base.splitlines(), kept.splitlines()
+    squashed_head = _squash(head)
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, base_lines, kept_lines, autojunk=False).get_opcodes():
+        if tag in ("insert", "replace"):
+            added = _squash("\n".join(kept_lines[j1:j2]))
+            if added and added not in squashed_head:
+                return False
+        if tag in ("delete", "replace"):
+            removed = _squash("\n".join(base_lines[i1:i2]))
+            if removed and removed in squashed_head and removed not in _squash("\n".join(kept_lines[j1:j2])):
+                return False
+    return True
+
+
+def _kept_at_head(root: Path, record: Path, marker: dict) -> bool:
+    """True when every path the halt withheld has its kept content already at HEAD: blob-equal, or the kept
+    diff against `run_base_sha` already present. A withheld path with no kept blob, a missing object or an
+    unreadable record holds. One git spawn for the whole run."""
+    from coordinator_core.ops.dispatch_emit import halted_run, kept_work
+
+    withheld = halted_run.halted_withheld(record)
+    if not withheld:
+        return False
+    kept: dict = {}
+    for chunk in kept_work.read(record)["chunks"].values():
+        paths = chunk.get("paths") if isinstance(chunk, dict) else None
+        if isinstance(paths, dict):
+            kept.update({p: b for p, b in paths.items() if isinstance(b, str) and b})
+    if any(p not in kept for p in withheld):
+        return False
+    base_sha = marker.get("run_base_sha")
+    base_sha = base_sha if isinstance(base_sha, str) and base_sha else ""
+    paths = sorted(withheld)
+    specs = [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths]
+    specs += [f"{base_sha}:{p}" for p in paths] if base_sha else []
+    blobs = _blob_batch(root, specs)
+    if blobs is None:
+        return False
+    for p in paths:
+        head, keep = blobs[f"HEAD:{p}"], blobs[kept[p]]
+        if head is None or keep is None:
+            return False
+        if head == keep:
+            continue
+        if not base_sha:
+            return False
+        base = blobs[f"{base_sha}:{p}"]
+        if not _hunks_present(
+            (base or b"").decode("utf-8", "replace"), keep.decode("utf-8", "replace"), head.decode("utf-8", "replace"),
+        ):
+            return False
+    return True
 
 
 def release_calls(root: Path, halted_run_id: str) -> tuple:

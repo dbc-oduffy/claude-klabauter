@@ -327,12 +327,10 @@ def _disclose_gone_deletions(message: str, gone: list) -> str:
 def _peer_claim_warnings(
     worktree_root: Path, paths: list, peer_holds: Optional[list] = None,
     own_sid: Optional[str] = None, abandoned_holds: Optional[list] = None,
-    companions: bool = True,
 ) -> list:
     """One batched ``claim_index.lookup(paths)`` plus a liveness check on each non-self claimant.
     Reports a live peer's hold; never refuses, never spawns, never raises: a lookup failure or
-    ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning. With ``companions``
-    each live peer also gets one warning naming (capped at 5) its untracked files outside ``paths``.
+    ``UNANSWERABLE`` entry degrades to a "claim state indeterminate" warning.
     A claimant ``session_abandoned`` reads idle joins ``abandoned_holds`` (when given), not
     ``peer_holds``. ``own_sid`` (opt-in) names the caller's session.
     """
@@ -351,7 +349,6 @@ def _peer_claim_warnings(
         return [f"claim state indeterminate ({exc!r})"]
 
     warnings: list = []
-    live_peers: list = []
     verdicts: dict = {}
 
     def _verdict(sid: str) -> Optional[tuple]:
@@ -395,29 +392,10 @@ def _peer_claim_warnings(
                     continue
                 if peer_holds is not None:
                     peer_holds.append((path, sid))
-                if sid not in live_peers:
-                    live_peers.append(sid)
                 warnings.append(
                     f"{path!r} is held by live peer session {sid!r} -- "
                     "committed anyway"
                 )
-    if live_peers and companions:
-        try:
-            from coordinator_core.ops.ceremony.commit_companion import untracked_companions
-
-            by_peer = untracked_companions(
-                worktree_root, lookup_result.held_by or {}, live_peers, list(paths)
-            )
-            for sid, names in by_peer.items():
-                shown = ", ".join(names[:5])
-                if len(names) > 5:
-                    shown += f" (+{len(names) - 5} more)"
-                warnings.append(
-                    f"live peer session {sid} holds untracked file(s) this "
-                    f"commit leaves behind: {shown}"
-                )
-        except Exception as exc:  # noqa: BLE001 -- never refuse the commit
-            warnings.append(f"companion state indeterminate ({exc})")
     return warnings
 
 
@@ -1248,7 +1226,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     with ledger.phase("claim_lookup"):
         peer_claim_warnings = _peer_claim_warnings(
             worktree_root, list(raw_paths) + raw_removed, peer_holds, own_sid=own_sid or "",
-            abandoned_holds=abandoned_holds, companions=False,
+            abandoned_holds=abandoned_holds,
         )
 
     # Gates run BEFORE the commit lands -- they are refusals, and a refusal after the fact is not one.

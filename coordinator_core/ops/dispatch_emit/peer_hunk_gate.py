@@ -7,7 +7,8 @@ is never read) whose status is still unresolved.
 `refusal_message` words both for the operator.
 
 Invariants: in-process file reads only (no spawn); an unreadable record contributes nothing and
-nothing raises; a halted run that `halted_hold_release.release_reason` frees holds nothing; a
+nothing raises; two halted runs withholding one path against each other hold nothing (the path lands
+whole, carrying both); a halted run that `halted_hold_release.release_reason` frees holds nothing; a
 junior fresh-token sibling claims nothing against a senior committer; a clean landing path is not
 contention (callers pass only the paths the commit carries). Stdlib
 only at module top (land_run cold-import pin); the readers are imported lazily.
@@ -104,9 +105,31 @@ def co_declared_peer_holds(
             for path in wanted:
                 if path in spine:
                     claims.setdefault(path, run_id)
+        for path in list(claims):
+            if _mutual_halted_hold(root, own_run_id, claims[path], path):
+                del claims[path]
     except Exception:  # noqa: BLE001 -- contest unknown: hold nothing
         return []
     return [(p, claims[p]) for p in wanted if p in claims and p in own]
+
+
+def _mutual_halted_hold(root: Path, own_run_id: Optional[str], holder: str, path: str) -> bool:
+    """True when `holder` is halted, withholds `path`, and its own claim view names `own_run_id` as the
+    path's first claimant: two halted runs holding one path against each other. Landing the path whole
+    carries both runs' hunks (the shared-tree blob), so neither run is superseded; the holder's
+    `dispatch.record_halted_run_landed` follows the landing."""
+    if not own_run_id or holder == own_run_id:
+        return False
+    from coordinator_core.ops import warp_run_deliverable
+    from coordinator_core.ops.dispatch_emit import halted_run, sibling_claims
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    if not warp_run_deliverable._halted(root, holder):
+        return False
+    if path not in {_norm(w) for w in halted_run.halted_withheld(record_dir(root, holder))}:
+        return False
+    mirror = sibling_claims.sibling_run_claims(root, holder, [path])
+    return mirror.get(path) == own_run_id
 
 
 def _names_path(finding: str, path: str, basename_unique: bool) -> bool:
@@ -193,10 +216,22 @@ def refusal_message(holds: Iterable[tuple], run_id: str, root: Optional[Path] = 
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import halted_hold_release
 
+        from coordinator_core.ops.dispatch_emit import halted_run
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
         for holder in sorted({s for _p, s in pairs}):
             if warp_run_deliverable._halted(Path(root), holder):
                 calls = "; ".join(halted_hold_release.release_calls(Path(root), holder))
                 text += f" Release run {holder}: {calls}."
+                withheld = halted_run.halted_withheld(record_dir(Path(root), holder))
+                mutual = sorted({p for p, s in pairs if s == holder and _norm(p) in {_norm(w) for w in withheld}})
+                if mutual:
+                    text += (
+                        f" Mutual hold: run {holder} withholds {', '.join(mutual)} against this run too."
+                        " Neither run is superseded: land the path whole in one commit (the tree blob, which"
+                        " carries both runs' hunks), then call dispatch.record_halted_run_landed"
+                        f" {{run_id: {holder}, sha: <that commit>}}."
+                    )
     except Exception:  # noqa: BLE001 -- release wording unknown: the base refusal stands
         return text
     return text

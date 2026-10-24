@@ -66,9 +66,14 @@ def _sizing(root, rel: str, status: str = "open", deliverable: str = "d1") -> No
     )
 
 
+STALE_BASELINE = "77141b7873847452257858e90a47b57945c203b5"
+LIVE_BASELINE = None  # PATH is absent at HEAD: the baseline HEAD still holds
+
+
 def _holder(root, run_id: str, marker: str | None, *, sizing: str = SIZING, plan: str | None = None, token=False, manifest=True, withheld=None):
     """A peer run declaring PATH through its manifest (or, without one, its sizing's plan spine), with an
-    optional halt marker and fresh token."""
+    optional halt marker and fresh token. The manifest carries a `write_baseline` for PATH (a
+    pre-stage fingerprint the tree no longer matches), the evidence the peer wrote there."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     rdir = root / "state" / "warp" / run_id
@@ -76,7 +81,10 @@ def _holder(root, run_id: str, marker: str | None, *, sizing: str = SIZING, plan
     (rdir / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
     if manifest:
         (rdir / "manifest.json").write_text(
-            json.dumps({"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": []}), encoding="utf-8"
+            json.dumps({
+                "rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": [],
+                "write_baseline": {PATH: LIVE_BASELINE},
+            }), encoding="utf-8"
         )
     if marker:
         body = {"status": marker, "sizing_rel": sizing, **({"plan": plan} if plan else {})}
@@ -107,6 +115,8 @@ def test_halted_peer_with_superseded_sizing_lands(repo):
 
 
 def test_halted_peer_on_the_same_sizing_successor_lands_and_a_different_one_refuses(repo):
+    """The halted peer's manifest carries a write_baseline for PATH, as in
+    state/warp/ask-20261024T044300-6137b0/manifest.json, so it holds PATH until a successor lands it."""
     _sizing(repo, SIZING)
     _sizing(repo, OWN_SIZING, deliverable="other")
     holder = _aged(60, "aaaaaa")
@@ -197,8 +207,9 @@ def test_resumed_peer_with_a_landed_successor_does_not_block_but_an_unlanded_one
     assert out["committed"] is True, out
 
 
-def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_with_an_open_sizing_and_another_plan_still_refuses(repo):
-    """The 6137b0 shape: the manifest declares PATH, the halt record withheld nothing, PATH is dirty."""
+def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_still_refuses(repo):
+    """The 6137b0 shape (state/warp/ask-20261024T044300-6137b0/manifest.json): the manifest declares PATH
+    with a write_baseline fingerprint the tree no longer matches, the halt record withheld nothing, PATH is dirty."""
     _sizing(repo, SIZING)
     holder = _aged(60, "aaaaaa")
     rdir = _holder(repo, holder, "halted", plan="docs/plans/other.md")
@@ -211,7 +222,17 @@ def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_with_an_open_
     assert json.loads((rdir / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
 
-def test_halted_peer_declaring_the_path_in_its_manifest_but_leaving_it_clean_with_an_open_sizing_and_another_plan_claims_nothing(repo):
+def test_halted_peer_whose_baseline_head_has_moved_past_claims_nothing_on_a_dirty_declared_path(repo):
+    """Moved base: the baseline differs from the tree because a landing moved HEAD, not because the peer edited."""
+    _halted_manifest_sibling(repo, baseline=STALE_BASELINE)
+
+    out, _head = _land_dirty(repo)
+
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+
+
+def test_halted_peer_declaring_the_path_in_its_manifest_but_leaving_it_clean_claims_nothing(repo):
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     _sizing(repo, SIZING)
@@ -287,29 +308,22 @@ def test_unresolved_out_of_ask_finding_on_the_path_refuses(repo):
     assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
 
 
-def _halted_manifest_sibling(root) -> None:
+def _halted_manifest_sibling(root, *, wrote: bool = True, baseline=LIVE_BASELINE) -> None:
     rdir = root / "state" / "warp" / SIBLING
     rdir.mkdir(parents=True)
     (rdir / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
     (rdir / "manifest.json").write_text(
-        json.dumps({"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": []}), encoding="utf-8"
+        json.dumps({
+            "rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": [],
+            **({"write_baseline": {PATH: baseline}} if wrote else {}),
+        }), encoding="utf-8"
     )
 
 
-def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_still_refuses(repo):
-    """The 6137b0 shape: the manifest declares PATH, the halt record withheld nothing, PATH is dirty."""
-    _halted_manifest_sibling(repo)
+def test_halted_peer_with_no_blob_and_no_baseline_claims_nothing_on_a_dirty_declared_path(repo):
+    """Counterpart of the state/warp/ask-20261024T044300-6137b0/manifest.json shape without its write_baseline."""
+    _halted_manifest_sibling(repo, wrote=False)
 
-    out, head = _land_dirty(repo)
+    out, _head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert SIBLING in str(out), out
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
-
-
-def test_halted_peer_declaring_the_path_in_its_manifest_but_leaving_it_clean_claims_nothing(repo):
-    from coordinator_core.ops.dispatch_emit import sibling_claims
-
-    _halted_manifest_sibling(repo)
-
-    assert sibling_claims.sibling_run_claims(repo, prod.RUN, [PATH]) == {}
+    assert out["committed"] is True, out

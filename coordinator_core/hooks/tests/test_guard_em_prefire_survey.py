@@ -444,3 +444,38 @@ def test_handler_returns_empty_without_deny(env):
 
     env.write(user())
     assert asyncio.run(g._handler(env.payload())) == {}
+
+
+PUBLISH_SEQUENCE = [
+    "python3 -m pytest coordinator_core/ops/dispatch_emit/tests/test_land_run.py -q",
+    "t=$(git merge-tree --write-tree aaa bbb) && c=$(git commit-tree $t -p aaa -m x)",
+    "git push candidate-source-b abc123:refs/heads/x",
+    "cd scratch/claude-klabauter-pub && git fetch origin && git checkout -q abc123",
+]
+PERCOLATE = "python3 coordinator/bin/percolate-round.py claude-klabauter --source-ref abc123 --invocation-authorized"
+
+
+def test_publish_sequence_after_landing_is_allowed(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch)
+    for i, cmd in enumerate(PUBLISH_SEQUENCE):
+        inp = {"command": cmd}
+        assert g.evaluate(env.payload(tid=f"s{i}", name="Bash", inp=inp)) is None
+        env.write(use(f"s{i}", "Bash", inp))
+    grep = {"command": "grep -n percolate-round transcript.jsonl"}
+    env.write(use("g1", "Bash", grep))
+    assert g.evaluate(env.payload(tid="g1", name="Bash", inp=grep)) is None
+    assert g.evaluate(env.payload(tid="pr", name="Bash", inp={"command": PERCOLATE})) is None
+
+
+def test_second_test_run_and_plain_reads_still_count_postlanding(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch)
+    assert g.evaluate(env.payload(tid="r0")) is None
+    t = {"command": PUBLISH_SEQUENCE[0]}
+    for i in range(2):
+        env.write(use(f"t{i}", "Bash", t))
+    env.write(use("r1"), use("r2"))
+    assert g.evaluate(env.payload(tid="r3")) is not None
+    log = {"command": "git log --oneline -5"}
+    assert g.evaluate(env.payload(tid="x", name="Bash", inp=log)) is not None

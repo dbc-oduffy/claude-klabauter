@@ -50,9 +50,14 @@ def _fresh(root: Path) -> Path:
     return root
 
 
-def _landing(root: Path, *, b_landing: str, holder: str | None, b_holder: str, live: bool = False) -> str | None:
+def _landing(
+    root: Path, *, b_landing: str, holder: str | None, b_holder: str | None, live: bool = False,
+    halted: str | None = None, declared_by_review: bool = False,
+) -> str | None:
     """PATH committed at B0; the landing run L stages against `b_landing`, writes B2 over the tree,
-    and a peer `holder` (halted, or live when `live`) declares PATH against `b_holder`."""
+    and a peer `holder` (halted, or live when `live`) declares PATH against `b_holder` (None: its
+    manifest records no `write_baseline`). `halted` sets the halt marker's `halted` reason;
+    `declared_by_review` names PATH in the manifest's `review_declared_paths` as well as a row."""
     prod._write(root, PATH, B0)
     prod._git(["add", PATH], root)
     prod._git(["commit", "-q", "-m", "base"], root)
@@ -64,16 +69,20 @@ def _landing(root: Path, *, b_landing: str, holder: str | None, b_holder: str, l
             _holder(root, holder_id, None, token=True, manifest=False)
         else:
             rdir = _holder(root, holder_id, "halted", plan="docs/plans/other.md")
-            (rdir / "manifest.json").write_text(
-                json.dumps({"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": [],
-                            "write_baseline": {PATH: _sha(b_holder)}}),
-                encoding="utf-8",
-            )
+            manifest = {"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": []}
+            if declared_by_review:
+                manifest["review_declared_paths"] = [PATH]
+            if b_holder is not None:
+                manifest["write_baseline"] = {PATH: _sha(b_holder)}
+            (rdir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            if halted:
+                marker = json.loads((rdir / "halted.json").read_text(encoding="utf-8"))
+                (rdir / "halted.json").write_text(json.dumps({**marker, "halted": halted}), encoding="utf-8")
             (rdir / "run-stage.json").write_text(
                 json.dumps({"stage": "halted", "started_at": "2026-10-24T00:00:00Z", "last_activity_at": HALT_AT}),
                 encoding="utf-8",
             )
-        if b_holder != B0 and not live:
+        if b_holder not in (None, B0) and not live:
             prod._write(root, PATH, b_holder)
     rec = f"{RECORD_DIR_ROOT}/{prod.RUN}"
     prod._write(root, f"{rec}/manifest.json", json.dumps({"rows": [], "write_baseline": {PATH: b_landing}}))
@@ -137,3 +146,34 @@ def test_halted_holder_with_hunks_in_the_path_refuses_the_landing(repo, monkeypa
     assert live_out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, live_out
     assert n == none_n + STATUS_READ
     assert n <= live_n + STATUS_READ
+
+
+def test_halted_declarer_with_no_write_baseline_and_no_kept_work_does_not_hold_the_path(repo, monkeypatch):
+    """The 432570 shape (state/warp/warp-2026-10-23-xl-xxl-fan-out-sizing-seam-pass-432570-*): a row and
+    `review_declared_paths` declare a path the run never wrote, its manifest has no `write_baseline`,
+    and the tree's dirt is the landing run's own."""
+    out, _n, holder = _count_landing(
+        monkeypatch, repo, b_landing=_sha(B0), holder="432570", b_holder=None, declared_by_review=True,
+    )
+
+    assert out.get("refused") is None, out
+    assert out.get("committed") is True, out
+    assert prod._git(["show", "HEAD:" + PATH], repo) == B2
+    assert (repo / "state" / "warp" / holder / "halted.json").is_file()
+
+
+def test_unstarted_dependent_holds_nothing_where_it_wrote_nothing_and_holds_where_it_did(repo, monkeypatch, tmp_path):
+    """The c595ec shape (halted: dependents_unstarted): a row of the run that never ran leaves the tree at
+    the run's baseline and holds nothing; a row that did run (c595ec's C3 hunks in ask_compose.py) still holds."""
+    never_ran, _n, _ = _count_landing(
+        monkeypatch, repo, b_landing=_sha(B0), holder="595ecd", b_holder=B0, halted="dependents_unstarted",
+    )
+    assert never_ran.get("refused") is None, never_ran
+    assert never_ran.get("committed") is True, never_ran
+
+    ran, _n, holder = _count_landing(
+        monkeypatch, _fresh(tmp_path / "ran"), b_landing=_sha(B1), holder="595ecd", b_holder=B0,
+        halted="dependents_unstarted",
+    )
+    assert ran.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, ran
+    assert holder in str(ran), ran

@@ -1643,3 +1643,58 @@ def test_a_claim_in_an_agent_sink_without_a_backpointer_is_found_once_one_appear
     _write(os.path.join(agent_dir, "em-session-id.txt"), "owner\n")
 
     assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["owner"]}
+
+
+def test_indexed_lookup_past_the_process_time_cap_is_unanswerable_not_negative(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    claim_index.lookup(["a.py"], sessions_dir=base)
+    monkeypatch.setattr(claim_index, "REBUILD_PROCESS_TIME_CAP_SECS", -1.0)
+
+    result = claim_index.lookup(["a.py"], sessions_dir=base)
+
+    assert result.complete is False
+    assert result.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
+    assert result["a.py"] == [claim_index.UNANSWERABLE]
+
+
+def test_a_build_whose_directory_was_reset_by_a_concurrent_build_is_not_stamped_complete(
+    tmp_path, monkeypatch
+):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    index_dir = touch_record.claim_index_dir(base)
+    real_walk = claim_index._walk
+
+    def walk_then_concurrent_reset(*args, **kwargs):
+        state = real_walk(*args, **kwargs)
+        claim_index._begin_index(base, index_dir)
+        return state
+
+    monkeypatch.setattr(claim_index, "_walk", walk_then_concurrent_reset)
+
+    claim_index.lookup(["a.py"], sessions_dir=base)
+
+    assert not os.path.exists(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE))
+
+
+def test_an_uninterrupted_build_is_stamped_complete(tmp_path):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+
+    claim_index.lookup(["a.py"], sessions_dir=base)
+
+    index_dir = touch_record.claim_index_dir(base)
+    assert os.path.isfile(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE))
+
+
+def test_a_claim_is_reindexed_after_another_process_reset_erased_its_memoised_stream(tmp_path):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    claim_index.lookup(["a.py"], sessions_dir=base)
+    stream = touch_record.claim_index_file(touch_record.claim_index_dir(base), "p", "a.py")
+    os.remove(stream)
+
+    _session_touched(base, "peer", [_touch_line("T", "a.py", "2026-08-08T11:00:00.000000Z")])
+
+    assert os.path.isfile(stream)

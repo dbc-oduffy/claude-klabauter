@@ -3158,6 +3158,24 @@ def test_branch0_gate_suppresses_setup_offer_when_the_gate_routed(monkeypatch, c
     assert "first-run setup" not in err
 
 
+@pytest.mark.parametrize("flag", ["--percolate-root", "--dest-root"])
+def test_round_refuses_a_repo_relative_root_naming_it(flag, monkeypatch, capsys, tmp_path):
+    """A `repo:path` root is refused naming the flag, the value and the absolute
+    form, before the gate runs; an existing directory passes the check."""
+    gate_calls = []
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda t, r: gate_calls.append(r) or None)
+    bad = "claude-klabauter:scratch/claude-klabauter-pub"
+    args = _mod._build_parser().parse_args(["alpha", flag, bad, "--yes"])
+    assert _mod._cmd_round(args) == _mod._EXIT_USAGE
+    err = capsys.readouterr().err
+    assert flag in err and bad in err and "absolute" in err
+    assert "first-run setup" not in err and "MISSING_TARGETS" not in err
+    assert gate_calls == []
+
+    good = _mod._build_parser().parse_args(["alpha", flag, str(tmp_path), "--yes"])
+    assert _mod._unresolved_root_flag(good) is None
+
+
 def test_branch0_gate_still_offers_setup_for_every_other_failure(monkeypatch, capsys):
     """Suppression is scoped to the routed case: a target that genuinely is not
     set up still gets the setup walk, which remains the correct offer."""

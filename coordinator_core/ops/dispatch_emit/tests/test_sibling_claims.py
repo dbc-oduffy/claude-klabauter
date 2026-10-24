@@ -324,6 +324,57 @@ def test_spine_only_halted_sibling_warns_once_when_it_frees_a_dirty_own_declared
     assert bool(claims) is bool(withheld)
 
 
+def _halted_declaring_dirty(repo: Path, monkeypatch, path: str = "p/a.py", *, kept: str | None = None) -> str:
+    """A halted sibling whose manifest declares `path`, dirty in the tree; `kept` is the content its
+    kept.json fingerprints for the path (None: it recorded nothing)."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    run_id = _stamped("bbbb5e")
+    rdir = _declare(repo, run_id, path)
+    _halt(rdir)
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    (repo / path).write_text("current = 1\n", encoding="utf-8")
+    if kept is not None:
+        blob = kept_work.blob_sha(kept.encode("utf-8"))
+        (rdir / "kept.json").write_text(
+            json.dumps({"chunks": {"C1": {"paths": {path: blob}}}, "plan_gate": None}), encoding="utf-8",
+        )
+    monkeypatch.setattr(sibling_claims, "_dirty_reader", lambda root, wanted: (lambda: {path}))
+    return run_id
+
+
+def test_halted_sibling_claims_nothing_when_the_dirt_in_its_declared_path_is_another_runs(repo, monkeypatch):
+    _halted_declaring_dirty(repo, monkeypatch, kept="sibling's own earlier content\n")
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {}
+
+
+def test_halted_sibling_that_recorded_nothing_claims_nothing_on_a_dirty_declared_path(repo, monkeypatch):
+    _halted_declaring_dirty(repo, monkeypatch)
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {}
+
+
+def test_halted_sibling_whose_kept_blob_matches_the_current_file_still_claims_it(repo, monkeypatch):
+    run_id = _halted_declaring_dirty(repo, monkeypatch, kept="current = 1\n")
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {"p/a.py": run_id}
+
+
+def test_halted_sibling_withheld_path_claims_whatever_the_dirt(repo, monkeypatch):
+    run_id = _halted_declaring_dirty(repo, monkeypatch, kept="other\n")
+    _halt(repo / "state" / "warp" / run_id, "p/a.py")
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {"p/a.py": run_id}
+
+
+def test_halted_sibling_baseline_that_head_moved_past_is_not_own_dirt_but_a_live_one_is(repo, monkeypatch):
+    run_id = _halted_declaring_dirty(repo, monkeypatch)
+    manifest = repo / "state" / "warp" / run_id / "manifest.json"
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    monkeypatch.setattr(sibling_claims, "_head_blobs", lambda root, paths: {"p/a.py": "headblob"})
+    for baseline, claimed in (("headblob", True), ("older-blob", False)):
+        manifest.write_text(json.dumps({**data, "write_baseline": {"p/a.py": baseline}}), encoding="utf-8")
+        got = sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"])
+        assert got == ({"p/a.py": run_id} if claimed else {})
+
+
 HALT_AT = "2026-10-24T01:00:00Z"
 START_AT = "2026-10-24T02:00:00Z"
 EXTRA = "src/extra.py"
@@ -369,9 +420,12 @@ def _stage_record(root: Path, run_id: str, stage: str, started: str, activity: s
     )
 
 
-def _halted_extra_holder(root: Path, tag: str, path: str, b_h: str) -> str:
+def _halted_extra_holder(root: Path, tag: str, path: str, b_h: str | None) -> str:
     run_id = _stamped(tag)
-    rdir = _declare(root, run_id, review_declared_paths=[path], write_baseline={path: b_h})
+    extra = {"review_declared_paths": [path]}
+    if b_h is not None:
+        extra["write_baseline"] = {path: b_h}
+    rdir = _declare(root, run_id, **extra)
     _halt(rdir)
     _stage_record(root, run_id, "halted", "2026-10-24T00:00:00Z", HALT_AT)
     return run_id
@@ -406,6 +460,16 @@ def test_halted_extra_with_pre_stage_foreign_dirt_is_claimed(git_repo):
 def test_halted_extra_still_equal_to_its_baseline_is_not_dirty_so_not_claimed(git_repo):
     _halted_extra_holder(git_repo, "fa0003", EXTRA, _blob("base\n"))
     _landing_run(git_repo, {EXTRA: _blob("base\n")})
+    assert sibling_claims.sibling_run_claims(git_repo, OWN, [EXTRA]) == {}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_halted_extra_with_no_recorded_baseline_claims_nothing_even_when_dirty(git_repo):
+    """The 432570 shape: a declared path, no `write_baseline` and no kept work, dirty with someone else's bytes."""
+    _halted_extra_holder(git_repo, "432570", EXTRA, None)
+    _landing_run(git_repo, {EXTRA: _blob("base\n")})
+    (git_repo / EXTRA).write_bytes(b"landing bytes\n")
     assert sibling_claims.sibling_run_claims(git_repo, OWN, [EXTRA]) == {}
 
 

@@ -148,6 +148,7 @@ import dataclasses
 import os
 import shutil
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence, Set
 
@@ -725,7 +726,7 @@ def lookup(
     building = _begin_index(base, index_dir)
     state = _walk(base, _note_sink if building else None)
     if building:
-        _finish_index(base, index_dir, state, sink_names, sid_sinks)
+        _finish_index(base, index_dir, state, sink_names, sid_sinks, building)
 
     held = _held_from_maps(
         {sid for path in paths for sid in state.claims.get(_normalize_key(path), ())},
@@ -827,7 +828,6 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
         if state["cause"] is None:
             state["cause"] = cause
 
-    attributed: Dict[str, Optional[tuple]] = {}
     folds: Dict[str, Optional[tuple]] = {}
 
     def _fold_sink(name: str) -> Optional[tuple]:
@@ -904,19 +904,24 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
     )
 
 
-def _begin_index(base: str, index_dir: str) -> bool:
+def _begin_index(base: str, index_dir: str) -> Optional[str]:
     """Reset ``index_dir`` and create its stream directories BEFORE the build's walk, so any claim
-    appended after the walk read its sink finds the directory and indexes itself."""
+    appended after the walk read its sink finds the directory and indexes itself. Returns this
+    build's token (also written to ``BUILDING``) or ``None``; a concurrent build's reset removes
+    the token, which ``_finish_index`` checks before it stamps."""
     if not os.path.isdir(base):
-        return False
+        return None
     touch_record.forget_indexed()
+    token = uuid.uuid4().hex
     try:
         shutil.rmtree(index_dir, ignore_errors=True)
         os.makedirs(os.path.join(index_dir, "p"), exist_ok=True)
         os.makedirs(os.path.join(index_dir, "s"), exist_ok=True)
+        with open(os.path.join(index_dir, _BUILD_TOKEN_FILE), "w", encoding="utf-8") as fh:
+            fh.write(token)
     except OSError:
-        return False
-    return True
+        return None
+    return token
 
 
 def _finish_index(
@@ -925,9 +930,11 @@ def _finish_index(
     state: "_IndexState",
     sink_names: Dict[str, Set[str]],
     sid_sinks: Dict[str, Set[str]],
+    token: str,
 ) -> None:
     """Write the streams the build's walk collected and, only when that walk was complete and every
-    write landed, the ``COMPLETE`` stamp. Failure leaves no stamp, so the next lookup builds again."""
+    write landed and no concurrent build reset the directory meanwhile (``token``), the ``COMPLETE``
+    stamp. Failure leaves no stamp, so the next lookup builds again."""
     if not state.complete:
         return
     try:
@@ -945,12 +952,25 @@ def _finish_index(
             touch_record.append_index_names(
                 touch_record.claim_index_file(index_dir, "s", sid), names
             )
+        if _read_build_token(index_dir) != token:
+            return
         touch_record.append_index_names(
             os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE),
             {f"v{touch_record.CLAIM_INDEX_VERSION}"},
         )
     except OSError:
         touch_record.invalidate_claim_index(index_dir)
+
+
+_BUILD_TOKEN_FILE = "BUILDING"
+
+
+def _read_build_token(index_dir: str) -> Optional[str]:
+    try:
+        with open(os.path.join(index_dir, _BUILD_TOKEN_FILE), "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return None
 
 
 def _unowned_agent_sinks(base: str) -> "Optional[List[tuple]]":

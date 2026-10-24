@@ -125,7 +125,7 @@ def test_fire_skill_revise_flags(tmp_path):
     assert not st["disarmed"]
     st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": "coordinator:something-else"})])
     assert not st["disarmed"]
-    st = run(tmp_path, [user(), tool_use("a", "Bash", {"command": "x workflow.revise y"})])
+    st = run(tmp_path, [user(), tool_use("a", "Bash", {"command": "coordinator-invoke workflow.revise y"})])
     assert st["revised"]
 
 
@@ -151,6 +151,36 @@ def test_delta_over_read_cap_jumps_to_tail(tmp_path, monkeypatch):
     monkeypatch.setattr(epw, "READ_CAP", 10)
     st = run(tmp_path, [user(), tool_use("a", "Read", {"file_path": "x"})])
     assert st["partial"] is True and st["pre"] == []
+
+
+def test_publish_mechanics_exempt_and_survey_git_counts():
+    ok = [
+        "git push origin abc:refs/heads/x",
+        "git -C scratch/claude-klabauter-pub fetch origin",
+        "cd scratch/claude-klabauter-pub && git fetch origin && git checkout -q abc",
+        "git -C scratch/claude-klabauter-pub checkout abc",
+        "t=$(git merge-tree --write-tree a b)",
+        "python3 coordinator/bin/percolate-round.py claude-klabauter --source-ref a",
+    ]
+    bad = [
+        "git log --oneline",
+        "git diff HEAD",
+        "git checkout abc",
+        "git fetch origin | cat",
+        "git push origin x && cat secrets",
+        "cd /tmp/other && git checkout abc",
+        "git status",
+    ]
+    assert all(epw.publish_mechanics(c) for c in ok)
+    assert not any(epw.publish_mechanics(c) for c in bad)
+
+
+def test_one_test_run_per_window_is_exempt_postlanding(tmp_path):
+    cmd = {"command": "python3 -m pytest coordinator_core/x/tests/test_a.py -q"}
+    st = run(tmp_path, [user(), tool_use("a", "Bash", cmd), tool_use("b", "Bash", cmd)])
+    assert st["all"] == ["b"] and st["test_used"] is True
+    assert not epw.is_test_run("pytest coordinator_core/")
+    assert not epw.is_test_run("pytest test_a.py; cat x")
 
 
 def test_unreadable_transcript_returns_state(tmp_path):

@@ -6,7 +6,11 @@ import json
 import time
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import halted_hold_release as hr
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PLAN = "docs/plans/p.md"
 SIZING = "state/sizings/s.yaml"
@@ -205,3 +209,68 @@ def test_mark_plan_origins_landed_skips_excluded_run(tmp_path):
     h = _rid("ask", 300, "aaaaaa")
     _run(root, h, marker="halted")
     assert hr.mark_plan_origins_landed(root, PLAN, "9" * 40, ["a.py"], exclude_run=h) == []
+
+
+def _git(root: Path, *args: str, stdin: str = "") -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, input=stdin,
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def _kept_repo(tmp_path: Path, head_text: str, kept_text: str):
+    """Real repo: base commit of `a.py`, then HEAD holds `head_text`; a halted run withheld `a.py` keeping `kept_text`."""
+    base_text = "def f():\n    return 1\n"
+    _git(tmp_path, "init", "-q")
+    _write(tmp_path / "a.py", base_text)
+    _git(tmp_path, "add", "a.py")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    _write(tmp_path / "a.py", head_text)
+    _git(tmp_path, "commit", "-q", "--allow-empty", "-am", "head")
+    kept_blob = _git(tmp_path, "hash-object", "-w", "--stdin", stdin=kept_text)
+    _sizing(tmp_path, SIZING)
+    h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
+    _run(tmp_path, h, marker="halted", plan="")
+    _run(tmp_path, c, sizing="state/sizings/other.yaml")
+    rec = tmp_path / "state/warp" / h
+    halted = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
+    halted.update({"run_base_sha": base, "run_artifacts": {"withheld": {"a.py": "halt-record-only"}}})
+    _write(rec / "halted.json", json.dumps(halted))
+    _write(rec / "kept.json", json.dumps({"chunks": {"X1": {"paths": {"a.py": kept_blob}}}, "plan_gate": None}))
+    return h, c
+
+
+KEPT = "def f():\n    return 1\n\n\ndef g(a, b):\n    return a + b\n"
+
+
+def test_kept_blob_equal_to_head_releases(tmp_path):
+    h, c = _kept_repo(tmp_path, KEPT, KEPT)
+    assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
+
+
+def test_kept_hunks_present_after_reflow_release(tmp_path):
+    reflowed = "def f():\n    return 1\n\n\ndef g(\n    a, b\n):\n    return a + b\n"
+    h, c = _kept_repo(tmp_path, reflowed, KEPT)
+    assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
+
+
+def test_unlanded_kept_hunks_still_hold(tmp_path):
+    h, c = _kept_repo(tmp_path, "def f():\n    return 1\n", KEPT)
+    assert hr.release_reason(tmp_path, h, c, None) is None
+
+
+def test_withheld_path_without_kept_blob_holds(tmp_path):
+    h, c = _kept_repo(tmp_path, KEPT, KEPT)
+    rec = tmp_path / "state/warp" / h
+    _write(rec / "kept.json", json.dumps({"chunks": {}, "plan_gate": None}))
+    assert hr.release_reason(tmp_path, h, c, None) is None
+
+
+def test_withhold_with_no_own_hunk_releases(tmp_path):
+    """The 4b2001 shape: the kept blob is the run base, so the run holds no hunk of its own in the path."""
+    base_text = "def f():\n    return 1\n"
+    h, c = _kept_repo(tmp_path, KEPT, base_text)
+    assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD

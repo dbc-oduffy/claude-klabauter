@@ -488,7 +488,13 @@ _PREP_GUARDS_JS = (
     # A count of 0 that disagrees with the slices (one lists files), or with
     # a row this run landed, is not trusted: the run falls through to the
     # slices guard instead of halting, so landed rows never skip review.
-    "  if (_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+    # The zero-file reply (a run whose only output is a non-code artifact,
+    # such as a sent memo) carries no verdict and a null error; an errored
+    # or refused prep carries an error or a verdict, and still halts.
+    "  const _prepNothing = !!(_reviewPrep && (_reviewPrep.verdict === 'single-reviewer-ok' || "
+    "(_reviewPrep.verdict == null && _reviewPrep.error == null && typeof _reviewPrep.basis === 'string' && "
+    "_reviewPrep.basis !== '' && !_reviewPrep.whole_diff_path)));\n"
+    "  if (_prepNothing && "
     "(typeof _landed === 'undefined' || !Object.keys(_landed).length) && "
     "(typeof _finished === 'undefined' || !_finished.size) && "
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
@@ -502,7 +508,7 @@ _PREP_GUARDS_JS = (
     # The same clean-prep predicate as the no-op halt, minus its
     # landed-rows condition; a refused prep fails `verdict`, and a prep
     # with product files fails `product_files`, so both still throw.
-    "  const _verifyOnly = !!(_reviewPrep && _reviewPrep.verdict === 'single-reviewer-ok' && "
+    "  const _verifyOnly = !!(_prepNothing && "
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
     "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length));\n"
     # A failed or refused prep yields no slices -- a refusal reports
@@ -643,6 +649,9 @@ _WAVE_GROUP_CLAUSE = (
 )
 
 
+_SLICE_FILTER_CLAUSE = "Review only the listed slice ids of your group; ignore every other slice the reply lists."
+
+
 def _wave_prep_instruction(
     mode_args: str,
     base_ref: str,
@@ -725,7 +734,6 @@ _REVERIFY_SCHEMA = {
             },
         },
         "pre_existing": {"type": "array", "items": {"type": "string"}},
-        "base_measure": {"type": "string"},
         "kept": {
             "type": "array",
             "items": {
@@ -743,23 +751,14 @@ _REVERIFY_SCHEMA = {
         "record": {"type": ["string", "null"]},
         "sidecar_path": {"type": "string"},
     },
-    "required": ["edited", "failing", FAILING_DETAIL_FIELD, "reverted", "pre_existing", "status_before"],
+    "required": ["edited", "failing", FAILING_DETAIL_FIELD, "reverted", "status_before"],
 }
 
 _REVERIFY_INDETERMINATE_CLAUSE = (
     "If any review.reverify call in this step returns a non-null `error` or fails as an engine "
     "call (any JSON-RPC error, -32004 included), run no tests and stop: return edited [], "
-    f'failing [], {FAILING_DETAIL_FIELD} [], reverted [], pre_existing [], status_before "{REVERIFY_INDETERMINATE}" and the verbatim error '
+    f'failing [], {FAILING_DETAIL_FIELD} [], reverted [], status_before "{REVERIFY_INDETERMINATE}" and the verbatim error '
     "as reverify_error. That is an engine defect, never a test result."
-)
-
-#: Tests carrying these markers are excluded from every tier (pyproject marker contract), so a
-#: re-verify run deselects them and never reports one as `failing`.
-_REVERIFY_MARKER_EXCLUSION = "not pending_fix and not designed_red"
-_REVERIFY_MARKER_CLAUSE = (
-    f'Every pytest run in this phase passes `-m "{_REVERIFY_MARKER_EXCLUSION}"`: a test marked '
-    "`pending_fix` or `designed_red` is never run, never reported as `failing` and never blocks "
-    "review."
 )
 
 #: Run-time review sidecar paths of the wave, appended to the re-verify prompt for its `sidecars`.
@@ -788,10 +787,7 @@ def _base_measure_clause(base_ref: str) -> str:
     """Prompt step measuring ``failing_at_base``: one baseline-export run over the failing ids at the
     snapshot base. Empty-set fallback when the base is the unset placeholder."""
     if base_ref == "run_base_sha":
-        return (
-            "The run base is unset: pass `\"failing_at_base\":[]` on every revert call, and return "
-            "`base_measure` \"unset\". "
-        )
+        return "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. "
     return (
         "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
         f"(never per test): `python -m coordinator_core.testing.baseline_export --sha {base_ref} -- "
@@ -800,9 +796,7 @@ def _base_measure_clause(base_ref: str) -> str:
         "`runner_exit` 0, 1 or 4. Exit 4 with a \"not found\" line naming ids means the run added "
         "them: they are never pre_existing; drop them and re-run that same command ONCE over the "
         "remaining ids. A second exit 4, an export error or any other result: "
-        "`failing_at_base` is `[]`. Return `base_measure` \"ok\" when the trailing JSON line "
-        "validated, else \"fallback: <the export or exit result>\" whenever `failing_at_base` was "
-        "forced to `[]`. "
+        "`failing_at_base` is `[]`. "
     )
 
 
@@ -864,7 +858,7 @@ def _reverify_phase(
             '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
             "review changed, the union of their `tripwires` lists names the test files whose source "
             "names one of those files. Return the union as `edited`. If every list is empty, "
-            "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], pre_existing [], status_before pass. "
+            "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], status_before pass. "
             f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
             "2. Run, and only run, the tests covering those files: the test files among them, every "
             "file in the `tripwires` union, the test files that import an edited module"
@@ -874,7 +868,7 @@ def _reverify_phase(
                 if verify_scope_targets
                 else ""
             )
-            + f". {_REVERIFY_MARKER_CLAUSE} Name each test file or node id; never a directory, a tier (the fast tier "
+            + ". Name each test file or node id; never a directory, a tier (the fast tier "
             "included) or the full suite. Report every failing node id as `failing` and set "
             "status_before to pass when none failed, else fail."
             f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
@@ -900,7 +894,7 @@ def _reverify_phase(
             "its own files, so make every call whether or not that prefix listed anything. The "
             "review_sidecars below is keyed by slice prefix: pass each call only its own prefix's "
             "list. Return the union of the `reverted`, `pre_existing` and `kept` lists as given "
-            "(a test is unattributed only when every prefix reports it so), `base_measure`, and the `record` of "
+            "(a test is unattributed only when every prefix reports it so), and the `record` of "
             "the first call that returned one; re-run only the tests of the reverted paths, and "
             "set status_after to pass or fail from that re-run. When nothing failed, "
             "status_after is null. `status_before` is the status after review, before any "
@@ -923,11 +917,10 @@ def _reverify_phase(
         'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
         "review changed. Its `tripwires` list names the test files whose source names one of "
         "those files. If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
-        "pre_existing [], status_before pass. "
+        "status_before pass. "
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
         "2. Run, and only run, the tests covering those files: the test files among them, every "
-        "file in `tripwires`, plus the test files that import an edited module. "
-        f"{_REVERIFY_MARKER_CLAUSE} Name each test file or node id; never a "
+        "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
         "directory, a tier (the fast tier included) or the full suite. Report every failing "
         "node id as `failing` and set status_before to pass when none failed, else fail."
         f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
@@ -945,7 +938,7 @@ def _reverify_phase(
         f"Call review.reverify in revert mode: `{invoke} review.reverify "
         f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
         f"ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
-        "as in step 1). Return its `reverted`, `pre_existing`, `kept` and `record` as given, plus `base_measure`, "
+        "as in step 1). Return its `reverted`, `pre_existing`, `kept` and `record` as given, "
         "re-run only the tests of the reverted paths, and set status_after to pass or fail from "
         "that re-run. When nothing failed, status_after is null. `status_before` is the status "
         "after review, before any revert.\n"
@@ -1010,10 +1003,17 @@ def compose_execute_review(
     delivery_notes_js: Optional[str] = None,
     review_groups: Optional[Sequence[ReviewGroup]] = None,
     verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
+    slice_filter_js: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
     is not ``None`` -- integration.
+
+    ``slice_filter_js`` (a JS expression for an array of slice ids; ``None`` emits nothing)
+    restricts the wave to those slices when it is a non-empty array at fire time. Without
+    ``prep_in_wave`` it narrows ``_reviewPrep.slices`` before the prep guards; with it, each
+    grouped agent's prompt carries a ``review_slice_ids:`` line and the agent count is capped at
+    the id count. A non-array or empty value filters nothing.
 
     ``review.integration is None`` is the 2026-09-28 no-integration-pass path
     (step b'): no integration call is emitted at all. Each review-wave
@@ -1389,6 +1389,14 @@ def compose_execute_review(
                 f"  phase({_js_string_literal(prep_phase)});\n"
                 + group_await
                 + f"  const _reviewPrep = await {_degrading(prep_call)};\n"
+                + (
+                    f"  if (Array.isArray({slice_filter_js}) && {slice_filter_js}.length && _reviewPrep && "
+                    f"Array.isArray(_reviewPrep.slices) && _reviewPrep.slices.some(s => {slice_filter_js}.includes(s?.id))) "
+                    f"{{ _reviewPrep.slices = _reviewPrep.slices.filter("
+                    f"s => {slice_filter_js}.includes(s?.id)); }}\n"
+                    if slice_filter_js
+                    else ""
+                )
                 + _PREP_GUARDS_JS
                 + group_merge,
             )
@@ -1429,13 +1437,27 @@ def compose_execute_review(
             grouped_call = (
                 f"() => agent({_prompt_literal(slice_prompt)}{wave_tail_js}{' + ' + notes_expr if notes_expr else ''} + "
                 f"{_js_string_literal(chr(10) + 'group_index: ')} + i + "
-                f"{_js_string_literal(chr(10) + 'group_count: ')} + n, " + slice_call[len(slice_prefix):]
+                f"{_js_string_literal(chr(10) + 'group_count: ')} + n"
+                + (
+                    f" + (Array.isArray({slice_filter_js}) && {slice_filter_js}.length ? "
+                    f"{_js_string_literal(chr(10) + 'review_slice_ids: ')} + JSON.stringify({slice_filter_js}) + "
+                    f"{_js_string_literal(chr(10) + _SLICE_FILTER_CLAUSE)} : '')"
+                    if slice_filter_js
+                    else ""
+                )
+                + ", "
+                + slice_call[len(slice_prefix):]
             )
             grouped_call = _sc(grouped_call, "slice", slice_type, "i")
             count_js = (
                 f"Math.max(1, Math.min({MAX_SLICES}, Math.ceil({rows_expr} / {max_rows}), "
                 f"Math.floor({rows_expr} / {min_rows})))"
             )
+            if slice_filter_js:
+                count_js = (
+                    f"Math.min({count_js}, Array.isArray({slice_filter_js}) && {slice_filter_js}.length "
+                    f"? {slice_filter_js}.length : Infinity)"
+                )
             slice_items = (
                 f"(() => {{ const n = {count_js}; "
                 f"return Array.from({{ length: n }}, (_, i) => () => ({_degrading(grouped_call)})().then("

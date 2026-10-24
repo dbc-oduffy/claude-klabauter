@@ -59,7 +59,7 @@ REVISED_INPUT_PHASE = {
     "requirement": "criterion",
 }
 
-#: Gate verdict field a resume carries: {reuse: [phase], rerun: [phase], verdicts: {phase: obj}}.
+#: Gate verdict field a resume carries: {reuse: [phase], rerun: [phase], verdicts: {phase: obj}}; verdicts also holds a landed `review` that is in rerun.
 RESUME_PHASES_FIELD = "resume_phases"
 
 KEPT_FILE = "kept.json"
@@ -140,11 +140,14 @@ def derive(repo_root: Path, run_id: str) -> dict:
 def resume_phases(
     landed: Mapping, halt_kind: Optional[str], revised: Iterable[str] = ()
 ) -> dict:
-    """The gate's `resume_phases` value: landed phases the halt left valid are reused with their verdicts."""
+    """The gate's `resume_phases` value: landed phases the halt left valid are reused with their verdicts.
+
+    A landed `review` that is re-run also carries its verdict, as the seed for the partial re-review.
+    """
     stale = invalidated(halt_kind, revised)
     reuse = [p for p in PHASES if p in landed and p not in stale]
-    return {
-        "reuse": reuse,
-        "rerun": [p for p in PHASES if p not in reuse],
-        "verdicts": {p: landed[p] for p in reuse},
-    }
+    rerun = [p for p in PHASES if p not in reuse]
+    verdicts = {p: landed[p] for p in reuse}
+    if "review" in landed and "review" in rerun:
+        verdicts["review"] = landed["review"]
+    return {"reuse": reuse, "rerun": rerun, "verdicts": verdicts}

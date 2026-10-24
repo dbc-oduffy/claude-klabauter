@@ -757,6 +757,37 @@ def test_single_reviewer_ok_over_no_product_file_is_a_no_op_not_a_refusal():
     assert "error" not in result
 
 
+_ZERO_FILE_PREP = {
+    "verdict": None,
+    "basis": "worktree",
+    "product_files": 0,
+    "foreign_claims": [],
+    "slices": [],
+    "whole_diff_path": None,
+    "error": None,
+}
+
+
+def test_zero_file_prep_with_no_error_is_nothing_to_review_not_a_refusal():
+    assert _run_prep_block(dict(_ZERO_FILE_PREP))["halted"] == "no-op"
+    result = _run_prep_block(dict(_ZERO_FILE_PREP), landed=_LANDED)
+    assert "halted" not in result and result["verifyOnly"] is True
+
+
+@pytest.mark.parametrize(
+    "prep",
+    [
+        {**_ZERO_FILE_PREP, "error": "freeze failed"},
+        {**_ZERO_FILE_PREP, "basis": ""},
+        {**_ZERO_FILE_PREP, "verdict": "PARTITION-MANDATORY"},
+        {**_ZERO_FILE_PREP, "foreign_claims": ["peer.py"]},
+    ],
+)
+def test_zero_file_prep_that_errored_or_refused_still_halts(prep):
+    for landed in (None, _LANDED):
+        assert _run_prep_block(prep, landed=landed)["halted"].startswith("review prep returned no slices")
+
+
 def test_zero_product_files_disagreeing_with_a_slice_that_lists_files_does_not_halt():
     prep = {**_PREP, "product_files": 0, "slices": [{"id": "s1", "files": ["x.py"], "diff_path": "d"}]}
     result = _run_prep_block(prep)
@@ -1572,16 +1603,6 @@ def test_reverify_leg_requires_and_asks_for_failing_detail():
     assert "failing [], reverted []" not in text
 
 
-@pytest.mark.parametrize("group_prefixes", [(), ("g1-", "g2-")])
-def test_reverify_deselects_pending_fix_and_designed_red(group_prefixes):
-    from coordinator_core.ops.review_mint.execute_review import _REVERIFY_MARKER_EXCLUSION
-
-    block = _reverify_phase_block("b" * 40, group_prefixes=group_prefixes)
-    assert _REVERIFY_MARKER_EXCLUSION == "not pending_fix and not designed_red"
-    assert _REVERIFY_MARKER_EXCLUSION in block
-    assert "-m " in block
-
-
 def test_reverify_false_output_equals_the_default_output():
     assert _reverify_phases(reverify=False) == _reverify_phases()
 
@@ -1665,8 +1686,6 @@ def test_reverify_prompt_measures_failing_at_base_once_and_passes_it(prefixes):
     assert block.count('failing_at_base\\":[<failing_at_base ids>]') + block.count(
         'failing_at_base":[<failing_at_base ids>]'
     ) == 1
-    assert "exit 4" in block.lower() and "ONCE over the remaining ids" in block
-    assert "`[]`" in block
 
 
 @pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
@@ -1674,26 +1693,6 @@ def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
     block = _reverify_phase_block("run_base_sha", prefixes)
     assert "baseline_export" not in block
     assert "failing_at_base" in block
-
-
-def test_reverify_schema_requires_pre_existing_and_types_base_measure():
-    from coordinator_core.ops.review_mint.execute_review import _REVERIFY_SCHEMA
-
-    assert "pre_existing" in _REVERIFY_SCHEMA["required"]
-    assert _REVERIFY_SCHEMA["properties"]["base_measure"] == {"type": "string"}
-    assert "base_measure" not in _REVERIFY_SCHEMA["required"]
-
-
-@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
-def test_reverify_early_returns_carry_pre_existing_and_base_measure_is_reported(prefixes):
-    measured = _reverify_phase_block("b" * 40, prefixes)
-    unset = _reverify_phase_block("run_base_sha", prefixes)
-    for block in (measured, unset):
-        assert block.count("reverted [], pre_existing [], status_before") == 2
-        assert "`base_measure`" in block
-    assert 'return `base_measure` \\"unset\\"' in unset or 'return `base_measure` "unset"' in unset
-    assert "fallback: <the export or exit result>" in measured
-    assert "full suite" in measured
 
 
 def _run_reverify_block(reply, *, verify_only=False):

@@ -1232,7 +1232,7 @@ def note_claim_in_index(sink: "Path | str", key: str) -> None:
     base, sink_name = layout
     index_dir = claim_index_dir(base)
     stream = claim_index_file(index_dir, "p", key)
-    if (stream, sink_name) in _INDEXED:
+    if (stream, sink_name) in _INDEXED and os.path.isfile(stream):
         return
     try:
         if not os.path.isdir(index_dir):

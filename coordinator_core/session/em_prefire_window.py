@@ -55,6 +55,9 @@ LIFECYCLE_OPS = ("sizing.supersede", "memo.transition", "workflow.revise")
 LIFECYCLE_BINS = ("cross-repo-memo", "pickup-assemble")
 _INVOKERS = ("coordinator-invoke", "invoke")
 _PYTHONS = re.compile(r"^python[0-9.]*(\.exe)?$")
+PUBLISH_GIT_VERBS = ("merge-tree", "commit-tree", "push", "fetch")
+PUBLISH_CLONE_GIT_VERBS = ("checkout", "switch", "reset", "clean")
+_PUBLISH_CLONE_RE = re.compile(r"(^|/)scratch/[^/\s]*-pub(/|$)")
 _LITERAL_BINS = (
     "${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/",
     "${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/",
@@ -80,6 +83,7 @@ def fresh_state(offset: int = 0) -> dict:
         "revised": False,
         "fire_seen": False,
         "fires": 0,
+        "test_used": False,
         "landings": {},
     }
 
@@ -207,19 +211,103 @@ def lifecycle_op(command: object) -> Optional[str]:
     return args[0] if args and args[0] in LIFECYCLE_OPS else None
 
 
-def classify(name: object, tool_input: object, opening: str, settings_home: Optional[str]) -> tuple[bool, bool]:
+def _segment_exempt(seg: str, state: dict) -> bool:
+    seg = seg.strip()
+    seg = re.sub(r"^[A-Za-z_][A-Za-z0-9_]*=", "", seg).strip()
+    if seg.startswith("$(") and seg.endswith(")"):
+        seg = seg[2:-1].strip()
+    if not seg or re.search(r"[|<>&`]|\$\(", seg):
+        return False
+    toks = [_unquote(t) for t in seg.split()]
+    if toks[0] == "cd":
+        if len(toks) == 2 and _PUBLISH_CLONE_RE.search(_norm(toks[1])):
+            state["clone"] = True
+            return True
+        return False
+    base = _norm(toks[0]).rsplit("/", 1)[-1]
+    if _PYTHONS.match(base):
+        toks = toks[1:]
+        return bool(toks) and _norm(toks[0]).rsplit("/", 1)[-1] in ("percolate-round.py", "percolate-round")
+    if base in ("percolate-round.py", "percolate-round", "percolate-round.cmd"):
+        return True
+    if base != "git":
+        return False
+    rest = toks[1:]
+    clone = state.get("clone", False)
+    while rest and rest[0] == "-C" and len(rest) > 1:
+        clone = clone or bool(_PUBLISH_CLONE_RE.search(_norm(rest[1])))
+        rest = rest[2:]
+    if not rest:
+        return False
+    if rest[0] in PUBLISH_GIT_VERBS:
+        return True
+    return rest[0] in PUBLISH_CLONE_GIT_VERBS and clone
+
+
+def publish_mechanics(command: object) -> bool:
+    """True when every `&&`/`;`/newline segment of a Bash command is publish or build mechanics.
+
+    Exempt: `git merge-tree|commit-tree|push|fetch`, `git checkout|switch|reset|clean` and `cd` only
+    inside a publish clone (`scratch/*-pub`), and `percolate-round.py`. Trap: a pipe, redirect,
+    backtick or nested substitution anywhere in a segment makes the command count, as does any
+    other git verb (log, diff, show, grep stay survey).
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    flat = _QUOTED_RE.sub("Q", command)
+    if re.search(r"[|<>`]", flat):
+        return False
+    state: dict = {}
+    segs = [s for s in re.split(r"&&|;|\n", command) if s.strip()]
+    return bool(segs) and all(_segment_exempt(s, state) for s in segs)
+
+
+def is_test_run(command: object) -> bool:
+    """True for one plain `pytest` / `python -m pytest` naming explicit test files, no chain."""
+    if not isinstance(command, str) or _CHAIN_RE.search(command):
+        return False
+    toks = [_unquote(t) for t in command.split()]
+    if toks and toks[0].startswith("cd "):
+        return False
+    if toks[:1] and _PYTHONS.match(_norm(toks[0]).rsplit("/", 1)[-1]):
+        toks = toks[1:]
+        if toks[:2] != ["-m", "pytest"]:
+            return False
+        toks = toks[2:]
+    elif toks[:1] and _norm(toks[0]).rsplit("/", 1)[-1] == "pytest":
+        toks = toks[1:]
+    else:
+        return False
+    targets = [t for t in toks if not t.startswith("-")]
+    return bool(targets) and all(re.search(r"(^|/)test_[^/]*\.py(::\S+)?$", t) for t in targets)
+
+
+def classify(
+    name: object,
+    tool_input: object,
+    opening: str,
+    settings_home: Optional[str],
+    test_used: bool = False,
+) -> tuple[bool, bool]:
     """(pre_counted, all_counted) for one main-thread tool call.
 
     `pre_counted` applies the pre-fire exemptions (paths, settings-home CLI); `all_counted` keeps the
-    path exemptions only, for the post-landing window.
+    path exemptions only, for the post-landing window, plus the publish-mechanics exemption and the
+    window's one test run (`test_used` False).
     """
     if name not in COUNTED_TOOLS:
         return False, False
     inp = tool_input if isinstance(tool_input, dict) else {}
     if name == "Bash":
-        if lifecycle_op(inp.get("command")):
+        cmd = inp.get("command")
+        if lifecycle_op(cmd):
             return False, False
-        return (not is_settings_bin_cli(inp.get("command"), settings_home)), True
+        if publish_mechanics(cmd):
+            return False, False
+        pre = not is_settings_bin_cli(cmd, settings_home)
+        if not test_used and is_test_run(cmd):
+            return pre, False
+        return pre, True
     target = inp.get("file_path") if name == "Read" else inp.get("path")
     if path_exempt(target, opening):
         return False, False
@@ -325,6 +413,7 @@ def advance(
                         fired=False,
                         disarmed=False,
                         revised=False,
+                        test_used=False,
                     )
                 continue
             msg = rec.get("message")
@@ -337,7 +426,7 @@ def advance(
                 _fold_tool_use(st, block, settings_home)
     if isinstance(current_tool_use_id, str) and current_tool_use_id:
         name, inp = current_call if current_call else (None, None)
-        pre, every = classify(name, inp, st.get("opening") or "", settings_home)
+        pre, every = classify(name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")))
         if pre:
             _add(st["pre"], current_tool_use_id)
         if every:
@@ -351,6 +440,7 @@ def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
     if name == "Workflow":
         if isinstance(inp, dict) and warp_fire.is_submit_name(inp.get("name")):
             st["fired"] = True
+            st["test_used"] = False
             st["fire_seen"] = True
             st["fires"] = int(st.get("fires") or 0) + 1
         return
@@ -358,9 +448,12 @@ def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
         if _skill_disarms(inp):
             st["disarmed"] = True
         return
-    pre, every = classify(name, inp, st.get("opening") or "", settings_home)
-    if name == "Bash" and isinstance(inp, dict) and lifecycle_op(inp.get("command")) == "workflow.revise":
-        st["revised"] = True
+    pre, every = classify(name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")))
+    if name == "Bash" and isinstance(inp, dict):
+        if lifecycle_op(inp.get("command")) == "workflow.revise":
+            st["revised"] = True
+        elif not st.get("test_used") and is_test_run(inp.get("command")):
+            st["test_used"] = True
     if pre:
         _add(st["pre"], block.get("id"))
     if every:
@@ -374,6 +467,8 @@ __all__ = [
     "classify",
     "fresh_state",
     "is_settings_bin_cli",
+    "is_test_run",
+    "publish_mechanics",
     "lifecycle_op",
     "load_state",
     "path_exempt",

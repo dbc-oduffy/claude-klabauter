@@ -10,6 +10,10 @@ Invariants: at most one ``run_git`` call per invocation, zero with no holders; `
 at most once, and only when a holder has an objective commit and a non-empty withheld set; it never
 raises, and any read error holds (the run is absent from the result).
 
+Consumer: none wired yet -- `met_at_head` and `halted_run.record_released` are speculative until a
+caller (the gate that stamps `released` on a halted marker) lands; `halted_hold_release` already reads
+the stamp.
+
 Stdlib only at module top: land_run and terminal_commit have cold-import pins, so every reader is
 imported lazily.
 """
