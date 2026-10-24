@@ -121,8 +121,9 @@ def dirty_paths(repo_root: Path) -> list[str]:
 def covering_dirty_paths(repo_root: Path) -> list[str]:
     """``dirty_paths`` minus untracked files a test run cannot depend on: an untracked path stays only
     when it is a ``.py`` file outside any dot-directory (a new module the tests may import). Scratch
-    trees such as ``.salvage-*`` therefore never enter the ``covered`` hash. Raises RuntimeError when
-    git fails."""
+    trees such as ``.salvage-*`` therefore never enter the ``covered`` hash. A plan ``*.evidence.yaml``
+    sidecar never enters it either: terminal_commit rewrites it after the retest and no test reads it.
+    Raises RuntimeError when git fails."""
     from coordinator_core.session.session_facts import _dirty_paths
 
     result = _dirty_paths(repo_root)
@@ -131,6 +132,8 @@ def covering_dirty_paths(repo_root: Path) -> list[str]:
     kept = []
     for entry in result["value"]["entries"]:
         xy, path = entry[0], entry[1]
+        if path.endswith(".evidence.yaml"):
+            continue
         if xy.strip() == "??" and not (
             path.endswith(".py") and not any(seg.startswith(".") for seg in path.split("/"))
         ):

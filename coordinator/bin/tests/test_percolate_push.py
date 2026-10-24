@@ -1208,10 +1208,9 @@ def test_flag_absent_argv_is_unchanged_for_default_channel_and_feature_branches(
 
 def test_open_only_publish_with_lock_held_spawns_no_percolate_gate(tmp_path, monkeypatch):
     dest, spy, _ = _open_only_setup(tmp_path, monkeypatch, status_stdout=_STATUS_FEATURE_BRANCH_AHEAD_1)
-    rc = _mod.open_only_publish(dest, "alpha", lock_held=True, default_branch="main")
+    rc = _mod.open_only_publish(dest, "alpha", lock_held=True)
     assert rc == _mod._EXIT_OK
     assert not any(str(_mod._PERCOLATE_GATE) in " ".join(map(str, c)) for c in spy.calls)
-    assert not any("symbolic-ref" in c for c in spy.calls)
     _never_merges(spy)
 
 

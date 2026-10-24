@@ -217,6 +217,18 @@ def test_covered_drops_unrelated_untracked_keeps_tracked_edits_and_new_modules(r
     assert set(record["covered"]) == {"test_a.py", "newmod.py"}
 
 
+def test_covered_excludes_plan_evidence_sidecar_tracked_or_new(repo):
+    (repo / "docs" / "plans").mkdir(parents=True)
+    tracked = repo / "docs" / "plans" / "p.evidence.yaml"
+    tracked.write_text("a: 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "e"], cwd=repo, check=True)
+    tracked.write_text("a: 2\n", encoding="utf-8")
+    (repo / "docs" / "plans" / "q.evidence.yaml").write_text("b: 1\n", encoding="utf-8")
+    (repo / "test_a.py").write_text("changed\n", encoding="utf-8")
+    assert retest_targeted.covering_dirty_paths(repo) == ["test_a.py"]
+
+
 def _declare(repo: Path, **keys: str) -> None:
     body = "".join(f"{k}: {v}\n" for k, v in keys.items())
     (repo / "coordinator.local.md").write_text(f"---\n{body}---\n", encoding="utf-8")
