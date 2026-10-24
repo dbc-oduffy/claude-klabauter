@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Optional, Sequence
@@ -1298,9 +1299,12 @@ def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow], record: Optio
 
     Trap: a refire (`record` holds a `halted.json` carrying `run_base_sha`) keeps the baseline the
     halted run's own stage recorded for every path it covers, since the live tree already holds that
-    fire's output. Only paths the prior manifest never baselined are read from the live tree."""
+    fire's output. A refire never reads the live tree: a path the prior manifest never baselined (or
+    a manifest that is absent, unreadable or lacks `write_baseline`) takes its blob at the run base,
+    one `git cat-file --batch --filters`; a failed lookup raises `RefireBaselineError`."""
     prior: Mapping = {}
-    if record is not None and halted_run_base(record):
+    base = halted_run_base(record) if record is not None else None
+    if base:
         recorded = (_recorded_manifest(record) or {}).get("write_baseline")
         if isinstance(recorded, Mapping):
             prior = recorded
@@ -1313,8 +1317,59 @@ def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow], record: Optio
                 continue
             paths.append(w)
     wanted = _dedupe_preserve_order(paths)
-    live = _write_baseline.capture(root, [p for p in wanted if p not in prior])
-    return {p: prior[p] if p in prior else live[p] for p in wanted}
+    missing = [p for p in wanted if p not in prior]
+    fresh = _run_base_blobs(root, base, missing) if base else _write_baseline.capture(root, missing)
+    return {p: prior[p] if p in prior else fresh[p] for p in wanted}
+
+
+class RefireBaselineError(RuntimeError):
+    """A refire's write baseline could not be read at the halted run's `run_base_sha`."""
+
+
+def _run_base_blobs(root: Path, base: str, paths: Sequence[str]) -> dict[str, Optional[str]]:
+    """`blob_sha` of each path's content at commit `base` after checkout conversion (None: absent there).
+
+    Trap: the domain is `kept_work.fingerprint` (raw working-tree bytes), so the base content is read
+    through `--filters`; a committed blob sha would never equal an unchanged file under an eol/smudge
+    rule. One git spawn, none for no paths."""
+    if not paths:
+        return {}
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+
+    fail = f"refire write_baseline: cannot read paths at run_base_sha {base}"
+    if any(ch.isspace() for p in paths for ch in p):
+        raise RefireBaselineError(f"{fail} (a whitespace path cannot be named to cat-file --batch)")
+    # Git's `--filters` header reports the unconverted size, so entries are split on a sentinel
+    # object (answered `<sentinel> missing`), never on the header size.
+    tok = uuid.uuid4().hex
+    lines = [base, f"{tok}0"]
+    for i, p in enumerate(paths, 1):
+        lines += [f"{base}:{p} {p}", f"{tok}{i}"]
+    res = run_git(
+        ["cat-file", "--batch", "--filters"],
+        cwd=str(root),
+        input=("\n".join(lines) + "\n").encode("utf-8"),
+    )
+    data = res.stdout_bytes
+    segments: list[bytes] = []
+    pos = 0
+    for i in range(len(paths) + 1):
+        end = data.find(f"{tok}{i} missing\n".encode(), pos)
+        if res.returncode != 0 or end < 0:
+            raise RefireBaselineError(f"{fail} (git cat-file rc={res.returncode})")
+        segments.append(data[pos:end])
+        pos = end + len(f"{tok}{i} missing\n")
+    out: dict[str, Optional[str]] = {}
+    for i, seg in enumerate(segments):
+        head, _, body = seg.partition(b"\n")
+        parts = head.split(b" ")
+        if i == 0:
+            if len(parts) != 3 or parts[1] != b"commit":
+                raise RefireBaselineError(f"{fail} (not a commit)")
+            continue
+        out[paths[i - 1]] = blob_sha(body[:-1]) if len(parts) == 3 and parts[1] == b"blob" else None
+    return out
 
 
 def manifest_payload(root: Path, manifest: StageManifest) -> dict:
