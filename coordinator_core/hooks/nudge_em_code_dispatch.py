@@ -482,12 +482,13 @@ def op(payload: dict) -> dict | None:
     (`agent_id` present) is denied only as a size-stage run spawn (`_size_stage_write_deny`).
 
     A recorded XS lane allows in-budget edits and denies the first past 2 files / 30 changed
-    lines; a landed session's residue edits are advised under that budget and denied over it
-    (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
+    lines (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
+
+    Once the session has fired a Workflow run, live or landed, every product Edit is denied
+    (`_post_fire_deny`); only the shell-write path still measures a residue window.
 
     An S+ sized session whose route has not fired is denied at strict until it fires (advised
-    at warn); once a run is live the advisory applies, once it has landed the residue window
-    applies. `touched_s_or_larger` reads the session's whole touch record, so any S+ (or
+    at warn). `touched_s_or_larger` reads the session's whole touch record, so any S+ (or
     unreadable) sizing it touched counts, not only the one being delivered.
 
     Exempt: doc/data files, bootstrap/out-of-repo, semantic-bypass

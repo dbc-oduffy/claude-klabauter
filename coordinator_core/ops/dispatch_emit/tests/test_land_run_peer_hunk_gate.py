@@ -17,11 +17,14 @@ PATH = "pkg/execute_review.py"
 SIBLING = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-7cc61e"
 
 
-def _sibling_via_plan_spine(root) -> None:
+def _sibling_via_plan_spine(root, withheld: dict | None = None) -> None:
     rdir = root / "state" / "warp" / SIBLING
     rdir.mkdir(parents=True)
     (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/b.yaml"}), encoding="utf-8")
-    (rdir / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    marker = {"status": "halted"}
+    if withheld:
+        marker["run_artifacts"] = {"withheld": withheld}
+    (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
     prod._write(root, "state/sizings/b.yaml", 'plan: "docs/plans/b.md"\n')
     prod._write(
         root, "docs/plans/b.md",
@@ -37,8 +40,18 @@ def _land_dirty(root) -> tuple:
     return prod._land(root), head
 
 
-def test_path_a_halted_sibling_declares_only_in_its_plan_spine_refuses_naming_it(repo):
+def test_halted_sibling_declaring_the_path_only_in_its_plan_spine_and_withholding_nothing_lands(repo):
     _sibling_via_plan_spine(repo)
+
+    out, _head = _land_dirty(repo)
+
+    assert out.get("committed") is True, out
+    assert out.get("refused") is None, out
+    assert PATH in prod._tree(repo)
+
+
+def test_halted_sibling_whose_halt_record_withholds_the_path_refuses_naming_it(repo):
+    _sibling_via_plan_spine(repo, withheld={PATH: "peer-held"})
 
     out, head = _land_dirty(repo)
 

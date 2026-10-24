@@ -41,8 +41,11 @@ def _declare(repo: Path, run_id: str, *writes: str, **extra) -> Path:
     return rdir
 
 
-def _halt(rdir: Path) -> None:
-    (rdir / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+def _halt(rdir: Path, *withheld: str) -> None:
+    marker: dict = {"status": "halted"}
+    if withheld:
+        marker["run_artifacts"] = {"withheld": {p: "left in tree" for p in withheld}}
+    (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
 
 
 def test_live_token_sibling_claims_its_declared_path(repo):
@@ -62,11 +65,33 @@ def test_claim_lookup_lists_the_token_store_once_per_call(repo, monkeypatch):
     assert len(listings) == 1
 
 
-def test_halted_sibling_claims_its_declared_path(repo):
+def test_halted_sibling_claims_its_withheld_path(repo):
     run_id = _stamped("aaaaaa")
-    _halt(_declare(repo, run_id, "other/b.py"))
+    _halt(_declare(repo, run_id, "other/b.py"), "other/b.py")
     claims = sibling_claims.sibling_run_claims(repo, OWN, ["other/b.py", "src/a.py"])
     assert claims == {"other/b.py": run_id}
+
+
+def test_halted_sibling_withholding_nothing_claims_nothing(repo):
+    run_id = _stamped("aaaaab")
+    _halt(_declare(repo, run_id, "other/b.py"))
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["other/b.py"]) == {}
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == []
+
+
+def test_halted_sibling_withholding_another_path_does_not_claim_this_one(repo):
+    _halt(_declare(repo, _stamped("aaaaac"), "other/b.py", "other/c.py"), "other/c.py")
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["other/b.py"]) == {}
+
+
+def test_missing_sibling_sizing_file_yields_no_claim_and_never_raises(repo):
+    run_id = _stamped("aaaaad")
+    rdir = _declare(repo, run_id, "other/b.py")
+    (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/gone.yaml"}), encoding="utf-8")
+    run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, ["src/a.py"], ["src/a.py"]) == []
 
 
 def test_stale_token_without_halt_is_not_a_claim(repo):
@@ -100,7 +125,7 @@ def test_halted_sibling_extra_sources_are_claimed(repo):
     (rdir / "run-outcome.json").write_text(
         json.dumps({"inline_review": {"prep": {"slice_files": ["other/s.py"]}}}), encoding="utf-8"
     )
-    _halt(rdir)
+    _halt(rdir, "other/r.py", "other/s.py", "state/sizings/b.yaml")
     paths = ["other/r.py", "other/s.py", "state/sizings/b.yaml", "src/a.py"]
     claims = sibling_claims.sibling_run_claims(repo, OWN, paths)
     assert claims == {"other/r.py": run_id, "other/s.py": run_id, "state/sizings/b.yaml": run_id}
@@ -125,9 +150,14 @@ def test_shared_dir_holds_live_sibling_dirt_in_a_shared_directory(repo):
 
 
 def test_shared_dir_holds_halted_sibling_dirt_in_a_shared_directory(repo):
-    _halt(_declare(repo, _stamped("ffffff"), "shared/b.py"))
+    _halt(_declare(repo, _stamped("ffffff"), "shared/b.py"), "shared/b.py")
     held = sibling_claims.shared_dir_holds(repo, OWN, ["shared/a.py"], ["shared/dirt.py"])
     assert held == ["shared/dirt.py"]
+
+
+def test_shared_dir_holds_nothing_for_a_halted_sibling_that_withheld_nothing(repo):
+    _halt(_declare(repo, _stamped("ffffee"), "shared/b.py"))
+    assert sibling_claims.shared_dir_holds(repo, OWN, ["shared/a.py"], ["shared/dirt.py"]) == []
 
 
 def test_shared_dir_holds_nothing_for_a_dead_sibling(repo):

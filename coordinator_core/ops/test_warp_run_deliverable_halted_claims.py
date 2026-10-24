@@ -25,14 +25,17 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _record(repo, run_id, *, writes=(), doc_writes=(), status=STATUS_HALTED, manifest_text=None):
+def _record(repo, run_id, *, writes=(), withheld=(), status=STATUS_HALTED, manifest_text=None):
     rec = repo / "state/warp" / run_id
     rec.mkdir(parents=True)
     if manifest_text is None:
-        manifest_text = json.dumps({"rows": [{"writes": list(writes)}], "doc_writes": list(doc_writes)})
+        manifest_text = json.dumps({"rows": [{"writes": list(writes)}], "doc_writes": []})
     (rec / "manifest.json").write_text(manifest_text, encoding="utf-8")
     if status is not None:
-        (rec / halted_run.HALTED_FILE).write_text(json.dumps({"status": status}), encoding="utf-8")
+        marker = {"status": status}
+        if withheld:
+            marker["run_artifacts"] = {"withheld": {p: "peer-held" for p in withheld}}
+        (rec / halted_run.HALTED_FILE).write_text(json.dumps(marker), encoding="utf-8")
     return rec
 
 
@@ -41,40 +44,34 @@ def _claims(repo, paths, **kw):
     return wrd.halted_run_write_claims(repo, paths, now=NOW, **kw)
 
 
-def test_declared_write_maps_to_run_id(repo):
-    _record(repo, HALTED_ID, writes=[JOB])
+def test_withheld_write_maps_to_run_id(repo):
+    _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
     assert _claims(repo, [JOB, "src/other.py"]) == {JOB: [HALTED_ID]}
 
 
-def test_doc_write_and_backslash_path(repo):
-    _record(repo, HALTED_ID, doc_writes=["docs/a.md"])
+def test_declared_but_not_withheld_path_is_not_held(repo):
+    _record(repo, HALTED_ID, writes=[JOB, "src/other.py"], withheld=["src/other.py"])
+    assert _claims(repo, [JOB, "src/other.py"]) == {"src/other.py": [HALTED_ID]}
+
+
+def test_halt_without_any_withheld_holds_nothing(repo):
+    _record(repo, HALTED_ID, writes=[JOB])
+    assert _claims(repo, [JOB]) == {}
+
+
+def test_backslash_path_is_normalized(repo):
+    _record(repo, HALTED_ID, withheld=["docs/a.md"])
     assert _claims(repo, ["docs\\a.md"]) == {"docs/a.md": [HALTED_ID]}
 
 
-def test_prefix_declaration_matches_path_under_it(repo):
-    _record(repo, HALTED_ID)
-    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
-
-    marker = render_marker(
-        CommitRequest(
-            chunks=(ChunkCommit(id="C", title="t", paths=(), prefixes=("tools/likeness-prototype",)),), version=1
-        )
-    )
-    scratch = repo / "scratch/warp" / HALTED_ID
-    scratch.mkdir(parents=True)
-    (scratch / wrd.COMMIT_REQUEST_FILE).write_text(marker + "\n", encoding="utf-8")
-    got = _claims(repo, ["tools/likeness-prototype/x.py", "tools/likeness-prototypex/y.py"])
-    assert got == {"tools/likeness-prototype/x.py": [HALTED_ID]}
-
-
 def test_two_halted_runs_both_named(repo):
-    _record(repo, HALTED_ID, writes=[JOB])
-    _record(repo, OTHER_ID, writes=[JOB])
+    _record(repo, HALTED_ID, withheld=[JOB])
+    _record(repo, OTHER_ID, withheld=[JOB])
     assert _claims(repo, [JOB]) == {JOB: sorted([HALTED_ID, OTHER_ID])}
 
 
 def test_resumed_marker_yields_empty(repo):
-    _record(repo, HALTED_ID, writes=[JOB], status="resumed")
+    _record(repo, HALTED_ID, withheld=[JOB], status="resumed")
     assert _claims(repo, [JOB]) == {}
 
 
@@ -84,27 +81,22 @@ def test_no_marker_yields_empty(repo):
 
 
 def test_out_of_window_stamp_yields_empty(repo):
-    _record(repo, OLD_ID, writes=[JOB])
+    _record(repo, OLD_ID, withheld=[JOB])
     assert _claims(repo, [JOB]) == {}
 
 
 def test_exclude_run_yields_empty(repo):
-    _record(repo, HALTED_ID, writes=[JOB])
+    _record(repo, HALTED_ID, withheld=[JOB])
     assert _claims(repo, [JOB], exclude_run=HALTED_ID) == {}
 
 
-def test_unreadable_manifest_yields_none(repo):
-    _record(repo, HALTED_ID, manifest_text="{not json")
-    assert _claims(repo, [JOB]) is None
-
-
-def test_unreadable_manifest_with_nothing_declared_out_of_window_is_ignored(repo):
-    _record(repo, OLD_ID, manifest_text="{not json")
-    assert _claims(repo, [JOB]) == {}
+def test_unreadable_manifest_does_not_hide_a_withheld_hold(repo):
+    _record(repo, HALTED_ID, withheld=[JOB], manifest_text="{not json")
+    assert _claims(repo, [JOB]) == {JOB: [HALTED_ID]}
 
 
 def test_unstamped_name_skipped_without_read(repo, monkeypatch):
-    _record(repo, "no-stamp-here", writes=[JOB])
+    _record(repo, "no-stamp-here", withheld=[JOB])
 
     def boom(*a, **k):
         raise AssertionError("read an unstamped record dir")
@@ -121,5 +113,5 @@ def test_no_candidates_or_no_state_dir(repo):
 def test_default_now_uses_wall_clock(repo):
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     run_id = f"ask-{stamp}-abcdef"
-    _record(repo, run_id, writes=[JOB])
+    _record(repo, run_id, withheld=[JOB])
     assert wrd.halted_run_write_claims(repo, [JOB], exclude_run=None) == {JOB: [run_id]}

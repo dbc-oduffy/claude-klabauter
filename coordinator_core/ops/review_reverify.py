@@ -4,8 +4,8 @@ review stage changed since ``review.prep`` froze them, and inverts the applied f
 
 Params: ``base`` (str), ``slice_prefix`` (str), optional ``session_id``, optional ``failing``
 (list of pytest node ids), optional ``sidecars`` (list of review sidecar paths), optional
-``failing_before`` (list of node ids), optional ``probe`` (``"open"`` or ``"close"``). Keying scope:
-show_top.
+``failing_before`` (list of node ids), optional ``failing_at_base`` (list of node ids), optional
+``probe`` (``"open"`` or ``"close"``). Keying scope: show_top.
 
 Reads the write-once pre-review snapshot ``review.prep`` left at
 ``<share>/<slice_prefix>.pre-review/`` (``manifest.json`` plus one blob per sha256). By path
@@ -48,8 +48,11 @@ The record ``reverify.json`` merges across calls. Revert refuses while a probe i
 Probe: ``"probe":"open"`` (with ``failing`` and ``sidecars``) writes the finding-inverted bytes of
 each implicated edited path into the tree, stashing the post-review bytes beside the snapshot, and
 names the ``rerun`` ids for the test-runner. ``"probe":"close"`` puts the post-review bytes back.
-``failing_before`` ids that a closed probe re-ran are ``pre_existing``: they implicate nothing, and
-are recorded, never reverted. An id no closed probe re-ran is never honoured.
+An id in ``failing_before`` that a closed probe re-ran implicates no review edit: its hunks are kept
+whatever ``failing_at_base`` holds. It is labelled ``pre_existing`` only when ``failing_at_base``
+(red at the run base with none of the run's edits applied) lists it; an absent or empty list
+leaves it ``unattributed``. An id no closed probe re-ran is never
+honoured.
 
 Negative-spec: zero process spawns, no git verb, no test execution. A refusal (no manifest, a
 path escaping the worktree, an unreadable or corrupt blob) is returned as ``error`` with nothing
@@ -496,6 +499,7 @@ def review_reverify(
     failing: Optional[List[str]] = None,
     sidecars: Optional[List[str]] = None,
     failing_before: Optional[List[str]] = None,
+    failing_at_base: Optional[List[str]] = None,
     probe: Optional[str] = None,
 ) -> dict:
     """List the review edits since the snapshot, or (``failing`` given) invert the findings those
@@ -574,10 +578,12 @@ def review_reverify(
     already = {t for entry in prior["reverted"] if isinstance(entry, dict) for t in entry.get("tests", [])}
     if revert:
         vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
-        pre_existing = sorted(n for n in ids if n in vouched)
+        at_base = {str(i) for i in failing_at_base or []}
+        skip = {n for n in ids if n in vouched}
+        pre_existing = sorted(n for n in skip if n in at_base)
+        not_base_red = sorted(skip - set(pre_existing))
     else:
-        pre_existing = []
-    skip = set(pre_existing)
+        pre_existing, not_base_red, skip = [], [], set()
     implication = _implication(repo_root, [n for n in ids if n not in skip], edited, created)
     implicated: Dict[str, List[str]] = {}
     unattributed: List[str] = []
@@ -625,6 +631,7 @@ def review_reverify(
             plan[rel] = (inv.data, "findings")
             refs_by_rel[rel] = inv.reverted
 
+    unattributed.extend(n for n in not_base_red if n not in unattributed)
     refusal = _dangling(repo_root, view, manifest, plan)
     if refusal:
         return _fail(refusal, True)
@@ -687,8 +694,9 @@ def review_reverify(
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "review.reverify". Params: ``base`` (str), ``slice_prefix`` (str), optional
     ``session_id``, optional ``failing`` (list[str] node ids; presence selects revert mode),
-    optional ``sidecars`` (list[str]), optional ``failing_before`` (list[str]), optional ``probe``
-    (``"open"`` or ``"close"``). Keying scope: show_top."""
+    optional ``sidecars`` (list[str]), optional ``failing_before`` (list[str]), optional
+    ``failing_at_base`` (list[str]), optional ``probe`` (``"open"`` or ``"close"``). Keying scope:
+    show_top."""
     probe = params.get("probe")
     shape = probe if probe in ("open", "close") else None
     revert = params.get("failing") is not None and shape is None
@@ -702,6 +710,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _fail("review.reverify failing must be a list of node ids", True, shape)
     if failing_before is not None and not isinstance(failing_before, list):
         return _fail("review.reverify failing_before must be a list of node ids", revert, shape)
+    failing_at_base = params.get("failing_at_base")
+    if failing_at_base is not None and not isinstance(failing_at_base, list):
+        return _fail("review.reverify failing_at_base must be a list of node ids", revert, shape)
     if sidecars is not None and not isinstance(sidecars, list):
         return _fail("review.reverify sidecars must be a list of paths", revert, shape)
     return review_reverify(
@@ -712,5 +723,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         failing=failing,
         sidecars=[str(s) for s in sidecars] if sidecars else None,
         failing_before=[str(i) for i in failing_before] if failing_before else None,
+        failing_at_base=[str(i) for i in failing_at_base] if failing_at_base is not None else None,
         probe=shape,
     )

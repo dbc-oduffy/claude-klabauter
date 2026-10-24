@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+from coordinator_core.win_portability import no_console_creationflags
 
 TEST_FILE = "tests/test_tool_producer_failure_disclosure.py"
 
@@ -163,7 +164,7 @@ def _node():
 
 def _run_js(node, call):
     program = lr.REOPEN_PLAN_JS + "\nprocess.stdout.write(JSON.stringify(" + call + "));"
-    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30)
+    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30, **no_console_creationflags())
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
 

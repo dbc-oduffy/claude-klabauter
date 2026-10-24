@@ -89,7 +89,9 @@ def test_nit_review_edit_in_a_file_whose_pre_review_state_already_fails_keeps_ev
     failing_before = _probe(root, FAILING)
     assert (root / "pkg/mod.py").read_bytes() == post
 
-    out = _call(root, failing=FAILING, failing_before=failing_before, sidecars=SIDECARS)
+    out = _call(
+        root, failing=FAILING, failing_before=failing_before, failing_at_base=FAILING, sidecars=SIDECARS
+    )
 
     assert out["error"] is None
     assert (root / "pkg/mod.py").read_bytes() == post

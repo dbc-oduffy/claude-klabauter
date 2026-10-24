@@ -14,7 +14,7 @@ import pytest
 import coordinator_core.machine_profile as mp
 from coordinator_core.bash_guards import _shell_write_projection as projection
 from coordinator_core.bash_guards import guard_xs_lane_shell_write as guard
-from coordinator_core.hooks import nudge_em_code_dispatch as hook
+from coordinator_core.hooks import _em_write_budget as hook
 from coordinator_core.session import xs_lane_budget as xb
 
 SID = "sess-xs-shell"
@@ -56,7 +56,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sys_tmp))
     monkeypatch.setattr(hook, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     monkeypatch.setattr(mp, "guard_level", lambda name: "strict")
-    monkeypatch.setattr(hook, "resolve_mode", lambda key, sid: False)
     monkeypatch.setattr(hook, "_session_sizing_state", lambda payload, sid: (True, False))
     root, sha = _make_repo(tmp_path, {"a.py": _lines(10), "b.py": _lines(10)})
     return root, sha

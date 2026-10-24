@@ -40,11 +40,17 @@ def _spine_writes(root: Path, run_id: str) -> set:
     sizing_rel = warp_run_deliverable.record_sizing_rel(root, run_id)
     if not sizing_rel:
         return out
-    sizing = yaml.safe_load((root / sizing_rel).read_text(encoding="utf-8")) or {}
+    try:
+        sizing = yaml.safe_load((root / sizing_rel).read_text(encoding="utf-8")) or {}
+    except OSError:
+        return out
     plan_rel = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
     if not plan_rel:
         return out
-    located = locate_fenced_block((root / plan_rel).read_text(encoding="utf-8"))
+    try:
+        located = locate_fenced_block((root / plan_rel).read_text(encoding="utf-8"))
+    except OSError:
+        return out
     if located.status is not LocateStatus.LOCATED:
         return out
     rows = yaml.safe_load(located.body) or []
@@ -63,8 +69,9 @@ def co_declared_peer_holds(
     own_declared: Iterable[str],
 ) -> list:
     """`[(path, sibling_run_id)]` for each landing path in `own_declared` that another unlanded
-    run claims: the case `sibling_claims.filter_own` lets through. A sibling with no stage
-    manifest is also read through its plan spine's `writes`. Sorted by path. Never raises."""
+    run claims: the case `sibling_claims.filter_own` lets through. A halted sibling claims only
+    the paths its halt record withholds; a live sibling with no stage manifest is also read
+    through its plan spine's `writes`. Sorted by path. Never raises."""
     root = Path(worktree_root)
     wanted = sorted({_norm(p) for p in landing_paths if p} - {""})
     own = {_norm(p) for p in own_declared if p}
@@ -76,6 +83,8 @@ def co_declared_peer_holds(
 
         claims = dict(sibling_claims.sibling_run_claims(root, own_run_id, wanted))
         for run_id in sibling_claims._unlanded_run_ids(root, own_run_id):
+            if warp_run_deliverable._halted(root, run_id):
+                continue
             paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
             if paths or prefixes:
                 continue

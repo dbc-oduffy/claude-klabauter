@@ -520,7 +520,7 @@ def _trigger_xs_lane_shell_write() -> Optional[Dict[str, Any]]:
     from unittest import mock
 
     from coordinator_core.bash_guards import guard_xs_lane_shell_write
-    from coordinator_core.hooks import nudge_em_code_dispatch as hook
+    from coordinator_core.hooks import _em_write_budget as hook
     from coordinator_core.session import xs_lane_budget as xlb
 
     lane = {"kind": "xs", "state": "open", "base_sha": "0" * 40, "paths": []}

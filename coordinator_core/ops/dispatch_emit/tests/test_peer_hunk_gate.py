@@ -71,20 +71,49 @@ def test_peer_claimed_path_the_run_does_not_declare_is_not_a_co_declared_hold(re
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], ["src/a.py"]) == []
 
 
-def test_sibling_declaring_only_in_plan_spine_is_held(repo):
-    run_id = _stamped("7cc61e")
+def _spine_sibling(repo: Path, run_id: str) -> Path:
     rdir = _run_dir(repo, run_id)
     (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/b.yaml"}), encoding="utf-8")
-    _halt(rdir)
-    (repo / "state" / "sizings").mkdir(parents=True)
+    (repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
     (repo / "state" / "sizings" / "b.yaml").write_text('plan: "docs/plans/b.md"\n', encoding="utf-8")
-    (repo / "docs" / "plans").mkdir(parents=True)
+    (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
     (repo / "docs" / "plans" / "b.md").write_text(
         "# B\n\n## Tasks\n\n```yaml plan-tasks\n- id: C0\n  writes:\n    - " + PATH + "\n```\n",
         encoding="utf-8",
     )
-    holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH])
-    assert holds == [(PATH, run_id)]
+    return rdir
+
+
+def test_live_sibling_declaring_only_in_plan_spine_is_held(repo):
+    run_id = _stamped("7cc61e")
+    _spine_sibling(repo, run_id)
+    run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, run_id)]
+
+
+def test_halted_sibling_declaring_but_not_withholding_holds_nothing(repo):
+    run_id = _stamped("7cc61e")
+    _halt(_spine_sibling(repo, run_id))
+    _declare(repo, run_id, PATH)
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
+
+
+def test_halted_sibling_withholding_the_path_holds_it(repo):
+    run_id = _stamped("7cc61e")
+    rdir = _declare(repo, run_id, PATH)
+    (rdir / "halted.json").write_text(
+        json.dumps({"status": "halted", "run_artifacts": {"withheld": {PATH: "peer-held"}}}), encoding="utf-8"
+    )
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, run_id)]
+
+
+def test_live_sibling_with_missing_sizing_file_claims_nothing_and_does_not_raise(repo):
+    run_id = _stamped("7cc61e")
+    rdir = _run_dir(repo, run_id)
+    (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/gone.yaml"}), encoding="utf-8")
+    run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    assert peer_hunk_gate._spine_writes(repo, run_id) == set()
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
 
 
 def test_unreadable_record_gives_no_holds(repo):

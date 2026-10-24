@@ -57,7 +57,7 @@ def test_group_implies_per_group_and_repeats(tmp_path, monkeypatch, capsys):
 def test_stdout_is_one_json_document(tmp_path, monkeypatch, capsys):
     _repo(tmp_path, monkeypatch)
     _stub_op(monkeypatch, tmp_path, [])
-    cli_module.main(["--from-sizing", "s.yaml", "--per-group"])
+    assert cli_module.main(["--from-sizing", "s.yaml", "--per-group"]) == cli_module.EXIT_OK
     json.loads(capsys.readouterr().out)
 
 
@@ -85,6 +85,6 @@ def test_without_flag_no_per_group_params(tmp_path, monkeypatch, capsys):
     _repo(tmp_path, monkeypatch)
     seen: list = []
     _stub_op(monkeypatch, tmp_path, seen)
-    cli_module.main(["--from-sizing", "s.yaml"])
+    assert cli_module.main(["--from-sizing", "s.yaml"]) == cli_module.EXIT_OK
     assert rg.PER_GROUP_PARAM not in seen[0]
     assert "each group is its own run" not in capsys.readouterr().err

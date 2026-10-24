@@ -275,11 +275,15 @@ def read_notes(dir_: Path) -> list[str]:
 
 def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
     """Repo-relative, forward-slash paths of the files the run's stored notes name, first-seen order."""
+    return _paths_named(repo_root, read_notes(dir_))
+
+
+def _paths_named(repo_root: Path, notes: Iterable[str]) -> list[str]:
     from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
 
     root = Path(repo_root).resolve()
     out: list[str] = []
-    for note in read_notes(dir_):
+    for note in notes:
         for token in note.split():
             token = token.strip("`'\"[]<>(").rstrip(".,;:)").strip("`'\"[]<>(")
             found = _contained_file(root, token)
@@ -289,6 +293,53 @@ def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
             if rel not in out:
                 out.append(rel)
     return out
+
+
+def run_footprint(repo_root: Path, dir_: Path, sizing_rel: Optional[str]) -> Optional[tuple[set[str], list[str]]]:
+    """`(files, dirs)` a staged run may write: its manifest rows' `writes` and `writes_under`, its
+    `doc_writes`, and the bound sizing's `writes`. None while the run has no manifest (nothing is
+    frozen yet, so no note can fall outside it)."""
+    try:
+        manifest = json.loads((Path(dir_) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    files: set[str] = {w for w in manifest.get("doc_writes") or [] if isinstance(w, str)}
+    dirs: list[str] = []
+    for row in manifest.get("rows") or []:
+        if isinstance(row, dict):
+            files.update(w for w in row.get("writes") or [] if isinstance(w, str))
+            dirs.extend(d.rstrip("/") for d in row.get("writes_under") or [] if isinstance(d, str))
+    if sizing_rel:
+        import yaml
+
+        try:
+            sizing = yaml.safe_load(_sizing_path(Path(repo_root), sizing_rel).read_text(encoding="utf-8"))
+        except (LedgerRefused, OSError, yaml.YAMLError):
+            sizing = None
+        if isinstance(sizing, dict):
+            files.update(w for w in sizing.get("writes") or [] if isinstance(w, str))
+    return files, dirs
+
+
+def paths_outside_footprint(
+    repo_root: Path, dir_: Path, sizing_rel: Optional[str], notes: Iterable[str]
+) -> list[str]:
+    """Files `notes` name that a staged run's frozen footprint does not cover; [] when it has no manifest."""
+    footprint = run_footprint(repo_root, dir_, sizing_rel)
+    if footprint is None:
+        return []
+    files, dirs = footprint
+    return [p for p in _paths_named(repo_root, notes) if p not in files and not any(p.startswith(d + "/") for d in dirs)]
+
+
+def _footprint_route(run_id: str, paths: Sequence[str]) -> str:
+    return (
+        f"run {run_id}'s write footprint is frozen at its manifest and does not cover {', '.join(paths)}; "
+        "a refire of the same sizing cannot reach them. Send the widened scope as a follow-up ask "
+        "(a new ask naming those files), or add them to the sizing's `writes` and refire."
+    )
 
 
 def pm_words(sizing: Optional[Mapping]) -> list[str]:
@@ -962,6 +1013,10 @@ def revise(
             )
     if stop_after and (dir_ / "manifest.json").exists():
         raise LedgerRefused(f"the run has staged; stop_after={STOP_AFTER_PLAN} can no longer park it")
+    if has_note:
+        outside = paths_outside_footprint(root, dir_, run.get("sizing_rel"), [note])
+        if outside:
+            raise LedgerRefused(_footprint_route(run_id, outside))
     if named and not run.get("sizing_rel"):
         raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
     claim_plan: Optional[tuple[str, Path]] = None
@@ -1476,7 +1531,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             " The refire after this run ends re-plans the omitted rows through its ledger re-plan leg."
         )
     if not live:
-        out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
+        out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted, dir_=dir_, run_id=params["run_id"]))
     elif _rows_briefed(dir_):
         out["briefed"] = True
         out["note"] = (
@@ -1567,12 +1622,17 @@ def _arm_lacking_replan_leg(root: Optional[Path], sizing_rel: Optional[str]) -> 
 def _refire(
     sizing_rel: Optional[str], root: Optional[Path] = None,
     unclaimed: Optional[tuple[Optional[str], list[str]]] = None, halted: bool = False,
+    dir_: Optional[Path] = None, run_id: str = "",
 ) -> dict:
     """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
     will. `halted` words the note for a halted run, whose resume would replay its stages. When the sizing's plan omits
     register rows, `next.replans` names them: the refire's ledger re-plan leg claims them (M+ arm only)."""
     from coordinator_core.warp_fire import fire_command
 
+    if root is not None and dir_ is not None:
+        outside = paths_outside_footprint(root, dir_, sizing_rel, read_notes(dir_))
+        if outside:
+            return {"next": {"kind": "follow-up-ask", "paths": outside}, "note": _footprint_route(run_id, outside)}
     plan_rel, missing = unclaimed or (_unclaimed_rows(root, sizing_rel) if root is not None else (None, []))
     if plan_rel:
         state = "run halted" if halted else "run finished"

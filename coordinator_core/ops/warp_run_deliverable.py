@@ -297,12 +297,11 @@ def live_run_write_claims(
 def halted_run_write_claims(
     repo_root: Path, paths: Iterable[str], *, exclude_run: Optional[str], now: Optional[float] = None,
 ) -> Optional[dict]:
-    """`{path: sorted halted run ids}` for each of `paths` a halted, unresumed run declares it writes.
+    """`{path: sorted halted run ids}` for each of `paths` a halted, unresumed run's halt record
+    names as withheld: a halted run that withheld nothing on a path holds nothing there.
 
     Only record dirs whose run-id stamp is within `run_token.TTL_SECONDS` of `now` are read; a name
-    with no stamp, or an older one, costs no IO. `exclude_run` is skipped. No session filter. Returns
-    None (hold unknown) when an in-window halted run's declaration is unparseable and yields no
-    usable paths; {} when nothing is declared."""
+    with no stamp, or an older one, costs no IO. `exclude_run` is skipped. No session filter."""
     import time
 
     from coordinator_core.ops.dispatch_emit import stopped_runs
@@ -327,15 +326,21 @@ def halted_run_write_claims(
             continue
         if not _halted(root, run_id):
             continue
-        declared, prefixes, unreadable = _manifest_declared(run_id, root)
-        if unreadable and not declared and not prefixes:
-            logging.getLogger(__name__).warning("halted run %s: unreadable write declaration", run_id)
-            return None
-        declared_set = set(declared)
-        for path in wanted:
-            if path in declared_set or any(path.startswith(pre + "/") or path == pre for pre in prefixes):
-                claims.setdefault(path, set()).add(run_id)
+        for path in wanted & halted_withheld_paths(root, run_id):
+            claims.setdefault(path, set()).add(run_id)
     return {p: sorted(s) for p, s in claims.items()}
+
+
+def halted_withheld_paths(root: Path, run_id: str) -> set:
+    """Normalized paths a halted run's marker records as withheld (hunks it left in the tree);
+    empty when the marker has none, is absent, or the run id is invalid."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    try:
+        withheld = halted_run.halted_withheld(record_dir(root, run_id))
+    except ValueError:
+        return set()
+    return {n for n in (_norm(p) for p in withheld) if n}
 
 
 def write_reconciled(run_dir: Path, sizing_rel: str, deliverable_id: str, shas: Iterable[str]) -> Path:

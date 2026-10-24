@@ -1,7 +1,7 @@
 """Feeds each product-path write of a Bash command to the XS lane budget verdict.
 
 The Edit/Write hook is the only other producer of a lane projection; this guard asks the same
-verdict (`nudge_em_code_dispatch.shell_write_budget`) so a heredoc, `tee`, `sed -i`, `cp` or
+verdict (`_em_write_budget.shell_write_budget`) so a heredoc, `tee`, `sed -i`, `cp` or
 interpreter-body write is counted or denied exactly as an Edit would be. A literal `cat`/`tee`
 heredoc body is projected in memory; any other shape is "not projectable" and is denied as
 unmeasurable where a lane governs the session. No subprocess: root resolution is a walk and the
@@ -49,7 +49,7 @@ def check(cmd: str, session_id: str, cwd: str, payload: Optional[Dict[str, Any]]
 
 def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
     from coordinator_core.bash_guards._shell_write_projection import shell_writes
-    from coordinator_core.hooks import nudge_em_code_dispatch as hook
+    from coordinator_core.hooks._em_write_budget import shell_write_budget
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
     from coordinator_core.session import xs_lane_budget as xlb
 
@@ -65,7 +65,7 @@ def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
         projected = None
         if target.body is not None:
             projected = xlb.project_shell_write(target.abs_path, target.body, target.append)
-        envelope = hook.shell_write_budget(
+        envelope = shell_write_budget(
             payload,
             session_id,
             target.abs_path,

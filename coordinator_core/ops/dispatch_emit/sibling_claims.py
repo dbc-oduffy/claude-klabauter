@@ -1,8 +1,8 @@
 """Which admitted landing paths does another unlanded run of this tree claim?
 
 `sibling_run_claims` composes `warp_run_deliverable.live_run_write_claims` and
-`halted_run_write_claims` (a live token's, or a halted unresumed in-window run's, declared
-writes) over the admitted set, then adds the sources those readers do not read for a halted
+`halted_run_write_claims` (a live token's declared writes, or a halted unresumed in-window run's
+withheld paths) over the admitted set, then adds the sources those readers do not read for a halted
 run: its `run.json` `sizing_rel`, its `run-outcome.json` `inline_review.prep.slice_files`, and
 its manifest's `review_declared_paths`. `filter_own` drops the claimed paths the committing run
 does not itself declare.
@@ -53,8 +53,9 @@ def _read_json(path: Path) -> dict:
 
 
 def _unlanded_run_ids(root: Path, own_run_id: Optional[str]) -> list:
-    """Run ids other than `own_run_id` that are halted and unresumed, or hold a fresh token
-    (unclaimed or claimed), sorted. One record-dir scan; the token is a point read per run, never a
+    """Run ids other than `own_run_id` that are halted and unresumed with a withheld path on
+    record, or hold a fresh token (unclaimed or claimed), sorted. A halted run that withheld
+    nothing left no hunks and is absent. One record-dir scan; the token is a point read per run, never a
     token-store listing. A stamped run id older than the token TTL is never opened."""
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import run_token, stopped_runs
@@ -74,7 +75,7 @@ def _unlanded_run_ids(root: Path, own_run_id: Optional[str]) -> list:
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
             continue
         if warp_run_deliverable._halted(root, run_id):
-            if stamp is not None:
+            if stamp is not None and warp_run_deliverable.halted_withheld_paths(root, run_id):
                 found.append(run_id)
             continue
         for claimed in (False, True):
@@ -111,6 +112,16 @@ def _extra_declared(root: Path, run_id: str) -> set:
     return out
 
 
+def _held_extras(root: Path, run_id: str) -> set:
+    """`_extra_declared`, narrowed for a halted run to the paths its halt record withholds."""
+    from coordinator_core.ops import warp_run_deliverable
+
+    extra = _extra_declared(root, run_id)
+    if warp_run_deliverable._halted(root, run_id):
+        return extra & warp_run_deliverable.halted_withheld_paths(root, run_id)
+    return extra
+
+
 def _declares(root: Path, run_id: str, path: str) -> bool:
     """Whether `run_id`'s manifest or commit request declares `path` (exactly or under a prefix)."""
     from coordinator_core.ops import warp_run_deliverable
@@ -141,7 +152,7 @@ def sibling_run_claims(worktree_root: Path, own_run_id: Optional[str], candidate
         for path, run_ids in sorted(halted.items()):
             claims.setdefault(path, run_ids[0])
         unlanded = _unlanded_run_ids(root, own_run_id)
-        extras = {run_id: _extra_declared(root, run_id) for run_id in unlanded}
+        extras = {run_id: _held_extras(root, run_id) for run_id in unlanded}
         for path, sessions in sorted(live.items()):
             owner = next((r for r in unlanded if _declares(root, r, path)), sessions[0])
             claims.setdefault(path, owner)
@@ -169,8 +180,11 @@ def shared_dir_holds(
         root = Path(worktree_root)
         held_dirs: set = set()
         for run_id in _unlanded_run_ids(root, own_run_id):
-            paths, _prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
-            declared = (*paths, *_extra_declared(root, run_id))
+            if warp_run_deliverable._halted(root, run_id):
+                declared = tuple(warp_run_deliverable.halted_withheld_paths(root, run_id))
+            else:
+                paths, _prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+                declared = (*paths, *_extra_declared(root, run_id))
             held_dirs.update(p.rpartition("/")[0] for p in declared if isinstance(p, str) and p)
     except Exception:  # noqa: BLE001 -- contest unknown: hold nothing further
         return []
