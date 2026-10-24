@@ -18,6 +18,7 @@ import base64
 import dataclasses
 import json
 import re
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -116,11 +117,14 @@ def header_state(repo_root: Path) -> dict[str, Any] | None:
         return None
     week = _date_in("Week starting", text)
     released = re.search(r"^\*\*Prior week released:\*\*[ \t]*(.*)$", text, re.MULTILINE)
+    day = local_day(str(repo_root))
     return {
         "week_starting": week,
         "last_start": _date_in("Last /workweek-start", text),
         "unset": week is None and header.UNSET_SENTINEL in text,
-        "missed_weeks": list(header.missed_weeks(Path(repo_root), local_day(str(repo_root)))),
+        "missed_weeks": list(header.missed_weeks(Path(repo_root), day)),
+        "missed_as_of": str(day),
+        "missed_as_of_week": header.current_week_start(Path(repo_root), day),
         "release_recorded": bool(released and "(none recorded)" not in released.group(1)
                                  and released.group(1).strip()),
     }
@@ -589,6 +593,19 @@ def _scratch_apply(rows: Mapping[str, Any]) -> list[StepSpec]:
     return [_hygiene_op(True)] if "hold_pending_marker" in caps else []
 
 
+def _weeks_rolled_since(as_of_week: str, today: str) -> list[str]:
+    """Week starts from `as_of_week` on the 7-day chain that end on or before `today`; [] on unparseable input."""
+    try:
+        start, day = date.fromisoformat(as_of_week), date.fromisoformat(today)
+    except ValueError:
+        return []
+    out: list[str] = []
+    while start + timedelta(days=7) <= day:
+        out.append(start.isoformat())
+        start += timedelta(days=7)
+    return out
+
+
 def finish_steps(decisions: Sequence[Decision], ledger_rows: Sequence[Any], *, run: Mapping[str, Any]) -> list[StepSpec]:
     """The steps the priorities and marker decisions open, ending in the chained workday-start launch."""
     rows = _rows(ledger_rows)
@@ -605,6 +622,12 @@ def finish_steps(decisions: Sequence[Decision], ledger_rows: Sequence[Any], *, r
     reset = marker is not None and marker.decision == "reset_week"
     _, state = _unfinished(rows)
     prior = (state or {}).get("week_starting")
+    as_of = (state or {}).get("missed_as_of")
+    missed = list((state or {}).get("missed_weeks") or [])
+    if as_of not in (None, today):
+        missed += _weeks_rolled_since(str((state or {}).get("missed_as_of_week") or ""), today)
+    archive_weeks = list(dict.fromkeys([*missed, *([prior] if prior else [])]))
+    archive_args = tuple(a for w in sorted(archive_weeks) for a in ("--prior-week-start", w))
 
     goals: list[str] = []
     used: set[str] = set()
@@ -647,7 +670,7 @@ def finish_steps(decisions: Sequence[Decision], ledger_rows: Sequence[Any], *, r
                       ("commit-priorities", "--sid-short", sid), stage="commit", detail="Step 8: commit and push."))
     if reset and prior:
         steps.append(_cli("w_step8_commit_archive_reset", "workweek-start-goal-and-priorities",
-                          ("commit-archive-reset", "--prior-week-start", prior), stage="commit",
+                          ("commit-archive-reset", *archive_args), stage="commit",
                           detail="Step 8: commit the archived week."))
     steps.append(_cli(STEP_HOOK, "workweek-start-goal-and-priorities", ("ceremony-hook", "--ceremony", "workweek-start"),
                       stage="hook", detail="Step 9: post-ceremony hook."))

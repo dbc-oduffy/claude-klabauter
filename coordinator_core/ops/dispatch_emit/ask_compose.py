@@ -70,6 +70,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_REVISED_FIELD,
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
+    RESUME_LEDGER_UNSERVED_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
@@ -2701,11 +2702,14 @@ def compose_ask_script(
         f"  const _ledgerDerived = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_DERIVED_FIELD} ?? []) : [];"
     )
     b.append(
+        f"  const _ledgerUnserved = _resumeLedger && (({_rl0}.{RESUME_LEDGER_UNSERVED_FIELD} ?? []).length > 0);"
+    )
+    b.append(
         f"  const _ledgerOwes = _resumeLedger && _gate.arm === {_lit(ARM_M_PLUS)}"
         f" && ((({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
         f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)}))"
-        f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0);"
+        f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0) || _ledgerUnserved;"
     )
     b.append(
         f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length || _ledgerDerived.length) {{ _ledgerExec = true; }} "
@@ -2759,6 +2763,11 @@ def compose_ask_script(
             ". Register rows the plan's register_claims.rows omit (a revise minted them after the plan was written; "
             "each is owed work and needs a row of its own that serves it): ",
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? [])",
+            ". Register rows no plan row serves (minted by a revise after the halt, or whose remaining work "
+            "names paths no row could derive; each is owed work): ",
+            f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_UNSERVED_FIELD} ?? [])",
+            ". Every row you add carries register_rows naming the register id it serves, and its writes may "
+            "name any path the work needs (the landing fence admits the writes of serving rows)",
             ". Revise the plan at ",
             "js:_planRel",
             " IN PLACE with Edit -- never scaffold a new plan, never change its path -- adding one new row, "
@@ -2791,7 +2800,11 @@ def compose_ask_script(
             "if (_ledgerAdded.length) { _ledgerExec = true; "
             "await _adoptStageReply(_replanned?.stage_reply); } "
             "else { if (!_ledgerUnlanded.length) { _xsTail = true; } "
-            "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; } }"
+            "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; "
+            f"if (_ledgerUnserved) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            f"reason: 'unserved register row(s) ' + JSON.stringify({_rl0}.{RESUME_LEDGER_UNSERVED_FIELD}) "
+            "+ ': the re-plan added no row; re-size the sizing, or fire a fresh ask whose asks[].writes "
+            "cover the work', sizing: _sizingRel, run_id: _runId }; } } }"
         )
 
         if blitz_fn:
@@ -3769,7 +3782,8 @@ def compose_ask_script(
             if judged
             else ""
         )
-        + "'delivery verdict FAIL', "
+        + "(_commit && _commit.committed === true && (_incompleteChunks.length > 0 || _blockedChunks.length > 0)) "
+        "? 'landed-rows-open' : 'delivery verdict FAIL', "
         f"revise: {_lit(f'{_INVOKE} workflow.revise (run_id; verbatim for a PM requirement, note for free text)')}, "
         f"refire: {_refire_js(sizing_rel)} }});"
     )
@@ -4050,7 +4064,8 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
         "goes in stale_docs, unedited. (a) Update every path the sizing's `doc_consumers` lists (each "
         "restates the rule this ask changes; a `:<line>` or `#<anchor>` suffix names where), and amend "
         "or supersede the text at each `ask_conflicts` path so it no longer contradicts the ask -- the "
-        "ask outranks it. "
+        "ask outranks it. A `DELIVERY*.md` among the declared doc writes is the delivery note the ask "
+        "named: write it at that path with the same content as (b), and do not leave it to the EM. ",
         f"(b) Write the delivery note at {note_rel}: every requirements-ledger item ({RECORD_DIR_ROOT}/"
         f"{run_id}/{LEDGER_VIEW_FILE}) with what the change did for it, what shipped (files "
         "and why), each review finding and how it was resolved, and every decision "
@@ -4115,6 +4130,13 @@ def _append_docs_and_commit(
         "blocked_on: _blockedRows.map((r) => ({ row: r.row, run_id: r.run_id, label: r.label, status: r.status })), "
         "refire: _blockedRows[0].refire, close: _commit.close ?? null, "
         "fire: _commit.close?.siblings?.released ?? [] } }; }"
+    )
+    b.append(
+        "      else if (_incompleteChunks.length > 0 || _blockedChunks.length > 0) { "
+        "_nextAction = { kind: 'revise_and_refire', op: 'workflow.revise', params: { run_id: _runId, "
+        "note: 'landed with rows open: ' + [...new Set([..._incompleteChunks, ..._blockedChunks])].join(', ') }, "
+        "close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] }; "
+        "_reviseAndRefire = _mkRevise(); }"
     )
     b.append(
         "      else { _nextAction = { kind: 'close_job', op: null, "

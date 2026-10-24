@@ -922,7 +922,9 @@ def cap_reply(result: dict) -> dict:
 
 @register_op("ceremony.commit_v2")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    ledger = PhaseLedger()
+    from coordinator_core import ipc
+
+    ledger = PhaseLedger(corr_id=ipc.current_corr_id())
     spawn_start = spawn_counter.spawn_count()
     t0 = time.thread_time()
     try:

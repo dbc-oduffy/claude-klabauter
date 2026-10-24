@@ -844,12 +844,12 @@ if (_reviewPaths.length === 0) {
 const PM_BOUND_TYPES = ['needs-judgment', 'unclear-direction'];
 const IRREVERSIBLE_GATE = /\b(merge[ds]? (to|into) main|push(ed|ing)? to main|force-push|publish(ed|ing)?|release|cross-repo commit|branch deletion|history rewrite|rewrite history)\b/i;
 async function _adjudicateOne(h) {
-  const _result = (await agent('phase: adjudicate\n\nYou are the PM\'s delegate for one hand-back of a grind run. Nobody escalates to the human here: a scope, direction or priority matter is yours as the APM. Rule it, do not re-ask it.\n\n' + 'Row: ' + (h.row) + '\nProfile: ' + (PROFILE_NAME) + '   Hand-back type: ' + (h.type) + '\nQuestion: ' + (h.reason || '(no question stated)') + '\nManifest path: ' + ((QUEUE_GRIND_MANIFEST.entries.find((x) => x.row_id === h.row) || {}).path || '(unknown)') + '\nYour repo is `' + (REPO_ROOT) + '`: `cd` there before any command.' + '\n\nDo this:\n  1. Read the row and what it cites. Decide the question with what is on disk.\n  2. Write one line on the row record: `pm_ruling: "apm (PM-delegated) <your ruling>"`.\n  3. Return verdict \'ruled\' and pmOnly false.\n\nReturn pmOnly true (verdict \'pm-only\', with pmOnlyGround) ONLY when the matter is important AND urgent AND has no clear right answer, or needs an external or irreversible action (merge, publish, push to main, cross-repo commit assent). Being unsure is not a ground. You do not stage or commit anything.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/adjudicate/', { label: 'adjudicate', phase: 'Adjudicate', agentType: 'coordinator:apm', model: 'opus', effort: 'high', schema: {"properties": {"pmOnly": {"type": "boolean"}, "pmOnlyGround": {"type": "string"}, "ruling": {"type": "string"}, "verdict": {"enum": ["ruled", "pm-only"], "type": "string"}}, "required": ["verdict", "pmOnly", "ruling"], "type": "object"} })) || {};
+  const _result = (await agent('phase: adjudicate\n\nYou are the PM\'s delegate for one hand-back of a grind run. Nobody escalates to the human here: a scope, direction or priority matter is yours as the APM. Rule it, do not re-ask it.\n\n' + 'Row: ' + (h.row) + '\nProfile: ' + (PROFILE_NAME) + '   Hand-back type: ' + (h.type) + '\nQuestion: ' + (h.reason || '(no question stated)') + '\nManifest path: ' + ((QUEUE_GRIND_MANIFEST.entries.find((x) => x.row_id === h.row) || {}).path || '(unknown)') + '\nYour repo is `' + (REPO_ROOT) + '`: `cd` there before any command.' + '\n\nDo this:\n  1. Read the row and what it cites. Decide the question with what is on disk.\n  2. Write one line on the row record: `pm_ruling: "apm (PM-delegated) <your ruling>"`.\n  3. Return verdict \'ruled\' and pmOnly false.\n  4. Return externalAction: the external or irreversible act the ruling needs, or \'\' for none.\n  5. Return actionable true only when the ruling names a concrete change the fix stage can apply now.\n\nReturn pmOnly true (verdict \'pm-only\', with pmOnlyGround) ONLY when the matter is important AND urgent AND has no clear right answer, or needs an external or irreversible action (merge, publish, push to main, cross-repo commit assent). Being unsure is not a ground. You do not stage or commit anything.' + '\n\nSidecar dir (yours, always writable): create it with `mkdir -p`; keep run notes there. If the harness denies the Write tool on a file your task declares or on a file in this dir ("Subagents should return findings as text"), write it with a Bash heredoc, `cat > <path> <<\'EOF\'` -- never skip it -- and name the path in your report. Use the heredoc only for a path the Write tool refused; once Write has written a path, keep editing it with Write/Edit, never overwrite it by heredoc (blob drift at commit). A coordinator guard\'s denial stays a stop; the cat-heredoc advisory is not a denial. Quote the delimiter; a frontmatter file written this way skips the write guard, so report it as unvalidated. No Bash tool: put the content in your reply. A provisioned `sidecar_path:` file, when you have one, is still where that report goes.\nsidecar_dir: .coordinator-local/workflow-sidecars/grind/run-1/adjudicate/', { label: 'adjudicate', phase: 'Adjudicate', agentType: 'coordinator:apm', model: 'opus', effort: 'high', schema: {"properties": {"actionable": {"type": "boolean"}, "externalAction": {"type": "string"}, "pmOnly": {"type": "boolean"}, "pmOnlyGround": {"type": "string"}, "ruling": {"type": "string"}, "verdict": {"enum": ["ruled", "pm-only"], "type": "string"}}, "required": ["verdict", "pmOnly", "ruling", "externalAction", "actionable"], "type": "object"} })) || {};
   _recordCall('adjudicate');
   return _result.verdict ? _result : null;
 }
 function _settleAdjudication(h, v) {
-  const gated = IRREVERSIBLE_GATE.test([h.reason, v && v.ruling].join(' '));
+  const gated = !!v && IRREVERSIBLE_GATE.test(v.externalAction || '');
   const pmOnly = !v || v.pmOnly === true || gated;
   h.adjudication = {
     adjudicator: 'coordinator:apm',
@@ -858,15 +858,18 @@ function _settleAdjudication(h, v) {
     ...(v && v.pmOnlyGround ? { pmOnlyGround: v.pmOnlyGround } : {}),
     ...(gated && !(v && v.pmOnly === true) ? { pmOnlyGround: 'external-or-irreversible' } : {}),
     ruling: v ? v.ruling : null,
+    actionable: !!(v && v.actionable) && !pmOnly,
   };
+}
+async function _adjudicateHandback(h) {
+  let v = null;
+  try { v = await _adjudicateOne(h); } catch (_e) { v = null; }
+  _settleAdjudication(h, v);
+  return h.adjudication;
 }
 async function _adjudicatePmBound() {
   const bound = _handedBack.filter((h) => PM_BOUND_TYPES.includes(h.type));
-  await Promise.all(bound.map(async (h) => {
-    let v = null;
-    try { v = await _adjudicateOne(h); } catch (_e) { v = null; }
-    _settleAdjudication(h, v);
-  }));
+  await Promise.all(bound.filter((h) => !h.adjudication).map((h) => _adjudicateHandback(h)));
 }
 
 await _adjudicatePmBound();

@@ -216,6 +216,17 @@ def test_an_unreadable_head_spine_joins_no_run_owned_deletions(repo, monkeypatch
     assert calls == [["src/gone.py"]]
 
 
+def test_a_reviewed_file_outside_every_declared_directory_lands(repo):
+    (repo / "elsewhere").mkdir()
+    (repo / "elsewhere" / "reviewed.py").write_text("r\n", encoding="utf-8", newline="")
+    (repo / "elsewhere" / "stray.py").write_text("s\n", encoding="utf-8", newline="")
+    out = _run(repo, session_id=SELF, inline_review=_reviewed_touching("elsewhere/reviewed.py"))
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["elsewhere/reviewed.py", "src/a.py"]
+    assert out["run_owned"] == ["elsewhere/reviewed.py"]
+    assert "elsewhere/stray.py" not in _committed(repo)
+
+
 def test_a_call_without_a_session_id_keeps_the_declared_only_behaviour(repo):
     (repo / "src" / "own.py").write_text("own\n", encoding="utf-8", newline="")
     session_scope.touch(SELF, "src/own.py", cwd=str(repo))

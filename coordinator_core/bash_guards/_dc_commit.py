@@ -960,6 +960,14 @@ def check_validate_commit(
                 _deny_entries: List[Dict[str, str]] = []
 
                 _merge_incoming_cache: List[Set[str]] = []  # one probe per command
+
+                def _merge_incoming() -> Set[str]:
+                    if not _merge_incoming_cache:
+                        _merge_incoming_cache.append(merge_incoming_paths(
+                            _bt_git_sequencer_in_progress, _run_git,
+                            _commit_seg_tokens or [], payload, _cwd))
+                    return _merge_incoming_cache[0]
+
                 # A path this session was already told about, that this commit's own
                 # pathspec leaves staged, is told once: the log below is the record.
                 _already_warned: Set[str] = set()
@@ -1035,11 +1043,7 @@ def check_validate_commit(
                                 if _agent_hash is not None and _agent_hash == _current_hash:
                                     continue
                                 # A merge conclusion stages the merge's own rewrite of this path.
-                                if not _merge_incoming_cache:
-                                    _merge_incoming_cache.append(merge_incoming_paths(
-                                        _bt_git_sequencer_in_progress, _run_git,
-                                        _commit_seg_tokens or [], payload, _cwd))
-                                if staged_file in _merge_incoming_cache[0]:
+                                if staged_file in _merge_incoming():
                                     continue
                                 _fh_note = operator_override_note(
                                     "COORDINATOR_SCOPE_STRICT_OFF",
@@ -1097,6 +1101,10 @@ def check_validate_commit(
                                 ),
                             })
                             continue
+
+                    # A merge conclusion must carry the merged tree, so the merge's own paths are not a sweep.
+                    if staged_file in _merge_incoming():
+                        continue
 
                     owner_fact = (
                         _compute_scope_raised_fact

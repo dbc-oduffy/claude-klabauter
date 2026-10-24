@@ -203,11 +203,22 @@ _BRIEF_CONFORMANCE_CLAUSE = (
 )
 
 
+# Directive only: a non-executing reviewer can answer just "gate corpus probe: not run"; nothing
+# downstream consumes that disclosure.
+NEW_GATE_CORPUS_PROBE_CLAUSE = (
+    "New-gate corpus probe: when your diff adds or changes a refusing gate or guard, run it against "
+    "the real corpus it gates (derive that corpus from the diff; a hand-built fixture does not "
+    "count) and report each refusal as a finding. A refusal of a valid record is a false refusal. "
+    "If you cannot execute, say \"gate corpus probe: not run\" in Execution capability."
+)
+
+
 def _brief_conformance_clause(criterion: Optional["OperativeCriterion"]) -> str:
     """The code-reviewer prompt line that hands it the brief items its ``brief_conformance`` rows
-    quote; names the operative criterion statement when one is resolved."""
+    quote and the new-gate corpus-probe clause; names the operative criterion statement when one is
+    resolved. Code-reviewer prompts only: no verify-stage prompt carries the probe clause."""
     named = f" Operative exit criterion: {criterion.statement}" if criterion is not None else ""
-    return f"\n{_BRIEF_CONFORMANCE_CLAUSE}{named}"
+    return f"\n{_BRIEF_CONFORMANCE_CLAUSE}{named}\n{NEW_GATE_CORPUS_PROBE_CLAUSE}"
 
 
 DELIVERY_NOTES_LABEL = "Executor delivery notes in the brief"

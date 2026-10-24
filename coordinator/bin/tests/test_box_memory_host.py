@@ -141,3 +141,56 @@ def test_read_memory_status_win32():
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 only")
 def test_nonpaged_pool_bytes_win32():
     assert host.nonpaged_pool_bytes() > 0
+
+
+def _spi_entry(next_off, pid, ppid, create, ws, private, name_ptr=0, name_len=0):
+    import struct
+
+    raw = bytearray(256)
+    struct.pack_into("<I", raw, 0, next_off)
+    struct.pack_into("<q", raw, 32, create)
+    struct.pack_into("<HHxxxxQ", raw, 56, name_len, name_len, name_ptr)
+    struct.pack_into("<QQ", raw, 80, pid, ppid)
+    struct.pack_into("<Q", raw, 144, ws)
+    struct.pack_into("<Q", raw, 200, private)
+    return bytes(raw)
+
+
+def test_parse_process_information_two_entries_and_terminator():
+    name = "a.exe".encode("utf-16-le")
+    ft = (1_700_000_000 + 11644473600) * 10_000_000
+    first = _spi_entry(256, 10, 4, ft, 111, 222, name_ptr=1000 + 512, name_len=len(name))
+    second = _spi_entry(0, 20, 10, 0, 333, 444)
+    buf = first + second + name
+    rows = host.parse_process_information(buf, base=1000)
+    assert [r.pid for r in rows] == [10, 20]
+    assert rows[0] == host.ProcRow(10, 4, 1_700_000_000.0, 111, 222, "a.exe")
+    assert (rows[1].ppid, rows[1].create_time, rows[1].private_bytes, rows[1].image) == (10, 0.0, 444, "")
+
+
+def test_parse_process_information_no_base_leaves_image_empty():
+    name = "a.exe".encode("utf-16-le")
+    buf = _spi_entry(0, 1, 0, 0, 1, 2, name_ptr=1256, name_len=len(name)) + name
+    assert host.parse_process_information(buf)[0].image == ""
+
+
+def test_parse_process_information_truncated_and_empty():
+    assert host.parse_process_information(b"") == []
+    full = _spi_entry(256, 1, 0, 0, 1, 2)
+    assert [r.pid for r in host.parse_process_information(full)] == [1]
+    assert [r.pid for r in host.parse_process_information(full[:207])] == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 only")
+def test_proc_table_contains_self_with_true_parent():
+    import os
+
+    rows = {r.pid: r for r in host.proc_table()}
+    me = rows[os.getpid()]
+    assert me.ppid == os.getppid()
+    assert me.private_bytes > 0 and me.image.lower().startswith("python")
+
+
+def test_proc_cmdline_nonexistent_pid_is_empty():
+    pytest.importorskip("psutil")
+    assert host.proc_cmdline(2**22 + 1) == ""

@@ -1325,12 +1325,22 @@ def commit_paths(
         if refused:
             detail = ", ".join(f"{row}: {name}" for row, name in refused)
             subdirs = dict(published_tree_classification._ROWS)
-            pending_args = []
-            for row, name in refused:
-                prefix = subdirs[row] + "/" + name
-                for p in path_list:
-                    if (p == prefix or p.startswith(prefix + "/")) and p not in pending_args:
-                        pending_args.append(p)
+            # The generator rebuilds field 7 from tracked files plus
+            # --pending, so every not-yet-tracked pathspec path under any
+            # published-tree row must be named, not just the refused ones.
+            refused_prefixes = [subdirs[row] + "/" + name for row, name in refused]
+            under_rows = [
+                p
+                for p in path_list
+                if any(p.startswith(sub + "/") for sub in subdirs.values())
+            ]
+            tracked = head_blobs(repo, under_rows)
+            pending_args = [
+                p
+                for p in under_rows
+                if p not in tracked
+                or any(p == pre or p.startswith(pre + "/") for pre in refused_prefixes)
+            ]
             pending_flags = " ".join(f"--pending {shlex.quote(p)}" for p in pending_args)
             raise CommitRefused(
                 "commit lands a published-tree top-level name the landing "

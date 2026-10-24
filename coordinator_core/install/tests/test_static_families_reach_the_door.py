@@ -201,6 +201,139 @@ def test_remove_superseded_python_forwarders_still_removes_without_exemption(tmp
         )
 
 
+_FIVE = frozenset({
+    "claude-home", "machine-local", "coordinator-settings-home",
+    "platform-localize", "resolve-coordinator-clone",
+})
+_PRESEEDED = {
+    "machine-local": b"ML-SHIM",
+    "machine-local.cmd": b"ML-CMD",
+    "coordinator-settings-home.ps1": b"CSH-PS1",
+    "claude-home": b"CH-SHIM",
+    "claude-home.cmd": b"CH-CMD",
+}
+
+
+def _door_only_rig(monkeypatch, tmp_path, *, windows=True, carries=_FIVE):
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    for fname, body in _PRESEEDED.items():
+        (bin_dst / fname).write_bytes(body)
+    calls = []
+
+    def fake_install(bd, engine_root, name, *, check_only=False, source=None):
+        calls.append((name, check_only))
+        dest = bd / f"{name}.exe"
+        if not check_only:
+            dest.write_bytes(b"EXE")
+        return dest
+
+    monkeypatch.setattr(substrate, "_door_only_platform", lambda: windows)
+    monkeypatch.setattr(door_install, "install_named_forwarder", fake_install)
+    monkeypatch.setattr(
+        door_install, "engine_carries_entrypoint_script", lambda root, n: n in carries
+    )
+    monkeypatch.setattr("coordinator_core.warm.engine_root.is_engine_root", lambda root: True)
+    return bin_dst, calls
+
+
+def _run_door_only(bin_dst, tmp_path, check_only=False):
+    return substrate._write_static_family_door_only_images(
+        bin_dst, tmp_path / "engine", substrate._static_bin_family_names(), check_only
+    )
+
+
+def test_door_only_names_are_the_five_reserved_static_family_stems():
+    assert substrate._static_family_door_only_names(
+        substrate._static_bin_family_names()
+    ) == _FIVE
+
+
+def test_door_only_step_installs_each_name_and_leaves_family_files_untouched(
+    monkeypatch, tmp_path
+):
+    bin_dst, calls = _door_only_rig(monkeypatch, tmp_path)
+    _run_door_only(bin_dst, tmp_path)
+    assert sorted(n for n, _ in calls) == sorted(_FIVE)
+    for fname, body in _PRESEEDED.items():
+        assert (bin_dst / fname).read_bytes() == body
+
+
+def test_door_only_step_is_inert_off_windows(monkeypatch, tmp_path):
+    bin_dst, calls = _door_only_rig(monkeypatch, tmp_path, windows=False)
+    (bin_dst / "machine-local.exe").write_bytes(b"EXE")
+    written = _run_door_only(bin_dst, tmp_path)
+    assert calls == [] and written == frozenset()
+    assert (bin_dst / "machine-local.exe").exists()
+
+
+def test_door_only_step_retires_only_the_image_when_engine_lacks_the_entrypoint(
+    monkeypatch, tmp_path
+):
+    bin_dst, calls = _door_only_rig(monkeypatch, tmp_path, carries=_FIVE - {"machine-local"})
+    (bin_dst / "machine-local.exe").write_bytes(b"EXE")
+    _run_door_only(bin_dst, tmp_path)
+    assert "machine-local" not in [n for n, _ in calls]
+    assert not (bin_dst / "machine-local.exe").exists()
+    assert (bin_dst / "machine-local.cmd").read_bytes() == b"ML-CMD"
+    assert (bin_dst / "machine-local").read_bytes() == b"ML-SHIM"
+
+
+def test_sweep_keeps_extra_protected_door_only_image_and_family_files(tmp_path):
+    # Covers the sweep's protection only; the `_install_bin_resolvers` call-site
+    # wiring of `door_only_filenames` is not exercised here.
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    for fname in ("machine-local.exe", "machine-local", "machine-local.cmd"):
+        (bin_dst / fname).write_bytes(b"X")
+    substrate._write_native_forwarder_manifest(bin_dst, {"machine-local"})
+    substrate._sweep_orphaned_agent_helpers(
+        bin_dst, {}, {}, False, extra_protected_names=frozenset({"machine-local.exe"})
+    )
+    for fname in ("machine-local.exe", "machine-local", "machine-local.cmd"):
+        assert (bin_dst / fname).exists()
+
+
+def test_door_only_build_failure_degrades_that_name_and_installs_the_rest(
+    monkeypatch, tmp_path
+):
+    bin_dst, _calls = _door_only_rig(monkeypatch, tmp_path)
+    real = door_install.install_named_forwarder
+
+    def flaky(bd, engine_root, name, *, check_only=False, source=None):
+        if name == "machine-local":
+            raise door_install.DoorInstallError("no cargo")
+        return real(bd, engine_root, name, check_only=check_only, source=source)
+
+    monkeypatch.setattr(door_install, "install_named_forwarder", flaky)
+    _run_door_only(bin_dst, tmp_path)
+    assert not (bin_dst / "machine-local.exe").exists()
+    assert (bin_dst / "platform-localize.exe").exists()
+
+
+def test_door_only_oserror_is_raised_after_every_name_was_tried(monkeypatch, tmp_path):
+    bin_dst, _calls = _door_only_rig(monkeypatch, tmp_path)
+    real = door_install.install_named_forwarder
+
+    def locked(bd, engine_root, name, *, check_only=False, source=None):
+        if name == "machine-local":
+            raise PermissionError("image in use")
+        return real(bd, engine_root, name, check_only=check_only, source=source)
+
+    monkeypatch.setattr(door_install, "install_named_forwarder", locked)
+    with pytest.raises(substrate.SubstrateFatalError, match="machine-local"):
+        _run_door_only(bin_dst, tmp_path)
+    assert (bin_dst / "platform-localize.exe").exists()
+
+
+def test_door_only_step_check_only_writes_and_removes_nothing(monkeypatch, tmp_path):
+    bin_dst, _calls = _door_only_rig(monkeypatch, tmp_path, carries=_FIVE - {"machine-local"})
+    (bin_dst / "machine-local.exe").write_bytes(b"EXE")
+    before = sorted(p.name for p in bin_dst.iterdir())
+    _run_door_only(bin_dst, tmp_path, check_only=True)
+    assert sorted(p.name for p in bin_dst.iterdir()) == before
+
+
 def test_only_windows_separates_the_image_from_the_ch_family_shim(tmp_path):
     """Why the two platforms are not symmetric. `named_forwarder_path` takes
     `.exe` on Windows and NO suffix on POSIX (it branches on `sys.platform`;

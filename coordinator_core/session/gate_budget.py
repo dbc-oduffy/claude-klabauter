@@ -9,9 +9,10 @@ Spec: docs/plans/2026-09-07-fix-the-validate-gate-recursive-tier-invocation.md
 
 What this emits, and nothing else: one stderr line carrying the door's own
 process time (`self_process_ms`) and the spawned suite's aggregate process
-time (`suite_process_ms`), plus a second stderr line naming DR-344 when
-`self_process_ms` exceeds the 500ms brightline
-(docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md). Process
+time (`suite_process_ms`), plus, when `self_process_ms` exceeds the 500ms
+brightline (docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md),
+one op-latency `fact_span` row (`validate_gate.self_process`) -- the breach
+never reaches stderr. Process
 time only -- never wall clock, and there is no fallback to one; an unreadable
 counter reports "unavailable" rather than a wall-clock substitute. Neither
 door's stdout (`Validation: ...` / `RC_UBT=...`) nor its exit code is ever
@@ -134,6 +135,22 @@ def format_breach_line(self_ms: Optional[int]) -> Optional[str]:
 
 def emit_budget_lines(self_ms: Optional[int], suite_ms: Optional[int]) -> None:
     print(format_budget_line(self_ms, suite_ms), file=sys.stderr)
-    breach = format_breach_line(self_ms)
-    if breach is not None:
-        print(breach, file=sys.stderr)
+    if format_breach_line(self_ms) is not None:
+        _record_breach(self_ms)
+
+
+def _record_breach(self_ms: int) -> None:
+    try:
+        import time
+
+        from coordinator_core.telemetry import op_latency
+
+        op_latency.record_fact_span(
+            fact="validate_gate.self_process",
+            t_start=time.time() - self_ms / 1000.0,
+            elapsed_ms=float(self_ms),
+            outcome="computed",
+            process_ms=float(self_ms),
+        )
+    except Exception:  # the gate's stdout and exit code must never depend on telemetry; a lost span is accepted
+        return

@@ -3693,22 +3693,18 @@ _PLAN_TASKS_GROUPING_BY_DISPOSITION = {
 
 _GROUPING_DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
 
-# Every refusal below routes here. It names the ONE correct next action —
-# ask the PM — and deliberately supplies no command, no CLI invocation, and
-# no field name to satisfy. That is not a style preference: the defect this
-# whole contract exists to fix was a gate that printed its own key
-# (`ops/plan_tasks_mutate.py`'s `_PM_APPROVAL_OFFER`, deleted with this
-# change), whose refusal text was correct and whose offer handed over the
-# command that defeated it. A message that reads as a missing-field nit
-# teaches a well-meaning EM to satisfy the field, reproducing that same
-# failure one layer up. The better alternative on offer is: go get a
-# decision.
+# Every refusal below routes here. It names the sanctioned route (an
+# approver's plan.signoff, cut_set for a first-time cut) and leaves the
+# decision with the approver: it never offers a key the authoring agent
+# could fill in itself (the retired `_PM_APPROVAL_OFFER` did, and defeated
+# the gate).
 _GROUPING_APPROVAL_HINT = (
-    'Ask the PM to approve this grouping. Which work gets cut is the PM\'s '
-    'call, not the authoring agent\'s — there is deliberately no command '
-    'that satisfies this from inside the session. Present the cut-set (the '
-    'rows in this grouping and why each one is being closed) and record the '
-    'PM\'s own words as pm_utterance when they approve it.'
+    'Ask the PM (or the APM, a G-EM or Uhura under DR-399) to approve this '
+    'grouping. Which work gets cut is not the authoring agent\'s call. '
+    'Present the cut-set (the rows in this grouping and why each one is '
+    'being closed); the approver signs it with plan.signoff, naming a '
+    'first-time cut as cut_set={rows: [ids], disposition: <d>} on '
+    'target.grouping, and resolve then accepts exactly that set.'
 )
 
 

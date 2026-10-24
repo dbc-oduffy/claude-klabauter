@@ -490,3 +490,122 @@ def test_sample_verdicts_order_independent_of_input_order():
 
 def test_git_head_sha_returns_none_for_non_git_dir(tmp_path):
     assert cg.git_head_sha(tmp_path) is None
+
+
+# --- tombstone resolution proof and bare_cite_scope narrowing ---------------
+
+
+def _wr(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(text.encode("utf-8"))
+
+
+def _tomb_fixture(tmp_path: Path, *, successor: bool = True) -> Path:
+    wiki = tmp_path / "coordinator" / "docs" / "wiki"
+    succ = "docs/wiki/coordinator-tripwires/tripwire-registry/README.md"
+    _wr(
+        wiki / "coordinator-tripwires" / "tripwire-registry.md",
+        f"---\nstatus: tombstone\n---\n# `tripwire-registry.md` moved to `{succ}`\n",
+    )
+    if successor:
+        _wr(wiki / "coordinator-tripwires" / "tripwire-registry" / "README.md", "# Registry\n")
+    _wr(
+        wiki / "citer.md",
+        "See `tripwire-registry.md` and "
+        "`docs/wiki/coordinator-tripwires/tripwire-registry.md`.\n",
+    )
+    return wiki
+
+
+def test_tombstone_resolves_old_citations_and_successor_hop(tmp_path):
+    wiki = _tomb_fixture(tmp_path)
+    report = cg.scan_corpus(wiki_root=wiki, repo_root=tmp_path)
+    tomb = wiki / "coordinator-tripwires" / "tripwire-registry.md"
+    by_file = {}
+    for v in report.verdicts:
+        by_file.setdefault(v.citation.citing_file.name, []).append(v)
+    assert all(v.status == "live" for v in by_file["citer.md"])
+    assert by_file["citer.md"][0].matches == (tomb,)
+    hop = [v for v in by_file["tripwire-registry.md"] if v.citation.kind == "pathed"][0]
+    assert hop.status == "live"
+    assert hop.resolved_root is not None and tmp_path in hop.resolved_root.parents
+    assert hop.matches[0].name == "README.md"
+
+
+def test_dangling_tombstone_is_rot(tmp_path):
+    wiki = _tomb_fixture(tmp_path, successor=False)
+    report = cg.scan_corpus(wiki_root=wiki, repo_root=tmp_path)
+    hop = [
+        v
+        for v in report.verdicts
+        if v.citation.citing_file.name == "tripwire-registry.md" and v.citation.kind == "pathed"
+    ]
+    assert hop and hop[0].status == "rot"
+
+
+def test_same_basename_tombstone_is_ambiguous(tmp_path):
+    wiki = tmp_path / "coordinator" / "docs" / "wiki"
+    _wr(wiki / "x.md", "---\nstatus: tombstone\n---\n# moved to `docs/wiki/sub/x.md`\n")
+    _wr(wiki / "sub" / "x.md", "# x\n")
+    _wr(wiki / "citer.md", "See `x.md`.\n")
+    report = cg.scan_corpus(wiki_root=wiki, repo_root=tmp_path)
+    assert [v.status for v in report.verdicts if v.citation.raw_target == "x.md"] == ["ambiguous"]
+
+
+def test_verdict_status_values_unchanged():
+    import typing
+
+    hint = typing.get_type_hints(cg.Verdict).get("status")
+    if hint is not None and getattr(hint, "__args__", None):
+        assert len(hint.__args__) == 6
+
+
+def _scope_fixture(tmp_path: Path, claims: "dict[str, str | None]", citer: str = "citer.md"):
+    wiki = tmp_path / "wiki"
+    for rel, scope in claims.items():
+        fm = "" if scope is None else f"---\r\nbare_cite_scope: {scope}\r\n---\r\n"
+        _wr(wiki / rel, fm + "# page\r\n")
+    _wr(wiki / citer, "See `p.md`.\n")
+    return wiki
+
+
+def _status(wiki: Path, tmp_path: Path, with_notes: bool = True) -> "tuple[str, tuple]":
+    idx = cg.load_wiki_index(wiki)
+    notes = cg.load_disambiguation_notes(idx, wiki) if with_notes else None
+    cit = [c for c in cg.extract_citations((wiki / "citer.md").read_text(), wiki / "citer.md")]
+    v = cg.resolve_bare_basename(cit[0], idx, {}, notes)
+    return v.status, v.matches
+
+
+def test_dot_scope_narrows_crlf_page(tmp_path):
+    wiki = _scope_fixture(tmp_path, {"p.md": ".", "sub/p.md": None})
+    status, matches = _status(wiki, tmp_path)
+    assert status == "live" and matches == (wiki / "p.md",)
+
+
+def test_notes_none_stays_ambiguous(tmp_path):
+    wiki = _scope_fixture(tmp_path, {"p.md": ".", "sub/p.md": None})
+    assert _status(wiki, tmp_path, with_notes=False)[0] == "ambiguous"
+
+
+def test_deeper_claim_wins_and_shallower_for_outsider(tmp_path):
+    wiki = _scope_fixture(tmp_path, {"p.md": ".", "sub/p.md": "sub/"}, citer="sub/citer.md")
+    (wiki / "citer.md").write_text("See `p.md`.\n")
+    idx = cg.load_wiki_index(wiki)
+    notes = cg.load_disambiguation_notes(idx, wiki)
+    inside = cg.extract_citations("`p.md`", wiki / "sub" / "citer.md")[0]
+    outside = cg.extract_citations("`p.md`", wiki / "citer.md")[0]
+    assert cg.resolve_bare_basename(inside, idx, {}, notes).matches == (wiki / "sub" / "p.md",)
+    assert cg.resolve_bare_basename(outside, idx, {}, notes).matches == (wiki / "p.md",)
+
+
+def test_equal_depth_and_no_claims_stay_ambiguous(tmp_path):
+    wiki = _scope_fixture(tmp_path, {"a/p.md": ".", "b/p.md": "."})
+    assert _status(wiki, tmp_path)[0] == "ambiguous"
+    wiki2 = _scope_fixture(tmp_path / "n", {"a/p.md": None, "b/p.md": None})
+    assert _status(wiki2, tmp_path)[0] == "ambiguous"
+
+
+def test_note_on_unambiguous_basename_is_unread(tmp_path):
+    wiki = _scope_fixture(tmp_path, {"p.md": "."})
+    assert cg.load_disambiguation_notes(cg.load_wiki_index(wiki), wiki) == {}

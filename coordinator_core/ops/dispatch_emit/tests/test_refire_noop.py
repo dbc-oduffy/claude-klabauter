@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_KIND_FIELD,
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
+    RESUME_LEDGER_UNSERVED_FIELD,
 )
 from coordinator_core.ops.dispatch_emit.refire_noop import identical_rehalt_reason
 
@@ -59,6 +60,7 @@ def test_no_leg_is_true():
         {"ledger": _ledger(**{RESUME_LEDGER_NOTES_FIELD: ["rule: add gem_holder"]})},
         {"ledger": _ledger(**{RESUME_LEDGER_SINCE_HALT_SHAS_FIELD: [SHA]})},
         {"ledger": _ledger(**{RESUME_LEDGER_CREDITED_FIELD: {"R1": SHA}})},
+        {"ledger": _ledger(**{RESUME_LEDGER_UNSERVED_FIELD: ["R1"]})},
         {"ledger": _ledger(blocking=[])},
         {"ledger": _ledger(**{RESUME_LEDGER_KIND_FIELD: "commit"})},
     ],

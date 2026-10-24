@@ -551,7 +551,7 @@ def render_em_message(
     message = (
         "Coordinator guard — instead: writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`) "
-        "is refused at guard level strict. Send `cross-repo-memo`, warn "
+        "is refused at guard level strict. `SendMessage` its live owner (none live: `cross-repo-memo`), warn "
         f"with `{_LEVEL_VERB}`, or check `git ls-remote <remote>`."
     )
     if _target_repo_is_outside_any_repo(target_repo):
@@ -818,7 +818,7 @@ def render_out_of_repo_refusal(
     place = scratch
     message = f"Coordinator guard — instead: write under `{place}`; {fact}"
     if target_in_repo:
-        message += " A peer repo takes `cross-repo-memo`."
+        message += " A peer repo's live owning session takes a `SendMessage`; no live owner -> `cross-repo-memo`."
     return message
 
 

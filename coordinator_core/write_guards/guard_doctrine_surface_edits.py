@@ -77,6 +77,15 @@ deliberately NOT printed in the deny message — see Deny message below):
     gets a lifetime sentence on allow and on deny; other audiences are
     unchanged. An expired sentinel is left in place (denied by age).
 
+Group EM admission: a main session `gem_admitted` reports as the verified live
+holder edits the `_gem_doctrine_carve_out` surfaces with no sentinel (allow
+carries only the rot advisory). DoE doctrine paths edited from a session
+anchored outside DoE are matched here, owned by DoE's root sentinel
+(`bump_out_of_repo_tool_write` defers). `edit_admitted` is the pure verdict
+for the bash guard's Edit route. EM-audience deny: SendMessage the live holder
+for a carve-out surface, else file a `coordinator-queue-append --schema lessons`
+change request.
+
 Fail-closed is DELIBERATE and is the one place this guard differs from
 every sibling guard in this tree. Every other guard fails OPEN on its own
 resolution failures (git root unresolvable, home unresolvable, subprocess
@@ -175,6 +184,14 @@ from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_profile import apply_guard_level, feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
 from coordinator_core.session.identity import resolves_em_audience
+from coordinator_core.bash_guards import _write_bump_applicability
+from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._gem_doctrine_carve_out import (
+    doctrine_root_of,
+    doctrine_surface,
+    gem_admitted,
+    live_gem_holder,
+)
 from coordinator_core.write_guards._guard_level import doctrine_surface_risk
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._sentinel_write_guard import (
@@ -634,6 +651,34 @@ def _pm_turn_names_target(payload: Dict[str, Any], target: str, repo_root: "str 
     return any(n and n in text for n in names)
 
 
+_LESSON_ROUTE = (
+    'File it as a change request: `coordinator-queue-append --schema lessons '
+    '--scope project --status open --tags doctrine-change-request '
+    '--title "Doctrine change: {target}" --body "<exact text>; why: <reason>"`. '
+    "Keep working; the next Group EM or /learn-lessons applies it."
+)
+
+
+def _live_holder_route(target: str, payload: Optional[Dict[str, Any]]) -> str:
+    """The SendMessage-the-Group-EM sentence when ``target`` is a surface a live
+    Group EM could edit and the caller is not that holder, else ""."""
+    try:
+        if doctrine_surface(target) is None:
+            return ""
+        holder = live_gem_holder(_git_root())
+        if not holder or not holder.get("name"):
+            return ""
+        caller = (payload or {}).get("session_id") or ""
+        if caller and holder.get("session_id") == caller:
+            return ""
+        return (
+            f"A live Group EM is on the box: SendMessage {holder['name']} the "
+            "proposed text and why. It edits or declines."
+        )
+    except Exception:
+        return ""
+
+
 def _deny_reason(
     target: str,
     is_local_config: bool = False,
@@ -662,14 +707,31 @@ def _deny_reason(
         into a bypass recipe. C6 replaces this alternative with the
         approval command once it exists.
     """
-    base = (
-        "[doctrine-surface guard] BLOCKED: "
-        f"{target} {_why_protected(is_local_config)}. Describe the proposed "
-        "change to the PM and ask them to approve it before editing this "
-        "file. Consider whether the content belongs in a wiki page or a "
+    head = f"[doctrine-surface guard] BLOCKED: {target} {_why_protected(is_local_config)}."
+    tail = (
+        " Consider whether the content belongs in a wiki page or a "
         "skill surface instead — those need no approval."
     )
+    base = (
+        head
+        + " Describe the proposed change to the PM and ask them to approve it "
+        "before editing this file."
+        + tail
+    )
     if resolves_em_audience(payload, _git_root()):
+        holder_route = "" if is_local_config else _live_holder_route(target, payload)
+        if holder_route:
+            base = head + " " + holder_route + tail
+            if root_sentinel == "deny-root":
+                base += " Removed a root-level approval file; approvals live under the git dir."
+            elif root_sentinel == "deny-root-present":
+                base += (
+                    " A root-level approval file is not an approval; "
+                    "approvals live under the git dir."
+                )
+            return base
+        if not is_local_config:
+            base = head + " " + _LESSON_ROUTE.format(target=target) + tail
         if _in_cloud_session():
             base += (
                 " Ask the PM to approve this edit to the named file in their "
@@ -679,6 +741,9 @@ def _deny_reason(
             base += (
                 f" See {resolve_override_keys_doc_display()} for how "
                 "approval works."
+                if is_local_config
+                else f" For an edit needed now, see {resolve_override_keys_doc_display()} "
+                "for how approval works."
             )
             if root_sentinel == "deny-root":
                 base += (
@@ -968,6 +1033,76 @@ def _weakening_deny_reason(what: str) -> str:
     return f"[doctrine-surface guard] BLOCKED: this edit {what}. Ask the PM to change it."
 
 
+def _anchor_inside(payload: Dict[str, Any], root: str) -> "bool | None":
+    """Whether the session's launch anchor is at or under ``root``; None when no anchor resolves."""
+    anchor = _write_bump_applicability.resolve_launch_anchor(
+        payload.get("session_id") or "", cwd=payload.get("cwd")
+    )
+    if not anchor:
+        return None
+    folded = casefold_path(os.path.realpath(anchor)).rstrip("/")
+    folded_root = casefold_path(os.path.realpath(root)).rstrip("/")
+    return folded == folded_root or folded.startswith(folded_root + "/")
+
+
+def _match_protected(
+    target: str, repo_root: "str | None", payload: Dict[str, Any]
+) -> "tuple[bool, str | None]":
+    """(matched, owning root): a protected entry, a foreign repo-root surface,
+    or a DoE doctrine path edited from a session anchored outside DoE."""
+    for path, entry_root in _protected_entries(repo_root):
+        if target == path:
+            return True, entry_root
+    foreign_root = _foreign_repo_root_surface(target)
+    if foreign_root is not None:
+        return True, foreign_root
+    try:
+        doc_root = doctrine_root_of(target)
+        if doc_root and _anchor_inside(payload, doc_root) is False:
+            return True, _norm(doc_root)
+    except Exception:
+        pass
+    return False, None
+
+
+def _sentinel_fresh_readonly(root: "str | None") -> bool:
+    """`_sentinel_state() == "allow"` without its root-file unlink."""
+    git_dir = _git_dir(root) if root else None
+    if not git_dir or os.path.lexists(os.path.join(root, _SENTINEL_NAME)):
+        return False
+    sentinel_path = os.path.join(git_dir, _SENTINEL_NAME)
+    try:
+        if not os.path.isfile(sentinel_path):
+            return False
+        age = time.time() - os.path.getmtime(sentinel_path)
+    except OSError:
+        return False
+    return 0 <= age <= _APPROVAL_WINDOW_SECONDS
+
+
+def edit_admitted(payload: Dict[str, Any], target: str) -> bool:
+    """Whether an Edit by this caller on ``target`` passes this guard and is not the derived copy.
+
+    Pure: reads standing, sentinel and transcript; writes and unlinks nothing.
+    """
+    try:
+        from coordinator_core.write_guards import block_derived_global_doctrine_write as derived
+
+        if derived._is_derived_live_copy(target):
+            return False
+        norm = _norm(target)
+        if gem_admitted(payload, norm):
+            return True
+        repo_root = _git_root()
+        matched, owning_root = _match_protected(norm, repo_root, payload)
+        if not matched:
+            return True
+        root = owning_root or repo_root
+        return _sentinel_fresh_readonly(root) or _pm_turn_names_target(payload, norm, root)
+    except Exception:
+        return False
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not feature_enabled(_GATE_FEATURE):
         return None
@@ -1024,19 +1159,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             risk=doctrine_surface_risk(f"This edit {weakened}."),
         )
 
-    owning_root: "str | None" = None
-    matched = False
-    for path, entry_root in _protected_entries(repo_root):
-        if target == path:
-            matched = True
-            owning_root = entry_root
-            break
+    if gem_admitted(payload, target):
+        return _rot_token_advisory(payload.get("tool_name", ""), tool_input, target)
+
+    matched, owning_root = _match_protected(target, repo_root, payload)
     if not matched:
-        foreign_root = _foreign_repo_root_surface(target)
-        if foreign_root is None:
-            return None
-        matched = True
-        owning_root = foreign_root
+        return None
 
     state = _sentinel_state(owning_root or repo_root)
     if state != "allow" and _pm_turn_names_target(payload, target, owning_root or repo_root):

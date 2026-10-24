@@ -29,12 +29,14 @@ IRREVERSIBLE_GATE_SOURCE = (
 
 _ADJUDICATION_SCHEMA = {
     "type": "object",
-    "required": ["verdict", "pmOnly", "ruling"],
+    "required": ["verdict", "pmOnly", "ruling", "externalAction", "actionable"],
     "properties": {
         "verdict": {"type": "string", "enum": ["ruled", "pm-only"]},
         "pmOnly": {"type": "boolean"},
         "pmOnlyGround": {"type": "string"},
         "ruling": {"type": "string"},
+        "externalAction": {"type": "string"},
+        "actionable": {"type": "boolean"},
     },
 }
 
@@ -47,7 +49,9 @@ _PROMPT_TAIL = (
     "\n\nDo this:\n"
     "  1. Read the row and what it cites. Decide the question with what is on disk.\n"
     "  2. Write one line on the row record: `pm_ruling: \"apm (PM-delegated) <your ruling>\"`.\n"
-    "  3. Return verdict 'ruled' and pmOnly false.\n\n"
+    "  3. Return verdict 'ruled' and pmOnly false.\n"
+    "  4. Return externalAction: the external or irreversible act the ruling needs, or '' for none.\n"
+    "  5. Return actionable true only when the ruling names a concrete change the fix stage can apply now.\n\n"
     "Return pmOnly true (verdict 'pm-only', with pmOnlyGround) ONLY when the matter is important AND "
     "urgent AND has no clear right answer, or needs an external or irreversible action (merge, "
     "publish, push to main, cross-repo commit assent). Being unsure is not a ground. "
@@ -61,10 +65,11 @@ def compose_adjudicate_block(
     models: Optional[Mapping[str, str]] = None,
     run_key: str = stages.DEFAULT_RUN_KEY,
 ) -> str:
-    """JS text defining ``_adjudicatePmBound()``; the caller awaits it after the grind loop.
+    """JS text defining ``_adjudicatePmBound()`` and ``_adjudicateHandback(h)``; the caller awaits the former after the grind loop.
 
     Every PM-bound entry in ``_handedBack`` gains an ``adjudication`` record
-    (adjudicator, verdict, pmOnly, ruling); a missing verdict yields ``pmOnly: true``.
+    (adjudicator, verdict, pmOnly, ruling, actionable); a missing verdict yields ``pmOnly: true``.
+    The gate scans only the adjudicator's declared ``externalAction``, never hand-back text.
     """
     call = stages._agent_call(
         _adjudicate_prompt_expr(),
@@ -92,7 +97,7 @@ def compose_adjudicate_block(
         "  return _result.verdict ? _result : null;\n"
         "}\n"
         "function _settleAdjudication(h, v) {\n"
-        "  const gated = IRREVERSIBLE_GATE.test([h.reason, v && v.ruling].join(' '));\n"
+        "  const gated = !!v && IRREVERSIBLE_GATE.test(v.externalAction || '');\n"
         "  const pmOnly = !v || v.pmOnly === true || gated;\n"
         "  h.adjudication = {\n"
         f"    adjudicator: {_js_string_literal(ADJUDICATOR_AGENT_TYPE)},\n"
@@ -101,15 +106,18 @@ def compose_adjudicate_block(
         "    ...(v && v.pmOnlyGround ? { pmOnlyGround: v.pmOnlyGround } : {}),\n"
         "    ...(gated && !(v && v.pmOnly === true) ? { pmOnlyGround: 'external-or-irreversible' } : {}),\n"
         "    ruling: v ? v.ruling : null,\n"
+        "    actionable: !!(v && v.actionable) && !pmOnly,\n"
         "  };\n"
+        "}\n"
+        "async function _adjudicateHandback(h) {\n"
+        "  let v = null;\n"
+        "  try { v = await _adjudicateOne(h); } catch (_e) { v = null; }\n"
+        "  _settleAdjudication(h, v);\n"
+        "  return h.adjudication;\n"
         "}\n"
         "async function _adjudicatePmBound() {\n"
         "  const bound = _handedBack.filter((h) => PM_BOUND_TYPES.includes(h.type));\n"
-        "  await Promise.all(bound.map(async (h) => {\n"
-        "    let v = null;\n"
-        "    try { v = await _adjudicateOne(h); } catch (_e) { v = null; }\n"
-        "    _settleAdjudication(h, v);\n"
-        "  }));\n"
+        "  await Promise.all(bound.filter((h) => !h.adjudication).map((h) => _adjudicateHandback(h)));\n"
         "}"
     )
 

@@ -78,7 +78,7 @@ def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch)
     assert "if (_ledgerAdded.length) { _ledgerExec = true; await _adoptStageReply(" in script
     assert (
         "else { if (!_ledgerUnlanded.length) { _xsTail = true; } "
-        "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; }"
+        "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; "
     ) in script
     assert script.count("if (!_halted && (!_resumeLedger || _ledgerExec)) {") == 2
     assert "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {" in script

@@ -14,7 +14,9 @@ when any of:
 2. Plan row: a `writes`/`writes_under`/`surface` path, or an evidence-sidecar entry for the row,
    naming `coordinator_core`.
 3. Register row: `source_text` or `met_by` naming `coordinator_core`, `claude-klabauter` or
-   `klabauter`.
+   `klabauter`. A mention is not a delivery: when the plan rows declare paths and none of them
+   (nor any evidence entry) is engine-owned, the run delivers in its own repo and rule 3 is
+   not applied.
 
 An uncleared execution-blocking gated row stays on the gated path; the caller removes those ids
 before calling. Classification reads text only: no git, no subprocess.
@@ -65,7 +67,10 @@ def engine_owner_rows(
     for row_id, text in evidence.items():
         if _ENGINE_PATH in text.casefold():
             ids.append(row_id)
-    for row in register_rows:
+    peer_delivered = not ids and any(
+        isinstance(r, Mapping) and any(_as_list(r.get(k)) for k in _PATH_FIELDS) for r in plan_raw_rows
+    )
+    for row in () if peer_delivered else register_rows:
         if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
             continue
         text = f"{row.get('source_text') or ''}\n{row.get('met_by') or ''}".casefold()

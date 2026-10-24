@@ -50,7 +50,7 @@ An unstamped dev tree keeps the refusing child by G-EM ruling, so measuring it
 would gate a path production never takes. Each sample runs with
 `cold_cli_env`. Per brief, a stamped in-process sample's procs equal the same
 brief's spawn-path procs (in-process rung declined) minus the bootstrap child's
-`CHILD_PROCS` (2 on Windows, 1 on Darwin); pickup, which spawns nothing itself,
+`CHILD_PROCS` (1); pickup, which spawns nothing itself,
 therefore reads exactly 2 on Windows and carries its high-water. baton and wsc
 are bounded by the 500ms brightline only: their own git spawns are routed to
 bug-backlog rows, not this gate.
@@ -149,9 +149,10 @@ GATE_TOTAL_PROCESS_TIME_CEILING_MS: float = (
 )
 GATE_TOTAL_PROCS_CEILING: int = 16 * GATE_SAMPLES_PER_BRIEF * _BRIEF_COUNT
 
-# Processes the declined in-process rung adds on the spawn path: the cold
-# `coordinator_core.invoke` child plus its conhost (Windows), the child (Darwin).
-CHILD_PROCS: int = 2 if IS_WINDOWS else 1
+# Processes the declined in-process rung adds on the spawn path: the one cold
+# `coordinator_core.invoke` child (the child runs with CREATE_NO_WINDOW, so no
+# conhost is counted on Windows).
+CHILD_PROCS: int = 1
 
 
 def _skip_reason_for_platform() -> Optional[str]:

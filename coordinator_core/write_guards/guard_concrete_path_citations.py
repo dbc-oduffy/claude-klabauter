@@ -87,8 +87,8 @@ to the table, not a control-flow change.
 LOUD covers surfaces that reach an agent's always-loaded context or an OSS
 install (percolating skill/agent/command/snippet/pipeline prompt surfaces,
 global-doctrine, root CLAUDE.md and any *.local.md, the wiki, and
-executable/config code that is actually read), plus `state/`, `archive/`,
-and every unlisted in-repo surface. It fires on EVERY offending write, with
+executable/config code that is actually read), plus `state/`
+and every unlisted in-repo surface (the write-time advisory skips `archive/`). It fires on EVERY offending write, with
 no session memoization -- the write lands either way, so the only cost of
 repeating is a line of context, and silence after the first one would mean
 the second citation ships unmentioned.
@@ -201,15 +201,19 @@ _LOUD_EXTENSIONS = frozenset({".py", ".sh", ".bats", ".json"})
 # and the sibling state-placement-law wiki) makes `state/` always-on
 # load-bearing substrate -- `state/lessons/` and `state/handoffs/` are read
 # and TRUSTED at session start, exactly the "an agent reads and trusts it as
-# fact" hazard this guard exists to close. `archive/` is closed-out
-# substrate, not scratch, either. Both fall through to the default LOUD
-# tier below rather than being listed in `_LOUD_PATH_PREFIXES` explicitly
-# -- an unlisted in-repo surface already defaults to "loud".
+# fact" hazard this guard exists to close. `state/` falls through to the
+# default LOUD tier below rather than being listed in `_LOUD_PATH_PREFIXES`
+# explicitly -- an unlisted in-repo surface already defaults to "loud".
+# `archive/` is skipped at write time by `_TRANSCRIPT_WRITE_PREFIXES`.
 _QUIET_PATH_PREFIXES: Tuple[str, ...] = (
     "scratch/",
     "tmp/",
     "tasks/",
 )
+
+# archive/ holds closed-out records moved there whole, so a write-time advisory has no remedy to
+# offer. The commit-time scan (`detect_in_text`) still covers archive/ per the APM option-A ruling.
+_TRANSCRIPT_WRITE_PREFIXES: Tuple[str, ...] = ("archive/",)
 
 _SESSION_SENTINEL_NAME = "concrete-path-citation-warn.fired"
 
@@ -547,6 +551,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         # its own finding, which is the exact circularity the exemption
         # closes (see `guard_concrete_path_citations`'s module docstring).
         repo_root, rel_path = _repo_relative(target)
+        if rel_path is not None and rel_path.startswith(_TRANSCRIPT_WRITE_PREFIXES):
+            return None
 
         new = new_violations(before, after, rel_path or "")
         if not new:

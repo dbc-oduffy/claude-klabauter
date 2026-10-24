@@ -89,6 +89,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Optional
 
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ceremony_common.apply_halt import (
     UnrecognizedDirective,
     _directive_gate_open,
@@ -390,6 +391,7 @@ def _execute_directives(
     output rather than as never-landed (2026-08-08 defect C)."""
     jp_by_id = _judgment_points_by_id(judgment_points)
     landed: list[str] = []
+    landed_this_pass: list[str] = []
     blocked: list[str] = []
     skipped: list[str] = []
     failed: list[dict[str, Any]] = []
@@ -553,6 +555,7 @@ def _execute_directives(
             continue
         results.append(result)
         landed.append(directive["id"])
+        landed_this_pass.append(directive["id"])
         directive_progress(_PROG, directive["id"], "landed")
         is_producer = directive["id"] in last_consumer_of
         if is_producer:
@@ -584,6 +587,13 @@ def _execute_directives(
             report["resumed_args_changed"] = resumed_args_changed
 
     if failed and landed:
+        report["partial_state"] = {
+            "landed_this_pass": landed_this_pass,
+            "push_landed": "d_step3_consolidate" in landed,
+            "resume": (
+                "Rerun the same apply; directives landed this pass resume from the checkpoint."
+            ),
+        }
         return int(WorkdayApplyExitCode.PARTIAL_MUTATION), report
     if failed:
         return int(WorkdayApplyExitCode.DIRECTIVE_FAILED), report
@@ -696,7 +706,48 @@ def main(argv: list[str]) -> int:
     kwargs, which thread them into the recomputed brief — see `apply()`'s
     docstring for the date-scope contract and the brief-USAGE ->
     TRANSPORT_FAIL propagation. A `--for-date` with a missing value fails
-    the same way a `--decisions` with a missing value already does."""
+    the same way a `--decisions` with a missing value already does.
+
+    `--result-file <path>` writes the run's report JSON to `path` on every exit path (a refusal
+    writes `{"error", "exit_code": 3}`; an exception escaping `apply()` writes
+    `exit_code: null` and re-raises). Absent, nothing is written."""
+    result_path = _prescan_result_file(argv)
+    try:
+        exit_code, payload = _run(argv)
+    except Exception as exc:  # noqa: BLE001 - recorded, then re-raised unchanged
+        if result_path is not None:
+            try:
+                _write_result(result_path, {"error": f"{type(exc).__name__}: {exc}", "exit_code": None})
+            except OSError:
+                pass  # the original exception is the signal; an unwritable result file must not replace it
+        raise
+    if result_path is not None:
+        _write_result(result_path, payload)
+    return exit_code
+
+
+def _prescan_result_file(argv: list[str]) -> Optional[str]:
+    """The `--result-file` value, found before any refusal can return; `None` if absent or valueless."""
+    if "--result-file" in argv:
+        at = argv.index("--result-file")
+        if at + 1 < len(argv) and not argv[at + 1].startswith("--"):
+            return argv[at + 1]
+    return None
+
+
+def _write_result(path: str, payload: dict[str, Any]) -> None:
+    atomic_write_bytes(path, json.dumps(payload, indent=2, sort_keys=True).encode("utf-8"))
+
+
+def _refuse(message: str) -> tuple[int, dict[str, Any]]:
+    print(f"workday-complete-apply: {message}", file=sys.stderr)
+    return int(WorkdayApplyExitCode.TRANSPORT_FAIL), {
+        "error": message,
+        "exit_code": int(WorkdayApplyExitCode.TRANSPORT_FAIL),
+    }
+
+
+def _run(argv: list[str]) -> tuple[int, dict[str, Any]]:
     decisions: Optional[dict[str, Any]] = None
     for_date: Optional[str] = None
     only_mode = False
@@ -704,22 +755,23 @@ def main(argv: list[str]) -> int:
     conclude = False
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:
-        print(f"workday-complete-apply: {conflict}", file=sys.stderr)
-        return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
+        return _refuse(conflict)
     i = 0
     while i < len(argv):
         tok = argv[i]
         if (payload := resolve_json_payload_flag(argv, i)).consumed:
             if payload.error is not None:
-                print(f"workday-complete-apply: {payload.error}", file=sys.stderr)
-                return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
+                return _refuse(payload.error)
             decisions = payload.value
             i += payload.consumed
         elif tok == "--for-date":
             if i + 1 >= len(argv):
-                print("workday-complete-apply: --for-date requires a value", file=sys.stderr)
-                return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
+                return _refuse("--for-date requires a value")
             for_date = argv[i + 1]
+            i += 2
+        elif tok == "--result-file":
+            if i + 1 >= len(argv):
+                return _refuse("--result-file requires a value")
             i += 2
         elif tok == "--only":
             only_mode = True
@@ -731,15 +783,13 @@ def main(argv: list[str]) -> int:
             conclude = True
             i += 1
         else:
-            print(f"workday-complete-apply: unrecognized argument {tok!r}", file=sys.stderr)
-            return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
+            return _refuse(f"unrecognized argument {tok!r}")
 
     refusal = period_flag_error(
         catch_up=catch_up, conclude=conclude, only_mode=only_mode, for_date=for_date
     )
     if refusal is not None:
-        print(f"workday-complete-apply: {refusal}", file=sys.stderr)
-        return int(WorkdayApplyExitCode.TRANSPORT_FAIL)
+        return _refuse(refusal)
 
     exit_code, report = apply(
         decisions=decisions,
@@ -748,7 +798,7 @@ def main(argv: list[str]) -> int:
         **_period_kwargs(catch_up, conclude),
     )
     print(json.dumps(report, indent=2, sort_keys=True))
-    return exit_code
+    return exit_code, report
 
 
 if __name__ == "__main__":

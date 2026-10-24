@@ -268,6 +268,54 @@ def test_reset_week_adds_commit_archive_reset_and_update_does_not():
     assert "w_step8_update_in_place" in _ids(update) and "w_step8_commit_archive_reset" not in _ids(update)
 
 
+def _archive_args(state_extra):
+    sup = Decision(rs.PRIORITIES_POINT, "q", "set", "rule", "priorities-supplied", "r", "e",
+                   payload={"priorities": [{"title": "A", "evidence": "e"}]})
+    mk = Decision(rs.MARKER_POINT, "q", "reset_week", "rule", "week-marker", "r", "e")
+    state = {"week_starting": "2026-10-05", "last_start": None, "unset": False, **state_extra}
+    steps = rs.finish_steps([sup, mk], [_unfinished([], state)], run=RUN)
+    return next(s for s in steps if s.id == "w_step8_commit_archive_reset").args
+
+
+def test_commit_archive_reset_names_each_missed_week_oldest_first_once():
+    args = _archive_args({"missed_weeks": ["2026-09-28", "2026-10-05"], "missed_as_of": RUN["day"]})
+    assert args == ("commit-archive-reset", "--prior-week-start", "2026-09-28", "--prior-week-start", "2026-10-05")
+
+
+def test_commit_archive_reset_adds_a_header_week_the_missed_list_lacks():
+    args = _archive_args({"missed_weeks": ["2026-09-28"], "missed_as_of": RUN["day"]})
+    assert args[1:] == ("--prior-week-start", "2026-09-28", "--prior-week-start", "2026-10-05")
+
+
+def _pairs(*weeks):
+    return ("commit-archive-reset", *(a for w in weeks for a in ("--prior-week-start", w)))
+
+
+def test_a_day_key_mismatch_keeps_the_stale_missed_weeks_and_adds_the_as_of_week():
+    args = _archive_args({"missed_weeks": ["2026-09-28"], "missed_as_of": "2026-10-11",
+                          "missed_as_of_week": "2026-10-05"})
+    assert args == _pairs("2026-09-28", "2026-10-05")
+
+
+def test_a_day_key_mismatch_names_every_intermediate_week():
+    args = _archive_args({"missed_weeks": ["2026-09-21"], "missed_as_of": "2026-09-30",
+                          "missed_as_of_week": "2026-09-28"})
+    assert args == _pairs("2026-09-21", "2026-09-28", "2026-10-05")
+
+
+def test_a_day_key_mismatch_without_an_as_of_week_never_narrows():
+    args = _archive_args({"missed_weeks": ["2026-09-28", "2026-10-05"], "missed_as_of": "2026-10-11"})
+    assert args == _pairs("2026-09-28", "2026-10-05")
+
+
+def test_header_state_records_the_day_its_missed_weeks_were_computed_on(tmp_path):
+    (tmp_path / rs.header.WEEK_DIR).mkdir(parents=True)
+    (tmp_path / rs.header.WEEK_DIR / "HEADER.md").write_text("**Week starting:** 2026-10-05\n", encoding="utf-8")
+    state = rs.header_state(tmp_path)
+    assert state["missed_as_of"] == str(rs.local_day(str(tmp_path)))
+    assert state["missed_as_of_week"] == rs.header.current_week_start(tmp_path, state["missed_as_of"])
+
+
 def test_reset_on_an_unset_header_starts_the_week_without_an_archive_commit():
     steps = _marker_steps("reset_week", header_week=None)
     assert "w_step8_start_week" in _ids(steps) and "w_step8_commit_archive_reset" not in _ids(steps)

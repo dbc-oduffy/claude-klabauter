@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 TTL_SECONDS = 24 * 3600
+KINDS = ("ask", "grind")
 _DIR = "coordinator-warp-run-tokens"
 #: Where `redeem` creates the claim record; `consume` or `release` ends it.
 _CLAIMED = "claimed"
@@ -119,14 +120,20 @@ def mint(
     *,
     session_id: Optional[str] = None,
     sizing_rel: Optional[str] = None,
+    kind: str = "ask",
 ) -> str:
     """Write the run's record and return the token. Raises ValueError when no git dir resolves,
-    the run id is malformed, or `script_path` is empty: an unbound token is never minted.
+    the run id is malformed, `script_path` is empty or `kind` is not one of `KINDS`: an unbound
+    token is never minted.
 
     `session_id` and `sizing_rel` (None for a raw ask until its gate binds the sizing it minted,
-    `bind_sizing`) let `run_owns_sizing` tell an in-flight run's sizing from an abandoned one."""
+    `bind_sizing`) let `run_owns_sizing` tell an in-flight run's sizing from an abandoned one.
+    `kind` ("ask" raw-ask run, "grind" queue-grind run) is recorded as `"kind"`; a record without
+    it reads as "ask"."""
     if not isinstance(script_path, str) or not script_path.strip():
         raise ValueError("run token: script_path is required")
+    if kind not in KINDS:
+        raise ValueError(f"run token: kind must be one of {KINDS}, got {kind!r}")
     path = _record_path(repo_root, run_id)
     if path is None:
         raise ValueError(f"run token: no git common dir under {repo_root} or a malformed run id {run_id!r}")
@@ -139,6 +146,7 @@ def mint(
         "minted_at": time.time(),
         "session_id": session_id,
         "sizing_rel": sizing_rel,
+        "kind": kind,
     }
     for stale in (
         _record_path(repo_root, run_id, claimed=True),

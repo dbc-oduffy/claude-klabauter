@@ -235,6 +235,21 @@ def _box_terms() -> "tuple[list, Optional[str], Optional[str]]":
     return terms, terms_path, None
 
 
+def _print_disjoint_offers(plan_arg: str, spine: "Optional[list]") -> None:
+    """Prints each row's disjoint-write split offer to stderr. A spine that cannot be read
+    skips the offers: `emit_script` reports that error with its own exit code."""
+    from coordinator_core.ops.dispatch_emit.dispatch_row_lint import disjoint_write_offer
+    from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError
+
+    try:
+        rows = spine if spine is not None else read_spine(Path(plan_arg))
+        offers = [offer for offer in (disjoint_write_offer(row) for row in rows) if offer]
+    except SpineReadError:
+        return
+    for offer in offers:
+        print(offer, file=sys.stderr)
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
     parsed, error = _parse(argv)
@@ -275,14 +290,18 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         guard_root = repo_root or _repo_root_for_plan(plan_arg)
         resume = _resume_set(parsed.get("--resume-rows"))
         landed_rows = None
+        spine = None
         if resume is not None:
-            landed_rows = frozenset(r.id for r in read_spine(Path(plan_arg))) - resume
+            spine = read_spine(Path(plan_arg))
+            landed_rows = frozenset(r.id for r in spine) - resume
         if guard_root is not None and (resume is not None or not _write_set_provably_clean(Path(plan_arg), guard_root)):
             from coordinator_core.ops.dispatch_emit.dirty_write_set import guard_against_dirty_write_set
             from coordinator_core.ops.dispatch_emit.wave_map import held_out_row_ids
 
+            if spine is None:
+                spine = read_spine(Path(plan_arg))
             regenerable_dirty = guard_against_dirty_write_set(
-                Path(plan_arg), guard_root, hold=held_out_row_ids(read_spine(Path(plan_arg))),
+                Path(plan_arg), guard_root, hold=held_out_row_ids(spine),
                 **({} if resume is None else {"landed": landed_rows, "own": resume}),
             )
             if regenerable_dirty and "own_leftover" in regenerable_dirty:
@@ -308,6 +327,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
 
         _refuse_unapproved_body(plan_arg)
+        _print_disjoint_offers(plan_arg, spine)
         review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
         plan_findings: list = []
         try:

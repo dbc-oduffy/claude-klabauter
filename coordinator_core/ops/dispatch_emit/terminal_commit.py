@@ -189,6 +189,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate  # noqa: E402
+from coordinator_core.ops.dispatch_emit.shipped_claims import SHIPPED_CLAIM_REFUSED, shipped_gate  # noqa: E402
 from coordinator_core.ops.dispatch_emit.write_baseline import (  # noqa: E402
     DIRTY_BEFORE_RUN_KEY,
     MEANT_TO_LAND_KEY,
@@ -2857,8 +2858,9 @@ def _run_owned_dirt(
     session_id: Optional[str], all_paths: list, deleted_paths: list, touched: frozenset,
     *, left_out: Optional[dict] = None,
 ) -> tuple:
-    """``(files, deletions)`` beside the run's declared writes (``_in_scope``) that join the one
-    commit_v2 call, read from the pre-commit snapshot; both empty with no snapshot or session id.
+    """``(files, deletions)`` beside the run's declared writes (``_in_scope``, or named in
+    ``touched`` whatever its directory) that join the one commit_v2 call, read from the
+    pre-commit snapshot; both empty with no snapshot or session id.
     Files exist on disk, are in ``touched`` (this run's own touched set) and uncontested by a
     live peer. Deletions are changed paths absent on disk and tracked at HEAD that any request
     chunk (stranded included) declares or ``touched`` names, likewise uncontested; the HEAD
@@ -2871,7 +2873,10 @@ def _run_owned_dirt(
     if snapshot is None or not session_id:
         return [], []
     taken = set(all_paths) | set(deleted_paths)
-    in_scope = sorted(p for p in snapshot.changed if p not in taken and _in_scope(p, request))
+    in_scope = sorted(
+        p for p in snapshot.changed
+        if p not in taken and (p in touched or _in_scope(p, request))
+    )
     present = [p for p in in_scope if (worktree_root / p).is_file()]
     gone = [p for p in in_scope if not (worktree_root / p).exists()]
     if not present and not gone:
@@ -4893,6 +4898,8 @@ def _terminal_commit_inner(
             review_writes = None
         if review_writes is not None:
             review_writes = {review_edits._norm(k): v for k, v in review_writes.items()}
+    from coordinator_core.ops.dispatch_emit import run_touched as _run_touched
+
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]
@@ -4900,7 +4907,10 @@ def _terminal_commit_inner(
         + companions
         + ([ask_note_rel] if ask_note_rel else [])
         + (list(artifacts.paths()) if artifacts is not None else [])
-        + [p for p in (review_writes or ()) if not review_edits._out_of_worktree(p)],
+        + [p for p in (review_writes or ()) if not review_edits._out_of_worktree(p)]
+        + sorted(_run_touched.touched_paths(
+            request, inline_review, artifacts.paths() if artifacts is not None else ()
+        )),
         [prefix for c in request.chunks for prefix in c.prefixes]
         + ([record_dir_rel] if record_dir_rel else [])
         + (list(artifacts.record_dirs) + [RECORD_DIR_ROOT] if artifacts is not None else []),
@@ -5824,18 +5834,27 @@ def _terminal_commit_inner(
         )
 
     reach_reply_field: dict = {}
+    shipped_reply_field: dict = {}
     if ask_note_rel is not None and token_state.get("since_halt_close") is None:
         reach_withheld = {
             *wh_map, *proc_wh, *sibling_withheld, *held_paths,
             *(art_landable.withheld if art_landable is not None else ()),
         }
+        ask_note_text = _read_rel(worktree_root, ask_note_rel)
         reach_refused, reach_reply_field = reach_gate(
-            worktree_root, _read_rel(worktree_root, ask_note_rel), landing_paths=all_paths,
+            worktree_root, ask_note_text, landing_paths=all_paths,
             deleted_paths=deleted_paths, withheld_paths=reach_withheld,
         )
         if reach_refused is not None:
             _remove(worktree_root, receipt_paths)
             return _error(reach_refused, refused=REACH_CLAIM_REFUSED, reach_claims=reach_reply_field)
+        shipped_refused, shipped_reply_field = shipped_gate(
+            worktree_root, ask_note_text, landing_paths=all_paths,
+            deleted_paths=deleted_paths, withheld_paths=reach_withheld,
+        )
+        if shipped_refused is not None:
+            _remove(worktree_root, receipt_paths)
+            return _error(shipped_refused, refused=SHIPPED_CLAIM_REFUSED, shipped_claims=shipped_reply_field)
 
     from coordinator_core.git import ref_cas_retry
 
@@ -6329,6 +6348,8 @@ def _terminal_commit_inner(
         reply["since_base_check"] = integrity_extra["since_base_check"]
     if reach_reply_field.get("checked"):
         reply["reach_claims"] = reach_reply_field
+    if shipped_reply_field.get("checked"):
+        reply["shipped_claims"] = shipped_reply_field
     reply["targeted_tests_check"] = integrity_extra["targeted_tests_check"]
     reply["reverify_check"] = integrity_extra["reverify_check"]
     if "retested_tests" in integrity_extra:

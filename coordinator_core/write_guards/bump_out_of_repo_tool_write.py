@@ -559,6 +559,7 @@ from coordinator_core.session import machinery_paths
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 from coordinator_core.write_guards._case_fold_path import casefold_path
+from coordinator_core.write_guards._gem_doctrine_carve_out import doctrine_root_of
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.bash_guards._write_bump_stand_down import (
     environment_stands_the_bump_down,
@@ -907,6 +908,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         translated_file_path = _resolve_translated_file_path(file_path, payload_cwd)
 
         if translated_file_path is None:
+            return None
+
+        if doctrine_root_of(translated_file_path) is not None:
             return None
 
         own_git_root = _resolve_git_root(anchor)

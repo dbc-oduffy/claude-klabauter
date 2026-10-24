@@ -468,6 +468,9 @@ RESUME_LEDGER_REVISED_FIELD = "revised"
 #: `resume_ledger` verdict key carrying the open register rows the halted plan's `register_claims.rows`
 #: omit (a revise minted them after the plan was written): the re-plan leg must serve and claim them.
 RESUME_LEDGER_UNCLAIMED_FIELD = "unclaimed_rows"
+#: `resume_ledger` verdict key carrying the blocking register ids no plan row serves and the gate derived
+#: no row for: the ledger-replan leg serves them at every arm.
+RESUME_LEDGER_UNSERVED_FIELD = "unserved_rows"
 #: `resume_ledger` verdict key carrying the ids an earlier halt judged met that a later no-landing halt re-listed.
 RESUME_LEDGER_CARRIED_MET_FIELD = "carried_met"
 #: `resume_ledger` verdict key carrying the open plan rows the halted run staged that no checkpoint

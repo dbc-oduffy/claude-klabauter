@@ -221,7 +221,7 @@ def _under_dot_git(rel: str) -> bool:
 #: A plan-blitz trail written to within this window belongs to a running wave.
 IN_FLIGHT_TRAIL_WINDOW_S = 900
 
-_PLAN_BLITZ_HOME = "state/plan-blitz"
+_PLAN_BLITZ_HOME = record_homes.home_dir("", "plan-blitz").replace(os.sep, "/").lstrip("/")
 
 
 def _in_flight_trail_paths(worktree_root: Union[Path, str], rels: Iterable[str]) -> set[str]:

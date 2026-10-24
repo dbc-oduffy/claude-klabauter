@@ -36,6 +36,9 @@ never joined against the citing file's directory -- the prototype's
 inherited bug):
   - `resolve_bare_basename` -- a bare basename (`some-page.md`), resolved by
     basename against the stated wiki file set (`WIKI_ROOT`).
+  - `bare_cite_scope` -- a `bare_cite_scope: <dir>/` (or `.`) frontmatter
+    claim on an ambiguous basename's page narrows a bare citation from under
+    that directory to that page (deepest claim wins; ties stay ambiguous).
   - `resolve_cross_surface` -- folded into `resolve_bare_basename`'s verdict:
     a bare basename absent from the wiki set but present elsewhere in the
     repo is CROSS_SURFACE, not ROT -- a real citation into a different
@@ -432,13 +435,77 @@ def load_repo_index(repo_root: Path = REPO_ROOT) -> "dict[str, tuple[Path, ...]]
     return {name: tuple(paths) for name, paths in index.items()}
 
 
+def _read_bare_cite_scope(path: Path) -> "str | None":
+    """The `bare_cite_scope:` scalar of `path`'s leading `---` frontmatter
+    fence, or `None`. Fence-bound and CRLF-tolerant; the fold target is the
+    shared frontmatter scanner."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception:
+        return None
+    lines = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        if line.startswith("bare_cite_scope:"):
+            value = line.split(":", 1)[1].split(" #", 1)[0].strip().strip("'\"")
+            return value or None
+    return None
+
+
+def load_disambiguation_notes(
+    wiki_index: "dict[str, tuple[Path, ...]]", wiki_root: Path
+) -> "dict[str, tuple[tuple[Path, Path], ...]]":
+    """`basename -> ((claimed_dir, page), ...)` for each ambiguous plain
+    basename whose pages carry a `bare_cite_scope:` frontmatter claim. A value
+    `.` is `wiki_root`; `a/b/` is `wiki_root / "a" / "b"`. Pages of
+    unambiguous basenames are never read."""
+    notes: "dict[str, tuple[tuple[Path, Path], ...]]" = {}
+    for name, pages in wiki_index.items():
+        if name.startswith("\0") or len(pages) < 2:
+            continue
+        claims = []
+        for page in pages:
+            scope = _read_bare_cite_scope(page)
+            if scope is None:
+                continue
+            parts = [p for p in scope.replace("\\", "/").split("/") if p and p != "."]
+            claims.append((Path(wiki_root, *parts), page))
+        if claims:
+            notes[name] = tuple(claims)
+    return notes
+
+
+def _narrow_by_notes(
+    citing_file: Path, claims: "tuple[tuple[Path, Path], ...]"
+) -> "Path | None":
+    """The page whose claimed directory is the deepest one containing
+    `citing_file`; `None` when no claim contains it or the deepest ties."""
+    citing = citing_file.resolve()
+    containing = []
+    for claimed_dir, page in claims:
+        if citing.is_relative_to(claimed_dir.resolve()):
+            containing.append((len(claimed_dir.resolve().parts), page))
+    if not containing:
+        return None
+    deepest = max(depth for depth, _ in containing)
+    winners = [page for depth, page in containing if depth == deepest]
+    return winners[0] if len(winners) == 1 else None
+
+
 def resolve_bare_basename(
     citation: Citation,
     wiki_index: "dict[str, tuple[Path, ...]]",
     repo_index: "dict[str, tuple[Path, ...]]",
+    notes: "dict[str, tuple[tuple[Path, Path], ...]] | None" = None,
 ) -> Verdict:
     """Bare basename resolved against `wiki_index` first. Exactly one match
-    there is `"live"`; more than one is `"ambiguous"`; zero there but a match
+    there is `"live"`; more than one is `"ambiguous"` unless `notes` holds
+    `bare_cite_scope` claims and exactly one claim at the greatest depth
+    contains the citing file, which narrows it to `"live"` on that page
+    (`notes=None` never narrows); zero there but a match
     in `repo_index` (a plan, handoff, lesson, or other tracked surface) is
     `"cross_surface"` -- live, out-of-scope for the wiki rot ratchet; zero
     anywhere is `"rot"`.
@@ -457,6 +524,10 @@ def resolve_bare_basename(
     if len(wiki_matches) == 1:
         return Verdict(citation, "live", wiki_matches)
     if len(wiki_matches) > 1:
+        if notes and name in notes:
+            page = _narrow_by_notes(citation.citing_file, notes[name])
+            if page is not None:
+                return Verdict(citation, "live", (page,))
         return Verdict(citation, "ambiguous", wiki_matches)
     repo_matches = repo_index.get(name, ())
     if repo_matches:
@@ -524,10 +595,12 @@ def resolve_citation(
     wiki_index: "dict[str, tuple[Path, ...]]",
     repo_index: "dict[str, tuple[Path, ...]]",
     roots: "tuple[Path, ...]" = PATHED_RESOLUTION_ROOTS,
+    notes: "dict[str, tuple[tuple[Path, Path], ...]] | None" = None,
 ) -> Verdict:
-    """Dispatch a single `Citation` to the resolver matching its `kind`."""
+    """Dispatch a single `Citation` to the resolver matching its `kind`;
+    `notes` is forwarded to `resolve_bare_basename` only."""
     if citation.kind == "bare_basename":
-        return resolve_bare_basename(citation, wiki_index, repo_index)
+        return resolve_bare_basename(citation, wiki_index, repo_index, notes)
     if citation.kind == "pathed":
         return resolve_pathed(citation, roots, wiki_index)
     if citation.kind == "markdown_link":
@@ -594,6 +667,7 @@ def scan_corpus(
     files and goes stale on any change that doesn't touch the citing file)."""
     wiki_index = load_wiki_index(wiki_root)
     repo_index = load_repo_index(repo_root)
+    notes = load_disambiguation_notes(wiki_index, wiki_root)
     wiki_files = sorted(wiki_root.rglob("*.md"))
 
     verdicts: "list[Verdict]" = []
@@ -604,7 +678,7 @@ def scan_corpus(
             continue  # wiki file unreadable; skip it, not fatal to the sweep
         roots = (repo_root / "coordinator", repo_root)
         for citation in extract_citations(text, path):
-            verdicts.append(resolve_citation(citation, wiki_index, repo_index, roots))
+            verdicts.append(resolve_citation(citation, wiki_index, repo_index, roots, notes))
 
     return CorpusReport(
         wiki_file_count=len(wiki_files),

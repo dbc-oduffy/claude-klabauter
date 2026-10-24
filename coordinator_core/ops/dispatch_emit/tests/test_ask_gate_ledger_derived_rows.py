@@ -10,15 +10,14 @@ from coordinator_core.ops.dispatch_emit import ask_gate
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEG_DISPATCH,
-    LEG_REFUSE,
     RECORD_DIR_ROOT,
     RESUME_LEDGER_ARM_FIELD,
     RESUME_LEDGER_DERIVED_FIELD,
     RESUME_LEDGER_LEG_FIELD,
+    RESUME_LEDGER_UNSERVED_FIELD,
     halted_record_message,
 )
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
-from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import _REMEDY
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
 from coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_executes_unmet_rows_incident import (
@@ -116,12 +115,11 @@ def test_case_variant_writes_derive_in_the_tracked_spelling_and_uncreated_paths_
     assert "coordinator/bin/tests/test_BLOCKED.py" in (repo / PLAN_REL).read_text(encoding="utf-8")
 
 
-def test_an_underivable_item_refuses_naming_the_item_and_remedy(repo):  # noqa: F811
+def test_an_underivable_item_routes_to_unserved_rows_without_a_manifest_error(repo):  # noqa: F811
     _halted(repo, ["do the thing"])
 
     out = ask_gate._handler({"sizing_path": REL, "run_id": REFIRE_RUN}, repo)
 
-    assert "R1" in out["manifest"]["error"] and _REMEDY in out["manifest"]["error"], out
-    leg = out["resume_ledger"][RESUME_LEDGER_LEG_FIELD]
-    assert leg["action"] == LEG_REFUSE and leg["writes"] == []
+    assert "R1" in out["resume_ledger"][RESUME_LEDGER_UNSERVED_FIELD], out
+    assert "error" not in (out.get("manifest") or {}), out
     assert "LR1" not in (repo / PLAN_REL).read_text(encoding="utf-8")

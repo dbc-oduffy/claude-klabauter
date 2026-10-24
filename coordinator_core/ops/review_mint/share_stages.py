@@ -323,7 +323,11 @@ def assemble_from_share(
     ])
     if tests is None and isinstance((reverify or {}).get("tests"), dict) and reverify["tests"].get("status") in _TESTS_STATUSES:
         t = reverify["tests"]
-        tests = (Path(str(t.get("sidecar") or reverify.get("supersedes") or "")), t)
+        raw = str(t.get("sidecar") or reverify.get("supersedes") or "")
+        tests_path = Path(raw)
+        if raw and not tests_path.is_absolute():
+            tests_path = repo_root / raw
+        tests = (tests_path, t)
     if tests is None:
         tests = _bookkeeping_tests(share, plan_id, plan_stem)
     if tests is None:

@@ -65,7 +65,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
-from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM
+from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM, _posix as _norm_rel
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 _PARAM_FIELDS = (
@@ -941,13 +941,6 @@ def _unchanged_since_halt(
                     detail["landed_paths"] = list(paths)
     detail.update(base=base, base_source=source if base else None, outcome=outcome)
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in judged]
-
-
-def _norm_rel(p: str) -> str:
-    s = p.replace("\\", "/")
-    while s.startswith("./"):
-        s = s[2:]
-    return s
 
 
 def _recovery_chunks(root: Path, ask_run_dir: Optional[Path]) -> dict:
@@ -2591,20 +2584,28 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         )
 
     reach_summary: dict = {}
+    shipped_summary: dict = {}
     if ask_run_dir is not None and token_state.get("since_halt_close") is None:
         try:
             note_text = (root / DELIVERY_NOTE_DIR / f"{ask_run_dir.name}.md").read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             note_text = None
         from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate
+        from coordinator_core.ops.dispatch_emit.shipped_claims import SHIPPED_CLAIM_REFUSED, shipped_gate
 
+        gate_withheld = [*withhold_reason, *recorded_reason, *art_dropped, *art_withheld, *held_paths]
         refusal, reach_summary = reach_gate(
-            root, note_text, landing_paths=paths, deleted_paths=deleted,
-            withheld_paths=[*withhold_reason, *recorded_reason, *art_dropped, *art_withheld, *held_paths],
+            root, note_text, landing_paths=paths, deleted_paths=deleted, withheld_paths=gate_withheld,
         )
         if refusal is not None:
             _remove(root, receipt_paths)
             return _error(refusal, refused=REACH_CLAIM_REFUSED, reach_claims=reach_summary)
+        refusal, shipped_summary = shipped_gate(
+            root, note_text, landing_paths=paths, deleted_paths=deleted, withheld_paths=gate_withheld,
+        )
+        if refusal is not None:
+            _remove(root, receipt_paths)
+            return _error(refusal, refused=SHIPPED_CLAIM_REFUSED, shipped_claims=shipped_summary)
 
     expected: dict = {}
     reread_artifacts: list = []
@@ -2784,6 +2785,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["script_source"] = script_source
     if reach_summary:
         reply["reach_claims"] = reach_summary
+    if shipped_summary:
+        reply["shipped_claims"] = shipped_summary
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
     reply.update(recovery_reply)

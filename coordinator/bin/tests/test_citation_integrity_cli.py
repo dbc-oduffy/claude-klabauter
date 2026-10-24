@@ -80,3 +80,47 @@ def test_main_reads_the_callers_repo_via_arg_and_env(tmp_path, monkeypatch, caps
     monkeypatch.chdir(tmp_path)
     assert cci.main([]) == 0
     assert str(expected) in capsys.readouterr().err
+
+
+def _tomb_wiki(tmp_path: Path, *, citer: bool = True) -> Path:
+    wiki = tmp_path / "coordinator" / "docs" / "wiki"
+    _write(
+        wiki / "old-name.md",
+        "---\nstatus: tombstone\n---\n# `old-name.md` moved to `docs/wiki/new/succ.md`\n",
+    )
+    _write(wiki / "new" / "succ.md", "# successor\n")
+    if citer:
+        _write(wiki / "citer.md", "See `old-name.md`.\n")
+    return wiki
+
+
+def _health(wiki: Path, tmp_path: Path, tombstones) -> dict:
+    report = cg.scan_corpus(wiki_root=wiki, repo_root=tmp_path)
+    return cci.structural_health(report, wiki, sorted(wiki.rglob("*.md")), tombstones)
+
+
+def test_tombstone_not_dead_end_and_edge_not_inbound(tmp_path: Path):
+    wiki = _tomb_wiki(tmp_path)
+    tombs = cci.tombstone_pages(wiki)
+    assert tombs == frozenset({"old-name.md"})
+    health = _health(wiki, tmp_path, tombs)
+    assert "old-name.md" not in health["dead_ends"]
+    assert "new/succ.md" in health["orphans"]
+    assert "old-name.md" not in health["orphans"]
+    plain = _health(wiki, tmp_path, frozenset())
+    assert "new/succ.md" not in plain["orphans"]
+
+
+def test_uncited_tombstone_is_orphan_despite_self_citation(tmp_path: Path):
+    wiki = _tomb_wiki(tmp_path, citer=False)
+    health = _health(wiki, tmp_path, cci.tombstone_pages(wiki))
+    assert "old-name.md" in health["orphans"]
+    assert "old-name.md" not in health["dead_ends"]
+
+
+def test_guide_drift_omits_tombstone(tmp_path: Path):
+    wiki = _tomb_wiki(tmp_path)
+    _write(wiki / "DIRECTORY_GUIDE.md", "# Guide\n")
+    absent = cci.guide_drift(wiki)["absent_pages"]
+    assert "old-name.md" not in absent
+    assert "citer.md" in absent

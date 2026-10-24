@@ -849,6 +849,10 @@ _RESOLVER_FAMILY_BY_FILE = {
     "plan-chain-run.py": frozenset({"self_location"}),
     "plan-evidence-append": frozenset({"env_first"}),
     "push-hold.py": frozenset({"env_first"}),
+    "coordinator-subsession.py": frozenset({"env_first"}),
+    "group-em-memory-governor.py": frozenset({"env_first"}),
+    "session-spend-report.py": frozenset({"env_first"}),
+    "sizing-link-baton.py": frozenset({"env_first"}),
 }
 
 

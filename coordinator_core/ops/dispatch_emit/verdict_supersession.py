@@ -175,6 +175,21 @@ def latest_criterion_record(repo_root: Path, plan_id: str, newer_than: datetime)
 TESTS_RECORD_KIND = "tests-reverify"
 
 
+def repo_rel(repo_root: Path, path: "str | Path") -> str:
+    """`path` as a repo-relative POSIX string when it lies under `repo_root`, else as given, forward-slashed."""
+    path = Path(path)
+    resolved = path if path.is_absolute() else repo_root / path
+    try:
+        return resolved.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def record_sidecar_value(repo_root: Path, sidecar: Any) -> Any:
+    """The `tests.sidecar` value a verdict record stores: repo-relative for a non-empty string, else as given."""
+    return repo_rel(repo_root, sidecar) if isinstance(sidecar, str) and sidecar else sidecar
+
+
 def record_tests_supersession(
     *, repo_root: Path, plan_id: str, tests: dict, session_id: str = ""
 ) -> str:
@@ -193,7 +208,7 @@ def record_tests_supersession(
         "recorded_at": now.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "session_id": session_id,
         "tests": {
-            key: tests.get(key)
+            key: record_sidecar_value(repo_root, tests.get(key)) if key == "sidecar" else tests.get(key)
             for key in ("status", "run", "failed", "sidecar", "baseline_method", "baseline")
         },
     }

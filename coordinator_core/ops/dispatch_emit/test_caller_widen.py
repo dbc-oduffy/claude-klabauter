@@ -3,8 +3,8 @@
 Pure: the one `git grep` that finds the referencers is run by the caller
 (`emit.compose_script`) and handed in as text. A referencer that a different
 row of the same wave writes is never added to this row (two writers of one
-file in one wave); it is named in the row's body instead, so the executor's
-PARTIAL cites it and the revise path widens it.
+file in one wave); it appears under "outside your writes" in the row's
+tests-exercising section instead, so the executor's PARTIAL cites it.
 """
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from coordinator_core.ops.dispatch_emit.wave_map import UNDECLARED
 
 #: Pathspecs `git grep` is limited to: test files only.
 TEST_PATHSPECS = ("*test_*.py", "*_test.py", "*/tests/*.py")
-
-_NOTE_HEAD = "## Test referencers outside this row's writes"
 
 
 class Widened(NamedTuple):
@@ -108,38 +106,45 @@ def widen_row(row, wave_rows: Sequence, by_module: dict) -> Widened:
     return Widened(tuple(added), tuple(excluded))
 
 
-def excluded_note(excluded: Sequence[str]) -> str:
-    listed = "\n".join(f"- `{t}`" for t in excluded)
-    return (
-        f"{_NOTE_HEAD}\n\nThese tests import a module you write, and another row of this wave "
-        "writes them, so they are outside your footprint. If your change breaks one, "
-        f"return PARTIAL naming it; do not edit it.\n\n{listed}"
-    )
+def _exercising_sources(row) -> list:
+    return [m for m in module_paths(row) if m.rsplit("/", 1)[-1] != "conftest.py"]
 
 
 def widen_waves(waves: list, run_grep) -> list:
-    """`waves` with each row's writes widened. `run_grep(pattern, pathspecs)` returns
-    `git grep` stdout, or None if it could not run; it is called once."""
+    """`waves` with each row's writes widened to importing tests and its body given the
+    tests-exercising section. `run_grep(pattern, pathspecs)` returns `git grep` stdout, or
+    None if it could not run; it is called once. Only import lines widen `writes`; a test
+    that merely names a source file is listed in the section, never written."""
+    # Deferred: dispatch_row_lint imports this module at load.
+    from coordinator_core.ops.dispatch_emit import dispatch_row_lint
+
     modules = sorted({m for wave in waves for row in wave for m in module_paths(row)})
-    pattern = grep_pattern(modules)
-    if pattern is None:
+    sources = sorted({m for wave in waves for row in wave for m in _exercising_sources(row)})
+    parts = [p for p in (grep_pattern(modules), dispatch_row_lint.exercising_pattern(sources)) if p]
+    if not parts:
         return waves
+    pattern = "|".join(parts)
     output = run_grep(pattern, TEST_PATHSPECS)
     if not output:
         return waves
-    by_module = referencers(modules, parse_grep(output))
+    pairs = parse_grep(output)
+    by_module = referencers(modules, pairs)
     result = []
     for wave in waves:
         new_wave = []
         for row in wave:
             w = widen_row(row, wave, by_module)
-            if not w.writes and not w.excluded:
+            writes = [*row.writes, *w.writes] if w.writes else row.writes
+            exercising = sorted(
+                {t for s in _exercising_sources(row) for t in dispatch_row_lint.tests_exercising(s, pairs)}
+            )
+            section = dispatch_row_lint.tests_exercising_section(writes, exercising, pattern)
+            if not w.writes and section is None:
                 new_wave.append(row)
                 continue
             body = row.body
-            if w.excluded:
-                body = f"{body}\n\n{excluded_note(w.excluded)}" if body else excluded_note(w.excluded)
-            writes = [*row.writes, *w.writes] if w.writes else row.writes
+            if section is not None:
+                body = f"{body}\n\n{section}" if body else section
             new_wave.append(row._replace(writes=writes, body=body))
         result.append(new_wave)
     return result

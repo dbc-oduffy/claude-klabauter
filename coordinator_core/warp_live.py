@@ -400,7 +400,8 @@ def _run_transcript_dir(
 def size_stage_run(
     repo_root: Path, session_id: Optional[str], spawn_dir: Optional[str]
 ) -> Optional[str]:
-    """The run id of a live raw-ask run of this session that has bound no sizing and whose launch
+    """The run id of a live raw-ask run (token kind "ask"; a grind token never names) of this
+    session that has bound no sizing and whose launch
     `transcript_dir` is `spawn_dir`: the writer is one of that run's own spawns, in its size stage.
 
     Unknown attribution (no session, no spawn dir, no recoverable transcript dir) answers None,
@@ -410,7 +411,7 @@ def size_stage_run(
     root = Path(repo_root)
     dirs = _launch_dirs(None)
     for record in _token_records(root):
-        if record.get("session_id") != session_id:
+        if record.get("session_id") != session_id or record.get("kind", "ask") != "ask":
             continue
         run_id = record["run_id"]
         submission = _read_json(_submission_path(root, run_id)) or {}

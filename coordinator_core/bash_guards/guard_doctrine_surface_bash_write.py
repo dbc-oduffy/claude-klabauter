@@ -2379,6 +2379,7 @@ def _compose_deny_message(
     *,
     commit_shaped: bool = False,
     quoted_content_shaped: bool = False,
+    edit_target: Optional[str] = None,
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
 ) -> str:
     """Construction-verified equivalent of DoE's ``_compose_deny_message`` +
@@ -2408,12 +2409,38 @@ def _compose_deny_message(
             "target. Edit the real destination; see "
             "findings-self-persist-sentinel.md."
         )
+    elif edit_target is not None:
+        prose = f"BLOCKED: writes a governed doctrine surface. Edit {edit_target} with the Edit tool."
     else:
         prose = (
-            "BLOCKED: writes a governed doctrine surface. If the target "
-            "is a governed file, use Write/Edit."
+            "BLOCKED: writes a governed doctrine surface. No Edit route is open "
+            "to you for the file; the PM's doctrine-edit approval sentinel opens one."
         )
     return f"{prose}\n\nSee {citation}."
+
+
+def _admitted_edit_target(
+    payload: Dict[str, Any], cmd: str, identifiers_lower: Tuple[str, ...]
+) -> Optional[str]:
+    """The one governed file this command writes, when an Edit on it passes
+    ``guard_doctrine_surface_edits`` for this caller; ``None`` for zero or several
+    targets, or a refused one. Message selection only: never changes the verdict."""
+    try:
+        from coordinator_core.write_guards.guard_doctrine_surface_edits import edit_admitted
+
+        targets = sorted(set(_governed_write_targets(cmd, identifiers_lower)))
+        if len(targets) != 1:
+            return None
+        target = targets[0]
+        if "$" in target or "`" in target:
+            return None
+        expanded = os.path.expanduser(target)
+        cwd = str(payload.get("cwd") or "")
+        if cwd and not os.path.isabs(expanded):
+            expanded = os.path.join(cwd, expanded)
+        return target if edit_admitted(payload, expanded) else None
+    except Exception:  # noqa: BLE001 -- message selection only
+        return None
 
 
 #: CLAUDE.md-class surfaces beyond the governed manifest: the live rules
@@ -2454,8 +2481,9 @@ def _check_advisory(
     return _record("advisory", doctrine_surface_advisory()["hookSpecificOutput"]["additionalContext"])
 
 
-def _record(verdict_kind: str, text: str) -> Any:
-    """This guard's record; its EM text is ``text`` verbatim, so the EM render is the legacy envelope."""
+def _record(verdict_kind: str, text: str, *, offer_edit: bool = True) -> Any:
+    """This guard's record; its EM text is ``text`` verbatim, so the EM render is the legacy envelope.
+    ``offer_edit=False`` drops the Write/Edit offer, for a caller no Edit door is open to."""
     from coordinator_core.guard_messages.alternative_record import (
         AdaptableOffer,
         AlternativeRecord,
@@ -2468,9 +2496,15 @@ def _record(verdict_kind: str, text: str) -> Any:
         summary=text,
         em_text=text,
         members=(
-            AdaptableOffer(
-                template="use the Write or Edit tool on the governed file",
-                what_to_adapt="the governed file path",
+            *(
+                (
+                    AdaptableOffer(
+                        template="use the Write or Edit tool on the governed file",
+                        what_to_adapt="the governed file path",
+                    ),
+                )
+                if offer_edit
+                else ()
             ),
             EscalationRoute(
                 report_what="the governed doctrine surface you need changed to whoever dispatched you",
@@ -2480,12 +2514,12 @@ def _record(verdict_kind: str, text: str) -> Any:
     )
 
 
-def _levelled_deny(message: str, risk: str) -> Any:
+def _levelled_deny(message: str, risk: str, *, offer_edit: bool = True) -> Any:
     """The deny record; a non-strict guard level returns the levelled envelope instead."""
     from coordinator_core.guard_messages.alternative_record import Audience
     from coordinator_core.guard_messages.render import render
 
-    record = _record("deny", message)
+    record = _record("deny", message, offer_edit=offer_edit)
     envelope = render(record, Audience.EM)
     leveled = apply_guard_level(_GUARD_NAME, envelope, risk=risk)
     return record if leveled == envelope else leveled
@@ -2522,12 +2556,20 @@ def check(
     if _is_onboarding_write(cmd, identifiers_lower, str(payload.get("cwd") or "")):
         return None
 
+    commit_shaped = _looks_commit_shaped(cmd)
+    quoted = _looks_quoted_content_shaped(cmd, identifiers_lower)
+    edit_target = (
+        None if commit_shaped or quoted else _admitted_edit_target(payload, cmd, identifiers_lower)
+    )
     message = _compose_deny_message(
-        commit_shaped=_looks_commit_shaped(cmd),
-        quoted_content_shaped=_looks_quoted_content_shaped(cmd, identifiers_lower),
+        commit_shaped=commit_shaped,
+        quoted_content_shaped=quoted,
+        edit_target=edit_target,
         resolve_wiki_citation=resolve_wiki_citation,
     )
 
     return _levelled_deny(
-        message, doctrine_surface_risk("this command writes a governed doctrine surface.")
+        message,
+        doctrine_surface_risk("this command writes a governed doctrine surface."),
+        offer_edit=edit_target is not None,
     )

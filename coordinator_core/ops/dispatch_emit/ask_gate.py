@@ -50,6 +50,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
     RESUME_LEDGER_SINCE_SHA_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
+    RESUME_LEDGER_UNSERVED_FIELD,
     RESUME_LEDGER_UNLANDED_FIELD,
     UNCHANGED_SINCE_HALT_REASON,
     RESUMED_RUN_ID_KEY,
@@ -504,6 +505,26 @@ def _credited_landed(blocking: Sequence[str], halt, repo_root: Path) -> list[str
     return credited
 
 
+def _unserved_revise_rows(revised: Sequence[str], remaining: Mapping, unclaimed: Sequence[str], halt, repo_root: Path) -> list[str]:
+    """Revise-minted blocking ids with no halt steps, no serving plan row and no unclaimed claim: the
+    ledger-replan leg serves them. An unreadable plan adds nothing. Reads the plan once per candidate
+    item, """
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import PlanRowsUnreadable, serving_rows
+
+    out: list[str] = []
+    for item in revised:
+        record = remaining.get(item)
+        if (isinstance(record, dict) and record.get("remaining")) or item in unclaimed:
+            continue
+        try:
+            if serving_rows(Path(repo_root) / halt.plan_rel, [item]):
+                continue
+        except PlanRowsUnreadable:
+            return []
+        out.append(item)
+    return out
+
+
 def _resume_ledger(
     sizing: dict, halt, repo_root: Path, run_id: Optional[str] = None, sizing_rel: Optional[str] = None
 ) -> Optional[dict]:
@@ -588,6 +609,9 @@ def _resume_ledger(
     unclaimed = [r for r in _unclaimed_rows(Path(repo_root), sizing_rel)[1] if r not in out]
     if unclaimed:
         verdict[RESUME_LEDGER_UNCLAIMED_FIELD] = unclaimed
+    unserved = _unserved_revise_rows(revised, verdict[RESUME_LEDGER_REMAINING_FIELD], unclaimed, halt, repo_root)
+    if unserved:
+        verdict[RESUME_LEDGER_UNSERVED_FIELD] = unserved
     if all_landed:
         verdict[RESUME_LEDGER_KIND_FIELD] = ALL_LANDED_HALT_KIND
     if halt.halted == COMMIT_HALT_KIND:
@@ -879,8 +903,9 @@ def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str
     """Ids of the rows serving the resume's open ledger items, appended to the plan's spine.
 
     One `derive_ledger_rows` row per open item; an item already holding an open derived row from an
-    earlier gate call reuses it. An underivable item raises `AskStageError` naming the item and the
-    remedy. A plan outside `docs/plans` (an XS record spine) is written through the same locked
+    earlier gate call reuses it. An underivable item, like a revise-minted item no plan row serves, is
+    appended to `resume_out[unserved_rows]` and served by the ledger-replan leg; a derived row that
+    cannot be written raises `AskStageError`. A plan outside `docs/plans` (an XS record spine) is written through the same locked
     rewrite `plan_tasks_mutate._add_task` applies.
     """
     from coordinator_core.frontmatter.body_blocks import LocateStatus
@@ -903,7 +928,8 @@ def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str
         rid, item = str(row.get("id") or ""), (row.get("register_rows") or [None])[0]
         if rid.startswith(LEDGER_DERIVED_ROW_PREFIX) and item in blocking and row.get("disposition") == "open":
             reuse.setdefault(str(item), rid)
-    todo = [b for b in blocking if b not in reuse]
+    unserved = resume_out.get(RESUME_LEDGER_UNSERVED_FIELD) or []
+    todo = [b for b in blocking if b not in reuse and b not in unserved]
     rows, underivable = lrp.derive_ledger_rows(
         resume_out.get(RESUME_LEDGER_REMAINING_FIELD) or {},
         resume_out.get(RESUME_LEDGER_NOTES_FIELD) or [],
@@ -915,9 +941,7 @@ def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str
         exclude=resume_out.get(RESUME_EXCLUDE_FIELD) or (),
     )
     if underivable:
-        raise AskStageError(
-            f"ledger item {', '.join(underivable)} owes work and no path resolves for it; {lrp._REMEDY}"
-        )
+        resume_out[RESUME_LEDGER_UNSERVED_FIELD] = list(dict.fromkeys([*unserved, *underivable]))
     for row in rows:
         row = {**row, "surface": row["writes"][0], "queue_scope": "project"}
         error = _append_spine_row(root, plan_rel, row)

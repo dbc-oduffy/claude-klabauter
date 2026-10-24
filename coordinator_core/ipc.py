@@ -1026,6 +1026,16 @@ _op_cpu_secs_var: contextvars.ContextVar[Optional[list]] = contextvars.ContextVa
 )
 
 
+_corr_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "coordinator_core_ipc_corr_id", default=None
+)
+
+
+def current_corr_id() -> Optional[str]:
+    """The corr_id the dispatch in flight is recorded under; None outside one."""
+    return _corr_id_var.get()
+
+
 def charge_op_cpu_secs(secs: float) -> None:
     """Charge `secs` of CPU to the dispatch in flight; no-op outside one.
 
@@ -2823,6 +2833,7 @@ async def dispatch_message(
             exc_info=True,
         )
 
+    _corr_token = _corr_id_var.set(corr_id)
     try:
         response = await _dispatch_message_impl(msg)
         error = response.get("error") if isinstance(response, dict) else None
@@ -2842,6 +2853,7 @@ async def dispatch_message(
         error_kind = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        _corr_id_var.reset(_corr_token)
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
         span_ms = (_time.process_time() - process_start) * 1000.0
         uncontaminated = _exit_dispatch(_record)

@@ -92,6 +92,43 @@ def test_self_process_ms_unreadable_counter_is_unavailable(monkeypatch):
     assert gate_budget.self_process_ms() is None
 
 
+def _patch_span(monkeypatch, fn):
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setattr(op_latency, "record_fact_span", fn)
+
+
+def test_breach_records_one_span_and_one_stderr_line(monkeypatch, capsys):
+    calls = []
+    _patch_span(monkeypatch, lambda **kw: calls.append(kw))
+    gate_budget.emit_budget_lines(501, 10)
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1
+    assert "BREACH" not in err
+    assert len(calls) == 1
+    assert calls[0]["process_ms"] == 501
+    assert calls[0]["fact"] == "validate_gate.self_process"
+
+
+def test_500_records_nothing(monkeypatch, capsys):
+    calls = []
+    _patch_span(monkeypatch, lambda **kw: calls.append(kw))
+    gate_budget.emit_budget_lines(500, 10)
+    assert calls == []
+    assert len(capsys.readouterr().err.strip().splitlines()) == 1
+
+
+def test_raising_sink_is_swallowed(monkeypatch, capsys):
+    def _boom(**kw):
+        raise OSError("sink down")
+
+    _patch_span(monkeypatch, _boom)
+    gate_budget.emit_budget_lines(900, 10)
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1
+    assert "self_process_ms=900" in err
+
+
 def test_no_suite_ceiling_or_workers_cap_axis_in_module():
     text = pathlib.Path(gate_budget.__file__).read_text()
     assert "fast_tier_suite_process_ceiling_ms" not in text

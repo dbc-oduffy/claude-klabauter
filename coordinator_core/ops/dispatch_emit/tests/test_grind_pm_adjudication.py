@@ -52,7 +52,26 @@ def test_pm_only_false_cannot_clear_an_irreversible_gate():
         assert gate.search(text), text
     assert not gate.search("should the row be parked")
     assert f"const IRREVERSIBLE_GATE = /{pa.IRREVERSIBLE_GATE_SOURCE}/i;" in s
-    assert "IRREVERSIBLE_GATE.test([h.reason, v && v.ruling].join(' '))" in s
+    assert "const gated = !!v && IRREVERSIBLE_GATE.test(v.externalAction || '');" in s
+    assert "h.reason, v && v.ruling" not in s
+
+
+def test_gate_reads_the_declared_external_action_not_the_hand_back_text():
+    s = _script()
+    settle = s[s.index("function _settleAdjudication"):s.index("async function _adjudicateHandback")]
+    assert "h.reason" not in settle and "v.ruling" not in settle.split("h.adjudication")[0]
+    assert "actionable: !!(v && v.actionable) && !pmOnly," in settle
+    assert "verdict: v ? v.verdict : 'unavailable'" in settle
+    assert pa._ADJUDICATION_SCHEMA["required"] == ["verdict", "pmOnly", "ruling", "externalAction", "actionable"]
+    assert pa._ADJUDICATION_SCHEMA["properties"]["externalAction"] == {"type": "string"}
+    assert pa._ADJUDICATION_SCHEMA["properties"]["actionable"] == {"type": "boolean"}
+
+
+def test_adjudicated_entry_is_not_re_asked():
+    s = _script()
+    assert "async function _adjudicateHandback(h) {" in s
+    assert "return h.adjudication;" in s
+    assert "bound.filter((h) => !h.adjudication).map((h) => _adjudicateHandback(h))" in s
 
 
 def test_adjudicator_call_is_a_counted_sonnet_call_site():

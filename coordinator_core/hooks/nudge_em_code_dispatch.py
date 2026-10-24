@@ -330,7 +330,8 @@ def _foreign_checkout_deny(checkout: str, file_path: str) -> dict:
     return deny(
         "PreToolUse",
         f"[em-code-dispatch nudge] {_display_checkout(checkout, file_path)} is another EM's repo. "
-        "Use instead: `cross-repo-memo draft <slug> --to <receiver-em>`.",
+        "Use instead: `SendMessage` its live EM; none live -> "
+        "`cross-repo-memo draft <slug> --to <receiver-em>`.",
     )
 
 

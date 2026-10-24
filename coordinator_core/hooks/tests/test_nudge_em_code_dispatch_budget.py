@@ -357,6 +357,7 @@ def test_general_work_session_editing_foreign_checkout_is_denied_with_memo_point
     reason = _reason(result)
     assert str(root) in reason
     assert "cross-repo-memo draft" in reason
+    assert "SendMessage" in reason
     assert xb.read_lane(root, SID) is None
 
 

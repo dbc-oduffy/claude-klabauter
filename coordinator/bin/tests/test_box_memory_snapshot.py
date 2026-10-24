@@ -37,11 +37,28 @@ GOV = SimpleNamespace(
 )
 
 
+MB = 1024**2
+TABLE = [
+    SimpleNamespace(pid=1, private_bytes=100 * MB),
+    SimpleNamespace(pid=2, private_bytes=900 * MB),
+    SimpleNamespace(pid=3, private_bytes=500 * MB),
+]
+CMDLINE_CALLS: list = []
+
+
+def _cmdline(pid):
+    CMDLINE_CALLS.append(pid)
+    return f"proc{pid}"
+
+
 def _run(argv, **kw):
     kw.setdefault("status_fn", _status())
     kw.setdefault("nonpaged_fn", lambda: GIB)
     kw.setdefault("cache_host_fn", _cache())
-    return mod.main(argv, platform="win32", governor=GOV, **kw)
+    kw.setdefault("proc_table_fn", lambda: TABLE)
+    kw.setdefault("cmdline_fn", _cmdline)
+    CMDLINE_CALLS.clear()
+    return mod.main(argv, platform="win32", **kw)
 
 
 @pytest.fixture(autouse=True)
@@ -116,6 +133,26 @@ def test_top_ordering_and_limit(capsys):
     out = capsys.readouterr().out
     assert "proc2" in out and "proc3" in out and "proc1" not in out
     assert out.index("proc2") < out.index("proc3")
+    assert sorted(CMDLINE_CALLS) == [2, 3]
+
+
+def test_top_proc_table_failure_degrades_one_field(capsys):
+    def boom():
+        raise OSError("ntquery")
+
+    assert _run(["--json"], proc_table_fn=boom) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["top_consumers"] == "unavailable" and data["available_gib"] == 40.0
+
+
+def test_win32_never_loads_governor(monkeypatch, capsys):
+    def no_gov():
+        raise AssertionError("load_governor called on win32")
+
+    monkeypatch.setattr(host, "load_governor", no_gov)
+    monkeypatch.setattr(mod, "_load", lambda name: host)
+    assert _run(["--json"]) == 0
+    assert [r["pid"] for r in json.loads(capsys.readouterr().out)["top_consumers"]] == [2, 3, 1]
 
 
 def test_json_shape(capsys):

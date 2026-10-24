@@ -987,3 +987,41 @@ def test_sizing_key_scope_does_not_apply_outside_sizings() -> None:
 def test_sizing_same_key_name_at_wrong_path_still_scanned() -> None:
     text = f"other:\n  text: 'see {_LEAK}'\n  source_text: 'see {_LEAK}'\n"
     assert any(f.rule == "posix-home" for f in detect_in_text(text, filename=_SIZING))
+
+
+_DRIVE_LINE = "see " + "C" + ":\\Users\\a\\b for the repo"
+
+_SCANNED_RECORD_PREFIXES = (
+    "archive/",
+    "tasks/",
+    "state/stand-downs/",
+    "state/plan-blitz/",
+    "state/mise-inventory/",
+    "state/memo-outbox/",
+    ".coordinator-local/memo-outbox/",
+    "state/cross-repo/",
+    "state/lessons-outbox/",
+    "state/audits/",
+)
+
+_EXEMPT_EVIDENCE_PREFIXES = (
+    "state/review-trail/diffs/",
+    "state/review-findings/",
+    "state/subagent-share/",
+    ".coordinator-local/subagent-share/",
+)
+
+
+def test_record_trees_are_scanned() -> None:
+    for prefix in _SCANNED_RECORD_PREFIXES:
+        hits = detect_in_text(_DRIVE_LINE, filename=prefix + "x/note.md")
+        assert len(hits) >= 1, prefix
+
+
+def test_remaining_evidence_prefixes_stay_exempt() -> None:
+    for prefix in _EXEMPT_EVIDENCE_PREFIXES:
+        assert detect_in_text(_DRIVE_LINE, filename=prefix + "x/note.md") == [], prefix
+
+
+def test_audits_capture_data_json_stays_exempt() -> None:
+    assert detect_in_text(_DRIVE_LINE, filename="state/audits/data/x.json") == []

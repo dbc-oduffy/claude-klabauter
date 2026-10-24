@@ -242,6 +242,62 @@ def test_grouping_digest_match_accepted(root):
     assert _call(root, {"grouping": "spun_off"}, digest=digest)["applied"] is True
 
 
+CUT = {"rows": ["A2"], "disposition": "wont_do"}
+
+
+def _resolve(root, ids):
+    import asyncio
+
+    from coordinator_core.ops import plan_tasks_mutate as ptm
+
+    return asyncio.run(ptm._handler({"plan_path": str(root / "docs/plans/p.md"), "verb": "resolve", "resolves": [
+        {"id": i, "disposition": "wont_do", "disposition_detail": "cut", "case_against": "ca"} for i in ids
+    ]}, repo_root=root / ".git"))
+
+
+def _with_ruled_out(root):
+    p = root / "docs/plans/p.md"
+    p.write_text(_text(root).replace("  do:\n", "  ruled_out:\n    status: pending\n  do:\n", 1), encoding="utf-8")
+
+
+def test_empty_grouping_refused_without_cut_set_and_hint_names_route(root):
+    _with_ruled_out(root)
+    with pytest.raises(ValueError, match="cut_set"):
+        _call(root, {"grouping": "ruled_out"})
+    from coordinator_core.frontmatter.schema_validate import _GROUPING_APPROVAL_HINT
+
+    assert "plan.signoff" in _GROUPING_APPROVAL_HINT and "cut_set" in _GROUPING_APPROVAL_HINT
+
+
+def test_cut_set_signoff_then_resolve_accepts_exactly_that_set(root, monkeypatch):
+    _with_ruled_out(root)
+    res = _call(root, {"grouping": "ruled_out"}, source="g-em", cut_set=CUT, approver="group-em-44",
+                ruling="close A2", ruling_ref="docs/plans/p.md")
+    assert res["applied"] is True
+    block = _fm(root)["grouping_approvals"]["ruled_out"]
+    assert block["status"] == "approved" and block["approver"] == "G-EM"
+    assert "A2" not in [i for i, r in _rows(root).items() if r.get("disposition") == "wont_do"]
+    refused = _resolve(root, ["A1", "A2"])
+    assert refused["exit_code"] != 0 and "different cut-set" in str(refused), refused
+    assert _rows(root)["A1"]["disposition"] == "open"
+    done = _resolve(root, ["A2"])
+    assert done["exit_code"] == 0, done
+    assert _rows(root)["A2"]["disposition"] == "wont_do"
+    assert _rows(root)["A1"]["disposition"] == "open"
+
+
+def test_cut_set_wrong_grouping_unknown_row_and_no_grouping_refused(root):
+    _with_ruled_out(root)
+    before = _text(root)
+    with pytest.raises(ValueError, match="does not close"):
+        _call(root, {"grouping": "spun_off"}, cut_set=CUT)
+    with pytest.raises(ValueError, match="not found"):
+        _call(root, {"grouping": "ruled_out"}, cut_set={"rows": ["NOPE"], "disposition": "wont_do"})
+    with pytest.raises(ValueError, match="grouping target only"):
+        _call(root, {"rows": ["A1"]}, cut_set=CUT)
+    assert _text(root) == before
+
+
 def test_target_shape_refused(root):
     with pytest.raises(ValueError, match="exactly one"):
         _call(root, {"rows": ["A1"], "grouping": "do"})

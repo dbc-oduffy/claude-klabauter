@@ -42,7 +42,8 @@ def test_referencer_another_same_wave_row_writes_is_excluded_and_named():
     wave = [_row("A", [MOD], body="b"), _row("B", ["pkg/tests/test_a.py"])]
     [[a, b]] = widen_waves([wave], grep)
     assert a.writes == [MOD]
-    assert "pkg/tests/test_a.py" in a.body and a.body.startswith("b")
+    assert "## Tests that exercise the code you change" in a.body and a.body.startswith("b")
+    assert "Outside your writes: run, do not edit:\n- `pkg/tests/test_a.py`" in a.body
     assert b.writes == ["pkg/tests/test_a.py"] and b.body == ""
 
 

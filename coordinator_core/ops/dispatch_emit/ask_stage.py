@@ -209,18 +209,24 @@ def _run_sizing(root: Path, rel: Optional[str]) -> Optional[dict]:
         return None
 
 
+DELIVERY_NAMED_NOTE = re.compile(r"DELIVERY[^/]*\.md", re.IGNORECASE)
 _DOC_TARGET_SUFFIX = re.compile(r"(?::\d+(?:-\d+)?|#.*)$")
 
 
 def doc_writes(run_id: str, sizing: Optional[Mapping]) -> tuple[str, ...]:
     """The docs stage's declared write set: the run's delivery note, then every path the sizing
-    names in `doc_consumers` and `ask_conflicts` (a `:<line>` or `#<anchor>` suffix stripped).
-    A sizing or plan path is never one -- those stay process records."""
+    names in `doc_consumers` and `ask_conflicts` (a `:<line>` or `#<anchor>` suffix stripped),
+    plus any `DELIVERY*.md` the sizing's `writes` names (the delivery note the ask asked for, at
+    its named path). A sizing or plan path is never one -- those stay process records."""
     sizing = sizing or {}
     raw = [p for p in sizing.get("doc_consumers") or [] if isinstance(p, str)]
     raw += [
         c.get("path") for c in sizing.get("ask_conflicts") or []
         if isinstance(c, Mapping) and isinstance(c.get("path"), str)
+    ]
+    raw += [
+        w for w in sizing.get("writes") or []
+        if isinstance(w, str) and DELIVERY_NAMED_NOTE.match(PurePosixPath(w.strip()).name)
     ]
     from coordinator_core.session.record_homes import home_dir
 

@@ -14,6 +14,10 @@ Wire params:
     approver, ruling, ruling_ref — source g-em or uhura: the session name, the ruling text and
                                  where it is recorded.
     digest (str, optional)     — grouping only: must equal a fresh recompute.
+    cut_set (dict, optional)   — grouping only: {"rows": [ids], "disposition": d}; signs the
+                                 grouping as it will read once those rows are resolved to d,
+                                 so a first-time cut into an empty grouping can be approved.
+                                 `plan.tasks.mutate resolve` then accepts exactly that set.
     on (str, optional)         — YYYY-MM-DD, default today (UTC).
 
 Reply: `{"plan", "applied", "message", "targets"}`.
@@ -40,6 +44,7 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.primitives import rebuild, split_frontmatter
 from coordinator_core.frontmatter.schema_validate import (
+    _PLAN_TASKS_GROUPING_BY_DISPOSITION,
     _plan_tasks_row_grouping,
     compute_grouping_digest,
     format_validation_errors,
@@ -142,8 +147,23 @@ def _sign_rows(old_text: str, ids: list, source: str, words: str, ref: Optional[
     return old_text[:start] + body + old_text[end:]
 
 
+def _prospective_rows(rows: list, grouping: str, cut_set: dict) -> list:
+    """`rows` with the cut-set's ids carrying its target disposition, so the digest matches
+    what `plan.tasks.mutate resolve` will compute for exactly that cut."""
+    disposition = cut_set.get("disposition")
+    if _PLAN_TASKS_GROUPING_BY_DISPOSITION.get(disposition) != grouping or grouping == "do":
+        raise _fail(f"cut_set disposition {disposition!r} does not close rows into grouping {grouping!r}")
+    by_id = {r.get("id"): r for r in rows}
+    missing = [i for i in cut_set["rows"] if i not in by_id]
+    if missing:
+        raise _fail(f"cut_set task id not found: {missing[0]!r}")
+    named = set(cut_set["rows"])
+    return [{**r, "disposition": disposition} if r.get("id") in named else r for r in rows]
+
+
 def _sign_grouping(old_text: str, grouping: str, digest: Optional[str], source: str, words: str,
-                   ref: Optional[str], on: str, approver: Optional[str]) -> str:
+                   ref: Optional[str], on: str, approver: Optional[str],
+                   cut_set: Optional[dict] = None) -> str:
     split = split_frontmatter(old_text)
     fm = parse_frontmatter(old_text).get("frontmatter")
     if split is None or not isinstance(fm, dict):
@@ -156,8 +176,13 @@ def _sign_grouping(old_text: str, grouping: str, digest: Optional[str], source: 
     if located.status is not LocateStatus.LOCATED:
         raise _fail("task spine is absent or malformed")
     rows = [r for r in _parse_rows_or_abort(located.body, "plan.signoff") if isinstance(r, dict)]
-    if not any(_plan_tasks_row_grouping(r) == grouping for r in rows):
-        raise _fail(f"grouping {grouping!r} covers no rows")
+    if cut_set is not None:
+        rows = _prospective_rows(rows, grouping, cut_set)
+    elif not any(_plan_tasks_row_grouping(r) == grouping for r in rows):
+        raise _fail(
+            f"grouping {grouping!r} covers no rows; to sign off a cut that has not been resolved yet, "
+            f"pass cut_set={{rows: [ids], disposition: <disposition>}}"
+        )
     fresh = compute_grouping_digest(rows, grouping)
     if digest is not None and digest != fresh:
         raise _fail(f"digest does not match the current membership of {grouping!r}")
@@ -209,6 +234,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     digest = params.get("digest")
     if digest is not None and grouping is None:
         raise ValueError("digest applies to a grouping target only")
+    cut_set = params.get("cut_set")
+    if cut_set is not None:
+        cs_rows = cut_set.get("rows") if isinstance(cut_set, dict) else None
+        if grouping is None:
+            raise ValueError("cut_set applies to a grouping target only")
+        if not (isinstance(cs_rows, list) and cs_rows and all(isinstance(i, str) and i for i in cs_rows)
+                and len(set(cs_rows)) == len(cs_rows) and isinstance(cut_set.get("disposition"), str)):
+            raise ValueError("cut_set must be {rows: [distinct ids], disposition: str}")
     on = params.get("on") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     if source in (SOURCE_GEM, SOURCE_UHURA) and grouping is None:
@@ -237,7 +270,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     def mutate(old_text: str) -> str:
         if grouping is not None:
-            return _sign_grouping(old_text, grouping.strip(), digest, source, words, ref, on, approver)
+            return _sign_grouping(old_text, grouping.strip(), digest, source, words, ref, on, approver, cut_set)
         return _sign_rows(old_text, ids, source, words, ref, on)
 
     try:

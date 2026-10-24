@@ -2170,10 +2170,12 @@ def _write_agent_forwarder(
 #
 # ``claude-home`` is reserved on EVERY platform: `ch_family` owns
 # `<settings-home>/bin/claude-home` permanently (both the POSIX leg and the
-# Windows git-bash leg), the door owns `claude-home.exe` on Windows only, and
-# no cutover of either leg has shipped. See DR-365's 2026-08-30 note for the
-# full history (an attempted cutover was backed out the same day) — do not
-# re-derive it here.
+# Windows git-bash leg) and the door owns `claude-home.exe` on Windows only,
+# written by `_write_static_family_door_only_images` for every reserved name a
+# static family serves (a door-only `.exe`, not an un-reservation; the `.cmd`
+# and shim stay). No cutover of either leg has shipped. See DR-365's
+# 2026-08-30 note for the full history (an attempted cutover was backed out
+# the same day) — do not re-derive it here.
 _AGENT_HELPER_RESERVED_NAMES = frozenset(
     {
         "machine-local",
@@ -3473,17 +3475,12 @@ def _resolve_agent_cmd_dest_collisions(agent_helper_target_map: "dict[str, str]"
 # tuples that USED to live here (all three sourced from `ml_bin`, DoE's
 # `templates/bin/`) are now declared in that manifest instead — see
 # `_load_bin_templates_manifest` above and `_install_bin_resolvers` below.
-# C5 (docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-are-
-# thoroughly-dead.md) retired the `.cmd` entry: `coordinator/bin/
-# claude-home.py` now exists, making `claude-home` door-eligible, and the
-# Windows leg cuts over to the native door image via the generic
-# agent-helper derivation instead (see `_AGENT_HELPER_RESERVED_NAMES`'s
-# OS-gated `claude-home` membership below). `"claude-home"` (the
-# extensionless POSIX shim) and `"_claude_home.py"` (the implementation)
-# stay — POSIX does NOT cut over (see that constant's comment), and both
-# names are still needed: the sweep-protection membership `_static_bin_
-# family_names()` provides against `_sweep_orphaned_agent_helpers`, and the
-# POSIX shim itself.
+# On Windows `_write_static_family_door_only_images` adds a door-only
+# `claude-home.exe` beside the `.cmd` and the extensionless shim, and this
+# family stays the sole writer of those two. `"claude-home"` (the POSIX shim)
+# and `"_claude_home.py"` (the implementation) are also the sweep-protection
+# membership `_static_bin_family_names()` provides against
+# `_sweep_orphaned_agent_helpers`.
 _CH_FAMILY_FILES = (
     ("claude-home", True), ("_claude_home.py", False), ("claude-home.cmd", False),
 )
@@ -4129,6 +4126,85 @@ def _retire_door_images(bin_dst: Path, names: "set[str]") -> None:
         _write_native_forwarder_manifest(bin_dst, set(state.names - names))
 
 
+def _door_only_platform() -> bool:
+    """True where the door-only static-family `.exe` step runs (Windows). A
+    module-level seam so tests can patch it."""
+    return os.name == "nt"
+
+
+def _static_family_door_only_names(static_family_names: "frozenset[str]") -> "frozenset[str]":
+    """Reserved agent-helper names a static family serves, by STEM
+    (platform-localize ships `.py` + `.cmd` and no bare file). Underscore- and
+    dot-prefixed members are implementation files, never entrypoints."""
+    return _AGENT_HELPER_RESERVED_NAMES & {
+        Path(n).stem for n in static_family_names if not n.startswith(("_", "."))
+    }
+
+
+def _write_static_family_door_only_images(
+    bin_dst: Path, engine_root: "Optional[Path]", static_family_names: "frozenset[str]",
+    check_only: bool,
+) -> "frozenset[str]":
+    """Writes `<name>.exe` for each reserved static-family name the engine
+    serves and touches no other file of that name: the `.cmd`, the extensionless
+    shim and any `.ps1` stay with their static family (DR-365: one path, one
+    owner). Windows only. Returns the installed image FILENAMES so the caller
+    can protect them from the orphan sweep.
+
+    Never call `remove_superseded_python_forwarders`, `remove_shadowing_ps1_sibling`
+    or `_cut_over_to_native_door` here: each deletes family-owned files.
+    A door build failure degrades the name to its `.cmd`; an `OSError` is
+    collected and raised as `SubstrateFatalError` after every name was tried.
+    Under `check_only` nothing is written, so the returned set is empty;
+    `SystemExit` is caught because the door build's CLI-style failure paths exit."""
+    if not _door_only_platform() or engine_root is None:
+        return frozenset()
+    from coordinator_core.install import door_install
+    from coordinator_core.warm.engine_root import is_engine_root
+
+    if not is_engine_root(engine_root):
+        return frozenset()
+    written: "set[str]" = set()
+    failed: "list[tuple[str, BaseException]]" = []
+    lock = (
+        contextlib.nullcontext()
+        if check_only
+        else held_lock(bin_dst, holder_label="install-substrate-door-only")
+    )
+    with lock:
+        for name in sorted(_static_family_door_only_names(static_family_names)):
+            if not door_install.engine_carries_entrypoint_script(engine_root, name):
+                if not check_only:
+                    _retire_door_images(bin_dst, {name})
+                continue
+            try:
+                door_install.install_named_forwarder(
+                    bin_dst, engine_root, name, check_only=check_only
+                )
+            except (door_install.DoorInstallError, SystemExit) as exc:
+                print(
+                    f"[install-substrate] {name}: no door-only .exe -- {exc}. "
+                    "Left on its .cmd.",
+                    file=sys.stderr,
+                )
+                continue
+            except OSError as exc:
+                failed.append((name, exc))
+                continue
+            if not check_only:
+                written.add(name)
+        if written:
+            _union_native_forwarder_manifest(bin_dst, written)
+    if failed:
+        for name, exc in failed:
+            print(f"[install-substrate]   FAILED {name}.exe: {exc}", file=sys.stderr)
+        raise SubstrateFatalError(
+            "install-substrate: door-only .exe could not be written for "
+            + ", ".join(n for n, _ in failed)
+        )
+    return frozenset(door_install.named_forwarder_path(bin_dst, n).name for n in written)
+
+
 def _split_live_source_tree_map(
     live_root: Path, live_bin: Path,
 ) -> "tuple[dict[str, str], set[str]]":
@@ -4411,6 +4487,8 @@ def _install_bin_resolvers(
 
     resolver_module = rm_family(bin_dst, "resolve-claude-klabauter")
     door_leg_target_map = _door_leg_target_map(agent_helper_target_map, claude_klabauter_root_resolved)
+    engine_root = _door_engine_root()
+    static_family_names = _static_bin_family_names(claude_klabauter_root_resolved)
     agent_helper_resolved = _write_agent_helper_forwarders(
         door_leg_target_map, bin_dst, check_only,
         withheld_names=frozenset(agent_helper_target_map) - frozenset(door_leg_target_map),
@@ -4418,9 +4496,12 @@ def _install_bin_resolvers(
         publisher_only_launchable=_publisher_only_names(
             claude_klabauter_root_resolved, "PUBLISHER_ONLY_LAUNCHABLE"
         ),
-        engine_root=_door_engine_root(),
+        engine_root=engine_root,
         resolver_module=resolver_module,
-        static_family_names=_static_bin_family_names(claude_klabauter_root_resolved),
+        static_family_names=static_family_names,
+    )
+    door_only_filenames = _write_static_family_door_only_images(
+        bin_dst, engine_root, static_family_names, check_only,
     )
     if not check_only:
         resolution_journal.record_resolution(
@@ -4476,7 +4557,7 @@ def _install_bin_resolvers(
 
     _sweep_orphaned_agent_helpers(
         bin_dst, agent_helper_target_map, agent_cmd_dest_map, check_only,
-        extra_protected_names=written_filenames | live_tree_protected,
+        extra_protected_names=written_filenames | door_only_filenames | live_tree_protected,
     )
 
     # --- Step 3c: platform-localize hook ---
@@ -4526,6 +4607,7 @@ def _install_bin_resolvers(
         _static_bin_family_names(claude_klabauter_root_resolved)
         | set(agent_helper_target_map) | set(agent_cmd_dest_map.values())
         | written_filenames
+        | door_only_filenames
         | {SITEPACKAGES_POINTER_NAME}
         | live_tree_protected
     )

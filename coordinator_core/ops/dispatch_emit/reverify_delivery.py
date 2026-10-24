@@ -57,6 +57,8 @@ from coordinator_core.ops.dispatch_emit.verdict_supersession import (  # noqa: F
     latest_delivery_supersession,
     latest_foreign_claims_supersession,
     latest_tests_supersession,
+    record_sidecar_value,
+    repo_rel,
 )
 from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
 from coordinator_core.ops.dispatch_emit.wake_digest import stage_schema_literal
@@ -232,12 +234,7 @@ def _head_sha(repo_root: Path) -> str:
     return proc.stdout.strip()
 
 
-def _run_rel(repo_root: Path, record_path: Path) -> str:
-    resolved = record_path if record_path.is_absolute() else repo_root / record_path
-    try:
-        return resolved.resolve().relative_to(repo_root.resolve()).as_posix()
-    except ValueError:
-        return resolved.as_posix()
+_run_rel = repo_rel
 
 
 def _commit_credit_note(repo_root: Optional[Path], plan_path: str, base: str) -> str:
@@ -590,7 +587,7 @@ def record_delivery_verdict(
             "status": status,
             "run": tests.get("run"),
             "failed": tests.get("failed"),
-            "sidecar": tests.get("sidecar"),
+            "sidecar": record_sidecar_value(repo_root, tests.get("sidecar")),
         }
         for key in ("baseline_method", "baseline"):
             if tests.get(key) is not None:

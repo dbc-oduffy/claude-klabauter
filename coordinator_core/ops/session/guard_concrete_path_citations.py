@@ -1086,7 +1086,7 @@ def _extract_token(text: str, start: int) -> str:
 # --- evidence-artifact exemption ------------------------------------------
 # See the module docstring's "Evidence-artifact exemption" section for the
 # full ARTIFACT-CLASS rationale -- this is not a directory allowlist, it is
-# a recognition that these two prefixes are, by construction, machine-
+# a recognition that these four prefixes are, by construction, machine-
 # generated RECORDS of a citation that exists elsewhere (a frozen diff
 # transcript, a reviewer sidecar quoting its own finding), not fresh corpus
 # debt. `filename` is repo-relative (as `scan_repo` and the write-time
@@ -1107,6 +1107,8 @@ def _extract_token(text: str, start: int) -> str:
 # a detect-side hole or a remedy-side falsification. Left as two constants
 # with this comment naming the asymmetry, so a future reader finds the
 # reason rather than assuming drift.
+# Record trees (archive/, tasks/, state/cross-repo/, state/audits/, ...) are absent
+# on purpose: records stay in scope.
 _EVIDENCE_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
     "state/review-trail/diffs/",
     # Machine-generated review output that TRANSCRIBES paths it did not
@@ -1119,22 +1121,6 @@ _EVIDENCE_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
     "state/review-findings/",
     "state/subagent-share/",
     ".coordinator-local/subagent-share/",
-    # Run records and correspondence the engine or a session writes as a
-    # transcript of what happened -- stand-down and blitz/mise run state,
-    # sent and received memos, outbox lessons, audits --
-    # plus the archive and the `tasks/` scratch tree. They quote the paths a
-    # run touched; rewriting them would falsify the record. Authored surfaces
-    # (docs/, wiki, code, live handoffs and plans) stay scanned.
-    "archive/",
-    "tasks/",
-    "state/stand-downs/",
-    "state/plan-blitz/",
-    "state/mise-inventory/",
-    "state/memo-outbox/",
-    ".coordinator-local/memo-outbox/",
-    "state/cross-repo/",
-    "state/lessons-outbox/",
-    "state/audits/",
 )
 
 # A THIRD, narrower evidence-artifact class: byte-exact serialization/
