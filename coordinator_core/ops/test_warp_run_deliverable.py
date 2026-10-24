@@ -352,6 +352,22 @@ def test_a_resumed_run_declares_again(repo, live):
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
 
 
+def test_a_landed_run_declares_nothing(repo, live):
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    _manifest(repo, "p1", writes=["a.py"])
+    _manifest(repo, "p2", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+    halted_run.write_halt_marker(record_dir(repo, "p1"), halted="criterion_not_met", sizing_rel=None)
+    assert halted_run.mark_landed(record_dir(repo, "p1"), "a" * 40)
+    assert _claims(repo, ["a.py"]) == {}
+    assert wrd.live_record_dir_owners(repo, ["state/warp/p1/x"], exclude_session=SESSION) == {}
+    run_token.mint(repo, "p2", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+
+
 def test_withheld_path_is_not_claimed(repo, live):
     from coordinator_core.ops.dispatch_emit import run_withhold
 
