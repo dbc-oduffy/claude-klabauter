@@ -157,7 +157,11 @@ def resolve(sha: str, cwd: str | os.PathLike[str]) -> tuple[str, str]:
 
 
 def export(toplevel: str, sha40: str, root: Path) -> None:
-    """Extract `git archive <sha40>` into `root` through tarfile's data filter; one git spawn."""
+    """Extract `git archive <sha40>` into `root` through tarfile's data filter; one git spawn.
+
+    The stream is drained to EOF after the last member: tarfile stops at the end-of-archive
+    marker and git's trailing block padding would otherwise leave it unreaped and killed.
+    """
     with tempfile.TemporaryFile() as errf:
         failure: BaseException | None = None
         with _git_popen(
@@ -168,10 +172,12 @@ def export(toplevel: str, sha40: str, root: Path) -> None:
                 with tarfile.open(fileobj=proc.stdout, mode="r|") as tf:
                     for member in tf:
                         tf.extract(member, path=root, filter="data")
+                while proc.stdout.read(65536):
+                    pass
             except (tarfile.TarError, OSError) as exc:
                 failure = exc
             finally:
-                if failure is not None or proc.poll() is None:
+                if failure is not None:
                     with contextlib.suppress(OSError):
                         proc.kill()
                 rc = proc.wait()

@@ -284,6 +284,45 @@ def test_sigterm_runs_the_finally_and_kills_the_group(repo, tmp_path):
         pytest.fail("grandchild outlived the CLI")
 
 
+def test_export_drains_archive_padding_and_extracts_committed_files(repo, tmp_path, monkeypatch):
+    real = be._git_popen
+    killed = []
+
+    class _StillRunning:
+        """git has not yet exited when the tar end-of-archive marker is read."""
+
+        def __init__(self, proc):
+            self._p = proc
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            killed.append(True)
+            self._p.kill()
+
+        def __getattr__(self, name):
+            return getattr(self._p, name)
+
+    class _Door:
+        def __init__(self, cm):
+            self._cm = cm
+
+        def __enter__(self):
+            return _StillRunning(self._cm.__enter__())
+
+        def __exit__(self, *exc):
+            return self._cm.__exit__(*exc)
+
+    monkeypatch.setattr(be, "_git_popen", lambda *a, **kw: _Door(real(*a, **kw)))
+    root = tmp_path / "out"
+    root.mkdir()
+    be.export(str(repo), _git(repo, "rev-parse", "HEAD"), root)
+    assert killed == []
+    assert (root / "a.txt").read_text() == "two\n"
+    assert (root / "pkg" / "b.txt").read_text() == "bee\n"
+
+
 def test_runs_as_a_module_process(repo):
     env = {**os.environ, "PYTHONPATH": str(ENGINE_ROOT)}
     done = subprocess.run(
