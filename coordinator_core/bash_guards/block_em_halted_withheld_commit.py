@@ -117,12 +117,54 @@ def _spec_hits(rel: str, indexed: Dict[str, str], root: str) -> List[str]:
 
 
 def _git_names(root: str, *args: str) -> List[str]:
-    from coordinator_core.git import run as git_run
+    from coordinator_core.git.run import run_git
 
-    proc = git_run.run_git(["-C", root, *args])
+    proc = run_git(["-C", root, *args])
     if proc.returncode != 0:
         return []
     return [line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip()]
+
+
+def _merge_in_progress(root: str) -> bool:
+    dot_git = os.path.join(root, ".git")
+    if os.path.isfile(dot_git):
+        try:
+            with open(dot_git, encoding="utf-8") as fh:
+                line = fh.readline().strip()
+        except OSError:
+            return False
+        if not line.startswith("gitdir:"):
+            return False
+        gitdir = line[len("gitdir:"):].strip()
+        dot_git = gitdir if os.path.isabs(gitdir) else os.path.join(root, gitdir)
+    return os.path.exists(os.path.join(dot_git, "MERGE_HEAD"))
+
+
+def _drop_landed_merge_paths(root: str, hits: Set[str]) -> Set[str]:
+    """Hits whose staged blob matches neither MERGE_HEAD's nor HEAD's blob (one batched cat-file).
+    An unreadable answer keeps every hit."""
+    from coordinator_core.git.run import run_git
+
+    ordered = sorted(hits)
+    specs = [f"{prefix}{p}" for p in ordered for prefix in (":", "MERGE_HEAD:", "HEAD:")]
+    proc = run_git(
+        ["-C", root, "cat-file", "--batch-check"],
+        input=("\n".join(specs) + "\n").encode("utf-8"),
+    )
+    lines = proc.stdout.splitlines() if proc.returncode == 0 else []
+    if len(lines) != len(specs):
+        return hits
+
+    def blob(line: str) -> Optional[str]:
+        parts = line.split()
+        return parts[0] if len(parts) == 3 and parts[1] == "blob" else None
+
+    kept: Set[str] = set()
+    for i, path in enumerate(ordered):
+        staged, merge, head = (blob(lines[3 * i + k]) for k in range(3))
+        if staged != merge and staged != head:
+            kept.add(path)
+    return kept
 
 
 def _git_subcommand(tokens: Sequence[str]) -> Optional[Tuple[str, Optional[str], List[str]]]:
@@ -241,6 +283,8 @@ def _scan_text(cmd: str, scan: _Scan, depth: int) -> None:
                 hits.update(p for p in _git_names(root, "diff", "--cached", "--name-only") if p in indexed)
             if not hits and sweeping:
                 hits.update(p for p in _git_names(root, "diff", "--name-only") if p in indexed)
+        if hits and _merge_in_progress(root):
+            hits = _drop_landed_merge_paths(root, hits)
         if hits:
             first = sorted(hits)[0]
             scan.hit = (indexed[first], first if len(hits) == 1 else f"{first} (+{len(hits) - 1} more)")

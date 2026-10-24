@@ -718,12 +718,16 @@ def _append_blocking_note(fm: str, note: str, anchor_key: str) -> str:
     if not note:
         return fm
 
-    existing_notes = read_fm_field_unquoted(fm, "blocking_notes")
+    # The handoff schema forbids gate_notes and blocking_notes together
+    # (gate_notes is blocking_notes' current name): a record already carrying
+    # gate_notes takes the note there.
+    key = "gate_notes" if read_fm_field(fm, "gate_notes") is not None else "blocking_notes"
+    existing_notes = read_fm_field_unquoted(fm, key)
     if existing_notes is None:
-        return insert_fm_field(fm, "blocking_notes", note, anchor_key)
+        return insert_fm_field(fm, key, note, anchor_key)
     if existing_notes:
-        return replace_fm_field(fm, "blocking_notes", f"{existing_notes} | {note}")
-    return replace_fm_field(fm, "blocking_notes", note)
+        return replace_fm_field(fm, key, f"{existing_notes} | {note}")
+    return replace_fm_field(fm, key, note)
 
 
 def _retire_gate_dependency(fm: str) -> str:

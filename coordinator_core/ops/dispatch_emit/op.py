@@ -554,8 +554,18 @@ def _spent_spine_tranche_params(params: dict, plan_path: str) -> Optional[dict]:
     return {**kept, "inventory_path": str(record), "row_budget": _UNBOUNDED_ROW_BUDGET}
 
 
+_FOREIGN_REMEDY_DEFAULT = "Coordinate with that session, name a different output_path, or pass force=true deliberately."
+_FOREIGN_REMEDY_ASK = "Coordinate with that session, or re-fire once its run lands or halts."
+
+
 def _refuse_foreign_emission(
-    output_path: Path, script: str, session_id: str, repo_root: Optional[Path] = None
+    output_path: Path,
+    script: str,
+    session_id: str,
+    repo_root: Optional[Path] = None,
+    *,
+    run_owned: bool = False,
+    remedy: str = _FOREIGN_REMEDY_DEFAULT,
 ) -> None:
     """Refuse to overwrite an existing emission whose bytes differ from ours,
     unless its receipt names ``session_id``: re-emitting your own output is
@@ -576,12 +586,18 @@ def _refuse_foreign_emission(
     if existing == ours:
         return
     receipt_path = emission_receipt_path(output_path)
-    if session_id and receipt_path.is_file():
+    recorded = None
+    if receipt_path.is_file():
         try:
             recorded = json.loads(receipt_path.read_text(encoding="utf-8")).get("session_id")
         except (OSError, ValueError):
             recorded = None
-        if recorded == session_id:
+    if session_id and recorded == session_id:
+        return
+    if run_owned:
+        from coordinator_core.session.liveness import session_live
+
+        if not (isinstance(recorded, str) and recorded and session_live(recorded)):
             return
     mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat(timespec="minutes")
     shown = output_path.as_posix()
@@ -593,7 +609,7 @@ def _refuse_foreign_emission(
     raise ForeignEmissionError(
         f"{shown} already holds a DIFFERENT emission "
         f"(mtime {mtime}, {len(existing)}B vs ours {len(ours)}B). "
-        "Coordinate with that session, name a different output_path, or pass force=true deliberately."
+        f"{remedy}"
     )
 
 
@@ -1685,8 +1701,14 @@ def _emit_script_file(
     session_id: str,
     agent_type_host: Optional[str],
     before_write: Callable[[], None],
+    ask_run: bool = False,
+    run_owned: bool = False,
 ) -> dict:
-    """Check, write and receipt one emitted script; returns its path, sha256, receipt and findings."""
+    """Check, write and receipt one emitted script; returns its path, sha256, receipt and findings.
+
+    `ask_run` names a remedy the engine-ask caller can use (its args carry no `force`); `run_owned`
+    marks a path the halted run being refired already owns, so a dead emitter's stale bytes are
+    overwritten and only a live peer's are refused."""
     check_agent_types_resolve(
         script,
         claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
@@ -1697,7 +1719,11 @@ def _emit_script_file(
     # rejected by the Workflow surface that fires it.
     _refuse_spent_overwrite(path, script.encode("utf-8"), path, _SPENT_HINT_OUTPUT)
     if not params.get("force"):
-        _refuse_foreign_emission(path, script, session_id, _repo_root_for_plan(str(path)))
+        _refuse_foreign_emission(
+            path, script, session_id, _repo_root_for_plan(str(path)),
+            run_owned=run_owned,
+            remedy=_FOREIGN_REMEDY_ASK if ask_run else _FOREIGN_REMEDY_DEFAULT,
+        )
     before_write()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(script, encoding="utf-8", newline="")
@@ -2749,6 +2775,8 @@ def _dispatch_emit_body(
             session_id=emitting_session_id,
             agent_type_host=agent_type_host,
             before_write=_declare_output_root,
+            ask_run=ask_ctx is not None,
+            run_owned=ask_ctx is not None and bool(ask_ctx.get("rebound") or ask_ctx.get("reserved_parent")),
         )
         error_count = written["error_count"]
         warn_count = written["warn_count"]

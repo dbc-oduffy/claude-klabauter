@@ -167,7 +167,7 @@ def _refuse_foreign_emission(output_path: Path, data: bytes, session_id: str) ->
         "-- refusing to overwrite. Another session emitted this plan against a "
         "different plan state; firing or resuming this path would run a wave "
         "map neither session generated. Coordinate with that session, name a "
-        "different output_path, or pass force=true deliberately."
+        "different --out, or pass --force deliberately."
     )
 
 

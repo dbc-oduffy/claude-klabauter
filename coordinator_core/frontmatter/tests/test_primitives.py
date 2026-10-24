@@ -1194,6 +1194,12 @@ class TestAppendBlockingNote:
             'blocking_notes: retired note'
         )
 
+    def test_gate_notes_present_takes_the_note_never_blocking_notes(self):
+        fm = 'title: T\ndeployment_state: awaiting_gate\ngate_notes: "clears on D"\n'
+        result = _append_blocking_note(fm, 'retired note', 'deployment_state')
+        assert read_fm_field_unquoted(result, 'gate_notes') == 'clears on D | retired note'
+        assert 'blocking_notes' not in result
+
     def test_appends_at_end_when_anchor_absent(self):
         fm = 'title: T\nstatus: open\n'
         result = _append_blocking_note(fm, 'retired note', 'nonexistent_anchor')

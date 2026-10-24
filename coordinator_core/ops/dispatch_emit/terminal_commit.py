@@ -5112,6 +5112,8 @@ def _terminal_commit_inner(
             review_writes = None
         if review_writes is not None:
             review_writes = {review_edits._norm(k): v for k, v in review_writes.items()}
+            for recorded in sorted(_review_recorded_edits(inline_review)):
+                review_writes.setdefault(recorded, "review-record")
     from coordinator_core.ops.dispatch_emit import run_touched as _run_touched
 
     snapshot = _worktree_snapshot(

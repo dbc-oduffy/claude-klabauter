@@ -59,7 +59,10 @@ def spawns(monkeypatch):
         key = "cached" if "--cached" in argv else "tracked"
         return SimpleNamespace(returncode=0, stdout="\n".join(out[key]))
 
-    monkeypatch.setattr(git_run, "run_git", fake_run)
+    def fake_run_git(args, **kwargs):
+        return fake_run(["git", *args], **kwargs)
+
+    monkeypatch.setattr("coordinator_core.git.run.run_git", fake_run_git)
     return SimpleNamespace(calls=calls, out=out)
 
 
@@ -205,6 +208,34 @@ def test_message_is_one_fact_plus_alternative_without_override(repo, spawns):
     text = _text(_verdict(repo, "git commit -m x -- a.py"))
     assert f"workflow.revise {RUN}" in text
     assert "override" not in text.lower() and "sorry" not in text.lower()
+
+
+@pytest.mark.spawns_process
+def test_merge_commit_exempts_landed_blobs_but_denies_a_path_matching_neither_side(repo):
+    from coordinator_core.win_portability import no_console_creationflags
+
+    def git(*args):
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+            cwd=repo, check=True, capture_output=True, **no_console_creationflags(),
+        )
+
+    git("init", "-q", "-b", "main")
+    git("add", "a.py", "b.py", "DELIVERY.md", "d")
+    git("commit", "-q", "-m", "base")
+    git("checkout", "-q", "-b", "side")
+    (repo / "a.py").write_text("landed")
+    git("commit", "-q", "-am", "side")
+    git("checkout", "-q", "main")
+    (repo / "b.py").write_text("main")
+    git("commit", "-q", "-am", "main")
+    git("merge", "--no-ff", "--no-commit", "side")
+
+    assert _verdict(repo, "git commit -m merge") is None
+
+    (repo / "a.py").write_text("run dirt")
+    git("add", "a.py")
+    assert _denied(_verdict(repo, "git commit -m merge"))
 
 
 @pytest.mark.spawns_process

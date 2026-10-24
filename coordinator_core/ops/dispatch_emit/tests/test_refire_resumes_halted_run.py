@@ -163,6 +163,25 @@ def test_a_live_peer_halted_run_still_refuses(repo, monkeypatch):
         _fire(repo)
 
 
+def test_a_live_peer_refusal_names_only_remedies_the_ask_route_accepts(repo, monkeypatch):
+    _halt(repo)
+    _emit_by(repo, "live-peer", True, monkeypatch)
+    with pytest.raises(op.ForeignEmissionError) as excinfo:
+        _fire(repo)
+    msg = str(excinfo.value)
+    assert "force" not in msg and "output_path" not in msg
+    assert "re-fire" in msg
+
+
+def test_a_halted_run_refire_lands_over_its_own_receiptless_stale_emission(repo, monkeypatch):
+    _halt(repo)
+    script, receipt = _emit_by(repo, "gone", False, monkeypatch)
+    receipt.unlink()
+    reply = _fire(repo)
+    assert reply["run_id"] == OLDER
+    assert script.read_text(encoding="utf-8") != "// peer emission\n"
+
+
 def test_a_dead_owner_halted_run_with_explicit_output_path_does_not_redirect(repo, monkeypatch):
     _halt(repo)
     _emit_by(repo, "dead-peer", False, monkeypatch)
