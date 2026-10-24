@@ -15,6 +15,9 @@ the close legs (``CLOSE_LEGS``) are queued in a close-job record paid by one det
 close-job record exists yet.
 Reply: ``{ok, run_id, sha, written, siblings?, recorded?, close, withheld}`` or ``{ok: false, error}``;
 ``withheld`` is the marker's ``blocking`` register-row ids.
+When the halt marker records withheld paths (``run_artifacts.withheld``), ``sha`` must have changed
+every one of them versus its first parent, so recording landed cannot release the withheld-commit
+guard for a commit that never carried them; a later follow-up commit that changed them qualifies.
 """
 
 from __future__ import annotations
@@ -254,6 +257,46 @@ def _terminal(cand: Path) -> bool:
     return isinstance(stage, dict) and stage.get("stage") in ("halted", "landed")
 
 
+def _carries_withheld(root: Path, run_id: str, sha: str) -> Optional[str]:
+    """None when *sha* changed every path the run's halt marker withholds versus its first parent, else the refusal text.
+
+    A run withholding nothing, or with no marker, passes. An unreadable commit or tree refuses.
+    """
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import read_tree_spine
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    try:
+        withheld = sorted(halted_run.halted_withheld(ask_contract.record_dir(root, run_id)))
+    except ValueError:
+        return None
+    if not withheld:
+        return None
+    common = resolve_git_common_dir(root)
+    meta = commit_meta(common, sha)
+    parents = meta.get("parents") if meta else None
+    parent_meta = commit_meta(common, parents[0]) if parents else None
+    if meta is None or not meta.get("tree") or (parents and (parent_meta is None or not parent_meta.get("tree"))):
+        return f"{sha} or its parent is unreadable; retry"
+    after = read_tree_spine(root, withheld, root_tree_sha=meta["tree"])
+    before = read_tree_spine(root, withheld, root_tree_sha=parent_meta["tree"]) if parent_meta else {}
+    if after is None or before is None:
+        return f"{sha} tree is unreadable; retry"
+
+    def _entry(spine: dict, path: str):
+        return spine.get(path.rpartition("/")[0], {}).get(path.rpartition("/")[2])
+
+    unchanged = [p for p in withheld if _entry(after, p) == _entry(before, p)]
+    if unchanged:
+        more = f" (+{len(unchanged) - 1} more)" if len(unchanged) > 1 else ""
+        return (
+            f"{sha} did not change withheld {unchanged[0]}{more}; "
+            "pass the commit that landed the run's withheld paths"
+        )
+    return None
+
+
 def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_id: Optional[str] = None) -> dict:
     """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
@@ -284,7 +327,7 @@ def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_i
         sha, problem = _resolve_prefix(root, sha)
         if problem:
             return _refuse(problem)
-    problem = _reachable(root, sha)
+    problem = _reachable(root, sha) or _carries_withheld(root, run_id, sha)
     if problem:
         return _refuse(problem)
     if not halted_run.mark_landed(record_dir, sha):
@@ -339,7 +382,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         sha, problem = _resolve_prefix(root, sha)
         if problem:
             return _refuse(problem)
-    problem = _reachable(root, sha)
+    problem = _reachable(root, sha) or _carries_withheld(root, run_id, sha)
     if problem:
         return _refuse(problem)
     reply = run_close.sibling_release(root, run_id, sha)

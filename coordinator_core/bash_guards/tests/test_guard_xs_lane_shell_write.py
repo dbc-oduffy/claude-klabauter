@@ -171,3 +171,12 @@ def test_a_crash_admits(env, monkeypatch):
 
     monkeypatch.setattr(projection, "shell_writes", boom)
     assert _run(root, _heredoc(str(root / "pkg" / "mod.py"))) is None
+
+
+def test_a_fired_session_gets_no_lane_advice_or_edit_route(env, monkeypatch):
+    from coordinator_core.hooks import flag_em_poll_in_flight
+
+    root, sha = env
+    assert xb.open_xs_lane(root, SID, sha)
+    monkeypatch.setattr(flag_em_poll_in_flight, "session_workflow_run_ids", lambda sid: ["run-1"])
+    assert _run(root, _heredoc(str(root / "pkg" / "mod.py"))) is None

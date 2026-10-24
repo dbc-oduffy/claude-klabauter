@@ -2173,6 +2173,8 @@ class TestBatonUnificationSchemaBump:
             repo_root / 'state' / 'handoffs'
             / '2026-07-22_162946_wsc-rebuild-port-regression-audit.md'
         )
+        if not (repo_root / 'state' / 'handoffs').is_dir():
+            pytest.skip('state/handoffs absent (exported tree carries no corpus)')
         assert path.exists(), f'corpus fixture missing: {path}'
         content = path.read_text(encoding='utf-8')
         fm = parse_frontmatter(content)['frontmatter']
@@ -2399,6 +2401,8 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
     def test_no_regression_vs_pre_bump_schema(self):
         repo_root = Path(__file__).resolve().parents[3]
         plans_dir = repo_root / 'docs' / 'plans'
+        if not plans_dir.is_dir():
+            pytest.skip('docs/plans absent (exported tree carries no corpus)')
         plan_paths = sorted(plans_dir.glob('*.md'))
         assert len(plan_paths) > 0, f'No plans found under {plans_dir}'
 
@@ -2440,6 +2444,8 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
         unvalidated extension key now validate under the declared field."""
         repo_root = Path(__file__).resolve().parents[3]
         plans_dir = repo_root / 'docs' / 'plans'
+        if not plans_dir.is_dir():
+            pytest.skip('docs/plans absent (exported tree carries no corpus)')
         checked = 0
         for path in sorted(plans_dir.glob('*.md')):
             content = path.read_text(encoding='utf-8')
@@ -4285,7 +4291,12 @@ _QUEUE_SCHEMA_PINS = {
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
     #   DoE 7524b888db: plan-tasks 3.6.0 status alternative, plan 2.28.0 plan-
     #   level depends_on_plan
-    'review-findings': "7524b888db715e7ea5ce40df3d12c48be51ab74f",
+    # Pin moved 2026-10-24 to f5f013a6788421bd9c7e2fcaf76aa333fc81da78 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   DoE moved review-findings past the recorded pin; vendored copy was
+    #   unedited, so re-vendor to restore mirror parity (export-portability
+    #   f41934 X1)
+    'review-findings': "f5f013a6788421bd9c7e2fcaf76aa333fc81da78",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -4412,7 +4423,7 @@ _QUEUE_SCHEMA_PINS = {
 # intended lifecycle: declare, gate, converge, remove.
 #
 # sizing-object: claude-klabauter 1.47.0 adds the `fan_out` xl_exit value (claude-klabauter-first); DoE
-# still reads 1.45.0 at the doe_ref below and has not vendored it yet.
+# still reads 1.46.0 at the doe_ref below and has not vendored it yet.
 # Exit path: once DoE vendors 1.47.0, delete this entry and run
 # bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
 # check_schema_drift byte-pin.
@@ -4425,10 +4436,10 @@ _QUEUE_SCHEMA_PINS = {
 # local_shape_hash / re-pin doe_ref before relying on it.
 _QUEUE_SCHEMA_AHEAD_PINS: dict = {
     'sizing-object': {
-        'doe_ref': "8807597379a74d97b6396eaa667e6646f6da49c2",
+        'doe_ref': "86eb0e39a7ca45ceb432de9b3d828d9078f91d3e",
         'reason': (
             "claude-klabauter-first sizing-object 1.47.0 adds the `fan_out` xl_exit value; "
-            "DoE's copy is still 1.45.0 and its own vendor of 1.47.0 is pending"
+            "DoE's copy is still 1.46.0 and its own vendor of 1.47.0 is pending"
         ),
         'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
         'exempt_paths': frozenset({('properties', 'xl_exit', 'description')}),

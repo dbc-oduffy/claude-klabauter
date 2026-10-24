@@ -60,7 +60,12 @@ def test_cd_resolves_against_sub(tmp_path):
 
 
 def _paths(cmd, root, cwd=None):
-    return [os.path.relpath(w.abs_path, root) for w in shell_writes(cmd, cwd or root, root)]
+    return [os.path.relpath(w.abs_path, root) for w in shell_writes(cmd, cwd or root, root, with_git=True)]
+
+
+def test_git_targets_are_opt_in(tmp_path):
+    root = _root(tmp_path)
+    assert shell_writes("git add pkg/a.py && git commit -m x", root, root) == []
 
 
 def test_git_add_pathspecs(tmp_path):
@@ -68,7 +73,7 @@ def test_git_add_pathspecs(tmp_path):
     assert _paths("git add pkg/a.py sub/b.py", root) == ["pkg/a.py", "sub/b.py"]
     assert _paths("git add -- pkg/a.py", root) == ["pkg/a.py"]
     assert _paths("cd sub && git add b.py", root) == ["sub/b.py"]
-    assert all(w.body is None for w in shell_writes("git add pkg/a.py", root, root))
+    assert all(w.body is None for w in shell_writes("git add pkg/a.py", root, root, with_git=True))
 
 
 def test_git_add_all_is_root(tmp_path):

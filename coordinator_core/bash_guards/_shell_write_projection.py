@@ -250,6 +250,7 @@ def _git_segment_specs(toks: List[str], cwd: str, root: str) -> List[str]:
             else:
                 specs.append(a)
         if every or not specs:
+            # No pathspec: the staged set is unknowable without a git spawn, so it counts as the root.
             return [root]
         return [absp(s) for s in specs]
     if sub == "apply":
@@ -298,8 +299,10 @@ def _git_writes(cmd: str, cwd: str, root: str) -> List[str]:
     return paths
 
 
-def shell_writes(cmd: str, cwd: str, root: str) -> List[ShellWrite]:
-    """Every in-repo write target of `cmd`, deduplicated, in encounter order."""
+def shell_writes(cmd: str, cwd: str, root: str, with_git: bool = False) -> List[ShellWrite]:
+    """Every in-repo write target of `cmd`, deduplicated, in encounter order. `with_git` adds the
+    pathspecs of `git add/commit/checkout --/restore/apply`; the pre-fire XS budget leaves it off,
+    since those targets carry no projectable body and would be denied as unmeasurable."""
     if not cmd or not cmd.strip() or not root:
         return []
     try:
@@ -326,7 +329,7 @@ def shell_writes(cmd: str, cwd: str, root: str) -> List[ShellWrite]:
                 out[resolved] = ShellWrite(resolved, lit[1], body_for[raw])
             else:
                 out[resolved] = ShellWrite(resolved, None, False)
-        if "git" in cmd:
+        if with_git and "git" in cmd:
             for p in _git_writes(cmd, cwd, root):
                 if _rel_if_inside(p, root) is not None and p not in out:
                     out[p] = ShellWrite(p, None, False)

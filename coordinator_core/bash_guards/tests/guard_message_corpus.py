@@ -1899,6 +1899,19 @@ def _xs_lane_shell_write_setup(
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
+def _em_post_fire_shell_write_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    from coordinator_core.hooks import _em_write_budget as hook
+    from coordinator_core.hooks import flag_em_poll_in_flight
+
+    (scratch_dir / ".git").mkdir(exist_ok=True)
+    mp.setattr(tempfile, "gettempdir", lambda: str(scratch_dir / "_tmp"))
+    mp.setattr(hook, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    mp.setattr(flag_em_poll_in_flight, "session_workflow_run_ids", lambda sid: ["run-1"])
+    return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
+
+
 def _move_from_inside_cwd_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -2120,6 +2133,23 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         _REWRITE,
         False,
         setup=lambda scratch_dir, mp: {"tool_name": "PowerShell"},
+    ),
+    CorpusRow(
+        "block-em-post-fire-product-write",
+        "block-em-post-fire-product-write-fire",
+        "echo x > pkg/step_ledger.py",
+        True,
+        _REWRITE,
+        False,
+        setup=_em_post_fire_shell_write_setup,
+    ),
+    CorpusRow(
+        "block-em-post-fire-product-write",
+        "block-em-post-fire-product-write-control",
+        "echo hi",
+        False,
+        _REWRITE,
+        False,
     ),
     CorpusRow(
         "xs-lane-shell-write",

@@ -535,8 +535,8 @@ def test_every_registered_guard_is_classified():
     (merge 49df735aad); 70 -> 72 with `trailing-background-ampersand` and
     `move-from-inside-cwd` (example-game-repo-3b friction advisories); 73 -> 74 with
     `block_drive_root_new_dir_bash_write`; 74 -> 75 with
-    `block-external-workspace-vcs-write`; 75 -> 76 with `xs-lane-shell-write`; 76 -> 77 with
-    `block-em-post-fire-product-write`."""
+    `block-external-workspace-vcs-write`; 75 -> 76 with `xs-lane-shell-write`; 76 -> 78 with
+    `block-em-post-fire-product-write` and `block-em-halted-withheld-commit`."""
     actual = _actual_matchers()
     assert len(actual) == 78, sorted(actual)
     assert set(actual) == set(EXPECTED)

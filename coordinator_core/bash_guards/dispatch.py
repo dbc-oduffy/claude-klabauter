@@ -2544,6 +2544,9 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.guard_head_tail_rewrite import (
         check_head_tail_plumbing_rewrite as _check_head_tail_plumbing_rewrite,
     )
+    from coordinator_core.bash_guards.guard_em_post_fire_shell_write import (
+        check as _check_em_post_fire_shell_write,
+    )
     from coordinator_core.bash_guards.guard_xs_lane_shell_write import (
         check as _check_xs_lane_shell_write,
     )
@@ -3388,6 +3391,9 @@ def _build_guard_chain(
         # docs/reference/guard-tool-name-membership.md §8.
         # Ahead of the rewrite/advise run (cat-heredoc-write-advise, heredoc-repo-write-advise):
         # the band is first-non-None-wins, so an advisory for the same heredoc would shadow the deny.
+        # Floor-named (machine_profile.FLOOR_GUARDS): the dispatch seam levels a deny under the
+        # entry's own name, so the post-fire deny cannot ride xs-lane-shell-write without demoting at warn.
+        GuardEntry("block-em-post-fire-product-write", lambda: _check_em_post_fire_shell_write(cmd, session_id, cwd, payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         GuardEntry("xs-lane-shell-write", lambda: _check_xs_lane_shell_write(cmd, session_id, cwd, payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),
         GuardEntry("grep-via-bash-rewrite", lambda: _dc.check_grep_via_bash_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=("Bash",)),

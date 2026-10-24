@@ -93,6 +93,13 @@ def test_constants():
     assert g.ARMING == "role-marker"
 
 
+def test_deny_texts_name_the_constant_their_window_enforces():
+    pre = g.prefire_deny_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
+    post = g.postlanding_deny_text(4, g.POSTLANDING_VERIFY_CALLS_MAX)
+    assert f"budget {g.PREFIRE_EXPLORATORY_CALLS_MAX} (" in pre and "since the last turn" in pre
+    assert f"budget {g.POSTLANDING_VERIFY_CALLS_MAX} (" in post and "since the landing" in post
+
+
 def test_markerless_session_is_never_denied(env):
     env.set_marker(False)
     env.write(user())

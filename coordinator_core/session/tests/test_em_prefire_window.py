@@ -197,6 +197,44 @@ def test_gate_probe_ops_and_sibling_git_probes_count_toward_no_budget():
         assert epw.classify("Bash", {"command": cmd}, "", None) == (True, True), cmd
 
 
+def test_lifecycle_op_every_invocation_shape():
+    verbatim = "it'\\''s a `thing`; ok & \"q\" $(x)"
+    for inv in ("coordinator-invoke", "/opt/x/.coordinator-claude-settings/bin/coordinator-invoke"):
+        for arg in (
+            "'{\"run_id\":\"r\",\"verbatim\":\"" + verbatim + "\"}'",
+            "--params-file /tmp/p.json",
+            "'{\"verbatim\":\"line1\nline2; `x`\"}'",
+        ):
+            for op in epw.LIFECYCLE_OPS:
+                assert epw.lifecycle_op(f"{inv} {op} {arg}") == op, (inv, op, arg)
+    assert epw.lifecycle_op("coordinator-invoke --params-file f.json workflow.revise") == "workflow.revise"
+    for bad in (
+        "coordinator-invoke workflow.revise '{\"a\":1}' | cat",
+        "coordinator-invoke workflow.revise '{\"a\":1}'; grep x y",
+        "coordinator-invoke workflow.revise \"`grep x y`\"",
+        "coordinator-invoke workflow.revise $(grep x y)",
+        "coordinator-invoke workflow.revise '{\"a\":1}",
+        "coordinator-invoke workflow.revise x && grep x y",
+        "coordinator-invoke sizing.list '{}'",
+    ):
+        assert epw.lifecycle_op(bad) is None, bad
+
+
+def test_relayed_workflow_revise_classifies_exempt_in_every_shape():
+    run_id = "warp-2026-10-24-ladder-add-l-c-xl-xxl-tasks-16cd3b-20261024T141445-90120f"
+    inline = "coordinator-invoke workflow.revise '{\"run_id\":\"" + run_id + "\",\"verbatim\":\"it'\\''s `x`; a & b\"}'"
+    forms = (
+        inline,
+        "/opt/x/.coordinator-claude-settings/bin/" + inline,
+        "coordinator-invoke workflow.revise --params-file /tmp/p.json",
+        "/opt/x/.coordinator-claude-settings/bin/coordinator-invoke workflow.revise --params-file /tmp/p.json",
+    )
+    for cmd in forms:
+        assert epw.classify("Bash", {"command": cmd}, "", None) == (False, False), cmd
+    survey = "coordinator-invoke sizing.list '{}'"
+    assert epw.classify("Bash", {"command": survey}, "", None) == (True, True)
+
+
 def test_one_test_run_per_window_is_exempt_postlanding(tmp_path):
     cmd = {"command": "python3 -m pytest coordinator_core/x/tests/test_a.py -q"}
     st = run(tmp_path, [user(), tool_use("a", "Bash", cmd), tool_use("b", "Bash", cmd)])

@@ -395,6 +395,53 @@ def test_launch_calls_spawn_detached_once_on_close_background(tmp_path, monkeypa
     assert args[1].endswith("close_background.py") and args[2][0] == "A" and kwargs == {"site_free": True}
 
 
+def _commit_files(repo: Path, files: dict) -> str:
+    for name, body in files.items():
+        p = repo / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+        _git(repo, "add", "--", p.relative_to(repo).as_posix())
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "files")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _withhold(marker: Path, *paths: str) -> None:
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    data["run_artifacts"] = {"withheld": {p: "r" for p in paths}}
+    marker.write_text(json.dumps(data), encoding="utf-8")
+
+
+@pytest.mark.parametrize("solo", [True, False])
+def test_sha_not_carrying_withheld_paths_refuses_and_follow_up_is_accepted(repo, solo):
+    root, first, _ = repo
+    rid = SOLO if solo else "A"
+    if solo:
+        marker = _solo(root)
+    else:
+        _seed(root, {"A": {"status": "halted"}})
+        marker = _plan_marker(root, "A")
+    _withhold(marker, "sub/d.md", "e.txt")
+    unrelated = _commit(root, "unrelated")
+    before = marker.read_bytes()
+    out = _call(root, run_id=rid, sha=unrelated)
+    assert not out["ok"] and "withheld e.txt (+1 more)" in out["error"]
+    assert marker.read_bytes() == before
+    partial = _commit_files(root, {"sub/d.md": "x"})
+    out = _call(root, run_id=rid, sha=partial)
+    assert not out["ok"] and "withheld e.txt" in out["error"]
+    full = _commit_files(root, {"sub/d.md": "later", "e.txt": "e"})
+    later = _commit(root, "after")
+    out = _call(root, run_id=rid, sha=full)
+    assert out["ok"] and out["written"] is True and out["sha"] == full
+    assert later != full
+
+
+def test_withheld_check_ignores_run_without_withheld_paths(repo):
+    root, first, _ = repo
+    _solo(root)
+    assert _call(root, run_id=SOLO, sha=first)["ok"]
+
+
 def test_process_time_of_the_op_is_under_the_bar(repo):
     import time
 

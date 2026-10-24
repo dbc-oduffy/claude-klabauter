@@ -48,8 +48,6 @@ _TOKEN_RE = re.compile(r"""\s*("[^"]*"|'[^']*'|\S+)""")
 # A chained or substituted tail could run a survey behind the exempt CLI; such a command counts.
 _CHAIN_RE = re.compile(r"[;&|`<>\n]|\$\(")
 _QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
-_UNQUOTED_CHAIN_RE = re.compile(r"[;&|<>\n]")
-_SUBST_RE = re.compile(r"`|\$\(")
 # Engine lifecycle and comms verbs: an invocation is not survey, so it counts toward no budget.
 LIFECYCLE_OPS = (
     "sizing.supersede",
@@ -60,7 +58,8 @@ LIFECYCLE_OPS = (
 )
 SIBLING_PROBE_GIT_VERBS = ("merge-base", "log")
 LIFECYCLE_BINS = ("cross-repo-memo", "pickup-assemble")
-_INVOKERS = ("coordinator-invoke", "invoke")
+_VALUE_FLAGS = ("--params-file", "--params", "--repo-root")
+_INVOKERS =("coordinator-invoke", "invoke")
 _PYTHONS = re.compile(r"^python[0-9.]*(\.exe)?$")
 PUBLISH_GIT_VERBS = ("merge-tree", "commit-tree", "push", "fetch")
 PUBLISH_CLONE_GIT_VERBS = ("checkout", "switch", "reset", "clean")
@@ -185,8 +184,63 @@ def is_settings_bin_cli(command: object, settings_home: Optional[str]) -> bool:
     return False
 
 
-def _tail_is_plain(rest: str) -> bool:
-    return not _SUBST_RE.search(rest) and not _UNQUOTED_CHAIN_RE.search(_QUOTED_RE.sub("", rest))
+def _plain_args(rest: str) -> Optional[list]:
+    """Shell-quote-aware words of a command tail, or None when it chains, substitutes or is unterminated.
+
+    Single quotes are literal (backticks, `;`, `$(` inside are data); inside double quotes only a
+    backtick or `$(` is live; outside quotes any of `;&|<>` or a newline chains. A backslash outside
+    single quotes escapes the next character, which is how `'\\''` embeds an apostrophe.
+    """
+    words: list = []
+    cur: list = []
+    started = False
+    i, n = 0, len(rest)
+    while i < n:
+        ch = rest[i]
+        if ch == "\\":
+            if i + 1 >= n:
+                return None
+            cur.append(rest[i + 1])
+            started = True
+            i += 2
+        elif ch == "'":
+            j = rest.find("'", i + 1)
+            if j < 0:
+                return None
+            cur.append(rest[i + 1:j])
+            started = True
+            i = j + 1
+        elif ch == '"':
+            i += 1
+            while True:
+                if i >= n:
+                    return None
+                c = rest[i]
+                if c == '"':
+                    break
+                if c == "`" or rest.startswith("$(", i):
+                    return None
+                if c == "\\" and i + 1 < n and rest[i + 1] in '"\\$`':
+                    i += 1
+                    c = rest[i]
+                cur.append(c)
+                i += 1
+            started = True
+            i += 1
+        elif ch in ";&|<>\n`" or rest.startswith("$(", i):
+            return None
+        elif ch.isspace():
+            if started:
+                words.append("".join(cur))
+                cur, started = [], False
+            i += 1
+        else:
+            cur.append(ch)
+            started = True
+            i += 1
+    if started:
+        words.append("".join(cur))
+    return words
 
 
 def lifecycle_op(command: object) -> Optional[str]:
@@ -200,21 +254,32 @@ def lifecycle_op(command: object) -> Optional[str]:
     if not isinstance(command, str):
         return None
     first, rest = _first_command_token(command)
-    if not first or not _tail_is_plain(rest):
+    if not first:
+        return None
+    args = _plain_args(rest)
+    if args is None:
         return None
     base = _norm(first).rsplit("/", 1)[-1]
     if base.endswith(".py"):
         base = base[:-3]
     if base in LIFECYCLE_BINS:
         return base
-    args = [_unquote(t) for t in rest.split()]
     if _PYTHONS.match(base):
         if args[:2] != ["-m", "coordinator_core.invoke"]:
             return None
         args = args[2:]
     elif base not in _INVOKERS:
         return None
-    args = [a for a in args if not a.startswith("-")]
+    kept: list = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+        elif a in _VALUE_FLAGS:
+            skip = True
+        elif not a.startswith("-"):
+            kept.append(a)
+    args = kept
     return args[0] if args and args[0] in LIFECYCLE_OPS else None
 
 
