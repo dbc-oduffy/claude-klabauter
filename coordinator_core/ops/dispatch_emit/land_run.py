@@ -1689,9 +1689,10 @@ def _fixes_integrated_at(root: Path, inline_review: object) -> tuple:
 def _recorded_fingerprints(
     root: Path, session_id: str, candidates: Sequence[str], carried: Sequence[str], *, excluded: set,
     reviewed: Optional[dict], reviewed_at: Optional[float], fixes_integrated_at: Optional[float],
-    wave_paths: frozenset, review_events: Optional[dict] = None,
+    wave_paths: frozenset, review_events: Optional[dict] = None, run_started_at: Optional[float] = None,
 ) -> dict:
     """``{path: sha256}`` the run expects each candidate path to carry; one batched sink read.
+    A session event older than ``run_started_at`` is another run's touch and is no expectation.
 
     Per path the newer of the session's last recorded write and the run's newest review supplies the
     hash (a tie goes to the session write). After a fix-applying wave a reviewed path settled before
@@ -1706,6 +1707,8 @@ def _recorded_fingerprints(
     if not wanted:
         return {}
     seen = touch_record.last_seen_events(session_id, wanted, root)
+    if run_started_at is not None:
+        seen = {p: (None if e is not None and e[1] < run_started_at else e) for p, e in seen.items()}
     reviewed = reviewed if reviewed_at is not None and isinstance(reviewed, dict) else {}
     out: dict = {}
     for p in wanted:
@@ -1742,6 +1745,13 @@ def _recorded_fingerprints(
         if agent_event is not None and agent_event[0] and (event is None or agent_event[1] > event[1]):
             out[p] = agent_event[0]
     return out
+
+
+def _submitted_at(root: Path, run_id: Optional[str]) -> Optional[float]:
+    """The run's ``submission.json`` ``submitted_at`` epoch, else None."""
+    from coordinator_core.ops.dispatch_emit.register_gate import run_started_at
+
+    return run_started_at(root, run_id)
 
 
 def _review_since(root: Path, run_id: Optional[str], inline_review: object) -> Optional[float]:
@@ -2774,6 +2784,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             reviewed=reviewed_bytes, reviewed_at=reviewed_at, fixes_integrated_at=fixes_at,
             wave_paths=wave_paths,
             review_events=_review_write_events(root, session_id, sibling_run_id, inline_review),
+            run_started_at=_submitted_at(root, art_run_id),
         )
         for ev_path, ev_before, ev_after in ([own_evidence_write] if own_evidence_write else []):
             if ev_path in paths and expected.get(ev_path) == ev_before:

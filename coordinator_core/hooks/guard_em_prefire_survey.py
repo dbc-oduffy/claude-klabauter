@@ -132,10 +132,6 @@ def _decide(payload: dict) -> Optional[str]:
         return None
     if _is_group_em_holder(root, sid):
         return None
-    # Trap: substring match, so any Bash text naming workflow.revise is exempt, not only an invocation.
-    if tool_name == "Bash" and isinstance(tool_input, dict) and "workflow.revise" in str(tool_input.get("command") or ""):
-        return None
-
     path = epw.state_path(root, sid)
     home = _settings_home(payload)
     prior = epw.load_state(path, transcript)

@@ -8,6 +8,7 @@ Negative-spec:
     tail and marks the record `partial` (counts are then a floor).
   - A subagent record (`isSidechain`) is never counted, and never opens or disarms a window.
   - The `Skill` disarm is a closed literal tuple; a prefix match on `coordinator:` is refused.
+  - A lifecycle verb counts toward no budget only as an invocation (`lifecycle_op`); a mention counts.
 """
 
 from __future__ import annotations
@@ -46,6 +47,14 @@ _ASSIGN_RE = re.compile(r"""\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)"""
 _TOKEN_RE = re.compile(r"""\s*("[^"]*"|'[^']*'|\S+)""")
 # A chained or substituted tail could run a survey behind the exempt CLI; such a command counts.
 _CHAIN_RE = re.compile(r"[;&|`<>\n]|\$\(")
+_QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
+_UNQUOTED_CHAIN_RE = re.compile(r"[;&|<>\n]")
+_SUBST_RE = re.compile(r"`|\$\(")
+# Engine lifecycle and comms verbs: an invocation is not survey, so it counts toward no budget.
+LIFECYCLE_OPS = ("sizing.supersede", "memo.transition", "workflow.revise")
+LIFECYCLE_BINS = ("cross-repo-memo", "pickup-assemble")
+_INVOKERS = ("coordinator-invoke", "invoke")
+_PYTHONS = re.compile(r"^python[0-9.]*(\.exe)?$")
 _LITERAL_BINS = (
     "${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/",
     "${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/",
@@ -165,6 +174,39 @@ def is_settings_bin_cli(command: object, settings_home: Optional[str]) -> bool:
     return False
 
 
+def _tail_is_plain(rest: str) -> bool:
+    return not _SUBST_RE.search(rest) and not _UNQUOTED_CHAIN_RE.search(_QUOTED_RE.sub("", rest))
+
+
+def lifecycle_op(command: object) -> Optional[str]:
+    """The lifecycle verb a Bash command invokes, else None.
+
+    An invocation is `cross-repo-memo` / `pickup-assemble` as the executable, or `coordinator-invoke`
+    / `python -m coordinator_core.invoke` followed by a LIFECYCLE_OPS verb as its first argument.
+    Trap: a verb named anywhere else (grep, cat, echo, a path) is a mention and returns None, as
+    does a chained or substituted tail, which could run a survey behind the verb.
+    """
+    if not isinstance(command, str):
+        return None
+    first, rest = _first_command_token(command)
+    if not first or not _tail_is_plain(rest):
+        return None
+    base = _norm(first).rsplit("/", 1)[-1]
+    if base.endswith(".py"):
+        base = base[:-3]
+    if base in LIFECYCLE_BINS:
+        return base
+    args = [_unquote(t) for t in rest.split()]
+    if _PYTHONS.match(base):
+        if args[:2] != ["-m", "coordinator_core.invoke"]:
+            return None
+        args = args[2:]
+    elif base not in _INVOKERS:
+        return None
+    args = [a for a in args if not a.startswith("-")]
+    return args[0] if args and args[0] in LIFECYCLE_OPS else None
+
+
 def classify(name: object, tool_input: object, opening: str, settings_home: Optional[str]) -> tuple[bool, bool]:
     """(pre_counted, all_counted) for one main-thread tool call.
 
@@ -175,6 +217,8 @@ def classify(name: object, tool_input: object, opening: str, settings_home: Opti
         return False, False
     inp = tool_input if isinstance(tool_input, dict) else {}
     if name == "Bash":
+        if lifecycle_op(inp.get("command")):
+            return False, False
         return (not is_settings_bin_cli(inp.get("command"), settings_home)), True
     target = inp.get("file_path") if name == "Read" else inp.get("path")
     if path_exempt(target, opening):
@@ -315,7 +359,7 @@ def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
             st["disarmed"] = True
         return
     pre, every = classify(name, inp, st.get("opening") or "", settings_home)
-    if name == "Bash" and isinstance(inp, dict) and "workflow.revise" in str(inp.get("command") or ""):
+    if name == "Bash" and isinstance(inp, dict) and lifecycle_op(inp.get("command")) == "workflow.revise":
         st["revised"] = True
     if pre:
         _add(st["pre"], block.get("id"))
@@ -330,6 +374,7 @@ __all__ = [
     "classify",
     "fresh_state",
     "is_settings_bin_cli",
+    "lifecycle_op",
     "load_state",
     "path_exempt",
     "save_state",

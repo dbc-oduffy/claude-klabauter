@@ -868,6 +868,8 @@ _CALLER_FACING_MESSAGE_MAX_LEN = 2000
 # to exercise the timeout path), and it is not reachable by an operator, who has
 # the environment and nothing else.
 DISPATCH_TIMEOUT_SECS: float = 30.0
+# A cold mutating op is awaited up to this multiple of its backstop, then reported hung.
+_COLD_AWAIT_CEILING_FACTOR: float = 5.0
 
 
 def _warn_on_near_miss_timeout_env(environ: Optional[Dict[str, str]] = None) -> None:
@@ -2479,15 +2481,26 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     _declared_writes_token = _declared_writes_var.set(_declared_writes)
     # Set on timeout so a handler thread that outlives its budget refuses its
     # irreversible step (`git.commit.commit_paths`) instead of landing late.
+    import inspect
     import threading
     import time
     from coordinator_core import dispatch_abandon
     _abandoned = threading.Event()
     _abandoned_token = dispatch_abandon.ACTIVE.set(_abandoned)
-    _deadline_token = dispatch_abandon.DEADLINE.set(time.monotonic() + op_timeout)
+    # A cold (IN_PROCESS) mutating sync op that outlives the backstop is awaited, not
+    # abandoned (see the sync branch), so no deadline binds: remaining() reads None
+    # there rather than a 0.0 nothing enforces. The wait itself is bounded by
+    # `op_timeout * _COLD_AWAIT_CEILING_FACTOR`; past it the op may still have
+    # completed, so the envelope says reconcile before retrying.
+    _await_on_breach = False
+    if not inspect.iscoroutinefunction(handler):
+        _await_on_breach = _cold_mutating_op(method)
+    _deadline_token = dispatch_abandon.DEADLINE.set(
+        None if _await_on_breach else time.monotonic() + op_timeout
+    )
     _op_cpu: list = []
     _op_cpu_token = _op_cpu_secs_var.set(_op_cpu)
-    import inspect
+    _completed_after_backstop: Optional[dict] = None
     try:
         if inspect.iscoroutinefunction(handler):
             try:
@@ -2518,19 +2531,56 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "error": _handler_exception_error(exc),
                 }
         else:
+            _fut = asyncio.ensure_future(
+                asyncio.to_thread(_run_handler_absorbing_base, handler, params, op_repo_key)
+            )
+            _fut.add_done_callback(lambda f: f.cancelled() or f.exception())
+            _t0 = time.monotonic()
             try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        _run_handler_absorbing_base, handler, params, op_repo_key
-                    ),
-                    timeout=op_timeout,
-                )
+                result = await asyncio.wait_for(asyncio.shield(_fut), timeout=op_timeout)
             except asyncio.TimeoutError:
-                _abandoned.set()
                 _log().error(
                     "coordinator_core.ipc: op %r timed out after %ss", method, op_timeout
                 )
-                return _timeout_error_envelope(method, op_timeout, id_)
+                if not _await_on_breach:
+                    _abandoned.set()
+                    return _timeout_error_envelope(method, op_timeout, id_)
+                _completed_after_backstop = {
+                    "case": "completed_after_backstop",
+                    "op": method,
+                    "backstop_secs": op_timeout,
+                }
+                _ceiling = op_timeout * _COLD_AWAIT_CEILING_FACTOR
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.shield(_fut),
+                        timeout=max(_ceiling - (time.monotonic() - _t0), 0.0),
+                    )
+                except asyncio.TimeoutError:
+                    if _fut.done():
+                        # The handler itself raised TimeoutError; that is its error, not the ceiling.
+                        raise
+                    _abandoned.set()
+                    _log().error(
+                        "coordinator_core.ipc: op %r hung past ceiling %ss", method, _ceiling
+                    )
+                    return _hung_past_ceiling_envelope(
+                        method, op_timeout, _ceiling, time.monotonic() - _t0, id_
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as exc:
+                    _completed_after_backstop["waited_secs"] = round(time.monotonic() - _t0, 3)
+                    _log().error(
+                        "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
+                        exc_info=True,
+                    )
+                    if isinstance(exc, _EscapedBaseException):
+                        exc = exc.wrapped
+                    err = _handler_exception_error(exc)
+                    err.setdefault("data", {})["diagnosis"] = _completed_after_backstop
+                    return {"jsonrpc": "2.0", "id": id_, "error": err}
+                _completed_after_backstop["waited_secs"] = round(time.monotonic() - _t0, 3)
             except asyncio.CancelledError:
                 raise
             except BaseException as exc:
@@ -2564,12 +2614,64 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             result[_SCOPE_TOUCH_PATHS_KEY] = deduped
         result = _record_self_reported_touches(result, str(request_repo) if request_repo else None)
         _report_ceremony_overrun(method, sum(_op_cpu), request_repo)
-        return {"jsonrpc": "2.0", "id": id_, "result": result}
+        envelope = {"jsonrpc": "2.0", "id": id_, "result": result}
+        if _completed_after_backstop is not None:
+            envelope["data"] = {"diagnosis": _completed_after_backstop}
+        return envelope
     finally:
         _op_cpu_secs_var.reset(_op_cpu_token)
         _declared_writes_var.reset(_declared_writes_token)
         dispatch_abandon.ACTIVE.reset(_abandoned_token)
         dispatch_abandon.DEADLINE.reset(_deadline_token)
+
+
+def _cold_mutating_op(method: str) -> bool:
+    """True when `method` may mutate AND this process runs ops IN_PROCESS (cold).
+
+    Fail-closed on the mutation test (`warm.client._op_may_mutate`); any import
+    failure answers False, which keeps the abandon-and-report path.
+    """
+    try:
+        from coordinator_core.telemetry import op_latency  # noqa: PLC0415 - lazy, import budget
+
+        if op_latency.execution_route() != op_latency.IN_PROCESS:
+            return False
+        from coordinator_core.warm.client import _op_may_mutate  # noqa: PLC0415 - cycle
+
+        return bool(_op_may_mutate(method))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _hung_past_ceiling_envelope(
+    method: str, backstop: float, ceiling: float, waited: float, id_: Any
+) -> dict:
+    """-32004 for a cold mutating op still running at the await ceiling: it may have completed."""
+    try:
+        from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE as code  # noqa: PLC0415
+    except Exception:  # pragma: no cover - defensive
+        code = INTERNAL_ERROR
+    return {
+        "jsonrpc": "2.0",
+        "id": id_,
+        "error": {
+            "code": code,
+            "message": (
+                f"cold-run dispatch hung: op {method!r} was still running after "
+                f"{round(waited, 3)}s (ceiling {ceiling}s); it may have completed -- "
+                f"reconcile before any retry"
+            ),
+            "data": {
+                "diagnosis": {
+                    "case": "hung_past_ceiling",
+                    "op": method,
+                    "waited_secs": round(waited, 3),
+                    "ceiling_secs": ceiling,
+                    "backstop_secs": backstop,
+                }
+            },
+        },
+    }
 
 
 def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:

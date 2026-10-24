@@ -1414,10 +1414,11 @@ def _recorded_fingerprints(
     deleted_paths: Sequence[str], *, excluded: set,
     reviewed: Optional[dict] = None, reviewed_at: Optional[float] = None,
     fixes_integrated_at: Optional[float] = None, wave_paths: frozenset = frozenset(),
-    review_events: Optional[dict] = None,
+    review_events: Optional[dict] = None, run_started_at: Optional[float] = None,
 ) -> dict:
     """``{path: sha256}`` the run's expectation for the commit's candidate paths; one batched sink
-    read. Per path the newer of the session's last recorded write and the run's newest review
+    read. A session event older than ``run_started_at`` is another run's touch and is no expectation
+    of this run: the path falls through to the review hash, else carries no entry. Per path the newer of the session's last recorded write and the run's newest review
     (``reviewed`` -> sha256 of the bytes it read, ``reviewed_at`` epoch seconds) supplies the hash;
     an exact tie goes to the session write. When the review wave applied fixes
     (``fixes_integrated_at``: epoch the wave's integration was recorded), a reviewed path whose
@@ -1439,6 +1440,8 @@ def _recorded_fingerprints(
     if not wanted:
         return {}
     seen = touch_record.last_seen_events(session_id, wanted, worktree_root)
+    if run_started_at is not None:
+        seen = {p: (None if e is not None and e[1] < run_started_at else e) for p, e in seen.items()}
     reviewed = reviewed if reviewed_at is not None and isinstance(reviewed, dict) else {}
     out: dict = {}
     for p in wanted:
@@ -6032,6 +6035,7 @@ def _terminal_commit_inner(
             reviewed=reviewed_bytes, reviewed_at=reviewed_at,
             fixes_integrated_at=fixes_at, wave_paths=wave_paths,
             review_events=_review_write_events(worktree_root, review_writes),
+            run_started_at=_run_started_at(worktree_root, art_run_id),
         )
         if note_committed and note_committed not in deleted_paths:
             from coordinator_core.session import touch_record

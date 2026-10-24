@@ -229,6 +229,64 @@ def test_settings_bin_cli_bash_exempt(env):
     assert g.evaluate(env.payload(name="Bash", tid="b2", inp={"command": "cat x"})) is not None
 
 
+LIFECYCLE_CMDS = [
+    "python -m coordinator_core.invoke sizing.supersede '{\"sizing_path\": \"state/sizings/a b.yaml\"}'",
+    "coordinator-invoke memo.transition '{\"action\": \"claim\"}'",
+    "pickup-assemble --fresh",
+    "/opt/bin/cross-repo-memo --to coordinator-content-repo",
+    "python3 -m coordinator_core.invoke workflow.revise --run r",
+]
+MENTION_CMDS = [
+    "grep -rn sizing.supersede coordinator_core",
+    "cat pickup-assemble",
+    "echo memo.transition",
+    "ls cross-repo-memo",
+    "python -m coordinator_core.invoke sizing.supersede x; cat y",
+    "coordinator-invoke memo.transition x $(cat y)",
+    "git log --grep workflow.revise",
+]
+
+
+@pytest.mark.parametrize("cmd", LIFECYCLE_CMDS)
+def test_lifecycle_invocation_counts_toward_no_prefire_budget(env, cmd):
+    env.write(user())
+    env.survey(7)
+    assert g.evaluate(env.payload(name="Bash", tid="l1", inp={"command": cmd})) is None
+    env.write(use("l1", "Bash", {"command": cmd}))
+    assert g.evaluate(env.payload(name="Bash", tid="b9", inp={"command": "cat x"})) is None
+    env.write(use("b9", "Bash", {"command": "cat x"}))
+    assert g.evaluate(env.payload(name="Bash", tid="b10", inp={"command": "cat y"})) is not None
+
+
+@pytest.mark.parametrize("cmd", MENTION_CMDS)
+def test_command_merely_mentioning_a_verb_still_counts(env, cmd):
+    env.write(user())
+    env.survey(8)
+    assert g.evaluate(env.payload(name="Bash", tid="m1", inp={"command": cmd})) is not None
+
+
+@pytest.mark.parametrize("cmd", LIFECYCLE_CMDS[:4])
+def test_lifecycle_invocation_not_counted_postlanding(env, monkeypatch, cmd):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch)
+    for i in range(1, 4):
+        env.write(use(f"p{i}"))
+        assert g.evaluate(env.payload(tid=f"p{i}")) is None
+    life = {"command": cmd}
+    assert g.evaluate(env.payload(tid="l1", name="Bash", inp=life)) is None
+    env.write(use("l1", "Bash", life))
+    assert g.evaluate(env.payload(tid="p4")) is not None
+
+
+def test_mention_of_revise_does_not_disarm_postlanding(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch)
+    assert g.evaluate(env.payload(tid="x0")) is None
+    mention = {"command": "grep workflow.revise x"}
+    env.write(use("g1", "Bash", mention), use("p1"), use("p2"), use("p3"))
+    assert g.evaluate(env.payload(tid="p4")) is not None
+
+
 def test_engine_ask_fire_disarms(env):
     env.write(user())
     env.survey(8)
@@ -349,7 +407,7 @@ def test_workflow_revise_disarms_postlanding(env, monkeypatch):
     for i in range(1, 6):
         env.write(use(f"p{i}"))
     assert g.evaluate(env.payload(tid="p5")) is not None
-    rev = {"command": "python -m x workflow.revise --run r"}
+    rev = {"command": "python -m coordinator_core.invoke workflow.revise --run r"}
     assert g.evaluate(env.payload(tid="r1", name="Bash", inp=rev)) is None
     env.write(use("r1", "Bash", rev), use("p6"))
     assert g.evaluate(env.payload(tid="p6")) is None

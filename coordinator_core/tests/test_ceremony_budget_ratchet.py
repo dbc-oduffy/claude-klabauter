@@ -348,18 +348,62 @@ def test_run_git_outside_a_dispatch_charges_nothing_and_still_returns_its_result
     assert not result.timed_out
 
 
-@pytest.mark.deliberate_wall_clock(reason="the hung envelope fires on a wall-clock backstop CPU time cannot see")
-def test_a_hung_ceremony_op_returns_the_hung_envelope_at_the_backstop(monkeypatch):
+def _slow_handler(params, ctx=None, repo_root=None):
+    time.sleep(0.7)
+    return {"late": True}
+
+
+def _set_route(monkeypatch, route, *, mutating):
+    from coordinator_core.warm import client as warm_client
+
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "0.2")
-    rows: list = []
+    monkeypatch.setenv("COORDINATOR_EXECUTION_ROUTE", route)
+    monkeypatch.setattr(warm_client, "_op_may_mutate", lambda method: mutating)
 
-    def _hung(params, ctx=None, repo_root=None):
-        time.sleep(0.8)
-        return {"late": True}
 
-    response = _dispatch_probe(monkeypatch, _hung, rows=rows)
-
+def _assert_hung_envelope(response):
     assert "result" not in response
     text = json.dumps(response["error"])
     assert "hung" in text
     assert "abandoned, not stopped" in text
+
+
+@pytest.mark.deliberate_wall_clock(reason="the hung envelope fires on a wall-clock backstop CPU time cannot see")
+@pytest.mark.parametrize("route", ["in_process", "warm_server"])
+def test_a_hung_ceremony_read_op_returns_the_hung_envelope_at_the_backstop(monkeypatch, route):
+    _set_route(monkeypatch, route, mutating=False)
+    response = _dispatch_probe(monkeypatch, _slow_handler, rows=[])
+    _assert_hung_envelope(response)
+
+
+@pytest.mark.deliberate_wall_clock(reason="the hung envelope fires on a wall-clock backstop CPU time cannot see")
+def test_a_hung_ceremony_mutating_op_on_the_warm_route_returns_the_hung_envelope(monkeypatch):
+    _set_route(monkeypatch, "warm_server", mutating=True)
+    response = _dispatch_probe(monkeypatch, _slow_handler, rows=[])
+    _assert_hung_envelope(response)
+
+
+@pytest.mark.deliberate_wall_clock(reason="the await outlives a wall-clock backstop CPU time cannot see")
+def test_a_cold_mutating_ceremony_op_is_awaited_past_the_backstop(monkeypatch):
+    _set_route(monkeypatch, "in_process", mutating=True)
+    response = _dispatch_probe(monkeypatch, _slow_handler, rows=[])
+    assert "error" not in response
+    assert response["result"] == {"late": True}
+    diagnosis = response["data"]["diagnosis"]
+    assert diagnosis["case"] == "completed_after_backstop"
+    assert diagnosis["backstop_secs"] == 0.2
+    assert diagnosis["waited_secs"] >= 0.5
+
+
+@pytest.mark.deliberate_wall_clock(reason="the await outlives a wall-clock backstop CPU time cannot see")
+def test_a_cold_mutating_ceremony_op_that_raises_after_the_backstop_reports_its_own_error(monkeypatch):
+    _set_route(monkeypatch, "in_process", mutating=True)
+
+    def _raises(params, ctx=None, repo_root=None):
+        time.sleep(0.5)
+        raise RuntimeError("boom")
+
+    response = _dispatch_probe(monkeypatch, _raises, rows=[])
+    assert "result" not in response
+    assert response["error"]["data"]["diagnosis"]["case"] == "completed_after_backstop"
+    assert "indeterminate" not in json.dumps(response["error"])
