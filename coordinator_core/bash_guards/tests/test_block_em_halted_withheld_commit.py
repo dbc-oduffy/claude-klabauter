@@ -52,12 +52,14 @@ def spawns(monkeypatch):
     calls = []
     out = {"cached": [], "tracked": []}
 
+    from coordinator_core.git import run as git_run
+
     def fake_run(argv, **kwargs):
         calls.append(argv)
         key = "cached" if "--cached" in argv else "tracked"
         return SimpleNamespace(returncode=0, stdout="\n".join(out[key]))
 
-    monkeypatch.setattr(guard.subprocess, "run", fake_run)
+    monkeypatch.setattr(git_run, "run_git", fake_run)
     return SimpleNamespace(calls=calls, out=out)
 
 

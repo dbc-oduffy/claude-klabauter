@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import fnmatch
 import os
-import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -47,7 +46,6 @@ PRIORITY = 41
 GUARD_NAME = "block-em-halted-withheld-commit"
 
 _MAX_UNWRAP_DEPTH = 3
-_GIT_DIFF_TIMEOUT_S = 5
 
 _COMMIT_VALUE_FLAGS = frozenset(
     {
@@ -119,18 +117,9 @@ def _spec_hits(rel: str, indexed: Dict[str, str], root: str) -> List[str]:
 
 
 def _git_names(root: str, *args: str) -> List[str]:
-    from coordinator_core.win_portability import no_console_creationflags
+    from coordinator_core.git import run as git_run
 
-    try:
-        proc = subprocess.run(
-            ["git", "-C", root, *args],
-            capture_output=True,
-            text=True,
-            timeout=_GIT_DIFF_TIMEOUT_S,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
+    proc = git_run.run_git(["-C", root, *args])
     if proc.returncode != 0:
         return []
     return [line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip()]

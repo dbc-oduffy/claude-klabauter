@@ -2229,8 +2229,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "6d6ba7b1b79a18b6d1f97bf380567318a31f86ac",
-    "coordinator_core/_engine_stamp": "df95184c940980dc2a6b874c53f44febf96c935d",
+    "coordinator_core/_engine_published_at": "35bb414057bd5dfbf971def7af7d3a1118e11e46",
+    "coordinator_core/_engine_stamp": "04e5f2231d7c9c5251c71b9575b9802c98634150",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2393,7 +2393,7 @@
     "coordinator_core/bash_guards/block_disarm_marker_sentinel_creation.py": "59a1ca611701b8e3ef655fa9ecbaa61ddbeb5658",
     "coordinator_core/bash_guards/block_drive_root_new_dir_bash_write.py": "a8f4743ddd3c701be288da36963f6b0997263845",
     "coordinator_core/bash_guards/block_editor_kill_by_name.py": "3dcc08c583401764bfc2292b16ec7388b0af826d",
-    "coordinator_core/bash_guards/block_em_halted_withheld_commit.py": "eae6fe5d25a3743ba59fd8e16e3b609c9859aa9c",
+    "coordinator_core/bash_guards/block_em_halted_withheld_commit.py": "c45e20e20bf679360dc49ae389eb8f5b29be0802",
     "coordinator_core/bash_guards/block_external_workspace_vcs_write.py": "0ed0f7b0c7051be0f326081ff85df91d1ca80165",
     "coordinator_core/bash_guards/block_fleet_delegation_creation.py": "52b6019bf513a0cb5441ec1c9ac3c1ccf8164548",
     "coordinator_core/bash_guards/block_hand_authored_handoff_creation.py": "343ce40079e685afc5f6093dee7856595ff276da",
@@ -2488,7 +2488,7 @@
     "coordinator_core/bash_guards/tests/test_block_drive_root_new_dir_bash_write.py": "db3b7c7b03e3cb70efacd4a31a591c1b14a41bfb",
     "coordinator_core/bash_guards/tests/test_block_drive_root_new_dir_bash_write_spawn_budget.py": "e6e2d817e7383d274d216e73966a83d0fdaf7f22",
     "coordinator_core/bash_guards/tests/test_block_editor_kill_by_name.py": "e25ea00c3739b0d47a755aa654d1688b075f12e2",
-    "coordinator_core/bash_guards/tests/test_block_em_halted_withheld_commit.py": "13261e70ec72e9aba39a7804bf042d241d7cbdfd",
+    "coordinator_core/bash_guards/tests/test_block_em_halted_withheld_commit.py": "1d73cc7cda2b6bbcc3b72ca403519e1a3785c73c",
     "coordinator_core/bash_guards/tests/test_block_external_workspace_vcs_write.py": "78d92c2a2372ec8d95757a3883ca55c3c3c3c5f6",
     "coordinator_core/bash_guards/tests/test_block_fleet_delegation_creation.py": "837ff20b0e014afc9a34a43a1f564d6c842d26e1",
     "coordinator_core/bash_guards/tests/test_block_home_root_bash_write.py": "7314812858ddbed57a2d22b88681ccd9eb35fb33",
@@ -9582,5 +9582,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "1d61d8cb4c9af4b20837e3211e034b5820fc21da"
+  "source_head": "9318446c2eca6fdb3e78525f4e4275b6ffdf6068"
 }
