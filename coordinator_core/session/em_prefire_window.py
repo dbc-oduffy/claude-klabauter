@@ -496,6 +496,90 @@ def classify(
     return True, True
 
 
+def run_footprint(repo_root, run_id: object) -> Optional[frozenset]:
+    """Repo-relative paths of a run's write footprint from `state/warp/<run_id>/manifest.json`, else None.
+
+    None (absent, unreadable or malformed manifest) means the footprint is unknown.
+    Reads one file, spawns nothing.
+    """
+    if not isinstance(run_id, str) or not run_id or "/" in run_id or "\\" in run_id:
+        return None
+    try:
+        man = json.loads((Path(repo_root) / "state" / "warp" / run_id / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(man, dict):
+        return None
+    found: set = set()
+    for key in ("doc_writes", "review_declared_paths", "test_targets"):
+        if isinstance(man.get(key), list):
+            found.update(p for p in man[key] if isinstance(p, str))
+    if isinstance(man.get("write_baseline"), dict):
+        found.update(p for p in man["write_baseline"] if isinstance(p, str))
+    for row in man.get("rows") or []:
+        if isinstance(row, dict) and isinstance(row.get("writes"), list):
+            found.update(p for p in row["writes"] if isinstance(p, str))
+    return frozenset(re.sub(r"^(\./)+", "", _norm(p)) for p in found if p)
+
+
+def _rel(token: str, repo_root) -> str:
+    t = re.sub(r"^(\./)+", "", _norm(token.strip()))
+    root = _norm(str(repo_root)).rstrip("/") + "/"
+    return t[len(root):] if t.startswith(root) else t
+
+
+def _path_hits_run(token: str, run_id: str, footprint: frozenset, repo_root) -> bool:
+    rel = _rel(token, repo_root)
+    if not rel:
+        return False
+    if rel.rstrip("/") == "state/warp/" + run_id or rel.startswith("state/warp/" + run_id + "/"):
+        return True
+    suffix = run_id.rsplit("-", 1)[-1]
+    base = rel.rsplit("/", 1)[-1]
+    if (
+        suffix
+        and (rel.startswith("docs/plans/") or rel.startswith("state/sizings/"))
+        and re.search(r"-" + re.escape(suffix) + r"\.(md|ya?ml)$", base)
+    ):
+        return True
+    if rel in footprint:
+        return True
+    prefix = "" if rel in (".", "") else rel.rstrip("/") + "/"
+    return (rel == "." and bool(footprint)) or any(f.startswith(prefix) for f in footprint if prefix)
+
+
+def touches_landed_run(name: object, tool_input: object, run_id: object, repo_root) -> bool:
+    """True when a counted call reads, searches or tests the landed run's footprint or records.
+
+    Records: `state/warp/<run_id>/`, plan and sizing files carrying the run's id suffix, and the
+    delivery note (a manifest `doc_writes` path). An unknown footprint (no readable manifest) fails
+    open: only the run's record dir and id-suffixed plan/sizing files count. Trap: a Bash command is
+    scanned by word, so a chained command naming a footprint path anywhere counts.
+    """
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    footprint = run_footprint(repo_root, run_id)
+    known = footprint is not None
+    if footprint is None:
+        footprint = frozenset()
+    inp = tool_input if isinstance(tool_input, dict) else {}
+    cands: list = []
+    if name == "Read":
+        cands = [inp.get("file_path")]
+    elif name in ("Grep", "Glob"):
+        cands = [inp.get("path"), inp.get("glob")] + ([inp.get("pattern")] if name == "Glob" else [])
+        if not inp.get("path"):
+            cands.append(".")
+    elif name == "Bash" and isinstance(inp.get("command"), str):
+        words = re.split(r"[\s;&|<>()`\"']+", inp["command"])
+        cands = [w for word in words for w in word.split("=")]
+    else:
+        return known
+    return any(
+        isinstance(c, str) and c and _path_hits_run(c, run_id, footprint, repo_root) for c in cands
+    )
+
+
 def _opening_text(content) -> str:
     if isinstance(content, str):
         return content[:OPENING_TEXT_CAP]
@@ -679,6 +763,8 @@ __all__ = [
     "is_settings_bin_cli",
     "is_test_run",
     "publish_mechanics",
+    "run_footprint",
+    "touches_landed_run",
     "lifecycle_op",
     "load_state",
     "path_exempt",

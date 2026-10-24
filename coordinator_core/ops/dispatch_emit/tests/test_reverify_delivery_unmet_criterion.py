@@ -6,7 +6,8 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
-from coordinator_core.ops.review_mint.execute_review import _JUDGE_PREAMBLE
+from coordinator_core.ops.review_mint.execute_review import criterion_judge_brief
+from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _judge_review
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _record, _repo
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -57,8 +58,14 @@ def test_delivery_fail_still_returns_its_claims(tmp_path):
     assert rd.prior_unbacked_claims(record)[1] == [{"claim": "c", "anchor": "a"}]
 
 
-def test_judge_preamble_names_the_python_interpreter():
-    assert "`python3`" in _JUDGE_PREAMBLE and "`python`" in _JUDGE_PREAMBLE
+def test_judge_preamble_names_the_python_interpreter(tmp_path):
+    plan = tmp_path / "p.md"
+    plan.write_text("# p\n", encoding="utf-8")
+    prompt, _ = criterion_judge_brief(
+        _judge_review(), stage_schemas={**_STAGE_SCHEMAS, "judge-result": {"type": "object"}},
+        plan_path=str(plan), run_base_sha="a" * 40,
+    )
+    assert "`python3`" in prompt and "`python`" in prompt
 
 
 @pytest.mark.usefixtures("verifier_roster")

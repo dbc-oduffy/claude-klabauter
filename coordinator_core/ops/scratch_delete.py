@@ -150,6 +150,8 @@ def delete_declared(repo_root, run_id: str, chunk_id: str, paths: Sequence[str])
 
 def brief_clause(run_id: str, chunk_id: str, writes: Sequence[str]) -> str:
     """The brief line naming the op call for a row's scratch/ writes; '' when it has none."""
+    if not isinstance(writes, (list, tuple)):
+        return ""
     scratch = [
         w for w in writes
         if isinstance(w, str) and w.replace("\\", "/").split("/", 1)[0] == _SCRATCH

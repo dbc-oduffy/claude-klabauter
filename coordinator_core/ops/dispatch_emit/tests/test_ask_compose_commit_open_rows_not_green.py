@@ -1,6 +1,6 @@
 """A landed commit with incomplete or blocked rows ends at revise_and_refire; an empty set keeps close_job.
 
-These pin the composed JS text only; none executes the arm."""
+Most pin the composed JS text only; the `_drive_commit_block` tests execute the commit arm under node."""
 
 from __future__ import annotations
 

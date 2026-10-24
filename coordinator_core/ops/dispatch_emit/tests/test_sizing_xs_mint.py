@@ -280,18 +280,44 @@ def test_no_repo_root_leaves_mint_unchanged(tmp_path):
 
 def test_em_row_body_never_mentions_a_grant(tmp_path):
     repo = _repo_with(tmp_path / "repo", "CLAUDE.md", "src/x.py")
-    _, rows = _rows_by_id(tmp_path, _ledger_sizing(("CLAUDE.md", "open")), ["src/x.py"], repo)
+    _, rows = _rows_by_id(tmp_path, _ledger_sizing(("edit CLAUDE.md", "open")), ["src/x.py"], repo)
     assert "grant" not in rows["E1"]["body"].lower()
 
 
 def test_plan_body_named_by_writes_and_register_stays_as_itself(tmp_path):
     repo = _repo_with(tmp_path / "repo", "docs/plans/p.md", "src/x.py")
     text, rows = _rows_by_id(
-        tmp_path, _ledger_sizing(("docs/plans/p.md", "open")), ["src/x.py", "docs/plans/p.md"], repo
+        tmp_path, _ledger_sizing(("edit docs/plans/p.md", "open")), ["src/x.py", "docs/plans/p.md"], repo
     )
     assert rows["X1"]["writes"] == ["src/x.py"]
     assert rows["P1"]["writes"] == ["docs/plans/p.md"]
     assert "evidence.yaml" not in text
+
+
+def test_path_named_only_as_provenance_is_not_a_write(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
+    _, rows = _rows_by_id(tmp_path, _ledger_sizing(("provenance: see docs/x.md", "open")), ["src/x.py"], repo)
+    assert rows["X1"]["writes"] == ["src/x.py"]
+
+
+def test_path_governed_by_an_edit_verb_is_kept(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
+    _, rows = _rows_by_id(tmp_path, _ledger_sizing(("edit docs/x.md", "open")), ["src/x.py"], repo)
+    assert "docs/x.md" in rows["X1"]["writes"]
+
+
+def test_provenance_sentence_in_a_row_with_a_verb_elsewhere_is_not_a_write(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
+    sizing = _ledger_sizing(("Fix the parser. Provenance: docs/x.md.", "open"))
+    _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
+    assert rows["X1"]["writes"] == ["src/x.py"]
+
+
+def test_provenance_line_after_a_newline_is_not_a_write(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
+    sizing = _ledger_sizing(("Fix the parser\nprovenance: docs/x.md", "open"))
+    _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
+    assert rows["X1"]["writes"] == ["src/x.py"]
 
 
 def test_case_variant_of_existing_file_mints_the_tracked_spelling(tmp_path):

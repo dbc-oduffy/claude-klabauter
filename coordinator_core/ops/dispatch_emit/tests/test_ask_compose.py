@@ -284,7 +284,7 @@ def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_targe
 
 def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
     script = _compose()
-    gate = "if (!_halted && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {\n  phase('Review wave');"
+    gate = "if (!_halted && !_reviewReused && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {\n  phase('Review wave');"
     assert script.count(gate) == 1
     assert "phase('review')" not in script
     assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("label: 'verify'")
@@ -687,3 +687,52 @@ def test_size_reword_stage_fold_drops_with_stop_after():
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 
     assert OP_ASK_STAGE not in _reword_prompt(_compose(stop_after=STOP_AFTER_PLAN))
+
+
+_RESUMED_WAVE = [
+    {"slice_id": "s1", "verdict": "CLEAN", "findings": 0, "applied": 0},
+    {"slice_id": "s2", "verdict": "BLOCKED", "findings": 3, "applied": 1},
+]
+
+
+def _eval_emitted_review_wave(fragment, *, rows, phase_verdicts):
+    """Run a fragment cut from the composed review wave under node with the gate's resume verdicts.
+
+    Fragments are cut from the emitted script by marker text, so reword a marker and its slice here together."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    prog = (
+        f"const _reviewReused = false; const n = 2; const _manifest = {{ rows: {json.dumps(rows)} }}; "
+        f"const _phaseVerdict = (k) => ({json.dumps(phase_verdicts)})[k] ?? null; "
+        f"console.log(JSON.stringify({fragment}));"
+    )
+    out = subprocess.run(
+        [node, "-e", prog], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_a_resumed_review_wave_sizes_and_briefs_itself_for_only_the_blocked_slice():
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_resume_review_blocked_slices import (
+        _compose as _compose_grouped,
+    )
+
+    script = _compose_grouped()
+    start = script.index("phase('Review wave');")
+    count = script[script.index("const n = ", start) + len("const n = "):script.index("; return Array.from({ length: n }", start)]
+    suffix_start = script.index("group_count: ' + n + ", start) + len("group_count: ' + n + ")
+    suffix = script[suffix_start:script.index(" + (\"\\n\\nSidecar dir", suffix_start)]
+    rows = list(range(12))
+    resumed = {"review": {"wave": _RESUMED_WAVE}}
+    assert _eval_emitted_review_wave(count, rows=rows, phase_verdicts=resumed) == 1
+    prompt = _eval_emitted_review_wave(suffix, rows=rows, phase_verdicts=resumed)
+    assert 'review_slice_ids: ["s2"]' in prompt and "Review only the listed slice ids" in prompt
+    assert _eval_emitted_review_wave(count, rows=rows, phase_verdicts={}) == 3
+    assert _eval_emitted_review_wave(suffix, rows=rows, phase_verdicts={}) == ""

@@ -261,6 +261,19 @@ def test_halt_marker_carries_the_reason_only_when_given(tmp_path):
     assert "reason" not in json.loads((tmp_path / "b" / HALTED_FILE).read_text(encoding="utf-8"))
 
 
+def test_halt_marker_carries_held_rows_only_when_given(tmp_path):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_HELD_ROWS_FIELD
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+
+    rows = [{"id": "X1", "reason": "performer em"}]
+    given = write_halt_marker(tmp_path / "a", halted="ledger_check", sizing_rel=None, held_rows=rows)
+    assert json.loads(given.read_text(encoding="utf-8"))[HALT_HELD_ROWS_FIELD] == rows
+    bare = write_halt_marker(tmp_path / "b", halted="ledger_check", sizing_rel=None)
+    assert HALT_HELD_ROWS_FIELD not in json.loads(bare.read_text(encoding="utf-8"))
+
+
 def _indexed(root):
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 

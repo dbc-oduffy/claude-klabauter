@@ -159,21 +159,29 @@ def _decide(payload: dict) -> Optional[str]:
             return None
         return prefire_deny_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX)
     if phase in (ers.PHASE_LANDED_GREEN, ers.PHASE_HALTED) and phase.run_id:
-        total = len(state["all"])
         landings = dict(state.get("landings") or {})
         rec = landings.get(phase.run_id)
         if not isinstance(rec, dict) or rec.get("window") != state.get("window"):
-            if isinstance(rec, dict):
-                base = 0
-            else:
-                base = total - (1 if current_id and current_id in state["all"] else 0)
-            rec = {"window": state.get("window"), "base": base, "fires": state.get("fires")}
+            rec = {"window": state.get("window"), "fires": state.get("fires"), "touched": []}
             landings[phase.run_id] = rec
             state["landings"] = landings
             epw.save_state(path, state)
         if state.get("revised") or int(state.get("fires") or 0) > int(rec.get("fires") or 0):
             return None
-        since = total - int(rec.get("base") or 0)
+        # Only calls touching the landed run are charged; `touched` holds their tool_use ids.
+        touched = rec.get("touched")
+        touched = list(touched) if isinstance(touched, list) else []
+        extra = 0
+        if epw.touches_landed_run(tool_name, tool_input, phase.run_id, root):
+            if current_id:
+                if current_id not in touched:
+                    touched.append(current_id)
+                    rec["touched"] = touched
+                    state["landings"] = landings
+                    epw.save_state(path, state)
+            else:
+                extra = 1
+        since = len(touched) + extra
         if since > POSTLANDING_VERIFY_CALLS_MAX:
             return postlanding_deny_text(since, POSTLANDING_VERIFY_CALLS_MAX)
     return None

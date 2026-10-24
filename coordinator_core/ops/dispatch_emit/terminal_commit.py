@@ -6109,7 +6109,7 @@ def _terminal_commit_inner(
 
     reach_reply_field: dict = {}
     shipped_reply_field: dict = {}
-    if ask_note_rel is not None and token_state.get("since_halt_close") is None:
+    if ask_note_rel is not None:
         reach_withheld = {
             **(dict(art_landable.withheld) if art_landable is not None else {}),
             **{p: str(why) for p, why in sibling_withheld.items()},

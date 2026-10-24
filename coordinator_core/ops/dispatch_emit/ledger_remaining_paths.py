@@ -170,7 +170,7 @@ def serving_rows(plan_path: Path, blocking: Sequence[str]) -> list[dict[str, Any
     return rows_serving(loaded.rows, claims, blocking)
 
 
-def rows_serving(rows: Iterable[Mapping[str, Any]], claims: Sequence[str], blocking: Sequence[str]) -> list[dict[str, Any]]:
+def rows_serving(rows: Iterable[dict[str, Any]], claims: Sequence[str], blocking: Sequence[str]) -> list[dict[str, Any]]:
     """`serving_rows`' predicate over spine `rows` in hand; `claims` is the frontmatter `register_claims.rows`."""
     blocked = set(blocking)
     out: list[dict[str, Any]] = []
@@ -180,7 +180,7 @@ def rows_serving(rows: Iterable[Mapping[str, Any]], claims: Sequence[str], block
         rr = row.get("register_rows")
         serves = [str(x) for x in rr] if isinstance(rr, list) and rr else claims
         if blocked.intersection(serves):
-            out.append(row)  # type: ignore[arg-type]
+            out.append(row)
     return out
 
 

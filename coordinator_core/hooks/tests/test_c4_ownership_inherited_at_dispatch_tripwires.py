@@ -696,12 +696,6 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
             "coordinator_core/ops/dispatch_emit/terminal_commit.py",
             "_claims_before_landing",
         ),
-        # S1 spike: renders `Absorbed-Peer-Claim` disclosure lines for live peers. A raising
-        # lookup yields []; read-only, never refuses the land or widens its pathspec.
-        (
-            "coordinator_core/benchmarks/commit_v2_minimal_land_spike.py",
-            "_peer_disclosures",
-        ),
         # Claim-lookup spike: reads the lookup's recorded kinds to pick the liveness-probe holders.
         # A benchmark; read-only, never refuses a land or widens a pathspec.
         (

@@ -126,18 +126,12 @@ def _squash(text: str) -> str:
 
 def _blob_batch(root: Path, specs: list) -> Optional[dict]:
     """`{spec: bytes | None}` for each git object spec, one `git cat-file --batch` spawn; None when git fails."""
-    import subprocess
+    from coordinator_core.git.run import run_git
 
-    try:
-        proc = subprocess.run(
-            ["git", "cat-file", "--batch"], cwd=str(root), input="".join(s + "\n" for s in specs).encode(),
-            capture_output=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
+    proc = run_git(["cat-file", "--batch"], cwd=str(root), input="".join(s + "\n" for s in specs).encode())
     if proc.returncode != 0:
         return None
-    out, data, pos = proc.stdout, {}, 0
+    out, data, pos = proc.stdout_bytes, {}, 0
     for spec in specs:
         end = out.find(b"\n", pos)
         if end < 0:

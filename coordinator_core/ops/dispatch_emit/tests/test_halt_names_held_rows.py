@@ -67,6 +67,16 @@ def test_held_rows_equal_the_snapshots_held(repo, call):
     assert _marker(repo)["held_rows"] == [{"id": i, "reason": r} for i, r in HELD]
 
 
+def test_snapshot_is_read_at_the_worktree_root_not_the_git_handle(repo):
+    """terminal_commit hands the `.git` handle as repo_root; the snapshot lives at the worktree root."""
+    resume_snapshot.write(repo / ".git", RUN, PLAN, [], [], held=HELD)
+
+    out = _terminal(repo, {"run_id": RUN, HALTED_RECORD_PARAM: HALT})
+
+    assert out["committed"] is True, out
+    assert "held_rows" not in _marker(repo)
+
+
 @WRITERS
 def test_no_snapshot_writes_no_key(repo, call):
     out = call(repo, {"run_id": RUN, HALTED_RECORD_PARAM: HALT})

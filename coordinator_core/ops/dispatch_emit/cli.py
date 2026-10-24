@@ -883,7 +883,7 @@ def _print_workflow_invocation(
             from coordinator_core.ops.dispatch_emit import run_token
 
             try:
-                token = run_token.mint(repo_root, run_stamp, str(script_path))
+                token = run_token.mint(repo_root, run_stamp, str(script_path), kind="grind")
                 token_arg = f", run_token: '{token}'"
             except (OSError, ValueError):
                 pass  # no token: the grind hands its finished rows back uncommitted

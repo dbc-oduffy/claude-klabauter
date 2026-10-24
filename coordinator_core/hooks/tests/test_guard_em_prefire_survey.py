@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core import machine_profile, warp_fire
 from coordinator_core.hooks import guard_em_prefire_survey as g
+from coordinator_core.session import em_prefire_window as epw
 from coordinator_core.session import engine_route_state as ers
 
 SID = "sess-1"
@@ -327,7 +328,9 @@ def test_mention_of_revise_does_not_disarm_postlanding(env, monkeypatch):
     _landed(monkeypatch)
     assert g.evaluate(env.payload(tid="x0")) is None
     mention = {"command": "grep workflow.revise x"}
-    env.write(use("g1", "Bash", mention), use("p1"), use("p2"), use("p3"))
+    _step(env, "g1", "Bash", mention)
+    for t in ("p1", "p2", "p3"):
+        _step(env, t)
     assert g.evaluate(env.payload(tid="p4")) is not None
 
 
@@ -404,17 +407,28 @@ def test_strict_only_arming(env, monkeypatch):
     assert g.evaluate(env.payload(env={"COORDINATOR_STRICT_DISPATCH": "1", "COORDINATOR_SETTINGS_HOME": str(env.home)})) is not None
 
 
-def _landed(monkeypatch, phase=ers.PHASE_LANDED_GREEN):
+def _landed(monkeypatch, phase=ers.PHASE_LANDED_GREEN, known=True):
+    """Landed phase; `known` stubs a run footprint covering every default `use()` read, else the manifest is absent."""
     monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(phase, "run-1"))
+    if known:
+        names = frozenset(
+            ["cur.py", "cur"] + [f"f{c}{i}.py" for c in "abcdefghijklmnopqrstuvwxyz" for i in range(10)]
+        )
+        monkeypatch.setattr(epw, "run_footprint", lambda *a, **k: names)
+
+
+def _step(env, tid, name="Read", inp=None):
+    """One call as production sees it: the hook evaluates it, then it lands in the transcript."""
+    res = g.evaluate(env.payload(tid=tid, name=name, inp=inp))
+    env.write(use(tid, name, inp))
+    return res
 
 
 def test_postlanding_fourth_call_denies(env, monkeypatch):
     env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
     _landed(monkeypatch)
-    assert g.evaluate(env.payload(tid="p1")) is None
-    env.write(use("p1"))
-    env.write(use("p2"), use("p3"))
-    assert g.evaluate(env.payload(tid="p3")) is None
+    for t in ("p1", "p2", "p3"):
+        assert _step(env, t) is None
     env.write(use("p4"))
     res = g.evaluate(env.payload(tid="p4"))
     assert res is not None
@@ -437,6 +451,7 @@ def test_postlanding_ignores_settings_cli_exemption(env, monkeypatch):
     _landed(monkeypatch)
     assert g.evaluate(env.payload(tid="x0")) is None
     cli = {"command": f"{env.home}/bin/cli"}
+    monkeypatch.setattr(epw, "run_footprint", lambda *a, **k: frozenset([cli["command"]]))
     for i in range(1, 3):
         env.write(use(f"b{i}", "Bash", cli))
         assert g.evaluate(env.payload(tid=f"b{i}", name="Bash", inp=cli)) is None
@@ -448,8 +463,8 @@ def test_workflow_revise_disarms_postlanding(env, monkeypatch):
     env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
     _landed(monkeypatch)
     assert g.evaluate(env.payload(tid="x0")) is None
-    for i in range(1, 6):
-        env.write(use(f"p{i}"))
+    for i in range(1, 5):
+        _step(env, f"p{i}")
     assert g.evaluate(env.payload(tid="p5")) is not None
     rev = {"command": "python -m coordinator_core.invoke workflow.revise --run r"}
     assert g.evaluate(env.payload(tid="r1", name="Bash", inp=rev)) is None
@@ -562,8 +577,76 @@ def test_second_test_run_and_plain_reads_still_count_postlanding(env, monkeypatc
     assert g.evaluate(env.payload(tid="r0")) is None
     t = {"command": PUBLISH_SEQUENCE[0]}
     for i in range(2):
-        env.write(use(f"t{i}", "Bash", t))
-    env.write(use("r1"), use("r2"))
+        _step(env, f"t{i}", "Bash", t)
+    _step(env, "r1")
+    _step(env, "r2")
     assert g.evaluate(env.payload(tid="r3")) is not None
     log = {"command": "git log --oneline -5"}
     assert g.evaluate(env.payload(tid="x", name="Bash", inp=log)) is not None
+
+
+def _manifest(env, run_id="run-1"):
+    d = env.repo / "state" / "warp" / run_id
+    d.mkdir(parents=True)
+    (d / "manifest.json").write_text(
+        json.dumps({"rows": [{"writes": ["pkg/mod.py", "pkg/tests/test_mod.py"]}], "doc_writes": ["docs/note.md"]}),
+        encoding="utf-8",
+    )
+
+
+def _fire_and_land(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch, known=False)
+    _manifest(env)
+
+
+def test_unrelated_work_after_landing_is_never_charged(env, monkeypatch):
+    _fire_and_land(env, monkeypatch)
+    test = {"command": "python -m pytest pkg/tests/test_mod.py -q"}
+    assert _step(env, "t1", "Bash", test) is None
+    for i in range(3):
+        assert _step(env, f"r{i}", "Read", {"file_path": f"experiments/r51/cell{i}/record.json"}) is None
+    judge = {"command": "python experiments/runner.py judge --help"}
+    assert _step(env, "j1", "Bash", judge) is None
+    assert _step(env, "j2", "Bash", {"command": "python experiments/runner.py score cell4"}) is None
+
+
+def test_reverification_of_the_landed_run_denies_past_three(env, monkeypatch):
+    _fire_and_land(env, monkeypatch)
+    reads = [
+        {"file_path": "pkg/mod.py"},
+        {"file_path": str(env.repo / "pkg" / "tests" / "test_mod.py")},
+        {"file_path": "./pkg/mod.py"},
+    ]
+    for i, inp in enumerate(reads):
+        assert _step(env, f"v{i}", "Read", inp) is None
+    res = _step(env, "v3", "Read", {"file_path": "docs/note.md"})
+    assert res is not None
+    assert reason(res).startswith("[em-prefire-survey] 4 exploratory calls since the landing")
+
+
+def test_unrelated_reads_do_not_mask_reverification_count(env, monkeypatch):
+    _fire_and_land(env, monkeypatch)
+    for i in range(5):
+        assert _step(env, f"u{i}", "Read", {"file_path": f"elsewhere/{i}.py"}) is None
+    for i in range(3):
+        assert _step(env, f"v{i}", "Read", {"file_path": "pkg/mod.py"}) is None
+    assert _step(env, "v3", "Grep", {"pattern": "x", "path": "pkg"}) is not None
+
+
+def test_missing_manifest_never_charges_unrelated_calls(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch, known=False)
+    for i in range(5):
+        assert _step(env, f"u{i}", "Read", {"file_path": f"elsewhere/{i}.py"}) is None
+    assert _step(env, "g", "Grep", {"pattern": "x"}) is None
+    assert _step(env, "b", "Bash", {"command": "ls elsewhere"}) is None
+
+
+def test_missing_manifest_still_charges_the_run_sizing(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch, known=False)
+    sizing = {"file_path": "state/sizings/2026-10-24-thing-1.yaml"}
+    for i in range(3):
+        assert _step(env, f"v{i}", "Read", sizing) is None
+    assert _step(env, "v3", "Read", sizing) is not None

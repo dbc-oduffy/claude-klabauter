@@ -10,6 +10,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import requirements_ledger
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_REFUSAL_HEAD
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler
@@ -19,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_e2e import 
     _LANDED,
     _MET,
     _NODE_PROGRAM,
+    _PRIOR_RUN,
     _RUN,
     _TOKEN,
     _example_game_repo_shape,
@@ -38,6 +40,9 @@ def _run(root, leg) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
+    requirements_ledger.start(root, _PRIOR_RUN)
+    requirements_ledger.revise(root, _PRIOR_RUN, note="finish the owed sizing update")
+    requirements_ledger.start(root, _RUN, resumed_from=_PRIOR_RUN)
     reply = agent_gate_reply(root, _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=root))
     ledger = reply["resume_ledger"]
     ledger["revise_notes"] = ["finish the owed sizing update"]

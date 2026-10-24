@@ -1,5 +1,5 @@
-"""A revise note naming a file outside a staged run's frozen footprint is refused at submit with the
-follow-up-ask route; a covered or manifest-less run takes it; a refire is never offered for it."""
+"""A revise withhold_paths entry outside a staged run's frozen footprint is refused with the follow-up-ask
+route; note prose never counts toward the footprint, and a refire is not derived from stored notes."""
 
 from __future__ import annotations
 
@@ -30,17 +30,29 @@ def _stage(repo, writes=(INSIDE,), under=()):
     (rl.run_dir(repo, RUN) / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def test_outside_path_is_refused_with_the_follow_up_ask_route(repo):
+def test_declared_withhold_outside_is_refused_with_the_follow_up_ask_route(repo):
     _stage(repo)
     with pytest.raises(rl.LedgerRefused) as exc:
-        rl.revise(repo, RUN, note=f"also fix `{OUTSIDE}`")
+        rl.revise(repo, RUN, withhold_paths=[{"path": OUTSIDE, "reason": "peer hunks"}])
     assert OUTSIDE in str(exc.value) and "follow-up ask" in str(exc.value)
-    assert rl.read_notes(rl.run_dir(repo, RUN)) == []
+    assert not (rl.run_dir(repo, RUN) / "withhold.jsonl").exists()
+
+
+def test_declared_withhold_inside_is_accepted(repo):
+    _stage(repo)
+    rl.revise(repo, RUN, withhold_paths=[{"path": INSIDE, "reason": "peer hunks"}])
+    assert (rl.run_dir(repo, RUN) / "withhold.jsonl").is_file()
+
+
+def test_note_citing_an_outside_file_as_provenance_is_accepted(repo):
+    _stage(repo)
+    rl.revise(repo, RUN, note=f"source text came from `{OUTSIDE}` (provenance only)")
+    assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
 def test_covered_path_is_accepted(repo):
     _stage(repo)
-    rl.revise(repo, RUN, note=f"also fix `{INSIDE}`")
+    rl.revise(repo, RUN, note=f"also fix `{INSIDE}`", withhold_paths=[{"path": INSIDE, "reason": "r"}])
     assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
@@ -55,19 +67,15 @@ def test_unstaged_run_has_no_frozen_footprint(repo):
     assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
-def test_refire_is_not_offered_for_a_stored_outside_note(repo):
-    d = rl.run_dir(repo, RUN)
+def test_refire_is_offered_despite_a_stored_note_naming_an_outside_path(repo):
     rl.revise(repo, RUN, note=f"also fix {OUTSIDE}")
     _stage(repo)
-    reply = rl._refire(None, repo, (None, []), halted=True, dir_=d, run_id=RUN)
-    assert reply["next"]["kind"] == "follow-up-ask"
-    assert reply["next"]["paths"] == [OUTSIDE]
-    assert "follow-up ask" in reply["note"]
+    reply = rl._refire(None, repo, (None, []), halted=True)
+    assert reply["next"]["kind"] == "refire"
 
 
 def test_refire_is_still_offered_when_every_noted_path_is_covered(repo):
-    d = rl.run_dir(repo, RUN)
     rl.revise(repo, RUN, note=f"also fix {INSIDE}")
     _stage(repo)
-    reply = rl._refire(None, repo, (None, []), halted=True, dir_=d, run_id=RUN)
+    reply = rl._refire(None, repo, (None, []), halted=True)
     assert reply["next"]["kind"] == "refire"

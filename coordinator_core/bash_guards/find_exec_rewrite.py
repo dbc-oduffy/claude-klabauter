@@ -205,10 +205,12 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
                 else "            pass"
             )
         else:
+            # Always newline-terminates each file's tail (real tail leaves an unterminated last line bare),
+            # so per-file outputs never glue together.
             action = (
-                "            nl = chr(10) if text.endswith(chr(10)) else ''\n"
-                "            parts = (text[:-1] if nl else text).split(chr(10))\n"
-                "            sys.stdout.write(chr(10).join(parts[-N:]) + nl)"
+                "            body = text[:-1] if text.endswith(chr(10)) else text\n"
+                "            if text:\n"
+                "                sys.stdout.write(chr(10).join(body.split(chr(10))[-N:]) + chr(10))"
                 if count > 0
                 else "            pass"
             )
@@ -216,7 +218,7 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
             "import fnmatch, os, sys\n"
             "N = %d\n"
             "for root, dirs, files in os.walk(%s):\n"
-            "    for fn in files:\n"
+            "    for fn in sorted(files):\n"
             "        if %s:\n"
             '            with open(os.path.join(root, fn), "rb") as fh:\n'
             '                text = fh.read().decode("utf-8", "replace")\n'

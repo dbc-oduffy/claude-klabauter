@@ -119,7 +119,7 @@ def test_head_tail_goldens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     out = run("head -1")
     assert sorted(out.splitlines(keepends=True)) == ["1\n", "x\n"]
     assert "==>" not in out
-    assert sorted(run("tail -2").splitlines(keepends=True)) == ["3\n", "4\n", "y\n", "z"]
+    assert run("tail -2") == "3\n4\ny\nz\n"
     assert run("head -n 0") == ""
 
 
@@ -153,17 +153,19 @@ def test_head_tail_rewrite_matches_real_semi_form(
     import shutil
     import subprocess
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     find, verb = shutil.which("find"), shutil.which(verb_args.split()[0])
     if not (find and verb):
         pytest.skip("find/head/tail not on PATH")
-    probe = subprocess.run([find, "--version"], capture_output=True, text=True)
+    probe = subprocess.run([find, "--version"], capture_output=True, text=True, **no_console_creationflags())
     if probe.returncode != 0 or "find" not in probe.stdout.lower():
         pytest.skip("PATH find is not POSIX find")
     _ht_fixture(tmp_path)
     cmd = "find . -type f -exec %s {} \\;" % verb_args
     proc = subprocess.run(
         [find, ".", "-type", "f", "-exec", verb_args.split()[0], *verb_args.split()[1:], "{}", ";"],
-        cwd=tmp_path, capture_output=True,
+        cwd=tmp_path, capture_output=True, **no_console_creationflags(),
     )
     if proc.returncode != 0:
         pytest.skip("PATH find could not run the ';' form: %r" % proc.stderr[:200])

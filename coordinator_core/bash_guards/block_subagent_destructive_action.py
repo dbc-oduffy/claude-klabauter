@@ -2754,7 +2754,13 @@ def _evaluate_git_segment_anchored(
     if subcmd == "clone":
         if _clone_into_scratch(list(remaining or ())):
             return None
-        return "git clone (only into <repo>/scratch/)"
+        ctx = _SCRATCH_CTX.get()
+        if ctx is not None:
+            return f"git clone (only into {(ctx[1] / 'scratch').as_posix()}/)"
+        return (
+            "git clone (only into a repo's scratch/; no repo resolved from the cwd -- "
+            "run from inside the repo checkout, keep non-repo scratch files in the session scratchpad)"
+        )
     if subcmd == "init":
         if _init_into_scratch(list(remaining or ())) or _scratchpad_fixture_init(list(remaining or ())):
             return None

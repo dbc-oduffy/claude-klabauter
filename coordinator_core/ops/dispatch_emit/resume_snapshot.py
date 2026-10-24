@@ -38,7 +38,7 @@ class Snapshot(NamedTuple):
     resume_rows: frozenset
     kept: frozenset = frozenset()
     kept_run: Optional[str] = None
-    held: tuple = ()
+    held: tuple[tuple[str, str], ...] = ()
 
 
 def write(

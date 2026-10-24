@@ -246,10 +246,12 @@ def test_default_now_uses_wall_clock(repo):
 def _git_repo_with_two_withheld(tmp_path, b_head):
     import subprocess
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     def git(*args, stdin=""):
         return subprocess.run(
             ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, input=stdin,
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, **no_console_creationflags(),
         ).stdout.strip()
 
     git("init", "-q")

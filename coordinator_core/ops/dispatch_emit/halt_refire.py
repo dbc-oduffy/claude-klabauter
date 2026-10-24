@@ -11,6 +11,7 @@ import json
 import re
 
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_DESIGN_REVIEW
+from coordinator_core.ops.dispatch_emit.phase_ledger import HALT_PHASE, PHASES
 from coordinator_core.ops.dispatch_emit.write_baseline import (
     DIRTY_BEFORE_RUN_KEY,
     MEANT_TO_LAND_KEY,
@@ -33,6 +34,9 @@ OPS = (OP_ENGINE_ASK, OP_WORKFLOW_RESUME)
 # `stage` is the resume handle from halt-keeps-work (hnd for 05b3e6-1-halt-keeps-work). This
 # module does not know its shape: it is copied as-is from the `stage` argument and never read.
 RESUME_KEYS = ("run_id", "sizing", "halted", "stage")
+# Optional beside RESUME_KEYS: halts recorded before it existed lack it, and a halt kind outside
+# HALT_PHASE omits it (a full pass).
+RESUME_PHASE_KEY = "phase"
 
 INPUT_KINDS = ("rule", "repin", "touchpoint", "em-discharge", "wait")
 LEGACY_INPUT_KIND = {
@@ -70,12 +74,19 @@ def refire_next_action(
     detail: str | None = None,
     stage=None,
 ) -> dict:
-    """The envelope `{kind, op, call, resume, input, detail}`; `stage` is copied unchanged."""
+    """The envelope `{kind, op, call, resume, input, detail}`; `stage` is copied unchanged.
+
+    `resume.phase` is HALT_PHASE[halted] and absent for a kind that map does not name.
+    """
+    resume = {"run_id": run_id, "sizing": sizing, "halted": halted, "stage": stage}
+    phase = HALT_PHASE.get(halted)
+    if phase is not None:
+        resume[RESUME_PHASE_KEY] = phase
     return {
         "kind": REFIRE_KIND,
         "op": op,
         "call": call,
-        "resume": {"run_id": run_id, "sizing": sizing, "halted": halted, "stage": stage},
+        "resume": resume,
         "input": input,
         "detail": detail,
     }
@@ -145,7 +156,9 @@ def is_refire_next_action(obj: object) -> bool:
     if not isinstance(call, str) or not call.strip() or not _call_is_one_engine_call(op, call):
         return False
     resume = obj.get("resume")
-    if not isinstance(resume, dict) or set(resume) != set(RESUME_KEYS):
+    if not isinstance(resume, dict) or set(resume) - {RESUME_PHASE_KEY} != set(RESUME_KEYS):
+        return False
+    if RESUME_PHASE_KEY in resume and resume[RESUME_PHASE_KEY] not in PHASES:
         return False
     if not isinstance(resume.get("run_id"), str) or not resume["run_id"]:
         return False
@@ -233,6 +246,7 @@ def refire_next_action_js(
             f"  if (_legacy && typeof _legacy === 'object' && _legacy.kind === {j(REFIRE_KIND)}) return;",
             f"  const _legacyKind = {j(LEGACY_INPUT_KIND)};",
             f"  const _byHalt = {j(INPUT_BY_HALT)};",
+            f"  const _haltPhase = {j(HALT_PHASE)};",
             "  let _input = null;",
             "  let _detail = null;",
             "  if (typeof _legacy === 'string') {",
@@ -247,7 +261,7 @@ def refire_next_action_js(
             f"    kind: {j(REFIRE_KIND)},",
             f"    op: _hk === {j(HALT_USAGE_LIMIT)} ? {j(OP_WORKFLOW_RESUME)} : {j(OP_ENGINE_ASK)},",
             f"    call: {call_js},",
-            f"    resume: {{ run_id: {run_id_js}, sizing: {sizing_js}, halted: _hk, stage: {stage_js} }},",
+            f"    resume: Object.assign({{ run_id: {run_id_js}, sizing: {sizing_js}, halted: _hk, stage: {stage_js} }}, Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? {{ {j(RESUME_PHASE_KEY)}: _haltPhase[_hk] }} : {{}}),",
             "    input: _input,",
             "    detail: _detail === undefined ? null : _detail,",
             "  };",

@@ -55,7 +55,7 @@ REPLY_KEYS: Final = frozenset({
     "exit_criterion_not_stamped",
 })
 
-#: Reply key: sorted chunk ids credited by the run and landed by this commit.
+#: Reply key: sorted ids this commit landed that `_grade` regraded (EM credit, ledger-met, outside-footprint) or that were credited but absent from the request; the commit arm drops them from the open set.
 REPLY_CREDITED_CHUNKS: Final = "credited_chunks"
 
 #: Commit-message trailer key; one line per credited row and path the landing leaves out:

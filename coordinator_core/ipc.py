@@ -2632,9 +2632,10 @@ def _cold_mutating_op(method: str) -> bool:
     failure answers False, which keeps the abandon-and-report path.
     """
     try:
+        from coordinator_core.session.core import in_warm_served_request  # noqa: PLC0415 - lazy, import budget
         from coordinator_core.telemetry import op_latency  # noqa: PLC0415 - lazy, import budget
 
-        if op_latency.execution_route() != op_latency.IN_PROCESS:
+        if in_warm_served_request() or op_latency.execution_route() != op_latency.IN_PROCESS:
             return False
         from coordinator_core.warm.client import _op_may_mutate  # noqa: PLC0415 - cycle
 

@@ -6,7 +6,8 @@ every chunk it finished, in one ``git.commit.commit_paths`` commit with the halt
 Membership is closed: a path enters only as a finished chunk's declared write, a run-artifact
 candidate or a superseded predecessor's record file, so a peer run's dirty file is never read, never
 staged and never listed. Differences from HEAD are read in process from the object store: no
-``git status``, no spawn. The run token is only checked, never spent, so the resumed run's product
+``git status``, no spawn. After the commit, one plan-only commit codes the halt's ``Lands-Chunks``
+rows at its sha. The run token is only checked, never spent, so the resumed run's product
 landing can still redeem it.
 """
 
@@ -284,6 +285,55 @@ def marker_kind(halted: dict) -> str:
     return "ledger-check" if is_test_blocker_halt(halted) else halted["halted"]
 
 
+def held_rows_for(repo_root: Path, run_id: str, plan_rel: Optional[str]) -> Optional[list]:
+    """``[{id, reason}, ...]`` the run's resume snapshot holds back; None when the plan is unknown
+    or no snapshot exists (the marker then carries no ``held_rows`` key)."""
+    if not plan_rel:
+        return None
+    from coordinator_core.ops.dispatch_emit import resume_snapshot
+
+    snap = resume_snapshot.read(repo_root, run_id, plan_rel)
+    if snap is None:
+        return None
+    return [{"id": i, "reason": r} for i, r in snap.held]
+
+
+def stamp_halt_lands_chunks(
+    worktree_root: Path, repo_root: Path, halted: dict, marker_plan: Optional[str],
+    landed_chunks: Sequence[str], sha: Optional[str], session_id: Optional[str],
+) -> Optional[dict]:
+    """Code a ledger-check halt's ``Lands-Chunks`` rows at the halt sha in one plan-only commit.
+
+    Returns the ``lands_chunks_stamp`` reply (``rows_coded``/``coded_sha`` or ``coded_stamp_error``),
+    or None when there is nothing to stamp. Never raises and never undoes the halt commit; the run
+    token is not touched.
+    """
+    if marker_kind(halted) != "ledger-check" or not landed_chunks or not isinstance(sha, str) or not sha:
+        return None
+    plan = halted.get(HALT_PLAN_FIELD)
+    plan = plan if isinstance(plan, str) and plan else marker_plan
+    if not plan:
+        return None
+    try:
+        from coordinator_core.ops.dispatch_emit.plan_row_coding import source_rows_by_plan
+        from coordinator_core.ops.dispatch_emit.terminal_commit import _stamp_coded_commit
+        from coordinator_core.warm.entry_seam import reentrant_dispatch
+
+        by_plan = source_rows_by_plan(worktree_root, plan, list(landed_chunks))
+        if not by_plan:
+            return None
+
+        def commit_v2(params: dict, root: Path):
+            return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
+
+        reply = _stamp_coded_commit(
+            commit_v2, worktree_root, repo_root, {}, sha, session_id, checkpoint_rows={sha: by_plan},
+        )
+    except Exception as exc:  # noqa: BLE001 -- the halt commit stands
+        return {"coded_stamp_error": repr(exc)}
+    return {k: v for k, v in reply.items() if not k.startswith("_")}
+
+
 def _settle_ledger_pointer(
     repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str], outcome_rel: Optional[str] = None
 ) -> None:
@@ -482,6 +532,7 @@ def _land(
         declared.append(sizing_rel)
 
     outcome_rel = _persist_run_outcome(root, run_id, halted, params)
+    plan_rel = None
     if (root / record_dir_rel).is_dir():
         plan_rel, blocking, blocking_items = (
             _ledger_halt_plan_and_blocking(repo_root, halted) if marker_kind(halted) == "ledger-check" else (None, (), [])
@@ -493,6 +544,7 @@ def _land(
             blocking_items=blocking_items if plan_rel else None,
             run_base_sha=run_base, reason=halt_reason,
             next_action=halted.get("next_action") if isinstance(halted.get("next_action"), dict) else None,
+            held_rows=held_rows_for(repo_root, run_id, plan_rel),
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(root, run_artifacts.candidate_paths(
@@ -706,6 +758,9 @@ def _land(
         out["landed_chunks"] = landed_chunks
     if withheld:
         out["withheld"] = withheld
+    stamp = stamp_halt_lands_chunks(root, repo_root, halted, plan_rel, landed_chunks, outcome.sha, session_id)
+    if stamp is not None:
+        out["lands_chunks_stamp"] = stamp
     if targeted is not None:
         out["targeted_tests"] = targeted
     if integrity:

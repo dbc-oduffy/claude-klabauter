@@ -35,6 +35,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     _DELIVERY_VERIFIER_HOST_NATIVE_TYPE,
     _DELIVERY_VERIFIER_ROLE_PREAMBLE,
     CRITERION_JUDGE_PHASE_TITLE,
+    NEW_GATE_CORPUS_PROBE_CLAUSE,
     _agent_opts_for,
     _host_native,
     _schema_literal,
@@ -370,6 +371,7 @@ def compose_reverify_script(
         f"{lead}"
         f"{delivery_supersession_clause(criterion).lstrip()}{chr(10) if criterion and criterion.superseded else ''}"
         f"{_NO_SIDECAR_NOTE}\n"
+        f"{NEW_GATE_CORPUS_PROBE_CLAUSE}\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {base}\n"
         f"head_sha: {head_sha}\n"
@@ -430,6 +432,7 @@ def compose_reverify_script(
             + "\n\nStep 2 -- criterion verdict. Only once the step 1 result is in, rule the criterion below. "
             "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "
             "Return the verdict under `judge`.\n\n"
+            + NEW_GATE_CORPUS_PROBE_CLAUSE + "\n\n"
             + parts.prompt
         )
         verify_call = _sidecar(

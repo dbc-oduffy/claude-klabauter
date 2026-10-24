@@ -219,6 +219,12 @@ NEW_GATE_CORPUS_PROBE_CLAUSE = (
 )
 
 
+RESTORE_TARGET_CLAUSE = (
+    "Restore target: a path a commit changed after run_base_sha is restored to HEAD's bytes, "
+    "never to run_base_sha's; a no-change path is judged against HEAD."
+)
+
+
 def _brief_conformance_clause(criterion: Optional["OperativeCriterion"]) -> str:
     """The code-reviewer prompt line that hands it the brief items its ``brief_conformance`` rows
     quote and the new-gate corpus-probe clause; names the operative criterion statement when one is
@@ -649,7 +655,10 @@ _WAVE_GROUP_CLAUSE = (
 )
 
 
-_SLICE_FILTER_CLAUSE = "Review only the listed slice ids of your group; ignore every other slice the reply lists."
+_SLICE_FILTER_CLAUSE = (
+    "Review only the listed slice ids of your group; ignore every other slice the reply lists. "
+    "When your prep reply lists none of them, review nothing: return `prep` alone."
+)
 
 
 def _wave_prep_instruction(
@@ -785,13 +794,15 @@ _REVERIFY_UNAPPLIED_JS = (
 
 def _base_measure_clause(base_ref: str) -> str:
     """Prompt step measuring ``failing_at_base``: one baseline-export run over the failing ids at the
-    snapshot base. Empty-set fallback when the base is the unset placeholder."""
+    snapshot base. Empty-set fallback when the base is the unset placeholder.
+
+    Its id placeholder must differ from step 4's "<all failing node ids>", which must appear exactly once."""
     if base_ref == "run_base_sha":
         return "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. "
     return (
         "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
         f"(never per test): `python -m coordinator_core.testing.baseline_export --sha {base_ref} -- "
-        "python -m pytest -rfE <all failing node ids>`. The ids on its `FAILED`/`ERROR` lines are "
+        "python -m pytest -rfE <the failing ids above>`. The ids on its `FAILED`/`ERROR` lines are "
         "`failing_at_base`, valid only when its trailing JSON line has `export` \"ok\" and "
         "`runner_exit` 0, 1 or 4. Exit 4 with a \"not found\" line naming ids means the run added "
         "them: they are never pre_existing; drop them and re-run that same command ONCE over the "
@@ -901,7 +912,7 @@ def _reverify_phase(
             "revert.\n"
             "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
             "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
-            "sidecar_path.\n"
+            f"sidecar_path. {RESTORE_TARGET_CLAUSE}\n"
             f"{NEW_GATE_CORPUS_PROBE_CLAUSE}\n"
             f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
@@ -944,7 +955,7 @@ def _reverify_phase(
         "after review, before any revert.\n"
         "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
         "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
-        "sidecar_path.\n"
+        f"sidecar_path. {RESTORE_TARGET_CLAUSE}\n"
         f"{NEW_GATE_CORPUS_PROBE_CLAUSE}\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}"

@@ -101,6 +101,7 @@ def test_a_hold_whose_kept_content_is_at_head_lands_the_path_without_a_shipped_r
 
     assert out.get("refused") not in (cohold_refusal.REFUSED_COHOLD, shipped_claims.SHIPPED_CLAIM_REFUSED), out
     assert HOLDER not in str(out.get("error"))
+    # Trap: either outcome passes; only the commit branch pins that m.py lands.
     if out.get("committed"):
         assert _git(repo, "show", "HEAD:m.py") == NEW_TEXT
     else:

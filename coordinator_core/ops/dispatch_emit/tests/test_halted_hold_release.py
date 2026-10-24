@@ -214,9 +214,11 @@ def test_mark_plan_origins_landed_skips_excluded_run(tmp_path):
 def _git(root: Path, *args: str, stdin: str = "") -> str:
     import subprocess
 
+    from coordinator_core.win_portability import no_console_creationflags
+
     return subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, input=stdin,
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, check=True, **no_console_creationflags(),
     ).stdout.strip()
 
 

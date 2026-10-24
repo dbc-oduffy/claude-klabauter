@@ -311,3 +311,63 @@ def test_reply_named_path_only_from_assembler_results(tmp_path):
         tool_use("r", "Read", {"file_path": "scratch/other.json"}),
     ]
     assert run(tmp_path, lines)["pre"] == ["g", "r"]
+
+
+RUN = "ask-20260101T000000-abc123"
+
+
+def _repo_with_manifest(tmp_path):
+    d = tmp_path / "state" / "warp" / RUN
+    d.mkdir(parents=True)
+    (d / "manifest.json").write_text(
+        json.dumps(
+            {
+                "doc_writes": ["docs/delivery/" + RUN + ".md"],
+                "rows": [{"id": "C1", "writes": ["pkg/mod.py", "pkg/tests/test_mod.py"]}],
+                "test_targets": ["pkg/tests/test_mod.py"],
+                "write_baseline": {"pkg/mod.py": "x"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_touches_landed_run_footprint_and_records(tmp_path):
+    root = _repo_with_manifest(tmp_path)
+    t = lambda name, inp: epw.touches_landed_run(name, inp, RUN, root)
+    assert t("Read", {"file_path": "pkg/mod.py"})
+    assert t("Read", {"file_path": str(root / "pkg" / "mod.py")})
+    assert t("Read", {"file_path": "state/warp/" + RUN + "/run.json"})
+    assert t("Read", {"file_path": "docs/plans/2026-01-01-thing-abc123.md"})
+    assert t("Read", {"file_path": "state/sizings/2026-01-01-thing-abc123.yaml"})
+    assert t("Read", {"file_path": "docs/delivery/" + RUN + ".md"})
+    assert t("Grep", {"pattern": "x", "path": "pkg"})
+    assert t("Bash", {"command": "python -m pytest pkg/tests/test_mod.py"})
+    assert t("Bash", {"command": "cat pkg/mod.py | head"})
+
+
+def test_unrelated_calls_do_not_touch_landed_run(tmp_path):
+    root = _repo_with_manifest(tmp_path)
+    t = lambda name, inp: epw.touches_landed_run(name, inp, RUN, root)
+    assert not t("Bash", {"command": "python -m pytest other/tests/test_other.py"})
+    assert not t("Read", {"file_path": "r51/ladder/cell-3.json"})
+    assert not t("Read", {"file_path": "state/warp/ask-other-111111/run.json"})
+    assert not t("Read", {"file_path": "docs/plans/2026-01-01-thing-zzz999.md"})
+    assert not t("Bash", {"command": "python runner.py judge --help"})
+    assert not t("Grep", {"pattern": "x", "path": "other"})
+
+
+def test_missing_or_bad_manifest_fails_open_but_records_still_count(tmp_path):
+    t = lambda name, inp: epw.touches_landed_run(name, inp, RUN, tmp_path)
+    assert epw.run_footprint(tmp_path, RUN) is None
+    assert not t("Bash", {"command": "runner.py judge --help"})
+    assert not t("Grep", {"pattern": "x"})
+    assert t("Read", {"file_path": "state/warp/" + RUN + "/run.json"})
+    assert t("Read", {"file_path": "state/sizings/2026-01-01-thing-abc123.yaml"})
+    (tmp_path / "state" / "warp" / RUN).mkdir(parents=True)
+    (tmp_path / "state" / "warp" / RUN / "manifest.json").write_text("{bad", encoding="utf-8")
+    assert not t("Read", {"file_path": "elsewhere.txt"})
+    assert t("Bash", {"command": "ls state/warp/" + RUN})
+    assert epw.run_footprint(tmp_path, "") is None
+    assert epw.run_footprint(tmp_path, "../x") is None

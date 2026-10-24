@@ -133,8 +133,15 @@ _EDIT_VERB = re.compile(
 _DETECT_CUE = re.compile(r"\b(?:holds?|contains?|detects?|detected|detection|ancestors?|exists?|present|finds?)\b", re.IGNORECASE)
 
 
+_CLAUSE_SPLIT = re.compile(r"(?<=[.;!?])\s+|\n")
+
+
 def _ledger_named_paths(sizing: Mapping, repo_root: Path | None) -> list[str]:
-    """Existing repo files the open register rows name literally; `[]` without a `repo_root`."""
+    """Existing repo files the open register rows name literally in a clause an edit verb governs;
+    `[]` without a `repo_root`.
+
+    Trap: the verb test is per sentence/clause, never per row: one row can name a path as
+    provenance and carry "Fix"/"Add" in another sentence."""
     if repo_root is None:
         return []
     register = sizing.get("requirement_register")
@@ -144,7 +151,8 @@ def _ledger_named_paths(sizing: Mapping, repo_root: Path | None) -> list[str]:
         for r in rows or ()
         if isinstance(r, Mapping) and r.get(rr.ROW_STATUS) not in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED)
     ]
-    found = named_paths(texts, Path(repo_root), spelling=functools.partial(tracked_spelling, Path(repo_root)))
+    governed = [c for t in texts for c in _CLAUSE_SPLIT.split(t) if _EDIT_VERB.search(c)]
+    found = named_paths(governed, Path(repo_root), spelling=functools.partial(tracked_spelling, Path(repo_root)))
     # Trap: a CLAUDE.md-class file named only as something to detect is not an edit surface, and it
     # would otherwise mint an EM row nothing performs.
     return [p for p in found if not (gated_paths([p]) and _named_only_as_target(p, texts))]

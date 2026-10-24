@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_gate, resume_snapshot
-from coordinator_core.ops.dispatch_emit.ask_contract import ResumePlan
+from coordinator_core.ops.dispatch_emit.ask_contract import LedgerHalt, ResumePlan
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage_handler
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
@@ -60,6 +60,10 @@ def test_no_resume_removes_an_earlier_snapshot(repo):  # noqa: F811
 HELD = (("A2", "performer em"), ("A4", "gated"))
 
 
+def _halt() -> LedgerHalt:
+    return LedgerHalt(RUN, PLAN_REL, REL, ("A2",))
+
+
 def _stub_resume(monkeypatch, resume, ledger=None):
     """Hand the gate a fixed ResumePlan, as `collect_fire_refusals` would through its `resume_sink`."""
     monkeypatch.setattr(
@@ -82,7 +86,7 @@ def test_ledger_resume_writes_held_and_its_unlanded_rows_as_the_resume_set(repo,
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open"), ("A4", "open")])
     _stub_resume(
-        monkeypatch, ResumePlan(PLAN_REL, (), ledger=object(), held=HELD),
+        monkeypatch, ResumePlan(PLAN_REL, (), ledger=_halt(), held=HELD),
         ledger={"plan": PLAN_REL, "unlanded": ["A2"]},
     )
     reply = _call(repo)
@@ -99,7 +103,7 @@ def test_empty_held_reads_empty_on_both_resumes(repo, monkeypatch):  # noqa: F81
     _stub_resume(monkeypatch, ResumePlan(PLAN_REL, ("A2",)))
     _call(repo)
     assert _snap(repo).held == ()
-    _stub_resume(monkeypatch, ResumePlan(PLAN_REL, (), ledger=object()), ledger={"plan": PLAN_REL})
+    _stub_resume(monkeypatch, ResumePlan(PLAN_REL, (), ledger=_halt()), ledger={"plan": PLAN_REL})
     _call(repo)
     assert _snap(repo).held == ()
 
@@ -108,7 +112,7 @@ def test_halted_gate_writes_no_snapshot_for_a_ledger_resume(repo, monkeypatch): 
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
     _call(repo)
-    _stub_resume(monkeypatch, ResumePlan(PLAN_REL, (), ledger=object(), held=HELD), ledger={"plan": PLAN_REL})
+    _stub_resume(monkeypatch, ResumePlan(PLAN_REL, (), ledger=_halt(), held=HELD), ledger={"plan": PLAN_REL})
     monkeypatch.setattr(ask_gate, "_resume_ledger", lambda *a, **k: (_ for _ in ()).throw(SizingFireRefused(["x"])))
     _call(repo)
     assert _snap(repo) is None

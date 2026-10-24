@@ -36,6 +36,7 @@ from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F4
 from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
+from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops._anchor_check import GRAMMAR as _ANCHOR_GRAMMAR
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -191,6 +192,20 @@ from coordinator_core.roadmap.post_stamp_clause import (
 from coordinator_core.session.record_homes import home_dir
 
 _OWNER_ROWS_JS = "_crossRepoRows"
+# A prior-wave slice that is BLOCKED with unapplied findings (findings > applied); one with
+# findings == applied (e.g. 0/0) counts as done. Shared by the re-review filter and the _reviewSeed carry-over.
+_BLOCKED_UNAPPLIED_JS = "w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0)"
+# Ids of the prior review wave's blocked slices ('+'-joined group ids split into members); null on a
+# fresh run, a reused review, or an empty result. Trap: the ids match only if review.prep reissues the
+# halted wave's slice ids on the resumed run; a mismatch leaves reviewers with nothing and the blocked
+# slices absent from the merged wave (no test covers differing ids).
+_RESUME_REVIEW_SLICE_FILTER_JS = (
+    "(() => { if (_reviewReused) return null; const _pw = _phaseVerdict('review')?.wave; "
+    "if (!Array.isArray(_pw)) return null; "
+    "const _ids = _pw.filter((w) => w && " + _BLOCKED_UNAPPLIED_JS + ")"
+    ".flatMap((w) => String(w.slice_id ?? '').split('+').filter(Boolean)); "
+    "return _ids.length ? _ids : null; })()"
+)
 _SCOUT_SCHEMA = SCOUT_SCHEMA  # tests/test_ask_compose.py reads this name
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
@@ -362,6 +377,7 @@ _GATE_SCHEMA = _obj(
         "resume_rows": {"type": ["array", "null"], "items": _STR},
         "pending_rulings": {"type": ["array", "null"], "items": _STR},
         "resume_ready": {"type": ["boolean", "null"]},
+        RESUME_PHASES_FIELD: {"type": ["object", "null"]},
         "spine_plan": {"type": ["string", "null"]},
         RESUME_LEDGER_KEY: {"type": ["object", "null"]},
         DESIGN_BRIEF_KEY: {"type": ["string", "null"]},
@@ -1477,6 +1493,10 @@ def _folded_ledger_charter(
         + _LEDGER_ITEMS_RULES
         + "A path the manifest's write_baseline shows unchanged since stage was not delivered by this "
         "run: pre-existing dirt never meets a row, whatever the working tree holds. "
+        "A dirty path outside the manifest's write footprint that this run did not write never makes a "
+        "row not_met, even when the row defers that line: judge the row on the run's own diff and name "
+        "that dirt in your verdict as an observation. Dirt the run wrote, or inside the footprint, keeps "
+        "its judgement. "
         "A HEAD-measured gate's result in this leg measures the run's candidate commit, so it is "
         "evidence about this run's change, never \"no change\"; when the measured-rev op refused, that "
         "gate measured HEAD, not the change, so the row is unmet with the refusal as its reason, never "
@@ -2083,6 +2103,7 @@ def compose_ask_script(
         tshirt_js="_gate?.tshirt",
         reverify=True,
         delivery_notes_js="_deliveryNotes",
+        slice_filter_js=_RESUME_REVIEW_SLICE_FILTER_JS,
     )
     review_titles = [title for title, _ in review_blocks]
     ledger_charter = _folded_ledger_charter(
@@ -2212,7 +2233,7 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(),
-            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, design_brief and design_route when present; "
+            "'` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, resume_phases, design_brief and design_route when present; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
             "and halt both null. Also read the sizing at ",
             "js:_sizingRel",
@@ -2237,7 +2258,7 @@ def compose_ask_script(
         "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, tshirt: null, route: null, "
         f"resume_plan: (_STAGED_RESUME.arm !== {_lit(ARM_XS)} && typeof _STAGED_RESUME.plan_rel === 'string' "
         "&& _STAGED_RESUME.plan_rel) ? _STAGED_RESUME.plan_rel : null, "
-        "resume_rows: null, resume_ledger: null, pending_rulings: null, resume_ready: null, spine_plan: null, "
+        "resume_rows: null, resume_ledger: null, pending_rulings: null, resume_ready: null, resume_phases: null, spine_plan: null, "
         f"{DESIGN_BRIEF_KEY}: null, {DESIGN_ROUTE_KEY}: null, {_ROUTE_VERDICT_KEY}: null }}"
     )
     if launcher_child:
@@ -2299,7 +2320,7 @@ def compose_ask_script(
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
-            f"resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
+            f"resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, resume_phases, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
@@ -2437,7 +2458,7 @@ def compose_ask_script(
             f"Do not edit, retry or repair it. (2) Only when exit_code is 0, run `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(sizing_js=_reword_sizing_js),
             "'` and return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, resume_rows, resume_ledger, "
-            f"pending_rulings, resume_ready, spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
+            f"pending_rulings, resume_ready, resume_phases, spine_plan, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''}; when the command is denied or fails, return halt {{kind: 'refusal', reason: <its error "
             "text>}, never arm and halt both null. Also read the sizing at ",
             "js:" + _reword_sizing_js,
             " and return its estimate.tshirt as tshirt and its route as route. On a non-zero exit_code run no "
@@ -2494,7 +2515,7 @@ def compose_ask_script(
         b.append(
             "      Object.assign(_scouted, { arm: _reworded.arm ?? null, halt: _reworded.halt ?? null, "
             "baton: _reworded.baton ?? null, sizing_path: _sizingRel, tshirt: _reworded.tshirt, route: _reworded.route, "
-            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, pending_rulings: _reworded.pending_rulings ?? null, resume_ready: _reworded.resume_ready ?? null, spine_plan: _reworded.spine_plan ?? null, "
+            "resume_plan: _reworded.resume_plan ?? null, resume_rows: _reworded.resume_rows ?? null, resume_ledger: _reworded.resume_ledger ?? null, pending_rulings: _reworded.pending_rulings ?? null, resume_ready: _reworded.resume_ready ?? null, resume_phases: _reworded.resume_phases ?? null, spine_plan: _reworded.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _reworded.{_ROUTE_VERDICT_KEY} ?? null, "
@@ -2549,7 +2570,7 @@ def compose_ask_script(
             + "_halted ? { arm: null, halt: null } : { arm: _scouted.arm ?? null, "
             "halt: _scouted.halt ?? null, baton: _scouted.baton ?? null, tshirt: _scouted.tshirt, "
             "route: _scouted.route, resume_plan: _scouted.resume_plan ?? null, "
-            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, pending_rulings: _scouted.pending_rulings ?? null, resume_ready: _scouted.resume_ready ?? null, spine_plan: _scouted.spine_plan ?? null, "
+            "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, pending_rulings: _scouted.pending_rulings ?? null, resume_ready: _scouted.resume_ready ?? null, resume_phases: _scouted.resume_phases ?? null, spine_plan: _scouted.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }}" + (")" if launcher_child else "") + ";"
@@ -2603,7 +2624,7 @@ def compose_ask_script(
         return [
             " When, and only when, your verdict is 'ruled', run this one command once, with " + fields
             + " set in its `record` member, and return its JSON reply verbatim as arm, halt, baton, "
-            "recorded and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, beside your verdict, pmOnly and ruling. "
+            "recorded and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, resume_phases, beside your verdict, pmOnly and ruling. "
             f"On 'pm-only' run nothing. `{_INVOKE} {OP_ASK_GATE} '",
             _gate_payload(record_js),
             "'` That command is the only way you write the sizing: never edit it by hand.",
@@ -2690,7 +2711,7 @@ def compose_ask_script(
             schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT, run_id=run_id,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, resume_ready: %s.resume_ready ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, resume_ready: %s.resume_ready ?? null, resume_phases: %s.resume_phases ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append("  let _splitSlices = null;")
         b.append("  let _splitFan = null;")
@@ -2706,7 +2727,7 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 10)}\n"
+            f"      {take_gate % (('_apm',) * 11)}\n"
             + (
                 f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) {{ await _adoptStageReply(_apm.stage_reply); }}"
                 f"{_fold_decline_js('!_gate.halt', _GATE_HALT_CAUSE_JS)}\n"
@@ -2727,7 +2748,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 10)}\n"
+            f"      {take_gate % (('_xl',) * 11)}\n"
             "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) { _splitSlices = _xl.slices; _splitFan = _xl; }\n"
             "      _progressed = true;\n"
             "    }\n"
@@ -2773,6 +2794,11 @@ def compose_ask_script(
     b.append("  let _ledgerExec = false;")
     b.append("  let _xsTail = false;")
     b.append("  let _ledgerAdded = [];")
+    b.append(
+        f"  const _reusePhase = (n) => !_halted && Array.isArray(_gate.{RESUME_PHASES_FIELD}?.reuse) "
+        f"&& _gate.{RESUME_PHASES_FIELD}.reuse.includes(n);\n"
+        f"  const _phaseVerdict = (n) => _gate.{RESUME_PHASES_FIELD}?.verdicts?.[n] ?? null;"
+    )
     b.append(f"  const _resumeLedger = !_halted && !!{_rl0};")
     b.append(
         f"  const _ledgerUnlanded = _resumeLedger ? ({_rl0}.{RESUME_LEDGER_UNLANDED_FIELD} ?? []) : [];"
@@ -3057,7 +3083,10 @@ def compose_ask_script(
         b.append("      }")
         b.append("      }")
         b.append("    }")
-        b.append("    if (_gate.resume_ready && _gate.resume_plan) { _planRel = _gate.resume_plan; }")
+        b.append(
+            "    if ((_gate.resume_ready || (_reusePhase('plan') && _reusePhase('plan_review'))) && _gate.resume_plan) "
+            "{ _planRel = _gate.resume_plan; }"
+        )
         b.append("    if (!_planRel && !_halted) {")
 
         # plan-blitz-ready-op-contract: omitted once staged and in a stop_after script (never stages).
@@ -3102,7 +3131,9 @@ def compose_ask_script(
             agent_model=_RULINGS_MODEL, schema=_RULED_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
         b.append(
-            "    if (_gate.resume_plan && (_gate.pending_rulings == null || _gate.pending_rulings.length > 0)) "
+            "    if (_gate.resume_plan && _reusePhase('plan_gate_rulings')) "
+            "{ _gate = { ..._gate, resume_rulings: (_phaseVerdict('plan_gate_rulings')?.applied ?? []) }; } "
+            "else if (_gate.resume_plan && (_gate.pending_rulings == null || _gate.pending_rulings.length > 0)) "
             f"{{ const _ruled = await {ruled_call}; _gate = {{ ..._gate, resume_rulings: (_ruled?.applied ?? []) }}; "
             "} else if (_gate.resume_plan) { _gate = { ..._gate, resume_rulings: [] }; }"
         )
@@ -3531,12 +3562,24 @@ def compose_ask_script(
     # literal `agent(` token, so a renamed call site is invisible to every one of them.
     b.append("  const _reviewOuterAgent = agent;")
     b.append("  let _footprintReviewed = false; // true only when this fire ran the review block; XS / _xsTail / no-paths set _reviewWave = [] without reviewing")
+    b.append(
+        "  const _reviewReused = _reusePhase('review') && !!_phaseVerdict('review');\n"
+        "  if (_reviewReused) { const _rv0 = _phaseVerdict('review'); _reviewPrep = _rv0.prep ?? null; "
+        "_reviewWave = Array.isArray(_rv0.wave) ? _rv0.wave : []; _deliveryVerdict = _rv0.delivery ?? null; "
+        "_reviewIntegration = _rv0.integration ?? null; _reviewReverify = _rv0.reverify ?? null; }\n"
+        "  const _reviewSeed = (!_reviewReused && Array.isArray(_phaseVerdict('review')?.wave)) "
+        "? _phaseVerdict('review').wave.filter((w) => w && !(" + _BLOCKED_UNAPPLIED_JS + ")) : [];"
+    )
     b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
-        f"  if (!_halted && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && !_noReviewPaths) {{\n"
+        f"  if (!_halted && !_reviewReused && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && !_noReviewPaths) {{\n"
         + review_text + "\n  _footprintReviewed = true;\n  }"
     )
     b.append("  }")
+    b.append(
+        "  if (_reviewSeed.length && Array.isArray(_reviewWave)) { const _rerun = new Set(_reviewWave.filter(Boolean).map((w) => w.slice_id)); "
+        "_reviewWave = [..._reviewSeed.filter((w) => !_rerun.has(w.slice_id)), ..._reviewWave]; }"
+    )
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
     b.append(f"  if (!_halted && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ _reviewWave = []; }}")

@@ -21,7 +21,7 @@ from typing import Mapping, Optional, Sequence
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.warp_fire import fire_command
-from coordinator_core.ops.dispatch_emit import design_route
+from coordinator_core.ops.dispatch_emit import design_route, phase_ledger
 from coordinator_core.ops.dispatch_emit.ask_exclusions import excluded_paths
 
 RESUME_EXCLUDE_FIELD = "exclude"
@@ -169,6 +169,7 @@ def gate(
     landed_sink: Optional[list] = None,
     run_id: Optional[str] = None,
     kept_sink: Optional[list] = None,
+    phase_sink: Optional[list] = None,
     held_sink: Optional[list] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
@@ -182,6 +183,7 @@ def gate(
     sizing's scope; a malformed registry with a non-empty scope halts `registry-unparseable`.
     `mint_design_rows` (a run-bound call) also appends one design row per hit to the register.
     `landed_sink`, when given, receives the row resume's `ResumePlan.landed_open`.
+    `phase_sink`, when given, receives one `phase_ledger.resume_phases` dict for a resume verdict.
     `run_id` (a run-bound call) carries the run's and its `resumed_from` predecessor's live (unretracted)
     revise notes into `resume_ledger` and the run's requirements view, and refuses nothing on notes.
     """
@@ -206,7 +208,7 @@ def gate(
         return replace(_halt(HALT_REFUSAL, f"{error}: repair {shown or registry}"), design_route=route_payload)
     verdict = _arm_verdict(
         root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink, run_id=run_id, kept_sink=kept_sink,
-        held_sink=held_sink,
+        phase_sink=phase_sink, held_sink=held_sink,
     )
     if route_payload is not None and verdict.design_route is None:
         verdict = replace(verdict, design_route=route_payload)
@@ -246,7 +248,7 @@ def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, bat
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
-    held_sink: Optional[list] = None,
+    phase_sink: Optional[list] = None, held_sink: Optional[list] = None,
 ) -> GateVerdict:
     """The arm-or-halt verdict, before the design-registry leg."""
     from coordinator_core import sizing_assemble as sa
@@ -383,12 +385,27 @@ def _arm_verdict(
     if kept_sink is not None and resume_rows and resume.kept:
         kept_sink.append((list(resume.kept), resume.kept_run))
     if held_sink is not None and resume:
-        held_sink.extend(resume.held)
+        held_sink.extend(getattr(resume, "held", ()))
     pending_rulings = None
+    ready_memo: dict = {}
+
+    def plan_ready(plan_rel: str) -> bool:
+        # One readiness run per gate call: it spawns the plan's anchor-premise checks.
+        if plan_rel not in ready_memo:
+            ready_memo[plan_rel] = _plan_gate_resume_ready(repo_root, sizing_rel, plan_rel)
+        return ready_memo[plan_rel]
+
     if resume_plan is not None:
         from coordinator_core.ops.dispatch_emit.requirements_ledger import pending_ruling_ids
 
         pending_rulings = list(pending_ruling_ids((sizing.get("requirement_register") or {}).get("rows") or []))
+    if resume and phase_sink is not None:
+        pending = pending_rulings
+        if pending is None:
+            from coordinator_core.ops.dispatch_emit.requirements_ledger import pending_ruling_ids
+
+            pending = list(pending_ruling_ids((sizing.get("requirement_register") or {}).get("rows") or []))
+        phase_sink.append(_resume_phases(repo_root, sizing_rel, resume, resume_ledger, pending, plan_ready))
 
     if arm != ARM_M_PLUS:
         # roadmap mints no baton: roadmap-blitz stubs are the batons
@@ -411,9 +428,7 @@ def _arm_verdict(
     spine, spine_refusal = (None, None) if resume else _spine_plan(repo_root, sizing, sizing_rel)
     if spine_refusal:
         return _halt(HALT_REFUSAL, spine_refusal)
-    resume_ready = bool(resume_plan) and pending_rulings == [] and _plan_gate_resume_ready(
-        repo_root, sizing_rel, resume_plan
-    )
+    resume_ready = bool(resume_plan) and pending_rulings == [] and plan_ready(resume_plan)
     return GateVerdict(
         resume_ready=resume_ready,
         arm=arm,
@@ -427,6 +442,36 @@ def _arm_verdict(
         design_route=route_payload,
         pending_rulings=pending_rulings,
     )
+
+
+def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Optional[dict], pending: Sequence[str], plan_ready) -> dict:
+    """`phase_ledger.resume_phases` for a resume of a halted run: landed phases the halt left valid.
+
+    plan / plan_review are credited only when `_plan_gate_resume_ready` holds with no ruling pending;
+    an unreadable halt kind ("unknown") invalidates every phase."""
+    from coordinator_core.ops.dispatch_emit.halted_run import _read, halted_ask_run_for
+
+    root = Path(repo_root)
+    ledger = resume.ledger
+    pred = None
+    if ledger is not None and ledger.run_id != ALL_LANDED_NO_RUN:
+        pred = ledger.run_id
+    pred = pred or resume.kept_run or halted_ask_run_for(root, sizing_rel)
+    kind = ledger.halted if ledger is not None else None
+    if kind is None and pred:
+        try:
+            marker = _read(record_dir(root, pred))
+        except ValueError:
+            marker = None
+        kind = marker.get("halted") if marker else None
+    landed = phase_ledger.derive(root, pred) if pred else {}
+    if landed.get("plan") and (pending or not plan_ready(resume.plan_rel)):
+        landed.pop("plan", None)
+        landed.pop("plan_review", None)
+    revised = []
+    if resume_ledger and (resume_ledger.get(RESUME_LEDGER_NOTES_FIELD) or resume_ledger.get(RESUME_LEDGER_REVISED_FIELD)):
+        revised.append("requirement")
+    return phase_ledger.resume_phases(landed, kind or "unknown", revised)
 
 
 def _plan_gate_resume_ready(repo_root: Path, sizing_rel: str, plan_rel: str) -> bool:
@@ -791,11 +836,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
     landed: list = []
     kept: list = []
+    phases: list = []
     held: list = []
     verdict = gate(
         root, sizing_rel, writes=writes, baton=params.get("baton"),
         mint_design_rows=bool(params.get("run_id")), landed_sink=landed, run_id=params.get("run_id"),
-        kept_sink=kept, held_sink=held,
+        kept_sink=kept, phase_sink=phases, held_sink=held,
     )
     if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
         _stamp_landed_rows(root, verdict.resume_plan, landed)
@@ -814,6 +860,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             except (OSError, ValueError):
                 pass
     out =(replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
+    if phases and verdict.halt is None:
+        out[phase_ledger.RESUME_PHASES_FIELD] = phases[0]
     if route_verdicts:
         from coordinator_core.ops.dispatch_emit import route_preference as rp
 
@@ -1049,8 +1097,9 @@ def _record_resume_snapshot(
             # A ledger resume stages exactly its unlanded rows; `ask_stage` reads this snapshot for any `only_rows`
             # call, so an empty resume set would drop every row from the stage.
             rows = verdict.resume_rows or tuple((verdict.resume_ledger or {}).get(RESUME_LEDGER_UNLANDED_FIELD) or ())
+            extra = {"held": held} if held else {}
             resume_snapshot.write(
-                root, run_id, plan_rel, ids - set(rows), rows, kept=kept, kept_run=kept_run, held=held,
+                root, run_id, plan_rel, ids - set(rows), rows, kept=kept, kept_run=kept_run, **extra,
             )
             return
     resume_snapshot.clear(root, run_id)
