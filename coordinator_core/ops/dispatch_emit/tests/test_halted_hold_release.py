@@ -84,14 +84,29 @@ def test_none_cases_landed_markerless_unrelated_unreadable(tmp_path):
     root = _root(tmp_path)
     c = _rid("ask", 10, "bbbbbb")
     _run(root, c, sizing="state/sizings/other.yaml")
-    landed, bare, unrelated, unreadable = (_rid("ask", 400 - i, f"00000{i}") for i in range(4))
-    _run(root, landed, marker="landed")
+    bare, unrelated, unreadable = (_rid("ask", 400 - i, f"00000{i}") for i in range(3))
     _run(root, bare)
     _run(root, unrelated, marker="halted", sizing="state/sizings/u.yaml", plan="docs/plans/z.md")
     _run(root, unreadable, marker="halted", sizing=GONE, plan="docs/plans/z.md")
-    for rid in (landed, bare, unrelated, unreadable):
+    for rid in (bare, unrelated, unreadable):
         assert hr.release_reason(root, rid, c, PLAN) is None, rid
     assert hr.release_reason(root, "missing-20260101T000000-abcdef", c, PLAN) is None
+
+
+def test_recorded_landed_marker_releases_and_shipped_sizing_frees_halted_and_resumed(tmp_path):
+    root = _root(tmp_path)
+    c = _rid("ask", 10, "bbbbbb")
+    _run(root, c, sizing="state/sizings/other.yaml")
+    landed, halted, resumed = (_rid("ask", 400 - i, f"00001{i}") for i in range(3))
+    _run(root, landed, marker="landed", sizing="state/sizings/u.yaml", plan="docs/plans/z.md")
+    assert hr.release_reason(root, landed, c, PLAN) == hr.RELEASE_RECORDED_LANDED
+    _sizing(root, "state/sizings/ship.yaml", "shipped")
+    _run(root, halted, marker="halted", sizing="state/sizings/ship.yaml", plan="docs/plans/z.md")
+    _run(root, resumed, marker="resumed", sizing="state/sizings/ship.yaml", plan="docs/plans/z.md")
+    assert hr.release_reason(root, halted, c, None) == hr.RELEASE_SIZING_SHIPPED
+    assert hr.release_reason(root, resumed, c, None) == hr.RELEASE_SIZING_SHIPPED
+    _sizing(root, "state/sizings/ship.yaml", "open")
+    assert hr.release_reason(root, halted, c, None) is None
 
 
 def test_resumed_released_by_superseded_sizing(tmp_path):

@@ -21,6 +21,8 @@ RELEASE_SUPERSEDED = "sizing-superseded"
 RELEASE_SUCCESSOR = "successor-run"
 RELEASE_PLAN_LANDING = "plan-landing"
 RELEASE_SUCCESSOR_LANDED = "successor-landed"
+RELEASE_RECORDED_LANDED = "recorded-landed"
+RELEASE_SIZING_SHIPPED = "sizing-shipped"
 
 
 def _halted_sizing(root: Path, run_id: str, marker: dict) -> str:
@@ -68,7 +70,8 @@ def release_reason(
 ) -> Optional[str]:
     """Why `halted_run_id` no longer holds against `committing_run_id`'s commit, else None (it holds).
 
-    None unless the run's halt marker reads `halted` or `resumed`. Never raises: an unreadable record holds.
+    A `landed` marker always releases; `halted`/`resumed` release per the rules above, and a shipped
+    sizing frees either. Any other marker state (none) is None. Never raises: an unreadable record holds.
     """
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
@@ -78,11 +81,16 @@ def release_reason(
         root = Path(root)
         marker = halted_run._read(record_dir(root, halted_run_id))
         status = marker.get("status") if marker else None
+        if status == halted_run.STATUS_LANDED:
+            return RELEASE_RECORDED_LANDED
         if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
         sizing = _halted_sizing(root, halted_run_id, marker)
-        if sizing and wrd.sizing_scalar(root, sizing, "status") == "superseded":
+        sizing_status = wrd.sizing_scalar(root, sizing, "status") if sizing else ""
+        if sizing_status == "superseded":
             return RELEASE_SUPERSEDED
+        if sizing_status == "shipped":
+            return RELEASE_SIZING_SHIPPED
         if status == halted_run.STATUS_RESUMED:
             return RELEASE_SUCCESSOR_LANDED if _successor_landed(root, halted_run_id, sizing) else None
         if committing_run_id and sizing:

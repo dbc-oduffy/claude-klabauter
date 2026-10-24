@@ -163,14 +163,14 @@ def _halted(root: Path, run_id: str) -> bool:
 
 
 def resumed_run_released(root: Path, run_id: str, exclude_run: Optional[str]) -> bool:
-    """Whether `run_id`'s marker reads `resumed` and `halted_hold_release.release_reason` frees it
-    (superseded sizing or a landed successor). A run with no marker, or any other status, is False
-    without consulting the predicate."""
+    """Whether `run_id`'s marker reads `resumed` or `landed` and `halted_hold_release.release_reason`
+    frees it (recorded landed, superseded or shipped sizing, or a landed successor). A run with no
+    marker, or any other status, is False without consulting the predicate."""
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
 
     try:
         marker = halted_run._read(record_dir(root, run_id))
-        if marker is None or marker.get("status") != halted_run.STATUS_RESUMED:
+        if marker is None or marker.get("status") not in (halted_run.STATUS_RESUMED, halted_run.STATUS_LANDED):
             return False
         return bool(halted_hold_release.release_reason(root, run_id, exclude_run, None))
     except Exception:  # noqa: BLE001 -- unreadable record holds
