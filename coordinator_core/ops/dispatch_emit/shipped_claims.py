@@ -2,12 +2,17 @@
 
 A note lists the files it shipped under a `What shipped` / `Shipped` heading; `shipped_gate`
 refuses a landing whose note names a file the commit does not carry. No subprocess is spawned.
+
+Two claim sources are reconciled: the note's claim set (verify agent, drawing on ledger evidence)
+and the landing set (credited rows, owned paths). A refusing claim on a stranded row's file is
+`row-ungraded` (EM credits the row); one owned by another run is `peer-owned` (never refuses). The
+`owners` lookup runs once and only on the would-refuse path (DR-344).
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional
 
@@ -19,9 +24,13 @@ SHIPPED_CLAIM_REFUSED = "shipped-claim-unbacked"
 
 SELF_APPLIED_WITHHOLDS = frozenset({HALT_RECORD_ONLY})  # reasons the halt path stamps on a run's own diff
 
-SHIPPED_VERDICTS = ("backed", "untracked", "not-in-commit", "withheld", "unresolved")
+ROW_GRADE_OWED = "partial-row-grade-owed"
+NOT_DECLARED = "no row of this run declares it"
+
+SHIPPED_VERDICTS = ("backed", "untracked", "not-in-commit", "withheld", "unresolved", "peer-owned", "row-ungraded")
 
 _REFUSING = ("untracked", "not-in-commit", "withheld")
+_ROW_LEFT_OUT = re.compile(r"^row (\S+) stays out: (.*)$", re.S)
 _ANCHOR_CAP = 300
 _SHIPPED_HEAD = re.compile(r"^(#{2,6})[ \t]+(?:what[ \t]+)?shipped\b", re.I)
 _ANY_HEAD = re.compile(r"^(#{1,6})[ \t]+\S")
@@ -53,6 +62,7 @@ class ShippedVerdict:
     claim: ShippedClaim
     verdict: str
     why: str
+    left_out: str = ""
 
 
 def _clean(token: str) -> str:
@@ -116,12 +126,16 @@ def _safe_rel(path: str) -> bool:
 
 def judge_shipped_claims(
     root: Path, claims: Iterable[ShippedClaim], *, landing_paths=(), deleted_paths=(), withheld_paths=(),
+    own_paths=None, row_of=None,
 ) -> tuple[ShippedVerdict, ...]:
     """One verdict per claim: withheld, backed, untracked, not-in-commit, else unresolved.
 
     Precedence runs in that order. Reads HEAD's tree and the worktree in process; a claim that
     names no file, a directory, or a file whose checkin filter cannot be reproduced is
     `unresolved`, which never refuses. A bare file name (no directory) is therefore never refused.
+    Each verdict's `left_out` is the landing's reason the file is not carried. A refusing verdict on
+    a path in `row_of` ({path: (row id, grade)}) becomes `row-ungraded`, except a withhold carrying
+    a reason (content or ownership): crediting the row would not land that file.
     Coupling: `_FILTERED`/`_worktree_blob` are land_run privates, imported lazily to avoid the cycle.
     """
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -134,10 +148,25 @@ def judge_shipped_claims(
     withheld = content_withheld(withheld_paths)
     head = head_sha(root, fresh=True)
     common = resolve_git_common_dir(root)
+    reasons = (
+        {_posix(p): str(why) for p, why in withheld_paths.items()} if isinstance(withheld_paths, Mapping) else None
+    )
+    own = None if own_paths is None else {_posix(p) for p in own_paths}
+    rows = {_posix(p): v for p, v in (row_of or {}).items()}
     out: list[ShippedVerdict] = []
     for claim in claims:
         rel = claim.path
-        verdict = lambda v, why, claim=claim: out.append(ShippedVerdict(claim, v, why))  # noqa: E731
+
+        def verdict(v, why, claim=claim, rel=rel):
+            left = why
+            if v == "withheld" and reasons is not None:
+                left = reasons.get(rel) or why
+            elif v in ("untracked", "not-in-commit") and own is not None and rel not in own:
+                left = NOT_DECLARED
+            if v in _REFUSING and rel in rows and not (v == "withheld" and reasons is not None):
+                cid, grade = rows[rel]
+                v, left = "row-ungraded", f"row {cid} stays out: {grade}"
+            out.append(ShippedVerdict(claim, v, why, left))
 
         if rel in withheld:
             verdict("withheld", "the landing withholds this path")
@@ -169,32 +198,92 @@ def judge_shipped_claims(
     return tuple(out)
 
 
-def shipped_refusal(verdicts: Iterable[ShippedVerdict]) -> Optional[str]:
-    """None unless a verdict refuses; else the refusal naming the first such claim."""
-    for v in verdicts:
-        if v.verdict in _REFUSING:
-            return (
-                f"{SHIPPED_CLAIM_REFUSED}: `{v.claim.path}` is {v.verdict}: {v.why}. "
-                f"If `{v.claim.path}` is an input you read rather than work you delivered, cite it as "
-                "provenance (e.g. 'source: `path`') or drop it from the shipped list; otherwise "
-                "correct the change. Then re-fire the same sizing."
-            )
-    return None
+def _row_split(v: ShippedVerdict) -> tuple[str, str]:
+    m = _ROW_LEFT_OUT.match(v.left_out)
+    return (m.group(1), m.group(2)) if m else ("?", v.left_out)
+
+
+def _item(v: ShippedVerdict) -> str:
+    return (
+        f"`{v.claim.path}` is {v.verdict}: claimed in the delivery note's What shipped ({v.claim.anchor}); "
+        f"the landing left it out: {v.left_out or v.why}."
+    )
+
+
+def shipped_refusal(verdicts: Iterable[ShippedVerdict], run_id: Optional[str] = None) -> Optional[str]:
+    """None unless a verdict refuses; else the refusal naming every refusing claim, unbacked first.
+
+    The prefix is `shipped-claim-unbacked:` when any unbacked claim exists, else `partial-row-grade-owed:`.
+    """
+    vs = list(verdicts)
+    unbacked = [v for v in vs if v.verdict in _REFUSING]
+    rows = [v for v in vs if v.verdict == "row-ungraded"]
+    if not unbacked and not rows:
+        return None
+    parts = [f"{SHIPPED_CLAIM_REFUSED if unbacked else ROW_GRADE_OWED}:"]
+    parts += [_item(v) for v in unbacked + rows]
+    if unbacked:
+        parts.append(
+            "If a path is an input you read rather than work you delivered, cite it as "
+            "provenance (e.g. 'source: `path`') or drop it from the shipped list; otherwise "
+            "correct the change. Then re-fire the same sizing."
+        )
+    for cid in dict.fromkeys(_row_split(v)[0] for v in rows):
+        parts.append(
+            f"Decide row {cid}: if its delivered edits are verified, credit it -- "
+            f'workflow.revise run_id={run_id or "<run_id>"} credit_chunks=[{{chunk: "{cid}", evidence}}] -- '
+            "then re-fire; else drop the path from What shipped."
+        )
+    return " ".join(parts)
+
+
+def refused_code(reply: Mapping) -> str:
+    """The refusal code for a `shipped_gate` reply: row-grade only when no unbacked claim exists."""
+    if reply.get("row_grade_owed") and not reply.get("unbacked"):
+        return ROW_GRADE_OWED
+    return SHIPPED_CLAIM_REFUSED
 
 
 def shipped_gate(
     root, note_text: Optional[str], *, landing_paths=(), deleted_paths=(), withheld_paths=(),
+    own_paths=None, row_of=None, owners=None, run_id=None,
 ) -> tuple[Optional[str], dict]:
-    """``(refusal | None, reply_field)``; the reply is empty when the note carries no shipped claim."""
+    """``(refusal | None, reply_field)``; the reply is empty when the note carries no shipped claim.
+
+    `owners(paths) -> {path: owner}` is called once, only with refusing claim paths in neither
+    `own_paths` nor `row_of`; a mapped claim is `peer-owned` and does not refuse. A raise leaves the refusal.
+    """
     claims = extract_shipped_claims(note_text) if note_text else ()
     if not claims:
         return None, {}
-    vs = judge_shipped_claims(
+    vs = list(judge_shipped_claims(
         Path(root), claims, landing_paths=landing_paths, deleted_paths=deleted_paths,
-        withheld_paths=withheld_paths,
-    )
-    return shipped_refusal(vs), {
+        withheld_paths=withheld_paths, own_paths=own_paths, row_of=row_of,
+    ))
+    if owners is not None:
+        skip = {_posix(p) for p in (own_paths or ())} | {_posix(p) for p in (row_of or {})}
+        cand = [v.claim.path for v in vs if v.verdict in _REFUSING and v.claim.path not in skip]
+        if cand:
+            try:
+                found = owners(cand)
+            except Exception:
+                found = {}
+            found = found if isinstance(found, Mapping) else {}
+            for i, v in enumerate(vs):
+                if v.claim.path in cand and found.get(v.claim.path):
+                    vs[i] = replace(v, verdict="peer-owned", left_out=f"owned by {found[v.claim.path]}")
+    reply: dict = {
         "checked": len(vs),
         "unbacked": [v.claim.anchor for v in vs if v.verdict in _REFUSING],
         "unresolved": [v.claim.anchor for v in vs if v.verdict == "unresolved"],
     }
+    peer = [{"path": v.claim.path, "owner": v.left_out.removeprefix("owned by ")} for v in vs if v.verdict == "peer-owned"]
+    if peer:
+        reply["peer_owned"] = peer
+    owed = [
+        {"chunk": _row_split(v)[0], "path": v.claim.path, "grade": _row_split(v)[1]}
+        for v in vs if v.verdict == "row-ungraded"
+    ]
+    if owed:
+        reply["row_grade_owed"] = owed
+    return shipped_refusal(vs, run_id), reply

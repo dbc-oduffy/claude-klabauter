@@ -166,6 +166,17 @@ def test_recorded_criterion_met_release_frees_halted_only(tmp_path):
     assert hr.release_reason(root, r, None, None) is None
 
 
+def test_recorded_phantom_release_frees_halted_only(tmp_path):
+    root = _root(tmp_path)
+    record = {"reason": hr.RELEASE_PHANTOM, "sha": "a" * 40}
+    h, r = _rid("ask", 300, "aaaaaa"), _rid("ask", 200, "bbbbbb")
+    _released(root, h, "halted", record)
+    _released(root, r, "resumed", record)
+    assert hr.RELEASE_PHANTOM == "phantom-no-own-hunk-owner-gone"
+    assert hr.release_reason(root, h, None, None) == hr.RELEASE_PHANTOM
+    assert hr.release_reason(root, r, None, None) is None
+
+
 def test_malformed_released_record_holds(tmp_path):
     root = _root(tmp_path)
     for i, bad in enumerate(("criterion-met-at-head", {"reason": "other", "sha": "a"}, ["x"], {})):

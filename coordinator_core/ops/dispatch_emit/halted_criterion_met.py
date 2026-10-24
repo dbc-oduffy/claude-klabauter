@@ -6,13 +6,13 @@ landing (``checkpoint_stamp.is_landing_message``) and names the run by structure
 ``Deliverable-Id: <the run sizing's deliverable_id>``. Prose mentions never count. A run's own hunks
 are the paths its halt marker records as withheld; they are clean when none is in the dirty set.
 
-Invariants: at most one ``run_git`` call per invocation, zero with no holders; ``dirty`` is called
-at most once, and only when a holder has an objective commit and a non-empty withheld set; it never
+Invariants: ``dirty`` is called at most once, before any git read, and only when a holder has a
+non-empty withheld set; at most one ``run_git`` call, made only for holders whose withheld set is
+clean; zero ``run_git`` calls when there are no holders or none survives the dirty check; it never
 raises, and any read error holds (the run is absent from the result).
 
-Consumer: none wired yet -- `met_at_head` and `halted_run.record_released` are speculative until a
-caller (the gate that stamps `released` on a halted marker) lands; `halted_hold_release` already reads
-the stamp.
+Consumer: `peer_hunk_gate._release_criterion_met` calls `met_at_head` and stamps `released` through
+`halted_run.record_released`; `halted_hold_release` reads the stamp.
 
 Stdlib only at module top: land_run and terminal_commit have cold-import pins, so every reader is
 imported lazily.
@@ -32,7 +32,7 @@ def _norm(path: str) -> str:
 
 
 def _holders(root: Path, run_ids: Iterable[str]) -> dict:
-    """``{run_id: (needles, withheld, since)}`` for every holder with a stamp; others hold."""
+    """``{run_id: (deliverable_id, withheld, since)}`` for every holder with a stamp; others hold."""
     from coordinator_core.ops import warp_run_deliverable as wrd
     from coordinator_core.ops.dispatch_emit import stopped_runs
 
@@ -73,6 +73,11 @@ def _met_at_head(root: Path, run_ids: list, dirty: Callable[[], set]) -> dict:
     holders = _holders(root, run_ids)
     if not holders:
         return {}
+    if any(w for _d, w, _s in holders.values()):
+        dirty_set = {_norm(p) for p in dirty()}
+        holders = {r: h for r, h in holders.items() if not (h[1] & dirty_set)}
+    if not holders:
+        return {}
     from coordinator_core.git.run import run_git
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import is_landing_message
 
@@ -96,8 +101,4 @@ def _met_at_head(root: Path, run_ids: list, dirty: Callable[[], set]) -> dict:
         sha = next((s for s, body in landings if _names(body, run_id, deliverable)), "")
         if sha:
             shas[run_id] = sha
-    needs_dirty = [r for r in shas if holders[r][1]]
-    if needs_dirty:
-        dirty_set = {_norm(p) for p in dirty()}
-        shas = {r: s for r, s in shas.items() if not (holders[r][1] & dirty_set)}
     return shas

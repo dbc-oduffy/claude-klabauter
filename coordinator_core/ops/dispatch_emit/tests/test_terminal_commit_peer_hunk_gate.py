@@ -78,6 +78,33 @@ def test_a_path_a_live_sibling_run_also_declares_is_refused_naming_it(repo):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
+def test_two_holders_on_two_declared_paths_are_both_named_in_the_error(repo):
+    path2 = "pkg/other.py"
+    (repo / path2).write_text("y = 1\n", encoding="utf-8")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "seed2"], repo)
+    sibling2 = "run-sibling-two"
+    for sib, path in ((SIBLING, PATH), (sibling2, path2)):
+        rdir = repo / "state" / "warp" / sib
+        rdir.mkdir(parents=True)
+        (rdir / "manifest.json").write_text(
+            json.dumps({"rows": [{"id": "C1", "writes": [path]}], "doc_writes": []}), encoding="utf-8"
+        )
+        run_token.mint(repo, sib, "sibling.mjs", session_id=SELF)
+    (repo / PATH).write_text("x = 2\n", encoding="utf-8")
+    (repo / path2).write_text("y = 2\n", encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=(PATH, path2)),))
+    (repo / "run.mjs").write_text(render_marker(request) + "\n", encoding="utf-8")
+    params = {"inline_review": _REVIEWED, "script_path": "run.mjs", "incomplete_chunks": [], "session_id": SELF}
+
+    out = terminal_commit._handler(params, repo_root=repo / ".git")
+
+    assert out["committed"] is False, out
+    assert out["refused"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED
+    for needle in (SIBLING, sibling2, PATH, path2):
+        assert needle in out["error"], out["error"]
+
+
 def _halted_sibling(repo: Path, sizing_status: str, plan: str | None = None) -> str:
     import time
 
@@ -93,7 +120,11 @@ def _halted_sibling(repo: Path, sizing_status: str, plan: str | None = None) -> 
     )
     (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8")
     (rdir / "halted.json").write_text(
-        json.dumps({"status": "halted", "sizing_rel": "state/sizings/s.yaml", **({"plan": plan} if plan else {})}),
+        json.dumps({
+            "status": "halted", "sizing_rel": "state/sizings/s.yaml",
+            "run_artifacts": {"withheld": {PATH: "halt-record-only"}},
+            **({"plan": plan} if plan else {}),
+        }),
         encoding="utf-8",
     )
     return halted

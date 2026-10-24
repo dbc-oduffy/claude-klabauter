@@ -99,14 +99,7 @@ def test_three_holders_cost_one_git_call_and_zero_holders_cost_none(tmp_path, mo
     for extra in ("ask-20200101T000002-111111", "ask-20200101T000003-222222"):
         (root / "state" / "warp" / extra).mkdir(parents=True)
     _commit(root, f"land (run {RUN})\n\nInline-Review: {RUN}")
-    calls = []
-    real = git_run.run_git
-
-    def counting(*a, **k):
-        calls.append(a)
-        return real(*a, **k)
-
-    monkeypatch.setattr(git_run, "run_git", counting)
+    calls = _count_git(monkeypatch)
     out = halted_criterion_met.met_at_head(
         root, [RUN, "ask-20200101T000002-111111", "ask-20200101T000003-222222"], _clean
     )
@@ -132,12 +125,52 @@ def test_git_failure_holds(tmp_path, monkeypatch, mode):
     assert halted_criterion_met.met_at_head(root, [RUN], _clean) == {}
 
 
-def test_holder_without_a_landing_never_calls_dirty(tmp_path):
+def _count_git(monkeypatch) -> list:
+    calls = []
+    real = git_run.run_git
+
+    def counting(*a, **k):
+        calls.append(a)
+        return real(*a, **k)
+
+    monkeypatch.setattr(git_run, "run_git", counting)
+    return calls
+
+
+def test_dirty_withheld_holder_costs_no_git_read(tmp_path, monkeypatch):
     root = _repo(tmp_path)
-    _commit(root, "unrelated")
+    _commit(root, f"land (run {RUN})\n\nInline-Review: {RUN}")
+    calls = _count_git(monkeypatch)
+    assert halted_criterion_met.met_at_head(root, [RUN], lambda: {WITHHELD}) == {}
+    assert calls == []
+
+
+def test_dirty_is_read_once_before_the_git_log(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    sha = _commit(root, f"land (run {RUN})\n\nInline-Review: {RUN}")
+    order = []
+    real = git_run.run_git
+    monkeypatch.setattr(git_run, "run_git", lambda *a, **k: order.append("git") or real(*a, **k))
+    assert halted_criterion_met.met_at_head(root, [RUN], lambda: order.append("dirty") or set()) == {RUN: sha}
+    assert order == ["dirty", "git"]
+
+
+def test_holder_with_nothing_withheld_never_calls_dirty(tmp_path):
+    root = _repo(tmp_path, withheld=())
+    sha = _commit(root, f"land (run {RUN})\n\nInline-Review: {RUN}")
     called = []
-    assert halted_criterion_met.met_at_head(root, [RUN], lambda: called.append(1) or set()) == {}
+    assert halted_criterion_met.met_at_head(root, [RUN], lambda: called.append(1) or set()) == {RUN: sha}
     assert called == []
+
+
+def test_dirty_failure_holds_every_holder(tmp_path):
+    root = _repo(tmp_path)
+    _commit(root, f"land (run {RUN})\n\nInline-Review: {RUN}")
+
+    def boom():
+        raise OSError("status failed")
+
+    assert halted_criterion_met.met_at_head(root, [RUN], boom) == {}
 
 
 def test_another_runs_landing_naming_the_holder_in_prose_holds(tmp_path):

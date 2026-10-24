@@ -114,7 +114,7 @@ def test_sizing_refusal_lands_one_commit_of_record_and_leaves_unrelated_dirt(rep
     assert out["committed"] is True
     assert _git(["rev-parse", "HEAD~1"], repo).strip() == head
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert sorted(names) == sorted(f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json"))
+    assert sorted(names) == sorted(f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json", "run-stage.json"))
     message = _git(["log", "-1", "--format=%B"], repo)
     assert "Halted-By: refusal" in message
     assert REASON in message
@@ -130,7 +130,8 @@ def test_halt_after_stage_lands_manifest_and_requirements(repo):
 
     assert out["committed"] is True
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert len(names) == 6
+    assert len(names) == 7
+    assert f"{RECORD_DIR_ROOT}/{RUN}/run-stage.json" in names
     assert all(n.startswith(f"{RECORD_DIR_ROOT}/{RUN}/") for n in names)
     assert "Halted-By: ledger-check" in _git(["log", "-1", "--format=%B"], repo)
 
@@ -146,6 +147,7 @@ def test_tracked_record_file_deleted_from_disk_lands(repo):
     assert out["committed"] is True, out
     assert sorted(_git(["show", "--name-status", "--format=", "HEAD"], repo).splitlines()) == [
         f"A\t{RECORD_DIR_ROOT}/{RUN}/halted.json",
+        f"A\t{RECORD_DIR_ROOT}/{RUN}/run-stage.json",
         f"D\t{RECORD_DIR_ROOT}/{RUN}/run.json",
     ]
 

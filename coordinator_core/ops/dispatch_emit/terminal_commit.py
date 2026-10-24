@@ -191,7 +191,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate  # noqa: E402
-from coordinator_core.ops.dispatch_emit.shipped_claims import SHIPPED_CLAIM_REFUSED, shipped_gate  # noqa: E402
+from coordinator_core.ops.dispatch_emit.shipped_claims import refused_code, shipped_gate  # noqa: E402
 from coordinator_core.ops.dispatch_emit.write_baseline import (  # noqa: E402
     DIRTY_BEFORE_RUN_KEY,
     MEANT_TO_LAND_KEY,
@@ -700,15 +700,17 @@ def _landing_integrity_gate(
     contested = paths if carried_set is None else [p for p in paths if p in carried_set]
     from coordinator_core.ops.dispatch_emit import merge_ancestry_release
 
-    for held_path, sibling in merge_ancestry_release.release(
+    peer_holds = list(merge_ancestry_release.release(
         worktree_root,
         peer_hunk_gate.co_declared_peer_holds(
             worktree_root, run_id, contested, own_declared, own_plan=plan, minted_before=minted_before,
         ),
-    ):
+    ))
+    for index, (held_path, sibling) in enumerate(peer_holds):
         findings.append(li.Finding(
             held_path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
-            peer_hunk_gate.refusal_message([(held_path, sibling)], run_id or "", worktree_root),
+            peer_hunk_gate.refusal_message(peer_holds, run_id or "", worktree_root) if index == 0
+            else f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off",
         ))
     if run_id and session_id:
         for held_path, stem, line in peer_hunk_gate.out_of_ask_holds(
@@ -6114,14 +6116,36 @@ def _terminal_commit_inner(
                 _unstamp_landed()
                 _remove(worktree_root, receipt_paths)
                 return _error(cohold_refused, refused=cohold_refusal.REFUSED_COHOLD)
+        stranded_rows = {
+            p: (c.id, f"executor PARTIAL: {withheld_partial[c.id]}" if c.id in withheld_partial else "incomplete")
+            for c in request.chunks if c.id in incomplete_chunks for p in c.paths
+        }
+
+        def _claim_owners(paths: Sequence[str]) -> dict:
+            from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+            halted: dict = {}
+            live = _live_run_claims(worktree_root, paths, sibling_run_id, halted)
+            if live is None:
+                return {}
+            found = {p: ", ".join(halted[p]) if p in halted else "a live peer run" for p in live}
+            wanted = set(paths) - set(found)
+            for p, rid_ in halted_withheld_index.withheld_by_path(worktree_root).items():
+                if p in wanted:
+                    found[p] = rid_
+            return {p: o for p, o in found.items() if o != sibling_run_id}
+
         shipped_refused, shipped_reply_field = shipped_gate(
             worktree_root, ask_note_text, landing_paths=all_paths,
             deleted_paths=deleted_paths, withheld_paths=reach_withheld,
+            own_paths=declared_writes, row_of=stranded_rows, owners=_claim_owners, run_id=sibling_run_id,
         )
         if shipped_refused is not None:
             _unstamp_landed()
             _remove(worktree_root, receipt_paths)
-            return _error(shipped_refused, refused=SHIPPED_CLAIM_REFUSED, shipped_claims=shipped_reply_field)
+            return _error(
+                shipped_refused, refused=refused_code(shipped_reply_field), shipped_claims=shipped_reply_field,
+            )
 
     from coordinator_core.git import ref_cas_retry
 

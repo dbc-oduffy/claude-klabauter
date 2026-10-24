@@ -253,6 +253,34 @@ def test_live_peer_unlanded_still_refuses_even_on_a_superseded_sizing(repo):
     assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
 
 
+def test_two_live_holders_on_two_declared_paths_are_both_named_in_the_error(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    path2 = "pkg/other.py"
+    holders = {PATH: _aged(60, "dddddd"), path2: _aged(61, "eeeeee")}
+    for n, (path, run_id) in enumerate(holders.items()):
+        rdir = repo / "state" / "warp" / run_id
+        rdir.mkdir(parents=True)
+        sizing = f"state/sizings/h{n}.yaml"
+        (rdir / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+        prod._write(repo, sizing, f'plan: "docs/plans/h{n}.md"\n')
+        prod._write(
+            repo, f"docs/plans/h{n}.md",
+            "# H\n\n## Tasks\n\n```yaml plan-tasks\n- id: C0\n  writes:\n    - " + path + "\n```\n",
+        )
+        run_token.mint(repo, run_id, "run-a.mjs", session_id=prod.SELF)
+    prod._author(repo, PATH, "x = 1\n")
+    prod._author(repo, path2, "y = 1\n")
+    prod._declare(repo, PATH, path2)
+    prod._record_dir(repo)
+
+    out = prod._land(repo)
+
+    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    for needle in (*holders, *holders.values()):
+        assert needle in out["error"], out["error"]
+
+
 def test_path_a_halted_sibling_declares_only_in_its_plan_spine_refuses_naming_it(repo):
     _sibling_via_plan_spine(repo, withheld={PATH: "peer-held"})
 
@@ -327,3 +355,20 @@ def test_halted_peer_with_no_blob_and_no_baseline_claims_nothing_on_a_dirty_decl
     out, _head = _land_dirty(repo)
 
     assert out["committed"] is True, out
+
+
+HELD = "pkg/held.py"
+
+
+def test_halted_peer_with_no_landing_commit_still_refuses_and_the_remedy_names_sizing_path(repo):
+    _sizing(repo, SIZING)
+    holder = _aged(60, "aaaaaa")
+    rdir = _holder(repo, holder, "halted", plan="docs/plans/other.md", withheld={HELD: "peer-held"})
+
+    out, head = _land_dirty(repo)
+
+    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    assert holder in str(out), out
+    assert "sizing_path" in str(out), out
+    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    assert "released" not in json.loads((rdir / "halted.json").read_text(encoding="utf-8"))

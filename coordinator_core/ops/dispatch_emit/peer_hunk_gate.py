@@ -6,18 +6,26 @@ landing paths a findings-ledger row marks `out_of_ask: true` (the structured mar
 is never read) whose status is still unresolved.
 `refusal_message` words both for the operator.
 
-Invariants: in-process file reads only (no spawn); an unreadable record contributes nothing and
-nothing raises; two halted runs withholding one path against each other hold nothing (the path lands
-whole, carrying both); a halted run that `halted_hold_release.release_reason` frees holds nothing; a
-junior fresh-token sibling claims nothing against a senior committer; a clean landing path is not
-contention (callers pass only the paths the commit carries). Stdlib
+Invariants: in-process file reads only (no spawn), except the
+`halted_criterion_met.met_at_head` reads (a status and a log) when a surviving holder is halted (it is recorded as
+`released` on its marker before its hold is dropped; an error keeps every hold); a halted holder
+whose owner session is not live and whose withheld paths carry no hunk of its own is released first
+(`RELEASE_PHANTOM`, sharing the one status read; no extra spawn); an unreadable
+record contributes nothing and nothing raises; two halted runs withholding one path against each
+other hold nothing (the path lands whole, carrying both); a halted run that
+`halted_hold_release.release_reason` frees holds nothing; a junior fresh-token sibling claims
+nothing against a senior committer; a clean landing path is not contention (callers pass only the
+paths the commit carries). Stdlib
 only at module top (land_run cold-import pin); the readers are imported lazily.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Iterable, Optional
+
+_LOG = logging.getLogger(__name__)
 
 PEER_HUNKS_CO_DECLARED = "peer-hunks-co-declared"
 OUT_OF_ASK_HUNKS = "out-of-ask-hunks"
@@ -79,7 +87,9 @@ def co_declared_peer_holds(
     its halt record withholds plus the manifest or plan-spine paths it declares that are dirty now;
     a live sibling with no stage manifest is also read through its plan spine's `writes`. A
     fresh-token sibling minted at or after `minted_before=(minted_at, run_id)` is junior and
-    claims nothing. Sorted by path. Never raises."""
+    claims nothing. Sorted by path. Never raises. Side effect: a halted holder that is phantom (owner
+    gone, no own hunk) or whose criterion is met at HEAD gets `released` written to its halt marker
+    and is dropped from the result."""
     root = Path(worktree_root)
     wanted = sorted({_norm(p) for p in landing_paths if p} - {""})
     own = {_norm(p) for p in own_declared if p}
@@ -110,7 +120,77 @@ def co_declared_peer_holds(
                 del claims[path]
     except Exception:  # noqa: BLE001 -- contest unknown: hold nothing
         return []
-    return [(p, claims[p]) for p in wanted if p in claims and p in own]
+    holds = [(p, claims[p]) for p in wanted if p in claims and p in own]
+    if not holds:
+        return holds
+    return _release_criterion_met(root, holds, landing_run_id=own_run_id, landing_plan=own_plan)
+
+
+def _release_criterion_met(
+    root: Path, holds: list, *, landing_run_id: Optional[str] = None, landing_plan: Optional[str] = None,
+) -> list:
+    """`holds` without the halted holders released on the would-refuse path; each release is recorded
+    on its marker (`released`) before its hold is dropped. Two kinds, both read through one shared
+    dirty reader: a phantom holder (owner session not live, no hunk of its own in any withheld path:
+    `RELEASE_PHANTOM`), then a holder whose landing commit is reachable from HEAD with its withheld
+    paths clean (`RELEASE_CRITERION_MET`). Up to two git spawns (one `git status`, one `git log`),
+    only when a halted holder survives the baseline check (the spawns the budgeted-path gate must
+    count). Any error keeps every hold."""
+    try:
+        from coordinator_core.git import git_state
+        from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import (
+            halted_criterion_met, halted_hold_release, halted_hunk_attribution, halted_phantom_release,
+            halted_run, sibling_claims,
+        )
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        halted = sorted({s for _p, s in holds if warp_run_deliverable._halted(root, s)})
+        own_withheld = {s: {_norm(p) for p in halted_run.halted_withheld(record_dir(root, s))} for s in halted}
+        halted = [s for s in halted if not _holds_baselined_path(root, s, holds, own_withheld[s])]
+        if not halted:
+            return holds
+        withheld = set().union(*(own_withheld[s] for s in halted))
+        dirty = sibling_claims._dirty_reader(root, withheld)
+        released = set()
+        attr = halted_hunk_attribution.reader(root, landing_run_id, landing_plan=landing_plan)
+        only_withheld = [
+            s for s in halted if all(_norm(p) in own_withheld[s] for p, sib in holds if sib == s)
+        ]
+        phantom = halted_phantom_release.phantom_holders(root, only_withheld, own_withheld, dirty, attr)
+        head = git_state.head_sha(root) if phantom else None
+        for run_id in sorted(phantom) if head else ():
+            if halted_run.record_released(record_dir(root, run_id), head, halted_hold_release.RELEASE_PHANTOM):
+                _LOG.info(
+                    "halted run %s released: %s at %s", run_id, halted_hold_release.RELEASE_PHANTOM, head,
+                )
+                released.add(run_id)
+        remaining = [s for s in halted if s not in released]
+        met = halted_criterion_met.met_at_head(root, remaining, dirty) if remaining else {}
+        for run_id, sha in met.items():
+            if halted_run.record_released(
+                record_dir(root, run_id), sha, halted_hold_release.RELEASE_CRITERION_MET,
+            ):
+                _LOG.info(
+                    "halted run %s released: %s at %s", run_id, halted_hold_release.RELEASE_CRITERION_MET, sha,
+                )
+                released.add(run_id)
+        return [(p, s) for p, s in holds if s not in released]
+    except Exception:  # noqa: BLE001 -- release unknown: every hold stands
+        return holds
+
+
+def _holds_baselined_path(root: Path, run_id: str, holds: list, withheld: set) -> bool:
+    """True when `run_id` holds a path it did not withhold and recorded a `write_baseline` for:
+    sibling_claims claims such a path only after attribution failed to explain its dirt as the
+    landing run's, so the run has hunks of its own and its criterion cannot be met. A file read,
+    no spawn; a run with no baseline is never excluded."""
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
+
+    baseline = halted_hunk_attribution._baseline(root, run_id)
+    if not baseline:
+        return False
+    return any(_norm(p) not in withheld and _norm(p) in baseline for p, s in holds if s == run_id)
 
 
 def _mutual_halted_hold(root: Path, own_run_id: Optional[str], holder: str, path: str) -> bool:

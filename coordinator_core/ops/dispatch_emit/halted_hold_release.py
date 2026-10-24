@@ -7,8 +7,9 @@ the one git spawn is `_kept_at_head`'s batched `cat-file`, reached only when no 
 
 Invariants: a run with no halt marker (a live fresh-token peer) is never released here. A `resumed`
 marker can be a run executing again, so only supersession and a landed successor release it, never
-a shared sizing or deliverable alone. The criterion-met rule only reads a `released` record on a
-`halted` marker; whoever shows the criterion met at HEAD writes it, never this module.
+a shared sizing or deliverable alone. The recorded releases (criterion-met, phantom) are only read
+from a `released` record on a `halted` marker; whoever shows the condition writes the record, never
+this module.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ RELEASE_RECORDED_LANDED = "recorded-landed"
 RELEASE_SIZING_SHIPPED = "sizing-shipped"
 RELEASE_KEPT_AT_HEAD = "kept-at-head"
 RELEASE_CRITERION_MET = "criterion-met-at-head"
+RELEASE_PHANTOM = "phantom-no-own-hunk-owner-gone"
+_RECORDED_RELEASES = frozenset({RELEASE_CRITERION_MET, RELEASE_PHANTOM})
 
 
 def _halted_sizing(root: Path, run_id: str, marker: dict) -> str:
@@ -89,12 +92,10 @@ def release_reason(
         if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
         released = marker.get(halted_run.HALT_RELEASED_FIELD)
-        if (
-            status == halted_run.STATUS_HALTED
-            and isinstance(released, dict)
-            and released.get("reason") == RELEASE_CRITERION_MET
-        ):
-            return RELEASE_CRITERION_MET
+        if status == halted_run.STATUS_HALTED and isinstance(released, dict):
+            reason = released.get("reason")
+            if reason in _RECORDED_RELEASES:
+                return reason
         sizing = _halted_sizing(root, halted_run_id, marker)
         sizing_status = wrd.sizing_scalar(root, sizing, "status") if sizing else ""
         if sizing_status == "superseded":

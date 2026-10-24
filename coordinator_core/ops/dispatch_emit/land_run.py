@@ -2732,17 +2732,19 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         _remove(root, receipt_paths)
         first = findings[0]
         remedy = ""
-        if first.reason == "peer-hunks-co-declared":
-            from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+        from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
-            remedy = ". " + peer_hunk_gate.refusal_message(
-                [(first.path, first.detail.partition(":")[0])], sibling_run_id, root=root,
-            )
-        elif first.reason == "since-base-overlap":
+        hold_pairs = [
+            (f.path, f.detail.partition(":")[0]) for f in findings
+            if f.reason == peer_hunk_gate.PEER_HUNKS_CO_DECLARED
+        ]
+        if hold_pairs:
+            remedy = ". " + peer_hunk_gate.refusal_message(hold_pairs, sibling_run_id, root=root)
+        if first.reason == "since-base-overlap":
             from coordinator_core.ops import warp_run_deliverable
             from coordinator_core.ops.dispatch_emit import sibling_claims
 
-            remedy = ". " + sibling_claims.reland_remedy(warp_run_deliverable.record_sizing_rel(root, sibling_run_id))
+            remedy += ". " + sibling_claims.reland_remedy(warp_run_deliverable.record_sizing_rel(root, sibling_run_id))
         return _error(
             f"landing refused {first.reason}: {first.path} ({first.detail}){remedy}",
             refused=first.reason,
@@ -2757,10 +2759,18 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         except (OSError, UnicodeError):
             note_text = None
         from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate
-        from coordinator_core.ops.dispatch_emit.shipped_claims import SHIPPED_CLAIM_REFUSED, shipped_gate
+        from coordinator_core.ops.dispatch_emit.shipped_claims import refused_code, shipped_gate
 
         gate_withheld = {
-            **{p: "withheld" for p in held_paths}, **art_withheld, **art_dropped, **recorded_reason, **withhold_reason,
+            p: (
+                f"held chunk {', '.join(held_paths[p])}" if p in held_paths and label == "withheld"
+                else f"withheld by the EM: {em_withheld[p]}" if p in em_withheld and label == "withheld"
+                else label
+            )
+            for p, label in {
+                **{p: "withheld" for p in held_paths}, **art_withheld, **art_dropped, **recorded_reason,
+                **withhold_reason,
+            }.items()
         }
         refusal, reach_summary = reach_gate(
             root, note_text, landing_paths=paths, deleted_paths=deleted, withheld_paths=gate_withheld,
@@ -2768,12 +2778,36 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if refusal is not None:
             _remove(root, receipt_paths)
             return _error(refusal, refused=REACH_CLAIM_REFUSED, reach_claims=reach_summary)
+        own_run_ids = {r for r in (rid, sibling_run_id) if isinstance(r, str) and r}
+        row_of = {
+            p: (cid, f"executor PARTIAL: {blockers[cid]}" if cid in blockers else "incomplete")
+            for cid, ps in stranded.items() for p in ps
+        }
+
+        def _owners(claimed: Sequence[str]) -> dict:
+            """``{path: owner}`` for claimed paths another run withholds (halted index) or a live peer holds (``_peer_held``)."""
+            wanted = set(claimed)
+            from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+            found = {
+                p: str(run) for p, run in halted_withheld_index.withheld_by_path(root).items()
+                if p in wanted and run not in own_run_ids
+            }
+            held = _peer_held(
+                root, [p for p in claimed if p not in found], session_id, rid, script_path,
+                plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
+                minted_before=own_seniority,
+            )
+            found.update({p: ", ".join(sorted(s)) for p, s in held.items() if s})
+            return found
+
         refusal, shipped_summary = shipped_gate(
             root, note_text, landing_paths=paths, deleted_paths=deleted, withheld_paths=gate_withheld,
+            own_paths=set(declared), row_of=row_of, owners=_owners, run_id=sibling_run_id or rid,
         )
         if refusal is not None:
             _remove(root, receipt_paths)
-            return _error(refusal, refused=SHIPPED_CLAIM_REFUSED, shipped_claims=shipped_summary)
+            return _error(refusal, refused=refused_code(shipped_summary), shipped_claims=shipped_summary)
 
     expected: dict = {}
     reread_artifacts: list = []

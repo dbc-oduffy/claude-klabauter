@@ -41,7 +41,7 @@ def merging(tmp_path):
     sizing = root / _SIZING
     sizing.parent.mkdir(parents=True)
     sizing.write_text(
-        "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: XS\n  provisional: true\n"
+        "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: S\n  provisional: true\n"
         "route: dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\npremise:\n"
         "  provenance: read\n  evidence: test fixture\n",
         encoding="utf-8",
@@ -81,7 +81,7 @@ def staged_mixed(tmp_path):
     sizing = root / _SIZING
     sizing.parent.mkdir(parents=True)
     sizing.write_text(
-        "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: XS\n  provisional: true\n"
+        "schema: sizing-object\nintent: Test intent, verbatim.\nestimate:\n  tshirt: S\n  provisional: true\n"
         "route: dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\npremise:\n"
         "  provenance: read\n  evidence: test fixture\n",
         encoding="utf-8",
