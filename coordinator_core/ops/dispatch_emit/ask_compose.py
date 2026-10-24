@@ -181,7 +181,7 @@ from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execu
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.requirement_register import REGISTER_PIN_DRIFT_KIND, REPIN_OP
 from coordinator_core.ops.review_mint.wave_not_run import WAVE_NOT_RUN_VAR
-from coordinator_core.ops.review_test_blocker import FAILING_DETAIL_FIELD, TEST_BLOCKER
+from coordinator_core.ops.review_test_blocker import FAILING_DETAIL_FIELD, OWN_DIFF_PATHS_FIELD, TEST_BLOCKER
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.roadmap.post_stamp_clause import (
     EXIT_CRITERION_REFUSAL_HEAD,
@@ -885,6 +885,35 @@ HALT_DELIVERY_FAIL = "delivery_fail"
 HALT_NOT_CLOSEABLE = "not_closeable"
 HALT_STOP_RULE = "stop_rule"
 
+def _test_blockers_js(src_expr: str, out_prefix: str, own_paths_expr: Optional[str] = None) -> str:
+    """JS declaring `<out_prefix>Failing` / `<out_prefix>Gaps` from the result object `src_expr`.
+
+    Mirrors `review_test_blocker.from_reverify`; with `own_paths_expr` (a JS array of declared paths)
+    it also mirrors `own_diff_blockers`, keeping only node ids whose file part is in that array.
+    Declares `<out_prefix>Src/Excluded/Resolved/Detail/Raw` too: the prefix must be unique per scope.
+    """
+    p = out_prefix
+    own = ""
+    if own_paths_expr:
+        own = (
+            "    const " + p + "Norm = (s) => String(s).replace(/\\\\/g, '/').replace(/^(\\.\\/)+/, '');\n"
+            "    const " + p + "Own = new Set((" + own_paths_expr + " || []).map(" + p + "Norm));\n"
+        )
+    own_filter = (".filter((n) => " + p + "Own.has(" + p + "Norm(n.split('::')[0])))") if own_paths_expr else ""
+    return (
+        f"    const {p}Src = {src_expr};\n"
+        + own
+        + f"    const {p}Excluded = new Set([...({p}Src?.pre_existing ?? []), ...({p}Src?.kept ?? [])].map(String));\n"
+        f"    const {p}Resolved = {p}Src?.status_after === 'pass';\n"
+        f"    const {p}Detail = new Map();\n"
+        f"    const {p}Raw = {p}Src?.{FAILING_DETAIL_FIELD};\n"
+        f"    if (Array.isArray({p}Raw)) {{ for (const d of {p}Raw) {{ if (d && d.node_id) {p}Detail.set(String(d.node_id), d.message == null ? '' : String(d.message)); }} }}\n"
+        f"    const {p}Failing = [...new Set((Array.isArray({p}Src?.failing) ? {p}Src.failing : (typeof {p}Src?.failing === 'string' ? [{p}Src.failing] : [])).map(String))]"
+        f".filter((n) => !{p}Resolved && !{p}Excluded.has(n)){own_filter}.sort().map((n) => ({{ node_id: n, message: {p}Detail.get(n) ?? '' }}));\n"
+        f"    const {p}Gaps = {p}Failing.map((t) => t.node_id + ': ' + (t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300));\n"
+    )
+
+
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
 def _review_blocked_halt_js(sizing_rel: Optional[str]) -> str:
@@ -894,31 +923,50 @@ def _review_blocked_halt_js(sizing_rel: Optional[str]) -> str:
         "  if (!_halted) {\n"
         "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
         "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
-        "    const _rv = (typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null;\n"
-        "    const _rvExcluded = new Set([...(_rv?.pre_existing ?? []), ...(_rv?.kept ?? [])].map(String));\n"
-        "    const _rvResolved = _rv?.status_after === 'pass';\n"
-        "    const _rvDetail = new Map();\n"
-        f"    const _rvRaw = _rv?.{FAILING_DETAIL_FIELD};\n"
-        "    if (Array.isArray(_rvRaw)) { for (const d of _rvRaw) { if (d && d.node_id) _rvDetail.set(String(d.node_id), d.message == null ? '' : String(d.message)); } }\n"
-        "    const _failingTests = [...new Set((Array.isArray(_rv?.failing) ? _rv.failing : (typeof _rv?.failing === 'string' ? [_rv.failing] : [])).map(String))]"
-        ".filter((n) => !_rvResolved && !_rvExcluded.has(n)).sort().map((n) => ({ node_id: n, message: _rvDetail.get(n) ?? '' }));\n"
-        "    const _gapLines = _failingTests.map((t) => t.node_id + ': ' + (t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300));\n"
-        "    const _slicesJs = _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
+        + _test_blockers_js(
+            "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null",
+            "_rv",
+        )
+        + "    const _slicesJs = _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
         "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));\n"
-        "    if (_failingTests.length) {\n"
+        "    if (_rvFailing.length) {\n"
         "      const _claimed = (typeof _manifest !== 'undefined' && _manifest?.ledger_item_ids?.length) ? _manifest.ledger_item_ids : [];\n"
         "      _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", blocker: " + json.dumps(TEST_BLOCKER) + ", run_id: _runId, "
-        "failing: _failingTests, gaps: _gapLines, "
+        "failing: _rvFailing, gaps: _rvGaps, "
         + HALT_PLAN_FIELD + ": (typeof _planRel !== 'undefined' ? _planRel : null), "
-        "items: _claimed.map((id) => ({ id, remaining: _gapLines, evidence: _gapLines.join('; ') })), "
+        "items: _claimed.map((id) => ({ id, remaining: _rvGaps, evidence: _rvGaps.join('; ') })), "
         "slices: _slicesJs, "
-        "next_action: 'The refire runs an executor fix leg against these failing tests: ' + _gapLines.join('; ') + '; ' + "
+        "next_action: 'The refire runs an executor fix leg against these failing tests: ' + _rvGaps.join('; ') + '; ' + "
         + _refire_js(sizing_rel) + " };\n"
         "    } else if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
         "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
         "slices: _slicesJs, "
         "next_action: 'The refire re-runs the review wave over the blocked slices: ' + "
         + _refire_js(sizing_rel) + " };\n"
+        "  }"
+    )
+
+
+def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
+    """Upgrades a bare `criterion_not_met` `_halted` whose falsifier result names a failing node id
+    in the run's own diff to the executor-fix-leg shape; any other `_halted` is left alone."""
+    return (
+        "  if (_halted.halted === " + _lit(HALT_CRITERION_NOT_MET) + ") {\n"
+        + _test_blockers_js(_emit._FALSIFIER_RESULT_VAR, "_cn", f"(_manifest?.{OWN_DIFF_PATHS_FIELD} ?? [])")
+        + "    if (_cnFailing.length) {\n"
+        "      const _cnSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
+        "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0))"
+        ".map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));\n"
+        "      const _cnClaimed = _manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids : [];\n"
+        "      _halted = { ..._halted, blocker: " + json.dumps(TEST_BLOCKER) + ", failing: _cnFailing, gaps: _cnGaps, "
+        "detail: _cnGaps.join('; '), "
+        + HALT_PLAN_FIELD + ": _planRel ?? null, "
+        "items: _cnClaimed.map((id) => ({ id, remaining: _cnGaps, evidence: _cnGaps.join('; ') })), "
+        "unapplied_findings: _cnSlices.reduce((n, w) => n + (w.findings - w.applied), 0), slices: _cnSlices, "
+        "next_action: 'The refire runs an executor fix leg against these failing tests: ' + _cnGaps.join('; ') + '; ' + "
+        + _refire_js(sizing_rel)
+        + " };\n"
+        "    }\n"
         "  }"
     )
 
@@ -3852,8 +3900,11 @@ def compose_ask_script(
     b.append(
         "  if (!_closeable && !_halted && !(_commit && _commit.committed === true)) { "
         f"_halted = {{ halted: {unclosable_kind}, reason: _reviseAndRefire.reason, "
-        "sizing: _sizingRel, run_id: _runId }; }"
+        "sizing: _sizingRel, run_id: _runId }; "
+        + ("" if judged else "}")
     )
+    if judged:
+        b.append(_criterion_blocker_halt_js(sizing_rel) + " }")
     b.append(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "

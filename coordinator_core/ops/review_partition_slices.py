@@ -78,7 +78,8 @@ def partition_slices(
 
     `path_bases` maps a declared path to its own base; absent paths use `base`. Measure and
     freeze run once per distinct base (spawns grow with bases, not paths); a directory slice
-    spanning two bases is frozen as one slice per base. None/{} is the single-base behaviour.
+    spanning two bases is frozen as one slice per base (after `group_paths`, so the slice count
+    can exceed MAX_SLICES). None/{} is the single-base behaviour.
 
     Returns `{verdict, loc, surfaces, product_paths: [..], slices: [{slice_id, paths, diff_path}],
     error}`; `error` is None on success. A freeze refusal is returned as `error` with the

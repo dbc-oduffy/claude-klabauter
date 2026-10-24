@@ -234,3 +234,44 @@ def test_halt_marker_carries_the_reason_only_when_given(tmp_path):
     assert json.loads(with_reason.read_text(encoding="utf-8"))["reason"] == "A: half"
     without = write_halt_marker(tmp_path / "b", halted="dependents_unstarted", sizing_rel=None)
     assert "reason" not in json.loads((tmp_path / "b" / HALTED_FILE).read_text(encoding="utf-8"))
+
+
+def _indexed(root):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    return idx.withheld_by_path(root)
+
+
+def test_index_follows_record_withheld_then_mark_resumed(tmp_path):
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    assert hr.record_withheld(d, {"a.py": "r", "DELIVERY.md": "r"}) is True
+    assert _indexed(tmp_path) == {"a.py": d.name, "DELIVERY.md": d.name}
+    assert hr.mark_resumed(d) is True
+    assert _indexed(tmp_path) == {}
+
+
+def test_index_follows_mark_landed(tmp_path):
+    d = _dir(tmp_path, "20261016T010000-bbbbbb")
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    hr.record_withheld(d, {"a.py": "r"})
+    assert _indexed(tmp_path) == {"a.py": d.name}
+    assert hr.mark_landed(d, "a" * 40) is True
+    assert _indexed(tmp_path) == {}
+
+
+def test_nothing_withheld_or_not_halted_leaves_index_untouched(tmp_path):
+    d = _dir(tmp_path, "20261016T010000-cccccc")
+    assert hr.record_withheld(d, {"a.py": "r"}) is False
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    assert hr.record_withheld(d, {}) is False
+    assert _indexed(tmp_path) == {}
+
+
+def test_worktree_rooted_record_dir_indexes_in_that_checkout(tmp_path):
+    main, wt = tmp_path / "main", tmp_path / "wt"
+    d = _dir(wt, "20261016T010000-dddddd")
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    hr.record_withheld(d, {"a.py": "r"})
+    assert _indexed(wt) == {"a.py": d.name}
+    assert _indexed(main) == {}

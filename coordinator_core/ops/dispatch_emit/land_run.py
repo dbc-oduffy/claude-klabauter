@@ -1127,9 +1127,12 @@ def _ledger_gate(
             result = {**result, "pass": False, "failures": [*result["failures"], *stale_met]}
     baseline = manifest_data.get("write_baseline") if isinstance(manifest_data, dict) else None
     if baseline and result["pass"]:
-        from coordinator_core.ops.dispatch_emit.write_baseline import unwritten
+        from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
+        from coordinator_core.ops.dispatch_emit.write_baseline import pre_existing_dirt, unwritten
 
         mrows = [r for r in manifest_data.get("rows") or [] if isinstance(r, dict)]
+        prep = inline_review.get("prep")
+        base = prep.get("run_base_sha") if isinstance(prep, dict) else None
         dirt: list = []
         for it in verdict.get("items") or []:
             if not isinstance(it, dict) or it.get("status") not in ("met", "post_commit"):
@@ -1138,8 +1141,19 @@ def _ledger_gate(
             if not claimed or any(r.get("kept_from") or r.get("adopts_stranded") for r in claimed):
                 continue
             writes = {w for r in claimed for w in r.get("writes") or [] if isinstance(w, str)}
-            if writes and len(unwritten(root, baseline, writes)) == len(writes):
-                dirt.append({"id": it.get("id"), "reason": "pre-existing-dirt: " + ", ".join(sorted(writes))})
+            if not writes:
+                continue
+            try:
+                own = own_checkpoint_paths.checkpoint_landed_paths(
+                    root, plan_rel, base if isinstance(base, str) else None, sorted(writes),
+                )
+            except Exception:  # noqa: BLE001 -- unreadable history proves no own pass
+                own = frozenset()
+            if len(unwritten(root, baseline, writes)) != len(writes):
+                continue
+            foreign = pre_existing_dirt(root, baseline, writes, own)
+            if foreign:
+                dirt.append({"id": it.get("id"), "reason": "pre-existing-dirt: " + ", ".join(sorted(foreign))})
         if dirt:
             result = {**result, "pass": False, "failures": [*result["failures"], *dirt]}
     since_halt: dict = {}

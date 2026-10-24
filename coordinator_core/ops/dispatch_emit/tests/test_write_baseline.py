@@ -47,6 +47,32 @@ def test_constants():
     assert wb.DIRTY_BEFORE_RUN_KEY == "dirty_before_run"
 
 
+def test_dirt_foreign_path_is_flagged(tmp_path):
+    (tmp_path / "a.py").write_text("dirty")
+    base = wb.capture(tmp_path, ["a.py"])
+    assert wb.pre_existing_dirt(tmp_path, base, ["a.py"]) == ["a.py"]
+
+
+def test_dirt_absent_path_is_not_flagged(tmp_path):
+    base = wb.capture(tmp_path, ["gone.py"])
+    assert wb.unwritten(tmp_path, base, ["gone.py"]) == ["gone.py"]
+    assert wb.pre_existing_dirt(tmp_path, base, ["gone.py"]) == []
+
+
+def test_dirt_own_pass_path_is_not_flagged(tmp_path):
+    (tmp_path / "a.py").write_text("dirty")
+    (tmp_path / "b.py").write_text("dirty")
+    base = wb.capture(tmp_path, ["a.py", "b.py"])
+    assert wb.pre_existing_dirt(tmp_path, base, ["a.py", "b.py"], own_written=["a.py"]) == ["b.py"]
+
+
+def test_dirt_edited_path_is_not_flagged(tmp_path):
+    (tmp_path / "a.py").write_text("dirty")
+    base = wb.capture(tmp_path, ["a.py"])
+    (tmp_path / "a.py").write_text("edited")
+    assert wb.pre_existing_dirt(tmp_path, base, ["a.py"]) == []
+
+
 def test_zero_spawns(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("spawn")

@@ -6,6 +6,9 @@ A commit is a peer commit when it carries a ``Deliverable-Id`` other than ``own_
 ``Session-Id`` other than ``own_session``; a commit with neither trailer is own. Diffing a path from
 its mapped sha leaves out the peer hunks and keeps the run's own. A path with a peer commit after an
 own commit is omitted: it cannot be split without hunk surgery and keeps the run base.
+
+Keys are changed file names, not declared paths: a declared directory is never itself a key. The
+whole-diff freeze expands a directory to its keyed files (``review_prep._specs_by_base``).
 """
 
 from __future__ import annotations
@@ -36,6 +39,12 @@ def _values(field: str) -> List[str]:
     return [v.strip() for v in field.split("\x1d") if v.strip()]
 
 
+def _has_object_store(repo_root: Path) -> bool:
+    """False when ``repo_root`` holds no git object store, where ``git log`` can only fail."""
+    dot_git = repo_root / ".git"
+    return dot_git.is_file() or (dot_git / "objects").is_dir()
+
+
 def peer_path_bases(
     repo_root: Path,
     base: str,
@@ -47,7 +56,7 @@ def peer_path_bases(
     """Declared ``paths`` -> sha of the newest peer commit in ``base..(head or HEAD)`` touching
     the path, only for paths where no own commit precedes it. One ``git log`` spawn; none when
     ``paths`` is empty. A git failure returns ``{}`` (every path keeps the run base)."""
-    if not paths:
+    if not paths or not _has_object_store(repo_root):
         return {}
     proc = run_git(
         [

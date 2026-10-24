@@ -793,6 +793,18 @@ def _deploy_dirty_tree_setup(
     return {}
 
 
+def _em_halted_withheld_commit_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    repo = scratch_dir / "halted-withheld-repo"
+    (repo / ".git").mkdir(parents=True, exist_ok=True)
+    halted_withheld_index.add_run(repo, "ask-20261024T000000-aaaaaa", ["a.py"])
+    halted_withheld_index.rebuild(repo)
+    return {_CWD_OVERRIDE_KEY: str(repo)}
+
+
 def _home_root_bash_write_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1271,6 +1283,24 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=_control_from_factory(
             "block-subagent-commit", "git status", identity=_EXECUTOR_IDENTITY
         ),
+    ),
+    CorpusRow(
+        "block-em-halted-withheld-commit",
+        "block-em-halted-withheld-commit-fire",
+        "git commit -m msg -- a.py",
+        True,
+        _DENY,
+        False,
+        setup=_em_halted_withheld_commit_setup,
+    ),
+    CorpusRow(
+        "block-em-halted-withheld-commit",
+        "block-em-halted-withheld-commit-control",
+        "git commit -m msg -- b.py",
+        False,
+        _DENY,
+        False,
+        setup=_em_halted_withheld_commit_setup,
     ),
     CorpusRow(
         "check-test-suite-invocation",
@@ -1856,7 +1886,7 @@ def _xs_lane_shell_write_setup(
 ) -> Dict[str, str]:
     # An open XS lane is stubbed so no xs-lane.json lands in a live session hub; the scratch
     # repo is lifted out of the tmp-path exemption the verdict applies to product paths.
-    from coordinator_core.hooks import nudge_em_code_dispatch as hook
+    from coordinator_core.hooks import _em_write_budget as hook
     from coordinator_core.session import xs_lane_budget as xlb
 
     (scratch_dir / ".git").mkdir(exist_ok=True)
@@ -4679,13 +4709,15 @@ def _fire_em_prefire_survey_post_landing() -> Optional[Dict[str, Any]]:
 
 
 def _fire_em_prefire_survey_within_budget() -> Optional[Dict[str, Any]]:
+    from unittest import mock
+
     from coordinator_core.hooks import guard_em_prefire_survey as g
 
     with tempfile.TemporaryDirectory(prefix="guard-message-corpus-eps-", dir=_neutral_scratch_parent()) as scratch:
         root = Path(scratch)
         (root / ".git").mkdir()
         records = [{"type": "user", "message": {"role": "user", "content": "survey"}}]
-        for i in range(g.PREFIRE_EXPLORATORY_CALLS_MAX):
+        for i in range(g.PREFIRE_EXPLORATORY_CALLS_MAX - 1):
             records.append(
                 {
                     "type": "assistant",
@@ -4704,16 +4736,20 @@ def _fire_em_prefire_survey_within_budget() -> Optional[Dict[str, Any]]:
             )
         transcript = root / "transcript.jsonl"
         transcript.write_text("".join(_json.dumps(r) + "\n" for r in records), encoding="utf-8")
-        envelope = g.evaluate(
-            {
-                "tool_name": "Read",
-                "tool_input": {"file_path": str(root / "last.py")},
-                "tool_use_id": "tu-cur",
-                "session_id": "sess-eps",
-                "transcript_path": str(transcript),
-                "cwd": str(root),
-            }
-        )
+        # Armed explicitly: an unarmed guard returns None before it counts, which would make this
+        # control pass without measuring the budget. Prior calls stay below the cap so the current
+        # call lands at or under it however the window counts it.
+        with mock.patch.object(g, "_armed", lambda payload, repo_root, sid: True):
+            envelope = g.evaluate(
+                {
+                    "tool_name": "Read",
+                    "tool_input": {"file_path": str(root / "last.py")},
+                    "tool_use_id": "tu-cur",
+                    "session_id": "sess-eps",
+                    "transcript_path": str(transcript),
+                    "cwd": str(root),
+                }
+            )
         return envelope or None
 
 

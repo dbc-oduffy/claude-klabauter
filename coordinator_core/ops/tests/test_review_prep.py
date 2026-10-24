@@ -581,3 +581,150 @@ def test_registered_in_every_op_set():
     assert OP_CLASSIFICATION["review.prep"] is OpClass.MUTATING
     assert _OP_KEY_SCOPE["review.prep"] == "show_top"
     assert OP_MODULE_MAP["review.prep"] == "coordinator_core.ops.review_prep"
+
+
+PEER = "sess-peer"
+DELIVERABLE = "dlv-own"
+
+
+def _plan_with_deliverable(repo: Path) -> None:
+    (repo / "docs" / "plans" / "p.md").write_text(
+        f"---\nplan_id: pln-test-1\ndeliverable_id: {DELIVERABLE}\n---\n\n# p\n", encoding="utf-8"
+    )
+
+
+def _commit_as(repo: Path, text: str, message: str, session: str, deliverable: str | None = None) -> str:
+    (repo / "a.py").write_text(text, encoding="utf-8")
+    trailers = f"Session-Id: {session}\n" + (f"Deliverable-Id: {deliverable}\n" if deliverable else "")
+    _git(repo, "add", "a.py")
+    _git(repo, "commit", "-q", "-m", f"{message}\n\n{trailers}")
+    return _git(repo, "rev-parse", "HEAD").strip()
+
+
+def _peer_scenario(repo: Path, peer_session: str, peer_deliverable: str | None) -> str:
+    _plan_with_deliverable(repo)
+    (repo / "a.py").write_text("v = 0\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed a")
+    base = _base(repo)
+    _commit_as(repo, "v = 0\npeer = 1\n", "peer edit", peer_session, peer_deliverable)
+    return base
+
+
+def _prep(repo: Path, base: str, **kw) -> dict:
+    return rp.review_prep(
+        repo, base=base, paths=["a.py"], slice_prefix=f"p-run-{base[:12]}-prep",
+        plan_path="docs/plans/p.md", session_id=SESSION, **kw,
+    )
+
+
+@pytest.mark.parametrize(
+    "peer_session,peer_deliverable", [(PEER, None), (SESSION, "dlv-sibling")]
+)
+def test_worktree_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo, peer_session, peer_deliverable):
+    base = _peer_scenario(repo, peer_session, peer_deliverable)
+    (repo / "a.py").write_text("v = 0\npeer = 1\nown = 1\n", encoding="utf-8")
+    reply = _prep(repo, base)
+    assert reply["error"] is None
+    diff = Path(reply["whole_diff_path"]).read_text(encoding="utf-8")
+    assert "+own = 1" in diff and "+peer = 1" not in diff
+    assert reply["run_base_sha"] == base
+    assert set(reply) >= set(rp._STORED_KEYS) - {"sidecar_path"} and "peer_bases" not in reply
+
+
+def test_range_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo):
+    base = _peer_scenario(repo, PEER, None)
+    head = _commit_as(repo, "v = 0\npeer = 1\nown = 1\n", "own edit", SESSION, DELIVERABLE)
+    reply = _prep(repo, base, head=head)
+    assert reply["error"] is None
+    diff = Path(reply["whole_diff_path"]).read_text(encoding="utf-8")
+    assert "+own = 1" in diff and "+peer = 1" not in diff
+
+
+def test_a_declared_directory_takes_the_peer_base_for_its_peer_file_and_keeps_the_rest(repo):
+    _plan_with_deliverable(repo)
+    (repo / "d").mkdir()
+    (repo / "d" / "x.py").write_text("x = 0\n", encoding="utf-8")
+    (repo / "d" / "y.py").write_text("y = 0\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed d")
+    base = _base(repo)
+
+    def commit(name: str, text: str, session: str, deliverable: str | None = None) -> str:
+        (repo / "d" / name).write_text(text, encoding="utf-8")
+        trailers = f"Session-Id: {session}\n" + (f"Deliverable-Id: {deliverable}\n" if deliverable else "")
+        _git(repo, "add", "d")
+        _git(repo, "commit", "-q", "-m", f"edit {name}\n\n{trailers}")
+        return _git(repo, "rev-parse", "HEAD").strip()
+
+    commit("x.py", "x = 0\npeer = 1\n", PEER)
+    commit("x.py", "x = 0\npeer = 1\nown_x = 1\n", SESSION, DELIVERABLE)
+    head = commit("y.py", "y = 0\nown_y = 1\n", SESSION, DELIVERABLE)
+    reply = rp.review_prep(
+        repo, base=base, paths=["d"], slice_prefix="p-dir-prep",
+        plan_path="docs/plans/p.md", session_id=SESSION, head=head,
+    )
+    assert reply["error"] is None
+    diff = Path(reply["whole_diff_path"]).read_text(encoding="utf-8")
+    assert "+own_x = 1" in diff and "+own_y = 1" in diff
+    assert "+peer = 1" not in diff
+
+
+def test_a_peer_commit_after_the_run_own_commit_keeps_the_run_base(repo):
+    _plan_with_deliverable(repo)
+    (repo / "a.py").write_text("v = 0\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed a")
+    base = _base(repo)
+    _commit_as(repo, "v = 0\nown = 1\n", "own edit", SESSION, DELIVERABLE)
+    head = _commit_as(repo, "v = 0\nown = 1\npeer = 1\n", "peer edit", PEER)
+    diff = Path(_prep(repo, base, head=head)["whole_diff_path"]).read_text(encoding="utf-8")
+    assert "+own = 1" in diff and "+peer = 1" in diff
+
+
+def test_partition_receives_the_peer_base_map(repo, monkeypatch):
+    base = _peer_scenario(repo, PEER, None)
+    (repo / "a.py").write_text("v = 0\npeer = 1\nown = 1\n", encoding="utf-8")
+    seen = {}
+    real = rp._heavy("partition_slices")
+
+    def spy(*a, **k):
+        seen.update(k)
+        return real(*a, **k)
+
+    monkeypatch.setattr(rp, "partition_slices", spy)
+    _prep(repo, base)
+    assert list(seen["path_bases"]) == ["a.py"] and seen["path_bases"]["a.py"] != base
+
+
+def test_a_stored_reply_is_refused_after_a_peer_commit_that_leaves_the_bytes_unmoved(repo):
+    base = _peer_scenario(repo, PEER, None)
+    own_text = "v = 0\npeer = 1\nown = 1\n"
+    (repo / "a.py").write_text(own_text, encoding="utf-8")
+    first = _prep(repo, base)
+    assert "+own = 1" in Path(first["whole_diff_path"]).read_text(encoding="utf-8")
+    assert _sidecar_fm(repo, first)["peer_bases"] != {}
+    peer_sha = _commit_as(repo, own_text, "peer absorbs", PEER)
+    second = _prep(repo, base)
+    assert second["error"] is None
+    assert _sidecar_fm(repo, second)["peer_bases"] == {"a.py": peer_sha}
+    assert "+own = 1" not in Path(second["whole_diff_path"]).read_text(encoding="utf-8")
+
+
+def test_a_served_reply_costs_exactly_one_peer_log_spawn(repo, monkeypatch):
+    from coordinator_core.ops import review_peer_bases as rpb  # noqa: PLC0415
+
+    base = _peer_scenario(repo, PEER, None)
+    (repo / "a.py").write_text("v = 0\npeer = 1\nown = 1\n", encoding="utf-8")
+    first = _prep(repo, base)
+    calls: list = []
+    real = rpb.run_git
+
+    def counting(*a, **k):
+        calls.append(a)
+        return real(*a, **k)
+
+    monkeypatch.setattr(rpb, "run_git", counting)
+    monkeypatch.setattr(rp, "freeze_diff", lambda *a, **k: pytest.fail("froze"))
+    assert _prep(repo, base) == first
+    assert len(calls) == 1

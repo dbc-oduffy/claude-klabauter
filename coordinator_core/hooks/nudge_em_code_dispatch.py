@@ -80,7 +80,6 @@ from coordinator_core.hooks._em_write_budget import (  # noqa: F401 -- re-bound 
     _SESSION_SIZING,
     _SIZED_ADVISORY,
     _budget_core,
-    _derive_executor_info,
     _is_bootstrap_or_out_of_repo,
     _is_scratch_or_tmp,
     _session_sizing_state,

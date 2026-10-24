@@ -1,0 +1,14 @@
+{
+  "_source": "experiments eddcf5a: naked-vs-coordinator/runs/ladder-l-close-out-artifacts__coordinator__r46/work.diff, file state/sizings/2026-10-24-close-out-refuses-absent-mechanism-artifact-67f021.yaml. Keys other than this one are route() parameter names, verbatim. scout_evidence and scout_evidence_kind were never persisted in the sizing record, so they are absent.",
+  "estimate": {
+    "tshirt": "M",
+    "provisional": true
+  },
+  "probe_signal": null,
+  "premise_provenance": "read",
+  "premise_evidence": "Read the EM-described seam: close_out_and_stamp.py gate pattern (goal/contradiction/review_stamp gates, _read_status_override) and plan_status_transition._stamp_implemented exist (grep confirmed _read_status_override and _ac_table_desync_finding in close_out_and_stamp.py, and plan_status_transition.py present); gate over disk not Status cell mirrors established pattern. Corpus false-positive rate unmeasured.",
+  "name": "close-out-refuses-absent-mechanism-artifact",
+  "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist; make it so, and report the offending criteria by id.",
+  "exit_criterion": "Both close-out and stamp-implemented refuse a plan whose mechanism-vocabulary criterion names a missing repo-relative code path, reporting offending AC ids, while existing-artifact and unticked-but-existing cases stay silent; tests covering touched files pass.",
+  "interaction_mode": "ceo"
+}

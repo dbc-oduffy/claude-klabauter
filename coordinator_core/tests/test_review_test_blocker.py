@@ -11,6 +11,20 @@ def test_constants_are_pinned():
     assert tb.FAILING_DETAIL_FIELD == "failing_detail"
 
 
+def test_own_diff_blockers_keeps_only_own_files_both_sides():
+    result = {"failing": ["pkg/t.py::a", "other/u.py::b", "pkg\\t.py::c"], "pre_existing": []}
+    got = tb.own_diff_blockers(result, ["./pkg/t.py"])
+    assert [b.node_id for b in got] == ["pkg/t.py::a", "pkg\\t.py::c"]
+    assert tb.own_diff_blockers(result, []) == []
+    assert tb.own_diff_blockers(result, ["pkg/other.py"]) == []
+
+
+def test_own_diff_blockers_respects_pre_existing_and_pins_field():
+    result = {"failing": ["t.py::a", "t.py::b"], "pre_existing": ["t.py::a"]}
+    assert tb.own_diff_blockers(result, ["t.py"]) == [TestBlocker("t.py::b", "")]
+    assert tb.OWN_DIFF_PATHS_FIELD == "review_declared_paths"
+
+
 def test_gap_line_takes_first_line_only():
     assert TestBlocker("t.py::a", "boom\nsecond").gap_line() == "t.py::a: boom"
 

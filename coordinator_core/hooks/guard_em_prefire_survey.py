@@ -24,7 +24,7 @@ GENERATES: list = []
 PREFIRE_EXPLORATORY_CALLS_MAX = 8  # absolute on every rung: XL made 51 pre-fire calls and L 26; doctrine forbids reading to fill em_context, so those counts are survey, not need; 8 cuts XL 84%, L 69%
 POSTLANDING_VERIFY_CALLS_MAX = 3
 _KILL_SWITCH = "COORDINATOR_HOOK_EM_PREFIRE_SURVEY_DISABLED"
-ARMING = "every-em-session"  # "strict-only" arms only when COORDINATOR_STRICT_DISPATCH == "1"; only tests select it
+ARMING = "role-marker"  # arms on the em-role-asserted marker; "strict-only" also requires COORDINATOR_STRICT_DISPATCH == "1"; only tests select it
 GUARD_NAME = "guard-em-prefire-survey"
 DENY_PREFIX = "[em-prefire-survey]"
 
@@ -79,6 +79,9 @@ def _settings_home(payload: dict) -> Optional[str]:
 
 
 def _armed(payload: dict, root: str, sid: str) -> bool:
+    """Armed only for a session carrying the em-role-asserted marker (every EM session, DoE EMs
+    included). Trap: an absent marker means unarmed, so a session whose SessionStart never wrote it
+    is never denied."""
     if ARMING == "strict-only" and _env_value(payload, "COORDINATOR_STRICT_DISPATCH") != "1":
         return False
     from coordinator_core.hooks.support import turn_intent
@@ -88,12 +91,28 @@ def _armed(payload: dict, root: str, sid: str) -> bool:
     return bool(common) and turn_intent.role_marker_present(turn_intent.session_dir(common, sid))
 
 
+def _is_group_em_holder(root: str, sid: str) -> bool:
+    """True only for the live, verified group-em-nomination holder of this repo. Trap: the holder
+    check runs only when the record's session_id equals sid, because entry_status can fall through
+    to transcript lookups; any failure means not the holder (fail toward armed)."""
+    try:
+        from coordinator_core.group_em import nomination
+
+        rec = nomination.read_record(root)
+        if not isinstance(rec, dict) or rec.get("session_id") != sid:
+            return False
+        if nomination.entry_status(rec)["status"] != "verified":
+            return False
+        return bool(nomination.is_live(rec).live)
+    except Exception:
+        return False
+
+
 def _decide(payload: dict) -> Optional[str]:
     """The deny text, or None. Raises are the caller's fail-open."""
     from coordinator_core.session import em_prefire_window as epw
     from coordinator_core.session import em_turn_count as etc
     from coordinator_core.session import engine_route_state as ers
-    from coordinator_core.session import xs_lane_budget
 
     if field(payload, "agent_id"):
         return None
@@ -109,6 +128,8 @@ def _decide(payload: dict) -> Optional[str]:
     if tool_name not in epw.COUNTED_TOOLS:
         return None
     if not _armed(payload, root, sid):
+        return None
+    if _is_group_em_holder(root, sid):
         return None
     # Trap: substring match, so any Bash text naming workflow.revise is exempt, not only an invocation.
     if tool_name == "Bash" and isinstance(tool_input, dict) and "workflow.revise" in str(tool_input.get("command") or ""):
@@ -136,9 +157,6 @@ def _decide(payload: dict) -> Optional[str]:
     phase = ers.session_route_phase(root, sid, last_run)
     if phase == ers.PHASE_UNFIRED:
         if not over or state.get("fire_seen") or state.get("fired") or state.get("disarmed"):
-            return None
-        lane = xs_lane_budget.read_lane(root, sid)
-        if isinstance(lane, dict) and lane.get("state") == xs_lane_budget.STATE_OPEN:
             return None
         return prefire_deny_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX)
     if phase in (ers.PHASE_LANDED_GREEN, ers.PHASE_HALTED) and phase.run_id:

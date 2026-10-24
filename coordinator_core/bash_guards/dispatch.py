@@ -55,6 +55,10 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      above -- all four fire on git-history protection or identity
      confinement, which outrank a machine-load deny. Supersedes
      ``nudge_subagent_scoped_commit`` (formerly position 6, RETIRED here).
+ 5a'. block_em_halted_withheld_commit      (hard, fail-closed) -- directly
+     after block_subagent_commit: that guard confines subagent commits, this
+     one denies the main-loop EM committing a halted run's withheld paths
+     (subagent-shaped callers pass it by design).
  5b. check_test_suite_invocation           (hard, fail-closed) -- NO legacy
      bash predecessor; added 2026-07-23 for DoE's DR-088 test-breadth ladder.
      It has no parity ordering to preserve, so it sits at the tail of the
@@ -547,6 +551,10 @@ _CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
     (
         "block-subagent-commit",
         "its pre-filter is 'commit' plus a 24-name hand-maintained op set plus python -c; a copy here would drift",
+    ),
+    (
+        "block-em-halted-withheld-commit",
+        "denies only when the repo's halted-run withheld index names a path, so no command text alone proves a crash-path deny",
     ),
     (
         "guard-host-subagent-bash-ban",
@@ -1354,6 +1362,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_subagent_commit import (
             MATCHERS as _matchers_subagent_commit,
         )
+        from coordinator_core.bash_guards.block_em_halted_withheld_commit import (
+            MATCHERS as _matchers_em_halted_withheld_commit,
+        )
         from coordinator_core.bash_guards.check_raw_pid_liveness import (
             MATCHERS as _matchers_raw_pid_liveness,
         )
@@ -1422,6 +1433,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_illegal_filename,
             _matchers_test_suite_invocation,
             _matchers_subagent_commit,
+            _matchers_em_halted_withheld_commit,
             _matchers_raw_pid_liveness,
             _matchers_worktree_creation,
             _matchers_approval_sentinel_creation,
@@ -2360,6 +2372,10 @@ def _build_guard_chain(
         check as _check_subagent_commit,
         MATCHERS as _matchers_subagent_commit,
     )
+    from coordinator_core.bash_guards.block_em_halted_withheld_commit import (
+        check as _check_em_halted_withheld_commit,
+        MATCHERS as _matchers_em_halted_withheld_commit,
+    )
     from coordinator_core.bash_guards.guard_host_subagent_bash_ban import (
         check as _check_host_subagent_bash_ban,
         MATCHERS as _matchers_host_subagent_bash_ban,
@@ -2908,6 +2924,7 @@ def _build_guard_chain(
         ),
         GuardEntry("block-subagent-destructive-action", lambda: _check_subagent_destructive_action(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_destructive_action)),
         GuardEntry("block-subagent-commit", lambda: _check_subagent_commit(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_commit)),
+        GuardEntry("block-em-halted-withheld-commit", lambda: _check_em_halted_withheld_commit(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_em_halted_withheld_commit)),
         # guard-host-subagent-bash-ban -- registered port of DoE's folded
         # `_run_folded_bash_guards` entry (C6, state/dispatch-briefs/2026-08-
         # 28-the-four-folded-bash-guards-get-registered-not-folded/C6.md).

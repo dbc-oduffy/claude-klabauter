@@ -12,6 +12,12 @@ changed, kept only when a live session other than the caller's claims the path
 (``claim_index.lookup``). The commit-range read is the one git spawn added over the two ops
 composed; it is skipped when ``paths`` is empty.
 
+Peer hunks: ``review_peer_bases.peer_path_bases`` maps a declared path a peer run committed ahead of
+this run's own work on it to that peer commit; the whole diff and the partition then take that path
+from the mapped base, so the reviewer sees only this run's hunks. The map is stored in the sidecar as
+``peer_bases`` (outside ``_STORED_KEYS``) and a stored reply is served only while a fresh map equals
+it, which costs one ``git log`` spawn on the served path.
+
 Computes once per ``slice_prefix``: the success sidecar stores the whole reply, and a later call
 with the same prefix, base, basis, head and paths reads it back and spawns no git. Concurrent
 first callers claim ``<slice_prefix>.review-prep.lock`` with ``O_EXCL``; the loser waits at most
@@ -65,7 +71,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import yaml
 
@@ -127,8 +133,8 @@ def _fail(message: str) -> dict:
     }
 
 
-def _plan_id(repo_root: Path, plan_path: str) -> str:
-    """The plan's frontmatter ``plan_id``, else its file stem."""
+def _plan_frontmatter_str(repo_root: Path, plan_path: str, key: str) -> Optional[str]:
+    """The plan's frontmatter string ``key``, or ``None`` when absent, blank or unreadable."""
     plan_file = Path(plan_path)
     if not plan_file.is_absolute():
         plan_file = repo_root / plan_file
@@ -137,8 +143,95 @@ def _plan_id(repo_root: Path, plan_path: str) -> str:
         doc = yaml.safe_load(split.fm_text) if split else None
     except (OSError, yaml.YAMLError):
         doc = None
-    value = doc.get("plan_id") if isinstance(doc, dict) else None
-    return value.strip() if isinstance(value, str) and value.strip() else plan_file.stem
+    value = doc.get(key) if isinstance(doc, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _plan_id(repo_root: Path, plan_path: str) -> str:
+    """The plan's frontmatter ``plan_id``, else its file stem."""
+    return _plan_frontmatter_str(repo_root, plan_path, "plan_id") or Path(plan_path).stem
+
+
+def _peer_bases(repo_root: Path, base: str, head: Optional[str], paths: List[str], session: str, plan_path: str) -> dict:
+    """Declared path -> effective base sha for every path a peer run committed ahead of this run's own work."""
+    from coordinator_core.ops.review_peer_bases import peer_path_bases
+
+    return peer_path_bases(
+        repo_root, base, head, paths, session, _plan_frontmatter_str(repo_root, plan_path, "deliverable_id")
+    )
+
+
+def _specs_by_base(paths: List[str], base: str, path_bases: dict) -> List[tuple]:
+    """``(pathspec, effective base)`` per declared path, in declared order. Peer bases are keyed by
+    file, so a declared directory holding keyed files stays on the run base minus those files
+    (``:(exclude)`` entries) and each keyed file follows it on its own peer base."""
+    from coordinator_core.ops.review_partition_slices import _effective_base
+
+    out: List[tuple] = []
+    for p in paths:
+        eb = _effective_base(p, base, path_bases)
+        out.append((p, eb))
+        if eb != base:
+            continue
+        prefix = p.rstrip("/") + "/"
+        inner = sorted(k for k in path_bases if k.startswith(prefix))
+        out.extend((f":(exclude){k}", eb) for k in inner)
+        out.extend((k, path_bases[k]) for k in inner)
+    return out
+
+
+def _freeze_whole_by_base(
+    repo_root: Path, base: str, head: Optional[str], paths: List[str], path_bases: dict, slice_prefix: str
+) -> dict:
+    """Freeze the whole diff with each path taken from its effective base, as the ``freeze_diff``
+    reply shape for ``<slice_prefix>.diff``.
+
+    One ``freeze_diff`` per distinct base under ids ``<slice_prefix>-g<n>-prep`` (distinct paths
+    cannot share a ``freeze_diffs_batch`` call, and worktree mode never batches), concatenated in
+    declared-path order. A path with nothing left after its peer base (peer-only work) drops out of
+    its group; a path on the run base keeps ``freeze_diff``'s own refusals."""
+    from coordinator_core.ops.review_freeze_diff import _is_run_keyed_prep_id, _shelve_prior_attempt
+
+    groups: dict = {}
+    for spec, eb in _specs_by_base(paths, base, path_bases):
+        groups.setdefault(eb, []).append(spec)
+    texts: List[str] = []
+    head_sha: Optional[str] = None
+    for n, (eb, group) in enumerate(groups.items(), 1):
+        slice_id = f"{slice_prefix}-g{n}-prep"
+        while group:
+            if head:
+                frozen = _heavy("freeze_diff")(repo_root, f"{eb}..{head}", slice_id, group)
+            else:
+                frozen = _heavy("freeze_diff")(repo_root, eb, slice_id, group, worktree=True)
+            err = frozen.get("error")
+            if not err or eb == base:
+                break
+            uncovered = frozen.get("uncovered_paths") or []
+            if uncovered:
+                group = [p for p in group if p not in uncovered]
+            elif "ZERO commits" in err:  # couples to freeze_diff's peer-only refusal wording; untested
+                group = []
+            else:
+                break
+        if not group:
+            continue
+        if frozen.get("error"):
+            return frozen
+        head_sha = head_sha or frozen["head_sha"]
+        texts.append(Path(frozen["diff_path"]).read_text(encoding="utf-8"))
+    diffs_dir = repo_root / "state" / "review-trail" / "diffs"
+    diff_path, sha_path = diffs_dir / f"{slice_prefix}.diff", diffs_dir / f"{slice_prefix}.head.sha"
+    text = "".join(texts)
+    if diff_path.exists() and diff_path.read_bytes().decode("utf-8") != text:
+        if not _is_run_keyed_prep_id(slice_prefix):
+            return {"error": f"slice_id '{slice_prefix}' already names a frozen diff at {diff_path} with different content"}
+        _shelve_prior_attempt(diff_path, sha_path)
+    diff_path.write_text(text, encoding="utf-8", newline="\n")
+    declare_write(diff_path)
+    sha_path.write_text((head_sha or head or f"{base} worktree") + "\n", encoding="utf-8", newline="\n")
+    declare_write(sha_path)
+    return {"diff_path": str(diff_path), "error": None}
 
 
 def foreign_claims(repo_root: Path, rev_range: str, paths: List[str], own_session: str) -> List[str]:
@@ -221,11 +314,18 @@ def _declared_bytes_unmoved(repo_root: Path, declared: object) -> bool:
 
 
 def _stored_reply(
-    repo_root: Path, sidecar: Path, base: str, paths: List[str], head: Optional[str]
+    repo_root: Path,
+    sidecar: Path,
+    base: str,
+    paths: List[str],
+    head: Optional[str],
+    peer_bases: Optional[Callable[[], dict]] = None,
 ) -> Optional[dict]:
     """The reply a success sidecar stored, or ``None`` when absent, unreadable, written before
-    replies were stored, written for another base, basis, head or path list, or (worktree mode)
-    lacking a ``declared_sha256`` map or recorded over declared bytes that have since moved."""
+    replies were stored, written for another base, basis, head or path list, (worktree mode)
+    lacking a ``declared_sha256`` map or recorded over declared bytes that have since moved, or
+    (when ``peer_bases`` is given) recorded under a ``peer_bases`` map that differs from the one it
+    returns now: a peer commit can land without moving the declared bytes."""
     try:
         split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
         fm = yaml.safe_load(split.fm_text) if split else None
@@ -241,6 +341,8 @@ def _stored_reply(
     ):
         return None
     if not head and not _declared_bytes_unmoved(repo_root, fm.get("declared_sha256")):
+        return None
+    if peer_bases is not None and (fm.get("peer_bases") or {}) != peer_bases():
         return None
     reply = {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
     if "reviewed_sha256" in fm:
@@ -386,7 +488,12 @@ def review_prep(
         return _for_group(zero, group_index, group_count)
     from coordinator_core.ops.dispatch_emit.landing_integrity import unparseable_py, unparseable_py_at
 
-    broken = unparseable_py_at(repo_root, head, paths) if head else unparseable_py(repo_root, paths)
+    from coordinator_core.ops.review_peer_bases import _has_object_store
+
+    if head:
+        broken = unparseable_py_at(repo_root, head, paths) if _has_object_store(repo_root) else []
+    else:
+        broken = unparseable_py(repo_root, paths)
     if broken:
         return _fail(
             "review.prep refused: py-unparseable: " + "; ".join(f"{f.path} {f.detail}" for f in broken)
@@ -399,13 +506,20 @@ def review_prep(
     sidecar = share / f"{slice_prefix}.review-prep.md"
     lock = share / f"{slice_prefix}.review-prep.lock"
 
+    fresh_bases: List[dict] = []
+
+    def peer_bases() -> dict:
+        if not fresh_bases:
+            fresh_bases.append(_peer_bases(repo_root, base, head, paths, session, plan_path))
+        return fresh_bases[0]
+
     def served() -> Optional[dict]:
-        return _stored_reply(repo_root, sidecar, base, paths, head)
+        return _stored_reply(repo_root, sidecar, base, paths, head, peer_bases)
 
     def compute_locked() -> dict:
         try:
             return served() or _compute(
-                repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar
+                repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar, peer_bases()
             )
         finally:
             try:
@@ -444,7 +558,10 @@ def _compute(
     session: str,
     share: Path,
     sidecar: Path,
+    peer_bases: Optional[dict] = None,
 ) -> dict:
+    if peer_bases is None:
+        peer_bases = _peer_bases(repo_root, base, head, paths, session, plan_path)
     plan_id = _plan_id(repo_root, plan_path)
     whole_sidecars = {
         "kira": _rel(share / f"{slice_prefix}.kira.md", repo_root),
@@ -463,7 +580,9 @@ def _compute(
 
     rev_range = f"{base}..{head or 'HEAD'}"
     try:
-        if head:
+        if peer_bases:
+            whole = _freeze_whole_by_base(repo_root, base, head, paths, peer_bases, slice_prefix)
+        elif head:
             whole = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
         else:
             whole = _heavy("freeze_diff")(repo_root, base, slice_prefix, paths, worktree=True)
@@ -487,7 +606,10 @@ def _compute(
         _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
         out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
 
-    part = _heavy("partition_slices")(repo_root, base, paths, slice_prefix, head=head or None)
+    out["peer_bases"] = peer_bases
+    part = _heavy("partition_slices")(
+        repo_root, base, paths, slice_prefix, head=head or None, **({"path_bases": peer_bases} if peer_bases else {})
+    )
     if part["error"]:
         out["error"] = part["error"]
         return out
@@ -518,6 +640,7 @@ def _compute(
     out["sidecar_path"] = _rel(sidecar, repo_root)
     _write_sidecar(sidecar, out, session, paths, head)
     out.pop("declared_sha256", None)
+    out.pop("peer_bases", None)
     return out
 
 
@@ -586,6 +709,7 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         **{k: result[k] for k in _STORED_KEYS},
         "reviewed_sha256": result.get("reviewed_sha256", {}),
         **({"declared_sha256": result["declared_sha256"]} if "declared_sha256" in result else {}),
+        "peer_bases": result.get("peer_bases", {}),
         "head": head or None,
         "paths": paths,
     }

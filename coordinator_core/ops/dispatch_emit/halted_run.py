@@ -209,6 +209,19 @@ def rebind_blocker(repo_root: Path, run_id: str, session_id: str) -> Optional[st
     return None if session_live(recorded) else EMITTER_GONE
 
 
+def _index_call(fn: str, record_dir: Path, *args) -> None:
+    """Mirror a marker transition into the halted-withheld index of the checkout holding `record_dir`
+    (`<root>/<RECORD_DIR_ROOT>/<run>`). Best-effort: the marker write is the truth, so an index
+    failure never fails the transition. Imported lazily: the index module imports this one."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    rd = Path(record_dir)
+    try:
+        getattr(idx, fn)(rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)], rd.name, *args)
+    except (OSError, ValueError, IndexError):
+        pass
+
+
 def record_withheld(record_dir: Path, withheld: dict) -> bool:
     """Stamp ``run_artifacts.withheld`` (``{path: reason}``) on a ``halted`` marker so a refire can
     tell product the halt left dirty on purpose from product it never touched; False and no write
@@ -217,6 +230,7 @@ def record_withheld(record_dir: Path, withheld: dict) -> bool:
     if not withheld or marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, HALT_RUN_ARTIFACTS_FIELD: {"withheld": dict(sorted(withheld.items()))}})
+    _index_call("add_run", record_dir, withheld)
     return True
 
 
@@ -266,6 +280,7 @@ def mark_resumed(record_dir: Path) -> bool:
     if marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_RESUMED})
+    _index_call("remove_run", record_dir)
     return True
 
 
@@ -278,5 +293,6 @@ def mark_landed(record_dir: Path, sha: str) -> bool:
     if marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha})
+    _index_call("remove_run", record_dir)
     stamp_run_stage_at(Path(record_dir), "landed")
     return True

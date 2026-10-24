@@ -189,6 +189,21 @@ def test_stage_reply_schema_carries_the_parked_reply():
         jsonschema.validate({"parked": "plan", "plan_path": 3}, rs.STAGE_REPLY_SCHEMA)
 
 
+def test_stage_reply_schema_accepts_already_staged_and_in_flight_replies(sidecar):
+    from coordinator_core.ops.dispatch_emit import ask_stage_receipt as asr
+
+    _, _, handle = sidecar
+    assert asr.ALREADY_STAGED_KEY in rs.STAGE_REPLY_SCHEMA["properties"]
+    assert asr.STAGE_IN_FLIGHT_KEY in rs.STAGE_REPLY_SCHEMA["properties"]
+    jsonschema.validate({"manifest_handle": handle, asr.ALREADY_STAGED_KEY: True}, rs.STAGE_REPLY_SCHEMA)
+    jsonschema.validate({asr.STAGE_IN_FLIGHT_KEY: {}}, rs.STAGE_REPLY_SCHEMA)
+    jsonschema.validate({asr.STAGE_IN_FLIGHT_KEY: {"digest": "d", "pid": 1}}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"manifest_handle": handle, asr.ALREADY_STAGED_KEY: False}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"manifest_handle": handle, "already_stagedd": True}, rs.STAGE_REPLY_SCHEMA)
+
+
 def test_stage_reply_schema_accepts_both_shapes_and_refuses_manifest_key(sidecar):
     _, _, handle = sidecar
     jsonschema.validate({"manifest_handle": handle}, rs.STAGE_REPLY_SCHEMA)

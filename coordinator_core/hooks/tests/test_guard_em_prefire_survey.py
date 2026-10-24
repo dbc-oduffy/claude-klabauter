@@ -90,7 +90,72 @@ def reason(res) -> str:
 
 def test_constants():
     assert g.PREFIRE_EXPLORATORY_CALLS_MAX == 8 and g.POSTLANDING_VERIFY_CALLS_MAX == 3
-    assert g.ARMING == "every-em-session"
+    assert g.ARMING == "role-marker"
+
+
+def test_markerless_session_is_never_denied(env):
+    env.set_marker(False)
+    env.write(user())
+    env.survey(12)
+    assert g.evaluate(env.payload()) is None
+    env.set_marker(True)
+    assert g.evaluate(env.payload(tid="cur2")) is not None
+
+
+def _holder(monkeypatch, *, sid=SID, status="verified", live=True, raises=False):
+    from coordinator_core.group_em import nomination
+
+    def read_record(root, directory=None):
+        if raises:
+            raise OSError("unreadable")
+        return None if sid is None else {"session_id": sid, "repo_root": root}
+
+    calls = []
+
+    def entry_status(rec, *a, **k):
+        calls.append("entry_status")
+        return {"status": status}
+
+    def is_live(rec):
+        calls.append("is_live")
+        return nomination.LivenessResult(live, "x")
+
+    monkeypatch.setattr(nomination, "read_record", read_record)
+    monkeypatch.setattr(nomination, "entry_status", entry_status)
+    monkeypatch.setattr(nomination, "is_live", is_live)
+    return calls
+
+
+def test_live_verified_holder_is_exempt(env, monkeypatch):
+    _holder(monkeypatch)
+    env.write(user())
+    env.survey(12)
+    assert g.evaluate(env.payload()) is None
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"sid": "other-sid"},
+        {"sid": None},
+        {"status": "pending"},
+        {"live": False},
+        {"raises": True},
+    ],
+)
+def test_non_holder_stale_or_unreadable_record_still_denies(env, monkeypatch, kw):
+    _holder(monkeypatch, **kw)
+    env.write(user())
+    env.survey(12)
+    assert g.evaluate(env.payload()) is not None
+
+
+def test_holder_checks_skipped_for_a_different_session(env, monkeypatch):
+    calls = _holder(monkeypatch, sid="other-sid")
+    env.write(user())
+    env.survey(12)
+    assert g.evaluate(env.payload()) is not None
+    assert calls == []
 
 
 def test_ninth_read_denies_with_fire_step(env):
@@ -179,14 +244,14 @@ def test_allowlisted_skill_disarms_but_other_skills_do_not(env):
     assert g.evaluate(env.payload(tid="cur2")) is None
 
 
-def test_open_xs_lane_disarms(env):
+def test_open_xs_lane_does_not_exempt(env):
     from coordinator_core.session import xs_lane_budget
 
     env.write(user())
     env.survey(8)
     assert g.evaluate(env.payload()) is not None
     assert xs_lane_budget.open_xs_lane(env.repo, SID, "abc")
-    assert g.evaluate(env.payload(tid="cur2")) is None
+    assert g.evaluate(env.payload(tid="cur2")) is not None
 
 
 @pytest.mark.parametrize("phase", [ers.PHASE_UNKNOWN, ers.PHASE_IN_FLIGHT])
@@ -216,8 +281,8 @@ def test_fail_open_cases(env):
     assert g.evaluate(env.payload(transcript_path="")) is None
     assert g.evaluate(env.payload(name="Edit")) is None
     assert g.evaluate("not a dict") is None
-    env.set_marker(False)
-    assert g.evaluate(env.payload()) is None
+    assert g.evaluate(env.payload()) is not None
+    assert g.evaluate(env.payload(agent_id="sub-1")) is None
 
 
 def test_subagent_returns_before_any_io(env, monkeypatch):

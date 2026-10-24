@@ -325,3 +325,40 @@ def test_record_deny_with_usage_keeps_files_and_lines(repo):
     xb.record_deny(root, "s")
     assert xb.read_lane(root, "s")["deny_usage"]["lines"] == 45
     assert xb.deny_count(xb.read_lane(root, "s")) == 2
+
+
+def test_discard_fresh_xs_lane_removes_pathless_open_lane(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    assert xb.discard_fresh_xs_lane(root, "s") is True
+    assert xb.read_lane(root, "s") is None
+    assert xb.open_xs_lane(root, "s", sha) is True
+
+
+def test_discard_fresh_xs_lane_keeps_lane_with_path(repo):
+    root, sha = repo
+    xb.open_xs_lane(root, "s", sha)
+    xb.add_path(root, "s", "a.py")
+    assert xb.discard_fresh_xs_lane(root, "s") is False
+    assert xb.read_lane(root, "s")["paths"] == ["a.py"]
+
+
+def test_discard_fresh_xs_lane_keeps_residue_and_spent(repo):
+    root, sha = repo
+    xb.open_residue_window(root, "r", sha)
+    assert xb.discard_fresh_xs_lane(root, "r") is False
+    assert xb.read_lane(root, "r")["kind"] == "residue"
+    xb.open_xs_lane(root, "p", sha)
+    xb.mark_spent(root, "p")
+    assert xb.discard_fresh_xs_lane(root, "p") is False
+    assert xb.read_lane(root, "p") is not None
+
+
+def test_discard_fresh_xs_lane_absent_and_corrupt_are_false(repo):
+    root, sha = repo
+    assert xb.discard_fresh_xs_lane(root, "absent") is False
+    xb.open_xs_lane(root, "c", sha)
+    p = xb.lane_path(root, "c")
+    p.write_text("{not json")
+    assert xb.discard_fresh_xs_lane(root, "c") is False
+    assert p.exists()

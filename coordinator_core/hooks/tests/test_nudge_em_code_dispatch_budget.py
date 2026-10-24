@@ -208,6 +208,46 @@ def test_unsized_one_line_edit_is_admitted_and_opens_lane(unsized):
     assert rec["kind"] == "xs" and rec["base_sha"] == sha and rec["state"] == "open"
 
 
+def test_unsized_oversized_first_write_is_denied_and_leaves_no_lane(unsized):
+    root, _ = unsized
+    big = "".join(f"x{i}\n" for i in range(42))
+    result = mod.op(_edit(root, "a.py", _lines(10), big))
+    assert _is_deny(result) and "XS budget spent" in _reason(result)
+    assert xb.read_lane(root, SID) is None
+
+
+def test_unsized_unmeasurable_first_write_is_denied_and_leaves_no_lane(unsized, monkeypatch):
+    root, _ = unsized
+
+    def boom(*a, **k):
+        raise RuntimeError("base unreadable")
+
+    monkeypatch.setattr(xb, "measure", boom)
+    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert _is_deny(result) and "unmeasurable" in _reason(result)
+    assert xb.read_lane(root, SID) is None
+
+
+def test_discard_failure_never_changes_the_verdict(unsized, monkeypatch):
+    root, _ = unsized
+
+    def boom(*a, **k):
+        raise OSError("locked")
+
+    monkeypatch.setattr(xb, "discard_fresh_xs_lane", boom)
+    big = "".join(f"x{i}\n" for i in range(42))
+    assert _is_deny(mod.op(_edit(root, "a.py", _lines(10), big)))
+
+
+def test_refusal_on_a_preexisting_lane_still_records_the_deny(env):
+    root, sha = env
+    assert xb.open_xs_lane(root, SID, sha)
+    big = "".join(f"x{i}\n" for i in range(42))
+    assert _is_deny(mod.op(_edit(root, "a.py", _lines(10), big)))
+    rec = xb.read_lane(root, SID)
+    assert rec is not None and xb.deny_count(rec) == 1
+
+
 def test_unsized_third_file_is_denied_with_resize_ask(unsized):
     root, _ = unsized
     for rel, old, new in (("a.py", "l1\n", "v1 = f(1)\n"), ("b.py", "l2\n", "v2 = f(2)\n")):

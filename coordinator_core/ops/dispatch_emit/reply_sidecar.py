@@ -49,6 +49,9 @@ STAGE_REPLY_SCHEMA = {
         # Literal ask_contract.STOP_AFTER_PLAN, pinned equal by test_reply_sidecar.
         "parked": {"const": "plan"},
         "plan_path": {"type": ["string", "null"]},
+        # Literals ask_stage_receipt.ALREADY_STAGED_KEY / STAGE_IN_FLIGHT_KEY, pinned equal by test_reply_sidecar.
+        "already_staged": {"const": True},
+        "stage_in_flight": {"type": "object"},
     },
 }
 

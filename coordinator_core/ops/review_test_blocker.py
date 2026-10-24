@@ -1,8 +1,9 @@
 """The failing-test blocker: one failing node id plus its message, as a halt's gap line.
 
-Pure: zero spawns, no I/O. `ask_compose._review_blocked_halt_js` re-implements `from_reverify`
-and `gap_line` in JS (the halt is built in the emitted script); the constants are what Python
-imports. `TestBlocker`/`from_reverify` are the reference the JS must match.
+Pure: zero spawns, no I/O. The JS fragment in `ask_compose` mirrors `from_reverify`,
+`own_diff_blockers` and `gap_line` (the halt is built in the emitted script); the constants are
+what Python imports. `TestBlocker`/`from_reverify`/`own_diff_blockers` are the reference the JS
+must match.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any, List, Mapping
 
 TEST_BLOCKER = "failing_test"
 FAILING_DETAIL_FIELD = "failing_detail"
+OWN_DIFF_PATHS_FIELD = "review_declared_paths"
 _MAX_MESSAGE = 300
 
 
@@ -54,3 +56,20 @@ def from_reverify(result: Mapping[str, Any]) -> List[TestBlocker]:
         TestBlocker(n, detail.get(n, ""))
         for n in sorted({str(i) for i in ids} - excluded)
     ]
+
+
+def _norm_path(p: str) -> str:
+    p = str(p).replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def own_diff_blockers(result: Mapping[str, Any], own_paths) -> List[TestBlocker]:
+    """`from_reverify` blockers whose node id's file part is in `own_paths`.
+
+    The file part is the text before the first `::`; both sides are normalised to `/`
+    separators with a leading `./` stripped.
+    """
+    own = {_norm_path(p) for p in own_paths or []}
+    return [b for b in from_reverify(result) if _norm_path(b.node_id.split("::", 1)[0]) in own]

@@ -87,6 +87,7 @@ def test_blocked_slices_ride_along_with_the_test_blocker():
     halted = _run(wave, _reverify())
 
     assert halted["blocker"] == TEST_BLOCKER
+    assert "unapplied_findings" not in halted
     assert halted["slices"] == [{"slice_id": "s1", "findings": 2, "applied": 0, "sidecar_path": "s1.md"}]
 
 

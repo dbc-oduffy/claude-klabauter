@@ -1360,10 +1360,11 @@ _LONG_PREP = {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 9, "sl
 
 
 def _with_slice_id(returned):
-    """Reply 0 returns an unbound slice_id (its own prep names no slices); reply 1 carries every slice."""
+    """Reply 0 returns an unbound slice_id (its own prep names no slices); the other replies keep
+    the group slices their prep honestly named, and the whole-diff replies carry every slice."""
     return (
         f"(r, n) => n === 0 ? {{ prep: {{ ...r.prep, slices: [] }}, review: {{ ...r.review, slice_id: {json.dumps(returned)} }} }}"
-        " : n === 1 ? { ...r, prep: { ...r.prep, slices: _full.slices } } : r"
+        " : r"
     )
 
 
@@ -1373,7 +1374,7 @@ def test_a_grouped_wave_review_naming_every_prepped_slice_id_reaches_a_valid_wav
     result = _run_in_wave(_LONG_PREP, 9, patch=_with_slice_id("+".join(ids)))
     assert "halted" not in result and "error" not in result
     assert result["wave"][0]["slice_id"] == "+".join(ids)
-    assert [s["id"] for s in result["prep"]["slices"]] == ids
+    assert sorted(s["id"] for s in result["prep"]["slices"]) == ids
 
 
 @pytest.mark.parametrize(
@@ -1632,6 +1633,37 @@ def test_reverify_slice_key_sentinel_is_resolved():
     block = dict(_reverify_phases(reverify=True, slice_key_js="_k"))["Review re-verify"]
     assert "__SLICE_KEY__" not in block
     assert "String(_k)" in block
+
+
+def _reverify_phase_block(base_ref, group_prefixes=()):
+    from coordinator_core.ops.review_mint.execute_review import _reverify_phase
+
+    return _reverify_phase(
+        base_ref=base_ref, prep_slice_id="prep1", repo_root=None, plan_path="docs/plans/example.md",
+        run_base_sha=base_ref, prompt_head="head", host_degraded=False,
+        sc=lambda call, *_: call, group_prefixes=group_prefixes,
+    )[1]
+
+
+@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
+def test_reverify_prompt_measures_failing_at_base_once_and_passes_it(prefixes):
+    block = _reverify_phase_block("b" * 40, prefixes)
+    assert block.count("baseline_export") == 1
+    assert "--sha " + "b" * 40 in block
+    assert "pytest -rfE" in block
+    assert block.count("failing_at_base") >= 3
+    assert block.count('failing_at_base\\":[<failing_at_base ids>]') + block.count(
+        'failing_at_base":[<failing_at_base ids>]'
+    ) == 1
+    assert "exit 4" in block.lower() and "ONCE over the remaining ids" in block
+    assert "`[]`" in block
+
+
+@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
+def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
+    block = _reverify_phase_block("run_base_sha", prefixes)
+    assert "baseline_export" not in block
+    assert "failing_at_base" in block
 
 
 def _run_reverify_block(reply, *, verify_only=False):

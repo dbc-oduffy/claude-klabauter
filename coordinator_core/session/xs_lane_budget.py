@@ -113,6 +113,25 @@ def record_deny(repo_root, sid: str, usage: Optional[Usage] = None, files: Optio
     return rec["denies"]
 
 
+def discard_fresh_xs_lane(repo_root, sid: str) -> bool:
+    """Remove an open XS lane that holds no paths. True when removed; False for an absent,
+    corrupt, residue, spent or path-holding record, or on OSError."""
+    rec = read_lane(repo_root, sid)
+    if (
+        rec is None
+        or rec.get("corrupt")
+        or rec.get("kind") != KIND_XS
+        or rec.get("state") != STATE_OPEN
+        or rec["paths"]
+    ):
+        return False
+    try:
+        os.unlink(lane_path(repo_root, sid))
+    except (OSError, RuntimeError):
+        return False
+    return True
+
+
 def _corrupt_record() -> dict:
     return {"kind": KIND_XS, "state": STATE_SPENT, "base_sha": "", "paths": [], "corrupt": True}
 

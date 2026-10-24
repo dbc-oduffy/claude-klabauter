@@ -56,12 +56,13 @@ _INPUTS = {"Read": _read_input, "Bash": _bash_input}
 
 
 class Door:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, role_marker: bool = True):
         self.repo = tmp_path / "repo"
         (self.repo / ".git").mkdir(parents=True)
-        marker_dir = self.repo / ".git" / "coordinator-sessions" / SID
-        marker_dir.mkdir(parents=True)
-        (marker_dir / "em-role-asserted").write_text("1", encoding="utf-8")
+        if role_marker:
+            marker_dir = self.repo / ".git" / "coordinator-sessions" / SID
+            marker_dir.mkdir(parents=True)
+            (marker_dir / "em-role-asserted").write_text("1", encoding="utf-8")
         self.home = tmp_path / "sh"
         self.transcript = tmp_path / "t.jsonl"
         self.lines = [_user()]
@@ -95,7 +96,7 @@ class Door:
 
 
 @pytest.fixture
-def door(tmp_path, monkeypatch):
+def door_env(tmp_path, monkeypatch):
     from coordinator_core.ipc import allow_unstamped_dispatch
 
     allow_unstamped_dispatch()
@@ -111,7 +112,22 @@ def door(tmp_path, monkeypatch):
     monkeypatch.delenv("COORDINATOR_HOOK_EM_PREFIRE_SURVEY_DISABLED", raising=False)
     monkeypatch.setattr(machine_profile, "guard_level", lambda name: "strict")
     monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(ers.PHASE_UNFIRED))
+
+@pytest.fixture
+def door(door_env, tmp_path):
     return Door(tmp_path)
+
+
+@pytest.fixture
+def cell_door(door_env, tmp_path):
+    """A ladder-cell EM session: the ask is the first prompt; SessionStart wrote the role marker."""
+    return Door(tmp_path)
+
+
+@pytest.fixture
+def markerless_door(door_env, tmp_path):
+    """A non-EM session (G-EM, DoE, experiments): no role marker."""
+    return Door(tmp_path, role_marker=False)
 
 
 def _decision(body: dict) -> str:
@@ -156,11 +172,44 @@ def test_fire_disarms(door, monkeypatch, capsys):
     assert rc == 0 and _decision(body) != "deny"
 
 
-def test_open_xs_lane_disarms(door, monkeypatch, capsys):
+def test_open_xs_lane_does_not_exempt(door, monkeypatch, capsys):
     door.history(8, "Read")
     assert xs_lane_budget.open_xs_lane(door.repo, SID, "abc")
     rc, body = door.run(monkeypatch, capsys, "Read")
+    assert rc == 0 and _decision(body) == "deny"
+
+
+@pytest.mark.parametrize("name", ["Read", "Bash"])
+def test_markerless_session_is_never_denied(markerless_door, monkeypatch, capsys, name):
+    markerless_door.history(12, name)
+    rc, body = markerless_door.run(monkeypatch, capsys, name)
     assert rc == 0 and _decision(body) != "deny"
+
+
+@pytest.mark.parametrize("name", ["Read", "Bash"])
+def test_cell_session_ninth_call_denies_with_role_marker(cell_door, monkeypatch, capsys, name):
+    cell_door.history(8, name)
+    rc, body = cell_door.run(monkeypatch, capsys, name)
+    assert rc == 0
+    assert _decision(body) == "deny"
+    assert _reason(body).startswith("[em-prefire-survey]")
+
+
+@pytest.mark.parametrize("name", ["Read", "Bash"])
+def test_cell_session_eighth_call_allows(cell_door, monkeypatch, capsys, name):
+    cell_door.history(7, name)
+    rc, body = cell_door.run(monkeypatch, capsys, name)
+    assert rc == 0 and _decision(body) != "deny"
+
+
+def test_cell_session_worker_is_never_denied(cell_door, monkeypatch, capsys):
+    cell_door.history(8, "Read")
+    event = cell_door.event("Read")
+    event["agent_id"] = "worker-1"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    rc = _load_hook_run().main(list(SEARCH_ARGV))
+    out = capsys.readouterr().out
+    assert rc == 0 and _decision(json.loads(out) if out.strip() else {}) != "deny"
 
 
 def test_phase_unknown_allows(door, monkeypatch, capsys):

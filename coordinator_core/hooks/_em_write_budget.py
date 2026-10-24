@@ -238,6 +238,14 @@ class _Unprojectable(Exception):
     """Carries the caller's own reason; rendered without an exception-type prefix."""
 
 
+def _discard_fresh(xlb, root, session_id: str) -> None:
+    """Drops the XS lane this call opened so a refused write leaves none; never changes the verdict."""
+    try:
+        xlb.discard_fresh_xs_lane(root, session_id)
+    except Exception:
+        pass
+
+
 def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tuple[bool, dict | None]:
     """Lane open/residue/measure logic shared by the hook's `_budget_decision` and `shell_write_budget`;
     `project()` returns the post-write text or raises."""
@@ -247,6 +255,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
     root = _repo_root(payload)
     if root is None or not session_id:
         return False, None
+    opened_here = False
     try:
         s_plus = xlb.touched_s_or_larger(session_id, root)
         rec = xlb.read_lane(root, session_id)
@@ -266,6 +275,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
 
             head = git_state.head_sha(root)
             if head and xlb.open_xs_lane(root, session_id, head):
+                opened_here = True
                 rec = xlb.read_lane(root, session_id)
         unfired = False
         if s_plus and (rec is None or rec.get("kind") != xlb.KIND_RESIDUE):
@@ -299,9 +309,13 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
         text = f"Budget unmeasurable ({reason}). Make the change as one plain Edit per file."
+        if opened_here and not residue:
+            _discard_fresh(xlb, root, session_id)
         return True, _budget_deny(text)
     if usage.over:
-        if not residue:
+        if opened_here and not residue:
+            _discard_fresh(xlb, root, session_id)
+        elif not residue:
             try:
                 denies = xlb.record_deny(root, session_id, usage, [*rec.get("paths", []), file_path])
             except Exception:

@@ -270,9 +270,12 @@ def _persist_run_outcome(repo_root: Path, run_id: str, halted: dict, params: dic
     return f"{RECORD_DIR_ROOT}/{run_id}/{RUN_OUTCOME_FILE}"
 
 
+_TEST_BLOCKER_HALTS = frozenset({"review_blocked", "criterion_not_met"})
+
+
 def is_test_blocker_halt(halted: dict) -> bool:
-    """A ``review_blocked`` halt whose blocker is a failing repo test."""
-    return halted.get("halted") == "review_blocked" and halted.get("blocker") == TEST_BLOCKER
+    """A ``review_blocked`` or ``criterion_not_met`` halt whose blocker is a failing repo test."""
+    return halted.get("halted") in _TEST_BLOCKER_HALTS and halted.get("blocker") == TEST_BLOCKER
 
 
 def marker_kind(halted: dict) -> str:
@@ -284,7 +287,7 @@ def marker_kind(halted: dict) -> str:
 def _settle_ledger_pointer(
     repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str], outcome_rel: Optional[str] = None
 ) -> None:
-    """A landed ``ledger-check`` halt, or a ``review_blocked`` halt whose blocker is a failing test,
+    """A landed ``ledger-check`` halt, or a ``review_blocked``/``criterion_not_met`` halt whose blocker is a failing test,
     writes its plan's ledger-halt pointer (``remaining`` is filled at resume from the halt record's
     items); a ``commit`` halt with a persisted outcome writes a ``halted="commit"`` pointer naming
     it; any other landed halt for a known plan unlinks a stale pointer. A halt without a relative,

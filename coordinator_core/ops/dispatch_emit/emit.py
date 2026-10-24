@@ -283,6 +283,7 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, spli
 from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops._workflow_contract import Finding, Severity, run_checks
+from coordinator_core.ops.review_test_blocker import FAILING_DETAIL_FIELD
 from coordinator_core.ops.dispatch_emit.pathspec import (
     NoTestTargetError,
     NoWritesDeclaredError,
@@ -3786,7 +3787,9 @@ def _falsifier_agent_call_expr(
         f"the expected-when-true text describes. Set `status` to 'met' only "
         f"when `differs_from_baseline` is true, 'not_met' when it is false, "
         f"'indeterminate' if you could not run the observation. Do not gate "
-        f"on exit code alone."
+        f"on exit code alone. When `status` is not_met and the observation ran "
+        f"pytest, list each failing node id in `failing` and each one's first "
+        f"error line in `{FAILING_DETAIL_FIELD}`."
         + _emit_sidecar_clause(plan_path, "test:terminal-falsifier")
     )
     return (
@@ -3877,6 +3880,21 @@ def _falsifier_schema_literal() -> str:
     schema["properties"]["differs_from_baseline"] = {"type": "boolean"}
     schema["properties"]["baseline_output"] = {"type": "string", "maxLength": 300}
     schema["properties"].setdefault("roots_read", ROOTS_READ_SCHEMA)
+    schema["properties"].setdefault("failing", {"type": "array", "items": {"type": "string"}})
+    schema["properties"].setdefault(
+        FAILING_DETAIL_FIELD,
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "node_id": {"type": "string"},
+                    "message": {"type": "string", "maxLength": 300},
+                },
+                "required": ["node_id", "message"],
+            },
+        },
+    )
     schema["required"] = sorted(
         {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
     )

@@ -197,3 +197,18 @@ def test_nothing_changed_commits_nothing(repo):
 
     assert out["committed"] is False and out["nothing_to_commit"] is True
     assert _git(repo, "rev-parse", "HEAD") == head
+
+
+@pytest.mark.parametrize(
+    "halted, expect",
+    [
+        ({"halted": "criterion_not_met", "blocker": "failing_test"}, True),
+        ({"halted": "review_blocked", "blocker": "failing_test"}, True),
+        ({"halted": "criterion_not_met"}, False),
+        ({"halted": "criterion_not_met", "blocker": "other"}, False),
+        ({"halted": "refusal", "blocker": "failing_test"}, False),
+    ],
+)
+def test_criterion_not_met_test_blocker_is_a_test_blocker_halt(halted, expect):
+    assert land_run_halt.is_test_blocker_halt(halted) is expect
+    assert land_run_halt.marker_kind(halted) == ("ledger-check" if expect else halted["halted"])

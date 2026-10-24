@@ -774,6 +774,23 @@ _REVERIFY_UNAPPLIED_JS = (
 )
 
 
+def _base_measure_clause(base_ref: str) -> str:
+    """Prompt step measuring ``failing_at_base``: one baseline-export run over the failing ids at the
+    snapshot base. Empty-set fallback when the base is the unset placeholder."""
+    if base_ref == "run_base_sha":
+        return "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. "
+    return (
+        "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
+        f"(never per test): `python -m coordinator_core.testing.baseline_export --sha {base_ref} -- "
+        "python -m pytest -rfE <all failing node ids>`. The ids on its `FAILED`/`ERROR` lines are "
+        "`failing_at_base`, valid only when its trailing JSON line has `export` \"ok\" and "
+        "`runner_exit` 0, 1 or 4. Exit 4 with a \"not found\" line naming ids means the run added "
+        "them: they are never pre_existing; drop them and re-run that same command ONCE over the "
+        "remaining ids. A second exit 4, an export error or any other result: "
+        "`failing_at_base` is `[]`. "
+    )
+
+
 def _reverify_phase(
     *,
     base_ref: str,
@@ -859,10 +876,11 @@ def _reverify_phase(
             f"'{{{sliced},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
             "returns an error, return it as the sidecar's finding and do not call revert for that "
             "prefix.\n"
-            f"4. Call review.reverify in revert mode for EVERY prefix, each time with the same "
-            f"failing set (all failing node ids): `{invoke} review.reverify '{{{sliced},"
+            f"4. {_base_measure_clause(base_ref)}"
+            f"Call review.reverify in revert mode for EVERY prefix, each time with the same "
+            f"failing set (all failing node ids) and the same `failing_at_base`: `{invoke} review.reverify '{{{sliced},"
             f"\"failing\":[<all failing node ids>],\"failing_before\":[<that prefix's "
-            f"failing_before ids>],\"sidecars\":[<that prefix's review_sidecars paths below>]}}'"
+            f"failing_before ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<that prefix's review_sidecars paths below>]}}'"
             f"{repo_pin}` (add `session_id` as in step 1). A prefix attributes a failure only to "
             "its own files, so make every call whether or not that prefix listed anything. The "
             "review_sidecars below is keyed by slice prefix: pass each call only its own prefix's "
@@ -907,9 +925,10 @@ def _reverify_phase(
         f"Then ALWAYS call `{invoke} review.reverify "
         f"'{{{base_args},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
         "returns an error, return it as the sidecar's finding and do not call revert.\n"
-        f"4. Call review.reverify in revert mode: `{invoke} review.reverify "
+        f"4. {_base_measure_clause(base_ref)}"
+        f"Call review.reverify in revert mode: `{invoke} review.reverify "
         f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
-        f"ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
+        f"ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
         "as in step 1). Return its `reverted`, `pre_existing`, `kept` and `record` as given, "
         "re-run only the tests of the reverted paths, and set status_after to pass or fail from "
         "that re-run. When nothing failed, status_after is null. `status_before` is the status "
@@ -1885,6 +1904,21 @@ def _widen_judge_schema(schema_literal: str) -> str:
         }
     )
     properties.setdefault("roots_read", ROOTS_READ_SCHEMA)
+    properties.setdefault("failing", {"type": "array", "items": {"type": "string"}})
+    properties.setdefault(
+        FAILING_DETAIL_FIELD,
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "node_id": {"type": "string"},
+                    "message": {"type": "string", "maxLength": 300},
+                },
+                "required": ["node_id", "message"],
+            },
+        },
+    )
     properties.setdefault(
         _rr.JUDGE_ROWS_KEY,
         {
@@ -2078,6 +2112,8 @@ def _criterion_judge_prompt(
     interpreter = (
         f"{interpreter_clause(_plan_repo_root(plan_path))} "
         "Run a falsifier under that rather than running its bare `python` verbatim. "
+        "When `status` is not_met and the observation ran pytest, list each failing node id "
+        f"in `failing` and each one's first error line in `{FAILING_DETAIL_FIELD}`. "
     )
     prompt = (
         f"{prompt_head}\n\n{judge_role}{_JUDGE_PREAMBLE}{interpreter}\n"
