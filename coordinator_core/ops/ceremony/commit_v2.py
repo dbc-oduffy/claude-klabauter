@@ -391,10 +391,10 @@ def _peer_claim_warnings(
         try:
             from coordinator_core.ops.ceremony.commit_companion import untracked_companions
 
-            companions = untracked_companions(
+            by_peer = untracked_companions(
                 worktree_root, lookup_result.held_by or {}, live_peers, list(paths)
             )
-            for sid, names in companions.items():
+            for sid, names in by_peer.items():
                 shown = ", ".join(names[:5])
                 if len(names) > 5:
                     shown += f" (+{len(names) - 5} more)"
@@ -1230,6 +1230,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     # A live peer holding a named path is reported, never refused.
     peer_holds: list = []
     abandoned_holds: list = []
+    # `own_sid or ""`: an already-resolved sid (even none) stops `_peer_claim_warnings` re-resolving it.
     with ledger.phase("claim_lookup"):
         peer_claim_warnings = _peer_claim_warnings(
             worktree_root, list(raw_paths) + raw_removed, peer_holds, own_sid=own_sid or "",

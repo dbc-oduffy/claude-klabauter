@@ -151,8 +151,8 @@ def live_run_deliverable_id(repo_root: Path, session_id: str, paths: Iterable[st
 def _halted(root: Path, run_id: str) -> bool:
     """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
     the TTL and its declaration contests no live write. Its declared writes stay held against
-    another run's carry until it resumes, ages out, or `halted_hold_release.release_reason` frees
-    it (`halted_run_write_claims`). A `resumed` marker is live again."""
+    another run's carry, while they carry hunks attributable to it, until it resumes, ages out, or
+    `halted_hold_release.release_reason` frees it (`halted_run_write_claims`). A `resumed` marker is live again."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
@@ -331,10 +331,13 @@ def halted_run_write_claims(
     now: Optional[float] = None,
     own_plan: Optional[str] = None,
     dirty=None,
+    attributable=None,
 ) -> Optional[dict]:
     """`{path: sorted halted run ids}` for each of `paths` a halted, unresumed run's halt record
     names as withheld, plus (when `dirty`, a no-arg callable returning the set of paths dirty in
-    the tree, is given) each path its manifest declares that is dirty now. `dirty` is called at most
+    the tree, is given) each path its manifest declares that is dirty now and carries hunks
+    attributable to that run (`attributable(run_id, paths) -> held subset`, default a lazily built
+    `halted_hunk_attribution.reader`). `dirty` is called at most
     once per call, and only when an unreleased halted run declares a candidate; a halted run that
     withheld nothing and left nothing dirty holds nothing.
 
@@ -377,7 +380,11 @@ def halted_run_write_claims(
                 hot = [p for p in wanted if p not in held and (
                     p in declared_set or any(p == pre or p.startswith(pre + "/") for pre in prefixes))]
                 if hot:
-                    held = held | (set(hot) & dirty())
+                    if attributable is None:
+                        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
+
+                        attributable = halted_hunk_attribution.reader(root, exclude_run, landing_plan=own_plan)
+                    held = held | attributable(run_id, (set(hot) & dirty()) - held)
         for path in wanted & held:
             claims.setdefault(path, set()).add(run_id)
     return {p: sorted(s) for p, s in claims.items()}

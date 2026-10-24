@@ -171,6 +171,71 @@ def test_no_candidates_or_no_state_dir(repo):
     assert _claims(repo, [JOB]) == {}
 
 
+def _baselined(repo, run_id, baseline, *, halted_at=None, started_at=None):
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
+
+    rec = repo / "state/warp" / run_id
+    manifest = json.loads((rec / "manifest.json").read_text(encoding="utf-8"))
+    manifest["write_baseline"] = baseline
+    (rec / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    stage = {}
+    if halted_at:
+        stage.update(stage="halted", last_activity_at=halted_at)
+    if started_at:
+        stage["started_at"] = started_at
+    (rec / RUN_STAGE_FILE).write_text(json.dumps(stage), encoding="utf-8")
+
+
+def _dirty_job(repo, text="landing run edit\n"):
+    path = repo / JOB
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _blob(text):
+    from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+
+    return blob_sha(text.encode("utf-8"))
+
+
+HALT_AT = "2026-10-19T10:30:00Z"
+START_AT = "2026-10-19T11:00:00Z"
+
+
+def _two_runs(repo, b_h, b_l):
+    _record(repo, HALTED_ID, writes=[JOB])
+    _baselined(repo, HALTED_ID, {JOB: b_h}, halted_at=HALT_AT)
+    _record(repo, OTHER_ID, status=None)
+    _baselined(repo, OTHER_ID, {JOB: b_l}, started_at=START_AT)
+
+
+def test_halted_holder_with_no_hunks_in_dirty_path_releases(repo):
+    base = _blob("base\n")
+    _two_runs(repo, base, base)
+    _dirty_job(repo)
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {}
+
+
+def test_halted_holder_with_hunks_in_dirty_path_holds(repo):
+    _two_runs(repo, _blob("base\n"), _blob("landing base\n"))
+    _dirty_job(repo)
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {JOB: [HALTED_ID]}
+
+
+def test_halted_holder_without_write_baseline_holds_dirty_path(repo):
+    _record(repo, HALTED_ID, writes=[JOB])
+    _dirty_job(repo)
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {JOB: [HALTED_ID]}
+
+
+def test_withheld_path_holds_even_when_tree_equals_baseline(repo):
+    base = _blob("base\n")
+    _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
+    _baselined(repo, HALTED_ID, {JOB: base}, halted_at=HALT_AT)
+    _dirty_job(repo, "base\n")
+    assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {JOB: [HALTED_ID]}
+
+
 def test_default_now_uses_wall_clock(repo):
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     run_id = f"ask-{stamp}-abcdef"

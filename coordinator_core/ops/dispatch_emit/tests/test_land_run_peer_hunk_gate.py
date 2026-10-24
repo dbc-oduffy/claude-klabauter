@@ -197,7 +197,7 @@ def test_resumed_peer_with_a_landed_successor_does_not_block_but_an_unlanded_one
     assert out["committed"] is True, out
 
 
-def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_still_refuses(repo):
+def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_with_an_open_sizing_and_another_plan_still_refuses(repo):
     """The 6137b0 shape: the manifest declares PATH, the halt record withheld nothing, PATH is dirty."""
     _sizing(repo, SIZING)
     holder = _aged(60, "aaaaaa")
@@ -211,7 +211,7 @@ def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_still_refuses
     assert json.loads((rdir / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
 
-def test_halted_peer_declaring_the_path_in_its_manifest_but_leaving_it_clean_claims_nothing(repo):
+def test_halted_peer_declaring_the_path_in_its_manifest_but_leaving_it_clean_with_an_open_sizing_and_another_plan_claims_nothing(repo):
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     _sizing(repo, SIZING)

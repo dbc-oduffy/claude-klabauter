@@ -122,10 +122,14 @@ def _extra_declared(root: Path, run_id: str) -> set:
     return out
 
 
-def _held_extras(root: Path, run_id: str, dirty=None, wanted: Optional[set] = None) -> set:
+def _held_extras(
+    root: Path, run_id: str, dirty=None, wanted: Optional[set] = None, attributable=None,
+) -> set:
     """`_extra_declared`, narrowed for a halted run to the paths its halt record withholds plus
     those that are dirty now (`dirty()`, read at most once and only if a candidate in `wanted`
-    remains -- an extra outside the candidates must not cost the status spawn)."""
+    remains -- an extra outside the candidates must not cost the status spawn). With
+    `attributable` (`halted_hunk_attribution.reader`), only the dirty ones carrying hunks
+    attributable to the run."""
     from coordinator_core.ops import warp_run_deliverable
 
     extra = _extra_declared(root, run_id)
@@ -134,7 +138,10 @@ def _held_extras(root: Path, run_id: str, dirty=None, wanted: Optional[set] = No
         rest = extra - held
         if wanted is not None:
             rest &= wanted
-        return held | (rest & dirty()) if dirty is not None and rest else held
+        if dirty is None or not rest:
+            return held
+        now_dirty = rest & dirty()
+        return held | (attributable(run_id, now_dirty) if attributable is not None else now_dirty)
     return extra
 
 
@@ -188,7 +195,8 @@ def sibling_run_claims(
     declares it, else by its holding session id. First claimant wins. Never raises.
 
     A halted run claims what it withholds plus the manifest/spine/extra paths it declares that are
-    dirty now (one shared status read, spawned only when such a candidate exists). A halted run
+    dirty now with hunks attributable to it (one shared status read, spawned only when such a
+    candidate exists; one index parse for the whole call). A halted run
     whose only declaration of a path is its plan spine's `writes` does not claim it dirty when
     `own_declared` holds it: the landing run's own write is not that run's dirt."""
     root = Path(worktree_root)
@@ -200,18 +208,22 @@ def sibling_run_claims(
     dirty = _dirty_reader(root, wanted)
     own = {_norm(p) for p in own_declared or () if p}
     try:
+        from coordinator_core.git import git_state
         from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
 
-        halted = warp_run_deliverable.halted_run_write_claims(
-            root, wanted, exclude_run=own_run_id, own_plan=own_plan, dirty=dirty,
-        ) or {}
+        attr = halted_hunk_attribution.reader(root, own_run_id, landing_plan=own_plan)
+        with git_state.index_read_cache_scope():
+            halted = warp_run_deliverable.halted_run_write_claims(
+                root, wanted, exclude_run=own_run_id, own_plan=own_plan, dirty=dirty, attributable=attr,
+            ) or {}
+            unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
+            extras = {run_id: _held_extras(root, run_id, dirty, wanted, attr) for run_id in unlanded}
         live = warp_run_deliverable.live_run_write_claims(
             root, wanted, exclude_session="", cwd=str(root), exclude_run=own_run_id, minted_before=minted_before,
         ) or {}
         for path, run_ids in sorted(halted.items()):
             claims.setdefault(path, run_ids[0])
-        unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
-        extras = {run_id: _held_extras(root, run_id, dirty, wanted) for run_id in unlanded}
         for path, sessions in sorted(live.items()):
             owner = next((r for r in unlanded if _declares(root, r, path)), sessions[0])
             claims.setdefault(path, owner)
