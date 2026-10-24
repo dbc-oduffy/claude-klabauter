@@ -52,7 +52,24 @@ def test_tuple_is_the_closed_list():
         "session-share-dir",
         "lessons-outbox",
         "declared-run-output-root",
+        "session-repo-scratch",
     )
+
+
+def test_session_repo_scratch_nested_clone_is_sanctioned(world):
+    clone = world["repo"] / "scratch" / "claude-klabauter-pub"
+    (clone / ".git").mkdir(parents=True)
+    assert _dest(world, clone, target_gitdir=clone / ".git") == "session-repo-scratch"
+
+
+def test_sibling_repo_and_scratch_lookalikes_stay_refused(world):
+    sibling = world["root"] / "sibling" / "scratch" / "x"
+    lookalike = world["root"] / "session-repo-scratch-evil"
+    sibling.mkdir(parents=True)
+    lookalike.mkdir()
+    assert _dest(world, sibling, target_gitdir=sibling) is None
+    assert _dest(world, lookalike) is None
+    assert _dest(world, world["repo"] / "other") is None
 
 
 def test_claude_home(world):

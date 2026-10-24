@@ -17,7 +17,6 @@ from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit import test_caller_widen as tcw
 
 
-
 class Selection(NamedTuple):
     tests: tuple
     skipped: tuple

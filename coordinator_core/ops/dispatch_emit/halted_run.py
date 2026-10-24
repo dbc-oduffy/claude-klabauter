@@ -34,6 +34,7 @@ HALT_RUN_BASE_FIELD = "run_base_sha"
 HALT_REASON_FIELD = "reason"
 HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
 REVISED_AT_FIELD = "revised_at"
+HALT_RELEASED_FIELD = "released"
 HALT_NEXT_ACTION_FIELD = "next_action"
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _DATE_PREFIX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -275,6 +276,16 @@ def revised_halt(record_dir: Path) -> Optional[str]:
         return None
     value = marker.get(REVISED_AT_FIELD)
     return value if isinstance(value, str) and value else None
+
+
+def record_released(record_dir: Path, sha: str, reason: str) -> bool:
+    """Stamp ``released: {reason, sha}`` on a ``halted`` marker, leaving it ``halted`` and resumable;
+    False and no write when the marker is absent or not halted."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker.get("status") != STATUS_HALTED:
+        return False
+    _write(Path(record_dir), {**marker, HALT_RELEASED_FIELD: {"reason": reason, "sha": sha}})
+    return True
 
 
 def mark_resumed(record_dir: Path) -> bool:

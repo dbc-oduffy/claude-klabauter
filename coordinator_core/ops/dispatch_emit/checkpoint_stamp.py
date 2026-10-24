@@ -93,6 +93,11 @@ def run_halted_trailer_lines(bases) -> list:
     return _trailer_lines(RUN_HALTED_TRAILER, bases)
 
 
+def is_landing_message(message: str) -> bool:
+    """True for a run landing: a ``Lands-Chunks:``/``Inline-Review:`` line on a non-checkpoint message."""
+    return bool(_LANDING_TRAILER_LINE.search(message)) and parse_checkpoint(message) is None
+
+
 def terminal_plan_closures(message: str, changed_paths) -> frozenset:
     """The ``Checkpoint-Plan`` paths a landing or halt commit ends a run of; empty unless typed.
 
@@ -108,7 +113,7 @@ def terminal_plan_closures(message: str, changed_paths) -> frozenset:
     lines = message.splitlines()
     subject = lines[0].strip() if lines else ""
     halt = subject.startswith(_HALT_SUBJECT_PREFIX)
-    landing = bool(_LANDING_TRAILER_LINE.search(message)) and parse_checkpoint(message) is None
+    landing = is_landing_message(message)
     if not (halt or landing):
         return frozenset()
     out = {

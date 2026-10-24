@@ -10,12 +10,16 @@ from coordinator_core.ops.dispatch_emit import land_run, measured_rev, own_check
 from coordinator_core.ops.dispatch_emit.write_baseline import capture
 
 
-def _gate(tmp_path, monkeypatch, paths, own=()):
+def _gate(tmp_path, monkeypatch, paths, own=(), prior=()):
     for p in paths:
         if p.startswith("present"):
             (tmp_path / p).write_text("x")
     run_dir = tmp_path / "run"
     run_dir.mkdir()
+    if prior:
+        (run_dir / "run-outcome.json").write_text(
+            json.dumps({"inline_review": {"prep": {"slice_files": list(prior)}}})
+        )
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({
         "write_baseline": capture(tmp_path, paths),
@@ -44,6 +48,15 @@ def test_foreign_dirt_still_refuses(tmp_path, monkeypatch):
 
 def test_absent_path_is_not_dirt(tmp_path, monkeypatch):
     assert _gate(tmp_path, monkeypatch, ["absent_test.py"]) is None
+
+
+def test_path_an_earlier_pass_recorded_as_written_is_not_dirt(tmp_path, monkeypatch):
+    assert _gate(tmp_path, monkeypatch, ["present.py"], prior=["present.py"]) is None
+
+
+def test_foreign_dirt_beside_a_prior_pass_path_still_refuses(tmp_path, monkeypatch):
+    out = _gate(tmp_path, monkeypatch, ["present.py", "present_b.py"], prior=["present.py"])
+    assert out is not None and "pre-existing-dirt: present_b.py" in json.dumps(out)
 
 
 def test_path_written_by_own_checkpoint_is_not_dirt(tmp_path, monkeypatch):

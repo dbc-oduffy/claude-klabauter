@@ -91,7 +91,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     from coordinator_core.sizing_assemble import route as _route
 
-    new_route = _route(estimate={"tshirt": tshirt})["route"]
+    new_route = _route(estimate={"tshirt": tshirt}, scout_evidence=[basis])["route"]
 
     worktree = main_worktree_root(repo_root)
     p = Path(sizing_raw)

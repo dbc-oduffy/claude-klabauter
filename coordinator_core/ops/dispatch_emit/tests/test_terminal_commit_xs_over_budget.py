@@ -139,13 +139,12 @@ def test_an_unresolved_arm_is_not_gated(root):
     assert reply.get("refused") != "xs-over-budget"
 
 
-def test_undeclared_files_the_run_wrote_are_priced(root):
+def test_undeclared_files_are_not_priced(root):
     declared = _new_files(root, 1, 3)
     for i in range(3):
         (root / f"stray_{i}.py").write_text("z = 1\n" * 12, encoding="utf-8")
     reply, _ = _call(root, declared)
-    assert reply["refused"] == "xs-over-budget"
-    assert reply["measured"] == {"files": 4, "lines": 39}
+    assert reply.get("refused") != "xs-over-budget", reply
 
 
 def test_bookkeeping_paths_are_not_priced(root):
@@ -165,6 +164,29 @@ def test_peer_committed_hunks_are_not_priced(root):
     reply, _ = _call(root, names, base=base)
     assert reply.get("refused") != "xs-over-budget", reply
     assert reply.get("committed") is True, reply
+
+
+def test_peer_commits_of_other_paths_are_not_priced(root):
+    base = _git(root, "rev-parse", "HEAD")
+    for i in range(30):
+        (root / f"peer_{i}.py").write_text("p = 1\n" * 20, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "peer work")
+    (root / "tracked.txt").write_text("t\n" + "o\n" * 5, encoding="utf-8")
+    (root / "keep.txt").write_text("k\n" + "o\n" * 5, encoding="utf-8")
+    reply, _ = _call(root, ["tracked.txt", "keep.txt"], base=base)
+    assert reply.get("refused") != "xs-over-budget", reply
+
+
+def test_own_oversized_diff_still_refuses_beside_peer_commits(root):
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "peer.py").write_text("p = 1\n" * 20, encoding="utf-8")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "peer work")
+    (root / "tracked.txt").write_text("t\n" + "o\n" * 40, encoding="utf-8")
+    reply, _ = _call(root, ["tracked.txt"], base=base)
+    assert reply["refused"] == "xs-over-budget"
+    assert reply["measured"] == {"files": 1, "lines": 40}
 
 
 def test_own_edit_on_top_of_a_peer_commit_is_priced_from_the_peer_commit(root):

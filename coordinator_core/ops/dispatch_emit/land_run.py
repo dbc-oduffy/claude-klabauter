@@ -1130,12 +1130,17 @@ def _ledger_gate(
     baseline = manifest_data.get("write_baseline") if isinstance(manifest_data, dict) else None
     if baseline and result["pass"]:
         from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
-        from coordinator_core.ops.dispatch_emit.write_baseline import pre_existing_dirt, unwritten
+        from coordinator_core.ops.dispatch_emit.write_baseline import (
+            pre_existing_dirt,
+            prior_pass_written,
+            unwritten,
+        )
 
         mrows = [r for r in manifest_data.get("rows") or [] if isinstance(r, dict)]
         prep = inline_review.get("prep")
         base = prep.get("run_base_sha") if isinstance(prep, dict) else None
         dirt: list = []
+        prior = prior_pass_written(root, run_dir)
         for it in verdict.get("items") or []:
             if not isinstance(it, dict) or it.get("status") not in ("met", "post_commit"):
                 continue
@@ -1153,7 +1158,7 @@ def _ledger_gate(
                 own = frozenset()
             if len(unwritten(root, baseline, writes)) != len(writes):
                 continue
-            foreign = pre_existing_dirt(root, baseline, writes, own)
+            foreign = pre_existing_dirt(root, baseline, writes, {*own, *prior})
             if foreign:
                 dirt.append({"id": it.get("id"), "reason": "pre-existing-dirt: " + ", ".join(sorted(foreign))})
         if dirt:

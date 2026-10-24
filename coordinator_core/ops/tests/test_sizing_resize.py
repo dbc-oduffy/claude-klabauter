@@ -96,6 +96,15 @@ def test_xs_resized_to_s_routes_spec_dispatch(repo):
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert doc["estimate"]["tshirt"] == "S"
     assert doc["route"] == "spec-dispatch"
+    from coordinator_core.ops.dispatch_emit import sizing_fire as sf
+
+    assert sf.effective_route(doc) == sf.ARM_ROUTE[sf.ARM_S]
+
+
+def test_s_resize_keeps_s_not_tie_broken_to_xs(repo):
+    _seed(repo, tshirt="XS", route="dispatch")
+    assert _run(repo, tshirt="S")["route"] == "spec-dispatch"
+    assert _run(repo, tshirt="XS")["route"] == "dispatch"
 
 
 def test_same_size_and_route_is_noop(repo):

@@ -144,12 +144,38 @@ def test_resumed_holds_when_successor_not_landed_even_sharing_sizing_and_plan(tm
     assert hr.release_reason(root, r, s, PLAN) is None
 
 
+def _released(root: Path, run_id: str, marker: str, released) -> None:
+    _run(root, run_id, marker=marker)
+    path = root / "state/warp" / run_id / "halted.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["released"] = released
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_recorded_criterion_met_release_frees_halted_only(tmp_path):
+    root = _root(tmp_path)
+    record = {"reason": hr.RELEASE_CRITERION_MET, "sha": "a" * 40}
+    h, r = _rid("ask", 300, "aaaaaa"), _rid("ask", 200, "bbbbbb")
+    _released(root, h, "halted", record)
+    _released(root, r, "resumed", record)
+    assert hr.release_reason(root, h, None, None) == hr.RELEASE_CRITERION_MET
+    assert hr.release_reason(root, r, None, None) is None
+
+
+def test_malformed_released_record_holds(tmp_path):
+    root = _root(tmp_path)
+    for i, bad in enumerate(("criterion-met-at-head", {"reason": "other", "sha": "a"}, ["x"], {})):
+        h = _rid("ask", 300 + i, f"a0000{i}")
+        _released(root, h, "halted", bad)
+        assert hr.release_reason(root, h, None, None) is None
+
+
 def test_release_calls_register_lines(tmp_path):
     root = _root(tmp_path)
     h = _rid("ask", 300, "aaaaaa")
     _run(root, h, marker="halted")
     assert hr.release_calls(root, h) == (
-        f"sizing.supersede {{sizing: {SIZING}}}",
+        f"sizing.supersede {{sizing_path: {SIZING}, note: <why the run is no longer owed>}}",
         f"dispatch.record_halted_run_landed {{run_id: {h}, sha: <landing sha>}}",
     )
     lone = hr.release_calls(root, "nope-20260101T000000-abcdef")

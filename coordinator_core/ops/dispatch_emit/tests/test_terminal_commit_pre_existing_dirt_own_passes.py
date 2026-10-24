@@ -3,6 +3,7 @@ same-plan checkpoint landed, and still names foreign dirt."""
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
@@ -51,3 +52,27 @@ def test_without_checkpoint_evidence_the_path_is_dirt(tmp_path, monkeypatch):
     _own(monkeypatch, set())
     out = tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN)
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: own.py"
+
+
+def _prior_record(tmp_path, slice_files):
+    run_dir = tmp_path / "state" / "warp" / "ask-20261024T045125-99976d"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-outcome.json").write_text(
+        json.dumps({"inline_review": {"prep": {"slice_files": slice_files}}})
+    )
+    return run_dir
+
+
+def test_path_an_earlier_pass_recorded_as_written_is_not_dirt(tmp_path, monkeypatch):
+    m = _manifest(tmp_path, ["prior.py"])
+    _own(monkeypatch, set())
+    run_dir = _prior_record(tmp_path, ["prior.py"])
+    assert tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN, run_dir) is None
+
+
+def test_foreign_dirt_beside_a_prior_pass_path_still_refuses(tmp_path, monkeypatch):
+    m = _manifest(tmp_path, ["prior.py", "foreign.py"])
+    _own(monkeypatch, set())
+    run_dir = _prior_record(tmp_path, ["prior.py"])
+    out = tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN, run_dir)
+    assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"

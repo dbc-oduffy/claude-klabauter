@@ -7,7 +7,8 @@ no git, no subprocess.
 
 Invariants: a run with no halt marker (a live fresh-token peer) is never released here. A `resumed`
 marker can be a run executing again, so only supersession and a landed successor release it, never
-a shared sizing or deliverable alone.
+a shared sizing or deliverable alone. The criterion-met rule only reads a `released` record on a
+`halted` marker; whoever shows the criterion met at HEAD writes it, never this module.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ RELEASE_PLAN_LANDING = "plan-landing"
 RELEASE_SUCCESSOR_LANDED = "successor-landed"
 RELEASE_RECORDED_LANDED = "recorded-landed"
 RELEASE_SIZING_SHIPPED = "sizing-shipped"
+RELEASE_CRITERION_MET = "criterion-met-at-head"
 
 
 def _halted_sizing(root: Path, run_id: str, marker: dict) -> str:
@@ -85,6 +87,13 @@ def release_reason(
             return RELEASE_RECORDED_LANDED
         if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
+        released = marker.get(halted_run.HALT_RELEASED_FIELD)
+        if (
+            status == halted_run.STATUS_HALTED
+            and isinstance(released, dict)
+            and released.get("reason") == RELEASE_CRITERION_MET
+        ):
+            return RELEASE_CRITERION_MET
         sizing = _halted_sizing(root, halted_run_id, marker)
         sizing_status = wrd.sizing_scalar(root, sizing, "status") if sizing else ""
         if sizing_status == "superseded":
@@ -120,7 +129,7 @@ def release_calls(root: Path, halted_run_id: str) -> tuple:
     except Exception:
         sizing = ""
     if sizing:
-        lines.append(f"sizing.supersede {{sizing: {sizing}}}")
+        lines.append(f"sizing.supersede {{sizing_path: {sizing}, note: <why the run is no longer owed>}}")
     lines.append(f"dispatch.record_halted_run_landed {{run_id: {halted_run_id}, sha: <landing sha>}}")
     return tuple(lines)
 

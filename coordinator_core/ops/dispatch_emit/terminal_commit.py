@@ -197,6 +197,7 @@ from coordinator_core.ops.dispatch_emit.write_baseline import (  # noqa: E402
     MEANT_TO_LAND_KEY,
     NO_CHANGE_REFUSAL,
     pre_existing_dirt as _pre_existing_dirt_paths,
+    prior_pass_written as _prior_pass_written,
     unwritten as _unwritten_paths,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -487,7 +488,7 @@ def _peer_adjusted_rows(
 ) -> Optional[list]:
     """``rows`` with each path a peer run committed ahead of this run's own work re-measured from
     that peer commit (``peer_path_bases``): one `git log` spawn, plus one numstat per distinct peer
-    base. None when a re-measure fails."""
+    base. None when a re-measure fails. ``rows`` are already limited to the run's own paths."""
     from coordinator_core.ops.review_peer_bases import peer_path_bases
 
     plan_text = _read_rel(worktree_root, request.plan_path) if request.plan_path else None
@@ -497,6 +498,8 @@ def _peer_adjusted_rows(
     )
     if not bases:
         return rows
+    from coordinator_core.ops.dispatch_emit import xs_diff_budget
+
     out = [r for r in rows if r[2] not in bases]
     by_base: dict = {}
     for path, sha in bases.items():
@@ -507,8 +510,6 @@ def _peer_adjusted_rows(
         )
         if not stat.ok:
             return None
-        from coordinator_core.ops.dispatch_emit import xs_diff_budget
-
         out.extend(xs_diff_budget.parse_numstat(stat.stdout))
     return out
 
@@ -516,15 +517,16 @@ def _peer_adjusted_rows(
 def _xs_over_budget_refusal(
     worktree_root: Path, params: dict, run_id: str, request: CommitRequest
 ) -> Optional[dict]:
-    """The ``xs-over-budget`` refusal when an XS-arm run's whole own diff against its run base
+    """The ``xs-over-budget`` refusal when an XS-arm run's own diff against its run base
     exceeds the XS budget (or cannot be measured), else None. Any other arm pays nothing.
 
-    The measure is every path the run changed, declared or not, less bookkeeping paths, the plan
-    and cited sizing, paths a live peer holds, and peer-committed hunks. An arm that cannot be
-    resolved is not gated.
+    The measure is the chunks' declared paths and prefixes only (the pathspec on both git
+    spawns), less bookkeeping paths, the plan and cited sizing, paths a live peer holds, and
+    peer-committed hunks. An arm that cannot be resolved is not gated. A peer's commits or dirt
+    elsewhere in the tree never count.
 
-    Trap: `git diff <base>` is blind to untracked files, so a second whole-tree `ls-files --others`
-    prices them; a peer's uncommitted edit no claim holds is still counted.
+    Trap: `git diff <base>` is blind to untracked files, so an `ls-files --others` over the same
+    pathspec prices them. An undeclared write is not measured.
     """
     from coordinator_core.ops.dispatch_emit import landing_integrity as _li
     from coordinator_core.ops.dispatch_emit import xs_diff_budget
@@ -536,14 +538,19 @@ def _xs_over_budget_refusal(
     exempt = [p for p in (request.plan_path, sizing) if p]
     bookkept = xs_diff_budget.BOOKKEEPING_PREFIXES
     base = _li.run_base_for(worktree_root, run_id, params)
+    owned = sorted({p.rstrip("/") for c in request.chunks for p in (*c.paths, *c.prefixes) if p})
     rows = None
-    if base is not None:
-        stat = run_git(["-C", str(worktree_root), "diff", "--numstat", "--no-renames", base])
+    if base is not None and not owned:
+        rows = []
+    elif base is not None:
+        stat = run_git(
+            ["-C", str(worktree_root), "--literal-pathspecs", "diff", "--numstat", "--no-renames", base, "--", *owned]
+        )
         if stat.ok:
             tracked = xs_diff_budget.product_rows(xs_diff_budget.parse_numstat(stat.stdout), exempt)
             tracked = _peer_adjusted_rows(worktree_root, base, tracked, request)
             fresh = _new_file_rows(
-                worktree_root, ["."], lambda rel: rel.startswith(bookkept) or rel in exempt
+                worktree_root, owned, lambda rel: rel.startswith(bookkept) or rel in exempt
             )
             rows = None if tracked is None or fresh is None else tracked + fresh
     if rows is not None:
@@ -2424,15 +2431,17 @@ def _readable_manifest(manifest_path: Optional[Path]) -> Optional[StageManifest]
 
 def _pre_existing_dirt_refusal(
     worktree_root: Path, manifest: Optional[StageManifest], verdict: dict, ledger: object,
-    plan_rel: Optional[str] = None,
+    plan_rel: Optional[str] = None, run_dir: Optional[Path] = None,
 ) -> Optional[dict]:
     """A ``ledger-unmet`` refusal (reason ``pre-existing-dirt``) when a ``met``/``post_commit`` item's
     claiming chunks are all non-kept and every declared write of them still equals the stage-time
-    baseline: the run wrote none of it. Only paths present in the tree and not landed by a same-plan
-    checkpoint (``plan_rel``) are named as dirt; none left, no refusal. None otherwise, or when the
-    manifest carries no baseline."""
+    baseline: the run wrote none of it. Only paths present in the tree, not landed by a same-plan
+    checkpoint (``plan_rel``) and not recorded as written by an earlier pass of the run
+    (``run_dir``'s record files) are named as dirt; none left, no refusal. None otherwise, or when
+    the manifest carries no baseline."""
     if manifest is None or not manifest.write_baseline:
         return None
+    prior = _prior_pass_written(worktree_root, run_dir) if run_dir is not None else frozenset()
     failures: list = []
     for item in verdict.get("items") or []:
         if not isinstance(item, dict) or item.get("status") not in ("met", "post_commit"):
@@ -2445,7 +2454,8 @@ def _pre_existing_dirt_refusal(
         if not writes or len(_unwritten_paths(worktree_root, manifest.write_baseline, writes)) != len(set(writes)):
             continue
         dirt = _pre_existing_dirt_paths(
-            worktree_root, manifest.write_baseline, writes, _plan_checkpoint_touched(worktree_root, plan_rel, writes)
+            worktree_root, manifest.write_baseline, writes,
+            _plan_checkpoint_touched(worktree_root, plan_rel, writes) | prior,
         )
         if dirt:
             failures.append({"id": iid, "reason": "pre-existing-dirt: " + ", ".join(sorted(set(dirt)))})
@@ -2464,12 +2474,14 @@ def _pre_existing_dirt_refusal(
 
 
 def _no_change_refusal(
-    worktree_root: Path, manifest: Optional[StageManifest], request: CommitRequest, inline_review: object
+    worktree_root: Path, manifest: Optional[StageManifest], request: CommitRequest, inline_review: object,
+    run_dir: Optional[Path] = None,
 ) -> Optional[dict]:
     """The ``no-change`` refusal when the run changed none of the product paths it meant to land:
-    every declared path of every non-kept row chunk still equals the stage-time baseline and the
-    review recorded no edit to them. None when the manifest has no baseline, a row adopts stranded
-    dirt, or any path was written."""
+    every declared path of every non-kept row chunk still equals the stage-time baseline and neither
+    the review nor an earlier pass of the run (``run_dir``'s record files) recorded a write to
+    them. None when the manifest has no baseline, a row adopts stranded dirt, or any path was
+    written."""
     if manifest is None or not manifest.write_baseline or request.review_only or not request.chunks:
         return None
     rows = {r.id: r for r in manifest.rows}
@@ -2482,6 +2494,8 @@ def _no_change_refusal(
         return None
     unchanged = set(_unwritten_paths(worktree_root, manifest.write_baseline, meant))
     if unchanged != set(meant) or _review_recorded_edits(inline_review) & set(meant):
+        return None
+    if run_dir is not None and _prior_pass_written(worktree_root, run_dir) & set(meant):
         return None
     from coordinator_core.git.git_state import IndexParseError, read_index
 
@@ -2587,7 +2601,9 @@ def _ledger_gate(
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if result["pass"]:
-        dirt = _pre_existing_dirt_refusal(worktree_root, _readable_manifest(manifest_path), verdict, ledger, plan_rel)
+        dirt = _pre_existing_dirt_refusal(
+            worktree_root, _readable_manifest(manifest_path), verdict, ledger, plan_rel, run_dir
+        )
         if dirt is not None:
             return dirt, ledger, []
         drift = _measured_rev_drift_refusal(run_dir, worktree_root, verdict, ledger)
@@ -4804,7 +4820,8 @@ def _terminal_commit_inner(
         )
 
     no_change = _no_change_refusal(
-        worktree_root, manifest if ask_run_dir is not None else None, request, inline_review
+        worktree_root, manifest if ask_run_dir is not None else None, request, inline_review,
+        ask_run_dir,
     )
     if no_change is not None:
         return no_change
@@ -5764,6 +5781,9 @@ def _terminal_commit_inner(
             refused="empty-subject",
         )
     paragraphs = [subject]
+    caller_message = params.get("message")
+    if isinstance(caller_message, str) and caller_message.strip():
+        paragraphs.append(caller_message.strip())
     if deleted_paths:
         # The undeclared-staged-deletion guard reads the message for a removal verb.
         # Its own paragraph: a non-trailer line inside the trailer block makes git

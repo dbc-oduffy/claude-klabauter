@@ -56,6 +56,24 @@ def test_mark_landed_rewrites_only_a_halted_marker(tmp_path):
     assert (running / hr.HALTED_FILE).read_bytes() == before
 
 
+def test_record_released_stamps_only_a_halted_marker(tmp_path):
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    sha = "a" * 40
+    assert hr.record_released(d, sha, "criterion-met-at-head") is False
+    assert not (d / hr.HALTED_FILE).exists()
+    p = hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    assert hr.record_released(d, sha, "criterion-met-at-head") is True
+    data = json.loads(p.read_text())
+    assert data[hr.HALT_RELEASED_FIELD] == {"reason": "criterion-met-at-head", "sha": sha}
+    assert data["status"] == "halted"
+    assert hr.halted_run_for(tmp_path, SIZING) == d.name
+    for other in (hr.mark_resumed, lambda rd: hr.mark_landed(rd, sha)):
+        other(d)
+        before = p.read_bytes()
+        assert hr.record_released(d, "b" * 40, "r") is False
+        assert p.read_bytes() == before
+
+
 def test_newest_dir_rule(tmp_path):
     old = _dir(tmp_path, "20261016T010000-aaaaaa")
     hr.write_halt_marker(old, halted="x", sizing_rel=SIZING)

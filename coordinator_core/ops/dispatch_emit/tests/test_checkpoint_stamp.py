@@ -324,3 +324,15 @@ def test_module_top_imports_stdlib_only():
     src = Path(checkpoint_stamp.__file__).read_text(encoding="utf-8")
     top = src.split("\n\n\n", 1)[0]
     assert "coordinator_core" not in top
+
+
+def test_is_landing_message_true_for_inline_review_line():
+    assert checkpoint_stamp.is_landing_message("land C1\n\nInline-Review: run-1\n")
+
+
+def test_is_landing_message_false_for_checkpoint_carrying_lands_chunks():
+    assert not checkpoint_stamp.is_landing_message(_message() + "\nLands-Chunks: C1\n")
+
+
+def test_is_landing_message_false_for_untyped_message():
+    assert not checkpoint_stamp.is_landing_message("just a commit\n\nbody\n")

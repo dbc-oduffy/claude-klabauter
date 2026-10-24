@@ -78,7 +78,7 @@ def test_halted_holder_holds_names_both_release_calls_and_superseding_releases(r
     holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH])
     assert holds == [(PATH, halted)]
     message = peer_hunk_gate.refusal_message(holds, OWN, repo)
-    assert "sizing.supersede {sizing: state/sizings/s.yaml}" in message
+    assert "sizing.supersede {sizing_path: state/sizings/s.yaml, note: <why the run is no longer owed>}" in message
     assert f"dispatch.record_halted_run_landed {{run_id: {halted}" in message
     assert peer_hunk_gate.refusal_message(holds, OWN) == peer_hunk_gate.refusal_message(holds, OWN, None)
     assert "Release run" not in peer_hunk_gate.refusal_message(holds, OWN)
