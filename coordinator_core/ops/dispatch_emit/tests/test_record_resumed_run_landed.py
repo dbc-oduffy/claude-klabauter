@@ -86,6 +86,30 @@ def test_resumed_with_non_live_successor_lands(repo, monkeypatch):
     assert op._handler({"run_id": RID, "sha": sha}, root)["ok"]
 
 
+@pytest.mark.parametrize("fname, payload", [
+    ("halted.json", {"status": "landed", "sha": "a" * 40}),
+    ("run-stage.json", {"stage": "landed"}),
+    ("run-stage.json", {"stage": "halted"}),
+])
+def test_resumed_with_terminal_but_token_live_successor_lands(repo, monkeypatch, fname, payload):
+    root, sha = repo
+    _marker(root)
+    _successor(root, "state/warp")
+    (root / "state" / "warp" / SUCC / fname).write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(run_token, "is_live", lambda r, run: run == SUCC)
+    assert op._handler({"run_id": RID, "sha": sha}, root)["ok"]
+
+
+def test_resumed_with_running_stage_successor_still_refuses(repo, monkeypatch):
+    root, sha = repo
+    _marker(root)
+    _successor(root, "state/warp")
+    (root / "state" / "warp" / SUCC / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
+    monkeypatch.setattr(run_token, "is_live", lambda r, run: run == SUCC)
+    out = op._handler({"run_id": RID, "sha": sha}, root)
+    assert not out["ok"] and SUCC in out["error"]
+
+
 def test_running_status_still_refuses(repo):
     root, sha = repo
     p = _marker(root, "running")

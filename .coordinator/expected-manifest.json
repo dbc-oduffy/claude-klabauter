@@ -2229,8 +2229,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "dc20f037b613696693a031c02a2963ccd37b5daa",
-    "coordinator_core/_engine_stamp": "da1a78f5dbd95995798c71241ef9209c363d01de",
+    "coordinator_core/_engine_published_at": "51c9cbdf5b8cc987f559a31ee3f3fc2a3685870e",
+    "coordinator_core/_engine_stamp": "abf0921acf4eeda35d41325f2a2a49f5594ddec5",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4865,7 +4865,7 @@
     "coordinator_core/ops/dispatch_emit/halted_record_commit.py": "acc4333f6d06077b25e7767589666f92906ad859",
     "coordinator_core/ops/dispatch_emit/halted_rows_commit.py": "d23a1a13a344783ee7d0e995f54d8eac49977fd6",
     "coordinator_core/ops/dispatch_emit/halted_run.py": "8fc5d441eebb67297536d76428630d973d16cdd9",
-    "coordinator_core/ops/dispatch_emit/halted_run_landed.py": "a6bf6a61bf593db7b0d746c57b38dc58ad0f4e6f",
+    "coordinator_core/ops/dispatch_emit/halted_run_landed.py": "6df48b9b985341a748ddedb75f640fbf31dd556d",
     "coordinator_core/ops/dispatch_emit/halted_run_route.py": "65e42f1412e6c4c721909c2a6fab113876fd933b",
     "coordinator_core/ops/dispatch_emit/halted_withheld_index.py": "ed85b7568a159ac6b69727e1dbcefedc3751bd48",
     "coordinator_core/ops/dispatch_emit/inventory_accounting.py": "38472b5d4ad09ec681015200162dab2f9192c116",
@@ -5667,7 +5667,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_receipt_and_request_import_set.py": "a5bed584b3407cdfd838ca1e34c7a4e95d676718",
     "coordinator_core/ops/dispatch_emit/tests/test_receipt_extras_collision.py": "7e37577f5e0e1482ccd96d21519bdd4ebb773ad5",
     "coordinator_core/ops/dispatch_emit/tests/test_reclose_requeues_background.py": "11182319c2b9019d602eca705db10cb48dc79dd8",
-    "coordinator_core/ops/dispatch_emit/tests/test_record_resumed_run_landed.py": "8d91a3f38d6922f2cdd394418a193bb88b73025a",
+    "coordinator_core/ops/dispatch_emit/tests/test_record_resumed_run_landed.py": "996f44d6693d5428e11d900e8bc2f4162357c800",
     "coordinator_core/ops/dispatch_emit/tests/test_refire_after_empty_ledger_halt_dispatches_open_row_incident.py": "8c7e559adc1057f39869ae320df214df87422ce2",
     "coordinator_core/ops/dispatch_emit/tests/test_refire_after_ledger_halt_executes_unmet_rows_incident.py": "bde60cde4462435d49d749b54c1228c722484f90",
     "coordinator_core/ops/dispatch_emit/tests/test_refire_after_ledger_halt_resumes_incident.py": "3456e04230649a1286daf5faa19dcf0c9c4171b0",
@@ -9573,5 +9573,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "a358b1392dbe1b6e0c7e96d221787024b87b0756"
+  "source_head": "5819f9d2854e6ef59eff7aceb025ddcda35d9046"
 }

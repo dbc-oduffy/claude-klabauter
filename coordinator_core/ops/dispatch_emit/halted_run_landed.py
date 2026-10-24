@@ -231,9 +231,27 @@ def _live_successor(root: Path, run_id: str) -> Optional[str]:
             continue
         for cand in candidates:
             ledger = rl.read_run(cand)
-            if ledger and ledger.get(rl.RESUMED_FROM_FIELD) == run_id and run_token.is_live(root, cand.name):
+            if (
+                ledger and ledger.get(rl.RESUMED_FROM_FIELD) == run_id
+                and run_token.is_live(root, cand.name) and not _terminal(cand)
+            ):
                 return cand.name
     return None
+
+
+def _terminal(cand: Path) -> bool:
+    """True when the run dir records the run landed or halted: its token's TTL is not liveness then."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
+
+    marker = halted_run._read(cand)
+    if marker is not None and marker.get("status") == halted_run.STATUS_LANDED:
+        return True
+    try:
+        stage = json.loads((cand / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(stage, dict) and stage.get("stage") in ("halted", "landed")
 
 
 def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_id: Optional[str] = None) -> dict:
