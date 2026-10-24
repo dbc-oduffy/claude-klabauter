@@ -51,6 +51,8 @@ REPLY_KEYS: Final = frozenset({
     "plan_status_reason",
     "index_stale",
     "credited_chunks",
+    "ledger_withheld_product",
+    "exit_criterion_not_stamped",
 })
 
 #: Reply key: sorted chunk ids credited by the run and landed by this commit.

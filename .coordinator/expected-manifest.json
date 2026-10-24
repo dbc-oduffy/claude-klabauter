@@ -2229,8 +2229,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "51c9cbdf5b8cc987f559a31ee3f3fc2a3685870e",
-    "coordinator_core/_engine_stamp": "abf0921acf4eeda35d41325f2a2a49f5594ddec5",
+    "coordinator_core/_engine_published_at": "a3f8ac3982b752ba1931b4388f029ca151f2e8f0",
+    "coordinator_core/_engine_stamp": "55151229e222a6ee256cb3b6fbacc55042903810",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4872,8 +4872,8 @@
     "coordinator_core/ops/dispatch_emit/inventory_mint.py": "95944b70a38b7f532c33a9d0bb3721ce7e967304",
     "coordinator_core/ops/dispatch_emit/judgment_halt.py": "d555852109e3f1e4b80ee43abb2760d2435dfbf9",
     "coordinator_core/ops/dispatch_emit/kept_work.py": "837cb75d59f4b58b3535e3e101cce0021a3befa8",
-    "coordinator_core/ops/dispatch_emit/land_run.py": "113b8992937ba76e167e1189d38a748ecdafd0c5",
-    "coordinator_core/ops/dispatch_emit/land_run_contract.py": "1963cfea333ac0fa8f07b1eaf7df74974a6979ca",
+    "coordinator_core/ops/dispatch_emit/land_run.py": "d2e6f709f9b81f55a6152ec64365cd780998a3ed",
+    "coordinator_core/ops/dispatch_emit/land_run_contract.py": "fb22ceec95063c925ecd0b0655dfdc80a0d51f06",
     "coordinator_core/ops/dispatch_emit/land_run_fanout.py": "bf17f04036e3807e8ec320eef0830c0a2f48e3c4",
     "coordinator_core/ops/dispatch_emit/land_run_grind.py": "0542579bdea7645602a89f5908ae78e33d5d1aa1",
     "coordinator_core/ops/dispatch_emit/land_run_halt.py": "d37b55cff508e494cc6fdd714f279305ecfc9fd4",
@@ -4954,6 +4954,7 @@
     "coordinator_core/ops/dispatch_emit/schemas/pipeline-manifest.schema.json": "a39061f4ea354b9f41c7cd1f32dccb12a907813f",
     "coordinator_core/ops/dispatch_emit/seam_repair.py": "b7e824da6f11bb192d9e7fd0b491f5aed6080b9c",
     "coordinator_core/ops/dispatch_emit/self_dr_discharge.py": "32fdc6b74bbcfedb7e6725d0b51234bcf10b3f34",
+    "coordinator_core/ops/dispatch_emit/shared_path_landing.py": "75e2f8899d6b894061e1437c97fdaaf848d4ca38",
     "coordinator_core/ops/dispatch_emit/shipped_claims.py": "9454c3dd30c85edb10a0d3945d0e65b6042cd018",
     "coordinator_core/ops/dispatch_emit/sibling_blockers.py": "9b55ae78e7fbe33d3c79f2d26664a7a509cea8df",
     "coordinator_core/ops/dispatch_emit/sibling_claims.py": "e580b488047d67b01e1beef665ca9ae0518da954",
@@ -5497,6 +5498,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_import_cost.py": "7bffb436ef72c7953d40f97ef09624ac2650aca0",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_landing_remedies.py": "e5bef762b051e5803a7f30e9e18eadf61b76f87d",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_ledger_already_landed.py": "8a3eb72df1ceb34b35bc69b58aae74a123a41b4f",
+    "coordinator_core/ops/dispatch_emit/tests/test_land_run_live_siblings_one_path.py": "eb393120ba0cb68f8724e849b5754cd72ae6d980",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_measured_rev_drift.py": "05ee0c6a1decfb01d1ec717f4071e949b1de0b1c",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_met_over_footprint_breach_incident.py": "63e4c57eb432e3a3f92c5a88ae581954cd4e6a33",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_off_commit_path.py": "5c19c2c0024c158d2d5f16dd944a31754aedc1f4",
@@ -5847,6 +5849,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_segment_key_contract.py": "2260ef06cc1d2fba564a67fac562bcdf568f2812",
     "coordinator_core/ops/dispatch_emit/tests/test_self_dr_discharge.py": "37e80f78f60cec88cebe21a32bc97f4ff04dd727",
     "coordinator_core/ops/dispatch_emit/tests/test_shared_blocks_keep_prompts_byte_identical.py": "0b8147d2b5da117fca21b03298ffdb722fa18ba4",
+    "coordinator_core/ops/dispatch_emit/tests/test_shared_path_landing.py": "56dcf2e96ca35e6436cddb39c5812f2a8ad54d9c",
     "coordinator_core/ops/dispatch_emit/tests/test_shipped_claim_gate_self_withhold.py": "195eb2e61e7d5e392c5d54fc7382938d21003578",
     "coordinator_core/ops/dispatch_emit/tests/test_shipped_claim_own_writes_resume.py": "486092d7985a82b0ef44a965bf22161ed1223a76",
     "coordinator_core/ops/dispatch_emit/tests/test_shipped_claims.py": "0730a49c5f3414f3614c1c8d56a95de9fa92aa8d",
@@ -9573,5 +9576,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "5819f9d2854e6ef59eff7aceb025ddcda35d9046"
+  "source_head": "6162b562a7bb844d9e80db071c83b4f25248e3e5"
 }

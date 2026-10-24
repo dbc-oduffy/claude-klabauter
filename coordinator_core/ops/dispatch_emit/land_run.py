@@ -12,7 +12,9 @@ sibling-repo or EM-withheld path stays out of the commit, rides a ``Row-Unlanded
 trailer and the reply's ``stranded``. Such a row is not in ``Lands-Chunks:`` and stays open. A path a
 senior live run merely declares does not hold a path this run's own ``checkpoint(wave N)`` commit
 already landed; a live write claim of another session still holds it. Every held path is named in the
-reply's ``peer_held_left``.
+reply's ``peer_held_left``. Under a requirements ledger, a credited row's path a live sibling holds
+refuses the landing (``shared-path-sibling-held``); any other withheld credited path clears the
+``ledger_met`` observation and the reply names it in ``ledger_withheld_product``.
 
 Everything that can run after the commit is queued to the close job (``close_background``): the review
 stamp, coded stamp, implemented flip, sizing ship, cascade, completion entry, baton ship and ledger
@@ -1509,11 +1511,12 @@ def _peer_held_left(peer_held: dict) -> dict:
 
 def _peer_held(
     root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object,
-    *, plan_rel: Optional[str] = None, run_base: Optional[str] = None,
+    *, plan_rel: Optional[str] = None, run_base: Optional[str] = None, minted_before: Optional[tuple] = None,
 ) -> dict:
     """``{path: [peer session ids]}`` (DR-462) a live peer session's touch claim or a senior live peer
-    run's declared writes holds over ``paths``. A bare declaration never holds a path this run's own
-    checkpoint landed; a live touch claim still does. A claim read that fails answers no hold."""
+    run's declared writes holds over ``paths``; ``minted_before`` is ``_own_run_seniority``'s answer.
+    A bare declaration never holds a path this run's own checkpoint landed; a live touch claim still
+    does. A claim read that fails answers no hold."""
     held: dict = {}
     if not paths:
         return held
@@ -1551,7 +1554,7 @@ def _peer_held(
 
         claims = warp_run_deliverable.live_run_write_claims(
             root, list(paths), exclude_session="", cwd=str(root),
-            minted_before=_own_run_seniority(root, run_id, script_path),
+            minted_before=minted_before,
             exclude_run=run_id if isinstance(run_id, str) else None,
         )
         own = (
@@ -2543,9 +2546,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     carried_probe = [*candidates, *art_present, *art_deleted]
     prep = inline_review.get("prep")
     run_base = prep.get("run_base_sha") if isinstance(prep, dict) else None
+    own_seniority = _own_run_seniority(root, rid, script_path)
     peer_held = _peer_held(
         root, carried_probe, session_id, rid, script_path,
         plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
+        minted_before=own_seniority,
     )
     for p in candidates:
         if p in peer_held:
@@ -2638,6 +2643,22 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if p not in stranded[row]:
             stranded[row].append(p)
 
+    withheld_product: list = []
+    if ledger is not None:
+        from coordinator_core.ops.dispatch_emit import shared_path_landing
+
+        held_product = shared_path_landing.sibling_held_product(unlanded, peer_held)
+        if held_product:
+            return _error(
+                shared_path_landing.refusal_message(held_product, str(sibling_run_id or rid), root),
+                refused=shared_path_landing.SHARED_PATH_SIBLING_HELD,
+                stranded={c: sorted(ps) for c, ps in stranded.items()},
+                **_peer_held_left(peer_held),
+            )
+        withheld_product = shared_path_landing.withheld_product_paths(unlanded)
+        if withheld_product:
+            ledger_met = None
+
     # A review that applied fixes anchors its trailer on the plan path even when the product matches HEAD.
     fixes_anchor = bool(inline_review.get("fixes")) and bool(request.plan_path) and bool(_review_trailer(record_abs))
     if not paths and not deleted:
@@ -2686,7 +2707,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     )
     findings = _integrity(
         root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
-        own_declared=declared, session_id=session_id,
+        own_declared=declared, session_id=session_id, minted_before=own_seniority,
     )
     if findings:
         _remove(root, receipt_paths)
@@ -2925,6 +2946,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["shipped_claims"] = shipped_summary
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
+    if withheld_product:
+        reply[shared_path_landing.LEDGER_WITHHELD_PRODUCT] = withheld_product
+        reply["exit_criterion_not_stamped"] = (
+            f"ledger rows not reported met: commit omits changed file(s) {withheld_product}"[:_UNDONE_CAP]
+        )
     reply.update(recovery_reply)
     reply[contract.REPLY_CREDITED_CHUNKS] = sorted(set(credited_ids) & (set(regraded) | {c.id for c in credited_absent}))
     if recorded_changed:
@@ -3183,7 +3209,7 @@ def _withhold_reasons(root: Path, artifacts, record_dir_rel: Optional[str]) -> d
 def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
     plan: Optional[str], *, residue_py: Sequence[str] = (), own_declared: Sequence[str] = (),
-    session_id: Optional[str] = None,
+    session_id: Optional[str] = None, minted_before: Optional[tuple] = None,
 ) -> list:
     """Pre-commit findings over the landing set: unparseable ``.py``, a ``.py`` importing what the
     commit leaves out of HEAD, a dirty declared ``.py`` the landing leaves behind that imports what
@@ -3217,7 +3243,7 @@ def _integrity(
     from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
     for path, sibling in peer_hunk_gate.co_declared_peer_holds(
-        root, run_id, live, own_declared, own_plan=plan,
+        root, run_id, live, own_declared, own_plan=plan, minted_before=minted_before,
     ):
         findings.append(li.Finding(
             path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
