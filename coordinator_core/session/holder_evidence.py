@@ -105,7 +105,7 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
     one. `_liveness_basis` is kept below as an alias for this module's own
     internal caller (`holder_evidence`).
 
-    Vocabulary (eight values; see `live_session_verdicts`'s docstring for the
+    Vocabulary (nine values; see `live_session_verdicts`'s docstring for the
     full per-arm derivation):
       "harness-registry"      — harness-written process identity, stronger
                                  evidence than `"stable-pid"`; `age_sec` is
@@ -146,6 +146,11 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
                                  the peer's `cwd` string here instead, which
                                  this function's own three-way unpack
                                  discards.
+      "harness-registry-superseded" — the session's `stable_pid` process is
+                                 alive but the harness registry shows it
+                                 serving a different session id (e.g. after
+                                 `/clear`). `live` is always False and
+                                 `age_sec` is always `None`.
       "unknown"               — either the underlying process-liveness check
                                  itself raised (never launder that into a
                                  stronger claim than can be supported), or
@@ -389,7 +394,7 @@ def holder_evidence(
       liveness_basis        - "harness-registry" | "stable-pid" |
                                  "recency-window" | "recency-window-mtime" |
                                  "no-record" | "harness-registry-elsewhere" |
-                                 "unknown"
+                                 "harness-registry-superseded" | "unknown"
       last_activity_age_sec  - int seconds since meta.json's last_activity
       holder_goal            - meta.json's "goal" field
       holder_goal_state       - "declared" | "undeclared" | "unreadable" —

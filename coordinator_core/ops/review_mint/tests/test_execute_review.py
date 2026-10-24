@@ -1572,6 +1572,16 @@ def test_reverify_leg_requires_and_asks_for_failing_detail():
     assert "failing [], reverted []" not in text
 
 
+@pytest.mark.parametrize("group_prefixes", [(), ("g1-", "g2-")])
+def test_reverify_deselects_pending_fix_and_designed_red(group_prefixes):
+    from coordinator_core.ops.review_mint.execute_review import _REVERIFY_MARKER_EXCLUSION
+
+    block = _reverify_phase_block("b" * 40, group_prefixes=group_prefixes)
+    assert _REVERIFY_MARKER_EXCLUSION == "not pending_fix and not designed_red"
+    assert _REVERIFY_MARKER_EXCLUSION in block
+    assert "-m " in block
+
+
 def test_reverify_false_output_equals_the_default_output():
     assert _reverify_phases(reverify=False) == _reverify_phases()
 

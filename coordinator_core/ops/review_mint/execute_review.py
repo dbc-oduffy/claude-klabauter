@@ -753,6 +753,15 @@ _REVERIFY_INDETERMINATE_CLAUSE = (
     "as reverify_error. That is an engine defect, never a test result."
 )
 
+#: Tests carrying these markers are excluded from every tier (pyproject marker contract), so a
+#: re-verify run deselects them and never reports one as `failing`.
+_REVERIFY_MARKER_EXCLUSION = "not pending_fix and not designed_red"
+_REVERIFY_MARKER_CLAUSE = (
+    f'Every pytest run in this phase passes `-m "{_REVERIFY_MARKER_EXCLUSION}"`: a test marked '
+    "`pending_fix` or `designed_red` is never run, never reported as `failing` and never blocks "
+    "review."
+)
+
 #: Run-time review sidecar paths of the wave, appended to the re-verify prompt for its `sidecars`.
 _REVERIFY_SIDECARS_JS = (
     "'\\nreview_sidecars: ' + JSON.stringify((Array.isArray(_reviewWave) ? _reviewWave : [])"
@@ -865,7 +874,7 @@ def _reverify_phase(
                 if verify_scope_targets
                 else ""
             )
-            + ". Name each test file or node id; never a directory, a tier (the fast tier "
+            + f". {_REVERIFY_MARKER_CLAUSE} Name each test file or node id; never a directory, a tier (the fast tier "
             "included) or the full suite. Report every failing node id as `failing` and set "
             "status_before to pass when none failed, else fail."
             f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
@@ -917,7 +926,8 @@ def _reverify_phase(
         "pre_existing [], status_before pass. "
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
         "2. Run, and only run, the tests covering those files: the test files among them, every "
-        "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
+        "file in `tripwires`, plus the test files that import an edited module. "
+        f"{_REVERIFY_MARKER_CLAUSE} Name each test file or node id; never a "
         "directory, a tier (the fast tier included) or the full suite. Report every failing "
         "node id as `failing` and set status_before to pass when none failed, else fail."
         f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"

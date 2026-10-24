@@ -1350,7 +1350,8 @@ def acquire_brief_claim(
                   when no verdict was available (see "holder-absent")>}
 
     `basis` is `"dead-holder"` only when `session_verdict` both ran and
-    confirmed the prior holder's process gone (`stable-pid`, live=False);
+    confirmed the prior holder's process gone (`stable-pid`, live=False) or
+    its session id superseded (`harness-registry-superseded`);
     no verdict at all (no local dir, no registry record) is
     `"holder-absent"` — no process check ran, so it is never mislabeled a
     confirmed death; every other resolved-but-not-dead verdict
@@ -1403,7 +1404,9 @@ def acquire_brief_claim(
 
     if prior_lease_expired:
         basis = "expired-brief-lease"
-    elif prior_liveness_basis == "stable-pid" and prior_liveness_live is False:
+    elif (
+        prior_liveness_basis == "stable-pid" and prior_liveness_live is False
+    ) or prior_liveness_basis == "harness-registry-superseded":
         basis = "dead-holder"
     elif prior_liveness_basis is None:
         basis = "holder-absent"

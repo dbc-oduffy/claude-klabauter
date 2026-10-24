@@ -4,10 +4,13 @@ this one module; `GUARD_NAME` is a floor guard, so no guard level turns the deny
 
 from __future__ import annotations
 
+import json
 import os
+import re
 
 from coordinator_core._hook_envelope import deny
 from coordinator_core.machine_profile import apply_guard_level
+from coordinator_core.session import record_homes
 
 GUARD_NAME = "block-em-post-fire-product-write"
 
@@ -35,7 +38,8 @@ def fired(session_id: str) -> bool:
 
 def is_product_path(abs_path: str, root: str, session_id: str) -> bool:
     """True for a path inside `root` that is not scratch/tmp, under `state/` or `.coordinator-local/`,
-    or a bootstrap/out-of-repo dir. The bare repo root counts as product."""
+    or a bootstrap/out-of-repo dir, or the surface an open `performer: em` row of a run `session_id`
+    fired names in `writes:`. The bare repo root counts as product."""
     from coordinator_core.hooks._em_write_budget import (
         _is_bootstrap_or_out_of_repo,
         _is_scratch_or_tmp,
@@ -57,7 +61,100 @@ def is_product_path(abs_path: str, root: str, session_id: str) -> bool:
         probe = os.path.join(abs_path, ".")
     if _is_scratch_or_tmp(abs_path):
         return False
-    return not _is_bootstrap_or_out_of_repo(probe)
+    if _is_bootstrap_or_out_of_repo(probe):
+        return False
+    return path == base or not _is_em_row_surface(path, base, session_id)
+
+
+_ROW_START = re.compile(r"^\s*-\s+id:\s*['\"]?([^'\"\s]+)")
+_KEY_LINE = re.compile(r"^\s*([A-Za-z_]+):\s*(.*?)\s*$")
+_ITEM_LINE = re.compile(r"^\s*-\s+['\"]?(.+?)['\"]?\s*$")
+
+
+def _open_em_row_writes(plan_text: str) -> list[tuple[str, list[str]]]:
+    """`(row_id, writes)` for each plan row declaring `performer: em` with no disposition or
+    `disposition: open`. A line scan, not a YAML parse: it runs on the deny path under the DR-344 bar."""
+    rows: list[tuple[str, dict]] = []
+    in_writes = False
+    for line in plan_text.splitlines():
+        start = _ROW_START.match(line)
+        if start:
+            rows.append((start.group(1), {"writes": []}))
+            in_writes = False
+            continue
+        if not rows:
+            continue
+        info = rows[-1][1]
+        if in_writes:
+            item = _ITEM_LINE.match(line)
+            if item:
+                info["writes"].append(item.group(1))
+                continue
+            in_writes = False
+        key = _KEY_LINE.match(line)
+        if not key:
+            continue
+        name, value = key.groups()
+        if name == "writes":
+            in_writes = True
+        elif name in ("performer", "disposition"):
+            info[name] = value.strip("'\"")
+    return [
+        (rid, info["writes"])
+        for rid, info in rows
+        if info.get("performer") == "em" and info.get("disposition", "open") == "open"
+    ]
+
+
+def _run_plan_file(root: str, run_id: str) -> str | None:
+    """The plan file a run's sizing names, else the run's own minted spine."""
+    run_dir = record_homes.record_path(root, "warp", run_id)
+    try:
+        with open(os.path.join(run_dir, "run.json"), encoding="utf-8") as fh:
+            sizing_rel = json.load(fh).get("sizing_rel")
+        if isinstance(sizing_rel, str) and sizing_rel:
+            with open(os.path.join(root, sizing_rel), encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("plan:"):
+                        plan = line[5:].strip().strip("'\"")
+                        if plan:
+                            return os.path.join(root, plan)
+                        break
+        for name in os.listdir(run_dir):
+            if name.endswith(".spine.md"):
+                return os.path.join(run_dir, name)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def _is_em_row_surface(path: str, base: str, session_id: str) -> bool:
+    """True when `path` (normcased, absolute) is named in `writes:` of an open `performer: em` row of
+    a run this session fired. Any read failure answers False: the path stays product."""
+    try:
+        from coordinator_core.hooks import flag_em_poll_in_flight
+
+        root = os.path.abspath(base)
+        for run_id in flag_em_poll_in_flight.session_workflow_run_ids(session_id):
+            plan = _run_plan_file(root, run_id)
+            if not plan:
+                continue
+            with open(plan, encoding="utf-8") as fh:
+                rows = _open_em_row_writes(fh.read())
+            hits = [rid for rid, writes in rows if any(
+                os.path.normcase(os.path.abspath(os.path.join(root, w))) == path for w in writes)]
+            if not hits:
+                continue
+            from pathlib import Path
+
+            from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
+
+            discharged = read_em_discharges(Path(plan))
+            if any(rid not in discharged for rid in hits):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def deny_envelope() -> dict | None:

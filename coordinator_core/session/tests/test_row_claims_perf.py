@@ -38,7 +38,11 @@ def test_row_verb_is_one_interpreter_under_the_process_time_bar(repo, verb):
     result = batched_process_time_ms(cmd, k=_K, env=_env(), cwd=str(repo))
     assert result["rc"] == 0, f"{verb} exited rc={result['rc']}"
     assert result["process_time_ms"] < _BUDGET_MS, result
-    assert result["procs_per_call"] == 1, result
+    bare = repo / "bare-interpreter.py"
+    bare.write_text("", encoding="utf-8")
+    floor = batched_process_time_ms([sys.executable, str(bare)], k=_K, env=_env(), cwd=str(repo))
+    assert floor["rc"] == 0, floor
+    assert result["procs_per_call"] == floor["procs_per_call"], (result, floor)
 
 
 def test_row_claim_blocker_spawns_nothing(repo, monkeypatch):

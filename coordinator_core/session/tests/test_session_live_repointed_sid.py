@@ -44,13 +44,13 @@ def world(tmp_path, monkeypatch):
     sdir = tmp_path / ".git" / "coordinator-sessions" / OLD_SID
     sdir.mkdir(parents=True)
 
-    def write_meta(start_epoch=epoch):
+    def write_meta(start_epoch=epoch, last_activity=None):
         (sdir / "meta.json").write_text(
             json.dumps(
                 {
                     "stable_pid": str(pid),
                     "stable_pid_start_epoch": str(int(start_epoch)),
-                    "last_activity": core.now_iso(),
+                    "last_activity": last_activity or core.now_iso(),
                 }
             ),
             encoding="utf-8",
@@ -95,6 +95,64 @@ def test_unreadable_record_falls_through_to_layer1(world):
 
 def test_missing_record_falls_through_to_layer1(world):
     assert liveness.session_live(OLD_SID, str(world["repo"])) is True
+
+
+_SUPERSEDED = (False, "harness-registry-superseded", None)
+_STALE = "2000-01-01T00:00:00Z"
+
+
+def _all_seams(repo):
+    r = str(repo)
+    return (
+        liveness.live_session_ids(r),
+        liveness.live_session_verdicts(r),
+        liveness.session_verdict(OLD_SID, r),
+        liveness.session_live_with_basis(OLD_SID, r),
+    )
+
+
+@pytest.mark.parametrize("last_activity", [None, _STALE], ids=["fresh", "stale"])
+def test_superseded_sid_reads_dead_on_every_seam(world, last_activity):
+    world["write_meta"](last_activity=last_activity)
+    world["write_record"](NEW_SID)
+    ids, verdicts, verdict, with_basis = _all_seams(world["repo"])
+    assert OLD_SID not in ids
+    assert verdicts[OLD_SID] == _SUPERSEDED
+    assert verdict == _SUPERSEDED
+    assert with_basis == (False, "harness-registry-superseded")
+
+
+def test_registered_idle_stale_session_stays_live_on_every_seam(world):
+    world["write_meta"](last_activity=_STALE)
+    world["write_record"](OLD_SID)
+    ids, verdicts, verdict, with_basis = _all_seams(world["repo"])
+    assert OLD_SID in ids
+    assert verdicts[OLD_SID][0] is True
+    assert verdict[0] is True
+    assert with_basis[0] is True
+
+
+@pytest.mark.parametrize("case", ["mismatched-epoch", "unreadable", "missing"])
+def test_corpus_seam_fails_open_like_session_live(world, case):
+    if case == "mismatched-epoch":
+        world["write_record"](NEW_SID, rec_epoch=world["epoch"] - 3600)
+    elif case == "unreadable":
+        (world["registry"] / f"{world['pid']}.json").write_text("{not json", encoding="utf-8")
+    ids, verdicts, _, _ = _all_seams(world["repo"])
+    assert OLD_SID in ids
+    live, basis, _age = verdicts[OLD_SID]
+    assert live is True
+    assert basis in ("stable-pid", "stable-pid-shared")
+
+
+def test_corpus_scan_reads_only_the_snapshot_built_index(world, monkeypatch):
+    world["write_record"](NEW_SID)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("corpus scan must not read the registry per pid")
+
+    monkeypatch.setattr(hr, "record_for_pid", _boom)
+    assert liveness.live_session_verdicts(str(world["repo"]))[OLD_SID] == _SUPERSEDED
 
 
 def test_clear_claim_if_dead_clears_path_claim_of_repointed_holder(world):

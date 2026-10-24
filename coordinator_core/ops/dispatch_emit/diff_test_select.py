@@ -8,15 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
 from pathlib import Path
 from typing import Callable, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit import test_caller_widen as tcw
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class Selection(NamedTuple):
@@ -72,10 +71,7 @@ def select(
 
 def _git(root: Path, args: list) -> Optional[str]:
     """stdout, or None when git failed (rc other than 0/1); callers must not read None as "no output"."""
-    r = subprocess.run(
-        ["git", *args], cwd=str(root), capture_output=True, text=True,
-        creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL,
-    )
+    r = run_git(args, cwd=str(root))
     return r.stdout if r.returncode in (0, 1) else None
 
 

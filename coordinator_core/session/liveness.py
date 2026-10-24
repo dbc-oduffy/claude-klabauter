@@ -478,15 +478,37 @@ def _dir_has_recorded_evidence(sdir: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _holder_repointed(sid: str, stable_pid: str, stable_pid_start_epoch: str) -> bool:
+def _pid_index(
+    snapshot: "dict[str, harness_registry.RegistryRecord]",
+) -> "dict[int, tuple[str, harness_registry.RegistryRecord]]":
+    """``{pid: (session_id, record)}`` over a registry snapshot the caller
+    already holds, so a corpus scan resolves "which session does this pid serve"
+    with no per-dir file read. Pure; any failure yields ``{}`` (fail open)."""
+    try:
+        return {rec.pid: (rsid, rec) for rsid, rec in snapshot.items()}
+    except Exception:
+        return {}
+
+
+def _holder_repointed(
+    sid: str,
+    stable_pid: str,
+    stable_pid_start_epoch: str,
+    pid_index: Optional[dict] = None,
+) -> bool:
     """True iff the harness registry shows ``stable_pid``'s process (same start
     epoch within ``core._STABLE_PID_EPOCH_TOLERANCE_SECS``) now serves a
-    session id other than ``sid``. One file read, no spawn; any read failure,
-    missing record, absent or mismatched epoch, or same-sid record is False."""
+    session id other than ``sid``. With ``pid_index`` the lookup is a dict get;
+    without one it is a single ``record_for_pid`` file read. No spawn; any read
+    failure, missing record, absent or mismatched epoch, or same-sid record is
+    False."""
     try:
         if not stable_pid_start_epoch:
             return False
-        found = harness_registry.record_for_pid(int(stable_pid))
+        if pid_index is not None:
+            found = pid_index.get(int(stable_pid))
+        else:
+            found = harness_registry.record_for_pid(int(stable_pid))
         if found is None:
             return False
         record_sid, record = found
@@ -563,9 +585,11 @@ def _decide_session_live(
       Layer 1 (PPID-authoritative): if ``stable_pid`` is non-empty in
         meta.json AND EITHER ``stable_pid_lstart`` OR
         ``stable_pid_start_epoch`` is present (either is a sufficient
-        birth-instant witness for ``core.stable_pid_alive``), delegate to
-        ``core.stable_pid_alive`` and RETURN its verdict — recency is NOT
-        consulted. POSIX ``init()`` stopped writing ``stable_pid_lstart``
+        birth-instant witness for ``core.stable_pid_alive``), a pid the
+        registry shows serving another session reads DEAD
+        (``"harness-registry-superseded"``); otherwise delegate to
+        ``core.stable_pid_alive`` and RETURN its verdict (a live
+        non-superseded pid is LIVE) — recency is NOT consulted. POSIX ``init()`` stopped writing ``stable_pid_lstart``
         2026-07-27 (dca0e3e80) but still writes ``stable_pid_start_epoch``.
         ``stable_pid`` present but BOTH witnesses ABSENT (partial write /
         TOCTOU between the meta writes) is NOT treated as dead — fall
@@ -700,7 +724,7 @@ def _decide_session_live(
         # core.stable_pid_alive already accepts as a sufficient witness.
         if stable_pid_lstart or stable_pid_start_epoch:
             if _holder_repointed(sid, stable_pid, stable_pid_start_epoch):
-                return (False, "stable-pid", None)
+                return (False, "harness-registry-superseded", None)
             # A raise here (e.g. MissingPsutilError)
             # must fail OPEN (True), matching live_session_verdicts' own
             # Layer-1 arm exactly ((True, "unknown", None)). Do NOT fall
@@ -1121,6 +1145,12 @@ def claim_held_by_me(
 #:                              not weaker — a consumer must not render it in
 #:                              a hedged/unknown arm.
 #:   "stable-pid"            — Layer 1 (PPID-authoritative) was consulted.
+#:   "harness-registry-superseded" — ``stable_pid``'s process is alive but the
+#:                              harness registry shows it (same start epoch)
+#:                              serving a DIFFERENT session id, so this sid
+#:                              has ended under a surviving process. `live` is
+#:                              always False and `age_sec` is always ``None``.
+#:                              Never derived from staleness.
 #:   "stable-pid-shared"     — Layer 1 was consulted, but this `stable_pid` is
 #:                              carried by MORE THAN ONE session on this box,
 #:                              so it proves only that SOMETHING under that
@@ -1306,15 +1336,23 @@ def _verdict_for_sdir(
     sdir: str,
     record: Optional[harness_registry.RegistryRecord],
     now_epoch: int,
+    pid_index: Optional[dict] = None,
 ) -> "SessionVerdict":
     """One id's verdict, factored out of ``live_session_verdicts``' loop body
     (Review: staff-eng-review C) so ``session_verdict`` below can compute the
     SAME per-id verdict without an O(n) whole-corpus scan. ``record`` is the
     already-resolved harness-registry record for ``sid`` (``None`` on a miss)
     -- callers own how they obtained it (a batch ``snapshot()`` for the loop,
-    a single ``lookup(sid)`` for the per-sid path), so this helper performs no
-    registry I/O itself. See ``live_session_verdicts``'s own docstring for the
-    full per-arm derivation this reproduces exactly.
+    a single ``lookup(sid)`` for the per-sid path). The corpus caller passes
+    ``pid_index`` built once from its snapshot, so the scan adds no registry
+    read per dir; the per-id caller passes ``None`` and pays one
+    ``record_for_pid`` read inside ``_holder_repointed``. In the Layer 1
+    branch a pid the registry shows serving a different session reads DEAD
+    (``"harness-registry-superseded"``) before ``core.stable_pid_alive``; a
+    live non-superseded pid is LIVE. No staleness ever yields DEAD, and a
+    registry read failure falls through to Layer 1 (fail open). See
+    ``live_session_verdicts``'s own docstring for the full per-arm derivation
+    this reproduces exactly.
 
     No rollback lever to consult here, nor in ``session_live`` any more
     (docs/reference/layer1-liveness-activation.md § 1): the lever that used
@@ -1339,6 +1377,10 @@ def _verdict_for_sdir(
             sdir, "stable_pid_start_epoch"
         )
         if stable_pid_lstart or stable_pid_start_epoch:
+            if _holder_repointed(
+                sid, stable_pid, stable_pid_start_epoch, pid_index
+            ):
+                return (False, "harness-registry-superseded", None)
             try:
                 live = core.stable_pid_alive(
                     stable_pid, stable_pid_lstart, stable_pid_start_epoch
@@ -1429,9 +1471,13 @@ def live_session_verdicts(
 
     Per id, the arms are:
       - ``stable_pid`` present AND (``stable_pid_lstart`` OR
-        ``stable_pid_start_epoch``) present -> Layer 1
+        ``stable_pid_start_epoch``) present -> first, if the snapshot-built
+        pid index shows that process (same start epoch) now serving a
+        DIFFERENT session id, the sid reads ``(False,
+        "harness-registry-superseded", None)``; otherwise Layer 1
         (``core.stable_pid_alive``, matching ``session_live``'s own Layer-1
-        arm exactly). ``age_sec`` is always ``None`` here — evidence is not
+        arm exactly), where a live non-superseded pid is LIVE and recency is
+        never consulted. ``age_sec`` is always ``None`` here — evidence is not
         meaningful on a process-identity verdict, and per this module's own
         contract it must never influence ``live``. An exception from
         ``core.stable_pid_alive`` (e.g. psutil unavailable) is caught HERE
@@ -1485,6 +1531,7 @@ def live_session_verdicts(
         registry = harness_registry.snapshot()
     except Exception:
         registry = {}
+    pid_index = _pid_index(registry)
     verdicts: dict[str, "SessionVerdict"] = {}
     for sdir_path in basep.iterdir():
         if not sdir_path.is_dir():
@@ -1498,7 +1545,7 @@ def live_session_verdicts(
         # never a per-id lookup(). Same tolerant compare as the "stable-pid"
         # arm below; a miss or mismatch falls through unchanged.
         record = registry.get(sid)
-        verdicts[sid] = _verdict_for_sdir(sid, sdir, record, now_epoch)
+        verdicts[sid] = _verdict_for_sdir(sid, sdir, record, now_epoch, pid_index)
     return verdicts
 
 
@@ -1604,7 +1651,7 @@ def session_verdict(
     except Exception:
         record = None
     now_epoch = core.now_epoch()
-    return _verdict_for_sdir(sid, sdir, record, now_epoch)
+    return _verdict_for_sdir(sid, sdir, record, now_epoch, None)
 
 
 def live_session_ids(cwd: Optional[str] = None) -> FrozenSet[str]:

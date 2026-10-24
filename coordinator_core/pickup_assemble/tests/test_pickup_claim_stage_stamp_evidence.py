@@ -151,6 +151,28 @@ def test_reclaim_basis_stays_dead_holder_for_confirmed_dead_process(
     assert record["liveness_basis"] == "stable-pid"
 
 
+def test_reclaim_basis_is_dead_holder_for_superseded_registry_witness(
+    tmp_path, as_session, holder_reads_live, monkeypatch
+):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    _write_claim(repo, "h1.md", "sid-old", stage="apply")
+    as_session("sid-new")
+    holder_reads_live(False)
+    monkeypatch.setattr(
+        liveness_mod,
+        "session_verdict",
+        lambda *a, **k: (False, "harness-registry-superseded", None),
+    )
+
+    record = pa.acquire_brief_claim(repo, "handoff", "h1.md")
+
+    assert record is not None
+    assert record["basis"] == "dead-holder"
+    assert record["liveness_basis"] == "harness-registry-superseded"
+
+
 def test_reclaim_basis_downgrades_confirmed_live_verdict_to_liveness_unknown(
     tmp_path, as_session, holder_reads_live, monkeypatch
 ):

@@ -99,6 +99,19 @@ def _assert_well_above_tick(total_process_time_ms: float, label: str) -> None:
     )
 
 
+def _bare_interpreter_procs_per_call(tmp_path: Path) -> float:
+    """procs_per_call of an empty script: the measurement's own floor.
+
+    The spawner counts the console host Windows allocates for the root
+    interpreter (2.0 here, 1.0 elsewhere), so a driver spawns no subprocess
+    of its own exactly when it equals this floor."""
+    bare = tmp_path / "bare-interpreter.py"
+    bare.write_text("", encoding="utf-8")
+    result = batched_process_time_ms([sys.executable, str(bare)], k=_K_FULL_READ)
+    assert result["rc"] == 0, f"bare interpreter floor failed: {result!r}"
+    return result["procs_per_call"]
+
+
 def _build_prior_events(sink: Path, count: int) -> None:
     sink.parent.mkdir(parents=True, exist_ok=True)
     ts = 1_700_000_000.0
@@ -172,6 +185,7 @@ def test_append_cost_is_flat_across_prior_event_counts(tmp_path):
     never a single threshold (module docstring: a threshold passes on an
     empty file and that is exactly how the killed op's O(D^2) dedup-read
     defect hid behind an 11.1ms median)."""
+    floor_procs = _bare_interpreter_procs_per_call(tmp_path)
     points = [
         _measure_append_cost_ms(tmp_path, 0, "prior=0"),
         _measure_append_cost_ms(tmp_path, 1_000, "prior=1000"),
@@ -179,7 +193,7 @@ def test_append_cost_is_flat_across_prior_event_counts(tmp_path):
     ]
 
     for point in points:
-        assert point["procs_per_call"] == pytest.approx(1.0, abs=0.01), (
+        assert point["procs_per_call"] == pytest.approx(floor_procs, abs=0.01), (
             f"a pure-Python append driver must spawn no subprocess of its "
             f"own: {point!r}"
         )
@@ -300,7 +314,9 @@ def test_full_read_at_realistic_length_is_under_the_bar(tmp_path):
 
     assert floor["rc"] == 0, f"full-read floor driver failed: {floor!r}"
     assert result["rc"] == 0, f"full-read driver failed: {result!r}"
-    assert result["procs_per_call"] == pytest.approx(1.0, abs=0.01)
+    assert result["procs_per_call"] == pytest.approx(
+        _bare_interpreter_procs_per_call(tmp_path), abs=0.01
+    )
 
     read_only_ms = round(result["process_time_ms"] - floor["process_time_ms"], 3)
     detail = (

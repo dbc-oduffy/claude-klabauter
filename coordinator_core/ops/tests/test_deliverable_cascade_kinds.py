@@ -612,11 +612,13 @@ _VENDORED_SCHEMA_VERSION_PINS = (
     # precedent), vendored byte-for-byte here at c3bbedf36 with the drift watch
     # reporting MATCH. The recorded answer this row demands is
     # cross-repo/inbox/2026-08-21-coordinator-content-repo-em-roadmap-glob-widened-and-spine-homing-answered.md.
-    ("roadmap.schema.json", "1.4.0", "coordinator-content-repo@1c5f0d849 (coordinator/schemas/roadmap.schema.json)"),
+    # Re-pinned 1.4.0 -> 1.5.0: re-vendored byte-for-byte from DoE (last touched 86eb0e39a7).
+    ("roadmap.schema.json", "1.5.0", "coordinator-content-repo@86eb0e39a7 (coordinator/schemas/roadmap.schema.json)"),
     # Re-pinned on DoE lvv-06 adding `closed` (+ optional closed_reason/closed_at)
     # to goal and initiative `status` (enum-value-additive, DoE 2eee177a8f).
-    ("goal.schema.json", "1.4.0", "coordinator-content-repo@2eee177a8f (coordinator/schemas/goal.schema.json)"),
-    ("initiative.schema.json", "1.2.0", "coordinator-content-repo@2eee177a8f (coordinator/schemas/initiative.schema.json)"),
+    # Re-pinned goal 1.4.0 -> 1.5.0 and initiative 1.2.0 -> 1.3.0: re-vendored byte-for-byte from DoE (18524b6c11).
+    ("goal.schema.json", "1.5.0", "coordinator-content-repo@18524b6c11 (coordinator/schemas/goal.schema.json)"),
+    ("initiative.schema.json", "1.3.0", "coordinator-content-repo@18524b6c11 (coordinator/schemas/initiative.schema.json)"),
     # Newly vendored at 616874831 (C3b). Added as a row rather than left
     # unpinned: this table exists to catch EQUAL_VERSION_SHAPE_DRIFT the moment
     # DoE bumps a vendored schema, and a schema with no row is exactly the

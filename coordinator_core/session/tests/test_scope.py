@@ -50,7 +50,13 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.session import core, scope, touch_record
+from coordinator_core.session import (
+    core,
+    harness_registry,
+    liveness,
+    scope,
+    touch_record,
+)
 from coordinator_core.testing import symlink_capability
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
@@ -2647,59 +2653,63 @@ class TestComputeScopeLiveness:
         skipped_paths = {p for p, _owner in result.skipped}
         assert "untouched_by_mine.py" not in skipped_paths
 
-    @pytest.mark.pending_fix
     def test_real_live_session_ids_no_monkeypatch_dead_peer_claim_releases(
-        self, tmp_path
+        self, tmp_path, monkeypatch
     ):
-        """One no-monkeypatch integration test
-        routing through the REAL `liveness.live_session_ids`, per
+        """One no-monkeypatch integration test routing through the REAL
+        `liveness.live_session_ids`, per
         `state/lessons/2026-07-12-mock-the-bridge-tests-can-t-catch-vacuou-
         5146e5a025e5.yaml`: every other test in this class stubs
         `live_session_ids`, which cannot catch a total delegation no-op.
-        Forces one session dead via an old `last_activity` and no
-        `stable_pid` in its meta.json (Layer-2 recency, unmocked).
 
-        RED AT HEAD, and correctly so (re-cut 2026-08-11,
-        docs/plans/2026-08-11-kill-on-staleness-and-a-way-past-the-gate.md
-        § B2): this test's own `core.init` gives "dead-peer" a real, live
-        PID witness (the test process itself), and Layer 1 (PPID-
-        authoritative) outranks the doctored Layer-2 recency this test
-        relies on to force death — so `live_session_ids` still reports
-        "dead-peer" live and its claim is never released here. This is a
-        real defect, NOT this plan's to fix: `liveness.py` is anti-scope
-        for this plan (PM ruling), and the defect is owned by
-        `state/bug-backlog/2026-08-11-session-live-layer-1-ppid-witness-perman-6c1272db353f.yaml`
-        (P1). Do NOT edit this test to pass — its redness is the correct,
-        documented state.
+        Premise (docs/plans/2026-09-30-session-claim-liveness.md C2 body:
+        "Rewrite it to the superseded premise ... Then drop `pending_fix`"):
+        "dead-peer" shares its `stable_pid` process with "mine", and the
+        sandboxed harness registry names "mine" as that process's current
+        session, so "dead-peer" is superseded and reads dead even though
+        its process is alive and its `last_activity` is stale. Only the
+        registry input is sandboxed; `live_session_ids` stays real. With no
+        captured `stable_pid` no record is written and dead-peer dies by
+        Layer-2 recency instead."""
+        registry = tmp_path / "registry"
+        registry.mkdir()
+        monkeypatch.setattr(harness_registry, "registry_dir", lambda: registry)
+        liveness._registry_snapshot_cache = None
+        try:
+            self._run_dead_peer_case(tmp_path, registry)
+        finally:
+            liveness._registry_snapshot_cache = None
 
-        This docstring previously
-        named `TestReleaseCommittedClaims::
-        test_b1_stale_peer_claim_on_a_clean_path_releases` as pinning B1's
-        release-path deliverable separately; that test no longer exists
-        (removed by chunk C5, which deleted `release_committed_claims`'s
-        peer-release machinery and its tests entirely). This test's own
-        assertion does NOT depend on `release_committed_claims` — it pins
-        `compute_scope`'s own Step 3/3b liveness gate (a distinct, C5-
-        untouched mechanism; see that function's docstring), which is what
-        the still-open Layer-1 PPID witness bug above actually blocks. No
-        replacement cross-reference is owed: nothing in this file pins the
-        now-deleted peer-release path, since C5 removed that capability
-        outright rather than leaving it under test.
-
-        MARKED `pending_fix` 2026-08-19. Its redness was correct and
-        documented, but it carried NO marker, so it failed every raw run of
-        this suite and each EM rediscovered it from scratch — the marker
-        contract in `pyproject.toml` exists precisely so a known-broken path
-        assumption is excluded from the tiers until fixed, instead of
-        spending someone's attention every time. This does NOT weaken the
-        do-not-edit-to-pass rule above: the marker records that the redness
-        is expected and owned, it does not retire the P1 that owns it."""
+    def _run_dead_peer_case(self, tmp_path, registry):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))
         core.init("dead-peer", cwd=str(repo))
         (repo / "shared.py").write_text("z")
         scope.touch("mine", "shared.py", cwd=str(repo))
         scope.touch("dead-peer", "shared.py", cwd=str(repo))
+
+        meta = json.loads(
+            (_sdir(repo, "dead-peer") / "meta.json").read_text(encoding="utf-8")
+        )
+        stable_pid = meta.get("stable_pid")
+        stable_epoch = meta.get("stable_pid_start_epoch")
+        if stable_pid and not stable_epoch:
+            pytest.fail(
+                "precondition gap: dead-peer has stable_pid but "
+                "stable_pid_start_epoch was not captured; the repointed-holder "
+                "check cannot confirm the process identity"
+            )
+        if stable_pid:
+            ticks = int(
+                (float(stable_epoch) + harness_registry._FILETIME_EPOCH_OFFSET_SEC)
+                * harness_registry._FILETIME_TICKS_PER_SEC
+            )
+            (registry / f"{stable_pid}.json").write_text(
+                json.dumps(
+                    {"sessionId": "mine", "pid": int(stable_pid), "procStart": ticks}
+                ),
+                encoding="utf-8",
+            )
 
         # Force "dead-peer" dead via real Layer-2 recency: no stable_pid,
         # last_activity far in the past (> 30 min idle threshold).

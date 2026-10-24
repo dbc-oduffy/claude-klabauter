@@ -168,11 +168,15 @@ def seed_plan(launcher: str, root: Path, rel: str, key: str, hits: List[Hit], ru
 
 
 def _git_toplevel() -> Path:
-    try:
-        out = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True,
-                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0)
-    except OSError as exc:
-        raise AuditError(f"git unavailable: {exc}") from exc
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+    from coordinator_core.git.run import run_git
+
+    out = run_git(["rev-parse", "--show-toplevel"])
+    if out.returncode == 127:
+        raise AuditError("git unavailable")
     if out.returncode != 0 or not out.stdout.strip():
         raise AuditError("cwd is not inside a git repo; pass --root")
     return Path(out.stdout.strip())

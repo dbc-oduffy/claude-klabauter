@@ -2909,9 +2909,14 @@ def acquire_brief_claim(
         --------------------|----------------------|---------------|------------------------
         True                | (any)                | (any)         | expired-brief-lease
         False               | "stable-pid"          | False         | dead-holder
-        False               | None                  | (n/a)         | holder-absent
+        False               | "harness-registry-superseded" | False | dead-holder
+        False               | None                 | (n/a)         | holder-absent
         False               | "recency-window(-mtime)" / "unknown" | (any) | holder-liveness-unknown
         False               | "stable-pid"          | True          | holder-liveness-unknown
+
+    The registry witness behind "harness-registry-superseded" is
+    session-scoped, so that basis alone is proof of death (unlike
+    "stable-pid", which needs its own boolean too).
 
     The last row is the structural-disagreement case (F1): `session_verdict`
     (computed here, label-only, strictly AFTER the takeover already
@@ -3015,9 +3020,11 @@ def acquire_brief_claim(
     # back to it rather than re-deriving the reasoning inline.
     if prior_lease_expired:
         basis = "expired-brief-lease"
-    elif prior_liveness_basis == "stable-pid" and prior_liveness_live is False:
+    elif (
+        prior_liveness_basis == "stable-pid" and prior_liveness_live is False
+    ) or prior_liveness_basis == "harness-registry-superseded":
         # Row 2 (Review: staff-eng F1) — confirmed dead: Layer 1 ran AND the
-        # boolean itself reads False.
+        # boolean itself reads False; the superseded basis is dead by itself.
         basis = "dead-holder"
     elif prior_liveness_basis is None:
         # Row 3 (Review: staff-eng F2) — no verdict at all (no local dir, no

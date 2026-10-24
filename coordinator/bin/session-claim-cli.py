@@ -84,7 +84,8 @@
 #       from the same single read as line 1 (liveness.session_live_with_basis):
 #       "harness-registry" | "stable-pid" | "stable-pid-shared" |
 #       "recency-window" | "recency-window-mtime" |
-#       "harness-registry-elsewhere" | "unknown". Never emitted on the
+#       "harness-registry-elsewhere" | "harness-registry-superseded" |
+#       "unknown". Never emitted on the
 #       malformed-SID or transport-failure paths since those carry no decided
 #       verdict to attach a basis to.
 #     exit 0   -> live.
