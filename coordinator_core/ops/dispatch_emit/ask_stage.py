@@ -60,6 +60,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
 )
 from coordinator_core.ops.dispatch_emit.credit_gate import DOCS_CHUNK_ID, SIZING_CHUNK_ID
 from coordinator_core.ops.dispatch_emit import write_baseline as _write_baseline
+from coordinator_core.ops.dispatch_emit.halted_run import halted_run_base
 from coordinator_core.ops.dispatch_emit.fanout_cost import FanoutCost, Unit, propose_groups
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
@@ -179,6 +180,32 @@ def relayed_ask_block(relayed_text: Optional[str]) -> str:
         "An agent relayed this ask; it is not the PM's own wording. Serve it, and where the PM's "
         "verbatim words above (or in the sizing) read differently, the PM's words outrank it.",
     ])
+    return "\n".join(lines) + "\n"
+
+
+REVISIONS_HEADING = "## Revisions sent while the run was in flight"
+
+
+def revisions_block(root: Path, run_id: str) -> str:
+    """The brief's section of every register row a `workflow.revise` added to the run, in arrival
+    order: the ledger judges each, so an executor not told of one can only fail it. Empty when none."""
+    try:
+        ledger = requirements_ledger.read_ledger(root, requirements_ledger.run_dir(root, run_id))
+    except requirements_ledger.LedgerRefused:
+        return ""
+    items = [i for i in ledger.items if i.origin == requirements_ledger.ORIGIN_REVISION] if ledger else []
+    if not items:
+        return ""
+    lines = [REVISIONS_HEADING, ""]
+    for item in items:
+        tag = ", ".join(p for p in (item.at, f"from {item.sender}" if item.sender else "") if p)
+        lines.append(f"{item.id} ({tag}):" if tag else f"{item.id}:")
+        lines.extend("> " + ln if ln else ">" for ln in item.text.strip().splitlines())
+        lines.append("")
+    lines.append(
+        "These are requirements of this run, relayed by an EM or peer, not the PM's words. Deliver "
+        "each one your row serves; a later revision governs over an earlier item it changes."
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -1029,6 +1056,9 @@ def stage(
         except requirements_ledger.LedgerRefused as exc:
             raise AskStageError(f"requirements: {exc}") from exc
         run_sizing = _run_sizing(root, run_sizing_rel) or run_sizing
+        revisions = revisions_block(root, run_id)
+        if revisions:
+            intent = intent + ("\n" if intent else "") + revisions
     if plan_rel and not ledger_resume and _split is not None:
         _refuse_unclaimed_register_rows(_split.fm_text, plan_posix, run_sizing_rel, run_sizing)
     em_block = em_brief_block(run_sizing)
@@ -1183,7 +1213,7 @@ def stage(
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
         dropped_writes=tuple({"path": p, "sentence": s} for p, s in excluded.items()),
-        write_baseline=_stage_write_baseline(root, manifest_rows),
+        write_baseline=_stage_write_baseline(root, manifest_rows, record),
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
         memo_close=memo_close if not manifest_rows else (),
         held_ids=held_ids,
@@ -1262,9 +1292,18 @@ def _recorded_manifest(record: Path) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow]) -> dict:
+def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow], record: Optional[Path] = None) -> dict:
     """Fingerprint every non-adopting row's declared file write (absent -> None); directories and globs are skipped.
-    Spawn-free; runs at stage, before any executor."""
+    Spawn-free; runs at stage, before any executor.
+
+    Trap: a refire (`record` holds a `halted.json` carrying `run_base_sha`) keeps the baseline the
+    halted run's own stage recorded for every path it covers, since the live tree already holds that
+    fire's output. Only paths the prior manifest never baselined are read from the live tree."""
+    prior: Mapping = {}
+    if record is not None and halted_run_base(record):
+        recorded = (_recorded_manifest(record) or {}).get("write_baseline")
+        if isinstance(recorded, Mapping):
+            prior = recorded
     paths: list[str] = []
     for r in rows:
         if r.adopts_stranded:
@@ -1273,7 +1312,9 @@ def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow]) -> dict:
             if any(ch in w for ch in "*?[") or w.endswith("/") or (root / w).is_dir():
                 continue
             paths.append(w)
-    return _write_baseline.capture(root, _dedupe_preserve_order(paths))
+    wanted = _dedupe_preserve_order(paths)
+    live = _write_baseline.capture(root, [p for p in wanted if p not in prior])
+    return {p: prior[p] if p in prior else live[p] for p in wanted}
 
 
 def manifest_payload(root: Path, manifest: StageManifest) -> dict:
