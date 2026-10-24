@@ -29,6 +29,19 @@ _TICKED = re.compile(r"`([^`\n]+)`")
 _LINE_SUFFIX = re.compile(r":\d+(?:-\d+)?$")
 
 
+_INPUT_WORDS = r"provenance|inputs?|sources?|references?|read-only"
+_INPUT_BEFORE = re.compile(
+    r"(?:\b(?:" + _INPUT_WORDS + r")\b[^`]{0,40}|\b(?:sourced|derived|taken|read|copied|cited)\s+from\s+)$", re.I
+)
+_INPUT_AFTER = re.compile(r"^\)?\s*[(\-—:,]\s*(?:as\s+|the\s+)*(?:" + _INPUT_WORDS + r")\b(?!\s*:)", re.I)
+_INPUT_HEAD = re.compile(r"^#{3,6}[ \t]+(?:" + _INPUT_WORDS + r")\b", re.I)
+
+
+def _cited_as_input(line: str, m: "re.Match[str]") -> bool:
+    """True when the line presents the ticked path as an input/source/provenance, not delivered work."""
+    return bool(_INPUT_BEFORE.search(line[: m.start()]) or _INPUT_AFTER.match(line[m.end():]))
+
+
 @dataclass(frozen=True)
 class ShippedClaim:
     path: str
@@ -59,12 +72,14 @@ def extract_shipped_claims(note_text: str) -> tuple[ShippedClaim, ...]:
     text = note_text[: head.start()] if head else note_text
     text = _FENCE.sub("", text)
     level = 0
+    inputs = False
     seen: set[str] = set()
     out: list[ShippedClaim] = []
     for line in text.splitlines():
         h = _ANY_HEAD.match(line)
         if h:
             depth = len(h.group(1))
+            inputs = bool(level and depth > level and _INPUT_HEAD.match(line))
             if _SHIPPED_HEAD.match(line):
                 level = depth
             elif level and depth <= level:
@@ -72,9 +87,13 @@ def extract_shipped_claims(note_text: str) -> tuple[ShippedClaim, ...]:
             continue
         if not level:
             continue
+        if inputs:
+            continue
         for m in _TICKED.finditer(line):
             path = _clean(m.group(1))
             if not path or re.search(r"\s", path) or path in seen:
+                continue
+            if _cited_as_input(line, m):
                 continue
             seen.add(path)
             out.append(ShippedClaim(path, line.strip()[:_ANCHOR_CAP]))
@@ -156,7 +175,9 @@ def shipped_refusal(verdicts: Iterable[ShippedVerdict]) -> Optional[str]:
         if v.verdict in _REFUSING:
             return (
                 f"{SHIPPED_CLAIM_REFUSED}: `{v.claim.path}` is {v.verdict}: {v.why}. "
-                "Correct the change or the note, then re-fire the same sizing."
+                f"If `{v.claim.path}` is an input you read rather than work you delivered, cite it as "
+                "provenance (e.g. 'source: `path`') or drop it from the shipped list; otherwise "
+                "correct the change. Then re-fire the same sizing."
             )
     return None
 

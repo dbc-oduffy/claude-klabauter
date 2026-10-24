@@ -61,8 +61,8 @@ def launches(monkeypatch):
     return calls
 
 
-NO_CLOSE = {"close": {"status": "not-applicable", "detail": "no halt record"}, "withheld": []}
-JOB_NA_SOLO = {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "withheld": []}
+NO_CLOSE = {"close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
+JOB_NA_SOLO = {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "blocking_rows": []}
 
 
 @pytest.fixture
@@ -134,9 +134,9 @@ def test_solo_halted_run_records_landed_marker(repo):
     marker = _solo(root)
     out = _call(root, run_id=SOLO, sha=first[:10])
     assert out == {
-        "ok": True, "run_id": SOLO, "sha": first, "written": True,
+        "ok": True, "run_id": SOLO, "sha": first, "written": True, "shas": [first], "covers": {},
         "recorded": f"state/warp/{SOLO}/halted.json",
-        "close": {"status": "not-applicable", "detail": "halt record names no plan"}, "withheld": [],
+        "close": {"status": "not-applicable", "detail": "halt record names no plan"}, "blocking_rows": [],
     }
     data = json.loads(marker.read_text(encoding="utf-8"))
     assert data["status"] == "landed" and data["sha"] == first and data["halted"] == "x"
@@ -364,7 +364,7 @@ def test_sibling_landing_flips_marker_queues_legs_and_launches_once(repo, launch
         "job": ".coordinator-local/close-jobs/A.json", "launched": True,
         "queued": [leg for leg in op.CLOSE_LEGS if leg != "review-stamp"],
     }
-    assert out["withheld"] == ["R1"]
+    assert out["blocking_rows"] == ["R1"]
     assert launches == ["A"]
     job = _job(root, "A")
     assert job["plan_rel"] == PLAN and job["terminal_sha"] == first and job["run_base_sha"] == FULL_BASE
@@ -390,7 +390,7 @@ def test_landed_same_sha_with_job_launches_nothing(repo, launches):
     _call(root, run_id="A", sha=first)
     launches.clear()
     out = _call(root, run_id="A", sha=first)
-    assert out["ok"] and out["close"]["status"] == "not-applicable" and out["withheld"] == ["R1"]
+    assert out["ok"] and out["close"]["status"] == "not-applicable" and out["blocking_rows"] == ["R1"]
     assert launches == []
 
 
@@ -402,7 +402,7 @@ def test_marker_without_plan_is_not_applicable(repo, launches):
     del data["plan"]
     marker.write_text(json.dumps(data), encoding="utf-8")
     out = _call(root, run_id="A", sha=first)
-    assert out["ok"] and out["close"]["status"] == "not-applicable" and out["withheld"] == ["R1"]
+    assert out["ok"] and out["close"]["status"] == "not-applicable" and out["blocking_rows"] == ["R1"]
     assert launches == [] and _job(root, "A") is None
 
 
@@ -513,6 +513,32 @@ def test_sha_set_covering_withheld_is_accepted_and_insufficient_or_unrelated_ref
     assert out["ok"] and out["written"] is True and out["sha"] == two
     again = _call(root, run_id=rid, shas=[one, two])
     assert again["ok"] and again["written"] is False and again["sha"] == two
+
+
+@pytest.mark.parametrize("solo", [True, False])
+def test_multi_sha_reply_echoes_every_sha_with_the_withheld_paths_each_covered(repo, solo):
+    root, first, _ = repo
+    rid = SOLO if solo else "A"
+    if solo:
+        marker = _solo(root)
+    else:
+        _seed(root, {"A": {"status": "halted"}})
+        marker = _plan_marker(root, "A")
+    _withhold(marker, "sub/d.md", "e.txt")
+    one = _commit_files(root, {"sub/d.md": "x"})
+    two = _commit_files(root, {"e.txt": "e"})
+    out = _call(root, run_id=rid, sha=one, shas=[two[:10]])
+    assert out["ok"] and out["sha"] == two
+    assert out["shas"] == [one, two]
+    assert out["covers"] == {one: ["sub/d.md"], two: ["e.txt"]}
+
+
+def test_single_sha_reply_without_withheld_echoes_the_sha_and_no_covers(repo):
+    root, first, _ = repo
+    _solo(root)
+    out = _call(root, run_id=SOLO, sha=first[:8])
+    assert out["ok"] and out["shas"] == [first] and out["covers"] == {}
+    assert "withheld" not in out and out["blocking_rows"] == []
 
 
 def test_shas_param_must_be_a_list_of_hex(repo):

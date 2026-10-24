@@ -30,6 +30,16 @@ def test_describe_deferring_handler_docstring_prints_module_docstring():
     assert out.count("See module docstring") == 1
 
 
+def test_describe_one_line_handler_docstring_appends_module_docstring_params():
+    buf = io.StringIO()
+    with redirect_stdout(buf), pytest.raises(SystemExit) as exc:
+        _dispatch_argv_body(["dispatch.record_halted_run_landed", "--describe"], ".", allow_warm=False)
+    assert exc.value.code == 0
+    out = buf.getvalue()
+    for param in ("run_id", "sha", "shas", "session_id"):
+        assert f"``{param}``" in out
+
+
 def test_describe_unknown_op_exits_nonzero():
     with pytest.raises(SystemExit) as exc:
         _dispatch_argv_body(["no.such.op", "--describe"], ".", allow_warm=False)

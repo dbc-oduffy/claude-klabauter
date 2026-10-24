@@ -66,6 +66,30 @@ def test_pure_empty_how_wrong_gap_and_unmet_rows():
     assert lr._unclosed_halt_gaps(_resume("x"), _verdict(), {}) == []
 
 
+def test_pure_commit_line_and_post_commit_acts_are_discharged_by_the_commit():
+    gaps = {"R1": {"remaining": ["Fix X", "commit"]}}
+    fix = {"gap": "Fix X", "how": "fixed"}
+    verdict = _verdict(fix, status="post_commit")
+    verdict["items"][0]["post_commit_acts"] = ["commit"]
+    assert lr._unclosed_halt_gaps(_resume("x"), verdict, gaps) == []
+    assert lr._unclosed_halt_gaps(_resume("x"), _verdict(fix), gaps) == []
+    other = {"R1": {"remaining": ["Fix X", "Fix Y"]}}
+    assert lr._unclosed_halt_gaps(_resume("x"), verdict, other)[0]["id"] == "R1"
+    acts = {"R1": {"remaining": ["Fix X", "sha_reply"]}}
+    assert lr._unclosed_halt_gaps(_resume("x"), verdict, acts)[0]["reason"].endswith("sha_reply")
+    verdict["items"][0]["post_commit_acts"] = ["commit", "sha_reply"]
+    assert lr._unclosed_halt_gaps(_resume("x"), verdict, acts) == []
+
+
+def test_terminal_commit_passes_post_commit_row_with_commit_remaining(run):
+    resume = _resume(run[3])
+    resume["remaining"] = {"R1": {"remaining": ["Fix X", "commit"], "evidence": "e"}}
+    verdict = _verdict({"gap": "Fix X", "how": "fixed"}, status="post_commit")
+    verdict["items"][0]["post_commit_acts"] = ["commit"]
+    refusal = _gate(run, verdict, resume)
+    assert refusal is None or HALT_GAP_UNCLOSED_REASON not in json.dumps(refusal)
+
+
 def _halt_record(root):
     d = root / RECORD_DIR_ROOT / HALTED
     d.mkdir(parents=True)

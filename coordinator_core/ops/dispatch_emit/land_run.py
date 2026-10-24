@@ -900,6 +900,8 @@ def _unclosed_halt_gaps(resume: object, verdict: object, gap_lines: object) -> l
     halt gap lines (stripped, exact) has no ``gaps_closed`` entry of the same gap with a non-empty
     ``how``. Pure; rows with no gap lines owe nothing.
 
+    A gap line that is ``commit`` or one of the item's ``post_commit_acts`` is discharged by the commit itself.
+
     Trap: checks coverage only; ``how`` is the judge's prose and its truth is not verified here."""
     from coordinator_core.ops.dispatch_emit.ask_contract import GAPS_CLOSED_FIELD, HALT_GAP_UNCLOSED_REASON
 
@@ -920,8 +922,10 @@ def _unclosed_halt_gaps(resume: object, verdict: object, gap_lines: object) -> l
             str(c.get("gap")).strip() for c in (closed if isinstance(closed, list) else [])
             if isinstance(c, dict) and isinstance(c.get("gap"), str) and isinstance(c.get("how"), str) and c["how"].strip()
         }
+        acts = item.get("post_commit_acts")
+        discharged = {"commit", *(str(a).strip().lower() for a in (acts if isinstance(acts, list) else []))}
         for line in lines:
-            if isinstance(line, str) and line.strip() and line.strip() not in covered:
+            if isinstance(line, str) and line.strip() and line.strip() not in covered and line.strip().lower() not in discharged:
                 failures.append({"id": item["id"], "reason": f"{HALT_GAP_UNCLOSED_REASON}: {line.strip()}"})
                 break
     return failures

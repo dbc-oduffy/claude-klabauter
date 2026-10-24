@@ -1,6 +1,9 @@
 """``dispatch.record_halted_run_landed``: records a halted run as landed at a verified commit.
 
-Params: ``{run_id, sha}`` or ``{run_id, shas}`` (``sha`` and ``shas`` combine); each sha is a lowercase hex commit sha, full or abbreviated to at least 4
+Params: ``run_id`` (string, required: the halted run), ``sha`` (string: one commit sha), ``shas``
+(list of strings: further commit shas, unioned with ``sha``; at least one of the two is required),
+``session_id`` (string, optional uuid: the calling session, used to find the run's review sidecar).
+Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit in the first-parent window and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
 ``halted`` (or already ``landed`` at the same sha) and ``sha`` must be a commit on HEAD's first-parent
@@ -13,8 +16,11 @@ the same way. The op never commits: commit existence and ancestry are in-process
 the close legs (``CLOSE_LEGS``) are queued in a close-job record paid by one detached launch
 (``_launch``), never inline. The record is written only when the marker names a ``plan`` and no
 close-job record exists yet.
-Reply: ``{ok, run_id, sha, written, siblings?, recorded?, close, withheld}`` or ``{ok: false, error}``;
-``withheld`` is the marker's ``blocking`` register-row ids.
+Reply: ``{ok, run_id, sha, written, shas?, covers?, siblings?, recorded?, close, blocking_rows}`` or
+``{ok: false, error}``; ``blocking_rows`` is the marker's ``blocking`` register-row ids (not paths; the
+withheld paths each sha carried are under ``covers``). When ``written``,
+``shas`` is every verified full sha (``sha`` plus ``shas`` params, deduplicated) and ``covers`` maps
+each to the withheld paths it changed (``{}`` when the run withholds nothing); ``sha`` is the newest.
 When the halt marker records withheld paths (``run_artifacts.withheld``), ``sha`` must have changed
 every one of them versus its first parent, or several shas must together (each changing at least one),
 so recording landed cannot release the withheld-commit guard for a commit that never carried them; a
@@ -124,7 +130,7 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     withheld = _withheld(marker)
     plan = marker.get("plan")
     if not isinstance(plan, str) or not plan:
-        return {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "withheld": withheld}
+        return {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "blocking_rows": withheld}
     base = marker.get("run_base_sha")
     deadline = datetime.now().astimezone() + timedelta(minutes=_CLOSE_JOB_WINDOW_MINUTES)
     try:
@@ -147,7 +153,7 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     except Exception as exc:  # noqa: BLE001 -- the landed write stands; the close reports itself
         return {
             "close": {"job": None, "launched": False, "queued": list(CLOSE_LEGS), "error": f"{type(exc).__name__}: {exc}"},
-            "withheld": withheld,
+            "blocking_rows": withheld,
         }
     launch_error = None
     try:
@@ -158,7 +164,7 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     close = {"job": job, "launched": launched, "queued": list(queued)}
     if launch_error is not None:
         close["error"] = launch_error
-    return {"close": close, "withheld": withheld}
+    return {"close": close, "blocking_rows": withheld}
 
 
 def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) -> dict:
@@ -169,15 +175,15 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) 
     try:
         record_dir = ask_contract.record_dir(root, run_id)
     except ValueError:
-        return {"close": {"status": "not-applicable", "detail": "no halt record"}, "withheld": []}
+        return {"close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
     marker = halted_run._read(record_dir)
     if marker is not None and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
         if halted_run.mark_landed(record_dir, sha):
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
     if marker is None:
-        return {**out, "close": {"status": "not-applicable", "detail": "no halt record"}, "withheld": []}
+        return {**out, "close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
     if run_close.resolve_close_job_stem(root, run_id) is not None:
-        return {**out, "close": {"status": "not-applicable", "detail": "close job already recorded"}, "withheld": _withheld(marker)}
+        return {**out, "close": {"status": "not-applicable", "detail": "close job already recorded"}, "blocking_rows": _withheld(marker)}
     return {**out, **_queue_close(root, run_id, sha, marker, session_id)}
 
 
@@ -258,12 +264,13 @@ def _terminal(cand: Path) -> bool:
     return isinstance(stage, dict) and stage.get("stage") in ("halted", "landed")
 
 
-def _carries_withheld(root: Path, run_id: str, shas: list) -> Optional[str]:
-    """None when *shas* together changed every path the run's halt marker withholds, else the refusal text.
+def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str], dict]:
+    """``(None, covers)`` when *shas* together changed every path the run's halt marker withholds, else ``(refusal, {})``.
 
     Each sha is compared with its first parent; the union of changed withheld paths must cover the
-    withheld list, and every sha must change at least one of them. A run withholding nothing, or with
-    no marker, passes. An unreadable commit or tree refuses.
+    withheld list, and every sha must change at least one of them. ``covers`` maps each sha to the
+    withheld paths it changed (empty for a run withholding nothing or with no marker, which passes).
+    An unreadable commit or tree refuses.
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -273,29 +280,31 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> Optional[str]:
     try:
         withheld = sorted(halted_run.halted_withheld(ask_contract.record_dir(root, run_id)))
     except ValueError:
-        return None
+        return None, {}
     if not withheld:
-        return None
+        return None, {}
     common = resolve_git_common_dir(root)
 
     def _entry(spine: dict, path: str):
         return spine.get(path.rpartition("/")[0], {}).get(path.rpartition("/")[2])
 
     covered: set = set()
+    covers: dict = {}
     for sha in shas:
         meta = commit_meta(common, sha)
         parents = meta.get("parents") if meta else None
         parent_meta = commit_meta(common, parents[0]) if parents else None
         if meta is None or not meta.get("tree") or (parents and (parent_meta is None or not parent_meta.get("tree"))):
-            return f"{sha} or its parent is unreadable; retry"
+            return f"{sha} or its parent is unreadable; retry", {}
         after = read_tree_spine(root, withheld, root_tree_sha=meta["tree"])
         before = read_tree_spine(root, withheld, root_tree_sha=parent_meta["tree"]) if parent_meta else {}
         if after is None or before is None:
-            return f"{sha} tree is unreadable; retry"
+            return f"{sha} tree is unreadable; retry", {}
         changed = {p for p in withheld if _entry(after, p) != _entry(before, p)}
         if len(shas) > 1 and not changed:
-            return f"{sha} changed none of the run's withheld paths; drop it from shas"
+            return f"{sha} changed none of the run's withheld paths; drop it from shas", {}
         covered |= changed
+        covers[sha] = [p for p in withheld if p in changed]
     unchanged = [p for p in withheld if p not in covered]
     if unchanged:
         more = f" (+{len(unchanged) - 1} more)" if len(unchanged) > 1 else ""
@@ -303,12 +312,15 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> Optional[str]:
         return (
             f"{who} did not change withheld {unchanged[0]}{more}; "
             "pass the commit(s) that landed the run's withheld paths"
-        )
-    return None
+        ), {}
+    return None, covers
 
 
-def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optional[str]]:
-    """``(newest_full_sha, None)`` when *shas* resolve, are reachable and cover the withheld paths, else ``(None, refusal)``."""
+def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optional[str], dict]:
+    """``(newest_full_sha, None, echo)`` when *shas* resolve, are reachable and cover the withheld paths, else ``(None, refusal, {})``.
+
+    ``echo`` is ``{"shas": every verified full sha, "covers": {sha: withheld paths it changed}}``.
+    """
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_sha
     from coordinator_core.git.rollback_check import _first_parent_ancestors
@@ -318,20 +330,21 @@ def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optiona
         if not _FULL_SHA.fullmatch(sha):
             sha, problem = _resolve_prefix(root, sha)
             if problem:
-                return None, problem
+                return None, problem, {}
         full.append(sha)
     full = list(dict.fromkeys(full))
     for sha in full:
         problem = _reachable(root, sha)
         if problem:
-            return None, problem
-    problem = _carries_withheld(root, run_id, full)
+            return None, problem, {}
+    problem, covers = _carries_withheld(root, run_id, full)
     if problem:
-        return None, problem
+        return None, problem, {}
+    echo = {"shas": full, "covers": covers}
     if len(full) == 1:
-        return full[0], None
+        return full[0], None, echo
     order = {s: i for i, s in _first_parent_ancestors(resolve_git_common_dir(root), head_sha(root), ANCESTRY_WINDOW)}
-    return min(full, key=lambda s: order.get(s, ANCESTRY_WINDOW)), None
+    return min(full, key=lambda s: order.get(s, ANCESTRY_WINDOW)), None, echo
 
 
 def _shas_param(params: dict) -> tuple[list, Optional[str]]:
@@ -375,14 +388,14 @@ def _record_solo(root: Path, run_id: str, shas: list, session_id: Optional[str] 
             return _refuse(f"{run_id} is resumed and its successor {successor} is still live; wait for it or stop it")
     elif status != halted_run.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}; only a halted or resumed run is recorded landed")
-    sha, problem = _verify(root, run_id, shas)
+    sha, problem, echo = _verify(root, run_id, shas)
     if problem:
         return _refuse(problem)
     if not halted_run.mark_landed(record_dir, sha):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     recorded = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
     return {
-        "ok": True, "run_id": run_id, "sha": sha, "written": True, "recorded": recorded,
+        "ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, "recorded": recorded,
         **_queue_close(root, run_id, sha, marker, session_id),
     }
 
@@ -426,11 +439,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if status != contract.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
-    sha, problem = _verify(root, run_id, shas)
+    sha, problem, echo = _verify(root, run_id, shas)
     if problem:
         return _refuse(problem)
     reply = run_close.sibling_release(root, run_id, sha)
-    out: dict = {"ok": True, "run_id": run_id, "sha": sha, "written": True}
+    out: dict = {"ok": True, "run_id": run_id, "sha": sha, "written": True, **echo}
     if reply is not None:
         out["siblings"] = reply
     out.update(_close_landed(root, run_id, sha, session_id))

@@ -13,6 +13,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -57,7 +58,13 @@ LIFECYCLE_OPS = (
     "roadmap.plan_gate",
     "handoff.append_session_ledger",
 )
-SIBLING_PROBE_GIT_VERBS = ("merge-base", "log")
+DESCRIBE_SUFFIX = "--describe"
+_OP_NAME_RE = re.compile(r"^[a-z_]+(\.[a-z_]+)+$")
+# Registry namespaces whose ops are post-fire lifecycle verbs; the read-only names inside them stay survey.
+_LIFECYCLE_NAMESPACES = ("dispatch", "sizing", "workflow")
+_NOT_LIFECYCLE_PREFIXES = ("read_", "pending_", "fire", "validate", "sibling_status", "measured_rev")
+_REGISTRY_OP_RE = re.compile(r'^\s*"((?:%s)\.[a-z_]+)"\s*:' % "|".join(_LIFECYCLE_NAMESPACES), re.M)
+SIBLING_PROBE_GIT_VERBS =("merge-base", "log")
 LIFECYCLE_BINS = (
     "cross-repo-memo",
     "backlog-grind-assemble",
@@ -268,6 +275,23 @@ def _plain_args(rest: str) -> Optional[list]:
     return words
 
 
+@functools.lru_cache(maxsize=1)
+def lifecycle_ops() -> frozenset:
+    """LIFECYCLE_OPS plus every dispatch./sizing./workflow. op in the registry map, so a new receipt verb is covered.
+
+    Reads `ops/_registry_map.py` as text (no import, no spawn); an unreadable map leaves the literal tuple.
+    """
+    found: set = set(LIFECYCLE_OPS)
+    try:
+        text = (Path(__file__).resolve().parents[1] / "ops" / "_registry_map.py").read_text(encoding="utf-8")
+    except OSError:
+        return frozenset(found)
+    for name in _REGISTRY_OP_RE.findall(text):
+        if not name.split(".", 1)[1].startswith(_NOT_LIFECYCLE_PREFIXES):
+            found.add(name)
+    return frozenset(found)
+
+
 def lifecycle_op(command: object) -> Optional[str]:
     """The lifecycle verb a Bash command invokes, else None.
 
@@ -289,6 +313,8 @@ def lifecycle_op(command: object) -> Optional[str]:
         base = base[:-3]
     if base in LIFECYCLE_BINS:
         return base
+    if base == "session-claim-cli":
+        return "session-claim-cli.release-artifact" if args[:1] == ["release-artifact"] else None
     if _PYTHONS.match(base):
         if args[:2] != ["-m", "coordinator_core.invoke"]:
             return None
@@ -296,6 +322,7 @@ def lifecycle_op(command: object) -> Optional[str]:
     elif base not in _INVOKERS:
         return None
     kept: list = []
+    kept_flags: list = []
     skip = False
     for a in args:
         if skip:
@@ -304,8 +331,14 @@ def lifecycle_op(command: object) -> Optional[str]:
             skip = True
         elif not a.startswith("-"):
             kept.append(a)
+        else:
+            kept_flags.append(a)
     args = kept
-    return args[0] if args and args[0] in LIFECYCLE_OPS else None
+    if not args:
+        return None
+    if "--describe" in kept_flags:
+        return args[0] + DESCRIBE_SUFFIX if _OP_NAME_RE.match(args[0]) else None
+    return args[0] if args[0] in lifecycle_ops() else None
 
 
 def _same_path(a: str, b: str) -> bool:

@@ -285,6 +285,43 @@ def test_lifecycle_invocation_not_counted_postlanding(env, monkeypatch, cmd):
     assert g.evaluate(env.payload(tid="p4")) is not None
 
 
+RELEASE_SEQUENCE = [
+    "git -C /r/scratch/mirror rev-parse HEAD",
+    "coordinator-invoke dispatch.record_halted_run_landed --describe",
+    "session-claim-cli release-artifact artifact state/warp/x/halted.json",
+    "coordinator-invoke dispatch.record_halted_run_landed --params-file /r/scratch/p.json",
+]
+
+
+def test_release_sequence_after_halt_receipt_never_denies(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch, ers.PHASE_HALTED)
+    for i, cmd in enumerate(RELEASE_SEQUENCE):
+        call = {"command": cmd}
+        assert g.evaluate(env.payload(tid=f"r{i}", name="Bash", inp=call)) is None
+        env.write(use(f"r{i}", "Bash", call))
+    assert g.evaluate(env.payload(tid="p1")) is None
+
+
+@pytest.mark.parametrize("op", ["sizing.resize", "dispatch.terminal_commit", "workflow.revise", "dispatch.some_new_receipt_verb_not_in_map"])
+def test_describe_of_any_op_is_exempt_but_never_a_revise(op):
+    from coordinator_core.session import em_prefire_window as w
+
+    assert w.lifecycle_op(f"coordinator-invoke {op} --describe") == op + w.DESCRIBE_SUFFIX
+
+
+def test_exempt_set_derives_from_registry_and_still_counts_reads():
+    from coordinator_core.session import em_prefire_window as w
+
+    ops = w.lifecycle_ops()
+    assert {"dispatch.record_halted_run_landed", "sizing.resize", "sizing.supersede", "workflow.revise", "dispatch.terminal_commit"} <= ops
+    assert w.lifecycle_op("coordinator-invoke dispatch.record_halted_run_landed --params-file p.json") == "dispatch.record_halted_run_landed"
+    assert w.lifecycle_op("coordinator-invoke sizing.read_object_fields '{}'") is None
+    assert w.lifecycle_op("session-claim-cli release-artifact artifact x") is not None
+    assert w.lifecycle_op("session-claim-cli list") is None
+    assert w.lifecycle_op("grep -n dispatch.record_halted_run_landed x") is None
+
+
 def test_mention_of_revise_does_not_disarm_postlanding(env, monkeypatch):
     env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
     _landed(monkeypatch)
