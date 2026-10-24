@@ -40,6 +40,11 @@ def _stub_source_preflight(request, monkeypatch):
     to exercise the real gate."""
     if getattr(request.module, "REAL_SOURCE_PREFLIGHT", False):
         return
-    from coordinator_core.percolate import source_preflight
+    try:
+        from coordinator_core.percolate import source_preflight
+    except ModuleNotFoundError as exc:
+        if not (exc.name or "").startswith("coordinator_core"):
+            raise
+        return
 
     monkeypatch.setattr(source_preflight, "check_source_published", lambda _source_dir, *_a, **_k: None)

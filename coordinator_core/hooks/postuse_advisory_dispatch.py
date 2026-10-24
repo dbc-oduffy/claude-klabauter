@@ -1514,9 +1514,10 @@ def _task_paused_in_tail(transcript_path: str, task_id: str) -> bool:
 
 
 def _superseded_by_live_run(record: dict, records: list, now: float) -> bool:
-    """True when a newer record of the same scriptPath and args (a fresh re-fire; same-run_id
-    records are already collapsed to the newest by the caller) has a journal that is not
-    stalled: settled or progressing. Reads journal stats only."""
+    """True when a newer record of the same args (a fresh re-fire; same-run_id records are
+    already collapsed to the newest by the caller) has a journal that is not stalled: settled
+    (landed) or progressing. Same args alone match when they name a `sizing` (a warp re-fire
+    mints a new scriptPath); otherwise scriptPath must match too. Reads journal stats only."""
     from coordinator_core.workflow_watch import stall
 
     fired_at = record.get("fired_at")
@@ -1526,8 +1527,10 @@ def _superseded_by_live_run(record: dict, records: list, now: float) -> bool:
                 or not isinstance(other_fired, (int, float)) or other_fired <= fired_at
                 or other.get("task_id") == record.get("task_id")):
             continue
-        same_run = (other.get("scriptPath") == record.get("scriptPath")
-                    and other.get("args") == record.get("args"))
+        args = record.get("args")
+        same_sizing = isinstance(args, dict) and isinstance(args.get("sizing"), str) and bool(args["sizing"])
+        same_run = other.get("args") == args and (
+            same_sizing or other.get("scriptPath") == record.get("scriptPath"))
         other_dir = other.get("transcript_dir")
         if not same_run or not isinstance(other_dir, str):
             continue

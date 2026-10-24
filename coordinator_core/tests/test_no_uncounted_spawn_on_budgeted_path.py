@@ -497,6 +497,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/fleet/scratch_hygiene.py",
         ("_handler",),
     ),
+    "scratch.delete": (
+        "coordinator_core/ops/scratch_delete.py",
+        ("_handler",),
+    ),
     "review_stamp.rejudge": (
         "coordinator_core/ops/review_stamp.py",
         ("_rejudge_handler",),
@@ -1140,6 +1144,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "schema.describe": (
         "coordinator_core/frontmatter/schema_cli.py",
         ("_op_schema_describe",),
+    ),
+    "scratch.delete": (
+        "coordinator_core/ops/scratch_delete.py",
+        ("_handler",),
     ),
     "schema.validate": (
         "coordinator_core/frontmatter/schema_cli.py",
@@ -3094,6 +3102,12 @@ _CLUSTER_D4_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/pyresolve.py", "_validate_interpreter", "<dynamic>", 0),
     ),
     "priority.drain": (),
+    "sizings.summary": (
+        ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
+    ),
+    "workflow_runs.list": (
+        ("coordinator_core/engine_root.py", "coordinator_engine_root", "machine-local", 0),
+    ),
     "repo_setup.copy_console_subprocess_tripwire": (),
     "session.guard_hooks_kill_switch_detail": (),
     "session.guard_settings_integrity": (),
@@ -3251,8 +3265,10 @@ _CLUSTER_D5_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "memo.fate_backfill": ("coordinator_core/ops/memo_fate_backfill.py", "_handler"),
     "repo_setup.validate_target_root": ("coordinator_core/ops/bootstrap_repo.py", "_validate_target_root_op"),
     "scratchpad.sweep": ("coordinator_core/ops/scratchpad_sweep.py", "_handler"),
+    "sizings.summary": ("coordinator_core/ops/cockpit_sections_query.py", "_sizings_summary"),
     "strategic.generate": ("coordinator_core/ops/strategic_generate.py", "_strategic_generate"),
     "tracker.mint_person": ("coordinator_core/ops/tracker/mint_person.py", "_handler"),
+    "workflow_runs.list": ("coordinator_core/ops/cockpit_sections_query.py", "_workflow_runs_list"),
     "workflow.fire": ("coordinator_core/ops/workflow_fire/op.py", "_workflow_fire"),
     "workflow.fire_status": ("coordinator_core/ops/workflow_fire/op.py", "_workflow_fire_status"),
 }
@@ -3365,11 +3381,17 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "scratchpad.sweep": (
         ("coordinator_core/ops/discover_working_repos.py", "_sort_unique", "sort", 0),
     ),
+    "sizings.summary": (
+        ("coordinator_core/ops/emit/resolvers.py", "resolve_coordinator_root", "<dynamic>", 0),
+    ),
     "strategic.generate": (
         ("coordinator_core/ops/strategic/version_highlights.py", "_run_git", "git", 0),
     ),
     "tracker.mint_person": (
         ("coordinator_core/person_resolver.py", "_git_config_uncached", "git", 0),
+    ),
+    "workflow_runs.list": (
+        ("coordinator_core/ops/emit/resolvers.py", "resolve_coordinator_root", "<dynamic>", 0),
     ),
     "workflow.fire": (
         ("coordinator_core/ops/workflow_fire/fire.py", "_pid_alive", "tasklist", 0),
@@ -3442,9 +3464,10 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # 33 -> 32 on 2026-10-03: `deliverable.cascade_terminal` re-registered from
     # `cascade_terminal_op.py`, which never reaches `archive_stamp.py::_run_git`.
     # 34 -> 33: `handoff.archive_transition` no longer reaches `archive_stamp.py::_run_git`.
-    assert total_pairs == 33, (
+    # 33 -> 35: `sizings.summary` and `workflow_runs.list` each reach resolvers.py::resolve_coordinator_root.
+    assert total_pairs == 35, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
+        "35 measured 2026-10-24 after sizings.summary and workflow_runs.list registered; 33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -7340,8 +7363,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "session.resolve_chain_terminal_disposition": 1,
     "session_baton.promote": 1,
     "session_ledger.aggregate_chain_loe": 1,
+    "sizings.summary": 2,
     "strategic.generate": 1,
     "tracker.mint_person": 1,
+    "workflow_runs.list": 2,
     "workflow.fire_status": 1,
     # Newly live ops measured at their reachable-site counts when first pinned.
     "ci.run_commenting_sweep": 1,

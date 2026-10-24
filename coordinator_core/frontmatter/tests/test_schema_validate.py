@@ -2576,6 +2576,35 @@ class TestPlanTasksPerformer:
         assert any(e['field'] == 'performer' for e in errors)
 
 
+class TestPlanTasksNotRuleNamesBranch:
+    def test_legacy_reads_with_reads_at_head_names_allof_and_quotes_comment(self):
+        row = _valid_plan_task_row(reads=['a.py'], reads_at_head=['b.py'])
+        errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
+        hits = [e for e in errors if e['error'].startswith('value must NOT match the negated schema')]
+        assert hits, errors
+        branch = next(
+            i for i, b in enumerate(
+                json.loads(Path(_PLAN_TASKS_SCHEMA).read_text(encoding='utf-8'))['allOf']
+            )
+            if 'legacy `reads`' in b.get('$comment', '')
+        )
+        assert any(f'allOf[{branch}]' in e['error'] for e in hits)
+        assert any('Cross-field rule (C1' in e['hint'] for e in hits)
+
+    def test_commentless_not_branch_keeps_generic_hint(self, tmp_path):
+        schema_path = tmp_path / 's.schema.json'
+        schema_path.write_text(
+            json.dumps({'allOf': [{'not': {'required': ['a']}}]}), encoding='utf-8'
+        )
+        errors = validate_frontmatter({'a': 1}, schema_path)
+        assert [e['error'] for e in errors] == ['value must NOT match the negated schema']
+        assert not errors[0]['hint'].startswith('allOf[')
+
+    def test_clean_row_has_no_not_refusal(self):
+        errors = validate_frontmatter(_valid_plan_task_row(reads=['a.py']), _PLAN_TASKS_SCHEMA)
+        assert not any('NOT match' in e['error'] for e in errors)
+
+
 class TestPlanTasksDispositionShape:
     def test_default_open_row_ok(self):
         errors = validate_frontmatter(_valid_plan_task_row(), _PLAN_TASKS_SCHEMA)
@@ -4363,6 +4392,13 @@ _QUEUE_SCHEMA_PINS = {
 # Exit path: once DoE vendors 1.47.0, delete this entry and run
 # bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
 # check_schema_drift byte-pin.
+#
+# plan-tasks: claude-klabauter 3.20.0 lifts `history: false` on the apm and g-em/uhura signoff
+# branches and adds `$defs.pm_signoff_record`; DoE still reads 3.19.0 at the doe_ref.
+# Exit path: once DoE vendors 3.20.0, delete this entry and run
+# bin/claude-klabauter-revendor-schema.py plan-tasks so it returns to a plain byte-pin.
+# Trap: TestAheadPinRegistryRouting was red with this entry at review time; recompute
+# local_shape_hash / re-pin doe_ref before relying on it.
 _QUEUE_SCHEMA_AHEAD_PINS: dict = {
     'sizing-object': {
         'doe_ref': "8807597379a74d97b6396eaa667e6646f6da49c2",
@@ -4373,6 +4409,22 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
         'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
         'exempt_paths': frozenset({('properties', 'xl_exit', 'description')}),
         'local_shape_hash': "2536a4cf618d48d977010e5354697a819369e8a0225d7853fcbef061d63b9d5c",
+    },
+    'plan-tasks': {
+        'doe_ref': "4c2317da8e6f2eeb3b83e606a8dd8ef15ad736fb",
+        'reason': (
+            "claude-klabauter-first plan-tasks 3.20.0 admits signoff history on apm, g-em and uhura "
+            "records and adds the pm_signoff_record history arm; DoE's copy is still 3.19.0 "
+            "and its own vendor of 3.20.0 is pending"
+        ),
+        'provenance': "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2",
+        'exempt_paths': frozenset({
+            ('$defs', 'signoff', 'allOf', 1, 'then', 'properties', 'history'),
+            ('$defs', 'signoff', 'allOf', 2, 'then', 'properties', 'history'),
+            ('$defs', 'signoff', 'description'),
+            ('$defs', 'signoff', 'properties', 'history', 'description'),
+        }),
+        'local_shape_hash': "ddf754d085825850719c0076c2dfcc0e82639ccf9983df075fbad15f60e83f65",
     },
 }
 
@@ -4392,6 +4444,44 @@ def _check_vendored_against_doe(name: str, schema_path: Path) -> None:
         exempt_paths=entry.get('exempt_paths', frozenset()),
         local_shape_hash=entry.get('local_shape_hash'),
     )
+
+_SO_PM = {'source': 'pm', 'pm_quote': 'go', 'on': '2026-10-24', 'ruling_ref': 'state/x.md'}
+_SO_GEM = {'source': 'g-em', 'approver': 'group-em-44', 'ruling': 'ok', 'ruling_ref': 'r1', 'on': '2026-10-24'}
+_SO_APM = {'source': 'apm', 'apm_ruling': 'ok', 'ruling_ref': 'r2', 'on': '2026-10-24'}
+
+
+def _signoff_errors(signoff: dict) -> list:
+    row = {'id': 'C1', 'title': 't', 'surface': 's', 'change_kind': 'doctrine-edit',
+           'writes': ['a.py'], 'authorization': signoff}
+    return validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
+
+
+@pytest.mark.parametrize('current,prior', [
+    (_SO_GEM, _SO_GEM), (_SO_GEM, _SO_APM), (_SO_APM, _SO_APM), (_SO_APM, _SO_PM),
+])
+def test_signoff_history_admitted_on_delegated_records(current, prior):
+    assert _signoff_errors({**current, 'history': [prior]}) == []
+
+
+def test_signoff_history_admits_pm_record_with_and_without_ruling_ref():
+    bare = {k: v for k, v in _SO_PM.items() if k != 'ruling_ref'}
+    assert _signoff_errors({**_SO_GEM, 'history': [_SO_PM, bare]}) == []
+
+
+def test_signoff_history_still_refuses_what_it_refused():
+    # validate_frontmatter does not enforce `properties: {k: false}` inside allOf/then,
+    # so the forbidden-key refusals are pinned through jsonschema on $defs.signoff.
+    import jsonschema
+    schema = json.loads(_PLAN_TASKS_SCHEMA.read_text(encoding='utf-8'))
+    validator = jsonschema.Draft202012Validator(
+        {'$defs': schema['$defs'], '$ref': '#/$defs/signoff'}
+    )
+    assert validator.is_valid({**_SO_GEM, 'history': [_SO_PM]})
+    assert not validator.is_valid({**_SO_GEM, 'pm_quote': 'x'})
+    assert not validator.is_valid({**_SO_APM, 'approver': 'x'})
+    assert not validator.is_valid({**_SO_GEM, 'history': [{**_SO_PM, 'approver': 'x'}]})
+    assert not validator.is_valid({**_SO_GEM, 'history': [{'source': 'pm', 'on': '2026-10-24'}]})
+
 
 _QUEUE_SCHEMA_NAMES = (
     'bug-backlog',

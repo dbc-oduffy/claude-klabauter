@@ -69,6 +69,7 @@ _STATUS_APPLIED = "applied"
 _STATUS_EM_REJECTED = "em-rejected"
 _STATUS_SUSPENDED = "suspended"
 _VALID_STATUSES = (_STATUS_APPLIED, _STATUS_EM_REJECTED, _STATUS_SUSPENDED)
+_OUT_OF_ASK_STATUSES = ("open", "applied", "em_rejected", _STATUS_EM_REJECTED)
 
 #: Refusals kept from `append_integrator_dispositions` (§ Contract, M2): this
 #: op's `verify`/`reject` may only ever target a real, still-open reviewer
@@ -591,6 +592,19 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
         if finding_id in seen_ids:
             failures.append(f"{finding_id}: duplicate row id")
         seen_ids.add(finding_id)
+
+        if row.get("out_of_ask") is True:
+            # Peer-hunk marker: no before/after evidence exists to check, and a
+            # missing `status` stays missing (it reads as unresolved downstream).
+            raw_status = row.get("status")
+            if raw_status is not None and raw_status not in _OUT_OF_ASK_STATUSES:
+                failures.append(f"{finding_id}: unrecognized out_of_ask status {raw_status!r}")
+                new_rows.append(row)
+                continue
+            marked = dict(row)
+            marked["verified"] = True
+            new_rows.append(marked)
+            continue
 
         status = _row_status(row)
         if status not in _VALID_STATUSES:

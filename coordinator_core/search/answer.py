@@ -44,6 +44,8 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+import re
+import sys
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
@@ -185,13 +187,26 @@ class PowerShellSource:
         return note_base
 
 
+# Also matches non-path tokens shaped `/x/` (a sed script, a regex); over-declining
+# only forfeits the in-process fast path, the real shell still answers.
+_MSYS_MOUNT_OPERAND = re.compile(r"^/[A-Za-z](/|$)")
+
+
+def _is_windows_host() -> bool:
+    return sys.platform == "win32"
+
+
 def plan_for(cmd: str, tool_name: str = "Bash") -> Optional[AnswerPlan]:
+    """Decline (None) a Bash command carrying an MSYS `/x/...` mount operand on a
+    Windows host: Python cannot open it, and the real shell resolves the mount."""
     if not cmd:
         return None
     if tool_name == "PowerShell":
         return _plan_for_powershell(cmd)
     classification = _classify(cmd.replace("\r", ""))
     if classification.tokens is None:
+        return None
+    if _is_windows_host() and any(_MSYS_MOUNT_OPERAND.match(t) for t in classification.tokens):
         return None
 
     grep_plan = _plan_for_grep(classification)

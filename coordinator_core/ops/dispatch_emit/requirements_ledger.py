@@ -44,6 +44,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     STOP_AFTER_PLAN,
     empty_register_refusal,
     record_dir,
+    stamp_run_stage,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
@@ -696,6 +697,7 @@ def start(
         data[RESUMED_FROM_FIELD] = prior[RESUMED_FROM_FIELD]
     _write_run(dir_, data)
     _write_view(repo_root, dir_, run_id)
+    stamp_run_stage(repo_root, run_id, "minted")
     return dir_
 
 

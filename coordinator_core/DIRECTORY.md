@@ -22,6 +22,7 @@ Last refreshed: 2026-08-06 (spot-check only — see coverage note above).
 |---|---|
 | `__init__.py` | Package entry — op-registry + dispatch surface exports |
 | `__main__.py` | CLI/module entrypoint |
+| `sizing_route_table.py` | Import-free leaf: `_BASE_ROUTE_BY_TSHIRT`, the size-to-route table shared by `sizing_assemble` and `ask_fanout` |
 | `ipc.py` | JSON-RPC 2.0 in-process dispatch + op-registry seam (`register_op`, `dispatch_message`) |
 | `dag.py` | Python port of `bin/lib/walk-handoff-dag.js` — DAG-walker |
 | `coverage.py` | Review-coverage core (SAFE_RANGE/trail-parse/verdict-filter) + gate (DAG-vs-flat, fixpoint, scope-filter, verdict-line) engine |
@@ -110,6 +111,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 | `resolve_baton_path.py` | `baton.resolve_path_and_repo` | Resolves a caller-supplied baton path to its absolute native form + owning git repo |
 | `resolve_mcp_server_cli_path.py` | `mcp.resolve_server_cli_path` | Resolves an MCP server's CLI path + project root from `~/.claude.json` |
 | `resolve_swept_baton.py` | `baton.resolve_swept_in_archive` | Finds a swept (already-archived) baton by basename across the three known archive dirs |
+| `review_peer_bases.py` | — | `peer_path_bases` — per declared path, the last peer commit (foreign `Deliverable-Id`/`Session-Id`) preceding all own commits on it, from one `git log` spawn; the effective diff base for review freezes |
 | `roadmap_dag.py` | — | Pure derivation helper — builds per-roadmap `{nodes, edges, roll_up, critical_path}` |
 | `roadmap_serve.py` | `roadmap.serve` | Read-only single-initiative DAG view |
 | `run_pip_audit.py` | `ci.run_pip_audit` | Runs pip-audit against a lock file, with optional `--extra-index-url` detection for non-PyPI wheel sources |

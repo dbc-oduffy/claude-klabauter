@@ -36,10 +36,12 @@ from coordinator_core.ops.review_mint.wave_not_run import (
     WAVE_NOT_RUN_VAR,
     not_run_entry_js as _not_run_entry_js,
 )
+from coordinator_core.ops.dispatch_emit.ask_contract import GAP_TITLE_PREFIX
 from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
 from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_INDETERMINATE
 from coordinator_core.ops.dispatch_emit.wake_digest import INTEGRATION_NOT_RUN_VAR
 from coordinator_core.ops.review_slice_limits import MAX_SLICES
+from coordinator_core.ops.review_test_blocker import FAILING_DETAIL_FIELD
 from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -200,7 +202,10 @@ _BRIEF_CONFORMANCE_CLAUSE = (
     "your diff bears on, add one row to your sidecar's frontmatter `brief_conformance:` list "
     "({brief_item, requirement, file_line, verified_how, status: met|partial|unmet}) and return "
     "the same rows as brief_conformance. An item with no evidence in your diff is `unmet`, never "
-    "omitted."
+    "omitted. "
+    f"A spine row titled \"{GAP_TITLE_PREFIX}...\" names a gap to close, not a requirement: its "
+    "requirement is that the gap no longer holds, and a diff or test that asserts the gap's state "
+    "is `unmet`."
 )
 
 
@@ -563,6 +568,23 @@ _PREP_FROM_WAVE_JS = (
     f"return {{ halted: {_js_string_literal(REVIEW_MISSING_HALT)}, "
     f"reason: {_js_string_literal(_REVIEW_MISSING_REFUSAL)}, "
     "prep: _prepReplies[0] ?? null, wave: null, integration: null }; }\n"
+    "  const _truthReply = _waveRaw.find(r => r && !r._dispatched && r.prep && !r.prep.error && "
+    "Array.isArray(r.prep.slices) && r.prep.slices['length']);\n"
+    "  const _outOfGroupAt = !_truthReply ? -1 : _waveRaw.findIndex(r => {\n"
+    "    if (!(r && r._dispatched && r.prep && !r.prep.error && Array.isArray(r.prep.slices) && r.prep.slices['length'])) return false;\n"
+    "    const all = _truthReply.prep.slices.map(s => s.id);\n"
+    "    const g = Math.max(1, Math.min(all.length, r._dispatched.n));\n"
+    "    let at = 0; for (let k = 0; k < r._dispatched.i && k < g; k++) at += Math.floor(all.length / g) + (k < all.length % g ? 1 : 0);\n"
+    "    const size = r._dispatched.i < g ? Math.floor(all.length / g) + (r._dispatched.i < all.length % g ? 1 : 0) : 0;\n"
+    "    return all.slice(at, at + size).join('+') !== r.prep.slices.map(s => s.id).join('+');\n"
+    "  });\n"
+    "  if (_outOfGroupAt >= 0) { "
+    f"return {{ halted: {_js_string_literal(SLICE_ID_UNKNOWN_HALT)} + ' (wave agent ' + _outOfGroupAt + "
+    "' prep named slices ' + JSON.stringify(_waveRaw[_outOfGroupAt].prep.slices.map(s => s.id)) + "
+    "' outside its dispatched group ' + _waveRaw[_outOfGroupAt]._dispatched.i + ' of ' + _waveRaw[_outOfGroupAt]._dispatched.n + ')', "
+    f"reason: {_js_string_literal(_SLICE_ID_UNKNOWN_REFUSAL)}, "
+    "prep: _truthReply.prep, wave: null, integration: null }; }\n"
+    "  // A reply whose prep lists slices is rebound to them, so SLICE_ID_UNKNOWN fires only for an empty prep.\n"
     "  for (const r of _waveRaw) if (r && r.review && typeof r.review === 'object' && r.prep && !r.prep.error) {\n"
     "    const _own = Array.isArray(r.prep.slices) ? r.prep.slices : [];\n"
     "    if (_own.length) r.review.slice_id = _own.map(s => s.id).join('+');\n"
@@ -676,6 +698,14 @@ _REVERIFY_SCHEMA = {
     "properties": {
         "edited": {"type": "array", "items": {"type": "string"}},
         "failing": {"type": "array", "items": {"type": "string"}},
+        FAILING_DETAIL_FIELD: {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"node_id": {"type": "string"}, "message": {"type": "string"}},
+                "required": ["node_id", "message"],
+            },
+        },
         "reverted": {
             "type": "array",
             "items": {
@@ -712,13 +742,13 @@ _REVERIFY_SCHEMA = {
         "record": {"type": ["string", "null"]},
         "sidecar_path": {"type": "string"},
     },
-    "required": ["edited", "failing", "reverted", "status_before"],
+    "required": ["edited", "failing", FAILING_DETAIL_FIELD, "reverted", "status_before"],
 }
 
 _REVERIFY_INDETERMINATE_CLAUSE = (
     "If any review.reverify call in this step returns a non-null `error` or fails as an engine "
     "call (any JSON-RPC error, -32004 included), run no tests and stop: return edited [], "
-    f'failing [], reverted [], status_before "{REVERIFY_INDETERMINATE}" and the verbatim error '
+    f'failing [], {FAILING_DETAIL_FIELD} [], reverted [], status_before "{REVERIFY_INDETERMINATE}" and the verbatim error '
     "as reverify_error. That is an engine defect, never a test result."
 )
 
@@ -802,7 +832,7 @@ def _reverify_phase(
             '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
             "review changed, the union of their `tripwires` lists names the test files whose source "
             "names one of those files. Return the union as `edited`. If every list is empty, "
-            "return edited [], failing [], reverted [], status_before pass. "
+            "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], status_before pass. "
             f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
             "2. Run, and only run, the tests covering those files: the test files among them, every "
             "file in the `tripwires` union, the test files that import an edited module"
@@ -814,7 +844,8 @@ def _reverify_phase(
             )
             + ". Name each test file or node id; never a directory, a tier (the fast tier "
             "included) or the full suite. Report every failing node id as `failing` and set "
-            "status_before to pass when none failed, else fail.\n"
+            "status_before to pass when none failed, else fail."
+            f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
             "3. When any failed, measure which were already failing before review, once for every "
             "prefix, each time with the same failing set: call review.reverify with "
             f"`\"probe\":\"open\"`: `{invoke} review.reverify "
@@ -858,13 +889,14 @@ def _reverify_phase(
         "prefix moved into a shell variable). When a non-empty `session_id:` value is given in "
         'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
         "review changed. Its `tripwires` list names the test files whose source names one of "
-        "those files. If both are empty, return edited [], failing [], reverted [], "
+        "those files. If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
         "status_before pass. "
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
         "2. Run, and only run, the tests covering those files: the test files among them, every "
         "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
         "directory, a tier (the fast tier included) or the full suite. Report every failing "
-        "node id as `failing` and set status_before to pass when none failed, else fail.\n"
+        "node id as `failing` and set status_before to pass when none failed, else fail."
+        f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
         f"3. When any failed, measure which were already failing before review: call review.reverify "
         f"with `\"probe\":\"open\"`: `{invoke} review.reverify "
         f"'{{{base_args},\"probe\":\"open\",\"failing\":[<failing node ids>],\"sidecars\":[<the "
@@ -1371,7 +1403,8 @@ def compose_execute_review(
             )
             slice_items = (
                 f"(() => {{ const n = {count_js}; "
-                f"return Array.from({{ length: n }}, (_, i) => {_degrading(grouped_call)}); }})()"
+                f"return Array.from({{ length: n }}, (_, i) => () => ({_degrading(grouped_call)})().then("
+                f"r => (r && typeof r === 'object' ? {{ ...r, _dispatched: {{ i, n }} }} : r))); }})()"
             )
             gate = _agent_gate(agent)
             item_lines.append(f"    ...({gate} ? {slice_items} : [])" if gate else f"    ...{slice_items}")

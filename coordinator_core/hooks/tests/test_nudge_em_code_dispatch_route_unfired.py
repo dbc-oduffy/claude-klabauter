@@ -13,12 +13,19 @@ import pytest
 
 import coordinator_core.machine_profile as mp
 from coordinator_core import warp_live
+from coordinator_core.hooks import _em_write_budget as leaf
 from coordinator_core.hooks import flag_em_poll_in_flight as fl
 from coordinator_core.hooks import nudge_em_code_dispatch as mod
 from coordinator_core.session import engine_route_state as ers
 from coordinator_core.session import xs_lane_budget as xb
 
 SID = "sess-unfired"
+
+
+def _patch_both(monkeypatch, name, value) -> None:
+    """The hook's op() and the leaf's budget path each read their own binding of the name."""
+    for target in (mod, leaf):
+        monkeypatch.setattr(target, name, value)
 
 
 def _obj(git: Path, kind: str, payload: bytes) -> str:
@@ -55,10 +62,10 @@ def env(tmp_path, monkeypatch):
     sys_tmp = tmp_path / "sys-tmp"
     sys_tmp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sys_tmp))
-    monkeypatch.setattr(mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    _patch_both(monkeypatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     monkeypatch.setattr(mp, "guard_level", lambda name: "strict")
     monkeypatch.setattr(mod, "resolve_mode", lambda key, sid: False)
-    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, False))
+    _patch_both(monkeypatch, "_session_sizing_state", lambda payload, sid: (True, False))
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: [])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
@@ -129,38 +136,38 @@ def test_autonomous_still_denies_unfired_s_plus(env, monkeypatch):
     assert mod._ROUTE_UNFIRED_DENY in _reason(result)
 
 
-def test_live_run_keeps_the_sized_advisory(env, monkeypatch):
+def test_live_run_gets_the_post_fire_deny_not_the_unfired_text(env, monkeypatch):
     root, _ = env
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: "ask-x")
     result = mod.op(_edit(root))
-    assert result is not None and not _is_deny(result)
-    assert mod._SIZED_ADVISORY in _ctx(result)
-    assert mod._ROUTE_UNFIRED_DENY not in _ctx(result)
+    assert _is_deny(result)
+    assert "already fired engine-ask" in _reason(result)
+    assert mod._ROUTE_UNFIRED_DENY not in _reason(result)
 
 
-def test_landed_run_gets_the_residue_verdict_not_the_unfired_text(env, monkeypatch):
+def test_landed_run_gets_the_post_fire_deny_not_the_unfired_text(env, monkeypatch):
     root, _ = env
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     result = mod.op(_edit(root))
-    assert result is not None and not _is_deny(result)
-    assert "residue 1/2 files" in _ctx(result)
-    assert mod._ROUTE_UNFIRED_DENY not in _ctx(result)
-    assert xb.read_lane(root, SID)["kind"] == "residue"
+    assert _is_deny(result)
+    assert "already fired engine-ask" in _reason(result)
+    assert mod._ROUTE_UNFIRED_DENY not in _reason(result)
+    assert xb.read_lane(root, SID) is None
 
 
 def test_unsized_xs_edit_in_budget_is_admitted(env, monkeypatch):
     root, _ = env
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: False)
-    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    _patch_both(monkeypatch, "_session_sizing_state", lambda payload, sid: (False, False))
     assert mod.op(_edit(root)) is None
     assert xb.read_lane(root, SID)["kind"] == "xs"
 
 
 def test_plan_routed_unfired_edit_gets_plan_route_advisory_not_the_deny(env, monkeypatch):
     root, _ = env
-    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, True))
+    _patch_both(monkeypatch, "_session_sizing_state", lambda payload, sid: (True, True))
     result = mod.op(_edit(root))
     assert result is not None and not _is_deny(result)
     assert mod._PLAN_ROUTE_ADVISORY in _ctx(result)
@@ -170,7 +177,7 @@ def test_plan_routed_unfired_edit_gets_plan_route_advisory_not_the_deny(env, mon
 def test_escape_sentinel_admits_unfired_s_plus_edit(env, monkeypatch):
     root, _ = env
     assert _is_deny(mod.op(_edit(root)))
-    monkeypatch.setattr(mod, "_take_escape", lambda *a, **k: True)
+    _patch_both(monkeypatch, "_take_escape", lambda *a, **k: True)
     assert mod.op(_edit(root)) is None
     assert _shell(root) is None
 

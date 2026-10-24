@@ -384,6 +384,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "records.history":                        "none",
     "records.by_origin_plan":                 "common_dir",
     "handoff.columns":                       "common_dir",
+    "sizings.summary":                       "common_dir",
+    "workflow_runs.list":                    "common_dir",
     "memo.triage":                            "common_dir",
     "updatedocs.gates":                       "common_dir",
     "distill.scope":                          "common_dir",

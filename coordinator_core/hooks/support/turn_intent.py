@@ -10,6 +10,11 @@ never via `stop_hook_active`, and only when the caller passes `role_marker` true
 (the marker is present AND `cockpit_session.under_cockpit()` holds); after that the
 record is labelled `source: heuristic`. The heuristic record is written either way.
 
+Schema 1 stability policy: the record keys are frozen for consumers: schema, session_id,
+needs_pm, ask, source, and turn_ended_at in epoch seconds. Changes within a version are
+additive-only. A schema 2 is announced to consumers by cross-repo memo before the writer emits
+it. Consumers treat schema > known as unreadable.
+
 Negative specs: the heuristic only labels, it never blocks. `decide` is pure. Nothing here
 spawns a process, and nothing is written for a session_id that is not a real uuid4.
 """

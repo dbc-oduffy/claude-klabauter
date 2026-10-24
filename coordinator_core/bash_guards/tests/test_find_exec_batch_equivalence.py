@@ -54,7 +54,7 @@ def test_plus_form_message_never_claims_per_match_forking() -> None:
 # batched alternative for verbs measured (2026-08-31, GNU findutils 4.11.0)
 # to be batch-equivalent -- `_FIND_EXEC_BATCH_EQUIVALENT_VERBS`, gated on
 # `{}` being the FINAL token of the exec'd argv. Verbs already handled by
-# `_FIND_EXEC_TRANSLATABLE_VERBS` (rm/cat/wc) are shadowed by that earlier
+# `_FIND_EXEC_TRANSLATABLE_VERBS` (rm/cat/wc/head/tail) are shadowed by that earlier
 # branch inside `check_find_exec_rewrite` -- this chunk does not reorder or
 # touch that priority, so the `+` offering is only reachable end-to-end
 # through the guard for a verb NOT on the translatable table. The unit
@@ -67,11 +67,11 @@ def test_plus_form_message_never_claims_per_match_forking() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_translatable_verbs_pinned_unchanged() -> None:
-    """This chunk MUST NOT touch `_FIND_EXEC_TRANSLATABLE_VERBS` -- a
-    different table answering a different question (see module comment
-    above `_bt_find_exec_batch_rewrite` in dispatch_checks.py)."""
-    assert _FIND_EXEC_TRANSLATABLE_VERBS == frozenset({"rm", "cat", "wc"})
+def test_translatable_verbs_pinned() -> None:
+    """`_FIND_EXEC_TRANSLATABLE_VERBS` is a different table from the
+    batch-equivalent one, answering a different question (see module comment
+    above `_bt_find_exec_batch_rewrite`)."""
+    assert _FIND_EXEC_TRANSLATABLE_VERBS == frozenset({"rm", "cat", "wc", "head", "tail"})
 
 
 def test_batch_equivalent_verbs_seeded_from_measured_table() -> None:
@@ -116,10 +116,18 @@ def test_git_rm_not_on_allowlist_no_plus_offered() -> None:
     assert command is None
 
 
+def test_head_tail_never_batch_equivalent() -> None:
+    assert not {"head", "tail"} & _FIND_EXEC_BATCH_EQUIVALENT_VERBS
+    for verb in ("head", "tail"):
+        tokens = shlex.split("find . -exec %s -n 3 {} \\;" % verb)
+        parsed = _bt_parse_find_exec_segment(tokens)
+        assert _bt_find_exec_batch_rewrite(tokens, parsed) is None
+
+
 def test_head_tail_wc_grep_not_batch_equivalent_no_plus_offered() -> None:
     for cmd in (
-        "find . -exec head {} \\;",
-        "find . -exec tail {} \\;",
+        "find . -exec head -c 5 {} \\;",
+        "find . -exec tail -f {} \\;",
         "find . -exec wc {} \\;",
         "find . -exec grep foo {} \\;",
     ):

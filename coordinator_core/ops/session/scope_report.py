@@ -198,6 +198,7 @@ from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.session import claim_index
+from coordinator_core.session import claims
 from coordinator_core.session import core
 from coordinator_core.session.liveness import live_session_ids
 
@@ -434,6 +435,8 @@ def assert_paths_in_session_scope(
     except Exception as exc:  # noqa: BLE001 - fail-closed on ANY error beneath
         return False, "claim_index.classify_paths raised: %s" % (exc,)
 
+    answer = _release_dead_holder_claims(session_id, answer, cwd)
+
     verified_caller = (
         allow_orphans
         and _ORPHAN_ADOPTION_ENABLED
@@ -572,6 +575,42 @@ def assert_paths_in_session_scope(
         )
 
     return False, reason
+
+
+def _release_dead_holder_claims(session_id: str, answer, cwd: Optional[str]):
+    """Release peer claims whose holders are all dead, then re-judge only those paths.
+
+    ``claims.clear_claim_if_dead`` is liveness-gated and refuses the whole
+    clear when any claimant is live, so a live holder still denies. Paths it
+    clears are re-classified and merged into a copy of ``answer``; the
+    verdict loop and orphan-adoption arm then treat them like any other path.
+    Cost: one liveness read per claimant, on the deny path only.
+    """
+    peer_paths = [
+        p
+        for p, own in answer.by_path.items()
+        if own.verdict == claim_index.OWNERSHIP_PEER
+    ]
+    cleared: list = []
+    for p in peer_paths:
+        try:
+            if claims.clear_claim_if_dead("artifact", p, cwd=cwd):
+                cleared.append(p)
+        except Exception:  # noqa: BLE001 - a failed reap leaves the deny standing
+            continue
+    if not cleared:
+        return answer
+    try:
+        rejudged = claim_index.classify_paths(session_id, cleared, cwd=cwd)
+    except Exception:  # noqa: BLE001 - fail closed: keep the original denial
+        return answer
+    merged = dict(answer.by_path)
+    merged.update(rejudged.by_path)
+    return claim_index.OwnershipAnswer(
+        by_path=merged,
+        complete=answer.complete and rejudged.complete,
+        abort_cause=answer.abort_cause or rejudged.abort_cause,
+    )
 
 
 _MAX_LISTED_PATHS = 25

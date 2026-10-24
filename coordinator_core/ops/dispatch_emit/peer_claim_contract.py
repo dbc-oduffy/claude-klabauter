@@ -1,6 +1,8 @@
 """Path-level contract for a peer-held path at terminal commit.
 
-A path a live peer holds lands whole or not at all; there is no hunk carry. The functions read the
+A path a live peer holds lands whole or not at all; there is no hunk carry. A path the committing
+run and an unlanded sibling both declare (same session included) is peer-held under this contract,
+and the land_run gate refuses it as peer-hunks-co-declared. The functions read the
 ``{path: [sid]}`` contention map the gate already computed: no spawn, no claim read.
 """
 from __future__ import annotations

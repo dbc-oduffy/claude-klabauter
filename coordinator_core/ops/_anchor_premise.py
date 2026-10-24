@@ -214,14 +214,13 @@ def anchor_findings(
     plan_text: str,
     repo_root: Optional[Path] = None,
     verdicts: Optional[list] = None,
-    *,
-    checker_ran: bool = True,
 ) -> list[str]:
     """One finding per anchor not resolved. Passed ``rows`` win over ``carry_rows``; a carry row
     counts only while its ``line_hash`` is still a line of ``plan_text``. A none-source anchor
-    whose check was NOT_EVALUABLE gets the no-verdict finding with the suffix
-    '(check not evaluable in-process: <detail>)', except when ``checker_ran`` is False: no
-    premise-checker can supply its verdict, so ``unevaluable_anchors`` carries it instead."""
+    whose check was NOT_EVALUABLE emits no finding in either lane: a check the in-process
+    evaluator cannot run is never a blocker, and ``unevaluable_anchors`` carries it for the
+    readiness consumer. A none-source anchor never evaluated (no repo root) still gets the
+    bare no-verdict finding."""
     out: list[str] = []
     known = frozenset(a["id"] for a in anchors)
     for index, row in enumerate(rows or []):
@@ -237,12 +236,9 @@ def anchor_findings(
     for entry in verdicts:
         verdict = entry["verdict"]
         if verdict is None:
-            if not checker_ran and entry["observed"]:
+            if entry["observed"]:
                 continue
-            detail = (
-                f" (check not evaluable in-process: {entry['observed']})" if entry["observed"] else ""
-            )
-            out.append(f"anchor-premise-no-verdict: {entry['id']}{detail}")
+            out.append(f"anchor-premise-no-verdict: {entry['id']}")
         elif verdict != "RESOLVES":
             out.append(
                 f"anchor-premise-{verdict}: {entry['id']} -- {str(claims[entry['id']])[:_CLAIM_CAP]}"

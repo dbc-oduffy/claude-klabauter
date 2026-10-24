@@ -326,6 +326,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/resume_snapshot.py': ('in-repo-non-state', 'resume-snapshot.json in the gitignored run scratch dir scratch/warp/<run_id>/: write'),
     'coordinator_core/bug_blitz/mint.py': ('claims-explicitly', 'in-place tag rewrite of a state/bug-backlog row via tmp + os.replace, declared through declare_write: _write_reuse'),
     'coordinator_core/ops/dispatch_emit/kept_work.py': ('claims-explicitly', 'kept.json under the run record dir, declared through declare_write: write'),
+    'coordinator_core/ops/dispatch_emit/row_returns.py': ('claims-explicitly', 'returns.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/run_withhold.py':('claims-explicitly', 'withhold.jsonl appended under the run dir, declared through declare_write: record'),
     'coordinator_core/ops/dispatch_emit/verdict_supersession.py': ('claims-explicitly', 'tests-reverify record created exclusively under state/, declared through declare_write'),
     'coordinator_core/ops/review_prep.py': ('claims-explicitly', 'prep-freeze sidecar under the session share dir, declared through declare_write: _write_sidecar'),

@@ -63,14 +63,10 @@ import io
 import os
 import re
 import socket
-import sys
 import tokenize
 from pathlib import Path, PurePosixPath
 
 from coordinator_core._hook_envelope import deny
-from coordinator_core import machine_resolver
-from coordinator_core._settings_home import settings_home
-from coordinator_core.group_em.gem_home import contains as _path_contains
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field, present
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
@@ -79,12 +75,22 @@ from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session.dispatch_nudge_sentinel import (
     sentinel_path as dispatch_nudge_sentinel_path,
 )
+from coordinator_core.hooks._em_write_budget import (  # noqa: F401 -- re-bound for callers and tests that resolve these on the hook
+    _ROUTE_UNFIRED_DENY,
+    _SESSION_SIZING,
+    _SIZED_ADVISORY,
+    _budget_core,
+    _derive_executor_info,
+    _is_bootstrap_or_out_of_repo,
+    _is_scratch_or_tmp,
+    _session_sizing_state,
+    shell_write_budget,
+)
 from coordinator_core.hooks.dispatch_escape import (
     _take_escape,
     _resolve_session_id_op,
 )
 from coordinator_core.session import general_work_scope
-from coordinator_core.session.engine_route_state import session_sizing_state as _session_sizing_state
 from coordinator_core.session.mode_resolution import resolve_mode
 from coordinator_core.warp_fire import fire_step
 
@@ -199,123 +205,6 @@ async def _handler(params: dict, repo_root=None) -> dict:
 # Source: coordinator/hooks/scripts/nudge-em-code-dispatch.js (435 lines, ported whole)
 # =============================================================================
 
-# ---------------------------------------------------------------------------
-# Executor type derivation — extension -> type mapping. Mirrors JS EXT_EXECUTOR_MAP.
-# ---------------------------------------------------------------------------
-_EXT_EXECUTOR_MAP: dict[str, str] = {
-    ".py": "python-executor",
-    ".js": "js-executor",
-    ".mjs": "js-executor",
-    ".cjs": "js-executor",
-    ".ts": "ts-executor",
-    ".tsx": "ts-executor",
-    ".jsx": "js-executor",
-    ".sh": "shell-executor",
-    ".bash": "shell-executor",
-    ".rb": "ruby-executor",
-    ".go": "go-executor",
-    ".rs": "rust-executor",
-    ".java": "jvm-executor",
-    ".kt": "jvm-executor",
-    ".c": "cpp-executor",
-    ".cpp": "cpp-executor",
-    ".cc": "cpp-executor",
-    ".h": "cpp-executor",
-    ".hpp": "cpp-executor",
-    ".swift": "swift-executor",
-    ".sql": "sql-executor",
-}
-
-# Path markers that signal coordinator-domain files -> coordinator-executor override.
-# Mirrors JS COORDINATOR_PATH_MARKERS.
-_COORDINATOR_PATH_MARKERS: list[str] = [
-    "coordinator/",
-    "coordinator_core/",
-    "plugins/coordinator",
-]
-
-_DEVOPS_FILENAME_RE = re.compile(
-    r"^(?:[Mm]akefile|[Dd]ockerfile(?:\..+)?|[Rr]akefile|[Gg]runtfile\.js|[Gg]ulpfile\.js)$"
-)
-
-
-def _bootstrap_dirs() -> list[str]:
-    """Machine-config/bootstrap dirs the F7 carve-out skips the nudge for.
-
-    Mirrors JS bootstrapDirs() for the `$HOME`-rooted rungs: HOME must be set
-    (matches JS's process.env.HOME guard), and those rungs are omitted when it
-    is absent.
-
-    DIVERGENCE FROM THE JS MIRROR — `<settings-home>/bin` is resolved
-    independently of the HOME guard, via the canonical
-    `coordinator_core._settings_home.settings_home()` (COORDINATOR_SETTINGS_HOME,
-    else CLAUDE_HOME, else the platform home, with `.coordinator-claude-settings`
-    appended to the latter two). That resolver has a Windows rung `Path.home()`
-    that a bare `$HOME` read does not, so gating it behind `HOME` would drop the
-    live executable surface's carve-out on exactly the platform where HOME is
-    unset. Resolution failure (a cwd-relative COORDINATOR_SETTINGS_HOME, or an
-    undeterminable home) degrades to omitting the rung, never to raising — this
-    is an advisory hook on the write path.
-
-    `~/.claude/bin` is retained as a legacy rung: its executable surface moved to
-    `<settings-home>/bin` on 2026-07-28 (the old dir renamed aside), but a machine
-    that has not been reinstalled since still has live bits there, and a stale
-    carve-out entry costs nothing but a suppressed nudge on a dir nobody writes.
-
-    Matching is prefix-on-abspath (see `_is_under_bootstrap_dir`), not realpath —
-    a symlinked settings home is matched by the path as written, not its target.
-    """
-    dirs: list[str] = []
-
-    try:
-        dirs.append(str(settings_home() / "bin"))
-    except (ValueError, RuntimeError, OSError):
-        pass
-
-    home = os.environ.get("HOME")
-    if home:
-        dirs.extend([
-            os.path.join(home, ".local", "bin"),
-            os.path.join(home, ".claude", "bin"),
-            os.path.join(home, ".claude", "shell"),
-        ])
-
-    return dirs
-
-
-def _is_under_bootstrap_dir(file_path: str) -> bool:
-    abs_file = os.path.normcase(os.path.abspath(file_path))
-    for d in _bootstrap_dirs():
-        abs_dir = os.path.normcase(os.path.abspath(d))
-        if abs_file == abs_dir or (abs_file + os.sep).startswith(abs_dir + os.sep):
-            return True
-    return False
-
-
-def _is_outside_git_work_tree(file_path: str) -> bool:
-    d = os.path.abspath(os.path.dirname(file_path))
-    root = os.path.splitdrive(d)[0] + os.sep if os.name == "nt" else os.sep
-    while True:
-        try:
-            if os.path.exists(os.path.join(d, ".git")):
-                return False
-        except OSError as exc:
-            print(f"nudge_em_code_dispatch: cannot stat {d}: {exc} (treating as not found)", file=sys.stderr)
-        if d == root:
-            break
-        parent = os.path.dirname(d)
-        if parent == d:
-            break
-        d = parent
-    return True
-
-
-def _is_under_general_work_root(file_path: str) -> bool:
-    """Target is under the registry-declared `coordinator.general_work_root`; an unset or unreadable key exempts nothing."""
-    root = general_work_scope.general_work_root()
-    return bool(root) and _path_contains(root, file_path)
-
-
 def _display_checkout(checkout: str, file_path: str) -> str:
     """`checkout` in the filesystem's own casing: gem_home.inside_checkout returns a normcased path
     (lowercase on Windows), which the operator should not be shown. Falls back to `checkout` as given."""
@@ -333,32 +222,6 @@ def _foreign_checkout_deny(checkout: str, file_path: str) -> dict:
         "Use instead: `SendMessage` its live EM; none live -> "
         "`cross-repo-memo draft <slug> --to <receiver-em>`.",
     )
-
-
-def _is_bootstrap_or_out_of_repo(file_path: str) -> bool:
-    if _is_under_bootstrap_dir(file_path):
-        return True
-    if _is_outside_git_work_tree(file_path):
-        return True
-    return _is_under_general_work_root(file_path)
-
-
-def _derive_executor_info(file_path: str) -> tuple[str, bool]:
-    ext = os.path.splitext(file_path)[1].lower()
-    basename = os.path.basename(file_path)
-    norm_path = file_path.replace("\\", "/")
-
-    if any(marker in norm_path for marker in _COORDINATOR_PATH_MARKERS):
-        return "coordinator-executor", False
-
-    by_ext = _EXT_EXECUTOR_MAP.get(ext)
-    if by_ext:
-        return by_ext, False
-
-    if _DEVOPS_FILENAME_RE.match(basename):
-        return "devops-executor", False
-
-    return "generic-executor", True
 
 
 def _describe_edit(payload: dict) -> str:
@@ -513,16 +376,6 @@ def _semantic_bypass_applies(file_path: str, tool_input: dict) -> bool:
     return False
 
 
-def _is_scratch_or_tmp(file_path: str) -> bool:
-    import tempfile
-
-    abs_path = os.path.abspath(file_path)
-    if "scratch" in abs_path.replace("\\", "/").split("/"):
-        return True
-    tmp = os.path.normcase(os.path.abspath(tempfile.gettempdir()))
-    return (os.path.normcase(abs_path) + os.sep).startswith(tmp + os.sep)
-
-
 def _is_scratch_py(file_path: str) -> bool:
     """A `.py` file under a `scratch/` directory: the probe-script shape."""
     if _ext_of(file_path) != ".py":
@@ -530,19 +383,8 @@ def _is_scratch_py(file_path: str) -> bool:
     return "scratch" in os.path.abspath(file_path).replace("\\", "/").split("/")[:-1]
 
 
-_SESSION_SIZING = "<this session's sizing path>"
-
 _UNSIZED_ADVISORY = (
     "[em-code-dispatch nudge] No sizing this session. " + fire_step()
-)
-
-_SIZED_ADVISORY = (
-    "[em-code-dispatch nudge] EM edits route through the warp run. "
-    + fire_step(_SESSION_SIZING)
-)
-
-_ROUTE_UNFIRED_DENY = (
-    "Sized S or larger; its engine run has not fired. " + fire_step(_SESSION_SIZING)
 )
 
 _PLAN_ROUTE_ADVISORY = (
@@ -592,12 +434,28 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
     return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _SIZE_STAGE_DENY))
 
 
-def _budget_text(prefix: str, usage) -> str:
-    return f"{prefix} {usage.files}/2 files, {usage.lines}/30 lines."
+_POST_FIRE_DENY = (
+    "This session already fired engine-ask; its product edits belong to the run. "
+    "Send the gap through workflow.revise, or fire a follow-up engine-ask whose em_context "
+    "quotes the receipt's gap line."
+)
 
 
-def _budget_deny(text: str) -> dict | None:
-    return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", text))
+def _post_fire_deny(session_id: str) -> dict | None:
+    """Deny the main EM's product edit once the session has launched a Workflow run, whichever
+    paths that run declared. Before the first fire this returns None and the XS budget decides.
+    Any read failure is no signal."""
+    if not session_id:
+        return None
+    try:
+        from coordinator_core.hooks import flag_em_poll_in_flight
+
+        fired = bool(flag_em_poll_in_flight.session_workflow_run_ids(session_id))
+    except Exception:
+        return None
+    if not fired:
+        return None
+    return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _POST_FIRE_DENY))
 
 
 def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input: dict) -> tuple[bool, dict | None]:
@@ -615,130 +473,6 @@ def _budget_decision(payload: dict, session_id: str, file_path: str, tool_input:
         return projected
 
     return _budget_core(payload, session_id, file_path, _project)
-
-
-def shell_write_budget(
-    payload: dict,
-    session_id: str,
-    file_path: str,
-    projected: str | None,
-    unprojectable: str | None,
-) -> dict | None:
-    """Budget verdict for a main-EM shell write to `file_path` whose post-write text is `projected`.
-    Runs the Edit/Write hook's exemption chain, then the lane/residue measure; returns the hook
-    envelope (deny, residue context) or None. `projected=None` with an `unprojectable` reason is
-    denied as unmeasurable only where a lane governs the session. Consumes an honoured escape
-    sentinel, as the hook does: the escape is taken ahead of the lane check, so it is spent even
-    where no lane would have denied."""
-    if "agent_id" in payload or not file_path:
-        return None
-    if _is_bootstrap_or_out_of_repo(file_path):
-        return None
-    if os.path.splitext(file_path)[1].lower() in _DOC_DATA_EXTENSIONS:
-        return None
-    if _is_scratch_or_tmp(file_path):
-        return None
-    if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
-        return None
-
-    def _project() -> str:
-        if projected is None:
-            raise _Unprojectable(unprojectable or "write cannot be projected")
-        return projected
-
-    handled, result = _budget_core(payload, session_id, file_path, _project)
-    return result if handled else None
-
-
-def _closed_text(rec: dict) -> str:
-    return f"XS hand edits closed. {fire_step()} Put `git diff {rec['base_sha'][:12]}` in the ask."
-
-
-class _Unprojectable(Exception):
-    """Carries the caller's own reason; rendered without an exception-type prefix."""
-
-
-def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tuple[bool, dict | None]:
-    """Lane open/residue/measure logic shared by `_budget_decision` and `shell_write_budget`;
-    `project()` returns the post-write text or raises."""
-    from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
-    from coordinator_core.session import xs_lane_budget as xlb
-
-    root = _repo_root(payload)
-    if root is None or not session_id:
-        return False, None
-    try:
-        s_plus = xlb.touched_s_or_larger(session_id, root)
-        rec = xlb.read_lane(root, session_id)
-        if rec is None or rec.get("kind") == xlb.KIND_XS:
-            from coordinator_core import warp_live
-            from coordinator_core.git import git_state
-            from coordinator_core.hooks.flag_em_poll_in_flight import session_workflow_run_ids
-
-            landed = bool(session_workflow_run_ids(session_id)) and (
-                warp_live.live_run_for_session(root, session_id) is None
-            )
-            head = git_state.head_sha(root) if landed else None
-            if head and xlb.open_residue_window(root, session_id, head, supersede_xs=True):
-                rec = xlb.read_lane(root, session_id)
-        if rec is None and not s_plus and not _session_sizing_state(payload, session_id)[0]:
-            from coordinator_core.git import git_state
-
-            head = git_state.head_sha(root)
-            if head and xlb.open_xs_lane(root, session_id, head):
-                rec = xlb.read_lane(root, session_id)
-        unfired = False
-        if s_plus and (rec is None or rec.get("kind") != xlb.KIND_RESIDUE):
-            from coordinator_core.session.engine_route_state import PHASE_UNFIRED, session_route_phase
-
-            unfired = (
-                session_route_phase(root, session_id) == PHASE_UNFIRED
-                and not _session_sizing_state(payload, session_id)[1]
-            )
-    except Exception:
-        return False, None
-    if unfired:
-        return True, _budget_deny(_ROUTE_UNFIRED_DENY)
-    if rec is None:
-        return False, None
-    kind = rec.get("kind")
-    if s_plus and kind != xlb.KIND_RESIDUE:
-        return False, None
-    residue = kind == xlb.KIND_RESIDUE
-    if residue:
-        executor, _ = _derive_executor_info(file_path)
-        over_text = lambda u: _budget_text("Residue budget spent (projected):", u) + f" Dispatch {executor} for the rest."
-    else:
-        over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + fire_step()
-    if rec.get("corrupt"):
-        return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
-    if not residue and xlb.deny_count(rec) >= xlb.GOLF_DENY_LIMIT:
-        return True, _budget_deny(_closed_text(rec))
-    try:
-        usage = xlb.measure(root, rec, file_path, project())
-    except Exception as exc:
-        reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
-        text = f"Budget unmeasurable ({reason}). Make the change as one plain Edit per file."
-        return True, _budget_deny(text)
-    if usage.over:
-        if not residue:
-            try:
-                denies = xlb.record_deny(root, session_id, usage, [*rec.get("paths", []), file_path])
-            except Exception:
-                denies = 0
-            if denies >= xlb.GOLF_DENY_LIMIT:
-                return True, _budget_deny(_closed_text(rec))
-        return True, _budget_deny(over_text(usage))
-    try:
-        xlb.add_path(root, session_id, file_path)
-    except Exception:
-        pass
-    if residue:
-        return True, context_only(
-            "PreToolUse",
-            _SIZED_ADVISORY + " " + _budget_text("residue", usage),
-        )
-    return True, None
 
 
 def op(payload: dict) -> dict | None:
@@ -810,6 +544,10 @@ def op(payload: dict) -> dict | None:
         checkout = general_work_scope.foreign_checkout(file_path)
         if checkout is not None:
             return apply_guard_level("nudge-em-code-dispatch", _foreign_checkout_deny(checkout, file_path))
+
+    post_fire = _post_fire_deny(session_id)
+    if post_fire is not None:
+        return post_fire
 
     handled, budget_result = _budget_decision(payload, session_id, file_path, tool_input)
     if handled:

@@ -403,6 +403,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "plus opt-in archived handoffs)",
     ),
     (
+        "coordinator_core.ops.cockpit_sections_query",
+        'registers "sizings.summary", "workflow_runs.list" (cockpit contract entity asks C9)',
+    ),
+    (
         "coordinator_core.ops.changelog_ops",
         'registers "changelog.append_day", "changelog.backfill_gaps", '
         '"changelog.compute_day_fields", "changelog.upsert_reviewed" (strang-10 A, DR-216)',

@@ -129,15 +129,71 @@ def test_combined_tests_value_is_split_into_paths(repo, tmp_path, value):
     assert li.fresh_targeted_verdict(repo, RUN_ID)["tests"] == ["test_a.py", "test_b.py"]
 
 
-def test_missing_test_path_is_refused_by_name_before_running(repo, tmp_path, capsys):
+def test_missing_target_is_dropped_with_a_note_and_the_rest_runs(repo, tmp_path, capsys):
+    seen = []
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py,nope.py", "--repo-root", str(repo), "--detached-child"],
-        run=lambda argv, cwd, **_kw: pytest.fail("must not run"),
+        run=lambda argv, cwd, **_kw: seen.append(argv) or 0,
     )
-    assert rc == 2
-    err = capsys.readouterr().err
-    assert "nope.py" in err and "test_a.py," not in err and "does not exist" in err
-    assert li.fresh_targeted_verdict(repo, RUN_ID) is None
+    assert rc == 0 and seen[0][-1] == "test_a.py" and "nope.py" not in seen[0]
+    assert "nope.py" in capsys.readouterr().err
+    record = li.fresh_targeted_verdict(repo, RUN_ID)
+    assert record["status"] == "pass" and record["tests"] == ["test_a.py"]
+    assert record["dropped"] == ["nope.py"] and "nope.py" in record["note"]
+
+
+def test_all_targets_missing_records_no_tests_not_error(repo, tmp_path):
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "nope.py", "--repo-root", str(repo)],
+        run=lambda argv, cwd, **_kw: pytest.fail("must not run"),
+        spawn=lambda *a, **k: pytest.fail("must not spawn"),
+    )
+    assert rc == 0
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert record["status"] == "no-tests" and record["tests_run"] == 0
+    assert record["dropped"] == ["nope.py"] and "nope.py" in record["note"]
+
+
+def test_launcher_collecting_nothing_records_no_tests(repo, tmp_path):
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=lambda argv, cwd, **_kw: 5,
+    )
+    assert rc == 0
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert record["status"] == "no-tests" and record["tests_run"] == 0 and "test_a.py" in record["reason"]
+
+
+def test_marker_filter_is_stripped_so_a_named_cadence_file_runs(repo, tmp_path, monkeypatch):
+    (repo / "test_slow.py").write_text(
+        "import pytest\n\n@pytest.mark.cadence\ndef test_slow():\n    pass\n", encoding="utf-8")
+    (repo / "pytest.ini").write_text("[pytest]\nmarkers = cadence\n", encoding="utf-8")
+    (Path(repo) / "coordinator.local.md").write_text(
+        "---\nfast_test_cmd: \"python3 -m pytest -q -m 'not cadence'\"\n---\n", encoding="utf-8")
+    monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_slow.py", "--repo-root", str(repo), "--detached-child"],
+    )
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert rc == 0 and record["status"] == "pass"
+
+
+def test_strip_drops_marker_filter_in_both_spellings(repo):
+    argv = retest_targeted._strip_collection_roots(repo, "python -m pytest -m 'not cadence' -mfoo -q --maxprocesses=7")
+    assert argv == ["python", "-m", "pytest", "-q", "--maxprocesses=7"]
+
+
+def test_failed_record_carries_node_ids_from_the_log(repo, tmp_path):
+    def run(argv, cwd, *, log=None, **_kw):
+        log.write_text("FAILED test_a.py::test_a - assert 0\n", encoding="utf-8")
+        return 1
+
+    retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=run,
+    )
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert record["status"] == "fail" and record[li.FAILED_TESTS_PARAM] == ["test_a.py::test_a"] and record["head"]
 
 
 def test_dirty_paths_reads_untracked_and_modified(repo):

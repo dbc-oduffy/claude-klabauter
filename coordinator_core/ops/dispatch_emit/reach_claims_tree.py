@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 from coordinator_core.ops.dispatch_emit.reach_claims import ReachClaim, ReachVerdict
 from coordinator_core.ops.review_reachability import _CODE_EXT, _TEST_RE, _WORD
@@ -321,7 +321,7 @@ def judge_reach_claims(
     *,
     landing_paths: Iterable[str] = (),
     deleted_paths: Iterable[str] = (),
-    withheld_paths: Iterable[str] = (),
+    withheld_paths: Iterable[str] | Mapping[str, str] = (),
 ) -> tuple[ReachVerdict, ...]:
     """One verdict per claim over the tree the commit lands: the index plus `landing_paths`, minus
     `deleted_paths`; `withheld_paths` (dirty, not landing) read at HEAD, never from the worktree."""
@@ -339,7 +339,9 @@ def judge_reach_claims(
 
     landing = {_norm(p) for p in landing_paths}
     deleted = {_norm(p) for p in deleted_paths}
-    withheld_only = {_norm(p) for p in withheld_paths} - landing
+    from coordinator_core.ops.dispatch_emit.shipped_claims import content_withheld
+
+    withheld_only = {_norm(p) for p in content_withheld(withheld_paths)} - landing
     withheld_only = {p for p in withheld_only if _prod(p)}
     head = None
     if withheld_only:

@@ -104,6 +104,8 @@ DECLARE_ORIGIN_NAME = "declare_benchmark_origin"
 # never an allowlist entry. See test_non_spawning_main_allowlist_entries_carry_no_spawn_shape
 # below for the anti-drift check that keeps this list honest.
 NON_SPAWNING_MAIN_ALLOWLIST: dict[str, str] = {
+    "commit_v2_paired_verdict.py": "reads op-latency ledger rows; spawns nothing",
+    "commit_v2_minimal_land_spike.py": "in-process spike; issues no invoke traffic",
     "_import_probe.py": "fresh-interpreter import-cost probe; measures a sys.modules delta around __import__() in-process, never spawns invoke traffic itself.",
     "_read_events_probe.py": "one-shot spawn target that calls tracker_store.read_events() directly; a plain library call, not invoke traffic, and spawns nothing of its own.",
     "_render_status_probe.py": "one-shot spawn target that calls tracker_projection.render_status() directly; a plain library call, not invoke traffic, and spawns nothing of its own.",

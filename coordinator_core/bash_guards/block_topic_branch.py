@@ -32,6 +32,9 @@ A push of the checked-out `work/*` branch is allowed whatever its date span, and
 A push of a registered `publish.mirrors.<key>` repo's declared `track_ref`
 branch (the command publish.py prints) is allowed.
 
+A push to exactly `candidate-source` (`<sha>:refs/heads/candidate-source`) is allowed;
+creating that branch locally is not.
+
 A cloud session (`CLAUDE_CODE_REMOTE=true`) may use its harness-assigned
 `claude/...` branch.
 
@@ -84,6 +87,8 @@ _HEADS_PREFIX = "refs/heads/"
 _LOCAL_ONLY_PREFIX = "scratch/"
 # publish.py's commit-only round leaves the mirror's work on this branch.
 _PUBLISH_BRANCH = "candidate"
+# percolate source_preflight tells the operator to push a non-HEAD source here; exact name only.
+_CANDIDATE_SOURCE_BRANCH = "candidate-source"
 
 
 def _looks_unreadable(name: str) -> bool:
@@ -549,6 +554,8 @@ def _offending_ref(
         if sub == "push" and (ref in new_tags or _is_local_tag(git_root, ref)):
             continue
         if _is_publish_push(sub, ref, git_root):
+            continue
+        if sub == "push" and ref == _CANDIDATE_SOURCE_BRANCH:
             continue
         if is_cloud_session(env) and ref.startswith(_CLOUD_SESSION_BRANCH_PREFIX):
             continue

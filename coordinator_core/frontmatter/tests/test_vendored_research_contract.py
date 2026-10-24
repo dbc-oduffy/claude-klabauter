@@ -44,7 +44,8 @@ def test_vendored_versions():
     # 1.46.0 -> 1.47.0: `fan_out` xl_exit enum value; claude-klabauter-first, DoE copy pending.
     assert _version(_SIZING) == "1.47.0"
     assert _version(_HANDOFF) == "11.1.0"
-    assert _version(_PLAN_TASKS) == "3.19.0"
+    # 3.19.0 -> 3.20.0: signoff history on every source, pm_signoff_record arm; claude-klabauter-first, DoE copy pending.
+    assert _version(_PLAN_TASKS) == "3.20.0"
 
 
 def _find_key(node, key):

@@ -212,9 +212,30 @@ def ensure_home_outcome(template: Path | None = None, refresh: bool = False) -> 
     return home, "seeded"
 
 
+_receiver_ids_cache: frozenset[str] | None = None
+
+
+def receiver_ids() -> frozenset[str]:
+    """RECEIVER_IDS unioned with the manifest's `identity.groupEmReceiverIds`, read once per
+    process. A manifest unreadable on the first call degrades to RECEIVER_IDS for the rest of
+    the process (the reader returns an empty set on failure, indistinguishable from absent).
+    Tests reset `_receiver_ids_cache` to None."""
+    global _receiver_ids_cache
+    if _receiver_ids_cache is None:
+        try:
+            # Lazy: _memo_resolver imports this module at top level.
+            from coordinator_core.ops.fleet._memo_resolver import read_group_em_receiver_ids
+
+            extra = read_group_em_receiver_ids()
+        except Exception:
+            extra = set()
+        _receiver_ids_cache = RECEIVER_IDS | frozenset(extra)
+    return _receiver_ids_cache
+
+
 def is_group_em_receiver(receiver: str) -> bool:
     """True when `receiver`, stripped and lowercased, is a G-EM receiver id."""
-    return receiver.strip().lower() in RECEIVER_IDS
+    return receiver.strip().lower() in receiver_ids()
 
 
 def gem_holder() -> dict | None:

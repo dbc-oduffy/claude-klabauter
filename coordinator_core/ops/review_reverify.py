@@ -78,7 +78,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops import review_reverify_probe as probe_io
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
-from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in
+from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in, tree_scanners, walked_created
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
 from coordinator_core.session.core import resolve_session_id
@@ -427,6 +427,15 @@ def _load_record(record: Path) -> dict:
     return data
 
 
+def _walked_created(repo_root: Path, test_file: str, created: List[str]) -> Set[str]:
+    """Created paths lying under a directory the tree-scanning test walks."""
+    try:
+        data = (repo_root / test_file).read_bytes()
+    except OSError:
+        return set()
+    return set(walked_created(data, created))
+
+
 def _implication(
     repo_root: Path, ids: List[str], edited: List[str], created: List[str]
 ) -> Dict[str, Set[str]]:
@@ -442,6 +451,8 @@ def _implication(
         if test_file.endswith(".py"):
             targets.update(_imported_edited(repo_root, test_file, edited_py))
             targets.update(_literal_named(repo_root, test_file, edited + created))
+            if created:
+                targets.update(_walked_created(repo_root, test_file, created))
         out[node] = targets
     return out
 
@@ -535,7 +546,11 @@ def review_reverify(
     if not revert and not probe:
         scan_error = None
         try:
-            tripwires = sorted(literal_namers(repo_root, edited + created, exclude=set(edited) | set(created)))
+            skip_paths = set(edited) | set(created)
+            found = set(literal_namers(repo_root, edited + created, exclude=skip_paths))
+            if created:
+                found.update(tree_scanners(repo_root, created, exclude=skip_paths))
+            tripwires = sorted(found)
         except TripwireScanUnavailable as exc:
             tripwires = []
             scan_error = f"tripwire scan unavailable: {exc}"

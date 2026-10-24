@@ -111,7 +111,7 @@ _WAVES = [
 ]
 
 
-def _compose(waves=_WAVES, **kwargs) -> str:
+def _compose(waves=_WAVES, plan_path="docs/plans/p.md", **kwargs) -> str:
     from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _v5_fragment
 
     fragment = _v5_fragment()
@@ -124,7 +124,7 @@ def _compose(waves=_WAVES, **kwargs) -> str:
     return emit.compose_script(
         waves, name="wf", description="d", review_roster_fragment=fragment,
         review_stage_schemas={**_STAGE_SCHEMAS, "judge-result": {"type": "object"}},
-        plan_path="docs/plans/p.md", run_base_sha="a" * 40, repo_root=_ROOT, session_id="9d860631-c114-462a-a6ee-f685cc671ced",
+        plan_path=plan_path, run_base_sha="a" * 40, repo_root=_ROOT, session_id="9d860631-c114-462a-a6ee-f685cc671ced",
         **kwargs,
     )
 
@@ -157,12 +157,24 @@ def test_reverify_names_a_call_per_group_prefix_and_the_main_prefix_and_reverts_
     text = _compose()
     block = text[text.index("phase('Review re-verify')") : text.index("phase('Verify')")]
     block = block[block.index("Re-verify the edits") :]
-    key = "9d860631"
+    key = "9d860631-p"
     for i in range(3):
         assert f'"slice_prefix":"{group_slice_prefix(key, i)}"' in block
     assert "for EVERY prefix" in block and "<all failing node ids>" in block
     assert "owns" not in block and "unattributed only when every prefix reports it so" in block
     assert block.count("review.reverify") >= 4
+
+
+def test_two_plans_emitted_in_one_session_mint_disjoint_group_slice_ids_carrying_their_stems():
+    def prefixes(plan_path: str) -> set[str]:
+        text = _compose(plan_path=plan_path)
+        return set(re.findall(r'"slice_prefix":"([^"]+)"', text))
+
+    first = {p for p in prefixes("docs/plans/alpha plan.md") if ".g" in p}
+    second = {p for p in prefixes("docs/plans/beta.md") if ".g" in p}
+    assert first and second and first.isdisjoint(second)
+    assert all("alpha-plan" in p for p in first) and all("beta" in p for p in second)
+    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+", p) for p in first | second)
 
 
 def test_the_rerun_set_is_widened_and_the_verify_scope_is_unchanged():

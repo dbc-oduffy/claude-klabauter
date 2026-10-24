@@ -99,6 +99,24 @@ def test_stage_without_ledger_resume_never_applies_the_refusal(tmp_path):
     assert {r.id for r in manifest.rows} >= {"C26"}
 
 
+def _dep_row(rid: str, regs: str, performer: str | None, deps: list[str]) -> str:
+    return _row(rid, regs, performer) + "  depends_on:\n" + "".join(f"    - chunk: {d}\n" for d in deps)
+
+
+def test_em_row_depending_transitively_on_a_discharged_row_is_staged(tmp_path):
+    rows = [
+        _row("S2", "[R1]", "em"),
+        _dep_row("B1", "[R2]", None, ["S2"]),
+        _dep_row("D1", "[R2]", None, ["B1"]),
+        _dep_row("R1x", "[R1]", "em", ["D1"]),
+    ]
+    plan = _plan(tmp_path, rows, discharged=("S2",))
+    raw = {r["id"]: r for r in yaml.safe_load(plan.read_text().split("```yaml plan-tasks\n")[1].split("```")[0])}
+    _refuse_reminted_em_rows(plan, raw, frozenset({"R1x"}))
+    with pytest.raises(AskStageError, match=r"depends_on"):
+        _refuse_reminted_em_rows(plan, {**raw, "R1x": {**raw["R1x"], "depends_on": []}}, frozenset({"R1x"}))
+
+
 def test_guard_still_admits_an_em_row_serving_a_new_register_row(tmp_path):
     plan = _plan(tmp_path, [_row("C25", "[R1]", "em"), _row("C28", "[R1, R2]", "em")], discharged=("C25",))
     raw = {r["id"]: r for r in yaml.safe_load(plan.read_text().split("```yaml plan-tasks\n")[1].split("```")[0])}

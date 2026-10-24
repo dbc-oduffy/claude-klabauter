@@ -52,6 +52,7 @@ import pytest
 
 from coordinator_core.bash_guards.find_exec_rewrite import (
     _bt_find_exec_python_rewrite,
+    _head_tail_count,
     _bt_parse_find_exec_segment,
 )
 
@@ -95,6 +96,79 @@ def test_rewrite_output_matches_real_find(
 ) -> None:
     _build_fixture(tmp_path)
     assert _run_rewrite(command, tmp_path, monkeypatch) == golden
+
+
+_HT_FILES = {
+    "a.txt": b"1\n2\n3\n4\n",
+    "b.txt": b"x\ny\nz",
+    "c.txt": b"",
+}
+_HT_CASES = [
+    "head -1", "head -n 3", "head", "head -n 0", "tail -2", "tail -n 2", "tail", "tail -n 0",
+]
+
+
+def _ht_fixture(root: Path) -> None:
+    for name, data in _HT_FILES.items():
+        (root / name).write_bytes(data)
+
+
+def test_head_tail_goldens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ht_fixture(tmp_path)
+    run = lambda c: _run_rewrite("find . -name '*.txt' -exec %s {} \\;" % c, tmp_path, monkeypatch)
+    out = run("head -1")
+    assert sorted(out.splitlines(keepends=True)) == ["1\n", "x\n"]
+    assert "==>" not in out
+    assert sorted(run("tail -2").splitlines(keepends=True)) == ["3\n", "4\n", "y\n", "z"]
+    assert run("head -n 0") == ""
+
+
+@pytest.mark.parametrize(
+    "exec_argv",
+    [
+        ["head", "-c", "5", "{}"],
+        ["tail", "-f", "{}"],
+        ["tail", "-n", "+3", "{}"],
+        ["head", "-n3", "{}"],
+        ["head", "-n", "²", "{}"],
+        ["head", "-²", "{}"],
+        ["head", "-n", "3", "-q", "{}"],
+        ["head", "-n", "3"],
+        ["head"],
+    ],
+)
+def test_head_tail_unsupported_shapes_are_not_translated(exec_argv: List[str]) -> None:
+    assert _head_tail_count(exec_argv) is None
+    parsed = {"path": ".", "name_pattern": None, "only_files": True,
+              "exec_argv": exec_argv, "terminator": "semi"}
+    assert _bt_find_exec_python_rewrite(parsed) is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize("verb_args", _HT_CASES)
+def test_head_tail_rewrite_matches_real_semi_form(
+    verb_args: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+    import subprocess
+
+    find, verb = shutil.which("find"), shutil.which(verb_args.split()[0])
+    if not (find and verb):
+        pytest.skip("find/head/tail not on PATH")
+    probe = subprocess.run([find, "--version"], capture_output=True, text=True)
+    if probe.returncode != 0 or "find" not in probe.stdout.lower():
+        pytest.skip("PATH find is not POSIX find")
+    _ht_fixture(tmp_path)
+    cmd = "find . -type f -exec %s {} \\;" % verb_args
+    proc = subprocess.run(
+        [find, ".", "-type", "f", "-exec", verb_args.split()[0], *verb_args.split()[1:], "{}", ";"],
+        cwd=tmp_path, capture_output=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip("PATH find could not run the ';' form: %r" % proc.stderr[:200])
+    real = proc.stdout.decode("utf-8", "replace")
+    assert _run_rewrite(cmd, tmp_path, monkeypatch) == real
 
 
 def test_cat_rewrite_appends_nothing_to_a_file_without_a_trailing_newline(

@@ -12,7 +12,7 @@ The pinned shape (contract quoted to DoE):
       ruling: "<G-EM or Uhura verbatim ruling>"  # source g-em or uhura only
       ruling_ref: "<run id or repo-relative path where the ruling is recorded>"  # delegated only, required
       on: YYYY-MM-DD
-      history:                  # source pm only: the APM sign-offs this PM countersign upgraded
+      history:                  # any source: the records a superseding re-sign replaced
         - {source: apm, apm_ruling: ..., ruling_ref: ..., on: ...}
 
 Per surface: a row carries `signoff` beside `pm_approved: true`; a grouping block carries
@@ -42,8 +42,13 @@ SOURCE_UHURA = "uhura"
 #: Every source that is not the PM: signed without human verification.
 DELEGATED_SOURCES = (SOURCE_APM, SOURCE_GEM, SOURCE_UHURA)
 
+#: The APM outranks G-EM and Uhura because its signing surface is a strict superset (rows and
+#: groupings vs groupings only, DR-399); G-EM and Uhura are co-equal (DR-399).
+SOURCE_RANK = {SOURCE_PM: 3, SOURCE_APM: 2, SOURCE_GEM: 1, SOURCE_UHURA: 1}
+
 __all__ = [
-    "SOURCE_PM", "SOURCE_APM", "SOURCE_GEM", "SOURCE_UHURA", "DELEGATED_SOURCES", "Signoff", "build_signoff", "countersign", "apm_admissible",
+    "SOURCE_PM", "SOURCE_APM", "SOURCE_GEM", "SOURCE_UHURA", "DELEGATED_SOURCES", "SOURCE_RANK",
+    "may_resign", "supersede", "Signoff", "build_signoff", "countersign", "apm_admissible",
     "read_row", "read_grouping", "read_sizing_accepted", "read_exec_stamp",
 ]
 
@@ -59,7 +64,7 @@ SURFACE_EXEC = "exec-auth"
 @dataclass(frozen=True)
 class Signoff:
     """`source` is pm, a delegated source, or None when the surface is approved but
-    `unrecorded`. `history` holds the APM records a PM countersign upgraded. `approver` is the
+    `unrecorded`. `history` holds the records any superseding re-sign replaced, on any source. `approver` is the
     G-EM or Uhura session name."""
 
     source: str | None
@@ -115,14 +120,30 @@ def build_signoff(source: str, words: str, ruling_ref: str | None, on: str,
     return record
 
 
+def may_resign(prior_source: Any, new_source: Any) -> bool:
+    """True when a `new_source` signer may replace a `prior_source` approval: rank(new) >=
+    rank(prior). An unknown source on either side is False."""
+    prior_rank = SOURCE_RANK.get(prior_source)
+    new_rank = SOURCE_RANK.get(new_source)
+    return prior_rank is not None and new_rank is not None and new_rank >= prior_rank
+
+
+def supersede(prior: dict, record: dict) -> dict:
+    """A copy of `record` whose `history` is the prior's history plus the prior itself (minus
+    its own `history`), so history stays flat. `prior` is not mutated."""
+    if not isinstance(prior, dict) or prior.get("source") not in SOURCE_RANK:
+        raise ValueError("supersede needs a prior signoff record with a known source")
+    out = dict(record)
+    out["history"] = [*(prior.get("history") or []), {k: v for k, v in prior.items() if k != "history"}]
+    return out
+
+
 def countersign(prior: dict, pm_quote: str, on: str) -> dict:
     """A pm record whose `history` ends with the prior delegated record (apm, g-em or uhura).
     A prior pm record is refused: there is nothing to upgrade."""
     if not isinstance(prior, dict) or prior.get("source") not in DELEGATED_SOURCES:
         raise ValueError("countersign upgrades a delegated signoff; the prior record is not one")
-    record = build_signoff(SOURCE_PM, pm_quote, None, on)
-    record["history"] = [*(prior.get("history") or []), {k: v for k, v in prior.items() if k != "history"}]
-    return record
+    return supersede(prior, build_signoff(SOURCE_PM, pm_quote, None, on))
 
 
 def _from_record(rec: dict, surface: str) -> Signoff:

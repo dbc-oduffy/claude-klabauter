@@ -8,6 +8,7 @@ refire reads rides under `input`.
 from __future__ import annotations
 
 import json
+import re
 
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_DESIGN_REVIEW
 from coordinator_core.ops.dispatch_emit.write_baseline import (
@@ -78,6 +79,34 @@ def refire_next_action(
         "input": input,
         "detail": detail,
     }
+
+
+WAVE_COMMIT_FAILED_HEAD = "wave commit failed, dependents held ("
+_WAVE_COMMIT_FAILED_TAIL = "): "
+_WAVE_REFUSAL_END = " [an unedited Workflow resume"
+_WAVE_SEAM_NOTE = "; seam drift also recorded"
+_WAVE_SPLIT = re.compile(r"; (?=wave \d+: )")
+_WAVE_SEGMENT = re.compile(r"wave (\d+): .*", re.S)
+
+
+def commit_retry_from_reason(reason: object) -> dict:
+    """``{wave: verbatim refusal}`` parsed from a halt marker's ``reason`` that records failed wave commits.
+
+    The text is the one the emitted finaliser writes (``wave commit failed, dependents held (...): wave N: <why>; ...``);
+    any other reason, or one with no ``wave N:`` segment, yields ``{}``.
+    """
+    if not isinstance(reason, str) or not reason.startswith(WAVE_COMMIT_FAILED_HEAD):
+        return {}
+    _, sep, body = reason.partition(_WAVE_COMMIT_FAILED_TAIL)
+    if not sep:
+        return {}
+    body = body.split(_WAVE_REFUSAL_END, 1)[0].split(_WAVE_SEAM_NOTE, 1)[0]
+    out: dict = {}
+    for segment in _WAVE_SPLIT.split(body):
+        match = _WAVE_SEGMENT.fullmatch(segment.strip())
+        if match:
+            out[int(match.group(1))] = match.group(0)
+    return out
 
 
 def legacy_input(legacy: dict) -> dict:

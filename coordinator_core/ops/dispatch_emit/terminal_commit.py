@@ -515,6 +515,7 @@ def _landing_integrity_gate(
     worktree_root: Path, all_paths: list, deleted_paths: list, record_abs: Optional[Path],
     params: dict, run_id: Optional[str], plan: Optional[str] = None,
     *, residue_py: Sequence[str] = (), residue_known: bool = True, merge_open: bool = False,
+    own_declared: Sequence[str] = (), session_id: Optional[str] = None,
 ) -> dict:
     """Pre-commit integrity findings over the product landing set (unparseable ``.py``, an
     import-closure hit where a ``.py`` the commit deletes (or a top-level def/class it removes) is
@@ -565,6 +566,22 @@ def _landing_integrity_gate(
         extra["since_base_check"] = "no-base"
     else:
         findings += li.since_base_findings(worktree_root, paths, base, run_id=run_id, plan=plan)
+    # A declared landing path carries a co-declaring live run's hunks, or a reviewer's unresolved
+    # out-of-ask finding names it: a path-level commit cannot split either off.
+    from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+
+    for held_path, sibling in peer_hunk_gate.co_declared_peer_holds(
+        worktree_root, run_id, paths, own_declared,
+    ):
+        findings.append(li.Finding(
+            held_path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
+            peer_hunk_gate.refusal_message([(held_path, sibling)], run_id or ""),
+        ))
+    if run_id and session_id:
+        for held_path, stem, line in peer_hunk_gate.out_of_ask_holds(
+            worktree_root, session_id, run_id, paths,
+        ):
+            findings.append(li.Finding(held_path, peer_hunk_gate.OUT_OF_ASK_HUNKS, f"{stem}: {line}"))
     # Trap: ``inline_review.tests.status`` is already baseline-aware (a baseline-cleared run folds
     # to ``pass``), so a carried ``fail`` here is run-caused or a failed row verification.
     tested, tcheck = li.landing_test_gate(worktree_root, params, run_id)
@@ -4614,14 +4631,14 @@ def _terminal_commit_inner(
             presets=presets,
         )
 
-    # Review at close is deterministic (PM ruling 2026-10-01): a run whose
-    # result carries no review-stage output cannot land code, however the
-    # script was composed or stripped.
     no_change = _no_change_refusal(
         worktree_root, manifest if ask_run_dir is not None else None, request, inline_review
     )
     if no_change is not None:
         return no_change
+    # Review at close is deterministic (PM ruling 2026-10-01): a run whose
+    # result carries no review-stage output cannot land code, however the
+    # script was composed or stripped.
     if inline_review is None:
         return _error(
             "params.inline_review is absent -- the run carries no review-stage "
@@ -5256,10 +5273,14 @@ def _terminal_commit_inner(
         run_owned = [p for p in run_owned if p not in proc_wh]
         scope["run_owned"] = list(run_owned)
 
+    from coordinator_core.ops.dispatch_emit.shipped_claims import SELF_APPLIED_WITHHOLDS
+
     wh_reasons = {
-        **_withhold_reasons(worktree_root, artifacts, record_dir_rel),
-        **param_withheld,
-        **_remedy.review_carried_withholds(request),
+        p: r for p, r in {
+            **_withhold_reasons(worktree_root, artifacts, record_dir_rel),
+            **param_withheld,
+            **_remedy.review_carried_withholds(request),
+        }.items() if r not in SELF_APPLIED_WITHHOLDS
     }
     wh_map: dict = {}
     wh_unmatched: list = []
@@ -5760,6 +5781,36 @@ def _terminal_commit_inner(
         commit_params["declared_reverts"] = own_reverts
     if params.get("allow_empty") is True or marker_anchor or ((anchor_only or request.review_only) and review_trailed):
         commit_params["allow_empty"] = True  # marker_anchor: the review anchor must land tree-equal
+    stage_before: Optional[str] = None
+    stage_stamped = False
+    if not anchor_only and isinstance(art_run_id, str) and art_run_id:
+        from coordinator_core.ops.dispatch_emit import ask_contract as _ac_stage
+
+        # Written before the candidate set is hashed and staged so run-stage.json rides this commit.
+        try:
+            stage_before = (_ac_stage.read_run_stage(worktree_root, art_run_id) or {}).get("stage")
+            _ac_stage.write_run_stage(worktree_root, art_run_id, "landed")
+            stage_stamped = True
+        except (ValueError, OSError):
+            stage_before = None
+
+    def _unstamp_landed() -> None:
+        """Undo the pre-commit `landed` stamp on a path that does not land: restore the prior stage,
+        or drop the file when the run had none."""
+        if not stage_stamped:
+            return
+        from coordinator_core.ops.dispatch_emit import ask_contract as _ac_unstamp
+
+        try:
+            if stage_before in _ac_unstamp.RUN_STAGES:
+                _ac_unstamp.write_run_stage(worktree_root, art_run_id, stage_before)
+            else:
+                (_ac_unstamp.record_dir(worktree_root, art_run_id) / _ac_unstamp.RUN_STAGE_FILE).unlink(
+                    missing_ok=True
+                )
+        except (ValueError, OSError):
+            pass
+
     reread_artifacts: list[str] = []
     if session_id is not None:
         commit_params["session_id"] = session_id
@@ -5815,8 +5866,10 @@ def _terminal_commit_inner(
         _run_id_of(params, ask_run_dir, script_path_raw), request.plan_path,
         residue_py=residue_py, residue_known=snapshot is not None,
         merge_open=merge_plan is not None,
+        own_declared=sorted(declared_writes), session_id=session_id,
     )
     if integrity_extra.get("refused"):
+        _unstamp_landed()
         _remove(worktree_root, receipt_paths)
         findings = integrity_extra["integrity"]
         first = findings[0]
@@ -5840,8 +5893,11 @@ def _terminal_commit_inner(
     shipped_reply_field: dict = {}
     if ask_note_rel is not None and token_state.get("since_halt_close") is None:
         reach_withheld = {
-            *wh_map, *proc_wh, *sibling_withheld, *held_paths,
-            *(art_landable.withheld if art_landable is not None else ()),
+            **(dict(art_landable.withheld) if art_landable is not None else {}),
+            **{p: str(why) for p, why in sibling_withheld.items()},
+            **{p: "peer-held" for p in held_paths},
+            **{p: str(why) for p, why in proc_wh.items()},
+            **{p: str(wh_reasons[p]) for p in wh_map},
         }
         ask_note_text = _read_rel(worktree_root, ask_note_rel)
         reach_refused, reach_reply_field = reach_gate(
@@ -5849,6 +5905,7 @@ def _terminal_commit_inner(
             deleted_paths=deleted_paths, withheld_paths=reach_withheld,
         )
         if reach_refused is not None:
+            _unstamp_landed()
             _remove(worktree_root, receipt_paths)
             return _error(reach_refused, refused=REACH_CLAIM_REFUSED, reach_claims=reach_reply_field)
         shipped_refused, shipped_reply_field = shipped_gate(
@@ -5856,6 +5913,7 @@ def _terminal_commit_inner(
             deleted_paths=deleted_paths, withheld_paths=reach_withheld,
         )
         if shipped_refused is not None:
+            _unstamp_landed()
             _remove(worktree_root, receipt_paths)
             return _error(shipped_refused, refused=SHIPPED_CLAIM_REFUSED, shipped_claims=shipped_reply_field)
 
@@ -5881,9 +5939,11 @@ def _terminal_commit_inner(
             worktree_root, _overlap_paths, _attempt, _cas_lost
         )
     except OpUnavailableError:
+        _unstamp_landed()
         _remove(worktree_root, receipt_paths)
         return _error("ceremony.commit_v2 is not registered")
     except BaseException:
+        _unstamp_landed()
         _remove(worktree_root, receipt_paths)
         raise
     if not isinstance(reply, dict):
@@ -5911,14 +5971,18 @@ def _terminal_commit_inner(
                     worktree_root, _overlap_paths, _attempt, _cas_lost
                 )
             except OpUnavailableError:
+                _unstamp_landed()
                 _remove(worktree_root, receipt_paths)
                 return _error("ceremony.commit_v2 is not registered")
             except BaseException:
+                _unstamp_landed()
                 _remove(worktree_root, receipt_paths)
                 raise
             if not isinstance(reply, dict):
                 reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
+    if not (reply.get("committed") and reply.get("sha")):
+        _unstamp_landed()
     reply = dict(reply)
     reply["script_source"] = script_source
     if tolerated:

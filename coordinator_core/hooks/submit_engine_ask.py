@@ -18,7 +18,7 @@ separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the 
 lazy-emit launcher (`fan_launcher.write_launcher`) that emits and starts each, with one ready run it fires
 that run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, or the venue is remote), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, or the venue is remote), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`, and ignored on a `sizing` submission; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
 when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
 root passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm
@@ -729,7 +729,7 @@ def evaluate(
         if source not in ASK_SOURCES:
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
         if sizing_rel is not None:
-            return _refuse("source marks an ask's text; a sizing submission carries none.")
+            source = None
     item_em_context: Optional[str] = None
     item_context: list[str] = []
     if asks is not None:

@@ -25,7 +25,11 @@ Reply: `{"plan", "applied", "message", "targets"}`.
 Negative-spec:
   - All-or-nothing across row ids, under locked_rmw; any refusal writes nothing.
   - A pm sign-off over an existing delegated one writes a countersign (the delegated record
-    moves into `history`); a delegated sign-off over any prior sign-off is refused.
+    moves into `history`).
+  - A re-sign of an approved grouping needs a source of the same or higher class
+    (pm > apm > g-em = uhura) AND a cut_set that strictly widens the approved set; the prior
+    record moves into `history`. A lower class, a non-widening re-sign, or a prior cut still
+    unresolved on disk is refused. Row sign-offs are never re-signed.
   - A delegated ruling naming an irreversible or external act is refused (stays the PM's).
   - Never commits; the caller's ceremony does.
 """
@@ -70,6 +74,8 @@ from coordinator_core.ops.signoff_provenance import (
     apm_admissible,
     build_signoff,
     countersign,
+    may_resign,
+    supersede,
 )
 
 #: The grouping block's `approver` per signoff source; schema_validate matches it case-blind.
@@ -85,15 +91,33 @@ def _fail(message: str) -> MutateAbort:
 
 
 def _new_record(prior: Any, source: str, words: str, ruling_ref: Optional[str], on: str,
-                approver: Optional[str] = None) -> dict:
-    """The record to write over `prior` (the target's current `signoff` dict or None)."""
+                approver: Optional[str] = None, *, widening: bool = False,
+                prior_cut_open: bool = False) -> dict:
+    """The record to write over `prior` (the target's current `signoff` dict or None).
+
+    Refusal order is fixed: rank, then unresolved prior cut, then widening, so a lower class
+    always gets the rank refusal and a PM countersign over a delegate needs neither check."""
     prior_source = prior.get("source") if isinstance(prior, dict) else None
     if prior_source == SOURCE_PM:
+        if source == SOURCE_PM and prior_cut_open:
+            raise _fail(f"already signed off by {_NAMES[prior_source]}; the approved cut-set still has "
+                        "unresolved rows; resolve them before widening")
+        if source == SOURCE_PM and widening:
+            return supersede(prior, build_signoff(source, words, ruling_ref, on, approver))
         raise _fail("already signed off by the PM; nothing to upgrade or overwrite")
     if prior_source in DELEGATED_SOURCES:
-        if source != SOURCE_PM:
-            raise _fail(f"already signed off by {_NAMES[prior_source]}")
-        return countersign(prior, words, on)
+        if source == SOURCE_PM:
+            return countersign(prior, words, on)
+        name = _NAMES[prior_source]
+        if not may_resign(prior_source, source):
+            raise _fail(f"already signed off by {name}; a lower-class sign-off cannot override it")
+        if prior_cut_open:
+            raise _fail(f"already signed off by {name}; the approved cut-set still has unresolved "
+                        "rows; resolve them before widening")
+        if not widening:
+            raise _fail(f"already signed off by {name}; a re-sign must widen the approved cut-set "
+                        "(pass cut_set naming the added rows)")
+        return supersede(prior, build_signoff(source, words, ruling_ref, on, approver))
     return build_signoff(source, words, ruling_ref, on, approver)
 
 
@@ -176,6 +200,7 @@ def _sign_grouping(old_text: str, grouping: str, digest: Optional[str], source: 
     if located.status is not LocateStatus.LOCATED:
         raise _fail("task spine is absent or malformed")
     rows = [r for r in _parse_rows_or_abort(located.body, "plan.signoff") if isinstance(r, dict)]
+    on_disk_rows = rows
     if cut_set is not None:
         rows = _prospective_rows(rows, grouping, cut_set)
     elif not any(_plan_tasks_row_grouping(r) == grouping for r in rows):
@@ -187,8 +212,14 @@ def _sign_grouping(old_text: str, grouping: str, digest: Optional[str], source: 
     if digest is not None and digest != fresh:
         raise _fail(f"digest does not match the current membership of {grouping!r}")
     prior = block.get("signoff") if block.get("status") == "approved" else None
+    prior_cut_open = widening = False
+    if prior is not None and cut_set is not None:
+        approved_now = compute_grouping_digest(on_disk_rows, grouping)
+        prior_cut_open = block.get("digest") != approved_now
+        widening = not prior_cut_open and fresh != approved_now
     try:
-        record = _new_record(prior, source, words, ref, on, approver)
+        record = _new_record(prior, source, words, ref, on, approver,
+                             widening=widening, prior_cut_open=prior_cut_open)
     except ValueError as exc:
         raise _fail(str(exc)) from exc
     block = dict(block)

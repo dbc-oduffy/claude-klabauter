@@ -52,6 +52,10 @@ from coordinator_core.contract.cockpit_schema.entities import (
     SnapshotEnvelope,
     TrackerSummary,
     WeekRollup,
+    SizingSummary,
+    WorkflowRun,
+    DeliveryVerdictSummary,
+    RulingSummary,
 )
 from coordinator_core.contract.cockpit_schema.provenance import ProvenanceEnvelope
 
@@ -121,6 +125,10 @@ ENTITY_SCHEMAS: dict[str, Any] = {
     "intelligence-signal": IntelligenceSignal,
     "financial-metric-summary": FinancialMetricSummary,
     "priority-ledger-entry": PriorityLedgerEntry,
+    "sizing-summary": SizingSummary,
+    "workflow-run": WorkflowRun,
+    "delivery-verdict-summary": DeliveryVerdictSummary,
+    "ruling-summary": RulingSummary,
     "completion-receipt": CompletionReceipt,
     "snapshot-envelope": SnapshotEnvelope,
     "emission-scope": ScopedEmission,

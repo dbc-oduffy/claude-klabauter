@@ -80,3 +80,12 @@ def test_blocked_slice_with_unapplied_findings_halts_naming_findings_and_recover
 )
 def test_applied_clean_degraded_or_whole_diff_waves_do_not_halt(wave):
     assert _run_halt(wave) is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_blocked_slice_without_reverify_failures_keeps_findings_halt_shape():
+    halted = _run_halt([_slice("BLOCKED", 1, 0)])
+
+    assert "blocker" not in halted
+    assert "gaps" not in halted

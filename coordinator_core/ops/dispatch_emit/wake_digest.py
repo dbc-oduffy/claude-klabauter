@@ -637,6 +637,8 @@ def completion_return_js(
     seam_drift_expr = (
         f"(Object.keys({COMMIT_REFUSED_VAR}).length ? 'wave commit failed, dependents held (the terminal commit lands the wave): ' "
         f"+ Object.values({COMMIT_REFUSED_VAR}).join('; ') "
+        # The ' [an unedited Workflow resume' prefix is the delimiter halt_refire.commit_retry_from_reason splits on.
+        "+ ' [an unedited Workflow resume replays this cached refusal; to re-attempt, re-emit the plan with dispatch.emit (it pins the Checkpoint-Base and the refusal from this halt), then resume]' "
         f"+ ({SEAM_DRIFT_VAR}.length ? '; seam drift also recorded: ' + {SEAM_DRIFT_VAR}.length + ' finding(s)' : '') : "
         f"({SEAM_DRIFT_VAR}.length ? (() => {{ const g = new Map(); {SEAM_DRIFT_VAR}.forEach(d => {{ "
         "const k = [d.wave, d.class || '', d.failed || '', d.plans.join(',')].join('|'); "

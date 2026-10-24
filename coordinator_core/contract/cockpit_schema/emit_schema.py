@@ -536,7 +536,16 @@ GENERATES_EXTERNAL = True
 # that expired with no decision. Additive enum widen only: no key removed, renamed or
 # retyped, and no value valid today becomes invalid. Expected red window:
 # `test_committed_emit_drift.py` until DoE regenerates the bundle at 4.15.0.
-CONTRACT_VERSION = "4.15.0"
+#
+# MINOR bump 4.15.0 -> 4.16.0: four new entities (`sizing-summary`, `workflow-run`,
+# `delivery-verdict-summary`, `ruling-summary`) and SnapshotEnvelope gains optional
+# `sizings` and `workflow_runs` arrays (not in `required[]`, the 4.11.0 precedent).
+# Verdicts and rulings get no envelope key; they are served through `records.query`.
+# Pure addition: no existing entity or field changed. Expected red window:
+# `ops/emit/tests/test_vendor_pin_version_consistency.py` and
+# `test_committed_emit_drift.py` until DoE regenerates the bundle at 4.16.0 and claude-klabauter
+# re-vendors.
+CONTRACT_VERSION = "4.16.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

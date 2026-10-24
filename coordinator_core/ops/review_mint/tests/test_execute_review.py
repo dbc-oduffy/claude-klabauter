@@ -1563,6 +1563,14 @@ def _reverify_phases(**kw):
     )
 
 
+def test_reverify_leg_requires_and_asks_for_failing_detail():
+    text = "\n".join(t + body for t, body in _reverify_phases(reverify=True) if t == "Review re-verify")
+    assert "failing_detail" in text
+    assert "one-line assertion message" in text
+    assert text.count("failing [], failing_detail []") >= 2
+    assert "failing [], reverted []" not in text
+
+
 def test_reverify_false_output_equals_the_default_output():
     assert _reverify_phases(reverify=False) == _reverify_phases()
 

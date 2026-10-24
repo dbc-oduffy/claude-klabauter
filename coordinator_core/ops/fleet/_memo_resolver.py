@@ -373,18 +373,26 @@ def read_receiver_aliases() -> dict[str, str]:
         return {}
 
 
-def read_central_receiver_ids() -> set[str]:
+def _read_identity_id_set(key: str, what: str) -> set[str]:
+    """Lowercased, stripped string entries of `identity.<key>`; `set()` on any read failure."""
     try:
-        central_ids: set[str] = set()
-        for entry in read_doe_identity().get("centralReceiverIds", []):
+        ids: set[str] = set()
+        for entry in read_doe_identity().get(key, []):
             if isinstance(entry, str) and entry.strip():
-                central_ids.add(entry.strip().lower())
-        return central_ids
+                ids.add(entry.strip().lower())
+        return ids
     except Exception as exc:
-        _LOG.warning(
-            "_memo_resolver: failed to read central receiver ids from DoE manifest: %s", exc
-        )
+        _LOG.warning("_memo_resolver: failed to read %s from DoE manifest: %s", what, exc)
         return set()
+
+
+def read_central_receiver_ids() -> set[str]:
+    return _read_identity_id_set("centralReceiverIds", "central receiver ids")
+
+
+def read_group_em_receiver_ids() -> set[str]:
+    """Lowercased `identity.groupEmReceiverIds` from the DoE manifest; `set()` when absent."""
+    return _read_identity_id_set("groupEmReceiverIds", "group-em receiver ids")
 
 
 def read_redirect_aliases() -> set[str]:

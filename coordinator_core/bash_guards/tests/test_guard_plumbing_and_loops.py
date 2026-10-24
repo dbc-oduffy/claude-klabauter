@@ -697,6 +697,28 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         ctx = out["hookSpecificOutput"]["additionalContext"]
         assert "pipeline-foreach-object" in ctx
 
+    @requires_powershell_grammar
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "Get-ChildItem | ForEach-Object { $_.Name }",
+            "ls | % { $_.Length }",
+            "Get-ChildItem | ForEach-Object { Get-Content $_ | Select-Object -First 1 }",
+        ],
+    )
+    def test_cmdlet_only_foreach_object_block_is_silent(self, command):
+        out = _enveloped(guard.check)(_ps_payload(command), host_is_windows=True)
+        assert out is None
+
+    @requires_powershell_grammar
+    def test_native_call_in_foreach_object_block_still_advises(self):
+        out = _enveloped(guard.check)(
+            _ps_payload("Get-ChildItem | ForEach-Object { git log -1 $_ }"),
+            host_is_windows=True,
+        )
+        assert out is not None
+        assert "pipeline-foreach-object" in out["hookSpecificOutput"]["additionalContext"]
+
     def test_no_private_shape_precedence_walk_remains(self):
         # AC11: `_verdict_powershell` must classify via
         # `_shape_classifier.classify_command` -- the module-level

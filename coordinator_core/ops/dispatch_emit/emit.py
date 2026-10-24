@@ -1471,6 +1471,14 @@ def _sidecar_run_key(plan_path: Optional[str]) -> str:
     return Path(plan_path.replace("\\", "/")).stem if plan_path else _SIDECAR_NO_PLAN_KEY
 
 
+def _review_run_key(session_id: Optional[str], plan_path: Optional[str], script_path: Optional[str]) -> Optional[str]:
+    """The review run key: session prefix plus the plan stem, so two plans emitted in one session
+    mint disjoint group slice ids (``<key>.g<N>``). Filename-safe; never a path or host name."""
+    session = (session_id or "")[:8]
+    stem = re.sub(r"[^A-Za-z0-9_.-]", "-", _sidecar_run_key(plan_path)) if plan_path else ""
+    return "-".join(p for p in (session, stem) if p) or (Path(script_path).stem if script_path else None)
+
+
 def _emit_sidecar_clause(plan_path: Optional[str], label: str) -> str:
     """Prompt-tail text for an agent whose label is known at compose time."""
     return _sidecar_clause(_sidecar_dir(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), label))
@@ -4962,6 +4970,7 @@ def _checkpoint_commit_js(
     sidecar_workflow: str = _SIDECAR_WORKFLOW,
     sidecar_run_key: Optional[str] = None,
     pre_commit_gate_js: Optional[str] = None,
+    commit_retry: Optional[Mapping[int, str]] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -4975,7 +4984,12 @@ def _checkpoint_commit_js(
 
     ``pre_commit_gate_js`` names an ``async (n, done) => boolean`` the script defines; a false
     verdict withholds the checkpoint and carries the wave's rows onto ``_carried`` (no leg, no
-    failure, no halt). None emits the machinery byte-identically."""
+    failure, no halt). None emits the machinery byte-identically.
+
+    ``commit_retry`` ({wave number: the prior run's verbatim refusal}) appends a re-attempt clause
+    to those waves' commit prompts. The Workflow resume cache keys on the resolved prompt, so the
+    changed prompt makes the leg re-run instead of replaying the cached ``commit-failed``; a wave
+    absent from the map keeps its prompt byte-identical. None or empty emits nothing."""
     root_clause = (
         "Your repo is `\0`: `cd` there before any command and resolve every "
         "relative path against it. "
@@ -5015,8 +5029,30 @@ def _checkpoint_commit_js(
     )
     commit_type = _js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))
     phase = _js_string_literal(_EXECUTE_PHASE_TITLE)
+    retry_prompt_js = ""
+    retry_lines: list[str] = []
+    if commit_retry:
+        retry_lines = [
+            "  const _commitRetry = "
+            + json.dumps({str(n): why for n, why in sorted(commit_retry.items())})
+            + ";"
+        ]
+        retry_prompt_js = (
+            " + (_commitRetry[n] ? "
+            + _js_string_literal(
+                " A prior run of this plan was refused at this wave's commit with: `"
+            )
+            + " + _commitRetry[n] + "
+            + _js_string_literal(
+                "`. Re-attempt the commit now with the same route: a claim that blocked it may "
+                "since have been released, and the route reads each holder's liveness itself. "
+                "Report a refusal verbatim again if it persists."
+            )
+            + " : '')"
+        )
     lines = [
         f"  const _CHECKPOINT_COMMIT_SCHEMA = {json.dumps(_CHECKPOINT_COMMIT_SCHEMA)};",
+        *retry_lines,
         "  const _commitFailures = [];",
         "  const _landed = {};",
         "  const _checkpointShas = [];",
@@ -5080,7 +5116,7 @@ def _checkpoint_commit_js(
         "'). Commit message, verbatim as the `message` param with its newlines "
         "JSON-escaped: `' + message + '`.' + "
         f"{_js_string_literal(commit_tail)} + paths.join(', ') + "
-        f"{_js(route)} + {_emit_sidecar_clause_js(plan_path, _COMMIT_LABEL_JS, **sidecar_key)},",
+        f"{_js(route)}{retry_prompt_js} + {_emit_sidecar_clause_js(plan_path, _COMMIT_LABEL_JS, **sidecar_key)},",
         f"        {{ label: 'commit:wave-' + n, phase: {phase}, agentType: {commit_type}, "
         f"{_model_opt(_COMMIT_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_COMMIT_SCHEMA }}",
         "      );",
@@ -5549,6 +5585,7 @@ def compose_script(
     routes: Optional[dict] = None,
     route_notes: Sequence[str] = (),
     absorb_run_id: Optional[str] = None,
+    commit_retry: Optional[Mapping[int, str]] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
@@ -5814,6 +5851,7 @@ def compose_script(
                 run_base_sha=run_base_sha,
                 seam=seam_leg,
                 prior_run_base=prior_run_base,
+                commit_retry=commit_retry,
             )
         )
         row_helper_index = len(body_blocks)
@@ -6242,7 +6280,7 @@ def compose_script(
         declared_paths=declared_paths,
         prompt_head=review_prompt_head,
         criterion=plan_context.operative_criterion if plan_context is not None else None,
-        run_key=(session_id or "")[:8] or (Path(script_path).stem if script_path else None),
+        run_key=_review_run_key(session_id, plan_path, script_path),
         precredited_rows=precredited_rows,
         em_owned_rows=em_owned_rows(excluded_rows),
         host_degraded=agent_type_host == _AGENT_TYPE_HOST_DEGRADED,
@@ -7266,6 +7304,18 @@ def deleted_in_range(
     return {p for p, b in bare.items() if b in gone}
 
 
+def _require_base_reaches_head(base: str, repo_root: Optional[Path]) -> None:
+    """Refuse a resume base that is not an ancestor of HEAD (a reverted or foreign sha)."""
+    from coordinator_core.git_ancestry import is_ancestor
+
+    cwd = str(repo_root) if repo_root is not None else None
+    read_ok, observed = is_ancestor(base, "HEAD", cwd=cwd)
+    if not read_ok:
+        raise ValueError(f"resume_run_base: ancestry of {base} to HEAD unreadable")
+    if not observed:
+        raise ValueError(f"resume_run_base {base} is not an ancestor of HEAD")
+
+
 def _pin_review_terminal(run_base_sha: str, repo_root: Optional[Path]) -> str:
     """The emit-time HEAD sha a review-only run reviews up to, after checking ``run_base_sha``
     reaches it. Two spawns; refuses on a non-ancestor and on an unreadable answer."""
@@ -7328,11 +7378,19 @@ def emit_script(
     auto_split: bool = False,
     sibling: Optional[dict] = None,
     absorb_run_id: Optional[str] = None,
+    resume_run_base: Optional[str] = None,
+    commit_retry: Optional[Mapping[int, str]] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
     ``absorb_run_id`` forwards to ``compose_script``: the warp run whose late
     ``workflow.revise`` rows the composed script absorbs after its DAG settles.
+
+    ``commit_retry`` ({wave number: a halted run's verbatim commit refusal}) re-emits a plan whose
+    prior run halted on a failed wave commit so a resumed run re-attempts that commit. It needs
+    ``resume_run_base``, the prior run's ``Checkpoint-Base`` sha: the emit-time base is spliced into
+    every prompt, so a moved base would miss the resume cache from the first row on. The base must be
+    an ancestor of HEAD; ``review_only_rows`` and these two are mutually exclusive.
 
     ``certified_plans`` is the full certified set a tranche spine was cut from; it rides
     into the wave-boundary seam leg so a consumer plan of another tranche still counts
@@ -7449,6 +7507,14 @@ def emit_script(
         review_terminal_sha = _pin_review_terminal(run_base_sha, repo_root)
     elif run_base_sha is not None or review_only_rows is not None:
         raise ValueError("run_base_sha and review_only_rows are accepted only together")
+    if bool(commit_retry) != bool(resume_run_base):
+        raise ValueError("commit_retry and resume_run_base are accepted only together")
+    if resume_run_base:
+        if review_only:
+            raise ValueError("commit_retry is not accepted with review_only_rows")
+        if not _RUN_BASE_RE.fullmatch(resume_run_base):
+            raise ValueError("resume_run_base must match ^[0-9a-f]{7,40}$")
+        _require_base_reaches_head(resume_run_base, repo_root)
     if review_carried_paths and not review_only:
         raise ValueError("review_carried_paths is accepted only with review_only_rows")
     # `landed_rows is not None` is the --only-incomplete request: a run text naming no rows
@@ -7594,7 +7660,7 @@ def emit_script(
     # unresolvable or HEAD cannot be read; compose_script degrades to no
     # narration line rather than guessing a sha.
     if not review_only:
-        run_base_sha = head_sha(repo_root) if repo_root is not None else None
+        run_base_sha = resume_run_base or (head_sha(repo_root) if repo_root is not None else None)
         if not run_base_sha and repo_root is not None and _repo_has_branches(repo_root):
             raise ValueError(
                 "emit refused: the repo has branches but HEAD resolves to no commit, so the script's "
@@ -7641,6 +7707,7 @@ def emit_script(
         predecessor_state=_with_resume_guard(
             predecessor_state_section(plan_text, repo_root),
             run_base_sha if review_only else (_run_base_marker() if run_base_sha else None),
+            spec_path.as_posix(),
         ),
         precredited_rows=precredited_rows,
         review_only=review_only,
@@ -7661,6 +7728,7 @@ def emit_script(
         prior_run_base=prior_run_base,
         prior_landed_rows=prior_landed_rows,
         absorb_run_id=absorb_run_id if sibling is None or sibling.get("terminal_commit", True) else None,
+        commit_retry=commit_retry,
         review_terminal_sha=review_terminal_sha,
         routes=routes,
         route_notes=route_notes,
@@ -7671,11 +7739,16 @@ def emit_script(
     )
 
 
-def _resume_guard_clause(run_base_sha: Optional[str]) -> str:
+def _resume_guard_clause(run_base_sha: Optional[str], plan_path: Optional[str] = None) -> str:
     """A resumed run re-dispatches every incomplete row from the script's
     emit-time literal, blind to what the EM has done since (a revert, a
     `wont_do` disposition); the executor is the only runtime reader of HEAD
-    and the spine, so it checks both before its first write."""
+    and the spine, so it checks both before its first write. A commit is inside
+    the run when its subject begins `checkpoint(` or its `Checkpoint-Plan:` /
+    `Plan:` trailer names ``plan_path`` (a hand landing of this plan's rows).
+
+    The text is part of every row prompt, hence of the resume cache key: changing it re-keys a
+    halted run emitted before the change, which then re-runs from its first row."""
     closed = ", ".join(sorted(NON_DISPATCHABLE_DISPOSITIONS | {"superseded", "abandoned"}))
     clause = (
         "BEFORE ANY WRITE, check two things. (1) Re-read your row in the plan "
@@ -7683,17 +7756,25 @@ def _resume_guard_clause(run_base_sha: Optional[str]) -> str:
         "nothing and report `Status: BLOCKED` with reason `row-closed-on-spine`."
     )
     if run_base_sha:
+        own = (
+            f"and carries no `Checkpoint-Plan:` or `Plan:` trailer (printed after the tab) naming `{plan_path}`"
+            if plan_path
+            else ""
+        )
         clause += (
-            f" (2) Run `git log --format=%h%x20%s {run_base_sha}..HEAD -- <your row's writes>`: "
-            "if any listed commit's subject does not begin `checkpoint(`, a change outside "
+            " (2) Run `git log --format=%h%x20%s%x09%(trailers:key=Checkpoint-Plan,key=Plan,valueonly,separator=%x2C) "
+            f"{run_base_sha}..HEAD -- <your row's writes>`: "
+            f"if any listed commit's subject does not begin `checkpoint(`{' ' + own if own else ''}, a change outside "
             "this run (a revert, a peer) moved your files; write nothing and report "
             "`Status: BLOCKED` with reason `writes-moved-outside-run`, naming the commits."
         )
     return clause
 
 
-def _with_resume_guard(predecessor_state: Optional[str], run_base_sha: Optional[str]) -> str:
-    guard = _resume_guard_clause(run_base_sha)
+def _with_resume_guard(
+    predecessor_state: Optional[str], run_base_sha: Optional[str], plan_path: Optional[str] = None
+) -> str:
+    guard = _resume_guard_clause(run_base_sha, plan_path)
     return f"{guard}\n\n{predecessor_state}" if predecessor_state else guard
 
 

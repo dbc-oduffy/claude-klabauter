@@ -22,6 +22,15 @@ def _script():
     )
 
 
+def test_both_prompts_state_the_evaluator_grammar_and_refuse_pipes():
+    from coordinator_core.ops._anchor_check import GRAMMAR
+
+    script = _script()
+    assert script.count(GRAMMAR) == 2
+    assert script.count("no pipes, redirects or other shell operators") == 2
+    assert script.count("anchor-premise-no-verdict") == 2
+
+
 def test_review_and_revise_prompts_carry_anchor_sentence_before_readiness_op():
     script = _script()
     for needle in ("anchor_premises", "plan.premise_record", "anchor: <id>", ask_compose._ANCHOR_BRIEF_VERSION):

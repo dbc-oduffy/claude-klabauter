@@ -52,13 +52,33 @@ def group_paths(paths: List[str], max_slices: int = MAX_SLICES) -> List[List[str
     return [files for _, files in ordered]
 
 
+def _effective_base(path: str, base: str, path_bases: Dict[str, str]) -> str:
+    """Base for `path`: the longest `path_bases` key equal to it or an ancestor directory."""
+    best_len, result = -1, base
+    for key, value in path_bases.items():
+        k = key.rstrip("/")
+        if (path == k or path.startswith(k + "/")) and len(k) > best_len:
+            best_len, result = len(k), value
+    return result
+
+
 def partition_slices(
-    repo_root: Path, base: str, paths: List[str], slice_prefix: str, *, head: Optional[str] = None
+    repo_root: Path,
+    base: str,
+    paths: List[str],
+    slice_prefix: str,
+    *,
+    head: Optional[str] = None,
+    path_bases: Optional[Dict[str, str]] = None,
 ) -> dict:
     """Gate verdict over `paths`, and the frozen slices when partitioned.
 
     With `head` set, measures and freezes committed `base..head` only (range mode); otherwise
     `base`->worktree. Range mode never reads the working tree.
+
+    `path_bases` maps a declared path to its own base; absent paths use `base`. Measure and
+    freeze run once per distinct base (spawns grow with bases, not paths); a directory slice
+    spanning two bases is frozen as one slice per base. None/{} is the single-base behaviour.
 
     Returns `{verdict, loc, surfaces, product_paths: [..], slices: [{slice_id, paths, diff_path}],
     error}`; `error` is None on success. A freeze refusal is returned as `error` with the
@@ -68,28 +88,43 @@ def partition_slices(
     if not base or not paths or not slice_prefix:
         out["error"] = "base, paths and slice_prefix are required"
         return out
-    if head:
-        try:
-            loc, surfaces, files = range_measure(base, head, paths, str(repo_root))
-        except RangeMeasureError as exc:
-            out["error"] = str(exc)
-            return out
-    else:
-        loc, surfaces, files = worktree_measure(base, paths, str(repo_root))
+    bases = path_bases or {}
+    by_base: Dict[str, List[str]] = {}
+    for p in paths:
+        by_base.setdefault(_effective_base(p, base, bases), []).append(p)
+    loc, surfaces, files = 0, set(), set()
+    for b, group_declared in by_base.items():
+        if head:
+            try:
+                g_loc, g_surfaces, g_files = range_measure(b, head, group_declared, str(repo_root))
+            except RangeMeasureError as exc:
+                out["error"] = str(exc)
+                return out
+        else:
+            g_loc, g_surfaces, g_files = worktree_measure(b, group_declared, str(repo_root))
+        loc += g_loc
+        surfaces |= g_surfaces
+        files |= g_files
     verdict = _verdict(loc, 0, len(surfaces))
     out.update(verdict=verdict, loc=loc, surfaces=len(surfaces), product_paths=sorted(files))
     if verdict != "PARTITION-MANDATORY" or not files:
         return out
-    for n, group in enumerate(group_paths(sorted(files)), 1):
-        slice_id = f"{slice_prefix}-{n}"
-        if head:
-            frozen = freeze_diff(repo_root, f"{base}..{head}", slice_id, group)
-        else:
-            frozen = freeze_diff(repo_root, base, slice_id, group, worktree=True)
-        if frozen.get("error"):
-            out["error"] = f"freeze of {slice_id} failed: {frozen['error']}"
-            return out
-        out["slices"].append({"slice_id": slice_id, "paths": group, "diff_path": frozen["diff_path"]})
+    n = 0
+    for group in group_paths(sorted(files)):
+        sub: Dict[str, List[str]] = {}
+        for f in group:
+            sub.setdefault(_effective_base(f, base, bases), []).append(f)
+        for b, sub_group in sorted(sub.items()):
+            n += 1
+            slice_id = f"{slice_prefix}-{n}"
+            if head:
+                frozen = freeze_diff(repo_root, f"{b}..{head}", slice_id, sub_group)
+            else:
+                frozen = freeze_diff(repo_root, b, slice_id, sub_group, worktree=True)
+            if frozen.get("error"):
+                out["error"] = f"freeze of {slice_id} failed: {frozen['error']}"
+                return out
+            out["slices"].append({"slice_id": slice_id, "paths": sub_group, "diff_path": frozen["diff_path"]})
     return out
 
 
@@ -113,4 +148,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         [str(p) for p in paths],
         str(params.get("slice_prefix") or ""),
         head=head or None,
+        path_bases={str(k): str(v) for k, v in (params.get("path_bases") or {}).items()},
     )

@@ -41,6 +41,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     OwedRow,
     StageManifest,
     record_dir,
+    stamp_run_stage,
     rulable_ids,
 )
 from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError, RouteTableError, route_rows
@@ -530,13 +531,31 @@ def _refuse_reminted_em_rows(plan_path: Path, raw_by_id: Mapping[str, Mapping], 
         if raw is None or row_id in discharged or not row_is_em_performed(raw):
             continue
         regs = {str(x) for x in raw.get("register_rows") or ()}
-        if regs and regs <= served:
+        if regs and regs <= served and not _reaches(raw_by_id, row_id, discharged):
             dupes.append(row_id)
     if dupes:
         raise AskStageError(
             f"ledger re-plan re-mints em-performed row(s) {dupes}: their register rows are served by an "
-            "em-discharged row; refire, the verify leg re-judges the discharged row"
+            "em-discharged row; give the row a depends_on chain to the discharged row (it then consumes it), "
+            "or drop it from only_rows"
         )
+
+
+def _reaches(raw_by_id: Mapping[str, Mapping], start: str, targets) -> bool:
+    """True when `start`'s transitive depends_on chunk edges reach any id in `targets`."""
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        raw = raw_by_id.get(stack.pop())
+        for edge in (raw or {}).get("depends_on") or ():
+            chunk = edge.get("chunk") if isinstance(edge, Mapping) else edge
+            if not isinstance(chunk, str) or chunk in seen:
+                continue
+            if chunk in targets:
+                return True
+            seen.add(chunk)
+            stack.append(chunk)
+    return False
 
 
 _UNKNOWN_RECEIVER_MARK = "UNKNOWN RECEIVER"
@@ -1170,6 +1189,7 @@ def stage(
         held_ids=held_ids,
     )
     reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
+    stamp_run_stage(root, run_id, "staged", steps_planned=len(manifest_rows))
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt
         # paths; the plan route registers them at compose time, the ask route

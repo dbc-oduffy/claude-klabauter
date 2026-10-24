@@ -185,16 +185,19 @@ def test_engine_states_map_to_verdicts(monkeypatch, tmp_path):
     assert f.startswith("anchor-premise-CONTRADICTED: AP1")
 
 
-def test_not_evaluable_leaves_none_source_with_suffix(monkeypatch, tmp_path):
-    from coordinator_core.ops._anchor_premise import anchor_verdicts
+def test_not_evaluable_is_not_a_blocker_even_when_the_checker_ran(monkeypatch, tmp_path):
+    from coordinator_core.ops._anchor_premise import anchor_verdicts, unevaluable_anchors
 
     one = [{**GOOD, "id": "AP1"}]
     _engine(monkeypatch, "NOT_EVALUABLE", "", "pipe refused")
     (v,) = anchor_verdicts(one, [], [], "p", tmp_path)
     assert v["verdict"] is None and v["source"] == "none"
-    assert anchor_findings(one, [], [], "p", tmp_path) == [
-        "anchor-premise-no-verdict: AP1 (check not evaluable in-process: pipe refused)"
-    ]
+    assert anchor_findings(one, [], [], "p", tmp_path) == []
+    assert unevaluable_anchors([v]) == [("AP1", "pipe refused")]
+    # a checker verdict that blocks still blocks
+    rows = [{"anchor": "AP1", "verdict": "CONTRADICTED"}]
+    (f,) = anchor_findings(one, rows, [], "p", tmp_path)
+    assert f.startswith("anchor-premise-CONTRADICTED: AP1")
 
 
 def test_without_a_checker_not_evaluable_moves_to_unevaluable_anchors(monkeypatch, tmp_path):
@@ -203,11 +206,11 @@ def test_without_a_checker_not_evaluable_moves_to_unevaluable_anchors(monkeypatc
     one = [{**GOOD, "id": "AP1"}]
     _engine(monkeypatch, "NOT_EVALUABLE", "", "pipe refused")
     verdicts = anchor_verdicts(one, [], [], "p", tmp_path)
-    assert anchor_findings(one, [], [], "p", tmp_path, verdicts, checker_ran=False) == []
+    assert anchor_findings(one, [], [], "p", tmp_path, verdicts) == []
     assert unevaluable_anchors(verdicts) == [("AP1", "pipe refused")]
     # no repo_root: nothing was evaluated, so the no-verdict finding stays in either lane
     bare = anchor_verdicts(one, [], [], "p", None)
-    assert anchor_findings(one, [], [], "p", None, bare, checker_ran=False) == [
+    assert anchor_findings(one, [], [], "p", None, bare) == [
         "anchor-premise-no-verdict: AP1"
     ]
     assert unevaluable_anchors(bare) == []

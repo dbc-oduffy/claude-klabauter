@@ -51,6 +51,10 @@ _DEADLINE_GRACE_SECS = 60.0
 #: ``run`` return value for a launcher killed at the timeout.
 LAUNCH_TIMED_OUT = "timed-out"
 
+#: pytest exit code for "no tests collected", and the record status that names it.
+NO_TESTS_COLLECTED = 5
+NO_TESTS_STATUS = "no-tests"
+
 #: Options whose next token is a value, never a collection root.
 _VALUE_OPTIONS = frozenset({
     "--rootdir", "-c", "-p", "--confcutdir", "-m", "-k", "--ignore", "--ignore-glob", "--deselect",
@@ -76,12 +80,25 @@ def _run_argv(argv: list[str], cwd: Path, *, log: Optional[Path] = None, timeout
 
 
 def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
-    """``cmd`` split, minus positional tokens naming an existing path under ``root``. Option values
-    and the program token stay."""
+    """``cmd`` split, minus positional tokens naming an existing path under ``root`` and the ``-m``
+    marker filter (a named file must run whatever its markers). Other option values and the program
+    token stay."""
     tokens = shlex.split(cmd)
     kept: list[str] = []
     prev_takes_value = False
+    skip_next = False
+    seen_pytest = False
     for i, tok in enumerate(tokens):
+        if skip_next:
+            skip_next = False
+            continue
+        if Path(tok).name in ("pytest", "py.test"):
+            seen_pytest = True
+        elif seen_pytest and tok == "-m":
+            skip_next = True
+            continue
+        elif seen_pytest and tok.startswith("-m") and not tok.startswith("--"):
+            continue
         if i == 0 or prev_takes_value or tok.startswith("-"):
             kept.append(tok)
         elif not (root / tok.split("::")[0]).exists():
@@ -205,6 +222,34 @@ def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], he
     return 0
 
 
+def _write_no_tests(root, path, run_id, dropped, note, dirty, head_sha) -> int:
+    """Record ``no-tests`` (tests_run 0, non-blocking, not ``error``) when every named target was
+    dropped as nonexistent. Nothing is launched."""
+    try:
+        covered_paths = dirty(root)
+    except RuntimeError as exc:
+        print(f"retest_targeted: {exc}", file=sys.stderr)
+        return 2
+    reason = note or "no tests to run"
+    _write_record(path, {
+        "run_id": run_id, "head": head_sha(root), "tests": [], "tests_run": 0, "dropped": dropped,
+        "covered": li.landing_fingerprint(root, covered_paths), "status": NO_TESTS_STATUS,
+        "note": reason, "at": datetime.now(timezone.utc).isoformat(),
+    })
+    print(f"{path} {NO_TESTS_STATUS}: {reason}")
+    return 0
+
+
+def _failed_node_ids(log: Path) -> list[str]:
+    """Node ids from pytest ``FAILED``/``ERROR`` summary lines in ``log``."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    found = re.findall(r"^(?:FAILED|ERROR) (\S+::\S+)", text, flags=re.MULTILINE)
+    return list(dict.fromkeys(found))
+
+
 def _read_record(path: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -250,7 +295,7 @@ def _poll(path: Path, task_output: str) -> int:
 
 def _start_detached(
     args: argparse.Namespace, root: Path, path: Path, log_path: Path, run_id: str, tests: list[str],
-    spawn: Callable[..., bool],
+    spawn: Callable[..., bool], dropped: Sequence[str] = (),
 ) -> int:
     """Warm path: write the ``running`` record, spawn the child, return. Launches no tests and reads
     no interpreter pin, so it stays inside the warm budget."""
@@ -273,6 +318,7 @@ def _start_detached(
         "--from-task-output", str(Path(args.from_task_output).resolve()),
         "--repo-root", str(root),
         *[x for t in tests for x in ("--tests", t)],
+        *[x for t in dropped for x in ("--dropped", t)],
         "--detached-child",
     ]
     if not spawn(str(engine), str(Path(__file__).resolve()), child_argv, site_free=True):
@@ -301,6 +347,7 @@ def main(
     ap.add_argument("--from-task-output", required=True)
     ap.add_argument("--tests", action="append", default=[])
     ap.add_argument("--repo-root")
+    ap.add_argument("--dropped", action="append", default=[], help=argparse.SUPPRESS)
     ap.add_argument("--detached-child", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--poll", action="store_true")
     args = ap.parse_args(argv)
@@ -328,17 +375,17 @@ def main(
     if escaping:
         print("retest_targeted: test path escapes the repo: " + ", ".join(escaping), file=sys.stderr)
         return 2
-    missing = [t for t in tests if not (root / t.split("::")[0]).exists()]
-    if missing:
-        print(
-            "retest_targeted: test path does not exist (target absent, nothing run): " + ", ".join(missing),
-            file=sys.stderr,
-        )
-        return 2
+    dropped = list(dict.fromkeys([*args.dropped, *(t for t in tests if not (root / t.split("::")[0]).exists())]))
+    tests = [t for t in tests if t not in dropped]
+    drop_note = ("dropped nonexistent target(s): " + ", ".join(dropped)) if dropped else ""
+    if drop_note:
+        print(f"retest_targeted: {drop_note}", file=sys.stderr)
 
     log_path = path.with_suffix(".log")
+    if not tests:
+        return _write_no_tests(root, path, run_id, dropped, drop_note, dirty, head_sha)
     if not args.detached_child:
-        return _start_detached(args, root, path, log_path, run_id, tests, spawn or spawn_detached)
+        return _start_detached(args, root, path, log_path, run_id, tests, spawn or spawn_detached, dropped)
 
     status, reason = "pass", ""
     log_used = False
@@ -359,6 +406,9 @@ def main(
             status = "error"
         elif rc == 1:
             status = "fail"
+        elif rc == NO_TESTS_COLLECTED:
+            status = NO_TESTS_STATUS
+            reason = f"launcher collected no tests from: {', '.join(tests)}"
         elif rc != 0:
             status = "error"
             reason = (
@@ -386,11 +436,18 @@ def main(
     }
     if reason:
         record["reason"] = reason
+    if status == NO_TESTS_STATUS:
+        record["tests_run"] = 0
+    if status == "fail" and log_used:
+        record[li.FAILED_TESTS_PARAM] = _failed_node_ids(log_path)
+    if dropped:
+        record["dropped"] = dropped
+        record["note"] = drop_note
     if log_used:
         record["log"] = str(log_path)
     _write_record(path, record)
     print(f"{path} {status}" + (f": {reason}" if reason else ""))
-    return {"pass": 0, "fail": 1}.get(status, 2)
+    return {"pass": 0, "fail": 1, NO_TESTS_STATUS: 0}.get(status, 2)
 
 
 if __name__ == "__main__":

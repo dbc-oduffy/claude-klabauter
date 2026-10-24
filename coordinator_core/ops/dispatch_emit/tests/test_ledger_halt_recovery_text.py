@@ -42,6 +42,16 @@ def test_ledger_halt_names_revise_run_id_and_scope(monkeypatch):
     assert "or fix the change" not in text
 
 
+def test_ledger_halt_names_add_task_when_remaining_paths_are_uncovered(monkeypatch):
+    script = _script(monkeypatch)
+    text = _halt_text(script)
+    assert "_gate.resume_ledger?.remaining_leg?.unwritable ?? []" in script
+    assert "plan.tasks.mutate verb add-task (params plan_path=' + (_planRel" in script
+    assert text.index("+ _addTaskRemedy") < text.index("Re-fire the same sizing")
+    assert "_uncoveredPaths.length ?" in script
+    assert text.count("_addTaskRemedy") == 1
+
+
 def test_ledger_halt_names_landed_close_route_in_both_rulable_branches(monkeypatch):
     text = _halt_text(_script(monkeypatch))
     assert text.count(f"'{ROUTE_OP}'") == 2

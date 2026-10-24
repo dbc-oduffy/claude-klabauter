@@ -31,7 +31,7 @@ from coordinator_core.bash_guards._shape_classifier import (
 )
 
 
-_FIND_EXEC_TRANSLATABLE_VERBS = frozenset({"rm", "cat", "wc"})
+_FIND_EXEC_TRANSLATABLE_VERBS = frozenset({"rm", "cat", "wc", "head", "tail"})
 
 #: Verbs where `-exec VERB ARGS {} +` is byte-identical in effect to running
 #: `-exec VERB ARGS {} \;` once per match -- a per-verb property, answered by
@@ -125,14 +125,32 @@ def _bt_parse_find_exec_segment(tokens: List[str]) -> Optional[Dict[str, Any]]:
 
 
 
+def _head_tail_count(exec_argv: List[str]) -> Optional[int]:
+    """Line count of `head`/`tail ... {}` for `-n N`, `-N` or no option
+    (default 10); `None` for any other option shape or a non-final `{}`."""
+    args = exec_argv[1:]
+    if not args or args[-1] != "{}":
+        return None
+    opts = args[:-1]
+    if not opts:
+        return 10
+    # isascii(): str.isdigit() is True for e.g. "²", which int() rejects.
+    if len(opts) == 2 and opts[0] == "-n" and opts[1].isascii() and opts[1].isdigit():
+        return int(opts[1])
+    if len(opts) == 1 and opts[0][:1] == "-" and opts[0][1:].isascii() and opts[0][1:].isdigit():
+        return int(opts[0][1:])
+    return None
+
+
 def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
     """Translate a parsed `-exec` invocation into a single `python3 -c`
     one-liner, when the exec'd verb is one of `_FIND_EXEC_TRANSLATABLE_
-    VERBS` (rm/cat/wc -- the observed census/cleanup habit: delete matches,
-    print matches, count lines across matches). Returns `None` for any
-    other verb -- an arbitrary `-exec <binary>` cannot be translated
-    without knowing its semantics, and this function never guesses; the
-    caller falls back to an advisory rather than a false auto-rewrite."""
+    VERBS` (rm/cat/wc/head/tail -- the observed census/cleanup habit: delete
+    matches, print matches or their first/last lines, count lines across
+    matches). Returns `None` for any other verb -- an arbitrary
+    `-exec <binary>` cannot be translated without knowing its semantics,
+    and this function never guesses; the caller falls back to an advisory
+    rather than a false auto-rewrite."""
     verb_norm = _normalize_executable_basename(parsed["exec_argv"][0])
     if verb_norm not in _FIND_EXEC_TRANSLATABLE_VERBS:
         return None
@@ -171,6 +189,38 @@ def _bt_find_exec_python_rewrite(parsed: Dict[str, Any]) -> Optional[str]:
             "        if %s:\n"
             '            with open(os.path.join(root, fn), encoding="utf-8", errors="replace") as fh:\n'
             "                sys.stdout.write(fh.read())" % (json.dumps(path), match_expr)
+        )
+    elif verb_norm in ("head", "tail"):
+        count = _head_tail_count(parsed["exec_argv"])
+        if count is None:
+            return None
+        # The `;` form runs the verb once per file, so there are no
+        # "==> path <==" banners; the `+` form's banners are why these verbs
+        # are not in `_FIND_EXEC_BATCH_EQUIVALENT_VERBS`.
+        if verb_norm == "head":
+            action = (
+                "            parts = text.split(chr(10), N)\n"
+                "            sys.stdout.write(chr(10).join(parts[:N]) + chr(10) if len(parts) > N else text)"
+                if count > 0
+                else "            pass"
+            )
+        else:
+            action = (
+                "            nl = chr(10) if text.endswith(chr(10)) else ''\n"
+                "            parts = (text[:-1] if nl else text).split(chr(10))\n"
+                "            sys.stdout.write(chr(10).join(parts[-N:]) + nl)"
+                if count > 0
+                else "            pass"
+            )
+        body = (
+            "import fnmatch, os, sys\n"
+            "N = %d\n"
+            "for root, dirs, files in os.walk(%s):\n"
+            "    for fn in files:\n"
+            "        if %s:\n"
+            '            with open(os.path.join(root, fn), "rb") as fh:\n'
+            '                text = fh.read().decode("utf-8", "replace")\n'
+            "%s" % (count, json.dumps(path), match_expr, action)
         )
     else:  # wc -- only the `-l` (line-count) form is translated
         if "-l" not in parsed["exec_argv"][1:]:

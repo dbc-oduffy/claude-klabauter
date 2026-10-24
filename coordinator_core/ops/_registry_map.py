@@ -296,6 +296,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "records.history":                        "coordinator_core.ops.record_history",
     "records.by_origin_plan":                 "coordinator_core.ops.campaign_enumerate",
     "handoff.columns":                        "coordinator_core.ops.handoff_columns_query",
+    "sizings.summary":                        "coordinator_core.ops.cockpit_sections_query",
+    "workflow_runs.list":                     "coordinator_core.ops.cockpit_sections_query",
     "changelog.append_day":                   "coordinator_core.ops.changelog_ops",
     "changelog.backfill_gaps":                "coordinator_core.ops.changelog_ops",
     "changelog.compute_day_fields":           "coordinator_core.ops.changelog_ops",

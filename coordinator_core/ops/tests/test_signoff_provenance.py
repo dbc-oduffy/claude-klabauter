@@ -43,6 +43,47 @@ def test_countersign_refuses_pm_prior():
         sp.countersign(sp.build_signoff("pm", "q", None, "2026-10-09"), "again", "2026-10-10")
 
 
+def _gem(on="2026-10-09"):
+    return sp.build_signoff("g-em", "ruled", "ref/x.md", on, approver="group-em-44")
+
+
+def test_rank_table_and_may_resign():
+    assert sp.SOURCE_RANK == {"pm": 3, "apm": 2, "g-em": 1, "uhura": 1}
+    known = list(sp.SOURCE_RANK)
+    for p in known:
+        for n in known:
+            assert sp.may_resign(p, n) == (sp.SOURCE_RANK[n] >= sp.SOURCE_RANK[p])
+    assert sp.may_resign("g-em", "uhura") and sp.may_resign("uhura", "g-em")
+    assert not sp.may_resign("apm", "g-em") and not sp.may_resign("pm", "apm")
+    assert not sp.may_resign("ceo", "pm") and not sp.may_resign("pm", "ceo")
+    assert not sp.may_resign(None, "pm")
+
+
+def test_supersede_flattens_history_and_leaves_prior_unmutated():
+    first = _gem()
+    second = sp.supersede(first, sp.build_signoff("g-em", "wider", "ref/y.md", "2026-10-10", approver="group-em-44"))
+    assert second["history"] == [first]
+    third_prior = dict(second)
+    snapshot = {**second, "history": list(second["history"])}
+    third = sp.supersede(third_prior, sp.build_signoff("apm", "r", "ref/z.md", "2026-10-11"))
+    assert third["history"] == [first, {k: v for k, v in second.items() if k != "history"}]
+    assert all("history" not in h for h in third["history"])
+    assert third_prior == snapshot and "history" not in first
+
+
+def test_supersede_refuses_bad_prior():
+    rec = sp.build_signoff("pm", "q", None, "2026-10-09")
+    for bad in (None, {}, {"source": "ceo"}):
+        with pytest.raises(ValueError):
+            sp.supersede(bad, rec)
+
+
+def test_countersign_is_pm_case_of_supersede():
+    for prior in (_apm(), _gem(), sp.supersede(_gem(), _apm())):
+        assert sp.countersign(prior, "q", "2026-10-10") == sp.supersede(
+            prior, sp.build_signoff("pm", "q", None, "2026-10-10"))
+
+
 def test_apm_admissible():
     assert sp.apm_admissible("approve the grouping")
     assert not sp.apm_admissible("ok to merge to main")

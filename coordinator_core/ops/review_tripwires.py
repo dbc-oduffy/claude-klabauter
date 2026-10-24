@@ -149,18 +149,8 @@ def _read(path: str, flags: int) -> bytes | None:
         os.close(fd)
 
 
-def literal_namers(
-    repo_root: Path, named: Sequence[str], *, exclude: Collection[str] = ()
-) -> Dict[str, List[str]]:
-    """Map each test module to the sorted `named` paths its bytes name.
-
-    Candidates are tracked `test_*.py` / `*_test.py` files under the repo's
-    pytest testpaths, minus `exclude`. An unreadable module is skipped.
-    Raises `TripwireScanUnavailable` when the index cannot be read.
-    """
-    by_base = _by_basename(named)
-    if not by_base:
-        return {}
+def _tracked_test_bytes(repo_root: Path, exclude: Collection[str]):
+    """Yield (rel, bytes) for each readable candidate test module, sorted by path."""
     root = str(repo_root).replace("\\", "/").rstrip("/")
     testpaths, norecurse = _pytest_config(Path(repo_root))
     skip = {_norm(e) for e in exclude}
@@ -170,7 +160,6 @@ def literal_namers(
     except (git_state.IndexParseError, OSError, ValueError) as exc:
         raise TripwireScanUnavailable(str(exc)) from exc
     roots = _walk_roots(testpaths)
-    out: Dict[str, List[str]] = {}
     for rel in sorted(tracked):
         parts = rel.split("/")
         if not _is_test_name(parts[-1]) or rel in skip:
@@ -185,9 +174,57 @@ def literal_namers(
         ):
             continue
         data = _read(f"{root}/{rel}", flags)
-        if data is None:
-            continue
+        if data is not None:
+            yield rel, data
+
+
+def literal_namers(
+    repo_root: Path, named: Sequence[str], *, exclude: Collection[str] = ()
+) -> Dict[str, List[str]]:
+    """Map each test module to the sorted `named` paths its bytes name.
+
+    Candidates are tracked `test_*.py` / `*_test.py` files under the repo's
+    pytest testpaths, minus `exclude`. An unreadable module is skipped.
+    Raises `TripwireScanUnavailable` when the index cannot be read.
+    """
+    by_base = _by_basename(named)
+    if not by_base:
+        return {}
+    out: Dict[str, List[str]] = {}
+    for rel, data in _tracked_test_bytes(repo_root, exclude):
         hits = _names(data, by_base)
         if hits:
             out[rel] = hits
     return out
+
+
+_WALK_PRIMITIVES = (b"rglob(", b"os.walk(", b".glob(", b"iterdir(", b"ls-files")
+_LITERAL_RE = re.compile(rb"""(["'])([^"'\n]{1,%d})\1""" % _MAX_LITERAL)
+
+
+def walked_created(data: bytes, created: Sequence[str]) -> List[str]:
+    """The `created` paths a test module's bytes walk: the bytes hold a walk primitive
+    (`rglob(`, `os.walk(`, `.glob(`, `iterdir(`, `ls-files`) and a quoted literal that,
+    normalised, equals a proper ancestor directory of the path. "", "." never count."""
+    if not any(w in data for w in _WALK_PRIMITIVES):
+        return []
+    lits = {
+        _norm(m.group(2).decode("utf-8", "replace")).rstrip("/") for m in _LITERAL_RE.finditer(data)
+    } - {"", "."}
+    hit = []
+    for c in created:
+        parts = _norm(c).split("/") if c else []
+        if any("/".join(parts[:i]) in lits for i in range(1, len(parts))):
+            hit.append(c)
+    return hit
+
+
+def tree_scanners(
+    repo_root: Path, created: Sequence[str], *, exclude: Collection[str] = ()
+) -> List[str]:
+    """Sorted tracked test modules that walk an ancestor directory of a created path
+    (`walked_created`). Same candidate set and failure mode as `literal_namers`."""
+    paths = [c for c in created if c]
+    if not paths:
+        return []
+    return sorted(rel for rel, data in _tracked_test_bytes(repo_root, exclude) if walked_created(data, paths))

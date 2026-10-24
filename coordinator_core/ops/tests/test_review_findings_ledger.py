@@ -576,3 +576,35 @@ def test_verify_accepts_a_plan_reviewer_sidecar_of_either_shape(tmp_path, monkey
     m._check_sidecar_scope(sidecar, tmp_path, sidecar.read_text(encoding="utf-8"))
     outcome = m.verify(sidecar, repo_root=tmp_path)
     assert outcome.ok, outcome.failures
+
+
+@pytest.mark.parametrize("status", [None, "open", "applied", "em_rejected"])
+def test_verify_keeps_an_out_of_ask_row_and_it_reaches_the_peer_hunk_gate(tmp_path, status):
+    from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+
+    row = {"id": "finding-1", "file": "peer/x.py", "out_of_ask": True}
+    if status:
+        row["status"] = status
+    sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[row])
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert outcome.ok, outcome.failures
+    text = sidecar.read_text(encoding="utf-8")
+    kept = m._parse_ledger_rows(text)[0]
+    assert kept["out_of_ask"] is True and kept["verified"] is True
+    assert kept.get("status") == status
+    unresolved = peer_hunk_gate._unresolved_out_of_ask(text)
+    assert bool(unresolved) == (status in (None, "open"))
+    if unresolved:
+        assert unresolved[0][1] == "peer/x.py"
+
+
+def test_verify_still_refuses_an_out_of_ask_row_with_an_unknown_status(tmp_path):
+    row = {"id": "finding-1", "file": "peer/x.py", "out_of_ask": True, "status": "bogus"}
+    sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[row])
+    assert not m.verify(sidecar, repo_root=tmp_path).ok
+
+
+def test_verify_still_refuses_open_status_on_a_normal_row(tmp_path):
+    row = {"id": "finding-1", "file": "a.py", "before": "x", "after": "y", "status": "open"}
+    sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[row])
+    assert not m.verify(sidecar, repo_root=tmp_path).ok

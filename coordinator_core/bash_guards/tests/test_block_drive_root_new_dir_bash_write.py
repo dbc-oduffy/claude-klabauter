@@ -157,6 +157,21 @@ def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch):
         assert _denied(check(_payload(cmd, "Bash", cwd))), cmd
 
 
+def test_shell_variable_assignment_to_msys_path_is_not_a_write(world, monkeypatch):
+    monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
+    monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
+    monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
+    cwd = "Z:/work"  # abs-path-ok: fake drive letter, never touched on disk
+    c = chr(47) + "c" + chr(47)
+    check = _enveloped(guard.check)
+    for cmd in (
+        f"B={c}Users/x/bin; ls $B | wc -l",
+        f"B={c}Users/x",
+    ):
+        assert check(_payload(cmd, "Bash", cwd)) is None, cmd
+    assert _denied(check(_payload(f"mkdir {c}zz-c2-newdir", "Bash", cwd)))
+
+
 class _Counter:
     def __init__(self, fn):
         self.fn, self.calls = fn, 0

@@ -36,6 +36,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.commit_request import PREFIX_CLAIM_LABEL
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
 from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM
+from coordinator_core.ops.review_test_blocker import TEST_BLOCKER
 
 # One report grammar for both landing modes: `land_run` imports this module lazily, so no cycle.
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
@@ -269,18 +270,34 @@ def _persist_run_outcome(repo_root: Path, run_id: str, halted: dict, params: dic
     return f"{RECORD_DIR_ROOT}/{run_id}/{RUN_OUTCOME_FILE}"
 
 
+def is_test_blocker_halt(halted: dict) -> bool:
+    """A ``review_blocked`` halt whose blocker is a failing repo test."""
+    return halted.get("halted") == "review_blocked" and halted.get("blocker") == TEST_BLOCKER
+
+
+def marker_kind(halted: dict) -> str:
+    """The kind a halt's marker records: a failing-test halt is recorded as ``ledger-check`` so the
+    halt record carries its blocking items to the refire's remaining-work leg."""
+    return "ledger-check" if is_test_blocker_halt(halted) else halted["halted"]
+
+
 def _settle_ledger_pointer(
-    repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str], outcome_rel: Optional[str]
+    repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str], outcome_rel: Optional[str] = None
 ) -> None:
-    """A landed ``ledger-check`` halt writes its plan's ledger-halt pointer; a ``commit`` halt with a
-    persisted outcome writes a ``halted="commit"`` pointer naming it; any other landed halt for a
-    known plan unlinks a stale pointer. A halt without a relative, contained plan touches nothing."""
+    """A landed ``ledger-check`` halt, or a ``review_blocked`` halt whose blocker is a failing test,
+    writes its plan's ledger-halt pointer (``remaining`` is filled at resume from the halt record's
+    items); a ``commit`` halt with a persisted outcome writes a ``halted="commit"`` pointer naming
+    it; any other landed halt for a known plan unlinks a stale pointer. A halt without a relative,
+    contained plan touches nothing. The one implementation for both halt-landing paths."""
     plan_rel, blocking, _items = _ledger_halt_plan_and_blocking(repo_root, halted)
     if plan_rel is None:
         return
     path = ledger_halt_path(repo_root, plan_rel)
     if halted["halted"] == "commit" and outcome_rel and sizing_rel:
         write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, (), halted="commit", outcome=outcome_rel))
+    elif is_test_blocker_halt(halted) and blocking:
+        if sizing_rel:
+            write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, blocking))
     elif halted["halted"] != "ledger-check":
         path.unlink(missing_ok=True)
     elif sizing_rel:
@@ -464,11 +481,11 @@ def _land(
     outcome_rel = _persist_run_outcome(root, run_id, halted, params)
     if (root / record_dir_rel).is_dir():
         plan_rel, blocking, blocking_items = (
-            _ledger_halt_plan_and_blocking(repo_root, halted) if kind == "ledger-check" else (None, (), [])
+            _ledger_halt_plan_and_blocking(repo_root, halted) if marker_kind(halted) == "ledger-check" else (None, (), [])
         )
         write_halt_marker(
             root / record_dir_rel,
-            halted=kind, sizing_rel=sizing_rel, plan_rel=plan_rel,
+            halted=marker_kind(halted), sizing_rel=sizing_rel, plan_rel=plan_rel,
             blocking=blocking if plan_rel else None,
             blocking_items=blocking_items if plan_rel else None,
             run_base_sha=run_base, reason=halt_reason,

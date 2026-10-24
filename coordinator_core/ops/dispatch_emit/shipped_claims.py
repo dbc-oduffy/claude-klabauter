@@ -9,12 +9,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
+from coordinator_core.ops.dispatch_emit.kept_work import HALT_RECORD_ONLY
 from coordinator_core.ops.dispatch_emit.ledger_recovery import _posix
 from coordinator_core.ops.dispatch_emit.reach_claims import _FENCE, _VERDICTS_HEAD
 
 SHIPPED_CLAIM_REFUSED = "shipped-claim-unbacked"
+
+SELF_APPLIED_WITHHOLDS = frozenset({HALT_RECORD_ONLY})  # reasons the halt path stamps on a run's own diff
 
 SHIPPED_VERDICTS = ("backed", "untracked", "not-in-commit", "withheld", "unresolved")
 
@@ -78,6 +81,15 @@ def extract_shipped_claims(note_text: str) -> tuple[ShippedClaim, ...]:
     return tuple(out)
 
 
+def content_withheld(withheld_paths) -> set[str]:
+    """Paths withheld for a content reason. A Mapping[path, reason] drops reasons in
+    `SELF_APPLIED_WITHHOLDS` (the halt path's own record of the run's diff); a bare iterable of
+    paths is all content withholds."""
+    if isinstance(withheld_paths, Mapping):
+        return {_posix(p) for p, why in withheld_paths.items() if why not in SELF_APPLIED_WITHHOLDS}
+    return {_posix(p) for p in withheld_paths}
+
+
 def _safe_rel(path: str) -> bool:
     p = PurePosixPath(path)
     return not (p.is_absolute() or ".." in p.parts or re.match(r"^[A-Za-z]:", path))
@@ -100,7 +112,7 @@ def judge_shipped_claims(
 
     landing = {_posix(p) for p in landing_paths}
     deleted = {_posix(p) for p in deleted_paths}
-    withheld = {_posix(p) for p in withheld_paths}
+    withheld = content_withheld(withheld_paths)
     head = head_sha(root, fresh=True)
     common = resolve_git_common_dir(root)
     out: list[ShippedVerdict] = []

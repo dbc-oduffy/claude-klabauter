@@ -72,7 +72,9 @@ from coordinator_core.contract.cockpit_schema.entities.summaries import (
     HandoffSummary,
     ReviewTrail,
 )
+from coordinator_core.contract.cockpit_schema.entities.sizing_summary import SizingSummary
 from coordinator_core.contract.cockpit_schema.entities.tracker_summary import TrackerSummary
+from coordinator_core.contract.cockpit_schema.entities.workflow_run import WorkflowRun
 
 
 class MalformedRecords(BaseModel):
@@ -135,6 +137,9 @@ class SnapshotEnvelope(BaseModel):
     completion_rollups: CompletionRollups
     # Optional: absent on envelopes emitted before 4.11.0.
     completion_receipts: list[CompletionReceipt] = Field(default_factory=list)
+    # Optional: absent on envelopes emitted before 4.16.0.
+    sizings: list[SizingSummary] = Field(default_factory=list)
+    workflow_runs: list[WorkflowRun] = Field(default_factory=list)
     backlogs: BacklogsEnvelope
     review_trail: list[ReviewTrail]
     routine_signals: list[RoutineSignal]

@@ -293,7 +293,8 @@ class TestMultiIdCoded(unittest.TestCase):
         self.assertEqual(calls, [], "refusal must be local — nothing dispatched")
         self.assertIn("repeatable --id is only offered for --coded", buf.getvalue())
         self.assertIn("'backlogged'", buf.getvalue())
-        self.assertIn("Make one call per row instead", buf.getvalue())
+        self.assertIn("--resolves-file", buf.getvalue())
+        self.assertNotIn("Make one call per row instead", buf.getvalue())
 
     def test_multi_id_wont_do_is_refused_locally(self):
         calls, fake = self._make_capture()

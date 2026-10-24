@@ -1,0 +1,72 @@
+[
+  {
+    "label": "camelCase sessionId, int pid",
+    "file": {"sessionId": "sess-aaa", "name": "alpha", "pid": 1234, "cwd": "/synthetic/work", "status": "idle"},
+    "expected": {"session_id": "sess-aaa", "name": "alpha", "pid": 1234, "cwd": "/synthetic/work", "status": "idle"}
+  },
+  {
+    "label": "snake_case session_id",
+    "file": {"session_id": "sess-bbb", "name": "beta", "pid": 2345, "cwd": "/synthetic/work", "status": "busy"},
+    "expected": {"session_id": "sess-bbb", "name": "beta", "pid": 2345, "cwd": "/synthetic/work", "status": "busy"}
+  },
+  {
+    "label": "both id keys present: sessionId wins",
+    "file": {"sessionId": "sess-camel", "session_id": "sess-snake", "name": "n", "pid": 1, "cwd": "/c", "status": "idle"},
+    "expected": {"session_id": "sess-camel", "name": "n", "pid": 1, "cwd": "/c", "status": "idle"}
+  },
+  {
+    "label": "pid as numeric string",
+    "file": {"sessionId": "sess-ccc", "name": "gamma", "pid": "3456", "cwd": "/synthetic/work", "status": "idle"},
+    "expected": {"session_id": "sess-ccc", "name": "gamma", "pid": 3456, "cwd": "/synthetic/work", "status": "idle"}
+  },
+  {
+    "label": "pid as non-numeric string degrades to 0",
+    "file": {"sessionId": "sess-ddd", "name": "delta", "pid": "not-a-pid", "cwd": "/synthetic/work", "status": "idle"},
+    "expected": {"session_id": "sess-ddd", "name": "delta", "pid": 0, "cwd": "/synthetic/work", "status": "idle"}
+  },
+  {
+    "label": "pid missing",
+    "file": {"sessionId": "sess-eee", "name": "epsilon", "cwd": "/synthetic/work", "status": "idle"},
+    "expected": {"session_id": "sess-eee", "name": "epsilon", "pid": 0, "cwd": "/synthetic/work", "status": "idle"}
+  },
+  {
+    "label": "pid null",
+    "file": {"sessionId": "sess-fff", "pid": null},
+    "expected": {"session_id": "sess-fff", "name": "", "pid": 0, "cwd": "", "status": ""}
+  },
+  {
+    "label": "name, cwd, status missing",
+    "file": {"sessionId": "sess-ggg", "pid": 4567},
+    "expected": {"session_id": "sess-ggg", "name": "", "pid": 4567, "cwd": "", "status": ""}
+  },
+  {
+    "label": "harness 2.1.299-2.1.301 shape with kind and entrypoint fields",
+    "file": {"sessionId": "sess-hhh", "pid": 5678, "cwd": "/synthetic/work", "name": "eta", "status": "idle", "kind": "interactive", "entrypoint": "cli", "version": "2.1.300", "startedAt": 1700000000000},
+    "expected": {"session_id": "sess-hhh", "name": "eta", "pid": 5678, "cwd": "/synthetic/work", "status": "idle"}
+  },
+  {
+    "label": "harness shape with kind and entrypoint, snake_case id",
+    "file": {"session_id": "sess-iii", "pid": 6789, "cwd": "/synthetic/work", "kind": "headless", "entrypoint": "sdk-cli"},
+    "expected": {"session_id": "sess-iii", "name": "", "pid": 6789, "cwd": "/synthetic/work", "status": ""}
+  },
+  {
+    "label": "no id key rejected",
+    "file": {"name": "orphan", "pid": 7890, "cwd": "/synthetic/work", "status": "idle"},
+    "expected": null
+  },
+  {
+    "label": "empty id rejected",
+    "file": {"sessionId": "", "session_id": "", "pid": 7890},
+    "expected": null
+  },
+  {
+    "label": "non-object (list) rejected",
+    "file": ["sessionId", "sess-jjj"],
+    "expected": null
+  },
+  {
+    "label": "non-object (string) rejected",
+    "file": "sess-kkk",
+    "expected": null
+  }
+]

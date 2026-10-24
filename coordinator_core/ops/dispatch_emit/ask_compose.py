@@ -37,9 +37,12 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BL
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
+from coordinator_core.ops._anchor_check import GRAMMAR as _ANCHOR_GRAMMAR
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
     CLAIM_PARAM,
+    GAPS_CLOSED_FIELD,
+    HALT_GAP_RULE,
     HALT_DEPENDENTS_UNSTARTED,
     LEG_REFUSAL_HEAD,
     LEG_REFUSE,
@@ -178,6 +181,7 @@ from coordinator_core.ops.review_mint.roster import EMIT_ROUTE_PLAN, parse_execu
 from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 from coordinator_core.ops.requirement_register import REGISTER_PIN_DRIFT_KIND, REPIN_OP
 from coordinator_core.ops.review_mint.wave_not_run import WAVE_NOT_RUN_VAR
+from coordinator_core.ops.review_test_blocker import FAILING_DETAIL_FIELD, TEST_BLOCKER
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 from coordinator_core.roadmap.post_stamp_clause import (
     EXIT_CRITERION_REFUSAL_HEAD,
@@ -322,6 +326,9 @@ _ANCHOR_PREMISES_SENTENCE = (
     "check, then record its verdict through the `plan.premise_record` op with `anchor: <id>` and "
     "`line: <1-based plan line of that anchor's command:>` on the row (brief_version "
     f"`{_ANCHOR_BRIEF_VERSION}`). "
+    f"The gate evaluates a check in-process only as {_ANCHOR_GRAMMAR}: grep -c stages joined by "
+    "&&, one file each, no pipes, redirects or other shell operators; any other check is pulled "
+    "as anchor-premise-no-verdict. "
 )
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
@@ -490,6 +497,7 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "remaining": {"type": "array", "items": _STR},
                     "evidence": _STR,
                     "met_by": {"type": ["string", "array"], "items": _STR},
+                    GAPS_CLOSED_FIELD: {"type": "array", "items": _obj(["gap", "how"], {"gap": _STR, "how": _STR})},
                     "anchor": _STR,
                 },
             ),
@@ -886,10 +894,29 @@ def _review_blocked_halt_js(sizing_rel: Optional[str]) -> str:
         "  if (!_halted) {\n"
         "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
         "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
-        "    if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
+        "    const _rv = (typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null;\n"
+        "    const _rvExcluded = new Set([...(_rv?.pre_existing ?? []), ...(_rv?.kept ?? [])].map(String));\n"
+        "    const _rvResolved = _rv?.status_after === 'pass';\n"
+        "    const _rvDetail = new Map();\n"
+        f"    const _rvRaw = _rv?.{FAILING_DETAIL_FIELD};\n"
+        "    if (Array.isArray(_rvRaw)) { for (const d of _rvRaw) { if (d && d.node_id) _rvDetail.set(String(d.node_id), d.message == null ? '' : String(d.message)); } }\n"
+        "    const _failingTests = [...new Set((Array.isArray(_rv?.failing) ? _rv.failing : (typeof _rv?.failing === 'string' ? [_rv.failing] : [])).map(String))]"
+        ".filter((n) => !_rvResolved && !_rvExcluded.has(n)).sort().map((n) => ({ node_id: n, message: _rvDetail.get(n) ?? '' }));\n"
+        "    const _gapLines = _failingTests.map((t) => t.node_id + ': ' + (t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300));\n"
+        "    const _slicesJs = _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
+        "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));\n"
+        "    if (_failingTests.length) {\n"
+        "      const _claimed = (typeof _manifest !== 'undefined' && _manifest?.ledger_item_ids?.length) ? _manifest.ledger_item_ids : [];\n"
+        "      _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", blocker: " + json.dumps(TEST_BLOCKER) + ", run_id: _runId, "
+        "failing: _failingTests, gaps: _gapLines, "
+        + HALT_PLAN_FIELD + ": (typeof _planRel !== 'undefined' ? _planRel : null), "
+        "items: _claimed.map((id) => ({ id, remaining: _gapLines, evidence: _gapLines.join('; ') })), "
+        "slices: _slicesJs, "
+        "next_action: 'The refire runs an executor fix leg against these failing tests: ' + _gapLines.join('; ') + '; ' + "
+        + _refire_js(sizing_rel) + " };\n"
+        "    } else if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
         "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
-        "slices: _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
-        "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null })), "
+        "slices: _slicesJs, "
         "next_action: 'The refire re-runs the review wave over the blocked slices: ' + "
         + _refire_js(sizing_rel) + " };\n"
         "  }"
@@ -1675,6 +1702,7 @@ def _single_exit_review(blocks: list[str]) -> str:
     malformed_guard = "  if (_malformed.length) {"
     slice_id_exit = f"return {{ halted: '{SLICE_ID_UNKNOWN_HALT}'"
     slice_id_guard = "  if (_badSliceIdAt >= 0) {"
+    out_of_group_guard = "  if (_outOfGroupAt >= 0) {"
     if (
         prep.count(malformed_exit) != 1
         or prep.count(malformed_guard) != 1
@@ -1682,8 +1710,9 @@ def _single_exit_review(blocks: list[str]) -> str:
         or prep.count(missing_exit) != 1
         or prep.count(_REVIEW_MISSING_GUARD) != 1
         or prep.count(_REVIEW_PREP_BIND) != 1
-        or prep.count(slice_id_exit) != 1
+        or prep.count(slice_id_exit) != 2
         or prep.count(slice_id_guard) != 1
+        or prep.count(out_of_group_guard) != 1
     ):
         raise AskComposeRefused("review prep block no longer has the prep-busy and review-missing exit shape single-exit composition rewrites")
     prep = prep.replace(busy_exit, busy_exit.replace("return ", "_halted = ", 1))
@@ -1693,6 +1722,7 @@ def _single_exit_review(blocks: list[str]) -> str:
     prep = prep.replace(_REVIEW_MISSING_GUARD, _REVIEW_MISSING_GUARD.replace("if (", "if (!_halted && ", 1), 1)
     prep = prep.replace(_REVIEW_PREP_BIND, "  if (!_halted) _reviewPrep = (() => {\n", 1)
     prep = prep.replace(slice_id_exit, slice_id_exit.replace("return ", "_halted = ", 1))
+    prep = prep.replace(out_of_group_guard, "  if (!_halted && _outOfGroupAt >= 0) {", 1)
     prep = prep.replace(slice_id_guard, "  if (!_halted && _badSliceIdAt >= 0) {", 1)
     prep = prep.replace(_REVIEW_NOOP_EXIT, "_halted = { halted: 'no-op',")
     prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))) {", 1)
@@ -2753,9 +2783,9 @@ def compose_ask_script(
             "Ledger-resume re-plan leg. An earlier run halted at the ledger check; these requirement rows "
             "stayed not_met: ",
             f"js:{_rl0}.blocking.join(', ')",
-            f". Read each row's register text in {ledger_rel}. Work still owed, by row: ",
+            f". Read each row's register text in {ledger_rel}. {_GAPS_OPEN_LEAD}",
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
-            ". Items already credited as landed by rows that landed after the halt (landed work: add no row for them, "
+            f". {HALT_GAP_RULE} Items already credited as landed by rows that landed after the halt (landed work: add no row for them, "
             "never re-plan them): ",
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_CREDITED_FIELD} ?? [])",
             ". Revise notes, oldest first: ",
@@ -3583,9 +3613,9 @@ def compose_ask_script(
         "Ledger-resume remaining-work leg. An earlier run halted; its revise notes may ask for work with no "
         "requirement row blocking. Rows still not_met and not ruled out_of_scope by the revise: ",
         f"js:{_rl}.blocking.join(', ')",
-        f". Read each row's register text in {ledger_rel}. Work still owed, by row: ",
+        f". Read each row's register text in {ledger_rel}. {_GAPS_OPEN_LEAD}",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
-        ". Revise notes, oldest first: ",
+        f". {HALT_GAP_RULE} Revise notes, oldest first: ",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? [])",
         ". Rows a revise added after the earlier run (new requirements, owed work you must do now):",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REVISED_FIELD} ?? [])",
@@ -3707,7 +3737,12 @@ def compose_ask_script(
         "    const _blkIds = (_emptyVerdict ? _owedIds : (_ledger ? _ledgerBlocking(_ledger) : []))"
         ".map((i) => (i && typeof i === 'object') ? i.id : i).filter(Boolean);\n"
         "    const _blkRulable = _blkIds.filter((id) => _rulable.includes(id));\n"
-        "    const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));"
+        "    const _blkForeign = _blkIds.filter((id) => !_rulable.includes(id));\n"
+        f"    const _uncoveredPaths = _gate.{RESUME_LEDGER_KEY}?.{RESUME_LEDGER_LEG_FIELD}?.unwritable ?? [];\n"
+        "    const _addTaskRemedy = _uncoveredPaths.length ? ' The remaining work names paths no plan row writes: ' "
+        "+ _uncoveredPaths.join(', ') + '. Add a row first: coordinator-invoke plan.tasks.mutate verb add-task "
+        "(params plan_path=' + (_planRel ?? '<the plan>') + ', task) with a unique id, a title and declared `writes` covering them; "
+        "a re-fire alone re-runs only the rows already there.' : '';"
     )
     b.append(
         "    if (!_halted && _emptyVerdict && Array.isArray(_ledgerIds) && !_ledgerIds.length "
@@ -3745,6 +3780,7 @@ def compose_ask_script(
         f"+ ' If the halt commit landed every row, close it after the revise: ' + {_lit(_HALTED_ROUTE_OP)} + ' {{run_id: ' + _runId + ', sha: <the halt commit>}}.' : '') "
         "+ (_blkForeign.length ? ' ' + _blkForeign.join(', ') + ' are not in the stage manifest rulable_ids: re-run the ledger check. "
         f"A ruling that is not yet a row is recorded with workflow.revise run_id ' + _runId + ' verbatim + from + {CLAIM_PARAM}: true, which claims it and resumes at the ledger check.' : '') "
+        "+ _addTaskRemedy "
         "+ (_blkIds.length ? ' Re-fire the same sizing: it executes the remaining work of the rows it keeps, briefed with the revise notes, '"
         "+ 'and work committed at or before the halt meets a row when the verdict met_by names that commit.' : '')) }; }"
     )
@@ -3826,7 +3862,8 @@ def compose_ask_script(
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
         "...(i.met_by ? { met_by: i.met_by } : {}), "
         "...(i.root_read != null ? { root_read: i.root_read } : {}), "
-        "...(i.remaining ? { remaining: i.remaining } : {}) })) }; }"
+        "...(i.remaining ? { remaining: i.remaining } : {}), "
+        f"...(i.{GAPS_CLOSED_FIELD} ? {{ {GAPS_CLOSED_FIELD}: i.{GAPS_CLOSED_FIELD} }} : {{}}) }})) }}; }}"
     )
     b.append(
         f"  if (_nextAction.params && _resumeLedger) {{ _nextAction.params.{TERMINAL_RESUME_LEDGER_PARAM} = "
@@ -4013,6 +4050,14 @@ _MEMO_CLOSE_CLAUSE_JS = (
     "and lifecycle acts is not_met with remaining naming them. Memo rows: ' + "
     f"JSON.stringify(_manifest.{MEMO_CLOSE_KEY}) + '.' : '')"
 )
+#: Lead-in of the refire prompts' per-row halt remaining lines; each line is a gap that is still true.
+_GAPS_OPEN_LEAD = "Gaps still open, by row (each line is still true; close it, never pin it): "
+#: Tells the resume ledger judge how a met blocking row proves each halt gap line closed.
+_GAPS_CLOSED_INSTRUCTION = (
+    f" On every blocking row you judge met, return {GAPS_CLOSED_FIELD} with one {{gap, how}} per halt gap line: "
+    "gap copied exactly, how naming the file or behaviour that makes it no longer hold. "
+    "A row whose diff asserts a gap line's state is not_met."
+)
 #: Appended to the verify prompt: on a ledger resume the executors' work already landed, so the
 #: verdict covers exactly the rows the halted run blocked on.
 _RESUME_LEDGER_CLAUSE_JS = (
@@ -4027,7 +4072,9 @@ _RESUME_LEDGER_CLAUSE_JS = (
     "met_by must name the commit sha(s) carrying that work, which may be a checkpoint this run made since the halt. ' : 'A blocking row is met on work changed since the halt "
     f"commit ' + (_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_HALT_SHA_FIELD} ?? '(unknown)') + ', or on work at HEAD committed at or before it when met_by names that commit sha. ') + '"
     f"Revise notes: ' + JSON.stringify(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_NOTES_FIELD} ?? []) + "
-    "'. Return an item for each of them and no other item.' "
+    "'. Return an item for each of them and no other item. Halt gap lines, by row: ' + "
+    f"JSON.stringify(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}}) + ' ' + {json.dumps(HALT_GAP_RULE)} + "
+    f"{json.dumps(_GAPS_CLOSED_INSTRUCTION)} "
     ": 'No requirement row is left to judge. Return items: [].') + "
     f"(Object.keys(_gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_EM_DISCHARGED_FIELD} ?? {{}}).length "
     "? ' EM-discharged rows (performed by the EM, recorded via em-discharge): ' + "

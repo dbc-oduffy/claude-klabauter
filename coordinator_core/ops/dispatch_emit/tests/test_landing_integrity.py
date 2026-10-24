@@ -542,3 +542,39 @@ def test_caused_ids_still_refuse_even_with_status_before_fail():
 def test_nonzero_fail_with_no_baseline_still_refuses():
     findings, check = li.failed_targeted_tests({"status": "fail", "tests_failed": 2, "status_before": "fail"})
     assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def _write_record(root, record):
+    path = li.fresh_verdict_path(root, "r1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    full = {"run_id": "r1", "head": _HEAD, "covered": li.landing_fingerprint(root, ["t.py"]), **record}
+    path.write_text(json.dumps(full), encoding="utf-8")
+
+
+def test_fresh_no_tests_record_blocks_nothing_and_leaves_failed_tests_remedy_open(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "no-tests", "tests_run": 0, "dropped": ["gone.py"], "note": "dropped"})
+    assert li.landing_test_gate(root, {}, "r1") == ([], "no-verdict")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and f"or pass params.{li.FAILED_TESTS_PARAM}" in findings[0].detail
+
+
+def test_fresh_no_tests_record_does_not_clear_a_recorded_failure(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "no-tests", "tests_run": 0})
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings
+
+
+def test_fresh_fail_record_node_ids_reach_attribution(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "fail", li.FAILED_TESTS_PARAM: ["t.py::test_x"]})
+    findings, check = li.landing_test_gate(root, {}, "r1")
+    assert check == "failed" and "t.py::test_x" in findings[0].detail
+
+
+def test_fresh_launcher_crash_without_tests_run_still_refuses(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "error", "reason": "launcher crashed"})
+    findings, check = li.landing_test_gate(root, {"failed_tests": ["a/test_x.py::t"]}, "r1")
+    assert check == "failed" and "launcher crashed" in findings[0].detail

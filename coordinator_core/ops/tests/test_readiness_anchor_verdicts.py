@@ -81,14 +81,36 @@ def test_mismatch_pulls_as_contradicted(tmp_path, monkeypatch):
     _validate(reply)
 
 
-def test_not_evaluable_pulls_as_no_verdict_with_source_none(tmp_path, monkeypatch):
+def test_pipe_check_with_clean_checker_is_ready_and_noted_unevaluable(tmp_path):
     common = _plan(tmp_path)
-    monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("NOT_EVALUABLE", detail="a pipe"))
+    plan = tmp_path / REL
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            f"grep -c marker {REL}", "ls docs/plans | wc -l"
+        ),
+        encoding="utf-8",
+    )
     reply = op._handler({"plan": REL, "premise": {"rows": []}}, common)
-    assert reply["verdict"] == "judgment"
-    assert any(b.startswith(f"anchor-premise-no-verdict: {ANCHOR_ID}") for b in reply["blocking"])
+    assert reply["verdict"] == "ready" and reply["blocking_findings"] == 0
+    assert not any("no-verdict" in b for b in reply["blocking"])
     assert _entry(reply)["source"] == "none" and _entry(reply)["verdict"] is None
+    assert f"{ANCHOR_ID} (" in reply["reason"] and "not blocking" in reply["reason"]
     _validate(reply)
+
+
+def test_pipe_check_with_a_contradicted_checker_row_still_blocks(tmp_path):
+    common = _plan(tmp_path)
+    plan = tmp_path / REL
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            f"grep -c marker {REL}", "ls docs/plans | wc -l"
+        ),
+        encoding="utf-8",
+    )
+    row = {"verdict": "CONTRADICTED", "citation": "the fixture marker", "anchor": ANCHOR_ID}
+    reply = op._handler({"plan": REL, "premise": {"rows": [row]}}, common)
+    assert reply["verdict"] == "judgment"
+    assert any(b.startswith(f"anchor-premise-CONTRADICTED: {ANCHOR_ID}") for b in reply["blocking"])
 
 
 def test_passed_unresolved_row_outranks_a_match(tmp_path, monkeypatch):
@@ -117,7 +139,7 @@ def test_reason_blocking_and_rulings_name_the_same_declared_anchor_ids(tmp_path,
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("NOT_EVALUABLE", detail="no '..'"))
+    monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("MISMATCH", observed="0"))
     rows = [{"verdict": "UNRESOLVED", "citation": f"claim {i} " + "y" * 190} for i in range(8)]
     reply = op._handler({"plan": REL, "premise": {"rows": rows}}, common)
     declared = {"P2", ANCHOR_ID}

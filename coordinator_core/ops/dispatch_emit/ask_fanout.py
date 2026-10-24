@@ -80,7 +80,7 @@ from coordinator_core.ops.sizing_intake_contract import (
 )
 from coordinator_core.session import claimed_write
 from coordinator_core.session.record_homes import home_dir
-from coordinator_core.sizing_assemble import _BASE_ROUTE_BY_TSHIRT
+from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 from coordinator_core.warp_fire import fire_command
 
 _SIZING_SCHEMA_PATH: Path = (

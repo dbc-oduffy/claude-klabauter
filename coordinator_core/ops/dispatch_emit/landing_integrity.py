@@ -26,6 +26,7 @@ REVIEW_REVERIFY_INDETERMINATE = "review-reverify-indeterminate"
 REVERIFY_KEY = "reverify"
 TARGETED_TESTS_PARAM = "targeted_tests"
 NOT_RUN_CHECK = "not-run"
+NO_TESTS_STATUS = "no-tests"
 ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
 ZERO_FAIL_CHECK = "zero-fail-unattributed"
 
@@ -520,6 +521,8 @@ def landing_test_gate(
         return [Finding("", TARGETED_TESTS_FAILED,
                         f"the run's retest errored without running tests ({reason}); "
                         f"fix the launcher and re-run: {retest_remedy(params)}")], "failed"
+    if fresh is not None and _ran_no_tests(fresh):
+        fresh = None
     if fresh is not None and fresh.get("status") == "fail" and not isinstance(fresh.get("baseline"), Mapping):
         verdict, fresh = fresh, None
     else:
@@ -555,6 +558,13 @@ def landing_test_gate(
         ], "failed"
     findings, check = failed_targeted_tests(fresh, retest_remedy(params))
     return findings, "pass-on-retest" if check == "pass" else check
+
+
+def _ran_no_tests(record: Mapping) -> bool:
+    """True for a fresh ``no-tests`` record (every target dropped or none collected): it measured
+    nothing and did not crash, so it is no verdict and the recorded verdict plus ``failed_tests``
+    attribution decide. A launcher crash (``error`` without ``tests_run``) is not this."""
+    return record.get("status") == NO_TESTS_STATUS
 
 
 def _explicit_empty_failed_tests(params: Mapping) -> bool:

@@ -69,3 +69,21 @@ def test_no_note_and_no_shipped_heading_land_unchanged(repo, note):  # noqa: F81
 
     assert out["committed"] is True, out
     assert "shipped_claims" not in out
+
+
+def test_a_halt_record_only_withhold_on_a_met_runs_product_lands_it(repo):  # noqa: F811
+    _stage(repo, f"## What shipped\n\n- `{_LANDING}`\n")
+
+    out = prod._land(repo, withhold_paths=[{"path": _LANDING, "reason": "halt-record-only"}])
+
+    assert out["committed"] is True, out
+    assert out["shipped_claims"]["unbacked"] == []
+    assert _LANDING in prod._tree(repo)
+
+
+def test_a_content_withhold_on_a_shipped_path_still_refuses(repo):  # noqa: F811
+    _stage(repo, f"## What shipped\n\n- `{_LANDING}`\n")
+
+    out = prod._land(repo, withhold_paths=[{"path": _LANDING, "reason": "peer owns this"}])
+
+    assert out["refused"] == SHIPPED_CLAIM_REFUSED, out

@@ -46,7 +46,9 @@ _KNOWN_PRODUCERS: frozenset[str] = frozenset(
         "rollups",
         "routine_signals",
         "session_hierarchy",
+        "sizings",
         "trackers",
+        "workflow_runs",
     }
 )
 

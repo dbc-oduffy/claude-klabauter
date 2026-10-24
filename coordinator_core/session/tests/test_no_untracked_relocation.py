@@ -142,6 +142,15 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "re-declare-then-move mechanism the rest of this allow-list migrates "
         "onto (plan C1)",
 
+    # --- Deletes by tombstone: a delete, not a relocation ---
+    ("coordinator_core", "ops/scratch_delete.py", "delete_declared", "os.rename", "os.rename(target, tomb / f'{target.name}-{time.time_ns()}')", 1):
+        "scratch_delete.delete_declared's tombstone os.rename is a delete, "
+        "not a relocation: the tombstone holds no session work, so "
+        "relocate_touched_path is the wrong tool. The source is always under "
+        "scratch/ and never in the git index (admit refuses outside-scratch "
+        "and indexed paths), so a stale claim strands nothing a commit could "
+        "carry.",
+
     # --- Fail-open fallbacks the plan added: deliberate raw call taken only ---
     # --- when the session engine / relocate_touched_path is unreachable.   ---
     ("coordinator_core", "percolate/rewrite_basename.py", "_do_rename", "Path.rename", "old_path.rename(new_path)", 1):

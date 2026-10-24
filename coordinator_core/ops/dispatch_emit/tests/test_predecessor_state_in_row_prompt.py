@@ -88,7 +88,7 @@ def test_resume_guard_leads_the_row_prompt():
     row = WaveRow(id="C1", title="t", surface="s", writes=UNDECLARED, reads=[], depends_on=[])
     prompt = _row_prompt(row, "docs/plans/p.md", None, predecessor_state=section)
     assert "row-closed-on-spine" in prompt and "wont_do" in prompt
-    assert "git log --format=%h%x20%s abc123..HEAD" in prompt
+    assert "git log --format=%h%x20%s%x09%(trailers:key=Checkpoint-Plan,key=Plan,valueonly,separator=%x2C) abc123..HEAD" in prompt
     assert "writes-moved-outside-run" in prompt
     assert "## Predecessor handoff state" in prompt
 

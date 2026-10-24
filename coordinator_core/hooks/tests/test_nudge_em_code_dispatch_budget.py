@@ -11,10 +11,18 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.machine_profile as mp
+from coordinator_core import machine_resolver
+from coordinator_core.hooks import _em_write_budget as leaf
 from coordinator_core.hooks import nudge_em_code_dispatch as mod
 from coordinator_core.session import xs_lane_budget as xb
 
 SID = "sess-budget"
+
+
+def _sizing(monkeypatch, state) -> None:
+    """The hook's op() and the leaf's budget path each read their own binding of the sizing state."""
+    for target in (mod, leaf):
+        monkeypatch.setattr(target, "_session_sizing_state", lambda payload, sid: state)
 
 
 def _obj(git: Path, kind: str, payload: bytes) -> str:
@@ -51,10 +59,11 @@ def env(tmp_path, monkeypatch):
     sys_tmp = tmp_path / "sys-tmp"
     sys_tmp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sys_tmp))
-    monkeypatch.setattr(mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    for target in (mod, leaf):
+        monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     monkeypatch.setattr(mp, "guard_level", lambda name: "strict")
     monkeypatch.setattr(mod, "resolve_mode", lambda key, sid: False)
-    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, False))
+    _sizing(monkeypatch, (True, False))
     root, sha = _make_repo(tmp_path, {"a.py": _lines(10), "b.py": _lines(10), "c.py": _lines(10)})
     return root, sha
 
@@ -187,7 +196,7 @@ def test_escaped_edit_is_not_added_to_path_set(env, monkeypatch):
 
 @pytest.fixture
 def unsized(env, monkeypatch):
-    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    _sizing(monkeypatch, (False, False))
     return env
 
 
@@ -231,7 +240,7 @@ def test_sized_session_without_lane_keeps_head_decision(env):
 def test_above_xs_sizing_unfired_is_denied(unsized, monkeypatch):
     root, _ = unsized
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
-    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, False))
+    _sizing(monkeypatch, (True, False))
     result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
     assert _is_deny(result)
     assert xb.read_lane(root, SID) is None
@@ -253,34 +262,32 @@ def landed(env, monkeypatch):
     return root, sha
 
 
-def test_residue_under_budget_advises_with_count(landed):
+def test_landed_run_edit_is_denied_post_fire_and_opens_no_lane(landed):
     root, _ = landed
     result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert result is not None and not _is_deny(result)
-    assert "residue 1/2 files, 2/30 lines" in result["hookSpecificOutput"]["additionalContext"]
-    assert xb.read_lane(root, SID)["kind"] == "residue"
+    assert _is_deny(result)
+    assert "already fired engine-ask" in _reason(result)
+    assert xb.read_lane(root, SID) is None
 
 
-def test_residue_over_budget_denies_naming_typed_executor(landed, monkeypatch):
-    # A redirected tmp root can itself sit under a `coordinator/` directory, which would
-    # select the coordinator-domain override over the extension map this test pins.
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+def test_landed_over_budget_edit_gets_the_post_fire_deny_not_the_residue_text(landed):
     root, _ = landed
     big = "".join(f"x{i}\n" for i in range(40))
     result = mod.op(_edit(root, "a.py", _lines(10), big))
     assert _is_deny(result)
-    assert "python-executor" in _reason(result)
-    assert xb.read_lane(root, SID)["state"] == "open"
-    assert not _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
+    assert "already fired engine-ask" in _reason(result)
+    assert "Residue budget spent" not in _reason(result)
+    assert _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
 
 
-def test_live_run_means_not_landed(landed, monkeypatch):
+def test_live_run_is_denied_post_fire_too(landed, monkeypatch):
     root, _ = landed
     from coordinator_core import warp_live
 
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: "run-1")
     result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert result is not None and not _is_deny(result)
+    assert _is_deny(result)
+    assert "already fired engine-ask" in _reason(result)
     assert xb.read_lane(root, SID) is None
 
 
@@ -289,9 +296,10 @@ _REAL_SEAM = mod._is_bootstrap_or_out_of_repo
 
 
 def _declare_general_work_root(monkeypatch, value):
-    monkeypatch.setattr(mod, "_is_bootstrap_or_out_of_repo", _REAL_SEAM)
+    for target in (mod, leaf):
+        monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", _REAL_SEAM)
     monkeypatch.setattr(
-        mod.machine_resolver,
+        machine_resolver,
         "registry_get",
         lambda key: value if key == "coordinator.general_work_root" else None,
     )
@@ -303,7 +311,7 @@ def _over_budget_edit(root):
 
 
 def test_general_work_root_target_is_not_denied(landed, monkeypatch):
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
     _declare_general_work_root(monkeypatch, str(root.parent))
     assert not _is_deny(_over_budget_edit(root))
@@ -311,7 +319,7 @@ def test_general_work_root_target_is_not_denied(landed, monkeypatch):
 
 
 def test_checkout_outside_general_work_root_still_denied(landed, tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
     other = tmp_path / "elsewhere"
     other.mkdir()
@@ -320,20 +328,20 @@ def test_checkout_outside_general_work_root_still_denied(landed, tmp_path, monke
 
 
 def test_unreadable_general_work_root_still_denied(landed, monkeypatch):
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
     _declare_general_work_root(monkeypatch, None)
 
     def _boom(key):
         raise OSError("registry unreadable")
 
-    monkeypatch.setattr(mod.machine_resolver, "registry_get", _boom)
+    monkeypatch.setattr(machine_resolver, "registry_get", _boom)
     assert _is_deny(_over_budget_edit(root))
 
 
 @pytest.mark.parametrize("unset", [None, ""])
 def test_unset_general_work_root_still_denied(landed, monkeypatch, unset):
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
     _declare_general_work_root(monkeypatch, unset)
     assert _is_deny(_over_budget_edit(root))
@@ -348,7 +356,7 @@ def _general_work_session(tmp_path, monkeypatch, payload):
 
 
 def test_general_work_session_editing_foreign_checkout_is_denied_with_memo_pointer(landed, tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
     big = "".join(f"x{i}\n" for i in range(40))
     payload = _general_work_session(tmp_path, monkeypatch, _edit(root, "a.py", _lines(10), big))
@@ -362,8 +370,8 @@ def test_general_work_session_editing_foreign_checkout_is_denied_with_memo_point
 
 
 def test_general_work_session_edit_outside_every_checkout_is_not_denied(landed, tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
-    monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
+    _sizing(monkeypatch, (False, False))
     plain = tmp_path / "plain"
     plain.mkdir()
     (plain / "tool.go").write_text("a\n")
@@ -429,7 +437,7 @@ def test_unsized_write_to_existing_file_is_priced_against_base(unsized):
 
 
 def test_non_general_work_session_is_not_given_the_memo_pointer(landed, tmp_path, monkeypatch):
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     root, _ = landed
     _declare_general_work_root(monkeypatch, str(tmp_path / "general-work"))
     result = _over_budget_edit(root)
@@ -544,7 +552,7 @@ def test_golf_residue_record_is_never_closed_by_denies(env, monkeypatch):
     assert xb._create_exclusive(
         root, SID, {"kind": "residue", "base_sha": sha, "state": "open", "paths": [], "denies": 5}
     )
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     over = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
     assert _is_deny(over) and "Residue budget spent" in _reason(over)
     assert not _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
@@ -585,45 +593,39 @@ def landed_unmarked(env, monkeypatch):
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: False)
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
-    monkeypatch.setattr(mod, "_COORDINATOR_PATH_MARKERS", [])
+    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
     return root, sha
 
 
-def test_landed_residue_without_s_plus_touch_advises_then_denies_over(landed_unmarked):
+def test_landed_edit_without_s_plus_touch_is_denied_post_fire(landed_unmarked):
     root, sha = landed_unmarked
-    ok = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert ok is not None and not _is_deny(ok)
-    assert "residue 1/2 files, 2/30 lines" in _reason_ctx(ok)
-    assert xb.read_lane(root, SID)["kind"] == "residue"
-    over = mod.op(_edit(root, "b.py", _lines(10), _big(40)))
-    assert _is_deny(over) and "Residue budget spent" in _reason(over)
+    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
+    assert _is_deny(result) and "already fired engine-ask" in _reason(result)
+    assert xb.read_lane(root, SID) is None
 
 
-def test_landed_residue_supersedes_a_pre_existing_xs_lane(landed_unmarked):
+def test_landed_edit_is_denied_post_fire_despite_a_pre_existing_xs_lane(landed_unmarked):
     root, sha = landed_unmarked
     xb.open_xs_lane(root, SID, "f" * 40)
-    xb.record_deny(root, SID)
-    ok = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert ok is not None and not _is_deny(ok)
-    rec = xb.read_lane(root, SID)
-    assert rec["kind"] == "residue" and rec["base_sha"] == sha
-    assert xb.deny_count(rec) == 0
-
-
-def test_landed_residue_live_run_keeps_the_sized_path(landed_unmarked, monkeypatch):
-    root, _ = landed_unmarked
-    from coordinator_core import warp_live
-
-    monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: "run-1")
     result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert result is not None and not _is_deny(result)
-    assert xb.read_lane(root, SID) is None
+    assert _is_deny(result) and "already fired engine-ask" in _reason(result)
+    assert xb.read_lane(root, SID)["kind"] == "xs"
 
 
 def test_landed_residue_shell_write_is_budgeted(landed_unmarked):
     root, _ = landed_unmarked
     result = _shell(root, "a.py", _big(42))
     assert _is_deny(result) and "Residue budget spent" in _reason(result)
+
+
+def test_landed_shell_write_supersedes_a_pre_existing_xs_lane(landed_unmarked):
+    root, sha = landed_unmarked
+    xb.open_xs_lane(root, SID, "f" * 40)
+    xb.record_deny(root, SID)
+    assert not _is_deny(_shell(root, "a.py", "v1 = f(1)\n"))
+    rec = xb.read_lane(root, SID)
+    assert rec["kind"] == "residue" and rec["base_sha"] == sha
+    assert xb.deny_count(rec) == 0
 
 
 def test_shell_write_escape_is_consumed_once(env, monkeypatch):
@@ -635,7 +637,7 @@ def test_shell_write_escape_is_consumed_once(env, monkeypatch):
         calls.append(1)
         return len(calls) == 1
 
-    monkeypatch.setattr(mod, "_take_escape", once)
+    monkeypatch.setattr(leaf, "_take_escape", once)
     big = "".join(f"x{i}\n" for i in range(42))
     assert _shell(root, "a.py", big) is None
     assert _is_deny(_shell(root, "a.py", big))

@@ -76,9 +76,8 @@ Grammar surface (post-T4d-g1c EXTEND):
 
 Negative-spec:
   - ``delivery-verdict`` (``state/delivery-verdicts/**/*.md``) and ``ruling``
-    (``state/rulings/*.md`` plus ``state/apm-rulings/*.md`` via
-    ``_EXTRA_GLOBS_FOR_TYPE``) are served here; the map holds one glob string
-    per type, so ruling's second directory lives in that side map.
+    (``state/{rulings,apm-rulings}/*.md``, brace-expanded in ``_collect_files``)
+    are served here.
   - ``_TYPE_TO_GLOB`` covers 22 query-records.js record types (widened from
     the original 4 — ``handoff``/``handoff-archived``/``plan``/
     ``cross-repo-memo`` — with 13 more: ``bug``/``debt``/``improvement``/
@@ -441,13 +440,7 @@ _TYPE_TO_GLOB: dict[str, str] = {
     'subtractive-adjudication-record': 'state/mise-inventory/*-adjudication.md',
     'completion-receipt': 'state/completion-receipts/**/*.md',
     'delivery-verdict':   'state/delivery-verdicts/**/*.md',
-    'ruling':             'state/rulings/*.md',
-}
-
-# Additional globs a type's records also live under, beyond its one `_TYPE_TO_GLOB` string.
-# `ruling` spans the engine-ruling dir and the APM-ruling dir.
-_EXTRA_GLOBS_FOR_TYPE: dict[str, tuple[str, ...]] = {
-    'ruling': ('state/apm-rulings/*.md',),
+    'ruling':             'state/{rulings,apm-rulings}/*.md',
 }
 
 # Query types whose files are `.yaml` whole-file frontmatter (no `---` fences) —
@@ -1455,9 +1448,13 @@ def _collect_files(worktree_root: Path, record_type: str) -> list[Path]:
     strangle because node sorts via scandir.
     """
     glob_pat = _memo_glob(worktree_root, record_type) or _TYPE_TO_GLOB[record_type]
-    files = _collect_files_for_glob(worktree_root, record_type, glob_pat)
-    for extra in _EXTRA_GLOBS_FOR_TYPE.get(record_type, ()):
-        files = files + _collect_files_for_glob(worktree_root, record_type, extra)
+    brace = re.fullmatch(r'(.*)\{([^{}/]+)\}(.*)', glob_pat)
+    if brace is None:
+        return _collect_files_for_glob(worktree_root, record_type, glob_pat)
+    files: list[Path] = []
+    for alt in brace.group(2).split(','):
+        files += _collect_files_for_glob(
+            worktree_root, record_type, f'{brace.group(1)}{alt}{brace.group(3)}')
     return files
 
 
@@ -1897,6 +1894,9 @@ def _load_record_uncached(
         # query-records.js's own silent-skip default (includeUnparseable=false).
         parsed = _clone(_parse_frontmatter_cached(text))
         fm = parsed['frontmatter']
+        if fm is None and record_type == 'ruling':
+            # Fence-less APM rulings are real records: served with empty frontmatter.
+            fm, parsed['body'] = {}, text
         if fm is None:
             return None
         body = parsed['body']
@@ -1933,6 +1933,17 @@ def _load_record_uncached(
     return {'path': rel_path, 'frontmatter': fm}
 
 
+# Types whose rows carry ``observed_at`` (the file's mtime, ISO-8601 UTC): the cockpit
+# delivery-verdict-summary and ruling-summary entities name it.
+_OBSERVED_AT_TYPES: frozenset[str] = frozenset({'delivery-verdict', 'ruling'})
+
+
+def _observed_at(mtime_ns: int) -> str:
+    """ISO-8601 UTC, second precision, from a ``st_mtime_ns``."""
+    return datetime.fromtimestamp(mtime_ns // 1_000_000_000, tz=timezone.utc).strftime(
+        '%Y-%m-%dT%H:%M:%SZ')
+
+
 def _load_record(
     fpath: Path, worktree_root: Path, record_type: str,
     *, archived: bool = False, include_body: bool = False,
@@ -1940,10 +1951,18 @@ def _load_record(
     """``_load_record_uncached`` through the per-worktree record cache: a file whose
     (size, mtime_ns) is unchanged is neither opened nor parsed. Bodies are not cached."""
     entry = _LISTING.pop(fpath, None)
+    observed = record_type in _OBSERVED_AT_TYPES
     if include_body or record_type == 'roadmap':
         # roadmap loads warn per record on an unmapped status; a cache hit would hide it.
-        return _load_record_uncached(
+        rec = _load_record_uncached(
             fpath, worktree_root, record_type, archived=archived, include_body=include_body)
+        if rec is not None and observed:
+            try:
+                st = entry.stat() if entry is not None else os.stat(str(fpath))
+                rec['observed_at'] = _observed_at(st.st_mtime_ns)
+            except OSError:
+                pass
+        return rec
     try:
         st = entry.stat() if entry is not None else os.stat(str(fpath))
         stamp = [st.st_size, st.st_mtime_ns]
@@ -1954,8 +1973,15 @@ def _load_record(
     hit = cache.entries.get(key)
     if hit is not None and hit[:2] == stamp:
         fm = hit[3]
-        return None if fm is None else {'path': hit[2], 'frontmatter': _clone(fm)}
+        if fm is None:
+            return None
+        rec = {'path': hit[2], 'frontmatter': _clone(fm)}
+        if observed:
+            rec['observed_at'] = _observed_at(stamp[1])
+        return rec
     rec = _load_record_uncached(fpath, worktree_root, record_type, archived=archived)
+    if rec is not None and observed:
+        rec['observed_at'] = _observed_at(stamp[1])
     if cache.path is not None:
         if rec is not None and _json_pure(rec['frontmatter']):
             cache.entries[key] = [*stamp, rec['path'], _clone(rec['frontmatter'])]

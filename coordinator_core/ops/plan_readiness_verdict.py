@@ -558,6 +558,13 @@ def readiness_verdict(
     engine_checked = sum(1 for v in anchor_verdicts or [] if v.get("source") == "engine-check")
     if engine_checked:
         notes.append(f"{engine_checked} anchor premise(s) resolved by in-process check")
+    if checker_ran:
+        unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or [])
+        if unevaluable:
+            notes.append(
+                "anchor check not evaluable in-process, not blocking (premise-checker ran, no "
+                "blocking row): " + "; ".join(f"{i} ({d[:80]})" for i, d in unevaluable)
+            )
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
@@ -639,7 +646,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         carried = _carry_rows(repo_root, str(prep_gate["plan"])) if anchors else []
         verdicts = _anchor_premise.anchor_verdicts(anchors, premise_rows, carried, text, anchor_root)
         anchor = defects + _anchor_premise.anchor_findings(
-            anchors, premise_rows, carried, text, anchor_root, verdicts, checker_ran=checker_ran
+            anchors, premise_rows, carried, text, anchor_root, verdicts
         )
     out = readiness_verdict(
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,

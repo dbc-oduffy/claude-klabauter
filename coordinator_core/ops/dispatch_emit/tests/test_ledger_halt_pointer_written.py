@@ -148,3 +148,55 @@ def test_spawn_count_matches_a_halt_without_a_plan(repo, monkeypatch):
     assert count["n"] == without_plan
     _git(["--version"], repo)
     assert count["n"] == without_plan + 1, "spawn spy is not counting"
+
+
+TEST_HALT = {
+    "halted": "review_blocked",
+    "blocker": "failing_test",
+    "plan": PLAN,
+    "items": [{"id": "R1", "remaining": ["tests/test_x.py::test_y fails: assert 1 == 2"], "evidence": "e"}],
+}
+
+
+def test_failing_test_halt_writes_pointer_and_resume_ledger_carries_the_gap_lines(repo):
+    from dataclasses import replace
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_halt_record
+    from coordinator_core.ops.dispatch_emit.ask_gate import _resume_ledger
+
+    _with_sizing(repo)
+    (repo / RECORD_DIR_ROOT / RUN / "manifest.json").write_text(
+        '{"rows": [{"id": "R1"}], "rulable_ids": ["R1"]}\n', encoding="utf-8"
+    )
+
+    out = _call(repo, **{HALTED_RECORD_PARAM: TEST_HALT})
+
+    assert out["committed"] is True, out
+    halt = read_ledger_halt(ledger_halt_path(repo, PLAN))
+    assert halt is not None
+    assert (halt.run_id, halt.plan_rel, halt.sizing_rel, halt.blocking) == (RUN, PLAN, SIZING, ("R1",))
+    record = read_halt_record(repo, RUN)
+    assert record is not None
+    halt = replace(halt, remaining=record.remaining)
+    sizing = {"requirement_register": {"rows": [{"id": "R1", "text": "t", "status": "open"}]}}
+    ledger = _resume_ledger(sizing, halt, repo)
+    assert ledger["remaining"]["R1"]["remaining"] == ["tests/test_x.py::test_y fails: assert 1 == 2"]
+
+
+def test_halt_blocked_on_findings_still_unlinks_the_pointer(repo):
+    _with_sizing(repo)
+    _call(repo, **{HALTED_RECORD_PARAM: LEDGER_HALT})
+    assert ledger_halt_path(repo, PLAN).is_file()
+
+    _call(repo, **{HALTED_RECORD_PARAM: {"halted": "review_blocked", "plan": PLAN, "items": [{"id": "R1"}]}})
+
+    assert not ledger_halt_path(repo, PLAN).exists()
+
+
+def test_failing_test_halt_through_the_halted_record_path_writes_the_pointer(repo):
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
+
+    _with_sizing(repo)
+    params = {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: TEST_HALT}
+    commit_halted_record(repo, repo, params)
+    assert read_ledger_halt(ledger_halt_path(repo, PLAN)) is not None

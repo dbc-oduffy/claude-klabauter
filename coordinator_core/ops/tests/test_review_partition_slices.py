@@ -151,6 +151,51 @@ def test_range_mode_freezes_each_partition_slice_with_only_its_own_paths(repo):
             assert (f"b/{other}" in text) == (other in s["paths"])
 
 
+def _peer_then_own(repo: Path):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
+    _write(repo, rels, 30)
+    _write(repo, ["pkg0/sub0/shared.py"], 40)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "peer work")
+    peer = _git(repo, "rev-parse", "HEAD").strip()
+    shared = repo / "pkg0" / "sub0" / "shared.py"
+    shared.write_text("v = 1\n" * 40 + "own_line = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "own work")
+    terminal = _git(repo, "rev-parse", "HEAD").strip()
+    return base, peer, terminal, rels + ["pkg0/sub0/shared.py"]
+
+
+def test_path_bases_excludes_peer_hunks_and_keeps_own(repo):
+    base, peer, terminal, declared = _peer_then_own(repo)
+    plain = partition_slices(repo, base, declared, "pb0", head=terminal)
+    mapped = partition_slices(
+        repo, base, declared, "pb1", head=terminal, path_bases={"pkg0/sub0/shared.py": peer}
+    )
+    assert plain["error"] is None and mapped["error"] is None
+    assert mapped["loc"] == plain["loc"] - 40
+    shared_diffs = [
+        Path(s["diff_path"]).read_text(encoding="utf-8")
+        for s in mapped["slices"]
+        if "pkg0/sub0/shared.py" in s["paths"]
+    ]
+    assert len(shared_diffs) == 1
+    assert "own_line" in shared_diffs[0] and "+v = 1" not in shared_diffs[0]
+    assert sorted(p for s in mapped["slices"] for p in s["paths"]) == sorted(declared)
+
+
+def test_empty_path_bases_matches_none_byte_for_byte(repo):
+    base, _peer, terminal, declared = _peer_then_own(repo)
+    a = partition_slices(repo, base, declared, "nb-a", head=terminal)
+    b = partition_slices(repo, base, declared, "nb-b", head=terminal, path_bases={})
+    assert (a["loc"], a["product_paths"], [s["paths"] for s in a["slices"]]) == (
+        b["loc"], b["product_paths"], [s["paths"] for s in b["slices"]]
+    )
+    for sa, sb in zip(a["slices"], b["slices"]):
+        assert Path(sa["diff_path"]).read_bytes() == Path(sb["diff_path"]).read_bytes()
+
+
 def test_op_is_registered_with_a_handler_and_complete_registration():
     from coordinator_core.ipc import get_op_handler  # noqa: PLC0415
     import coordinator_core.ops  # noqa: F401, PLC0415

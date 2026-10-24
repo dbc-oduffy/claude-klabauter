@@ -110,6 +110,16 @@ from coordinator_core.contract.cockpit_schema.entities.summaries import (
 from coordinator_core.contract.cockpit_schema.entities.tracker_summary import (
     TrackerSummary,
 )
+from coordinator_core.contract.cockpit_schema.entities.sizing_summary import (
+    SizingSummary,
+)
+from coordinator_core.contract.cockpit_schema.entities.workflow_run import WorkflowRun
+from coordinator_core.contract.cockpit_schema.entities.delivery_verdict_summary import (
+    DeliveryVerdictSummary,
+)
+from coordinator_core.contract.cockpit_schema.entities.ruling_summary import (
+    RulingSummary,
+)
 
 __all__ = [
     "BacklogHistory",
@@ -151,4 +161,8 @@ __all__ = [
     "HandoffSummary",
     "ReviewTrail",
     "TrackerSummary",
+    "SizingSummary",
+    "WorkflowRun",
+    "DeliveryVerdictSummary",
+    "RulingSummary",
 ]

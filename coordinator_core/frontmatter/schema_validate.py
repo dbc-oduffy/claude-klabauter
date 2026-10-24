@@ -516,6 +516,22 @@ def _evaluated_property_keys(value: dict, schema: dict, root_schema: dict) -> se
     return evaluated
 
 
+_NOT_NEGATED_ERROR = 'value must NOT match the negated schema'
+
+
+def _name_allof_branch(err: ErrorDict, idx: int, comment: str, field: str) -> ErrorDict:
+    """Text-only: tag a bare `not` refusal at this node with its allOf index and the
+    branch's `$comment` first sentence. Never changes accept/refuse."""
+    if err.get('error') != _NOT_NEGATED_ERROR or err.get('field') != field:
+        return err
+    first = re.split(r'(?<=[.;])\s', comment.strip(), maxsplit=1)[0]
+    return {
+        'field': err['field'],
+        'error': f'{_NOT_NEGATED_ERROR} (allOf[{idx}])',
+        'hint': f'allOf[{idx}]: {first}',
+    }
+
+
 def _validate_json_schema_node(
     value: Any,
     schema: dict | None,
@@ -659,8 +675,14 @@ def _validate_json_schema_node(
     if 'allOf' in schema:
         all_of = schema['allOf']
         if isinstance(all_of, list):
-            for sub in all_of:
-                errors.extend(_validate_json_schema_node(value, sub, root_schema, path))
+            for idx, sub in enumerate(all_of):
+                sub_errs = _validate_json_schema_node(value, sub, root_schema, path)
+                comment = sub.get('$comment') if isinstance(sub, dict) else None
+                if comment and isinstance(comment, str):
+                    sub_errs = [
+                        _name_allof_branch(e, idx, comment, field) for e in sub_errs
+                    ]
+                errors.extend(sub_errs)
 
     # oneOf — value must match EXACTLY one sub-schema. Unlike anyOf, the
     # failure mode is two-shaped (zero matches vs. multiple matches) and the
@@ -722,7 +744,7 @@ def _validate_json_schema_node(
         if len(sub_errors) == 0:
             errors.append({
                 'field': field,
-                'error': 'value must NOT match the negated schema',
+                'error': _NOT_NEGATED_ERROR,
                 'hint': 'Remove or change the field(s) that satisfy the forbidden condition',
             })
             return errors

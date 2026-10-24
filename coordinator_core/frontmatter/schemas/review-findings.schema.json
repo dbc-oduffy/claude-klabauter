@@ -45,7 +45,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "file", "before", "after", "status"],
+            "required": ["id"],
             "properties": {
               "id": {
                 "type": "string",
@@ -66,8 +66,17 @@
               },
               "status": {
                 "type": "string",
-                "enum": ["applied", "em-rejected", "suspended"],
+                "enum": ["applied", "em-rejected", "suspended", "open", "em_rejected"],
                 "description": "`applied`: `review-findings-ledger verify` confirmed `before`/`after` evidence against the row's recorded `baseline_sha256`. `em-rejected`: the EM ran `reject`, restoring `before` over `after` and requiring `reason`. `suspended`: logged under a `REJECTED`/`PIVOT` premise verdict, where the reviewer applies nothing — the only verdicts `verify` accepts `suspended` under."
+              },
+              "files": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Repo-relative paths, used instead of `file` when one out-of-ask finding spans several files."
+              },
+              "out_of_ask": {
+                "type": "boolean",
+                "description": "`true` marks a diff hunk that belongs to a different run or ask (peer work still in review). Such a row carries `id`, `file` or `files`, `out_of_ask`, `status` (`open`, `applied` or `em_rejected`) and `verified`; it needs no `before`/`after`. A row with no `status` counts as unresolved. A hunk already committed by another run is not out-of-ask and gets no such row. Non-out-of-ask rows keep `file`, `before`, `after` and `status` in practice."
               },
               "reason": {
                 "type": "string",

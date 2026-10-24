@@ -64,6 +64,13 @@ def _hook_layer_always_reachable(monkeypatch):
     monkeypatch.setattr(_gsi, "_hook_layer_reachable", lambda settings_data: True)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_guardless_scan(monkeypatch):
+    """`evaluate_guardless_sessions` scans live host processes; stub it so
+    banner-equality assertions do not depend on unguarded peers."""
+    monkeypatch.setattr(_gsi, "evaluate_guardless_sessions", lambda: "")
+
+
 _HEALTHY = {"enabledPlugins": {"foo@bar": True}}
 _UNHEALTHY = {"not-enabled-plugins": "stub"}
 

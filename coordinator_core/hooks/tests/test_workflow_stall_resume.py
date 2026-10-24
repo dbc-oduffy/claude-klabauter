@@ -144,6 +144,37 @@ def test_newer_run_of_other_script_does_not_supersede(tmp_path, tdir):
     assert 'TaskStop({"task_id": "old"})' in mod.workflow_stall_resume_text(SID, "", NOW)
 
 
+def _sizing_record(tdir, run_dir, *, sizing, task, run, fired_at, script):
+    rec = _record(tdir, run_dir, task=task, run=run, fired_at=fired_at, args={"sizing": sizing})
+    rec["scriptPath"] = script
+    (tdir / f"workflow-run-{SID}-{task}.json").write_text(json.dumps(rec), encoding="utf-8")
+
+
+def test_refire_of_same_sizing_under_new_script_supersedes(tmp_path, tdir):
+    _sizing_record(tdir, _run(tmp_path, "r1"), sizing="s.yaml", task="old", run="wf_old",
+                   fired_at=NOW - 5000, script="scripts/warp-1.workflow.mjs")
+    _sizing_record(tdir, _run(tmp_path, "r2", transcript_age=10), sizing="s.yaml", task="new",
+                   run="wf_new", fired_at=NOW - 4000, script="scripts/warp-2.workflow.mjs")
+    assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
+
+
+def test_refire_of_same_sizing_landed_supersedes_gone_task(tmp_path, tdir):
+    _sizing_record(tdir, _run(tmp_path, "r1"), sizing="s.yaml", task="old", run="wf_old",
+                   fired_at=NOW - 5000, script="scripts/warp-1.workflow.mjs")
+    _sizing_record(tdir, _run(tmp_path, "r2", settled=True), sizing="s.yaml", task="new",
+                   run="wf_new", fired_at=NOW - 4000, script="scripts/warp-2.workflow.mjs")
+    tp = _transcript(tmp_path, json.dumps({"content": "Error: No task found with ID: old"}))
+    assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
+
+
+def test_refire_of_other_sizing_does_not_supersede(tmp_path, tdir):
+    _sizing_record(tdir, _run(tmp_path, "r1"), sizing="s.yaml", task="old", run="wf_old",
+                   fired_at=NOW - 5000, script="scripts/warp-1.workflow.mjs")
+    _sizing_record(tdir, _run(tmp_path, "r2", transcript_age=10), sizing="t.yaml", task="new",
+                   run="wf_new", fired_at=NOW - 4000, script="scripts/warp-2.workflow.mjs")
+    assert 'TaskStop({"task_id": "old"})' in mod.workflow_stall_resume_text(SID, "", NOW)
+
+
 def test_newer_stalled_rerun_does_not_supersede(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"), task="old", run="wf_old", fired_at=NOW - 5000)
     _record(tdir, _run(tmp_path, "r2"), task="new", run="wf_new", fired_at=NOW - 4000)

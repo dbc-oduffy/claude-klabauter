@@ -2293,6 +2293,18 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     # Spec: docs/plans/2026-08-11-pull-surface-four-columns-and-the-archive.md § C3
     "handoff.columns": OpClass.COMPUTE_ONLY,
+    # sizings.summary / workflow_runs.list -- cockpit section reads (SizingSummary,
+    # WorkflowRun rows) over state/sizings and state/warp run records.
+    #   1. Writes, deletes, or reorders coordinator substrate?               No.
+    #   2. Writes outside its own module's return value?                     No.
+    #   3. Shells out to a mutating command?                                 No.
+    #      resolve_context reads the git remote name; a read.
+    #   4. Mutates shared mutable state outside its own module?              No.
+    #   5. Persistent state changes observable across process boundaries?    No.
+    # COMPUTE_ONLY justification: all five No -- a pure read, same profile as handoff.columns.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "sizings.summary": OpClass.COMPUTE_ONLY,
+    "workflow_runs.list": OpClass.COMPUTE_ONLY,
     # ceremony.commit_v2 — MUTATING: a thin envelope over `commit.commit_paths`
     # (coordinator_core/git/commit.py), whose entire purpose is writing git
     # objects and moving the branch ref (ops/ceremony/commit_v2.py docstring).

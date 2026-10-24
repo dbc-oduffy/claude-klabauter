@@ -823,7 +823,7 @@ def test_the_args_shape_names_the_route_preference_keys():
     "args, needle",
     [
         ({"ask": "a", "source": "peer"}, "'peer'"),
-        ({"sizing": "state/sizings/a.yaml", "source": "relayed"}, "sizing submission carries none"),
+        ({"sizing": "state/sizings/a.yaml", "source": "peer"}, "'peer'"),
     ],
 )
 def test_a_bad_source_is_refused(tmp_path, args, needle):
@@ -832,6 +832,15 @@ def test_a_bad_source_is_refused(tmp_path, args, needle):
     assert _hso(out)["permissionDecision"] == "deny"
     assert needle in _hso(out)["permissionDecisionReason"]
     assert emit.calls == []
+
+
+def test_a_valid_source_on_a_sizing_submission_is_admitted_and_dropped(tmp_path):
+    emit = _Emit()
+    out = mod.evaluate(
+        _payload(_repo(tmp_path), {"sizing": "state/sizings/a.yaml", "source": "relayed"}), emit=emit
+    )
+    assert _hso(out)["permissionDecision"] == "allow", _hso(out)
+    assert "ask_source" not in emit.calls[0][0]
 
 
 def test_op_door_answers_the_wrapped_payload(tmp_path, monkeypatch):

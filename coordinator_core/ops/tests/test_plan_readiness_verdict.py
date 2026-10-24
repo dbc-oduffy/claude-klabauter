@@ -742,11 +742,6 @@ _AP1 = (
 )
 
 
-_AP1_NO_VERDICT = (
-    "anchor-premise-no-verdict: AP1 (check not evaluable in-process: unsupported shell operator '|')"
-)
-
-
 def _anchor_plan(root: Path, block: str) -> Path:
     common = _corrects_plan(root, "")
     plan = root / REL
@@ -780,11 +775,10 @@ def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
     assert _anchor_rulings(reply)[0].startswith("anchor-premise-unchecked: AP1")
 
 
-def test_r32_anchor_with_a_named_check_and_no_verdict_is_caught(tmp_path):
-    # Checker lane: a premise param is present, so an unevaluable check still blocks.
+def test_r32_anchor_with_an_unevaluable_check_does_not_block_in_the_checker_lane(tmp_path):
     reply = op._handler({"plan": REL, "premise": {"rows": []}}, _anchor_plan(tmp_path, _AP1))
-    assert reply["verdict"] == "judgment"
-    assert _anchor_rulings(reply) == [_AP1_NO_VERDICT]
+    assert _anchor_rulings(reply) == []
+    assert reply["blocking"] == [] and reply["anchor_verdicts"][0]["verdict"] is None
 
 
 def test_contradicted_anchor_row_is_exactly_one_blocking_finding(tmp_path):
@@ -842,7 +836,7 @@ def test_carry_row_resolves_an_anchor_only_while_its_line_is_unedited(tmp_path):
     assert op._handler({"plan": REL}, common)["verdict"] == "ready"
     _carry(tmp_path, "0" * 64)
     reply = op._handler({"plan": REL, "premise": {"rows": []}}, common)  # checker lane
-    assert _anchor_rulings(reply) == [_AP1_NO_VERDICT]
+    assert reply["anchor_verdicts"][0]["verdict"] is None and _anchor_rulings(reply) == []
 
 
 def test_empty_anchor_premises_adds_no_finding(tmp_path):

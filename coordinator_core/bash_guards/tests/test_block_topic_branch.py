@@ -532,5 +532,34 @@ def test_scratch_dir_under_non_repo_still_denies(tmp_path, monkeypatch):
     assert _denied(_check(proj, "git checkout -b feature-x"))
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git push origin abc1234def:refs/heads/candidate-source",
+        "git push origin abc1234def:candidate-source",
+        "git push origin candidate-source",
+        "git push -q origin +abc1234def:refs/heads/candidate-source",
+    ],
+)
+def test_candidate_source_push_allowed(repo, cmd):
+    assert not _denied(_check(repo, cmd))
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git push origin abc1234def:refs/heads/candidate-source-2",
+        "git push origin abc1234def:refs/heads/candidate-other",
+        "git push origin abc1234def:refs/heads/x/candidate-source",
+        "git push origin abc1234def:refs/heads/feature-x",
+        "git branch candidate-source",
+        "git checkout -b candidate-source",
+        "git switch -c candidate-source",
+    ],
+)
+def test_candidate_source_allowance_is_exact_and_push_only(repo, cmd):
+    assert _denied(_check(repo, cmd))
+
+
 def test_cloud_session_may_push_its_harness_ccr_branch(repo):
     assert not _denied(_check(repo, "git push -u origin ccr-26b62fdb-pmxy1z", env=CLOUD))

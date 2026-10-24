@@ -22,6 +22,7 @@ from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
+    stamp_run_stage_at,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.ops.dispatch_emit.halt_refire import is_exit_next_action, is_refire_next_action
@@ -94,7 +95,9 @@ def write_halt_marker(
         payload[HALT_NEXT_ACTION_FIELD] = next_action
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
-    return _write(Path(record_dir), payload)
+    target = _write(Path(record_dir), payload)
+    stamp_run_stage_at(Path(record_dir), "halted")
+    return target
 
 
 def halted_run_base(record_dir: Path) -> Optional[str]:
@@ -275,4 +278,5 @@ def mark_landed(record_dir: Path, sha: str) -> bool:
     if marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha})
+    stamp_run_stage_at(Path(record_dir), "landed")
     return True

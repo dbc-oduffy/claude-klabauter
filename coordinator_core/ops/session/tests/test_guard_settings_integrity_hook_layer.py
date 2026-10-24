@@ -46,6 +46,13 @@ from coordinator_core.ops.session import guard_settings_integrity as gsi
 from coordinator_core.resolve_coordinator_clone import ResolveCoordinatorCloneError
 
 
+@pytest.fixture(autouse=True)
+def _no_live_guardless_scan(monkeypatch):
+    """`evaluate_guardless_sessions` scans live host processes; stub it so
+    banner-equality assertions do not depend on unguarded peers."""
+    monkeypatch.setattr(gsi, "evaluate_guardless_sessions", lambda: "")
+
+
 def _raise_unresolvable() -> str:
     raise ResolveCoordinatorCloneError("no coordinator content root on this (test) machine")
 

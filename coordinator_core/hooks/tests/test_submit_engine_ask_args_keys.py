@@ -123,6 +123,26 @@ def test_top_level_sender_reaches_the_fanout(tmp_path):
     assert seen[0]["asks"][1]["context"] == ["why"]
 
 
+def test_sizing_with_valid_source_is_not_refused_for_the_source(tmp_path):
+    _repo(tmp_path)
+    seen: list[dict] = []
+
+    def emit(params: dict, root: Path) -> dict:
+        seen.append(params)
+        return {"path": str(tmp_path / "run.js"), "run_id": "r1", "fire_args": {}}
+
+    env = mod.evaluate(_payload(tmp_path, {"sizing": "state/sizings/x.yaml", "source": "relayed"}), emit=emit, fanout=_boom)
+    assert "source marks an ask" not in env["hookSpecificOutput"].get("permissionDecisionReason", "")
+    assert seen and all("ask_source" not in p for p in seen)
+
+
+def test_sizing_with_invalid_source_still_refuses_naming_it(tmp_path):
+    _repo(tmp_path)
+    env = mod.evaluate(_payload(tmp_path, {"sizing": "state/sizings/x.yaml", "source": "bogus"}), emit=_boom, fanout=_boom)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "source 'bogus' is not one of" in _reason(env)
+
+
 def test_hook_keeps_no_local_copy_of_the_moved_helpers():
     assert not hasattr(mod, "_with_em_context") and not hasattr(mod, "_is_path_shaped")
 

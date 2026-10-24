@@ -66,3 +66,33 @@ def test_a_note_with_no_shipped_heading_lands_unchanged(repo):  # noqa: F811
 
     assert out["committed"] is True, out
     assert "shipped_claims" not in out
+
+
+def _stamp_withhold(root, path, reason):
+    import json
+
+    _write(root, f"state/warp/{RUN}/withhold.jsonl", json.dumps({"path": path, "reason": reason, "at": "t"}) + "\n")
+
+
+def test_a_halt_record_only_stamped_product_path_lands_and_is_not_refused(repo):  # noqa: F811
+    _write(repo, "a.py", "def a_tool():\n    return 1\n")
+    _write(repo, NOTE, "# Delivery\n\n## What shipped\n\n- `a.py`\n")
+    _stamp_withhold(repo, "a.py", "halt-record-only")
+
+    out = _call(repo)
+
+    assert out["committed"] is True, out
+    assert "a.py" in _git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()
+    assert not out["shipped_claims"]["unbacked"]
+
+
+def test_a_content_withheld_shipped_path_still_refuses(repo):  # noqa: F811
+    _write(repo, "a.py", "def a_tool():\n    return 1\n")
+    _write(repo, "b.py", "def b_tool():\n    return 1\n")
+    _write(repo, NOTE, "# Delivery\n\n## What shipped\n\n- `a.py`\n- `b.py`\n")
+    _stamp_withhold(repo, "b.py", "peer owns this file")
+
+    out = _call(repo)
+
+    assert out["committed"] is False, out
+    assert out["refused"] == shipped_claims.SHIPPED_CLAIM_REFUSED

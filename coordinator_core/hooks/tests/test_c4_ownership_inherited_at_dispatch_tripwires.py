@@ -768,6 +768,15 @@ _EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
             "coordinator_core/ops/session/scope_report.py",
             "assert_paths_in_session_scope",
         ),
+        # Dead-holder reap at the wave-boundary commit: re-judges ONLY the paths whose peer claim
+        # `claims.clear_claim_if_dead` just cleared (liveness-gated, refuses while any claimant is
+        # live); a raising classify keeps the original denial. It can only turn a deny into an
+        # allow for a claim that no live session holds.
+        (
+            "classify_paths",
+            "coordinator_core/ops/session/scope_report.py",
+            "_release_dead_holder_claims",
+        ),
         (
             "commit_set",
             "coordinator_core/ops/session/safe_commit_offer.py",

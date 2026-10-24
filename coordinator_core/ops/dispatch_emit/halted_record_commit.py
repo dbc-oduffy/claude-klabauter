@@ -47,12 +47,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
     RUN_OUTCOME_FILE,
-    LedgerHalt,
     halted_record_message,
-    ledger_halt_path,
-    write_ledger_halt,
     write_run_outcome,
 )
+from coordinator_core.ops.dispatch_emit.land_run_halt import _settle_ledger_pointer, marker_kind
 
 
 def is_halted_record_call(params: object) -> bool:
@@ -296,27 +294,6 @@ def _persist_run_outcome(repo_root: Path, run_id: str, halted: dict, params: dic
     return f"{RECORD_DIR_ROOT}/{run_id}/{RUN_OUTCOME_FILE}"
 
 
-def _settle_ledger_pointer(
-    repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str], outcome_rel: Optional[str] = None
-) -> None:
-    """A landed ledger-check halt writes its plan's ledger-halt pointer; a commit halt with a
-    persisted outcome writes a ``halted="commit"`` pointer naming it; any other landed halt for
-    a known plan unlinks a stale one. A halt without a relative, contained plan touches nothing."""
-    plan_rel, blocking, _items = _ledger_halt_plan_and_blocking(repo_root, halted)
-    if plan_rel is None:
-        return
-    path = ledger_halt_path(repo_root, plan_rel)
-    if halted["halted"] == "commit" and outcome_rel and sizing_rel:
-        write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, (), halted="commit", outcome=outcome_rel))
-        return
-    if halted["halted"] != "ledger-check":
-        path.unlink(missing_ok=True)
-        return
-    if not sizing_rel:
-        return
-    write_ledger_halt(path, LedgerHalt(run_id, plan_rel, sizing_rel, blocking))
-
-
 def _live_run_ids(repo_root: Path) -> list:
     """Run ids holding a live or claimed token; a read failure names none."""
     from coordinator_core.ops.dispatch_emit import abandoned_runs
@@ -542,7 +519,7 @@ def _land(
     if (worktree_root / record_dir_rel).is_dir():
         plan_rel, blocking, blocking_items = (
             _ledger_halt_plan_and_blocking(repo_root, halted)
-            if halted["halted"] == "ledger-check" else (None, (), [])
+            if marker_kind(halted) == "ledger-check" else (None, (), [])
         )
         if halted["halted"] == "ledger-check" and plan_rel is None:
             plan_rel, blocking, blocking_items = _xs_spine_halt(
@@ -550,7 +527,7 @@ def _land(
             )
         write_halt_marker(
             worktree_root / record_dir_rel,
-            halted=halted["halted"],
+            halted=marker_kind(halted),
             sizing_rel=sizing_rel,
             plan_rel=plan_rel,
             blocking=blocking if plan_rel else None,

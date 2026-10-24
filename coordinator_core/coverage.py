@@ -221,10 +221,10 @@ EXCLUDED_VERDICTS: FrozenSet[str] = frozenset({"pending"})
 #: (Rule C2-4, _cf_origin_predecessor_none_invariant, reinforces the same
 #: invariant from the origin-axis side but fires only when an `origin_*`
 #: field is present — A3a-3 is the unconditional guarantee this constant
-#: rests on.) Used by BOTH legs of _derive_dag_chain_set — Step 1's walk and
-#: Step 2's blocker enumeration MUST agree on this set or an ancestor gets
+#: rests on.) Was used by BOTH legs of the removed `_derive_dag_chain_set` (walk
+#: and blocker enumeration), which had to agree on this set or an ancestor got
 #: deferred to a chain that is structurally incapable of ever claiming it
-#: (false COVERED).
+#: (false COVERED). Now read only by tests/test_dag_edge_kind_ssot.py.
 _CONTINUATION_EDGE_KINDS: FrozenSet[str] = _DAG_CONTINUATION_EDGE_KINDS
 
 # ---------------------------------------------------------------------------
@@ -495,10 +495,9 @@ _BOOKKEEPING_PATH_PREFIXES: Tuple[str, ...] = ("state/", "archive/", "tasks/", "
 
 #: The handoff corpus. A commit that *introduces* a file here is authoring a
 #: handoff — the primary content the DAG coverage gate exists to track, and
-#: the commit `_derive_dag_chain_set` attributes a node to (it resolves a
-#: node's authoring commit with `git log --follow -M100% --diff-filter=A`,
-#: then reads the `Session-Id` trailer off it). A commit that merely MUTATES a
-#: file here is ceremony exhaust — the `shipped_in` stamp, the
+#: the commit that introduced the file (`git log --follow -M100%
+#: --diff-filter=A`), whose `Session-Id` trailer attributes it. A commit that
+#: merely MUTATES a file here is ceremony exhaust — the `shipped_in` stamp, the
 #: pickup-assemble claim, the fleet archival move — which is what
 #: `_BOOKKEEPING_PATH_PREFIXES` catches. See `_handoff_authoring_shas`.
 _HANDOFF_AUTHORING_PATH_PREFIX = "state/handoffs/"
@@ -680,9 +679,8 @@ def _handoff_authoring_shas(shas: List[str], cwd: str) -> FrozenSet[str]:
 
     The change-type leg of the bookkeeping-vs-code partition. Path prefix alone
     cannot tell a handoff being authored from ceremony exhaust mutating the same
-    tree; the discriminator is which commit put the file there. That is the same
-    signal `_derive_dag_chain_set` uses to attribute a DAG node to its authoring
-    commit (`git log --follow -M100% --diff-filter=A`), so a commit this returns
+    tree; the discriminator is which commit put the file there: the commit that
+    introduced it (`git log --follow -M100% --diff-filter=A`), so a commit this returns
     is exactly one the gate may be asked to hang a `Session-Id` attribution off.
 
     Uses `--name-status` rather than `_commit_touched_paths`' `--name-only`, and
@@ -1039,7 +1037,7 @@ def _filter_shas_by_scope_paths(
     nor treat failure as an empty result (would silently drop the whole
     chain) — both are exploit-shaped. The caller instead threads the note into
     an INDETERMINATE verdict, consistent with this file's other "cannot safely
-    determine this" guards (see _derive_dag_chain_set's Guard 2 and the
+    determine this" guards (see the
     `indeterminate` field on `_DagChainResult`).
     """
     matched: Set[str] = set()
@@ -1091,14 +1089,14 @@ def _filter_shas_by_scope_paths(
 @dataclass
 class _DagNodeAttribution:
     """One coverable ancestry node's identity + the commit segment attributed
-    to it — computed exactly once, inline, by _derive_dag_chain_set's Step 3
-    (segment attribution), and carried forward on _DagChainResult.node_attribution.
+    to it — computed exactly once, inline, by the segment-attribution step of the
+    since-removed `_derive_dag_chain_set`, and carried forward on
+    _DagChainResult.node_attribution.
 
     Exists so a renderer can label an uncovered commit with its originating
     baton and print the ancestry chain without recomputing which commits
-    belong to which node — see the module's "Shape to avoid" guidance on
-    _derive_dag_chain_set: the per-node segment resolution happens ONCE,
-    here, never copy-pasted into a caller. The original renderer,
+    belong to which node: the per-node segment resolution happens ONCE,
+    never copy-pasted into a caller. The original renderer,
     run_coverage_gate's DAG-mode UNCOVERED notes, was removed by K-001
     (2026-08-16, see state/kill-ledger.md).
 
@@ -1265,7 +1263,7 @@ class CoverageResult:
                    chain_commits - len(bookkeeping_shas) - len(planning_shas). Empty
                    by default, same additive-field property as bookkeeping_shas.
     dag_ordered_ancestry: DAG-mode only (empty in flat mode) — the baton
-                   ancestry chain _derive_dag_chain_set walked, verbatim from
+                   ancestry chain the since-removed `_derive_dag_chain_set` walked, verbatim from
                    _DagChainResult.ordered_ancestry. Empty by default, same
                    additive-field property as bookkeeping_shas above.
     coverage_ratio: The code-partition coverage ratio (C10) — covered_code /
@@ -1289,7 +1287,7 @@ class CoverageResult:
                    render needs to tag each uncovered commit with its
                    originating baton and print the ancestry chain without
                    recomputing segment membership (the "state exactly once"
-                   property _derive_dag_chain_set's docstring requires). The
+                   property the since-removed `_derive_dag_chain_set` required). The
                    original renderer, run_coverage_gate's DAG-mode UNCOVERED
                    notes assembly, was removed by K-001 (2026-08-16, see
                    state/kill-ledger.md). Empty by default, same additive-field
@@ -1367,13 +1365,13 @@ def _render_dag_ancestry_notes(
     fix: it makes the ancestry chain and per-commit baton origin explicit,
     every time, on UNCOVERED in DAG mode.
 
-    Reads `node_attribution` (computed once, by _derive_dag_chain_set's Step
-    3) rather than recomputing segment membership — see that dataclass's own
-    "state exactly once" property and coverage.py's "Shape to avoid" note.
+    Reads `node_attribution` (computed once, by the since-removed
+    `_derive_dag_chain_set`) rather than recomputing segment membership — see
+    that dataclass's own "state exactly once" property.
 
     Only nodes present in `node_attribution` are rendered (i.e. members of the
     fixpoint's closing_set — the coverable ancestry) — a blocked ancestor
-    never reaches Step 3, contributes no commits to the chain, and has
+    never reached segment attribution, contributed no commits to the chain, and has
     nothing to disclose here.
 
     A commit attributed to more than one node's segment (a possible but

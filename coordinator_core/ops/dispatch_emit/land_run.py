@@ -884,7 +884,7 @@ def _halt_gap_lines(root: Path, resume: object) -> dict:
     if not isinstance(resume, dict):
         return {}
     payload = resume.get(ac.RESUME_LEDGER_REMAINING_FIELD)
-    if isinstance(payload, dict):
+    if isinstance(payload, dict) and payload:
         return payload
     run_id, halt_sha = resume.get("run_id"), resume.get("halt_sha")
     if not isinstance(run_id, str):
@@ -896,7 +896,9 @@ def _halt_gap_lines(root: Path, resume: object) -> dict:
 def _unclosed_halt_gaps(resume: object, verdict: object, gap_lines: object) -> list:
     """``[{id, reason}]`` for each blocking row the verdict calls met or post_commit while one of its
     halt gap lines (stripped, exact) has no ``gaps_closed`` entry of the same gap with a non-empty
-    ``how``. Pure; rows with no gap lines owe nothing."""
+    ``how``. Pure; rows with no gap lines owe nothing.
+
+    Trap: checks coverage only; ``how`` is the judge's prose and its truth is not verified here."""
     from coordinator_core.ops.dispatch_emit.ask_contract import GAPS_CLOSED_FIELD, HALT_GAP_UNCLOSED_REASON
 
     blocking = resume.get("blocking") if isinstance(resume, dict) else None
@@ -2027,6 +2029,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         review_carried_withholds,
         review_only_anchor,
     )
+    from coordinator_core.ops.dispatch_emit.shipped_claims import SELF_APPLIED_WITHHOLDS
 
     task_output = params.get("task_output_path") if isinstance(params, dict) else None
     reclose = _reclose_params(root, params)
@@ -2427,7 +2430,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             withhold_reason[p] = "never-commit"
         elif sibling_write(p, root) is not None:
             withhold_reason[p] = "sibling-repo"
-        elif p in em_withheld:
+        elif p in em_withheld and em_withheld[p] not in SELF_APPLIED_WITHHOLDS:
             withhold_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
         elif p in footprint_breach:
             withhold_reason[p] = OUTSIDE_ROW_FOOTPRINT
@@ -2440,7 +2443,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             recorded_reason[p] = "never-commit"
         elif sibling_write(p, root) is not None:
             recorded_reason[p] = "sibling-repo"
-        elif p in em_withheld:
+        elif p in em_withheld and em_withheld[p] not in SELF_APPLIED_WITHHOLDS:
             recorded_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
         elif p in reverted:
             recorded_reason[p] = "reverted"
@@ -2452,7 +2455,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     for p in [*art_present, *art_deleted]:
         if is_never_commit(p):
             art_dropped[p] = "never-commit"
-        elif p in em_withheld:
+        elif p in em_withheld and em_withheld[p] not in SELF_APPLIED_WITHHOLDS:
             art_dropped[p] = f"withhold_paths: {em_withheld[p]}"
     process_withheld: dict = {}
     if artifacts is not None:
@@ -2615,12 +2618,19 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     )
     findings = _integrity(
         root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
+        own_declared=declared, session_id=session_id,
     )
     if findings:
         _remove(root, receipt_paths)
         first = findings[0]
         remedy = ""
-        if first.reason == "since-base-overlap":
+        if first.reason == "peer-hunks-co-declared":
+            from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+
+            remedy = ". " + peer_hunk_gate.refusal_message(
+                [(first.path, first.detail.partition(":")[0])], sibling_run_id,
+            )
+        elif first.reason == "since-base-overlap":
             from coordinator_core.ops import warp_run_deliverable
             from coordinator_core.ops.dispatch_emit import sibling_claims
 
@@ -2641,7 +2651,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate
         from coordinator_core.ops.dispatch_emit.shipped_claims import SHIPPED_CLAIM_REFUSED, shipped_gate
 
-        gate_withheld = [*withhold_reason, *recorded_reason, *art_dropped, *art_withheld, *held_paths]
+        gate_withheld = {
+            **{p: "withheld" for p in held_paths}, **art_withheld, **art_dropped, **recorded_reason, **withhold_reason,
+        }
         refusal, reach_summary = reach_gate(
             root, note_text, landing_paths=paths, deleted_paths=deleted, withheld_paths=gate_withheld,
         )
@@ -3091,7 +3103,8 @@ def _withhold_reasons(root: Path, artifacts, record_dir_rel: Optional[str]) -> d
 
 def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
-    plan: Optional[str], *, residue_py: Sequence[str] = (),
+    plan: Optional[str], *, residue_py: Sequence[str] = (), own_declared: Sequence[str] = (),
+    session_id: Optional[str] = None,
 ) -> list:
     """Pre-commit findings over the landing set: unparseable ``.py``, a ``.py`` importing what the
     commit leaves out of HEAD, a dirty declared ``.py`` the landing leaves behind that imports what
@@ -3122,5 +3135,14 @@ def _integrity(
     base = li.run_base_for(root, run_id, params)
     if base is not None:
         findings += li.since_base_findings(root, live, base, run_id=run_id, plan=plan)
+    from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+
+    for path, sibling in peer_hunk_gate.co_declared_peer_holds(root, run_id, live, own_declared):
+        findings.append(li.Finding(
+            path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
+            f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off",
+        ))
+    for path, stem, line in peer_hunk_gate.out_of_ask_holds(root, session_id or "", run_id, live):
+        findings.append(li.Finding(path, peer_hunk_gate.OUT_OF_ASK_HUNKS, f"{stem}: {line}"))
     tested, _check = li.landing_test_gate(root, params, run_id)
     return findings + tested

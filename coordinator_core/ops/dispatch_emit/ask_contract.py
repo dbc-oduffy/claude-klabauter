@@ -924,6 +924,71 @@ def read_run_baton(repo_root: Path, run_id: str) -> str | None:
     return None if data is None else _safe_baton_rel(data.get("baton"))
 
 
+#: The run's progress record, beside `run-baton.json`: `session_id`, `started_at`, `stage`,
+#: `last_activity_at` and (once staged) `steps_planned`.
+RUN_STAGE_FILE = "run-stage.json"
+RUN_STAGES = ("minted", "staged", "halted", "landed")
+
+
+def write_run_stage_at(
+    record_path: Path, stage: str, *, steps_planned: int | None = None, now: str | None = None,
+) -> Path:
+    """Atomically write `stage` into `<record_path>/run-stage.json` and return the path. One read of
+    the prior file, one write. `session_id`/`started_at` come from the prior file; the first stamp of
+    any stage sets them (`session_id` null when unresolvable), so a run that never passed the ledger
+    start still projects as a `WorkflowRun`. `steps_planned` is kept from the prior file unless given.
+    Raises ValueError on a stage outside RUN_STAGES."""
+    from datetime import datetime, timezone
+
+    if stage not in RUN_STAGES:
+        raise ValueError(f"run stage {stage!r} is not one of {RUN_STAGES}")
+    path = Path(record_path) / RUN_STAGE_FILE
+    prior = _read_json_object(path)
+    stamp = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    data: dict[str, Any] = dict(prior) if prior else {}
+    if "started_at" not in data:
+        from coordinator_core.session.core import resolve_session_id
+
+        data["session_id"] = resolve_session_id() or None
+        data["started_at"] = stamp
+    data["stage"] = stage
+    data["last_activity_at"] = stamp
+    if steps_planned is not None:
+        data["steps_planned"] = int(steps_planned)
+    atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    return path
+
+
+def write_run_stage(repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None) -> Path:
+    """`write_run_stage_at` over the run's record dir. Raises ValueError on a bad stage or an unsafe
+    run id."""
+    return write_run_stage_at(record_dir(repo_root, run_id), stage, steps_planned=steps_planned)
+
+
+def read_run_stage(repo_root: Path, run_id: str) -> dict[str, Any] | None:
+    """The run's stage record, or None on an unsafe run id or an absent or malformed file. One read."""
+    try:
+        return _read_json_object(record_dir(repo_root, run_id) / RUN_STAGE_FILE)
+    except ValueError:
+        return None
+
+
+def stamp_run_stage(repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None) -> None:
+    """Best-effort `write_run_stage`: a ValueError or OSError never reaches the op it rides on."""
+    try:
+        stamp_run_stage_at(record_dir(repo_root, run_id), stage, steps_planned=steps_planned)
+    except ValueError:
+        pass
+
+
+def stamp_run_stage_at(record_path: Path, stage: str, *, steps_planned: int | None = None) -> None:
+    """Best-effort `write_run_stage_at`: a ValueError or OSError never reaches the op it rides on."""
+    try:
+        write_run_stage_at(record_path, stage, steps_planned=steps_planned)
+    except (ValueError, OSError):
+        pass
+
+
 def write_ledger_halt(path: Path, halt: LedgerHalt) -> None:
     """Atomically write ``halt`` to ``path``."""
     atomic_write_bytes(path, (json.dumps(halt.to_json(), indent=2) + "\n").encode("utf-8"))

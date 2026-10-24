@@ -667,6 +667,51 @@ def _recorded_run_base(root: Path, run_id: str) -> Optional[str]:
         return None
 
 
+def _resume_commit_retry(root: Optional[Path], plan_path: str) -> dict:
+    """``{commit_retry, resume_run_base}`` for a plan whose halted run recorded failed wave commits, else ``{}``.
+
+    The halted run is the one its cited sizing's refire resumes; the retry is the marker's recorded
+    wave refusals and the base is the marker's run base. A base that no longer reaches HEAD, or a
+    marker with no refusal or no base, yields ``{}`` (the unchanged emit).
+
+     (``emit_script`` re-checks it).
+    """
+    if root is None:
+        return {}
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.ops.dispatch_emit.emit import _require_base_reaches_head
+    from coordinator_core.ops.dispatch_emit.halt_refire import commit_retry_from_reason
+    from coordinator_core.ops.dispatch_emit.halted_run import (
+        HALT_REASON_FIELD, HALTED_FILE, halted_ask_run_for, halted_run_base, halted_run_for,
+    )
+
+    plan = Path(plan_path)
+    try:
+        split = split_frontmatter((plan if plan.is_absolute() else root / plan).read_text(encoding="utf-8"))
+    except OSError:
+        return {}
+    sizing_rel = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+    if not sizing_rel or sizing_rel == "null":
+        return {}
+    halted_id = halted_run_for(root, sizing_rel) or halted_ask_run_for(root, sizing_rel)
+    if not halted_id:
+        return {}
+    run_dir = record_dir(root, halted_id)
+    try:
+        marker = json.loads((run_dir / HALTED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    retry = commit_retry_from_reason(marker.get(HALT_REASON_FIELD) if isinstance(marker, dict) else None)
+    base = halted_run_base(run_dir)
+    if not retry or not base:
+        return {}
+    try:
+        _require_base_reaches_head(base, root)
+    except ValueError:
+        return {}
+    return {"commit_retry": retry, "resume_run_base": base}
+
+
 def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
     """Copy the parent record into the run's own record dir, then mark the run `running`; the
     exclusive status create is the bind, so a second bind of one id is refused. The first bind
@@ -2618,6 +2663,11 @@ def _dispatch_emit_body(
                 held_out=held_out,
                 auto_split=bool(params.get("auto_split")),
                 sibling=params.get("sibling"),
+                **(
+                    {}
+                    if params.get("review_only_rows") is not None
+                    else _resume_commit_retry(repo_root or _repo_root_for_plan(plan_path), plan_path)
+                ),
             )
         except ScriptOverCapError as over:
             # Part emits re-enter on this tranche record, not a fresh one (`_emit_inventory_parts`).

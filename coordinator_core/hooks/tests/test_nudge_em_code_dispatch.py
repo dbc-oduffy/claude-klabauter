@@ -6,6 +6,7 @@ import tempfile
 
 import pytest
 
+from coordinator_core.hooks import _em_write_budget as leaf
 from coordinator_core.hooks import nudge_em_code_dispatch as _mod
 from coordinator_core.hooks.nudge_em_code_dispatch import (
     _is_comment_or_docstring_only_diff,
@@ -19,6 +20,12 @@ from coordinator_core.hooks.nudge_em_code_dispatch import (
 @pytest.fixture(autouse=True)
 def _outside_f7_carveout_scope(monkeypatch):
     monkeypatch.setattr(_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    monkeypatch.setattr(leaf, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+
+
+def _set_sizing(monkeypatch, state: tuple[bool, bool]) -> None:
+    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: state)
+    monkeypatch.setattr(leaf, "_session_sizing_state", lambda payload, sid: state)
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +38,7 @@ _REAL_SIZING_STATE = _mod._session_sizing_state
 
 @pytest.fixture(autouse=True)
 def _sized_by_default(monkeypatch):
-    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (True, False))
+    _set_sizing(monkeypatch, (True, False))
 
 
 def _is_advisory(result) -> bool:
@@ -237,7 +244,7 @@ def _payload(sid: str = "sess-sizing-1") -> dict:
 def _unsized(monkeypatch) -> None:
     from coordinator_core.hooks import nudge_unrouted_sizing as sizing
 
-    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (False, False))
+    _set_sizing(monkeypatch, (False, False))
     # No repo root: the XS-lane budget stands down and the sizing branches decide.
     monkeypatch.setattr(sizing, "_repo_root", lambda payload: None)
 
@@ -284,7 +291,7 @@ def test_sized_advises_and_repeats(monkeypatch) -> None:
 
 
 def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch) -> None:
-    monkeypatch.setattr(_mod, "_session_sizing_state", lambda payload, sid: (True, True))
+    _set_sizing(monkeypatch, (True, True))
     first = _advisory(op(_payload()))
     second = _advisory(op(_payload()))
     assert "routed to a plan" in first and 'args: {"sizing": ' in first

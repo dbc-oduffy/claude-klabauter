@@ -533,16 +533,8 @@ _PROBE_RAISE_SUPPRESSION_DETENT = {
 # DELIBERATELY NOT widened for XXL (2026-08-07 sizing-ladder-xxl-notch-and-
 _APPETITE_CEILING_TSHIRT = {"small": "S", "medium": "M", "large": "XL"}
 
-# Adding a KEY for a new size (XXL, below) is an EXTENSION of this table's
-# HARD GATE.
-_BASE_ROUTE_BY_TSHIRT = {
-    "XS": "dispatch",
-    "S": "spec-dispatch",
-    "M": "plan",
-    "L": "plan",
-    "XL": "pm-decision",
-    "XXL": "goal-setting",
-}
+# _BASE_ROUTE_BY_TSHIRT lives in the import-free leaf coordinator_core/sizing_route_table.py.
+from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 
 _LARGE_TSHIRTS = ("L", "XL", "XXL")
 
