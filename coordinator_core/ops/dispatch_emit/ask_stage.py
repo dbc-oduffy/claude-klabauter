@@ -29,6 +29,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PARKED,
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
+    REGISTER_ROWS_UNCLAIMED_REFUSAL,
     RELAYED_ASK_FILE,
     RELAYED_ASK_HEADING,
     RUN_DIR_ROOT,
@@ -815,6 +816,34 @@ def _claim_register_rows(root: Path, plan_path: Path) -> None:
         return
 
 
+def _refuse_unclaimed_register_rows(
+    fm_text: str, plan_posix: str, run_sizing_rel: Optional[str], run_sizing: Optional[Mapping]
+) -> None:
+    """Raise AskStageError REGISTER-ROWS-UNCLAIMED when the plan's `register_claims.rows` omit a
+    row of the register it claims against that no ruling retires. Silent when the plan claims
+    against another sizing than the run's, or carries no register."""
+    from coordinator_core.ops import requirement_register as rr
+
+    claimed_sizing, claimed = rr.plan_claims(fm_text)
+    cited = read_fm_field_unquoted(fm_text, "sizing_object")
+    if not claimed_sizing or claimed_sizing != rr._plan_key(cited) or claimed_sizing != rr._plan_key(run_sizing_rel):
+        return
+    rows = [
+        r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or []
+        if isinstance(r, Mapping)
+    ]
+    ruled_out = [
+        r.get(rr.ROW_ID) for r in rows
+        if r.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED) and not rr._unruled(r)
+    ]
+    missing = rr.unclaimed_ids(rows, claimed, exclude=ruled_out)
+    if missing:
+        raise AskStageError(
+            f"{REGISTER_ROWS_UNCLAIMED_REFUSAL}: {plan_posix} omits register row(s) "
+            f"{', '.join(missing)} in register_claims.rows. Refire {claimed_sizing}: its re-plan leg claims them."
+        )
+
+
 def stage(
     repo_root: Path,
     *,
@@ -981,6 +1010,8 @@ def stage(
         except requirements_ledger.LedgerRefused as exc:
             raise AskStageError(f"requirements: {exc}") from exc
         run_sizing = _run_sizing(root, run_sizing_rel) or run_sizing
+    if plan_rel and not ledger_resume and _split is not None:
+        _refuse_unclaimed_register_rows(_split.fm_text, plan_posix, run_sizing_rel, run_sizing)
     em_block = em_brief_block(run_sizing)
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block

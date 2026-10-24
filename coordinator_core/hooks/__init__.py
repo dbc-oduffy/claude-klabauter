@@ -178,6 +178,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.nudge_autonomous_askuserquestion",
     "coordinator_core.hooks.flag_em_poll_in_flight",
     "coordinator_core.hooks.nudge_em_turn_budget",
+    "coordinator_core.hooks.guard_em_prefire_survey",
     "coordinator_core.hooks.submit_engine_ask",
     "coordinator_core.hooks.submit_bug_blitz",
     "coordinator_core.hooks.taskstop_launch_recorder",

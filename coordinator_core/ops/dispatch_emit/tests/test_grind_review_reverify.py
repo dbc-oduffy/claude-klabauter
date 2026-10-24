@@ -12,7 +12,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _GUARD = (
     "const _reviewFixWithheld = _reviewReverify ? "
-    "(_reviewReverify.status_after ?? _reviewReverify.status_before) === 'fail' : !_verifyOnly;"
+    "['fail', 'indeterminate'].includes(_reviewReverify.status_after ?? _reviewReverify.status_before)"
+    " : !_verifyOnly;"
 )
 
 
@@ -30,6 +31,7 @@ def test_reverify_phase_follows_the_review_blocks_and_precedes_review_fixes():
 def test_script_carries_the_verbatim_withhold_guard():
     script = _compose()
     assert _GUARD in script
+    assert "'indeterminate'" in _GUARD
     assert script.index("phase('Review re-verify')") < script.index(_GUARD) < script.index("phase('Review fixes')")
 
 

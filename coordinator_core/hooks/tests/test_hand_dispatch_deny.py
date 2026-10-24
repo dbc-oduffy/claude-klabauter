@@ -112,45 +112,13 @@ def _repo(tmp_path, claimed):
 
 
 @pytest.mark.parametrize("stype", sorted(mod.PLAN_AUTHOR_TYPES))
-def test_plan_author_bound_to_sizing_whose_plan_omits_rows_passes(strict, tmp_path, stype):
+def test_plan_author_naming_a_sizing_whose_plan_omits_rows_is_denied(strict, tmp_path, stype):
     root = _repo(tmp_path, ["R1"])
     payload = _payload(stype, f"Amend the plan to claim R2. Sizing: {SIZING}", cwd=str(root))
-    assert mod.hand_dispatch_deny(payload, stype) is None
+    assert _hso(mod.hand_dispatch_deny(payload, stype))["permissionDecision"] == "deny"
 
 
 def test_bare_plan_author_stays_denied_with_a_repo_present(strict, tmp_path):
     stype = "coordinator:plan-author"
     payload = _payload(stype, "write the plan", cwd=str(_repo(tmp_path, ["R1"])))
     assert _hso(mod.hand_dispatch_deny(payload, stype))["permissionDecision"] == "deny"
-
-
-def test_sizing_whose_plan_claims_every_row_stays_denied(strict, tmp_path):
-    stype = "coordinator:plan-author"
-    root = _repo(tmp_path, ["R1", "R2"])
-    payload = _payload(stype, f"Sizing: {SIZING}", cwd=str(root))
-    assert _hso(mod.hand_dispatch_deny(payload, stype))["permissionDecision"] == "deny"
-
-
-def test_nonexistent_sizing_stays_denied(strict, tmp_path):
-    stype = "coordinator:plan-author"
-    root = _repo(tmp_path, ["R1"])
-    payload = _payload(stype, "Sizing: state/sizings/nope.yaml", cwd=str(root))
-    assert _hso(mod.hand_dispatch_deny(payload, stype))["permissionDecision"] == "deny"
-
-
-def test_roadmap_planner_is_not_admitted_by_a_bound_sizing(strict, tmp_path):
-    stype = "coordinator:roadmap-planner"
-    root = _repo(tmp_path, ["R1"])
-    payload = _payload(stype, f"Sizing: {SIZING}", cwd=str(root))
-    assert _hso(mod.hand_dispatch_deny(payload, stype))["permissionDecision"] == "deny"
-
-
-def test_the_revise_plan_reply_names_a_sizing_the_guard_admits(strict, tmp_path):
-    from coordinator_core.ops.dispatch_emit.requirements_ledger import _refire
-
-    stype = "coordinator:plan-author"
-    root = _repo(tmp_path, ["R1"])
-    reply = _refire(SIZING, root)
-    assert reply["next"]["kind"] == "revise-plan"
-    payload = _payload(stype, f"Claim the omitted rows. {reply['next']['sizing']}", cwd=str(root))
-    assert mod.hand_dispatch_deny(payload, stype) is None

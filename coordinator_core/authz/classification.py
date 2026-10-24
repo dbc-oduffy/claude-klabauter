@@ -216,6 +216,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Advisory only (always allows); the write disqualifies COMPUTE_ONLY under the five-question
     # test, as hooks.flag_em_poll_in_flight's state file does.
     "hooks.nudge_em_turn_budget": OpClass.MUTATING,
+    # hooks.guard_em_prefire_survey — MUTATING: persists a per-session em-prefire.json record
+    # (pre-fire call count, window state, transcript offset) in the session hub; the write
+    # disqualifies COMPUTE_ONLY under the five-question test, as hooks.nudge_em_turn_budget's does.
+    "hooks.guard_em_prefire_survey": OpClass.MUTATING,
     # hooks.submit_engine_ask — MUTATING: emits a warp run through dispatch.emit (script,
     # receipt, run token, ask.md) and writes the run's submission record beside its briefs.
     "hooks.submit_engine_ask": OpClass.MUTATING,

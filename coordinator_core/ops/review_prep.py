@@ -384,6 +384,13 @@ def review_prep(
             error=None,
         )
         return _for_group(zero, group_index, group_count)
+    from coordinator_core.ops.dispatch_emit.landing_integrity import unparseable_py, unparseable_py_at
+
+    broken = unparseable_py_at(repo_root, head, paths) if head else unparseable_py(repo_root, paths)
+    if broken:
+        return _fail(
+            "review.prep refused: py-unparseable: " + "; ".join(f"{f.path} {f.detail}" for f in broken)
+        )
     session = session_id or resolve_session_id(str(repo_root))
     if not session:
         return _fail("no session id: pass session_id or run under a session")

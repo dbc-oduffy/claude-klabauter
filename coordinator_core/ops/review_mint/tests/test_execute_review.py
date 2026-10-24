@@ -1107,7 +1107,7 @@ def test_single_slice_group_prompt_equals_the_per_slice_prompt():
 
 def test_multi_slice_group_names_every_slice_and_the_sidecar_rule():
     (prompt,) = _grouped_prompts(4, 3)
-    assert "\n\nSlices: " in prompt and "joined with `+`" in prompt
+    assert "\n\nSlices: " in prompt and "first listed slice's id" in prompt and "joined with" not in prompt
     assert prompt.count('"sidecar_path"') == 3
 
 
@@ -1327,11 +1327,21 @@ def test_a_busy_prep_in_the_wave_halts_rather_than_merging_a_prep_without_its_sl
     pytest.param("s0+nope", marks=pytest.mark.cadence),
 ])
 def test_a_wave_review_with_a_slice_id_naming_no_real_slice_halts(bad_id):
-    patch = f"(r, n) => n === 0 ? {{ ...r, review: {{ ...r.review, slice_id: {json.dumps(bad_id)} }} }} : r"
+    patch = (
+        f"(r, n) => n === 0 ? {{ prep: {{ ...r.prep, slices: [] }}, "
+        f"review: {{ ...r.review, slice_id: {json.dumps(bad_id)} }} }} : r"
+    )
     result = _run_in_wave(_FULL, 9, patch=patch)
     assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
     assert json.dumps(bad_id) in result["halted"]
     assert result["wave"] is None and result["integration"] is None
+
+
+def test_a_bound_wave_review_with_a_truncated_slice_id_is_rebound_from_its_prep_and_does_not_halt():
+    patch = "(r, n) => n === 0 ? { ...r, review: { ...r.review, slice_id: 's0+s' } } : r"
+    result = _run_in_wave(_FULL, 9, patch=patch)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == "s0+s1"
 
 
 def test_a_wave_review_with_plus_joined_real_slice_ids_is_accepted():
@@ -1350,7 +1360,11 @@ _LONG_PREP = {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 9, "sl
 
 
 def _with_slice_id(returned):
-    return f"(r, n) => n === 0 ? {{ ...r, review: {{ ...r.review, slice_id: {json.dumps(returned)} }} }} : r"
+    """Reply 0 returns an unbound slice_id (its own prep names no slices); reply 1 carries every slice."""
+    return (
+        f"(r, n) => n === 0 ? {{ prep: {{ ...r.prep, slices: [] }}, review: {{ ...r.review, slice_id: {json.dumps(returned)} }} }}"
+        " : n === 1 ? { ...r, prep: { ...r.prep, slices: _full.slices } } : r"
+    )
 
 
 def test_a_grouped_wave_review_naming_every_prepped_slice_id_reaches_a_valid_wave():

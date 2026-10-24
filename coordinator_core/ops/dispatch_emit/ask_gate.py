@@ -33,6 +33,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_SPLIT,
     HALT_TOUCHPOINT,
     LEG_REFUSE,
+    REGISTER_ROWS_UNCLAIMED_REFUSAL,
+    UNCLAIMED_ROWS_HALT_KIND,
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
     LEDGER_DERIVED_ROW_PREFIX,
@@ -363,6 +365,13 @@ def _arm_verdict(
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
+    if resume_ledger and arm != ARM_M_PLUS and resume_ledger.get(RESUME_LEDGER_UNCLAIMED_FIELD):
+        return _halt(
+            HALT_REFUSAL,
+            f"{REGISTER_ROWS_UNCLAIMED_REFUSAL}: {resume_ledger['plan']} omits register row(s) "
+            f"{', '.join(str(r) for r in resume_ledger[RESUME_LEDGER_UNCLAIMED_FIELD])}; arm {arm} has no re-plan leg. "
+            f"Resize {sizing_rel} to M+, then refire.",
+        )
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
     if landed_sink is not None and resume_rows:
@@ -565,7 +574,7 @@ def _resume_ledger(
     blocking = [b for b in blocking if b not in credited]
     all_landed = halt.halted == ALL_LANDED_HALT_KIND
     notes = (
-        [] if all_landed and halt.run_id == ALL_LANDED_NO_RUN
+        [] if halt.halted in (ALL_LANDED_HALT_KIND, UNCLAIMED_ROWS_HALT_KIND) and halt.run_id == ALL_LANDED_NO_RUN
         else [e["note"] for e in run_notes.live(run_notes.entries(run_dir(Path(repo_root), halt.run_id) / NOTES_FILE, halt.run_id))]
     )
     if run_id:
@@ -614,6 +623,8 @@ def _resume_ledger(
         verdict[RESUME_LEDGER_UNSERVED_FIELD] = unserved
     if all_landed:
         verdict[RESUME_LEDGER_KIND_FIELD] = ALL_LANDED_HALT_KIND
+    elif halt.halted == UNCLAIMED_ROWS_HALT_KIND:
+        verdict[RESUME_LEDGER_KIND_FIELD] = UNCLAIMED_ROWS_HALT_KIND
     if halt.halted == COMMIT_HALT_KIND:
         outcome = read_run_outcome(Path(repo_root), halt.run_id)
         if outcome is None:

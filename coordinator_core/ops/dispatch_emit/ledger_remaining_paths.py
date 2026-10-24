@@ -246,8 +246,16 @@ def derive_ledger_rows(
 
     With `spelling`, every write is in the resolver's spelling: a named path it does not back is
     dropped and named in the row body, a serving write it does not back is kept as declared.
+
+    Each `remaining` line is a gap to close, not a requirement: the title is `GAP_TITLE_PREFIX` +
+    the first line (an item with only revise notes keeps "Serve revise note for <item>"), and the
+    body lists the lines under `HALT_GAP_RULE` with a done-when that no gap line holds at HEAD.
     """
-    from coordinator_core.ops.dispatch_emit.ask_contract import LEDGER_DERIVED_ROW_PREFIX
+    from coordinator_core.ops.dispatch_emit.ask_contract import (
+        GAP_TITLE_PREFIX,
+        HALT_GAP_RULE,
+        LEDGER_DERIVED_ROW_PREFIX,
+    )
 
     rerule = note_rerules(notes)
     sha_notes = [str(n) for n in notes if sha_tokens(n)]
@@ -289,15 +297,19 @@ def derive_ledger_rows(
             n += 1
             rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}-{n}"
         taken.add(rid)
-        lines = [f"Ledger item {item} is open. Remaining steps:", *(f"- {s}" for s in steps)]
+        lines = [
+            f"Ledger item {item} is open. Gaps to close (each line is still true; make it false):",
+            *(f"- {s}" for s in steps),
+            HALT_GAP_RULE,
+        ]
         if notes:
             lines += ["Revise notes:", *(f"- {n_}" for n_ in notes)]
         if dropped:
             lines.append("Not declared (no tracked or present path): " + ", ".join(dropped))
-        lines.append(f"Done when: the ledger check judges {item} met.")
+        lines.append(f"Done when: no gap line above holds at HEAD and the ledger check judges {item} met.")
         rows.append({
             "id": rid,
-            "title": steps[0] if steps else f"Serve revise note for {item}",
+            "title": GAP_TITLE_PREFIX + steps[0] if steps else f"Serve revise note for {item}",
             "change_kind": "code-edit",
             "writes": writes,
             "register_rows": [item],

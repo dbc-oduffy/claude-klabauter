@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
@@ -470,6 +470,21 @@ def blocking_unclaimed(register: Register, claimed_ids: Sequence[Any]) -> Option
         if str(row.get(ROW_ID)) not in claimed and _owes_unclaimed_work(row):
             return str(row.get(ROW_ID))
     return None
+
+
+def unclaimed_ids(
+    rows: Sequence[Mapping[str, Any]], claimed: Iterable[Any], exclude: Iterable[Any] = ()
+) -> list[str]:
+    """Ids of `rows` (register order) in neither `claimed` nor `exclude`. Every row counts, met
+    ones included; a row with no id is skipped."""
+    skip = {str(i) for i in claimed} | {str(i) for i in exclude}
+    out: list[str] = []
+    for row in rows:
+        rid = row.get(ROW_ID)
+        if rid is None or str(rid) in skip:
+            continue
+        out.append(str(rid))
+    return out
 
 
 def _owes_unclaimed_work(row: Mapping[str, Any]) -> bool:

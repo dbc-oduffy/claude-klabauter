@@ -155,8 +155,58 @@ def _baseline_dirty(root: Path, session_id: str) -> list[str]:
     return [p for p in claims if under_roots(p, roots)]
 
 
+def _read_selection(script: Path) -> tuple[list[dict], list[str], list[str]]:
+    """(declined, not_admitted, unselected) from the emit receipt beside the script.
+
+    The receipt has no `entries` key and keys a declined row `id`; the caller derives entries.
+    An unreadable receipt yields empty lists (every minted id then reads as an entry).
+    """
+    try:
+        receipt = json.loads(script.with_name(script.name + ".emitted.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], [], []
+    if not isinstance(receipt, dict):
+        return [], [], []
+
+    def _ids(key: str) -> list[str]:
+        block = receipt.get(key)
+        ids = block.get("row_ids") if isinstance(block, dict) else None
+        return [str(i) for i in ids] if isinstance(ids, list) else []
+
+    declined = [
+        {"row_id": str(d.get("id", d.get("row_id"))), "path": d.get("path"), "reason": d.get("reason", "")}
+        for d in (receipt.get("declined") or [])
+        if isinstance(d, dict) and d.get("id", d.get("row_id")) is not None
+    ]
+    return declined, _ids("not_admitted"), _ids("unselected")
+
+
+def _account(script: Path, parsed: Optional[ParseResult], minted: list[str]) -> list:
+    if parsed is None:
+        return []
+    from coordinator_core.bug_blitz.accounting import account_targets
+
+    declined, not_admitted, unselected = _read_selection(script)
+    excluded = {d["row_id"] for d in declined} | set(not_admitted) | set(unselected)
+    entries = [m for m in minted if m not in excluded]
+    return account_targets(parsed.tests, minted, entries, declined, not_admitted)
+
+
+def _not_run_line(accounts: list) -> str:
+    rest = [a for a in accounts if a.disposition != "row"]
+    if not rest:
+        return ""
+    named = "; ".join(dict.fromkeys(f"{a.row_id or a.nodeid} ({a.reason})" for a in rest))
+    return f"{len(rest)} of {len(accounts)} targets not run: {named}."
+
+
 def _write_decisions(
-    run_dir: Path, parsed: Optional[ParseResult], minted: list[str], target_ref: str, baseline_dirty: list[str]
+    run_dir: Path,
+    parsed: Optional[ParseResult],
+    minted: list[str],
+    target_ref: str,
+    baseline_dirty: list[str],
+    accounts: Optional[list] = None,
 ) -> None:
     record = {
         BASELINE_DIRTY_KEY: baseline_dirty,
@@ -168,6 +218,7 @@ def _write_decisions(
         # Repo-relative row paths: grind_rows.cmd_run_record reads this list under
         # grind_commit_contract.MINTED_KEY as land-set paths.
         "minted": [f"{QUEUE_DIR}/{row_id}.yaml" for row_id in minted],
+        "targets": [a.to_json() for a in accounts or []],
     }
     (run_dir / DECISIONS_FILE).write_text(
         json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
@@ -246,7 +297,8 @@ def evaluate(
         return _refuse(f"The engine emitted no run: {detail}")
 
     try:
-        _write_decisions(Path(script).parent, parsed, minted, target_raw, _baseline_dirty(root, session_id))
+        accounts = _account(Path(script), parsed, minted)
+        _write_decisions(Path(script).parent, parsed, minted, target_raw, _baseline_dirty(root, session_id), accounts)
     except OSError as exc:
         return _refuse(f"decisions.json not written: {exc}")
 
@@ -259,7 +311,7 @@ def evaluate(
     try:
         from coordinator_core.ops.dispatch_emit import run_token
 
-        fire_args["run_token"] = run_token.mint(root, stamp, str(script), session_id=session_id or None)
+        fire_args["run_token"] = run_token.mint(root, stamp, str(script), session_id=session_id or None, kind="grind")
     except (OSError, ValueError):
         pass  # fail-open by design: tokenless, the grind hands finished rows back uncommitted (pinned by test_mint_failure_submits_without_a_token)
     new_input = {"scriptPath": str(script), "args": fire_args}
@@ -272,7 +324,9 @@ def evaluate(
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
-    hso["permissionDecisionReason"] = f"Bug blitz submission: emitted {Path(script).name} this call."
+    hso["permissionDecisionReason"] = " ".join(
+        part for part in (f"Bug blitz submission: emitted {Path(script).name} this call.", _not_run_line(accounts)) if part
+    )
     return envelope
 
 

@@ -50,9 +50,20 @@ def _compose_wave(fragment: dict, **kwargs) -> str:
     return dict(phases)["Review wave"]
 
 
-def test_fragment_pins_three_to_four_rows_per_reviewer(fragment):
+# 4 is the roster before DoE raises the cap; 6 is the target. Any other max is refused.
+_ALLOWED_MAX_ROWS = (4, 6)
+
+
+def _reviewer_max_rows(fragment: dict) -> int:
     reviewer = next(a for a in _wave_agents(fragment) if a["agentType"] == _CODE_REVIEWER)
-    assert reviewer["executor_rows_per_reviewer"] == {"min": 3, "max": 4}
+    return reviewer["executor_rows_per_reviewer"]["max"]
+
+
+def test_fragment_pins_three_to_four_or_six_rows_per_reviewer(fragment):
+    reviewer = next(a for a in _wave_agents(fragment) if a["agentType"] == _CODE_REVIEWER)
+    ratio = reviewer["executor_rows_per_reviewer"]
+    assert ratio["min"] == 3
+    assert ratio["max"] in _ALLOWED_MAX_ROWS
     assert reviewer["per"] == "slice"
 
 
@@ -81,7 +92,8 @@ def test_reviewer_count_is_one_per_max_rows_capped_by_slices(fragment, rows, sli
     review = parse_execute_review(fragment, signals={"named": []})
     agent = next(a for a in review.review_wave if a.agent_type == _CODE_REVIEWER)
     lo, hi = agent.executor_rows_per_reviewer
-    assert (lo, hi) == (3, 4)
+    assert lo == 3
+    assert hi in _ALLOWED_MAX_ROWS
     expected = max(1, min(slices, -(-rows // hi), rows // lo))
     assert agent.reviewer_count(rows, slices) == expected
 
@@ -90,7 +102,7 @@ def test_reviewer_count_is_one_per_max_rows_capped_by_slices(fragment, rows, sli
 def test_composed_wave_groups_slices_by_the_fragment_max(fragment, rows):
     wave = _compose_wave(fragment, executor_rows=rows)
     assert "_groupSlices" in wave
-    assert f"_groupSlices({REVIEW_PREP_SLICES_JS}, {rows}, 3, 4)" in wave
+    assert f"_groupSlices({REVIEW_PREP_SLICES_JS}, {rows}, 3, {_reviewer_max_rows(fragment)})" in wave
 
 
 @pytest.mark.parametrize("tshirt", ["L", "XL", "XXL"])
@@ -120,7 +132,29 @@ def test_dropping_rows_per_reviewer_fails_the_ratchet(fragment):
     for agent in _wave_agents(stripped):
         agent.pop("executor_rows_per_reviewer", None)
     with pytest.raises(KeyError):
-        test_fragment_pins_three_to_four_rows_per_reviewer(stripped)
+        test_fragment_pins_three_to_four_or_six_rows_per_reviewer(stripped)
+
+
+@pytest.mark.parametrize("max_rows", [3, 5, 8])
+def test_unlisted_max_rows_fails_the_ratchet(fragment, max_rows):
+    mutated = copy.deepcopy(fragment)
+    for agent in _wave_agents(mutated):
+        if agent["agentType"] == _CODE_REVIEWER:
+            agent["executor_rows_per_reviewer"]["max"] = max_rows
+    with pytest.raises(AssertionError):
+        test_fragment_pins_three_to_four_or_six_rows_per_reviewer(mutated)
+
+
+@pytest.mark.parametrize("max_rows", [4, 6])
+def test_four_and_six_max_rows_pass_the_ratchet_and_reviewers_stay_parallel(fragment, max_rows):
+    mutated = copy.deepcopy(fragment)
+    for agent in _wave_agents(mutated):
+        if agent["agentType"] == _CODE_REVIEWER:
+            agent["executor_rows_per_reviewer"]["max"] = max_rows
+    test_fragment_pins_three_to_four_or_six_rows_per_reviewer(mutated)
+    wave = _compose_wave(mutated, executor_rows=12)
+    assert f"_groupSlices({REVIEW_PREP_SLICES_JS}, 12, 3, {max_rows})" in wave
+    assert f"3, {max_rows}).map(g => () => " in wave
 
 
 @pytest.mark.parametrize("floor", [None, "M", "XL"])

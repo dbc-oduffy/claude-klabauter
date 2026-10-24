@@ -56,6 +56,13 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     if base is None:
         raise MeasuredRevRefused("no HEAD commit to measure against")
     rels = sorted({_normalise(p) for p in paths})
+    from coordinator_core.ops.dispatch_emit.landing_integrity import unparseable_py
+
+    broken = unparseable_py(root, rels)
+    if broken:
+        raise MeasuredRevRefused(
+            "measured-rev refused: py-unparseable: " + "; ".join(f"{f.path} {f.detail}" for f in broken)
+        )
     spine = read_tree_spine(root, rels)
     if spine is None:
         raise MeasuredRevRefused("HEAD's tree spine could not be read")

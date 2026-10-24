@@ -229,6 +229,31 @@ def test_fast_forward_over_a_peer_publish_the_source_lacks_is_refused(origin_and
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
+def test_fast_forward_contains_check_probes_the_source_ref_not_head(origin_and_clone, tmp_path):
+    origin, clone = origin_and_clone
+    src, peer = _source_with(tmp_path, merged=False)
+    _git(src, "checkout", "-b", "pin")
+    _git(src, "merge", "--no-edit", "peer")
+    pin = _git(src, "rev-parse", "HEAD")
+    _git(src, "checkout", "main")
+    _peer_publish_on_origin(origin, "percolate publish [source-head {0}]".format(peer[:12]))
+
+    out, err = _capture()
+    refused = refresh_dest_from_origin(clone, out=out, err=err, source_root=src)
+    assert not refused.ok
+    assert "HEAD" in refused.reason and "--source-ref" in refused.reason
+
+    refused_ref = refresh_dest_from_origin(
+        clone, out=out, err=err, source_root=src, source_ref="main"
+    )
+    assert not refused_ref.ok
+    assert "main" in refused_ref.reason
+
+    result = refresh_dest_from_origin(clone, out=out, err=err, source_root=src, source_ref=pin)
+    assert result.ok
+    assert _git(clone, "rev-list", "--count", "HEAD..origin/candidate") == "0"
+
+
 def test_fast_forward_over_a_peer_publish_the_source_contains_proceeds(origin_and_clone, tmp_path):
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=True)

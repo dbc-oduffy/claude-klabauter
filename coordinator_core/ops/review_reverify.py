@@ -20,8 +20,10 @@ keeps the snapshot baseline and adds ``"head_unreadable": true``.
 
 List mode (no ``failing``): ``{"edited", "created", "foreign", "tripwires", "snapshot", "error"}``,
 plus ``head_unreadable`` when applicable.
-``tripwires`` is the sorted test modules (not already edited or created) whose source holds a string
-literal naming an edited or created path; empty for an empty edit set. ``edited`` is every
+``tripwires`` is the sorted tracked test modules (not already edited or created) whose source holds a string
+literal naming an edited or created path; empty for an empty edit set. When the tracked-file index cannot
+be read, ``tripwires`` is empty and ``error`` is ``"tripwire scan unavailable: <reason>"``; the other
+fields stay filled. ``edited`` is every
 manifest path whose bytes now differ from its baseline (a missing file counts); ``created`` is every path the
 session's review stage wrote that the manifest and its declared ``paths`` do not name. ``foreign``
 is such a path another live run declared that is tracked in the snapshot's base commit, or that predates the snapshot: the session's write record
@@ -76,7 +78,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops import review_reverify_probe as probe_io
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
-from coordinator_core.ops.review_tripwires import literal_namers, names_in
+from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
 from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
 from coordinator_core.session.core import resolve_session_id
@@ -531,14 +533,19 @@ def review_reverify(
     edited = _edited(repo_root, manifest, view)
     snapshot_rel = _rel(str(snapshot_dir / _MANIFEST), repo_root)
     if not revert and not probe:
-        tripwires = sorted(literal_namers(repo_root, edited + created, exclude=set(edited) | set(created)))
+        scan_error = None
+        try:
+            tripwires = sorted(literal_namers(repo_root, edited + created, exclude=set(edited) | set(created)))
+        except TripwireScanUnavailable as exc:
+            tripwires = []
+            scan_error = f"tripwire scan unavailable: {exc}"
         out = {
             "edited": edited,
             "created": created,
             "foreign": foreign,
             "tripwires": tripwires,
             "snapshot": snapshot_rel,
-            "error": None,
+            "error": scan_error,
         }
         if unreadable:
             out["head_unreadable"] = True

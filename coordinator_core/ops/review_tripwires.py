@@ -3,14 +3,18 @@
 A structural tripwire selects its subject by reading it (a literal such as
 `"run_pass.py"` in an expected-files list), so import-based and file-path
 based test mapping both miss it. `literal_namers` finds such modules by
-scanning the bytes of the target repo's test modules.
+scanning the bytes of the target repo's tracked test modules.
 
-Negative spec: zero spawns, no git verb, no index read, no ast, no hashing, no
-writes. One pass, no state, so a cold call costs the same as a warm one.
+Negative spec: zero spawns, no git verb, no directory walk, no ast, no hashing,
+no writes. One in-process index parse, no state, so a cold call costs the same
+as a warm one.
 
-Trap: walk roots are `pyproject.toml` `[tool.pytest.ini_options] testpaths`;
-a repo declaring none (or configuring them elsewhere) is walked from its root,
-bounded only by that tree's size. Bytes past 4MiB of a module are not scanned.
+Trap: candidates are the git index's tracked paths filtered by
+`pyproject.toml` `[tool.pytest.ini_options] testpaths` (none declared: the
+whole tree); the bound is the tracked set, never the disk. An untracked module
+is never opened. An unreadable index raises `TripwireScanUnavailable`; an
+absent one (unborn repo) is the empty set. Bytes past 4MiB of a module are not
+scanned.
 
 Match rule: a module names edited path `p` iff it holds a quoted literal
 `lit` that, after `\\` -> `/` and a leading `./` stripped, equals `p` or is a
@@ -26,6 +30,13 @@ import re
 import tomllib
 from pathlib import Path
 from typing import Collection, Dict, List, Sequence, Tuple
+
+from coordinator_core.git import git_state
+
+
+class TripwireScanUnavailable(Exception):
+    """The tracked-file index could not be read, so no tripwire set can be claimed complete."""
+
 
 _GENERIC_BASENAMES = frozenset({"__init__.py", "__main__.py", "conftest.py"})
 _ALWAYS_SKIPPED_DIRS = frozenset({"__pycache__", "node_modules"})
@@ -143,8 +154,9 @@ def literal_namers(
 ) -> Dict[str, List[str]]:
     """Map each test module to the sorted `named` paths its bytes name.
 
-    Candidates are `test_*.py` / `*_test.py` files under the repo's pytest
-    testpaths, minus `exclude`. An unreadable root or module is skipped.
+    Candidates are tracked `test_*.py` / `*_test.py` files under the repo's
+    pytest testpaths, minus `exclude`. An unreadable module is skipped.
+    Raises `TripwireScanUnavailable` when the index cannot be read.
     """
     by_base = _by_basename(named)
     if not by_base:
@@ -153,40 +165,29 @@ def literal_namers(
     testpaths, norecurse = _pytest_config(Path(repo_root))
     skip = {_norm(e) for e in exclude}
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    try:
+        tracked = git_state.read_index_paths(repo_root)
+    except (git_state.IndexParseError, OSError, ValueError) as exc:
+        raise TripwireScanUnavailable(str(exc)) from exc
+    roots = _walk_roots(testpaths)
     out: Dict[str, List[str]] = {}
-    stack = [(f"{root}/{r}" if r else root, r) for r in _walk_roots(testpaths)]
-    while stack:
-        abs_dir, rel_dir = stack.pop()
-        try:
-            with os.scandir(abs_dir) as it:
-                entries = list(it)
-        except OSError:
+    for rel in sorted(tracked):
+        parts = rel.split("/")
+        if not _is_test_name(parts[-1]) or rel in skip:
             continue
-        for de in entries:
-            name = de.name
-            try:
-                if de.is_dir(follow_symlinks=False):
-                    if (
-                        name.startswith(".")
-                        or name in _ALWAYS_SKIPPED_DIRS
-                        or any(fnmatch.fnmatch(name, pat) for pat in norecurse)
-                    ):
-                        continue
-                    stack.append(
-                        (f"{abs_dir}/{name}", f"{rel_dir}/{name}" if rel_dir else name)
-                    )
-                    continue
-                if not _is_test_name(name) or not de.is_file():
-                    continue
-            except OSError:
-                continue
-            rel = f"{rel_dir}/{name}" if rel_dir else name
-            if rel in skip:
-                continue
-            data = _read(f"{abs_dir}/{name}", flags)
-            if data is None:
-                continue
-            hits = _names(data, by_base)
-            if hits:
-                out[rel] = hits
+        if not any(not r or rel.startswith(r + "/") for r in roots):
+            continue
+        if any(
+            d.startswith(".")
+            or d in _ALWAYS_SKIPPED_DIRS
+            or any(fnmatch.fnmatch(d, pat) for pat in norecurse)
+            for d in parts[:-1]
+        ):
+            continue
+        data = _read(f"{root}/{rel}", flags)
+        if data is None:
+            continue
+        hits = _names(data, by_base)
+        if hits:
+            out[rel] = hits
     return out

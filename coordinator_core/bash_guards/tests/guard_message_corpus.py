@@ -4666,6 +4666,57 @@ def _fire_nudge_em_turn_budget_post_landing() -> Optional[Dict[str, Any]]:
     return _hook_envelope_from_message({"message": _hook_nudge_em_turn_budget.post_landing_text(6, 5)})
 
 
+def _fire_em_prefire_survey_pre_fire() -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import guard_em_prefire_survey as g
+
+    return _hook_envelope_from_message({"message": g.prefire_deny_text(9, 8)})
+
+
+def _fire_em_prefire_survey_post_landing() -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import guard_em_prefire_survey as g
+
+    return _hook_envelope_from_message({"message": g.postlanding_deny_text(4, 3)})
+
+
+def _fire_em_prefire_survey_within_budget() -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import guard_em_prefire_survey as g
+
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-eps-", dir=_neutral_scratch_parent()) as scratch:
+        root = Path(scratch)
+        (root / ".git").mkdir()
+        records = [{"type": "user", "message": {"role": "user", "content": "survey"}}]
+        for i in range(g.PREFIRE_EXPLORATORY_CALLS_MAX):
+            records.append(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu-%d" % i,
+                                "name": "Read",
+                                "input": {"file_path": str(root / ("f%d.py" % i))},
+                            }
+                        ],
+                    },
+                }
+            )
+        transcript = root / "transcript.jsonl"
+        transcript.write_text("".join(_json.dumps(r) + "\n" for r in records), encoding="utf-8")
+        envelope = g.evaluate(
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": str(root / "last.py")},
+                "tool_use_id": "tu-cur",
+                "session_id": "sess-eps",
+                "transcript_path": str(transcript),
+                "cwd": str(root),
+            }
+        )
+        return envelope or None
+
+
 def _fire_nudge_em_turn_budget_quiet() -> Optional[Dict[str, Any]]:
     text = _hook_nudge_em_turn_budget.advisory_text(
         {"payload": {"agent_id": "subagent-1", "session_id": "s", "transcript_path": "t"}}
@@ -6822,6 +6873,9 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("nudge_em_turn_budget", "fire-pre-fire", True, _fire_nudge_em_turn_budget_pre_fire),
     HookRow("nudge_em_turn_budget", "fire-post-landing", True, _fire_nudge_em_turn_budget_post_landing),
     HookRow("nudge_em_turn_budget", "quiet-subagent", False, _fire_nudge_em_turn_budget_quiet),
+    HookRow("guard_em_prefire_survey", "deny-pre-fire", True, _fire_em_prefire_survey_pre_fire),
+    HookRow("guard_em_prefire_survey", "deny-post-landing", True, _fire_em_prefire_survey_post_landing),
+    HookRow("guard_em_prefire_survey", "allow-within-budget", False, _fire_em_prefire_survey_within_budget),
     HookRow("submit_engine_ask", "fire-scout-while-run-live", True, _fire_submit_engine_ask_scout_live),
     HookRow("submit_engine_ask", "fire-sizing-already-working", True, _fire_submit_engine_ask_sizing_in_flight),
     HookRow("submit_engine_ask", "fire-neither-ask-nor-sizing", True, _fire_submit_engine_ask_neither),

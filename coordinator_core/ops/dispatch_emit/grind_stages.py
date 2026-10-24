@@ -782,6 +782,7 @@ def compose_fix_call(
     feedback_js: Optional[str] = None,
     close_note_js: Optional[str] = None,
     refute_note_js: Optional[str] = None,
+    ruling_note_js: Optional[str] = None,
     profile: str = "",
     profile_dir_js: Optional[str] = None,
     row_path_js: Optional[str] = None,
@@ -919,6 +920,8 @@ def compose_fix_call(
         parts.append(("expr", close_note_js))
     if refute_note_js:
         parts.append(("expr", refute_note_js))
+    if ruling_note_js:
+        parts.append(("expr", ruling_note_js))
     parts.append(("lit", " " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",

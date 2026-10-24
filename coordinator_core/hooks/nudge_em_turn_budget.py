@@ -32,7 +32,11 @@ def pre_fire_text(turns: int, bar: int) -> str:
 
 
 def post_landing_text(turns: int, bar: int) -> str:
-    return f"[em-turn-budget] {turns} turns since the run landed, bar {bar}. Read the digest and close."
+    return (
+        f"[em-turn-budget] {turns} turns since the run landed, bar {bar}. "
+        "Send a gap through workflow.revise, or fire a follow-up engine-ask whose em_context "
+        "quotes the receipt's gap line."
+    )
 
 
 def _advisory(params: dict) -> str:

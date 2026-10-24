@@ -1563,6 +1563,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/nudge_em_turn_budget.py",
         ("_handler",),
     ),
+    "hooks.guard_em_prefire_survey": (
+        "coordinator_core/hooks/guard_em_prefire_survey.py",
+        ("_handler",),
+    ),
     "hooks.submit_engine_ask": (
         "coordinator_core/hooks/submit_engine_ask.py",
         ("_handler",),

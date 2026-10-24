@@ -21,6 +21,7 @@ from .ask_contract import (
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
     RESUME_LEDGER_UNSERVED_FIELD,
+    UNCLAIMED_ROWS_HALT_KIND,
 )
 
 _BLOCKING_FIELD = "blocking"
@@ -45,7 +46,7 @@ def identical_rehalt_reason(
     if not resume_ledger:
         return None
     kind = resume_ledger.get(RESUME_LEDGER_KIND_FIELD, LEDGER_HALT_KIND)
-    if kind not in (LEDGER_HALT_KIND, ALL_LANDED_HALT_KIND):
+    if kind not in (LEDGER_HALT_KIND, ALL_LANDED_HALT_KIND, UNCLAIMED_ROWS_HALT_KIND):
         return None
     blocking = resume_ledger.get(_BLOCKING_FIELD) or []
     if not blocking:

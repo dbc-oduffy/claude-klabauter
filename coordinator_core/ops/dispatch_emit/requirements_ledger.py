@@ -1470,7 +1470,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "the plan will be pulled on register-rows-unclaimed."
         )
     if warnings:
-        out["warning"] = " ".join(warnings) + " Re-plan against the register before the run spends further."
+        out["warning"] = " ".join(warnings) + (
+            " The refire after this run ends re-plans the omitted rows through its ledger re-plan leg."
+        )
     if not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
     elif _rows_briefed(dir_):
@@ -1538,8 +1540,26 @@ def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str
         return None, []
     register = rr.read_register(sizing_text)
     claimed = {str(r) for r in claims["rows"]}
-    missing = [str(r[rr.ROW_ID]) for r in register.rows if str(r[rr.ROW_ID]) not in claimed] if register else []
+    missing = rr.unclaimed_ids(register.rows, claimed, exclude=ruled_out_ids(register.rows)) if register else []
     return (edge, missing) if missing else (None, [])
+
+
+def _arm_lacking_replan_leg(root: Optional[Path], sizing_rel: Optional[str]) -> Optional[str]:
+    """The sizing's arm name when it resolves to anything but M+ (no ledger re-plan leg); None for M+
+    or an arm that does not resolve."""
+    if root is None:
+        return None
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    sizing_text = _sizing_plan(root, sizing_rel)[2]
+    try:
+        sizing = yaml.safe_load(sizing_text)
+        arm = sizing_fire.resolve_arm(sizing) if isinstance(sizing, dict) else sizing_fire.ARM_M_PLUS
+    except (yaml.YAMLError, sizing_fire.SizingFireRefused):
+        return None
+    return None if arm == sizing_fire.ARM_M_PLUS else arm
 
 
 def _refire(
@@ -1547,22 +1567,25 @@ def _refire(
     unclaimed: Optional[tuple[Optional[str], list[str]]] = None, halted: bool = False,
 ) -> dict:
     """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
-    will. `halted` words the note for a halted run, whose resume would replay its stages. When the sizing's plan omits register rows, the refire would fire that stale plan: the
-    reply names the plan-revision step first and holds the fire call as `then`."""
+    will. `halted` words the note for a halted run, whose resume would replay its stages. When the sizing's plan omits
+    register rows, `next.replans` names them: the refire's ledger re-plan leg claims them (M+ arm only)."""
     from coordinator_core.warp_fire import fire_command
 
     plan_rel, missing = unclaimed or (_unclaimed_rows(root, sizing_rel) if root is not None else (None, []))
     if plan_rel:
+        state = "run halted" if halted else "run finished"
+        rows = ", ".join(missing)
+        arm = _arm_lacking_replan_leg(root, sizing_rel)
+        if arm:
+            tail = (
+                f"arm {arm} has no re-plan leg, so the refire refuses "
+                "REGISTER-ROWS-UNCLAIMED. Resize the sizing to M+, then fire next.call."
+            )
+        else:
+            tail = "the refire's ledger re-plan leg adds rows serving them and claims them before staging. Fire next.call."
         return {
-            "next": {
-                "kind": "revise-plan", "plan": plan_rel, "sizing": sizing_rel, "rows": missing,
-                "then": fire_command(sizing_rel),
-            },
-            "note": (
-                f"run finished: {plan_rel} omits register row(s) {', '.join(missing)} in register_claims.rows; "
-                f"a refire would fire the stale plan. Dispatch plan-author with {sizing_rel} named in its prompt "
-                "to claim them, then refire."
-            ),
+            "next": {"kind": "refire", "call": fire_command(sizing_rel), "replans": {"plan": plan_rel, "rows": missing}},
+            "note": f"{state}: {plan_rel} omits register row(s) {rows}; {tail}",
         }
     return {
         "next": {"kind": "refire", "call": fire_command(sizing_rel)},

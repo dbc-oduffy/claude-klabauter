@@ -37,6 +37,7 @@ from coordinator_core.ops.review_mint.wave_not_run import (
     not_run_entry_js as _not_run_entry_js,
 )
 from coordinator_core.ops.dispatch_emit.test_interpreter import interpreter_clause
+from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_INDETERMINATE
 from coordinator_core.ops.dispatch_emit.wake_digest import INTEGRATION_NOT_RUN_VAR
 from coordinator_core.ops.review_slice_limits import MAX_SLICES
 from coordinator_core.ops.review_prep import REVIEW_PREP_BUSY_PREFIX
@@ -216,7 +217,8 @@ NEW_GATE_CORPUS_PROBE_CLAUSE = (
 def _brief_conformance_clause(criterion: Optional["OperativeCriterion"]) -> str:
     """The code-reviewer prompt line that hands it the brief items its ``brief_conformance`` rows
     quote and the new-gate corpus-probe clause; names the operative criterion statement when one is
-    resolved. Code-reviewer prompts only: no verify-stage prompt carries the probe clause."""
+    resolved. Code-reviewer prompts only; the reverify phase and delivery verifier append the probe
+    clause themselves."""
     named = f" Operative exit criterion: {criterion.statement}" if criterion is not None else ""
     return f"\n{_BRIEF_CONFORMANCE_CLAUSE}{named}\n{NEW_GATE_CORPUS_PROBE_CLAUSE}"
 
@@ -276,7 +278,8 @@ _GROUP_SLICES_JS = (
 
 _GROUPED_SLICES_CLAUSE = (
     "\nYou own every slice listed above: apply findings only inside their files, write one sidecar "
-    "at the first slice's sidecar_path, and return slice_id as the slice ids joined with `+`."
+    "at the first slice's sidecar_path, and return slice_id as the first listed slice's id; the "
+    "wave binds the full group's ids itself."
 )
 
 #: Prefix of the `halted` string the emitted script returns when review prep yields nothing
@@ -560,6 +563,10 @@ _PREP_FROM_WAVE_JS = (
     f"return {{ halted: {_js_string_literal(REVIEW_MISSING_HALT)}, "
     f"reason: {_js_string_literal(_REVIEW_MISSING_REFUSAL)}, "
     "prep: _prepReplies[0] ?? null, wave: null, integration: null }; }\n"
+    "  for (const r of _waveRaw) if (r && r.review && typeof r.review === 'object' && r.prep && !r.prep.error) {\n"
+    "    const _own = Array.isArray(r.prep.slices) ? r.prep.slices : [];\n"
+    "    if (_own.length) r.review.slice_id = _own.map(s => s.id).join('+');\n"
+    "  }\n"
     "  const _reviewPrep = (() => {\n"
     "    const ok = _prepReplies.find(p => !p.error);\n"
     "    if (!ok) return _prepReplies[0] ?? null;\n"
@@ -609,9 +616,8 @@ _PREP_FROM_WAVE_JS = (
 
 _WAVE_GROUP_CLAUSE = (
     "\nYou own every slice the reply lists: apply findings only inside their files, write one "
-    "sidecar at the first slice's sidecar_path, and return slice_id as the `id` of each slice the reply "
-    "lists, copied verbatim and joined with `+`. Never shorten, elide or range an id: the wave accepts "
-    "only the ids the reply lists."
+    "sidecar at the first slice's sidecar_path, and return slice_id as the `id` of the first slice the "
+    "reply lists, copied verbatim; the wave binds the full list from your `prep` reply itself."
 )
 
 
@@ -702,11 +708,19 @@ _REVERIFY_SCHEMA = {
         },
         "status_before": {"type": "string"},
         "status_after": {"type": ["string", "null"]},
+        "reverify_error": {"type": ["string", "null"]},
         "record": {"type": ["string", "null"]},
         "sidecar_path": {"type": "string"},
     },
     "required": ["edited", "failing", "reverted", "status_before"],
 }
+
+_REVERIFY_INDETERMINATE_CLAUSE = (
+    "If any review.reverify call in this step returns a non-null `error` or fails as an engine "
+    "call (any JSON-RPC error, -32004 included), run no tests and stop: return edited [], "
+    f'failing [], reverted [], status_before "{REVERIFY_INDETERMINATE}" and the verbatim error '
+    "as reverify_error. That is an engine defect, never a test result."
+)
 
 #: Run-time review sidecar paths of the wave, appended to the re-verify prompt for its `sidecars`.
 _REVERIFY_SIDECARS_JS = (
@@ -788,7 +802,8 @@ def _reverify_phase(
             '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
             "review changed, the union of their `tripwires` lists names the test files whose source "
             "names one of those files. Return the union as `edited`. If every list is empty, "
-            "return edited [], failing [], reverted [], status_before pass.\n"
+            "return edited [], failing [], reverted [], status_before pass. "
+            f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
             "2. Run, and only run, the tests covering those files: the test files among them, every "
             "file in the `tripwires` union, the test files that import an edited module"
             + (
@@ -829,6 +844,7 @@ def _reverify_phase(
             "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
             "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
             "sidecar_path.\n"
+            f"{NEW_GATE_CORPUS_PROBE_CLAUSE}\n"
             f"plan_path: {plan_path}\n"
             f"run_base_sha: {run_base_sha}"
         ).strip()
@@ -843,7 +859,8 @@ def _reverify_phase(
         'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
         "review changed. Its `tripwires` list names the test files whose source names one of "
         "those files. If both are empty, return edited [], failing [], reverted [], "
-        "status_before pass.\n"
+        "status_before pass. "
+        f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
         "2. Run, and only run, the tests covering those files: the test files among them, every "
         "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
         "directory, a tier (the fast tier included) or the full suite. Report every failing "
@@ -868,6 +885,7 @@ def _reverify_phase(
         "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
         "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
         "sidecar_path.\n"
+        f"{NEW_GATE_CORPUS_PROBE_CLAUSE}\n"
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}"
     ).strip()
@@ -1401,7 +1419,9 @@ def compose_execute_review(
             grouped_call = _sc(spliced_call.replace(single_suffix, f"{suffix}, ", 1), "slice", slice_type)
             slice_items = (
                 f"_groupSlices({REVIEW_PREP_SLICES_JS}, {rows_expr}, "
-                f"{agent.executor_rows_per_reviewer[0]}, {agent.executor_rows_per_reviewer[1]}).map(g => () => {_degrading(grouped_call)})"
+                f"{agent.executor_rows_per_reviewer[0]}, {agent.executor_rows_per_reviewer[1]}).map(g => () => "
+                f"{_degrading(grouped_call)}.then(r => {{ if (r && typeof r === 'object') "
+                f"r.slice_id = g.map(s => s.id).join('+'); return r; }}))"
             )
         else:
             single_call = _sc(spliced_call, "slice", slice_type, "s.slice_id")
@@ -1424,7 +1444,7 @@ def compose_execute_review(
             else _not_run_expr(f"{_js_string_literal(_WAVE_REJECTED)} + String(e && e.message || e)") + ";"
         )
         role_note = (
-            f"\n\n{_DELIVERY_VERIFIER_ROLE_PREAMBLE}{delivery_supersession_clause(criterion)}"
+            f"\n\n{_DELIVERY_VERIFIER_ROLE_PREAMBLE}{delivery_supersession_clause(criterion)}\n{NEW_GATE_CORPUS_PROBE_CLAUSE}"
             if is_delivery_verifier
             else (_brief_conformance_clause(criterion) if _is_code_reviewer(agent.agent_type) else "")
         )

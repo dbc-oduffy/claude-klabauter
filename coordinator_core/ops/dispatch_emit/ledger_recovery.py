@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable, Mapping
 
+from coordinator_core.ops.dispatch_emit.ask_contract import HALT_GAP_RULE
+
 #: One attempt is one `ledger-fix` leg per reopened chunk followed by one re-verify.
 RECOVERY_ATTEMPT_CAP = 2
 
@@ -51,9 +53,13 @@ LEDGER_FIX_SCHEMA = {
 
 
 def ledger_fix_prompt(remaining_var: str, evidence_var: str, failing_var: str, footprint_var: str) -> str:
-    """Instruction tail for the fix agent; the four args are JS expressions spliced in."""
+    """Instruction tail for the fix agent; the four args are JS expressions spliced in.
+
+    Trap: the footprint is prose here; the only check is the agent's self-reported `paths`.
+    """
     return (
-        "A requirement row is not met. Remaining: ${" + remaining_var + "}. "
+        "A requirement row is not met. Gaps to close (each is still true; make it false): ${"
+        + remaining_var + "}. " + HALT_GAP_RULE + " "
         "Evidence: ${" + evidence_var + "}. Failing output: ${" + failing_var + "}. "
         "The ONLY paths you may edit: ${" + footprint_var + "}. "
         "Reproduce first with `python -m pytest <failing> -q`. "

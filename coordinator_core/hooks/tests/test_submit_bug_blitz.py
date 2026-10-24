@@ -134,6 +134,65 @@ def test_mint_failure_submits_without_a_token(repo, monkeypatch):
     assert "run_token" not in env["hookSpecificOutput"]["updatedInput"]["args"]
 
 
+_FIVE = (
+    FailingTest(file="pkg/a.test.ts", name="a1", package="pkg"),
+    FailingTest(file="pkg/a.test.ts", name="a2", package="pkg"),
+    FailingTest(file="pkg/b.test.ts", name="b1", package="pkg"),
+    FailingTest(file="pkg/fleet.test.ts", name="f1", package="pkg"),
+    FailingTest(file="pkg/fleet.test.ts", name="f2", package="pkg"),
+)
+
+
+def test_declined_target_is_accounted_named_in_the_reason_and_token_is_grind_kind(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    def emit(params: dict, root: Path) -> dict:
+        script = Path(params["output_path"])
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("// stub\n", encoding="utf-8")
+        script.with_name(script.name + ".emitted.json").write_text(
+            json.dumps(
+                {
+                    "declined": [{"id": "TF-2", "path": "state/bug-backlog/TF-2.yaml", "reason": "route to plan"}],
+                    "not_admitted": {"row_ids": []},
+                    "unselected": {"row_ids": []},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return {"ok": True, "path": str(script)}
+
+    env = _call(
+        repo,
+        {"targets": "red-set"},
+        parse=lambda spec: ParseResult(tests=_FIVE),
+        mint=lambda root, run_id, tests, *, target_ref: ["TF-0", "TF-1", "TF-2"],
+        emit=emit,
+    )
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", env
+    script = Path(hso["updatedInput"]["scriptPath"])
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    assert len(decisions["targets"]) == 5
+    assert [t["disposition"] for t in decisions["targets"]] == ["row", "row", "row", "declined", "declined"]
+    assert "2 of 5 targets not run: TF-2 (route to plan)" in hso["permissionDecisionReason"]
+    assert [r["kind"] for r in run_token.live_records(repo) if r["run_id"] == RUN_ID] == ["grind"]
+
+
+def test_backlog_submission_writes_empty_targets(repo):
+    def emit(params: dict, root: Path) -> dict:
+        script = Path(params["output_path"])
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text("// stub\n", encoding="utf-8")
+        return {"ok": True, "path": str(script)}
+
+    env = _call(repo, {"targets": "backlog"}, emit=emit)
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    assert decisions["targets"] == []
+    assert "not run" not in _reason(env)
+
+
 def test_emit_params_carry_run_tag_where_and_sweep_appetite(repo):
     seen: dict = {}
 

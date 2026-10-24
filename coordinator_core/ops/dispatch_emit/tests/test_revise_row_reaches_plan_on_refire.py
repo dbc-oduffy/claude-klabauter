@@ -1,5 +1,5 @@
-"""workflow.revise on a finished run whose sizing routes to a plan: the refire reply names the plan
-revision when the plan's register_claims omit the new row, instead of a bare fire of the stale plan."""
+"""workflow.revise on a finished or halted run whose plan omits register rows: the reply is an engine refire
+carrying `replans`, never a plan-author hand dispatch."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ REL = "state/sizings/2026-10-15-revise.yaml"
 PLAN = "docs/plans/2026-10-15-revise.md"
 
 
-def _repo(tmp_path, *, plan_edge):
+def _repo(tmp_path, *, plan_edge, tshirt="M"):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     sizing = {
-        "schema": "sizing-object", "intent": "build the op", "estimate": {"tshirt": "M", "provisional": True},
+        "schema": "sizing-object", "intent": "build the op", "estimate": {"tshirt": tshirt, "provisional": True},
         "route": "plan", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
         "premise": {"provenance": "not-applicable", "evidence": "fixture"},
         "pm_verbatims": [{"turn": 1, "text": "build the op"}, {"turn": 2, "text": "keep it fast"}],
@@ -38,19 +38,39 @@ def _revise(root):
     return rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
 
 
-def test_refire_names_the_plan_revision_when_the_plan_omits_the_new_row(tmp_path):
+def _assert_no_hand_dispatch(out):
+    assert "then" not in out and "then" not in out["next"]
+    assert "Dispatch" not in out["note"] and "plan-author" not in out["note"]
+
+
+def test_omitted_row_replies_with_an_engine_refire_that_replans_it(tmp_path):
     out = _revise(_repo(tmp_path, plan_edge=True))
     assert out["item"] == "R4"
-    assert out["next"]["kind"] == "revise-plan" and out["next"]["rows"] == ["R4"]
-    assert out["next"]["plan"] == PLAN and "call" not in out["next"]
-    assert out["next"]["then"] == fire_command(REL)
-    assert PLAN in out["note"] and "R4" in out["note"]
+    assert out["next"] == {"kind": "refire", "call": fire_command(REL), "replans": {"plan": PLAN, "rows": ["R4"]}}
+    _assert_no_hand_dispatch(out)
+    assert out["note"].startswith("run finished:") and PLAN in out["note"] and "R4" in out["note"]
+    assert "re-plan leg" in out["note"]
 
 
-def test_revise_plan_reply_names_the_sizing_the_plan_author_prompt_must_bind(tmp_path):
+def test_non_m_plus_arm_names_the_refusal_and_the_resize(tmp_path):
+    out = _revise(_repo(tmp_path, plan_edge=True, tshirt="S"))
+    assert out["next"] == {"kind": "refire", "call": fire_command(REL), "replans": {"plan": PLAN, "rows": ["R4"]}}
+    _assert_no_hand_dispatch(out)
+    assert "REGISTER-ROWS-UNCLAIMED" in out["note"] and "M+" in out["note"]
+
+
+def test_halted_run_words_the_note_as_halted(tmp_path):
+    repo = _repo(tmp_path, plan_edge=True)
+    out = rl._refire(REL, repo, (PLAN, ["R4"]), halted=True)
+    assert out["note"].startswith("run halted:")
+    assert out["next"]["replans"] == {"plan": PLAN, "rows": ["R4"]}
+    _assert_no_hand_dispatch(out)
+
+
+def test_warning_names_the_engine_route(tmp_path):
     out = _revise(_repo(tmp_path, plan_edge=True))
-    assert out["next"]["sizing"] == REL
-    assert f"{REL} named in its prompt" in out["note"]
+    assert "Re-plan against the register" not in out["warning"]
+    assert "refire after this run ends re-plans" in out["warning"]
 
 
 def test_refire_is_the_bare_fire_when_the_plan_claims_every_row(tmp_path):

@@ -107,6 +107,7 @@ from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.ops.dispatch_emit import pm_adjudication
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_INDETERMINATE
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import (
     PARAMS_BLOCK_JS,
     PARAMS_FILE_NAME,
@@ -431,6 +432,8 @@ class Row:
     sizing_path: str = ""
     evidence: str = ""
     pm_ruling: str = ""
+    ruled_once: bool = False
+    adjudication: Optional[dict] = None
 
 @dataclass
 class _Batch:
@@ -572,6 +575,8 @@ def run_admission(
             entry["tradeoff"] = tradeoff
         if ruling:
             entry["ruling"] = ruling
+        if row.adjudication and htype in pm_adjudication.PM_BOUND_HANDBACK_TYPES:
+            entry["adjudication"] = row.adjudication
         handed_back.append(entry)
 
     def _apply_route(row: Row, action: tuple[str, str], reason: str, tradeoff: str = "", ruling: str = "") -> None:
@@ -581,11 +586,59 @@ def run_admission(
         else:
             row.node = value
 
+    def _adjudicate(row: Row) -> dict:
+        """Rule one PM-bound hand-back; fails closed to pmOnly. Twin: ``_adjudicateHandback``."""
+        try:
+            verdict = _record_call("adjudicate", row.row_id)
+        except Exception:  # noqa: BLE001 -- a throwing adjudicator is a missing verdict
+            verdict = None
+        if not isinstance(verdict, Mapping) or not verdict.get("verdict"):
+            verdict = None
+        gated = bool(verdict) and re.search(
+            pm_adjudication.IRREVERSIBLE_GATE_SOURCE, str(verdict.get("externalAction") or ""), re.IGNORECASE
+        ) is not None
+        pm_only = verdict is None or verdict.get("pmOnly") is True or gated
+        return {
+            "adjudicator": pm_adjudication.ADJUDICATOR_AGENT_TYPE,
+            "verdict": verdict["verdict"] if verdict else "unavailable",
+            "pmOnly": pm_only,
+            "ruling": verdict.get("ruling") if verdict else None,
+            "actionable": bool(verdict and verdict.get("actionable")) and not pm_only,
+        }
+
+    def _ruled_fix_node(row: Row) -> Optional[str]:
+        """The node a ruled row re-enters: its triage verdict's target, else the fix target. Twin: ``_ruledFixNode``."""
+        verdict = row.origin.removeprefix("triage:") if row.origin.startswith("triage:") else ""
+        if verdict:
+            kind, value = route_after_triage(routing, triage_node_id, verdict, None, "", row.pm_ruling, "")
+            if kind == "node":
+                return value
+        return fix_target if fix_target and fix_target in routing else None
+
     def _handback_row(row: Row, htype: str, reason: str, tradeoff: str = "", ruling: str = "") -> None:
-        """Hand back a non-landing row, undoing its writes first unless its type is exempt. Twin: ``_handBackRow``."""
+        """Hand back a non-landing row, undoing its writes first unless its type is exempt. A PM-bound
+        type is adjudicated once per row; an actionable ruling re-enters fix. Twin: ``_handBackRow``."""
         row.done = True
+        reloop_node: Optional[str] = None
+        if htype in pm_adjudication.PM_BOUND_HANDBACK_TYPES and not row.ruled_once:
+            row.ruled_once = True
+            row.adjudication = _adjudicate(row)
+            if row.adjudication["actionable"] and row.adjudication["ruling"]:
+                reloop_node = _ruled_fix_node(row)
+
+        def _reloop(undone: bool) -> None:
+            row.pm_ruling = row.adjudication["ruling"]
+            if undone:
+                row.touched_files, row.created_files, row.removed_files = [], [], []
+                row.fix_reported = False
+            row.done = False
+            row.node = reloop_node
+
         undo_set = _undo_paths(row)
         if htype in _UNDO_EXEMPT or not _has_writes(row) or not undo_set:
+            if reloop_node:
+                _reloop(False)
+                return
             if htype == "peer-dirty" and _has_writes(row) and undo_set:
                 reason = f"{reason}; {_NOT_UNDONE_PEER}: {', '.join(undo_set)}"
             _handback(row, htype, reason, tradeoff, ruling)
@@ -598,6 +651,9 @@ def run_admission(
             undo_result = {"outcome": "undo-failed", "reason": str(err)}
         if undo_result.get("outcome") != "undone":
             _handback(row, "stage-dead", _undo_failed_reason(undo_result, _nonlanding_undo_failed_head(htype)))
+            return
+        if reloop_node:
+            _reloop(True)
             return
         _handback(row, htype, f"{reason}; undone", tradeoff, ruling)
 
@@ -745,11 +801,14 @@ def run_admission(
                 by_triage_check["repeat_refused"] += 1
                 _apply_route(row, action, _REPEAT_REFUSED_HEAD + row.pm_ruling, tradeoff, row.pm_ruling)
             elif tradeoff and action == ("handback", "needs-judgment"):
-                _apply_route(row, action, f"triage reported a tradeoff: {tradeoff}", tradeoff)
+                _handback_row(row, "needs-judgment", f"triage reported a tradeoff: {tradeoff}", tradeoff)
             else:
                 if tradeoff:
                     by_triage_check["ruled_tradeoff"] += 1
-                _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
+                if action[0] == "handback" and action[1] in pm_adjudication.PM_BOUND_HANDBACK_TYPES:
+                    _handback_row(row, action[1], f"triage verdict {rec['verdict']!r}")
+                else:
+                    _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
         for rid in batch.row_ids:
             row = rows[rid]
             if rid not in seen and not row.done and row.node is None:
@@ -1749,6 +1808,7 @@ def compose_grind_script(
         "  if (_handedBack.some((h) => h.row === rowId && h.type === type)) return;\n"
         "  const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };\n"
         "  if (ruling) { _entry.ruling = ruling; }\n"
+        "  if (_row && _row.adjudication && PM_BOUND_TYPES.includes(type)) { _entry.adjudication = _row.adjudication; }\n"
         "  _handedBack.push(_entry);\n"
         "}\n"
         "function _normalizeRowRef(items, ref) {\n"
@@ -1816,6 +1876,7 @@ def compose_grind_script(
             "(row.refuteNote ? (' The refuter judged this defect live at HEAD; reason: ' + "
             "row.refuteNote) : '')"
         ),
+        ruling_note_js="(row.adjudication && row.adjudication.actionable ? (' Binding ruling on this row: ' + row.pmRuling) : '')",
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
         run_id_js="RUN_ID", agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner,
@@ -1841,10 +1902,32 @@ def compose_grind_script(
         "async function _rejectUndoCall(row) {\n" + _indent_block(_capture(reject_raw, "verify"), "  ") + "\n}"
     )
     lines.append(
+        "function _ruledFixNode(row) {\n"
+        "  const _verdict = String(row.origin || '').startsWith('triage:') ? row.origin.slice(7) : '';\n"
+        "  if (_verdict) {\n"
+        "    const _r = routeAfterTriage(_verdict, null, '', row.pmRuling, '');\n"
+        "    if (_r.kind === 'node') return _r.value;\n"
+        "  }\n"
+        "  return SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET] ? SIZE_FIX_TARGET : null;\n"
+        "}\n"
+        "function _reloopRuled(row, node, undone) {\n"
+        "  row.pmRuling = row.adjudication.ruling;\n"
+        "  if (undone) { row.touchedFiles = [row.path]; row.createdFiles = []; row.removedFiles = []; row.fixReported = false; row.closeResult = null; }\n"
+        "  row.done = false;\n"
+        "  row.node = node;\n"
+        "}\n"
         "async function _handBackRow(rowId, type, reason, tradeoff, ruling) {\n"
         "  const row = _rows[rowId];\n"
         "  row.done = true;\n"
+        "  let _reloop = null;\n"
+        "  if (PM_BOUND_TYPES.includes(type) && !row.ruledOnce) {\n"
+        "    row.ruledOnce = true;\n"
+        "    const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };\n"
+        "    row.adjudication = await _issue(row.batchId, rowId, () => _adjudicateHandback(_entry));\n"
+        "    if (row.adjudication.actionable && row.adjudication.ruling) { _reloop = _ruledFixNode(row); }\n"
+        "  }\n"
         "  if (_UNDO_EXEMPT.includes(type) || !_hasWrites(row) || _undoPaths(row).length === 0) {\n"
+        "    if (_reloop) { _reloopRuled(row, _reloop, false); return; }\n"
         "    const _left = _undoPaths(row);\n"
         f"    if (type === 'peer-dirty' && _hasWrites(row) && _left.length > 0) {{ reason = reason + '; ' + {json.dumps(_NOT_UNDONE_PEER)} + ': ' + _left.join(', '); }}\n"
         "    _handBack(rowId, type, reason, tradeoff, ruling); return;\n"
@@ -1858,6 +1941,7 @@ def compose_grind_script(
         " + (_undone.reason ? ` (${_undone.reason})` : (_undone.outcome ? '' : ' (the verify stage returned no undo reply)')) + '" + _UNDO_FAILED_TAIL + "');\n"
         "    return;\n"
         "  }\n"
+        "  if (_reloop) { _reloopRuled(row, _reloop, true); return; }\n"
         "  _handBack(rowId, type, reason + '; undone', tradeoff, ruling);\n"
         "}\n"
         "async function _applyRouteRow(row, rowId, route, reason) {\n"
@@ -1997,7 +2081,7 @@ def compose_grind_script(
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
         "origin: '', refuteNote: '', fixReported: false, sizingPath: '', undoReason: '', "
-        "widened: false, verifyRetried: false, dedupeFlipped: false, onFailUsed: false, done: false, sha: '' };\n"
+        "widened: false, verifyRetried: false, dedupeFlipped: false, onFailUsed: false, done: false, sha: '', ruledOnce: false, adjudication: null };\n"
         "  }\n"
         "}"
     )
@@ -2037,8 +2121,12 @@ def compose_grind_script(
         "    if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"
         "    if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }\n"
         "    if (tradeoff && route.kind === 'handback' && route.value === 'repeat-refused') { _byTriageCheck.repeat_refused += 1; applyRoute(row, recRow, route, REPEAT_REFUSED_HEAD + row.pmRuling, tradeoff, row.pmRuling); }\n"
-        "    else if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { applyRoute(row, recRow, route, `triage reported a tradeoff: ${tradeoff}`, tradeoff); }\n"
-        "    else { if (tradeoff) { _byTriageCheck.ruled_tradeoff += 1; } applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }\n"
+        "    else if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { await _handBackRow(recRow, 'needs-judgment', `triage reported a tradeoff: ${tradeoff}`, tradeoff); }\n"
+        "    else {\n"
+        "      if (tradeoff) { _byTriageCheck.ruled_tradeoff += 1; }\n"
+        "      if (route.kind === 'handback' && PM_BOUND_TYPES.includes(route.value)) { await _handBackRow(recRow, route.value, `triage verdict ${rec.verdict}`); }\n"
+        "      else { applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }\n"
+        "    }\n"
         "  }\n"
         "  for (const staleRef of (_out.stale || [])) {\n"
         "    const staleId = _normalizeRowRef(rowsMeta, staleRef);\n"
@@ -2235,6 +2323,10 @@ def compose_grind_script(
         "}"
     )
 
+    adjudicate_text = pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
+    once_per_run_legs.append(adjudicate_text)
+    lines.append(adjudicate_text)
+
     run_close_text = _run_close_block(profile_name=profile.name, queue_dirs=queue_dirs, agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
     once_per_run_legs.append(run_close_text)
     lines.append(run_close_text)
@@ -2297,7 +2389,9 @@ def compose_grind_script(
         # Trap: the terminal commit already landed the rows in runGrind's finally before review
         # started, so "Review fixes" is the only commit review edits reach; a red re-verify
         # verdict stops them here.
-        + "\n  const _reviewFixWithheld = _reviewReverify ? (_reviewReverify.status_after ?? _reviewReverify.status_before) === 'fail' : !_verifyOnly;\n"
+        + "\n  const _reviewFixWithheld = _reviewReverify ? "
+        + f"['fail', '{REVERIFY_INDETERMINATE}'].includes(_reviewReverify.status_after ?? _reviewReverify.status_before)"
+        + " : !_verifyOnly;\n"
         + "  if (!_reviewFixWithheld) {\n"
         + f"  phase({_js_string_literal(_REVIEW_FIX_PHASE)});\n"
         + "  await (async () => {\n"
@@ -2308,9 +2402,6 @@ def compose_grind_script(
         + "  }\n}"
     )
 
-    adjudicate_text = pm_adjudication.compose_adjudicate_block(agent_type_host=agent_type_host, run_key=run_key, models=stage_models)
-    once_per_run_legs.append(adjudicate_text)
-    lines.append(adjudicate_text)
     lines.append(
         "await _adjudicatePmBound();\n"
         "} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
@@ -2322,6 +2413,7 @@ def compose_grind_script(
         "  profile: PROFILE_NAME,\n"
         "  appetite: APPETITE_NAME,\n"
         "  handed_back: _handedBack,\n"
+        "  declined: QUEUE_GRIND_MANIFEST.declined,\n"
         "  settled: _settled,\n"
         "  counts: _counts(),\n"
         "  spend: _spend(),\n"
@@ -2329,8 +2421,8 @@ def compose_grind_script(
     )
     lines.append("return HANDBACK;")
 
-    # Per-row legs (size/fix/reject/verify/close), a retried drain and per-handback adjudication
-    # route at run time, so the count is a floor.
+    # Per-row legs (size/fix/reject/verify/close), a retried drain and one adjudicate call per
+    # PM-bound row inside the loop route at run time, so the count is a floor.
     lines[meta_index] = with_fanout(
         meta_text,
         FanoutCost(

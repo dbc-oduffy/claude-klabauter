@@ -20,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEDGER_HALT_KIND,
     RECORD_DIR_ROOT,
     SPINE_SUFFIX,
+    UNCLAIMED_ROWS_HALT_KIND,
     LedgerHalt,
     ResumePlan,
     ledger_halt_path,
@@ -301,8 +302,42 @@ def resumable_plan(
         refusal = f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"
         route = halted_route_for_sizing(root, sizing_rel)
         raise SizingFireRefused([f"{refusal} {route}" if route else refusal])
+    unclaimed_halt = _unclaimed_rows_halt(root, plan_rel, plan_text, sizing, sizing_rel, pending)
+    if unclaimed_halt is not None:
+        return ResumePlan(plan_rel, (), ledger=unclaimed_halt)
     kept, kept_run = _kept_rows(root, sizing_rel, open_ids)
     return ResumePlan(plan_rel, tuple(open_ids), landed_open=landed_open, kept=kept, kept_run=kept_run)
+
+
+def _unclaimed_rows_halt(
+    root: Path, plan_rel: str, plan_text: str, sizing: Mapping, sizing_rel: str, pending: Sequence[str]
+) -> LedgerHalt | None:
+    """The synthesised `UNCLAIMED_ROWS_HALT_KIND` halt for a plan with rows still open whose
+    `register_claims` omit register rows (not ruled out), else None. It routes the refire through the
+    ledger re-plan leg, which adds rows serving them. Reads nothing: `plan_text` and `sizing` are in
+    hand. The halt is never persisted."""
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_ask_run_for
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import ruled_out_ids
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter
+
+    register = sizing.get("requirement_register")
+    rows = register.get("rows") if isinstance(register, Mapping) else None
+    if not isinstance(rows, list):
+        return None
+    claims = plan_frontmatter(plan_text).get("register_claims")
+    if not isinstance(claims, Mapping) or claims.get("sizing") != sizing_rel or not isinstance(claims.get("rows"), list):
+        return None
+    dict_rows = [r for r in rows if isinstance(r, dict)]
+    out = ruled_out_ids(dict_rows)
+    if not rr.unclaimed_ids(dict_rows, claims["rows"], exclude=out):
+        return None
+    rulable = [r for r in rulable_ids(rows) if r not in out]
+    run = halted_ask_run_for(root, sizing_rel)
+    return LedgerHalt(
+        run or ALL_LANDED_NO_RUN, plan_rel, sizing_rel, tuple(rulable),
+        halted=UNCLAIMED_ROWS_HALT_KIND, unlanded=tuple(pending),
+    )
 
 
 def _kept_rows(root: Path, sizing_rel: str, open_ids: Sequence[str]) -> tuple[tuple[str, ...], str | None]:

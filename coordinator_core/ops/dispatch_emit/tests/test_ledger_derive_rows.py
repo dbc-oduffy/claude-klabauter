@@ -142,6 +142,26 @@ def test_spelling_none_ignores_resolver_free_behaviour(tmp_path):
     assert rows[0]["writes"] == ["a/x.py"] and "Not declared" not in rows[0]["body"]
 
 
+def test_remaining_line_is_framed_as_gap_not_title_spec(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import GAP_TITLE_PREFIX, HALT_GAP_RULE
+
+    _touch(tmp_path, "a/x.py")
+    line = "verify-stage prompts do not carry the corpus-probe clause in a/x.py"
+    rows, _ = derive_ledger_rows({"R2": {"remaining": [line]}}, [], ["R2"], {}, [], tmp_path)
+    row = rows[0]
+    assert row["title"] != line and row["title"].startswith(GAP_TITLE_PREFIX)
+    assert row["title"] == "Close gap: " + line
+    assert HALT_GAP_RULE in row["body"]
+    assert "Gaps to close (each line is still true; make it false):" in row["body"]
+    assert f"- {line}" in row["body"]
+    assert "no gap line above holds at HEAD and the ledger check judges R2 met" in row["body"]
+
+
+def test_note_only_item_title_is_not_gap_prefixed(tmp_path):
+    rows, _ = derive_ledger_rows({}, ["finish the gate"], ["R1"], {"R1": ["a/x.py"]}, [], tmp_path)
+    assert rows[0]["title"] == "Serve revise note for R1"
+
+
 def test_note_only_item_derives_from_serving_writes(tmp_path):
     rows, under = derive_ledger_rows({}, ["finish the gate"], ["R1"], {"R1": ["a/x.py"]}, [], tmp_path)
     assert under == [] and rows[0]["writes"] == ["a/x.py"]

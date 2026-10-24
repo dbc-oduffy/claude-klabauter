@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.ops import review_findings_ledger
 from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import review_edits
+from coordinator_core.ops.tests.test_review_tripwires import stage
 from coordinator_core.session.machinery_paths import share_dir
 
 _REAL_POPEN = subprocess.Popen
@@ -409,6 +410,7 @@ def _add_tripwire(root):
     (root / "tests/test_tripwire.py").write_text(
         'def test_t():\n    assert open("pkg/mod.py")\n', encoding="utf-8"
     )
+    stage(root, ["tests/test_tripwire.py"])
 
 
 def test_tripwire_list_mode_returns_test_naming_an_edited_file(world):
@@ -429,6 +431,7 @@ def test_tripwire_list_mode_ignores_unrelated_edit_and_empty_edit_set(world):
 def test_tripwire_edited_test_file_naming_another_edit_stays_in_edited_only(world):
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_text('X = "pkg/mod.py"\n', encoding="utf-8")
+    stage(root, ["tests/test_plain.py"])
     (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
     out = _list(root)
     assert "tests/test_plain.py" in out["edited"]

@@ -95,6 +95,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.nudge_autonomous_askuserquestion": "coordinator_core.hooks",
     "hooks.flag_em_poll_in_flight":           "coordinator_core.hooks",
     "hooks.nudge_em_turn_budget":             "coordinator_core.hooks",
+    "hooks.guard_em_prefire_survey":          "coordinator_core.hooks",
     "hooks.submit_engine_ask":                "coordinator_core.hooks",
     "hooks.submit_bug_blitz":                 "coordinator_core.hooks",
     "hooks.taskstop_launch_recorder":         "coordinator_core.hooks",

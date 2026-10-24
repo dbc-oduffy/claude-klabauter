@@ -443,7 +443,7 @@ def next_action_parts(
                 rv = review_vars["reverify"]
                 record_fields_expr += (
                     f", {REVERIFY_KEY}: ({rv} ? {{ status_before: {rv}.status_before ?? null, "
-                    f"status_after: {rv}.status_after ?? null, failing: {rv}.failing ?? [], "
+                    f"status_after: {rv}.status_after ?? null, reverify_error: {rv}.reverify_error ?? null, failing: {rv}.failing ?? [], "
                     f"reverted: ({rv}.reverted ?? []).map(v => ({{ path: v.path, tests: v.tests ?? [] }})) }} : null)"
                 )
         def bookkeeping_form() -> str:

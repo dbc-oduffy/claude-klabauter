@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import struct
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.index_write import _build_entry
 from coordinator_core.ops.review_tripwires import literal_namers, names_in
 
 pytestmark = [pytest.mark.cadence]
@@ -13,11 +16,23 @@ pytestmark = [pytest.mark.cadence]
 EDITED = "ops/coverage-oracles/run_pass.py"
 
 
-def _repo(tmp_path: Path, files: dict) -> Path:
+def stage(repo: Path, rels) -> None:
+    """Write a v2 `.git/index` tracking `rels`, in process (no git spawn)."""
+    entries = b""
+    for rel in sorted(rels):
+        entries += _build_entry(rel.encode(), 0o100644, "ab" * 20, os.stat(repo / rel))
+    raw = b"DIRC" + struct.pack(">II", 2, len(rels)) + entries + b"\x00" * 20
+    (repo / ".git").mkdir(exist_ok=True)
+    (repo / ".git" / "index").write_bytes(raw)
+
+
+def _repo(tmp_path: Path, files: dict, *, track: bool = True) -> Path:
     for rel, text in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
+    if track:
+        stage(tmp_path, list(files))
     return tmp_path
 
 

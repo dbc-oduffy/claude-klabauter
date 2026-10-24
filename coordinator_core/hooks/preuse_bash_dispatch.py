@@ -121,6 +121,26 @@ def _irreversible_on_import_failure(command: str) -> str | None:
     return None
 
 
+def _is_deny(out: object) -> bool:
+    if not isinstance(out, dict):
+        return False
+    specific = out.get("hookSpecificOutput")
+    return isinstance(specific, dict) and specific.get("permissionDecision") == "deny"
+
+
+def _prefire_deny(params: dict) -> dict | None:
+    """Pre-fire survey deny envelope, else None; any failure is None (fail open).
+
+    `evaluate` already fails open; this wrapper covers only the import.
+    """
+    try:
+        from coordinator_core.hooks import guard_em_prefire_survey
+
+        return guard_em_prefire_survey.evaluate(params)
+    except Exception:
+        return None
+
+
 @register_op("hooks.preuse_bash_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: run the full bash-guard chain against
@@ -173,6 +193,11 @@ def _handler(params: dict, repo_root=None) -> dict:
     except Exception as exc:
         return _unevaluated(f"{type(exc).__name__}: {exc}")
 
+    if _is_deny(out):
+        return out
+    guard_deny = _prefire_deny(params)
+    if guard_deny:
+        return guard_deny
     if isinstance(out, dict):
         return out
     try:

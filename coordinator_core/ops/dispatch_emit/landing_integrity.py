@@ -21,6 +21,8 @@ SINCE_BASE_OVERLAP = "since-base-overlap"
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
 IMPORT_CLOSURE_UNTRACKED = "import-closure-untracked"
 REVIEW_REVERIFY_FAILED = "review-reverify-failed"
+REVERIFY_INDETERMINATE = "indeterminate"
+REVIEW_REVERIFY_INDETERMINATE = "review-reverify-indeterminate"
 REVERIFY_KEY = "reverify"
 TARGETED_TESTS_PARAM = "targeted_tests"
 NOT_RUN_CHECK = "not-run"
@@ -55,12 +57,51 @@ def unparseable_py(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:
             source = (Path(worktree_root) / rel).read_bytes()
         except OSError:
             continue
-        try:
-            ast.parse(source, filename=rel)
-        except SyntaxError as exc:
-            out.append(Finding(rel, PY_UNPARSEABLE, f"line {exc.lineno}: {exc.msg}"))
-        except ValueError as exc:
-            out.append(Finding(rel, PY_UNPARSEABLE, f"line 0: {exc}"))
+        found = _parse_finding(rel, source)
+        if found:
+            out.append(found)
+    return out
+
+
+def _parse_finding(rel: str, source: bytes) -> Optional[Finding]:
+    try:
+        ast.parse(source, filename=rel)
+    except SyntaxError as exc:
+        return Finding(rel, PY_UNPARSEABLE, f"line {exc.lineno}: {exc.msg}")
+    except ValueError as exc:
+        return Finding(rel, PY_UNPARSEABLE, f"line 0: {exc}")
+    return None
+
+
+def unparseable_py_at(worktree_root: Path, rev: str, paths: Sequence[str]) -> list[Finding]:
+    """Like ``unparseable_py`` but parses each ``.py`` path's blob at ``rev`` (one ``git cat-file --batch``
+    spawn). Paths absent at ``rev`` are skipped; an unreadable ``rev`` yields no findings."""
+    wanted = [p for p in paths if p.endswith(".py")]
+    if not wanted:
+        return []
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(
+        ["-C", str(worktree_root), "cat-file", "--batch"],
+        input="".join(f"{rev}:{p}\n" for p in wanted).encode("utf-8"),
+        binary=True,
+    )
+    if proc.returncode != 0:
+        return []
+    data, pos, out = proc.stdout_bytes, 0, []
+    for rel in wanted:
+        eol = data.find(b"\n", pos)
+        if eol < 0:
+            break
+        header = data[pos:eol].split()
+        pos = eol + 1
+        if len(header) != 3 or header[1] != b"blob":
+            continue
+        size = int(header[2])
+        found = _parse_finding(rel, data[pos : pos + size])
+        pos += size + 1
+        if found:
+            out.append(found)
     return out
 
 
@@ -219,6 +260,14 @@ def retest_remedy(params: Optional[Mapping], files: Sequence[str] = ()) -> str:
     return line + "".join(f" --tests {f}" for f in files)
 
 
+def _indeterminate_finding(error: object, remedy: str) -> Finding:
+    cause = error if isinstance(error, str) and error.strip() else "no error recorded"
+    return Finding(
+        "", REVIEW_REVERIFY_INDETERMINATE,
+        f"re-verify did not run ({cause}); engine defect, not a test result; re-run: {remedy}",
+    )
+
+
 def failed_targeted_tests(
     verdict: Optional[Mapping], remedy: Optional[str] = None
 ) -> tuple[list[Finding], str]:
@@ -227,6 +276,10 @@ def failed_targeted_tests(
 
     A fail/error verdict whose ``tests_run`` is the integer 0 executed nothing: ``([], NOT_RUN_CHECK)``,
     checked before the baseline, never a TARGETED_TESTS_FAILED finding.
+
+    A fail/error verdict whose ``status_before`` is ``"indeterminate"`` (the re-verify never ran) is
+    one Finding(REVIEW_REVERIFY_INDETERMINATE) with check ``"failed"``, checked ahead of the above
+    and never ``"pre-existing-only"``.
 
     A fail/error verdict with ``baseline.caused`` yields one Finding(TARGETED_TESTS_FAILED) per
     distinct caused test file (repo-relative POSIX), the detail naming up to three node ids. A
@@ -245,6 +298,8 @@ def failed_targeted_tests(
         return [], "pass"
     if status not in ("fail", "error"):
         return [], "no-verdict"
+    if verdict.get("status_before") == REVERIFY_INDETERMINATE:
+        return [_indeterminate_finding(verdict.get("reverify_error"), remedy or retest_remedy(None))], "failed"
     tests_run = verdict.get("tests_run")
     if isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run == 0:
         return [], NOT_RUN_CHECK
@@ -355,13 +410,20 @@ def reverify_verdict(record: Mapping) -> object:
 def reverify_red_findings(
     worktree_root: Path, params: Mapping, landing_paths: Sequence[str]
 ) -> list[Finding]:
-    """A Finding(REVIEW_REVERIFY_FAILED) per test file the run's review re-verify left red that the
+    """One Finding(REVIEW_REVERIFY_INDETERMINATE) when the re-verify record reads ``indeterminate`` or
+    carries a non-empty ``reverify_error``: it never ran, an engine defect rather than a test result.
+    Otherwise a Finding(REVIEW_REVERIFY_FAILED) per test file the run's review re-verify left red that the
     landing touches: ``params["inline_review"]["reverify"]`` reading ``fail`` (``status_after``, else
     ``status_before``), whose ``failing`` node ids and ``reverted[].tests`` name a file that is itself
     landing or imports a landing module. An absent or non-dict re-verify, a non-fail verdict, or a
     failure implicating no landed path yields []. In-process; one read per implicated test file."""
     record = reverify_record(params)
-    if record is None or reverify_verdict(record) != "fail":
+    if record is None:
+        return []
+    error = record.get("reverify_error")
+    if reverify_verdict(record) == REVERIFY_INDETERMINATE or (isinstance(error, str) and error.strip()):
+        return [_indeterminate_finding(error, retest_remedy(params, []))]
+    if reverify_verdict(record) != "fail":
         return []
     landed = {str(p).replace("\\", "/") for p in landing_paths}
     nodes: list[str] = [str(n) for n in (record.get("failing") or []) if n]
@@ -471,6 +533,8 @@ def landing_test_gate(
             verdict = {**verdict, "tests_failed": None}
         files =list(dict.fromkeys(f for f in (_node_file(n) for n in nodes) if f))
         findings, check = failed_targeted_tests(verdict, retest_remedy(params, files))
+        if any(f.reason == REVIEW_REVERIFY_INDETERMINATE for f in findings):
+            return findings, check
         if check != "failed" or verdict.get("baseline"):
             return findings, check
         if not files:

@@ -99,6 +99,13 @@ def test_sixth_post_landing_turn_signals_once(env):
     assert nb.advisory_text(env.params()) == ""
 
 
+def test_post_landing_text_routes_gap_through_revise():
+    text = nb.post_landing_text(6, 5)
+    assert text.startswith("[em-turn-budget]")
+    assert "workflow.revise" in text
+    assert "Read the digest" not in text
+
+
 def test_second_landed_run_signals_again(env):
     env.turns(1, fire=True)
     for run in ("run-1", "run-2"):

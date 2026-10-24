@@ -103,7 +103,44 @@ def test_synthetic_session_id_is_silent(indexed_repo):
 
 
 def test_other_tools_are_silent(indexed_repo):
+    assert m._handler(_payload(indexed_repo, tool="Bash")) == m.no_advisory()
+
+
+_GUARD_DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                      "permissionDecisionReason": "[em-prefire-survey] x"}}
+
+
+@pytest.mark.parametrize("tool", ["Read", "Grep", "Glob"])
+def test_guard_deny_returned_before_advisories(indexed_repo, monkeypatch, tool):
+    sid = str(uuid.uuid4())
+    spent: list = []
+    monkeypatch.setattr(m.guard_em_prefire_survey, "evaluate", lambda params: _GUARD_DENY)
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text",
+                        lambda params: spent.append(1) or _TURN)
+    assert m._handler(_payload(indexed_repo, tool=tool, pattern="some text", session_id=sid)) == _GUARD_DENY
+    assert spent == []
+    monkeypatch.setattr(m.guard_em_prefire_survey, "evaluate", lambda params: None)
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: "")
+    if tool != "Read":
+        assert "this repo has a code index" in _ctx(
+            m._handler(_payload(indexed_repo, tool=tool, pattern="some text", session_id=sid)))
+
+
+def test_read_reaches_door_and_gets_no_rag_advice(indexed_repo, monkeypatch):
+    monkeypatch.setattr(m.guard_em_prefire_survey, "evaluate", lambda params: None)
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
+    out = _ctx(m._handler(_payload(indexed_repo, tool="Read", pattern="_resolve_registry_key")))
+    assert _TURN in out and "this repo has a code index" not in out
+    monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: "")
     assert m._handler(_payload(indexed_repo, tool="Read")) == m.no_advisory()
+
+
+def test_guard_exception_fails_open(indexed_repo, monkeypatch):
+    def boom(params):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(m.guard_em_prefire_survey, "evaluate", boom)
+    assert "this repo has a code index" in _ctx(m._handler(_payload(indexed_repo)))
 
 
 _TURN = "[em-turn-budget] test signal"
@@ -133,7 +170,7 @@ def test_turn_text_signals_in_repo_without_index(tmp_path, monkeypatch):
 def test_turn_leg_not_reached_for_synthetic_session_or_other_tool(indexed_repo, monkeypatch):
     monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
     assert m._handler(_payload(indexed_repo, session_id="probe")) == m.no_advisory()
-    assert m._handler(_payload(indexed_repo, tool="Read")) == m.no_advisory()
+    assert m._handler(_payload(indexed_repo, tool="Bash")) == m.no_advisory()
 
 
 def test_turn_leg_exception_keeps_example_retrieval_repo_advice(indexed_repo, monkeypatch):

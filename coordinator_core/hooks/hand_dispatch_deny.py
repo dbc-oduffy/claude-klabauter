@@ -5,9 +5,8 @@ Purpose: leaf of ``hooks.block_unenumerated_agent_type.check``. A workflow ``age
 reaches PreToolUse(Agent), so a top-level hit on a planner type is hand-rolled by construction.
 Invariant: no module-scope import beyond stdlib, ``hooks._envelope`` and
 ``hooks.sizing_scout_deny`` (``test_fleet_mode_reader_set.py`` counts every import edge into the
-guard closure); ``requirements_ledger`` is imported inside ``_binds_unclaimed_sizing`` only, once a
-prompt names an existing sizing. Trap: the ``/mise-prep`` carve-out token is agent-writable, so it
-must never be named in the reason text.
+guard closure). Trap: the ``/mise-prep`` carve-out token is agent-writable, so it must never be
+named in the reason text.
 
 Order is load-bearing: tool, agent_id and the type are checked before the prompt is read, so no
 other Agent dispatch pays anything.
@@ -16,7 +15,6 @@ other Agent dispatch pays anything.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from coordinator_core.hooks import sizing_scout_deny as _scout
@@ -26,30 +24,10 @@ GUARD_NAME = "hand-dispatch-planner"
 PLAN_AUTHOR_TYPES = frozenset({"coordinator:plan-author", "plan-author"})
 PLANNER_TYPES = PLAN_AUTHOR_TYPES | frozenset({"coordinator:roadmap-planner", "roadmap-planner"})
 _MISE_PREP_TOKEN = re.compile(r"(?<![\w-])mise-prep-gate(?![\w-])")
-_SIZING_PATH = re.compile(r"(?<![\w./-])(state/sizings/[\w.-]+\.yaml)(?![\w-])")
 _REASON = (
     "Planning starts at sizing: Skill(coordinator:sizing) fires the ask workflow, "
     "then Skill(coordinator:plan) plans what it routes."
 )
-
-
-def _binds_unclaimed_sizing(prompt: str, cwd: Any) -> bool:
-    """True when the prompt names an existing ``state/sizings/*.yaml`` whose plan omits register rows.
-
-    Reads the on-disk fact through ``requirements_ledger._unclaimed_rows``, resolved against the
-    payload cwd; a missing cwd, a missing sizing or a fully claiming plan is False.
-    """
-    if not isinstance(cwd, str) or not cwd:
-        return False
-    root = Path(cwd)
-    for sizing_rel in dict.fromkeys(_SIZING_PATH.findall(prompt.replace("\\", "/"))):
-        if not (root / sizing_rel).is_file():
-            continue
-        from coordinator_core.ops.dispatch_emit.requirements_ledger import _unclaimed_rows
-
-        if _unclaimed_rows(root, sizing_rel)[0]:
-            return True
-    return False
 
 
 def hand_dispatch_deny(payload: Mapping[str, Any], subagent_type: str) -> Optional[dict]:
@@ -69,8 +47,6 @@ def hand_dispatch_deny(payload: Mapping[str, Any], subagent_type: str) -> Option
         tool_input = payload.get("tool_input")
         prompt = tool_input.get("prompt") if isinstance(tool_input, Mapping) else None
         if isinstance(prompt, str) and _MISE_PREP_TOKEN.search(prompt):
-            return None
-        if isinstance(prompt, str) and _binds_unclaimed_sizing(prompt, payload.get("cwd")):
             return None
     from coordinator_core.machine_profile import apply_guard_level
 

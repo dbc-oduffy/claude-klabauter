@@ -495,6 +495,18 @@ LEG_DISPATCH, LEG_SKIP, LEG_REFUSE = "dispatch", "skip", "refuse"
 LEG_REFUSAL_HEAD = "ledger-remaining leg refused: "
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
+#: Register sentence framing every halt remaining line; carried verbatim into refire briefs, the fix prompt, the resume ledger judge clause and derived row bodies.
+HALT_GAP_RULE = (
+    "Each remaining line names a state that is still true and must become false; closing it changes "
+    "the tree so the line no longer holds; a row, test, or verdict that asserts the line's state "
+    "pins the gap and does not close it."
+)
+#: Title prefix `derive_ledger_rows` puts on a row derived from a halt remaining line.
+GAP_TITLE_PREFIX = "Close gap: "
+#: Verdict item key holding `[{gap, how}]`: one entry per halt remaining line the row closed.
+GAPS_CLOSED_FIELD = "gaps_closed"
+#: land_run failure reason for a met blocking row with a halt gap line lacking a `gaps_closed` entry.
+HALT_GAP_UNCLOSED_REASON = "a halt remaining line has no gaps_closed entry with a non-empty how"
 #: Speculative, no non-test consumer yet: `workflow.revise` param naming the register row ids a ruling claims.
 CLAIM_PARAM = "claim"
 #: Speculative, no non-test consumer yet: filename of the remaining-leg footprint artifact inside `RECORD_DIR_ROOT/<run_id>/`.
@@ -693,6 +705,10 @@ RESUME_LEDGER_KEY = "resume_ledger"
 LEDGER_HALT_KIND = "ledger-check"
 #: `LedgerHalt.halted` of a resume synthesised at gate time from an all-landed plan; never a pointer on disk.
 ALL_LANDED_HALT_KIND = "all-landed"
+#: `LedgerHalt.halted` of a resume for a plan that leaves register rows unclaimed.
+UNCLAIMED_ROWS_HALT_KIND = "unclaimed-rows"
+#: Stage refusal code for a plan whose claims omit register rows.
+REGISTER_ROWS_UNCLAIMED_REFUSAL = "REGISTER-ROWS-UNCLAIMED"
 #: `resume_ledger` verdict key carrying the halted kind; absent means `LEDGER_HALT_KIND`.
 RESUME_LEDGER_KIND_FIELD = "kind"
 #: The run's recorded review outcome, in its record dir; the source of a re-fire's `inline_review`.

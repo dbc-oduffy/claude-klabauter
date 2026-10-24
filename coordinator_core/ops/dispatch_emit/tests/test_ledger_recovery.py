@@ -143,6 +143,17 @@ def test_fix_prompt_carries_the_negative_specs():
         assert needle in p
 
 
+def test_fix_prompt_frames_remaining_as_gaps_to_close():
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_GAP_RULE
+
+    p = lr.ledger_fix_prompt("r", "e", "f", "fp")
+    assert "Gaps to close" in p
+    assert HALT_GAP_RULE in p
+    assert "Remaining:" not in p
+    for var in ("${r}", "${e}", "${f}", "${fp}"):
+        assert var in p
+
+
 def _node():
     node = shutil.which("node")
     if node is None:

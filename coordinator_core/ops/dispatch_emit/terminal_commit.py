@@ -167,7 +167,9 @@ from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy  # noqa: E402 -- sibling-package group
-from coordinator_core.ops.dispatch_emit.land_run import _em_discharged_rows, _leg_footprint_writes, _recovery_backing  # noqa: E402
+from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
+    _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
+)
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix  # noqa: E402
 from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
@@ -348,7 +350,7 @@ def _halted_commit_params(digest: dict) -> Optional[dict]:
     ):
         return None
     keep = ("id", "status", "essential", "wired", "superseded_by", "withheld_by", "post_commit_acts",
-            "met_by", "root_read", "remaining")
+            "met_by", "root_read", "remaining", "gaps_closed")
     verdict = {
         "items": [
             {"essential": True, **{k: i[k] for k in keep if k in i}}
@@ -2403,6 +2405,7 @@ def _ledger_gate(
         stale = _unchanged_since_halt_failures(
             worktree_root, resume_ledger, verdict, manifest_path, plan_rel, since_halt
         )
+        stale = [*stale, *_unclosed_halt_gaps(resume_ledger, verdict, _halt_gap_lines(worktree_root, resume_ledger))]
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if result["pass"]:

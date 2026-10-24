@@ -876,6 +876,53 @@ def _em_discharged_rows(resume: object, items: Sequence) -> frozenset:
     return frozenset(out)
 
 
+def _halt_gap_lines(root: Path, resume: object) -> dict:
+    """``{row_id: {"remaining": [str]}}`` of a ledger resume's halt gap lines: the payload's
+    ``remaining`` mapping when present, else the halt record's. File reads only; ``{}`` when unknown."""
+    from coordinator_core.ops.dispatch_emit import ask_contract as ac
+
+    if not isinstance(resume, dict):
+        return {}
+    payload = resume.get(ac.RESUME_LEDGER_REMAINING_FIELD)
+    if isinstance(payload, dict):
+        return payload
+    run_id, halt_sha = resume.get("run_id"), resume.get("halt_sha")
+    if not isinstance(run_id, str):
+        return {}
+    record = ac.read_halt_record(root, run_id, halt_sha if isinstance(halt_sha, str) else None)
+    return dict(record.remaining) if record is not None else {}
+
+
+def _unclosed_halt_gaps(resume: object, verdict: object, gap_lines: object) -> list:
+    """``[{id, reason}]`` for each blocking row the verdict calls met or post_commit while one of its
+    halt gap lines (stripped, exact) has no ``gaps_closed`` entry of the same gap with a non-empty
+    ``how``. Pure; rows with no gap lines owe nothing."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import GAPS_CLOSED_FIELD, HALT_GAP_UNCLOSED_REASON
+
+    blocking = resume.get("blocking") if isinstance(resume, dict) else None
+    items = verdict.get("items") if isinstance(verdict, dict) else None
+    if not isinstance(blocking, list) or not isinstance(items, list) or not isinstance(gap_lines, dict):
+        return []
+    failures: list = []
+    for item in items:
+        if not isinstance(item, dict) or item.get("id") not in blocking or item.get("status") not in ("met", "post_commit"):
+            continue
+        entry = gap_lines.get(str(item["id"]))
+        lines = entry.get("remaining") if isinstance(entry, dict) else entry
+        if not isinstance(lines, (list, tuple)):
+            continue
+        closed = item.get(GAPS_CLOSED_FIELD)
+        covered = {
+            str(c.get("gap")).strip() for c in (closed if isinstance(closed, list) else [])
+            if isinstance(c, dict) and isinstance(c.get("gap"), str) and isinstance(c.get("how"), str) and c["how"].strip()
+        }
+        for line in lines:
+            if isinstance(line, str) and line.strip() and line.strip() not in covered:
+                failures.append({"id": item["id"], "reason": f"{HALT_GAP_UNCLOSED_REASON}: {line.strip()}"})
+                break
+    return failures
+
+
 def _unchanged_since_halt(
     root: Path, resume: object, verdict: object, manifest_abs: Optional[Path],
     plan_rel: Optional[str], detail: dict, exclude: Sequence[str] = (),
@@ -1104,6 +1151,7 @@ def _ledger_gate(
         stale = _unchanged_since_halt(
             root, resume_ledger, verdict, manifest_abs, plan_rel, since_halt, fenced.get("breach") or (),
         )
+        stale = [*stale, *_unclosed_halt_gaps(resume_ledger, verdict, _halt_gap_lines(root, resume_ledger))]
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
         if fenced.get("breach"):

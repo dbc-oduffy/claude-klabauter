@@ -1,8 +1,14 @@
-"""coordinator_core.hooks.preuse_search_dispatch — PreToolUse(Grep, Glob)
-advisory: steer structural questions to example-retrieval-repo where it answers.
+"""coordinator_core.hooks.preuse_search_dispatch — PreToolUse(Read, Grep, Glob)
+door: the pre-fire survey deny, then advisories steering structural questions
+to example-retrieval-repo where it answers.
 
-Two kinds of fire, both advisory (`context_only`, never a permission
-decision), both fail open to `no_advisory()`:
+First leg: `guard_em_prefire_survey.evaluate` may return a deny envelope for
+any of Read/Grep/Glob; it runs before the advisories so a denied call spends
+none of them, and any failure in it is silence. Read gets no example-retrieval-repo
+advice, only the turn-budget advisory.
+
+Two kinds of advisory fire for Grep/Glob, both `context_only` (never a
+permission decision), both fail open to `no_advisory()`:
 
   1. General — the first Grep/Glob per (session, agent) against a repo that
      example-retrieval-repo answers for names the structural tools once.
@@ -39,7 +45,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
-from coordinator_core.hooks import nudge_em_turn_budget
+from coordinator_core.hooks import guard_em_prefire_survey, nudge_em_turn_budget
 from coordinator_core.hooks.example_retrieval_repo_detect import find_example_retrieval_repo_dir
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.session_hub import (
@@ -49,7 +55,7 @@ from coordinator_core.hooks.support.session_hub import (
 from coordinator_core.ipc import register_op
 
 _KILL_SWITCH = "COORDINATOR_HOOK_PREUSE_SEARCH_DISPATCH_DISABLED"
-_SEARCH_TOOLS = frozenset({"Grep", "Glob"})
+_SEARCH_TOOLS = frozenset({"Read", "Grep", "Glob"})
 _GENERAL_SENTINEL = "example-retrieval-repo-search-nudged"
 _AGENT_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
 
@@ -205,6 +211,14 @@ def _turn_budget_text(params: dict) -> str:
         return ""
 
 
+def _prefire_deny(params: dict) -> Optional[dict]:
+    """Pre-fire survey deny envelope, else None; any failure is None (fail open)."""
+    try:
+        return guard_em_prefire_survey.evaluate(params)
+    except Exception:
+        return None
+
+
 @register_op("hooks.preuse_search_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
@@ -219,10 +233,17 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not isinstance(session_id, str) or not session_id_is_real(session_id):
         return no_advisory()
 
+    denied = _prefire_deny(params)
+    if denied:
+        return denied
+
     turn_text = _turn_budget_text(params)
 
     def _only_turn_text() -> dict:
         return context_only("PreToolUse", turn_text) if turn_text else no_advisory()
+
+    if params.get("tool_name") == "Read":
+        return _only_turn_text()
 
     search_root = _search_root(params, tool_input)
     indexed_root = _indexed_repo_root(search_root) if search_root else None
