@@ -88,6 +88,40 @@ def test_absent_failing_at_base_vouches_for_nothing(world):
     assert out["error"] is None and out["pre_existing"] == []
 
 
+def _mod_bytes(root):
+    return (root / "pkg/mod.py").read_bytes()
+
+
+def test_red_at_base_without_probe_is_pre_existing_and_not_reverted(world):
+    before = _mod_bytes(world)
+    out = _call(world, failing=FAILING, failing_at_base=FAILING, sidecars=SIDECARS)
+    assert out["error"] is None
+    assert out["pre_existing"] == FAILING
+    assert out["unattributed"] == [] and out["reverted"] == []
+    assert _mod_bytes(world) == before
+
+
+def test_pre_existing_id_implicating_an_applied_finding_is_not_inverted(world):
+    before = _mod_bytes(world)
+    out = _call(world, failing=FAILING, failing_before=FAILING, failing_at_base=FAILING, sidecars=SIDECARS)
+    assert out["pre_existing"] == FAILING and out["reverted"] == []
+    assert _mod_bytes(world) == before
+    other = ["tests/test_mod.py::test_other"]
+    out = _call(world, failing=other, failing_at_base=[], sidecars=SIDECARS)
+    assert out["pre_existing"] == []
+
+
+def test_at_base_id_outside_failing_is_never_reported(world):
+    out = _call(world, failing=FAILING, failing_at_base=["tests/test_x.py::test_z"], sidecars=SIDECARS)
+    assert out["pre_existing"] == []
+
+
+def test_record_carries_pre_existing(world):
+    out = _call(world, failing=FAILING, failing_at_base=FAILING, sidecars=SIDECARS)
+    record = json.loads((world / out["record"]).read_text(encoding="utf-8"))
+    assert record["pre_existing"] == FAILING
+
+
 def test_handler_refuses_non_list_failing_at_base(world):
     out = rr._handler(
         {"base": BASE, "slice_prefix": PREFIX, "session_id": SESSION, "failing": FAILING, "failing_at_base": "x"},

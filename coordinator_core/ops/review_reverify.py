@@ -48,11 +48,11 @@ The record ``reverify.json`` merges across calls. Revert refuses while a probe i
 Probe: ``"probe":"open"`` (with ``failing`` and ``sidecars``) writes the finding-inverted bytes of
 each implicated edited path into the tree, stashing the post-review bytes beside the snapshot, and
 names the ``rerun`` ids for the test-runner. ``"probe":"close"`` puts the post-review bytes back.
-An id in ``failing_before`` that a closed probe re-ran implicates no review edit: its hunks are kept
-whatever ``failing_at_base`` holds. It is labelled ``pre_existing`` only when ``failing_at_base``
-(red at the run base with none of the run's edits applied) lists it; an absent or empty list
-leaves it ``unattributed``. An id no closed probe re-ran is never
-honoured.
+An id in ``failing_at_base`` (red at the run base with none of the run's edits applied) is
+``pre_existing`` whatever the probe ran: it is never reverted and never ``unattributed``. An absent
+or empty list classes nothing ``pre_existing``. An id in ``failing_before`` that a closed probe
+re-ran, but not in ``failing_at_base``, implicates no review edit: its hunks are kept and it is
+``unattributed``. An id no closed probe re-ran is never honoured as ``failing_before``.
 
 Negative-spec: zero process spawns, no git verb, no test execution. A refusal (no manifest, a
 path escaping the worktree, an unreadable or corrupt blob) is returned as ``error`` with nothing
@@ -579,9 +579,9 @@ def review_reverify(
     if revert:
         vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
         at_base = {str(i) for i in failing_at_base or []}
-        skip = {n for n in ids if n in vouched}
-        pre_existing = sorted(n for n in skip if n in at_base)
-        not_base_red = sorted(skip - set(pre_existing))
+        pre_existing = sorted(n for n in ids if n in at_base)
+        not_base_red = sorted(n for n in ids if n in vouched and n not in at_base)
+        skip = set(pre_existing) | set(not_base_red)
     else:
         pre_existing, not_base_red, skip = [], [], set()
     implication = _implication(repo_root, [n for n in ids if n not in skip], edited, created)

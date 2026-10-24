@@ -21,9 +21,9 @@ run-caused failure withholds the chunk owning the failing test file, or every ch
 failure is unattributed or in a file no landing chunk owns (``targeted-tests-failed``); the reply's
 ``targeted_tests.check`` says ``no-verdict`` when none was carried, and ``not-run`` (halt-record-only
 too) when the carried verdict executed no test.
-With no finished chunk the commit is record-only. No receipt, sizing ship,
-plan stamp or close job runs, and the run token is only checked (``run_token.admits``), never
-claimed: no branch, raise or killed op can strand it, so a halt never spends the token the
+With no finished chunk the commit is record-only. No receipt, sizing ship
+or close job runs; the one plan stamp codes this halt's ``Lands-Chunks`` rows at its sha. The run
+token is only checked (``run_token.admits``), never claimed: no branch, raise or killed op can strand it, so a halt never spends the token the
 resumed run's product commit needs.
 """
 
@@ -50,7 +50,9 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     halted_record_message,
     write_run_outcome,
 )
-from coordinator_core.ops.dispatch_emit.land_run_halt import _settle_ledger_pointer, marker_kind
+from coordinator_core.ops.dispatch_emit.land_run_halt import (
+    _settle_ledger_pointer, held_rows_for, marker_kind, stamp_halt_lands_chunks,
+)
 
 
 def is_halted_record_call(params: object) -> bool:
@@ -577,6 +579,7 @@ def _land(
         declared.append(sizing_rel)
 
     outcome_rel = _persist_run_outcome(worktree_root, run_id, halted, params)
+    plan_rel = None
     if (worktree_root / record_dir_rel).is_dir():
         plan_rel, blocking, blocking_items = (
             _ledger_halt_plan_and_blocking(repo_root, halted)
@@ -596,6 +599,7 @@ def _land(
             run_base_sha=run_base,
             reason=halt_reason,
             next_action=halted.get("next_action") if isinstance(halted.get("next_action"), dict) else None,
+            held_rows=held_rows_for(worktree_root, run_id, plan_rel),
         )
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
@@ -875,6 +879,12 @@ def _land(
         )
         if left:
             extra["run_artifact_residue"] = left
+        halt_sha = reply.get("sha") if reply.get("committed") else None
+        stamp = stamp_halt_lands_chunks(
+            worktree_root, repo_root, halted, plan_rel, landed_chunks, halt_sha, session_id,
+        )
+        if stamp is not None:
+            extra["lands_chunks_stamp"] = stamp
     extra["run_artifacts"] = {"landed": sorted(paths + deleted), "withheld": withheld}
     if landed_chunks:
         extra["landed_chunks"] = landed_chunks

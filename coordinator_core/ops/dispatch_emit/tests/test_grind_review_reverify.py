@@ -12,7 +12,10 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _GUARD = (
     "const _reviewFixWithheld = _reviewReverify ? "
-    "['fail', 'indeterminate'].includes(_reviewReverify.status_after ?? _reviewReverify.status_before)"
+    "(_reviewReverify.status_after ?? _reviewReverify.status_before) === 'indeterminate'"
+    " || ((_reviewReverify.status_after ?? _reviewReverify.status_before) === 'fail'"
+    " && !(Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length > 0"
+    " && _reviewReverify.failing.every((id) => (_reviewReverify.pre_existing ?? []).includes(id))))"
     " : !_verifyOnly;"
 )
 
@@ -41,6 +44,37 @@ def test_review_fix_call_sits_under_the_negated_guard_and_logs_when_withheld():
     fix_at = script.index("label: 'review-fix-commit'")
     else_at = script.index("} else {\n    log('review fixes withheld: targeted-tests-failed');")
     assert script.index(_GUARD) < guard_at < script.index("phase('Review fixes')") < fix_at < else_at
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    ("verdict", "withheld"),
+    [
+        ({"status_before": "fail", "failing": ["t::a", "t::b"], "pre_existing": ["t::a", "t::b"]}, False),
+        ({"status_before": "fail", "failing": ["t::a", "t::b"], "pre_existing": ["t::a"]}, True),
+        ({"status_before": "fail", "failing": [], "pre_existing": []}, True),
+        ({"status_before": "fail", "failing": ["t::a"]}, True),
+        ({"status_before": "fail", "status_after": "pass", "failing": ["t::a"], "pre_existing": []}, False),
+        ({"status_before": "indeterminate", "failing": [], "pre_existing": []}, True),
+        ({"status_before": "pass", "failing": [], "pre_existing": []}, False),
+    ],
+)
+def test_withhold_guard_spares_only_an_all_pre_existing_fail(verdict, withheld):
+    import json
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    script = _compose()
+    start = script.index(_GUARD)
+    expr = script[start:start + len(_GUARD)]
+    program = (
+        f"const _reviewReverify = {json.dumps(verdict)}; const _verifyOnly = false; "
+        f"{expr} console.log(JSON.stringify(_reviewFixWithheld));"
+    )
+    out = subprocess.run([node, "-e", program], capture_output=True, text=True, **no_console_creationflags())
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) is withheld
 
 
 @pytest.mark.spawns_process

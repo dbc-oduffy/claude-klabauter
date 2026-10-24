@@ -169,13 +169,12 @@ def test_solo_landed_at_other_sha_refuses(repo):
     assert not out["ok"] and "already landed" in out["error"]
 
 
-@pytest.mark.parametrize("status", ["resumed", "running"])
-def test_solo_non_halted_status_refuses(repo, status):
+def test_solo_non_halted_status_refuses(repo):
     root, first, _ = repo
-    marker = _solo(root, status)
+    marker = _solo(root, "running")
     before = marker.read_bytes()
     out = _call(root, run_id=SOLO, sha=first)
-    assert not out["ok"] and "not halted" in out["error"]
+    assert not out["ok"] and "halted or resumed" in out["error"]
     assert marker.read_bytes() == before
 
 

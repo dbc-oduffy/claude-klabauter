@@ -57,6 +57,11 @@ def test_reply_keys_carry_what_callers_read():
             "criterion_status", "stranded", "peer_held_left", "incomplete_reasons", "next"} <= c.REPLY_KEYS
 
 
+def test_credited_chunks_reply_key_is_a_member():
+    assert c.REPLY_CREDITED_CHUNKS == "credited_chunks"
+    assert c.REPLY_CREDITED_CHUNKS in c.REPLY_KEYS
+
+
 def test_clause_names_op_and_not_the_killed_op():
     assert c.OP_NAME in c.RECONCILE_CLAUSE
     assert "terminal_commit" not in c.RECONCILE_CLAUSE

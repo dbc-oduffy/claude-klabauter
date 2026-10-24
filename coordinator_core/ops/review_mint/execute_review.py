@@ -725,6 +725,7 @@ _REVERIFY_SCHEMA = {
             },
         },
         "pre_existing": {"type": "array", "items": {"type": "string"}},
+        "base_measure": {"type": "string"},
         "kept": {
             "type": "array",
             "items": {
@@ -742,13 +743,13 @@ _REVERIFY_SCHEMA = {
         "record": {"type": ["string", "null"]},
         "sidecar_path": {"type": "string"},
     },
-    "required": ["edited", "failing", FAILING_DETAIL_FIELD, "reverted", "status_before"],
+    "required": ["edited", "failing", FAILING_DETAIL_FIELD, "reverted", "pre_existing", "status_before"],
 }
 
 _REVERIFY_INDETERMINATE_CLAUSE = (
     "If any review.reverify call in this step returns a non-null `error` or fails as an engine "
     "call (any JSON-RPC error, -32004 included), run no tests and stop: return edited [], "
-    f'failing [], {FAILING_DETAIL_FIELD} [], reverted [], status_before "{REVERIFY_INDETERMINATE}" and the verbatim error '
+    f'failing [], {FAILING_DETAIL_FIELD} [], reverted [], pre_existing [], status_before "{REVERIFY_INDETERMINATE}" and the verbatim error '
     "as reverify_error. That is an engine defect, never a test result."
 )
 
@@ -778,7 +779,10 @@ def _base_measure_clause(base_ref: str) -> str:
     """Prompt step measuring ``failing_at_base``: one baseline-export run over the failing ids at the
     snapshot base. Empty-set fallback when the base is the unset placeholder."""
     if base_ref == "run_base_sha":
-        return "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. "
+        return (
+            "The run base is unset: pass `\"failing_at_base\":[]` on every revert call, and return "
+            "`base_measure` \"unset\". "
+        )
     return (
         "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
         f"(never per test): `python -m coordinator_core.testing.baseline_export --sha {base_ref} -- "
@@ -787,7 +791,9 @@ def _base_measure_clause(base_ref: str) -> str:
         "`runner_exit` 0, 1 or 4. Exit 4 with a \"not found\" line naming ids means the run added "
         "them: they are never pre_existing; drop them and re-run that same command ONCE over the "
         "remaining ids. A second exit 4, an export error or any other result: "
-        "`failing_at_base` is `[]`. "
+        "`failing_at_base` is `[]`. Return `base_measure` \"ok\" when the trailing JSON line "
+        "validated, else \"fallback: <the export or exit result>\" whenever `failing_at_base` was "
+        "forced to `[]`. "
     )
 
 
@@ -849,7 +855,7 @@ def _reverify_phase(
             '`"session_id"` to each. The union of their `edited` and `created` lists is the files '
             "review changed, the union of their `tripwires` lists names the test files whose source "
             "names one of those files. Return the union as `edited`. If every list is empty, "
-            "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], status_before pass. "
+            "return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], pre_existing [], status_before pass. "
             f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
             "2. Run, and only run, the tests covering those files: the test files among them, every "
             "file in the `tripwires` union, the test files that import an edited module"
@@ -885,7 +891,7 @@ def _reverify_phase(
             "its own files, so make every call whether or not that prefix listed anything. The "
             "review_sidecars below is keyed by slice prefix: pass each call only its own prefix's "
             "list. Return the union of the `reverted`, `pre_existing` and `kept` lists as given "
-            "(a test is unattributed only when every prefix reports it so), and the `record` of "
+            "(a test is unattributed only when every prefix reports it so), `base_measure`, and the `record` of "
             "the first call that returned one; re-run only the tests of the reverted paths, and "
             "set status_after to pass or fail from that re-run. When nothing failed, "
             "status_after is null. `status_before` is the status after review, before any "
@@ -908,7 +914,7 @@ def _reverify_phase(
         'this brief, add it as `"session_id"`. Its `edited` and `created` lists are the files '
         "review changed. Its `tripwires` list names the test files whose source names one of "
         "those files. If both are empty, return edited [], failing [], " + f"{FAILING_DETAIL_FIELD} [], " + "reverted [], "
-        "status_before pass. "
+        "pre_existing [], status_before pass. "
         f"{_REVERIFY_INDETERMINATE_CLAUSE}\n"
         "2. Run, and only run, the tests covering those files: the test files among them, every "
         "file in `tripwires`, plus the test files that import an edited module. Name each test file or node id; never a "
@@ -929,7 +935,7 @@ def _reverify_phase(
         f"Call review.reverify in revert mode: `{invoke} review.reverify "
         f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
         f"ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
-        "as in step 1). Return its `reverted`, `pre_existing`, `kept` and `record` as given, "
+        "as in step 1). Return its `reverted`, `pre_existing`, `kept` and `record` as given, plus `base_measure`, "
         "re-run only the tests of the reverted paths, and set status_after to pass or fail from "
         "that re-run. When nothing failed, status_after is null. `status_before` is the status "
         "after review, before any revert.\n"

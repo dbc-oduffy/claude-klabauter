@@ -466,6 +466,7 @@ _COMMIT_SCHEMA = _obj(
         "run_artifacts": {"type": ["object", "null"]},
         "run_artifact_residue": {"type": ["object", "null"]},
         _RESIDUE_REPLY_KEY: {"type": ["array", "null"], "items": {"type": "string"}},
+        "credited_chunks": {"type": ["array", "null"], "items": {"type": "string"}},
     },
 )
 _DOC_PATHS_JS = (
@@ -4220,6 +4221,10 @@ def _append_docs_and_commit(
     b.append(
         "      for (const _uk of Object.keys(_commit.incomplete_reasons ?? {})) "
         "{ if (!_incompleteChunks.includes(_uk)) _incompleteChunks.push(_uk); }"
+    )
+    b.append(
+        "      for (const _cc of (Array.isArray(_commit.credited_chunks) ? _commit.credited_chunks : [])) "
+        "{ const _ci = _incompleteChunks.indexOf(_cc); if (_ci >= 0) _incompleteChunks.splice(_ci, 1); }"
     )
     b.append(
         "      if (_blockedRows.length > 0) { _nextAction = { kind: 'refire_after_sibling', op: "

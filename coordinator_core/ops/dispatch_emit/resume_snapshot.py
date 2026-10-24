@@ -38,6 +38,7 @@ class Snapshot(NamedTuple):
     resume_rows: frozenset
     kept: frozenset = frozenset()
     kept_run: Optional[str] = None
+    held: tuple = ()
 
 
 def write(
@@ -48,6 +49,7 @@ def write(
     resume_rows: Iterable[str],
     kept: Iterable[str] = (),
     kept_run: Optional[str] = None,
+    held: Iterable = (),
 ) -> Optional[Path]:
     """Write the snapshot; return its path, or None (nothing written) for an unsafe run_id or an unwritable run dir."""
     path = _snapshot_path(repo_root, run_id)
@@ -62,6 +64,7 @@ def write(
         body["kept"] = sorted(set(kept))
     if kept_run:
         body["kept_run"] = kept_run
+    body["held"] = [{"id": i, "reason": r} for i, r in held]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
@@ -92,8 +95,18 @@ def read(repo_root: Path, run_id: str, plan_rel: str) -> Optional[Snapshot]:
     if not isinstance(kept, list) or not all(isinstance(r, str) for r in kept):
         kept = []
     kept_run = body.get("kept_run")
+    held_raw = body.get("held", [])
+    held = tuple(
+        (h["id"], h["reason"])
+        for h in (held_raw if isinstance(held_raw, list) else [])
+        if isinstance(h, dict) and isinstance(h.get("id"), str) and isinstance(h.get("reason"), str)
+    )
     return Snapshot(
-        frozenset(rows), frozenset(resume), frozenset(kept), kept_run if isinstance(kept_run, str) and kept_run else None
+        frozenset(rows),
+        frozenset(resume),
+        frozenset(kept),
+        kept_run if isinstance(kept_run, str) and kept_run else None,
+        held,
     )
 
 

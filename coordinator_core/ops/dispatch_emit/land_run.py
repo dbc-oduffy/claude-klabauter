@@ -1285,7 +1285,7 @@ def _grade(
     (the executor's ``gate-blocker: outside-footprint`` line, every file in a passed review's slices),
     ``ledger-met`` (a passed ledger plus a clean review, report readable and not BLOCKED) and
     ``credited:`` (the EM's ``workflow.revise credit_chunks``; a hold still bars it)."""
-    from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed, run_credit
+    from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed
 
     out: dict = {}
     reviewed = _reviewed_files(inline_review, need_pass=True)
@@ -1316,15 +1316,7 @@ def _grade(
     for cid in credit_gate.ledger_regradable(ledger_ids, blocked, ledger_files, clean):
         out.setdefault(cid, reason)
 
-    dirs = list(artifacts.record_dirs) if artifacts is not None else []
-    if record_dir_rel and record_dir_rel not in dirs:
-        dirs.insert(0, record_dir_rel)
-    sources = [root / d for d in reversed(dirs)]
-    if run_dir is not None:
-        sources.append(run_dir)
-    credits = run_credit.read(sources)
-    if sizing_rel:
-        credits = {**run_credit.credits_for_sizing(root, sizing_rel), **credits}
+    credits = _read_credits(root, artifacts, record_dir_rel, run_dir, sizing_rel)
     if credits:
         known = []
         for chunk in request.chunks:
@@ -1335,6 +1327,64 @@ def _grade(
                 known.append(chunk.id)
         for cid, evidence in credit_gate.credit_regradable(known, credits, held).items():
             out[cid] = f"credited: {evidence}"[:_UNDONE_CAP]
+    return out
+
+
+def _read_credits(root: Path, artifacts, record_dir_rel: Optional[str], run_dir: Optional[Path], sizing_rel: Optional[str]) -> dict:
+    """``{row id: evidence}`` the EM credited via ``workflow.revise credit_chunks``: record dirs, the run dir, the sizing."""
+    from coordinator_core.ops.dispatch_emit import run_credit
+
+    dirs = list(artifacts.record_dirs) if artifacts is not None else []
+    if record_dir_rel and record_dir_rel not in dirs:
+        dirs.insert(0, record_dir_rel)
+    sources = [root / d for d in reversed(dirs)]
+    if run_dir is not None:
+        sources.append(run_dir)
+    credits = run_credit.read(sources)
+    if sizing_rel:
+        credits = {**run_credit.credits_for_sizing(root, sizing_rel), **credits}
+    return credits
+
+
+def _credited_absent_chunks(
+    plan_text: Optional[str], request, credits: dict, held: set, incomplete: set
+) -> list:
+    """``ChunkCommit`` per plan row the EM credited that the request does not carry: a refire's request
+    names only the rows it re-ran, so a row credited from the first fire would otherwise never land.
+    Rows closed on the spine (``NON_DISPATCHABLE_DISPOSITIONS``) and held rows are skipped; a credited row
+    still ``open`` whose files already landed is re-listed, and lands nothing."""
+    if not credits or plan_text is None:
+        return []
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit import credit_gate
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        NON_DISPATCHABLE_DISPOSITIONS,
+        load_rows_memo,
+        with_canonical_disposition,
+    )
+
+    loaded = load_rows_memo(plan_text)
+    if loaded.status is not LocateStatus.LOCATED:
+        return []
+    present = {c.id for c in request.chunks}
+    out: list = []
+    for raw in loaded.rows:
+        row = with_canonical_disposition(raw)
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        rid = row["id"]
+        if rid in present or rid in incomplete or row.get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
+            continue
+        if rid not in credit_gate.credit_regradable([rid], credits, held):
+            continue
+        writes = row.get("writes")
+        paths = tuple(
+            PurePosixPath(p.replace("\\", "/")).as_posix()
+            for p in (writes if isinstance(writes, list) else ()) if isinstance(p, str) and p.strip()
+        )
+        if paths:
+            out.append(ChunkCommit(id=rid, title=str(row.get("title") or rid), paths=paths))
     return out
 
 
@@ -2351,7 +2401,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     blockers: dict = {}
     partial = [c for c in _partial_chunks(root, request, incomplete, blockers) if c.id not in held_ids | recovery_out]
     done = [c for c in request.chunks if c.id not in incomplete]
-    credited_chunks = done + partial
+    credited_absent = _credited_absent_chunks(
+        plan_text, request,
+        _read_credits(root, artifacts, record_dir_rel, ask_run_dir, sizing_for_credit), held_ids, incomplete,
+    )
+    credited_chunks = done + partial + credited_absent
 
     held_paths = _held_write_paths(root, request, held_ids) if held_ids else {}
     if held_paths:
@@ -2872,6 +2926,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
     reply.update(recovery_reply)
+    reply[contract.REPLY_CREDITED_CHUNKS] = sorted(set(credited_ids) & (set(regraded) | {c.id for c in credited_absent}))
     if recorded_changed:
         landed_now = set(paths)
         reply["resume_recorded"] = {

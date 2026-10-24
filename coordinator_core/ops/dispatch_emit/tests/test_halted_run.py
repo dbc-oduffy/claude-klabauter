@@ -45,8 +45,15 @@ def test_mark_landed_rewrites_only_a_halted_marker(tmp_path):
     hr.write_halt_marker(resumed, halted="x", sizing_rel=SIZING)
     hr.mark_resumed(resumed)
     before = (resumed / hr.HALTED_FILE).read_bytes()
-    assert hr.mark_landed(resumed, sha) is False
-    assert (resumed / hr.HALTED_FILE).read_bytes() == before
+    assert hr.mark_landed(resumed, sha) is True
+    assert json.loads((resumed / hr.HALTED_FILE).read_text())["status"] == hr.STATUS_LANDED
+    assert (resumed / hr.HALTED_FILE).read_bytes() != before
+    running = _dir(tmp_path, "20261016T030000-cccccc")
+    running.mkdir(parents=True)
+    (running / hr.HALTED_FILE).write_text(json.dumps({"status": "running"}), encoding="utf-8")
+    before = (running / hr.HALTED_FILE).read_bytes()
+    assert hr.mark_landed(running, sha) is False
+    assert (running / hr.HALTED_FILE).read_bytes() == before
 
 
 def test_newest_dir_rule(tmp_path):
@@ -234,6 +241,19 @@ def test_halt_marker_carries_the_reason_only_when_given(tmp_path):
     assert json.loads(with_reason.read_text(encoding="utf-8"))["reason"] == "A: half"
     without = write_halt_marker(tmp_path / "b", halted="dependents_unstarted", sizing_rel=None)
     assert "reason" not in json.loads((tmp_path / "b" / HALTED_FILE).read_text(encoding="utf-8"))
+
+
+def test_halt_marker_carries_held_rows_only_when_given(tmp_path):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_HELD_ROWS_FIELD
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+
+    rows = [{"id": "X1", "reason": "performer em"}]
+    given = write_halt_marker(tmp_path / "a", halted="ledger_check", sizing_rel=None, held_rows=rows)
+    assert json.loads(given.read_text(encoding="utf-8"))[HALT_HELD_ROWS_FIELD] == rows
+    bare = write_halt_marker(tmp_path / "b", halted="ledger_check", sizing_rel=None)
+    assert HALT_HELD_ROWS_FIELD not in json.loads(bare.read_text(encoding="utf-8"))
 
 
 def _indexed(root):

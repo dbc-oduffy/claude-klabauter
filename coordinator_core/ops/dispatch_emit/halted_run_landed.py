@@ -4,7 +4,8 @@ Params: ``{run_id, sha}``; ``sha`` is a lowercase hex commit sha, full or abbrev
 characters; an abbreviation must name exactly one commit in the first-parent window and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
 ``halted`` (or already ``landed`` at the same sha) and ``sha`` must be a commit on HEAD's first-parent
-chain within ``ANCESTRY_WINDOW``. The write and the release of ``after`` successors are
+chain within ``ANCESTRY_WINDOW``. A solo run's marker may also read ``resumed`` when no live run's
+ledger names it as ``resumed_from``. The write and the release of ``after`` successors are
 ``run_close.sibling_release``'s; this op never writes the sibling status file itself. A solo run has
 no sibling status: its halt marker (``halted_run``) is read and rewritten to ``landed`` instead, and
 the reply names that tracked path as ``recorded``; a sibling run's still-``halted`` marker is flipped
@@ -157,7 +158,7 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
 
 
 def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) -> dict:
-    """Flip a still-``halted`` marker to landed, then queue the close unless a job record exists."""
+    """Flip a still-``halted`` or ``resumed`` marker to landed, then queue the close unless a job record exists."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, run_close
 
     out: dict = {}
@@ -166,7 +167,7 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) 
     except ValueError:
         return {"close": {"status": "not-applicable", "detail": "no halt record"}, "withheld": []}
     marker = halted_run._read(record_dir)
-    if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
+    if marker is not None and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
         if halted_run.mark_landed(record_dir, sha):
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
     if marker is None:
@@ -218,6 +219,23 @@ def _reachable(root: Path, sha: str) -> Optional[str]:
     return None
 
 
+def _live_successor(root: Path, run_id: str) -> Optional[str]:
+    """The id of a live run whose ledger resumes *run_id*, else None; scans both run record roots once, reading one ledger per run dir (cost grows with the run-dir count)."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl, run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+
+    for base in (RECORD_DIR_ROOT, RUN_DIR_ROOT):
+        try:
+            candidates = sorted(p for p in (root / base).iterdir() if p.is_dir() and p.name != run_id)
+        except OSError:
+            continue
+        for cand in candidates:
+            ledger = rl.read_run(cand)
+            if ledger and ledger.get(rl.RESUMED_FROM_FIELD) == run_id and run_token.is_live(root, cand.name):
+                return cand.name
+    return None
+
+
 def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_id: Optional[str] = None) -> dict:
     """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
@@ -238,8 +256,12 @@ def _record_solo(root: Path, run_id: str, sha: str, abbreviated: bool, session_i
                 **_close_landed(root, run_id, landed, session_id),
             }
         return _refuse(f"{run_id} already landed at {marker.get('sha')}; nothing to record")
-    if status != halted_run.STATUS_HALTED:
-        return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
+    if status == halted_run.STATUS_RESUMED:
+        successor = _live_successor(root, run_id)
+        if successor:
+            return _refuse(f"{run_id} is resumed and its successor {successor} is still live; wait for it or stop it")
+    elif status != halted_run.STATUS_HALTED:
+        return _refuse(f"{run_id} is {status}; only a halted or resumed run is recorded landed")
     if abbreviated:
         sha, problem = _resolve_prefix(root, sha)
         if problem:

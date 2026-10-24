@@ -1666,6 +1666,26 @@ def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
     assert "failing_at_base" in block
 
 
+def test_reverify_schema_requires_pre_existing_and_types_base_measure():
+    from coordinator_core.ops.review_mint.execute_review import _REVERIFY_SCHEMA
+
+    assert "pre_existing" in _REVERIFY_SCHEMA["required"]
+    assert _REVERIFY_SCHEMA["properties"]["base_measure"] == {"type": "string"}
+    assert "base_measure" not in _REVERIFY_SCHEMA["required"]
+
+
+@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
+def test_reverify_early_returns_carry_pre_existing_and_base_measure_is_reported(prefixes):
+    measured = _reverify_phase_block("b" * 40, prefixes)
+    unset = _reverify_phase_block("run_base_sha", prefixes)
+    for block in (measured, unset):
+        assert block.count("reverted [], pre_existing [], status_before") == 2
+        assert "`base_measure`" in block
+    assert 'return `base_measure` \\"unset\\"' in unset or 'return `base_measure` "unset"' in unset
+    assert "fallback: <the export or exit result>" in measured
+    assert "full suite" in measured
+
+
 def _run_reverify_block(reply, *, verify_only=False):
     """Run the emitted re-verify block under node with the agent stubbed to return ``reply``."""
     import shutil

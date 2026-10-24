@@ -167,16 +167,37 @@ def serving_rows(plan_path: Path, blocking: Sequence[str]) -> list[dict[str, Any
             claims = [str(c) for c in raw] if isinstance(raw, list) else []
         except (ValueError, yaml.YAMLError) as exc:
             raise PlanRowsUnreadable(f"plan {plan_path} frontmatter unparseable: {exc}") from exc
+    return rows_serving(loaded.rows, claims, blocking)
+
+
+def rows_serving(rows: Iterable[Mapping[str, Any]], claims: Sequence[str], blocking: Sequence[str]) -> list[dict[str, Any]]:
+    """`serving_rows`' predicate over spine `rows` in hand; `claims` is the frontmatter `register_claims.rows`."""
     blocked = set(blocking)
     out: list[dict[str, Any]] = []
-    for row in loaded.rows:
+    for row in rows:
         if row.get("disposition") in ("wont_do", "spun_off"):
             continue
         rr = row.get("register_rows")
         serves = [str(x) for x in rr] if isinstance(rr, list) and rr else claims
         if blocked.intersection(serves):
-            out.append(row)
+            out.append(row)  # type: ignore[arg-type]
     return out
+
+
+def row_ids_named(remaining: Iterable[str], ids: Iterable[str]) -> list[str]:
+    """The `ids` (in their order) that are a whole whitespace token of a `remaining` line.
+
+    Edge quotes, brackets and trailing punctuation are stripped first, so `X1:` and `(X1)` match
+    `X1` and `X10` does not. Exact and case-sensitive.
+    """
+    tokens: set[str] = set()
+    for line in remaining:
+        for tok in str(line).split():
+            t = tok.strip(_STRIP_EDGES)
+            while t and t[-1] in _TRAILING:
+                t = t[:-1].rstrip(_STRIP_EDGES)
+            tokens.add(t)
+    return [i for i in dict.fromkeys(ids) if i in tokens]
 
 
 def plan_rows_serving(plan_path: Path, blocking: Sequence[str]) -> list[str]:

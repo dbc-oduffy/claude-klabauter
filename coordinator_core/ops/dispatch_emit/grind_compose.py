@@ -2390,7 +2390,10 @@ def compose_grind_script(
         # started, so "Review fixes" is the only commit review edits reach; a red re-verify
         # verdict stops them here.
         + "\n  const _reviewFixWithheld = _reviewReverify ? "
-        + f"['fail', '{REVERIFY_INDETERMINATE}'].includes(_reviewReverify.status_after ?? _reviewReverify.status_before)"
+        + f"(_reviewReverify.status_after ?? _reviewReverify.status_before) === '{REVERIFY_INDETERMINATE}'"
+        + " || ((_reviewReverify.status_after ?? _reviewReverify.status_before) === 'fail'"
+        + " && !(Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length > 0"
+        + " && _reviewReverify.failing.every((id) => (_reviewReverify.pre_existing ?? []).includes(id))))"
         + " : !_verifyOnly;\n"
         + "  if (!_reviewFixWithheld) {\n"
         + f"  phase({_js_string_literal(_REVIEW_FIX_PHASE)});\n"

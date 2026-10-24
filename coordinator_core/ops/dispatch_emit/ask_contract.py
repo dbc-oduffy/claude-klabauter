@@ -495,6 +495,8 @@ LEG_DISPATCH, LEG_SKIP, LEG_REFUSE = "dispatch", "skip", "refuse"
 LEG_REFUSAL_HEAD = "ledger-remaining leg refused: "
 #: halted.json key a ledger-check halt records `[{id, remaining, evidence}]` for its blocking rows under.
 HALT_BLOCKING_ITEMS_FIELD = "blocking_items"
+#: halted.json key a halt records `[{id, reason}]` for rows a blocking ledger item names that the gate held back.
+HALT_HELD_ROWS_FIELD = "held_rows"
 #: Register sentence framing every halt remaining line; carried verbatim into refire briefs, the fix prompt, the resume ledger judge clause and derived row bodies.
 HALT_GAP_RULE = (
     "Each remaining line names a state that is still true and must become false; closing it changes "
@@ -998,7 +1000,8 @@ class ResumePlan(NamedTuple):
     """`sizing_fire.resumable_plan`'s return: the plan to resume and the ids of its rows still
     to run, in spine order; ``ledger`` is the halt pointer a ledger-halted run resumes from;
     ``landed_open`` is ``(row id, landing sha)`` for each row still ``open`` on disk that a
-    commit landed."""
+    commit landed. ``held`` is ``(row id, reason)`` for rows a blocking ledger item names that the
+    gate did not hand the stage."""
 
     plan_rel: str
     incomplete: tuple[str, ...]
@@ -1007,6 +1010,7 @@ class ResumePlan(NamedTuple):
     #: Row ids whose finished product a halted run kept, from the run ``kept_run``.
     kept: tuple[str, ...] = ()
     kept_run: str | None = None
+    held: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

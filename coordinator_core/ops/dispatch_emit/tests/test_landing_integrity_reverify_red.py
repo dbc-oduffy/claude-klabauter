@@ -67,6 +67,34 @@ def test_windows_separator_node_ids_and_landing_paths_match(tmp_path):
     assert len(li.reverify_red_findings(tmp_path, p, ["pkg\\mod.py"])) == 1
 
 
+def test_all_pre_existing_failing_on_importing_test_gives_none(tmp_path):
+    _tree(tmp_path)
+    ids = [f"{TEST}::test_a", f"{TEST}::test_b"]
+    p = _params(status_before="fail", status_after="fail", failing=ids, pre_existing=ids)
+    assert li.reverify_red_findings(tmp_path, p, [LANDED]) == []
+
+
+def test_mixed_pre_existing_and_caused_names_only_the_caused_id(tmp_path):
+    _tree(tmp_path)
+    p = _params(status_after="fail", failing=[f"{TEST}::old", f"{TEST}::new"], pre_existing=[f"{TEST}::old"])
+    found = li.reverify_red_findings(tmp_path, p, [LANDED])
+    assert len(found) == 1
+    assert f"{TEST}::new" in found[0].detail and f"{TEST}::old" not in found[0].detail
+
+
+def test_fail_with_empty_failing_still_trips_the_naming_trap(tmp_path):
+    _tree(tmp_path)
+    found = li.reverify_red_findings(tmp_path, _params(status_after="fail", failing=[], pre_existing=[]), [LANDED])
+    assert len(found) == 1 and "naming no failing test" in found[0].detail
+
+
+def test_pre_existing_failing_does_not_hide_reverted_tests(tmp_path):
+    _tree(tmp_path)
+    p = _params(status_after="fail", failing=[f"{TEST}::old"], pre_existing=[f"{TEST}::old"],
+                reverted=[{"tests": [f"{TEST}::r"]}])
+    assert len(li.reverify_red_findings(tmp_path, p, [LANDED])) == 1
+
+
 def _subdir_suite(root: Path, body: str) -> None:
     (root / "lab" / "tests").mkdir(parents=True)
     (root / "lab" / "ledger_tr.py").write_text("X = 1\n", encoding="utf-8")

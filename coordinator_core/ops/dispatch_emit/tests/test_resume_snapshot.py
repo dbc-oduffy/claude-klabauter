@@ -13,6 +13,14 @@ def test_round_trip(tmp_path):
     assert rs.read(tmp_path, "run-1", PLAN) == rs.Snapshot(frozenset({"C1", "C2"}), frozenset({"C3"}))
 
 
+def test_held_round_trips_and_a_snapshot_without_it_reads_empty(tmp_path):
+    held = (("X1", "performer em"), ("T3", "deps open"))
+    rs.write(tmp_path, "run-1", PLAN, ["C1"], [], held=held)
+    assert rs.read(tmp_path, "run-1", PLAN).held == held
+    rs.write(tmp_path, "run-2", PLAN, ["C1"], [])
+    assert rs.read(tmp_path, "run-2", PLAN).held == ()
+
+
 def test_legacy_body_reads_empty_resume_rows(tmp_path):
     path = rs.write(tmp_path, "run-1", PLAN, ["C1"], [])
     path.write_text('{"plan": "%s", "not_to_run": ["C1"]}' % PLAN, encoding="utf-8")

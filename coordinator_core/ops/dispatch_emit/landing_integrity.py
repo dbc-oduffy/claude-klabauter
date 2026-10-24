@@ -417,7 +417,9 @@ def reverify_red_findings(
     landing touches: ``params["inline_review"]["reverify"]`` reading ``fail`` (``status_after``, else
     ``status_before``), whose ``failing`` node ids and ``reverted[].tests`` name a file that is itself
     landing or imports a landing module. An absent or non-dict re-verify, a non-fail verdict, or a
-    failure implicating no landed path yields []. In-process; one read per implicated test file."""
+    failure implicating no landed path yields []. ``failing`` ids also listed in ``pre_existing`` (red at the
+    run base) are dropped; ``reverted[].tests`` are kept. A fail whose every ``failing`` id is pre_existing and
+    that has no reverted tests yields []; a fail naming no test at all still refuses. In-process; one read per implicated test file."""
     record = reverify_record(params)
     if record is None:
         return []
@@ -427,10 +429,14 @@ def reverify_red_findings(
     if reverify_verdict(record) != "fail":
         return []
     landed = {str(p).replace("\\", "/") for p in landing_paths}
-    nodes: list[str] = [str(n) for n in (record.get("failing") or []) if n]
+    failing = [str(n) for n in (record.get("failing") or []) if n]
+    pre = {str(n) for n in (record.get("pre_existing") or [])}
+    nodes: list[str] = [n for n in failing if n not in pre]
     for entry in record.get("reverted") or []:
         if isinstance(entry, Mapping):
             nodes += [str(n) for n in (entry.get("tests") or []) if n]
+    if failing and not nodes:
+        return []
     by_file: dict[str, list[str]] = {}
     for node in nodes:
         by_file.setdefault(_node_file(node), []).append(node)

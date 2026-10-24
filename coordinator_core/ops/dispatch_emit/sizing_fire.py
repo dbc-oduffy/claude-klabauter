@@ -271,32 +271,41 @@ def resumable_plan(
     ]
     if open_ids:
         open_ids = _drop_em_discharged(plan, plan_text, rows, open_ids)
+    open_pre = list(open_ids)
+    credited: Mapping = {}
     if open_ids:
         credited = credits_for_sizing(root, sizing_rel)
         open_ids = [i for i in open_ids if i not in credited]
     state = None
     landed_open: tuple = ()
     pending = list(open_ids)
+    record: object = _UNREAD
+    named: list[str] = []
     if open_ids or not _terminal_coded(rows) or _sha_coded(rows):
         from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
 
         state = resume_landed_state(root, plan_rel)
+        record, named = _blocking_named_rows(root, plan_rel, sizing_rel, plan_text, rows, open_pre, state)
         landed_open = tuple((i, state.row_shas[i]) for i in open_ids if i in state.rows and state.row_shas.get(i))
         open_ids = [i for i in open_ids if i not in state.rows]
         pending = list(open_ids)
         if open_ids:
             from coordinator_core.ops.dispatch_emit.plan_row_coding import rows_landed_outside_executor
 
-            outside = rows_landed_outside_executor(root, plan_rel, [r for r in rows if r.get("id") in open_ids])
+            outside = rows_landed_outside_executor(
+                root, plan_rel, [r for r in rows if r.get("id") in open_ids and r.get("id") not in named]
+            )
             landed_open += tuple((i, outside[i]) for i in open_ids if i in outside)
             open_ids = [i for i in open_ids if i not in outside]
-    halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state)
+    halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state, record)
     if halt is not None:
-        return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)))
+        held = _held_rows(named, pending, credited, state)
+        return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held)
     if not open_ids:
         halt = _all_landed_halt(root, plan_rel, sizing, sizing_rel, state)
         if halt is not None:
-            return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)))
+            held = _held_rows(named, pending, credited, state)
+            return ResumePlan(plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held)
         from coordinator_core.ops.dispatch_emit.halted_run_route import halted_route_for_sizing
 
         refusal = f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"
@@ -304,9 +313,63 @@ def resumable_plan(
         raise SizingFireRefused([f"{refusal} {route}" if route else refusal])
     unclaimed_halt = _unclaimed_rows_halt(root, plan_rel, plan_text, sizing, sizing_rel, pending)
     if unclaimed_halt is not None:
-        return ResumePlan(plan_rel, (), ledger=unclaimed_halt)
+        return ResumePlan(plan_rel, (), ledger=unclaimed_halt, held=_held_rows(named, pending, credited, state))
     kept, kept_run = _kept_rows(root, sizing_rel, open_ids)
-    return ResumePlan(plan_rel, tuple(open_ids), landed_open=landed_open, kept=kept, kept_run=kept_run)
+    return ResumePlan(
+        plan_rel, tuple(open_ids), landed_open=landed_open, kept=kept, kept_run=kept_run,
+        held=_held_rows(named, open_ids, credited, state),
+    )
+
+
+#: `_ledger_halt_for`'s `record` when the caller has not read the halt record.
+_UNREAD = object()
+
+
+def _blocking_named_rows(
+    root: Path, plan_rel: str, sizing_rel: str, plan_text: str, rows: Sequence, open_ids: Sequence[str], state
+) -> tuple[object, list[str]]:
+    """`(record, named)`: the newest ledger-check halt record of this plan and sizing (read once; `_UNREAD`
+    when none is read) and the open non-EM rows, in `open_ids` order, that a blocking item's `remaining`
+    lines name by id and that serve that item."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_halt_record
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import row_ids_named, rows_serving
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter
+
+    if state.ledger_run is None or not open_ids:
+        return _UNREAD, []
+    record = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha)
+    if (
+        record is None
+        or record.sizing_rel != sizing_rel
+        or (record.plan_rel is not None and record.plan_rel != plan_rel)
+    ):
+        return record, []
+    by_id = {r["id"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
+    candidates = [i for i in open_ids if i in by_id and not row_is_em_performed(by_id[i])]
+    raw = (plan_frontmatter(plan_text).get("register_claims") or {}).get("rows")
+    claims = [str(c) for c in raw] if isinstance(raw, list) else []
+    named: set[str] = set()
+    for item, entry in record.remaining.items():
+        if record.blocking is not None and item not in record.blocking:
+            continue
+        hit = row_ids_named([str(s) for s in entry.get("remaining") or []], candidates)
+        serving = {r["id"] for r in rows_serving([by_id[i] for i in hit], claims, [item])}
+        named |= serving
+    return record, [i for i in candidates if i in named]
+
+
+def _held_rows(named: Sequence[str], handed: Sequence[str], credited: Mapping, state) -> tuple[tuple[str, str], ...]:
+    """`(row id, reason)` for each named row the gate did not hand the stage: `credited` or `landed:<sha>`."""
+    out: list[tuple[str, str]] = []
+    for i in named:
+        if i in handed:
+            continue
+        if i in credited:
+            out.append((i, "credited"))
+        elif state is not None and i in state.rows and state.row_shas.get(i):
+            out.append((i, f"landed:{state.row_shas[i]}"))
+    return tuple(out)
 
 
 def _unclaimed_rows_halt(
@@ -510,7 +573,8 @@ def _own_pointer(root: Path, plan_rel: str, sizing_rel: str) -> LedgerHalt | Non
 
 
 def _ledger_halt_for(
-    root: Path, plan_rel: str, sizing_rel: str, rows: Sequence, open_ids: Sequence[str], state=None
+    root: Path, plan_rel: str, sizing_rel: str, rows: Sequence, open_ids: Sequence[str], state=None,
+    record: object = _UNREAD,
 ) -> LedgerHalt | None:
     """The ledger halt a refire resumes at, else None. None when a row is `coded` (the terminal
     commit landed). A commit-halt pointer resumes only with no open id, so an open row takes the
@@ -546,7 +610,8 @@ def _ledger_halt_for(
             if set(open_ids) - set(pointer.ruled) - _memo_close_ids(rows, open_ids) <= landed:
                 return _carry(root, plan_rel, _with_ruled_blocking(pointer, halt_sha=sha), state)
         return None
-    record = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha)
+    if record is _UNREAD:
+        record = read_halt_record(root, state.ledger_run, at_sha=state.ledger_sha)
     same_run = pointer is not None and pointer.run_id == state.ledger_run
     ruled = set(pointer.ruled) if same_run else set()
     if (
