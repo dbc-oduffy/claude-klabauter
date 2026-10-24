@@ -177,6 +177,18 @@ def resumed_run_released(root: Path, run_id: str, exclude_run: Optional[str]) ->
         return False
 
 
+def _landed(root: Path, run_id: str) -> bool:
+    """A run whose record marker is `landed` (`halted_run.mark_landed`) has put its work in a
+    commit: it writes nothing more and claims nothing, whatever its token's remaining TTL."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    try:
+        marker = halted_run._read(record_dir(root, run_id))
+    except ValueError:
+        return False
+    return marker is not None and marker.get("status") == halted_run.STATUS_LANDED
+
+
 def _manifest_declared(run_id: str, root: Path) -> tuple:
     """`(paths, prefixes, unreadable)` a run's `manifest.json` (`rows[].writes`, `doc_writes`)
     and `commit-request.txt` (chunk paths and prefixes) declare, normalized. `unreadable` is True
@@ -228,7 +240,7 @@ def _live_peer_run(
 ) -> bool:
     """True when a held `record` is a live peer's run: fresh (claimed records included), a
     non-empty `session_id` other than `exclude_session` that is `touch_record.session_live`, not
-    halted, and (when given) strictly senior to `minted_before=(minted_at, run_id)`."""
+    halted, not landed, and (when given) strictly senior to `minted_before=(minted_at, run_id)`."""
     from coordinator_core.session import touch_record
 
     sid = record.get("session_id")
@@ -237,7 +249,7 @@ def _live_peer_run(
         return False
     if minted_before is not None and (record["minted_at"], run_id) >= tuple(minted_before):
         return False
-    return touch_record.session_live(sid, cwd) and not _halted(root, run_id)
+    return touch_record.session_live(sid, cwd) and not _halted(root, run_id) and not _landed(root, run_id)
 
 
 def live_record_dir_owners(
