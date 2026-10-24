@@ -1,7 +1,8 @@
 """Freshness contract for ``claim_index.lookup``: any lookup implementation must keep these green.
 
-Written against the public surface (``lookup`` plus the touch_record writers); the one exception is the
-unreadable-sink case, which patches ``Path.read_bytes`` and so assumes the sink read goes through it.
+Written against the public surface (``lookup`` plus the touch_record writers); the exceptions are the
+unreadable-sink case, which patches ``Path.read_bytes`` and so assumes the sink read goes through it,
+and the forced-rotation case, which calls ``touch_record._rotate_oversized``.
 """
 
 import os

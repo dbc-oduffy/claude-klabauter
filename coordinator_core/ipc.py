@@ -1036,6 +1036,16 @@ def current_corr_id() -> Optional[str]:
     return _corr_id_var.get()
 
 
+_dispatch_op_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "coordinator_core_ipc_dispatch_op", default=None
+)
+
+
+def current_dispatch_op() -> Optional[str]:
+    """The JSON-RPC method of the dispatch in flight; None outside one. A handler called directly inside a dispatch reads that dispatch's method; a nested `dispatch_message` rebinds it for its own span."""
+    return _dispatch_op_var.get()
+
+
 def charge_op_cpu_secs(secs: float) -> None:
     """Charge `secs` of CPU to the dispatch in flight; no-op outside one.
 
@@ -2834,6 +2844,7 @@ async def dispatch_message(
         )
 
     _corr_token = _corr_id_var.set(corr_id)
+    _op_token = _dispatch_op_var.set(method if isinstance(method, str) else None)
     try:
         response = await _dispatch_message_impl(msg)
         error = response.get("error") if isinstance(response, dict) else None
@@ -2854,6 +2865,7 @@ async def dispatch_message(
         raise
     finally:
         _corr_id_var.reset(_corr_token)
+        _dispatch_op_var.reset(_op_token)
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
         span_ms = (_time.process_time() - process_start) * 1000.0
         uncontaminated = _exit_dispatch(_record)

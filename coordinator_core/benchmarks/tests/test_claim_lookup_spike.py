@@ -1,6 +1,6 @@
 """Structure pins for the claim-lookup spike: candidate parity with claim_index, write containment, verdict line.
 
-No time figure is asserted; the live verdict is S2's run.
+No time figure is asserted; timing belongs to the live run.
 """
 from __future__ import annotations
 
@@ -55,6 +55,58 @@ def test_today_split_matches_claim_index(sessions):
     assert shape == _today(sessions)
     assert {"enumerate", "stats", "fold", "aggregate", "total"} <= set(parts)
     assert shape["claimants"]["src/one.py"] == [SID_A, SID_B]
+
+
+def test_today_split_latest_ts_wins_across_a_sids_streams(tmp_path):
+    base = tmp_path / "sessions"
+    _event(base, SID_A, "T", "src/one.py", ts=3000.0)
+    agent_dir = base / "zagent"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "em-session-id.txt").write_text(SID_A + "\n", encoding="utf-8")
+    _event(base, "zagent", "R", "src/one.py", ts=2000.0)
+    expected = _today(base)
+    assert expected["claimants"]["src/one.py"] == [SID_A]
+    shape, _parts = spike.today_split(str(base), PATHS)
+    assert shape == expected
+
+    _event(base, "zagent", "R", "src/one.py", ts=4000.0)
+    expected = _today(base)
+    assert expected["claimants"]["src/one.py"] == []
+    assert spike.today_split(str(base), PATHS)[0] == expected
+
+
+def test_today_split_write_then_read_stays_a_write_hold_and_read_only_is_excluded(tmp_path):
+    base = tmp_path / "sessions"
+    _event(base, SID_A, "T", "src/one.py", ts=1000.0)
+    _event(base, SID_A, "T", "src/one.py", kind=touch_record.KIND_READ, ts=1001.0)
+    _event(base, SID_B, "T", "src/two.py", kind=touch_record.KIND_READ, ts=1000.0)
+    _event(base, SID_B, "T", "src/one.py", kind=touch_record.KIND_READ, ts=1000.0)
+    expected = _today(base)
+    assert expected["held_by"][SID_A] == ["src/one.py"]
+    shape, _parts = spike.today_split(str(base), PATHS)
+    assert shape == expected
+    assert SID_B not in shape["held_by"]
+
+
+def test_candidates_keep_write_then_read_hold_and_drop_read_only(tmp_path):
+    base = tmp_path / "sessions"
+    _event(base, SID_A, "T", "src/one.py", ts=1000.0)
+    _event(base, SID_A, "T", "src/one.py", kind=touch_record.KIND_READ, ts=1001.0)
+    _event(base, SID_B, "T", "src/one.py", kind=touch_record.KIND_READ, ts=1000.0)
+    expected = _today(base)
+    assert expected["held_by"][SID_A] == ["src/one.py"]
+    assert SID_B not in expected["held_by"]
+    work = tmp_path / "work"
+    journal = _candidates(base, work)
+    assert spike.p_lookup(work / "P", PATHS) == expected
+    assert spike.j_lookup(str(base), journal, PATHS)[0] == expected
+    _event(base, SID_A, "R", "src/one.py", ts=1002.0)
+    _event(base, SID_A, "T", "src/one.py", kind=touch_record.KIND_READ, ts=1003.0)
+    expected = _today(base)
+    assert SID_A not in expected["held_by"]
+    journal = _candidates(base, work)
+    assert spike.p_lookup(work / "P", PATHS) == expected
+    assert spike.j_lookup(str(base), journal, PATHS)[0] == expected
 
 
 def test_candidates_agree_with_claim_index(sessions, tmp_path):

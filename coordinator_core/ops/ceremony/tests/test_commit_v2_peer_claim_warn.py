@@ -267,3 +267,32 @@ def test_session_abandoned_raising_keeps_the_live_hold(repo, monkeypatch):
     assert peer_holds == [(rel, peer_sid)]
     assert abandoned_holds == []
     assert any(peer_sid in w for w in warnings)
+
+
+def test_claimant_holding_two_paths_gets_one_liveness_verdict(repo, monkeypatch):
+    peer_sid = "commit-v2-peer-claim-two-paths"
+    rel_a, rel_b = "state/a-tracker.md", "state/b-tracker.md"
+    _seed_tracked(repo, rel_b, "v1\n")
+    _live_holder(repo, monkeypatch, peer_sid, rel_a)
+    session_scope.touch(peer_sid, rel_b, cwd=str(repo))
+
+    live_calls: list = []
+    abandoned_calls: list = []
+    monkeypatch.setattr(
+        commit_v2.session_liveness, "session_live",
+        lambda sid, cwd=None: live_calls.append(sid) or True,
+    )
+    monkeypatch.setattr(
+        commit_v2.session_liveness, "session_abandoned",
+        lambda sid, cwd=None: abandoned_calls.append(sid) or False,
+    )
+
+    peer_holds: list = []
+    warnings = commit_v2._peer_claim_warnings(
+        repo, [rel_a, rel_b], peer_holds, own_sid="someone-else"
+    )
+
+    assert live_calls == [peer_sid]
+    assert abandoned_calls == [peer_sid]
+    assert sorted(peer_holds) == sorted([(rel_a, peer_sid), (rel_b, peer_sid)])
+    assert len([w for w in warnings if peer_sid in w]) == 2

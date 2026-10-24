@@ -17,8 +17,9 @@ O(claims) scan into an O(len(paths)) dict lookup.
 
 SOURCE OF TRUTH stays the existing per-claimant logs — this module is a
 derived cache, never a second authority. It never writes to the touch
-record, and it writes nothing to disk of its own: the reverse index is
-IN-MEMORY-ONLY, rebuilt fresh on every ``lookup()`` call.
+record. ``lookup()`` is served from the per-path sink index (see INDEX
+PERSISTENCE); ``rebuild()``, ``commit_set`` and ``classify_paths`` need the
+whole corpus and stay full walks, with an in-memory-only result.
 
 SUBSTRATE FORMAT — the touch record (``touch-record.jsonl``, DR-254's
 successor dialect; see the NEGATIVE SPEC below for the retirement of the
@@ -44,13 +45,6 @@ last verb seen per path, per claimant file, in file order (the log is
 append-only, so file order already IS chronological order — no timestamp
 comparison across files is needed or performed).
 
-NO ``record()`` — rebuild-only by design. Wiring incremental writes would
-need three call sites in ``coordinator_core/session/scope.py`` (``touch``,
-``release_committed_claims``, and its write-side sibling), and this plan
-authors no chunk that touches ``scope.py`` — an unwired ``record()`` would
-ship a permanently-stale index. With a full rebuild measured at 37.9ms,
-always-rebuild-on-staleness is simpler and cheap enough to just do.
-
 NO LOCK. Concurrent-reader-safe by construction rather than by mutual
 exclusion: each claimant's touch record is read as a single
 line-oriented blob, and a reader that catches a writer mid-write discards
@@ -60,47 +54,35 @@ serialize this is explicitly out of scope (PM ruling 2026-08-07;
 ``ceremony_lock.py`` is a dead no-op shim with no automated recovery) —
 see the plan's Anti-scope.
 
-INDEX PERSISTENCE — REMOVED, NOT JUST UNUSED (C1c). An earlier revision of
-this module persisted the rebuilt index to
-``<sessions-dir>/.index/claims.idx`` and read it back via a
-``_load_index()`` staleness-checked path. C1b made ``lookup()`` rebuild
-unconditionally, which deleted the only CALLER of ``_load_index()`` but
-left the WRITER (``rebuild()`` -> ``_write_index()``) still running on
-every call. A producer with no reader is worse than no producer: it is a
-stale artifact a future maintainer can stumble on and trust as live state
-— the exact failure mode this repo has already been bitten by once (a
-lookup-table read mistaken for live state). ``rebuild()`` therefore no
-longer writes anything; the reverse index lives only in the
-``_IndexState`` this call's ``rebuild()`` returns, and is discarded when
-the caller's stack frame returns.
+INDEX PERSISTENCE. ``lookup()`` reads a per-path index of sink names that
+``touch_record`` owns and writes (``claim_index_dir``, ``note_claim_in_index``):
+one stream per normalized path listing every sink that has recorded an event
+for it, and one list per claimant session naming its sinks. It sits BESIDE the
+sessions dir, so no session walk or reap sees it, and carries a version in its
+directory name. An earlier ``<sessions-dir>/.index/claims.idx`` was deleted
+because its writer outlived its only reader; every file here has a reader in
+``lookup()``, and a derived file is never trusted without the proof below.
+The index is a superset of the truth, never a second authority: a stream names
+sinks, and ``lookup()`` answers only from those sinks' own folds.
 
-STALENESS RULE — DELETED, NOT REPAIRED (measured this session, C1b). The
-original design stamped the index with the sessions-dir's own top-level
-mtime and had ``lookup()`` re-rebuild only on divergence. That probe is
-blind to the common case: an EXISTING session appending its 2nd-and-later
-claim to ``<sid>/touch-record.jsonl`` (what ``scope.py::touch`` does on every call
-after the first) changes THAT FILE's mtime, not its parent directory's —
-neither the top-level sessions-dir mtime nor ``<sid>/``'s own mtime moves.
-Only creating a brand-new session dir moved the stamp. So the probe reported
-FRESH while live peers accumulated claims unseen, and the index served a
-stale NEGATIVE — the one answer that authorizes a write — through a door
-the positive/negative asymmetry rule (below) did not cover. Switching to a
-max-mtime-over-session-dirs probe would not fix this: it is blind to the
-identical append, since the append still never touches any directory's
-mtime, only the file's. There is no cheap mtime-shaped probe that observes
-an in-place file append; the fix is to stop relying on one.
+BUILD. A missing, unstamped, version-mismatched or unreadable index is built
+ONCE by a full ``_walk`` (``_begin_index`` creates the directory BEFORE the
+walk, ``_finish_index`` writes the streams after it, and the ``COMPLETE``
+stamp goes last and only for a complete walk). That walk's own result answers
+the call that triggered it.
 
-``lookup()`` therefore REBUILDS UNCONDITIONALLY on every call — no mtime
-stamp, no staleness comparison, no cached on-disk index read. This is
-not a performance regression: the index's win was never caching, it was
-replacing the excised gate's 24 git-subprocess call sites (13.91s measured)
-with pure file reads (37.9ms measured full rebuild) — a 366x win that
-unconditional rebuild keeps in full, since a full rebuild is what a fresh
-call now always does anyway. Unconditional rebuild also collapses the
-staleness window to zero, which makes the positive/negative asymmetry rule
-below MOOT rather than load-bearing — it is kept and documented (not
-deleted) because it is still the correct rule for anyone who reintroduces
-any form of caching here later.
+STALENESS RULE — THE FRESHNESS PROOF. Appends cannot be observed through a
+directory or file mtime probe (C1b measured this), so freshness is not probed;
+it is constructed. Every adder of a claim goes through ``touch_record.
+append_event``, which appends the sink line first and then the index entry. A
+build creates the index directory before it walks, so every sink line either
+predates the walk (the walk reads it) or follows the directory (the adder
+indexes it). A failed index append removes ``COMPLETE``, which makes the next
+lookup rebuild. So a NEGATIVE never comes from state that missed an append.
+Removals (release, rotation, compaction, reap) only leave an entry that no
+longer holds, and verification against the sink's own fold drops it. The
+residual is a writer that bypasses ``append_event``; none exists (the census
+at the S2 verdict), and a new one is a defect.
 
 The 500ms hard process-time cap (``REBUILD_PROCESS_TIME_CAP_SECS``) is
 UNCHANGED and, together with an I/O error surfaced while READING a
@@ -116,17 +98,13 @@ applies its own fail-closed policy to that marker; this module never
 guesses on its behalf). A genuinely-absent directory (``FileNotFoundError``)
 is not a degradation — it legitimately means "no claims here yet".
 
-POSITIVE/NEGATIVE ASYMMETRY (design rule, kept for a future caching
-reintroduction — moot, not load-bearing, under unconditional rebuild). A
-POSITIVE (claimed) answer may be served from the index unconditionally — it
-can only cause an over-refusal, which is safe. A NEGATIVE (unclaimed)
-answer is the only one that authorizes a write, so if this module ever
-caches again, ``lookup()`` must never serve a negative straight off a
-cached stamp: it must force one more unconditional ``rebuild()`` pass
-immediately before returning a negative for any requested path. Under the
-current unconditional-rebuild design every answer already comes from a
-just-built state, so this extra pass is a no-op in effect and is kept only
-to preserve the invariant textually for whoever adds caching back.
+POSITIVE/NEGATIVE ASYMMETRY (binding rule). A POSITIVE (claimed) answer can
+only cause an over-refusal, which is safe, and is verified against the sink's
+own fold anyway. A NEGATIVE (unclaimed) answer is the only one that authorizes
+a write, so it may only come from an index whose every adder has indexed its
+append (the freshness proof above): never from a probe, a timestamp or a stamp
+that merely looks recent. Any doubt about the index (no stamp, unreadable
+file, missing claimant list) is a rebuild, never a negative.
 
 AC10b — DOCUMENTED RESIDUAL, NOT FIXED HERE. A forged ``session_id`` that
 names the ACTUAL live holder of a target path defeats this whole layer: it
@@ -168,6 +146,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import shutil
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence, Set
@@ -569,16 +548,62 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     if not base:
         state = _IndexState(claims={}, complete=False, abort_cause=ABORT_CAUSE_EMPTY_BASE)
         return state
+    return _walk(base)
 
-    process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
+
+def _fold_rows(folded: List[tuple]) -> tuple:
+    """Fold ``(event, path, claimant_sid, agent_id, stream_held)`` rows to ``(claims, edit_ts,
+    recorded_name, recorded_kind, held_kind, agent_claims)``, all keyed by path then claimant."""
     claims: Dict[str, set] = {}
     edit_ts: Dict[str, Dict[str, datetime]] = {}
     recorded_name: Dict[str, Dict[str, str]] = {}
     recorded_kind: Dict[str, Dict[str, str]] = {}
     held_kind: Dict[str, Dict[str, Optional[str]]] = {}
     agent_claims: Dict[str, Dict[str, Set[Optional[str]]]] = {}
+    # Latest ts wins per (path, sid) across all of a sid's streams. At equal ts a
+    # TOUCH folds after a RELEASE (touch_record's cross-stream tie rule: a false
+    # "released" lets a commit through); enumeration order breaks only same-verb ties.
+    folded.sort(
+        key=lambda row: (row[0].timestamp, row[0].verb == touch_record.VERB_TOUCH)
+    )
+    for event, path, claimant_sid, agent_id, stream_held in folded:
+        if event.verb == touch_record.VERB_TOUCH:
+            claims.setdefault(path, set()).add(claimant_sid)
+            agent_claims.setdefault(path, {}).setdefault(claimant_sid, set()).add(
+                agent_id
+            )
+            if event.timestamp > 0:
+                edit_ts.setdefault(path, {})[claimant_sid] = datetime.fromtimestamp(
+                    event.timestamp, tz=timezone.utc
+                )
+            if event.name:
+                recorded_name.setdefault(path, {})[claimant_sid] = event.name
+            if event.kind:
+                recorded_kind.setdefault(path, {})[claimant_sid] = event.kind
+            if path in stream_held:
+                per_sid = held_kind.setdefault(path, {})
+                per_sid[claimant_sid] = _merge_held_kind(
+                    per_sid.get(claimant_sid, _NO_HELD), stream_held[path]
+                )
+        else:
+            claims.get(path, set()).discard(claimant_sid)
+            edit_ts.get(path, {}).pop(claimant_sid, None)
+            recorded_name.get(path, {}).pop(claimant_sid, None)
+            recorded_kind.get(path, {}).pop(claimant_sid, None)
+            held_kind.get(path, {}).pop(claimant_sid, None)
+            sid_sources = agent_claims.get(path, {}).get(claimant_sid)
+            if sid_sources is not None:
+                sid_sources.discard(agent_id)
+    return claims, edit_ts, recorded_name, recorded_kind, held_kind, agent_claims
+
+
+def _walk(base: str, on_sink=None) -> _IndexState:
+    """``rebuild``'s walk over a resolved sessions dir. ``on_sink(sink_path, claimant_sid,
+    stream_claims)`` sees every sink read cleanly, for the index build."""
+    process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
     touched_pairs, complete = _enumerate_claim_sinks(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
+    folded: List[tuple] = []
 
     for touched_path, claimant_sid, agent_id in touched_pairs:
         if time.process_time() > process_deadline:
@@ -594,35 +619,14 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
             if abort_cause is None:
                 abort_cause = ABORT_CAUSE_IO_ERROR
             continue
+        if on_sink is not None:
+            on_sink(touched_path, claimant_sid, stream_claims)
         for path, event in stream_claims.items():
-            if event.verb == touch_record.VERB_TOUCH:
-                claims.setdefault(path, set()).add(claimant_sid)
-                agent_claims.setdefault(path, {}).setdefault(claimant_sid, set()).add(
-                    agent_id
-                )
-                if event.timestamp > 0:
-                    edit_ts.setdefault(path, {})[claimant_sid] = datetime.fromtimestamp(
-                        event.timestamp, tz=timezone.utc
-                    )
-                if event.name:
-                    recorded_name.setdefault(path, {})[claimant_sid] = event.name
-                if event.kind:
-                    recorded_kind.setdefault(path, {})[claimant_sid] = event.kind
-                if path in stream_held:
-                    per_sid = held_kind.setdefault(path, {})
-                    per_sid[claimant_sid] = _merge_held_kind(
-                        per_sid.get(claimant_sid, _NO_HELD), stream_held[path]
-                    )
-            else:
-                claims.get(path, set()).discard(claimant_sid)
-                edit_ts.get(path, {}).pop(claimant_sid, None)
-                recorded_name.get(path, {}).pop(claimant_sid, None)
-                recorded_kind.get(path, {}).pop(claimant_sid, None)
-                held_kind.get(path, {}).pop(claimant_sid, None)
-                sid_sources = agent_claims.get(path, {}).get(claimant_sid)
-                if sid_sources is not None:
-                    sid_sources.discard(agent_id)
+            folded.append((event, path, claimant_sid, agent_id, stream_held))
 
+    claims, edit_ts, recorded_name, recorded_kind, held_kind, agent_claims = _fold_rows(
+        folded
+    )
     result_claims = {path: sorted(sids) for path, sids in claims.items() if sids}
     result_edit_ts = {
         path: dict(sids_ts) for path, sids_ts in edit_ts.items() if sids_ts
@@ -659,13 +663,10 @@ def lookup(
 ) -> "_LookupResult":
     """``{path: [claimant_session_id, ...]}`` for every path in ``paths``.
 
-    Rebuilds the index UNCONDITIONALLY on every call — see module
-    docstring's Staleness rule for why the earlier mtime-staleness probe
-    was deleted rather than repaired (C1b: it never observed an existing
-    session appending a 2nd-and-later claim, the common case, so it served
-    stale negatives). There is no cached-read path left in this function;
-    every call is a fresh ``rebuild()``, budgeted at the measured 37.9ms
-    against ``REBUILD_PROCESS_TIME_CAP_SECS``.
+    Served from the per-path sink index (see module docstring): the work is
+    proportional to the requested paths and the claimants found, never to
+    the number of sinks. A missing, incomplete or unreadable index is built
+    once from a full walk (``_walk``) and that walk answers the call.
 
     A path with no live claimant resolves to ``[]``. A path this call could
     not resolve (unresolvable sessions dir, or an aborted rebuild that
@@ -704,51 +705,285 @@ def lookup(
         result.held_by = {}
         return result
 
-    state = rebuild(sessions_dir=base)
+    paths = list(paths)
+    served = _lookup_from_index(base, paths)
+    if served is not None:
+        return served
 
+    sink_names: Dict[str, Set[str]] = {}
+    sid_sinks: Dict[str, Set[str]] = {}
+
+    def _note_sink(sink_path, claimant_sid, stream_claims):
+        layout = touch_record.sink_layout(sink_path)
+        if layout is None:
+            return
+        sid_sinks.setdefault(claimant_sid, set()).add(layout[1])
+        for key in stream_claims:
+            sink_names.setdefault(key, set()).add(layout[1])
+
+    index_dir = touch_record.claim_index_dir(base)
+    building = _begin_index(base, index_dir)
+    state = _walk(base, _note_sink if building else None)
+    if building:
+        _finish_index(base, index_dir, state, sink_names, sid_sinks)
+
+    held = _held_from_maps(
+        {sid for path in paths for sid in state.claims.get(_normalize_key(path), ())},
+        state.claims,
+        state.held_kind,
+    )
+    return _assemble(
+        paths,
+        state.claims,
+        state.edit_ts,
+        state.recorded_name,
+        state.recorded_kind,
+        state.complete,
+        state.abort_cause,
+        held,
+    )
+
+
+def _assemble(
+    paths,
+    claims,
+    edit_ts,
+    recorded_name,
+    recorded_kind,
+    complete: bool,
+    abort_cause: Optional[str],
+    held_by,
+) -> "_LookupResult":
     result = _LookupResult()
     result_edit_ts: Dict[str, Dict[str, datetime]] = {}
     result_recorded_name: Dict[str, Dict[str, str]] = {}
     result_recorded_kind: Dict[str, Dict[str, str]] = {}
     for path in paths:
         normalized = _normalize_key(path)
-        claimants = state.claims.get(normalized)
+        claimants = claims.get(normalized)
         if claimants:
             result[path] = list(claimants)
-        elif not state.complete:
+        elif not complete:
             result[path] = [UNANSWERABLE]
         else:
             result[path] = []
-        path_edit_ts = state.edit_ts.get(normalized)
+        path_edit_ts = edit_ts.get(normalized)
         if path_edit_ts:
             result_edit_ts[path] = dict(path_edit_ts)
-        path_recorded_name = state.recorded_name.get(normalized)
+        path_recorded_name = recorded_name.get(normalized)
         if path_recorded_name:
             result_recorded_name[path] = dict(path_recorded_name)
-        path_recorded_kind = state.recorded_kind.get(normalized)
+        path_recorded_kind = recorded_kind.get(normalized)
         if path_recorded_kind:
             result_recorded_kind[path] = dict(path_recorded_kind)
-    result.complete = state.complete
-    result.abort_cause = state.abort_cause
+    result.complete = complete
+    result.abort_cause = abort_cause
     result.edit_ts = result_edit_ts
     result.recorded_name = result_recorded_name
     result.recorded_kind = result_recorded_kind
+    result.held_by = held_by
+    return result
 
-    wanted = {
-        sid for claimants in result.values() for sid in claimants if sid != UNANSWERABLE
-    }
+
+def _held_from_maps(wanted, claims, held_kind) -> Dict[str, List[str]]:
+    """``{sid: sorted paths}`` each wanted sid holds with a non-read kind."""
     held: Dict[str, List[str]] = {}
     if wanted:
-        for key, sids in state.claims.items():
-            kinds = state.recorded_kind.get(key, {})
+        for key, sids in claims.items():
+            kinds = held_kind.get(key, {})
             for sid in sids:
                 if sid in wanted and kinds.get(sid) != touch_record.KIND_READ:
                     held.setdefault(sid, []).append(key)
         for keys in held.values():
             keys.sort()
-    result.held_by = held
+    return held
 
-    return result
+
+def _read_index_names(file_path: str) -> Optional[Set[str]]:
+    """Sink names listed in an index file; ``None`` when the file does not exist."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as fh:
+            return {line.strip() for line in fh if line.strip()}
+    except FileNotFoundError:
+        return None
+
+
+def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]":
+    """Answer ``paths`` from the per-path sink index, or ``None`` when the index is absent, not
+    complete or unreadable (the caller then builds it).
+
+    Each positive is verified against its sink's own fold, so a stale entry (a release, rotation,
+    compaction or reaped sink) is dropped; a negative holds because every adder indexes its sink in
+    the same helper that appends the claim. ``held_by`` folds only the found claimants' sinks.
+    """
+    index_dir = touch_record.claim_index_dir(base)
+    if not os.path.isfile(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE)):
+        return None
+    deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
+    state = {"complete": True, "cause": None}
+
+    def _degrade(cause: str) -> None:
+        state["complete"] = False
+        if state["cause"] is None:
+            state["cause"] = cause
+
+    attributed: Dict[str, Optional[tuple]] = {}
+    folds: Dict[str, Optional[tuple]] = {}
+
+    def _fold_sink(name: str) -> Optional[tuple]:
+        """``(claimant_sid, agent_id, claims, held_kind)`` for a sink, or ``None`` when it has no
+        owner, cannot be read or the time cap passed."""
+        if name in folds:
+            return folds[name]
+        folds[name] = None
+        if time.process_time() > deadline:
+            _degrade(ABORT_CAUSE_CAP_EXCEEDED)
+            return None
+        owner, conclusive = touch_record.attribute_sink(base, name, _agent_owner_sid)
+        if not conclusive:
+            _degrade(ABORT_CAUSE_IO_ERROR)
+        if owner is None:
+            return None
+        read = _read_stream_claims(os.path.join(base, *name.split("/")))
+        stream_claims, content_read_ok = read
+        if not content_read_ok:
+            _degrade(ABORT_CAUSE_IO_ERROR)
+            return None
+        folds[name] = (owner[0], owner[1], stream_claims, getattr(read, "held_kind", {}))
+        return folds[name]
+
+    keys = {_normalize_key(path) for path in paths}
+    rows: List[tuple] = []
+    try:
+        for key in keys:
+            names = _read_index_names(
+                touch_record.claim_index_file(index_dir, "p", key)
+            )
+            for name in sorted(names or ()):
+                folded = _fold_sink(name)
+                if folded is None:
+                    continue
+                sid, agent_id, stream_claims, stream_held = folded
+                event = stream_claims.get(key)
+                if event is not None:
+                    rows.append((event, key, sid, agent_id, stream_held))
+        claims, edit_ts, recorded_name, recorded_kind, _held, _agent = _fold_rows(rows)
+        found = {path: sorted(sids) for path, sids in claims.items() if sids}
+        wanted = {sid for sids in found.values() for sid in sids}
+
+        held_rows: List[tuple] = []
+        for sid in sorted(wanted):
+            names = _read_index_names(touch_record.claim_index_file(index_dir, "s", sid))
+            if names is None:
+                return None
+            names.update(
+                name
+                for name, folded in folds.items()
+                if folded is not None and folded[0] == sid
+            )
+            for name in sorted(names):
+                folded = _fold_sink(name)
+                if folded is None or folded[0] != sid:
+                    continue
+                _sid, agent_id, stream_claims, stream_held = folded
+                for path, event in stream_claims.items():
+                    held_rows.append((event, path, sid, agent_id, stream_held))
+        held_claims, _e, _n, _k, held_kinds, _a = _fold_rows(held_rows)
+    except OSError:
+        return None
+
+    return _assemble(
+        paths,
+        found,
+        {p: v for p, v in edit_ts.items() if v},
+        {p: v for p, v in recorded_name.items() if v},
+        {p: v for p, v in recorded_kind.items() if v},
+        state["complete"],
+        state["cause"],
+        _held_from_maps(wanted, held_claims, held_kinds),
+    )
+
+
+def _begin_index(base: str, index_dir: str) -> bool:
+    """Reset ``index_dir`` and create its stream directories BEFORE the build's walk, so any claim
+    appended after the walk read its sink finds the directory and indexes itself."""
+    if not os.path.isdir(base):
+        return False
+    touch_record.forget_indexed()
+    try:
+        shutil.rmtree(index_dir, ignore_errors=True)
+        os.makedirs(os.path.join(index_dir, "p"), exist_ok=True)
+        os.makedirs(os.path.join(index_dir, "s"), exist_ok=True)
+    except OSError:
+        return False
+    return True
+
+
+def _finish_index(
+    base: str,
+    index_dir: str,
+    state: "_IndexState",
+    sink_names: Dict[str, Set[str]],
+    sid_sinks: Dict[str, Set[str]],
+) -> None:
+    """Write the streams the build's walk collected and, only when that walk was complete and every
+    write landed, the ``COMPLETE`` stamp. Failure leaves no stamp, so the next lookup builds again."""
+    if not state.complete:
+        return
+    try:
+        unowned = _unowned_agent_sinks(base)
+        if unowned is None:
+            return
+        for name, stream_claims in unowned:
+            for key in stream_claims:
+                sink_names.setdefault(key, set()).add(name)
+        for key, names in sink_names.items():
+            touch_record.append_index_names(
+                touch_record.claim_index_file(index_dir, "p", key), names
+            )
+        for sid, names in sid_sinks.items():
+            touch_record.append_index_names(
+                touch_record.claim_index_file(index_dir, "s", sid), names
+            )
+        touch_record.append_index_names(
+            os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE),
+            {f"v{touch_record.CLAIM_INDEX_VERSION}"},
+        )
+    except OSError:
+        touch_record.invalidate_claim_index(index_dir)
+
+
+def _unowned_agent_sinks(base: str) -> "Optional[List[tuple]]":
+    """``(sink name, claims)`` for agent sinks whose back-pointer is absent: the walk skips them, but
+    the back-pointer can appear later, and the index must already hold what they recorded. ``None``
+    when one cannot be read."""
+    out: List[tuple] = []
+    agents_base = os.path.join(base, _AGENTS_SUBDIR)
+    try:
+        entries = sorted(os.scandir(agents_base), key=lambda e: e.name)
+    except FileNotFoundError:
+        return out
+    except OSError:
+        return None
+    for entry in entries:
+        try:
+            if not entry.is_dir():
+                continue
+        except OSError:
+            continue
+        owner_sid, conclusive = _agent_owner_sid(entry.path)
+        if not conclusive:
+            return None
+        if owner_sid:
+            continue
+        sink = os.path.join(entry.path, _TOUCHED_FILENAME)
+        if not _has_claim_surface(sink):
+            continue
+        stream_claims, content_read_ok = _read_stream_claims(sink)
+        if not content_read_ok:
+            return None
+        out.append((f"{_AGENTS_SUBDIR}/{entry.name}/{_TOUCHED_FILENAME}", stream_claims))
+    return out
 
 
 @dataclasses.dataclass

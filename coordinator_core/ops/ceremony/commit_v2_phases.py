@@ -21,6 +21,12 @@ def _child_cpu_secs() -> float:
     return float(sum(bucket)) if bucket else 0.0
 
 
+def _dispatch_op() -> Optional[str]:
+    ipc = sys.modules.get("coordinator_core.ipc")
+    accessor = getattr(ipc, "current_dispatch_op", None)
+    return accessor() if accessor else None
+
+
 class PhaseLedger:
     """Accumulates CPU milliseconds per named phase; `emit` writes one `phase_time` row."""
 
@@ -54,7 +60,11 @@ class PhaseLedger:
         paths: int,
         spawns: Optional[int],
     ) -> None:
-        """Write one `phase_time` row (counts only, no path strings); never raises."""
+        """Write one `phase_time` row (counts only, no path strings); never raises.
+
+        `dispatch_op` is the method of the dispatch the handler ran inside: a value other than
+        `ceremony.commit_v2` marks a nested call sharing that dispatch's corr_id.
+        """
         try:
             from coordinator_core import dispatch_abandon
             from coordinator_core.telemetry import op_latency
@@ -66,6 +76,7 @@ class PhaseLedger:
                     "op": OP,
                     "t_start": time.time(),
                     "corr_id": self.corr_id,
+                    "dispatch_op": _dispatch_op(),
                     "phases_ms": phases,
                     "total_ms": sum(phases.values()),
                     "abandoned": bool(abandoned or dispatch_abandon.is_abandoned()),

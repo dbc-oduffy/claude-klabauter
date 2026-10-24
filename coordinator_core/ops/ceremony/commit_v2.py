@@ -352,6 +352,24 @@ def _peer_claim_warnings(
 
     warnings: list = []
     live_peers: list = []
+    verdicts: dict = {}
+
+    def _verdict(sid: str) -> Optional[tuple]:
+        """(live, abandoned) for ``sid``, computed once; None when liveness raised."""
+        if sid not in verdicts:
+            try:
+                live = session_liveness.session_live(sid, str(worktree_root))
+                abandoned = False
+                if live:
+                    try:
+                        abandoned = session_liveness.session_abandoned(sid, str(worktree_root))
+                    except Exception:  # noqa: BLE001 -- see docstring
+                        abandoned = False
+                verdicts[sid] = (live, abandoned)
+            except Exception:  # noqa: BLE001 -- see docstring
+                verdicts[sid] = None
+        return verdicts[sid]
+
     for path in paths:
         claimants = lookup_result.get(path, [])
         if session_claim_index.UNANSWERABLE in claimants:
@@ -361,16 +379,12 @@ def _peer_claim_warnings(
         for sid in claimants:
             if sid == own_sid or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
                 continue
-            try:
-                live = session_liveness.session_live(sid, str(worktree_root))
-            except Exception:  # noqa: BLE001 -- see docstring
+            verdict = _verdict(sid)
+            if verdict is None:
                 warnings.append(f"claim state indeterminate for {path!r}")
                 continue
+            live, abandoned = verdict
             if live:
-                try:
-                    abandoned = session_liveness.session_abandoned(sid, str(worktree_root))
-                except Exception:  # noqa: BLE001 -- see docstring
-                    abandoned = False
                 if abandoned:
                     if abandoned_holds is not None:
                         abandoned_holds.append((path, sid))

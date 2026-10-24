@@ -967,3 +967,73 @@ def test_last_seen_hash_never_reads_a_peer_sessions_claim(tmp_path, monkeypatch)
 
 def test_last_seen_hash_none_when_session_dir_absent(tmp_path):
     assert touch_record.last_seen_hash("no-such-sid", "a.py", str(tmp_path)) is None
+
+
+def _index_names(index_dir, kind, name):
+    with open(touch_record.claim_index_file(str(index_dir), kind, name), encoding="utf-8") as fh:
+        return fh.read().splitlines()
+
+
+def test_append_event_writes_the_path_and_session_index_beside_the_sink_line(tmp_path):
+    base = tmp_path / "sessions"
+    index_dir = touch_record.claim_index_dir(base)
+    os.makedirs(os.path.join(index_dir, "p"))
+    os.makedirs(os.path.join(index_dir, "s"))
+    sink = base / "sid1" / "touch-record.jsonl"
+
+    append_event(sink, session_id="sid1", agent_id=None, verb=VERB_TOUCH, path="a\\b.py", name=None)
+    append_event(sink, session_id="sid1", agent_id=None, verb=VERB_TOUCH, path="a/b.py", name=None)
+
+    assert sink.read_text(encoding="utf-8").count("\n") == 2
+    assert _index_names(index_dir, "p", "a/b.py") == ["sid1/touch-record.jsonl"]
+    assert _index_names(index_dir, "s", "sid1") == ["sid1/touch-record.jsonl"]
+
+
+def test_append_event_indexes_an_agent_sink_under_its_owner_only_once_attributed(tmp_path):
+    base = tmp_path / "sessions"
+    index_dir = touch_record.claim_index_dir(base)
+    os.makedirs(os.path.join(index_dir, "p"))
+    os.makedirs(os.path.join(index_dir, "s"))
+    agent_dir = base / ".agents" / "agent1"
+    sink = agent_dir / "touch-record.jsonl"
+
+    append_event(sink, session_id="owner", agent_id="agent1", verb=VERB_TOUCH, path="x.py", name=None)
+    assert _index_names(index_dir, "p", "x.py") == [".agents/agent1/touch-record.jsonl"]
+    assert not os.path.exists(touch_record.claim_index_file(index_dir, "s", "owner"))
+
+    (agent_dir / "em-session-id.txt").write_text("owner\n", encoding="utf-8")
+    append_event(sink, session_id="owner", agent_id="agent1", verb=VERB_TOUCH, path="y.py", name=None)
+    assert _index_names(index_dir, "s", "owner") == [".agents/agent1/touch-record.jsonl"]
+
+
+def test_append_event_writes_no_index_until_a_build_has_made_the_directory(tmp_path):
+    base = tmp_path / "sessions"
+    sink = base / "sid1" / "touch-record.jsonl"
+
+    append_event(sink, session_id="sid1", agent_id=None, verb=VERB_TOUCH, path="a.py", name=None)
+
+    assert sink.exists()
+    assert not os.path.exists(touch_record.claim_index_dir(base))
+
+
+def test_a_failed_index_append_keeps_the_claim_and_invalidates_the_index(tmp_path, monkeypatch):
+    base = tmp_path / "sessions"
+    index_dir = touch_record.claim_index_dir(base)
+    os.makedirs(os.path.join(index_dir, "p"))
+    os.makedirs(os.path.join(index_dir, "s"))
+    stamp = os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE)
+    Path(stamp).write_text("v1\n", encoding="utf-8")
+    real = touch_record.atomic_append.append_line
+
+    def _fail_for_index(target, encoded):
+        if "-claim-index" in str(target):
+            raise OSError("index volume full")
+        real(target, encoded)
+
+    monkeypatch.setattr(touch_record.atomic_append, "append_line", _fail_for_index)
+    sink = base / "sid1" / "touch-record.jsonl"
+
+    append_event(sink, session_id="sid1", agent_id=None, verb=VERB_TOUCH, path="a.py", name=None)
+
+    assert sink.read_text(encoding="utf-8").count("\n") == 1
+    assert not os.path.exists(stamp)

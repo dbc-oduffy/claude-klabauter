@@ -425,6 +425,43 @@ def test_session_dir_and_agent_dir_claims_both_read_in_one_rebuild(tmp_path):
     }
 
 
+def test_older_release_in_later_agent_sink_does_not_drop_newer_claim(tmp_path):
+    base = str(tmp_path)
+    _session_touched(
+        base, "sess-a", [_touch_line("T", "hot.py", "2026-08-08T12:00:00.000000Z")]
+    )
+    _agent_touched(
+        base, "agent-z", "sess-a", [_touch_line("R", "hot.py", "2026-08-08T09:00:00.000000Z")]
+    )
+
+    result = claim_index.lookup(["hot.py"], sessions_dir=base)
+
+    assert result == {"hot.py": ["sess-a"]}
+    assert result.held_by == {"sess-a": ["hot.py"]}
+    assert claim_index.rebuild(sessions_dir=base).claims == {"hot.py": ["sess-a"]}
+
+
+def test_newer_release_in_later_agent_sink_still_drops_older_claim(tmp_path):
+    base = str(tmp_path)
+    _session_touched(
+        base, "sess-a", [_touch_line("T", "hot.py", "2026-08-08T09:00:00.000000Z")]
+    )
+    _agent_touched(
+        base, "agent-z", "sess-a", [_touch_line("R", "hot.py", "2026-08-08T12:00:00.000000Z")]
+    )
+
+    assert claim_index.lookup(["hot.py"], sessions_dir=base) == {"hot.py": []}
+
+
+def test_equal_ts_release_in_later_agent_sink_does_not_drop_touch(tmp_path):
+    base = str(tmp_path)
+    ts = "2026-08-08T12:00:00.000000Z"
+    _session_touched(base, "sess-a", [_touch_line("T", "hot.py", ts)])
+    _agent_touched(base, "agent-z", "sess-a", [_touch_line("R", "hot.py", ts)])
+
+    assert claim_index.lookup(["hot.py"], sessions_dir=base) == {"hot.py": ["sess-a"]}
+
+
 def test_workflow_agent_session_dir_folds_to_dispatching_session(tmp_path):
     base = str(tmp_path)
     _session_touched(base, "agent-sess", [_touch_line("T", "wf.py")])
@@ -869,6 +906,30 @@ def _session_touched_kind(base, sid, path, kind):
         timestamp=1.0,
         kind=kind,
     )
+
+
+def _touch_kind_at(base, sid, path, kind, timestamp):
+    sink = os.path.join(str(base), sid, "touch-record.jsonl")
+    touch_record.append_event(
+        sink,
+        session_id=sid,
+        agent_id=None,
+        verb="T",
+        path=path,
+        timestamp=timestamp,
+        kind=kind,
+    )
+
+
+def test_lookup_held_by_keeps_a_path_written_then_read_without_release(tmp_path):
+    _touch_kind_at(tmp_path, "sid-a", "wr.py", touch_record.KIND_WRITE, 1.0)
+    _touch_kind_at(tmp_path, "sid-a", "wr.py", touch_record.KIND_READ, 2.0)
+    _touch_kind_at(tmp_path, "sid-a", "ro.py", touch_record.KIND_READ, 1.0)
+    _touch_kind_at(tmp_path, "sid-a", "ro.py", touch_record.KIND_READ, 2.0)
+
+    result = claim_index.lookup(["wr.py", "ro.py"], sessions_dir=str(tmp_path))
+
+    assert result.held_by == {"sid-a": ["wr.py"]}
 
 
 def test_classify_paths_admits_a_path_whose_only_foreign_claim_is_a_read(tmp_path):
@@ -1398,3 +1459,187 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     assert rebuild_only_ms <= _BRIGHTLINE_MS, (
         f"AC18 UNMET: {detail}"
     )
+
+
+def _spy_on_sink_reads(monkeypatch):
+    reads = []
+    real = claim_index._read_stream_claims
+
+    def _spy(sink):
+        reads.append(os.path.dirname(sink))
+        return real(sink)
+
+    monkeypatch.setattr(claim_index, "_read_stream_claims", _spy)
+    return reads
+
+
+def _count_walks(monkeypatch):
+    walks = []
+    real = claim_index._walk
+
+    def _counting(*args, **kwargs):
+        walks.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(claim_index, "_walk", _counting)
+    return walks
+
+
+def _bystanders(base, count=6):
+    for i in range(count):
+        _session_touched(base, f"bystander-{i}", [_touch_line("T", f"other{i}.py")])
+
+
+def test_indexed_lookup_reads_only_the_found_claimants_sinks(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _bystanders(base)
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+
+    reads = _spy_on_sink_reads(monkeypatch)
+    walks = _count_walks(monkeypatch)
+    result = claim_index.lookup(["a.py", "never-claimed.py"], sessions_dir=base)
+
+    assert result == {"a.py": ["peer"], "never-claimed.py": []}
+    assert set(reads) == {os.path.join(base, "peer")}
+    assert walks == []
+
+
+def test_indexed_lookup_drops_a_released_claim_and_sees_a_later_one(tmp_path):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+
+    _session_touched(base, "peer", [_touch_line("R", "a.py", "2026-08-08T10:00:01.000000Z")])
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": []}
+
+    _session_touched(base, "late", [_touch_line("T", "a.py", "2026-08-08T10:00:02.000000Z")])
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["late"]}
+
+
+def test_indexed_held_by_comes_from_the_found_claimants_sinks(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _bystanders(base)
+    _session_touched(base, "peer", [_touch_line("T", "a.py"), _touch_line("T", "b.py")])
+    _agent_touched(base, "agent1", "peer", [_touch_line("T", "c.py")])
+    assert claim_index.lookup(["a.py"], sessions_dir=base).held_by == {
+        "peer": ["a.py", "b.py", "c.py"]
+    }
+
+    reads = _spy_on_sink_reads(monkeypatch)
+    result = claim_index.lookup(["a.py"], sessions_dir=base)
+
+    assert result.held_by == {"peer": ["a.py", "b.py", "c.py"]}
+    assert set(reads) == {
+        os.path.join(base, "peer"),
+        os.path.join(base, ".agents", "agent1"),
+    }
+
+
+def test_missing_index_stamp_rebuilds_once_then_serves(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    claim_index.lookup(["a.py"], sessions_dir=base)
+    index_dir = touch_record.claim_index_dir(base)
+    os.remove(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE))
+    walks = _count_walks(monkeypatch)
+
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+
+    assert len(walks) == 1
+
+
+def test_a_format_version_change_rebuilds_once_then_serves(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    claim_index.lookup(["a.py"], sessions_dir=base)
+    monkeypatch.setattr(touch_record, "CLAIM_INDEX_VERSION", touch_record.CLAIM_INDEX_VERSION + 1)
+    walks = _count_walks(monkeypatch)
+
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+
+    assert len(walks) == 1
+
+
+def test_an_unreadable_path_stream_rebuilds_once_then_serves(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    claim_index.lookup(["a.py"], sessions_dir=base)
+    stream = touch_record.claim_index_file(touch_record.claim_index_dir(base), "p", "a.py")
+    os.remove(stream)
+    os.mkdir(stream)
+    walks = _count_walks(monkeypatch)
+
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+
+    assert len(walks) == 1
+
+
+def test_a_failed_index_append_leaves_the_claim_written_and_the_next_lookup_correct(
+    tmp_path, monkeypatch
+):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "early", [_touch_line("T", "a.py")])
+    claim_index.lookup(["a.py"], sessions_dir=base)
+    real = touch_record.atomic_append.append_line
+
+    def _fail_for_index(target, encoded):
+        if "-claim-index" in str(target):
+            raise OSError("index volume full")
+        real(target, encoded)
+
+    monkeypatch.setattr(touch_record.atomic_append, "append_line", _fail_for_index)
+    _session_touched(base, "late", [_touch_line("T", "b.py")])
+    monkeypatch.setattr(touch_record.atomic_append, "append_line", real)
+    stamp = os.path.join(
+        touch_record.claim_index_dir(base), touch_record.CLAIM_INDEX_COMPLETE
+    )
+    assert not os.path.exists(stamp)
+    walks = _count_walks(monkeypatch)
+
+    assert claim_index.lookup(["a.py", "b.py"], sessions_dir=base) == {
+        "a.py": ["early"],
+        "b.py": ["late"],
+    }
+    assert claim_index.lookup(["b.py"], sessions_dir=base) == {"b.py": ["late"]}
+
+    assert len(walks) == 1 and os.path.exists(stamp)
+
+
+def test_an_incomplete_build_leaves_no_stamp_and_builds_again(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    real = claim_index._read_stream_claims
+
+    def _unreadable(sink):
+        read = claim_index._ClaimRead(({}, False))
+        read.held_kind = {}
+        return read
+
+    monkeypatch.setattr(claim_index, "_read_stream_claims", _unreadable)
+    result = claim_index.lookup(["a.py"], sessions_dir=base)
+    assert result == {"a.py": [claim_index.UNANSWERABLE]} and not result.complete
+    stamp = os.path.join(
+        touch_record.claim_index_dir(base), touch_record.CLAIM_INDEX_COMPLETE
+    )
+    assert not os.path.exists(stamp)
+
+    monkeypatch.setattr(claim_index, "_read_stream_claims", real)
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+    assert os.path.exists(stamp)
+
+
+def test_a_claim_in_an_agent_sink_without_a_backpointer_is_found_once_one_appears(tmp_path):
+    base = str(tmp_path / "sessions")
+    agent_dir = os.path.join(base, ".agents", "agent1")
+    sink = os.path.join(agent_dir, "touch-record.jsonl")
+    _append_fixture_line(sink, "owner", "agent1", _touch_line("T", "a.py"))
+    _session_touched(base, "bystander", [_touch_line("T", "other.py")])
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": []}
+
+    _write(os.path.join(agent_dir, "em-session-id.txt"), "owner\n")
+
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["owner"]}

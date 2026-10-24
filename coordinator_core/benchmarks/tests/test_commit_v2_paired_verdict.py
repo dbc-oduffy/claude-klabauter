@@ -151,6 +151,22 @@ def test_every_unpaired_reason_is_named_and_windowed_by_since(tmp_path):
     assert pv.main(["--repo-root", str(repo)]) == 2
 
 
+def test_nested_phase_row_goes_to_phase_nested_not_unpaired(tmp_path, capsys):
+    repo = _repo(tmp_path)
+    nested = _pair("shared", t=500.0)[0]
+    nested["dispatch_op"] = "dispatch.terminal_commit"
+    top = _pair("shared", t=501.0)
+    top[0]["dispatch_op"] = OP
+    _write(repo, [nested] + top + _many(4, ms=300.0, spawns=1))
+    allpaired, unpaired = pv._pair(repo)
+    assert pv.unpaired_by_reason(unpaired, None) == {"phase_nested": 1}
+    assert [r["corr_id"] for r in allpaired].count("shared") == 1
+    assert pv.main(["--repo-root", str(repo)]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "unpaired: 0" and "phase_nested: 1" in out
+    assert out[-1].startswith("VERDICT: PASS")
+
+
 @pytest.mark.parametrize("text,expected", [("1500.5", 1500.5), ("1970-01-01T00:10:00Z", 600.0), ("1970-01-01T00:10:00", 600.0)])
 def test_since_parse(text, expected):
     assert pv._parse_since(text) == expected

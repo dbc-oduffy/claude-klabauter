@@ -702,6 +702,12 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
             "coordinator_core/benchmarks/commit_v2_minimal_land_spike.py",
             "_peer_disclosures",
         ),
+        # Claim-lookup spike: reads the lookup's recorded kinds to pick the liveness-probe holders.
+        # A benchmark; read-only, never refuses a land or widens a pathspec.
+        (
+            "coordinator_core/benchmarks/claim_lookup_spike.py",
+            "main",
+        ),
     }
 )
 

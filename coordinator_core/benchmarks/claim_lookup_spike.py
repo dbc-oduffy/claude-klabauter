@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import statistics
 import subprocess
 import sys
@@ -24,6 +23,7 @@ from coordinator_core.ops.ceremony.commit_v2_phases import PhaseLedger
 from coordinator_core.session import claim_index, touch_record
 from coordinator_core.session.path_dialect import canonicalize_relative_path
 
+# Per-candidate lookup + deduplicated liveness budget for a 2-path commit_v2 land (plan S2 target).
 MEDIAN_BAR_MS = 25.0
 MAX_BAR_MS = 110.0
 
@@ -113,25 +113,35 @@ def today_split(base: str, paths: Sequence[str]) -> tuple[dict, dict]:
     p0 = time.process_time()
     claims: dict[str, set] = {}
     kinds: dict[str, dict] = {}
+    events = []
     for (_sink, sid, _agent), read in zip(pairs, folds):
         stream_claims, ok = read
         if not ok:
             continue
+        stream_held = read.held_kind
         for path, ev in stream_claims.items():
-            if ev.verb == touch_record.VERB_TOUCH:
-                claims.setdefault(path, set()).add(sid)
-                if ev.kind:
-                    kinds.setdefault(path, {})[sid] = ev.kind
-            else:
-                claims.get(path, set()).discard(sid)
-                kinds.get(path, {}).pop(sid, None)
+            events.append((ev, path, sid, stream_held))
+    # Latest ts wins per (path, sid) across all of a sid's streams, as claim_index.rebuild folds.
+    # A TOUCH sorts after a RELEASE at equal ts (touch_record's cross-stream tie rule).
+    events.sort(key=lambda row: (row[0].timestamp, row[0].verb == touch_record.VERB_TOUCH))
+    for ev, path, sid, stream_held in events:
+        if ev.verb == touch_record.VERB_TOUCH:
+            claims.setdefault(path, set()).add(sid)
+            if path in stream_held:
+                per_sid = kinds.setdefault(path, {})
+                per_sid[sid] = claim_index._merge_held_kind(
+                    per_sid.get(sid, claim_index._NO_HELD), stream_held[path]
+                )
+        else:
+            claims.get(path, set()).discard(sid)
+            kinds.get(path, {}).pop(sid, None)
     result = {p: sorted(claims.get(_norm(p)) or ()) for p in paths}
     wanted = {sid for sids in result.values() for sid in sids}
     held: dict[str, list] = {}
     if wanted:
         for key, sids in claims.items():
             for sid in sids:
-                if sid in wanted and kinds.get(key, {}).get(sid) != touch_record.KIND_READ:
+                if sid in wanted and kinds.get(key, {}).get(sid, claim_index._NO_HELD) != touch_record.KIND_READ:
                     held.setdefault(sid, []).append(key)
     t["aggregate"] = (time.process_time() - p0) * 1000.0
     t["total"] = sum(t[k] for k in ("enumerate", "fold", "aggregate"))
@@ -187,7 +197,11 @@ def p_backfill(base: str, work_dir: Path) -> int:
 
 
 def p_lookup(work_dir: Path, paths: Sequence[str]) -> dict:
-    """Read each path's stream, fold per sink, and verify each positive against the sink's fold."""
+    """Read each path's stream, fold per sink, and verify each positive against the sink's fold.
+
+    Per-sink only: it does not apply today's cross-stream ts fold, so it can read claimed where
+    `today_split` reads released when one sid's sinks disagree on a path.
+    """
     result: dict[str, set] = {}
     for path in paths:
         key = _norm(path)
@@ -213,11 +227,17 @@ def p_lookup(work_dir: Path, paths: Sequence[str]) -> dict:
     if wanted:
         by_sid = _p_by_sid(work_dir)
         for sid in wanted:
+            merged: dict[str, object] = {}
             for sink in by_sid.get(sid, ()):
-                claims, _h = _fold(sink)
+                claims, stream_held = _fold(sink)
                 for key, ev in claims.items():
-                    if ev.verb == touch_record.VERB_TOUCH and ev.kind != touch_record.KIND_READ:
-                        held.setdefault(sid, []).append(key)
+                    if ev.verb == touch_record.VERB_TOUCH:
+                        merged[key] = claim_index._merge_held_kind(
+                            merged.get(key, claim_index._NO_HELD), stream_held.get(key, ev.kind)
+                        )
+            for key, kind in merged.items():
+                if kind != touch_record.KIND_READ:
+                    held.setdefault(sid, []).append(key)
     return _shape(result, held)
 
 
@@ -229,10 +249,13 @@ def _sig(sink: str) -> list:
 
 def _j_entry(sink: str, sid: str, agent: Optional[str]) -> dict:
     sig = _sig(sink)
-    claims, _held = _fold(sink)
+    claims, stream_held = _fold(sink)
     return {
         "sid": sid, "agent": agent, "sig": sig,
-        "claims": {p: [ev.kind] for p, ev in claims.items() if ev.verb == touch_record.VERB_TOUCH},
+        "claims": {
+            p: [stream_held.get(p, ev.kind)]
+            for p, ev in claims.items() if ev.verb == touch_record.VERB_TOUCH
+        },
     }
 
 
@@ -262,6 +285,9 @@ def j_lookup(base: str, journal: Path, paths: Sequence[str], force_stale: int = 
 
     `force_stale` marks that many journal sinks changed regardless of their signature, to cost a
     miss of known size. Returns `(shape, sinks_refolded)`.
+
+    Per-sink only, like `p_lookup`: no cross-stream ts fold, so it can read claimed where
+    `today_split` reads released when one sid's sinks disagree on a path.
     """
     data = json.loads(journal.read_text(encoding="utf-8"))
     sinks: dict = data["sinks"]
@@ -286,11 +312,16 @@ def j_lookup(base: str, journal: Path, paths: Sequence[str], force_stale: int = 
     wanted = {sid for sids in result.values() for sid in sids}
     held: dict[str, list] = {}
     if wanted:
+        merged: dict[str, dict] = {}
         for entry in sinks.values():
             if entry["sid"] in wanted:
+                per_sid = merged.setdefault(entry["sid"], {})
                 for key, (kind,) in entry["claims"].items():
-                    if kind != touch_record.KIND_READ:
-                        held.setdefault(entry["sid"], []).append(key)
+                    per_sid[key] = claim_index._merge_held_kind(per_sid.get(key, claim_index._NO_HELD), kind)
+        for sid, per_sid in merged.items():
+            for key, kind in per_sid.items():
+                if kind != touch_record.KIND_READ:
+                    held.setdefault(sid, []).append(key)
     return _shape(result, held), len(changed)
 
 

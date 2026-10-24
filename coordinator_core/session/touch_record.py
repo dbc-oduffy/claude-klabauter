@@ -199,6 +199,7 @@ countable and bounded, never silent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import itertools
@@ -1124,6 +1125,134 @@ def append_event(
     sink_path.parent.mkdir(parents=True, exist_ok=True)
     _maybe_rotate(sink_path)
     atomic_append.append_line(sink_path, encoded)
+    note_claim_in_index(sink_path, canonicalize_relative_path(path))
+
+
+# ---------------------------------------------------------------------------
+# The per-path sink index ``claim_index.lookup`` reads.
+#
+# ``<sessions-dir>-claim-index/v<N>/p/<sha1(path)>.txt`` holds one sink-relative name per line:
+# every sink that has ever recorded an event for that path. ``.../s/<sha1(sid)>.txt`` holds the
+# sinks a claimant session owns. Both are append-only through ``atomic_append`` and a superset of
+# the truth by construction: removals (release, rotation, compaction, reap) leave an entry that
+# the reader's verification against the sink's own fold drops. ``COMPLETE`` is written last by a
+# full build and removed by any failed index append, so a lookup never serves an index that may
+# have missed a claim. It sits beside the sessions dir, not inside it, so no session walk or reap
+# sees it.
+# ---------------------------------------------------------------------------
+
+CLAIM_INDEX_VERSION = 1
+CLAIM_INDEX_COMPLETE = "COMPLETE"
+_AGENTS_DIRNAME = ".agents"
+_INDEXED: set = set()
+_INDEXED_MAX = 65536
+
+
+def claim_index_dir(sessions_dir: "Path | str") -> str:
+    """The versioned index root for ``sessions_dir``; a version bump is a new directory."""
+    base = os.path.normpath(str(sessions_dir))
+    return os.path.join(
+        os.path.dirname(base),
+        os.path.basename(base) + "-claim-index",
+        f"v{CLAIM_INDEX_VERSION}",
+    )
+
+
+def claim_index_file(index_dir: str, kind: str, name: str) -> str:
+    """``kind`` is ``"p"`` (stream of a normalized path) or ``"s"`` (sinks of a session id)."""
+    return os.path.join(index_dir, kind, hashlib.sha1(name.encode("utf-8")).hexdigest() + ".txt")
+
+
+def sink_layout(sink: "Path | str") -> "Optional[tuple[str, str]]":
+    """``(sessions_dir, posix sink name)`` for ``<base>/<dir>/touch-record.jsonl`` or
+    ``<base>/.agents/<dir>/touch-record.jsonl``; ``None`` for any other shape."""
+    owner_dir, name = os.path.split(os.path.normpath(str(sink)))
+    if name != RECORD_FILENAME:
+        return None
+    parent, dirname = os.path.split(owner_dir)
+    if not dirname or dirname == _AGENTS_DIRNAME:
+        return None
+    grandparent, parent_name = os.path.split(parent)
+    if parent_name == _AGENTS_DIRNAME:
+        return grandparent, f"{_AGENTS_DIRNAME}/{dirname}/{name}"
+    return parent, f"{dirname}/{name}"
+
+
+def attribute_sink(base: str, sink_name: str, owner_of=None) -> "tuple[Optional[tuple[str, Optional[str]]], bool]":
+    """``((claimant_sid, agent_id) | None, owner_read_conclusive)`` for a sink name from
+    ``sink_layout``: an agent sink belongs to the session its back-pointer names (``None`` when it
+    has none), a session sink to itself unless its own back-pointer names another session."""
+    owner_of = owner_of or agent_owner_sid
+    parts = sink_name.split("/")
+    owner, conclusive = owner_of(os.path.join(base, *parts[:-1]))
+    if parts[0] == _AGENTS_DIRNAME:
+        return ((owner, parts[1]) if owner else None), conclusive
+    if owner and owner != parts[0]:
+        return (owner, parts[0]), conclusive
+    return (parts[0], None), conclusive
+
+
+def append_index_names(file_path: str, names: "Iterable[str]") -> None:
+    """Append ``names`` to an index file in one atomic write; the build's bulk form of
+    ``note_claim_in_index``. Raises ``OSError`` for the caller to turn into a missing stamp."""
+    atomic_append.append_line(
+        file_path, ("".join(f"{name}\n" for name in sorted(names))).encode("utf-8")
+    )
+
+
+def invalidate_claim_index(index_dir: str) -> None:
+    """Make the next lookup rebuild the index. Best effort: a removal that fails leaves the index
+    as it was."""
+    _INDEXED.clear()
+    try:
+        os.remove(os.path.join(index_dir, CLAIM_INDEX_COMPLETE))
+    except OSError:
+        pass
+
+
+def forget_indexed() -> None:
+    """Drop the once-per-process memo of indexed (stream, sink) pairs.
+
+    A build resets the index directory, which erases entries for sinks whose fold no longer names
+    the path; a memo that outlives the reset would skip re-indexing a later claim on that pair.
+    """
+    _INDEXED.clear()
+
+
+def note_claim_in_index(sink: "Path | str", key: str) -> None:
+    """Record that ``sink`` has an event for normalized path ``key``, once per process.
+
+    Runs after the sink append, and only when a build has created the index directory: a build
+    creates it before it walks, so every sink line either predates the walk or finds the directory.
+    Never raises; a failed index append invalidates the index instead of failing the claim write.
+    """
+    layout = sink_layout(sink)
+    if layout is None:
+        return
+    base, sink_name = layout
+    index_dir = claim_index_dir(base)
+    stream = claim_index_file(index_dir, "p", key)
+    if (stream, sink_name) in _INDEXED:
+        return
+    try:
+        if not os.path.isdir(index_dir):
+            return
+        attributed, _conclusive = attribute_sink(base, sink_name)
+        if attributed is not None:
+            sid_memo = (index_dir, sink_name, attributed[0])
+            if sid_memo not in _INDEXED:
+                atomic_append.append_line(
+                    claim_index_file(index_dir, "s", attributed[0]),
+                    (sink_name + "\n").encode("utf-8"),
+                )
+                _INDEXED.add(sid_memo)
+        atomic_append.append_line(stream, (sink_name + "\n").encode("utf-8"))
+        if len(_INDEXED) >= _INDEXED_MAX:
+            _INDEXED.clear()
+        _INDEXED.add((stream, sink_name))
+    except Exception as exc:
+        _note_degrade("claim_index_append", str(exc))
+        invalidate_claim_index(index_dir)
 
 
 # ---------------------------------------------------------------------------

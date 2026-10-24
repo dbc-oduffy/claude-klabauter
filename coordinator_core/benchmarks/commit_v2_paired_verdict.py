@@ -48,6 +48,7 @@ DUP_PHASE = "phase_duplicate_corr_id"
 NO_HANDLER = "phase_no_handler_row"
 NO_PROCESS_MS = "handler_no_process_ms"
 NO_PHASE = "handler_no_phase_row"
+NESTED = "phase_nested"
 
 
 def _pair(repo_root: Path) -> tuple[list[dict], list[dict]]:
@@ -64,6 +65,10 @@ def _pair(repo_root: Path) -> tuple[list[dict], list[dict]]:
         is_phase = kind == "phase_time"
         is_handler = kind == "process_time" and row.get("measurement_scope") == SCOPE
         if not (is_phase or is_handler):
+            continue
+        dop = row.get("dispatch_op")
+        if is_phase and isinstance(dop, str) and dop and dop != OP:
+            _miss(NESTED, row)
             continue
         cid = row.get("corr_id")
         if not isinstance(cid, str) or not cid:
@@ -202,9 +207,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     rows = _filter(allpaired, since, args.paths_max)
 
     reasons = unpaired_by_reason(unpaired, since)
+    nested = reasons.pop(NESTED, 0)
     print(f"unpaired: {sum(reasons.values())}")
     for reason, n in reasons.items():
         print(f"  {reason}: {n}")
+    print(f"phase_nested: {nested}")
     print()
     print("| t_start | paths | process_ms | spawns | phase total_ms | phases >= 15.6ms |")
     print("|---|---|---|---|---|---|")

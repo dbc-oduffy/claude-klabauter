@@ -51,6 +51,32 @@ def test_row_without_a_dispatch_reads_null(tmp_path, monkeypatch):
     assert rows[0]["corr_id"] is None
 
 
+def test_row_carries_the_dispatch_op_inside_a_dispatch_and_none_outside(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_OP_LATENCY_DISABLE", raising=False)
+    _bare(tmp_path)
+    token = ipc._dispatch_op_var.set("dispatch.terminal_commit")
+    try:
+        commit_v2._handler({"paths": ["a.txt"], "message": ""}, repo_root=tmp_path / ".git")
+    finally:
+        ipc._dispatch_op_var.reset(token)
+    commit_v2._handler({"paths": ["a.txt"], "message": ""}, repo_root=tmp_path / ".git")
+    rows = _phase_rows(tmp_path)
+    assert [r["dispatch_op"] for r in rows] == ["dispatch.terminal_commit", None]
+
+
+def test_dispatch_message_binds_and_resets_the_dispatch_op(monkeypatch):
+    seen = {}
+
+    async def _impl(msg):
+        seen["during"] = ipc.current_dispatch_op()
+        return {"jsonrpc": "2.0", "id": 1, "result": {}}
+
+    monkeypatch.setattr(ipc, "_dispatch_message_impl", _impl)
+    asyncio.run(ipc.dispatch_message({"jsonrpc": "2.0", "id": 1, "method": "dispatch.x"}, corr_id="1-0-1"))
+    assert seen["during"] == "dispatch.x"
+    assert ipc.current_dispatch_op() is None
+
+
 def test_dispatch_message_exposes_and_resets_its_corr_id(monkeypatch):
     seen = {}
 
