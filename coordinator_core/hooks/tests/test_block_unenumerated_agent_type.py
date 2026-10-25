@@ -611,3 +611,30 @@ def test_plugin_agent_model_skips_a_pre_refresh_snapshot(tmp_path: Path) -> None
 @pytest.mark.parametrize("agent_type", ["no-colon", ":stem", "plugin:", "a/b:c", r"a:..\c"])
 def test_plugin_agent_model_rejects_malformed_types(tmp_path: Path, agent_type: str) -> None:
     assert mod.plugin_agent_model(agent_type, home=tmp_path) == (None, None)
+
+
+def test_roster_load_failure_reasons_carry_no_machine_absolute_path_under_quarantined_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    quarantine = tmp_path / "home-quarantine0"
+    quarantine.mkdir()
+    monkeypatch.setenv("HOME", str(quarantine))
+    monkeypatch.setenv("USERPROFILE", str(quarantine))
+    root = quarantine / ".coordinator-claude-settings" / "stub-root"
+    root.mkdir(parents=True)
+
+    reasons = [mod.resolve_roster(content_root=str(root), home=str(quarantine))[1]]
+    _write_agents_dir(root, ["executor"])
+    reasons.append(mod.resolve_roster(content_root=str(root), home=str(quarantine))[1])
+    (root / "coordinator" / "subagent-sandbox-policy.yaml").write_text("[x\n", encoding="utf-8")
+    reasons.append(mod.resolve_roster(content_root=str(root), home=str(quarantine))[1])
+    (root / "coordinator" / "subagent-sandbox-policy.yaml").write_text("- a\n", encoding="utf-8")
+    reasons.append(mod.resolve_roster(content_root=str(root), home=str(quarantine))[1])
+    (root / "coordinator" / "subagent-sandbox-policy.yaml").unlink()
+    (root / "coordinator" / "subagent-sandbox-policy.yaml").mkdir()
+    reasons.append(mod.resolve_roster(content_root=str(root), home=str(quarantine))[1])
+
+    for reason in reasons:
+        assert reason is not None
+        assert str(quarantine) not in reason and str(tmp_path) not in reason
+        assert "subagent-sandbox-policy.yaml" in reason

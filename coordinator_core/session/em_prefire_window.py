@@ -292,6 +292,19 @@ def lifecycle_ops() -> frozenset:
     return frozenset(found)
 
 
+_LEAD_CD_RE = re.compile(r"""^\s*cd\s+[^\s;&|<>`$()"'\\]+\s*&&\s*""")
+_CAT_SUBST_RE = re.compile(r"""\"\$\(cat\s+[^\s;&|<>`$()"'\\]+\)\"""")
+_TRIM_TAIL_RE = re.compile(r"\s*(?:2>&1\s*)?\|\s*(?:head|tail)\s+(?:-[cn]\s*\d+|-\d+|\d+)\s*$")
+
+
+def _strip_harmless_frame(command: str) -> str:
+    """Drop one leading `cd <plain path> &&`, a trailing `[2>&1] | head|tail [-c|-n] N`, and turn each
+    `"$(cat <plain path>)"` into a literal word; anything else stays and is refused by `_plain_args`."""
+    command = _LEAD_CD_RE.sub("", command, count=1)
+    command = _TRIM_TAIL_RE.sub("", command, count=1)
+    return _CAT_SUBST_RE.sub("FILE", command)
+
+
 def lifecycle_op(command: object) -> Optional[str]:
     """The lifecycle verb a Bash command invokes, else None.
 
@@ -302,7 +315,7 @@ def lifecycle_op(command: object) -> Optional[str]:
     """
     if not isinstance(command, str):
         return None
-    first, rest = _first_command_token(command)
+    first, rest = _first_command_token(_strip_harmless_frame(command))
     if not first:
         return None
     args = _plain_args(rest)

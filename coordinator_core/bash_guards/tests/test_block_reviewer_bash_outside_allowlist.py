@@ -1680,6 +1680,36 @@ def test_the_emitted_review_prep_call_allows(monkeypatch):
     _allow(_EMITTED_PREP, monkeypatch)
 
 
+_POSIX_HALT_PREP = "cd /x/project-posix && " + _EMITTED_PREP
+
+
+def test_the_posix_halt_cd_prefixed_review_prep_allows(monkeypatch):
+    _allow(_POSIX_HALT_PREP, monkeypatch)
+    _allow(_POSIX_HALT_PREP.replace(" && ", "&&", 1), monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "cd /x && rm -rf /y",
+        "cd /x && git status",
+        "cd relative/path && " + _EMITTED_PREP,
+        "cd /x; " + _EMITTED_PREP,
+        "cd /x | " + _EMITTED_PREP,
+        "cd /x && cd /y && " + _EMITTED_PREP,
+        "cd /x && " + _EMITTED_PREP + " && rm -rf /y",
+        "cd /x && " + _EMITTED_PREP + "; rm -rf /y",
+        "cd /x && " + _EMITTED_PREP + " | cat",
+        "cd /x && " + _EMITTED_PREP.replace("review.prep", "review.stamp"),
+        "cd $(evil) && " + _EMITTED_PREP,
+        "cd '/x y' && " + _EMITTED_PREP,
+        _EMITTED_PREP + " && rm -rf /y",
+    ],
+)
+def test_other_chaining_around_review_prep_still_denies(cmd, monkeypatch):
+    _deny(cmd, monkeypatch)
+
+
 def test_another_engine_op_still_denies(monkeypatch):
     _deny(_EMITTED_PREP.replace("review.prep", "review.stamp"), monkeypatch)
 

@@ -305,6 +305,16 @@ def _content_candidates(content_root: str, leaf: str) -> "list[Path]":
     return [base / "coordinator" / leaf, base / leaf]
 
 
+def _shown(path: Path, content_root: str) -> str:
+    """`path` as the content-root-relative POSIX string a deny reason may carry;
+    a reason never renders a machine-absolute path."""
+    try:
+        rel = path.relative_to(Path(content_root))
+    except ValueError:
+        return path.name
+    return "<content-root>/" + rel.as_posix()
+
+
 def _load_policy_roster(content_root: str) -> FrozenSet[str]:
     """Roster source (a) -- the union of all `subagent_type` keys/members
     across `subagent-sandbox-policy.yaml`'s four catering maps.
@@ -322,7 +332,7 @@ def _load_policy_roster(content_root: str) -> FrozenSet[str]:
     if policy_path is None:
         raise _RosterError(
             "roster source MISSING ENTIRELY (path/install defect): "
-            + " and ".join(str(c) for c in candidates)
+            + " and ".join(_shown(c, content_root) for c in candidates)
             + " do not exist."
         )
     try:
@@ -330,19 +340,19 @@ def _load_policy_roster(content_root: str) -> FrozenSet[str]:
     except OSError as exc:
         raise _RosterError(
             "roster source present but UNREADABLE (peer-repo edit in "
-            f"flight?): {policy_path} -- OSError: {exc}"
+            f"flight?): {_shown(policy_path, content_root)} -- OSError: {exc.strerror or type(exc).__name__}"
         ) from exc
     try:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:
         raise _RosterError(
             "roster source present but UNPARSEABLE (peer-repo edit in "
-            f"flight?): {policy_path} -- YAMLError: {exc}"
+            f"flight?): {_shown(policy_path, content_root)} -- YAMLError: {exc}"
         ) from exc
     if not isinstance(data, dict):
         raise _RosterError(
             "roster source present but UNPARSEABLE (top-level YAML "
-            f"document is not a mapping): {policy_path}"
+            f"document is not a mapping): {_shown(policy_path, content_root)}"
         )
 
     keys: set = set()
@@ -371,7 +381,7 @@ def _scan_agents_frontmatter(content_root: str) -> Dict[str, Tuple[dict, Path]]:
     if agents_dir is None:
         raise _RosterError(
             "roster source MISSING ENTIRELY (path/install defect): "
-            + " and ".join(str(c) for c in candidates)
+            + " and ".join(_shown(c, content_root) for c in candidates)
             + " are not directories."
         )
     try:
@@ -379,7 +389,7 @@ def _scan_agents_frontmatter(content_root: str) -> Dict[str, Tuple[dict, Path]]:
     except OSError as exc:
         raise _RosterError(
             "roster source present but UNREADABLE (peer-repo edit in "
-            f"flight?): {agents_dir} -- OSError: {exc}"
+            f"flight?): {_shown(agents_dir, content_root)} -- OSError: {exc.strerror or type(exc).__name__}"
         ) from exc
 
     entries: Dict[str, Tuple[dict, Path]] = {}

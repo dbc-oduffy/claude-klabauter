@@ -220,6 +220,42 @@ def test_lifecycle_op_every_invocation_shape():
         assert epw.lifecycle_op(bad) is None, bad
 
 
+def test_workflow_revise_with_cd_cat_substitution_and_trim_is_exempt():
+    line = (
+        'cd /opt/x/coordinator-content-repo && /opt/x/.coordinator-claude-settings/bin/coordinator-invoke '
+        'workflow.revise "$(cat scratch/revise-338db0-r4.json)" --bare 2>&1 | tail -c 200'
+    )
+    assert epw.lifecycle_op(line) == "workflow.revise"
+    assert epw.classify("Bash", {"command": line}, "", None) == (False, False)
+    for ok in (
+        "cd x && coordinator-invoke workflow.revise --params-file f.json | head -n 5",
+        'coordinator-invoke workflow.revise "$(cat a.json)" | tail -20',
+    ):
+        assert epw.lifecycle_op(ok) == "workflow.revise", ok
+    for bad in (
+        "cd x && cat secret | tail",
+        "cd x && coordinator-invoke workflow.revise x | tail",
+        'coordinator-invoke workflow.revise "$(cat a; rm b)"',
+        'coordinator-invoke workflow.revise "$(cat a b)"',
+        "coordinator-invoke workflow.revise x | sh",
+        "coordinator-invoke workflow.revise x 2>&1 | sh",
+        "coordinator-invoke workflow.revise x | grep y | tail -c 5",
+        "cd x && cd y && coordinator-invoke workflow.revise x",
+        "cd x; coordinator-invoke workflow.revise x",
+        "cd $(pwd) && coordinator-invoke workflow.revise x",
+        "cd x && grep y z && coordinator-invoke workflow.revise x",
+    ):
+        assert epw.lifecycle_op(bad) is None, bad
+
+
+def test_deny_texts_name_the_exempt_form():
+    from coordinator_core.hooks import guard_em_prefire_survey as g
+
+    form = "coordinator-invoke workflow.revise --params-file <file>"
+    assert form in g.postlanding_deny_text(5, 3)
+    assert form in g.prefire_deny_text(5, 3)
+
+
 def test_relayed_workflow_revise_classifies_exempt_in_every_shape():
     run_id = "warp-2026-10-24-ladder-add-l-c-xl-xxl-tasks-16cd3b-20261024T141445-90120f"
     inline = "coordinator-invoke workflow.revise '{\"run_id\":\"" + run_id + "\",\"verbatim\":\"it'\\''s `x`; a & b\"}'"

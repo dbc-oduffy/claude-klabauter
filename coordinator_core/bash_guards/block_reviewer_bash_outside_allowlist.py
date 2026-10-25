@@ -1178,6 +1178,20 @@ def _is_review_prep_invoke(cmd: str) -> bool:
     )
 
 
+#: One leading `cd <absolute plain path> &&`; the path carries no quote, expansion or operator character.
+_LEADING_CD_RE = re.compile(r"""^\s*cd\s+(?:/|[A-Za-z]:/)[^\s;&|<>`$()"'\\]*\s*&&\s*""")
+
+
+def _strip_leading_cd_before_review_prep(cmd: str) -> str:
+    """Return `cmd` minus one leading `cd <abs path> &&` only when the remainder is a review.prep
+    invoke; any other command is returned unchanged so its `&&` still denies."""
+    match = _LEADING_CD_RE.match(cmd)
+    if match is None:
+        return cmd
+    rest = cmd[match.end():]
+    return rest if _is_review_prep_invoke(rest) else cmd
+
+
 def _default_ruleset(effective_type: str = "") -> Dict[str, Any]:
     """(Divergence 7) The prior hardcoded enforcement, expressed in the same
     shape ``_validate_ruleset`` returns for a policy-supplied entry. This is
@@ -3002,6 +3016,7 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     if not deny:
         cmd_for_check = _normalize_windows_argv0_head_path_with_spaces(cmd_for_check, ruleset)
         cmd_for_check = _normalize_windows_git_argv0(cmd_for_check, ruleset)
+        cmd_for_check = _strip_leading_cd_before_review_prep(cmd_for_check)
 
     pipeline_splits: list = []
     if not deny:
