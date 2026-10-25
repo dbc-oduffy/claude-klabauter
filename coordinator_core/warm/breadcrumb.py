@@ -75,8 +75,9 @@ except ImportError:  # pragma: no cover
 import json
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
@@ -108,6 +109,11 @@ __all__ = [
     "READ_CAUSES",
     "READ_RETRY_BUDGET_SECS",
     "read_record_with_cause",
+    "PUBLISH_MARKER_FILENAME",
+    "PUBLISH_MARKER_MAX_AGE_SECS",
+    "publish_marker_path",
+    "publish_marker_held",
+    "hold_publish_marker",
 ]
 
 # The old `client.START_DEADLINE` value, reused for a different job now
@@ -140,6 +146,10 @@ BOOT_CLAIM_MAX_SECS = 30.0
 _CLAIM_STAMP_OFFSET = 1
 
 BREADCRUMB_FILENAME = "warm.json"
+
+PUBLISH_MARKER_FILENAME = "publish.marker"
+#: A crashed publisher's marker stops blocking after this.
+PUBLISH_MARKER_MAX_AGE_SECS = 3600
 
 #: `transport` field values -- what shape the `pipe` field's endpoint is.
 #: See `write_breadcrumb` for why the field that carries the endpoint is
@@ -814,6 +824,154 @@ def try_claim_boot(lock_path: Path, *, now: Optional[float] = None) -> bool:
     return expired
 
 
+def publish_marker_path(engine_root: Optional[Path] = None) -> Path:
+    """`svc_dir(engine_root) / PUBLISH_MARKER_FILENAME`."""
+    return svc_dir(engine_root) / PUBLISH_MARKER_FILENAME
+
+
+def _read_marker(path: Path) -> "tuple[Optional[dict], float]":
+    """The marker's parsed JSON object (None if unparseable/non-object) and
+    its mtime. Raises OSError if the file cannot be stat'ed or read."""
+    mtime = path.stat().st_mtime
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None, mtime
+    return (record if isinstance(record, dict) else None), mtime
+
+
+def publish_marker_held(svc: Path, *, now: Optional[float] = None) -> bool:
+    """Whether a publish is copying into the engine root whose runtime dir
+    is `svc`: nothing may spawn a warm process into it while this is True.
+
+    True iff `svc/PUBLISH_MARKER_FILENAME` exists AND either its JSON names
+    a holder pid that `stable_pid_alive` confirms with a `started_at`
+    younger than `PUBLISH_MARKER_MAX_AGE_SECS`, or it is unparseable and its
+    mtime is that young. Absent, dead holder or aged out -> False.
+
+    TRAP: this runs on the hook path via `supervisor.ensure_listener`, so it
+    must stay read-only and spawn-free: one `os.stat`, never a subprocess,
+    never an unlink of a stale marker. Never raises; any error reads False.
+    """
+    current = time.time() if now is None else now
+    path = svc / PUBLISH_MARKER_FILENAME
+    try:
+        record, mtime = _read_marker(path)
+    except OSError:
+        return False
+    try:
+        if record is None:
+            return 0 <= current - mtime < PUBLISH_MARKER_MAX_AGE_SECS
+        started_at = record.get("started_at")
+        pid = record.get("pid")
+        if not isinstance(started_at, str) or not isinstance(pid, int):
+            return False
+        started_epoch = calendar.timegm(time.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ"))
+        if not (-PUBLISH_MARKER_MAX_AGE_SECS < current - started_epoch < PUBLISH_MARKER_MAX_AGE_SECS):
+            return False
+        stored = record.get("stable_pid_start_epoch")
+        return bool(stable_pid_alive(pid, stored_start_epoch=str(stored) if stored is not None else ""))
+    except Exception:  # noqa: BLE001 -- a hint reader never raises
+        return False
+
+
+def _is_ancestor_pid(pid: int) -> bool:
+    """Whether `pid` is a strict ancestor of this process. In-process
+    psutil walk, no spawn; any failure reads False."""
+    try:
+        from coordinator_core.session.core import _psutil
+
+        ps = _psutil()
+        if ps is None:
+            return False
+        return any(p.pid == pid for p in ps.Process(os.getpid()).parents())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _live_ancestor_holds(path: Path) -> bool:
+    """True iff `path` is a marker `publish_marker_held` still honours (live
+    holder inside `PUBLISH_MARKER_MAX_AGE_SECS`), names another pid, and that
+    pid is an ancestor of this process."""
+    try:
+        record, _ = _read_marker(path)
+    except OSError:
+        return False
+    if record is None:
+        return False
+    pid = record.get("pid")
+    if not isinstance(pid, int) or pid == os.getpid():
+        return False
+    if not publish_marker_held(path.parent):
+        return False
+    return _is_ancestor_pid(pid)
+
+
+@contextmanager
+def hold_publish_marker(engine_root: Path, *, holder: str) -> Iterator[Path]:
+    """Hold the publish marker for `engine_root` while a copy runs.
+
+    Writes `{pid, stable_pid_start_epoch, started_at, holder}` atomically
+    (temp file + `locked_write.replace_with_retry`) under `svc_dir`,
+    creating it; yields the marker path; on exit unlinks it only if it
+    still names `os.getpid()`, so a marker another publisher rewrote is left
+    in place.
+
+    NESTING: a marker this process already holds (pid AND start epoch match)
+    or a live ANCESTOR holds is yielded untouched; the outer hold owns the release.
+    percolate-round.py spawns publish.py holding no marker, so that child is the sole holder;
+    round.run_round holds it in-process via _quiesced_dest and spawns no publish.py.
+    The ancestor branch guards a caller that nests.
+    TRAP: a pid match alone would pass a dead predecessor that reused the pid.
+    """
+    path = publish_marker_path(engine_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if _live_ancestor_holds(path):
+        yield path
+        return
+    from coordinator_core.session.core import _win_create_time_epoch
+
+    # TRAP: a zero epoch makes `stable_pid_alive` read the holder as dead, so
+    # the marker would block nothing; refuse to hold rather than hold inertly.
+    epoch = _win_create_time_epoch(os.getpid())
+    if not epoch:
+        raise OSError("could not establish publish-marker holder identity (no process start time)")
+    try:
+        existing, _ = _read_marker(path)
+    except OSError:
+        existing = None
+    if (
+        existing is not None
+        and existing.get("pid") == os.getpid()
+        and str(existing.get("stable_pid_start_epoch")) == str(epoch)
+    ):
+        yield path
+        return
+    record = {
+        "pid": os.getpid(),
+        "stable_pid_start_epoch": epoch,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "holder": holder,
+    }
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(record), encoding="utf-8", newline="\n")
+    if not locked_write.replace_with_retry(str(tmp), str(path)):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise OSError(f"could not publish marker {path}")
+    try:
+        yield path
+    finally:
+        try:
+            current, _ = _read_marker(path)
+            if current is not None and current.get("pid") == os.getpid():
+                path.unlink()
+        except OSError:
+            pass
+
+
 def should_spawn_decision(
     record: Optional[dict],
     *,
@@ -896,12 +1054,17 @@ def should_spawn_decision(
                             fully_alive = bool(extra_liveness(record))
                         except Exception:
                             fully_alive = False
-                        return not fully_alive
+                        spawn = not fully_alive
+                        if spawn and publish_marker_held(lock_path.parent, now=now):
+                            return False
+                        return spawn
 
     # No record, or nothing in it currently vouches for an in-flight boot:
     # this is exactly the succession window this chunk closes. Absence used
     # to mean unconditional True here; it now means "ask the boot-in-flight
     # primitive," which is the fix.
+    if publish_marker_held(lock_path.parent, now=now):
+        return False
     return try_claim_boot(lock_path, now=now)
 
 

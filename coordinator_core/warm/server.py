@@ -3238,6 +3238,12 @@ def _run_guarded() -> int:
     this one with a different endpoint under it.
     """
     repo_root = _engine_clone_root()
+    if breadcrumb.publish_marker_held(breadcrumb.svc_dir(repo_root)):
+        print(
+            f"[warm-server] publish in progress for {repo_root}; not starting",
+            file=sys.stderr,
+        )
+        return 0
     spawn_epoch = _spawn_epoch_from_env()
     token = skew.compute_client_token(repo_root)
     on_windows = sys.platform == "win32"

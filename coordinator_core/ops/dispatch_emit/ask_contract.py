@@ -38,6 +38,7 @@ from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, ROUTES as DESIGN_ROUTES
 from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.ops.dispatch_emit import review_floor
 from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE, ROUTE_VERDICT_KEY
 from coordinator_core.session.record_homes import home_dir
 
@@ -1256,6 +1257,8 @@ class StageManifest:
     held_ids: tuple[str, ...] = ()
     #: Unfinished plan rows the stage did not stage, as `{id, reason}`; serialised only when non-empty.
     dropped_rows: tuple[dict[str, str], ...] = ()
+    #: The code subset of `review_declared_paths` (`review_floor.code_paths`); an absent key reads as ``()``.
+    review_code_paths: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         out = self._base_json()
@@ -1288,6 +1291,7 @@ class StageManifest:
             "run_dir": self.run_dir,
             "rows": [r.to_json() for r in self.rows],
             "review_declared_paths": list(self.review_declared_paths),
+            review_floor.MANIFEST_KEY: list(self.review_code_paths),
             "marker_path": self.marker_path,
             "gated": [g.to_json() for g in self.gated],
             "test_targets": list(self.test_targets),
@@ -1301,6 +1305,7 @@ class StageManifest:
             run_dir=data["run_dir"],
             rows=tuple(ManifestRow.from_json(r) for r in data["rows"]),
             review_declared_paths=tuple(data["review_declared_paths"]),
+            review_code_paths=tuple(data.get(review_floor.MANIFEST_KEY) or ()),
             marker_path=data["marker_path"],
             plan_id=data.get("plan_id"),
             gated=tuple(GatedRow.from_json(g) for g in data.get("gated") or ()),

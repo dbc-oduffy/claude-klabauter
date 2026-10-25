@@ -13,6 +13,13 @@ def test_review_blocked_invalidates_review_and_dependents_only():
     assert not out & {"gate", "size", "plan", "plan_review", "plan_gate_rulings"}
 
 
+def test_review_floor_resumes_at_review_and_old_spelling_is_full_pass():
+    out = pl.invalidated("review_floor")
+    assert out == pl.invalidated("review_blocked")
+    assert "execute" not in out
+    assert pl.invalidated("review-floor") == frozenset(pl.PHASES)
+
+
 def test_ruling_halt_maps_to_plan_gate_rulings():
     out = pl.invalidated("plan_gate")
     assert "plan_gate_rulings" in out and "plan_review" not in out and "commit" in out

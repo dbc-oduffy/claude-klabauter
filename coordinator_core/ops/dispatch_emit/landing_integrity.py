@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -534,7 +535,27 @@ def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping
     return record
 
 
+class GateFindings(list):
+    """The gate's findings list; ``deleted_note`` is the receipt line naming run-deleted targets
+    (``""`` when none). A plain list otherwise, so ``== []`` and unpacking keep working."""
+
+    deleted_note: str = ""
+
+
 def landing_test_gate(
+    worktree_root: Path, params: Mapping, run_id: Optional[str]
+) -> tuple[GateFindings, str]:
+    """``(findings, check)`` as ``_landing_test_gate``; on a benign ``no-verdict`` or ``not-run``
+    result, ``findings.deleted_note`` names the dropped targets the run's own diff deleted, so every
+    caller reads one computation. ``check`` is never changed by the note."""
+    findings, check = _landing_test_gate(worktree_root, params, run_id)
+    out = GateFindings(findings)
+    if not findings and check in ("no-verdict", NOT_RUN_CHECK):
+        out.deleted_note = deleted_targets_receipt_note(worktree_root, params, run_id)
+    return out, check
+
+
+def _landing_test_gate(
     worktree_root: Path, params: Mapping, run_id: Optional[str]
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a landing path: a valid fresh verdict replaces the recorded one.
@@ -554,9 +575,11 @@ def landing_test_gate(
                         + " --poll; if poll reports it abandoned past deadline, re-run: "
                         + retest_remedy(params))], "retest-running"
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+    # `not in` (key absent) here: an empty failed_tests list still means the launcher named nothing,
+    # unlike the truthiness test below.
     errored_unrun = (
         fresh is not None and fresh.get("status") == "error" and _ran_nothing(fresh.get("tests_run"))
-        and not fresh.get(FAILED_TESTS_PARAM)
+        and FAILED_TESTS_PARAM not in fresh
     )
     if errored_unrun and _explicit_failed_tests(params):
         fresh = None
@@ -567,7 +590,7 @@ def landing_test_gate(
                         f"fix the launcher and re-run: {retest_remedy(params)}")], "failed"
     unrun_retest = False
     if fresh is not None and _ran_no_tests(fresh):
-        unrun_retest = not (fresh.get("dropped") and not fresh.get("tests"))
+        unrun_retest = not _only_run_deleted_targets(worktree_root, params, run_id, fresh)
         fresh = None
     if fresh is not None and not isinstance(fresh.get("baseline"), Mapping) and (
         fresh.get("status") == "fail"
@@ -584,7 +607,7 @@ def landing_test_gate(
         )
         if zero_run or (unrun_retest and check_now == "no-verdict"):
             if unrun_retest or _targeted_set_exists(worktree_root, params, verdict, run_id):
-                return [_ran_zero_finding(params)], "failed"
+                return [_ran_zero_finding(params, _renamed_detail(worktree_root, params, run_id))], "failed"
             if check_now == NOT_RUN_CHECK:
                 return [], NOT_RUN_CHECK
         nodes = _failed_nodes(params, verdict)
@@ -623,10 +646,17 @@ def _ran_zero_int(tests_run: object) -> bool:
     return isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run == 0
 
 
-def _ran_zero_finding(params: Mapping) -> Finding:
+def _ran_zero_finding(params: Mapping, renamed: str = "") -> Finding:
     return Finding("", TARGETED_TESTS_FAILED,
                    "the targeted tests ran 0 tests (nothing collected or run), so nothing "
-                   f"is proven; re-run: {retest_remedy(params)}")
+                   f"is proven{renamed}; re-run: {retest_remedy(params)}")
+
+
+def _renamed_detail(worktree_root: Path, params: Mapping, run_id: Optional[str]) -> str:
+    """``"; target X was renamed to Y, retarget Y"`` for each renamed dropped target; ``""`` when none."""
+    record = _retest_record(worktree_root, run_id)
+    renamed = renamed_dropped_targets(worktree_root, params, run_id, record) if record else {}
+    return "".join(f"; target {t} was renamed to {n}, retarget {n}" for t, n in renamed.items())
 
 
 def _targeted_set_exists(
@@ -636,9 +666,130 @@ def _targeted_set_exists(
     ``stale`` one, written when no set exists, does not count), a targeted set (``targeted_set``) or
     explicit ``failed_tests``. Only a run with none (a docs/state-only change) may read not-run."""
     record = _retest_record(worktree_root, run_id)
-    if record is not None and record.get("status") != "stale" and (record.get("tests") or record.get("dropped")):
+    if record is not None and record.get("status") != "stale" and (
+        record.get("tests") or (record.get("dropped") and not _only_run_deleted_targets(worktree_root, params, run_id, record))
+    ):
         return True
     return bool(_explicit_failed_tests(params) or targeted_set(params, verdict))
+
+
+def run_deleted_dropped_targets(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> list[str]:
+    """The record's ``dropped`` targets whose file the run's own diff deleted (present at the run
+    base, gone from the worktree, its base blob nowhere else); empty when no base is known or the
+    base tree is unreadable. A renamed target is not deleted: see ``renamed_dropped_targets``."""
+    return _classify_dropped(worktree_root, params, run_id, record)[0]
+
+
+def renamed_dropped_targets(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> dict[str, str]:
+    """``{target: new_path}`` for dropped targets whose old name is gone but whose base blob sits at
+    another path (index entry or a file beside the old one; a case-only rename included). Trap: a
+    deleted file byte-identical to another tracked file also reads as renamed, which refuses (fail closed)."""
+    return _classify_dropped(worktree_root, params, run_id, record)[1]
+
+
+def _classify_dropped(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> tuple[list[str], dict[str, str]]:
+    dropped = [d for d in (record.get("dropped") or []) if isinstance(d, str)]
+    base = run_base_for(worktree_root, run_id, params) if dropped else None
+    if not base:
+        return [], {}
+    from coordinator_core.git.git_state import read_tree_spine
+    from coordinator_core.git.ref_cas_retry import _root_tree
+
+    files = {d: d.split("::")[0].replace("\\", "/") for d in dropped}
+    tree = _root_tree(worktree_root, base)
+    spine = read_tree_spine(worktree_root, list(files.values()), root_tree_sha=tree) if tree else None
+    if spine is None:
+        return [], {}
+    deleted: list[str] = []
+    renamed: dict[str, str] = {}
+    index: Optional[Mapping] = None
+    for target, rel in files.items():
+        parent, _, name = rel.rpartition("/")
+        entry = spine.get(parent, {}).get(name)
+        if entry is None:
+            continue
+        beside = _dir_files(Path(worktree_root) / parent) if parent else _dir_files(Path(worktree_root))
+        if name in beside:
+            continue
+        if index is None:
+            index = _index_or_empty(worktree_root)
+        moved = _blob_elsewhere(worktree_root, entry[1], rel, parent, beside, index)
+        if moved:
+            renamed[target] = moved
+        else:
+            deleted.append(target)
+    return deleted, renamed
+
+
+def _dir_files(directory: Path) -> dict[str, Path]:
+    """``{on-disk name: path}`` of the regular files directly in ``directory`` (true case on Windows)."""
+    try:
+        with os.scandir(directory) as it:
+            return {e.name: Path(e.path) for e in it if e.is_file()}
+    except OSError:
+        return {}
+
+
+def _index_or_empty(worktree_root: Path) -> Mapping:
+    from coordinator_core.git.git_state import read_index
+
+    try:
+        return read_index(worktree_root)
+    except Exception:
+        return {}
+
+
+def _blob_elsewhere(
+    worktree_root: Path, blob_sha: str, rel: str, parent: str, beside: Mapping[str, Path], index: Mapping
+) -> str:
+    """The first other path holding blob ``blob_sha``: an index entry, else an untracked ``.py`` file
+    beside ``rel`` (only those are hashed); ``""`` when none."""
+    for path, entry in index.items():
+        if path != rel and entry.sha == blob_sha:
+            return path
+    for name, full in beside.items():
+        if not name.endswith(".py") or (f"{parent}/{name}" if parent else name) in index:
+            continue
+        try:
+            data = full.read_bytes()
+        except OSError:
+            continue
+        # core.autocrlf stores a CRLF worktree file as its LF blob, so hash the LF form too.
+        for form in (data, data.replace(b"\r\n", b"\n")):
+            if hashlib.sha1(b"blob %d\0" % len(form) + form).hexdigest() == blob_sha:
+                return f"{parent}/{name}" if parent else name
+    return ""
+
+
+def deleted_targets_receipt_note(
+    worktree_root: Path, params: Mapping, run_id: Optional[str]
+) -> str:
+    """Receipt text naming the dropped targets the run's own diff deleted when that is why the gate
+    read benign (an all-dropped, no-tests record); ``""`` otherwise. Never a refusal."""
+    record = _retest_record(worktree_root, run_id)
+    dropped = record.get("dropped") if record else None
+    if not dropped or record.get("tests"):
+        return ""
+    names = _classify_dropped(worktree_root, params, run_id, record)[0]
+    if set(names) != set(dropped):
+        return ""
+    return "not-run: run deleted " + ", ".join(names)
+
+
+def _only_run_deleted_targets(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> bool:
+    """True for an all-dropped record (no tests) whose every dropped target the run's own diff deleted."""
+    dropped = record.get("dropped")
+    if not dropped or record.get("tests"):
+        return False
+    return set(run_deleted_dropped_targets(worktree_root, params, run_id, record)) == set(dropped)
 
 
 def _ran_nothing(tests_run: object) -> bool:

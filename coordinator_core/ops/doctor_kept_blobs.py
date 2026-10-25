@@ -3,7 +3,9 @@
 `sweep` reads every `state/warp/*/kept.json` (chunks.<id>.paths and post_checkpoint) and asks
 git once per repo (`cat-file --batch-check`) which listed blobs are absent. `recover` re-creates
 them in-process, never touching the worktree: from worktree bytes that hash to the kept sha, else
-by replaying the run's executor Write/Edit tool calls from its workflow transcripts.
+by replaying every session transcript's Write/Edit/MultiEdit calls on the path from every
+historical base (exact raw match only, else lost), then classifies each replayed blob against HEAD
+(SUPERSEDED or NOT-LANDED). Method and traps: docs/reference/kept-blob-recovery.md.
 `doctor.run_doctor` imports this module lazily to avoid an import cycle. Also registers the
 `doctor.recover_kept_blobs` op (callable cross-repo with `repo_root`).
 
@@ -16,13 +18,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import subprocess
-import zlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ipc import CallerFacingValidationError, register_op
 
 if TYPE_CHECKING:
@@ -30,7 +31,7 @@ if TYPE_CHECKING:
 
 LAYER_NAME = "Kept blobs are in the object store"
 _DELIMITER_OID = "0" * 39 + "1"
-_NO_WINDOW =getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 @dataclass
@@ -42,6 +43,7 @@ class MissingBlob:
     landed: bool
     worktree_holds: bool
     mode: Optional[str] = None  # "raw" | "filtered" when the worktree bytes hash to `sha`
+    head_oid: Optional[str] = None  # HEAD's blob oid for `path`; None when HEAD lacks the path
 
 
 @dataclass
@@ -51,15 +53,10 @@ class RecoverResult:
     sha: str
     outcome: str  # "rescued-worktree" | "rescued-replay" | "lost"
     mode: Optional[str] = None  # "raw" | "filtered" (worktree) | "raw" (replay)
-
-
-def _git(repo: Path, args: List[str], data: Optional[bytes] = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        input=data,
-        capture_output=True,
-        creationflags=_NO_WINDOW,
-    )
+    verdict: Optional[str] = None  # "SUPERSEDED" | "NOT-LANDED" | "CARRIED"; None without a replay base
+    commit: Optional[str] = None  # oldest history commit already carrying the kept hunks
+    base: Optional[str] = None  # label of the replay base that reproduced the blob
+    why: Optional[str] = None
 
 
 def blob_sha(data: bytes) -> str:
@@ -100,14 +97,15 @@ def sweep(repo_root: Path) -> List[MissingBlob]:
     items = [i for i in _kept_entries(repo) if isinstance(i[3], str) and i[3]]
     if not items:
         return []
-    proc = _git(repo, ["cat-file", "--batch-check"], "".join(i[3] + "\n" for i in items).encode())
-    lines = proc.stdout.decode("utf-8", "replace").splitlines()
+    proc = run_git(["-C", str(repo), "cat-file", "--batch-check"],
+                   input="".join(i[3] + "\n" for i in items).encode(), binary=True)
+    lines = proc.stdout_bytes.decode("utf-8", "replace").splitlines()
     if len(lines) != len(items):
         return []
     absent = [i for i, line in zip(items, lines) if line.endswith("missing")]
     if not absent:
         return []
-    filtered, head = _filtered_and_head(repo, [i[2] for i in absent])
+    filtered, head, head_oids = _filtered_and_head(repo, [i[2] for i in absent])
     missing: List[MissingBlob] = []
     for run, kind, path, sha, landed in absent:
         if sha in head.get(path, ()):
@@ -122,12 +120,13 @@ def sweep(repo_root: Path) -> List[MissingBlob]:
                     mode = "filtered"
         except OSError:
             pass
-        missing.append(MissingBlob(run, kind, path, sha, landed, mode is not None, mode))
+        missing.append(MissingBlob(run, kind, path, sha, landed, mode is not None, mode, head_oids.get(path)))
     return missing
 
 
 def _filtered_and_head(repo: Path, paths: List[str]) -> tuple:
-    """({path: filtered worktree blob sha}, {path: shas that mean HEAD holds the kept content}).
+    """({path: filtered worktree blob sha}, {path: shas that mean HEAD holds the kept content},
+    {path: HEAD blob oid}).
 
     Per path the HEAD set is its blob sha plus the raw sha of its checked-out bytes (smudge/eol
     filters applied); three spawns for all paths."""
@@ -135,30 +134,35 @@ def _filtered_and_head(repo: Path, paths: List[str]) -> tuple:
     filtered: Dict[str, str] = {}
     existing = [p for p in unique if (repo / p).is_file()]
     if existing:
-        out = _git(repo, ["hash-object", "--stdin-paths"], "".join(p + "\n" for p in existing).encode())
-        shas = out.stdout.decode("utf-8", "replace").splitlines()
+        out = run_git(["-C", str(repo), "hash-object", "--stdin-paths"],
+                      input="".join(p + "\n" for p in existing).encode(), binary=True)
+        shas = out.stdout_bytes.decode("utf-8", "replace").splitlines()
         if out.returncode == 0 and len(shas) == len(existing):
             filtered = dict(zip(existing, shas))
     head: Dict[str, set] = {}
-    out = _git(repo, ["cat-file", "--batch-check"], "".join(f"HEAD:{p}\n" for p in unique).encode())
-    lines = out.stdout.decode("utf-8", "replace").splitlines()
+    head_oids: Dict[str, str] = {}
+    out = run_git(["-C", str(repo), "cat-file", "--batch-check"],
+                  input="".join(f"HEAD:{p}\n" for p in unique).encode(), binary=True)
+    lines = out.stdout_bytes.decode("utf-8", "replace").splitlines()
     if len(lines) == len(unique):
         for p, line in zip(unique, lines):
             if not line.endswith("missing"):
                 head[p] = {line.split(" ", 1)[0]}
+                head_oids[p] = line.split(" ", 1)[0]
     present = [p for p in unique if p in head]
     if present:
         # The size in a --filters header is not the converted length, so a never-resolving oid
         # after each request delimits the content.
         stop = b"%s missing\n" % _DELIMITER_OID.encode()
         req = "".join(f"HEAD:{p} {p}\n{_DELIMITER_OID}\n" for p in present).encode()
-        chunks = _git(repo, ["cat-file", "--batch", "--filters"], req).stdout.split(b"\n" + stop)
+        chunks = run_git(["-C", str(repo), "cat-file", "--batch", "--filters"],
+                         input=req, binary=True).stdout_bytes.split(b"\n" + stop)
         if len(chunks) == len(present) + 1:
             for p, chunk in zip(present, chunks):
                 nl = chunk.find(b"\n")
                 if nl >= 0 and chunk[:nl].split(b" ")[1:2] == [b"blob"]:
                     head[p].add(blob_sha(chunk[nl + 1 :]))
-    return filtered, head
+    return filtered, head, head_oids
 
 
 def kept_blobs_layer(repo_root: Path) -> "Layer":
@@ -188,144 +192,121 @@ def kept_blobs_layer(repo_root: Path) -> "Layer":
     return Layer(LAYER_NAME, "broken", findings)
 
 
-def _norm(p: str) -> str:
-    return p.replace("\\", "/")
+def _commit_history(bases: list) -> list:
+    """Commit bases as (commit10, since, data), oldest first; `empty` and `base_sha:` bases excluded."""
+    rows = [
+        (b.label.split(":", 1)[0], b.since or _EPOCH, b.data)
+        for b in bases
+        if b.label != "empty" and not b.label.startswith("base_sha:")
+    ]
+    return sorted(rows, key=lambda r: r[1])
 
 
-def _path_matches(tool_path: str, rel: str) -> bool:
-    t = _norm(tool_path)
-    return t == rel or t.endswith("/" + rel)
+def _classify_hit(hit, m: MissingBlob, bases: list, common) -> tuple:
+    """(verdict, commit, why) of a replayed blob against HEAD; verdict None when HEAD is unreadable."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.ops.kept_blob_classify import classify
 
-
-def _tool_calls(transcript: Path) -> Iterable[dict]:
-    try:
-        text = transcript.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return
-    for line in text.splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            continue
-        content = (rec.get("message") or {}).get("content")
-        if rec.get("type") != "assistant" or not isinstance(content, list):
-            continue
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                yield {"ts": rec.get("timestamp") or "", "name": block.get("name"), "input": block.get("input") or {}}
-
-
-def default_transcript_roots() -> List[Path]:
-    base = Path(os.path.expanduser("~")) / ".claude" / "projects"
-    return list(base.glob("*/*/subagents/workflows")) if base.is_dir() else []
-
-
-def _run_transcripts(run: str, roots: Iterable[Path]) -> List[Path]:
-    needle = run.encode()
-    found: List[Path] = []
-    for root in roots:
-        for f in Path(root).rglob("*.jsonl"):
-            try:
-                if needle in f.read_bytes():
-                    found.append(f)
-            except OSError:
-                continue
-    return found
-
-
-def _replay(calls: List[dict], rel: str, base: Optional[bytes]) -> Optional[bytes]:
-    cur = base
-    for call in calls:
-        inp = call["input"]
-        if not _path_matches(str(inp.get("file_path", "")), rel):
-            continue
-        if call["name"] == "Write" and isinstance(inp.get("content"), str):
-            cur = inp["content"].encode("utf-8")
-        elif call["name"] == "Edit" and cur is not None:
-            old, new = inp.get("old_string"), inp.get("new_string")
-            try:
-                text = cur.decode("utf-8")
-            except UnicodeDecodeError:
-                return None
-            if not isinstance(old, str) or not isinstance(new, str) or old not in text:
-                return None
-            text = text.replace(old, new) if inp.get("replace_all") else text.replace(old, new, 1)
-            cur = text.encode("utf-8")
-    return cur
-
-
-def _write_loose(repo: Path, sha: str, data: bytes) -> bool:
-    """Write the blob as a loose object; True when the store now holds `sha`."""
-    proc = _git(repo, ["rev-parse", "--git-common-dir"])
-    if proc.returncode != 0:
-        return False
-    gitdir = Path(proc.stdout.decode().strip())
-    if not gitdir.is_absolute():
-        gitdir = repo / gitdir
-    dest = gitdir / "objects" / sha[:2] / sha[2:]
-    if dest.exists():
-        return True
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(f"tmp_obj_{os.getpid()}")
-    tmp.write_bytes(zlib.compress(b"blob %d\0" % len(data) + data))
-    os.replace(tmp, dest)
-    return True
-
-
-def _base_candidates(repo: Path, rel: str, base_sha: Optional[str]) -> List[Optional[bytes]]:
-    cands: List[Optional[bytes]] = []
-    refs = ([base_sha] if base_sha else []) + ["HEAD"]
-    for ref in refs:
-        proc = _git(repo, ["cat-file", "blob", f"{ref}:{rel}"])
-        if proc.returncode == 0:
-            cands.append(proc.stdout)
-    cands.append(None)  # new file: first Write defines the content
-    return cands
+    head: Optional[bytes] = None
+    if m.head_oid:
+        obj = git_objects.read_object(common, m.head_oid)
+        if obj is None or obj[0] != "blob":
+            return None, None, "HEAD blob unreadable"
+        head = obj[1]
+    v = classify(hit.base.data, hit.data, head, _commit_history(bases))
+    return v.verdict, v.commit, v.why
 
 
 def recover(
     repo_root: Path,
     base_sha: Optional[str] = None,
     transcript_roots: Optional[Iterable[Path]] = None,
+    scan: Optional[dict] = None,
 ) -> List[RecoverResult]:
     """Re-create each absent kept blob in the object store; the worktree is never modified.
 
-    Order per blob: worktree bytes hashing to the kept sha, else a replay of the run's Write/Edit
-    calls onto the base blob accepted only when its blob sha equals the kept sha.
+    Order per blob: worktree bytes hashing to the kept sha, else the exact replay of every
+    transcript's Write/Edit/MultiEdit calls on the path from a historical base. A replayed blob is
+    classified against HEAD; a blob no replay reproduces is lost and no replayed bytes are written.
+
+    Bulk remediation verb under the DR-344 bulk-transfer carve-out, granted by G-EM ruling (a)
+    (group-em-44, PM-delegated, 2026-10-25): the all-transcript scan is not held to the 500ms bar.
+    Run it once per incident, explicitly; it is never reachable from a hook,
+    the sweep or the doctor default. Transcripts stream one at a time. `scan`, when given, receives
+    {roots, transcripts, window} of what was scanned.
     """
+    from coordinator_core.git import git_dir, git_objects
+    from coordinator_core.ops.kept_blob_replay import history_bases, replay_exact
+    from coordinator_core.ops.kept_blob_transcripts import collect_edits, default_transcript_root
+
     repo = Path(repo_root)
-    roots = list(transcript_roots) if transcript_roots is not None else default_transcript_roots()
+    if scan is not None:
+        scan.update(roots=0, transcripts=0, window=None)
+    absent = sweep(repo)
+    if not absent:
+        return []
+    roots = list(transcript_roots) if transcript_roots is not None else [default_transcript_root()]
+    rels = {m.path.replace("\\", "/") for m in absent}
+    edits = collect_edits(repo, rels, roots, scan)
+    bases = history_bases(repo, rels, base_sha)
+    common = git_dir.resolve_git_common_dir(repo)
+
     results: List[RecoverResult] = []
-    calls_by_run: Dict[str, List[dict]] = {}
-    for m in sweep(repo):
-        outcome = "lost"
-        mode = None
-        if m.worktree_holds:
+    hits: list = []
+    filtered_idx: List[int] = []
+    for m in absent:
+        rel = m.path.replace("\\", "/")
+        hit = replay_exact(bases[rel], edits[rel], m.sha)
+        outcome, mode = "lost", None
+        if m.worktree_holds and m.mode == "raw":
             try:
-                if m.mode == "raw":
-                    ok = _write_loose(repo, m.sha, (repo / m.path).read_bytes())
-                else:
-                    ok = _git(repo, ["hash-object", "-w", "--", m.path]).stdout.decode().strip() == m.sha
-                if ok:
-                    outcome, mode = "rescued-worktree", m.mode
+                data = (repo / m.path).read_bytes()
             except OSError:
-                pass
-        if outcome == "lost":
-            if m.run not in calls_by_run:
-                calls = [c for f in _run_transcripts(m.run, roots) for c in _tool_calls(f)]
-                calls_by_run[m.run] = sorted(calls, key=lambda c: c["ts"])
-            for base in _base_candidates(repo, m.path, base_sha):
-                data = _replay(calls_by_run[m.run], _norm(m.path), base)
-                if data is not None and blob_sha(data) == m.sha and _write_loose(repo, m.sha, data):
-                    outcome, mode = "rescued-replay", "raw"
-                    break
+                data = b""
+            if blob_sha(data) == m.sha:
+                git_objects.write_object(common, b"blob", data)
+                outcome, mode = "rescued-worktree", "raw"
+        elif m.worktree_holds and m.mode == "filtered":
+            filtered_idx.append(len(results))
+        if outcome == "lost" and hit is not None and m.mode != "filtered":
+            git_objects.write_object(common, b"blob", hit.data)
+            outcome, mode = "rescued-replay", "raw"
         results.append(RecoverResult(m.run, m.path, m.sha, outcome, mode))
+        hits.append(hit)
+
+    if filtered_idx:
+        paths = [absent[i].path for i in filtered_idx]
+        out = run_git(["-C", str(repo), "hash-object", "-w", "--stdin-paths"],
+                      input="".join(p + "\n" for p in paths).encode(), binary=True)
+        shas = out.stdout_bytes.decode("utf-8", "replace").splitlines()
+        stored = out.returncode == 0 and len(shas) == len(paths)
+        for i, sha in zip(filtered_idx, shas if stored else [None] * len(paths)):
+            r = results[i]
+            if sha == r.sha:
+                r.outcome, r.mode = "rescued-worktree", "filtered"
+            elif hits[i] is not None:
+                git_objects.write_object(common, b"blob", hits[i].data)
+                r.outcome, r.mode = "rescued-replay", "raw"
+
+    for m, r, hit in zip(absent, results, hits):
+        if hit is None:
+            continue
+        r.base = hit.base.label
+        r.verdict, r.commit, r.why = _classify_hit(hit, m, bases[m.path.replace("\\", "/")], common)
+    for r, hit in zip(results, hits):
+        if hit is None and r.outcome == "lost":
+            r.why = "no replay base"
     return results
 
 
 @register_op("doctor.recover_kept_blobs")
 def _recover_op(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """Handler body for `doctor.recover_kept_blobs`: params `repo_root` (else the envelope's), `base_sha`."""
+    """Handler body for `doctor.recover_kept_blobs`: params `repo_root` (else the envelope's), `base_sha`.
+
+    Bulk remediation under the DR-344 bulk-transfer carve-out, granted by G-EM ruling (a)
+    (group-em-44, PM-delegated, 2026-10-25); the 500ms bar does not govern it;
+    explicit invocation only. The result's `scanned` = {roots, transcripts, window}.
+    """
     raw = params.get("repo_root") if isinstance(params, dict) else None
     if raw is not None and not isinstance(raw, str):
         raise CallerFacingValidationError("doctor.recover_kept_blobs repo_root must be a string path.")
@@ -335,14 +316,23 @@ def _recover_op(params: dict, repo_root: Optional[Path] = None) -> dict:
     base = params.get("base_sha")
     if base is not None and not isinstance(base, str):
         raise CallerFacingValidationError("doctor.recover_kept_blobs base_sha must be a string.")
-    results = recover(Path(target), base_sha=base)
+    scan: dict = {}
+    results = recover(Path(target), base_sha=base, scan=scan)
     counts: Dict[str, int] = {}
     for r in results:
         counts[r.outcome] = counts.get(r.outcome, 0) + 1
+        if r.verdict:
+            key = f"verdict:{r.verdict}"
+            counts[key] = counts.get(key, 0) + 1
     return {
         "repo_root": str(target),
         "counts": counts,
+        "scanned": scan,
         "results": [
-            {"run": r.run, "path": r.path, "sha": r.sha, "outcome": r.outcome, "mode": r.mode} for r in results
+            {
+                "run": r.run, "path": r.path, "sha": r.sha, "outcome": r.outcome, "mode": r.mode,
+                "verdict": r.verdict, "commit": r.commit, "base": r.base, "why": r.why,
+            }
+            for r in results
         ],
     }

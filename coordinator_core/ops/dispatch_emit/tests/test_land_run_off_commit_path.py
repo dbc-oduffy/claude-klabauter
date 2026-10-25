@@ -108,7 +108,10 @@ def _drive_product(root: Path) -> dict:
     _record(root)
     _write(root, "a.py", "x = 2\n")
     _declare(root, "a.py")
-    return {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": {"integration_stem": "s", "slices": 1, "fixes": 0}}
+    sidecar = root.parent / "review-sidecar.md"
+    sidecar.write_text("verdict: PASS\n", encoding="utf-8")
+    wave = [{"slice_id": "s1", "verdict": "PASS", "sidecar_path": str(sidecar)}]
+    return {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": {"integration_stem": "s", "slices": 1, "fixes": 0, "wave_reviews": wave}}
 
 
 def _drive_halted(root: Path) -> dict:

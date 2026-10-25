@@ -798,6 +798,14 @@ def _land(
     art_deleted = list(extra_artifacts.deleted)
 
     from coordinator_core.ops.dispatch_emit import sibling_claims
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _withhold_reasons
+
+    em_withheld = _withhold_reasons(worktree_root, artifacts, record_dir_rel)
+    withheld.update({
+        p: em_withheld[p]
+        for p in (*product, *gone, *art_paths, *art_deleted, *(n for n in map(review_edits._norm, review_literals) if n in snapshot.changed))
+        if p in em_withheld
+    })
 
     sibling = sibling_claims.sibling_run_claims(
         worktree_root, run_id, product + gone + art_paths + art_deleted + review_literals
@@ -846,6 +854,7 @@ def _land(
         targeted = {
             "check": tcheck,
             "findings": [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in tfind],
+            **({"note": tfind.deleted_note} if tfind.deleted_note else {}),
         }
     if halted["halted"] != "ledger-check":
         withheld.update({p: "halt-record-only" for p in product + gone if p in owner})

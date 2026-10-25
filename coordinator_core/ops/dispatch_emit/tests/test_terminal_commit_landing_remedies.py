@@ -24,7 +24,10 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "c4e53fa2-2bda-51b1-833a-cf629f2b0cb6"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = {
+    "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+    "wave_reviews": [{"agent_type": "coordinator:reviewer", "verdict": "PASS", "sidecar_path": "../wave-review.md"}],
+}
 _OP = "dispatch.terminal_commit"
 
 
@@ -43,6 +46,7 @@ def _sha(text: str) -> str:
 def repo(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
+    (tmp_path / "wave-review.md").write_text("# review\n", encoding="utf-8")
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)

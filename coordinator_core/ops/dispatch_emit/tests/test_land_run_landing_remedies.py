@@ -25,7 +25,13 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 SELF = "5e1f0000-0000-4000-8000-0000000000c2"
 RUN = "inv-t1-p1-land.workflow"
 SCRIPT = "run-a.mjs"
-REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+def _reviewed(root: Path) -> dict:
+    sidecar = root.parent / "review-sidecar.md"
+    sidecar.write_text("verdict: PASS\n", encoding="utf-8")
+    return {
+        "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+        "wave_reviews": [{"verdict": "PASS", "sidecar_path": str(sidecar)}],
+    }
 
 
 def _git(args, cwd: Path) -> str:
@@ -79,7 +85,7 @@ def _declare(root: Path, chunks, review_only: bool = False) -> None:
 
 def _land(root: Path, **extra) -> dict:
     params = {
-        "script_path": SCRIPT, "incomplete_chunks": [], "inline_review": dict(REVIEWED),
+        "script_path": SCRIPT, "incomplete_chunks": [], "inline_review": _reviewed(root),
         "session_id": SELF, "run_id": RUN, **extra,
     }
     return land_run._handler(params, repo_root=root / ".git")
@@ -170,6 +176,30 @@ def test_a_malformed_withhold_paths_refuses_before_any_write(repo):
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
+def test_a_landing_trailer_and_reply_name_the_run_deleted_targets(repo):
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    _write(repo, "test_gone.py", "def test_g():\n    pass\n")
+    _git(["add", "test_gone.py"], repo)
+    _git(["commit", "-q", "-m", "add"], repo)
+    base = _git(["rev-parse", "HEAD"], repo).strip()
+    _git(["rm", "-q", "test_gone.py"], repo)
+    _git(["commit", "-q", "-m", "delete"], repo)
+    record = {"run_id": RUN, "head": _git(["rev-parse", "HEAD"], repo).strip(), "status": "no-tests", "tests": [],
+              "tests_run": 0, "dropped": ["test_gone.py"], "covered": {}}
+    path = landing_integrity.fresh_verdict_path(repo, RUN)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    _author(repo, "a.py", "a = 1\n")
+    _declare(repo, [("C1", ["a.py"])])
+
+    out = _land(repo, run_base_sha=base)
+
+    assert out["committed"] is True, out
+    assert "test_gone.py" in out["targeted_tests_note"]
+    assert "Targeted-Tests-Note: not-run: run deleted test_gone.py" in _git(["log", "-1", "--format=%B"], repo)
+
+
 def _review_only_fixture(repo: Path, *, edited_after_review: bool) -> dict:
     _author(repo, "a.py", "a = 1\n")
     _declare(repo, [("C1", ["a.py"])], review_only=True)
@@ -181,7 +211,7 @@ def _review_only_fixture(repo: Path, *, edited_after_review: bool) -> dict:
     if edited_after_review:
         _write(repo, "a.py", "a = 3  # peer rewrite after the review\n")
         os.utime(repo / "a.py", (now + 200, now + 200))
-    review = {"integration_stem": "rev-stem", "slices": 0, "fixes": 0, "prep_sidecar": "prep.md"}
+    review = {"integration_stem": "rev-stem", "slices": 0, "fixes": 0, "prep_sidecar": "prep.md", "wave_reviews": _reviewed(repo)["wave_reviews"]}
     return _land(repo, inline_review=review)
 
 

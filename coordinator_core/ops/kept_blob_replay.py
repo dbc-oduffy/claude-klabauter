@@ -2,15 +2,14 @@
 from __future__ import annotations
 
 import hashlib
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.kept_blob_transcripts import ToolEdit
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _ZERO_OID = "0" * 40
 
 
@@ -31,15 +30,6 @@ class ReplayHit:
     last_src: Optional[str]
 
 
-def _git(repo: Path, args: List[str], data: Optional[bytes] = None) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        input=data,
-        capture_output=True,
-        creationflags=_NO_WINDOW,
-    )
-
-
 def _parse_time(iso: str) -> Optional[datetime]:
     try:
         dt = datetime.fromisoformat(iso.strip())
@@ -52,13 +42,13 @@ def _parse_time(iso: str) -> Optional[datetime]:
 
 def _log_commits(repo_root: Path, rels: List[str]):
     """One `git log` spawn: [(commit, time, {rel: new_oid})] newest first."""
-    out = _git(repo_root, ["-c", "core.quotepath=false", "log", "--all", "--no-abbrev", "--raw", "--no-renames",
-                           "--format=%x00%H %cI", "--", *rels])
+    out = run_git(["-C", str(repo_root), "-c", "core.quotepath=false", "log", "--all", "--no-abbrev", "--raw",
+                   "--no-renames", "--format=%x00%H %cI", "--", *rels], binary=True)
     commits = []
     if out.returncode != 0:
         return commits
     wanted = set(rels)
-    for chunk in out.stdout.decode("utf-8", "replace").split("\x00"):
+    for chunk in out.stdout_bytes.decode("utf-8", "replace").split("\x00"):
         if not chunk.strip():
             continue
         head, _, rest = chunk.partition("\n")
@@ -82,10 +72,18 @@ def _log_commits(repo_root: Path, rels: List[str]):
     return commits
 
 
+def _commit_time(repo_root: Path, rev: str) -> Optional[datetime]:
+    """Committer time of `rev`; used when the base commit did not touch any wanted path, so the
+    path log cannot date it and its base would otherwise take every edit regardless of age."""
+    out = run_git(["-C", str(repo_root), "show", "-s", "--format=%cI", rev], binary=True)
+    return _parse_time(out.stdout_bytes.decode("utf-8", "replace")) if out.returncode == 0 else None
+
+
 def _cat_file_batch(repo_root: Path, specs: List[str]) -> List[Optional[bytes]]:
     """Blob bytes for each `<rev>:<rel>` spec via one cat-file --batch spawn; None when missing."""
-    out = _git(repo_root, ["cat-file", "--batch"], ("\n".join(specs) + "\n").encode("utf-8"))
-    buf = out.stdout
+    out = run_git(["-C", str(repo_root), "cat-file", "--batch"],
+                  input=("\n".join(specs) + "\n").encode("utf-8"), binary=True)
+    buf = out.stdout_bytes
     pos = 0
     result: List[Optional[bytes]] = []
     for _ in specs:
@@ -129,7 +127,7 @@ def history_bases(repo_root: Path, rels: Iterable[str], base_sha: Optional[str] 
             bases[rel].append(Base(f"{commit[:10]}:{oid[:10]}", obj[1], when))
     if base_sha:
         found = [(c, w) for c, w, _ in commits if c.startswith(base_sha)]
-        since = found[0][1] if found else None
+        since = found[0][1] if found else _commit_time(repo_root, base_sha)
         datas = _cat_file_batch(repo_root, [f"{base_sha}:{rel}" for rel in rels])
         for rel, data in zip(rels, datas):
             if data is not None:

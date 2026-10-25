@@ -1,9 +1,9 @@
-"""Tests for `coordinator_core.warm.breadcrumb` and `coordinator/bin/
-warm-engine-stop.py`.
+"""Tests for `coordinator_core.warm.breadcrumb` and the helpers of
+`coordinator_core.warm.pair_stop` (imported here as `stop_mod`).
 
 Spec backlink: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C18
 
-Never kills a real process: `warm-engine-stop.py`'s `_terminate_pid` takes
+Never kills a real process: `pair_stop._terminate_pid` takes
 an injectable `psutil_module` seam exactly so this file can exercise the
 terminate/escalate-to-kill logic against a fake process object instead.
 Nothing here opens a real Windows named pipe either -- `_ask_server_to_stop`
@@ -14,7 +14,6 @@ sibling `warm.client` module.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import time
 from pathlib import Path
@@ -22,18 +21,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.warm import breadcrumb
-
-# ---------------------------------------------------------------------------
-# Import warm-engine-stop.py via importlib -- filename has dashes, not
-# importable as a regular identifier (mirrors coordinator/bin/tests/
-# file-attribution/test_derive_file_attribution.py's own convention).
-# ---------------------------------------------------------------------------
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_STOP_SCRIPT_PATH = _REPO_ROOT / "coordinator" / "bin" / "warm-engine-stop.py"
-
-_spec = importlib.util.spec_from_file_location("warm_engine_stop", _STOP_SCRIPT_PATH)
-stop_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(stop_mod)
+from coordinator_core.warm import pair_stop as stop_mod
 
 
 # ---------------------------------------------------------------------------
@@ -337,102 +325,6 @@ def test_should_spawn_true_on_missing_psutil(tmp_path: Path, monkeypatch: pytest
 # ---------------------------------------------------------------------------
 # warm-engine-stop.py
 # ---------------------------------------------------------------------------
-
-
-def test_main_exits_no_breadcrumb_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(stop_mod.breadcrumb, "breadcrumb_path", lambda: tmp_path / "state" / "warm" / "warm.json")
-    monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: None)
-    assert stop_mod.main([]) == stop_mod._EXIT_NO_BREADCRUMB
-
-
-def test_main_exits_stale_breadcrumb_when_pid_dead(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    record = {
-        "pipe": r"\\.\pipe\fake",
-        "pid": 999999,
-        "stable_pid_start_epoch": 1,
-        "engine_sha": "x",
-        "started_at": "2026-01-01T00:00:00Z",
-    }
-    monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: record)
-    monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": False)
-    assert stop_mod.main([]) == stop_mod._EXIT_STALE_BREADCRUMB
-
-
-def test_main_asks_server_and_unlinks_breadcrumb_on_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    record = {
-        "pipe": r"\\.\pipe\fake",
-        "pid": 4242,
-        "stable_pid_start_epoch": 1,
-        "engine_sha": "x",
-        "started_at": "2026-01-01T00:00:00Z",
-    }
-    monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: record)
-    monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
-    monkeypatch.setattr(stop_mod, "_ask_server_to_stop", lambda pipe: True)
-    monkeypatch.setattr(stop_mod, "_wait_for_pid_gone", lambda pid, epoch, deadline_secs: True)
-    unlinked = []
-    monkeypatch.setattr(stop_mod.breadcrumb, "unlink_breadcrumb", lambda: unlinked.append(True))
-    assert stop_mod.main([]) == stop_mod._EXIT_OK
-    assert unlinked == [True]
-
-
-def test_main_keeps_breadcrumb_when_graceful_stop_is_delivered_but_pid_stays(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    record = {
-        "pipe": r"\\.\pipe\fake",
-        "pid": 4242,
-        "stable_pid_start_epoch": 1,
-        "engine_sha": "x",
-        "started_at": "2026-01-01T00:00:00Z",
-    }
-    monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: record)
-    monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
-    monkeypatch.setattr(stop_mod, "_ask_server_to_stop", lambda pipe: True)
-    monkeypatch.setattr(stop_mod, "_wait_for_pid_gone", lambda pid, epoch, deadline_secs: False)
-    unlinked = []
-    monkeypatch.setattr(stop_mod.breadcrumb, "unlink_breadcrumb", lambda: unlinked.append(True))
-    assert stop_mod.main([]) == stop_mod._EXIT_COULD_NOT_STOP
-    assert unlinked == []
-
-
-def test_main_falls_back_to_terminate_when_ask_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    record = {
-        "pipe": r"\\.\pipe\fake",
-        "pid": 4242,
-        "stable_pid_start_epoch": 1,
-        "engine_sha": "x",
-        "started_at": "2026-01-01T00:00:00Z",
-    }
-    monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: record)
-    monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
-    monkeypatch.setattr(stop_mod, "_ask_server_to_stop", lambda pipe: False)
-    terminated = []
-    monkeypatch.setattr(stop_mod, "_terminate_pid", lambda pid: terminated.append(pid) or True)
-    unlinked = []
-    monkeypatch.setattr(stop_mod.breadcrumb, "unlink_breadcrumb", lambda: unlinked.append(True))
-    assert stop_mod.main([]) == stop_mod._EXIT_OK
-    assert terminated == [4242]
-    assert unlinked == [True]
-
-
-def test_main_reports_failure_when_terminate_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    record = {
-        "pipe": r"\\.\pipe\fake",
-        "pid": 4242,
-        "stable_pid_start_epoch": 1,
-        "engine_sha": "x",
-        "started_at": "2026-01-01T00:00:00Z",
-    }
-    monkeypatch.setattr(stop_mod.breadcrumb, "read_breadcrumb", lambda: record)
-    monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
-    monkeypatch.setattr(stop_mod, "_ask_server_to_stop", lambda pipe: False)
-    monkeypatch.setattr(stop_mod, "_terminate_pid", lambda pid: False)
-    assert stop_mod.main([]) == stop_mod._EXIT_COULD_NOT_STOP
 
 
 def test_ask_server_to_stop_false_on_missing_pipe(monkeypatch: pytest.MonkeyPatch) -> None:

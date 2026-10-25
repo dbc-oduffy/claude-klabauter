@@ -1073,6 +1073,36 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
         assert key in record_fn, key
 
 
+def test_run_cost_record_reads_not_run_until_the_review_wave_assigns_it():
+    """Node is barred, so the record's initial state and the only assignment sites are checked over the script."""
+    script = _compose()
+    assert "let _reviewState = 'not-run';\nlet _reviewVerdictsRecord = null;" in script
+    record_fn = script[script.index("function _runCostRecord()"):]
+    assert "review_state: _reviewState, review_verdicts: _reviewVerdictsRecord," in record_fn[: record_fn.index("\n}")]
+    assert script.count("_reviewState = 'ran'") == 1 and script.count("_reviewState = 'withheld'") == 1
+    assert script.index("_reviewState = 'ran'") < script.index("_reviewState = 'withheld'") < script.index("phase('Review fixes')")
+
+
+def test_run_cost_record_carries_only_wave_entries_that_have_a_verdict():
+    script = _compose()
+    start = script.index("const _waveVerdicts = ")
+    block = script[start:script.index("\n  }", start)]
+    assert "typeof r.verdict === 'string' && r.verdict.trim()" in block
+    assert "verdict: r.verdict," in block and "r.verdict ?? null" not in block
+    assert "if (_waveVerdicts.length > 0) {\n    _reviewState = 'ran';" in block
+    assert "_reviewVerdictsRecord = []" not in script
+
+
+def test_run_record_review_verdicts_are_assigned_inside_the_review_gate_before_run_close():
+    script = _compose()
+    record_fn = script[script.index("function _runCostRecord()"):]
+    assert "review_verdicts: _reviewVerdictsRecord" in record_fn[: record_fn.index("\n}")]
+    gate = script.index("if (_reviewPaths.length === 0)")
+    assign = script.index("_reviewVerdictsRecord = _waveVerdicts")
+    close = script.index("finally { await _runClose(); }")
+    assert gate < assign < close
+
+
 def test_batch_helpers_receive_a_batches_entry_never_batch_state():
     """`batchState` ({id, batchKey, triaged, closedRows}) has no `.rows`; a
     helper typed on a BATCHES entry that is handed batchState throws at run

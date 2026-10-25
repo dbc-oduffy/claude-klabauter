@@ -34,7 +34,13 @@ RUN = "run1"
 SIZING = "state/sizings/20260101-a.yaml"
 PLAN = "docs/plans/p.md"
 NODE = "tests/test_a.py::test_x"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+# Resolves against the repo root to a file the `repo` fixture writes beside the repo (never dirty in it).
+WAVE_SIDECAR = "../wave-review.md"
+WAVE_REVIEW = {"agent_type": "coordinator:reviewer", "verdict": "PASS", "sidecar_path": WAVE_SIDECAR}
+_REVIEWED = {
+    "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+    "wave_reviews": [WAVE_REVIEW],
+}
 _SID = "11111111-2222-3333-4444-555555555555"
 
 
@@ -61,6 +67,7 @@ def _put(repo: Path, rel: str, text: str) -> None:
 def repo(tmp_path, monkeypatch):
     root = tmp_path / "repo"
     root.mkdir()
+    (tmp_path / "wave-review.md").write_text("# review\n", encoding="utf-8")
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "t")
@@ -117,7 +124,10 @@ def _call(repo: Path, **extra) -> dict:
 
 
 # The budget driver's minting review, without its lesson: this fixture points no lessons outbox.
-_MINTING_REVIEW = {**INLINE_REVIEW, "criterion": {**INLINE_REVIEW["criterion"], "lesson_candidates": []}}
+_MINTING_REVIEW = {
+    **INLINE_REVIEW, "criterion": {**INLINE_REVIEW["criterion"], "lesson_candidates": []},
+    "wave_reviews": [WAVE_REVIEW],
+}
 
 
 def _closable_plan(repo: Path, plan_rel: str) -> None:
@@ -299,6 +309,11 @@ def _size_l(repo):
 
 
 def test_an_xs_run_with_an_empty_review_wave_commits_without_a_review_verdict(repo):
+    _write(repo, "docs/reference/x.md", "x\n")
+    docs_only = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t", paths=("docs/reference/x.md",)),), deliverable_id=DLV, plan_path=PLAN
+    )
+    _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(docs_only) + "\n")
     xs_review = {
         "integration_stem": "wave-bookkeeping-run1", "slices": 0, "fixes": 0, "prep_sidecar": None,
         "plan_id": None, "wave_sidecar_paths": [], "prep": None, "delivery": None,

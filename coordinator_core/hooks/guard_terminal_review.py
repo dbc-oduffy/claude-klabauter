@@ -16,8 +16,9 @@ Trigger conditions (all must hold to refuse a Stop):
   2. The session has at least one CODE-diff commit of its own — a commit
      whose `Session-Id` trailer equals the payload's `session_id`, and at
      least one touched path is CODE. A path is non-code (exempt) when it is
-     bookkeeping (`coverage._is_bookkeeping_path`, plus the two gate-local
-     prefixes `docs/plans/` and `.coordinator-local/`) OR doc-only by the
+     bookkeeping (`coverage._is_bookkeeping_path`, plus the two extra
+     prefixes `docs/plans/` and `.coordinator-local/`, all in
+     `coverage._is_code_path`) OR doc-only by the
      Scale ladder's own rule (suffix `.md`/`.yaml`/`.yml`, wherever it
      sits). A mixed commit (any code path present) counts as code and fails
      closed.
@@ -92,7 +93,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
-from coordinator_core.coverage import _is_bookkeeping_path
+from coordinator_core.coverage import _is_code_path
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.git.run import run_git
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, post_advisory
@@ -112,18 +113,6 @@ _COMMIT_WALK_BOUND = 500
 #: ("executor dispatched, or >50 LOC, or shared-schema touched") — the only
 #: leg mechanically readable at Stop. See module docstring's known limit.
 _EM_VERIFIED_LOC_CEILING = 50
-
-#: Two gate-local non-code prefixes, additional to `_is_bookkeeping_path`'s
-#: own set (`state/`, `archive/`, `tasks/`, `cross-repo/`). `docs/plans/` is
-#: exempt because plan review is its own gate; `.coordinator-local/` is
-#: coordinator machinery, never authored code.
-_GATE_LOCAL_NONCODE_PREFIXES = ("docs/plans/", ".coordinator-local/")
-
-#: Scale ladder's own doc-only rule: a path with one of these suffixes is
-#: doc-only WHEREVER it sits — the decision that doctrine markdown is not
-#: gated (§ Design condition 2).
-_DOC_ONLY_SUFFIXES = (".md", ".yaml", ".yml")
-
 
 _HEADER_SENTINEL = "\x02"
 _FIELD_SEP = "\x1f"
@@ -156,18 +145,6 @@ class _Commit:
     code_loc: int = 0
     is_code: bool = False
     inline_review: List[str] = field(default_factory=list)
-
-
-def _is_code_path(path: str) -> bool:
-    """True when `path` must count toward the gate — i.e. it is neither
-    bookkeeping nor doc-only by the Scale ladder's suffix rule."""
-    if _is_bookkeeping_path(path):
-        return False
-    if any(path.startswith(prefix) for prefix in _GATE_LOCAL_NONCODE_PREFIXES):
-        return False
-    if path.endswith(_DOC_ONLY_SUFFIXES):
-        return False
-    return True
 
 
 def _parse_timestamp(value) -> Optional[datetime]:

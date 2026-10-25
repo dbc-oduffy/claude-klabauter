@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple
 
 @dataclass(frozen=True)
 class Verdict:
-    verdict: str  # "SUPERSEDED" | "NOT-LANDED"
+    verdict: str  # "SUPERSEDED" | "NOT-LANDED" | "CARRIED" (EOL-only difference from HEAD)
     commit: Optional[str]
     why: str
 
@@ -119,6 +119,10 @@ def _first_landing(
     return None
 
 
+def _lf(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n")
+
+
 def classify(
     base: bytes,
     kept: bytes,
@@ -130,9 +134,12 @@ def classify(
         return Verdict("NOT-LANDED", None, "path absent at HEAD")
     if head == kept:
         return Verdict("SUPERSEDED", _first_landing(base, kept, history), "HEAD equals kept")
-    merged, n = merge3(base, kept, head)
+    nbase, nkept, nhead = _lf(base), _lf(kept), _lf(head)
+    if nkept == nhead:
+        return Verdict("CARRIED", None, "EOL-only difference from HEAD")
+    merged, n = merge3(nbase, nkept, nhead)
     if n:
         return Verdict("NOT-LANDED", None, f"merge conflicts ({n}) onto HEAD")
-    if merged == head:
+    if merged == nhead:
         return Verdict("SUPERSEDED", _first_landing(base, kept, history), "kept hunks already in HEAD")
     return Verdict("NOT-LANDED", None, "kept hunks missing from HEAD (clean merge changes HEAD)")

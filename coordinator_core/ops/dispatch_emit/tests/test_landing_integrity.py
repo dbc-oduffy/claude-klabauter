@@ -480,10 +480,11 @@ def _write_record(root, record):
     path.write_text(json.dumps(full), encoding="utf-8")
 
 
-def test_fresh_no_tests_record_blocks_nothing_and_leaves_failed_tests_remedy_open(tmp_path):
+def test_fresh_no_tests_record_with_only_missing_targets_refuses_and_leaves_failed_tests_remedy_open(tmp_path):
     root = _repo(tmp_path)
     _write_record(root, {"status": "no-tests", "tests_run": 0, "tests": [], "dropped": ["gone.py"], "note": "dropped"})
-    assert li.landing_test_gate(root, {}, "r1") == ([], "no-verdict")
+    findings, check = li.landing_test_gate(root, {}, "r1")
+    assert check == "failed" and "ran 0 tests" in findings[0].detail
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "failed" and f"or pass params.{li.FAILED_TESTS_PARAM}" in findings[0].detail
 
@@ -547,3 +548,37 @@ def test_fresh_launcher_crash_without_tests_run_still_refuses(tmp_path):
     _write_record(root, {"status": "error", "reason": "launcher crashed"})
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "failed" and "launcher crashed" in findings[0].detail
+
+
+def _git_repo(tmp_path):
+    def git(*a):
+        return subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True, text=True,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    return tmp_path, git
+
+
+@pytest.mark.spawns_process
+def test_gate_receipt_names_run_deleted_targets_and_stays_no_verdict(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit
+
+    root, git = _git_repo(tmp_path)
+    (root / "test_gone.py").write_text("def test_g():\n    pass\n", encoding="utf-8")
+    (root / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+    base = git("rev-parse", "HEAD")
+    git("rm", "-q", "test_gone.py")
+    git("commit", "-q", "-m", "delete")
+    record = {"run_id": "r1", "head": git("rev-parse", "HEAD"), "status": "no-tests", "tests": [],
+              "tests_run": 0, "dropped": ["test_gone.py"], "covered": li.landing_fingerprint(root, ["mod.py"])}
+    path = li.fresh_verdict_path(root, "r1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    params = {"run_base_sha": base}
+    out = terminal_commit._landing_integrity_gate(root, ["mod.py"], [], None, params, "r1")
+    assert out["targeted_tests_check"] == "no-verdict"
+    assert "test_gone.py" in out["targeted_tests_note"]

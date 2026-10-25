@@ -79,10 +79,13 @@ prime_exit_criterion:
 ```
 """
 
+REVIEW_SIDECAR_REL = ".coordinator-local/subagent-share/fixture-run/review-s1.md"
+
 INLINE_REVIEW = {
     "integration_stem": f"{PLAN_ID}.review-wave-bookkeeping",
     "slices": 1,
     "fixes": 0,
+    "wave_reviews": [{"slice_id": "s1", "verdict": "PASS", "sidecar_path": REVIEW_SIDECAR_REL}],
     "plan_id": PLAN_ID,
     "prep_sidecar": None,
     "wave_sidecar_paths": [],
@@ -161,6 +164,8 @@ def build_fixture(parent: Path) -> tuple[Path, str]:
     (repo / "state" / "handoffs").mkdir(parents=True)
     (repo / BATON_REL).write_text(_BATON, encoding="utf-8")
     (repo / PLAN_REL).write_text(_PLAN, encoding="utf-8")
+    (repo / REVIEW_SIDECAR_REL).parent.mkdir(parents=True)
+    (repo / REVIEW_SIDECAR_REL).write_text("---\nverdict: PASS\n---\n\nreview\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "plan")
     (repo / "a.py").write_text("a\n", encoding="utf-8")

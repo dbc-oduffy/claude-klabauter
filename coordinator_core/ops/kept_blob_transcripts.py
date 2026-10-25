@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,11 +27,18 @@ def default_transcript_root() -> Path:
 
 
 def _prefixes(repo_root: Path) -> List[str]:
-    """Lower-cased repo-root prefixes (either drive-letter case, and the git-bash `/<drive>/...` form)."""
-    r = str(repo_root).replace("\\", "/").rstrip("/")
-    out = [r.lower() + "/"]
-    if len(r) > 2 and r[1] == ":":
-        out.append("/" + r[0].lower() + r[2:].lower() + "/")
+    """Lower-cased repo-root prefixes: the root as given, its abspath form when that differs
+    (Windows grafts a drive onto a POSIX root), and the git-bash `/<drive>/...` form of each.
+
+    Always ends in `/` so `/proj` never matches `/projX`; no suffix matching.
+    """
+    out: List[str] = []
+    for cand in (str(repo_root), os.path.abspath(repo_root)):
+        r = cand.replace("\\", "/").rstrip("/")
+        forms = [r.lower() + "/"]
+        if len(r) > 2 and r[1] == ":":
+            forms.append("/" + r[0].lower() + r[2:].lower() + "/")
+        out.extend(f for f in forms if f not in out)
     return out
 
 
@@ -124,19 +132,41 @@ def _scan_file(
     ]
 
 
-def collect_edits(repo_root: Path, rels: Iterable[str], roots: Iterable[Path]) -> Dict[str, List[ToolEdit]]:
-    """Per rel path, its edits ordered by ts, errored results and duplicate tool_use ids dropped."""
+def collect_edits(
+    repo_root: Path, rels: Iterable[str], roots: Iterable[Path], stats: Optional[dict] = None
+) -> Dict[str, List[ToolEdit]]:
+    """Per rel path, its edits ordered by ts, errored results and duplicate tool_use ids dropped.
+
+    Streams: one transcript's bytes are live at a time. When `stats` is given it receives
+    `roots`, `transcripts` (files opened) and `window` ([oldest, newest] transcript mtime, ISO UTC,
+    or None when nothing was scanned) so a narrow scan cannot pass for a full one.
+    """
     rel_set = frozenset(r.replace("\\", "/") for r in rels)
     found: Dict[str, List[ToolEdit]] = {r: [] for r in rel_set}
+    root_list = [Path(r) for r in roots]
+    if stats is not None:
+        stats.update(roots=len(root_list), transcripts=0, window=None)
     if not rel_set:
         return found
     needles = _needle_variants({r.rsplit("/", 1)[-1] for r in rel_set})
     prefixes = _prefixes(Path(repo_root))
-    for root in roots:
-        for f in _jsonl_files(Path(root)):
+    oldest = newest = None
+    for root in root_list:
+        for f in _jsonl_files(root):
+            if stats is not None:
+                stats["transcripts"] += 1
+                try:
+                    m = f.stat().st_mtime
+                except OSError:
+                    m = None
+                if m is not None:
+                    oldest = m if oldest is None else min(oldest, m)
+                    newest = m if newest is None else max(newest, m)
             src = f"{f.parent.name}/{f.name}"
             for rel, ts, tid, name, inp in _scan_file(f, needles, prefixes, rel_set):
                 found[rel].append(ToolEdit(ts=ts, tool_use_id=tid, name=name, input=inp, src=src))
+    if stats is not None and oldest is not None:
+        stats["window"] = [datetime.fromtimestamp(t, timezone.utc).isoformat() for t in (oldest, newest)]
     for rel, edits in found.items():
         edits.sort(key=lambda e: (e.ts, e.src, e.tool_use_id))
         seen: set = set()

@@ -1380,6 +1380,8 @@ def main() -> int:
     steps but with the election collapsed onto C2's bind-is-the-election
     primitive rather than a named-pipe lock:
 
+    0. If the publish marker is held for this root, exit 0 before any
+       election or socket work.
     1. `elect_front_door()` -- bind the fixed port, or discriminate why not
        (module docstring's three typed outcomes). `ElectionLost` means
        another instance of this same door already won this generation;
@@ -1400,6 +1402,12 @@ def main() -> int:
     import sys as _sys
 
     root = current_engine_clone()
+    if breadcrumb.publish_marker_held(breadcrumb.svc_dir(root)):
+        print(
+            f"[front-door] publish in progress for {root}; not starting",
+            file=_sys.stderr,
+        )
+        return 0
     try:
         sock = elect_front_door(engine_root=root)
     except ElectionLost:

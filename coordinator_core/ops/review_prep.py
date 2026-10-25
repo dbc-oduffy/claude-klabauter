@@ -44,6 +44,12 @@ one contiguous balanced group at ``group_index`` of ``min(slices, group_count)``
 ``execute_review._GROUP_SLICES_JS`` applies; every other field is the whole-run reply. Without
 them ``slices`` is the full list.
 
+``run_id`` (instead of ``paths``) resolves the declared paths via ``declared_paths_for_run``: the run
+manifest's ``review_declared_paths``, plus the leg footprint's ``writes`` only when ``leg`` is true.
+``leg`` is explicit because ``leg-footprint.json`` outlives the ledger resume that wrote it, so
+presence cannot signal this fire has a leg. A run_id resolving to no path is a refusal naming the
+run, never the empty-``paths`` zero-file reply.
+
 Negative-spec: a single-reviewer-ok verdict over product files returns ONE whole-diff slice,
 never an empty list; zero product files returns no slices. Empty ``paths`` returns the zero-file
 reply (no slices, ``product_files`` 0, no sidecar, lock or git) rather than a refusal. A refusal from either composed op is
@@ -722,17 +728,69 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
     declare_write(sidecar)
 
 
+def _read_json_object(path: Path) -> Optional[dict]:
+    try:
+        got = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return got if isinstance(got, dict) else None
+
+
+def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False) -> List[str]:
+    """The run's declared paths from its record: the manifest's ``review_declared_paths``, then,
+    when ``leg``, the leg footprint's ``writes``. Order kept, no dedupe, no normalisation. Raises
+    ValueError (one fact) on an unsafe run_id, a missing manifest, a non-list-of-str field, a
+    missing footprint under ``leg``, or an empty result. Spawns nothing."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
+
+    base = record_dir(repo_root, run_id)
+    manifest = _read_json_object(base / "manifest.json")
+    if manifest is None:
+        raise ValueError(f"no readable manifest for run {run_id!r}")
+    declared = manifest.get("review_declared_paths")
+    if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
+        raise ValueError(f"manifest review_declared_paths for run {run_id!r} is not a list of str")
+    resolved = list(declared)
+    if leg:
+        footprint = _read_json_object(base / LEG_FOOTPRINT_FILE)
+        writes = footprint.get("writes") if footprint is not None else None
+        if not isinstance(writes, list) or not all(isinstance(p, str) for p in writes):
+            raise ValueError(f"no readable leg footprint writes list for run {run_id!r}")
+        resolved += writes
+    if not resolved:
+        raise ValueError(f"run {run_id!r} declares no paths to review")
+    return resolved
+
+
 @register_op("review.prep")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "review.prep". Params: ``base`` (str sha), ``paths`` (list[str]), ``slice_prefix``
+    """JSON-RPC "review.prep". Params: ``base`` (str sha), exactly one of ``paths`` (list[str]) and
+    ``run_id`` (str; the run's declared paths are read from its record), optional ``leg`` (bool,
+    only with ``run_id``; appends the leg footprint's writes), ``slice_prefix``
     (str), ``plan_path`` (str), optional ``session_id``, and exactly one of ``head`` (str,
     committed range mode) or ``worktree: true``; optional ``group_index`` / ``group_count`` (ints,
     together) return only that slice group. Keying scope: show_top."""
     if repo_root is None:
         return _fail("review.prep requires a show_top-keyed dispatch; repo_root was not supplied")
     paths = params.get("paths")
-    if not isinstance(paths, list):
-        return _fail("review.prep requires params.paths as a list")
+    run_id = params.get("run_id")
+    leg = params.get("leg")
+    if run_id is not None:
+        if paths is not None:
+            return _fail("review.prep takes exactly one of paths or run_id")
+        if not isinstance(run_id, str) or not run_id:
+            return _fail("review.prep run_id must be a non-empty string")
+        if leg is not None and not isinstance(leg, bool):
+            return _fail("review.prep leg must be a boolean")
+        try:
+            paths = declared_paths_for_run(repo_root, run_id, leg=bool(leg))
+        except ValueError as exc:
+            return _fail(str(exc))
+    else:
+        if leg is not None:
+            return _fail("review.prep leg is accepted only with run_id")
+        if not isinstance(paths, list):
+            return _fail("review.prep requires params.paths as a list")
     head = str(params.get("head") or "")
     if bool(head) == bool(params.get("worktree")):
         return _fail("review.prep requires exactly one of head (range mode) or worktree=true")

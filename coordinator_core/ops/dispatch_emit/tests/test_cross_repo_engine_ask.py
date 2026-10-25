@@ -189,11 +189,16 @@ def test_b3_review_prep_resolves_the_run_base_sha_in_the_targets_object_store(wo
     assert command, "no review.prep command in the composed script"
     params_text = command.group(1).replace("\\'", "'")
     assert world.base in params_text
-    params_text = params_text.replace("[<every declared path>]", '["pkg/mod.py"]').replace("<plan_path>", _PLAN_REL)
+    params_text = params_text.replace("<plan_path>", _PLAN_REL)
     import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
     params = {**json.loads(params_text), "session_id": _SESSION}
     root = _landing_root(_command_span(script, "review.prep"))
+    assert root == world.target.resolve()
+    manifest = record_dir(world.target, "run-1") / "manifest.json"
+    _put(manifest, json.dumps({"review_declared_paths": ["pkg/mod.py"]}))
     reply = review_prep(params, repo_root=root)
     assert reply["error"] is None, reply["error"]
     assert reply["run_base_sha"] == world.base and reply["product_files"] == 1

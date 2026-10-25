@@ -631,7 +631,12 @@ def _land(
     art_paths, art_deleted = list(extra.present), list(extra.deleted)
 
     from coordinator_core.ops.ceremony import commit_v2
+    from coordinator_core.ops.dispatch_emit.land_run import _withhold_reasons
 
+    em_withheld = _withhold_reasons(root, artifacts, record_dir_rel)
+    withheld.update({
+        p: em_withheld[p] for p in (*product, *removed, *art_paths, *art_deleted) if p in em_withheld
+    })
     holds: list = []
     warnings = commit_v2._peer_claim_warnings(
         root, product + removed + art_paths + art_deleted, holds, own_sid=session_id
@@ -664,6 +669,7 @@ def _land(
         targeted = {
             "check": tcheck,
             "findings": [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in tfind],
+            **({"note": tfind.deleted_note} if tfind.deleted_note else {}),
         }
     if kind != "ledger-check" or tcheck in ("no-verdict", landing_integrity.NOT_RUN_CHECK):
         # Trap: with no verdict, or a verdict where no test executed (not-run), the scoped-test leg

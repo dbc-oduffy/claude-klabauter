@@ -669,12 +669,22 @@ def _wave_prep_instruction(
     *,
     grouped: bool,
     paths_literal: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> str:
     """The first-act ``review.prep`` instruction every review-wave agent carries under
     ``prep_in_wave``; a grouped agent adds the ``group_index`` / ``group_count`` values its prompt
     ends with. ``paths_literal`` (a JSON list) replaces the declared-paths placeholder with one
-    review group's own files."""
-    paths_arg = paths_literal if paths_literal is not None else "[<every declared path>]"
+    review group's own files. ``run_id`` replaces the path list with the run id the op resolves
+    the declared paths from, so the command's length is constant in the footprint; it excludes
+    ``paths_literal``, since a group subset cannot be expressed by run id."""
+    if run_id is not None and paths_literal is not None:
+        raise ValueError("_wave_prep_instruction takes at most one of run_id / paths_literal")
+    if run_id is not None:
+        paths_key = f"\"run_id\":{json.dumps(run_id)}"
+        leg_note = " When a `leg: true` value is given, add it as `\"leg\":true`."
+    else:
+        paths_key = "\"paths\":" + (paths_literal if paths_literal is not None else "[<every declared path>]")
+        leg_note = ""
     group_args = ',"group_index":<group_index>,"group_count":<group_count>' if grouped else ""
     group_note = " Pass the `group_index:` and `group_count:` values given below." if grouped else ""
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
@@ -682,11 +692,11 @@ def _wave_prep_instruction(
         f"First, run this run's review prep as ONE engine call, never your own freeze, grouping or "
         f"claim check: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
         f"review.prep '{{{mode_args},\"base\":\"{base_ref}\","
-        f"\"slice_prefix\":\"{prep_slice_id}\",\"paths\":{paths_arg},"
+        f"\"slice_prefix\":\"{prep_slice_id}\",{paths_key},"
         f"\"plan_path\":\"<plan_path>\"{group_args}}}'{repo_pin}`, its command word exactly as written "
         f"(a guard denies the prefix moved into a shell variable). <plan_path> is the `plan:` value "
         f"below when it is given, else the `plan_path:` line. When a non-empty `session_id:` value is "
-        f"given, add it as `\"session_id\"`.{group_note} The op computes once per run: concurrent "
+        f"given, add it as `\"session_id\"`.{leg_note}{group_note} The op computes once per run: concurrent "
         f"callers read one stored reply. Return the reply verbatim as `prep`, beside your review as "
         f"`review`. An error beginning `{REVIEW_PREP_BUSY_PREFIX}` is not a refusal: re-run the same "
         f"call, up to {_PREP_BUSY_RETRIES} times, and if it is still busy return `prep` alone. Any other "
@@ -1015,6 +1025,7 @@ def compose_execute_review(
     review_groups: Optional[Sequence[ReviewGroup]] = None,
     verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
     slice_filter_js: Optional[str] = None,
+    prep_run_id: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
     block)`` entries: prep, review-wave, and -- ONLY when ``review.integration``
@@ -1090,6 +1101,10 @@ def compose_execute_review(
     briefs, since the diff size is unknown until the wave has run, and whole-diff reviewers are
     not skipped on a verify-only run. ``False`` keeps the output byte-identical.
 
+    ``prep_run_id`` (needs ``prep_in_wave=True``; equals ``run_key`` when both are given) makes the
+    slice-group and whole-diff prep commands carry ``"run_id"`` instead of the declared-path list,
+    so their length does not grow with the footprint. ``None`` keeps the output byte-identical.
+
     ``reverify`` appends a "Review re-verify" phase after the last applying stage, binding
     ``_reviewReverify`` (``null`` under ``_verifyOnly`` or when the agent call degrades): a
     ``coordinator:test-runner`` agent lists the review-edited files with ``review.reverify``, runs
@@ -1142,6 +1157,11 @@ def compose_execute_review(
             raise ValueError("compose_execute_review(review_groups=...) reviews the working tree, not review_terminal_sha")
         if slice_key_js:
             raise ValueError("compose_execute_review(review_groups=...) takes no slice_key_js")
+    if prep_run_id is not None:
+        if not prep_in_wave:
+            raise ValueError("compose_execute_review(prep_run_id=...) needs prep_in_wave=True")
+        if run_key is not None and run_key != prep_run_id:
+            raise ValueError("compose_execute_review(prep_run_id=...) must equal run_key when both are given")
     phases: List[Tuple[str, str]] = []
 
     # -- 1. prep ----------------------------------------------------------
@@ -1427,7 +1447,7 @@ def compose_execute_review(
             slice_prompt = (
                 f"{prompt_head}\n\n{slice_role}"
                 f"Review your assigned slice group of this run's diff.\n"
-                + _wave_prep_instruction(wave_mode_args, base_ref, prep_slice_id, repo_root, grouped=True)
+                + _wave_prep_instruction(wave_mode_args, base_ref, prep_slice_id, repo_root, grouped=True, run_id=prep_run_id)
                 + f" Review exactly the slices the reply lists, and nothing else. If it lists none, "
                 f"there is nothing in your group: return `prep` alone.{_WAVE_GROUP_CLAUSE}{slice_bc}\n"
                 f"plan_path: {plan_path}\n"
@@ -1583,7 +1603,7 @@ def compose_execute_review(
             wave_prompt = (
                 f"{prompt_head}\n\n{whole_role}"
                 f"Review this run's whole diff.\n"
-                + _wave_prep_instruction(wave_mode_args, base_ref, prep_slice_id, repo_root, grouped=False)
+                + _wave_prep_instruction(wave_mode_args, base_ref, prep_slice_id, repo_root, grouped=False, run_id=prep_run_id)
                 + f" Read the frozen diff named by the reply's whole_diff_path (this run's is "
                 f"`{prep_slice_id}.diff`); never another plan's `-prep.diff`."
                 + (

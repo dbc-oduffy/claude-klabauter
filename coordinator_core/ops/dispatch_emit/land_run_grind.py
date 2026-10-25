@@ -29,8 +29,11 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
     render_row_trailer,
     validate_grind_params,
 )
-from coordinator_core.ops.dispatch_emit import grind_landing_select, landing_integrity
+from coordinator_core.ops.dispatch_emit import grind_landing_select, landing_integrity, review_floor
 from coordinator_core.ops.dispatch_emit.land_run_contract import REFUSED_MODE_AMBIGUOUS, UNLANDED_ROW_TRAILER
+
+#: Receipt a code-landing grind commit carries: its review wave runs after landing, so the floor is exempt.
+POST_LANDING_RECEIPT = "review: post-landing (grind exemption, DR-grind-review-runs-after-landing)"
 
 #: ``dropped`` reason of a changed, undeclared-deleted path that is no longer a file in the worktree.
 DROP_MISSING = "missing-from-worktree"
@@ -190,7 +193,10 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
             **base,
         )
 
-    message = _message(grind, landing, len(commit_deleted), stranded, deliverable_id)
+    message = _message(
+        grind, landing, len(commit_deleted), stranded, deliverable_id,
+        code_landed=bool(review_floor.code_paths(commit_files + commit_deleted)),
+    )
     try:
         outcome = commit_paths(
             main_root,
@@ -220,7 +226,9 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
     }
 
 
-def _message(grind: dict, landing: list, removed: int, stranded: list, deliverable_id: object) -> str:
+def _message(
+    grind: dict, landing: list, removed: int, stranded: list, deliverable_id: object, code_landed: bool = False,
+) -> str:
     subject = f"grind({' '.join(grind['profile'].split())}): {len(landing)} rows"
     if removed:
         subject += f", {removed} backlog rows removed to archive"
@@ -230,6 +238,8 @@ def _message(grind: dict, landing: list, removed: int, stranded: list, deliverab
     trailers = [render_row_trailer(r["row_id"], r["outcome"]) for r in landing]
     if isinstance(deliverable_id, str) and deliverable_id:
         trailers.insert(0, f"Deliverable-Id: {deliverable_id}")
+    if code_landed:
+        trailers.append(f"Ledger-Receipt: {POST_LANDING_RECEIPT}")
     trailers += [
         f"{UNLANDED_ROW_TRAILER}: {' '.join(str(s['row_id']).split())} {s['path']} {s['reason']}"
         for s in stranded

@@ -527,6 +527,26 @@ def _is_bookkeeping_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in _BOOKKEEPING_PATH_PREFIXES)
 
 
+#: Two non-code prefixes additional to `_is_bookkeeping_path`'s set. `docs/plans/` is exempt
+#: because plan review is its own gate; `.coordinator-local/` is coordinator machinery.
+_GATE_LOCAL_NONCODE_PREFIXES = ("docs/plans/", ".coordinator-local/")
+
+#: Scale ladder's doc-only rule: a path with one of these suffixes is doc-only WHEREVER it sits.
+_DOC_ONLY_SUFFIXES = (".md", ".yaml", ".yml")
+
+
+def _is_code_path(path: str) -> bool:
+    """True when `path` is neither bookkeeping nor doc-only by the Scale ladder's suffix rule.
+    The one home of the code/doc classifier: the terminal-review hook and review_floor share it."""
+    if _is_bookkeeping_path(path):
+        return False
+    if any(path.startswith(prefix) for prefix in _GATE_LOCAL_NONCODE_PREFIXES):
+        return False
+    if path.endswith(_DOC_ONLY_SUFFIXES):
+        return False
+    return True
+
+
 #: Path prefixes whose commits are PLANNING artifacts — a plan, a piece of
 #: planning research/problem-framing prose, or a plan's own sidecar — never
 #: code a reviewer opens, but ALSO never exempt from review the way EXHAUST

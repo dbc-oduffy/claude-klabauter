@@ -46,6 +46,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     record_dir,
     stamp_run_stage,
 )
+from coordinator_core.ops.dispatch_emit import review_floor
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, read_em_brief, read_em_context_paths
@@ -1222,6 +1223,7 @@ def judge(
     gated: Optional[Iterable[str]] = None, operator: Optional[Mapping[str, str]] = None,
     repo_root: Optional[Path] = None, plan_text: Optional[str] = None,
     wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
+    code_paths: Sequence[str] = (), review_verdicts: Optional[int] = None,
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -1259,7 +1261,12 @@ def judge(
     (given `repo_root` and the run's `plan_text`) returns None; a `met` that fails it is judged
     `not_met`, so an empty `met_by` never stands as met. `wave_reviews` (the review wave's
     `{agent_type, sidecar_path, verdict}` returns) and `noted_paths` (files the revise notes name)
-    are default evidence beside the item's own `met_by`."""
+    are default evidence beside the item's own `met_by`.
+
+    `code_paths` (the run's declared code paths) with `review_verdicts` 0 or None (unsupplied counts
+    as 0) fails every met or post_commit item: a code-editing run never reads met on an empty review. A non-None
+    `review_verdicts` adds `receipt` ("review: N verdicts") to the result."""
+    floor = review_floor.floor_reason(list(code_paths), review_verdicts or 0)
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(rows, list):
@@ -1301,6 +1308,8 @@ def judge(
             if why is not None:
                 failures.append({"id": item.id, "reason": why})
                 status = "not_met"
+        if floor is not None and status in ("met", "post_commit"):
+            failures.append({"id": item.id, "reason": floor})
         gated_open = status == "not_met" and isinstance(row.get("withheld_by"), str) and row["withheld_by"] in gated_ids
         if routed and item.id in routed and status in ("met", "not_met", "post_commit") and not gated_open:
             reason = _misrouted(row, routed[item.id])
@@ -1351,7 +1360,10 @@ def judge(
     unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids - set(operator))
     failures.extend({"id": rid, "reason": NOT_A_ROW_REASON} for rid in unknown)
     open_rows.extend(dict(w) for w in ledger.withheld)
-    return {"pass": not failures, "failures": failures, "open": open_rows}
+    result = {"pass": not failures, "failures": failures, "open": open_rows}
+    if review_verdicts is not None:
+        result["receipt"] = review_floor.receipt(review_verdicts)
+    return result
 
 
 def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str) -> list[dict]:

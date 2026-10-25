@@ -39,7 +39,10 @@ def _git(args, cwd: Path) -> None:
 
 
 # A marked run lands only with review-stage output; tests that aren't about it carry this one.
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = {
+    "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+    "wave_reviews": [{"agent_type": "coordinator:reviewer", "verdict": "PASS", "sidecar_path": "../wave-review.md"}],
+}
 
 
 def _call(repo: Path, params: dict) -> dict:
@@ -50,6 +53,7 @@ def _call(repo: Path, params: dict) -> dict:
 def repo(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
+    (tmp_path / "wave-review.md").write_text("# review\n", encoding="utf-8")
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
@@ -180,7 +184,7 @@ def test_inline_review_trailer(repo):
         {
             "script_path": script,
             "incomplete_chunks": [],
-            "inline_review": {"integration_stem": "stem1", "slices": 3, "fixes": 2},
+            "inline_review": {**_REVIEWED, "integration_stem": "stem1", "slices": 3, "fixes": 2},
         },
     )
     assert out["committed"] is True
@@ -209,7 +213,7 @@ def test_inline_review_stays_a_git_trailer_beside_a_declared_deletion(repo):
         {
             "script_path": script,
             "incomplete_chunks": [],
-            "inline_review": {"integration_stem": "stem1", "slices": 3, "fixes": 2},
+            "inline_review": {**_REVIEWED, "integration_stem": "stem1", "slices": 3, "fixes": 2},
         },
     )
     assert out["committed"] is True, out
@@ -301,6 +305,7 @@ def test_zero_stage_inline_review_runs_bookkeep_wave_and_review_stamp_mints(repo
             "session_id": session_id,
             "inline_review": {
                 "integration_stem": stem,
+                "wave_reviews": _REVIEWED["wave_reviews"],
                 "slices": 1,
                 "fixes": 1,
                 "prep_sidecar": prep_rel,
@@ -851,6 +856,7 @@ def test_branch_mismatch_writes_no_bookkeeping_record(repo):
             "session_id": "12345678-1234-4234-8234-123456789abc",
             "inline_review": {
                 "integration_stem": "stem1",
+                "wave_reviews": _REVIEWED["wave_reviews"],
                 "slices": 1,
                 "fixes": 0,
                 "wave_sidecar_paths": ["w.md"],
@@ -948,6 +954,7 @@ def test_a_digest_carrying_stage_returns_mints_the_review_stamp_into_the_coded_c
     session = "11111111-2222-3333-4444-555555555555"
     inline_review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping",
+        "wave_reviews": _REVIEWED["wave_reviews"],
         "slices": 1,
         "fixes": 0,
         "plan_id": "pln-x-123456",
@@ -1030,6 +1037,7 @@ def test_a_met_criterion_on_the_last_open_row_flips_the_plan_implemented(repo):
     script = _write_script(repo, request)  # racy-stat-ok: new untracked script, no index entry to go stale
     inline_review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "wave_reviews": _REVIEWED["wave_reviews"],
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
@@ -1057,6 +1065,7 @@ def test_a_retried_flip_over_an_already_recorded_verdict_stays_implemented(repo)
     script = _write_script(repo, request)  # racy-stat-ok: new untracked script, no index entry to go stale
     inline_review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "wave_reviews": _REVIEWED["wave_reviews"],
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
@@ -1082,6 +1091,7 @@ def test_a_met_criterion_flips_a_plan_that_was_never_committed(repo):
     script = _write_script(repo, request)
     inline_review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "wave_reviews": _REVIEWED["wave_reviews"],
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
@@ -1106,6 +1116,7 @@ def test_a_refused_mint_is_reported_and_the_product_commit_stands(repo):
     script = _write_script(repo, request)
     inline_review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "wave_reviews": _REVIEWED["wave_reviews"],
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "FAIL", "product_files": 1, "claims_unbacked": 2,
@@ -1186,6 +1197,7 @@ def test_a_zero_file_pass_rerun_lands_a_fresh_review_anchor_and_stamps_the_plan(
     def review(verdict: str, files: int, session: str) -> dict:
         return {
             "integration_stem": review_wave_bookkeeping_stem("pln-x-123456", session), "slices": 1, "fixes": 0,
+            "wave_reviews": _REVIEWED["wave_reviews"],
             "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
             "prep": {"run_base_sha": "a" * 40, "product_files": files, "foreign_claims": [],
                      "slice_files": ["a.py"]},
@@ -1239,6 +1251,7 @@ def test_a_zero_file_run_that_is_not_a_pass_commits_nothing(repo):
 def _unmet_criterion_review(status: str) -> dict:
     return {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
+        "wave_reviews": _REVIEWED["wave_reviews"],
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
@@ -1437,6 +1450,7 @@ def _review_record_call(repo: Path, *, with_plan: bool, allow_empty: bool = Fals
             "allow_empty": allow_empty,
             "inline_review": {
                 "integration_stem": review_wave_bookkeeping_stem(_RR_PLAN_ID, _RR_SESSION),
+                "wave_reviews": _REVIEWED["wave_reviews"],
                 "slices": 1,
                 "fixes": 1,
                 "prep_sidecar": f"{base}/prep.md",

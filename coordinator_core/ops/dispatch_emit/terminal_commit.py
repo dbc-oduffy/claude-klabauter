@@ -166,7 +166,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
-from coordinator_core.ops.dispatch_emit import cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit import cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy, review_floor  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
     _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
 )
@@ -305,7 +305,8 @@ def _launcher_run_digest(data: dict, path_raw: str, run_id: Optional[str]) -> di
 def _xs_zero_slice_review(digest: dict) -> Optional[dict]:
     """The zero-slice `inline_review` of an XS digest whose review never ran, else ``None``.
 
-    An XS arm skips review by design (`_reviewWave = []`), but a digest composed with an
+    A docs/state-only XS run skips review by design (`_reviewWave = []`; a code-editing one runs or
+    halts `review-floor`, and `_review_floor_refusal` refuses this empty form for it), but a digest composed with an
     integration stage derives `inline_review` from that stage's result and so carries null;
     the bookkeeping-stem form below is what the same run emits without one.
     """
@@ -576,6 +577,23 @@ def _xs_over_budget_refusal(
     )
 
 
+def _review_floor_refusal(
+    request: CommitRequest, inline_review: object, prep_from_disk: bool, root: Path,
+) -> Optional[dict]:
+    """The ``review-floor`` refusal when the run's floor code set (``review_floor.floor_code_paths``)
+    is non-empty and the review wave returned no sidecar-backed verdict (sidecars resolve against
+    ``root``), else None. Arm-agnostic; a run declaring no code path pays nothing."""
+    code = review_floor.floor_code_paths(request, inline_review, prep_from_disk)
+    reason = review_floor.floor_reason(code, review_floor.verdict_count(inline_review, root))
+    if reason is None:
+        return None
+    return _error(
+        reason + "; refire so the review wave runs a reviewer, or resize the run",
+        refused=review_floor.REFUSED_REVIEW_FLOOR,
+        code_paths=code,
+    )
+
+
 def _error(message: str, **extra: object) -> dict:
     result: dict = {"committed": False, "sha": None, "error": message}
     result.update(extra)
@@ -724,6 +742,8 @@ def _landing_integrity_gate(
     tested, tcheck = li.landing_test_gate(worktree_root, params, run_id)
     findings += tested
     extra["targeted_tests_check"] = tcheck
+    if tested.deleted_note:
+        extra["targeted_tests_note"] = tested.deleted_note
     fresh_record = None
     if tcheck == "pass-on-retest":
         fresh_record = li.fresh_targeted_verdict(worktree_root, run_id) if run_id else None
@@ -1681,10 +1701,11 @@ def _reconcile_prep(
     (``product_files`` null, ``slice_files`` empty) and then reads as a zero-file diff. Does nothing
     when no base resolves or no single stored reply matches; the relay then stands.
 
-    Returns ``(reviewed_sha256, recorded_at_epoch)`` of the stored reply -- the bytes the run's
-    newest review read -- or ``({}, None)`` when there is no usable reply or timestamp.
+    Returns ``(reviewed_sha256, recorded_at_epoch, matched)`` of the stored reply -- the bytes the
+    run's newest review read -- or ``({}, None, False)`` when there is no usable reply or timestamp.
+    ``matched`` is True only when a stored reply replaced the relayed prep.
     """
-    none: tuple = ({}, None)
+    none: tuple = ({}, None, False)
     if not isinstance(inline_review, dict) or not session_id or not run_id:
         return none
     prep = inline_review.get("prep")
@@ -1711,7 +1732,7 @@ def _reconcile_prep(
     }
     inline_review["prep_sidecar"] = reply["sidecar_path"]
     reviewed = reply.get("reviewed_sha256")
-    return (reviewed if isinstance(reviewed, dict) else {}), _epoch_of(reply.get("recorded_at"))
+    return (reviewed if isinstance(reviewed, dict) else {}), _epoch_of(reply.get("recorded_at")), True
 
 
 def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: str) -> dict:
@@ -2304,9 +2325,10 @@ def _unchanged_since_halt_failures(
 _VERDICTS_HEADING = "## Verdicts"
 
 
-def _verdicts_section(ledger_verdict: object, inline_review: dict) -> str:
+def _verdicts_section(ledger_verdict: object, inline_review: dict, sidecar_root: Path) -> str:
     """The delivery note's ``## Verdicts`` section: the ledger checker's per-item status and the
-    review, test and criterion results, rendered from the params the commit already holds."""
+    review, test and criterion results, rendered from the params the commit already holds.
+    ``sidecar_root`` (required) anchors relative review sidecar paths, never the process cwd."""
     def cell(value: object) -> str:
         return str(value if value not in (None, "") else "-").replace("|", "\\|").replace("\n", " ")
 
@@ -2330,6 +2352,7 @@ def _verdicts_section(ledger_verdict: object, inline_review: dict) -> str:
         f"- delivery verdict: {cell(delivery.get('verdict'))}; unbacked claims: {cell(delivery.get('claims_unbacked'))}",
         f"- product files: {cell(prep.get('product_files'))}; slices reviewed: {cell(inline_review.get('slices'))}; "
         f"fixes applied: {cell(inline_review.get('fixes'))}",
+        f"- ledger receipt: {review_floor.receipt(review_floor.verdict_count(inline_review, sidecar_root))}",
         "",
     ]
     tests = inline_review.get("tests") if isinstance(inline_review.get("tests"), dict) else {}
@@ -2349,7 +2372,9 @@ def _verdicts_section(ledger_verdict: object, inline_review: dict) -> str:
     return "\n".join(lines)
 
 
-def _write_note_verdicts(note_abs: Path, ledger_verdict: object, inline_review: object) -> None:
+def _write_note_verdicts(
+    note_abs: Path, ledger_verdict: object, inline_review: object, sidecar_root: Path,
+) -> None:
     """Append ``## Verdicts`` to the docs stage's delivery note, once. Never raises: the note is
     a record, and a failed append must not refuse the product commit."""
     if not isinstance(inline_review, dict):
@@ -2359,7 +2384,7 @@ def _write_note_verdicts(note_abs: Path, ledger_verdict: object, inline_review: 
         if _VERDICTS_HEADING in text:
             return
         note_abs.write_text(
-            text.rstrip("\n") + "\n\n" + _verdicts_section(ledger_verdict, inline_review),
+            text.rstrip("\n") + "\n\n" + _verdicts_section(ledger_verdict, inline_review, sidecar_root),
             encoding="utf-8", newline="\n",
         )
     except (OSError, ValueError):
@@ -2527,7 +2552,8 @@ def _ledger_gate(
     gated: Optional[Sequence[str]] = None, operator: Optional[dict] = None,
     plan_text: Optional[str] = None, inline_review: Optional[dict] = None,
     resume_ledger: object = None, plan_rel: Optional[str] = None,
-    recovery_withheld: Optional[Sequence[str]] = None,
+    recovery_withheld: Optional[Sequence[str]] = None, code_paths: Sequence[str] = (),
+    sidecar_root: Optional[Path] = None,
 ) -> tuple[Optional[dict], object, list]:
     """(refusal or None, ledger, open) for a ledger-bearing ask run: the refusal when ``verdict``
     does not pass ``requirements_ledger.judge`` against the live register rows, an engine-routed
@@ -2574,6 +2600,8 @@ def _ledger_gate(
         repo_root=worktree_root, plan_text=plan_text,
         wave_reviews=[w for w in (inline_review or {}).get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(worktree_root, run_dir),
+        code_paths=code_paths,
+        review_verdicts=review_floor.verdict_count(inline_review, sidecar_root or worktree_root),
     )
     since_halt: dict = {}
     if resume_ledger is not None:
@@ -4841,7 +4869,7 @@ def _terminal_commit_inner(
             for c in request.chunks
         ))
     anchor_only = not request.chunks
-    reviewed_bytes, reviewed_at = _reconcile_prep(
+    reviewed_bytes, reviewed_at, prep_from_disk = _reconcile_prep(
         worktree_root, session_id, _run_id_of(params, ask_run_dir, script_path_raw), request, inline_review
     )
     # An ask run's product commit carries product, its delivery note and its record directory;
@@ -4910,6 +4938,10 @@ def _terminal_commit_inner(
             "Use the digest's `terminal_commit_cli` line verbatim",
             refused="unreviewed",
         )
+    floor_code = review_floor.floor_code_paths(request, inline_review, prep_from_disk)
+    floor_refusal = _review_floor_refusal(request, inline_review, prep_from_disk, worktree_root)
+    if floor_refusal is not None:
+        return floor_refusal
     over_budget = _xs_over_budget_refusal(
         worktree_root, params, _run_id_of(params, ask_run_dir, script_path_raw), request
     )
@@ -4927,6 +4959,7 @@ def _terminal_commit_inner(
             inline_review,
             params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
             recovery_withheld=recovery_withheld,
+            code_paths=floor_code, sidecar_root=worktree_root,
         )
         if unmet is not None:
             if not (unmet.get("already_landed") and unmet.get("committed")):
@@ -5116,7 +5149,7 @@ def _terminal_commit_inner(
         candidate = f"{DELIVERY_NOTE_DIR}/{ask_run_dir.name}.md"
         if (worktree_root / candidate).is_file():
             ask_note_rel = candidate
-            _write_note_verdicts(worktree_root / candidate, params.get("ledger_verdict"), inline_review)
+            _write_note_verdicts(worktree_root / candidate, params.get("ledger_verdict"), inline_review, worktree_root)
     usage_reply: dict = (
         _write_usage(worktree_root, session_id, ask_run_dir.name)
         if ask_run_dir is not None and not anchor_only else {}
@@ -5915,6 +5948,8 @@ def _terminal_commit_inner(
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
     )
+    if ledger is not None:
+        trailers.append(f"Ledger-Receipt: {review_floor.receipt(review_floor.verdict_count(inline_review, worktree_root))}")
     from coordinator_core.ops.dispatch_emit import landing_integrity as _li_close
 
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_closed_trailer_lines, script_run_base
@@ -6827,6 +6862,8 @@ def _terminal_commit_inner(
         reply["shipped_claims"] = shipped_reply_field
     reply["targeted_tests_check"] = integrity_extra["targeted_tests_check"]
     reply["reverify_check"] = integrity_extra["reverify_check"]
+    if "targeted_tests_note" in integrity_extra:
+        reply["targeted_tests_note"] = integrity_extra["targeted_tests_note"]
     if "retested_tests" in integrity_extra:
         reply["retested_tests"] = integrity_extra["retested_tests"]
     reply["receipts"] = receipt_paths

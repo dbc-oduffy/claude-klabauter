@@ -68,10 +68,14 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
     launches: list = []
     monkeypatch.setattr(land_run, "_launch_close_job", lambda root, key, batons, memo: launches.append(key) or True)
+    inline_review = copy.deepcopy(driver.INLINE_REVIEW)
+    sidecar = tmp_path / "review-sidecar.md"
+    sidecar.write_text("verdict: PASS\n", encoding="utf-8")
+    inline_review["wave_reviews"] = [{"slice_id": "s1", "verdict": "PASS", "sidecar_path": str(sidecar)}]
     first = land_run._handler(
         {
             "script_path": script, "incomplete_chunks": [], "session_id": driver.SESSION_ID,
-            "inline_review": copy.deepcopy(driver.INLINE_REVIEW),
+            "inline_review": inline_review,
         },
         repo_root=repo / ".git",
     )

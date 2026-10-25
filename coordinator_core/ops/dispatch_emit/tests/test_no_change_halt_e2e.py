@@ -30,8 +30,16 @@ from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_commits_delivered
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-ZERO_SLICE = {"integration_stem": "rev-stem", "slices": 0, "fixes": 0}
+ZERO_SLICE = {
+    "integration_stem": "rev-stem", "slices": 0, "fixes": 0,
+    "wave_reviews": [{"agent_type": "coordinator:reviewer", "verdict": "PASS", "sidecar_path": "../wave-review.md"}],
+}
 PATHS = ("a.py", "b.py")
+
+
+@pytest.fixture(autouse=True)
+def _wave_sidecar(repo):
+    (repo.parent / "wave-review.md").write_text("# review\n", encoding="utf-8")
 
 
 def _stage(root, *, adopts=False):

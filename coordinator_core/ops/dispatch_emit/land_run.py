@@ -68,6 +68,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
 from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM, _posix as _norm_rel
+from coordinator_core.ops.dispatch_emit import review_floor
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 _PARAM_FIELDS = (
@@ -1078,6 +1079,7 @@ def _ledger_gate(
     root: Path, run_dir: Path, verdict: object, manifest_abs: Optional[Path], gated: Sequence[str],
     operator: dict, plan_text: Optional[str], inline_review: dict, resume_ledger: object,
     plan_rel: Optional[str], fence: Optional[dict] = None, recovery_reasons: Optional[dict] = None,
+    code_paths: Sequence[str] = (),
 ) -> tuple[Optional[dict], object, list]:
     """``(refusal or None, ledger, open rows)`` for a ledger-bearing ask run: the refusal when the
     verdict does not pass ``requirements_ledger.judge`` against the live register rows (a not_met row a
@@ -1114,6 +1116,7 @@ def _ledger_gate(
         ledger, verdict, routed, gated=[*gated, *recovery_reasons], operator=operator, repo_root=root, plan_text=plan_text,
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(root, run_dir),
+        code_paths=code_paths, review_verdicts=review_floor.verdict_count(inline_review, root),
     )
     from coordinator_core.ops.dispatch_emit import measured_rev
 
@@ -1856,8 +1859,9 @@ def _reconcile_prep(
     """Replace the relayed ``inline_review["prep"]`` with the reply ``review.prep`` stored on disk for
     this run, in place: disk truth the engine wrote wins over a review agent's trimmed copy.
 
-    Returns ``(reviewed_sha256, recorded_at_epoch)`` of the stored reply, or ``({}, None)``."""
-    none: tuple = ({}, None)
+    Returns ``(reviewed_sha256, recorded_at_epoch, matched)``: ``matched`` is true only when a stored
+    reply replaced the prep; ``({}, None, False)`` otherwise."""
+    none: tuple = ({}, None, False)
     if not isinstance(inline_review, dict) or not session_id or not run_id:
         return none
     prep = inline_review.get("prep")
@@ -1884,7 +1888,7 @@ def _reconcile_prep(
     }
     inline_review["prep_sidecar"] = reply["sidecar_path"]
     reviewed = reply.get("reviewed_sha256")
-    return (reviewed if isinstance(reviewed, dict) else {}), _epoch_of(reply.get("recorded_at"))
+    return (reviewed if isinstance(reviewed, dict) else {}), _epoch_of(reply.get("recorded_at")), True
 
 
 # ---- trailers ---------------------------------------------------------------------------------
@@ -2275,7 +2279,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         else ask_run_dir.name if ask_run_dir is not None
         else PurePosixPath(script_path.replace("\\", "/")).stem
     )
-    reviewed_bytes, reviewed_at = _reconcile_prep(root, session_id, sibling_run_id, request, inline_review)
+    reviewed_bytes, reviewed_at, prep_from_disk = _reconcile_prep(root, session_id, sibling_run_id, request, inline_review)
     product_only = ask_run_dir is not None
     record_dir_rel: Optional[str] = None
     if ask_run_dir is not None:
@@ -2305,6 +2309,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "verbatim",
             refused="unreviewed",
         )
+    floor_code = review_floor.floor_code_paths(request, inline_review, prep_from_disk)
+    floor_reason = review_floor.floor_reason(floor_code, review_floor.verdict_count(inline_review, root))
+    if floor_reason is not None:
+        return _error(
+            f"{floor_reason}. Re-fire so the review wave runs, or resize the run",
+            refused=review_floor.REFUSED_REVIEW_FLOOR, code_paths=floor_code,
+        )
 
     ledger = None
     open_rows: list = []
@@ -2314,7 +2325,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated], {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
             plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path, fence,
-            recovery_reasons,
+            recovery_reasons, code_paths=floor_code,
         )
         if unmet is not None:
             if not (unmet.get(ALREADY_LANDED_KEY) and unmet.get("committed")):
@@ -2772,9 +2783,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     residue_py = sorted(
         p for p in changed if p.endswith(".py") and p not in landing_carried and (root / p).is_file()
     )
+    deleted_notes: list = []
     findings = _integrity(
         root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
         own_declared=declared, session_id=session_id, minted_before=own_seniority,
+        deleted_notes=deleted_notes,
     )
     if findings:
         _remove(root, receipt_paths)
@@ -2890,6 +2903,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if deleted:
         paragraphs.append("Removes declared write(s): " + ", ".join(deleted))
     trailers = []
+    trailers.extend(f"Targeted-Tests-Note: {n}" for n in deleted_notes)
     if request.deliverable_id:
         trailers.append(f"Deliverable-Id: {request.deliverable_id}")
     if plan_text is not None:
@@ -2913,6 +2927,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         f"Inline-Review: applies {inline_review['integration_stem']} -- execute-review: "
         f"{inline_review['slices']} slices, {inline_review.get('fixes')} fixes"
     )
+    if ledger is not None:
+        trailers.append(f"Ledger-Receipt: {review_floor.receipt(review_floor.verdict_count(inline_review, root))}")
     trailers.extend(_run_closed_lines(root, art_run_id or sibling_run_id, params))
     if product_only:
         trailers.extend(_ask_trailers(root, request.plan_path, record_abs, receipts_built))
@@ -3076,6 +3092,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["reach_claims"] = reach_summary
     if shipped_summary:
         reply["shipped_claims"] = shipped_summary
+    if deleted_notes:
+        reply["targeted_tests_note"] = "; ".join(deleted_notes)
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
     if withheld_product:
@@ -3363,11 +3381,13 @@ def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
     plan: Optional[str], *, residue_py: Sequence[str] = (), own_declared: Sequence[str] = (),
     session_id: Optional[str] = None, minted_before: Optional[tuple] = None,
+    deleted_notes: Optional[list] = None,
 ) -> list:
     """Pre-commit findings over the landing set: unparseable ``.py``, a ``.py`` importing what the
     commit leaves out of HEAD, a dirty declared ``.py`` the landing leaves behind that imports what
     it deletes, a blob dropping lines a foreign commit added since the run base, and a carried test
-    verdict naming a run-caused failure."""
+    verdict naming a run-caused failure. ``deleted_notes`` is an out-list: the test gate's
+    run-deleted-targets line is appended when present."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
     skip = set(deleted)
@@ -3422,4 +3442,6 @@ def _integrity(
     for path, stem, line in peer_hunk_gate.out_of_ask_holds(root, session_id or "", run_id, live):
         findings.append(li.Finding(path, peer_hunk_gate.OUT_OF_ASK_HUNKS, f"{stem}: {line}"))
     tested, _check = li.landing_test_gate(root, params, run_id)
+    if deleted_notes is not None and tested.deleted_note:
+        deleted_notes.append(tested.deleted_note)
     return findings + tested

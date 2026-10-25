@@ -14,7 +14,10 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = {
+    "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+    "wave_reviews": [{"verdict": "PASS", "sidecar_path": "../wave-review.md"}],
+}
 _SIZING = "state/sizings/20260101-a.yaml"
 _PLAN = "docs/plans/p.md"
 
@@ -29,6 +32,7 @@ def _git(cwd: Path, *args: str) -> str:
 def repo(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
+    (tmp_path / "wave-review.md").write_text("# review\n", encoding="utf-8")
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "t")
@@ -259,21 +263,21 @@ _INLINE = {
 def test_the_note_gets_its_verdicts_section_from_the_params_once(tmp_path):
     note = tmp_path / "n.md"
     note.write_text("# delivered\n", encoding="utf-8")
-    terminal_commit._write_note_verdicts(note, _VERDICT, _INLINE)
+    terminal_commit._write_note_verdicts(note, _VERDICT, _INLINE, tmp_path)
     text = note.read_text(encoding="utf-8")
     assert text.startswith("# delivered\n\n## Verdicts\n")
     assert "| R1 | met | True | True | a\\|b |" in text
     assert "delivery verdict: PASS" in text and "status: pass; run: 12; failed: 0" in text
     assert "- status: met" in text and "observation: line1 line2" in text
-    terminal_commit._write_note_verdicts(note, _VERDICT, _INLINE)
+    terminal_commit._write_note_verdicts(note, _VERDICT, _INLINE, tmp_path)
     assert note.read_text(encoding="utf-8") == text
 
 
 def test_the_verdicts_section_prints_the_criterion_reason_only_when_present(tmp_path):
     reason = "met; recorded falsifier did not run as authored: AttributeError"
     with_reason = {**_INLINE, "criterion": {**_INLINE["criterion"], "reason": reason}}
-    assert f"- reason: {reason}" in terminal_commit._verdicts_section(_VERDICT, with_reason)
-    assert "- reason:" not in terminal_commit._verdicts_section(_VERDICT, _INLINE)
+    assert f"- reason: {reason}" in terminal_commit._verdicts_section(_VERDICT, with_reason, tmp_path)
+    assert "- reason:" not in terminal_commit._verdicts_section(_VERDICT, _INLINE, tmp_path)
 
 
 def test_criterion_reason_reads_only_a_non_empty_string():
@@ -307,9 +311,9 @@ def test_the_implemented_stamp_prose_carries_the_reason(tmp_path, monkeypatch, r
 
 
 def test_a_missing_note_or_inline_review_writes_nothing(tmp_path):
-    terminal_commit._write_note_verdicts(tmp_path / "absent.md", _VERDICT, _INLINE)
+    terminal_commit._write_note_verdicts(tmp_path / "absent.md", _VERDICT, _INLINE, tmp_path)
     assert not (tmp_path / "absent.md").exists()
     note = tmp_path / "n.md"
     note.write_text("# delivered\n", encoding="utf-8")
-    terminal_commit._write_note_verdicts(note, _VERDICT, None)
+    terminal_commit._write_note_verdicts(note, _VERDICT, None, tmp_path)
     assert note.read_text(encoding="utf-8") == "# delivered\n"

@@ -76,14 +76,23 @@ def test_same_rel_under_other_repo_not_collected(tmp_path):
 
 def test_path_forms_each_match_their_repo(tmp_path):
     write_transcript(tmp_path / "a.jsonl", [
-        _use("win", "Write", "D:\\w\\proj\\pkg\\mod.py", "2026-01-01T00:00:01Z"),
+        _use("win", "Write", "D:\\w\\proj\\pkg\\mod.py", "2026-01-01T00:00:01Z"),  # abs-path-ok: fixture
         _use("low", "Write", "d:/w/proj/pkg/mod.py", "2026-01-01T00:00:02Z"),
         _use("bash", "Write", "/d/w/proj/pkg/mod.py", "2026-01-01T00:00:03Z"),
     ])
     assert [e.tool_use_id for e in collect_edits(REPO, [REL], [tmp_path])[REL]] == ["win", "low", "bash"]
-    write_transcript(tmp_path / "p" / "b.jsonl", [_use("posix", "Write", "/home/u/proj/pkg/mod.py", "2026-01-01T00:00:01Z")])
+    write_transcript(tmp_path / "p" / "b.jsonl", [_use("posix", "Write", "/home/u/proj/pkg/mod.py", "2026-01-01T00:00:01Z")])  # abs-path-ok: fixture
     got = collect_edits(Path("/home/u/proj"), [REL], [tmp_path / "p"])
     assert [e.tool_use_id for e in got[REL]] == ["posix"]
+
+
+def test_posix_root_matches_on_a_path_boundary_only(tmp_path):
+    write_transcript(tmp_path / "b.jsonl", [
+        _use("sibling", "Write", "/home/u/projX/pkg/mod.py", "2026-01-01T00:00:01Z"),  # abs-path-ok: fixture
+        _use("mine", "Write", "/home/u/proj/pkg/mod.py", "2026-01-01T00:00:02Z"),  # abs-path-ok: fixture
+    ])
+    got = collect_edits(Path("/home/u/proj"), [REL], [tmp_path])  # abs-path-ok: fixture
+    assert [e.tool_use_id for e in got[REL]] == ["mine"]
 
 
 def test_file_without_needle_never_parsed(tmp_path, monkeypatch):

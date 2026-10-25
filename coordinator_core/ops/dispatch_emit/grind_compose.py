@@ -2069,7 +2069,7 @@ def compose_grind_script(
     lines.append(terminal_commit_text)
 
     lines.append(
-        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nfunction _runCostRecord() {\n  return { profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };\n}\nfunction _declaredWrites() {\n  const out = [];\n  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }\n  return Array.from(new Set(out));\n}"
+        "function _counts() {\n  const by_type = {};\n  for (const h of _handedBack) { by_type[h.type] = (by_type[h.type] || 0) + 1; }\n  const by_outcome = {};\n  for (const s of _settled) { by_outcome[s.outcome] = (by_outcome[s.outcome] || 0) + 1; }\n  return { by_type, by_outcome, by_refute_origin: _byRefuteOrigin, by_triage_check: _byTriageCheck };\n}\nfunction _spend() {\n  return { output_tokens: budget.spent() - _startSpent, agent_calls_total: _callCount, agent_calls_by_stage_kind: _agentCallsByStageKind };\n}\nlet _reviewState = 'not-run';\nlet _reviewVerdictsRecord = null;\nfunction _runCostRecord() {\n  return { review_state: _reviewState, review_verdicts: _reviewVerdictsRecord, profile: PROFILE_NAME, appetite: APPETITE_NAME, run_id: RUN_ID, resolved_knobs: RESOLVED_KNOBS, " + stage_models_field + "manifest_digest: MANIFEST_DIGEST, counts: _counts(), spend: _spend(), handed_back: _handedBack, halted: _haltReason() !== null, halted_reason: _haltReason(), terminal_commit_dropped: _terminalCommitDropped };\n}\nfunction _declaredWrites() {\n  const out = [];\n  for (const r of Object.keys(_rows)) { if (_rows[r].origin) out.push(_rows[r].path); if (_rows[r].sizingPath) out.push(_rows[r].sizingPath); }\n  return Array.from(new Set(out));\n}"
     )
     lines.append(
         "const _rows = {};\n"
@@ -2386,6 +2386,14 @@ def compose_grind_script(
         "  log('execute_review skipped: no row committed, nothing landed to review');\n"
         "} else {\n"
         + "\n".join(block for _, block in review_blocks)
+        # Trap: a wave that ran but returned no verdict-bearing entry leaves review_state 'not-run'.
+        + "\n  const _waveVerdicts = (Array.isArray(_reviewWave) ? _reviewWave : [])"
+        ".filter((r) => r && typeof r.verdict === 'string' && r.verdict.trim())"
+        ".map((r) => ({ applied: r.applied ?? null, verdict: r.verdict, sidecar_path: r.sidecar_path ?? null }));\n"
+        "  if (_waveVerdicts.length > 0) {\n"
+        "    _reviewState = 'ran';\n"
+        "    _reviewVerdictsRecord = _waveVerdicts;\n"
+        "  }"
         # Trap: the terminal commit already landed the rows in runGrind's finally before review
         # started, so "Review fixes" is the only commit review edits reach; a red re-verify
         # verdict stops them here.
@@ -2395,6 +2403,7 @@ def compose_grind_script(
         + " && !(Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length > 0"
         + " && _reviewReverify.failing.every((id) => (_reviewReverify.pre_existing ?? []).includes(id))))"
         + " : !_verifyOnly;\n"
+        + "  if (_reviewFixWithheld && _reviewState === 'ran') { _reviewState = 'withheld'; }\n"
         + "  if (!_reviewFixWithheld) {\n"
         + f"  phase({_js_string_literal(_REVIEW_FIX_PHASE)});\n"
         + "  await (async () => {\n"

@@ -44,6 +44,7 @@ DEPENDS = {
 #: halt kind -> the phase that halted. An unlisted kind invalidates every phase.
 HALT_PHASE = {
     "review_blocked": "review",
+    "review_floor": "review",
     "footprint_gap": "execute",
     "plan_gate": "plan_gate_rulings",
     "plan_gate_ruling": "plan_gate_rulings",

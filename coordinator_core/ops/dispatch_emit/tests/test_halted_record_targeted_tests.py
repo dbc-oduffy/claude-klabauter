@@ -113,6 +113,45 @@ def test_not_run_verdict_is_record_only_and_never_targeted_tests_failed(repo):
     assert out["targeted_tests"] == {"check": "not-run", "findings": []}
 
 
+def _run_deleted_target(root) -> dict:
+    """Commit then delete ``test_gone.py``; write a no-tests retest record dropping it; return the base params."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    (root / "test_gone.py").write_text("def test_g():\n    pass\n", encoding="utf-8")
+    _git(["add", "test_gone.py"], root)
+    _git(["commit", "-q", "-m", "add"], root)
+    base = _git(["rev-parse", "HEAD"], root).strip()
+    _git(["rm", "-q", "test_gone.py"], root)
+    _git(["commit", "-q", "-m", "delete"], root)
+    record = {"run_id": RUN, "head": _git(["rev-parse", "HEAD"], root).strip(), "status": "no-tests", "tests": [],
+              "tests_run": 0, "dropped": ["test_gone.py"], "covered": {}}
+    path = landing_integrity.fresh_verdict_path(root, RUN)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return {"run_base_sha": base}
+
+
+@pytest.mark.parametrize("verdict,check", [
+    (None, "no-verdict"),
+    ({"status": "error", "tests_run": 0, "tests_failed": 0, "baseline": None}, "not-run"),
+])
+def test_reply_names_run_deleted_targets_and_keeps_the_check(repo, verdict, check):
+    params = _run_deleted_target(repo)
+    _setup(repo)
+    if verdict is not None:
+        params["targeted_tests"] = verdict
+
+    out = _call(repo, LEDGER, **params)
+
+    assert out["committed"] is True, out
+    assert out["targeted_tests"]["check"] == check
+    assert out["targeted_tests"]["findings"] == []
+    assert "test_gone.py" in out["targeted_tests"]["note"]
+    assert set(out["withheld"].values()) == {"halt-record-only"}
+
+
 def test_non_ledger_check_halt_is_unchanged(repo):
     _setup(repo)
 

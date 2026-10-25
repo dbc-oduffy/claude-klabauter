@@ -145,6 +145,39 @@ def test_a_not_run_verdict_withholds_record_only_and_records_not_run(repo):
     assert "done.py" not in _names(repo, out["sha"])
 
 
+@pytest.mark.parametrize("verdict,check", [
+    (None, "no-verdict"),
+    ({"status": "error", "tests_run": 0, "tests_failed": 0, "baseline": None}, "not-run"),
+])
+def test_reply_names_run_deleted_targets_and_keeps_the_check(repo, verdict, check):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    _write(repo, "test_gone.py", "def test_g():\n    pass\n")
+    _git(repo, "add", "test_gone.py")
+    _git(repo, "commit", "-q", "-m", "add")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "rm", "-q", "test_gone.py")
+    _git(repo, "commit", "-q", "-m", "delete")
+    record = {"run_id": RUN, "head": _git(repo, "rev-parse", "HEAD").strip(), "status": "no-tests", "tests": [],
+              "tests_run": 0, "dropped": ["test_gone.py"], "covered": {}}
+    path = landing_integrity.fresh_verdict_path(repo, RUN)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    _record(repo)
+    _chunks(repo, {"C1": ["done.py"]})
+    extra = {"run_base_sha": base, **({"targeted_tests": verdict} if verdict else {})}
+
+    out = _call(repo, LEDGER, **extra)
+
+    assert out["committed"] is True, out
+    assert out["targeted_tests"]["check"] == check
+    assert out["targeted_tests"]["findings"] == []
+    assert "test_gone.py" in out["targeted_tests"]["note"]
+    assert out["withheld"] == {"done.py": land_run_halt.HALT_RECORD_ONLY}
+
+
 def test_a_halt_other_than_ledger_check_lands_the_record_only(repo):
     _record(repo)
     _chunks(repo, {"C1": ["done.py"]})
@@ -186,6 +219,21 @@ def test_a_tracked_record_file_deleted_from_disk_lands_as_a_removal(repo):
     assert out["committed"] is True, out
     assert f"Removes: {RECORD_DIR_ROOT}/{RUN}/notes.md" in _message(repo)
     assert f"{RECORD_DIR_ROOT}/{RUN}/notes.md" not in _git(repo, "ls-tree", "-r", "--name-only", "HEAD")
+
+
+def test_run_withhold_keeps_a_dirty_declared_path_out_of_the_halt_commit(repo):
+    from coordinator_core.ops.dispatch_emit import run_withhold
+
+    _record(repo)
+    _chunks(repo, {"C1": ["done.py"], "C2": ["peer_owned.py"]})
+    run_withhold.record(repo / RECORD_DIR_ROOT / RUN, [{"path": "peer_owned.py", "reason": "owned by peer run d238dc"}], "t")
+
+    out = _call(repo, LEDGER, **PASSING)
+
+    assert out["withheld"] == {"peer_owned.py": "owned by peer run d238dc"}
+    names = _names(repo, out["sha"])
+    assert "done.py" in names and "peer_owned.py" not in names
+    assert "Lands-Chunks: C1" in _message(repo)
 
 
 def test_nothing_changed_commits_nothing(repo):

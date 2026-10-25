@@ -38,6 +38,7 @@ CASES = {
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_merge3_parity_with_git(tmp_path, name):
     base, kept, head = CASES[name]
@@ -84,15 +85,33 @@ def test_not_landed_on_conflict():
     assert v.verdict == "NOT-LANDED" and "conflicts (1)" in v.why
 
 
+def test_carried_when_head_differs_from_kept_only_by_crlf():
+    kept = b"a\nB\nc\n"
+    v = classify(b"a\nb\nc\n", kept, b"a\r\nB\r\nc\r\n", [])
+    assert (v.verdict, v.commit, v.why) == ("CARRIED", None, "EOL-only difference from HEAD")
+
+
+def test_crlf_head_with_kept_hunks_present_is_superseded_not_conflict():
+    base, kept = b"a\nb\nc\n", b"a\nB\nc\n"
+    v = classify(base, kept, b"a\r\nB\r\nc\r\nd\r\n", [])
+    assert v.verdict == "SUPERSEDED"
+
+
+def test_crlf_does_not_mask_a_real_difference():
+    v = classify(b"a\nb\n", b"a\nB\n", b"a\r\nX\r\n", [])
+    assert v.verdict == "NOT-LANDED"
+
+
 def test_not_landed_when_path_absent_at_head():
     v = classify(BASE, b"x\n", None, [])
     assert (v.verdict, v.why) == ("NOT-LANDED", "path absent at HEAD")
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_classify_agrees_with_git_on_real_repo_history(tmp_path):
     repo = git_repo(tmp_path)
-    _, base_blob = commit_at(repo, "f.txt", BASE, "2026-01-01T00:00:00Z")
+    commit_at(repo, "f.txt", BASE, "2026-01-01T00:00:00Z")
     kept = b"a\nB\nc\nd\ne\nf\ng\n"
     c2, _ = commit_at(repo, "f.txt", kept, "2026-01-02T00:00:00Z")
     head = b"a\nB\nc\nd\ne\nF\ng\n"

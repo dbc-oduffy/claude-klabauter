@@ -1,8 +1,9 @@
 """history_bases and replay_exact: historical bases, commit-time cut-offs, exact raw match."""
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime, timezone
+
+import pytest
 
 from coordinator_core.ops import kept_blob_replay as kr
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
@@ -22,6 +23,8 @@ def _e(day, old, new):
     return _edit(day, "Edit", {"old_string": old, "new_string": new})
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_hit_from_historical_blob_not_head_or_base(tmp_path):
     repo = git_repo(tmp_path)
     commit_at(repo, "a.txt", b"one\n", "2026-01-01T00:00:00Z")
@@ -35,6 +38,8 @@ def test_hit_from_historical_blob_not_head_or_base(tmp_path):
     assert hit.base.data == b"one\n" and hit.applied == 1
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_commit_base_cutoff_vs_empty_base(tmp_path):
     repo = git_repo(tmp_path)
     commit_at(repo, "a.txt", b"hello\n", "2026-01-10T00:00:00Z")
@@ -91,30 +96,34 @@ def test_base_equality_hit_applies_zero():
     assert hit is not None and hit.applied == 0
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_history_bases_one_spawn_for_three_rels(tmp_path, monkeypatch):
     repo = git_repo(tmp_path)
     for r in ("a.txt", "b.txt", "c.txt"):
         commit_at(repo, r, r.encode() + b"\n", "2026-01-01T00:00:00Z")
     calls = []
-    real = subprocess.run
+    real = kr.run_git
 
     def spy(*a, **k):
         calls.append(a[0])
         return real(*a, **k)
 
-    monkeypatch.setattr(kr.subprocess, "run", spy)
+    monkeypatch.setattr(kr, "run_git", spy)
     out = kr.history_bases(repo, ["a.txt", "b.txt", "c.txt"])
     assert len(calls) == 1
     assert all(len(v) == 2 for v in out.values())
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_base_sha_uses_single_cat_file_spawn(tmp_path, monkeypatch):
     repo = git_repo(tmp_path)
     commit_at(repo, "a.txt", b"a\n", "2026-01-01T00:00:00Z")
     c, _ = commit_at(repo, "b.txt", b"b\n", "2026-01-02T00:00:00Z")
     calls = []
-    real = subprocess.run
-    monkeypatch.setattr(kr.subprocess, "run", lambda *a, **k: (calls.append(a[0]), real(*a, **k))[1])
+    real = kr.run_git
+    monkeypatch.setattr(kr, "run_git", lambda *a, **k: (calls.append(a[0]), real(*a, **k))[1])
     out = kr.history_bases(repo, ["a.txt", "b.txt"], base_sha=c)
     assert len(calls) == 2
     assert any(b.label.startswith("base_sha:") for b in out["b.txt"])

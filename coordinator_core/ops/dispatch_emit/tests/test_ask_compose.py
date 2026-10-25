@@ -282,13 +282,16 @@ def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_targe
     assert script.index("label: 'verify'") < script.index("_manifest.no_test_target")
 
 
-def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
+def test_the_review_phase_runs_on_every_arm_but_xs_unless_code_review_is_owed():
     script = _compose()
-    gate = "if (!_halted && !_reviewReused && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {\n  phase('Review wave');"
+    gate = (
+        "if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {\n"
+        "  phase('Review wave');"
+    )
     assert script.count(gate) == 1
     assert "phase('review')" not in script
     assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("label: 'verify'")
-    assert "if (!_halted && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
+    assert "if (!_halted && !_codeReviewOwed && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
     assert script.index(gate) < script.index("_reviewWave = [];") < script.index("  _nextAction = _closeable")
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 

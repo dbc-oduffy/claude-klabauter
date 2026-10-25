@@ -110,7 +110,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     read_spine,
     with_canonical_disposition,
 )
-from coordinator_core.ops.dispatch_emit import run_notes
+from coordinator_core.ops.dispatch_emit import review_floor, run_notes
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
@@ -1268,10 +1268,12 @@ def stage(
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
     ]
     ledger_item_ids, withheld_ids = requirements_ledger.ledger_ids(register_rows)
+    review_declared = _reviewable(_dedupe_preserve_order(review_paths))
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
-        review_declared_paths=_reviewable(_dedupe_preserve_order(review_paths)),
+        review_declared_paths=review_declared,
+        review_code_paths=tuple(review_floor.code_paths(review_declared)),
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),

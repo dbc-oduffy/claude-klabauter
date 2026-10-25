@@ -1278,6 +1278,13 @@ def main() -> int:
             pass
         return 2
 
+    if breadcrumb.publish_marker_held(breadcrumb.svc_dir(root)):
+        print(
+            f"[warm-http-supervisor] publish in progress for {root}; not starting",
+            file=sys.stderr,
+        )
+        return 0
+
     try:
         handle = _elect_supervisor_slot(root)
     except election.ElectionLost as exc:

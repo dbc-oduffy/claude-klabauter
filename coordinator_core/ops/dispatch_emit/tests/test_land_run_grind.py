@@ -79,6 +79,47 @@ def test_two_rows_land_as_one_commit_with_two_trailers(repo):
     assert out["dropped"] == [] and out["stranded"] == []
 
 
+def test_code_landing_with_zero_verdicts_carries_the_post_landing_stamp(repo):
+    out = _call(repo, [_row("r1", ["a.py"])])
+    assert out["committed"] is True
+    body = _message(repo)
+    assert f"Ledger-Receipt: {land_run_grind.POST_LANDING_RECEIPT}" in body
+    assert "post-landing (grind exemption, DR-grind-review-runs-after-landing)" in body
+    assert body.count("Ledger-Receipt:") == 1
+    assert "Ledger-Receipt: review: met" not in body
+
+
+def test_docs_only_landing_carries_no_review_receipt(repo):
+    write_seen_by_git(repo / "notes.md", "# n\n")
+    out = _call(repo, [_row("r1", ["notes.md"])])
+    assert out["committed"] is True
+    assert "Ledger-Receipt" not in _message(repo)
+
+
+def test_mixed_docs_and_code_landing_carries_the_post_landing_stamp(repo):
+    write_seen_by_git(repo / "notes.md", "# n\n")
+    out = _call(repo, [_row("r1", ["notes.md", "a.py"])])
+    assert out["committed"] is True
+    assert _head_files(repo) == {"notes.md", "a.py"}
+    assert _message(repo).count(f"Ledger-Receipt: {land_run_grind.POST_LANDING_RECEIPT}") == 1
+
+
+def test_code_deletion_only_landing_carries_the_post_landing_stamp(repo):
+    (repo / "other.py").unlink()
+    out = _call(repo, [_row("r1", [], ["other.py"])])
+    assert out["committed"] is True
+    assert _head_files(repo) == {"other.py"}
+    assert f"Ledger-Receipt: {land_run_grind.POST_LANDING_RECEIPT}" in _message(repo)
+
+
+def test_post_landing_receipt_names_an_existing_decision_record():
+    import re
+
+    dr_id = re.search(r"\b(DR-[\w-]+)\)", land_run_grind.POST_LANDING_RECEIPT).group(1)
+    root = Path(__file__).resolve().parents[4]
+    assert (root / "docs" / "decisions" / f"{dr_id}.md").is_file()
+
+
 def test_undeclared_dirty_path_is_not_staged(repo):
     _call(repo, [_row("r1", ["a.py"])])
     assert _status(repo) == {"b.py": " M", "other.py": " M"}

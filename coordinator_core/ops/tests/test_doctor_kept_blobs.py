@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import doctor_kept_blobs as dkb
+from coordinator_core.ops.tests._kept_blob_fixture import commit_at, git_repo, kept, write_transcript
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -70,14 +71,11 @@ def test_worktree_bytes_make_blob_rescuable_and_recover_writes_it(tmp_path):
     assert dkb.sweep(repo) == []
 
 
-def _transcript(root: Path, run: str, calls: list) -> None:
-    root.mkdir(parents=True, exist_ok=True)
-    lines = [
-        json.dumps({"type": "assistant", "timestamp": f"2026-10-25T00:00:{i:02d}Z",
-                    "message": {"content": [{"type": "tool_use", "name": n, "input": inp}]}})
-        for i, (n, inp) in enumerate(calls)
-    ]
-    (root / "agent-1.jsonl").write_text("\n".join(lines) + f"\n# {run}\n")
+def _transcript(root: Path, run: str, calls: list, name: str = "agent-1.jsonl") -> None:
+    write_transcript(
+        root / name,
+        [("use", f"{name}-{i}", n, inp, f"2026-10-25T00:00:{i:02d}Z") for i, (n, inp) in enumerate(calls)],
+    )
 
 
 def test_replay_reproducing_kept_sha_is_written(tmp_path):
@@ -163,3 +161,135 @@ def test_recover_op_is_registered_and_takes_repo_root(tmp_path):
 
     with pytest.raises(ipc.CallerFacingValidationError):
         dkb._recover_op({"repo_root": str(tmp_path / "nowhere")})
+
+
+_BASE = b"a\nb\nc\nd\ne\nf\ng\n"
+_KEPT = b"a\nB\nc\nd\ne\nf\ng\n"
+
+
+def _edit_b(repo: Path) -> tuple:
+    return ("Edit", {"file_path": str(repo / "a.txt"), "old_string": "\nb\n", "new_string": "\nB\n"})
+
+
+def test_blob_built_only_from_another_sessions_transcript_is_rescued(tmp_path):
+    repo = _repo(tmp_path)
+    sha = dkb.blob_sha(b"alpha\nBETA\n")
+    _kept(repo, "run-r", {"n.txt": sha})
+    tr = tmp_path / "tr"
+    _transcript(tr / "session-a", "run-r", [("Write", {"file_path": str(repo / "n.txt"), "content": "alpha\nbeta\n"})])
+    _transcript(
+        tr / "session-b" / "subagents", "other-run",
+        [("Edit", {"file_path": str(repo / "n.txt"), "old_string": "beta", "new_string": "BETA"})],
+        name="agent-9.jsonl",
+    )
+    [r] = dkb.recover(repo, transcript_roots=[tr])
+    assert (r.outcome, r.mode, r.base) == ("rescued-replay", "raw", "empty")
+    assert _git(repo, "cat-file", "-t", sha) == "blob"
+
+
+def test_multiedit_built_blob_is_rescued(tmp_path):
+    repo = _repo(tmp_path)
+    sha = dkb.blob_sha(b"X\nY\n")
+    _kept(repo, "run-m", {"m.txt": sha})
+    tr = tmp_path / "tr"
+    fp = str(repo / "m.txt")
+    _transcript(tr, "run-m", [
+        ("Write", {"file_path": fp, "content": "x\ny\n"}),
+        ("MultiEdit", {"file_path": fp, "edits": [
+            {"old_string": "x", "new_string": "X"}, {"old_string": "y", "new_string": "Y"}]}),
+    ])
+    [r] = dkb.recover(repo, transcript_roots=[tr])
+    assert r.outcome == "rescued-replay"
+    assert _git(repo, "cat-file", "-p", sha) == "X\nY"
+
+
+def test_recovered_blob_already_in_head_is_superseded_with_landing_commit(tmp_path):
+    repo = git_repo(tmp_path)
+    commit_at(repo, "a.txt", _BASE, "2026-01-01T00:00:00Z")
+    c1, _ = commit_at(repo, "a.txt", b"a\nB\nc\nd\ne\nF\ng\n", "2026-01-02T00:00:00Z")
+    sha = dkb.blob_sha(_KEPT)
+    kept(repo, "run-s", {"a.txt": sha})
+    tr = tmp_path / "tr"
+    _transcript(tr, "run-s", [_edit_b(repo)])
+    [r] = dkb.recover(repo, transcript_roots=[tr])
+    assert (r.outcome, r.verdict, r.commit) == ("rescued-replay", "SUPERSEDED", c1[:10])
+    assert r.base is not None and r.base != "empty"
+
+
+def test_recovered_blob_whose_hunk_is_missing_from_head_is_not_landed(tmp_path):
+    repo = git_repo(tmp_path)
+    commit_at(repo, "a.txt", _BASE, "2026-01-01T00:00:00Z")
+    sha = dkb.blob_sha(_KEPT)
+    kept(repo, "run-n", {"a.txt": sha})
+    tr = tmp_path / "tr"
+    _transcript(tr, "run-n", [_edit_b(repo)])
+    [r] = dkb.recover(repo, transcript_roots=[tr])
+    assert (r.outcome, r.verdict, r.commit) == ("rescued-replay", "NOT-LANDED", None)
+    assert "missing from HEAD" in r.why
+
+
+def test_lost_blob_has_no_verdict(tmp_path):
+    repo = git_repo(tmp_path)
+    commit_at(repo, "a.txt", _BASE, "2026-01-01T00:00:00Z")
+    kept(repo, "run-x", {"a.txt": dkb.blob_sha(b"unreachable\n")})
+    tr = tmp_path / "tr"
+    _transcript(tr, "run-x", [_edit_b(repo)])
+    [r] = dkb.recover(repo, transcript_roots=[tr])
+    assert (r.outcome, r.verdict, r.base, r.why) == ("lost", None, None, "no replay base")
+
+
+def test_op_result_row_carries_verdict_commit_base_and_why(tmp_path, monkeypatch):
+    from coordinator_core.ops import kept_blob_transcripts as kbt
+
+    repo = git_repo(tmp_path)
+    commit_at(repo, "a.txt", _BASE, "2026-01-01T00:00:00Z")
+    kept(repo, "run-o", {"a.txt": dkb.blob_sha(_KEPT)})
+    tr = tmp_path / "tr"
+    _transcript(tr, "run-o", [_edit_b(repo)])
+    monkeypatch.setattr(kbt, "default_transcript_root", lambda: tr)
+    out = dkb._recover_op({"repo_root": str(repo)})
+    assert out["counts"] == {"rescued-replay": 1, "verdict:NOT-LANDED": 1}
+    row = out["results"][0]
+    assert row["verdict"] == "NOT-LANDED" and row["commit"] is None
+    assert row["base"] and row["why"]
+
+
+def _budget_repo(tmp_path: Path) -> tuple:
+    tmp_path.mkdir(parents=True)
+    repo = git_repo(tmp_path)
+    c0, _ = commit_at(repo, "a.txt", _BASE, "2026-01-01T00:00:00Z")
+    commit_at(repo, "b.txt", _BASE, "2026-01-02T00:00:00Z")
+    kept(repo, "run-b", {"a.txt": dkb.blob_sha(_KEPT), "b.txt": dkb.blob_sha(b"a\nB\nc\nd\ne\nf\ng\nh\n")})
+    tr = tmp_path / "tr"
+    _transcript(tr, "run-b", [
+        _edit_b(repo),
+        ("Edit", {"file_path": str(repo / "b.txt"), "old_string": "g\n", "new_string": "g\nh\n"}),
+        ("Edit", {"file_path": str(repo / "b.txt"), "old_string": "\nb\n", "new_string": "\nB\n"}),
+    ])
+    return repo, c0, tr
+
+
+def test_recover_spawn_budget_is_sweep_plus_history_log(tmp_path, monkeypatch):
+    # run_git spawns through Popen, so that is the seam to count; spying subprocess.run sees nothing.
+    real = subprocess.Popen
+    calls: list = []
+
+    def spy(cmd, *a, **kw):
+        calls.append(cmd)
+        return real(cmd, *a, **kw)
+
+    repo, c0, tr = _budget_repo(tmp_path / "plain")
+    monkeypatch.setattr(subprocess, "Popen", spy)
+    dkb.sweep(repo)
+    sweep_n, calls[:] = len(calls), []
+    assert sweep_n > 0
+    res = dkb.recover(repo, transcript_roots=[tr])
+    assert [r.outcome for r in res] == ["rescued-replay", "rescued-replay"]
+    assert len(calls) <= sweep_n + 2
+
+    monkeypatch.setattr(subprocess, "Popen", real)
+    repo, c0, tr = _budget_repo(tmp_path / "based")
+    monkeypatch.setattr(subprocess, "Popen", spy)
+    calls[:] = []
+    dkb.recover(repo, base_sha=c0, transcript_roots=[tr])
+    assert len(calls) <= sweep_n + 3

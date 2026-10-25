@@ -757,7 +757,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     (
         "coordinator_core.ops.doctor_kept_blobs",
         'registers "doctor.recover_kept_blobs" (re-creates kept.json blobs absent from the object '
-        "store; the doctor layer is the report half)",
+        "store; the doctor layer is the report half; explicit-only bulk remediation under the "
+        "DR-344 bulk-transfer carve-out, granted by G-EM ruling (a))",
     ),
     (
         "coordinator_core.ops.freshness_commit_delta",

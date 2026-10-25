@@ -165,6 +165,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     INTEGRATION_NOT_RUN_VAR,
     next_action_parts,
 )
+from coordinator_core.ops.dispatch_emit.review_floor import HALT_REVIEW_FLOOR, MANIFEST_KEY as _REVIEW_CODE_KEY
 from coordinator_core.ops.dispatch_emit.work_label import build_work_label
 from coordinator_core.ops.dispatch_emit.write_baseline import DIRTY_BEFORE_RUN_KEY, MEANT_TO_LAND_KEY, NO_CHANGE_REFUSAL
 from coordinator_core.ops.review_mint.execute_review import (
@@ -195,6 +196,15 @@ _OWNER_ROWS_JS = "_crossRepoRows"
 # A prior-wave slice that is BLOCKED with unapplied findings (findings > applied); one with
 # findings == applied (e.g. 0/0) counts as done. Shared by the re-review filter and the _reviewSeed carry-over.
 _BLOCKED_UNAPPLIED_JS = "w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0)"
+# Wave entries carrying a non-empty string verdict and a non-empty sidecar_path; mirrors
+# `review_floor.verdict_count` minus the file-exists check, which only the lander can make. An expression
+# over `_reviewWave` alone, so the halt and the digest receipt both evaluate it where `_reviewVerdicts`
+# is out of scope.
+_VERDICT_COUNT_JS = (
+    "(Array.isArray(_reviewWave) ? _reviewWave : [])"
+    ".filter((w) => w && typeof w.verdict === 'string' && w.verdict.trim()"
+    " && typeof w.sidecar_path === 'string' && w.sidecar_path.trim()).length"
+)
 # Ids of the prior review wave's blocked slices ('+'-joined group ids split into members); null on a
 # fresh run, a reused review, or an empty result. Trap: the ids match only if review.prep reissues the
 # halted wave's slice ids on the resumed run; a mismatch leaves reviewers with nothing and the blocked
@@ -629,6 +639,7 @@ _MANIFEST_SCHEMA = _obj(
         },
         "fanout": {"type": ["object", "null"]},
         "review_declared_paths": {"type": "array", "items": _STR},
+        _REVIEW_CODE_KEY: {"type": "array", "items": _STR},
         "test_targets": {"type": "array", "items": _STR},
         "wave_test_targets": {"type": "object", "additionalProperties": {"type": "array", "items": _STR}},
         "no_test_target": {"type": ["object", "null"]},
@@ -2094,7 +2105,11 @@ def compose_ask_script(
         declared_paths_js="_reviewPaths",
         prompt_head=review_head,
         run_key=run_id,
-        prep_suffix_js="' plan: ' + (_planRel ?? _sizingRel) + ' session_id: ' + _SESSION_ID",
+        prep_suffix_js=(
+            "' plan: ' + (_planRel ?? _sizingRel) + ' session_id: ' + _SESSION_ID"
+            " + _prepLeg"
+        ),
+        prep_run_id=run_id,
         prep_in_wave=True,
         host_degraded=agent_type_host == _emit._AGENT_TYPE_HOST_DEGRADED,
         owner_rows_js=_OWNER_ROWS_JS,
@@ -3555,7 +3570,9 @@ def compose_ask_script(
     b.append(
         "  const _reviewPaths = [...(_manifest?.review_declared_paths ?? []), "
         f"...(_gate.{RESUME_LEDGER_KEY}?.remaining_leg?.writes ?? [])];\n"
-        "  const _noReviewPaths = !_reviewPaths.length;"
+        f"  const _prepLeg = (_gate.{RESUME_LEDGER_KEY}?.remaining_leg?.writes ?? []).length ? ' leg: true' : '';\n"
+        "  const _noReviewPaths = !_reviewPaths.length;\n"
+        f"  const _codeReviewOwed = (_manifest?.{_REVIEW_CODE_KEY} ?? []).length > 0;"
     )
     # The review wave shadows `agent` inside its own block (design brief prefix only) rather than
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
@@ -3572,7 +3589,7 @@ def compose_ask_script(
     )
     b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
-        f"  if (!_halted && !_reviewReused && _gate.arm !== {_lit(ARM_XS)} && !_xsTail && !_noReviewPaths) {{\n"
+        f"  if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{\n"
         + review_text + "\n  _footprintReviewed = true;\n  }"
     )
     b.append("  }")
@@ -3582,8 +3599,8 @@ def compose_ask_script(
     )
     # XS skips review; an empty wave (zero slices, no delivery verdict) is the form terminal_commit's
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
-    b.append(f"  if (!_halted && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ _reviewWave = []; }}")
-    b.append(f"  if (!_halted && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ {INTEGRATION_NOT_RUN_VAR} = true; }}")
+    b.append(f"  if (!_halted && !_codeReviewOwed && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ _reviewWave = []; }}")
+    b.append(f"  if (!_halted && !_codeReviewOwed && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ {INTEGRATION_NOT_RUN_VAR} = true; }}")
     b.append(
         "  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== "
         f"{_lit(ARM_XS)}) {{ log('execute_review skipped: no row declares a path, nothing to review'); "
@@ -3594,6 +3611,13 @@ def compose_ask_script(
         f"{{ {INTEGRATION_NOT_RUN_VAR} = true; }}"
     )
     b.append(_review_blocked_halt_js(sizing_rel))
+    b.append(
+        f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
+        "  if (!_halted && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) { _halted = { halted: "
+        f"{_lit(HALT_REVIEW_FLOOR)}, reason: 'review: 0 verdicts on a code-editing run (' + "
+        f"_manifest.{_REVIEW_CODE_KEY}.slice(0, 5).join(', ') + ')', run_id: _runId, "
+        "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
+    )
     test_guard = (
         f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
     )
@@ -4002,7 +4026,8 @@ def compose_ask_script(
         "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, halt_commit: _haltCommit, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
-        "integration: _reviewIntegration, reverify: _reviewReverify }, "
+        "integration: _reviewIntegration, reverify: _reviewReverify, "
+        f"receipt: 'review: ' + {_VERDICT_COUNT_JS} + ' verdicts' }}, "
         + (
             "roadmap: _viaRoadmap ? { gate: _rb, ready: _ready, fanout: _commit?.fanout ?? null, "
             "not_fired: _commit?.fanout?.not_fired ?? _unfired } : null, "

@@ -24,7 +24,13 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.foreign_repo]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+REVIEW_SIDECAR = ".coordinator-local/subagent-share/rev-s1.md"
+_REVIEWED = {
+    "integration_stem": "rev-stem",
+    "slices": 1,
+    "fixes": 0,
+    "wave_reviews": [{"slice_id": "s1", "verdict": "PASS", "sidecar_path": REVIEW_SIDECAR}],
+}
 RUN = "ask-20261016T120000-aaaaaa"
 SIZING = "state/sizings/2026-10-16-x.yaml"
 BATON = "state/handoffs/2026-10-16-x.md"
@@ -81,6 +87,7 @@ def _fire(root: Path) -> dict:
         run_dir=f"{RUN_DIR_ROOT}/{RUN}", rows=(), review_declared_paths=(), marker_path=marker,
     )
     _write(root, f"{RECORD_DIR_ROOT}/{RUN}/manifest.json", json.dumps(manifest.to_json()))
+    _write(root, REVIEW_SIDECAR, "---\nverdict: PASS\n---\nreview\n")
     _write(root, "run.mjs", f"{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/{RUN}/manifest.json\n")
     return terminal_commit._handler(
         {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _REVIEWED},
@@ -114,8 +121,12 @@ def test_a_run_in_a_repo_without_coordinator_state_commits_product_paths_only(re
     out = _fire(repo)
 
     assert out["committed"] is True, out
-    assert _commits(repo) == before + 1
-    paths = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    # Pins current behavior: the stage stamp lands as a second "(process files)" commit rather
+    # than riding the product commit; a fix to that must update this count.
+    assert _commits(repo) == before + 2
+    stage = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    assert stage == [f"{RECORD_DIR_ROOT}/{RUN}/run-stage.json"], stage
+    paths = _git(["show", "--name-only", "--format=", "HEAD~1"], repo).split()
     assert paths == [PRODUCT], paths
     assert out["run_artifacts"]["landed"] == []
     withheld = out["run_artifacts"]["withheld"]
@@ -136,7 +147,9 @@ def test_a_second_run_adds_no_duplicate_exclude_lines(repo):
     second = _fire(repo)
 
     assert second["committed"] is True, second
-    assert _exclude_lines(repo) == first
+    stage_line = f"/{RECORD_DIR_ROOT}/{RUN}/run-stage.json"
+    assert _exclude_lines(repo) == [*first, stage_line]
+    assert stage_line not in first
     assert len(first) == len(set(first))
 
 
