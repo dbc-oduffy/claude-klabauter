@@ -62,11 +62,14 @@ _VALUE_OPTIONS = frozenset({
 })
 
 
-def _run_argv(argv: list[str], cwd: Path, *, log: Optional[Path] = None, timeout: Optional[float] = None):
+def _run_argv(
+    argv: list[str], cwd: Path, *, log: Optional[Path] = None, timeout: Optional[float] = None,
+    append: bool = False,
+):
     """Exit code, or ``LAUNCH_TIMED_OUT``. Trap: the timeout kills only the direct child; the log is a
     file so a surviving grandchild never blocks this call."""
     limit = RETEST_CHILD_TIMEOUT_SECS if timeout is None else timeout
-    sink = open(log, "wb") if log is not None else subprocess.DEVNULL
+    sink = open(log, "ab" if append else "wb") if log is not None else subprocess.DEVNULL
     try:
         return subprocess.run(
             argv, cwd=str(cwd), creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL,
@@ -181,12 +184,42 @@ def _recorded_targeted_set(params: dict, verdict: object) -> list[str]:
     return []
 
 
-def _launch_argv(root: Path, tests: list[str]) -> "list[str] | str":
-    """The command that runs ``tests``: the repo's declared ``targeted_test_launcher`` under its
-    pinned interpreter (else this one) with the node ids passed through, else ``fast_test_cmd``
-    with the paths appended. A string return is the reason no command could be built."""
+def _scope_of(root: Path, test: str) -> str:
+    """Nearest ancestor directory of the test file, inside ``root``, holding a ``conftest.py`` (repo-relative
+    POSIX; ``""`` when none). One pytest session per scope keeps a bare ``from conftest import`` on its own."""
+    rel = PurePosixPath(test.split("::")[0])
+    for parent in rel.parents:
+        if (root / parent / "conftest.py").is_file():
+            return "" if str(parent) == "." else str(parent)
+    return ""
+
+
+def _drop_tier_options(tokens: list[str]) -> list[str]:
+    """``tokens`` minus ``--tier X`` / ``--tier=X``: a runner's tier selection adds that tier's default
+    collection to the named files."""
+    out: list[str] = []
+    skip = False
+    for tok in tokens:
+        if skip:
+            skip = False
+        elif tok == "--tier":
+            skip = True
+        elif not tok.startswith("--tier="):
+            out.append(tok)
+    return out
+
+
+def _launch_argv(root: Path, tests: list[str]) -> "list[list[str]] | str":
+    """The commands that run ``tests``, one per conftest scope: the repo's declared
+    ``targeted_test_launcher`` under its pinned interpreter (else this one) with the node ids passed
+    through, else ``fast_test_cmd`` minus its collection roots, markers and tier option with the paths
+    appended. A string return is the reason no command could be built."""
     from coordinator_core import diff_scoped_tests, resolve_validation_cmd
     from coordinator_core.ops.dispatch_emit import test_interpreter as ti
+
+    scopes: dict[str, list[str]] = {}
+    for t in tests:
+        scopes.setdefault(_scope_of(root, t), []).append(t)
 
     declared = resolve_validation_cmd.read_local_md_key(str(root), ti.LAUNCHER_KEY).strip()
     if declared:
@@ -195,12 +228,12 @@ def _launch_argv(root: Path, tests: list[str]) -> "list[str] | str":
             return f"{ti.LAUNCHER_KEY} {declared!r} is not a repo-relative file that exists"
         pin = ti.resolve_targeted_test_python(root)
         python = pin.command if pin.command and pin.defect is None else sys.executable
-        return [python, *shlex.split(declared), *tests]
+        return [[python, *shlex.split(declared), *group] for group in scopes.values()]
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
     if resolved.returncode != 0:
         return f"fast_test_cmd unresolved: {resolved.stderr.strip()}"
-    stripped = shlex.join(_strip_collection_roots(root, resolved.stdout.strip()))
-    return shlex.split(diff_scoped_tests.append_test_paths(stripped, tests))
+    stripped = shlex.join(_drop_tier_options(_strip_collection_roots(root, resolved.stdout.strip())))
+    return [shlex.split(diff_scoped_tests.append_test_paths(stripped, group)) for group in scopes.values()]
 
 
 def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], head_sha: Callable) -> int:
@@ -401,26 +434,39 @@ def main(
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         log_used = True
-        try:
-            rc = run(argv_or_err, root, log=log_path, timeout=RETEST_CHILD_TIMEOUT_SECS)
-        except OSError as exc:
-            rc, reason = None, f"launcher could not start: {exc}"
-        if rc == LAUNCH_TIMED_OUT:
+        import time
+
+        codes: list = []
+        deadline = time.monotonic() + RETEST_CHILD_TIMEOUT_SECS
+        failing = argv_or_err[0]
+        for n, argv in enumerate(argv_or_err):
+            try:
+                rc = run(argv, root, log=log_path, timeout=max(deadline - time.monotonic(), 1.0), append=n > 0)
+            except OSError as exc:
+                rc, reason = None, f"launcher could not start: {exc}"
+            codes.append(rc)
+            if rc not in (0, 1, NO_TESTS_COLLECTED):
+                failing = argv
+                break
+            if rc == 1:
+                failing = argv
+        broken = [c for c in codes if c not in (0, 1, NO_TESTS_COLLECTED)]
+        if broken and broken[0] == LAUNCH_TIMED_OUT:
             status = "error"
-            reason = f"launcher exceeded {RETEST_CHILD_TIMEOUT_SECS:g}s: {shlex.join(argv_or_err)}"
-        elif rc is None:
+            reason = f"launcher exceeded {RETEST_CHILD_TIMEOUT_SECS:g}s: {shlex.join(failing)}"
+        elif broken and broken[0] is None:
             status = "error"
-        elif rc == 1:
-            status = "fail"
-        elif rc == NO_TESTS_COLLECTED:
-            status = NO_TESTS_STATUS
-            reason = f"launcher collected no tests from: {', '.join(tests)}"
-        elif rc != 0:
+        elif broken:
             status = "error"
             reason = (
-                f"launcher exited {rc} with no test results (denied, missing or crashed launcher): "
-                + shlex.join(argv_or_err)
+                f"launcher exited {broken[0]} with no test results (denied, missing or crashed launcher): "
+                + shlex.join(failing)
             )
+        elif 1 in codes:
+            status = "fail"
+        elif all(c == NO_TESTS_COLLECTED for c in codes):
+            status = NO_TESTS_STATUS
+            reason = f"launcher collected no tests from: {', '.join(tests)}"
 
     test_files = [t.split("::")[0] for t in tests]
     try:

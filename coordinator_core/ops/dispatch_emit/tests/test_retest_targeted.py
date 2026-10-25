@@ -379,6 +379,50 @@ def test_fast_test_cmd_roots_are_dropped_and_only_targets_run(repo, tmp_path, mo
     assert seen[0][1:] == ["-m", "pytest", "-q", "test_a.py"]
 
 
+def _two_roots(repo: Path, targets: str) -> list[str]:
+    for d, name in (("rootx", "X"), ("rooty", "Y")):
+        (repo / d).mkdir()
+        (repo / d / "conftest.py").write_text(f"class Fake{name}:\n    pass\n", encoding="utf-8")
+        (repo / d / f"test_{d}.py").write_text(
+            f"from conftest import Fake{name}\n\ndef test_it():\n    assert Fake{name}\n", encoding="utf-8")
+    return ["--tests", targets]
+
+
+def _run_two_roots(repo, tmp_path):
+    args = _two_roots(repo, "rootx/test_rootx.py,rooty/test_rooty.py")
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), *args, "--repo-root", str(repo), "--detached-child"])
+    return rc, json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+
+
+def test_two_test_roots_run_in_separate_sessions_and_pass(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python -m pytest -q -p no:cacheprovider")
+    rc, record = _run_two_roots(repo, tmp_path)
+    assert rc == 0 and record["status"] == "pass", record
+
+
+def test_runner_tier_option_is_dropped_so_no_default_collection_is_added(repo, tmp_path, monkeypatch):
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run-tests.py").write_text(
+        "import sys, pytest\n"
+        "a = sys.argv[1:]\n"
+        "if '--tier' in a:\n"
+        "    i = a.index('--tier'); del a[i:i + 2]; a.append('tests')\n"
+        "sys.exit(pytest.main(['-q', '-p', 'no:cacheprovider', *a]))\n", encoding="utf-8")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "conftest.py").write_text("", encoding="utf-8")
+    (repo / "tests" / "test_default.py").write_text("def test_default():\n    assert False\n", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python scripts/run-tests.py --tier fast")
+    rc, record = _run_two_roots(repo, tmp_path)
+    assert rc == 0 and record["status"] == "pass", record
+
+
+def test_scopes_split_one_command_per_conftest_root(repo):
+    _two_roots(repo, "")
+    argvs = retest_targeted._launch_argv(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"])
+    assert [a[-1] for a in argvs] == ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"]
+
+
 def test_runner_script_survives_root_stripping(repo):
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
