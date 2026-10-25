@@ -19,6 +19,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import functools
 import importlib
 import importlib.util
 import os
@@ -52,25 +53,33 @@ def _relative_to_root(file_path: str, payload: Dict[str, Any]) -> Optional[tuple
     return root, rel.as_posix()
 
 
+@functools.lru_cache(maxsize=None)
+def _publisher_present() -> bool:
+    """Whether the publisher is installed; resolved once per process (tests call `cache_clear()`)."""
+    return importlib.util.find_spec("coordinator_core.percolate") is not None
+
+
 def _detectors() -> Optional[tuple]:
-    """`(foreign_identity, payload_locality)`, or None where the publisher is absent.
+    """`(foreign_identity, payload_locality)`, or None where the publisher is absent or broken.
 
     Trap: the published tree withholds both detectors, so they are resolved by name at
-    runtime; a literal import would be a dangling import in the mirror.
+    runtime; a literal import would be a dangling import in the mirror. Only the publisher
+    check is memoised: an ImportError is never cached, so a transient one cannot disable
+    the guard for the engine's lifetime.
     """
-    if importlib.util.find_spec("coordinator_core.percolate") is None:
+    if not _publisher_present():
         return None
     pkg = "coordinator_core.authoring_leaks"
-    return (
-        importlib.import_module(f"{pkg}.foreign_identity"),
-        importlib.import_module(f"{pkg}.payload_locality"),
-    )
+    try:
+        return (
+            importlib.import_module(f"{pkg}.foreign_identity"),
+            importlib.import_module(f"{pkg}.payload_locality"),
+        )
+    except ImportError:
+        return None
 
 
-def _in_scope(rel: str) -> bool:
-    detectors = _detectors()
-    if detectors is None:
-        return False
+def _in_scope(detectors: tuple, rel: str) -> bool:
     foreign_identity, payload_locality = detectors
     return foreign_identity.in_scope(rel) or payload_locality.target_for(rel) is not None
 
@@ -84,10 +93,7 @@ def _read_before(path: Path) -> str:
         return ""
 
 
-def _findings(before: str, after: str, rel: str, root: Path) -> List[Any]:
-    detectors = _detectors()
-    if detectors is None:
-        return []
+def _findings(detectors: tuple, before: str, after: str, rel: str, root: Path) -> List[Any]:
     foreign_identity, payload_locality = detectors
     found: List[Any] = []
     found.extend(payload_locality.detect_text(before, after, rel, root))
@@ -111,7 +117,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if resolved is None:
             return None
         root, rel = resolved
-        if not _in_scope(rel):
+        detectors = _detectors()
+        if detectors is None or not _in_scope(detectors, rel):
             return None
 
         from coordinator_core.write_guards._sentinel_write_guard import reconstruct_after
@@ -121,7 +128,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if after is None:
             return None
 
-        found = _findings(before, after, rel, root)
+        found = _findings(detectors, before, after, rel, root)
         if not found:
             return None
 

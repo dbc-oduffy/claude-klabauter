@@ -535,3 +535,147 @@ def test_poll_exit_codes(repo, tmp_path, capsys):
     assert _poll_exit(repo, tmp_path, {"status": "fail"}) == 1
     assert _poll_exit(repo, tmp_path, {"status": "error", "reason": "x"}) == 2
     assert _poll_exit(repo, tmp_path, {"status": "stale"}) == 2
+
+
+@pytest.mark.parametrize("cmd, expected", [
+    ("py -3 scripts/run-tests.py --tier fast", ["py", "-3", "scripts/run-tests.py", "--tier", "fast"]),
+    ("uv run scripts/x.py -q", ["uv", "run", "scripts/x.py", "-q"]),
+    ("pytest.exe -q roots_a", ["pytest.exe", "-q"]),
+    ("py.test.exe -m 'not cadence' roots_a", ["py.test.exe"]),
+    ("python -m pytest -q roots_a", ["python", "-m", "pytest", "-q"]),
+    ("uv run pytest roots_a -q", ["uv", "run", "pytest", "-q"]),
+])
+def test_launcher_shapes_keep_the_runner_script_and_treat_pytest_exe_as_pytest(repo, cmd, expected):
+    (repo / "scripts").mkdir()
+    for name in ("run-tests.py", "x.py"):
+        (repo / "scripts" / name).write_text("", encoding="utf-8")
+    (repo / "roots_a").mkdir()
+    assert retest_targeted._strip_collection_roots(repo, cmd) == expected
+
+
+def _two_conftest_launcher(repo: Path):
+    _two_roots(repo, "")
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
+    _declare(repo, targeted_test_launcher="scripts/run.py")
+
+
+def test_declared_launcher_runs_once_with_all_ids_when_scopes_do_not_conflict(repo):
+    (repo / "sub").mkdir()
+    (repo / "sub" / "test_s.py").write_text("def test_s():\n    pass\n", encoding="utf-8")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
+    _declare(repo, targeted_test_launcher="scripts/run.py")
+    argvs = retest_targeted._launch_argv(repo, ["test_a.py", "sub/test_s.py"])
+    assert len(argvs) == 1 and argvs[0][-2:] == ["test_a.py", "sub/test_s.py"]
+
+
+def test_declared_launcher_splits_only_when_conftests_collide(repo):
+    _two_conftest_launcher(repo)
+    argvs = retest_targeted._launch_argv(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py"])
+    assert [a[-1] for a in argvs] == ["rootx/test_rootx.py", "rooty/test_rooty.py"]
+
+
+def _fake_runner(repo, monkeypatch, tmp_path, codes, tests="rootx/test_rootx.py,rooty/test_rooty.py,test_a.py",
+                 cmd="python -m pytest -q"):
+    _two_roots(repo, "")
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", cmd)
+    calls = []
+
+    def run(argv, cwd, *, log=None, timeout=None, append=False):
+        n = len(calls)
+        calls.append((argv, timeout, append))
+        if codes[n] == 1:
+            with open(log, "ab" if append else "wb") as fh:
+                fh.write(f"FAILED {argv[-1]}::t - x\n".encode())
+        if codes[n] == "collect-error":
+            with open(log, "ab" if append else "wb") as fh:
+                fh.write(b"ERROR collecting test_a.py\nInterrupted: 1 error during collection\n")
+            return 2
+        if codes[n] == "raise":
+            raise OSError("boom")
+        return codes[n]
+
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", tests, "--repo-root", str(repo), "--detached-child"],
+        run=run)
+    return rc, calls, json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+
+
+def test_aggregate_fail_then_pass_is_fail(repo, tmp_path, monkeypatch):
+    rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [1, 0, 0])
+    assert rc == 1 and rec["status"] == "fail" and len(calls) == 3
+    assert rec[li.FAILED_TESTS_PARAM] == ["rootx/test_rootx.py::t"]
+
+
+def test_aggregate_fail_then_crash_keeps_failed_ids_and_names_both(repo, tmp_path, monkeypatch):
+    rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [1, 126, 0])
+    assert rc == 2 and rec["status"] == "error"
+    assert rec[li.FAILED_TESTS_PARAM] == ["rootx/test_rootx.py::t"]
+    assert "126" in rec["reason"] and "rooty/test_rooty.py" in rec["reason"]
+    assert "failing session(s)" in rec["reason"] and "rootx/test_rootx.py" in rec["reason"]
+
+
+def test_aggregate_no_tests_then_pass_is_pass(repo, tmp_path, monkeypatch):
+    rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 0, 5])
+    assert rc == 0 and rec["status"] == "pass"
+
+
+def test_aggregate_all_no_tests_is_no_tests(repo, tmp_path, monkeypatch):
+    rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 5, 5])
+    assert rc == 0 and rec["status"] == "no-tests" and rec["tests_run"] == 0
+
+
+def test_oserror_mid_sequence_is_error_naming_the_session(repo, tmp_path, monkeypatch):
+    rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, "raise", 0])
+    assert rc == 2 and rec["status"] == "error" and "boom" in rec["reason"]
+
+
+def test_spent_deadline_launches_nothing_and_states_the_budget(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr(retest_targeted, "RETEST_CHILD_TIMEOUT_SECS", 0.0)
+    rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, 0, 0])
+    assert rc == 2 and not calls and rec["status"] == "error"
+    assert "not started" in rec["reason"] and "0s budget" in rec["reason"]
+
+
+def test_timeout_mid_sequence_skips_later_sessions(repo, tmp_path, monkeypatch):
+    rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [retest_targeted.LAUNCH_TIMED_OUT, 0, 0])
+    assert rc == 2 and len(calls) == 1 and "exceeded 1800s" in rec["reason"]
+    assert all(t <= retest_targeted.RETEST_CHILD_TIMEOUT_SECS for _a, t, _p in calls)
+
+
+def test_tier_runner_that_needs_tier_falls_back_to_it(repo, tmp_path, monkeypatch):
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
+    rc, calls, rec = _fake_runner(
+        repo, monkeypatch, tmp_path, [2, 0], tests="test_a.py",
+        cmd="python scripts/run-tests.py --tier fast")
+    assert len(calls) == 2 and "--tier" not in calls[0][0]
+    assert calls[1][0][1:5] == ["scripts/run-tests.py", "--tier", "fast", "test_a.py"] and calls[1][2] is True
+    assert rc == 0 and rec["status"] == "pass"
+
+
+def test_tier_is_not_retried_when_the_cmd_has_none(repo, tmp_path, monkeypatch):
+    rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [2], tests="test_a.py")
+    assert len(calls) == 1 and rc == 2 and rec["status"] == "error"
+
+
+def test_tier_is_not_retried_after_a_pytest_collection_error(repo, tmp_path, monkeypatch):
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
+    rc, calls, rec = _fake_runner(
+        repo, monkeypatch, tmp_path, ["collect-error", 0], tests="test_a.py",
+        cmd="python scripts/run-tests.py --tier fast")
+    assert len(calls) == 1 and rc == 2 and rec["status"] == "error"
+
+
+def test_targeted_set_is_shared_with_the_landing_gate():
+    params = {"targeted_tests": {"status": "fail", "baseline": {"caused": ["a/test_x.py::t1"]}},
+              "targeted_test_paths": ["b/test_y.py"]}
+    assert retest_targeted._tests_to_run([], params) == li.targeted_set(params, li.targeted_test_verdict(params))
+    assert retest_targeted._tests_to_run([], params) == ["a/test_x.py"]
+
+
+def test_errored_retest_with_failed_tests_and_no_tests_run_keeps_the_ids(repo, tmp_path, monkeypatch):
+    rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [1, 126, 0])
+    assert rec["status"] == "error" and "tests_run" not in rec and rec[li.FAILED_TESTS_PARAM]

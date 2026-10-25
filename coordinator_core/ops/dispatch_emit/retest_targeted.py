@@ -22,6 +22,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional, Sequence
@@ -55,6 +56,9 @@ LAUNCH_TIMED_OUT = "timed-out"
 NO_TESTS_COLLECTED = 5
 NO_TESTS_STATUS = "no-tests"
 
+#: Program names that are pytest itself (lower-cased basename).
+_PYTEST_NAMES = frozenset({"pytest", "py.test", "pytest.exe", "py.test.exe"})
+
 #: Options whose next token is a value, never a collection root.
 _VALUE_OPTIONS = frozenset({
     "--rootdir", "-c", "-p", "--confcutdir", "-m", "-k", "--ignore", "--ignore-glob", "--deselect",
@@ -82,6 +86,22 @@ def _run_argv(
             sink.close()
 
 
+#: ``_run_session`` code for a session never started because the shared deadline was already spent.
+_NOT_LAUNCHED = "not-launched"
+
+
+def _run_session(run, argv: list[str], root: Path, log: Path, deadline: float, append: bool):
+    """``(code, error)`` for one session under the shared ``deadline`` (monotonic): ``_NOT_LAUNCHED``
+    when no time remains, ``(None, message)`` when the launcher could not start."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return _NOT_LAUNCHED, None
+    try:
+        return run(argv, root, log=log, timeout=remaining, append=append), None
+    except OSError as exc:
+        return None, str(exc)
+
+
 def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
     """``cmd`` split, minus positional tokens naming an existing path under ``root`` and the ``-m``
     marker filter (a named file must run whatever its markers). Other option values and the program
@@ -91,11 +111,12 @@ def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
     prev_takes_value = False
     skip_next = False
     seen_pytest = False
+    seen_runner = False
     for i, tok in enumerate(tokens):
         if skip_next:
             skip_next = False
             continue
-        if Path(tok).name in ("pytest", "py.test"):
+        if Path(tok).name.lower() in _PYTEST_NAMES:
             seen_pytest = True
         elif seen_pytest and tok == "-m":
             skip_next = True
@@ -104,7 +125,8 @@ def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
             continue
         if i == 0 or prev_takes_value or tok.startswith("-"):
             kept.append(tok)
-        elif i == 1 and tok.endswith(".py") and Path(tokens[0]).name not in ("pytest", "py.test"):
+        elif not seen_pytest and not seen_runner and tok.endswith(".py"):
+            seen_runner = True
             kept.append(tok)
         elif not (root / tok.split("::")[0]).exists():
             kept.append(tok)
@@ -159,29 +181,30 @@ def _repo_root(raw: Optional[str]) -> Path:
 
 def _tests_to_run(explicit: Sequence[str], params: dict) -> list[str]:
     tests = [p.replace("\\", "/") for t in explicit for p in re.split(r"[,\s]+", t) if p]
-    verdict = li.targeted_test_verdict(params)
-    baseline = verdict.get("baseline") if isinstance(verdict, dict) else None
-    if isinstance(baseline, dict):
-        for node in baseline.get("caused") or []:
-            tests.append(li._node_file(str(node)))
-    if not tests:
-        tests = _recorded_targeted_set(params, verdict)
-    return list(dict.fromkeys(t for t in tests if t))
+    return li.targeted_set(params, li.targeted_test_verdict(params), tests)
 
 
-def _recorded_targeted_set(params: dict, verdict: object) -> list[str]:
-    """Test paths the run recorded as its targeted set: ``tests`` or ``test_paths`` on the verdict,
-    else ``params["targeted_test_paths"]``. Empty when none is recorded."""
-    holders = [verdict if isinstance(verdict, dict) else {}, params]
-    keys = (("tests", "test_paths"), ("targeted_test_paths",))
-    for holder, names in zip(holders, keys):
-        for name in names:
-            raw = holder.get(name)
-            if isinstance(raw, list):
-                found = [li._node_file(str(n)) for n in raw if isinstance(n, str)]
-                if any(found):
-                    return found
-    return []
+_recorded_targeted_set = li.recorded_targeted_set
+
+#: pytest output that marks a collection failure (exit 2), which a ``--tier`` retry cannot fix.
+_COLLECTION_FAILURE = re.compile(r"ERROR collecting |errors? during collection", re.IGNORECASE)
+
+
+def _log_size(log: Path) -> int:
+    try:
+        return log.stat().st_size
+    except OSError:
+        return 0
+
+
+def _collection_failed_since(log: Path, offset: int) -> bool:
+    """True when ``log`` past byte ``offset`` shows pytest collection output."""
+    try:
+        with open(log, "rb") as handle:
+            handle.seek(offset)
+            return bool(_COLLECTION_FAILURE.search(handle.read().decode("utf-8", errors="replace")))
+    except OSError:
+        return False
 
 
 def _scope_of(root: Path, test: str) -> str:
@@ -209,11 +232,18 @@ def _drop_tier_options(tokens: list[str]) -> list[str]:
     return out
 
 
-def _launch_argv(root: Path, tests: list[str]) -> "list[list[str]] | str":
-    """The commands that run ``tests``, one per conftest scope: the repo's declared
-    ``targeted_test_launcher`` under its pinned interpreter (else this one) with the node ids passed
-    through, else ``fast_test_cmd`` minus its collection roots, markers and tier option with the paths
-    appended. A string return is the reason no command could be built."""
+def _scopes_conflict(root: Path, scopes: dict[str, list[str]]) -> bool:
+    """True when two or more scopes each carry their own ``conftest.py`` (a bare ``from conftest import``
+    would collide in one session)."""
+    return sum(1 for s in scopes if (root / s / "conftest.py").is_file()) > 1
+
+
+def _launch_argv(root: Path, tests: list[str], *, keep_tier: bool = False) -> "list[list[str]] | str":
+    """The commands that run ``tests``. A declared ``targeted_test_launcher`` (pinned interpreter, else
+    this one) gets every node id in one command unless the scopes' conftests collide, then one per
+    conftest scope. Else ``fast_test_cmd`` minus its collection roots and markers, one command per scope
+    with the paths appended; its ``--tier`` option is dropped unless ``keep_tier`` (the fallback when a
+    runner needs it). A string return is the reason no command could be built."""
     from coordinator_core import diff_scoped_tests, resolve_validation_cmd
     from coordinator_core.ops.dispatch_emit import test_interpreter as ti
 
@@ -228,11 +258,13 @@ def _launch_argv(root: Path, tests: list[str]) -> "list[list[str]] | str":
             return f"{ti.LAUNCHER_KEY} {declared!r} is not a repo-relative file that exists"
         pin = ti.resolve_targeted_test_python(root)
         python = pin.command if pin.command and pin.defect is None else sys.executable
-        return [[python, *shlex.split(declared), *group] for group in scopes.values()]
+        groups = list(scopes.values()) if _scopes_conflict(root, scopes) else [tests]
+        return [[python, *shlex.split(declared), *group] for group in groups]
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
     if resolved.returncode != 0:
         return f"fast_test_cmd unresolved: {resolved.stderr.strip()}"
-    stripped = shlex.join(_drop_tier_options(_strip_collection_roots(root, resolved.stdout.strip())))
+    base = _strip_collection_roots(root, resolved.stdout.strip())
+    stripped = shlex.join(base if keep_tier else _drop_tier_options(base))
     return [shlex.split(diff_scoped_tests.append_test_paths(stripped, group)) for group in scopes.values()]
 
 
@@ -434,35 +466,39 @@ def main(
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         log_used = True
-        import time
-
+        budget = RETEST_CHILD_TIMEOUT_SECS
+        deadline = time.monotonic() + budget
         codes: list = []
-        deadline = time.monotonic() + RETEST_CHILD_TIMEOUT_SECS
-        failing = argv_or_err[0]
+        failed_cmds: list[str] = []
+        broken_msgs: list[str] = []
         for n, argv in enumerate(argv_or_err):
-            try:
-                rc = run(argv, root, log=log_path, timeout=max(deadline - time.monotonic(), 1.0), append=n > 0)
-            except OSError as exc:
-                rc, reason = None, f"launcher could not start: {exc}"
+            offset = _log_size(log_path) if n > 0 else 0
+            rc, err = _run_session(run, argv, root, log_path, deadline, n > 0)
+            if rc == 2 and not _collection_failed_since(log_path, offset):
+                kept = _launch_argv(root, tests, keep_tier=True)
+                if isinstance(kept, list) and len(kept) == len(argv_or_err) and kept[n] != argv:
+                    argv = kept[n]
+                    rc, err = _run_session(run, argv, root, log_path, deadline, True)
             codes.append(rc)
-            if rc not in (0, 1, NO_TESTS_COLLECTED):
-                failing = argv
+            cmd = shlex.join(argv)
+            if err is not None:
+                broken_msgs.append(f"launcher could not start: {err}: {cmd}")
+            elif rc == _NOT_LAUNCHED:
+                broken_msgs.append(f"launcher not started, the {budget:g}s budget was spent: {cmd}")
                 break
-            if rc == 1:
-                failing = argv
-        broken = [c for c in codes if c not in (0, 1, NO_TESTS_COLLECTED)]
-        if broken and broken[0] == LAUNCH_TIMED_OUT:
+            elif rc == LAUNCH_TIMED_OUT:
+                broken_msgs.append(f"launcher exceeded {budget:g}s: {cmd}")
+                break
+            elif rc == 1:
+                failed_cmds.append(cmd)
+            elif rc not in (0, NO_TESTS_COLLECTED):
+                broken_msgs.append(f"launcher exited {rc} with no test results (denied, missing or crashed launcher): {cmd}")
+        if broken_msgs:
             status = "error"
-            reason = f"launcher exceeded {RETEST_CHILD_TIMEOUT_SECS:g}s: {shlex.join(failing)}"
-        elif broken and broken[0] is None:
-            status = "error"
-        elif broken:
-            status = "error"
-            reason = (
-                f"launcher exited {broken[0]} with no test results (denied, missing or crashed launcher): "
-                + shlex.join(failing)
-            )
-        elif 1 in codes:
+            reason = "; ".join(broken_msgs)
+            if failed_cmds:
+                reason += "; failing session(s): " + ", ".join(failed_cmds)
+        elif failed_cmds:
             status = "fail"
         elif all(c == NO_TESTS_COLLECTED for c in codes):
             status = NO_TESTS_STATUS
@@ -490,7 +526,7 @@ def main(
         record["reason"] = reason
     if status == NO_TESTS_STATUS:
         record["tests_run"] = 0
-    if status == "fail" and log_used:
+    if log_used and status in ("fail", "error") and 1 in codes:
         record[li.FAILED_TESTS_PARAM] = _failed_node_ids(log_path)
     if dropped:
         record["dropped"] = dropped

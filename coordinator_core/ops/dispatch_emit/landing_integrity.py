@@ -214,6 +214,38 @@ def _node_file(node_id: str) -> str:
     return head[2:] if head.startswith("./") else head
 
 
+def recorded_targeted_set(params: Mapping, verdict: object) -> list[str]:
+    """Test paths the run recorded as its targeted set: ``tests`` or ``test_paths`` on the verdict,
+    else ``params["targeted_test_paths"]``. Empty when none is recorded."""
+    holders = [verdict if isinstance(verdict, Mapping) else {}, params]
+    keys = (("tests", "test_paths"), ("targeted_test_paths",))
+    for holder, names in zip(holders, keys):
+        for name in names:
+            raw = holder.get(name)
+            if isinstance(raw, list):
+                found = [_node_file(str(n)) for n in raw if isinstance(n, str)]
+                if any(found):
+                    return found
+    return []
+
+
+def baseline_caused_files(verdict: object) -> list[str]:
+    """Test files of the verdict's ``baseline.caused`` node ids."""
+    baseline = verdict.get("baseline") if isinstance(verdict, Mapping) else None
+    if not isinstance(baseline, Mapping):
+        return []
+    return [_node_file(str(node)) for node in baseline.get("caused") or []]
+
+
+def targeted_set(params: Mapping, verdict: object, explicit: Sequence[str] = ()) -> list[str]:
+    """The run's targeted test paths, deduplicated: ``explicit``, else the baseline's caused files,
+    else the recorded set. The one definition the retest launcher and the landing gate share."""
+    tests = [*explicit, *baseline_caused_files(verdict)]
+    if not any(tests):
+        tests = recorded_targeted_set(params, verdict)
+    return list(dict.fromkeys(t for t in tests if t))
+
+
 _FILE_LIKE = re.compile(r"^[\w@./+-]+\.\w+$")
 _GATE_BLOCKER = re.compile(r"gate-blocker:\s*outside-footprint:\s*(\S.*)$")
 
@@ -522,23 +554,39 @@ def landing_test_gate(
                         + " --poll; if poll reports it abandoned past deadline, re-run: "
                         + retest_remedy(params))], "retest-running"
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
-    if fresh is not None and fresh.get("status") == "error" and fresh.get("tests_run") != 0 and _explicit_failed_tests(params):
+    errored_unrun = (
+        fresh is not None and fresh.get("status") == "error" and _ran_nothing(fresh.get("tests_run"))
+        and not fresh.get(FAILED_TESTS_PARAM)
+    )
+    if errored_unrun and _explicit_failed_tests(params):
         fresh = None
-    if fresh is not None and fresh.get("status") == "error" and fresh.get("tests_run") != 0:
+    elif errored_unrun:
         reason = fresh.get("reason") or "launcher produced no test results"
         return [Finding("", TARGETED_TESTS_FAILED,
                         f"the run's retest errored without running tests ({reason}); "
                         f"fix the launcher and re-run: {retest_remedy(params)}")], "failed"
+    unrun_retest = False
     if fresh is not None and _ran_no_tests(fresh):
+        unrun_retest = not (fresh.get("dropped") and not fresh.get("tests"))
         fresh = None
-    if fresh is not None and fresh.get("status") == "fail" and not isinstance(fresh.get("baseline"), Mapping):
+    if fresh is not None and not isinstance(fresh.get("baseline"), Mapping) and (
+        fresh.get("status") == "fail"
+        or (fresh.get("status") == "error" and fresh.get(FAILED_TESTS_PARAM))
+    ):
         verdict, fresh = fresh, None
     else:
         verdict = None
     if fresh is None:
         verdict = verdict or targeted_test_verdict(params)
-        if failed_targeted_tests(verdict)[1] == NOT_RUN_CHECK:
-            return [], NOT_RUN_CHECK
+        check_now = failed_targeted_tests(verdict)[1]
+        zero_run = check_now == NOT_RUN_CHECK or (
+            check_now == "pass" and verdict.get("status") == "pass" and _ran_zero_int(verdict.get("tests_run"))
+        )
+        if zero_run or (unrun_retest and check_now == "no-verdict"):
+            if unrun_retest or _targeted_set_exists(worktree_root, params, verdict, run_id):
+                return [_ran_zero_finding(params)], "failed"
+            if check_now == NOT_RUN_CHECK:
+                return [], NOT_RUN_CHECK
         nodes = _failed_nodes(params, verdict)
         if nodes and failed_targeted_tests(verdict)[1] == ZERO_FAIL_CHECK:
             verdict = {**verdict, "tests_failed": None}
@@ -565,7 +613,39 @@ def landing_test_gate(
             for f in changed
         ], "failed"
     findings, check = failed_targeted_tests(fresh, retest_remedy(params))
+    if check == "pass" and fresh.get("status") == "pass" and _ran_zero_int(fresh.get("tests_run")):
+        return [_ran_zero_finding(params)], "failed"
     return findings, "pass-on-retest" if check == "pass" else check
+
+
+def _ran_zero_int(tests_run: object) -> bool:
+    """True only for the integer 0 (an absent count is not a zero run)."""
+    return isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run == 0
+
+
+def _ran_zero_finding(params: Mapping) -> Finding:
+    return Finding("", TARGETED_TESTS_FAILED,
+                   "the targeted tests ran 0 tests (nothing collected or run), so nothing "
+                   f"is proven; re-run: {retest_remedy(params)}")
+
+
+def _targeted_set_exists(
+    worktree_root: Path, params: Mapping, verdict: Optional[Mapping], run_id: Optional[str]
+) -> bool:
+    """True when the run had targeted tests: a retest record that names tests or dropped targets (a
+    ``stale`` one, written when no set exists, does not count), a targeted set (``targeted_set``) or
+    explicit ``failed_tests``. Only a run with none (a docs/state-only change) may read not-run."""
+    record = _retest_record(worktree_root, run_id)
+    if record is not None and record.get("status") != "stale" and (record.get("tests") or record.get("dropped")):
+        return True
+    return bool(_explicit_failed_tests(params) or targeted_set(params, verdict))
+
+
+def _ran_nothing(tests_run: object) -> bool:
+    """True when ``tests_run`` is absent or the integer 0 (anything else non-numeric reads as absent)."""
+    if isinstance(tests_run, int) and not isinstance(tests_run, bool):
+        return tests_run == 0
+    return True
 
 
 def _ran_no_tests(record: Mapping) -> bool:
@@ -595,15 +675,21 @@ def _explicit_empty_failed_tests(params: Mapping) -> bool:
     return bool(lists) and not any(lists)
 
 
-def _retest_record_status(worktree_root: Path, run_id: Optional[str]) -> Optional[str]:
-    """Status in the run's retest record on disk, valid or not; None when absent or unreadable."""
+def _retest_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:
+    """The run's retest record on disk, valid or not; None when absent, unreadable or not an object."""
     if not run_id:
         return None
     try:
         record = json.loads(fresh_verdict_path(worktree_root, run_id).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    status = record.get("status") if isinstance(record, dict) else None
+    return record if isinstance(record, dict) else None
+
+
+def _retest_record_status(worktree_root: Path, run_id: Optional[str]) -> Optional[str]:
+    """Status in the run's retest record on disk, valid or not; None when absent or unreadable."""
+    record = _retest_record(worktree_root, run_id)
+    status = record.get("status") if record else None
     return status if isinstance(status, str) else None
 
 

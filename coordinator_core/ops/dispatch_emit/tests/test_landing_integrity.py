@@ -98,24 +98,36 @@ def test_non_zero_or_non_int_tests_run_keeps_unattributed_failure(run):
     assert check == "failed" and findings[0].path == ""
 
 
-def test_inline_review_run_zero_is_not_run():
-    params = {"inline_review": {"tests": {"status": "error", "run": 0, "failed": 0}}}
+def test_inline_review_run_zero_refuses_when_targeted_tests_exist():
+    params = {"inline_review": {"tests": {"status": "error", "run": 0, "failed": 0}},
+              "targeted_test_paths": ["a/test_x.py"]}
     assert li.targeted_test_verdict(params)["tests_run"] == 0
+    findings, check = li.landing_test_gate(Path("."), params, None)
+    assert check == "failed" and findings and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def test_inline_review_run_zero_with_no_targeted_tests_stays_not_run():
+    params = {"inline_review": {"tests": {"status": "error", "run": 0, "failed": 0}}}
     assert li.landing_test_gate(Path("."), params, None) == ([], "not-run")
 
 
-def test_recorded_not_run_skips_failure_attribution():
+def test_recorded_zero_run_with_explicit_failed_tests_refuses():
     params = {"targeted_tests": {"status": "error", "tests_run": 0, "baseline": None},
               "failed_tests": ["a/test_x.py::t1"]}
-    assert li.landing_test_gate(Path("."), params, None) == ([], "not-run")
+    findings, check = li.landing_test_gate(Path("."), params, None)
+    assert check == "failed" and findings
 
 
-def test_fresh_retest_verdict_with_zero_run_is_not_run(tmp_path):
+def test_fresh_retest_verdict_with_zero_run_refuses(tmp_path):
     root = _repo(tmp_path)
     path = _write_fresh(root, status="error")
     record = json.loads(path.read_text(encoding="utf-8"))
     path.write_text(json.dumps({**record, "tests_run": 0}), encoding="utf-8")
-    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "not-run")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings
+    zero = {"targeted_tests": {"status": "error", "tests_run": 0, "baseline": None}}
+    findings, check = li.landing_test_gate(root, zero, "r1")
+    assert check == "failed" and findings and "errored without running tests" in findings[0].detail
 
 
 def test_absent_verdict_is_no_verdict():
@@ -470,10 +482,50 @@ def _write_record(root, record):
 
 def test_fresh_no_tests_record_blocks_nothing_and_leaves_failed_tests_remedy_open(tmp_path):
     root = _repo(tmp_path)
-    _write_record(root, {"status": "no-tests", "tests_run": 0, "dropped": ["gone.py"], "note": "dropped"})
+    _write_record(root, {"status": "no-tests", "tests_run": 0, "tests": [], "dropped": ["gone.py"], "note": "dropped"})
     assert li.landing_test_gate(root, {}, "r1") == ([], "no-verdict")
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "failed" and f"or pass params.{li.FAILED_TESTS_PARAM}" in findings[0].detail
+
+
+def test_fresh_no_tests_record_with_no_verdict_and_a_targeted_set_refuses(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "no-tests", "tests_run": 0, "tests": ["t.py"], "reason": "collected no tests"})
+    findings, check = li.landing_test_gate(root, {}, "r1")
+    assert check == "failed" and findings and "ran 0 tests" in findings[0].detail
+
+
+def test_stale_record_with_no_targeted_set_stays_not_run(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "stale", "tests": [], "note": "no targeted test set recorded"})
+    params = {"targeted_tests": {"status": "error", "tests_run": 0, "baseline": None}}
+    assert li.landing_test_gate(root, params, "r1") == ([], "not-run")
+
+
+def test_stale_record_does_not_count_as_a_targeted_set(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "stale", "tests": ["t.py"]})
+    assert not li._targeted_set_exists(root, {}, None, "r1")
+    _write_record(root, {"status": "no-tests", "tests": [], "dropped": ["gone.py"]})
+    assert li._targeted_set_exists(root, {}, None, "r1")
+
+
+def test_pass_verdict_that_ran_zero_tests_refuses_only_with_a_targeted_set():
+    verdict = {"status": "pass", "tests_run": 0, "baseline": None}
+    assert li.landing_test_gate(Path("."), {"targeted_tests": verdict}, None) == ([], "pass")
+    findings, check = li.landing_test_gate(
+        Path("."), {"targeted_tests": verdict, "targeted_test_paths": ["a/test_x.py"]}, None)
+    assert check == "failed" and findings
+    skips = {**verdict, "status": "pass-with-skips"}
+    assert li.landing_test_gate(
+        Path("."), {"targeted_tests": skips, "targeted_test_paths": ["a/test_x.py"]}, None) == ([], "pass")
+
+
+def test_fresh_pass_record_with_zero_tests_run_refuses(tmp_path):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "pass", "tests_run": 0, "tests": ["t.py"]})
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings
 
 
 def test_fresh_no_tests_record_does_not_clear_a_recorded_failure(tmp_path):
