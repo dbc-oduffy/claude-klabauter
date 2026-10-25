@@ -5,6 +5,12 @@ gate is honoured only while every recorded fingerprint still equals the bytes on
 spawns no process.
 
 Invariant: ``post_checkpoint`` holds hunks no plan row owns, so no reader may treat its keys as row ids.
+
+Invariant: one hash mode. Every fingerprint in ``kept.json`` is a RAW-bytes ``blob_sha``; a committed
+blob is the checkin-filtered form (CRLF folded to LF under ``core.autocrlf``). The two domains cross
+only through ``checkin_form`` and ``matches_committed``, never by comparing a raw sha to a committed one.
+Trap: these in-process consumers never lift the committed side to raw; that needs a ``--filters``
+spawn, and the only sanctioned lift is doctor_kept_blobs's one batched spawn per repo, off the hot path.
 """
 
 from __future__ import annotations
@@ -34,6 +40,77 @@ def fingerprint(root: Path, rel: str) -> Optional[str]:
         return blob_sha((Path(root) / rel).read_bytes())
     except OSError:
         return None
+
+
+_SHA40 = re.compile(r"[0-9a-f]{40}")
+
+
+def checkin_form(root: Path, rel: str, data: bytes) -> Optional[bytes]:
+    """The bytes ``git add`` would hash for ``data`` at ``rel`` (``git.commit._checkin_bytes``), or
+    None when that conversion is refused (``FilterUnsupported``)."""
+    from coordinator_core.git.commit import FilterUnsupported, _checkin_bytes
+
+    try:
+        return _checkin_bytes(Path(root), rel, data)
+    except FilterUnsupported:
+        return None
+
+
+def matches_committed(root: Path, rel: str, raw_sha: object, committed_sha: object) -> bool:
+    """True when the raw kept fingerprint ``raw_sha`` is the same content as the committed blob
+    ``committed_sha`` once converted to checkin form. The raw bytes come from the object store, else
+    from the worktree file when it still fingerprints to ``raw_sha``. False when the bytes are
+    unavailable, the conversion is refused, or either sha is not a str. Zero spawns."""
+    if not isinstance(raw_sha, str) or not isinstance(committed_sha, str):
+        return False
+    if raw_sha == committed_sha:
+        return True
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+
+    data: Optional[bytes] = None
+    if _SHA40.fullmatch(raw_sha):
+        try:
+            obj = read_object(resolve_git_common_dir(root), raw_sha)
+        except (OSError, ValueError):
+            obj = None
+        if obj is not None and obj[0] == "blob":
+            data = obj[1]
+    if data is None and fingerprint(root, rel) == raw_sha:
+        try:
+            data = (Path(root) / rel).read_bytes()
+        except OSError:
+            return False
+    if data is None:
+        return False
+    form = checkin_form(root, rel, data)
+    return form is not None and blob_sha(form) == committed_sha
+
+
+def held_paths(root: Path, rels: Iterable[str]) -> dict[str, str]:
+    """``{rel: run_id}`` for each normalised ``rel`` listed in ``kept.json`` (``chunks[*].paths`` or
+    ``post_checkpoint``) of a still-halted run, i.e. one in the withheld index. Trap: ``withheld_by_path``
+    maps a path two runs hold to the lexically last run only, so the run set is that map's values plus
+    every indexed run file. Spawn-free; an unreadable index or record contributes nothing."""
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_withheld_index
+
+    wanted = {k for k in (_norm(r) for r in rels) if k is not None}
+    if not wanted:
+        return {}
+    try:
+        run_ids = set(halted_withheld_index.withheld_by_path(root).values())
+        run_ids.update(halted_withheld_index.run_ids(root))
+    except OSError:
+        return {}
+    out: dict[str, str] = {}
+    for run_id in sorted(run_ids):
+        try:
+            prints = kept_fingerprints(ask_contract.record_dir(root, run_id))
+        except (OSError, ValueError):
+            continue
+        for rel in wanted.intersection(prints):
+            out.setdefault(rel, run_id)
+    return out
 
 
 def kept_chunks(

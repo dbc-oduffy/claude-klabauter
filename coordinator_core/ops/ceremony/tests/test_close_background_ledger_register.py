@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
 import yaml
 
 from coordinator_core.ops import requirement_register as rr
@@ -12,6 +13,8 @@ from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.tests.test_register_gate import _PLAN, _SIZING, _wb_row, _wb_sizing_text
 from coordinator_core.ops.tests.test_deliverable_cascade_kinds import _init_repo
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN = "run-ledger-1"
 PLAN = _PLAN

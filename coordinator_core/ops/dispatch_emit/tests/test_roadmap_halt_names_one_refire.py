@@ -36,6 +36,7 @@ def test_script_calls_finaliser_before_its_return():
     assert call < ret and s.count("halted_by: _halted") == 1
 
 
+@pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 def test_no_arm_gate_halt_yields_refire_envelope(tmp_path):

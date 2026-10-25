@@ -15,7 +15,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     halted_record_message,
 )
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PLAN = "docs/plans/p.md"
 RUN = "run-1"

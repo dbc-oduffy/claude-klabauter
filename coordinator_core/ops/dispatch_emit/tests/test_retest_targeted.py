@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit import retest_targeted
 from coordinator_core.testing.git_write import write_seen_by_git
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "run-abc"
 

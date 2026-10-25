@@ -18,6 +18,7 @@ Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-autho
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -174,7 +175,17 @@ def test_converter_named_by_the_gate_exists_and_is_runnable() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     script = repo_root / "coordinator" / "bin" / "mise-prep-upgrade.py"
     assert script.is_file(), f"gate names {script}, which does not exist"
-    assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3")
+    tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+    guards = [
+        n
+        for n in tree.body
+        if isinstance(n, ast.If)
+        and isinstance(n.test, ast.Compare)
+        and isinstance(n.test.left, ast.Name)
+        and n.test.left.id == "__name__"
+        and any(isinstance(c, ast.Constant) and c.value == "__main__" for c in n.test.comparators)
+    ]
+    assert guards, f"{script} has no `if __name__ == \"__main__\":` guard"
 
 
 def test_every_path_the_refusal_names_resolves_from_where_its_reader_stands() -> None:

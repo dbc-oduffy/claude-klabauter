@@ -53,6 +53,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "peer_notice.send":                       "coordinator_core.ops.peer_notice_send",
     "peer_notice.check":                      "coordinator_core.ops.peer_notice_check",
     "op_census.breaches":                     "coordinator_core.ops.op_budget_breaches",
+    "doctor.recover_kept_blobs":              "coordinator_core.ops.doctor_kept_blobs",
     "freshness.commit_delta":                 "coordinator_core.ops.freshness_commit_delta",
     # coordinator_core.hooks registers all 16 hooks.* ops (6 advisory + 8 bookkeeping
     # + 1 pull/poll arrival-check + 1 subagent-fabrication check) in a single module

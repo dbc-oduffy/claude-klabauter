@@ -50,6 +50,7 @@ def test_bogus_phase_or_extra_key_refused():
     assert not hr.is_refire_next_action(env)
 
 
+@pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 def test_js_carries_phase_for_mapped_kind_only(tmp_path):

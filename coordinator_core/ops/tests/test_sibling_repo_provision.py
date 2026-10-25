@@ -16,7 +16,7 @@ from coordinator_core.ops.fleet import _memo_resolver
 from coordinator_core.ops.sibling_repo_provision_contract import MARKER_NAME, has_remote, read_marker
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 NAME = "demo-vault-guide"
 KEY = "repos.demo_vault_guide"

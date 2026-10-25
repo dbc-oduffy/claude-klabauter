@@ -755,6 +755,11 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "brightline-process-budget-for-claude-klabauter.md)",
     ),
     (
+        "coordinator_core.ops.doctor_kept_blobs",
+        'registers "doctor.recover_kept_blobs" (re-creates kept.json blobs absent from the object '
+        "store; the doctor layer is the report half)",
+    ),
+    (
         "coordinator_core.ops.freshness_commit_delta",
         'registers "freshness.commit_delta" (workday-start doc/test/bug-sweep '
         "commit-delta producer — docs/plans/2026-09-10-cartography-churn-producer-"

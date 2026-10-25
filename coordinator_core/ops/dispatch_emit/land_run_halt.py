@@ -51,6 +51,9 @@ PEER_INDETERMINATE = "peer-claim-indeterminate"
 #: ``withheld`` reason for a path a live peer session holds.
 PEER_HELD = "peer-held"
 
+#: ``refused`` value when a halt finds this run's own merge open: nothing is committed, the reply names the routes out.
+HALT_ON_RUN_OWNED_MERGE = "halt-on-run-owned-merge"
+
 _EVIDENCE_CAP_BYTES = 2000
 
 
@@ -498,6 +501,29 @@ def _reconcile_landing(
     return reply
 
 
+def _run_owned_merge_reply(root: Path, run_id: str, halted: dict, base: dict) -> Optional[dict]:
+    """The no-commit reply when this run's own merge is open (a single-parent halt commit would be
+    refused mid-merge); None otherwise. Two file reads, no spawn."""
+    from coordinator_core.git import merge_owner
+    from coordinator_core.git.git_dir import resolve_git_dir
+    from coordinator_core.ops.dispatch_emit.halt_refire import is_refire_next_action
+
+    if not (resolve_git_dir(root) / "MERGE_HEAD").exists() or merge_owner.owner(root) != run_id:
+        return None
+    action = halted.get("next_action")
+    finish = action["call"] if is_refire_next_action(action) else None
+    finish_hint = "Finish: refire the run. " if finish else ""
+    return {
+        "committed": False, "sha": None, "refused": HALT_ON_RUN_OWNED_MERGE,
+        "error": (
+            "this run's merge is open and the halt record is on disk uncommitted. "
+            f"{finish_hint}Abort: branch.merge_into_workstream {{abort: true}}, then re-run this halt landing."
+        ),
+        "merge_route": {"finish": finish, "abort": "branch.merge_into_workstream {abort: true}"},
+        **base,
+    }
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -739,6 +765,9 @@ def _land(
         hash_worktree_blobs_via_spawn,
     )
 
+    owned_merge = _run_owned_merge_reply(root, run_id, halted, base)
+    if owned_merge is not None:
+        return owned_merge
     try:
         outcome = commit_paths(
             root, paths, message, deleted_paths=deleted, declared_reverts=deleted,

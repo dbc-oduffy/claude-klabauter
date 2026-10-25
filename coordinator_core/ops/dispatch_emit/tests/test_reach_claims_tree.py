@@ -13,7 +13,7 @@ from coordinator_core.ops.dispatch_emit.reach_claims_tree import REACH_CLOSURE_D
 from coordinator_core.win_portability import no_console_creationflags
 
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(repo: Path, *args: str) -> None:

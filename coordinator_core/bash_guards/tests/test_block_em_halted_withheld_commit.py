@@ -238,6 +238,7 @@ def test_merge_commit_exempts_landed_blobs_but_denies_a_path_matching_neither_si
     assert _denied(_verdict(repo, "git commit -m merge"))
 
 
+@pytest.mark.cadence
 @pytest.mark.spawns_process
 def test_real_git_staged_withheld_path_denied_then_clean_passes(repo):
     from coordinator_core.win_portability import no_console_creationflags

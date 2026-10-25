@@ -96,6 +96,7 @@ def test_unknown_subcommand_exits_2(entry, capsys):
     assert "Usage:" in err
 
 
+@pytest.mark.cadence
 @pytest.mark.spawns_process
 def test_subprocess_runs_with_scrubbed_pythonpath(tmp_path):
     settings = tmp_path / "settings"

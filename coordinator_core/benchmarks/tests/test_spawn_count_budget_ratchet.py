@@ -324,6 +324,14 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "dispatch.ask_stage": {
+        "refire_base_blobs": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-25 at the value it entered with: one git cat-file --batch --filters reads the run-base blobs a refire's prior manifest never baselined (the eol/smudge conversion the raw-bytes fingerprint domain needs); counted by the refire test in coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py."
+            ),
+        },
+    },
     "plan.readiness_verdict": {
         "census_python_target_tracking": {
             "ceiling": 1,

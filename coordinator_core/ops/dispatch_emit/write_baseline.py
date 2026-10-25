@@ -11,7 +11,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional
 
-from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
+from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, fingerprint
 
 NO_CHANGE_REFUSAL = "no-change"
 
@@ -23,9 +23,44 @@ MEANT_TO_LAND_KEY = "meant_to_land"
 DIRTY_BEFORE_RUN_KEY = "dirty_before_run"
 
 
+def common_dir_for(root: Path) -> Optional[Path]:
+    """The repo's object-store dir, or None when ``root`` holds no git dir. Spawn-free."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    try:
+        common = resolve_git_common_dir(root)
+    except (OSError, ValueError):
+        return None
+    return common if common.is_dir() else None
+
+
+def persist_raw(common_dir: Optional[Path], data: bytes) -> None:
+    """Write ``data`` as a loose blob so a later check can read the bytes behind a fingerprint.
+    An OSError leaves the blob unpersisted; the fingerprint stays valid."""
+    if common_dir is None:
+        return
+    from coordinator_core.git import git_objects
+
+    try:
+        git_objects.write_object(common_dir, b"blob", data)
+    except OSError:
+        pass
+
+
 def capture(root: Path, paths: Iterable[str]) -> dict[str, Optional[str]]:
-    """Map each repo-relative path to its fingerprint; None means absent."""
-    return {p: fingerprint(root, p) for p in paths}
+    """Map each repo-relative path to its raw-bytes fingerprint (None means absent), persisting
+    each present file's raw blob in the object store."""
+    common = common_dir_for(root)
+    out: dict[str, Optional[str]] = {}
+    for p in paths:
+        try:
+            data = (Path(root) / p).read_bytes()
+        except OSError:
+            out[p] = None
+            continue
+        out[p] = blob_sha(data)
+        persist_raw(common, data)
+    return out
 
 
 def unwritten(root: Path, baseline: Mapping[str, Optional[str]], paths: Iterable[str]) -> list[str]:

@@ -17,7 +17,7 @@ from coordinator_core.guard_messages.testing import envelope_of
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BASE = "".join("line%02d\n" % i for i in range(1, 31))
 _HUNK1 = _BASE.replace("line02\n", "line02-A\n")

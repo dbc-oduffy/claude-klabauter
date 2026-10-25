@@ -10,6 +10,8 @@ import pytest
 from coordinator_core.ops.memo_transition import _handler
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _MEMO = """---
 title: "t"
 from: "a"

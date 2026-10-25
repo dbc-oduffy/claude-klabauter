@@ -2481,6 +2481,7 @@ def _no_change_refusal(
     if run_dir is not None and _prior_pass_written(worktree_root, run_dir) & set(meant):
         return None
     from coordinator_core.git.git_state import IndexParseError, read_index
+    from coordinator_core.ops.dispatch_emit import kept_work
 
     try:
         index = read_index(worktree_root)
@@ -2489,7 +2490,7 @@ def _no_change_refusal(
     dirty = [
         p for p in meant
         if manifest.write_baseline.get(p) is not None
-        and (p not in index or index[p].sha != manifest.write_baseline[p])
+        and (p not in index or not kept_work.matches_committed(worktree_root, p, manifest.write_baseline[p], index[p].sha))
     ]
     route = (
         "the dirt predates the run: land it through a reviewed run of its own"
@@ -6414,6 +6415,12 @@ def _terminal_commit_inner(
             "sha": str(reply["sha"]), "rows": [c.id for c in contributing_chunks], "paths": list(all_paths),
         })
         _release_siblings_at_landing(close_ctx, str(reply["sha"]))
+        from coordinator_core.ops.dispatch_emit.halted_run import mark_predecessors_landed
+
+        try:
+            mark_predecessors_landed(worktree_root, _run_id_of(params, ask_run_dir, script_path_raw), str(reply["sha"]))
+        except Exception:  # noqa: BLE001 -- the landed commit stands; the predecessor can be recorded landed by hand
+            pass
         from coordinator_core.ops.dispatch_emit.emission_receipt import stamp_landed
 
         stamp_landed(guarded_script, str(reply["sha"]))

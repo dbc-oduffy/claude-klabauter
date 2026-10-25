@@ -11,7 +11,7 @@ from coordinator_core.ipc import CallerFacingValidationError
 from coordinator_core.ops import plan_backfill_warp_executing as op
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SPINE_CODED = (
     "## Tasks\n\n```yaml plan-tasks\n"

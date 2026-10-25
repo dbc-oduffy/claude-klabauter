@@ -236,6 +236,16 @@ def test_the_index_is_parsed_once_across_two_halted_runs_on_one_reader(root, mon
     assert len(parses) == 1
 
 
+@pytest.mark.parametrize("eol", ["\n", "\r\n"])
+def test_index_blob_equal_to_the_landing_baseline_releases_for_lf_and_crlf_alike(root, eol):
+    _git(root, "config", "core.autocrlf", "true")
+    _stage_index(root, "line one\nline two\n")
+    _tree(root, f"line one{eol}line two{eol}")
+    _halted_run(root, _sha("old\n"))
+    _landing(root, _sha(f"line one{eol}line two{eol}"))
+    assert _held(root) == set()
+
+
 def test_crlf_converted_landing_baseline_never_releases_through_the_index(root):
     _git(root, "config", "core.autocrlf", "true")
     _stage_index(root, "line one\nline two\n")

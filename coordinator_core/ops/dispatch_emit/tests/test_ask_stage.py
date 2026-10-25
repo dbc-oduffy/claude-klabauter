@@ -80,7 +80,7 @@ def test_three_row_plan_yields_briefs_equal_to_the_plan_routes_prompts(repo):
     for mr in m.rows:
         row = next(r for r in rows if r.id == mr.id)
         brief = (repo / mr.brief_path).read_text(encoding="utf-8")
-        assert brief == emit._row_prompt(row, PLAN_REL, ctx)
+        assert brief.startswith(emit._row_prompt(row, PLAN_REL, ctx).rstrip())
     waves = {r.id: r.wave for r in m.rows}
     assert waves["C2"] > waves["C1"]
     assert {"pkg/a.py", "pkg/b.py", "pkg/c.py"} <= set(m.review_declared_paths)

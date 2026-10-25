@@ -8,7 +8,7 @@ import pytest
 from coordinator_core.install import runtime_ignore_apply as mod
 from coordinator_core.install.runtime_ignore_apply import HEADER, apply_runtime_ignore
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 TEMPLATE = "# managed\n.coordinator-local/\nstate/watch.json\nscratch/\n"
 

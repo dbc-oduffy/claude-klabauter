@@ -63,6 +63,7 @@ def test_unqueued_review_stamp_reads_a_reasoned_skip(kind):
     assert leg.detail == f"{SKIP}not-queued"
 
 
+@pytest.mark.cadence
 @pytest.mark.parametrize("kind", run_close.CLOSE_KINDS)
 def test_queued_review_stamp_ends_classified(tmp_path, kind):
     repo, head = _repo(tmp_path)
@@ -72,6 +73,7 @@ def test_queued_review_stamp_ends_classified(tmp_path, kind):
     assert leg.status != "ran"
 
 
+@pytest.mark.cadence
 def test_halted_ledger_check_without_review_record_settles_no_review_outcome(tmp_path):
     repo, head = _repo(tmp_path)
     marker = {"status": "halted", "plan": "docs/plans/example.md", "blocking": []}
@@ -84,6 +86,7 @@ def test_halted_ledger_check_without_review_record_settles_no_review_outcome(tmp
     assert leg.detail == f"{SKIP}no-review-outcome"
 
 
+@pytest.mark.cadence
 def test_halted_ledger_check_with_review_record_mints_without_an_inline_review_trailer(tmp_path):
     repo, head = _repo(tmp_path)
     assert "Inline-Review" not in _git(repo, "log", "-1", "--format=%B")

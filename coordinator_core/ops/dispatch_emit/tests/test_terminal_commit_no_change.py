@@ -35,6 +35,32 @@ def test_unwritten_path_refuses_and_a_written_one_does_not(tmp_path):
     assert tc._no_change_refusal(tmp_path, m, _request(), None) is None
 
 
+def _crlf_case(tmp_path, monkeypatch, index_sha_of):
+    from coordinator_core.git import git_state
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    m = _manifest(tmp_path)
+    (tmp_path / "a.py").write_bytes(b"one\r\n")
+    base = kept_work.fingerprint(tmp_path, "a.py")
+    m = StageManifest(
+        run_dir="r", rows=m.rows, review_declared_paths=(), marker_path="m", write_baseline={"a.py": base},
+    )
+    monkeypatch.setattr(kept_work, "checkin_form", lambda root, rel, data: data.replace(b"\r\n", b"\n"))
+    sha = index_sha_of(kept_work)
+    monkeypatch.setattr(git_state, "read_index", lambda root: {"a.py": SimpleNamespace(sha=sha)})
+    return tc._no_change_refusal(tmp_path, m, _request(), None)
+
+
+def test_unchanged_crlf_path_routes_revise_the_ask(tmp_path, monkeypatch):
+    out = _crlf_case(tmp_path, monkeypatch, lambda kw: kw.blob_sha(b"one\n"))
+    assert "revise the ask" in out["error"] and "predates" not in out["error"]
+
+
+def test_crlf_path_with_a_different_index_blob_still_routes_pre_existing_dirt(tmp_path, monkeypatch):
+    out = _crlf_case(tmp_path, monkeypatch, lambda kw: kw.blob_sha(b"other\n"))
+    assert "predates the run" in out["error"]
+
+
 def test_review_recorded_edit_lifts_the_refusal(tmp_path):
     m = _manifest(tmp_path)
     assert tc._no_change_refusal(tmp_path, m, _request(), {"tests": {"edited": ["a.py"]}}) is None

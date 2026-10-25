@@ -86,6 +86,15 @@ def _paths_of(file: Path) -> list[str]:
     return [p for p in raw if isinstance(p, str)] if isinstance(raw, list) else []
 
 
+def run_ids(repo_root: Path) -> list[str]:
+    """Sorted run ids of every run file in the index directory; empty when it is unreadable."""
+    try:
+        names = sorted(os.listdir(_dir(Path(repo_root))))
+    except OSError:
+        return []
+    return [n[: -len(".json")] for n in names if n.endswith(".json")]
+
+
 def withheld_by_path(repo_root: Path) -> dict[str, str]:
     """`{repo-relative posix path: run id}` over every indexed run; a path held by two runs maps to
     the lexically last run id. Runs `rebuild` once when the sentinel is absent."""

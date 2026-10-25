@@ -15,6 +15,7 @@ from coordinator_core.win_portability import no_console_creationflags
 KINDS = [*HALT_PHASE, "totally_unknown", "toString"]
 
 
+@pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 def test_resume_phase_matches_python_for_every_kind(tmp_path):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.ceremony.tests.test_close_background_land_run_legs import (
     PLAN,
@@ -9,6 +11,9 @@ from coordinator_core.ops.ceremony.tests.test_close_background_land_run_legs imp
     _fake_mint,
     _flip_ctx,
 )
+
+# Tiering follows the imported land_run_legs helpers, which drive real git.
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 ENTRY = {
     "row": "C2",

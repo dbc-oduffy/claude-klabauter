@@ -1152,6 +1152,9 @@ def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     from coordinator_core.ops.doctor_boot_banners import boot_banner_layers
 
     report.layers.extend(boot_banner_layers(_config_dir()))
+    from coordinator_core.ops.doctor_kept_blobs import kept_blobs_layer
+
+    report.layers.append(kept_blobs_layer(Path(__file__).resolve().parents[2]))
 
     fix_report: List[str] = []
     if fix:

@@ -1,4 +1,4 @@
-"""bump_out_of_repo_tool_write defers on ContentRooted doctrine paths: one guard
+"""bump_out_of_repo_tool_write defers on content-root doctrine paths: one guard
 (guard_doctrine_surface_edits) owns doctrine policy; every other out-of-repo
 path still denies exactly as before.
 """

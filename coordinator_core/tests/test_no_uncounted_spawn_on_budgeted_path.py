@@ -2169,6 +2169,21 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "attempted, counted as the spawn attempt regardless of DR-308's no-secret-key fallthrough).",
     ),
     (
+        "dispatch.ask_stage",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py",
+        executed="Measured 2026-10-25: attributed by stack to git/run.py::run_git under "
+        "`test_a_refire_stage_spawns_exactly_the_budgeted_base_blob_read` (`assert len(spawns) == "
+        "budget`, read from the manifest's dispatch.ask_stage `refire_base_blobs`); the "
+        "attribution is itself asserted on every run. Planted precondition: a halted.json "
+        "carrying the real HEAD as run_base_sha in the run's record dir.",
+    ),
+    (
         "hooks.stop_dispatch",
         "coordinator_core/git/run.py",
         "run_git",
@@ -7397,6 +7412,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # (run_git), refusal path only.
     "dispatch.land_run": 5,
     "dispatch.reap_abandoned_runs": 1,
+    "doctor.recover_kept_blobs": 2,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
     "fleet.delete_superseded_decisions": 8,

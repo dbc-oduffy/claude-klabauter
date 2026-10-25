@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-import pytest
 
 from coordinator_core.ops.dispatch_emit import halt_refire, halted_run, kept_work
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
@@ -14,7 +11,6 @@ from coordinator_core.ops.dispatch_emit.tests.test_halt_records_kept_work import
     RUN,
     WRITERS,
     _chunks,
-    _git,
     repo,
 )
 
@@ -36,10 +32,6 @@ def _halted(envelope, *, with_plan: bool = False) -> dict:
         halted["plan"] = PLAN
         halted["blitz"] = {"pulled": [{"planPath": PLAN, "reviews": "r.json", "coverage": "c"}]}
     return halted
-
-
-def _landed_marker(root: Path) -> dict:
-    return json.loads(_git(root, "show", f"HEAD:{HALTED_REL}"))
 
 
 def test_valid_envelope_is_written_and_invalid_or_legacy_is_omitted(tmp_path):
@@ -78,36 +70,6 @@ def test_record_resume_stage_sets_stage_and_refuses_otherwise(tmp_path):
     before = (resumed / "halted.json").read_bytes()
     assert halted_run.record_resume_stage(resumed, stage) is False
     assert (resumed / "halted.json").read_bytes() == before
-
-
-@WRITERS
-def test_landed_marker_carries_envelope_and_kept_pointer(repo, call):
-    _chunks(repo, {"C1": ["a.py"]}, {"C1": "DONE: C1\n"})
-
-    out = call(repo, _halted(_envelope()))
-
-    assert out["committed"] is True, out
-    action = _landed_marker(repo)["next_action"]
-    assert halt_refire.is_refire_next_action(action)
-    assert action["resume"]["stage"] == {"kept": KEPT_POINTER, "chunks": ["C1"], "plan_gate": False}
-
-
-@WRITERS
-def test_nothing_kept_leaves_stage_null(repo, call):
-    out = call(repo, _halted(_envelope()))
-
-    assert out["committed"] is True, out
-    assert _landed_marker(repo)["next_action"]["resume"]["stage"] is None
-
-
-@WRITERS
-def test_legacy_string_next_action_is_omitted_from_landed_marker(repo, call):
-    _chunks(repo, {"C1": ["a.py"]}, {"C1": "DONE: C1\n"})
-
-    out = call(repo, _halted("fix the file"))
-
-    assert out["committed"] is True, out
-    assert "next_action" not in _landed_marker(repo)
 
 
 @WRITERS

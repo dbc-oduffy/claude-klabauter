@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import halt_refire as hr
 from coordinator_core.ops.dispatch_emit.ask_compose import HALT_USAGE_LIMIT, compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
 from coordinator_core.ops.dispatch_emit.judgment_halt import rule_and_refire_next_action_js
+from coordinator_core.ops.dispatch_emit.phase_ledger import HALT_PHASE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.win_portability import no_console_creationflags
@@ -93,7 +94,13 @@ def test_review_blocked_halt_returns_the_engine_ask_refire():
     halted = _run_finaliser("null", pre)
     action = halted["next_action"]
     assert hr.is_refire_next_action(action)
-    assert action["resume"] == {"run_id": "run-1", "sizing": _SIZING, "halted": "review_blocked", "stage": None}
+    assert action["resume"] == {
+        "run_id": "run-1",
+        "sizing": _SIZING,
+        "halted": "review_blocked",
+        "stage": None,
+        hr.RESUME_PHASE_KEY: HALT_PHASE["review_blocked"],
+    }
     assert action["call"] == fire_command(_SIZING)
     assert "fix the" not in json.dumps(action).lower()
 

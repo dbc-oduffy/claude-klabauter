@@ -216,6 +216,52 @@ def test_stage_of_a_halted_run_keeps_the_prior_baseline(tmp_path, fake_git):
     assert m.write_baseline["pkg/new.py"] is None
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_capture_persists_the_raw_crlf_blob_and_it_matches_head(tmp_path):
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.tests._kept_fixture import crlf_repo, git
+
+    root, _, _, _ = crlf_repo(tmp_path)
+    rel = "docs/fresh.txt"
+    (root / rel).write_bytes(b"one\n")
+    git(root, "add", rel)
+    git(root, "commit", "-q", "-m", "fresh")
+    crlf = b"one\r\n"
+    (root / rel).write_bytes(crlf)
+    head_sha = git(root, "rev-parse", f"HEAD:{rel}")
+    assert not (resolve_git_common_dir(root) / "objects" / blob_sha(crlf)[:2] / blob_sha(crlf)[2:]).exists()
+
+    got = ask_stage._write_baseline.capture(root, [rel, "docs/absent.txt"])
+
+    assert got == {rel: blob_sha(crlf), "docs/absent.txt": None}
+    assert read_object(resolve_git_common_dir(root), got[rel]) == ("blob", crlf)
+    (root / rel).unlink()
+    assert kept_work.matches_committed(root, rel, got[rel], head_sha)
+
+
+def test_capture_survives_an_unwritable_object_store(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "a.py").write_text("x\n", encoding="utf-8", newline="\n")
+
+    def deny(*a, **k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("coordinator_core.git.git_objects.write_object", deny)
+    assert ask_stage._write_baseline.capture(tmp_path, ["a.py"]) == {"a.py": fingerprint(tmp_path, "a.py")}
+
+
+def test_run_base_blobs_persist_each_segment_body(tmp_path, fake_git):
+    from coordinator_core.git.git_objects import read_object
+
+    (tmp_path / ".git").mkdir()
+    got = ask_stage._run_base_blobs(tmp_path, BASE, ["pkg/extra.py", "pkg/gone.py"])
+    assert got == {"pkg/extra.py": BASE_EXTRA, "pkg/gone.py": None}
+    assert read_object(tmp_path / ".git", BASE_EXTRA) == ("blob", EXTRA_BYTES)
+
+
 def test_adopts_stranded_flag_is_deterministic():
     f = ask_stage._adopts_stranded
     assert f({"authorization": {"source": "em-inferred", "rationale": "the stranded 9 files"}})

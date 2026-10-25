@@ -4,6 +4,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 HOOK = Path(__file__).resolve().parents[1] / "lib" / "claude_author_control" / "turn_hook.py"
 sys.path.insert(0, str(HOOK.parent.parent))
 from claude_author_control import protocol  # noqa: E402

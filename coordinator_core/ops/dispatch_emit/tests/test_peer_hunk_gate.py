@@ -59,6 +59,24 @@ def test_co_declared_path_is_held_and_names_the_sibling(repo):
     assert "run-b" in peer_hunk_gate.refusal_message(holds, OWN)
 
 
+def test_every_co_declaring_sibling_is_named_not_just_the_first(repo):
+    for run_id in ("run-b", "run-c", "run-d"):
+        _declare(repo, run_id, PATH)
+        run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH])
+    assert holds == [(PATH, "run-b"), (PATH, "run-c"), (PATH, "run-d")]
+    message = peer_hunk_gate.refusal_message(holds, OWN, repo)
+    assert all(run_id in message for run_id in ("run-b", "run-c", "run-d"))
+
+
+def test_sibling_not_declaring_the_path_is_not_added_to_the_holders(repo):
+    for run_id, declared in (("run-b", PATH), ("run-c", PATH), ("run-d", "other/d.py")):
+        _declare(repo, run_id, declared)
+        run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH])
+    assert holds == [(PATH, "run-b"), (PATH, "run-c")]
+
+
 def _release_fixture(repo: Path, status: str = "open", plan: str | None = None):
     (repo / "state/sizings").mkdir(parents=True, exist_ok=True)
     (repo / "state/sizings/s.yaml").write_text(f"status: {status}\n", encoding="utf-8")

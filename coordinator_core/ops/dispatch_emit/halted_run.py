@@ -310,3 +310,31 @@ def mark_landed(record_dir: Path, sha: str) -> bool:
     _index_call("remove_run", record_dir)
     stamp_run_stage_at(Path(record_dir), "landed")
     return True
+
+
+def mark_predecessors_landed(repo_root: Path, run_id: str, sha: str) -> list:
+    """Stamp each `resumed` predecessor of `run_id` (its run.json `resumed_from` chain) landed at `sha`.
+
+    Returns the run ids stamped. A predecessor not `resumed` (already landed, or halted again) is left
+    alone; the walk is cycle-safe and capped at `CARRIED_HOP_CAP` hops. Never raises on a bad link.
+    """
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    root = Path(repo_root)
+    stamped: list = []
+    visited = {run_id}
+    cur = run_id
+    for _ in range(rl.CARRIED_HOP_CAP):
+        try:
+            prev = (rl.read_run(record_dir(root, cur)) or {}).get(rl.RESUMED_FROM_FIELD)
+            if not (isinstance(prev, str) and safe_id(prev)) or prev in visited:
+                break
+            marker = _read(record_dir(root, prev))
+            if marker is not None and marker.get("status") == STATUS_RESUMED and mark_landed(record_dir(root, prev), sha):
+                stamped.append(prev)
+        except (OSError, ValueError):
+            break
+        visited.add(prev)
+        cur = prev
+    return stamped

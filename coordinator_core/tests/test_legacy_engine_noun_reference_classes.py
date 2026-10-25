@@ -242,6 +242,58 @@ def test_a_tests_own_fixture_literal_is_not_a_renameable_row(rel, line, expected
 
 
 @pytest.mark.parametrize(
+    "line,expected",
+    [
+        ('"""Opens a claude-klabauter docstring', "PROSE-ONLY"),
+        ('"""One-line claude-klabauter docstring."""', "PROSE-ONLY"),
+        ("r'''raw claude-klabauter opener", "PROSE-ONLY"),
+        ('x = claude_klabauter_y  # """', "RENAMEABLE-LOCAL"),
+    ],
+)
+def test_a_docstring_opener_line_is_prose_only(line, expected):
+    gen = _load_generator_module()
+    opener = gen._DOCSTRING_OPENER.match(line) is not None
+    assert gen._classify_line("coordinator_core/x.py", line, False, opener)[0] == expected
+
+
+def _scan_classes(tmp_path, source):
+    gen = _load_generator_module()
+    (tmp_path / "coordinator").mkdir()
+    (tmp_path / "coordinator" / "m.py").write_text(source, encoding="utf-8")
+    _init_bare_git_repo(tmp_path)
+    rows, _ = gen._scan_four_trees(tmp_path)
+    return {r["line"]: r["primary_class"] for r in rows}
+
+
+def test_only_a_genuine_docstring_is_prose_only(tmp_path):
+    source = (
+        '"""Module claude-klabauter docstring."""\n'  # 1 genuine
+        "import os\n"
+        "\n"
+        "class C:\n"
+        '    """Class claude-klabauter doc\n'  # 5 genuine opener
+        "    claude-klabauter body\n"  # 6 genuine body
+        '    """\n'
+        "\n"
+        "    def f(self,\n"
+        "          a) -> int:\n"
+        '        """Func claude-klabauter doc."""\n'  # 11 genuine (multi-line header)
+        '        sql = """\n'  # 12 not a docstring
+        "        select claude_klabauter_col\n"  # 13 string body: code
+        '        """\n'
+        '        return """claude-klabauter one-line"""\n'  # 15 not a docstring
+        '\n'
+        'TEMPLATE = """\n'
+        "claude_klabauter_template\n"  # 18 code
+        '"""\n'
+    )
+    classes = _scan_classes(tmp_path, source)
+    assert classes[1] == classes[5] == classes[6] == classes[11] == "PROSE-ONLY"
+    for lineno in (13, 15, 18):
+        assert classes[lineno] == "RENAMEABLE-LOCAL", lineno
+
+
+@pytest.mark.parametrize(
     "text,expected",
     [
         ("def test_to_claude_klabauter_memo_is_engine():", True),

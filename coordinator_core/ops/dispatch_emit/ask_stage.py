@@ -1145,6 +1145,14 @@ def stage(
                 scratch_clause = scratch_delete.brief_clause(run_id, row.id, row.writes)
                 if scratch_clause:
                     text = text.rstrip() + "\n\n" + scratch_clause + "\n"
+                from coordinator_core.bash_guards import block_subagent_destructive_action as _destructive_guard
+
+                if _destructive_guard._DECLARED_DELETE_CHANNEL_LIVE and any(
+                    not str(w).replace("\\", "/").startswith("scratch/") for w in row.writes
+                ):
+                    from coordinator_core.bash_guards import _declared_delete_license
+
+                    text = text.rstrip() + "\n\n" + _declared_delete_license.brief_clause(run_id, row.id) + "\n"
                 if prior:
                     text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
                 for dep in after.get(row.id, ()):
@@ -1491,6 +1499,7 @@ def _run_base_blobs(root: Path, base: str, paths: Sequence[str]) -> dict[str, Op
         segments.append(data[pos:end])
         pos = end + len(f"{tok}{i} missing\n")
     out: dict[str, Optional[str]] = {}
+    common = _write_baseline.common_dir_for(root)
     for i, seg in enumerate(segments):
         head, _, body = seg.partition(b"\n")
         parts = head.split(b" ")
@@ -1498,7 +1507,12 @@ def _run_base_blobs(root: Path, base: str, paths: Sequence[str]) -> dict[str, Op
             if len(parts) != 3 or parts[1] != b"commit":
                 raise RefireBaselineError(f"{fail} (not a commit)")
             continue
-        out[paths[i - 1]] = blob_sha(body[:-1]) if len(parts) == 3 and parts[1] == b"blob" else None
+        if len(parts) == 3 and parts[1] == b"blob":
+            blob = body[:-1]
+            out[paths[i - 1]] = blob_sha(blob)
+            _write_baseline.persist_raw(common, blob)
+        else:
+            out[paths[i - 1]] = None
     return out
 
 

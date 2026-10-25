@@ -49,12 +49,6 @@ def merging(tmp_path):
     return r
 
 
-def _old(root, paths, deleted, product):
-    from coordinator_core.ops.dispatch_emit import terminal_commit
-
-    return terminal_commit._merge_landing_plan(root, paths, deleted, product=product)
-
-
 def _own(repo, run_id="run-1"):
     mh = _git(repo, "rev-parse", "MERGE_HEAD").stdout.strip()
     h = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -66,30 +60,27 @@ def _resolve(repo):
     _git(repo, "add", "shared.txt")
 
 
-def test_no_owner_matches_old_function_when_resolved(merging):
+def test_no_owner_plans_the_merge_paths_when_resolved(merging):
     _resolve(merging)
-    args = (["shared.txt", "extra.txt"], [])
-    assert landing_plan(merging, *args, product={"shared.txt"}) == _old(
-        merging, *args, {"shared.txt"}
-    )
-    assert "paths" in landing_plan(merging, *args, product={"shared.txt"})
+    got = landing_plan(merging, ["shared.txt", "extra.txt"], [], product={"shared.txt"})
+    assert "shared.txt" in got["paths"] and "extra.txt" not in got["paths"]
+    assert got["deleted"] == []
+    assert got["artifacts"] == {"paths": ["extra.txt"], "deleted": []}
 
 
-def test_no_owner_matches_old_function_with_markers(merging):
-    args = (["shared.txt"], [])
-    got = landing_plan(merging, *args, product={"shared.txt"})
-    assert got == _old(merging, *args, {"shared.txt"})
-    assert "refusal" in got
+def test_no_owner_refuses_with_markers(merging):
+    got = landing_plan(merging, ["shared.txt"], [], product={"shared.txt"})
+    assert got["refusal"].startswith("merge not finished, HEAD unmoved:")
+    assert "shared.txt" in got["extra"]["merge_paths"]
 
 
-def test_no_owner_matches_old_function_foreign_declared_path(merging):
+def test_no_owner_refuses_foreign_declared_path(merging):
     _resolve(merging)
     _w(merging, "elsewhere.txt", "x\n")
-    args = (["shared.txt", "elsewhere.txt"], [])
-    product = {"shared.txt", "elsewhere.txt"}
-    got = landing_plan(merging, *args, product=product)
-    assert got == _old(merging, *args, product)
-    assert "refusal" in got
+    got = landing_plan(
+        merging, ["shared.txt", "elsewhere.txt"], [], product={"shared.txt", "elsewhere.txt"}
+    )
+    assert got["refusal"].startswith("merge not finished, HEAD unmoved:")
 
 
 def test_recorded_owner_gets_paths_and_artifacts(merging):

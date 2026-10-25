@@ -4806,6 +4806,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      No subprocess, no network, no cache write -- unlike its
     #      op_census.report sibling, which persists a module index.
     "op_census.breaches": OpClass.COMPUTE_ONLY,
+    # doctor.recover_kept_blobs — MUTATING: writes loose git objects into the target repo's
+    # object store (ops/doctor_kept_blobs.py::_recover_op); never touches the worktree.
+    # DR-208: 1 Yes (git objects) 2 No 3 Yes (loose object files) 4 Yes (shared object store)
+    # 5 Yes. No COMPUTE_ONLY reading exists: the report half is the doctor layer, not an op.
+    "doctor.recover_kept_blobs": OpClass.MUTATING,
     # freshness.commit_delta — COMPUTE_ONLY: the workday-start doc/test/bug-sweep
     # commit-delta producer (ops/freshness_commit_delta.py::freshness_commit_delta).
     # docs/plans/2026-09-10-cartography-churn-producer-and-staleness-registrations.md

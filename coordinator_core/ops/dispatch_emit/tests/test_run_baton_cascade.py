@@ -21,7 +21,7 @@ from coordinator_core.ops.tests.test_deliverable_cascade_kinds import (
     _seed_handoff,
 )
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SESSION_ID = "11111111-1111-1111-1111-111111111111"
 _DID = "dlv-run-baton-000000"

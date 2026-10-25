@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_export as le
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(root: Path, *args: str) -> str:

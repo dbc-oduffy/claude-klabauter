@@ -3377,8 +3377,18 @@ def _integrity(
         except ValueError:
             pass
     live = [p for p in paths if p not in skip]
+    from coordinator_core.ops.dispatch_emit import merge_landing
+
+    owned = merge_landing.run_owned_merge(root, run_id)
     findings = li.unparseable_py(root, live)
-    findings += li.import_closure_findings(root, live, deleted)
+    # The merge commit carries every merge path, so an import of a merge-carried module is landed,
+    # not uncommitted.
+    if owned is not None:
+        findings += li.import_closure_findings(
+            root, sorted({*live, *owned.present}), sorted({*deleted, *owned.deleted}),
+        )
+    else:
+        findings += li.import_closure_findings(root, live, deleted)
     try:
         from coordinator_core.authoring_leaks import import_closure
 
@@ -3391,23 +3401,14 @@ def _integrity(
             "", li.IMPORT_CLOSURE_UNTRACKED, f"residue import scan failed: {type(exc).__name__}: {exc}",
         ))
     base = li.run_base_for(root, run_id, params)
-    from coordinator_core.git import merge_owner
-
     # The merge owner skips the since-base scan for the merge's own paths only: a resolution that
     # takes the other side drops this side's lines by design. A path the merge does not move is
     # still scanned. No readable merge state exempts nothing (fail closed).
     if base is not None:
         scan = live
-        if run_id and merge_owner.owner(root) == run_id:
-            from coordinator_core.git import merge_state
-
-            try:
-                state = merge_state.read_merge_state(root)
-            except merge_state.MergeStateError:
-                state = None
-            if state is not None:
-                moved = set(state.merge_paths)
-                scan = [p for p in live if p not in moved]
+        if owned is not None:
+            moved = {*owned.present, *owned.deleted}
+            scan = [p for p in live if p not in moved]
         findings += li.since_base_findings(root, scan, base, run_id=run_id, plan=plan)
     from coordinator_core.ops.dispatch_emit import merge_ancestry_release, peer_hunk_gate
 

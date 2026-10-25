@@ -6,9 +6,41 @@ Stdlib-only at the top: terminal_commit's cold-import pin covers this module.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 FOREIGN_KEY = "foreign"
+
+
+class RunOwnedMerge(NamedTuple):
+    """Sorted repo-relative paths the open merge commit carries: still on disk, and gone from disk."""
+
+    present: tuple[str, ...]
+    deleted: tuple[str, ...]
+
+
+def run_owned_merge(worktree_root: Path, run_id: Optional[str]) -> Optional[RunOwnedMerge]:
+    """The open merge's changed paths when ``run_id`` started it, else None (fail closed).
+
+    Trap: the set is the merge's changed paths, i.e. exactly what ``landing_plan`` hands the
+    merge commit; never the worktree's dirt. No spawn when ``run_id`` is falsy or no merge is open."""
+    if not run_id:
+        return None
+    from coordinator_core.git import merge_owner, merge_state
+    from coordinator_core.git.git_dir import resolve_git_dir
+
+    if not (resolve_git_dir(worktree_root) / "MERGE_HEAD").exists():
+        return None
+    if merge_owner.owner(worktree_root) != run_id:
+        return None
+    try:
+        state = merge_state.read_merge_state(worktree_root)
+    except merge_state.MergeStateError:
+        return None
+    if state is None:
+        return None
+    merge_set = set(state.merge_paths)
+    gone = sorted(p for p in merge_set if not (worktree_root / p).exists())
+    return RunOwnedMerge(tuple(sorted(merge_set - set(gone))), tuple(gone))
 
 
 def landing_plan(

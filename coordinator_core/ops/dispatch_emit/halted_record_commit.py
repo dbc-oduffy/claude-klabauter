@@ -581,13 +581,17 @@ def _record_kept(
     place) so they land with the record, and stamp ``kept.json`` on the marker as
     ``next_action.resume.stage``. ``post_candidates`` that are in ``withheld``, not in ``landed`` and
     owned by no kept chunk are fingerprinted under ``post_checkpoint`` when their blob was persisted;
-    the rest are named under ``post_checkpoint_unpersisted``.
+    the rest are named under ``post_checkpoint_unpersisted``. Every kept chunk path's blob is
+    persisted too; those that could not be are named under ``kept_unpersisted``.
     Returns ``{"kept": {...}}`` (plus ``"returns": [ids]``) when anything was recorded, else ``{}``."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit import kept_work, row_returns
 
     record_dir = root / record_dir_rel
     if not record_dir.is_dir():
         return {}
+    if common_dir is None:
+        common_dir = resolve_git_common_dir(root)
     returns = {
         k: v for k, v in (consumed_returns.items() if isinstance(consumed_returns, dict) else ())
         if isinstance(k, str) and isinstance(v, str)
@@ -617,8 +621,12 @@ def _record_kept(
     }
     stored = _persist_blobs(root, common_dir, wanted)
     post = {p: blob for p, blob in wanted.items() if p in stored}
+    kept_paths = {p: fp for entry in chunks.values() for p, fp in entry["paths"].items()}
+    kept_stored = _persist_blobs(root, common_dir, kept_paths)
     written = kept_work.write(record_dir, chunks, gate, post)
     reply: dict = {"returns": sorted(persisted)} if persisted else {}
+    if len(kept_stored) != len(kept_paths):
+        reply["kept_unpersisted"] = sorted(set(kept_paths) - kept_stored)
     if len(post) != len(wanted):
         reply["post_checkpoint_unpersisted"] = sorted(set(wanted) - set(post))
     if written is None:

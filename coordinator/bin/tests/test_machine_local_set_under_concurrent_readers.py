@@ -12,7 +12,11 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="read/replace contention is Windows-only")
+pytestmark = [
+    pytest.mark.skipif(sys.platform != "win32", reason="read/replace contention is Windows-only"),
+    pytest.mark.spawns_process,
+    pytest.mark.cadence,
+]
 
 _REPO = Path(__file__).resolve().parents[3]
 _IMPL = _REPO / "coordinator" / "templates" / "bin" / "_machine_local.py"

@@ -98,6 +98,16 @@ def test_executing_bound_secs_for_an_op_without_override_is_the_pool_deadline(mo
     assert server._executing_bound_secs(_METHOD) == server._POOL_RESULT_DEADLINE_SECS
 
 
+def _noop():
+    return None
+
+
+def _prewarm(inner):
+    """Pay the spawn worker's start and import (this module included) before the
+    pool-deadline clock runs, so a cold spawn cannot land in the withdraw branch."""
+    inner.submit(_noop).result(timeout=_WAIT)
+
+
 def _hold_then_reply(msg, caller):
     params = msg["params"]
     Path(params["started"]).write_text("1")
@@ -150,6 +160,7 @@ def test_blocked_worker_reads_abandoned_then_finishes_when_released(tmp_path, mo
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)
     release = tmp_path / "release"
     try:
+        _prewarm(inner)
         key = dispatch_ack.mint_key()
         assert server._ack_store.admit(key, _METHOD)
         ctx._pool_outstanding.enter()

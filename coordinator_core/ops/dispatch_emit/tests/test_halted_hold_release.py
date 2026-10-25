@@ -264,6 +264,44 @@ def test_kept_blob_equal_to_head_releases(tmp_path):
     assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
 
 
+def test_kept_crlf_blob_whose_lf_form_is_at_head_releases(tmp_path):
+    """ue-addon cd5bb6: under core.autocrlf the keep is a raw CRLF blob while HEAD stores the LF form."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    h, c = _kept_repo(tmp_path, KEPT, KEPT)
+    _git(tmp_path, "config", "core.autocrlf", "true")
+    crlf = KEPT.replace("\n", "\r\n").encode()
+    kept_blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=tmp_path, input=crlf,
+        capture_output=True, check=True, **no_console_creationflags(),
+    ).stdout.decode().strip()
+    assert kept_blob != _git(tmp_path, "rev-parse", "HEAD:a.py")
+    rec = tmp_path / "state/warp" / h
+    _write(rec / "kept.json", json.dumps({"chunks": {"X1": {"paths": {"a.py": kept_blob}}}, "plan_gate": None}))
+    halted = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
+    halted.pop("run_base_sha")  # no _hunks_present fallback: only blob equality can release
+    _write(rec / "halted.json", json.dumps(halted))
+    assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
+
+
+def test_kept_crlf_blob_with_different_content_holds(tmp_path):
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    h, c = _kept_repo(tmp_path, "def f():\n    return 1\n", KEPT)
+    _git(tmp_path, "config", "core.autocrlf", "true")
+    kept_blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=tmp_path, input=KEPT.replace("\n", "\r\n").encode(),
+        capture_output=True, check=True, **no_console_creationflags(),
+    ).stdout.decode().strip()
+    _write(tmp_path / "state/warp" / h / "kept.json",
+           json.dumps({"chunks": {"X1": {"paths": {"a.py": kept_blob}}}, "plan_gate": None}))
+    assert hr.release_reason(tmp_path, h, c, None) is None
+
+
 def test_kept_hunks_present_after_reflow_release(tmp_path):
     reflowed = "def f():\n    return 1\n\n\ndef g(\n    a, b\n):\n    return a + b\n"
     h, c = _kept_repo(tmp_path, reflowed, KEPT)

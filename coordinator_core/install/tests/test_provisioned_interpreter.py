@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 from coordinator_core.install.provisioned_interpreter import resolve_provisioned_interpreter
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _fake_rag(tmp_path, body):

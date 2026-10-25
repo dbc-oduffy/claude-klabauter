@@ -802,7 +802,7 @@ _PLAN_TASKS_RESOLVE_REASON = (
 _GEN_SHIM_TWIN_REASON = (
     "Two-leg-pair admission test. Extensionless POSIX bareword entrypoint; "
     "its Windows leg is the tracked sibling coordinator/bin/<name>.cmd "
-    "(also <name>.ps1), generator-owned by coordinator/bin/gen-launcher-shim.py, "
+    "(and, where generated, <name>.ps1), generator-owned by coordinator/bin/gen-launcher-shim.py, "
     "which runs this exact file python-direct. Same shape as "
     "_PLAN_TASKS_RESOLVE_REASON. Dropping the bit or shebang would kill the "
     "POSIX bareword path (fleet floor is macOS)."
@@ -853,6 +853,8 @@ _GEN_SHIM_TWIN_PATHS = (
     "coordinator/bin/coordinator-precommit-foreign-platform-check",
     "coordinator/bin/coordinator-precommit-settings-tracking-check",
     "coordinator/bin/gate-validate-invocable",
+    "coordinator/bin/plan-evidence-append",
+    "coordinator/bin/plan-tasks-stamp",
     "coordinator/bin/spawn-census",
     "coordinator/bin/static-check",
     "coordinator/bin/with-suite-mutex",
@@ -1246,6 +1248,37 @@ _REASON_BYTE_COPIED_POSIX_TARGET = (
     "coordinator/bin/claude-author.cmd (and claude-author.ps1)."
 )
 
+_REASON_LAUNCHABILITY_PLATFORM_PARAM_GUARD = (
+    "Admission test: posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), 'Known residual' "
+    "shape. coordinator_core/ceremony_config/launchability.py check() returns "
+    "before `os.access(resolved, os.X_OK)` under `if platform == \"win32\":`, "
+    "where `platform` is an injectable keyword parameter defaulting to "
+    "`sys.platform` so tests drive both legs. `_is_windows_guarded()` "
+    "recognizes only os.name/sys.platform/platform.system() tests, so the "
+    "guard is invisible to it. The X_OK check never runs on Windows."
+)
+
+_REASON_PERCOLATE_DIFF_COMMIT_SKIPIF = (
+    "Admission test: posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), shape (c) "
+    "skipif-decorator gap. The exec-bit asserts in "
+    "coordinator/lib/percolate/tests/test_diff_commit.py sit in tests "
+    "decorated `@posix_only` (`pytest.mark.skipif(os.name == \"nt\", ...)`), "
+    "which `_is_windows_guarded()` cannot see. Those tests are skipped "
+    "outright on Windows, so the flagged construct never executes there."
+)
+
+_REASON_PUBLISH_ROUND_MODES_SKIPIF = (
+    "Admission test: posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), shape (c) "
+    "skipif-decorator gap. The exec-bit asserts in "
+    "coordinator/bin/tests/test_publish_round_lands_source_modes.py sit in "
+    "tests decorated `@_POSIX_ONLY` (`pytest.mark.skipif(os.name == \"nt\", "
+    "...)`), which `_is_windows_guarded()` cannot see, or behind inline "
+    "`if os.name != \"nt\":` chmod guards. They never execute on Windows."
+)
+
 _REASON_SETUP_DIRECT_EXEC = (
     "Admission test: directly-executable installer. scripts/setup.py is invoked "
     "as ./scripts/setup.py on POSIX; shebang + exec bit are pinned by "
@@ -1281,6 +1314,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
             "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
+            "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
             **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
@@ -1383,6 +1417,9 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator/bin/tests/test_settings_home_first_read_rungs.py": _REASON_PMB_FIXTURE_CHMOD,
             "coordinator/bin/tests/test_workday_complete_step1_validate.py": _REASON_PMB_FIXTURE_CHMOD,
             "coordinator_core/hooks/support/tests/test_support_state.py": _REASON_PMB_FIXTURE_CHMOD,
+            "coordinator_core/ceremony_config/launchability.py": _REASON_LAUNCHABILITY_PLATFORM_PARAM_GUARD,
+            "coordinator/lib/percolate/tests/test_diff_commit.py": _REASON_PERCOLATE_DIFF_COMMIT_SKIPIF,
+            "coordinator/bin/tests/test_publish_round_lands_source_modes.py": _REASON_PUBLISH_ROUND_MODES_SKIPIF,
         },
     },
     "unresolved_cross_path": {},

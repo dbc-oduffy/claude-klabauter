@@ -208,8 +208,11 @@ def test_a_refusal_halt_resumes_ready_once_the_premise_target_is_fixed(repo, mon
     assert out["halt"] is None and out["resume_ready"] is True, out
     assert "manifest_handle" in out
     script = _script(monkeypatch, "m_plus")
-    ready = script.index("if (_gate.resume_ready && _gate.resume_plan) { _planRel = _gate.resume_plan; }")
-    ready_line = script[ready : script.index("\n", ready)]
+    ready_line = next(
+        ln
+        for ln in script.splitlines()
+        if "_gate.resume_ready" in ln and "_gate.resume_plan) " in ln and "{ _planRel = _gate.resume_plan; }" in ln
+    )
     assert "agent(" not in ready_line and "planBlitz(" not in ready_line
     assert "label: 'plan" not in ready_line and "reblitz" not in ready_line
 

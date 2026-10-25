@@ -15,7 +15,7 @@ from coordinator_core.ops.review_mint import wave_bookkeeping
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "11111111-2222-3333-4444-555555555555"
 PLAN = "docs/plans/ex.md"

@@ -139,6 +139,14 @@ This hardening only ever engages AFTER the existing subagent-identity
 resolution gate (EM main-loop calls remain unaffected) and only widens what
 Layer 2 denies -- it never narrows the original ported deny ladder.
 
+DECLARED-DELETE ADMISSION: `git rm` is admitted for a subagent only as
+`COORDINATOR_DISPATCH_ROW=<run_id>/<row_id> git rm [-q|-n|--cached] -- <file>...`
+where every file is in that manifest row's `writes` and the run's emission receipt names the
+payload's session. -r, -f, a directory, a glob, a repoint and any undeclared file stay denied;
+the PowerShell dialect and the unparseable-segment fallback stay default-deny. The marker is
+self-asserted, so a subagent can name a sibling row of its own run (bound shared with
+scratch.delete); `git rm` without -f refuses modified files. Zero spawns.
+
 UNSCOPED-STASH GAP CLOSE (2026-07-26, this change): confirmed real, not a
 deliberate carve-out -- the safe-forward allowlist gated bare `git stash`
 and `git stash push` (with no pathspec) through to allow on BOTH the
@@ -2564,6 +2572,190 @@ def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Opt
 
 _NO_VERDICT = "\0no-verdict"
 
+# Master switch for the declared-delete marker channel (git rm / tracked rm admission and the
+# executor-brief marker line). Dormant by default.
+_DECLARED_DELETE_CHANNEL_LIVE = False
+
+#: DECLARED-DELETE ADMISSION. While a Bash-dialect `check()` runs on a command carrying the
+#: dispatch marker, holds `{"cmd", "cwd", "session_id", "license"}`; `license` memoises the
+#: manifest + receipt read per marker value. None otherwise, so a command without the marker
+#: never reads either file.
+_DECL_CTX: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "_subagent_declared_delete_ctx", default=None
+)
+_GIT_RM_DENY_PREFIX = "git rm "
+_GIT_RM_SAFE_LONG_OPTS = frozenset({"--quiet", "--dry-run", "--cached"})
+_GIT_GLOBAL_REPOINT_PREFIXES = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix")
+
+
+def _row_license(ctx: dict, marker: Any, root: Path) -> Any:
+    from coordinator_core.bash_guards import _declared_delete_license as lic
+
+    memo = ctx["license"]
+    if marker not in memo:
+        memo[marker] = lic.resolve_license(root, marker, ctx["session_id"])
+    return memo[marker]
+
+
+def _git_rm_verdict(seg: str, remaining: Optional[List[str]]) -> Optional[str]:
+    """None for a `git rm` of files the dispatched row declares; else the deny kind.
+
+    Denies, in order: a git repoint before `rm`; -r/-f; an option outside -q/-n/--cached;
+    no operand or an operand that is not a plain repo file; no marker on this segment or an
+    ambiguous one; a refused license; an operand outside the row's writes.
+    """
+    from coordinator_core.bash_guards import _declared_delete_license as lic
+
+    remaining = list(remaining or ())
+    try:
+        tokens = shlex.split(seg)
+    except ValueError:
+        return _GIT_RM_DENY_PREFIX + "(unparseable segment)"
+    idx = len(tokens) - len(remaining) - 1
+    if idx < 0 or tokens[idx] != "rm":
+        return _GIT_RM_DENY_PREFIX + "(unparseable segment)"
+    if any(t.startswith(_GIT_GLOBAL_REPOINT_PREFIXES) for t in tokens[:idx] if t.startswith("-")):
+        return _GIT_RM_DENY_PREFIX + "after a git repoint (-C/--git-dir/--work-tree)"
+
+    options: List[str] = []
+    operands: List[str] = []
+    seen_dashdash = False
+    for tok in remaining:
+        if seen_dashdash:
+            operands.append(tok)
+        elif tok == "--":
+            seen_dashdash = True
+        elif tok.startswith("-") and tok != "-":
+            options.append(tok)
+        else:
+            operands.append(tok)
+    for opt in options:
+        short = not opt.startswith("--")
+        if opt == "--force" or (short and ("r" in opt[1:] or "f" in opt[1:])):
+            return "git rm -r/-f (recursive or force)"
+    for opt in options:
+        if opt.startswith("--"):
+            ok = opt in _GIT_RM_SAFE_LONG_OPTS
+        else:
+            ok = set(opt[1:]) <= {"q", "n"}
+        if not ok:
+            return _GIT_RM_DENY_PREFIX + "option outside -q/-n/--cached"
+
+    ctx = _DECL_CTX.get()
+    cwd = ctx["cwd"] if ctx else None
+    root = _repo_root_of(Path(cwd)) if cwd else None
+    if ctx is None:
+        return _GIT_RM_DENY_PREFIX + "without a dispatch marker on this segment"
+    if not operands or root is None:
+        return _GIT_RM_DENY_PREFIX + "needs a plain repo-file operand"
+    if _cd_precedes_delete(ctx["cmd"]):
+        return _UNRESOLVED_DENY_KIND
+    rels: List[str] = []
+    for op in operands:
+        rel = lic.normalize_operand(op, cwd, root)
+        if rel is None or (root / rel).is_dir():
+            return _GIT_RM_DENY_PREFIX + "needs a plain repo-file operand"
+        rels.append(rel)
+    return _git_rm_verdict_marker(seg, ctx, root, rels)
+
+
+def _git_rm_verdict_marker(seg: str, ctx: dict, root: Path, rels: List[str]) -> Optional[str]:
+    """None when `seg`'s own marker matches the command's single marker and its row declares `rels`."""
+    from coordinator_core.bash_guards import _declared_delete_license as lic
+
+    marker = lic.parse_marker(seg)
+    whole = lic.parse_marker(ctx["cmd"])
+    if whole is lic.AMBIGUOUS or marker is lic.AMBIGUOUS:
+        return _GIT_RM_DENY_PREFIX + "with two different dispatch markers"
+    if marker is None or marker != whole:
+        return _GIT_RM_DENY_PREFIX + "without a dispatch marker on this segment"
+    granted = _row_license(ctx, marker, root)
+    if isinstance(granted, str):
+        return _GIT_RM_DENY_PREFIX + f"marker refused: {granted}"
+    if not all(lic.declared(rel, granted.paths, root) for rel in rels):
+        return _GIT_RM_DENY_PREFIX + "operand not declared by the row"
+    return None
+
+
+_RM_TRACKED_DENY_KIND = "rm of a tracked path the dispatch row does not declare"
+_UNRESOLVED_DENY_KIND = "delete operand the guard cannot resolve ($-expansion or after cd)"
+_CD_HEADS = frozenset({"cd", "pushd", "popd"})
+
+
+def _cd_precedes_delete(flat: str) -> bool:
+    """True when a `cd`/`pushd`/`popd` segment comes before an `rm` or `git ... rm` segment."""
+    tokens = _tokenize_full_command(flat)
+    if not tokens:
+        return False
+    seen_cd = False
+    for seg in _segments_from_tokens(tokens):
+        seg_tokens = seg[0] if isinstance(seg, tuple) else seg
+        words = list(seg_tokens)
+        while words and _ASSIGN_TOKEN_RE.match(words[0]):
+            words.pop(0)
+        if not words:
+            continue
+        head = _normalize_executable_basename(words[0])
+        if head in _CD_HEADS:
+            seen_cd = True
+        elif seen_cd and (head == "rm" or (head == "git" and words[1:2] == ["rm"])):
+            return True
+    return False
+
+
+def _rm_tracked_verdict(rm_segments: List[tuple], cwd: Optional[str]) -> Optional[str]:
+    """None unless a direct `rm` segment names a tracked repo file its own marker does not declare.
+
+    Each segment is judged alone: only a marker in assignment-prefix position of that segment
+    licenses it, and the command must carry exactly one distinct marker value. Untracked and
+    out-of-repo operands pass. A glob expands against `cwd` with no spawn and is never licensed:
+    a tracked match denies. An unreadable index treats every in-repo operand as tracked. Inside a
+    repo a `$` operand, or an rm after `cd`/`pushd`/`popd`, is refused.
+    """
+    import glob as _glob
+
+    from coordinator_core.bash_guards import _declared_delete_license as lic
+
+    if not rm_segments or not cwd:
+        return None
+    root = _repo_root_of(Path(cwd))
+    if root is None:
+        return None
+    ctx = _DECL_CTX.get()
+    # A delete after cd cannot be resolved against the payload cwd, so it is denied.
+    # Trap: this deny departs from DR-394 rule 1 under its reopen clause (a bare rm of a tracked
+    # file loses uncommitted changes git cannot restore); the reopen awaits a PM ruling, and
+    # declining it makes this a DR-394 rule-3 advisory, never a silent allow.
+    if _cd_precedes_delete(_RAW_CMD.get()):
+        return _UNRESOLVED_DENY_KIND
+    for seg_text, operands in rm_segments:
+        rels: List[str] = []
+        globbed = False
+        for op in operands:
+            if "$" in op:
+                return _UNRESOLVED_DENY_KIND
+            if any(c in op for c in "*?["):
+                full = op if os.path.isabs(op) else os.path.join(cwd, op)
+                candidates = [m for m in _glob.glob(full) if os.path.isfile(m)]
+                globbed = True
+            else:
+                candidates = [op]
+            for cand in candidates:
+                rel = lic.normalize_operand(cand, cwd, root)
+                if rel is not None:
+                    rels.append(rel)
+        if not rels:
+            continue
+        tracked = lic.tracked_subset(root, rels)
+        needing = rels if tracked is None else [r for r in rels if r in tracked]
+        if not needing:
+            continue
+        if globbed or ctx is None:
+            return _RM_TRACKED_DENY_KIND
+        if _git_rm_verdict_marker(seg_text, ctx, root, needing) is not None:
+            return _RM_TRACKED_DENY_KIND
+    return None
+
 
 def _evaluate_git_segment_anchored(
     seg: str, subcmd: Optional[str], remaining: Optional[List[str]] = None
@@ -2705,6 +2897,9 @@ def _evaluate_git_segment_anchored(
         return "git filter-branch/filter-repo"
     if subcmd == "clean" and _CLEAN_FD_RE.search(seg):
         return "git clean -fd(x)"
+
+    if _DECLARED_DELETE_CHANNEL_LIVE and subcmd == "rm":
+        return _git_rm_verdict(seg, remaining)
 
     # --- SAFE-FORWARD ALLOWLIST -- reached only if none of the above
     # matched. Any git subcommand not enumerated here is DEFAULT-DENIED:
@@ -2879,9 +3074,13 @@ class _TokenSurfaces:
         "is_wrapper",
         "is_machine_local",
         "deny_kind",
+        "rm_segments",
     )
 
     def __init__(self) -> None:
+        # One (segment_text, operands) pair per direct rm segment; segment_text keeps the
+        # segment's own leading assignments so a marker binds to the segment it prefixes.
+        self.rm_segments: List[tuple] = []
         self.is_git = False
         self.is_rm = False
         self.is_chmod_chown_r = False
@@ -2957,6 +3156,15 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
 
         head_base = _normalize_executable_basename(working[0])
         norm_head = _normalize_interpreter_basename(head_base)
+        if _ASSIGN_TOKEN_RE.match(working[0]):
+            lead = 0
+            while lead < len(working) and _ASSIGN_TOKEN_RE.match(working[lead]):
+                lead += 1
+            if lead < len(working) and _normalize_interpreter_basename(
+                _normalize_executable_basename(working[lead])
+            ) == "rm":
+                working = working[lead:]
+                norm_head = "rm"
         seg_norm_text = " ".join(shlex.quote(tok) for tok in working)
 
         if norm_head == "git":
@@ -2970,6 +3178,16 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
             result.is_rm = True
             if _RM_DENY_RE.search(seg_norm_text) and result.deny_kind is None:
                 result.deny_kind = "rm -r/-f (recursive or force)"
+            after_dashdash = False
+            operands: List[str] = []
+            for tok in working[1:]:
+                if after_dashdash or not tok.startswith("-"):
+                    operands.append(tok)
+                elif tok == "--":
+                    after_dashdash = True
+            result.rm_segments.append(
+                (" ".join(shlex.quote(tok) for tok in seg_tokens), operands)
+            )
             continue
 
         if norm_head in ("chmod", "chown"):
@@ -3733,6 +3951,29 @@ def _build_reason(
             "denied action is permission laundering.\n"
             "Allowed: `kill`/`Stop-Process -Id <pid>` of numeric PIDs under this session."
         )
+    if deny_kind.startswith(_GIT_RM_DENY_PREFIX):
+        return (
+            f"BLOCKED: {deny_kind}.\n\n"
+            f"  Subagent: {agent_id} ({effective_type})\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Instead: `COORDINATOR_DISPATCH_ROW=<run_id>/<row_id> git rm -q -- <path>`, "
+            "where the row declares <path>. Anything else: the EM."
+        )
+    if deny_kind == _RM_TRACKED_DENY_KIND:
+        return (
+            f"BLOCKED: {deny_kind}.\n\n"
+            f"  Subagent: {agent_id} ({effective_type})\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Instead: `COORDINATOR_DISPATCH_ROW=<run_id>/<row_id> rm -- <path>`, "
+            "where the row declares <path>. Untracked files need no marker. Anything else: the EM."
+        )
+    if deny_kind == _UNRESOLVED_DENY_KIND:
+        return (
+            f"BLOCKED: {deny_kind}.\n\n"
+            f"  Subagent: {agent_id} ({effective_type})\n"
+            f"  Command:  {cmd_safe}\n\n"
+            "Instead: run from the payload cwd with a literal repo-relative path."
+        )
     if deny_kind == "rm -r/-f (recursive or force)":
         return (
             "BLOCKED: subagents may not run destructive rm operations — EM-locked.\n\n"
@@ -4404,9 +4645,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
     memo_token = _SP_MEMO.set({})
     raw_token = _RAW_CMD.set(flat)
+    decl_token = _DECL_CTX.set(
+        {"cmd": flat, "cwd": cwd, "session_id": payload.get("session_id") or "", "license": {}}
+        if _DECLARED_DELETE_CHANNEL_LIVE
+        and cwd
+        and "COORDINATOR_DISPATCH_ROW=" in flat
+        and dialect_from_tool_name(payload.get("tool_name") or "") is Dialect.BASH
+        else None
+    )
     try:
         return _check_unscoped(payload)
     finally:
+        _DECL_CTX.reset(decl_token)
         _RAW_CMD.reset(raw_token)
         _SP_MEMO.reset(memo_token)
         _SP_CTX.reset(sp_token)
@@ -4579,6 +4829,12 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not deny and tok_surfaces.is_rm and tok_surfaces.deny_kind:
             deny = True
             deny_kind = tok_surfaces.deny_kind
+
+        if not deny and _DECLARED_DELETE_CHANNEL_LIVE and tok_surfaces.rm_segments:
+            rm_verdict = _rm_tracked_verdict(tok_surfaces.rm_segments, payload.get("cwd"))
+            if rm_verdict is not None:
+                deny = True
+                deny_kind = rm_verdict
 
         if not deny and is_chmod_chown_r_surface:
             deny = True

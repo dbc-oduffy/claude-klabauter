@@ -104,6 +104,30 @@ def test_done_chunk_is_recorded_and_kept_json_lands_with_the_record(repo, call):
 
 
 @WRITERS
+def test_kept_chunk_blob_survives_the_worktree_file_being_overwritten(repo, call):
+    _chunks(repo, {"C1": ["a.py"]}, {"C1": "DONE: C1\n"})
+    want = kept_work.fingerprint(repo, "a.py")
+
+    out = call(repo, _halted(False))
+
+    _write(repo, "a.py", "overwritten\n")
+    assert _git(repo, "cat-file", "blob", want) == "a.py = 1\n"
+    assert "kept_unpersisted" not in out
+
+
+def test_kept_chunk_path_that_cannot_be_persisted_is_named(repo, tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
+
+    _chunks(repo, {"C1": ["a.py"]}, {"C1": "DONE: C1\n"})
+    monkeypatch.setattr(hrc, "_persist_blobs", lambda root, common_dir, post: set())
+
+    out = _terminal(repo, _halted(False))
+
+    assert out["kept_unpersisted"] == ["a.py"]
+    assert out["kept"]["chunks"] == ["C1"]
+
+
+@WRITERS
 def test_unfinished_chunk_is_never_recorded(repo, call):
     _chunks(repo, {"C1": ["a.py"], "C2": ["h.py"]}, {"C1": "DONE: C1\n", "C2": "PARTIAL: C2\n"})
 

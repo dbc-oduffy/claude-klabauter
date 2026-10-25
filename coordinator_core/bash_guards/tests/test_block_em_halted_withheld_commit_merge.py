@@ -16,7 +16,7 @@ R = "ask-20261024T000000-aaaaaa"
 S = "ask-20261024T000000-bbbbbb"
 CMD = "git " + "commit"
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(repo, *args, check=True):

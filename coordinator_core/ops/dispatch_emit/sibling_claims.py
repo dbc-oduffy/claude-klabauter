@@ -133,7 +133,8 @@ def _head_blobs(root: Path, paths: set) -> dict:
 def _own_dirt(root: Path, run_id: str, path: str, head: Optional[dict] = None) -> bool:
     """Whether the current bytes at `path` are `run_id`'s own work, judged from its records: a
     `kept.json` chunk fingerprint equal to the file, or a manifest `write_baseline` entry (the
-    pre-stage fingerprint) the file no longer equals while HEAD still holds that baseline. A baseline
+    pre-stage fingerprint) the file no longer equals while HEAD still holds that baseline (compared
+    through `kept_work.matches_committed`, as the baseline is a raw-bytes sha). A baseline
     HEAD has moved past (`head[path]` differs; `head` None counts as moved) is no evidence: the
     difference is the landed base, not this run's edit. A run that recorded neither, or whose
     recorded blob differs from the file, owns none of it."""
@@ -155,7 +156,8 @@ def _own_dirt(root: Path, run_id: str, path: str, head: Optional[dict] = None) -
         recorded = {_norm(k): v for k, v in base.items()}
         return (
             path in recorded and recorded[path] != current
-            and head is not None and head.get(path) == recorded[path]
+            and head is not None and head.get(path) is not None
+            and kept_work.matches_committed(root, path, recorded[path], head[path])
         )
     return False
 

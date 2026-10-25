@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 _BIN = Path(__file__).resolve().parents[1]
 
 _FAKE_GATE = '''

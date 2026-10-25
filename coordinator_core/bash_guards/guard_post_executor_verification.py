@@ -194,10 +194,16 @@ def _code_verifies(code: str, repo_root: str) -> bool:
     return _code_names_runner(code) and _code_imports_repo(code, repo_root)
 
 
+def _resolve_script_path(path: str) -> str:
+    """``path`` with environment variables expanded; one still carrying ``$`` is unresolved
+    and is classified on its basename."""
+    expanded = os.path.expandvars(path)
+    return os.path.basename(expanded) if "$" in expanded else expanded
+
+
 def _script_runs_suite(path: str, cwd: str) -> bool:
     """A probe script invoking a test runner. An unreadable script runs nothing we can see."""
-    if "$" in path:
-        return True
+    path = _resolve_script_path(path)
     try:
         with open(os.path.join(cwd, os.path.expanduser(path)), "r", encoding="utf-8", errors="replace") as fh:
             return _code_names_runner(fh.read(65536))
@@ -217,8 +223,7 @@ def _is_probe_script(path: str, repo_root: str, cwd: str) -> bool:
     """A throwaway script outside the repo under a temp or scratch(pad) dir whose
     source imports a repo package or loads a repo ``.py`` by quoted path. Installed
     tools outside the repo are not probes; an unreadable script fails open (not one)."""
-    if "$" in path:
-        return True
+    path = _resolve_script_path(path)
     full = os.path.normpath(os.path.join(cwd, os.path.expanduser(path)))
     root = os.path.normpath(repo_root)
     if full == root or full.startswith(root + os.sep):
@@ -453,13 +458,38 @@ def executor_reported(payload: dict, session_id: str, repo_root: str) -> bool:
     return newest_arming_epoch(session_id, repo_root) is not None
 
 
-def _deny_record(event_sentinel: str):
+_SCRIPT_TOKEN_RE = re.compile(r"[^\s'\"=;|&<>()]*\$[^\s'\"=;|&<>()]*\.py\b")
+
+
+def _unresolved_dollar_script(cmd: str) -> str:
+    """First ``.py`` word in ``cmd`` that still carries ``$`` after expansion, else ''."""
+    for m in _SCRIPT_TOKEN_RE.finditer(cmd):
+        if "$" in os.path.expandvars(m.group(0)):
+            return m.group(0)
+    return ""
+
+
+def _escape_clause(event_sentinel: str) -> str:
+    return (
+        f"No self-escape: the first non-blank line of {event_sentinel} is the reason. It applies only while a dispatched executor's "
+        "run report or sidecar reads status: blocked, thrashing, aborted or failed; a reason line alone "
+        "is not honoured, and one that applies is honoured once."
+    )
+
+
+def _deny_record(event_sentinel: str, unresolved: str = ""):
     from coordinator_core.bash_guards._rewrite_support import _deny_record as _build
     from coordinator_core.guard_messages.alternative_record import AdaptableOffer
 
+    note = (
+        f" Script path {unresolved} has an unresolved $ variable (set it in the environment); "
+        "it was classified on its basename."
+        if unresolved
+        else ""
+    )
     return _build(
         GUARD_NAME,
-        f"{_DENY_BODY} No self-escape: if an executor BLOCKs, a reason line in {event_sentinel} is honoured once.",
+        f"{_DENY_BODY}{note} {_escape_clause(event_sentinel)}",
         (
             AdaptableOffer(
                 template="dispatch a coordinator:test-runner",
@@ -471,9 +501,9 @@ def _deny_record(event_sentinel: str):
             ),
         ),
         em_text=(
-            f"{_DENY_BODY} Dispatch a coordinator:test-runner. "
+            f"{_DENY_BODY}{note} Dispatch a coordinator:test-runner. "
             "To measure, run python -m coordinator_core.benchmarks.measure -- <argv>. "
-            f"No self-escape: if an executor BLOCKs, a reason line in {event_sentinel} is honoured once."
+            f"{_escape_clause(event_sentinel)}"
         ),
     )
 
@@ -608,4 +638,4 @@ def check(payload: dict):
         return None
     from coordinator_core.session.dispatch_nudge_sentinel import sentinel_path
 
-    return _deny_record(str(sentinel_path(session_id)))
+    return _deny_record(str(sentinel_path(session_id)), _unresolved_dollar_script(clean))

@@ -36,6 +36,7 @@ def _setup(repo, tmp_path, exit_code: int, declare: bool = True) -> Path:
         f"open({str(marker)!r}, 'w').write('ran')\n"
         f"sys.exit({exit_code})\n",
         encoding="utf-8",
+        newline="",
     )
     _git(["add", "tools/v.py"], repo)
     _git(["commit", "-q", "-m", "verifier"], repo)

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-
-from coordinator_core.win_portability import no_console_creationflags
 from pathlib import Path
 
 import pytest
@@ -12,6 +10,8 @@ import pytest
 from coordinator_core.ops.push_outstanding import _upstream_sha
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import push_pending as pp
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _git(root: Path, *args: str) -> str:

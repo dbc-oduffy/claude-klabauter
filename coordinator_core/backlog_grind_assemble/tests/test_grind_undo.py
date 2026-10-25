@@ -261,6 +261,20 @@ def test_baseline_dirty_path_is_left_and_other_restored(repo, capsys, tmp_path):
     assert (repo / "mod.txt").read_bytes() == b"pre-fire edit"
 
 
+def test_kept_work_held_path_is_left_and_unheld_sibling_restored(repo, capsys):
+    from coordinator_core.ops.dispatch_emit.tests._kept_fixture import hold_kept
+
+    (repo / "mod.txt").write_bytes(b"kept edit")
+    (repo / "other.txt").write_text("edited\n")
+    hold_kept(repo, "run-kept1", ["mod.txt"])
+    assert _undo(repo, ["mod.txt", "other.txt"]) == 1
+    out = _out(capsys)
+    assert out["left"] == [{"path": "mod.txt", "reason": "kept-work-held:run-kept1"}]
+    assert out["restored"] == ["other.txt"]
+    assert (repo / "mod.txt").read_bytes() == b"kept edit"
+    assert (repo / "other.txt").read_text() == "other\n"
+
+
 def test_unreadable_decisions_file_restores_nothing(repo, capsys, tmp_path):
     (repo / "mod.txt").write_bytes(b"pre-fire edit")
     rc = grind_rows.main(

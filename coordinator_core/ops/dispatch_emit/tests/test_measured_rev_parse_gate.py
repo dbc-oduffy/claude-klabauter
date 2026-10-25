@@ -7,6 +7,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 
 def _git(root, *args):
     subprocess.run(

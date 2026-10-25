@@ -19,7 +19,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _REFIRE_CALL = "Workflow({ script: 'engine-ask s.yaml' })"
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.skipif(shutil.which("node") is None, reason="node absent")]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.skipif(shutil.which("node") is None, reason="node absent")]
 
 
 def _finalise(halted: dict) -> dict:

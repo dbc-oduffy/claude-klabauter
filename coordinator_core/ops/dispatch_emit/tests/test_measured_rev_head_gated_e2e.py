@@ -4,8 +4,12 @@ that is correct only in the working tree, and stays red for one that is not."""
 import os
 import subprocess
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
 from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV
+
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 BUDGET = 100
 

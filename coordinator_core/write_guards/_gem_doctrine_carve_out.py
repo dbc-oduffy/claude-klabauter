@@ -72,7 +72,7 @@ def doctrine_surface(path: str) -> Optional[str]:
 
 
 def doctrine_root_of(path: str) -> Optional[str]:
-    """The resolved content root when ``path`` is a ContentRooted surface, else None."""
+    """The resolved content root when ``path`` is a content-root surface, else None."""
     try:
         return _classify(path)[1]
     except Exception:

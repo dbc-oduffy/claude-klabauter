@@ -491,6 +491,7 @@ static const char *const door_stdin_reading_basenames[] = {
     "backlog-grind-assemble",
     "claims-emit",
     "coordinator-safe-commit",
+    "cross-repo-memo",
     "detect-initiative-candidates",
     "distill-log-append",
     "fan-out-dispatch",
@@ -498,6 +499,7 @@ static const char *const door_stdin_reading_basenames[] = {
     "misc-session-and-guards",
     "normalize-snippet",
     "queue-triage",
+    "session-claim-cli",
     "statusline",
     "subagent-statusline",
     "survey-consume-gate",
@@ -535,6 +537,7 @@ typedef struct {
 static const door_stdin_scope_t door_stdin_subcommand_scoped[] = {
     { "backlog-grind-assemble", "grind-row" },
     { "misc-session-and-guards", "claim-classify" },
+    { "session-claim-cli", "release-artifact-bulk" },
 };
 
 #define DOOR_STDIN_SUBCOMMAND_SCOPED_COUNT     (sizeof(door_stdin_subcommand_scoped) / sizeof(door_stdin_subcommand_scoped[0]))

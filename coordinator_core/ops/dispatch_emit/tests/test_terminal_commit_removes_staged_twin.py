@@ -9,6 +9,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
 SHA = "a" * 64
 SCRIPT = "scratch/warp/run1.workflow.mjs"
 

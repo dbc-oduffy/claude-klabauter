@@ -14,7 +14,8 @@ Exit codes: 0 nothing left, 1 something left (stdout and stderr carry the
 escapes root).
 
 Negative-spec: never `git status`, `clean`, `reset`, `stash`; never a recursive
-delete; never releases touch claims; never restores a `baseline_dirty` path.
+delete; never releases touch claims; never restores a `baseline_dirty` path;
+never restores a path an open kept.json holds.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from coordinator_core.contract.grind_vocab import decode_undo_paths
 from coordinator_core.git.run import GitResult, run_git
 from coordinator_core.git_scope import scoped_git_env
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.dispatch_emit import kept_work
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import BASELINE_DIRTY_KEY
 
 
@@ -108,6 +110,9 @@ def cmd_undo(rest: list[str]) -> int:
         if p in baseline:
             left[p] = "baseline"
     todo = [p for p in rels if p not in left]
+    for p, run_id in kept_work.held_paths(real_root, todo).items():
+        left[p] = f"kept-work-held:{run_id}"
+    todo = [p for p in todo if p not in left]
 
     root_str = str(real_root)
     sid = core.resolve_session_id(root_str)

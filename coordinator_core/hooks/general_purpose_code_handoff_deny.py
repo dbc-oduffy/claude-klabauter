@@ -33,9 +33,19 @@ _EDIT_VERB = re.compile(
     re.IGNORECASE,
 )
 _CODE_PATH = re.compile(r"(?<![\w./:@-])((?:[\w.-]+/)*[\w-][\w.-]*(\.[A-Za-z0-9]+))(?![\w-])")
+FORK_TYPE = "fork"
+_DEFERRED_TYPES = frozenset({GENERAL_PURPOSE_TYPE, FORK_TYPE})
 _REASON = (
     "Code edits go to a typed executor: dispatch subagent_type coordinator:executor "
-    "with the file and the change in its brief; general-purpose is untyped and unguarded."
+    "with the file and the change in its brief; general-purpose is untyped and unguarded. "
+    "coordinator:executor (Sonnet) is also the lane for scratch-only forensics "
+    "(scratch/ writes, git hash-object -w)."
+)
+_FORK_REASON = (
+    "A fork inherits the parent model (Opus) and ignores a model override, so it is not a "
+    "route around the tier rule: dispatch subagent_type coordinator:executor (Sonnet) with "
+    "the file and the change in its brief. coordinator:executor also covers scratch-only "
+    "forensics (scratch/ writes, git hash-object -w)."
 )
 
 
@@ -51,7 +61,7 @@ def _names_code_path(prompt: str) -> bool:
 def general_purpose_code_handoff_deny(
     payload: Mapping[str, Any], subagent_type: str
 ) -> Optional[dict]:
-    """None unless a top-level general-purpose Agent dispatch hands over a code edit.
+    """None unless a top-level general-purpose or fork Agent dispatch hands over a code edit.
 
     The prompt must name a code-extension path and carry an edit verb; the deny goes through
     ``apply_guard_level`` so the guard level governs it.
@@ -59,7 +69,7 @@ def general_purpose_code_handoff_deny(
     if (
         payload.get("tool_name") != "Agent"
         or payload.get("agent_id")
-        or subagent_type != GENERAL_PURPOSE_TYPE
+        or subagent_type not in _DEFERRED_TYPES
     ):
         return None
     tool_input = payload.get("tool_input")
@@ -68,4 +78,5 @@ def general_purpose_code_handoff_deny(
         return None
     from coordinator_core.machine_profile import apply_guard_level
 
-    return apply_guard_level(GUARD_NAME, deny("PreToolUse", _REASON))
+    return apply_guard_level(GUARD_NAME, deny("PreToolUse", _FORK_REASON if subagent_type == FORK_TYPE else _REASON)
+    )

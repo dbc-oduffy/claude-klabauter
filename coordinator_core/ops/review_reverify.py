@@ -42,12 +42,14 @@ path is removed, but one tracked at HEAD is restored to HEAD's bytes, never unli
 anything is written, the revert (tripwire-named paths included) refuses (``error``, nothing written,
 the whole call) when it would remove a top-level symbol that a committed file in the run's surface
 (manifest paths plus paths changed anchor..HEAD) still uses. An id implicating nothing is
-``unattributed`` and reverts nothing. Every rewritten or removed path is passed to ``declare_write``.
-The record ``reverify.json`` merges across calls. Revert refuses while a probe is open.
+``unattributed`` and reverts nothing. A path an open ``kept.json`` holds (``kept_work.held_paths``)
+is never restored, unlinked or inverted: it lands in ``kept`` as ``kept-work-held:<run_id>``. Every
+rewritten or removed path is passed to ``declare_write``. The record ``reverify.json`` merges across calls. Revert refuses while a probe is open.
 
 Probe: ``"probe":"open"`` (with ``failing`` and ``sidecars``) writes the finding-inverted bytes of
 each implicated edited path into the tree, stashing the post-review bytes beside the snapshot, and
-names the ``rerun`` ids for the test-runner. ``"probe":"close"`` puts the post-review bytes back.
+names the ``rerun`` ids for the test-runner; a path an open ``kept.json`` holds is not probed.
+``"probe":"close"`` puts the post-review bytes back.
 An id in ``failing_at_base`` (red at the run base with none of the run's edits applied) is
 ``pre_existing`` whatever the probe ran: it is never reverted and never ``unattributed``. An absent
 or empty list classes nothing ``pre_existing``. An id in ``failing_before`` that a closed probe
@@ -475,10 +477,13 @@ def _open_probe(
     repo_root: Path, snapshot_dir: Path, ids: List[str], implicated: Dict[str, List[str]],
     created_set: Set[str], sidecars: List[str],
 ) -> dict:
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    held = kept_work.held_paths(repo_root, implicated)
     writes: Dict[str, bytes] = {}
     for rel in sorted(implicated):
         target = repo_root / rel
-        if rel in created_set or not target.is_file():
+        if rel in held or rel in created_set or not target.is_file():
             continue
         inv = invert(target.read_bytes(), applied_rows(repo_root, sidecars, rel))
         if inv.reverted:
@@ -602,7 +607,16 @@ def review_reverify(
     plan: _Plan = {}
     refs_by_rel: Dict[str, list] = {}
     kept: List[dict] = []
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    held = kept_work.held_paths(repo_root, implicated)
     for rel in sorted(implicated):
+        if rel in held:
+            kept.append({
+                "path": rel, "tests": sorted(set(implicated[rel])),
+                "findings": [{"sidecar": None, "id": None, "reason": f"kept-work-held:{held[rel]}"}],
+            })
+            continue
         if rel in created_set:
             entry = view.head_map.get(rel)
             if entry is None:

@@ -96,6 +96,7 @@ def test_js_embeds_each_constant_and_is_idempotent():
     assert js.index("_legacy.kind === " + json.dumps(hr.REFIRE_KIND)) < js.index("_halted.next_action =")
 
 
+@pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 def test_js_runs_under_node(tmp_path):

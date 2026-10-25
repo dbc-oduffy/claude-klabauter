@@ -115,15 +115,40 @@ def co_declared_peer_holds(
             for path in wanted:
                 if path in spine:
                     claims.setdefault(path, run_id)
-        for path in list(claims):
-            if _mutual_halted_hold(root, own_run_id, claims[path], path):
-                del claims[path]
+        holders = {p: [r] for p, r in claims.items()}
+        if holders:
+            for run_id in sibling_claims._unlanded_run_ids(root, own_run_id, own_plan, minted_before):
+                for path in wanted:
+                    if path in holders and run_id not in holders[path] and _also_claims(root, run_id, path):
+                        holders[path].append(run_id)
+        pairs = [
+            (p, r) for p in wanted if p in holders and p in own
+            for r in sorted(holders[p]) if not _mutual_halted_hold(root, own_run_id, r, p)
+        ]
     except Exception:  # noqa: BLE001 -- contest unknown: hold nothing
         return []
-    holds = [(p, claims[p]) for p in wanted if p in claims and p in own]
+    holds = pairs
     if not holds:
         return holds
     return _release_criterion_met(root, holds, landing_run_id=own_run_id, landing_plan=own_plan)
+
+
+def _also_claims(root: Path, run_id: str, path: str) -> bool:
+    """Whether an unlanded `run_id` claims an already-contested `path` without a status read: a halted
+    run when it withholds the path; a live run when its manifest, extra records or plan spine declare
+    it. Dirt-only halted claims name only the first claimant (they need the shared status read)."""
+    from coordinator_core.ops import warp_run_deliverable
+    from coordinator_core.ops.dispatch_emit import sibling_claims
+
+    try:
+        if warp_run_deliverable._halted(root, run_id):
+            return path in {_norm(w) for w in warp_run_deliverable.halted_withheld_paths(root, run_id)}
+        if sibling_claims._declares(root, run_id, path) or path in sibling_claims._extra_declared(root, run_id):
+            return True
+        paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+        return not (paths or prefixes) and path in _spine_writes(root, run_id)
+    except Exception:  # noqa: BLE001 -- this run's claim unknown: it adds no holder
+        return False
 
 
 def _release_criterion_met(

@@ -288,10 +288,37 @@ def test_racily_clean_entry_gates(tmp_path):
     assert scoped_changed(repo, ["a.txt"], [], []) is None
 
 
-def test_executable_bit_disagreement_gates(tmp_path):
+class _OsView:
+    """Stand-in for the module's `os` that overrides only `name`."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+def test_executable_bit_disagreement_gates(tmp_path, monkeypatch):
+    from coordinator_core.git import scoped_changed as mod
+
+    monkeypatch.setattr(mod, "os", _OsView("posix"))
     repo = _repo(tmp_path, _BASE)
     _git(repo, "update-index", "--chmod=+x", "a.txt")
     assert scoped_changed(repo, ["a.txt"], [], []) is None
+
+
+def test_executable_bit_disagreement_is_ignored_on_windows(tmp_path, monkeypatch):
+    from coordinator_core.git import scoped_changed as mod
+
+    monkeypatch.setattr(mod, "os", _OsView("nt"))
+    repo = _repo(tmp_path, _BASE)
+    _git(repo, "update-index", "--chmod=+x", "a.txt")
+    _git(repo, "commit", "-q", "-m", "mode")
+    (repo / "a.txt").chmod(0o644)
+    got = scoped_changed(repo, ["a.txt"], [], [])
+    assert got is not None
+    changed, _ = got
+    assert changed == set()
 
 
 def test_literal_naming_a_directory_gates(tmp_path):

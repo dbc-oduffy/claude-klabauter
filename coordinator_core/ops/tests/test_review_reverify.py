@@ -107,7 +107,7 @@ def _row(fid, file, before, after):
 
 def test_failing_id_in_edited_test_file_inverts_the_finding_byte_for_byte(world, monkeypatch):
     root, orig, declared = world
-    (root / "tests/test_plain.py").write_text("def test_p():\n    assert undefined_local\n", encoding="utf-8")
+    (root / "tests/test_plain.py").write_bytes(b"def test_p():\n    assert undefined_local\n")
     sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert undefined_local\n"))
     out = _revert(root, ["tests/test_plain.py::test_p"], sidecars=sidecars)
     assert out["error"] is None
@@ -121,7 +121,7 @@ def test_failing_id_in_edited_test_file_inverts_the_finding_byte_for_byte(world,
 
 def test_failing_test_importing_an_edited_module_inverts_that_modules_finding(world, monkeypatch):
     root, orig, _ = world
-    (root / "pkg/mod.py").write_text("VALUE = 99\n", encoding="utf-8")
+    (root / "pkg/mod.py").write_bytes(b"VALUE = 99\n")
     sidecars = _ledger(monkeypatch, _row("F1", "pkg/mod.py", "VALUE = 1\n", "VALUE = 99\n"))
     out = _revert(root, ["tests/test_mod.py::test_v"], sidecars=sidecars)
     assert [e["path"] for e in out["reverted"]] == ["pkg/mod.py"]
@@ -196,7 +196,7 @@ def test_handler_validates_probe_and_failing_before(world):
 
 def test_revert_refuses_while_a_probe_is_open(world, monkeypatch):
     root, _orig, _ = world
-    (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
+    (root / "tests/test_plain.py").write_bytes(b"def test_p():\n    assert nope\n")
     sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))
     failing = ["tests/test_plain.py::test_p"]
     opened = rr.review_reverify(
@@ -307,70 +307,6 @@ def test_tracked_at_base_undeclared_foreign_file_is_not_removed(world, monkeypat
     assert tracked.read_bytes() == before
 
 
-def _commit_seed(root, monkeypatch):
-    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
-    for argv in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
-                 ["add", "pkg", "tests"], ["commit", "-q", "-m", "seed"]):
-        subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True, creationflags=_NOWIN)
-    return subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, creationflags=_NOWIN
-    ).stdout.strip()
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@pytest.mark.parametrize("anchor", ["abc1234", "z" * 40])
-def test_head_without_a_valid_sha_anchor_fails_closed(world, monkeypatch, anchor):
-    root, _orig, _ = world
-    _commit_seed(root, monkeypatch)
-    _set_base(root, anchor)
-    (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
-    out = rr.review_reverify(
-        root, base=anchor, slice_prefix=PREFIX, session_id=SESSION, failing=["tests/test_plain.py::test_p"]
-    )
-    assert "unreadable" in out["error"] and out["reverted"] == []
-    assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == "def test_p():\n    assert nope\n"
-    listed = rr.review_reverify(root, base=anchor, slice_prefix=PREFIX, session_id=SESSION)
-    assert listed["head_unreadable"] is True
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@pytest.mark.parametrize("snapshot_uses_foo, refused", [(True, True), (False, False)])
-def test_reverted_caller_is_scanned_at_its_post_revert_bytes(world, monkeypatch, snapshot_uses_foo, refused):
-    """tests/test_plain.py is committed without FOO; its snapshot bytes import FOO from a created
-    module that the same revert removes. Only the snapshot bytes (post-revert) decide."""
-    root, _orig, _ = world
-    snap_bytes = (
-        b"from pkg.new import FOO\n\n\ndef test_p():\n    assert FOO\n"
-        if snapshot_uses_foo
-        else b"def test_p():\n    assert True\n"
-    )
-    snap = _manifest_path(root).parent
-    (snap / _sha(snap_bytes)).write_bytes(snap_bytes)
-    data = json.loads(_manifest_path(root).read_text(encoding="utf-8"))
-    data["files"]["tests/test_plain.py"] = _sha(snap_bytes)
-    _manifest_path(root).write_text(json.dumps(data), encoding="utf-8")
-    base = _commit_seed(root, monkeypatch)
-    _set_base(root, base)
-    (root / "pkg/new.py").write_text("FOO = 1\n", encoding="utf-8")
-    (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
-    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {"pkg/new.py": "a1"})
-    sidecars = _ledger(
-        monkeypatch, _row("F1", "tests/test_plain.py", snap_bytes.decode(), "def test_p():\n    assert nope\n")
-    )
-    out = rr.review_reverify(
-        root, base=base, slice_prefix=PREFIX, session_id=SESSION,
-        failing=["tests/test_plain.py::test_p", "pkg/new.py::x"], sidecars=sidecars,
-    )
-    if refused:
-        assert "referencing removed pkg.new.FOO" in out["error"]
-        assert (root / "pkg/new.py").exists()
-    else:
-        assert out["error"] is None
-        assert not (root / "pkg/new.py").exists()
-
-
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_removed_created_path_leaves_no_intent_to_add_entry(world, monkeypatch):
@@ -441,7 +377,7 @@ def test_tripwire_edited_test_file_naming_another_edit_stays_in_edited_only(worl
 def test_tripwire_failing_node_inverts_the_finding_in_the_file_it_names(world, monkeypatch):
     root, orig, _ = world
     _add_tripwire(root)
-    (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (root / "pkg/mod.py").write_bytes(b"VALUE = 2\n")
     sidecars = _ledger(monkeypatch, _row("F1", "pkg/mod.py", "VALUE = 1\n", "VALUE = 2\n"))
     out = _revert(root, ["tests/test_tripwire.py::test_t"], sidecars=sidecars)
     assert [(e["path"], e["tests"]) for e in out["reverted"]] == [

@@ -12,7 +12,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import coded_or_withheld
 from coordinator_core.roadmap import gate_v2
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 GATED = (
     "## Tasks\n\n```yaml plan-tasks\n"

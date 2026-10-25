@@ -29,7 +29,7 @@ def _commit(root: Path, name: str) -> str:
     return _g(root, "rev-parse", "HEAD")
 
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture()

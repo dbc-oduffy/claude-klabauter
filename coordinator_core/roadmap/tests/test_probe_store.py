@@ -208,6 +208,7 @@ def test_engine_key_equal_across_calls_with_an_unrelated_import_between(monkeypa
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_engine_key_is_the_same_in_a_fresh_process():
     import subprocess
 

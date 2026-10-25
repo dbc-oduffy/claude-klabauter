@@ -19,6 +19,7 @@ def _load():
     return mod
 
 
+@pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("flag", ["--help", "-h"])
 def test_help_exits_zero_and_leaves_claude_home_untouched(flag, tmp_path):

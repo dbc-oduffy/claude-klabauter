@@ -164,6 +164,7 @@ def reader(
         wanted = {_norm(p) for p in paths if p}
         wanted.discard("")
         try:
+            from coordinator_core.ops.dispatch_emit import kept_work
             from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
 
             b_h = _baseline(root, halted_run_id)
@@ -196,7 +197,11 @@ def reader(
                 if b_l[p] == b_h[p]:
                     return False
                 entries = index_entries()
-                if entries is not None and entries.get(p) == b_l[p]:
+                if (
+                    entries is not None
+                    and entries.get(p) is not None
+                    and kept_work.matches_committed(root, p, b_l[p], entries[p])
+                ):
                     return False
                 return not landed(p)
 

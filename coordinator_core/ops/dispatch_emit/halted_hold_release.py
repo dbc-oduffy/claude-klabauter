@@ -202,7 +202,7 @@ def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
         head, keep = blobs[f"HEAD:{p}"], blobs[kept[p]]
         if head is None or keep is None:
             continue
-        if head == keep:
+        if head == keep or kept_work.checkin_form(root, p, keep) == head:
             released.add(p)
         elif base_sha and _hunks_present(
             (blobs[f"{base_sha}:{p}"] or b"").decode("utf-8", "replace"),

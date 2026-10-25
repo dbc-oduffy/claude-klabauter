@@ -725,3 +725,57 @@ def test_grant_does_not_exempt_a_bare_suite_beside_a_mutex_one(repo, monkeypatch
     cmd = f"{_SUITE}; python3 -m pytest coordinator/tests"
     assert g.check(_bash(repo, cmd)) is None
     assert _denied(g.check(_bash(repo, cmd)))
+
+
+def test_dollar_path_resolving_outside_scratch_is_not_a_probe(repo, tmp_path, monkeypatch) -> None:
+    tool = tmp_path / "elsewhere" / "tools" / "heavy_job.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("import pkg, pytest\n")
+    monkeypatch.setenv("P_X1", str(tmp_path / "elsewhere"))
+    assert not g.runs_verification("python3 $P_X1/tools/heavy_job.py launch", str(repo), str(repo))
+    assert not g.runs_verification("python3 ${P_X1}/tools/heavy_job.py launch", str(repo), str(repo))
+
+
+def test_dollar_path_resolving_into_scratch_probe_still_counted(repo, tmp_path, monkeypatch) -> None:
+    _script(tmp_path, "scratch/probe.py", "import pkg, pytest\n")
+    monkeypatch.setenv("S_X1", str(tmp_path / "scratch"))
+    assert g.runs_verification("python3 $S_X1/probe.py", str(repo), str(repo))
+
+
+def test_unresolvable_dollar_path_is_not_a_probe_signal(repo, monkeypatch) -> None:
+    monkeypatch.delenv("NOPE_X1", raising=False)
+    assert not g.runs_verification("python3 $NOPE_X1/tools/heavy_job.py launch", str(repo), str(repo))
+
+
+def test_unresolvable_dollar_path_classified_on_basename(repo, tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("NOPE_X1", raising=False)
+    _script(tmp_path, "scratch/probe.py", "import pkg, pytest\n")
+    cwd = str(tmp_path / "scratch")
+    assert g.runs_verification("python3 $NOPE_X1/probe.py", str(repo), cwd)
+    assert not g.runs_verification("python3 $NOPE_X1/other.py", str(repo), cwd)
+
+
+def test_em_run_dollar_path_script_not_denied_after_executor(repo, tmp_path, monkeypatch) -> None:
+    _executor_ran(repo)
+    monkeypatch.setenv("P_X1", str(tmp_path / "elsewhere"))
+    for _ in range(3):
+        assert g.check(_bash(repo, "python3 $P_X1/tools/heavy_job.py launch")) is None
+
+
+def test_deny_text_names_reason_line_format(repo) -> None:
+    _executor_ran(repo)
+    assert g.check(_bash(repo, "pytest pkg")) is None
+    reason = envelope_of(g.check(_bash(repo, "pytest pkg")), "em")["hookSpecificOutput"]["permissionDecisionReason"]
+    assert str(nd.dispatch_nudge_sentinel_path(SID)) in reason
+    assert "first non-blank line" in reason and "blocked, thrashing, aborted or failed" in reason
+    assert "unresolved $" not in reason
+
+
+def test_deny_text_names_unresolved_dollar_cause() -> None:
+    from coordinator_core.guard_messages.alternative_record import Audience
+    from coordinator_core.guard_messages.render import render
+
+    assert g._unresolved_dollar_script("python3 $NOPE_X1/a.py go") == "$NOPE_X1/a.py"
+    assert g._unresolved_dollar_script("python3 a.py go") == ""
+    text = render(g._deny_record("/s/sentinel", "$NOPE_X1/a.py"), Audience.EM)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "unresolved $ variable" in text and "basename" in text

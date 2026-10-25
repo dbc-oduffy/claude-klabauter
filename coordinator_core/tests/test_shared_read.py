@@ -106,6 +106,7 @@ def test_plain_open_holder_blocks_posix_rename(tmp_path):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 @pytest.mark.skipif(not _WIN, reason="Windows import path")
 def test_winapi_path_imports_no_ctypes(tmp_path):
     p = tmp_path / "f"

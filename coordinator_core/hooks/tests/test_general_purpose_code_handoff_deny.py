@@ -40,6 +40,31 @@ def test_untyped_code_edit_handoff_is_denied_naming_executor(strict, stype):
     assert "coordinator:executor" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_fork_code_edit_handoff_is_denied_naming_sonnet_lane(strict):
+    out = gate.check(_payload(subagent_type="fork"))
+    assert _decision(out) == "deny"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "coordinator:executor" in reason
+    assert "scratch" in reason
+
+
+def test_general_purpose_refusal_names_scratch_forensics_lane(strict):
+    out = _call(_payload(subagent_type="general-purpose"))
+    assert "scratch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    ["Read coordinator_core/hooks/foo.py and summarize it.", "Edit docs/plans/x.md to fix typo."],
+)
+def test_fork_non_edit_dispatch_passes(strict, prompt):
+    assert _call(_payload(prompt, subagent_type="fork")) is None
+
+
+def test_nested_fork_passes(strict):
+    assert _call(_payload(subagent_type="fork", agent_id="a1")) is None
+
+
 def test_gate_check_denies_before_roster(strict):
     out = gate.check(_payload())
     assert _decision(out) == "deny"
