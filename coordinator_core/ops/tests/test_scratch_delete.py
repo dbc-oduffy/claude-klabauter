@@ -198,6 +198,95 @@ def test_handler_through_op_entry(tmp_path):
     assert "error" in sd._handler({"run_id": RUN, "chunk_id": CHUNK, "paths": "x"}, repo_root=root)
 
 
+def test_warm_engine_root_without_the_record_falls_to_the_caller_repo(tmp_path, monkeypatch):
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    (engine / ".git").mkdir()
+    repo_a = tmp_path / "repo-a"
+    repo_a.mkdir()
+    root = _repo(repo_a, ["scratch/base"])
+    _tree(root, "scratch/base")
+    monkeypatch.chdir(root)
+    out = sd._handler(
+        {"run_id": RUN, "chunk_id": CHUNK, "paths": ["scratch/base"]}, repo_root=engine
+    )
+    assert out["deleted"] == ["scratch/base"] and out["refused"] == []
+    assert not (root / "scratch/base").exists()
+    assert len(list((root / "scratch" / sd.TOMBSTONE_DIRNAME).iterdir())) == 1
+
+
+def test_dispatcher_root_holding_the_record_still_wins_over_cwd(tmp_path, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / ".git").mkdir()
+    (tmp_path / "r").mkdir()
+    root = _repo(tmp_path / "r", ["scratch/base"])
+    _tree(root, "scratch/base")
+    monkeypatch.chdir(other)
+    out = sd._handler(
+        {"run_id": RUN, "chunk_id": CHUNK, "paths": ["scratch/base"]}, repo_root=root
+    )
+    assert out["deleted"] == ["scratch/base"]
+
+
+def test_no_root_holds_the_record_refuses_naming_the_first_root(tmp_path, monkeypatch):
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    (engine / ".git").mkdir()
+    monkeypatch.chdir(engine)
+    out = sd._handler(
+        {"run_id": RUN, "chunk_id": CHUNK, "paths": ["scratch/base"]}, repo_root=engine
+    )
+    assert out["deleted"] == [] and "manifest" in out["refused"][0]["reason"]
+
+
+def test_dispatch_from_a_foreign_cwd_tombstones_in_the_caller_worktree(tmp_path, monkeypatch):
+    import asyncio
+
+    from coordinator_core import ipc
+
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    (engine / ".git").mkdir()
+    (tmp_path / "repo-a").mkdir()
+    root = _repo(tmp_path / "repo-a", ["scratch/base"])
+    _tree(root, "scratch/base")
+    monkeypatch.chdir(engine)
+    assert ipc.OP_KEY_SCOPE["scratch.delete"] == "show_top"
+    msg = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "scratch.delete",
+        "params": {"run_id": RUN, "chunk_id": CHUNK, "paths": ["scratch/base"]},
+        "_origin_worktree": str(root),
+    }
+    out = asyncio.run(ipc.dispatch_message(msg))
+    assert out["result"]["deleted"] == ["scratch/base"], out
+    assert not (root / "scratch/base").exists()
+    assert len(list((root / "scratch" / sd.TOMBSTONE_DIRNAME).iterdir())) == 1
+
+
+def test_scope_is_origin_worktree_not_engine_cwd(tmp_path, monkeypatch):
+    from coordinator_core.op_scopes import OP_KEY_SCOPE, WORKTREE_SCOPED_OPS
+
+    assert OP_KEY_SCOPE["scratch.delete"] == "show_top"
+    assert "scratch.delete" in WORKTREE_SCOPED_OPS
+
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    caller = tmp_path / "caller"
+    caller.mkdir()
+    root = _repo(caller, ["scratch/base"])
+    _tree(root, "scratch/base")
+    monkeypatch.chdir(engine)
+    out = sd._handler(
+        {"run_id": RUN, "chunk_id": CHUNK, "paths": ["scratch/base"]}, repo_root=root
+    )
+    assert out["deleted"] == ["scratch/base"] and out["refused"] == []
+    assert not (root / "scratch/base").exists()
+    assert not (engine / "scratch").exists()
+
+
 def test_brief_clause():
     assert sd.brief_clause(RUN, CHUNK, ["src/a.py"]) == ""
     clause = sd.brief_clause(RUN, CHUNK, ["src/a.py", "scratch/base"])

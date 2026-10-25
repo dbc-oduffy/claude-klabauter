@@ -31,6 +31,7 @@ import sys
 import pytest
 
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
+from coordinator_core.benchmarks.terminal_commit_launch import _ONBOARDED_LAUNCH
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -75,8 +76,15 @@ REAL_SHAPE_K = 1
 REAL_SHAPE_SAMPLES = 2
 
 
+def _driver_cmd(driver: str, *args: str) -> list:
+    """`python -m driver args` with the fixture repo read as onboarded: the conftest pin of
+    `hosts_coordinator_state` does not cross the process boundary, and an unonboarded repo withholds
+    every run artifact (`repo-not-opted-in`)."""
+    return [sys.executable, "-c", _ONBOARDED_LAUNCH, driver, *args]
+
+
 def _sample(workdir, *extra: str, driver: str = _DRIVER, k: int = K_INVOCATIONS) -> dict:
-    result = batched_process_time_ms([sys.executable, "-m", driver, str(workdir), *extra], k=k)
+    result = batched_process_time_ms(_driver_cmd(driver, str(workdir), *extra), k=k)
     assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
     return result
 
@@ -146,9 +154,7 @@ def reclose_measurement(tmp_path_factory):
 
 
 def _sample_prebuilt(d, *extra: str) -> dict:
-    result = batched_process_time_ms(
-        [sys.executable, "-m", _DRIVER, "--prebuilt", str(d), *extra], k=K_INVOCATIONS
-    )
+    result = batched_process_time_ms(_driver_cmd(_DRIVER, "--prebuilt", str(d), *extra), k=K_INVOCATIONS)
     assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
     return result
 
@@ -162,7 +168,7 @@ def _build_prebuilt(parent, kind: str, real_shape: bool = True) -> None:
     parent.mkdir(parents=True)
     shape = ["--real-shape"] if real_shape else []
     built = subprocess.run(
-        [sys.executable, "-m", _DRIVER, str(parent), "--kind", kind, *shape, "--build-only"],
+        _driver_cmd(_DRIVER, str(parent), "--kind", kind, *shape, "--build-only"),
         capture_output=True,
         text=True,
         **no_console_creationflags(),
@@ -178,9 +184,7 @@ def _real_shape_measure(root, kind: str) -> dict:
         _build_prebuilt(d, kind)
 
     def run(d, *extra):
-        result = batched_process_time_ms(
-            [sys.executable, "-m", _DRIVER, "--prebuilt", str(d), *extra], k=REAL_SHAPE_K
-        )
+        result = batched_process_time_ms(_driver_cmd(_DRIVER, "--prebuilt", str(d), *extra), k=REAL_SHAPE_K)
         assert result["rc"] == 0, f"driver exited {result['rc']}: {result!r}"
         return result
 

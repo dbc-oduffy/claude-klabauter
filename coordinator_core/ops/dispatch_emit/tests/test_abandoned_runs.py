@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import abandoned_runs as ar
 from coordinator_core.ops.dispatch_emit import run_token
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -311,7 +312,7 @@ def test_late_modified_tracked_requirements_reaped_inside_ttl(bare):
     req.write_text("one\n", encoding="utf-8")
     _git(["add", "."], bare)
     _git(["commit", "-q", "-m", "run commit"], bare)
-    req.write_text("two\n", encoding="utf-8")
+    write_seen_by_git(req, "two\n")
     os.utime(req, (time.time() - MID_AGE,) * 2)
 
     out = _reap(bare)

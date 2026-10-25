@@ -45,7 +45,8 @@ def test_schema_declares_reverify_error_as_optional_string_or_null():
 
 def test_grind_withholds_an_indeterminate_fix_and_still_withholds_a_failed_one():
     script = _compose()
-    assert f"['fail', '{REVERIFY_INDETERMINATE}'].includes(" in script
+    assert f"(_reviewReverify.status_after ?? _reviewReverify.status_before) === '{REVERIFY_INDETERMINATE}' || (" in script
+    assert "=== 'fail' && !(" in script
     assert ") : !_verifyOnly;" in script
 
 

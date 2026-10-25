@@ -181,6 +181,12 @@ def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
         paths = chunk.get("paths") if isinstance(chunk, dict) else None
         if isinstance(paths, dict):
             kept.update({p: b for p, b in paths.items() if isinstance(b, str) and b})
+    # Trap: kept_fingerprints is keyed by normalised path and unions chunk and post_checkpoint blobs;
+    # only a path with no chunk entry here and exactly one union blob has a single kept content to
+    # compare against HEAD, otherwise it stays held.
+    for p, blobs in kept_work.kept_fingerprints(record).items():
+        if p not in kept and len(blobs) == 1:
+            kept[p] = next(iter(blobs))
     paths = sorted(p for p in withheld if p in kept)
     if not paths:
         return set()

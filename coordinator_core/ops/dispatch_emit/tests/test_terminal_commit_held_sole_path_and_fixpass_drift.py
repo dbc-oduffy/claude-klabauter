@@ -82,6 +82,8 @@ def _committed(repo: Path) -> list:
 def _held_setup(repo: Path, extra_marker_paths=()) -> CommitRequest:
     (repo / "docs").mkdir()
     (repo / "docs" / "plan.md").write_text(_PLAN, encoding="utf-8", newline="\n")
+    _git(["add", "docs/plan.md"], repo)
+    _git(["commit", "-q", "-m", "plan"], repo)
     (repo / "contract").mkdir()
     (repo / "contract" / "held.json").write_text("{}\n", encoding="utf-8")
     (repo / "a.py").write_text("a\n", encoding="utf-8")

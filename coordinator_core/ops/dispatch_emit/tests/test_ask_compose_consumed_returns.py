@@ -30,7 +30,11 @@ def test_the_binding_is_declared_before_execute_and_filled_only_at_the_settled_r
     assert script.count("let _consumedReturns = {};") == 1
     decl = script.index("let _consumedReturns = {};")
     assert decl < script.index("const _rows = {};")
-    assert script.index("let _deliveryNotes = '';") < decl
+    # 576a923115 moved the declaration up beside _ledger so the halt-record commit (which reads it)
+    # never meets it uninitialised; that replaced the old "after _deliveryNotes" ordering. The
+    # function declaration hoists, so the invariant is against its first call.
+    assert script.index("let _ledger = null;") < decl
+    assert decl < script.index("await _commitHaltRecord()")
     fills = [i for i in range(len(script)) if script.startswith("_consumedReturns[", i)]
     assert len(fills) == 1
     settled = script.index("await Promise.all(Object.values(_rows));")

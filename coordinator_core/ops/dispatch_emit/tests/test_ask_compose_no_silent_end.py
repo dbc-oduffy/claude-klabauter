@@ -23,7 +23,7 @@ _TAIL_PREFIXES = (
 )
 _HARNESS = """
 let _halted = null, _commit = null, _runId = 'r', _sizingRel = 's.yaml';
-let _manifest = {}, _falsifierResult = %s, _deliveryVerdict = %s;
+let _manifest = {}, _planRel = null, _reviewWave = [], _falsifierResult = %s, _deliveryVerdict = %s;
 %s
 console.log(JSON.stringify(_halted));
 """
@@ -37,7 +37,18 @@ _ARMS = [
 
 
 def _tail(script: str) -> str:
-    kept = [ln.strip() for ln in script.split("\n") if ln.strip().startswith(_TAIL_PREFIXES)]
+    # 89544482e5 appended _criterion_blocker_halt_js as a multi-line continuation of the
+    # `if (!_closeable && !_halted` block, so that block is kept whole up to the next statement.
+    kept: list[str] = []
+    in_block = False
+    for raw in script.split("\n"):
+        ln = raw.strip()
+        if ln.startswith("if (_nextAction.params && _ledger)"):
+            in_block = False
+        if ln.startswith("if (!_closeable && !_halted"):
+            in_block = True
+        if in_block or ln.startswith(_TAIL_PREFIXES):
+            kept.append(ln)
     return "\n".join(kept)
 
 

@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_rows_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -142,17 +143,17 @@ def _halt_fixture(root: Path) -> None:
     _git(["commit", "-q", "-m", "rows landed"], root)
     script = root / "scratch" / "warp" / f"{RUN}.workflow.mjs"
     script.parent.mkdir(parents=True)
-    script.write_text((root / "run.mjs").read_text(encoding="utf-8"), encoding="utf-8")
+    write_seen_by_git(script, (root / "run.mjs").read_text(encoding="utf-8"))
     runs = (
         c.SiblingRun(RUN, RUN, (), "state/sizings/a.yaml", c.STATUS_READY),
         c.SiblingRun(SUCC, SUCC, (RUN,), "state/sizings/b.yaml", c.STATUS_AFTER),
     )
     rec = root / c.parent_record_rel(PARENT)
     rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(json.dumps(c.ParentRecord(PARENT, runs).to_json()), encoding="utf-8")
+    write_seen_by_git(rec, json.dumps(c.ParentRecord(PARENT, runs).to_json()))
     st = root / c.status_rel(RUN)
     st.parent.mkdir(parents=True, exist_ok=True)
-    st.write_text(json.dumps({"status": c.STATUS_RUNNING, "parent_id": PARENT}), encoding="utf-8")
+    write_seen_by_git(st, json.dumps({"status": c.STATUS_RUNNING, "parent_id": PARENT}))
 
 
 def _status(root: Path, rid: str = RUN) -> str:

@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.tests.test_met_judge_reaches_close_legs_e2e import _run_close_job
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -47,6 +48,13 @@ def _write(repo: Path, rel: str, text: str) -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _put(repo: Path, rel: str, text: str) -> None:
+    """`_write` for a rewrite of a tracked file that `git status` must report dirty."""
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_seen_by_git(path, text, newline="\n")
 
 
 @pytest.fixture
@@ -415,7 +423,7 @@ def _composed_digest(ledger_js: str) -> dict:
         "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewReverify=null, _reviewPrep={slices:[1]}, _reviewWave=[], "
         "_deliveryVerdict=null, _deliveryNotRun=null, _waveNotRun=[], _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
         "_sizingRel='s', _planRel=null, _resumeLedger=false, REPO_ROOT='/r', _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
-        f"_stoppedBy=[], _blockedChunks=[], _docs=null, _commit=null; let _nextAction=null; const _ledger={ledger_js};\n"
+        f"_stoppedBy=[], _blockedChunks=[], _recoveryWithheld=[], _docs=null, _commit=null, _refireNextAction=() => {{}}, _haltNextActionText=() => '', _terminalCommitParamsBlock=(p) => JSON.stringify(p), _falsifierResult=null, _falsifierSpec=null, _memoCloseOnly=false, _preHaltCredit=false, log=() => {{}}; let _nextAction=null; const _ledger={ledger_js};\n"
     )
     body = script[start:stop].replace("  return { arm:", "  const _out = { arm:", 1)
     prog = f"(() => {{\n{stubs}{body}\nconsole.log(JSON.stringify(_out));\n}})();"

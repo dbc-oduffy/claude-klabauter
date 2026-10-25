@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
 )
 from coordinator_core.ops.dispatch_emit.inventory_mint import as_git_pathspec
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -419,11 +420,11 @@ def test_commits_a_literal_wrapped_bracketed_path(repo):
     (repo / route).write_text("v1\n", encoding="utf-8")
     _git(["add", "--", f":(literal){route}"], repo)
     _git(["commit", "-q", "-m", "route"], repo)
-    (repo / route).write_text("v2\n", encoding="utf-8")
+    write_seen_by_git(repo / route, "v2\n")
     request = CommitRequest(
         chunks=(ChunkCommit(id="C3", title="t3", paths=(as_git_pathspec(route),)),),
     )
-    script = _write_script(repo, request)
+    script = _write_script(repo, request)  # racy-stat-ok: new untracked script, no index entry to go stale
     out = _call(repo, {"script_path": script, "incomplete_chunks": []})
     assert out["committed"] is True
     assert out["dropped_absent"] == []
@@ -1024,9 +1025,9 @@ def test_a_met_criterion_on_the_last_open_row_flips_the_plan_implemented(repo):
     (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "plan"], repo)
-    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    write_seen_by_git(repo / "a.py", "a\n")
     request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md")
-    script = _write_script(repo, request)
+    script = _write_script(repo, request)  # racy-stat-ok: new untracked script, no index entry to go stale
     inline_review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
@@ -1051,9 +1052,9 @@ def test_a_retried_flip_over_an_already_recorded_verdict_stays_implemented(repo)
     (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "plan"], repo)
-    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    write_seen_by_git(repo / "a.py", "a\n")
     request = CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md")
-    script = _write_script(repo, request)
+    script = _write_script(repo, request)  # racy-stat-ok: new untracked script, no index entry to go stale
     inline_review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
@@ -1173,8 +1174,8 @@ def test_a_zero_file_pass_rerun_lands_a_fresh_review_anchor_and_stamps_the_plan(
     (repo / "docs" / "plan.md").write_text(_SINGLE_ROW_PLAN, encoding="utf-8")
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "plan"], repo)
-    (repo / "a.py").write_text("a\n", encoding="utf-8")
-    first = _write_script(
+    write_seen_by_git(repo / "a.py", "a\n")
+    first = _write_script(  # racy-stat-ok: new untracked script, no index entry to go stale
         repo,
         CommitRequest(chunks=(ChunkCommit(id="C3", title="t3", paths=("a.py",)),), plan_path="docs/plan.md"),
         name="first.mjs",
@@ -1198,7 +1199,7 @@ def test_a_zero_file_pass_rerun_lands_a_fresh_review_anchor_and_stamps_the_plan(
                           "inline_review": review("FAIL", 1, s1)})
     assert failed["committed"] is True and failed["review_stamp"] == "refused"
 
-    rerun = _write_script(repo, CommitRequest(chunks=()), name="rerun.mjs")
+    rerun = _write_script(repo, CommitRequest(chunks=()), name="rerun.mjs")  # racy-stat-ok: new untracked script
     before = _head(repo)
     out = _call(repo, {"script_path": rerun, "incomplete_chunks": [], "plan_path": "docs/plan.md",
                        "session_id": s2, "inline_review": review("PASS", 0, s2)})

@@ -7,6 +7,26 @@ import pytest
 #: collection. Guard: test_dispatch_emit_fixtures_attach.py.
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "xs_gate_live: opt out of this directory's stub of the XS diff-budget refusal "
+        "(terminal_commit tests that pin the unmeasurable-diff refusal live)",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _xs_diff_budget_gate_off_outside_its_own_tests(request, monkeypatch):
+    """A terminal_commit fixture cites an XS sizing but names no run base, so the XS diff-budget
+    gate refuses it as unmeasurable before the behaviour under test. A module marked
+    `xs_gate_live` exercises the gate live."""
+    if request.node.get_closest_marker("xs_gate_live"):
+        return
+    from coordinator_core.ops.dispatch_emit import terminal_commit
+
+    monkeypatch.setattr(terminal_commit, "_xs_over_budget_refusal", lambda *a, **k: None)
+
+
 _V5_ROSTER_FRAGMENT = {
     "schema": "review-roster-fragment",
     "schema_version": 5,

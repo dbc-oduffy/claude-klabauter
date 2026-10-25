@@ -177,11 +177,27 @@ def _handler(params: dict, repo_root=None) -> dict:
         return {"error": "scratch.delete: chunk_id must be a non-empty string"}
     if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         return {"error": "scratch.delete: paths must be a list of strings"}
-    root = params.get("repo_root") or repo_root
-    if not root:
-        from coordinator_core.ops import prune_claude_temp as _p
-
-        root = _p.find_repo_root(os.getcwd())
+    root = _resolve_root(params.get("repo_root"), repo_root, run_id)
     if not root:
         return {"error": "scratch.delete: no repo root"}
     return delete_declared(Path(root), run_id, chunk_id, paths)
+
+
+def _resolve_root(param_root, dispatcher_root, run_id: str):
+    """The first candidate root holding the run's record: the explicit param, the dispatcher's
+    root, then the caller's cwd repo. None of them holding it falls back to the first candidate
+    so the refusal names that root."""
+    from coordinator_core.ops import prune_claude_temp as _p
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    candidates = [c for c in (param_root, dispatcher_root) if c]
+    cwd_root = _p.find_repo_root(os.getcwd())
+    if cwd_root:
+        candidates.append(cwd_root)
+    for cand in candidates:
+        try:
+            if (ask_contract.record_dir(Path(cand), run_id) / "manifest.json").is_file():
+                return cand
+        except (ValueError, OSError):
+            break
+    return candidates[0] if candidates else None

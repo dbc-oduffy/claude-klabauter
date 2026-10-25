@@ -649,8 +649,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: this module's own docstring (Two-gate deletion contract /
     # Liveness-scope fix, 2026-08-10).
     "scratchpad.sweep":                       "none",
-    # scratch.delete — "none", MUTATING: the handler resolves its repo from params like scratchpad.sweep.
-    "scratch.delete":                         "none",
+    # scratch.delete — "show_top", MUTATING: repo_root is the caller's _origin_worktree, so a warm
+    # engine whose own cwd is another checkout still reads the run record in the calling repo.
+    "scratch.delete":                         "show_top",
     "cartography.count_references":           "none",
     "doctrine.assert_cross_reference_counts": "common_dir",
     "percolate.check_inverse_drift":          "none",

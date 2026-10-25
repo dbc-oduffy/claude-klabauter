@@ -200,6 +200,8 @@ from coordinator_core.ops.dispatch_emit.write_baseline import (  # noqa: E402
     prior_pass_written as _prior_pass_written,
     unwritten as _unwritten_paths,
 )
+
+POST_COMMIT_PATH_UNLANDED = "post-commit-path-unlanded"
 from coordinator_core.ops.dispatch_emit.commit_request import (
     MARKER_PREFIX,
     PREFIX_CLAIM_LABEL,
@@ -3142,6 +3144,88 @@ def _resumed_review_source(
     return resumed, recorded_emitter(worktree_root, resumed) or session_id
 
 
+def _post_checkpoint_named(
+    *reason_maps, art_landable=None, sibling_withheld=(), left_out=(), held=(),
+) -> set:
+    """Every path a landing already names as withheld: the ``reason_maps`` keys, ``sibling_withheld``,
+    ``left_out``, ``held`` and ``art_landable.withheld``. The one builder for both gate sites. Trap:
+    ``sibling_withheld`` exists only after the pre-commit sibling filter, so the early site passes none."""
+    named: set = set()
+    for m in reason_maps:
+        named.update(m)
+    named.update(sibling_withheld)
+    named.update(left_out)
+    named.update(held)
+    if art_landable is not None:
+        named.update(art_landable.withheld)
+    return named
+
+
+def _unclaimed_post_checkpoint(snapshot, recorded_pc: dict, *, landing: set, named: set) -> list:
+    """Sorted recorded post-checkpoint paths still dirty in ``snapshot`` and neither in ``landing`` nor
+    ``named``."""
+    return sorted(
+        p for p in snapshot.changed_among(sorted(recorded_pc)) if p not in landing and p not in named
+    )
+
+
+def _snapshot_unavailable_refusal(recorded_pc: dict) -> dict:
+    """The refusal when recorded post-checkpoint hunks exist but the worktree snapshot could not be read,
+    so their dirt cannot be checked."""
+    return _error(
+        "recorded post-checkpoint hunk(s) cannot be checked: the worktree snapshot is unavailable ("
+        + ", ".join(sorted(recorded_pc)) + ")",
+        refused="own-post-checkpoint-hunks-unverifiable",
+        paths=sorted(recorded_pc),
+    )
+
+
+def _unclaimed_refusal(recorded_pc: dict, unclaimed: list) -> dict:
+    """The one refusal for own post-checkpoint hunks outside a landing. Trap: the early zero-landing
+    site and the pre-commit site must refuse with this single message and token."""
+    return _error(
+        "own post-checkpoint hunk(s) are dirty and outside this landing: "
+        + ", ".join(f"{p} (recorded in {recorded_pc[p]})" for p in unclaimed)
+        + ". Re-stage so the kept-review chunk carries them, or withhold each with a reason "
+        "through workflow.revise withhold_paths",
+        refused="own-post-checkpoint-hunks-unclaimed",
+        paths=unclaimed,
+    )
+
+
+def _recorded_post_checkpoint(
+    worktree_root: Path, ask_run_dir: Optional[Path], run_id: Optional[str], inline_review: object
+) -> dict:
+    """``{path: record dir name}`` of the ``post_checkpoint`` hunks this run's own kept.json and the
+    resumed run's (``RESUMED_RUN_ID_KEY``) hold: hunks a halt recorded that this landing must carry
+    or withhold. File reads only; an unreadable or unsafe record contributes nothing."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    dirs: list = []
+    if ask_run_dir is not None:
+        dirs.append(ask_run_dir)
+    elif isinstance(run_id, str) and run_id:
+        try:
+            dirs.append(record_dir(worktree_root, run_id))
+        except ValueError:
+            pass
+    resumed = inline_review.get(RESUMED_RUN_ID_KEY) if isinstance(inline_review, dict) else None
+    if isinstance(resumed, str) and resumed and safe_id(resumed):
+        try:
+            dirs.append(record_dir(worktree_root, resumed))
+        except ValueError:
+            pass
+    found: dict = {}
+    for rdir in dirs:
+        for rel in kept_work.read(rdir)[kept_work.POST_CHECKPOINT_KEY]:
+            norm = kept_work._norm(rel)
+            if norm is not None:
+                found.setdefault(norm, rdir.name)
+    return found
+
+
 def _review_recorded_edits(inline_review: object) -> frozenset:
     """Repo-relative paths the review's test-runner or reverify record lists as ``edited`` or
     ``created``: files the run's review changed, including ones an earlier checkpoint of this run
@@ -5097,9 +5181,20 @@ def _terminal_commit_inner(
                 review_writes.setdefault(recorded, "review-record")
     from coordinator_core.ops.dispatch_emit import run_touched as _run_touched
 
+    recorded_pc = _recorded_post_checkpoint(worktree_root, ask_run_dir, review_run_id, inline_review)
+    commit_obliged: tuple = ()
+    if isinstance(params.get("ledger_verdict"), dict):
+        from coordinator_core.ops.dispatch_emit.post_commit_paths import commit_act_paths
+
+        commit_obliged = commit_act_paths(worktree_root, params["ledger_verdict"])
+    obliged_dirs = [p for p in commit_obliged if (worktree_root / p).is_dir()]
+    obliged_files = [p for p in commit_obliged if p not in obliged_dirs]
+
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]
+        + sorted(recorded_pc)
+        + obliged_files
         + [p for p in (request.plan_path, plan_seam, bookkeeping_record_path) if p]
         + companions
         + ([ask_note_rel] if ask_note_rel else [])
@@ -5109,6 +5204,7 @@ def _terminal_commit_inner(
             request, inline_review, artifacts.paths() if artifacts is not None else ()
         )),
         [prefix for c in request.chunks for prefix in c.prefixes]
+        + obliged_dirs
         + ([record_dir_rel] if record_dir_rel else [])
         + (list(artifacts.record_dirs) + [RECORD_DIR_ROOT] if artifacts is not None else []),
         _scope_pathspecs(request),
@@ -5332,6 +5428,16 @@ def _terminal_commit_inner(
     if (not all_paths and not art_has_landing and (anchor_only or request.review_only) and record_abs is not None
             and request.plan_path and (worktree_root / request.plan_path).is_file()):
         all_paths.append(request.plan_path)
+    if not all_paths and not art_has_landing and recorded_pc:
+        if snapshot is None:
+            return _snapshot_unavailable_refusal(recorded_pc)
+        early_named = _post_checkpoint_named(
+            _withhold_reasons(worktree_root, artifacts, record_dir_rel), param_withheld, proc_wh,
+            art_landable=art_landable, left_out=left_out_map, held=held_paths,
+        )
+        early_unclaimed = _unclaimed_post_checkpoint(snapshot, recorded_pc, landing=set(), named=early_named)
+        if early_unclaimed:
+            return _unclaimed_refusal(recorded_pc, early_unclaimed)
     if not all_paths and not art_has_landing:
         if close_ctx is not None:
             close_ctx.clear()
@@ -5433,6 +5539,16 @@ def _terminal_commit_inner(
             run_owned = [p for p in run_owned if p not in overlapped]
     owned_deletions = [p for p in _bar_stranded(list(owned_deletions)) if p not in reverted]
     all_paths.extend(run_owned)
+    obliged_changed: list = []
+    if commit_obliged:
+        answered = _changed(snapshot, worktree_root, list(commit_obliged))
+        if answered is None:
+            return _error(
+                f"cannot read the worktree state of post_commit `commit` path(s) {list(commit_obliged)}",
+                refused=POST_COMMIT_PATH_UNLANDED,
+            )
+        obliged_changed = sorted(p for p in answered if (worktree_root / p).is_file())
+        all_paths.extend(p for p in obliged_changed if p not in all_paths)
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
     scope["run_owned"] = list(run_owned)
     # A session's own `.git/` scratch (review-targets.txt) reaches the touched set but never a
@@ -5977,14 +6093,24 @@ def _terminal_commit_inner(
 
         # Written before the candidate set is hashed and staged so run-stage.json rides this commit.
         try:
-            stage_before = (_ac_stage.read_run_stage(worktree_root, art_run_id) or {}).get("stage")
-            _ac_stage.write_run_stage(worktree_root, art_run_id, "landed")
-            stage_stamped = True
-            stage_rel = (_ac_stage.record_dir(worktree_root, art_run_id) / _ac_stage.RUN_STAGE_FILE).relative_to(
-                worktree_root
-            ).as_posix()
-            if stage_rel not in all_paths and not stage_rel.startswith(RUN_DIR_ROOT.rstrip("/") + "/"):
-                all_paths.append(stage_rel)
+            stage_dir = _ac_stage.record_dir(worktree_root, art_run_id)
+            stage_dir_rel = stage_dir.relative_to(worktree_root).as_posix() + "/"
+            # No record dir: a stamp would fabricate a one-file record. No path outside it lands:
+            # the run landed nothing, so "landed" would be false (and a stamp alone is no change).
+            should_stamp = stage_dir.is_dir() and any(
+                not p.startswith(stage_dir_rel)
+                and (snapshot is None or not snapshot.covers(p) or p in snapshot.changed)
+                for p in (*all_paths, *deleted_paths)
+            )
+            if should_stamp:
+                stage_before = (_ac_stage.read_run_stage(worktree_root, art_run_id) or {}).get("stage")
+                _ac_stage.write_run_stage(worktree_root, art_run_id, "landed")
+                stage_stamped = True
+                stage_rel = (
+                    _ac_stage.record_dir(worktree_root, art_run_id) / _ac_stage.RUN_STAGE_FILE
+                ).relative_to(worktree_root).as_posix()
+                if stage_rel not in all_paths and not stage_rel.startswith(RUN_DIR_ROOT.rstrip("/") + "/"):
+                    all_paths.append(stage_rel)
         except (ValueError, OSError):
             stage_before = None
 
@@ -6085,6 +6211,19 @@ def _terminal_commit_inner(
             **integrity_extra,
         )
 
+    landed_now = set(all_paths)
+    unlanded = [p for p in obliged_changed if p not in landed_now]
+    if unlanded:
+        _unstamp_landed()
+        _remove(worktree_root, receipt_paths)
+        named = sorted({o for o in commit_obliged if any(u == o or u.startswith(o + "/") for u in unlanded)})
+        return _error(
+            f"a post_commit `commit` row names {named} but {len(unlanded)} file(s) under it did not "
+            f"land (withheld, peer-held or ignored): {unlanded[:10]}. Land them or revise the row",
+            refused=POST_COMMIT_PATH_UNLANDED,
+            unlanded=unlanded,
+        )
+
     reach_reply_field: dict = {}
     shipped_reply_field: dict = {}
     if ask_note_rel is not None:
@@ -6158,6 +6297,29 @@ def _terminal_commit_inner(
         _claims_before_landing(worktree_root, [*all_paths, *deleted_paths])
         if session_id is not None and not anchor_only else {}
     )
+
+    if recorded_pc and snapshot is None:
+        claims_memo.clear()
+        _unstamp_landed()
+        _remove(worktree_root, receipt_paths)
+        return _snapshot_unavailable_refusal(recorded_pc)
+    if recorded_pc:
+        landing = set(all_paths) | set(deleted_paths)
+        named = _post_checkpoint_named(
+            wh_reasons, proc_wh, art_landable=art_landable, sibling_withheld=sibling_withheld,
+            left_out=left_out_map, held=held_paths,
+        )
+        unclaimed = _unclaimed_post_checkpoint(snapshot, recorded_pc, landing=landing, named=named)
+        if unclaimed and session_id is not None:
+            carried_after = set(_session_left_behind(
+                worktree_root, session_id, [*all_paths, *deleted_paths], claims_before, _claimed_or_held,
+            ))
+            unclaimed = [p for p in unclaimed if p not in carried_after]
+        if unclaimed:
+            claims_memo.clear()
+            _unstamp_landed()
+            _remove(worktree_root, receipt_paths)
+            return _unclaimed_refusal(recorded_pc, unclaimed)
 
     def _attempt():
         return commit_v2(commit_params, repo_root)

@@ -35,11 +35,11 @@ def sibling_held_product(unlanded: Iterable, peer_held: Mapping) -> list[tuple[s
 
 
 def withheld_product_paths(unlanded: Iterable) -> list[str]:
-    """Sorted unique paths of every unlanded ``(row, path, reason)`` triple; never raises."""
-    try:
-        return sorted({str(path) for _row, path, _reason in unlanded or ()})
-    except Exception:  # noqa: BLE001
-        return []
+    """Sorted unique paths of every unlanded ``(row, path, reason)`` triple.
+
+    A malformed triple raises, as in ``sibling_held_product``: swallowing it would leave ``ledger_met``
+    set over a withheld product path."""
+    return sorted({str(path) for _row, path, _reason in unlanded or ()})
 
 
 def refusal_message(holds: Iterable, run_id: str, root: Optional[Path] = None) -> str:

@@ -61,7 +61,10 @@ def test_a_kept_row_is_not_a_member_of_its_group_prompt(monkeypatch):
 
 def test_resume_ready_precedes_the_resume_plan_blitz_and_no_plan_agent_is_reachable_from_it(monkeypatch):
     script = _script(monkeypatch)
-    ready = script.index("if (_gate.resume_ready && _gate.resume_plan) { _planRel = _gate.resume_plan; }")
+    # e312728c2c (phase reuse): a reused plan + plan_review also counts as resume-ready.
+    ready = script.index(
+        "if ((_gate.resume_ready || (_reusePhase('plan') && _reusePhase('plan_review'))) && _gate.resume_plan) { _planRel = _gate.resume_plan; }"
+    )
     guard = script.index("if (!_planRel && !_halted) {", ready)
     ready_line = script[ready : script.index("\n", ready)]
     assert not re.search(r"label: '(plan|plan-review|plan-revise|apply-rulings|reblitz)", ready_line)

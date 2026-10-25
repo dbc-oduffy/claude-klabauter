@@ -23,7 +23,7 @@ STRANDED = {"C1": C1, "C2": C2}
 def test_names_and_bookkeeping():
     assert cg.REFUSED_CREDITED_UNCOMMITTED == "credited-chunk-uncommitted"
     assert cg.REFUSED_NO_CREDITED_LANDING == "no-credited-chunk-landed"
-    assert cg.BOOKKEEPING_CHUNK_IDS == frozenset({"docs", "sizing"})
+    assert cg.BOOKKEEPING_CHUNK_IDS == frozenset({"docs", "sizing", "kept-review"})
 
 
 def test_stranded_residue_names_review_path_of_c1():

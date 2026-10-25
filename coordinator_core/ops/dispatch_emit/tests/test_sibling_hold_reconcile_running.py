@@ -11,6 +11,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.dispatch_emit import sibling_hold as sh
+from coordinator_core.testing.git_write import write_seen_by_git
 
 RUN = "ask-20261018T022939-ca3355"
 PARENT = "ask-parent-20261018T022939-250228"
@@ -25,10 +26,10 @@ def _git(root, *args):
     ).stdout.strip()
 
 
-def _write(root, rel, text):
+def _put(root, rel, text):
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    write_seen_by_git(path, text)
 
 
 def _commit_all(root, msg):
@@ -38,7 +39,7 @@ def _commit_all(root, msg):
 
 
 def _status(root, **fields):
-    _write(root, c.status_rel(RUN), json.dumps({"status": "running", "parent_id": PARENT, **fields}))
+    _put(root, c.status_rel(RUN), json.dumps({"status": "running", "parent_id": PARENT, **fields}))
 
 
 def _read_status(root):
@@ -52,7 +53,7 @@ def repo(tmp_path):
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "t")
-    _write(root, "src/a.py", "a1\n")
+    _put(root, "src/a.py", "a1\n")
     _commit_all(root, "base")
     return root
 
@@ -62,8 +63,8 @@ def _usage(as_of):
 
 
 def test_terminal_record_at_head_rewrites_running_as_landed(repo):
-    _write(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
-    _write(repo, f"state/warp/{RUN}/run.json", "{}")
+    _put(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
+    _put(repo, f"state/warp/{RUN}/run.json", "{}")
     head = _commit_all(repo, "terminal")
     _status(repo)
     assert sh.reconcile_running(repo, RUN) == head
@@ -73,8 +74,8 @@ def test_terminal_record_at_head_rewrites_running_as_landed(repo):
 
 
 def test_halted_record_at_head_is_not_rewritten(repo):
-    _write(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
-    _write(repo, f"state/warp/{RUN}/halted.json", json.dumps({"status": "halted"}))
+    _put(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
+    _put(repo, f"state/warp/{RUN}/halted.json", json.dumps({"status": "halted"}))
     _commit_all(repo, "halted record")
     _status(repo)
     assert sh.reconcile_running(repo, RUN) is None
@@ -83,7 +84,7 @@ def test_halted_record_at_head_is_not_rewritten(repo):
 
 
 def test_checkpoint_commits_only_leave_running(repo):
-    _write(repo, "src/a.py", "a2\n")
+    _put(repo, "src/a.py", "a2\n")
     _commit_all(repo, "checkpoint(wave 0)")
     _status(repo)
     assert sh.reconcile_running(repo, RUN) is None
@@ -92,16 +93,16 @@ def test_checkpoint_commits_only_leave_running(repo):
 
 @pytest.mark.parametrize("state", ["landed", "halted"])
 def test_non_running_status_is_untouched(repo, state):
-    _write(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
+    _put(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
     _commit_all(repo, "terminal")
-    _write(repo, c.status_rel(RUN), json.dumps({"status": state}))
+    _put(repo, c.status_rel(RUN), json.dumps({"status": state}))
     before = (repo / c.status_rel(RUN)).read_text(encoding="utf-8")
     assert sh.reconcile_running(repo, RUN) is None
     assert (repo / c.status_rel(RUN)).read_text(encoding="utf-8") == before
 
 
 def test_absent_status_file_returns_none_and_writes_nothing(repo):
-    _write(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
+    _put(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
     _commit_all(repo, "terminal")
     assert sh.reconcile_running(repo, RUN) is None
     assert not (repo / c.status_rel(RUN)).exists()
@@ -113,7 +114,7 @@ def test_unsafe_run_id_is_none(repo, run_id):
 
 
 def test_abandoned_reap_shape_is_not_landed(repo):
-    _write(repo, f"state/warp/{RUN}/run.json", "{}")
+    _put(repo, f"state/warp/{RUN}/run.json", "{}")
     _commit_all(repo, "reap abandoned")
     _status(repo)
     assert sh.reconcile_running(repo, RUN) is None
@@ -121,14 +122,14 @@ def test_abandoned_reap_shape_is_not_landed(repo):
 
 
 def test_usage_not_stamped_terminal_commit_is_not_landed(repo):
-    _write(repo, f"state/warp/{RUN}/usage.json", _usage("mid-run"))
+    _put(repo, f"state/warp/{RUN}/usage.json", _usage("mid-run"))
     _commit_all(repo, "mid")
     _status(repo)
     assert sh.reconcile_running(repo, RUN) is None
 
 
 def test_reconcile_spawns_no_process(repo, monkeypatch):
-    _write(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
+    _put(repo, f"state/warp/{RUN}/usage.json", _usage("terminal-commit"))
     head = _commit_all(repo, "terminal")
     _status(repo)
 

@@ -10,7 +10,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_xs_over_budge
     root,
 )
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.xs_gate_live]
 
 
 def _own_paths(root, count):

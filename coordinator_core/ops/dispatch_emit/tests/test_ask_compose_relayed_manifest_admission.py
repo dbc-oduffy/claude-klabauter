@@ -103,7 +103,9 @@ def test_incomplete_chunk_pushes_need_no_own_guard_and_result_rows_are_strings()
     script = _compose()
     assert "_incompleteChunks.push(g.id)" in script and "_incompleteChunks.push(o.id)" in script
     assert "rows: (_manifest?.rows ?? []).map((r) => r.id)" in script
-    assert "String(r.id)" not in script
+    # 94ed1afa0e / 576a923115 added String(r.id) coercions in the ledger-recovery JS and the rowOf
+    # lookup; the result-rows site is what stays uncoerced.
+    assert "rows: (_manifest?.rows ?? []).map((r) => String(r.id))" not in script
 
 
 def _adopt(manifest, soft: bool) -> str | None:

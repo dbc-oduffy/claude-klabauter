@@ -47,6 +47,7 @@ from typing import Callable, Optional, Sequence
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.interleave import Primitive, run_interleaved
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
+from coordinator_core.benchmarks.terminal_commit_launch import _ONBOARDED_LAUNCH, ONBOARDED_PIN
 from coordinator_core.benchmarks.tests.test_terminal_commit_process_budget import (
     K_INVOCATIONS,
     SAMPLES,
@@ -196,7 +197,7 @@ builtins.__import__ = _hook
 os.replace = _replace
 subprocess.Popen.__init__ = _popen_init
 from coordinator_core.benchmarks import terminal_commit_full_path as drv
-repo, script = drv.build_fixture(Path(sys.argv[1]))
+""" + ONBOARDED_PIN + """repo, script = drv.build_fixture(Path(sys.argv[1]))
 drv._prepare_close(repo)
 from coordinator_core.ops.dispatch_emit import land_run
 queued_jobs = []
@@ -383,8 +384,10 @@ def assert_resolves_to_tree(tree: Path) -> None:
 
 
 def _sample(tree: Path, workdir: Path, *extra: str) -> dict:
+    """The fixture repo is read as onboarded: an unonboarded repo withholds every run artifact and
+    the close legs report not-applicable."""
     result = batched_process_time_ms(
-        [sys.executable, "-m", DRIVER, str(workdir), *extra],
+        [sys.executable, "-c", _ONBOARDED_LAUNCH, DRIVER, str(workdir), *extra],
         k=K_INVOCATIONS, env=_child_env(tree), cwd=str(tree),
     )
     if result["rc"] != 0:
@@ -517,7 +520,7 @@ def net_attribution(full: Sequence[dict], setup: Sequence[dict]) -> list[dict]:
 
 def _importtime_stderr(tree: Path, workdir: Path, *extra: str) -> str:
     done = subprocess.run(
-        [sys.executable, "-X", "importtime", "-m", DRIVER, str(workdir), *extra],
+        [sys.executable, "-X", "importtime", "-c", _ONBOARDED_LAUNCH, DRIVER, str(workdir), *extra],
         cwd=str(tree), env=_child_env(tree), capture_output=True, text=True, timeout=300,
         **no_console_creationflags(),
     )

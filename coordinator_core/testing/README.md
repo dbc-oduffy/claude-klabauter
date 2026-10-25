@@ -188,6 +188,14 @@ python3 -m coordinator_core.testing.full_runner \
 Per-suite PASS/FAIL is streamed as suites complete, followed by a final
 machine-scannable tally line (`N passed, M failed across K families`).
 
+## `git_write` — writes `git status` always sees
+
+`write_seen_by_git(path, text, *, encoding, newline)` and
+`write_bytes_seen_by_git(path, data)` rewrite a fixture file and, when the size
+is unchanged, bump its mtime by +2s so `core.checkStat=minimal` cannot read the
+edit as clean. Use them for any test write that follows a commit and expects
+dirt.
+
 ## Out of scope here
 
 - Actually setting `full_test_cmd:` in DoE's `coordinator.local.md` — that is

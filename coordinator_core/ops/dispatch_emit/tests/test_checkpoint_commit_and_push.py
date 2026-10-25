@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, execute_section
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
+from coordinator_core.testing.git_write import write_seen_by_git
 
 _SESSION = "9d860631-c114-462a-a6ee-f685cc671ced"
 
@@ -268,9 +269,9 @@ def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp
     git("add", "-A")
     git("commit", "-q", "-m", "seed")
 
-    (tmp_path / "tracked.ts").write_text("b\n", encoding="utf-8", newline="\n")
-    (tmp_path / "new_declared.ts").write_text("n\n", encoding="utf-8", newline="\n")
-    (tmp_path / "stray.ts").write_text("s\n", encoding="utf-8", newline="\n")
+    write_seen_by_git(tmp_path / "tracked.ts", "b\n", newline="\n")
+    write_seen_by_git(tmp_path / "new_declared.ts", "n\n", newline="\n")
+    write_seen_by_git(tmp_path / "stray.ts", "s\n", newline="\n")
 
     declared = ["tracked.ts", "new_declared.ts"]
     status = git("status", "--porcelain", "-uall", "--", *declared)

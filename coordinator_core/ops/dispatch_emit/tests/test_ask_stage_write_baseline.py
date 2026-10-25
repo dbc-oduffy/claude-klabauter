@@ -181,6 +181,14 @@ def test_refire_baseline_is_in_the_fingerprint_domain_under_an_eol_rule(tmp_path
     assert ask_stage._write_baseline.unwritten(tmp_path, got, ["f.txt", "g.txt"]) == ["f.txt"]
 
 
+def test_refire_with_a_whitespace_path_refuses_before_spawning_git(tmp_path, fake_git):
+    rec = _halt(tmp_path, "ws", {}, BASE)
+    rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/has space.py",), 0)]
+    with pytest.raises(ask_stage.RefireBaselineError):
+        ask_stage._stage_write_baseline(tmp_path, rows, rec)
+    assert fake_git.calls == 0
+
+
 def test_refire_with_every_path_recorded_spawns_no_git(tmp_path, fake_git):
     rec = _halt(tmp_path, "full", {"pkg/a.py": None}, BASE)
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/a.py",), 0)]

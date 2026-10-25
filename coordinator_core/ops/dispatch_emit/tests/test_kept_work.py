@@ -87,12 +87,12 @@ def test_write_read_round_trip_and_empty_writes_nothing(tmp_path):
     assert path == tmp_path / k.KEPT_FILE
     raw = path.read_bytes()
     assert b"\r" not in raw
-    assert k.read(tmp_path) == {"chunks": {"C1": {"paths": {"a": "x"}}}, "plan_gate": None}
+    assert k.read(tmp_path) == {"chunks": {"C1": {"paths": {"a": "x"}}}, "plan_gate": None, "post_checkpoint": {}}
     assert json.loads(raw)["chunks"]["C1"]["paths"] == {"a": "x"}
 
 
 def test_read_malformed_is_empty(tmp_path):
-    empty = {"chunks": {}, "plan_gate": None}
+    empty = {"chunks": {}, "plan_gate": None, "post_checkpoint": {}}
     assert k.read(tmp_path) == empty
     (tmp_path / k.KEPT_FILE).write_text("{not json", encoding="utf-8")
     assert k.read(tmp_path) == empty

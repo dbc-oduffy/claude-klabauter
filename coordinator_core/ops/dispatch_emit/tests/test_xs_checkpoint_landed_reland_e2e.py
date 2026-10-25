@@ -12,9 +12,11 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import review_edits, sibling_claims
 from coordinator_core.ops.dispatch_emit.ask_contract import RESUMED_RUN_ID_KEY, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import run_base_rel
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler as ask_gate_handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_commit_halt_refire_e2e import (  # noqa: F401
     RUN,
+    RUN2,
     SIZING,
     _commit,
     _git,
@@ -23,12 +25,13 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_commit_halt_refire_e2e im
     halted,
     repo,
 )
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _put
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PRODUCT = "a.py"
 FOREIGN = "coordinator/tests/test_foreign_shape.py"
-FOREIGN_BYTES = "def test_a():\n    assert True\n# in-flight edit of a concurrent run\n"
+FOREIGN_BYTES = "def test_a():\n    assert 1 == 1  # in-flight edit of a concurrent run\n"
 
 
 def _make_xs(root) -> None:
@@ -39,6 +42,13 @@ def _make_xs(root) -> None:
     run = f"warp-{stem}-20261021T191648-4195de"
     _write(root, f"{RUN_DIR_ROOT}/{run}/manifest.json",
            json.dumps({"rows": [{"id": "X1", "writes": [PRODUCT]}]}))
+
+
+def _second_run_with_base(root, base: str = "") -> str:
+    token = _second_run(root)
+    if not (root / run_base_rel(RUN2)).exists():
+        _write(root, run_base_rel(RUN2), (base or _git(root, "rev-parse", "HEAD").strip()) + "\n")
+    return token
 
 
 def _printed_params() -> dict:
@@ -59,10 +69,11 @@ def test_the_printed_line_relands_a_checkpoint_landed_xs_run_and_pays_the_close_
     _make_xs(halted)
     _git(halted, "add", SIZING)
     _git(halted, "commit", "-q", "-m", "sizing: xs")
-    _write(halted, FOREIGN, "def test_a():\n    assert True\n")
+    run_base = _git(halted, "rev-parse", "HEAD").strip()
+    _put(halted, FOREIGN, "def test_a():\n    assert True\n")
     _git(halted, "add", FOREIGN)
     _git(halted, "commit", "-q", "-m", "foreign seed")
-    _write(halted, FOREIGN, FOREIGN_BYTES)
+    _put(halted, FOREIGN, FOREIGN_BYTES)
 
     verdict = ask_gate_handler(_printed_params(), repo_root=halted)
     assert verdict["halt"] is None, verdict
@@ -70,7 +81,7 @@ def test_the_printed_line_relands_a_checkpoint_landed_xs_run_and_pays_the_close_
     assert inline_review[RESUMED_RUN_ID_KEY] == RUN
 
     monkeypatch.setattr(review_edits, "review_writes", lambda root, sid, since: {})
-    out = _commit(halted, _second_run(halted), {**inline_review, "prep": {"slice_files": [FOREIGN]}})
+    out = _commit(halted, _second_run_with_base(halted, run_base), {**inline_review, "prep": {"slice_files": [FOREIGN]}})
 
     assert out["committed"] is True, out
     landed = set().union(*(_changed(halted, sha) for sha in _shas(out)))
@@ -90,10 +101,10 @@ def test_a_second_call_lands_nothing_again(halted, monkeypatch):
     verdict = ask_gate_handler(_printed_params(), repo_root=halted)
     inline_review = verdict["resume_ledger"]["inline_review"]
     monkeypatch.setattr(review_edits, "review_writes", lambda root, sid, since: {})
-    first = _commit(halted, _second_run(halted), inline_review)
+    first = _commit(halted, _second_run_with_base(halted), inline_review)
     assert first["committed"] is True, first
     head = _git(halted, "rev-parse", "HEAD").strip()
 
-    second = _commit(halted, _second_run(halted), inline_review)
+    second = _commit(halted, _second_run_with_base(halted), inline_review)
 
     assert _git(halted, "rev-parse", "HEAD").strip() == head, second

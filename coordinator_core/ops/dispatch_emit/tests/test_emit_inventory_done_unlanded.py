@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest import (
 )
 from coordinator_core.ops.dispatch_emit.tests.test_inventory_mint_done_unlanded import _dep, _git, _plan_text
 from coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_and_withheld import _chunk
+from coordinator_core.testing.git_write import write_bytes_seen_by_git, write_seen_by_git
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -40,9 +41,10 @@ def _fixture(tmp_path: Path) -> Path:
     (tmp_path / "src" / "n1.py").write_text("x\n", encoding="utf-8")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "seed")
-    (tmp_path / "src" / "l1.py").write_bytes(_DIRTY)
+    write_bytes_seen_by_git(tmp_path / "src" / "l1.py", _DIRTY)
     inv = tmp_path / DIR / f"{BASE}.md"
-    inv.write_text(
+    write_seen_by_git(
+        inv,
         f"---\nrun_id: {BASE}\n---\n\n## Chunk table\n\n"
         "| id | spec path | summary | footprint | deps | verification | complexity | disposition |\n"
         "|---|---|---|---|---|---|---|---|\n"

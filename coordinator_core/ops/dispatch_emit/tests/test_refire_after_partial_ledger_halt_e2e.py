@@ -34,6 +34,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import
     RUN,
     SIZING,
     _git,
+    _put,
     _write,
     repo,
 )
@@ -99,7 +100,7 @@ def halted(repo, monkeypatch):  # noqa: F811
         repo, "commit", "-q", "-m", "checkpoint(wave 1): 1 row — C1",
         "-m", f"Checkpoint-Plan: {PLAN}\nCheckpoint-Base: abc1234",
     )
-    _write(repo, "b.py", "b\n")
+    _put(repo, "b.py", "b\n")
     _record(repo, RUN)
     out = terminal_commit._handler(
         {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: _HALT}, repo_root=repo
@@ -199,12 +200,11 @@ def test_refire_resumes_at_the_ledger_plans_nothing_and_the_withheld_chunk_lands
     assert "_gate.resume_ledger.em_discharged" in script
 
     token = _second_run(halted)
+    before_head = _git(halted, "rev-parse", "HEAD").strip()
     out = _commit(halted, token)
     assert out["committed"] is True, out
     assert "C2" in out["rows_coded"][PLAN], out.get("rows_coded")
-    assert "b.py" in _git(halted, "show", "--name-only", "--format=", "HEAD~1") + _git(
-        halted, "show", "--name-only", "--format=", "HEAD"
-    )
+    assert "b.py" in _git(halted, "log", "--name-only", "--format=", f"{before_head}..HEAD")
     assert "disposition: coded" in (halted / PLAN).read_text(encoding="utf-8")
 
     later = gate(halted, SIZING)

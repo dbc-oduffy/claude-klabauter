@@ -14,7 +14,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-_REVISION ="R2-MARK also make the conform job refuse undeclared writes"
+_REVISION = "R2-MARK also make the conform job refuse undeclared writes"
 
 
 def _live_run(repo, run_id):  # noqa: F811

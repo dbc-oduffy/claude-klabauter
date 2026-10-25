@@ -1044,7 +1044,11 @@ _dispatch_op_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar
 
 
 def current_dispatch_op() -> Optional[str]:
-    """The JSON-RPC method of the dispatch in flight; None outside one. A handler called directly inside a dispatch reads that dispatch's method; a nested `dispatch_message` rebinds it for its own span."""
+    """The JSON-RPC method of the dispatch in flight; None outside one.
+
+    A handler called directly inside a dispatch reads that dispatch's method; a nested
+    `dispatch_message` rebinds it for its own span.
+    """
     return _dispatch_op_var.get()
 
 

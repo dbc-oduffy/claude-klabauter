@@ -230,7 +230,9 @@ def main(argv: list[str]) -> int:
         "script_path": "run.mjs", "run_id": RUN_ID,
         "halted_by": {"halted": "ledger-check", "reason": "sizing refused: route is not spec-dispatch"},
     }
-    expected = {f"{RECORD_DIR_ROOT}/{RUN_ID}/{n}" for n in (*RECORD_FILES, "halted.json")}
+    expected = {f"{RECORD_DIR_ROOT}/{RUN_ID}/{n}" for n in (*RECORD_FILES, "halted.json", "run-stage.json")}
+    if not incident:
+        expected.add(f"{RECORD_DIR_ROOT}/{RUN_ID}/kept.json")
     if incident:
         params["incomplete_chunks"] = ["C2", "C3"]
         params["landed_chunks"] = ["C1"]

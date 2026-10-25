@@ -278,14 +278,22 @@ def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
     return _paths_named(repo_root, read_notes(dir_))
 
 
+def path_tokens(text: str) -> list[str]:
+    """The whitespace-split tokens of `text` with wrapping quotes, brackets and trailing
+    punctuation stripped; candidates only, none checked against disk."""
+    out = []
+    for token in text.split():
+        out.append(token.strip("`'\"[]<>(").rstrip(".,;:)").strip("`'\"[]<>("))
+    return out
+
+
 def _paths_named(repo_root: Path, notes: Iterable[str]) -> list[str]:
     from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
 
     root = Path(repo_root).resolve()
     out: list[str] = []
     for note in notes:
-        for token in note.split():
-            token = token.strip("`'\"[]<>(").rstrip(".,;:)").strip("`'\"[]<>(")
+        for token in path_tokens(note):
             found = _contained_file(root, token)
             if found is None:
                 continue

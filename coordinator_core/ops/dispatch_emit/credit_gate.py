@@ -14,9 +14,12 @@ REFUSED_NO_CREDITED_LANDING = "no-credited-chunk-landed"
 DOCS_CHUNK_ID = "docs"
 SIZING_CHUNK_ID = "sizing"
 
-#: Chunk ids ``ask_stage.stage`` mints that carry run records, not delivery. terminal_commit's
-#: "run-note" scope chunk never appears in ``request.chunks`` for crediting, so it is not a member.
-BOOKKEEPING_CHUNK_IDS = frozenset({DOCS_CHUNK_ID, SIZING_CHUNK_ID})
+KEPT_REVIEW_CHUNK_ID = "kept-review"
+
+#: Chunk ids ``ask_stage`` mints that carry run records or carried hunks, not delivery.
+#: terminal_commit's "run-note" scope chunk never appears in ``request.chunks`` for crediting, so it
+#: is not a member.
+BOOKKEEPING_CHUNK_IDS = frozenset({DOCS_CHUNK_ID, SIZING_CHUNK_ID, KEPT_REVIEW_CHUNK_ID})
 
 
 def stranded_residue(

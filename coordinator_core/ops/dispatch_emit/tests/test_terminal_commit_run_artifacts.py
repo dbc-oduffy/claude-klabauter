@@ -187,7 +187,7 @@ def test_a_candidate_another_run_claims_is_not_this_runs_residue(repo, monkeypat
     monkeypatch.setattr(run_artifacts, "landable", lambda *a, **k: run_artifacts.Landable())
     monkeypatch.setattr(
         sibling_claims, "sibling_run_claims",
-        lambda root, rid, paths: {p: "ask-20261016T130000-cccccc" for p in paths if p == EVIDENCE},
+        lambda root, rid, paths, own_plan=None: {p: "ask-20261016T130000-cccccc" for p in paths if p == EVIDENCE},
     )
 
     out = _fire(repo)
@@ -222,7 +222,7 @@ def test_stranded_residue_omits_a_path_another_run_claims(repo, monkeypatch, cla
     _write(repo, "op.py", "v2\n")
     monkeypatch.setattr(
         sibling_claims, "sibling_run_claims",
-        lambda root, rid, paths: {p: "ask-20261016T130000-cccccc" for p in paths if claimed and p == "op.py"},
+        lambda root, rid, paths, own_plan=None: {p: "ask-20261016T130000-cccccc" for p in paths if claimed and p == "op.py"},
     )
 
     out = _fire_stranded(repo, session_id=SESSION)

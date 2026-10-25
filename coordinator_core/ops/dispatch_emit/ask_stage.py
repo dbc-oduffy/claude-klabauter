@@ -60,7 +60,11 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
-from coordinator_core.ops.dispatch_emit.credit_gate import DOCS_CHUNK_ID, SIZING_CHUNK_ID
+from coordinator_core.ops.dispatch_emit.credit_gate import (
+    DOCS_CHUNK_ID,
+    KEPT_REVIEW_CHUNK_ID,
+    SIZING_CHUNK_ID,
+)
 from coordinator_core.ops.dispatch_emit import write_baseline as _write_baseline
 from coordinator_core.ops.dispatch_emit.halted_run import halted_run_base
 from coordinator_core.ops.dispatch_emit.fanout_cost import FanoutCost, Unit, propose_groups
@@ -835,6 +839,40 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
     raise AskStageError(f"{LIVE_RUN_WRITE_OVERLAP}: writes overlap live run {named}. Resubmit when it lands.")
 
 
+KEPT_HUNKS_DRIFTED = "kept-hunks-drifted"
+
+
+def _kept_review_paths(
+    root: Path,
+    run_id: str,
+    record: Path,
+    resume_snap: Optional[resume_snapshot.Snapshot],
+    declared: Sequence[str],
+) -> tuple[str, ...]:
+    """The sorted post-checkpoint paths a halted run recorded (this run's record dir, and the resumed
+    run's when it differs) whose bytes still equal the record and no staged row declares.
+    Raises AskStageError `kept-hunks-drifted` naming each recorded path whose bytes moved.
+    Trap: reads kept.json directly, never `snap.kept` -- a record holding only `post_checkpoint` keeps no row."""
+    dirs = [record]
+    if resume_snap is not None and resume_snap.kept_run and resume_snap.kept_run != run_id:
+        dirs.append(record_dir(root, resume_snap.kept_run))
+    owned = {kept_work._norm(p) for p in declared}
+    holding: set[str] = set()
+    drifted: dict[str, str] = {}
+    for rdir in dirs:
+        held, moved = kept_work.kept_post_checkpoint(root, rdir)
+        holding.update(held)
+        recorded = kept_work.read(rdir)[kept_work.POST_CHECKPOINT_KEY]
+        drifted.update({p: recorded.get(p, "") for p in moved})
+    holding -= owned
+    for p in owned:
+        drifted.pop(p, None)
+    if drifted:
+        named = "; ".join(f"{p} (recorded {b})" for p, b in sorted(drifted.items()))
+        raise AskStageError(f"{KEPT_HUNKS_DRIFTED}: recorded post-checkpoint hunks changed since the halt: {named}. Restore the recorded bytes (or land them), then re-fire.")
+    return tuple(sorted(holding))
+
+
 def _claim_register_rows(root: Path, plan_path: Path) -> None:
     """Claim into `plan_path`'s `register_claims.rows` every row of the register it names that they omit.
     A plan with no readable claims or register is left as it is."""
@@ -1188,6 +1226,9 @@ def stage(
     )
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
     chunks.append(ChunkCommit(id=DOCS_CHUNK_ID, title="run docs", paths=docs))
+    kept_review = _kept_review_paths(root, run_id, record, resume_snap, declared)
+    if kept_review:
+        chunks.append(ChunkCommit(id=KEPT_REVIEW_CHUNK_ID, title="kept post-checkpoint hunks", paths=kept_review))
     carried_sizing = sizing_rel or commit_sizing_rel
     if carried_sizing:
         # The run flips the sizing to routed and links its plan; no row declares it.
@@ -1208,7 +1249,7 @@ def stage(
     marker_path = run_dir / "commit-request.txt"
     _write(marker_path, f"{marker}\n" if marker else "")
 
-    review_paths = list(declared)
+    review_paths = [*declared, *kept_review]
     if only_rows is not None and not ledger_resume:
         # Twin of emit.py prior_landed_rows -> prior_surface. Trap: the review base is the halted
         # run's base, so a dropped row landed before that base adds no hunk.
@@ -1411,7 +1452,7 @@ def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow], record: Optio
     return {p: prior[p] if p in prior else fresh[p] for p in wanted}
 
 
-class RefireBaselineError(RuntimeError):
+class RefireBaselineError(AskStageError):
     """A refire's write baseline could not be read at the halted run's `run_base_sha`."""
 
 

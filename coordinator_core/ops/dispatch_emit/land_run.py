@@ -1324,6 +1324,13 @@ def _grade(
         else:
             ledger_files[chunk.id] = set(chunk.paths) | set(prefix_files)
     reason = ("ledger-met: " + ", ".join(met))[:_UNDONE_CAP]
+    if clean is not None:
+        from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
+
+        # review.prep's slice_files never list a non-product path, so a review cannot cover one.
+        clean = clean | {
+            f for fs in ledger_files.values() for f in fs if f.startswith(PRODUCT_FILE_EXCLUDED_PREFIXES)
+        }
     for cid in credit_gate.ledger_regradable(ledger_ids, blocked, ledger_files, clean):
         out.setdefault(cid, reason)
 
@@ -2078,6 +2085,27 @@ def _requeue_close(root: Path, params: dict, *, key: Optional[str] = None, crite
 # ---- the product landing ----------------------------------------------------------------------
 
 
+def _recorded_post_checkpoint(
+    root: Path, run_ids: Sequence[object], ask_run_dir: Optional[Path]
+) -> dict:
+    """``{path: run id}`` of the ``post_checkpoint`` hunks recorded in kept.json of each named run's
+    record dir (``ask_run_dir`` stands in for the landing run's own). An unsafe or absent dir reads as none."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    out: dict = {}
+    for run_id in dict.fromkeys(r for r in run_ids if isinstance(r, str) and r):
+        try:
+            rdir = ask_run_dir if ask_run_dir is not None and ask_run_dir.name == run_id else record_dir(root, run_id)
+        except ValueError:
+            continue
+        for rel in kept_work.read(rdir)[kept_work.POST_CHECKPOINT_KEY]:
+            path = kept_work._norm(rel)
+            if path:
+                out.setdefault(path, run_id)
+    return out
+
+
 def _land_product(root: Path, repo_root: Path, params: dict, token_state: dict) -> dict:
     """Land one run's product; see the module. ``token_state`` carries the claimed run token."""
     stranded: dict = {}
@@ -2469,9 +2497,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     recorded: list = []
     if ask_run_dir is not None and isinstance(params.get(TERMINAL_RESUME_LEDGER_PARAM), dict):
         recorded = [p for p in _resume_recorded_paths(root, ask_run_dir, inline_review) if p not in owner]
+    recorded_pc = _recorded_post_checkpoint(
+        root, [art_run_id, _resumed_review_source(root, inline_review, rid, session_id)[0]], ask_run_dir,
+    )
     literals = [*declared, *recorded, *(artifacts.paths() if artifacts is not None else ())]
     if bookkeeping_path:
         literals.append(bookkeeping_path)
+    literals.extend(recorded_pc)
     changed, ignored, _head = _dirty_among(root, literals)
     superseded: tuple = ()
     if artifacts is not None and sizing_for_credit:
@@ -2612,6 +2644,22 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         and not machine_local_paths([bookkeeping_path]) and (root / bookkeeping_path).is_file()
     ):
         paths.append(bookkeeping_path)
+    named_out = {
+        *withhold_reason, *recorded_reason, *art_withheld, *art_dropped,
+        *(p for p, why in em_withheld.items() if why not in SELF_APPLIED_WITHHOLDS),
+    }
+    unclaimed = sorted(
+        p for p in recorded_pc
+        if p in changed and p not in ignored and p not in paths and p not in deleted and p not in named_out
+    )
+    if unclaimed:
+        shown = "; ".join(f"{p} (kept.json of {recorded_pc[p]})" for p in unclaimed)
+        return _error(
+            f"the run's own post-checkpoint hunks are dirty and not in this landing: {shown}. "
+            "Re-stage so the kept-review chunk carries them, or withhold them with a reason: "
+            "workflow.revise withhold_paths",
+            refused="own-post-checkpoint-hunks-unclaimed", paths=unclaimed,
+        )
     if token_state.get("since_halt_close") is not None and not candidates and not (set(deleted) - set(art_deleted)):
         _exclude_withheld()
         return {
@@ -2662,10 +2710,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if p not in stranded[row]:
             stranded[row].append(p)
 
+    from coordinator_core.ops.dispatch_emit import shared_path_landing
+
     withheld_product: list = []
     if ledger is not None:
-        from coordinator_core.ops.dispatch_emit import shared_path_landing
-
         held_product = shared_path_landing.sibling_held_product(unlanded, peer_held)
         if held_product:
             return _error(

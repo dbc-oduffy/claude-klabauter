@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.xs_gate_live]
 
 RUN_ID = "ask-xsb"
 SCRIPT = f"scratch/warp/{RUN_ID}.workflow.mjs"

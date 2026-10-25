@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
 )
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -28,7 +29,7 @@ FOREIGN = "foreign/other_run.py"
 EARLIER = "elsewhere/tests/earlier.py"
 _REVIEWED = {
     "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
-    "prep": {"slice_files": [STRAY, "elsewhere/tests/gone.py"]},
+    "reverify": {"edited": [STRAY, "elsewhere/tests/gone.py"]},
 }
 _UNLISTED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 1}
 
@@ -111,7 +112,7 @@ def test_unlandable_review_edit_refuses_naming_the_files(repo, monkeypatch):
     assert STRAY in out["error"]
     assert _git(["rev-parse", "HEAD"], repo) == head
     _review_wrote(monkeypatch, {})
-    retry = _run(repo, run_id=RUN, run_token=token)
+    retry = _run(repo, run_id=RUN, run_token=token, inline_review=_UNLISTED)
     assert retry["committed"] is True, retry
 
 
@@ -172,7 +173,7 @@ def test_a_review_edit_to_an_earlier_checkpoints_file_lands_when_the_review_reco
     (repo / EARLIER).write_text("v1\n", encoding="utf-8", newline="")
     _git(["add", EARLIER], repo)
     _git(["commit", "-q", "-m", "checkpoint(wave 1)"], repo)
-    (repo / EARLIER).write_text("v = 2\n", encoding="utf-8", newline="")
+    write_seen_by_git(repo / EARLIER, "v = 2\n", newline="")
     _review_wrote(monkeypatch, {EARLIER: "agent-1"})
     out = _run(repo, inline_review={**_UNLISTED, "reverify": {"edited": [EARLIER]}})
     assert out["committed"] is True, out
@@ -185,9 +186,9 @@ def test_an_earlier_checkpoint_file_the_review_record_omits_stays_dirty(repo, mo
     (repo / EARLIER).write_text("v1\n", encoding="utf-8", newline="")
     _git(["add", EARLIER], repo)
     _git(["commit", "-q", "-m", "checkpoint(wave 1)"], repo)
-    (repo / EARLIER).write_text("v = 3\n", encoding="utf-8", newline="")
+    write_seen_by_git(repo / EARLIER, "v = 3\n", newline="")
     _review_wrote(monkeypatch, {EARLIER: "agent-2"})
-    out = _run(repo, inline_review={**_UNLISTED, "reverify": {"edited": [STRAY]}})
+    out = _run(repo, inline_review={**_UNLISTED, "reverify": {"edited": ["README.md"]}})
     assert out["committed"] is True, out
     assert "review_residue" not in out
     assert EARLIER not in _committed(repo)

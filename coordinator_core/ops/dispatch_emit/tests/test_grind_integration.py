@@ -42,6 +42,7 @@ from coordinator_core.backlog_grind_assemble import grind_rows
 from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.ops.dispatch_emit.queue_emit import emit_queue_script
 from coordinator_core.ops.dispatch_emit.queue_select import select_rows
+from coordinator_core.testing.git_write import write_seen_by_git
 
 from .conftest import REVIEW_KW
 
@@ -632,7 +633,7 @@ def test_a_grind_that_throws_mid_run_leaves_the_run_write_roots_clean_and_the_re
     assert _git(["add", "-A"], tmp_path).returncode == 0
     assert _git(["commit", "-m", "seed row"], tmp_path).returncode == 0
     decisions = tmp_path.parent / f"{tmp_path.name}-decisions.json"
-    decisions.write_text(json.dumps({contract.MINTED_KEY: ["state/bug-backlog/TF-1.yaml"]}), encoding="utf-8")
+    write_seen_by_git(decisions, json.dumps({contract.MINTED_KEY: ["state/bug-backlog/TF-1.yaml"]}))
     run_id = "20261015T000000Z"
     sink: list = []
 
@@ -651,8 +652,8 @@ def test_a_grind_that_throws_mid_run_leaves_the_run_write_roots_clean_and_the_re
 
     profile_dir = tmp_path.parent / f"{tmp_path.name}-profiles"
     profile_dir.mkdir()
-    (profile_dir / "bug.yaml").write_text(
-        (_FIXTURE_PROFILE_DIR / "fixture.yaml").read_text(encoding="utf-8"), encoding="utf-8"
+    write_seen_by_git(
+        profile_dir / "bug.yaml", (_FIXTURE_PROFILE_DIR / "fixture.yaml").read_text(encoding="utf-8")
     )
 
     def drain(_unit):

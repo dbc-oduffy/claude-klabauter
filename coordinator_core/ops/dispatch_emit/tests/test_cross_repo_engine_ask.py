@@ -30,6 +30,7 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_gated_rows import _patch_registry
 from coordinator_core.ops.review_prep import _handler as review_prep
+from coordinator_core.testing.git_write import write_seen_by_git
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -47,9 +48,9 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _write(path: Path, text: str) -> None:
+def _put(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    write_seen_by_git(path, text, newline="\n")
 
 
 def _init(root: Path, marker: str) -> Path:
@@ -58,8 +59,8 @@ def _init(root: Path, marker: str) -> Path:
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@example.com")
     _git(root, "config", "user.name", "t")
-    _write(root / "pkg" / "mod.py", f"# {marker}\nVALUE = 1\n")
-    _write(root / ".gitignore", ".coordinator-local/\nstate/\n")
+    _put(root / "pkg" / "mod.py", f"# {marker}\nVALUE = 1\n")
+    _put(root / ".gitignore", ".coordinator-local/\nstate/\n")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", f"seed {marker}")
     return root
@@ -70,12 +71,12 @@ def world(tmp_path, monkeypatch):
     """The driver is the process cwd; the target holds a committed base and one uncommitted change."""
     driver = _init(tmp_path / "driver", "driver")
     target = _init(tmp_path / "target-repo", "target")
-    _write(driver / "pkg" / "driver_only.py", "X = 1\n")
+    _put(driver / "pkg" / "driver_only.py", "X = 1\n")
     _git(driver, "add", "-A")
     _git(driver, "commit", "-q", "-m", "driver moves on")
     base = _git(target, "rev-parse", "HEAD")
-    _write(target / "pkg" / "mod.py", "# target\nVALUE = 2\n")
-    _write(
+    _put(target / "pkg" / "mod.py", "# target\nVALUE = 2\n")
+    _put(
         target / _PLAN_REL,
         f"---\nplan_id: {_PLAN_ID}\nstatus: executing\n---\n# Plan\n",
     )
@@ -166,7 +167,7 @@ def test_b2_the_targets_own_rows_are_staged_not_withheld(world, monkeypatch):
         monkeypatch,
         {"repos.target_repo": world.target.as_posix(), "repos.third_repo": third.as_posix()},
     )
-    _write(
+    _put(
         world.target / _PLAN_REL,
         "---\nplan_id: pln-cross-repo-abc123\n---\n# Plan\n\n## Tasks\n\n```yaml plan-tasks\n"
         "- id: U1\n  title: ungated\n  change_kind: code-edit\n  surface: pkg/a.py\n  writes:\n    - pkg/a.py\n"
@@ -236,5 +237,5 @@ def _record_in(repo: Path, base: str) -> Path:
         "criterion": {"status": "met", "observation": "ok", "sidecar": None},
     }
     path = repo / "state" / "superseding-reviews" / "2026-10" / "rec.md"
-    _write(path, "---\n" + "\n".join(f"{k}: {json.dumps(v)}" for k, v in data.items()) + "\n---\n\nbody\n")
+    _put(path, "---\n" + "\n".join(f"{k}: {json.dumps(v)}" for k, v in data.items()) + "\n---\n\nbody\n")
     return path

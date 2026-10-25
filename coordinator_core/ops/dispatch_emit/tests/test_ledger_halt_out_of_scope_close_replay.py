@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import halted_record_message
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, resumable_plan
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.warp_fire import fire_command
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -43,10 +44,10 @@ def _git(root: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
-def _write(root: Path, rel: str, text: str) -> None:
+def _put(root: Path, rel: str, text: str) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    write_seen_by_git(path, text, newline="\n")
 
 
 def _commit(root: Path, message: str, *paths: str) -> str:
@@ -105,15 +106,15 @@ def _build(root: Path) -> str:
     the landed rows' commits, and the halt commit; returns the halt commit's sha."""
     _git(root, "init", "-q")
     _git(root, "config", "commit.gpgsign", "false")
-    _write(root, "README.md", "init\n")
+    _put(root, "README.md", "init\n")
     base = _commit(root, "init", "README.md")
     (root / "archive").mkdir()
-    _write(root, "archive/.keep", "")
-    _write(root, SIZING, yaml.safe_dump(_sizing_doc(), sort_keys=False))
-    _write(root, PLAN, _plan_text(base))
+    _put(root, "archive/.keep", "")
+    _put(root, SIZING, yaml.safe_dump(_sizing_doc(), sort_keys=False))
+    _put(root, PLAN, _plan_text(base))
     _commit(root, "seed", SIZING, PLAN, "archive/.keep")
     for i in ROWS:
-        _write(root, f"src/{i}.py", f"{i} landed\n")
+        _put(root, f"src/{i}.py", f"{i} landed\n")
     _commit(
         root, f"checkpoint(wave 1): 3 rows — {', '.join(ROWS)}\n\nCheckpoint-Plan: {PLAN}\nCheckpoint-Base: {base[:7]}",
         *[f"src/{i}.py" for i in ROWS],
@@ -121,14 +122,14 @@ def _build(root: Path) -> str:
     rl.start(root, RUN)
     rl.bind(root, RUN, SIZING)
     runs = [_sibling_run(RUN), _sibling_run(SUCCESSOR, [RUN], c.STATUS_AFTER, SUCCESSOR_SIZING)]
-    _write(root, c.parent_record_rel(PARENT), json.dumps(c.ParentRecord(PARENT, tuple(runs)).to_json()))
+    _put(root, c.parent_record_rel(PARENT), json.dumps(c.ParentRecord(PARENT, tuple(runs)).to_json()))
     for rid, status in ((RUN, "halted"), (SUCCESSOR, "after")):
-        _write(root, c.status_rel(rid), json.dumps({"parent_id": PARENT, "status": status}))
+        _put(root, c.status_rel(rid), json.dumps({"parent_id": PARENT, "status": status}))
     halted = {
         "status": "halted", "halted": "ledger-check", "blocking": ["R1"], "plan": PLAN,
         "sizing_rel": SIZING, "run_base_sha": BASE,
     }
-    _write(root, f"state/warp/{RUN}/halted.json", json.dumps(halted))
+    _put(root, f"state/warp/{RUN}/halted.json", json.dumps(halted))
     message = halted_record_message(RUN, halted) + f"\nLands-Chunks: {', '.join(ROWS)}"
     return _commit(root, message, f"state/warp/{RUN}/halted.json", f"state/warp/{RUN}/run.json")
 
@@ -171,12 +172,14 @@ def _drive(root: Path, sha: str) -> dict:
     return op._handler({"run_id": RUN, "sha": sha}, root)
 
 
-def _attach_review(root: Path, sha: str) -> None:
-    _write(root, REVIEW_RECORD, _review_record(sha))
-    job_path = root / ".coordinator-local" / "close-jobs" / f"{RUN}.json"
-    job = json.loads(job_path.read_text(encoding="utf-8"))
-    job["inputs"] = {**(job.get("inputs") or {}), "review_record": REVIEW_RECORD}
-    job_path.write_text(json.dumps(job), encoding="utf-8")
+def _stage_review(root: Path, sha: str) -> None:
+    """The review sidecar and the run outcome naming it, in place before the op queues the close:
+    the review-stamp leg is queued only when the op resolves a review record."""
+    _put(root, REVIEW_RECORD, _review_record(sha))
+    _put(
+        root, f"state/warp/{RUN}/run-outcome.json",
+        json.dumps({"inline_review": {"integration": {"sidecar": REVIEW_RECORD}}}),
+    )
 
 
 def _coded(root: Path) -> list:
@@ -187,13 +190,13 @@ def _coded(root: Path) -> list:
 
 def test_halt_to_named_route_to_closed_with_r1_withheld(repo):
     root, sha, launches = repo
+    _stage_review(root, sha)
     out = _drive(root, sha)
     assert out["ok"] and out["written"] is True
     assert out["close"]["job"] == f".coordinator-local/close-jobs/{RUN}.json" and out["close"]["launched"] is True
-    assert out["withheld"] == ["R1"] and launches == [RUN]
+    assert out["blocking_rows"] == ["R1"] and launches == [RUN]
     assert out["siblings"]["released"] == [fire_command(SUCCESSOR_SIZING)]
 
-    _attach_review(root, sha)
     legs = _run_job(root)
 
     assert legs["coded-stamp"].status == "ran", legs["coded-stamp"].detail
@@ -214,9 +217,11 @@ def test_halt_to_named_route_to_closed_with_r1_withheld(repo):
 def test_without_a_review_record_the_stamp_and_flip_fail_while_the_rest_lands(repo):
     root, sha, launches = repo
     out = _drive(root, sha)
-    assert out["withheld"] == ["R1"] and out["siblings"]["released"] == [fire_command(SUCCESSOR_SIZING)]
+    assert out["blocking_rows"] == ["R1"] and out["siblings"]["released"] == [fire_command(SUCCESSOR_SIZING)]
     legs = _run_job(root)
-    assert legs["review-stamp"].status == "failed"
+    assert "review-stamp" not in out["close"]["queued"] and "review-stamp" not in legs
+    job = json.loads((root / ".coordinator-local" / "close-jobs" / f"{RUN}.json").read_text(encoding="utf-8"))
+    assert job["settled"]["review-stamp"]["status"] == "not-applicable"
     assert legs["plan-reconciliation"].status == "failed"
     assert "status: implemented" not in (root / PLAN).read_text(encoding="utf-8")
     assert legs["coded-stamp"].status == "ran" and _coded(root) == [(i, "coded") for i in ROWS]

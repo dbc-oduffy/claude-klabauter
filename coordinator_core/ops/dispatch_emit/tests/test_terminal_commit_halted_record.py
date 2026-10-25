@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -114,7 +115,10 @@ def test_sizing_refusal_lands_one_commit_of_record_and_leaves_unrelated_dirt(rep
     assert out["committed"] is True
     assert _git(["rev-parse", "HEAD~1"], repo).strip() == head
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert sorted(names) == sorted(f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json", "run-stage.json"))
+    # run-stage.json rides every terminal commit: the stage stamp is written before staging.
+    assert sorted(names) == sorted(
+        f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json", "run-stage.json")
+    )
     message = _git(["log", "-1", "--format=%B"], repo)
     assert "Halted-By: refusal" in message
     assert REASON in message
@@ -130,7 +134,7 @@ def test_halt_after_stage_lands_manifest_and_requirements(repo):
 
     assert out["committed"] is True
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert len(names) == 7
+    assert len(names) == 7  # five record files + halted.json + run-stage.json
     assert f"{RECORD_DIR_ROOT}/{RUN}/run-stage.json" in names
     assert all(n.startswith(f"{RECORD_DIR_ROOT}/{RUN}/") for n in names)
     assert "Halted-By: ledger-check" in _git(["log", "-1", "--format=%B"], repo)
@@ -477,10 +481,8 @@ def test_ledger_halt_withholds_tsx_chunk_importing_untracked_alias_module(repo):
     (repo / "src" / "page.tsx").write_text("export const P = 1;\n", encoding="utf-8")
     _git(["add", "tsconfig.json", "src"], repo)
     _git(["commit", "-q", "-m", "ts"], repo)
-    (repo / "src" / "page.tsx").write_text(
-        'import { X } from "@/components/x";\nexport const P = X;\n', encoding="utf-8"
-    )
-    (repo / "src" / "components" / "x.tsx").write_text("export const X = 1;\n", encoding="utf-8")
+    write_seen_by_git(repo / "src" / "page.tsx", 'import { X } from "@/components/x";\nexport const P = X;\n')
+    write_seen_by_git(repo / "src" / "components" / "x.tsx", "export const X = 1;\n")
     _marker_script(repo, [("C1", ["src/page.tsx"])], {"C1": "DONE: C1\n"})
 
     out = _call(repo, LEDGER, **PASSING)
@@ -532,7 +534,7 @@ def test_run_json_sizing_lands_when_dirty_and_is_skipped_otherwise(repo):
     assert "Lands-Chunks" not in _git(["log", "-1", "--format=%B"], repo)
     assert "landed_chunks" not in out
 
-    record = {f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "run.json", "halted.json")}
+    record = {f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "run.json", "halted.json", "run-stage.json")}
     for named in ("state/sizings/own.yaml", "../outside.yaml", "/abs/outside.yaml", "state/sizings/absent.yaml"):
         (repo / RECORD_DIR_ROOT / RUN / "ask.md").write_text(f"again {named}\n", encoding="utf-8")
         _name_sizing(repo, named)

@@ -86,7 +86,7 @@ def test_each_verdict_with_zero_subprocess_calls(repo, monkeypatch):
 
     got = _judge(
         repo, "clean.py", "dirty.py", "new.py", "landing.py", "held.py", "gone.py", "nope.py",
-        "op_scopes.py", "pkg", "..\\x.py", "../x.py",
+        "op_scopes.py", "..\\x.py", "../x.py",
         landing_paths=["landing.py", "held.py"], withheld_paths=["held.py"],
     )
 
@@ -98,9 +98,68 @@ def test_each_verdict_with_zero_subprocess_calls(repo, monkeypatch):
     assert got["gone.py"] == "unresolved"
     assert got["nope.py"] == "unresolved"
     assert got["op_scopes.py"] == "unresolved"
-    assert got["pkg"] == "unresolved"
     assert got["../x.py"] == "unresolved"
     assert set(got.values()) <= set(SHIPPED_VERDICTS)
+
+
+def _write(root, rel, text="n\n"):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8", newline="\n")
+
+
+def test_a_clean_tracked_directory_is_backed_by_head(repo):
+    assert _judge(repo, "pkg", "pkg/") == {"pkg": "backed", "pkg/": "backed"}
+
+
+def test_an_unlanded_untracked_directory_is_refused_and_a_landed_one_is_backed(repo):
+    for f in ("run/a.txt", "run/sub/b.txt"):
+        _write(repo, f)
+    assert _judge(repo, "run") == {"run": "untracked"}
+    assert _judge(repo, "run", landing_paths=["run/a.txt"]) == {"run": "untracked"}
+    assert _judge(repo, "run", landing_paths=["run/a.txt", "run/sub/b.txt"]) == {"run": "backed"}
+    note = "## What shipped\n- `run/`\n"
+    refusal, _ = shipped_gate(repo, note)
+    assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED) and "run/a.txt" in refusal
+    assert shipped_gate(repo, note, landing_paths=["run/a.txt", "run/sub/b.txt"])[0] is None
+
+
+def test_a_tracked_directory_with_a_differing_file_is_not_in_commit(repo):
+    _write(repo, "pkg/m.py", "changed\n")
+    assert _judge(repo, "pkg") == {"pkg": "not-in-commit"}
+    assert _judge(repo, "pkg", landing_paths=["pkg/m.py"]) == {"pkg": "backed"}
+
+
+def test_a_gitignored_file_under_a_landed_directory_does_not_refuse(repo):
+    _write(repo, ".gitignore", "*.log\n")
+    _write(repo, "run/a.txt")
+    _write(repo, "run/noise.log")
+    assert _judge(repo, "run", landing_paths=["run/a.txt"]) == {"run": "backed"}
+
+
+def test_a_directory_whose_files_are_all_withheld_is_withheld(repo):
+    _write(repo, "run/a.txt")
+    got = _judge(repo, "run", landing_paths=["run/a.txt"], withheld_paths=["run/a.txt"])
+    assert got == {"run": "withheld"}
+
+
+def test_an_empty_or_missing_directory_claim_stays_unresolved(repo):
+    (repo / "empty").mkdir()
+    assert _judge(repo, "empty", "ghost") == {"empty": "unresolved", "ghost": "unresolved"}
+
+
+def test_directory_claims_cost_one_spawn_and_file_claims_none(repo, monkeypatch):
+    from coordinator_core.git import run as git_run
+
+    calls = []
+    real = git_run.run_git
+    monkeypatch.setattr(git_run, "run_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+    _write(repo, "run/a.txt")
+    _write(repo, "run2/a.txt")
+    _judge(repo, "clean.py", "new.py")
+    assert calls == []
+    _judge(repo, "run", "run2", "pkg")
+    assert len(calls) == 1
 
 
 def test_a_deleted_landing_path_is_backed(repo):

@@ -30,7 +30,7 @@ it, so a halt never spends the token the resumed run's product commit needs.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
@@ -451,16 +451,69 @@ def _baton_cascade(worktree_root: Path, repo_root: Path, run_id: str) -> dict:
     return {"run_baton_cascade": fire_for_batons(worktree_root, repo_root, [rel], None)}
 
 
-def _manifest_baseline(record_dir: Path) -> Optional[dict]:
-    """The run manifest's ``write_baseline``; None when the manifest or the key is absent or unreadable."""
+def _manifest_doc(record_dir: Path) -> dict:
+    """The run manifest as a dict; empty when absent or unreadable."""
     import json
 
     try:
         data = json.loads((record_dir / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
-    base = data.get("write_baseline") if isinstance(data, dict) else None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _manifest_baseline(record_dir: Path, doc: Optional[dict] = None) -> Optional[dict]:
+    """The run manifest's ``write_baseline`` (read from ``doc`` when given); None when the manifest or the key is absent or unreadable."""
+    base = (_manifest_doc(record_dir) if doc is None else doc).get("write_baseline")
     return base if isinstance(base, dict) and base else None
+
+
+def _post_checkpoint_candidates(
+    root: Path, record_dir_rel: str, doc: dict, excluded_owners: dict, review_literals: list,
+    run_written: list,
+) -> list:
+    """Paths this run declared or wrote that a halt may need to keep: manifest row writes (minus those
+    still equal to ``write_baseline``), ``review_declared_paths``, review and touch-record writes, and
+    the record dir's prior ``post_checkpoint`` paths. Never a record-dir, ``excluded_owners``, scratch
+    or out-of-worktree path."""
+    from coordinator_core.ops.dispatch_emit import kept_work, write_baseline
+
+    declared: list = []
+    for row in doc.get("rows") or ():
+        writes = row.get("writes") if isinstance(row, dict) else None
+        declared.extend(w for w in writes or () if isinstance(w, str))
+    declared.extend(p for p in doc.get("review_declared_paths") or () if isinstance(p, str))
+    declared = [review_edits._norm(p) for p in declared]
+    baseline = _manifest_baseline(root / record_dir_rel, doc)
+    stale = set(write_baseline.unwritten(root, baseline, declared)) if baseline else set()
+    prior = kept_work.read(root / record_dir_rel)[kept_work.POST_CHECKPOINT_KEY]
+    owned = {review_edits._norm(p) for p in excluded_owners}
+    out: dict = {}
+    for raw in (*[p for p in declared if p not in stale], *review_literals, *run_written, *prior):
+        rel = review_edits._norm(raw)
+        if (
+            not rel or review_edits._out_of_worktree(rel) or rel == "scratch" or rel.startswith("scratch/")
+            or rel.startswith(record_dir_rel + "/") or rel in owned
+        ):
+            continue
+        out[rel] = None
+    return list(out)
+
+
+def _coded_rows(worktree_root: Path, halted: dict) -> tuple:
+    """``(row ids the halt's plan marks coded, error)``. The set is empty when the plan field is
+    absent (error None) or the plan cannot be read or decoded (error names it): an unreadable plan
+    credits no row, and the caller surfaces that."""
+    from coordinator_core.ops.dispatch_emit import delivery_credit
+
+    plan = halted.get(HALT_PLAN_FIELD)
+    if not isinstance(plan, str) or not plan:
+        return set(), None
+    try:
+        by_ref = delivery_credit.coded_row_refs(str(worktree_root / plan))
+    except (OSError, ValueError) as exc:
+        return set(), f"{plan}: {exc}"
+    return {i for ids in by_ref.values() for i in ids}, None
 
 
 def _manifest_kept_from(record_dir: Path) -> dict:
@@ -494,14 +547,42 @@ def _carried_returns(root: Path, record_dir: Path, returns: dict) -> dict:
     return out
 
 
+def _persist_blobs(root: Path, common_dir: Optional[Path], post: dict) -> set:
+    """Write each ``post`` path's bytes as a git blob (in-process, no spawn) when its sha still
+    equals the recorded fingerprint, so a reviewed hunk stays recoverable after a refire; returns the
+    paths whose blob was written. A path whose read or write raises OSError or whose bytes changed is
+    left out; any other exception from ``write_object`` propagates. ``write_object`` is
+    content-addressed, so a lost race is not a lost write."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    written: set = set()
+    if common_dir is None or not common_dir.is_dir():
+        return written
+    for rel, want in post.items():
+        try:
+            data = (root / rel).read_bytes()
+            if kept_work.blob_sha(data) != want:
+                continue
+            git_objects.write_object(common_dir, b"blob", data)
+        except OSError:
+            continue
+        written.add(rel)
+    return written
+
+
 def _record_kept(
     root: Path, record_dir_rel: str, owner: dict, withheld: dict, halted: dict, paths: list,
-    consumed_returns: Optional[dict] = None,
+    consumed_returns: Optional[dict] = None, post_candidates: Iterable[str] = (), landed: Iterable[str] = (),
+    common_dir: Optional[Path] = None, manifest_doc: Optional[dict] = None,
 ) -> dict:
     """Write ``kept.json`` beside the withheld map and ``returns.json`` beside it when
     ``consumed_returns`` (row id to reply) holds a str entry; append their paths to ``paths`` (in
     place) so they land with the record, and stamp ``kept.json`` on the marker as
-    ``next_action.resume.stage``. Returns ``{"kept": {...}}`` (plus ``"returns": [ids]``) when anything was recorded, else ``{}``."""
+    ``next_action.resume.stage``. ``post_candidates`` that are in ``withheld``, not in ``landed`` and
+    owned by no kept chunk are fingerprinted under ``post_checkpoint`` when their blob was persisted;
+    the rest are named under ``post_checkpoint_unpersisted``.
+    Returns ``{"kept": {...}}`` (plus ``"returns": [ids]``) when anything was recorded, else ``{}``."""
     from coordinator_core.ops.dispatch_emit import kept_work, row_returns
 
     record_dir = root / record_dir_rel
@@ -520,19 +601,34 @@ def _record_kept(
             if returns_rel not in paths:
                 paths.append(returns_rel)
     owning = set(owner.values())
+    baseline = _manifest_baseline(record_dir, manifest_doc)
     chunks = kept_work.kept_chunks(
-        root, owner, withheld, _manifest_baseline(record_dir),
+        root, owner, withheld, baseline,
         returns=persisted, finished=[r for r in persisted if r not in owning],
     )
     gate = kept_work.plan_gate(halted, root)
-    written = kept_work.write(record_dir, chunks, gate)
+    recorded = {p for entry in chunks.values() for p in entry["paths"]} | set(owner)
+    wanted = {
+        p: blob
+        for p, blob in kept_work.post_checkpoint_hunks(
+            root, post_candidates, landed=landed, recorded=recorded, baseline=baseline
+        ).items()
+        if p in withheld
+    }
+    stored = _persist_blobs(root, common_dir, wanted)
+    post = {p: blob for p, blob in wanted.items() if p in stored}
+    written = kept_work.write(record_dir, chunks, gate, post)
     reply: dict = {"returns": sorted(persisted)} if persisted else {}
+    if len(post) != len(wanted):
+        reply["post_checkpoint_unpersisted"] = sorted(set(wanted) - set(post))
     if written is None:
         return reply
     rel = f"{record_dir_rel}/{kept_work.KEPT_FILE}"
     if rel not in paths:
         paths.append(rel)
     kept = {"chunks": sorted(chunks), "plan_gate": gate is not None}
+    if post:
+        kept[kept_work.POST_CHECKPOINT_KEY] = sorted(post)
     stage = {"kept": rel, **kept}
     if persisted:
         stage["returns"] = sorted(persisted)
@@ -544,6 +640,9 @@ def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
     from coordinator_core.git.commit_trailers import _UUID_RE
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.credit_gate import KEPT_REVIEW_CHUNK_ID
     from coordinator_core.ops.dispatch_emit.terminal_commit import _error, _worktree_snapshot
     from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 
@@ -563,6 +662,8 @@ def _land(
     declared: dict = {}  # path -> owning chunk id, first declarer wins
     report_cache: dict = {}
     for chunk in finished:
+        if chunk.id == KEPT_REVIEW_CHUNK_ID:
+            continue
         for path in list(chunk.paths) + (_own_prefix_files(worktree_root, chunk, report_cache) or []):
             declared.setdefault(path, chunk.id)
     owner = declared
@@ -625,8 +726,22 @@ def _land(
         p for p in review_written if not review_edits._out_of_worktree(review_edits._norm(p))
     ]
     run_written = _run_written(worktree_root, session_id, run_id)
+    request, _ = _run_request(worktree_root, params.get("script_path"))
+    request_owned = {p: c.id for c in (request.chunks if request is not None else ()) for p in c.paths}
+    coded, coded_error = _coded_rows(worktree_root, halted)
+    coded_reply: dict = {"coded_rows_unreadable": coded_error} if coded_error else {}
+    uncoded_dirt = [
+        review_edits._norm(p) for p, cid in request_owned.items() if p not in owner and cid not in coded
+    ]
+    manifest_doc = _manifest_doc(worktree_root / record_dir_rel)
+    post_candidates = _post_checkpoint_candidates(
+        worktree_root, record_dir_rel, manifest_doc,
+        {**{p: c for p, c in request_owned.items() if c not in coded}, **owner},
+        review_literals, run_written,
+    )
+    listed = declared + list(artifacts.paths()) + review_literals + run_written
     snapshot = _worktree_snapshot(
-        worktree_root, declared + list(artifacts.paths()) + review_literals + run_written,
+        worktree_root, listed + [p for p in [*post_candidates, *uncoded_dirt] if p not in listed],
         [record_dir_rel, RECORD_DIR_ROOT], [],
     )
     if snapshot is None:
@@ -817,7 +932,10 @@ def _land(
             landed_classes["review-edit"] = len(review_landed)
     review_reply["review_edits_unlanded"] = unlanded
 
-    _withhold_run_dirt(withheld, run_written, snapshot.changed, set(paths) | set(deleted))
+    # Trap: taken before _record_kept appends kept.json/returns.json to ``paths``; the record files are
+    # never post-checkpoint candidates, so they must not count as landed here.
+    landed_now = set(paths) | set(deleted)
+    _withhold_run_dirt(withheld, [*run_written, *post_candidates, *uncoded_dirt], snapshot.changed, landed_now)
 
     if process_withheld:
         process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
@@ -828,9 +946,16 @@ def _land(
             "committed": False, "sha": None, "nothing_to_commit": True,
             **({"withheld": withheld} if withheld else {}), **peer_held_by,
             **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply,
-            **baton_reply, **_baton_cascade(worktree_root, repo_root, run_id), **base,
+            **baton_reply, **coded_reply, **_baton_cascade(worktree_root, repo_root, run_id), **base,
         }
 
+    if (worktree_root / record_dir_rel).is_dir():
+        halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
+    kept_reply = _record_kept(
+        worktree_root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM),
+        post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
+        common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
+    )
     message = halted_record_message(run_id, halted)
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
 
@@ -838,17 +963,14 @@ def _land(
         message += "\n" + line
     for path in unlanded:
         message += "\nReview-Edit-Unlanded: " + path
+    for path in (kept_reply.get("kept") or {}).get(kept_work.POST_CHECKPOINT_KEY, ()):
+        message += "\nKept-Post-Checkpoint: " + path
     if landed_chunks:
         message += "\nLands-Chunks: " + ", ".join(landed_chunks)
     if landed_classes:
         message += "\nLands-Artifacts: " + ", ".join(f"{c}={n}" for c, n in sorted(landed_classes.items()))
     if deleted:
         message += "\nRemoves: " + ", ".join(deleted)
-    if (worktree_root / record_dir_rel).is_dir():
-        halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
-    kept_reply = _record_kept(
-        worktree_root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM)
-    )
     commit_params: dict = {"paths": paths, "message": message, "carry_stopped_runs": False}
     if deleted:
         commit_params["deleted_paths"] = deleted
@@ -870,7 +992,7 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **kept_reply}
+    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **coded_reply, **kept_reply}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         extra.update(_baton_cascade(worktree_root, repo_root, run_id))

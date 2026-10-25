@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import land_run_grind, run_token
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -37,10 +38,8 @@ def repo(tmp_path):
     (root / "state" / "backlog" / "tracked.yaml").write_text("id: tracked\n", encoding="utf-8")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
-    # A different size from the seed: under `core.checkStat=minimal` a same-size edit within the seed's
-    # second reads clean, so the undeclared dirty paths would vanish from `git status`.
     for name in ("a.py", "b.py", "other.py"):
-        (root / name).write_text("x = 200\n", encoding="utf-8")
+        write_seen_by_git(root / name, "x = 2\n")
     return root
 
 

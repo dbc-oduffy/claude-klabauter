@@ -75,7 +75,8 @@ def _sibling_b(repo: Path, *, halted: bool) -> None:
     _write(repo, f"state/warp/{run_id}/manifest.json",
            json.dumps({"rows": [{"id": "C1", "writes": [B_DOC]}], "doc_writes": []}))
     if halted:
-        _write(repo, f"state/warp/{run_id}/halted.json", json.dumps({"status": "halted"}))
+        _write(repo, f"state/warp/{run_id}/halted.json", json.dumps(
+            {"status": "halted", "run_artifacts": {"withheld": {B_DOC: "claimed"}}}))
     else:
         run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
 
@@ -116,6 +117,8 @@ def test_control_without_a_sibling_the_admitted_doc_path_lands(repo):
 
 
 def test_a_path_the_run_declares_lands_even_when_a_sibling_claims_it(repo):
+    token = run_token.mint(repo, _run_id("aaaaaa"), "run-a.mjs", session_id=SELF)
+    assert run_token.redeem(repo, _run_id("aaaaaa"), token, "run-a.mjs")
     _sibling_b(repo, halted=False)
     session_scope.touch(SELF, B_DOC, cwd=str(repo))
     out = _run_a(repo, own_paths=("src/a.py", B_DOC))

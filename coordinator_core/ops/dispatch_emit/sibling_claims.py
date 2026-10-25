@@ -147,10 +147,8 @@ def _own_dirt(root: Path, run_id: str, path: str, head: Optional[dict] = None) -
     current = kept_work.fingerprint(root, path)
     if current is None:
         return False
-    for chunk in kept_work.read(rdir)["chunks"].values():
-        paths = chunk.get("paths") if isinstance(chunk, dict) else None
-        if isinstance(paths, dict) and any(_norm(k) == path and v == current for k, v in paths.items()):
-            return True
+    if current in kept_work.kept_fingerprints(rdir).get(path, ()):
+        return True
     manifest = _read_json(rdir / "manifest.json") or _read_json(root / RUN_DIR_ROOT / run_id / "manifest.json")
     base = manifest.get("write_baseline")
     if isinstance(base, dict):

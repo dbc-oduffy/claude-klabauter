@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, Commi
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -34,10 +35,10 @@ def _git(args, cwd: Path) -> str:
     ).stdout
 
 
-def _write(root: Path, rel: str, text: str) -> None:
+def _put(root: Path, rel: str, text: str) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
+    write_seen_by_git(path, text, newline="\n")
 
 
 def _record(root: Path, rel: str, agent_id=None) -> None:
@@ -56,8 +57,8 @@ def repo(tmp_path, monkeypatch):
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
     _git(["config", "core.autocrlf", "false"], root)
-    _write(root, PLAN_B, "one\n")
-    _write(root, "README.md", "seed\n")
+    _put(root, PLAN_B, "one\n")
+    _put(root, "README.md", "seed\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
@@ -78,21 +79,21 @@ def _dirty(root: Path) -> set:
 
 def test_run_a_lands_its_own_paths_while_run_bs_dirt_stays_unread_and_unnamed(repo):
     base = _git(["rev-parse", "HEAD"], repo).strip()
-    _write(repo, PLAN_B, "one\nforeign\n")
+    _put(repo, PLAN_B, "one\nforeign\n")
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "foreign commit adds lines to run B's plan"], repo)
     foreign_blob = _git(["rev-parse", f"HEAD:{PLAN_B}"], repo).strip()
-    _write(repo, PLAN_B, "one\nforeign\nrun B is still editing\n")
-    _write(repo, "state/warp/run-b/manifest.json", json.dumps({"rows": [{"id": "C1", "writes": [PLAN_B]}]}))
+    _put(repo, PLAN_B, "one\nforeign\nrun B is still editing\n")
+    _put(repo, "state/warp/run-b/manifest.json", json.dumps({"rows": [{"id": "C1", "writes": [PLAN_B]}]}))
     run_token.mint(repo, RUN_B, "b.mjs", session_id=SELF)
 
     for rel, agent in (("src/a.py", None), ("src/claimed.py", None), ("src/review_written.py", REVIEW_AGENT)):
-        _write(repo, rel, f"{Path(rel).stem} = 1\n")
+        _put(repo, rel, f"{Path(rel).stem} = 1\n")
         session_scope.touch(SELF, rel, cwd=str(repo))
         _record(repo, rel, agent)
-    _write(repo, f"{RECORD_DIR_ROOT}/{RUN_A}/run.json", json.dumps({"run_id": RUN_A}))
+    _put(repo, f"{RECORD_DIR_ROOT}/{RUN_A}/run.json", json.dumps({"run_id": RUN_A}))
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("src/a.py",)),), plan_path=None)
-    _write(repo, SCRIPT, "// emitted\n" + render_marker(request) + "\n")
+    _put(repo, SCRIPT, "// emitted\n" + render_marker(request) + "\n")
 
     out = land_run._handler(
         {"script_path": SCRIPT, "incomplete_chunks": [], "inline_review": dict(REVIEWED),
@@ -111,14 +112,14 @@ def test_run_a_lands_its_own_paths_while_run_bs_dirt_stays_unread_and_unnamed(re
 
 
 def test_control_a_declared_path_run_b_also_declares_is_held_not_swept(repo):
-    _write(repo, "state/warp/run-b/manifest.json", json.dumps({"rows": [{"id": "C1", "writes": ["src/shared.py"]}]}))
+    _put(repo, "state/warp/run-b/manifest.json", json.dumps({"rows": [{"id": "C1", "writes": ["src/shared.py"]}]}))
     run_token.mint(repo, RUN_B, "b.mjs", session_id=SELF)
-    _write(repo, "src/shared.py", "shared = 1\n")
+    _put(repo, "src/shared.py", "shared = 1\n")
     session_scope.touch(SELF, "src/shared.py", cwd=str(repo))
     _record(repo, "src/shared.py")
-    _write(repo, f"{RECORD_DIR_ROOT}/{RUN_A}/run.json", json.dumps({"run_id": RUN_A}))
+    _put(repo, f"{RECORD_DIR_ROOT}/{RUN_A}/run.json", json.dumps({"run_id": RUN_A}))
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("src/shared.py",)),), plan_path=None)
-    _write(repo, SCRIPT, "// emitted\n" + render_marker(request) + "\n")
+    _put(repo, SCRIPT, "// emitted\n" + render_marker(request) + "\n")
 
     out = land_run._handler(
         {"script_path": SCRIPT, "incomplete_chunks": [], "inline_review": dict(REVIEWED),

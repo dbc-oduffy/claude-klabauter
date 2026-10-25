@@ -3,6 +3,8 @@
 Invariant: ``kept.json`` lives in the run record dir beside ``notes.jsonl``. A kept chunk or plan
 gate is honoured only while every recorded fingerprint still equals the bytes on disk. Stdlib only;
 spawns no process.
+
+Invariant: ``post_checkpoint`` holds hunks no plan row owns, so no reader may treat its keys as row ids.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit import row_returns
@@ -18,6 +20,7 @@ from coordinator_core.session.declared_writes import declare_write
 
 KEPT_FILE = "kept.json"
 HALT_RECORD_ONLY = "halt-record-only"
+POST_CHECKPOINT_KEY = "post_checkpoint"
 
 
 def blob_sha(data: bytes) -> str:
@@ -104,12 +107,102 @@ def plan_gate(halted: Mapping, root: Path) -> Optional[dict]:
     }
 
 
-def write(record_dir: Path, chunks: Mapping, plan_gate: Optional[Mapping]) -> Optional[Path]:
-    """Write ``kept.json`` (UTF-8, LF, sorted keys) when either part is non-empty; return its path or None."""
-    if not chunks and not plan_gate:
+def _norm(rel: object) -> Optional[str]:
+    """POSIX-normalised repo-relative path, or None for an empty, absolute, drive-lettered or ``..`` path."""
+    if not isinstance(rel, str):
+        return None
+    p = rel.strip().replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    parts = PurePosixPath(p).parts
+    if not p or p.startswith("/") or (len(p) > 1 and p[1] == ":") or ".." in parts:
+        return None
+    return "/".join(parts)
+
+
+def post_checkpoint_hunks(
+    root: Path,
+    candidates: Iterable[str],
+    *,
+    landed: Iterable[str],
+    recorded: Iterable[str],
+    baseline: Optional[Mapping[str, Optional[str]]] = None,
+) -> dict:
+    """``{rel: fingerprint}`` for each candidate the run wrote after its last checkpoint: contained in
+    the worktree, outside ``scratch/``, in neither ``landed`` nor ``recorded``, present, and (with
+    ``baseline``) not still equal to it. Declared order, deduped."""
+    skip = {_norm(p) for p in landed} | {_norm(p) for p in recorded}
+    cands: list[str] = []
+    for raw in candidates:
+        rel = _norm(raw)
+        if rel is None or rel in cands or rel in skip or rel == "scratch" or rel.startswith("scratch/"):
+            continue
+        cands.append(rel)
+    if baseline and cands:
+        # Deferred: write_baseline imports this module's `fingerprint`.
+        from coordinator_core.ops.dispatch_emit.write_baseline import unwritten as _unwritten
+
+        stale = set(_unwritten(root, baseline, cands))
+        cands = [p for p in cands if p not in stale]
+    base = Path(root).resolve()
+    out: dict[str, str] = {}
+    for rel in cands:
+        try:
+            (base / rel).resolve().relative_to(base)
+        except (OSError, ValueError):
+            continue
+        print_ = fingerprint(root, rel)
+        if print_ is not None:
+            out[rel] = print_
+    return out
+
+
+def kept_post_checkpoint(root: Path, record_dir: Path) -> tuple[dict, list]:
+    """``(holding, drifted)``: recorded ``post_checkpoint`` paths whose bytes still equal their blob,
+    and the sorted rest (absent or other bytes)."""
+    holding: dict[str, str] = {}
+    drifted: list[str] = []
+    for rel, want in read(record_dir)[POST_CHECKPOINT_KEY].items():
+        if fingerprint(root, rel) == want:
+            holding[rel] = want
+        else:
+            drifted.append(rel)
+    return holding, sorted(drifted)
+
+
+def kept_fingerprints(record_dir: Path) -> dict[str, frozenset]:
+    """Per normalised path, the union of every ``chunks[*].paths`` blob and every ``post_checkpoint`` blob."""
+    data = read(record_dir)
+    out: dict[str, set] = {}
+    for entry in data["chunks"].values():
+        paths = entry.get("paths") if isinstance(entry, Mapping) else None
+        if isinstance(paths, Mapping):
+            for rel, blob in paths.items():
+                key = _norm(rel)
+                if key is not None and isinstance(blob, str):
+                    out.setdefault(key, set()).add(blob)
+    for rel, blob in data[POST_CHECKPOINT_KEY].items():
+        key = _norm(rel)
+        if key is not None:
+            out.setdefault(key, set()).add(blob)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+def write(
+    record_dir: Path,
+    chunks: Mapping,
+    plan_gate: Optional[Mapping],
+    post_checkpoint: Optional[Mapping] = None,
+) -> Optional[Path]:
+    """Write ``kept.json`` (UTF-8, LF, sorted keys) when any part is non-empty; return its path or None.
+    ``post_checkpoint`` is written only when non-empty."""
+    if not chunks and not plan_gate and not post_checkpoint:
         return None
     path = Path(record_dir) / KEPT_FILE
-    body = json.dumps({"chunks": dict(chunks), "plan_gate": plan_gate or None}, sort_keys=True, indent=2)
+    doc: dict = {"chunks": dict(chunks), "plan_gate": plan_gate or None}
+    if post_checkpoint:
+        doc[POST_CHECKPOINT_KEY] = dict(post_checkpoint)
+    body = json.dumps(doc, sort_keys=True, indent=2)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -121,8 +214,9 @@ def write(record_dir: Path, chunks: Mapping, plan_gate: Optional[Mapping]) -> Op
 
 
 def read(record_dir: Path) -> dict:
-    """``{"chunks": {...}, "plan_gate": {...} | None}``; empty parts when absent or malformed. Never raises."""
-    empty: dict = {"chunks": {}, "plan_gate": None}
+    """``{"chunks": {...}, "plan_gate": {...} | None, "post_checkpoint": {rel: blob}}``; empty parts
+    when absent or malformed, non-str post_checkpoint entries dropped. Never raises."""
+    empty: dict = {"chunks": {}, "plan_gate": None, POST_CHECKPOINT_KEY: {}}
     try:
         data = json.loads((Path(record_dir) / KEPT_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -131,9 +225,15 @@ def read(record_dir: Path) -> dict:
         return empty
     chunks = data.get("chunks")
     gate = data.get("plan_gate")
+    post = data.get(POST_CHECKPOINT_KEY)
     return {
         "chunks": chunks if isinstance(chunks, dict) else {},
         "plan_gate": gate if isinstance(gate, dict) else None,
+        POST_CHECKPOINT_KEY: (
+            {k: v for k, v in post.items() if isinstance(k, str) and isinstance(v, str)}
+            if isinstance(post, dict)
+            else {}
+        ),
     }
 
 

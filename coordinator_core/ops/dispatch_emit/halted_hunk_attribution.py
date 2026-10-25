@@ -156,15 +156,9 @@ def reader(
         from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
         try:
-            chunks = kept_work.read(record_dir(root, halted_run_id))["chunks"].values()
+            return set(kept_work.kept_fingerprints(record_dir(root, halted_run_id)).get(p, frozenset()))
         except ValueError:
             return set()
-        found = set()
-        for chunk in chunks:
-            paths = chunk.get("paths") if isinstance(chunk, dict) else None
-            if isinstance(paths, dict):
-                found.update(v for k, v in paths.items() if _norm(k) == p and isinstance(v, str))
-        return found
 
     def attributable(halted_run_id: str, paths: Iterable[str]) -> set:
         wanted = {_norm(p) for p in paths if p}

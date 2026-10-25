@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.dispatch_emit import land_run
+from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.warp_fire import fire_command
 
 pytestmark = [pytest.mark.spawns_process]
@@ -30,9 +31,9 @@ def _run(rid, after=(), status=c.STATUS_READY):
     return c.SiblingRun(rid, rid, tuple(after), f"state/sizings/{rid}.yaml", status)
 
 
-def _write(path: Path, text: str) -> None:
+def _put(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    write_seen_by_git(path, text)
 
 
 def _build(tmp_path, monkeypatch, sib_status: str) -> Path:
@@ -50,15 +51,15 @@ def _build(tmp_path, monkeypatch, sib_status: str) -> Path:
     plan = repo / driver.PLAN_REL
     text = plan.read_text(encoding="utf-8")
     plan.write_text(text.replace("\n```\n", "\n" + C4_ROW + "```\n", 1), encoding="utf-8")
-    _write(repo / SIB_SIZING, f"plan: {SIB_PLAN}\n")
-    _write(repo / OWN_SIZING, "plan: docs/plan.md\n")
+    _put(repo / SIB_SIZING, f"plan: {SIB_PLAN}\n")
+    _put(repo / OWN_SIZING, "plan: docs/plan.md\n")
     driver._git(repo, "add", driver.PLAN_REL, OWN_SIZING, SIB_SIZING)
     driver._git(repo, "commit", "-q", "-m", "c4 row and sizings")
-    _write(repo / SCRIPT_REL, (repo / script).read_text(encoding="utf-8"))
+    _put(repo / SCRIPT_REL, (repo / script).read_text(encoding="utf-8"))
     record = c.ParentRecord(PARENT, (_run("A"), _run("B", ["A"], c.STATUS_AFTER)))
-    _write(repo / c.parent_record_rel(PARENT), json.dumps(record.to_json()))
-    _write(repo / c.status_rel("A"), json.dumps({"status": c.STATUS_RUNNING, "parent_id": PARENT}))
-    _write(repo / c.status_rel("B"), json.dumps({"status": sib_status, "parent_id": PARENT}))
+    _put(repo / c.parent_record_rel(PARENT), json.dumps(record.to_json()))
+    _put(repo / c.status_rel("A"), json.dumps({"status": c.STATUS_RUNNING, "parent_id": PARENT}))
+    _put(repo / c.status_rel("B"), json.dumps({"status": sib_status, "parent_id": PARENT}))
     return repo
 
 

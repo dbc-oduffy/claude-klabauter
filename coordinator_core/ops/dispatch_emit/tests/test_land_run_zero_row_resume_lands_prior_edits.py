@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import 
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import (  # noqa: F401
     _git,
+    _put,
     _write,
     repo,
 )
@@ -35,10 +36,10 @@ def _prior_fire(root) -> None:
         _write(root, rel, "v = 1\n")
     _git(root, "add", "pkg")
     _git(root, "commit", "-q", "-m", "prior product")
-    _write(root, EDITED, "v = 2\n")
-    _write(root, REVERTED, "v = 2\n")
-    _write(root, FOREIGN, "v = 2\n")
-    _write(root, CREATED, "v = 1\n")
+    _put(root, EDITED, "v = 2\n")
+    _put(root, REVERTED, "v = 2\n")
+    _put(root, FOREIGN, "v = 2\n")
+    _put(root, CREATED, "v = 1\n")
 
 
 def _terminal(root, resume, *, tests=None, footprint=(EDITED, CLEAN, REVERTED)) -> dict:

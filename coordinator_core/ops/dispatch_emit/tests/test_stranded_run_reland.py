@@ -5,6 +5,7 @@ own product, and a live sibling run's dirty path stays dirty throughout."""
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -24,11 +25,14 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_commit_halt_refire_e2e im
     halted,
     repo,
 )
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _put
+from coordinator_core.session import touch_record
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-SIBLING_RUN = "ask-20260101T000000-bbbbbb"
+SIBLING_RUN = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-bbbbbb"
 SIBLING_PATH = "docs/sibling.md"
+_PEER_SID = "99999999-8888-7777-6666-555555555555"
 _MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
@@ -38,7 +42,7 @@ def _sibling_live(root) -> None:
         root, f"{RUN_DIR_ROOT}/{SIBLING_RUN}/manifest.json",
         json.dumps({"rows": [{"id": "C1", "writes": [SIBLING_PATH]}], "doc_writes": []}),
     )
-    run_token.mint(root, SIBLING_RUN, "sibling.mjs", session_id=_SID)
+    run_token.mint(root, SIBLING_RUN, "sibling.mjs", session_id=_PEER_SID)
 
 
 def test_no_reland_op_is_registered_the_refire_is_the_supported_path():
@@ -66,10 +70,11 @@ def _landed(root, out: dict) -> set:
 
 def test_a_stranded_run_refires_and_lands_its_own_product_without_the_siblings_dirt(halted, monkeypatch):
     base = _git(halted, "rev-parse", "HEAD").strip()
-    _write(halted, RESIDUE, "b = 9  # foreign\n")
+    _put(halted, RESIDUE, "b = 9  # foreign\n")
     _git(halted, "commit", "-q", "-am", "foreign edit after the run base")
-    _write(halted, RESIDUE, "b = 2  # reworded by the reviewer\n")
+    _put(halted, RESIDUE, "b = 2  # reworded by the reviewer\n")
     _sibling_live(halted)
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
     monkeypatch.setattr(review_edits, "review_writes", lambda root, sid, since: {RESIDUE: "reviewer"})
 
     refused = _commit(halted, _second_run(halted), {"integration_stem": "rev-stem", "slices": 1, "fixes": 1},

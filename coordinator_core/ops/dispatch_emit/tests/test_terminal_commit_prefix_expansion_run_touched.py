@@ -121,7 +121,7 @@ def test_a_run_touched_prefix_file_a_live_peer_holds_is_left_out_and_named(repo)
 
     out = _run_touching(repo, "A", ["out/a.txt", "out/c.txt"])
     assert out["committed"] is True, out
-    assert _committed(repo) == ["out/a.txt"]
+    assert set(_committed(repo)) == {"out/a.txt", "report-A.md"}
     assert out["peer_held_left"] == [{"path": "out/c.txt", "sessions": [peer]}]
 
 

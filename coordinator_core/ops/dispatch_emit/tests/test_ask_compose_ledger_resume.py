@@ -59,7 +59,9 @@ def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work
     assert ".remaining ?? []).length > 0" in script[owes : owes + 400]
     assert "else if (!_ledgerOwes) { _xsTail = true; }" in script
     leg = script.index("label: 'ledger-replan'")
-    prompt = script[leg - 4200 : leg]
+    # Prompt preamble growth (3256e0bf2a, later additions) pushed the join past the fixed 4200
+    # window set by 4912597f37; slice from the prompt's own opening line instead.
+    prompt = script[script.index("Ledger-resume re-plan leg.") : leg]
     assert "_gate.resume_ledger.blocking.join(', ')" in prompt
     assert "_gate.resume_ledger.remaining ?? {}" in prompt
     assert "_gate.resume_ledger.revise_notes ?? []" in prompt
@@ -112,7 +114,10 @@ def test_the_ledger_resume_block_never_reassigns_the_gate_arm(monkeypatch):
 
 def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):
     script = _script(monkeypatch)
-    review = script.index("if (!_halted && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {")
+    # e312728c2c gated the review block on `!_reviewReused` (phase reuse).
+    review = script.index(
+        "if (!_halted && !_reviewReused && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {"
+    )
     assert script.index("else if (!_ledgerOwes) { _xsTail = true; }") < review < script.index("label: 'verify'")
     assert "if (!_halted && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
 
