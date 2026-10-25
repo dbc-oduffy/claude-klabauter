@@ -2231,8 +2231,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "c008e8adeaddaedbac3cf3a8a37b6e319a4ec674",
-    "coordinator_core/_engine_stamp": "851069dbbe2fb2ed5e127119cfe91fca1d8cfdd4",
+    "coordinator_core/_engine_published_at": "63808fabe7742c8907c17b90404715e1d711a058",
+    "coordinator_core/_engine_stamp": "9c24913782d1e648dd7f142419fa3eb89d9364c2",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -9411,7 +9411,7 @@
     "coordinator_core/write_guards/guard_doctrine_surface_edits.py": "34ea61639136635fe982cd38d2e53e8b222c0106",
     "coordinator_core/write_guards/guard_memory_store_cap.py": "4af8292a1d36a003d3ddf950b3ed86edf08f1f84",
     "coordinator_core/write_guards/guard_settings_json_write.py": "575144b2332d86c57611b457e82e8a13e3df16c6",
-    "coordinator_core/write_guards/nudge_authoring_leak.py": "3268559e3155283a6d2731ff7c84d32a6109a7fe",
+    "coordinator_core/write_guards/nudge_authoring_leak.py": "892f1f25550409090a22bafa747b39eb195de4a0",
     "coordinator_core/write_guards/nudge_baton_body_bar.py": "5ba7d64242cf7c9905cc54576c44204bcf6a3f66",
     "coordinator_core/write_guards/nudge_dangling_sizing_citation.py": "0c09d1478f1fd96c15e7870fe75caca050ca774c",
     "coordinator_core/write_guards/nudge_em_code_dispatch.py": "bb043cbf5d27b2409a6f22cf3b688a5d16eee612",
@@ -9692,5 +9692,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "df6180ab5b04d43c2b30047c0bfcff5377b5f020"
+  "source_head": "ab1f2ea207e25cffa959ba5eec8b981bb9985738"
 }

@@ -19,6 +19,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -50,9 +52,26 @@ def _relative_to_root(file_path: str, payload: Dict[str, Any]) -> Optional[tuple
     return root, rel.as_posix()
 
 
-def _in_scope(rel: str) -> bool:
-    from coordinator_core.authoring_leaks import foreign_identity, payload_locality
+def _detectors() -> Optional[tuple]:
+    """`(foreign_identity, payload_locality)`, or None where the publisher is absent.
 
+    Trap: the published tree withholds both detectors, so they are resolved by name at
+    runtime; a literal import would be a dangling import in the mirror.
+    """
+    if importlib.util.find_spec("coordinator_core.percolate") is None:
+        return None
+    pkg = "coordinator_core.authoring_leaks"
+    return (
+        importlib.import_module(f"{pkg}.foreign_identity"),
+        importlib.import_module(f"{pkg}.payload_locality"),
+    )
+
+
+def _in_scope(rel: str) -> bool:
+    detectors = _detectors()
+    if detectors is None:
+        return False
+    foreign_identity, payload_locality = detectors
     return foreign_identity.in_scope(rel) or payload_locality.target_for(rel) is not None
 
 
@@ -66,8 +85,10 @@ def _read_before(path: Path) -> str:
 
 
 def _findings(before: str, after: str, rel: str, root: Path) -> List[Any]:
-    from coordinator_core.authoring_leaks import foreign_identity, payload_locality
-
+    detectors = _detectors()
+    if detectors is None:
+        return []
+    foreign_identity, payload_locality = detectors
     found: List[Any] = []
     found.extend(payload_locality.detect_text(before, after, rel, root))
     found.extend(foreign_identity.detect_text(before, after, rel))
