@@ -66,6 +66,15 @@ def test_prep_run_id_guards_raise(extra):
         _compose(prep_run_id="ask-x", **extra)
 
 
+def test_run_id_leg_note_never_quotes_a_leg_value_line():
+    from coordinator_core.ops.review_mint.execute_review import _wave_prep_instruction
+
+    text = _wave_prep_instruction("m", "b", "p", None, grouped=False, run_id="r")
+    assert "leg: true" not in text
+    assert "only when the values below carry a `leg:` line" in text
+    assert '"leg"' not in _wave_prep_instruction("m", "b", "p", None, grouped=False, paths_literal="[]")
+
+
 def test_wave_prep_instruction_refuses_run_id_with_paths_literal():
     from coordinator_core.ops.review_mint.execute_review import _wave_prep_instruction
 

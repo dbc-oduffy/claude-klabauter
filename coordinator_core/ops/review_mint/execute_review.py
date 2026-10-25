@@ -681,7 +681,7 @@ def _wave_prep_instruction(
         raise ValueError("_wave_prep_instruction takes at most one of run_id / paths_literal")
     if run_id is not None:
         paths_key = f"\"run_id\":{json.dumps(run_id)}"
-        leg_note = " When a `leg: true` value is given, add it as `\"leg\":true`."
+        leg_note = " Add `\"leg\":true` only when the values below carry a `leg:` line; otherwise omit `leg`."
     else:
         paths_key = "\"paths\":" + (paths_literal if paths_literal is not None else "[<every declared path>]")
         leg_note = ""
