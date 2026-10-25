@@ -235,6 +235,18 @@ def test_empty_failed_tests_without_a_retest_record_still_refuses(tmp_path):
     assert check == "failed" and findings
 
 
+def test_failed_tests_param_outranks_an_errored_no_results_retest(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, status="error")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**record, "reason": "launcher exited 2"}), encoding="utf-8")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and "errored without running tests" in findings[0].detail
+    monkeypatch.setattr(li, "_changed_since_base", lambda *a, **k: [])
+    params = {**_RECORDED_FAIL, "failed_tests": ["t.py::test_x"]}
+    assert li.landing_test_gate(root, params, "r1") == ([], "pre-existing-only")
+
+
 def test_refusal_names_a_drifted_retest_record_and_its_route(tmp_path):
     root = _repo(tmp_path)
     _write_fresh(root, status="pass", head="f" * 40)
@@ -481,5 +493,5 @@ def test_fresh_fail_record_node_ids_reach_attribution(tmp_path):
 def test_fresh_launcher_crash_without_tests_run_still_refuses(tmp_path):
     root = _repo(tmp_path)
     _write_record(root, {"status": "error", "reason": "launcher crashed"})
-    findings, check = li.landing_test_gate(root, {"failed_tests": ["a/test_x.py::t"]}, "r1")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "failed" and "launcher crashed" in findings[0].detail

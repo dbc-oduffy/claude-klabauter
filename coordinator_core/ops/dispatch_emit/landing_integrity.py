@@ -522,6 +522,8 @@ def landing_test_gate(
                         + " --poll; if poll reports it abandoned past deadline, re-run: "
                         + retest_remedy(params))], "retest-running"
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+    if fresh is not None and fresh.get("status") == "error" and fresh.get("tests_run") != 0 and _explicit_failed_tests(params):
+        fresh = None
     if fresh is not None and fresh.get("status") == "error" and fresh.get("tests_run") != 0:
         reason = fresh.get("reason") or "launcher produced no test results"
         return [Finding("", TARGETED_TESTS_FAILED,
@@ -571,6 +573,17 @@ def _ran_no_tests(record: Mapping) -> bool:
     nothing and did not crash, so it is no verdict and the recorded verdict plus ``failed_tests``
     attribution decide. A launcher crash (``error`` without ``tests_run``) is not this."""
     return record.get("status") == NO_TESTS_STATUS
+
+
+def _explicit_failed_tests(params: Mapping) -> list[str]:
+    """Non-empty ``failed_tests`` node ids the caller passed (top level or ``params.params``): an
+    attribution that outranks an errored no-results retest."""
+    nested = params.get("params")
+    out: list[str] = []
+    for holder in (params, nested if isinstance(nested, Mapping) else {}):
+        raw = holder.get(FAILED_TESTS_PARAM)
+        out += [str(n) for n in raw] if isinstance(raw, (list, tuple)) else [raw] if isinstance(raw, str) else []
+    return [n for n in out if n.strip()]
 
 
 def _explicit_empty_failed_tests(params: Mapping) -> bool:

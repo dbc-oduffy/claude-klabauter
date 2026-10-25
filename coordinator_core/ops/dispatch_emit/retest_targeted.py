@@ -101,6 +101,8 @@ def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
             continue
         if i == 0 or prev_takes_value or tok.startswith("-"):
             kept.append(tok)
+        elif i == 1 and tok.endswith(".py") and Path(tokens[0]).name not in ("pytest", "py.test"):
+            kept.append(tok)
         elif not (root / tok.split("::")[0]).exists():
             kept.append(tok)
         prev_takes_value = tok in _VALUE_OPTIONS

@@ -292,7 +292,7 @@ def test_gate_on_error_record_says_rerun_retest_not_failed_tests(repo, tmp_path)
     path = li.fresh_verdict_path(repo, RUN_ID)
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(record), encoding="utf-8")
-    findings, check = li.landing_test_gate(repo, {"failed_tests": ["test_a.py::test_a"]}, RUN_ID)
+    findings, check = li.landing_test_gate(repo, {"targeted_tests": {"status": "fail", "baseline": None}}, RUN_ID)
     assert check == "failed"
     assert "launcher denied" in findings[0].detail and "--retest-targeted" in findings[0].detail
     assert "pass params" not in findings[0].detail
@@ -377,6 +377,15 @@ def test_fast_test_cmd_roots_are_dropped_and_only_targets_run(repo, tmp_path, mo
     rc = retest_targeted.main(_real_args(tmp_path, repo), run=lambda argv, cwd, **_kw: seen.append(argv) or 0)
     assert rc == 0
     assert seen[0][1:] == ["-m", "pytest", "-q", "test_a.py"]
+
+
+def test_runner_script_survives_root_stripping(repo):
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
+    argv = retest_targeted._strip_collection_roots(repo, "python3 scripts/run-tests.py --tier fast")
+    assert argv == ["python3", "scripts/run-tests.py", "--tier", "fast"]
+    (repo / "roots_a").mkdir()
+    assert retest_targeted._strip_collection_roots(repo, "pytest roots_a -q") == ["pytest", "-q"]
 
 
 def test_option_values_survive_root_stripping(repo):
