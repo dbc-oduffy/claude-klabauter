@@ -306,70 +306,43 @@ def test_unattributed_cr_content_autocrlf_unset_refuses_without_fallback(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# POST-REF SPLICE FAILURE -- the commit LANDED and must not be retried.
-#
-# `commit_paths` splices the index AFTER the ref swap by design (invariant 3:
-# "an index that matches a commit which never landed is the same lie in the
-# other direction"). A peer holding `.git/index.lock` for the width of that
-# splice therefore lands with real work in history -- routine at the
-# ~50-session load norm, not exotic.
-#
-# It escaped as a bare `IndexWriteLockBusy`, whose own docstring promises the
-# OPPOSITE of what is true at that line: "raised BEFORE any bytes reach
-# `.git/index` and before the ref moves, so retrying is correct there". Every
-# `commit_paths` caller in the tree catches `(CommitRefused, FilterUnsupported)`
-# and nothing else, so it surfaced as an internal error for a landed commit --
-# and the honest response to an internal error is a retry, which commits the
-# same work twice.
-#
-# `IndexStaleAfterCommit` was written for this outcome and had no raise site.
-# Source: cross-repo/inbox/2026-09-01-example-retrieval-repo-em-ceremony-engine-defects-
-# second-repo-confirmation.md (the memo.send face of it).
+# BUSY INDEX LOCK -- `commit_paths` takes `index.lock` before the ref swap, so a
+# peer-held lock refuses with `CommitRefused`: no commit, index byte-identical.
 
 
-def test_lock_held_during_splice_raises_stale_not_lock_busy(tmp_path):
-    from coordinator_core.git.index_write import (
-        IndexStaleAfterCommit,
-        IndexWriteLockBusy,
-    )
-
+def test_lock_held_during_splice_refuses_before_anything_lands(tmp_path, monkeypatch):
+    monkeypatch.setattr(gcommit, "_SPLICE_LOCK_BACKOFF_SECS", ())
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
     head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    cached_before = _git(repo, "diff", "--cached").stdout
+    index_bytes_before = (repo / ".git" / "index").read_bytes()
 
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
 
-    with pytest.raises(IndexStaleAfterCommit) as caught:
+    with pytest.raises(gcommit.CommitRefused):
         gcommit.commit_paths(repo, ["seed.txt"], "second\n")
 
-    exc = caught.value
-    assert not isinstance(exc, IndexWriteLockBusy), (
-        "the type must say the commit LANDED -- IndexWriteLockBusy's docstring "
-        "promises the ref had not moved, which is false past the cas_ref"
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head_before, (
+        "a busy lock must refuse before the ref moves"
     )
-
-    head_after = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    assert head_after != head_before, "the commit really did land"
-    assert exc.outcome is not None, (
-        "the caller needs the sha it just created -- naming the outcome without "
-        "carrying it still strands them"
-    )
-    assert exc.outcome.sha == head_after
+    assert _git(repo, "diff", "--cached").stdout == cached_before
+    assert (repo / ".git" / "index").read_bytes() == index_bytes_before
 
 
-def test_stale_after_commit_message_forbids_the_retry(tmp_path):
-    from coordinator_core.git.index_write import IndexStaleAfterCommit
-
+def test_busy_lock_refusal_message_says_nothing_landed_and_retry_is_safe(tmp_path, monkeypatch):
+    monkeypatch.setattr(gcommit, "_SPLICE_LOCK_BACKOFF_SECS", ())
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
 
-    with pytest.raises(IndexStaleAfterCommit) as caught:
+    with pytest.raises(gcommit.CommitRefused) as caught:
         gcommit.commit_paths(repo, ["seed.txt"], "second\n")
 
     text = str(caught.value)
-    assert "LANDED" in text
-    assert "Do not retry" in text
+    assert "nothing committed" in text
+    assert "Safe to retry" in text
+    assert "LANDED" not in text
 
 
 def test_ordinary_commit_still_splices_and_raises_nothing(tmp_path):

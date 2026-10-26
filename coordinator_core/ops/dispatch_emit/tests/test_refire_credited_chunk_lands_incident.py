@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler as ask_gate
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.land_run_contract import REPLY_CREDITED_CHUNKS
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git, _write
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo as _base_repo  # noqa: F401
 
@@ -33,7 +34,7 @@ RUN1 = "ask-20261024T100000-aaaaaa"
 RUN2 = "ask-20261024T110000-bbbbbb"
 X0_PATH, X1_PATH = "src/x0.py", "src/x1.py"
 _SID = "11111111-2222-3333-4444-555555555555"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = reviewed()
 _MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 

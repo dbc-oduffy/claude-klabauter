@@ -28,7 +28,7 @@ be read, ``tripwires`` is empty and ``error`` is ``"tripwire scan unavailable: <
 fields stay filled. ``edited`` is every
 manifest path whose bytes now differ from its baseline (a missing file counts); ``created`` is every path the
 session's review stage wrote that the manifest and its declared ``paths`` do not name. ``foreign``
-is such a path another live run declared that is tracked in the snapshot's base commit, or that predates the snapshot: the session's write record
+is such a path under ``scratch/``, or one another live run declared that is tracked in the snapshot's base commit, or that predates the snapshot: the session's write record
 spans concurrent runs, so it is reported, never reverted or removed. In revert mode ``foreign`` lists
 the failing node ids whose test file is foreign.
 
@@ -67,7 +67,9 @@ An id in ``failing_at_base`` (red at the run base with none of the run's edits a
 ``pre_existing`` whatever the probe ran: it is never reverted and never ``unattributed``. An absent
 or empty list classes nothing ``pre_existing``. An id in ``failing_before`` that a closed probe
 re-ran, but not in ``failing_at_base``, implicates no review edit: its hunks are kept and it is
-``unattributed``. An id no closed probe re-ran is never honoured as ``failing_before``.
+``unattributed``. An id this record already lists in a ``reverted`` entry's ``tests`` and that is
+passed again in revert mode still fails after its revert: it is ``pre_existing``, never reverted
+twice. An id no closed probe re-ran is never honoured as ``failing_before``.
 
 Negative-spec: no test execution and no git verb of its own; the only spawn is the ``git cat-file``
 inside ``land_run.foreign_halted_withheld`` (up to one per still-held halted run), reached on a probe
@@ -209,7 +211,9 @@ def _created(
         target = repo_root / rel
         if not target.is_file():
             continue
-        if rel in sibling or rel in tracked or _predates(target, since):
+        if rel.startswith("scratch/"):
+            foreign.add(rel)
+        elif rel in sibling or rel in tracked or _predates(target, since):
             foreign.add(rel)
             foreign_agents.add(writes[raw])
         else:
@@ -752,8 +756,8 @@ def review_reverify(
     if revert:
         vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
         at_base = {str(i) for i in failing_at_base or []}
-        pre_existing = sorted(n for n in ids if n in at_base)
-        not_base_red = sorted(n for n in ids if n in vouched and n not in at_base)
+        pre_existing = sorted(n for n in ids if n in at_base or n in already)
+        not_base_red = sorted(n for n in ids if n in vouched and n not in at_base and n not in already)
         skip = set(pre_existing) | set(not_base_red)
     else:
         pre_existing, not_base_red, skip = [], [], set()

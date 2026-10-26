@@ -439,11 +439,13 @@ def next_action_parts(
             )
             if "reverify" in review_vars:
                 from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_KEY
+                from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
 
                 rv = review_vars["reverify"]
                 record_fields_expr += (
                     f", {REVERIFY_KEY}: ({rv} ? {{ status_before: {rv}.status_before ?? null, "
                     f"status_after: {rv}.status_after ?? null, reverify_error: {rv}.reverify_error ?? null, failing: {rv}.failing ?? [], "
+                    f"pre_existing: {rv}.pre_existing ?? [], {FOREIGN_FIELD}: {rv}.{FOREIGN_FIELD} ?? [], "
                     f"reverted: ({rv}.reverted ?? []).map(v => ({{ path: v.path, tests: v.tests ?? [] }})) }} : null)"
                 )
         def bookkeeping_form() -> str:

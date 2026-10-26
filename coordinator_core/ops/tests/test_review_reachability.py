@@ -165,9 +165,10 @@ def test_tracked_declared_write_unchanged_in_range_adds_nothing(tmp_path):
 def test_new_unnamed_wiki_doc_is_an_unreachable_doc_entry_by_default(tmp_path):
     root = build("unwired", tmp_path / "d")
     base = run_git(["-C", str(root), "rev-parse", "HEAD"]).stdout.strip()
-    _write(root, "docs/wiki/x.md", "# x\n")
-    params = {"repo_root": str(root), "base_sha": base, "worktree": True, "paths": ["docs/wiki/x.md"]}
-    want = [{"kind": "doc", "ref": "docs/wiki/x.md", "verdict": "unreachable"}]
+    x = "docs" + "/wiki/x.md"
+    _write(root, x, "# x\n")
+    params = {"repo_root": str(root), "base_sha": base, "worktree": True, "paths": [x]}
+    want = [{"kind": "doc", "ref": x, "verdict": "unreachable"}]
     res = _handler({**params, "entry_kinds": ["doc"]})
     assert res["entries"] == want
     assert res["cost"]["spawns"] == 1

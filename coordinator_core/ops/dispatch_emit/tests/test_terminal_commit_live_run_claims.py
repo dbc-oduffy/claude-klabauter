@@ -25,7 +25,9 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SELF = "5e1f0000-0000-4000-8000-0000000000a1"
 PEER = "5e1f0000-0000-4000-8000-0000000000b2"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+
+_REVIEWED = reviewed()
 _PEER_EDIT = "peer_half_written_edit = 1\n"
 
 

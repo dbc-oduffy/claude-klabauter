@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit import run_token
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
@@ -55,7 +56,7 @@ def _call(root, paths, *, slices=0, base=None, arm="xs"):
             "slices": slices,
             "fixes": 0,
             "wave_sidecar_paths": [],
-            "wave_reviews": [],
+            "wave_reviews": reviewed()["wave_reviews"],
             "prep": None,
             "delivery": None,
             "wave_not_run": [],

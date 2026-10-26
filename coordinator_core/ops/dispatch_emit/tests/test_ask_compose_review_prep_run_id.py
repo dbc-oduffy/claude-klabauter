@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.review_prep import _handler as review_prep, declared_paths_for_run
+from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -103,7 +104,7 @@ def test_composed_params_return_the_same_slices_as_explicit_paths(repo):
     composed = {**_params(_prep_command(_compose(repo))), "session_id": "sess-own"}
     assert composed["run_id"] == _RUN
     explicit = {k: v for k, v in composed.items() if k != "run_id"}
-    explicit.update(paths=rels, slice_prefix="prep-explicit")
+    explicit.update(paths=rels, slice_prefix=run_prep_slice_prefix(_RUN, composed["base"]))
     by_id = review_prep(composed, repo_root=repo)
     by_paths = review_prep(explicit, repo_root=repo)
     assert by_id["error"] is None and by_paths["error"] is None, (by_id["error"], by_paths["error"])

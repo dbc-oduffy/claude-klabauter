@@ -77,14 +77,17 @@ def test_machine_local_write_lands_first_try_under_a_share_delete_reader(tmp_pat
     def no_sleep(_s):
         raise AssertionError("fell to the retry ladder")
 
+    def no_os_replace(*_a, **_k):
+        raise AssertionError("fell to the os.replace ladder")
+
     t = _hold_share_delete_then_release(target, 0.5)
     monkeypatch.setattr(time, "sleep", no_sleep)
-    started = time.monotonic()
+    # Trap: sleep-only detection misses a sleepless busy-loop retry; every
+    # ladder rung calls os.replace, so forbidding it pins first-try landing.
+    monkeypatch.setattr(mod.os, "replace", no_os_replace)
     rc = mod._write_registry_file(str(target), "new = 2\n", is_new=False)
-    landed_in = time.monotonic() - started
     t.join()
     assert rc == 0
-    assert landed_in < 0.4
     assert target.read_text(encoding="utf-8") == "new = 2\n"
     assert not list(tmp_path.glob("*.tmp.*"))
 

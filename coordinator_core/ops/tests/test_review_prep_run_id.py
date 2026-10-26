@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops import review_prep as rp
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
+from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
 from coordinator_core.ops.tests.test_review_prep import _base, _spawn_trap, _write, repo  # noqa: F401
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -44,7 +45,7 @@ def test_run_id_returns_the_same_slices_as_explicit_paths(repo, rels):
     _write(repo, rels, 30)
     _stage(repo, rels)
     by_id = rp._handler(_params(repo, "prep-r", run_id=RUN), repo)
-    by_paths = rp._handler(_params(repo, "prep-p", paths=rels), repo)
+    by_paths = rp._handler(_params(repo, run_prep_slice_prefix(RUN, _base(repo)), paths=rels), repo)
     assert by_id["error"] is None and by_paths["error"] is None
     assert by_id["slices"]
     assert _shape(by_id) == _shape(by_paths)
@@ -57,7 +58,7 @@ def test_explicit_call_after_run_id_call_is_served_from_the_store(repo, monkeypa
     first = rp._handler(_params(repo, "prep-s", run_id=RUN), repo)
     assert first["error"] is None
     _spawn_trap(monkeypatch)
-    second = rp._handler(_params(repo, "prep-s", paths=rels), repo)
+    second = rp._handler(_params(repo, run_prep_slice_prefix(RUN, _base(repo)), paths=rels), repo)
     assert second["error"] is None
     assert _shape(second) == _shape(first)
 
@@ -69,6 +70,7 @@ def test_leg_appends_footprint_writes_and_absent_leg_ignores_them(repo):
     assert rp.declared_paths_for_run(repo, RUN, leg=True) == ["a/one.py", "b/two.py"]
     with_leg = rp._handler(_params(repo, "prep-l", run_id=RUN, leg=True), repo)
     without = rp._handler(_params(repo, "prep-n", run_id=RUN), repo)
+    assert with_leg["error"] is None and without["error"] is None
     assert with_leg["product_files"] == 2
     assert without["product_files"] == 1
 

@@ -435,6 +435,19 @@ def _checkin_bytes(root: Path, rel: str, data: bytes) -> bytes:
     return data
 
 
+def checkin_form(root: Path, rel: str, data: bytes) -> Optional[bytes]:
+    """The bytes git's checkin filter hands the object writer for `data` at `rel`, or
+    None for every shape `_checkin_bytes` refuses (FilterUnsupported).
+
+    Trap: compare against a HEAD blob only in checkin form, never raw worktree bytes
+    (CRLF worktree bytes differ from the LF blob on every line).
+    """
+    try:
+        return _checkin_bytes(Path(root), rel, data)
+    except FilterUnsupported:
+        return None
+
+
 def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
     """The blob sha `git add` would record for the worktree file `rel`, or None.
 
@@ -451,8 +464,10 @@ def checkin_blob_sha(root: Path, rel: str) -> Optional[str]:
     base = Path(root)
     try:
         data = (base / rel).read_bytes()
-        out = _checkin_bytes(base, rel, data)
-    except (OSError, FilterUnsupported):
+    except OSError:
+        return None
+    out = checkin_form(base, rel, data)
+    if out is None:
         return None
     digest = hashlib.sha1(b"blob %d\0" % len(out))
     digest.update(out)
@@ -1834,16 +1849,33 @@ def commit_paths(
             "dispatch timed out before the ref update -- nothing committed; "
             "the commit object is unreferenced. Safe to retry."
         )
-    if not cas_ref(ref_gitdir, ref, old_head, commit_sha,
-                   reflog_committer=f"{name} <{email}>",
-                   reflog_message=message.splitlines()[0] if message.strip() else "commit",
-                   head_gitdir=gitdir):
+    # The index lock is taken BEFORE the ref moves and held across it: an index left at its
+    # pre-commit bytes under a moved HEAD reads as staged deletions of every added path, and
+    # only the lock holder can write it. A busy lock is therefore a pre-ref refusal.
+    prepared = _prepare_index_splice(repo, index_updates, merge_view)
+    try:
+        moved = cas_ref(ref_gitdir, ref, old_head, commit_sha,
+                        reflog_committer=f"{name} <{email}>",
+                        reflog_message=message.splitlines()[0] if message.strip() else "commit",
+                        head_gitdir=gitdir)
+    except BaseException:
+        prepared.abort()
+        raise
+    if not moved:
+        prepared.abort()
         raise CommitRefused(
             f"compare-and-swap failed -- {ref} moved since {old_head} was "
             "captured. Refusing to retry silently: a retry needs the tree "
             "rebuilt against the new HEAD, and reusing this one would commit "
             "past a peer."
         )
+
+    # Publish the held index the instant the ref has moved, so the lock window is two renames.
+    publish_error: Optional[index_write.IndexWriteError] = None
+    try:
+        prepared.publish()
+    except index_write.IndexWriteError as exc:
+        publish_error = exc
 
     if merge_view is not None:
         # The ref move concluded the merge; a splice failure below must not leave MERGE_HEAD
@@ -1858,30 +1890,9 @@ def commit_paths(
     except Exception:  # noqa: BLE001 -- a landed commit never fails on store hygiene
         pass
 
-    # INVARIANT 3, and it must follow the ref, not precede it: an index that
-    # matches a commit which never landed is the same lie in the other
-    # direction. A failure here leaves a correct commit and a stale index --
-    # recoverable by any `git add`/`git status` -- so it is reported, never
-    # rolled back onto a landed commit.
-    #
-    # "REPORTED" HAS TO MEAN A TYPE THE CALLER CAN TELL APART. The bare
-    # `index_write` error escaping here says `IndexWriteLockBusy`, whose own
-    # docstring promises the opposite of what is true at THIS line: that it
-    # was "raised BEFORE any bytes reach `.git/index` and before the ref
-    # moves, so retrying is correct there". Past the `cas_ref` above, the ref
-    # HAS moved. Every `commit_paths` caller in the tree catches
-    # `(CommitRefused, FilterUnsupported)` and nothing else, so the lock-busy
-    # propagated as a raw internal error for a commit that had LANDED -- and
-    # the honest response to an internal error is a retry, which commits the
-    # same work twice.
-    #
-    # `IndexStaleAfterCommit` was written for exactly this outcome ("the one
-    # outcome on this surface that must not be retried") and had no raise
-    # site, so the word existed and was never said. This is that site. At the
-    # ~50-session load norm a peer holding `.git/index.lock` for the width of
-    # a splice is routine, not exotic; example-retrieval-repo-em observed the memo.send
-    # face of it on 2026-09-01 (`cross-repo/inbox/2026-09-01-example-retrieval-repo-em-
-    # ceremony-engine-defects-second-repo-confirmation.md`).
+    # The index is published only after the ref moved (an index matching a commit that never
+    # landed is a lie), so a publish failure here is a landed commit with a stale index: reported
+    # as `IndexStaleAfterCommit` -- callers must not retry -- never rolled back.
     outcome = CommitOutcome(
         sha=commit_sha,
         staged_preferred=tuple(staged_preferred),
@@ -1890,40 +1901,46 @@ def commit_paths(
         sign_warning=sign_warning,
         merge_parent=merge_view.merge_head if merge_view is not None else None,
     )
-    try:
-        for pause in (*_SPLICE_LOCK_BACKOFF_SECS, None):
-            try:
-                index_write.splice_index(
-                    repo, index_updates, stat_fallback=True,
-                    collapse_unmerged=merge_view.unmerged if merge_view is not None else (),
-                )
-                break
-            except index_write.IndexWriteLockBusy:
-                # A peer's lock is held for the width of its own write; sleeping costs
-                # wall clock, not process time. Past the schedule the commit reports stale.
-                if pause is None:
-                    raise
-                time.sleep(pause)
-    except index_write.IndexWriteError as exc:
+    if publish_error is not None:
         stale = tuple(sorted(index_updates))
         if _reset_index_paths(repo, stale):
             return outcome
         raise index_write.IndexStaleAfterCommit(
-            f"commit {commit_sha} LANDED; the index splice did not: {exc}. "
+            f"commit {commit_sha} LANDED; the index splice did not: {publish_error}. "
             "Do not retry -- the work is in history. index_stale: true. Repair: "
             "`git reset -q -- <index_stale paths>` (or `git add -- <paths>` to re-stage).",
             outcome=outcome,
             paths=stale,
-        ) from exc
+        ) from publish_error
 
-    return CommitOutcome(
-        sha=commit_sha,
-        staged_preferred=tuple(staged_preferred),
-        worktree_over_staged=tuple(worktree_over_staged),
-        no_delta=tuple(no_delta),
-        sign_warning=sign_warning,
-        merge_parent=merge_view.merge_head if merge_view is not None else None,
-    )
+    return outcome
+
+
+def _prepare_index_splice(
+    repo: Union[str, Path],
+    index_updates: Mapping[str, object],
+    merge_view: Optional[object],
+) -> "index_write.PreparedSplice":
+    """Take `index.lock` and build the spliced index, retrying a peer-held lock on
+    `_SPLICE_LOCK_BACKOFF_SECS`; past the schedule, `CommitRefused` -- nothing committed,
+    index untouched, safe to retry."""
+    for pause in (*_SPLICE_LOCK_BACKOFF_SECS, None):
+        try:
+            return index_write.prepare_splice(
+                repo, index_updates, stat_fallback=True,
+                collapse_unmerged=merge_view.unmerged if merge_view is not None else (),
+            )
+        except index_write.IndexWriteLockBusy as exc:
+            if pause is None:
+                raise CommitRefused(
+                    f"{exc}; nothing committed, the index is untouched. Safe to retry."
+                ) from exc
+            time.sleep(pause)
+        except index_write.IndexWriteError as exc:
+            raise CommitRefused(
+                f"the index splice could not be built: {exc}; nothing committed."
+            ) from exc
+    raise AssertionError("unreachable")
 
 
 def _reset_index_paths(repo: Union[str, Path], paths: Sequence[str]) -> bool:

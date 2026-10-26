@@ -5,9 +5,12 @@ Lands the union of the finished rows' declared product paths as one ``commit_pat
 declared paths enter, so an undeclared dirty file is never staged. Each path lands the owning row's own
 bytes (``grind_landing_select``), never a peer run's dirty hunks of the same file; a landing whose
 bytes import code HEAD will lack is refused with ``REFUSED_IMPORT_CLOSURE`` before the commit. A path the commit cannot land (a
-ledger-root path, a deletion git never saw, a file gone from the worktree) is dropped, reported under
+ledger-root path, a declared deletion of a file that still exists unchanged (tracked and clean, or
+gitignored), a file gone from the worktree) is dropped, reported under
 ``dropped`` and ``stranded`` and named in the commit by one ``UNLANDED_ROW_TRAILER`` line; it is never a
-reason to refuse the call. A landed row's ledger is settled afterwards. The run token is redeemed,
+reason to refuse the call. A row with a dropped product path (any reason but a ledger-root path or an
+unseen deletion) lands none of its paths, gets no ``Grind-Row:`` trailer, is listed under ``unlanded`` and
+keeps its ledger. A landed row's ledger is settled afterwards. The run token is redeemed,
 consumed on a landed commit and released on every other return. A repeat call after a landing is
 answered from the run token's spent receipt and lands nothing.
 """
@@ -37,6 +40,10 @@ POST_LANDING_RECEIPT = "review: post-landing (grind exemption, DR-grind-review-r
 
 #: ``dropped`` reason of a changed, undeclared-deleted path that is no longer a file in the worktree.
 DROP_MISSING = "missing-from-worktree"
+
+
+#: Drops that never hold a row open: a ledger-root path is evidence, not product, and an unseen deletion is already true.
+_NON_PRODUCT_DROPS = frozenset({DROP_LEDGER_ROOT, DROP_UNSEEN_DELETION})
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -146,6 +153,8 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
         for p in deleted:
             if p in changed:
                 removed.append(p)
+            elif not (main_root / p).exists():
+                continue  # absent from HEAD (unchanged) and from the worktree: the deletion is already true
             else:
                 dropped.append({"row_id": row_id, "path": p, "reason": DROP_UNSEEN_DELETION})
         staged.append((row, live, removed))
@@ -153,22 +162,34 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
     owners: dict = {}
     for row, live, _removed in staged:
         for p in live:
-            owners.setdefault(p, row["row_id"])
+            rows_of = owners.get(p)
+            if rows_of is None:
+                owners[p] = [row["row_id"]]
+            elif row["row_id"] not in rows_of:
+                rows_of.append(row["row_id"])
     sel = grind_landing_select.select(main_root, run_id, owners) if owners else None
 
-    commit_files: list = []
-    commit_deleted: list = []
-    landing: list = []
+    selected: list = []
     for row, live, removed in staged:
         if sel is not None:
             kept = []
             for p in live:
-                reason = sel.dropped.get(p)
+                reason = sel.dropped_for(row["row_id"], p)
                 if reason is None:
                     kept.append(p)
                 else:
                     dropped.append({"row_id": row["row_id"], "path": p, "reason": reason})
             live = kept
+        selected.append((row, live, removed))
+
+    # A row with any dropped path is incomplete: it neither lands, settles nor reports committed.
+    held = {d["row_id"] for d in dropped if d["reason"] not in _NON_PRODUCT_DROPS}
+    commit_files: list = []
+    commit_deleted: list = []
+    landing: list = []
+    for row, live, removed in selected:
+        if row["row_id"] in held:
+            continue
         if live or removed:
             landing.append(row)
             commit_files += live
@@ -176,7 +197,11 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
     commit_files = list(dict.fromkeys(commit_files))
     commit_deleted = list(dict.fromkeys(commit_deleted))
     stranded = [dict(d) for d in dropped]
-    base = {"dropped": dropped, "stranded": stranded, "rows": []}
+    unlanded = [
+        {"row_id": i, "reason": "a declared product path was dropped from the landing; the row stays open"}
+        for i in sorted(held)
+    ]
+    base = {"dropped": dropped, "stranded": stranded, "rows": [], UNLANDED_KEY: unlanded}
     if not landing:
         return {"committed": False, "sha": None, "nothing_to_commit": True, **base}
 
@@ -221,7 +246,7 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
         settle_error = f"ledger settle failed after the commit landed: {err}"
     return {
         "committed": True, "sha": sha, "paths": commit_files + commit_deleted, "rows": rows,
-        "dropped": dropped, "stranded": stranded,
+        "dropped": dropped, "stranded": stranded, UNLANDED_KEY: unlanded,
         **({"settle_error": settle_error} if settle_error else {}),
     }
 

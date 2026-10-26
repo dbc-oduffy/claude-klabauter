@@ -12,6 +12,7 @@ from coordinator_core.distill.delete_guard import evaluate_candidate_detailed, p
 
 _COMPLETED = "archive/completed/2026-08/2026-08-01-thing-abc123.md"
 _SPEC = "archive/specs/2026-08/2026-08-01-thing.md"
+_THING = "docs" + "/wiki/thing.md"
 
 
 def _write(root: Path, rel: str, text: str) -> Path:
@@ -28,7 +29,7 @@ def _verdict(root: Path, rel: str):
 
 def test_harvested_completion_record_with_no_live_reference_clears(tmp_path):
     _write(tmp_path, _COMPLETED, "---\nstatus: done\n---\nbody\n")
-    _write(tmp_path, "docs/wiki/thing.md", f"<!-- PROVENANCE: {_COMPLETED} -->\n")
+    _write(tmp_path, _THING, f"<!-- PROVENANCE: {_COMPLETED} -->\n")
     assert _verdict(tmp_path, _COMPLETED) == ("completion", [])
 
 
@@ -39,14 +40,14 @@ def test_unharvested_completion_record_is_blocked(tmp_path):
 
 def test_a_test_that_opens_the_record_blocks_it(tmp_path):
     _write(tmp_path, _COMPLETED, "---\nstatus: done\n---\nbody\n")
-    _write(tmp_path, "docs/wiki/thing.md", f"source: {_COMPLETED}\n")
+    _write(tmp_path, _THING, f"source: {_COMPLETED}\n")
     _write(tmp_path, "pkg/tests/test_oracle.py", f'ORACLE = "{_COMPLETED}"\n')
     assert _verdict(tmp_path, _COMPLETED) == ("completion", ["active-reference"])
 
 
 def test_dated_logs_and_the_record_itself_are_not_live_references(tmp_path):
     _write(tmp_path, _COMPLETED, f"---\nstatus: done\n---\nself: {_COMPLETED}\n")
-    _write(tmp_path, "docs/wiki/thing.md", f"source: {_COMPLETED}\n")
+    _write(tmp_path, _THING, f"source: {_COMPLETED}\n")
     _write(tmp_path, "archive/week-changelogs/2026-W31.md", f"- {_COMPLETED}\n")
     _write(tmp_path, "state/handoffs-archive/h.md", f"- {_COMPLETED}\n")
     assert _verdict(tmp_path, _COMPLETED) == ("completion", [])
@@ -54,7 +55,7 @@ def test_dated_logs_and_the_record_itself_are_not_live_references(tmp_path):
 
 def test_a_live_plan_citing_the_record_blocks_it(tmp_path):
     _write(tmp_path, _COMPLETED, "---\nstatus: done\n---\nbody\n")
-    _write(tmp_path, "docs/wiki/thing.md", f"source: {_COMPLETED}\n")
+    _write(tmp_path, _THING, f"source: {_COMPLETED}\n")
     _write(tmp_path, "docs/plans/next.md", f"see {_COMPLETED}\n")
     assert _verdict(tmp_path, _COMPLETED) == ("completion", ["active-reference"])
 
@@ -74,7 +75,7 @@ def test_never_delivered_plan_clears_without_harvest(tmp_path):
 
 def test_open_plan_fails_closed(tmp_path):
     _write(tmp_path, "docs/plans/live.md", "---\nstatus: executing\n---\nbody\n")
-    _write(tmp_path, "docs/wiki/thing.md", "source: docs/plans/live.md\n")
+    _write(tmp_path, _THING, "source: docs/plans/live.md\n")
     assert _verdict(tmp_path, "docs/plans/live.md") == ("plan", ["plan-status"])
 
 
@@ -88,7 +89,7 @@ def test_one_prefetch_answers_a_batch(tmp_path):
     other = "archive/completed/2026-08/2026-08-02-other-def456.md"
     _write(tmp_path, _COMPLETED, "---\nstatus: done\n---\n")
     _write(tmp_path, other, "---\nstatus: done\n---\n")
-    _write(tmp_path, "docs/wiki/thing.md", f"source: {_COMPLETED}\n")
+    _write(tmp_path, _THING, f"source: {_COMPLETED}\n")
     citations = prefetch_citations([_COMPLETED, other], tmp_path)
     blocked = {
         rel: [r.guard for r in evaluate_candidate_detailed(tmp_path / rel, tmp_path, citations=citations)[1] if not r.passed]

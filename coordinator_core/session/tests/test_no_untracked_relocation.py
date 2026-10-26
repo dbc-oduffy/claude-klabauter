@@ -215,6 +215,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
 
     # --- C3's no-strand classification: rotations, .git-subtree moves and  ---
     # --- external-tree publishes, where the source is not a claimable path. ---
+    ("coordinator_core", "ops/review_reverify.py", "review_reverify", "os.replace", "os.replace(target, dest)", 1): "revert's never-unlink move-aside of a review-created path to `<snapshot>/removed/<rel>`: dest is machinery space under the snapshot share dir, not claimable, so no T-claim should follow it; the source is re-declared via declare_write(target) right after",
     ("coordinator_core", "bash_guards/block_subagent_destructive_action.py", "_rotate_fail_open_log_if_oversized", "os.replace", "os.replace(log_path, log_path.with_name(f'{log_path.name}.1'))", 1): "generation rotation of this guard's OWN fail-open log: live file -> `.1`, both under the guard's log dir, never a claimable working-tree path",
     ("coordinator_core", "bash_guards/block_subagent_destructive_action.py", "_rotate_fail_open_log_if_oversized", "os.replace", "os.replace(src, dst)", 1): "same rotation, the `.N` -> `.N+1` shift ahead of it; identical reasoning to the entry above",
     ("coordinator_core", "bash_guards/chain_arrival_ledger.py", "_rotate_if_oversize", "os.replace", "os.replace(path, path.with_name(path.name + '.1'))", 1): "generation rotation of the chain-arrival ledger the guard owns; live -> `.1`, never a claimable working-tree path",

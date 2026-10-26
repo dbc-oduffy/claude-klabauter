@@ -80,6 +80,41 @@ def test_deny_envelope_denies_at_every_level(monkeypatch, tmp_path, level):
     assert "workflow.revise" in env["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def _reason(env):
+    return env["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("rel", ["CLAUDE.md", "sub/CLAUDE.md", ".claude/CLAUDE.md"])
+def test_claude_md_class_path_gets_the_grant_route_variant(rel):
+    from coordinator_core.session.claude_md_grant import GRANT_CLI_COMMAND
+
+    env = pf.deny_envelope((ROOT + "/" + rel,))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    text = _reason(env)
+    for needle in (GRANT_CLI_COMMAND, "from the repo that holds the CLAUDE.md",
+                   "workflow.revise", "already fired engine-ask"):
+        assert needle in text
+
+
+def test_other_path_keeps_the_generic_deny():
+    env = pf.deny_envelope((ROOT + "/src/x.py",))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _reason(env) == _reason(pf.deny_envelope())
+    assert "grant" not in _reason(env)
+
+
+def test_classify_failure_falls_back_to_generic_deny(monkeypatch):
+    from coordinator_core import claude_md_budget
+
+    def boom(path):
+        raise RuntimeError("classify crash")
+
+    monkeypatch.setattr(claude_md_budget, "is_claude_md_class", boom)
+    env = pf.deny_envelope((ROOT + "/CLAUDE.md",))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert _reason(env) == _reason(pf.deny_envelope())
+
+
 _PLAN = """\
 ```yaml plan-tasks
 - id: S1

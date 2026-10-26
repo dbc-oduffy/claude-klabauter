@@ -346,6 +346,16 @@ class TestSubagentResolvability:
         assert record_default == record_explicit
 
 
+class TestGrantCliConstants:
+    def test_command_starts_with_name_and_grant_pm(self):
+        assert cmg.GRANT_CLI_NAME == "claude-md-grant-cli"
+        assert cmg.GRANT_CLI_COMMAND.startswith(cmg.GRANT_CLI_NAME + " grant pm ")
+
+    def test_constants_exported(self):
+        assert "GRANT_CLI_NAME" in cmg.__all__
+        assert "GRANT_CLI_COMMAND" in cmg.__all__
+
+
 class TestCliMain:
     def test_grant_subcommand_writes_and_exits_zero(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)

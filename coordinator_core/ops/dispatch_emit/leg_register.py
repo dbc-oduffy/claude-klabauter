@@ -129,6 +129,8 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),
     _earns("ask", "ledger-fix:", "fixes one reopened chunk behind a not_met ledger row inside its footprint; the chunks run in parallel"),
     _earns("ask", "ledger-reverify", "re-judges only the reopened rows and re-runs only the reopened chunks' scoped tests"),
+    _earns("ask", "halt-fix", "closes the owned failing tests and blocked-slice findings inside the review footprint before the review_blocked halt"),
+    _earns("ask", "halt-reverify", "re-runs only the owned failing ids and re-judges only the blocked slices' findings after a halt-fix leg"),
     _earns("ask", "ledger-recovery-record", "writes recovery.json once the loop's final chunk statuses are known; a held-only run has no other agent to fold the write into"),
     _earns("ask", "remnant-complete", "completes the not_met remnant (unattributed or capped ledger rows, a not_met criterion, a delivery FAIL) inside its footprint; the judge stays read-only"),
     _earns("ask", "remnant-reverify", "re-runs the scoped tests and re-rules the ledger, criterion and delivery once after the remnant leg"),

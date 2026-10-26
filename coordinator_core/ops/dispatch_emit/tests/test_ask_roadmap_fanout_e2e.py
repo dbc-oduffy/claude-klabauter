@@ -144,7 +144,7 @@ def _sibling_script(repo, sizing_rel, run_id):
     return ask_compose.compose_ask_script(
         repo_root=repo.as_posix(), prompt=None, sizing_rel=sizing_rel, run_id=run_id, session_id=None,
         wrap_stage=lambda t: ("  async function planBlitz(args) { return { ready: [] }; }", ["Plan"]),
-        plan_blitz_text="stub", in_run_commit=True, **REVIEW_KW,
+        plan_blitz_text="stub", in_run_commit=True, run_base_sha="a" * 40, **REVIEW_KW,
     )
 
 

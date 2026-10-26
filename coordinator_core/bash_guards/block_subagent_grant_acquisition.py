@@ -114,6 +114,15 @@ deny text that consume these classifiers):
      grant-shaped and is not classified here, matching the `-m` form's
      subcommand discrimination.
 
+  3. WRAPPER NAME: a segment headed by `claude-md-grant-cli` (basename, any
+     of `.py`/`.cmd`/`.ps1`/`.exe`) or `python <path>/claude-md-grant-cli[.py]`
+     with a `grant` token next.
+  4. `-c` payload naming the module and calling `main(` with a literal
+     `'grant'`/`"grant"` token.
+  5. SCRIPT PATH: `python <path>/claude_md_grant.py grant`.
+  Still uncaught: a grant token built at runtime, or a script written to
+  disk and run.
+
 Tokenization and shell-shape handling (env-assignment skipping, subshell
 peeling, `;`/`&&`/`|` segmentation, heredoc-body stripping, bundled-short-
 flag recognition) is REUSED from `block_subagent_destructive_action.py` and
@@ -149,6 +158,7 @@ from coordinator_core.bash_guards._dialect import (
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
+from coordinator_core.session.claude_md_grant import GRANT_CLI_NAME
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
@@ -237,9 +247,61 @@ def _classify_dash_c_invocation(working: List[str]) -> Optional[str]:
         return None
     if _GRANT_MODULE not in payload:
         return None
-    if not _WRITE_FUNC_NAME_RE.search(payload):
+    if _WRITE_FUNC_NAME_RE.search(payload):
+        return f"python -c ...{_GRANT_MODULE}.{_WRITE_FUNC_NAME}..."
+    if _MAIN_CALL_RE.search(payload) and _GRANT_LITERAL_RE.search(payload):
+        return f"python -c ...{_GRANT_MODULE}.main(grant)..."
+    return None
+
+
+#: A `-c` payload calling the module's CLI entry with a literal grant token.
+_MAIN_CALL_RE = re.compile(r"(?<![A-Za-z0-9_])main\s*\(")
+_GRANT_LITERAL_RE = re.compile(r"""['"]grant['"]""")
+
+_LAUNCHER_SUFFIX_RE = re.compile(r"\.(py|ps1|cmd|exe)$", re.IGNORECASE)
+
+#: Basename (sans launcher suffix) of the module file, for the script-path shape.
+_GRANT_MODULE_STEM = _GRANT_MODULE.rsplit(".", 1)[-1]
+
+
+def _launcher_stem(token: str) -> str:
+    """Basename of `token` with every trailing launcher suffix stripped."""
+    base = _normalize_executable_basename(token)
+    while True:
+        stripped = _LAUNCHER_SUFFIX_RE.sub("", base)
+        if stripped == base:
+            return base
+        base = stripped
+
+
+def _classify_wrapper_invocation(working: List[str]) -> Optional[str]:
+    """Wrapper-name shape (`claude-md-grant-cli grant ...`, any launcher
+    suffix, optionally behind a python head) and script-path shape
+    (`python <path>/claude_md_grant.py grant ...`)."""
+    head = _launcher_stem(working[0])
+    if head == GRANT_CLI_NAME:
+        rest = working[1:]
+        label = "grant wrapper grant"
+    elif _PYTHON_BASENAME_RE.match(_normalize_executable_basename(working[0])):
+        script_idx = next(
+            (i for i, t in enumerate(working[1:], 1) if not t.startswith("-")),
+            None,
+        )
+        if script_idx is None:
+            return None
+        stem = _launcher_stem(working[script_idx])
+        if stem == GRANT_CLI_NAME:
+            label = "python grant wrapper grant"
+        elif stem == _GRANT_MODULE_STEM:
+            label = "python grant script grant"
+        else:
+            return None
+        rest = working[script_idx + 1:]
+    else:
         return None
-    return f"python -c ...{_GRANT_MODULE}.{_WRITE_FUNC_NAME}..."
+    if rest and rest[0] in _GATED_SUBCOMMANDS:
+        return label
+    return None
 
 
 def _evaluate(cmd: str) -> Optional[str]:
@@ -267,6 +329,10 @@ def _evaluate(cmd: str) -> Optional[str]:
         working = _strip_leading_subshell_and_env(seg_tokens)
         if not working:
             continue
+
+        verdict = _classify_wrapper_invocation(working)
+        if verdict is not None:
+            return verdict
 
         head_base = _normalize_executable_basename(working[0])
         if not _PYTHON_BASENAME_RE.match(head_base):

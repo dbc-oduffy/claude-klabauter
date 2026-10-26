@@ -273,6 +273,14 @@ def mint_xs_spine(
         frontmatter["deliverable_id"] = str(sizing["deliverable_id"])
     frontmatter["prime_exit_criterion"] = {"statement": statement}
 
+    post_commit = ""
+    if repo_root is not None:
+        from coordinator_core.ops.dispatch_emit import bug_close
+
+        bug_ids = bug_close.named_bug_ids(repo_root, statement + "\n" + intent)
+        if bug_ids:
+            post_commit = bug_close.post_commit_clause(bug_ids) + "\n"
+
     rows: list[dict] = []
     if paths:
         rows.append(
@@ -285,6 +293,7 @@ def mint_xs_spine(
                     f"Spec: {sizing_rel} ({XS_ROW_ID})\n"
                     f"Intent:\n{intent}\n"
                     f"Verification (this row is DONE only when this holds): {statement}\n"
+                    + post_commit
                     + "".join(
                         f"{body} is routed to {sidecar}: record plan evidence with coordinator-invoke "
                         "plan.tasks.mutate evidence-append; an executor row never edits a plan body.\n"

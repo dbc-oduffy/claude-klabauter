@@ -272,6 +272,77 @@ class TestScopeEqualsEnforcement:
         ) is None
 
 
+class TestWrapperAndExtraShapes:
+    _DENY = [
+        'claude-md-grant-cli grant pm "n"',
+        'claude-md-grant-cli.py grant pm "n"',
+        "/x/bin/claude-md-grant-cli.cmd grant pm n",
+        "claude-md-grant-cli.ps1 grant pm n",
+        "python3 /x/bin/claude-md-grant-cli grant pm n",
+        "python /x/bin/claude-md-grant-cli.py grant pm n",
+        "python3 -u coordinator_core/session/claude_md_grant.py grant pm n",
+        "python3 -c \"from coordinator_core.session.claude_md_grant import main; "
+        "main(['grant', 'pm', 'n'])\"",
+    ]
+    _ALLOW = [
+        "claude-md-grant-cli read",
+        "claude-md-grant-cli check",
+        "python3 /x/claude-md-grant-cli read",
+        "python3 coordinator_core/session/claude_md_grant.py check",
+        "python3 -c \"from coordinator_core.session.claude_md_grant import main; "
+        "main(['read'])\"",
+        "python3 other.py grant pm n",
+        "echo claude-md-grant-cli grant",
+    ]
+
+    def test_subagent_denied(self):
+        for cmd in self._DENY:
+            _reason(_enveloped(guard.check)(_payload(cmd, agent_id="a1")))
+
+    def test_em_allowed(self):
+        for cmd in self._DENY:
+            assert _enveloped(guard.check)(_payload(cmd)) is None, cmd
+
+    def test_non_grant_shapes_allowed(self):
+        for cmd in self._ALLOW:
+            assert _enveloped(guard.check)(_payload(cmd, agent_id="a1")) is None, cmd
+
+    def test_deny_text_does_not_echo_command(self):
+        reason = _reason(
+            _enveloped(guard.check)(_payload(self._DENY[0], agent_id="a1"))
+        )
+        assert "claude-md-grant-cli" not in reason
+
+
+class TestWrapperShapesUnderPowerShellTool:
+    _DENY = [
+        'claude-md-grant-cli grant pm "x"',
+        '& "C:/x/claude-md-grant-cli.ps1" grant pm x',  # abs-path-ok: tokenizer fixture, never opened
+        "python coordinator/bin/claude-md-grant-cli.py grant pm x",
+        "Start-Process python -ArgumentList 'coordinator/bin/claude-md-grant-cli.py','grant','pm','x'",
+    ]
+
+    @staticmethod
+    def _ps(cmd, agent_id=None):
+        p = _payload(cmd, agent_id=agent_id)
+        p["tool_name"] = "PowerShell"
+        return p
+
+    def test_subagent_denied(self):
+        for cmd in self._DENY:
+            out = _enveloped(guard.check)(self._ps(cmd, agent_id="a1"))
+            assert out is not None, cmd
+
+    def test_em_allowed(self):
+        for cmd in self._DENY:
+            assert _enveloped(guard.check)(self._ps(cmd)) is None, cmd
+
+    def test_read_allowed_for_subagent(self):
+        assert _enveloped(guard.check)(
+            self._ps("claude-md-grant-cli read", agent_id="a1")
+        ) is None
+
+
 class TestUnparseableCommandRecordsSilent:
     """An `_tokenize_full_command`-unparseable PowerShell shape must not
     silently return an unrecorded `None` -- it must declare a SILENT verdict
@@ -413,6 +484,12 @@ def _reachable_modules(entry_dotted_names, root: Path, source_override=None):
             continue
         modules_seen[dotted] = tree
         for module, _names in _module_imports(tree):
+            # Importing only CLI-name constants is not a reach to the writer.
+            if module == _GRANT_MODULE_DOTTED and _names and set(_names) <= {
+                "GRANT_CLI_NAME",
+                "GRANT_CLI_COMMAND",
+            }:
+                continue
             if module and module.startswith("coordinator_core") and module not in visited:
                 queue.append(module)
     return modules_seen

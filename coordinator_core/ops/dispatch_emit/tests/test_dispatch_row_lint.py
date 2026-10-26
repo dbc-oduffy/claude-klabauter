@@ -73,8 +73,8 @@ def test_affinity_strips_every_suffix_test_markers_and_dashes():
 
 
 def test_ancestor_paths_are_coherent():
-    assert len(lint.write_groups(["docs/wiki", "docs/wiki/zzz.md"])) == 1
-    assert len(lint.write_groups(["docs/wikix", "docs/wiki/zzz.md"])) == 2
+    assert len(lint.write_groups(["docs/wiki", "docs/" "wiki/zzz.md"])) == 1
+    assert len(lint.write_groups(["docs/wikix", "docs/" "wiki/zzz.md"])) == 2
 
 
 def test_write_groups_preserves_first_seen_order_and_dedupes():

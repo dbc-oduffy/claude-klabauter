@@ -100,3 +100,58 @@ def test_missing_since_or_session_gives_none(tmp_path):
     _agent(hub, "a10", "coordinator:code-reviewer", [("pkg/z.py", 1500.0, "w")])
     assert review_edit_source.session_review_writes(tmp_path, SID, None) is None
     assert review_edit_source.session_review_writes(tmp_path, None, SINCE) is None
+
+
+RUN = "ask-20261026T120000-aaaaaa"
+OTHER_RUN = "ask-20261026T110000-bbbbbb"
+
+
+def _held(monkeypatch, records):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    monkeypatch.setattr(run_token, "held_records", lambda root: records)
+
+
+def _reviewer(tmp_path):
+    _agent(_store(tmp_path), "s1", "coordinator:code-reviewer", [("pkg/a.py", 1500.0, "w"), ("pkg/b.py", 1600.0, "w")])
+
+
+def test_sole_run_attests_every_review_write(tmp_path, monkeypatch):
+    _reviewer(tmp_path)
+    _held(monkeypatch, [{"session_id": SID, "run_id": RUN}, {"session_id": "peer", "run_id": OTHER_RUN}])
+    got = review_edit_source.sole_run_attested_writes(tmp_path, SID, RUN, SINCE)
+    assert got == frozenset({"pkg/a.py", "pkg/b.py"})
+
+
+def test_unnamed_run_attests_nothing(tmp_path, monkeypatch):
+    _reviewer(tmp_path)
+    _held(monkeypatch, [])
+    assert review_edit_source.sole_run_attested_writes(tmp_path, SID, None, SINCE) == frozenset()
+    assert review_edit_source.sole_run_attested_writes(tmp_path, None, RUN, SINCE) == frozenset()
+
+
+def test_another_run_held_by_the_session_attests_nothing(tmp_path, monkeypatch):
+    _reviewer(tmp_path)
+    _held(monkeypatch, [{"session_id": SID, "run_id": RUN}, {"session_id": SID, "run_id": OTHER_RUN}])
+    assert review_edit_source.sole_run_attested_writes(tmp_path, SID, RUN, SINCE) == frozenset()
+
+
+def test_unreadable_run_tokens_attest_nothing(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _reviewer(tmp_path)
+
+    def boom(root):
+        raise OSError("tokens unreadable")
+
+    monkeypatch.setattr(run_token, "held_records", boom)
+    assert review_edit_source.sole_run_attested_writes(tmp_path, SID, RUN, SINCE) == frozenset()
+
+
+def test_unanswerable_touch_record_attests_nothing(tmp_path, monkeypatch):
+    hub = _store(tmp_path)
+    _agent(hub, "s2", "coordinator:code-reviewer", [("pkg/a.py", 1500.0, "w")])
+    with (hub / ".agents" / "s2" / touch_record.RECORD_FILENAME).open("ab") as fh:
+        fh.write(b"not json\n")
+    _held(monkeypatch, [{"session_id": SID, "run_id": RUN}])
+    assert review_edit_source.sole_run_attested_writes(tmp_path, SID, RUN, SINCE) == frozenset()

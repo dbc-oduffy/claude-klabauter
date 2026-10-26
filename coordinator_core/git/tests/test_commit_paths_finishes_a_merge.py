@@ -153,16 +153,36 @@ def test_splice_failure_after_cas_leaves_merge_state_cleared(merging, monkeypatc
     _w(merging, "shared.txt", "resolved\n")
     old_head = _heads(merging)
 
-    def boom(*a, **k):
+    def boom(self):
         raise gcommit.index_write.IndexWriteError("forced")
 
-    monkeypatch.setattr(gcommit.index_write, "splice_index", boom)
+    monkeypatch.setattr(gcommit.index_write.PreparedSplice, "_publish", boom)
     monkeypatch.setattr(gcommit, "_reset_index_paths", lambda *a, **k: False)
     with pytest.raises(gcommit.index_write.IndexStaleAfterCommit):
         commit_paths(merging, _MERGE_PATHS, "merge other", finish_merge=True)
 
     assert _heads(merging) != old_head
     assert not (merging / ".git" / "MERGE_HEAD").exists()
+    assert not (merging / ".git" / "index.lock").exists()
+
+
+def test_busy_index_lock_refuses_merge_commit_and_leaves_state_as_found(merging, monkeypatch):
+    _w(merging, "shared.txt", "resolved\n")
+    old_head = _heads(merging)
+    cached_before = _git(merging, "diff", "--cached").stdout
+    unmerged_before = _git(merging, "ls-files", "-u").stdout
+    lock = merging / ".git" / "index.lock"
+    lock.write_bytes(b"")
+    monkeypatch.setattr(gcommit, "_SPLICE_LOCK_BACKOFF_SECS", ())
+
+    with pytest.raises(CommitRefused, match="nothing committed"):
+        commit_paths(merging, _MERGE_PATHS, "merge other", finish_merge=True)
+
+    assert lock.exists()
+    assert _heads(merging) == old_head
+    assert (merging / ".git" / "MERGE_HEAD").exists()
+    assert _git(merging, "diff", "--cached").stdout == cached_before
+    assert _git(merging, "ls-files", "-u").stdout == unmerged_before
 
 
 def test_signed_commit_tree_emits_extra_parent_lines(merging, monkeypatch):

@@ -90,6 +90,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "ceremony-run.py",
     "check-sidecar-fill.py",
     "classify-engine-root-residue.py",
+    "claude-md-grant-cli.py",
     "coordinator-cockpit-emit-schema.py",
     "coordinator-install.py",
     "coordinator-invoke.py",

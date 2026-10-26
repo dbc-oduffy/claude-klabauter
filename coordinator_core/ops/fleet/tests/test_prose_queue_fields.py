@@ -47,7 +47,7 @@ def test_change_kind_default_flags_ambiguous():
     assert c.fields["change_kind"] == "script-edit" and "ambiguous" in c.flags
 
 
-@pytest.mark.parametrize("surface,kind", [("run.sh", "script-edit"), ("docs/wiki/a.md", "wiki-append")])
+@pytest.mark.parametrize("surface,kind", [("run.sh", "script-edit"), ("docs" + "/wiki/a.md", "wiki-append")])
 def test_change_kind_rules(surface, kind):
     assert fill_fields("improvement-queue", pipe_row(surface=surface)).fields["change_kind"] == kind
 

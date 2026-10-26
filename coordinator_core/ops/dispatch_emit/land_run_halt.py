@@ -732,11 +732,6 @@ def _land(
         own_differ, own_gone = _differs(root, written_entries, run_written)
         own_changed = own_differ | own_gone
     _withhold_run_dirt(withheld, run_written, own_changed, set(paths) | set(deleted))
-    from coordinator_core.ops.dispatch_emit.halted_record_commit import plan_tree_eviction
-
-    eviction = plan_tree_eviction(
-        root, record_dir_rel, run_written, own_changed, [*run_written, *owner, *declared], withheld, paths,
-    )
 
     if not paths and not deleted:
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
@@ -762,19 +757,8 @@ def _land(
     from coordinator_core.ops.dispatch_emit.halted_record_commit import _record_kept
 
     kept_reply = _record_kept(
-        root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
-        halted, paths, params.get(CONSUMED_RETURNS_PARAM),
+        root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM)
     )
-    if eviction is not None:
-        try:
-            eviction.apply()
-        except OSError as exc:
-            return _error(f"evicting unimportable run bytes failed: {exc}", **base)
-        kept_reply = {
-            **kept_reply,
-            "evicted": eviction.evicted,
-            **({"unimportable_unowned": eviction.unowned} if eviction.unowned else {}),
-        }
     left = dispatch_abandon.remaining()
     if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:
         return _error(

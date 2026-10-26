@@ -444,7 +444,7 @@ def _post_fire_deny(session_id: str, paths: tuple[str, ...] = (), root: str | No
         return None
     if paths and not any(_em_post_fire.is_product_path(p, root or "", session_id) for p in paths):
         return None
-    return _em_post_fire.deny_envelope()
+    return _em_post_fire.deny_envelope(paths)
 
 
 def _edit_paths(tool_input: dict, cwd: object) -> tuple[str, ...]:

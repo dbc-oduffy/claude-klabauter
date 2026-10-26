@@ -53,7 +53,7 @@ def test_review_phase_reused_skips_the_wave_and_seeds_its_verdict():
     script = _compose()
     assert "const _reviewReused = _reusePhase('review') && !!_phaseVerdict('review');" in script
     assert "_reviewWave = Array.isArray(_rv0.wave) ? _rv0.wave : []" in script
-    assert "if (!_halted && !_reviewReused && _gate.arm !== 'xs'" in script
+    assert "if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {" in script
 
 
 def test_review_phase_rerun_keeps_non_blocked_slices_and_the_rerun_wins():

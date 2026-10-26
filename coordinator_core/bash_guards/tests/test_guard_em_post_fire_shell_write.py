@@ -92,7 +92,8 @@ ADMITTED = (
 @pytest.mark.parametrize("cmd", ADMITTED)
 def test_fired_session_read_only_and_scratch_forms_are_admitted(repo, monkeypatch, tmp_path, cmd):
     _fire(monkeypatch, ["run-1"])
-    cmd = cmd.format(scratch=tmp_path / "sys-tmp" / "n.txt")
+    # Bash eats an unquoted backslash, so a native Windows path would name a different file.
+    cmd = cmd.format(scratch=(tmp_path / "sys-tmp" / "n.txt").as_posix())
     assert guard.check(cmd, SID, str(repo), {"cwd": str(repo)}) is None
 
 
@@ -104,6 +105,17 @@ def test_fired_session_product_write_is_denied_at_warn(repo, monkeypatch, cmd):
     text = _reason(out)
     assert "workflow.revise" in text and "engine-ask" in text and "em_context" in text
     assert "one plain Edit per file" not in text
+
+
+def test_fired_session_claude_md_write_names_the_grant_route(repo, monkeypatch):
+    from coordinator_core.session.claude_md_grant import GRANT_CLI_NAME
+
+    _fire(monkeypatch, ["run-1"])
+    out = _dispatch(repo, "echo x >> CLAUDE.md")
+    assert _decision(out) == "deny", out
+    text = _reason(out)
+    assert GRANT_CLI_NAME in text and "workflow.revise" in text and "already fired engine-ask" in text
+    assert "from the repo that holds the CLAUDE.md" in text
 
 
 @pytest.mark.parametrize(

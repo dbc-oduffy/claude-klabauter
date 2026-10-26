@@ -22,7 +22,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+_REVIEWED = reviewed()
 
 _PLAN = """---
 title: p
@@ -106,8 +107,8 @@ def test_h3_plain_differing_index_ends_at_head(repo):
 
 
 def test_h1_lock_busy_once_still_ends_at_head(repo, monkeypatch):
-    """H1: splice_index raises IndexWriteLockBusy on its first call."""
-    real = index_write.splice_index
+    """H1: prepare_splice raises IndexWriteLockBusy on its first call; the engine retries."""
+    real = index_write.prepare_splice
     calls = {"n": 0}
 
     def flaky(repo_path, updates, **kw):
@@ -116,7 +117,7 @@ def test_h1_lock_busy_once_still_ends_at_head(repo, monkeypatch):
             raise index_write.IndexWriteLockBusy("simulated peer lock")
         return real(repo_path, updates, **kw)
 
-    monkeypatch.setattr(index_write, "splice_index", flaky)
+    monkeypatch.setattr(index_write, "prepare_splice", flaky)
     _run_plain(repo)
     assert calls["n"] == 2
     _assert_index_at_head(repo, ["a.py"])
@@ -134,18 +135,41 @@ def test_h1_v4_index_refuses_before_landing(repo):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
-def test_persistent_splice_failure_reports_index_stale(repo, monkeypatch):
-    """A splice that keeps failing yields committed: true, the sha, and index_stale naming the paths."""
+def test_persistent_lock_busy_refuses_before_the_ref_moves(repo, monkeypatch):
+    """A lock that stays busy refuses the landing: HEAD and the index bytes are unchanged."""
     calls = {"n": 0}
 
     def busy(_repo_path, _updates, **_kw):
         calls["n"] += 1
         raise index_write.IndexWriteLockBusy("simulated peer lock")
 
-    monkeypatch.setattr(index_write, "splice_index", busy)
+    monkeypatch.setattr(index_write, "prepare_splice", busy)
+    monkeypatch.setattr(commit, "_SPLICE_LOCK_BACKOFF_SECS", (0.0, 0.0))
+    _stage_differing(repo, "a.py", "staged\n", "worktree\n")
+    head = _git(["rev-parse", "HEAD"], repo)
+    index_before = (repo / ".git" / "index").read_bytes()
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=("a.py",)),))
+    out = _call(repo, {"script_path": _script(repo, request), "incomplete_chunks": []})
+    assert out["committed"] is False, out
+    assert "Safe to retry" in out["error"], out
+    assert calls["n"] == len(commit._SPLICE_LOCK_BACKOFF_SECS) + 1
+    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert (repo / ".git" / "index").read_bytes() == index_before
+
+
+def test_persistent_publish_failure_reports_index_stale(repo, monkeypatch):
+    """A publish that fails after the ref moved yields committed: true, the sha, and index_stale."""
+    calls = {"n": 0}
+
+    def failing_publish(self):
+        calls["n"] += 1
+        self.abort()
+        raise index_write.IndexWriteError("simulated publish failure")
+
+    monkeypatch.setattr(index_write.PreparedSplice, "publish", failing_publish)
     monkeypatch.setattr(commit, "_reset_index_paths", lambda *_a: False)
     out = _run_plain(repo)
-    assert calls["n"] == len(commit._SPLICE_LOCK_BACKOFF_SECS) + 1
+    assert calls["n"] == 1
     assert out["sha"]
     assert out["index_stale"] == ["a.py"]
     assert "git add" in " ".join(out["warnings"])

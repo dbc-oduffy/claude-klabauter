@@ -1,9 +1,11 @@
 """Spike: what a 2-path peer-claim lookup costs per candidate mechanism, read-only on the live store.
 
-Candidates: today's `claim_index.lookup` (O(sinks) walk), P (per-path streams verified against the
-claimant's cached sink fold) and J (a journal of sink signatures plus a reverse index). Prototype
-state is written under `--work-dir` only; the sessions dir is read, never written, and no commit
-lands. Clocks are `time.process_time()` deltas (excludes git children) and PhaseLedger ms (thread
+Candidates: `today_split` (the full O(sinks) walk, the pre-rebuild lookup), P (per-path streams
+verified against the claimant's cached sink fold) and J (a journal of sink signatures plus a
+reverse index). Prototype state is written under `--work-dir` only; the sessions dir is read, never
+written, and no commit lands. The one exception is the production `claim_index.lookup` that `main`
+calls for recorded kinds, which builds its own index beside the sessions dir on a first call.
+Clocks are `time.process_time()` deltas (excludes git children) and PhaseLedger ms (thread
 CPU plus the dispatch child bucket). Sample 1 is cold; medians and max judge samples 2..N. Spawns
 expected: none; `_SpawnCount` reports any that occur.
 """

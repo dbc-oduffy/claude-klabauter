@@ -50,6 +50,18 @@ def test_fired_product_write_is_denied_at_warn(root, monkeypatch, tool):
     assert "workflow.revise" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+@pytest.mark.parametrize("rel", ["CLAUDE.md", "sub/CLAUDE.md", ".claude/CLAUDE.md"])
+def test_fired_claude_md_write_names_the_grant_route(root, monkeypatch, rel):
+    from coordinator_core.session.claude_md_grant import GRANT_CLI_NAME
+
+    _fire(monkeypatch, ["run-1"])
+    result = mod.op(_payload(root, "Edit", rel))
+    assert _is_deny(result)
+    text = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert GRANT_CLI_NAME in text and "workflow.revise" in text and "already fired engine-ask" in text
+    assert "from the repo that holds the CLAUDE.md" in text
+
+
 def test_multiedit_edits_path_is_denied(root, monkeypatch):
     _fire(monkeypatch, ["run-1"])
     payload = {

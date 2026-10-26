@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_refire_close_block_run_id_producer import FIRST, REFIRE, SESSION
 from coordinator_core.ops.review_mint import wave_bookkeeping
 from coordinator_core.session import touch_record
@@ -71,6 +72,7 @@ def test_terminal_commit_handler_keys_the_close_to_its_own_run_not_the_stale_scr
          "inline_review": {
              "integration_stem": "rev-stem", "slices": 1, "fixes": 0, "prep_sidecar": "prep.md",
              "plan_id": "pln-ex-abc123", "wave_sidecar_paths": ["w.md"],
+             "wave_reviews": reviewed()["wave_reviews"],
          }},
         repo_root=root / ".git",
     )

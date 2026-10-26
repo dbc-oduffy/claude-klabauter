@@ -307,16 +307,11 @@ _NO_SLICES_REFUSAL = (
 _SLICE_KEY_SENTINEL = "__SLICE_KEY__"
 
 
-def prep_slice_id_for(
-    plan_path: str, run_base_sha: Optional[str], run_key: Optional[str] = None
-) -> str:
-    """The frozen-diff slice id of one run's prep: plan stem, `run_key` (the run's own unique id)
-    and run base, so concurrent runs never share `state/review-trail/diffs/<id>.diff`. Every
-    caller passes its run key: a plan-less route (queue grind, ask manifest) has no distinguishing
-    stem, so the run base alone would collide."""
-    safe = lambda s: re.sub(r"[^A-Za-z0-9_.-]", "-", s)  # noqa: E731
-    parts = [safe(Path(plan_path.replace("\\", "/")).stem), safe(run_key or ""), (run_base_sha or "nobase")[:12]]
-    return "-".join(p for p in parts if p) + "-prep"
+from coordinator_core.ops.review_slice_id import (  # noqa: E402,F401  (prep_slice_id_for stays importable here)
+    RUN_PREP_PLAN_STEM,
+    prep_slice_id_for,
+    run_prep_slice_prefix,
+)
 
 
 def em_owned_clause(em_owned_rows: Optional[List[str]]) -> str:
@@ -681,9 +676,11 @@ def _wave_prep_instruction(
         raise ValueError("_wave_prep_instruction takes at most one of run_id / paths_literal")
     if run_id is not None:
         paths_key = f"\"run_id\":{json.dumps(run_id)}"
+        prefix_key = ""
         leg_note = " Add `\"leg\":true` only when the values below carry a `leg:` line; otherwise omit `leg`."
     else:
         paths_key = "\"paths\":" + (paths_literal if paths_literal is not None else "[<every declared path>]")
+        prefix_key = f"\"slice_prefix\":\"{prep_slice_id}\","
         leg_note = ""
     group_args = ',"group_index":<group_index>,"group_count":<group_count>' if grouped else ""
     group_note = " Pass the `group_index:` and `group_count:` values given below." if grouped else ""
@@ -692,7 +689,7 @@ def _wave_prep_instruction(
         f"First, run this run's review prep as ONE engine call, never your own freeze, grouping or "
         f"claim check: `\"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke\" "
         f"review.prep '{{{mode_args},\"base\":\"{base_ref}\","
-        f"\"slice_prefix\":\"{prep_slice_id}\",{paths_key},"
+        f"{prefix_key}{paths_key},"
         f"\"plan_path\":\"<plan_path>\"{group_args}}}'{repo_pin}`, its command word exactly as written "
         f"(a guard denies the prefix moved into a shell variable). <plan_path> is the `plan:` value "
         f"below when it is given, else the `plan_path:` line. When a non-empty `session_id:` value is "
@@ -802,6 +799,13 @@ _REVERIFY_UNAPPLIED_JS = (
 )
 
 
+_SETTLE_CLAUSE = (
+    "A reverted test that still fails in that re-run is not review's doing: call revert mode once "
+    "more with the same fields and `failing` set to those ids, and add its `pre_existing` to the "
+    "returned `pre_existing`. "
+)
+
+
 def _owned_red_clause(owned_red_path: str) -> str:
     """Step text crediting a red another run owns (``owned_red.jsonl``, written by workflow.revise): those
     ids join ``failing_at_base`` and are named, never blocking this run's landing."""
@@ -851,7 +855,6 @@ def _reverify_phase(
     owned_red_path: str = "",
     run_id: str = "",
     deferred: bool = False,
-    integration_bound: bool = False,
 ) -> Tuple[str, str]:
     """The ``Review re-verify`` phase: a test-runner lists what review changed (``review.reverify``
     list mode), runs only the tests covering it, and reverts the implicated files in revert mode
@@ -864,10 +867,10 @@ def _reverify_phase(
     prompt byte-identical. ``verify_scope_targets`` (path -> test targets, group mode only) widens
     the rerun set with the verify-scope targets of every edited path.
 
-    The call is skipped (``_reviewReverify`` is ``null``) when no review applied an edit: the summed
-    ``applied`` of ``_reviewWave`` (plus ``fixes_applied`` of ``_reviewIntegration`` when
-    ``integration_bound``) is 0. ``deferred`` binds the un-awaited promise ``_reviewReverifyP``
-    instead, for a caller that awaits it alongside other work; it resolves to the same value."""
+    The call runs whatever the review applied: halted-run self-correction reads its owned and
+    foreign reds on a wave that applied nothing. ``deferred`` binds the un-awaited promise
+    ``_reviewReverifyP`` instead, for a caller that awaits it alongside other work; it resolves to
+    the same value."""
     agent_type, role = _host_native(_REVERIFY_AGENT_TYPE, host_degraded)
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
     invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
@@ -942,8 +945,9 @@ def _reverify_phase(
             "list. Return the union of the `reverted`, `pre_existing` and `kept` lists as given "
             "(a test is unattributed only when every prefix reports it so), and the `record` of "
             "the first call that returned one; re-run only the tests of the reverted paths, and "
-            "set status_after to pass or fail from that re-run. When nothing failed, "
-            "status_after is null. `status_before` is the status after review, before any "
+            "set status_after to pass or fail from that re-run. "
+            + _SETTLE_CLAUSE
+            + "When nothing failed, status_after is null. `status_before` is the status after review, before any "
             "revert.\n"
             "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
             "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
@@ -986,7 +990,9 @@ def _reverify_phase(
         f"ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
         "as in step 1). Return its `reverted`, `pre_existing`, `kept` and `record` as given, "
         "re-run only the tests of the reverted paths, and set status_after to pass or fail from "
-        "that re-run. When nothing failed, status_after is null. `status_before` is the status "
+        "that re-run. "
+        + _SETTLE_CLAUSE
+        + "When nothing failed, status_after is null. `status_before` is the status "
         "after review, before any revert.\n"
         "Revert only through review.reverify: never `git checkout`, `restore`, `stash` or "
         "`reset`, and never edit a file yourself. Return the sidecar path you wrote as "
@@ -1014,9 +1020,6 @@ def _reverify_phase(
         raise ValueError("re-verify agent call does not open with its prompt literal")
     call = f"agent({_prompt_literal(prompt)} + '\\n' + {sidecars_js}, " + call[len(prefix):]
     call = sc(call, "reverify", agent_type)
-    applied_js = "(Array.isArray(_reviewWave) ? _reviewWave : []).reduce((n, r) => n + ((r && r.applied) || 0), 0)"
-    if integration_bound:
-        applied_js += " + ((_reviewIntegration && _reviewIntegration.fixes_applied) || 0)"
     run_js = (
         f"((r) => r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null)"
         f"(await {_degrading(call)})"
@@ -1024,14 +1027,13 @@ def _reverify_phase(
     if deferred:
         block = (
             f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
-            f"  const _reviewReverifyP = (_verifyOnly || !({applied_js})) ? Promise.resolve(null) : "
+            f"  const _reviewReverifyP = _verifyOnly ? Promise.resolve(null) : "
             f"(async () => {run_js})();"
         )
     else:
         block = (
             f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
-            f"  const _reviewReverify = _verifyOnly ? null : "
-            f"(!({applied_js}) ? null : {run_js});"
+            f"  const _reviewReverify = _verifyOnly ? null : {run_js};"
         )
     return REVERIFY_PHASE, block
 
@@ -1234,11 +1236,27 @@ def compose_execute_review(
         full_js = None if label_js is None else f"{_js_string_literal(label + '-')} + {label_js}"
         return with_sidecar_clause(call, "review", sidecar_key, label, label_js=full_js)
 
-    prep_slice_id = prep_slice_id_for(
-        plan_path,
-        slice_identity_sha if slice_identity_sha is not None else run_base_sha,
-        _SLICE_KEY_SENTINEL if slice_key_js else run_key,
-    )
+    if prep_run_id is not None:
+        # The op derives the run-mode prefix from the command's run id and base alone.
+        if slice_identity_sha is not None and slice_identity_sha != run_base_sha:
+            raise ValueError("compose_execute_review(prep_run_id=...) takes no slice_identity_sha differing from run_base_sha")
+        if Path(plan_path.replace("\\", "/")).stem != RUN_PREP_PLAN_STEM:
+            raise ValueError(
+                f"compose_execute_review(prep_run_id=...) needs a plan_path whose stem is {RUN_PREP_PLAN_STEM!r}"
+            )
+        if slice_key_js:
+            raise ValueError("compose_execute_review(prep_run_id=...) takes no slice_key_js")
+        if not run_base_sha:
+            # No base (a compose outside a git checkout): the op's run mode needs a sha, so prep runs in paths mode.
+            run_key, prep_run_id = prep_run_id, None
+    if prep_run_id is not None:
+        prep_slice_id = run_prep_slice_prefix(prep_run_id, run_base_sha)
+    else:
+        prep_slice_id = prep_slice_id_for(
+            plan_path,
+            slice_identity_sha if slice_identity_sha is not None else run_base_sha,
+            _SLICE_KEY_SENTINEL if slice_key_js else run_key,
+        )
     credit_note = (
         "\nDelivered before this run's base (resume): rows "
         + ", ".join(precredited_rows)
@@ -1393,7 +1411,8 @@ def compose_execute_review(
 
     item_lines: List[str] = []
     wave_mode_args = f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
-    if safe_run_id:
+    # review.prep takes exactly one of paths or run_id: paths mode carries no run_id.
+    if safe_run_id and prep_run_id is not None:
         wave_mode_args += f",\"run_id\":{json.dumps(safe_run_id)}"
     wave_tail_js = (
         (f" + ' ' + JSON.stringify({declared_paths_js})" if declared_paths_js else "")
@@ -1945,7 +1964,6 @@ def compose_execute_review(
                 owned_red_path=owned_red_path,
                 run_id=safe_run_id,
                 deferred=reverify_deferred,
-                integration_bound=review.integration is not None,
             )
         )
 

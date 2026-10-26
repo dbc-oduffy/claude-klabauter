@@ -19,7 +19,8 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 CRLF = b"line one\r\nline two\r\nline three\r\n"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+_REVIEWED = reviewed()
 
 
 def _git(args, cwd: Path) -> str:

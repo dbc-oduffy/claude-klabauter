@@ -90,16 +90,16 @@ def test_composed_script_parses_as_an_async_function_body(tmp_path):
     assert out.returncode == 0, out.stderr
 
 
-def test_reverify_runs_concurrently_with_verify_and_reads_after_the_join():
+def test_reverify_joins_before_self_correction_reads_it():
+    # Halted-run self-correction reads the re-verify result, so its join precedes the review-blocked
+    # halt; the verify phase's join then resolves the same settled promise.
     script = _compose()
     assert "_reviewReverifyP = " in script and "const _reviewReverifyP" not in script
     join = script.index("[_verify, _reviewReverify] = await Promise.all(")
     assert script.index("const _runVerify = ") < join
-    assert "await _reviewReverifyP" not in script[: join]
-    reread = script.index("if (!_reverifyJoined)")
-    assert reread > join
-    post_halt = script.index("_halted.halted === \"review_blocked\")")
-    assert post_halt > join
+    early = script.index("if (!_reverifyJoined)")
+    assert early < join
+    assert script.index("_halted.halted === \"review_blocked\")") > join
 
 
 def test_unapplied_reverify_reruns_verify_once():

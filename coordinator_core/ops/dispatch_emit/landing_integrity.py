@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
+
 PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
@@ -451,7 +453,8 @@ def reverify_red_findings(
     ``status_before``), whose ``failing`` node ids and ``reverted[].tests`` name a file that is itself
     landing or imports a landing module. An absent or non-dict re-verify, a non-fail verdict, or a
     failure implicating no landed path yields []. ``failing`` ids also listed in ``pre_existing`` (red at the
-    run base) are dropped; ``reverted[].tests`` are kept. A fail whose every ``failing`` id is pre_existing and
+    run base) or under the record's ``foreign`` key (reds the run does not own) are dropped; ``reverted[].tests``
+    are kept. A fail whose every ``failing`` id is pre_existing or foreign and
     that has no reverted tests yields []; a fail naming no test at all still refuses. In-process; one read per implicated test file."""
     record = reverify_record(params)
     if record is None:
@@ -464,6 +467,7 @@ def reverify_red_findings(
     landed = {str(p).replace("\\", "/") for p in landing_paths}
     failing = [str(n) for n in (record.get("failing") or []) if n]
     pre = {str(n) for n in (record.get("pre_existing") or [])}
+    pre |= {str(n) for n in (record.get(FOREIGN_FIELD) or [])}
     nodes: list[str] = [n for n in failing if n not in pre]
     for entry in record.get("reverted") or []:
         if isinstance(entry, Mapping):

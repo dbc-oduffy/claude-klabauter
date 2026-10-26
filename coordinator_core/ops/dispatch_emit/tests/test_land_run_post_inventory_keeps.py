@@ -17,6 +17,7 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.dispatch_emit import land_run, review_edit_source
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_landing_remedies import (  # noqa: F401 -- fixture
     RUN,
     SELF,
@@ -201,7 +202,7 @@ def test_p12_control_an_unrecorded_outside_edit_still_refuses_as_blob_drift(repo
 
 _PREFIX = "manifest-run-1-prep"
 _SIDECAR_REL = f".coordinator-local/subagent-share/{SELF}/{_PREFIX}.review-prep.md"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0, "prep_sidecar": _SIDECAR_REL}
+_REVIEWED = {**reviewed(), "prep_sidecar": _SIDECAR_REL}
 _PY_SOURCE = "# Reviewed-by: kira\nx = 1\n"
 
 

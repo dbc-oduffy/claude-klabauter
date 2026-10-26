@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
 )
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -36,6 +37,7 @@ DOCS = ("docs/a.md", "docs/b.md", "coordinator/tests/notes.md")
 def _review(*slice_files: str) -> dict:
     return {
         "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+        "wave_reviews": reviewed()["wave_reviews"],
         "prep": {"slice_files": list(slice_files)},
     }
 

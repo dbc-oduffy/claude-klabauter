@@ -22,7 +22,8 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SELF = "5e1f0000-0000-4000-8000-0000000000a1"
 AGENT = "fixpass-agent-1"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+_REVIEWED = reviewed()
 _PLAN = (
     "---\ntitle: p\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
     "- id: H1\n  title: held\n  change_kind: code-edit\n  surface: contract/held.json\n"

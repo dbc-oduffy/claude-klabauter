@@ -59,11 +59,19 @@ LEDGER_FIX_SCHEMA = {
 }
 
 
-def ledger_fix_prompt(remaining_var: str, evidence_var: str, failing_var: str, footprint_var: str) -> str:
-    """Instruction tail for the fix agent; the four args are JS expressions spliced in.
+def ledger_fix_prompt(
+    remaining_var: str, evidence_var: str, failing_var: str, footprint_var: str, notes_path: str = ""
+) -> str:
+    """Instruction tail for the fix agent; the four `_var` args are JS expressions spliced in.
 
+    `notes_path` is literal text; when given, the run's revise-notes sentence is appended.
     Trap: the footprint is prose here; the only check is the agent's self-reported `paths`.
     """
+    notes = ""
+    if notes_path:
+        from coordinator_core.ops.dispatch_emit.self_correction import notes_sentence  # deferred: self_correction imports RECOVERY_ATTEMPT_CAP from this module
+
+        notes = notes_sentence(notes_path) + " "
     return (
         "A requirement row is not met. Gaps to close (each is still true; make it false): ${"
         + remaining_var + "}. " + HALT_GAP_RULE + " "
@@ -73,6 +81,7 @@ def ledger_fix_prompt(remaining_var: str, evidence_var: str, failing_var: str, f
         "Fix within the footprint and return DONE with every path written. "
         "Return BLOCKED with the reason when the fix needs a path outside the footprint "
         "or the failure is not caused by this run's change. "
+        + notes +
         "Commit nothing. Never edit a test to delete its assertion. "
         "Save captures under `scratch/ledger-fix/<run-id>/`."
     )

@@ -102,7 +102,7 @@ def test_the_footprint_flag_is_set_only_inside_the_review_block_and_read_by_the_
     script = _script(monkeypatch)
     assert script.count("_footprintReviewed = true;") == 1
     flag = script.index("_footprintReviewed = true;")
-    gate = script.index("!_xsTail && !_noReviewPaths) {")
+    gate = script.index("|| _codeReviewOwed)) {")
     phase = script.index("phase('Review wave')")
     empty_wave = script.index("_reviewWave = [];")
     assert gate < phase < flag < empty_wave

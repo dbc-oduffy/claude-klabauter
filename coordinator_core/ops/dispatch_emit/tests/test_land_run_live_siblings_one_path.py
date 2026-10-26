@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import shared_path_landing
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
@@ -31,7 +32,7 @@ SOLO = "ask-20261024T100002-cccccc"
 SIZING = "state/sizings/20260101-a.yaml"
 F = "pkg/shared.py"
 T = "tests/test_junior.py"
-REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+REVIEWED = reviewed()
 VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 DLV = "dlv-alpha-aaaaaa"
 PLAN = "docs/plans/p.md"

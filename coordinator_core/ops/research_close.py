@@ -48,6 +48,10 @@ root never holds notebooklm's claims).
 file; otherwise the close is refused with ``deliverable: false`` before any copy or commit).
 Unlike ``require_claims``, a halted segment never excuses an entry: the file is the run's
 deliverable.
+``require_segment_outputs`` (optional list of non-empty scratch-relative paths, each a non-empty
+regular file; refused like ``require_outputs``): a ``<seg>/<file>`` entry whose ``<seg>`` is in both
+``halted_segments`` and ``segment_dirs`` is excused, as for ``require_claims``; a root entry is
+never excused.
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
@@ -611,18 +615,18 @@ def _missing_claims(scratch: Path, require_claims) -> Optional[dict]:
     return None
 
 
-def _missing_outputs(scratch: Path, require_outputs) -> Optional[dict]:
-    """A refusal reply when a ``require_outputs`` path is not a non-empty regular file, else None."""
+def _missing_outputs(scratch: Path, require_outputs, name: str = "require_outputs") -> Optional[dict]:
+    """A refusal reply when a ``name`` path is not a non-empty regular file, else None."""
     if require_outputs is None:
         return None
     if not isinstance(require_outputs, list) or not all(
         isinstance(r, str) and r for r in require_outputs
     ):
-        return _err("require_outputs must be a list of non-empty scratch-relative paths")
+        return _err(f"{name} must be a list of non-empty scratch-relative paths")
     for rel in require_outputs:
         p = contained_path(scratch / rel, [scratch])
         if p is None:
-            return _err(f"require_outputs entry escapes scratch_dir: {rel!r}")
+            return _err(f"{name} entry escapes scratch_dir: {rel!r}")
         try:
             landed = p.is_file() and p.stat().st_size > 0
         except OSError:
@@ -681,8 +685,18 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         return _err(f"require_grounding must be a bool: {require_grounding!r}")
     if require_grounding and tier != "scouts":
         return _err(f"require_grounding applies to tier scouts only: {tier!r}")
-    problem = _missing_claims(scratch, require_claims) or _missing_outputs(
-        scratch, params.get("require_outputs")
+    require_segment_outputs = params.get("require_segment_outputs")
+    if halted_segments and isinstance(require_segment_outputs, list):
+        excused_out = set(halted_segments) & set(segment_dirs)
+        require_segment_outputs = [
+            r for r in require_segment_outputs
+            if not (isinstance(r, str) and r.replace("\\", "/").split("/", 1)[0] in excused_out
+                    and "/" in r.replace("\\", "/"))
+        ]
+    problem = (
+        _missing_claims(scratch, require_claims)
+        or _missing_outputs(scratch, params.get("require_outputs"))
+        or _missing_outputs(scratch, require_segment_outputs, "require_segment_outputs")
     )
     if problem:
         if halted_segments is not None:

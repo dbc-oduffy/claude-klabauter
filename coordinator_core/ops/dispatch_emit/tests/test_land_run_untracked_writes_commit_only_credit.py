@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import land_run, run_token
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
@@ -106,7 +107,7 @@ def _declare(root: Path) -> str:
 
 def _review(slice_files: list) -> dict:
     return {
-        "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+        **reviewed(),
         "prep": {"run_base_sha": None, "product_files": slice_files, "foreign_claims": [], "slice_files": slice_files},
         "delivery": {"verdict": "PASS"},
         "integration": {"unresolved": [], "confinement_violations": []},

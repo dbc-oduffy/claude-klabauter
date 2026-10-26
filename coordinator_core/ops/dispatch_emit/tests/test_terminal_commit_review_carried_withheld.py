@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_remedy, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift import (  # noqa: F401 -- fixtures
     SID,
     _git,
@@ -46,7 +47,7 @@ def _fire(repo, carried):
     token = run_token.mint(repo, "run-1", "run.mjs")
     return terminal_commit._handler(
         {"script_path": "run.mjs", "incomplete_chunks": [],
-         "inline_review": {"integration_stem": "s", "slices": 1, "fixes": 0},
+         "inline_review": {**reviewed(), "integration_stem": "s"},
          "session_id": SID, "run_id": "run-1", "run_token": token},
         repo_root=repo / ".git",
     )

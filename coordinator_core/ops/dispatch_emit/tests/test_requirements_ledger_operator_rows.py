@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RUN_DIR_ROOT, OwedRow, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -23,7 +24,7 @@ RUN = "run1"
 SIZING = "state/sizings/20260101-a.yaml"
 PLAN = "docs/plans/p.md"
 COMMAND = "python scratch/walk-cost/run_units.py --units d1 d2b"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = reviewed()
 _SID = "11111111-2222-3333-4444-555555555555"
 
 

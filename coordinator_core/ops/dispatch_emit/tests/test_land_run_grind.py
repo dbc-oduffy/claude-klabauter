@@ -136,7 +136,18 @@ def test_deliverable_id_rides_the_message(repo):
     assert "Deliverable-Id: dlv-x" in _message(repo)
 
 
+def test_deletion_of_a_never_tracked_absent_path_is_already_true(repo):
+    out = _call(repo, [_row("r1", ["a.py"], ["state/bug-backlog/r1.yaml"])])
+    assert out["committed"] is True
+    assert out["dropped"] == [] and out["stranded"] == []
+    assert "Row-Unlanded" not in _message(repo)
+
+
 def test_dropped_deletion_carries_an_unlanded_trailer(repo):
+    (repo / "state" / "bug-backlog").mkdir(parents=True)
+    write_seen_by_git(repo / "state" / "bug-backlog" / "r1.yaml", "id: r1\n")
+    _git(["add", "state/bug-backlog/r1.yaml"], repo)
+    _git(["commit", "-q", "-m", "track r1"], repo)
     out = _call(repo, [_row("r1", ["a.py"], ["state/bug-backlog/r1.yaml"])])
     assert out["committed"] is True
     drop = {"row_id": "r1", "path": "state/bug-backlog/r1.yaml", "reason": "deletion-git-cannot-see"}
@@ -175,9 +186,10 @@ def test_tracked_deletion_lands_with_removal_phrase(repo):
 
 def test_changed_path_gone_from_the_worktree_is_named_not_skipped(repo):
     (repo / "b.py").unlink()
-    out = _call(repo, [_row("r1", ["a.py", "b.py"])])
+    out = _call(repo, [_row("r1", ["b.py"]), _row("r2", ["a.py"])])
     assert out["committed"] is True
     assert _head_files(repo) == {"a.py"}
+    assert [u["row_id"] for u in out["unlanded"]] == ["r1"]
     assert "Row-Unlanded: r1 b.py missing-from-worktree" in _message(repo)
 
 
@@ -260,8 +272,9 @@ def test_imageless_path_held_by_a_live_peer_is_dropped_and_the_rest_lands(repo, 
     from coordinator_core.ops.dispatch_emit import grind_landing_select
 
     monkeypatch.setattr(grind_landing_select, "_live_peer_held", lambda _root, paths: {"a.py"} & set(paths))
-    out = _call(repo, [_row("r1", ["a.py", "b.py"])])
+    out = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])])
     assert out["committed"] is True
     assert _head_files(repo) == {"b.py"}
     assert out["dropped"] == [{"row_id": "r1", "path": "a.py", "reason": "unattributed-shared"}]
+    assert [u["row_id"] for u in out["unlanded"]] == ["r1"]
     assert "Row-Unlanded: r1 a.py unattributed-shared" in _message(repo)

@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import kept_work
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.credit_gate import KEPT_REVIEW_CHUNK_ID
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_landing_remedies import (  # noqa: F401 -- fixture
     _author,
     _declare,
@@ -75,7 +76,7 @@ def test_the_resumed_runs_record_is_read_too(repo):
     _declare(repo, [("C1", ["p.py"])])
     _record(repo, resumed, {"a.py": _blob(repo, "a.py")})
     (repo / RECORD_DIR_ROOT / RUN).mkdir(parents=True, exist_ok=True)
-    review = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0, "resumed_run_id": resumed}
+    review = {**reviewed(), "resumed_run_id": resumed}
 
     out = _land_run(repo, inline_review=review)
 

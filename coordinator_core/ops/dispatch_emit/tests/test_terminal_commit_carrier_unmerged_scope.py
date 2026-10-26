@@ -26,7 +26,8 @@ PLAN = "docs/plan.md"
 IDS = ("A1", "A2", "B1", "B2")
 OWN = ("A1", "A2")
 SIBLINGS = ("B1", "B2")
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+_REVIEWED = reviewed()
 
 
 def _git(args, cwd: Path) -> str:

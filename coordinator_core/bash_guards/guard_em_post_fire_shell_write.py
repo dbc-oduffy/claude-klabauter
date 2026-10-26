@@ -87,7 +87,7 @@ def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
         return None
     for target in targets:
         if _em_post_fire.is_product_path(target.abs_path, root, session_id):
-            envelope = _em_post_fire.deny_envelope() or {}
+            envelope = _em_post_fire.deny_envelope((target.abs_path,)) or {}
             out = envelope.get("hookSpecificOutput") or {}
             text = out.get("permissionDecisionReason") or out.get("additionalContext") or ""
             return _record(text)

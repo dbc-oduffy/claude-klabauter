@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
 RUN = "ask-20261022T000000-abc123"
 REL = "state/sizings/2026-10-22-lifecycle.yaml"
-LIFE = ["baton_archive", "plan_implemented"]
+LIFE = ["baton_archive", "plan_implemented", "bug_close"]
 BOARD = "https://claude.ai/design/p/abc123"
 HIT = {"id": "settings", "board_url": BOARD, "artboards": ["A1"], "status": "designed", "paths": ["app/settings/page.tsx"]}
 
@@ -45,9 +45,9 @@ def _verdict(run, **replaced):
 
 
 def test_lifecycle_vocabulary_is_pinned():
-    assert rl.LIFECYCLE_ACTS == ("baton_archive", "plan_implemented")
+    assert rl.LIFECYCLE_ACTS == ("baton_archive", "plan_implemented", "bug_close")
     assert rl.POST_COMMIT_ACTS[:3] == ("commit", "sha_reply", "sha_memo")
-    assert rl.CLOSE_DISCHARGED_ACTS == ("commit", "baton_archive", "plan_implemented")
+    assert rl.CLOSE_DISCHARGED_ACTS == ("commit", "baton_archive", "plan_implemented", "bug_close")
 
 
 def test_normalize_turns_lifecycle_remaining_into_post_commit():
@@ -69,6 +69,8 @@ def test_judge_fails_a_lifecycle_act_mixed_with_a_plain_words_gap(run):
     (["commit", "plan_implemented"], True),
     (LIFE, True),
     (["sha_reply"], False),
+    (["commit", "bug_close"], True),
+    (["bug_close", "sha_memo"], False),
     (["plan_implemented", "sha_memo"], False),
     ([], False),
 ])
@@ -88,8 +90,11 @@ def test_post_commit_owed_lists_an_undischarged_lifecycle_act():
     assert rl.post_commit_owed(verdict, "abc1234", discharged=["plan_implemented"]) == []
     both = {"items": [_item("R1", LIFE)]}
     assert rl.post_commit_owed(both, "abc1234", discharged={"baton_archive"}) == [
-        {"id": "R1", "acts": ["plan_implemented"], "sha": "abc1234"}
+        {"id": "R1", "acts": ["plan_implemented", "bug_close"], "sha": "abc1234"}
     ]
+    bug = {"items": [_item("R1", ["bug_close"])]}
+    assert rl.post_commit_owed(bug, "abc1234") == [{"id": "R1", "acts": ["bug_close"], "sha": "abc1234"}]
+    assert rl.post_commit_owed(bug, "abc1234", discharged={"bug_close"}) == []
 
 
 def test_post_commit_owed_keeps_the_sha_memo_entry_unchanged():

@@ -1517,6 +1517,13 @@ def _research_route_setup(
     nested = [segment_name(m, i) for index, (m, i, _) in enumerate(segments) if index > 0 or i.segment_key]
     if nested:
         close_params["segment_dirs"] = nested
+    segment_outputs = []
+    for index, (m, i, _) in enumerate(segments):
+        out = research_emit.synthesis_output(m)
+        if out:
+            segment_outputs.append(f"{segment_name(m, i)}/{out}" if index > 0 or i.segment_key else out)
+    if segment_outputs:
+        close_params["require_segment_outputs"] = segment_outputs
     if compare_brief:
         compare_manifest = next(m for m, _, _ in segments if m.pipeline == research_emit.REPO_COMPARE_PIPELINE)
         close_params["require_outputs"] = [
@@ -2181,6 +2188,8 @@ def _dispatch_emit_body(
                     inherited_base = _recorded_run_base(ask_root, resumes_ask) or halted_run_base(
                         record_dir(ask_root, resumes_ask)
                     )
+                else:
+                    resumed_from = halted_ask_run_for(ask_root, sizing_rel, ignore_superseded=True)
             if halted_id:
                 from coordinator_core.ops.dispatch_emit.halted_run import rebind_blocker, recorded_emitter
 

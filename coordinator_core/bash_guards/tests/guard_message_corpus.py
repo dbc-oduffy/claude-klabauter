@@ -1292,6 +1292,9 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=_em_halted_withheld_commit_setup,
+        # Main-loop-only guard: a subagent-shaped caller is allowed (no message), so the
+        # subagent-audience render of this cell is legitimately empty.
+        audience=EM_AUDIENCE,
     ),
     CorpusRow(
         "block-em-halted-withheld-commit",

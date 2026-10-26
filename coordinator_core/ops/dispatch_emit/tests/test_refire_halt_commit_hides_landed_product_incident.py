@@ -10,7 +10,7 @@ import json
 import pytest
 import yaml
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import land_run, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
@@ -28,13 +28,16 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import
     PLAN,
     RUN,
     SIZING,
+    WAVE_REVIEW,
     _git,
     _write,
     repo,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_product_changes import (
+    _MET,
+    _REVIEWED,
+    _SID,
     _refire,
-    _terminal,
 )
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -42,6 +45,18 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 #: (a) each fire halts under its own run id; (b) fire 2 rebinds fire 1's run id.
 FIRE2_RUN_IDS = {"own-run-ids": "run-fire2", "rebound-run-id": RUN}
 _HALT = {"halted": "ledger-check", "plan": PLAN, "items": [{"id": "R1"}]}
+
+
+def _terminal(root, token: str, resume: dict) -> dict:
+    """Lands the refire carrying a real review verdict (sidecar on disk) for the run's code edit."""
+    return land_run._handler(
+        {
+            "script_path": "run2.mjs", "run_id": RUN2, "run_token": token, "incomplete_chunks": [],
+            "inline_review": {**_REVIEWED, "wave_reviews": [WAVE_REVIEW]}, "session_id": _SID,
+            "ledger_verdict": _MET, "resume_ledger": resume,
+        },
+        repo_root=root / ".git",
+    )
 
 
 def _fire2_halt(root, run_id: str) -> str:

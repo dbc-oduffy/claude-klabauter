@@ -37,7 +37,7 @@ def _script(monkeypatch) -> str:
 def test_the_verify_prompt_names_the_lifecycle_acts(monkeypatch):
     script = _script(monkeypatch).replace("\\'", "'")
     assert "baton_archive" in script and "plan_implemented" in script
-    assert "post_commit_acts from (commit, sha_reply, sha_memo, baton_archive, plan_implemented)" in script
+    assert "post_commit_acts from (commit, sha_reply, sha_memo, baton_archive, plan_implemented, bug_close)" in script
 
 
 def _blocking(script: str, items: list[dict]) -> list[dict]:

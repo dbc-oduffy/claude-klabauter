@@ -277,7 +277,7 @@ def test_apply_verdict_writes_met_wired_and_superseded_rows(run):
 def test_judge_passes_a_post_commit_item_and_the_landing_writes_it_back(run):
     repo, _d = run
     assert "post_commit" in rl.STATUSES and rl.POST_COMMIT_ACTS == (
-        "commit", "sha_reply", "sha_memo", "baton_archive", "plan_implemented")
+        "commit", "sha_reply", "sha_memo", "baton_archive", "plan_implemented", "bug_close")
     verdict = _verdict(
         ("R1", "post_commit", {"post_commit_acts": ["commit", "sha_reply"], "wired": True}),
         ("R2", "met", {"wired": True}), ("R3", "met", {"wired": True}),

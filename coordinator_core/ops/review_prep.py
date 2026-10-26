@@ -387,7 +387,7 @@ def stored_reply_for_run(
     """The reply ``review.prep`` stored for one run, found without its slice prefix, or ``None``.
 
     Globs the session's share dir for ``*-<base[:12]>-prep.review-prep.md`` (the suffix shape of
-    ``execute_review.prep_slice_id_for``, not imported: that module is heavy). A file is kept when
+    ``review_slice_id.prep_slice_id_for``, not imported). A file is kept when
     its name contains ``run_key`` (if given), its ``agent_type`` is ``engine:prep-freeze``, its
     ``run_base_sha`` is ``base`` and, when ``within`` is non-empty, every ``paths`` entry is in it.
     ``covering=True`` (keyword-only, default off) flips that check: a file is kept when every
@@ -793,7 +793,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``run_id`` (str; the run's declared paths are read from its record), optional ``leg`` (bool,
     only with ``run_id``; appends the leg footprint's writes), ``slice_prefix``
     (str), ``plan_path`` (str), optional ``session_id``, and exactly one of ``head`` (str,
-    committed range mode) or ``worktree: true``; optional ``group_index`` / ``group_count`` (ints,
+    committed range mode) or ``worktree: true``. With ``run_id`` the slice prefix is always
+    ``review_slice_id.run_prep_slice_prefix(run_id, base)``: a typed ``slice_prefix`` is ignored
+    and may be omitted; with ``paths`` it is required. Optional ``group_index`` / ``group_count`` (ints,
     together) return only that slice group. Keying scope: show_top."""
     if repo_root is None:
         return _fail("review.prep requires a show_top-keyed dispatch; repo_root was not supplied")
@@ -822,6 +824,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     group_index, group_count = params.get("group_index"), params.get("group_count")
     if any(v is not None and (isinstance(v, bool) or not isinstance(v, int)) for v in (group_index, group_count)):
         return _fail("review.prep group_index and group_count must be integers")
+    base = str(params.get("base") or "")
+    if run_id is not None:
+        if not _SHA_RE.match(base):
+            return _fail("base must be a lowercase commit sha")
+        from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+        slice_prefix = run_prep_slice_prefix(run_id, base)
+    else:
+        slice_prefix = str(params.get("slice_prefix") or "")
     live_runs = live_runs_from_params(params.get("live_runs"))
     if params.get("live_runs") and live_runs is None:
         return _fail("review.prep params.live_runs must map run ids to objects")
@@ -833,9 +844,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         live_runs = holders_from_held(held) or None
     return review_prep(
         repo_root,
-        base=str(params.get("base") or ""),
+        base=base,
         paths=[str(p) for p in paths],
-        slice_prefix=str(params.get("slice_prefix") or ""),
+        slice_prefix=slice_prefix,
         plan_path=str(params.get("plan_path") or ""),
         head=head or None,
         session_id=str(params.get("session_id") or ""),

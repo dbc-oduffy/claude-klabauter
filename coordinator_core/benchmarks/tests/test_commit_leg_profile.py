@@ -8,7 +8,7 @@ import pytest
 
 from coordinator_core.benchmarks import commit_leg_profile as clp
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _KEYS = {"mode", "sign", "paths", "head", "committed", "sha", "parent_ms", "children_ms", "spawns", "phases"}
 

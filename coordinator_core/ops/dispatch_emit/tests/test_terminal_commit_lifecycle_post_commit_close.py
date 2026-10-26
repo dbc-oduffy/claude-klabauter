@@ -8,6 +8,7 @@ import json
 import pytest
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
@@ -65,6 +66,7 @@ def _fire(repo, ledger_verdict, *, flip_refused: bool = False, chunk_report: str
     review = {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+        "wave_reviews": reviewed()["wave_reviews"],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
         "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},

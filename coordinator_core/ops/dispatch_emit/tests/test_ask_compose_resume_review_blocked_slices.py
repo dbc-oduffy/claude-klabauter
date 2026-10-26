@@ -97,6 +97,7 @@ const _agentDefsClause = () => '';
 let _halted = null, _xsTail = false, _noReviewPaths = false, _waveNotRun = [], _reviewPrep = null, _reviewWave = null;
 let _deliveryVerdict = null, _deliveryNotRun = null, _reviewIntegration = null, _integrationNotRun = false, _reviewReverify = null;
 let _footprintReviewed = false;
+const _prepLeg = '', _codeReviewOwed = false;
 const _planRel = 'p.md', _sizingRel = 's.yaml', _SESSION_ID = 'sid', _deliveryNotes = null, _reviewPaths = ['a.py'];
 const _manifest = { rows: Array.from({ length: 9 }, (_, i) => ({ id: 'R' + i })) };
 const _gate = %(gate)s;

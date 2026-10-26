@@ -78,7 +78,7 @@ def test_pre_equals_head_lands_post_without_peer_edit(tmp_path, monkeypatch):
     _no_peers(monkeypatch)
     _images(root, HEAD_TXT, ROW_TXT)
     (root / REL).write_bytes(BOTH_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
+    s = sel.select(root, RUN, {REL: [ROW]})
     assert s.dropped == {}
     assert _blob_text(root, s.supplied_blobs[REL]) == ROW_TXT
     assert s.landed_text(REL) == ROW_TXT.decode()
@@ -89,7 +89,7 @@ def test_pre_equals_head_post_is_worktree_needs_no_blob(tmp_path, monkeypatch):
     _no_peers(monkeypatch)
     _images(root, HEAD_TXT, ROW_TXT)
     (root / REL).write_bytes(ROW_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
+    s = sel.select(root, RUN, {REL: [ROW]})
     assert s.supplied_blobs == {} and s.dropped == {}
 
 
@@ -98,7 +98,7 @@ def test_incident_shape_peer_import_in_pre_excluded(tmp_path, monkeypatch):
     _no_peers(monkeypatch)
     _images(root, PEER_TXT, BOTH_TXT)
     (root / REL).write_bytes(BOTH_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
+    s = sel.select(root, RUN, {REL: [ROW]})
     assert s.dropped == {}
     landed = _blob_text(root, s.supplied_blobs[REL])
     assert landed == ROW_TXT
@@ -111,8 +111,9 @@ def test_overlapping_peer_edit_drops_with_conflict(tmp_path, monkeypatch):
     pre = b'"""doc peer"""\nbody = 1\n'
     _images(root, pre, ROW_TXT)
     (root / REL).write_bytes(ROW_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
-    assert s.dropped == {REL: contract.DROP_PEER_HUNKS_CONFLICT}
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {REL: {ROW: contract.DROP_PEER_HUNKS_CONFLICT}}
+    assert s.dropped_for(ROW, REL) == contract.DROP_PEER_HUNKS_CONFLICT
     assert REL not in s.supplied_blobs
 
 
@@ -121,23 +122,23 @@ def test_unparseable_record_drops_fail_closed(tmp_path, monkeypatch):
     _no_peers(monkeypatch)
     _images(root, None, None, raw="{not json")
     (root / REL).write_bytes(ROW_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
-    assert s.dropped == {REL: contract.DROP_UNATTRIBUTED_SHARED}
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
 
 
 def test_missing_blob_drops_fail_closed(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, None, None, raw=json.dumps({"pre": {REL: "0" * 40}, "post": {REL: "1" * 40}}))
-    s = sel.select(root, RUN, {REL: ROW})
-    assert s.dropped == {REL: contract.DROP_UNATTRIBUTED_SHARED}
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
 
 
 def test_no_images_lands_worktree_when_unheld(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     (root / REL).write_bytes(ROW_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
+    s = sel.select(root, RUN, {REL: [ROW]})
     assert s.dropped == {} and s.supplied_blobs == {}
     assert s.landed_text(REL) == ROW_TXT.decode()
 
@@ -146,8 +147,8 @@ def test_no_images_peer_held_drops(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     _no_peers(monkeypatch, held={REL})
     (root / REL).write_bytes(ROW_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
-    assert s.dropped == {REL: contract.DROP_UNATTRIBUTED_SHARED}
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
 
 
 def test_reads_the_record_grind_row_image_writes(tmp_path, monkeypatch):
@@ -164,7 +165,7 @@ def test_reads_the_record_grind_row_image_writes(tmp_path, monkeypatch):
     image("pre")
     (root / REL).write_bytes(BOTH_TXT)
     image("post")
-    s = sel.select(root, RUN, {REL: ROW})
+    s = sel.select(root, RUN, {REL: [ROW]})
     assert s.dropped == {}
     assert _blob_text(root, s.supplied_blobs[REL]) == ROW_TXT
 
@@ -174,8 +175,166 @@ def test_pre_without_post_drops_unattributed(tmp_path, monkeypatch):
     _no_peers(monkeypatch)
     _images(root, None, None, raw=json.dumps({"pre": {REL: _blob(root, HEAD_TXT)}, "post": {}}))
     (root / REL).write_bytes(BOTH_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
-    assert s.dropped == {REL: contract.DROP_UNATTRIBUTED_SHARED}
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
+
+
+BASE20 = "".join(f"line{i} = {i}\n" for i in range(1, 21))
+EDIT_A = BASE20.replace("line2 = 2\n", "line2 = 'a'\n")
+EDIT_B = BASE20.replace("line19 = 19\n", "line19 = 'b'\n")
+EDIT_AB = EDIT_A.replace("line19 = 19\n", "line19 = 'b'\n")
+
+
+def _two_row_repo(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _no_peers(monkeypatch)
+    (root / REL).write_bytes(BASE20.encode())
+    _git(root, "add", REL)
+    _git(root, "commit", "-q", "-m", "base20")
+    return root
+
+
+def _row_images(root: Path, row: str, pre: bytes, post: bytes) -> None:
+    f = root / contract.row_images_rel(RUN, row) / contract.IMAGE_RECORD_FILE
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"pre": {REL: _blob(root, pre)}, "post": {REL: _blob(root, post)}}), encoding="utf-8")
+
+
+def test_two_owners_sequential_disjoint_hunks_both_land(tmp_path, monkeypatch):
+    root = _two_row_repo(tmp_path, monkeypatch)
+    _row_images(root, ROW, BASE20.encode(), EDIT_A.encode())
+    _row_images(root, "r2", EDIT_A.encode(), EDIT_AB.encode())
+    (root / REL).write_bytes(EDIT_AB.encode())
+    s = sel.select(root, RUN, {REL: [ROW, "r2"]})
+    assert s.dropped == {}
+    assert s.landed_text(REL) == EDIT_AB
+
+
+def test_two_owners_concurrent_disjoint_hunks_both_land(tmp_path, monkeypatch):
+    root = _two_row_repo(tmp_path, monkeypatch)
+    _row_images(root, ROW, BASE20.encode(), EDIT_A.encode())
+    _row_images(root, "r2", BASE20.encode(), EDIT_B.encode())
+    (root / REL).write_bytes(EDIT_AB.encode())
+    s = sel.select(root, RUN, {REL: [ROW, "r2"]})
+    assert s.dropped == {}
+    assert s.landed_text(REL) == EDIT_AB
+
+
+def test_two_owners_colliding_hunks_drop_only_the_second(tmp_path, monkeypatch):
+    root = _two_row_repo(tmp_path, monkeypatch)
+    clash = BASE20.replace("line2 = 2\n", "line2 = 'z'\n")
+    _row_images(root, ROW, BASE20.encode(), EDIT_A.encode())
+    _row_images(root, "r2", BASE20.encode(), clash.encode())
+    (root / REL).write_bytes(clash.encode())
+    s = sel.select(root, RUN, {REL: [ROW, "r2"]})
+    assert s.dropped == {REL: {"r2": contract.DROP_PEER_HUNKS_CONFLICT}}
+    assert s.dropped_for(ROW, REL) is None
+    assert _blob_text(root, s.supplied_blobs[REL]) == EDIT_A.encode()
+
+
+def test_crlf_images_over_lf_head_land_lf_with_the_edit(tmp_path, monkeypatch):
+    root = _two_row_repo(tmp_path, monkeypatch)
+    _git(root, "config", "core.autocrlf", "true")
+    crlf = BASE20.replace("\n", "\r\n")
+    edited = EDIT_A.replace("\n", "\r\n")
+    _row_images(root, ROW, crlf.encode(), edited.encode())
+    (root / REL).write_bytes(edited.encode())
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {}
+    assert s.supplied_blobs == {}
+    assert s.landed_text(REL) == EDIT_A
+
+
+def test_untracked_new_file_with_prior_pre_lands_pre_to_post(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _no_peers(monkeypatch)
+    f = root / "new.py"
+    f.write_bytes(b"a = 1\nb = 2\n")
+    rec = root / contract.row_images_rel(RUN, ROW) / contract.IMAGE_RECORD_FILE
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text(json.dumps({
+        "pre": {"new.py": _blob(root, b"a = 1\n")}, "post": {"new.py": _blob(root, b"a = 1\nb = 2\n")},
+    }), encoding="utf-8")
+    s = sel.select(root, RUN, {"new.py": [ROW]})
+    assert s.dropped == {}
+    assert s.landed_text("new.py") == "a = 1\nb = 2\n"
+
+
+def test_second_owner_without_images_drops_first_lands(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _no_peers(monkeypatch)
+    _images(root, HEAD_TXT, ROW_TXT)
+    (root / REL).write_bytes(ROW_TXT)
+    s = sel.select(root, RUN, {REL: [ROW, "r2"]})
+    assert s.dropped == {REL: {"r2": contract.DROP_UNATTRIBUTED_SHARED}}
+    assert s.dropped_for(ROW, REL) is None
+    assert s.landed_text(REL) == ROW_TXT.decode()
+
+
+def test_single_owner_deletion_with_file_gone_lands_the_deletion(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _no_peers(monkeypatch)
+    _images(root, HEAD_TXT, None)
+    (root / REL).unlink()
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {}
+    assert s.landed_text(REL) is None
+
+
+def test_two_owner_deletion_drops_both_unattributed(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _no_peers(monkeypatch)
+    _images(root, HEAD_TXT, None)
+    _row_images_deleted = root / contract.row_images_rel(RUN, "r2") / contract.IMAGE_RECORD_FILE
+    _row_images_deleted.parent.mkdir(parents=True, exist_ok=True)
+    _row_images_deleted.write_text(
+        json.dumps({"pre": {REL: _blob(root, HEAD_TXT)}, "post": {REL: None}}), encoding="utf-8"
+    )
+    (root / REL).unlink()
+    s = sel.select(root, RUN, {REL: [ROW, "r2"]})
+    assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED, "r2": contract.DROP_UNATTRIBUTED_SHARED}}
+    assert s.landed_text(REL) == HEAD_TXT.decode()
+
+
+PS1 = "s.ps1"
+PS1_BASE = "".join(f"l{i} = {i}\n" for i in range(1, 6))
+PS1_EDIT = PS1_BASE.replace("l2 = 2\n", "l2 = 'x'\n")
+
+
+def _ps1_repo(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _no_peers(monkeypatch)
+    (root / ".gitattributes").write_bytes(b"*.ps1 text eol=crlf\n")
+    (root / PS1).write_bytes(PS1_BASE.encode())
+    _git(root, "add", ".gitattributes", PS1)
+    _git(root, "commit", "-q", "-m", "ps1")
+    return root
+
+
+def _ps1_images(root: Path, pre: bytes, post: bytes) -> None:
+    f = root / contract.row_images_rel(RUN, ROW) / contract.IMAGE_RECORD_FILE
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps({"pre": {PS1: _blob(root, pre)}, "post": {PS1: _blob(root, post)}}), encoding="utf-8")
+
+
+def test_refused_checkin_worktree_lands_the_lf_image_as_a_supplied_blob(tmp_path, monkeypatch):
+    root = _ps1_repo(tmp_path, monkeypatch)
+    _ps1_images(root, PS1_BASE.encode(), PS1_EDIT.encode())
+    (root / PS1).write_bytes(PS1_EDIT.replace("\n", "\r\n").encode())
+    s = sel.select(root, RUN, {PS1: [ROW]})
+    assert s.dropped == {}
+    assert _blob_text(root, s.supplied_blobs[PS1]) == PS1_EDIT.encode()
+    assert s.landed_text(PS1) == PS1_EDIT
+
+
+def test_refused_checkin_cr_image_drops_unattributed(tmp_path, monkeypatch):
+    root = _ps1_repo(tmp_path, monkeypatch)
+    crlf = PS1_EDIT.replace("\n", "\r\n").encode()
+    _ps1_images(root, PS1_BASE.encode(), crlf)
+    (root / PS1).write_bytes(crlf)
+    s = sel.select(root, RUN, {PS1: [ROW]})
+    assert s.dropped == {PS1: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
+    assert PS1 not in s.supplied_blobs
 
 
 def test_non_string_image_value_drops_fail_closed(tmp_path, monkeypatch):
@@ -183,5 +342,5 @@ def test_non_string_image_value_drops_fail_closed(tmp_path, monkeypatch):
     _no_peers(monkeypatch)
     _images(root, None, None, raw=json.dumps({"pre": {REL: 7}, "post": {REL: None}}))
     (root / REL).write_bytes(ROW_TXT)
-    s = sel.select(root, RUN, {REL: ROW})
-    assert s.dropped == {REL: contract.DROP_UNATTRIBUTED_SHARED}
+    s = sel.select(root, RUN, {REL: [ROW]})
+    assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}

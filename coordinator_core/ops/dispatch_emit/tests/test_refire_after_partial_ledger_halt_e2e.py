@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_ledger_resume import _script
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import (  # noqa: F401
     DLV,
@@ -47,7 +48,7 @@ REFUSED_RUN = "run-refused"
 RUN2 = "run2"
 SCRIPT2 = "run2.mjs"
 _SID = "11111111-2222-3333-4444-555555555555"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = reviewed()
 _HALT = {"halted": "ledger-check", "plan": PLAN, "items": [{"id": "R1"}]}
 _MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 _DISCHARGE = "verified V1 by hand"

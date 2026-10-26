@@ -46,7 +46,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     record_dir,
     stamp_run_stage,
 )
-from coordinator_core.ops.dispatch_emit import review_floor
+from coordinator_core.ops.dispatch_emit import bug_close, review_floor
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, read_em_brief, read_em_context_paths
@@ -72,8 +72,8 @@ REVISE_REF = "workflow.revise"
 OUT_OF_SCOPE_REF = "out_of_scope"
 STATUSES = ("met", "not_met", "drifted", "superseded", "post_commit")
 #: Acts the terminal commit's landing performs itself: the run's consumed baton archived and the
-#: plan stamped implemented.
-LIFECYCLE_ACTS: tuple[str, ...] = ("baton_archive", "plan_implemented")
+#: plan stamped implemented, and each bug row the spine says to close closed with the landing sha.
+LIFECYCLE_ACTS: tuple[str, ...] = ("baton_archive", "plan_implemented", bug_close.ACT)
 #: Acts that can only exist after the terminal commit; a `post_commit` item names which remain.
 POST_COMMIT_ACTS = ("commit", "sha_reply", "sha_memo", *LIFECYCLE_ACTS)
 #: The post-commit acts the landing performs with no further sender.
@@ -1296,7 +1296,7 @@ def _claim_ruling(root: Path, sizing_rel: str, plan: tuple[str, Path], run_id: s
 
 def normalize_verdict(verdict: object) -> object:
     """A copy of `verdict` in which every `not_met` item whose non-empty `remaining` list holds only
-    `POST_COMMIT_ACTS` (commit, sha_reply, sha_memo, baton_archive, plan_implemented) reads
+    `POST_COMMIT_ACTS` (commit, sha_reply, sha_memo, baton_archive, plan_implemented, bug_close) reads
     `post_commit` with those acts; every other item and a shapeless verdict come back unchanged."""
     items = verdict.get("items") if isinstance(verdict, Mapping) else None
     if not isinstance(items, list):
@@ -1383,7 +1383,7 @@ def judge(
     `all_of_pm_ask` is set or the row is essential (the default), else it passes listed open as
     `non-essential`; `post_commit` passes only when
     `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS` (commit, sha_reply,
-    sha_memo, baton_archive, plan_implemented).
+    sha_memo, baton_archive, plan_implemented, bug_close).
 
     A design-conformance row (anchor `design-registry:<id>`) is always essential: `essential: false`
     is ignored, `post_commit` fails, and `met` passes only when `design_conformance.evidence_refusal`
@@ -1499,7 +1499,7 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
     """Write a passed verdict onto the register once the commit `sha` landed: met and wired ->
     `met` with `<run_id>@<sha>` in met_by; met alone -> `partial`; superseded -> `waived` with the
     PM's superseding words as the ruling. A `post_commit` item whose acts are within
-    `{commit, sha_reply, baton_archive, plan_implemented}` is written as `met` (the landed commit
+    `{commit, sha_reply, baton_archive, plan_implemented, bug_close}` is written as `met` (the landed commit
     is the act, and the landing performs the lifecycle acts); one naming
     `sha_memo` is `partial`, the engine sending no memo. A `not_met` item whose `remaining` is only
     post-commit acts reads as `post_commit` (`normalize_verdict`). Every judged row gets

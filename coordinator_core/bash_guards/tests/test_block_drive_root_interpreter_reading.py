@@ -91,6 +91,24 @@ def test_interpreter_write_to_new_msys_literal_still_denied(fake_fs):
     assert "'brand-new'" in res["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+SPACED_READ = (
+    'D="/c/Program Files/Epic Games/UE_5.8/Engine"; ls -la "$D"; '
+    "python -I - \"$D\" <<EOF\nimport json,sys\njson.load(open(sys.argv[1] + '/x.json'))\nEOF"
+)
+
+
+def test_quoted_msys_path_with_space_is_one_word_when_reading(fake_fs):
+    fake_fs.update({"c:\\", "c:\\program files"})  # abs-path-ok: in-memory fake drive table
+    assert _enveloped(guard.check)(_payload(SPACED_READ, "C:\\")) is None
+
+
+def test_quoted_msys_path_with_space_naming_a_new_folder_still_denied(fake_fs):
+    fake_fs.add("c:\\")  # abs-path-ok: in-memory fake drive table
+    res = _enveloped(guard.check)(_payload(SPACED_READ, "C:\\"))
+    assert res is not None
+    assert "'Program Files'" in res["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_bash_only_mkdir_uses_msys_reading(fake_fs):
     assert _enveloped(guard.check)(_payload("mkdir -p /e/example-retrieval-repo/x", "F:\\dev")) is None
     assert _enveloped(guard.check)(_payload("mkdir -p /e/brand-new/x", "F:\\dev")) is not None

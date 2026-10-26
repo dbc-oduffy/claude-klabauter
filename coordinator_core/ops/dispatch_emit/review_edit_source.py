@@ -88,6 +88,28 @@ def session_agent_writes(
     return None if got is None else got[1]
 
 
+def sole_run_attested_writes(
+    worktree_root: Path, session_id: Optional[str], run_id: Optional[str], since: Optional[float]
+) -> frozenset[str]:
+    """Paths the engine's touch record attributes to the session's review agents, when no other
+    run holds this session: with a single run in the session every such write is that run's.
+    Empty when another run of the session is held, the run is unnamed, or the record cannot answer."""
+    if not session_id or not run_id:
+        return frozenset()
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    try:
+        records = run_token.held_records(worktree_root)
+    except Exception:  # noqa: BLE001 -- unreadable run tokens cannot prove the run is alone
+        return frozenset()
+    if any(r.get("session_id") == session_id and r.get("run_id") != run_id for r in records):
+        return frozenset()
+    by_agent = session_agent_writes(worktree_root, session_id, since)
+    if not by_agent:
+        return frozenset()
+    return frozenset(p for paths in by_agent.values() for p in paths)
+
+
 def _collect(
     worktree_root: Path, session_id: Optional[str], since: Optional[float]
 ) -> Optional[tuple[dict[str, str], dict[str, set[str]]]]:

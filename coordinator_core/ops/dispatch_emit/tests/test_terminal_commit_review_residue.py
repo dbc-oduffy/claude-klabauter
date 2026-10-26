@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import review_edits, run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -27,11 +28,8 @@ RUN = "run-review-residue"
 STRAY = "elsewhere/tests/test_stray.py"
 FOREIGN = "foreign/other_run.py"
 EARLIER = "elsewhere/tests/earlier.py"
-_REVIEWED = {
-    "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
-    "reverify": {"edited": [STRAY, "elsewhere/tests/gone.py"]},
-}
-_UNLISTED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 1}
+_REVIEWED = {**reviewed(), "reverify": {"edited": [STRAY, "elsewhere/tests/gone.py"]}}
+_UNLISTED = {**reviewed(), "fixes": 1}
 
 
 def _git(args, cwd: Path) -> str:

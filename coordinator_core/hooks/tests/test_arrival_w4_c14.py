@@ -7,9 +7,9 @@ import pytest
 
 
 def _stop_message(out):
-    """A Stop-event envelope carries its text at top-level systemMessage (advisory) or reason (deny)."""
+    """A Stop-event envelope carries its advisory at top-level systemMessage; Stop drops hookSpecificOutput."""
     assert "hookSpecificOutput" not in out
-    return out.get("systemMessage") or out.get("reason")
+    return out.get("systemMessage")
 
 
 def _run(coro):

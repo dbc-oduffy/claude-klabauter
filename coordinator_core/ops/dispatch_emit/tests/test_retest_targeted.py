@@ -419,8 +419,8 @@ def test_runner_tier_option_is_dropped_so_no_default_collection_is_added(repo, t
 
 def test_scopes_split_one_command_per_conftest_root(repo):
     _two_roots(repo, "")
-    argvs = retest_targeted._launch_argv(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"])
-    assert [a[-1] for a in argvs] == ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"]
+    _base, groups = retest_targeted._launch_plan(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"])
+    assert [g[-1] for g in groups] == ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"]
 
 
 def test_runner_script_survives_root_stripping(repo):
@@ -446,7 +446,7 @@ def _warm_args(tmp_path: Path, repo: Path) -> list[str]:
 
 
 def _no_launch(monkeypatch):
-    monkeypatch.setattr(retest_targeted, "_launch_argv", lambda *a, **k: pytest.fail("warm path must not launch"))
+    monkeypatch.setattr(retest_targeted, "_launch_plan", lambda *a, **k: pytest.fail("warm path must not launch"))
 
 
 def test_warm_entry_records_running_and_spawns_without_launching(repo, tmp_path, monkeypatch):
@@ -566,14 +566,110 @@ def test_declared_launcher_runs_once_with_all_ids_when_scopes_do_not_conflict(re
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
     _declare(repo, targeted_test_launcher="scripts/run.py")
-    argvs = retest_targeted._launch_argv(repo, ["test_a.py", "sub/test_s.py"])
-    assert len(argvs) == 1 and argvs[0][-2:] == ["test_a.py", "sub/test_s.py"]
+    _base, groups = retest_targeted._launch_plan(repo, ["test_a.py", "sub/test_s.py"])
+    assert groups == [["test_a.py", "sub/test_s.py"]]
 
 
 def test_declared_launcher_splits_only_when_conftests_collide(repo):
     _two_conftest_launcher(repo)
-    argvs = retest_targeted._launch_argv(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py"])
-    assert [a[-1] for a in argvs] == ["rootx/test_rootx.py", "rooty/test_rooty.py"]
+    _base, groups = retest_targeted._launch_plan(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py"])
+    assert [g[-1] for g in groups] == ["rootx/test_rootx.py", "rooty/test_rooty.py"]
+
+
+def _one_conftest_sub(repo: Path) -> None:
+    (repo / "sub").mkdir()
+    (repo / "sub" / "conftest.py").write_text("", encoding="utf-8")
+    (repo / "sub" / "test_s.py").write_text("def test_s():\n    pass\n", encoding="utf-8")
+
+
+def _main_calls(repo, tmp_path, tests):
+    calls = []
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", tests, "--repo-root", str(repo), "--detached-child"],
+        run=lambda argv, cwd, **_kw: calls.append(argv) or 0)
+    return rc, calls
+
+
+def test_main_runs_one_session_when_scopes_do_not_conflict(repo, tmp_path):
+    _one_conftest_sub(repo)
+    rc, calls = _main_calls(repo, tmp_path, "test_a.py,sub/test_s.py")
+    assert rc == 0 and len(calls) == 1
+    assert calls[0][-2:] == ["test_a.py", "sub/test_s.py"]
+
+
+def test_main_declared_launcher_runs_one_session_when_scopes_do_not_conflict(repo, tmp_path):
+    _one_conftest_sub(repo)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
+    _declare(repo, targeted_test_launcher="scripts/run.py")
+    rc, calls = _main_calls(repo, tmp_path, "test_a.py,sub/test_s.py")
+    assert rc == 0 and len(calls) == 1
+    assert calls[0][-2:] == ["test_a.py", "sub/test_s.py"]
+
+
+def test_main_conflicting_scopes_run_one_session_per_scope(repo, tmp_path):
+    _two_roots(repo, "")
+    rc, calls = _main_calls(repo, tmp_path, "rootx/test_rootx.py,rooty/test_rooty.py,test_a.py")
+    assert rc == 0 and len(calls) == 3
+    assert [c[-1] for c in calls] == ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"]
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_launch_plan_fast_cmd_keep_tier_changes_base_only(repo, monkeypatch, conflicting):
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python scripts/run-tests.py --tier fast")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
+    if conflicting:
+        _two_roots(repo, "")
+        tests = ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"]
+    else:
+        _one_conftest_sub(repo)
+        tests = ["test_a.py", "sub/test_s.py"]
+    dropped = retest_targeted._launch_plan(repo, tests)
+    kept = retest_targeted._launch_plan(repo, tests, keep_tier=True)
+    assert "--tier" in kept[0] and "--tier" not in dropped[0]
+    assert kept[1] == dropped[1]
+    assert len(dropped[1]) == (3 if conflicting else 1)
+
+
+def test_launch_plan_unresolved_declared_launcher_returns_reason(repo):
+    _declare(repo, targeted_test_launcher="scripts/missing.py")
+    assert isinstance(retest_targeted._launch_plan(repo, ["test_a.py"]), str)
+
+
+_TIER_CMD = "python scripts/run-tests.py --tier fast"
+
+
+def _tier_runner(repo, monkeypatch, tmp_path, codes):
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
+    keep_calls = []
+    real = retest_targeted._launch_plan
+
+    def spy(root, tests, *, keep_tier=False):
+        if keep_tier:
+            keep_calls.append(tests)
+        return real(root, tests, keep_tier=keep_tier)
+
+    monkeypatch.setattr(retest_targeted, "_launch_plan", spy)
+    rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, codes, cmd=_TIER_CMD)
+    return rc, calls, rec, keep_calls
+
+
+def test_multi_group_rc2_retries_only_that_group_with_tier_kept(repo, tmp_path, monkeypatch):
+    rc, calls, rec, keep_calls = _tier_runner(repo, monkeypatch, tmp_path, [0, 2, 0, 0])
+    assert rc == 0 and rec["status"] == "pass" and len(calls) == 4
+    argvs = [c[0] for c in calls]
+    assert [("--tier" in a) for a in argvs] == [False, False, True, False]
+    assert argvs[2][-1] == "rooty/test_rooty.py" and calls[2][2] is True
+    assert argvs[1][-1] == "rooty/test_rooty.py" and argvs[3][-1] == "test_a.py"
+    assert len(keep_calls) == 1
+
+
+def test_two_rc2_groups_plan_keep_tier_once(repo, tmp_path, monkeypatch):
+    rc, calls, rec, keep_calls = _tier_runner(repo, monkeypatch, tmp_path, [2, 0, 2, 0, 0])
+    assert rc == 0 and len(calls) == 5
+    assert len(keep_calls) == 1
 
 
 def _fake_runner(repo, monkeypatch, tmp_path, codes, tests="rootx/test_rootx.py,rooty/test_rooty.py,test_a.py",

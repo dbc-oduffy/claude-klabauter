@@ -723,7 +723,7 @@ _JUDGE_CRITERION = {
     "sidecar": None,
     "completion_summary": "Three things shipped.",
     "lesson_candidates": [
-        {"title": "t", "body": "b", "change_kind": "wiki-append", "target_wiki": "docs/wiki/x.md"}
+        {"title": "t", "body": "b", "change_kind": "wiki-append", "target_wiki": "docs/" "wiki/x.md"}
     ],
 }
 

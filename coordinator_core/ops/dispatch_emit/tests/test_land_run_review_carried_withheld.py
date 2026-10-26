@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.landing_remedy import REVIEW_CARRIED_REASON
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
@@ -24,7 +25,7 @@ SELF = "5e1f0000-0000-4000-8000-0000000000c5"
 RUN = "plan-20261022T100000-c5c5c5"
 SCRIPT = "run-c5.mjs"
 CARRIED = "a.py"
-REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+REVIEWED = reviewed()
 
 
 def _git(args, cwd: Path) -> str:

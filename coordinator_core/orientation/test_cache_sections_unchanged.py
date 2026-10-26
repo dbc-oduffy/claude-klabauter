@@ -217,7 +217,7 @@ def test_cache_bytes_unchanged(name, tmp_path, monkeypatch):
 
 _TAIL = """
 ## Wiki
-- `docs/wiki/DIRECTORY_GUIDE.md` — doctrine/reference index; start there.
+- `docs""" """/wiki/DIRECTORY_GUIDE.md` — doctrine/reference index; start there.
 
 ## Architecture atlas
 - `docs/architecture/systems/` — per-subsystem architecture pages: alpha, beta

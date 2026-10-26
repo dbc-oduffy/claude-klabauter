@@ -364,8 +364,8 @@ def _run_written(worktree_root: Path, session_id: Optional[str], run_id: str) ->
                         event.verb == touch_record.VERB_TOUCH and event.kind != touch_record.KIND_READ
                         and event.timestamp >= since
                     ):
-                        rel = review_edits._norm(event.path)
-                        if not review_edits._out_of_worktree(rel) and not rel.startswith("scratch/"):
+                        rel = review_edits.norm(event.path)
+                        if not review_edits.out_of_worktree(rel) and not rel.startswith("scratch/"):
                             found.add(rel)
         return sorted(found)
     except Exception:  # noqa: BLE001 -- an unreadable source names no path
@@ -557,16 +557,16 @@ def _post_checkpoint_candidates(
         writes = row.get("writes") if isinstance(row, dict) else None
         declared.extend(w for w in writes or () if isinstance(w, str))
     declared.extend(p for p in doc.get("review_declared_paths") or () if isinstance(p, str))
-    declared = [review_edits._norm(p) for p in declared]
+    declared = [review_edits.norm(p) for p in declared]
     baseline = _manifest_baseline(root / record_dir_rel, doc)
     stale = set(write_baseline.unwritten(root, baseline, declared)) if baseline else set()
     prior = kept_work.read(root / record_dir_rel)[kept_work.POST_CHECKPOINT_KEY]
-    owned = {review_edits._norm(p) for p in excluded_owners}
+    owned = {review_edits.norm(p) for p in excluded_owners}
     out: dict = {}
     for raw in (*[p for p in declared if p not in stale], *review_literals, *run_written, *prior):
-        rel = review_edits._norm(raw)
+        rel = review_edits.norm(raw)
         if (
-            not rel or review_edits._out_of_worktree(rel) or rel == "scratch" or rel.startswith("scratch/")
+            not rel or review_edits.out_of_worktree(rel) or rel == "scratch" or rel.startswith("scratch/")
             or rel.startswith(record_dir_rel + "/") or rel in owned
         ):
             continue
@@ -842,7 +842,7 @@ def _land(
     baton_reply: dict = {"run_baton": baton_error} if baton_error is not None else {}
     review_written = _review_written(worktree_root, session_id, run_id)
     review_literals = [] if review_written is None else [
-        p for p in review_written if not review_edits._out_of_worktree(review_edits._norm(p))
+        p for p in review_written if not review_edits.out_of_worktree(review_edits.norm(p))
     ]
     run_written = _run_written(worktree_root, session_id, run_id)
     request, _ = _run_request(worktree_root, params.get("script_path"))
@@ -850,7 +850,7 @@ def _land(
     coded, coded_error = _coded_rows(worktree_root, halted)
     coded_reply: dict = {"coded_rows_unreadable": coded_error} if coded_error else {}
     uncoded_dirt = [
-        review_edits._norm(p) for p, cid in request_owned.items() if p not in owner and cid not in coded
+        review_edits.norm(p) for p, cid in request_owned.items() if p not in owner and cid not in coded
     ]
     manifest_doc = _manifest_doc(worktree_root / record_dir_rel)
     post_candidates = _post_checkpoint_candidates(
@@ -914,7 +914,7 @@ def _land(
     em_withheld = _withhold_reasons(worktree_root, artifacts, record_dir_rel)
     withheld.update({
         p: em_withheld[p]
-        for p in (*product, *gone, *art_paths, *art_deleted, *(n for n in map(review_edits._norm, review_literals) if n in snapshot.changed))
+        for p in (*product, *gone, *art_paths, *art_deleted, *(n for n in map(review_edits.norm, review_literals) if n in snapshot.changed))
         if p in em_withheld
     })
 
@@ -1039,7 +1039,6 @@ def _land(
             landed_classes[cls] = landed_classes.get(cls, 0) + 1
     review_reply: dict = {}
     unlanded: dict = {}
-    review_landed: list = []
     if review_written is None:
         review_reply["review_edits"] = None
     else:
@@ -1048,40 +1047,21 @@ def _land(
             committed=set(paths) | set(deleted), sibling_declared=sibling, contested=set(),
             present=lambda p: (worktree_root / p).is_file(),
         )
-        unlanded = {p: HALT_RUN_REASON for p in sorted(verdict.halt)}
-        stageable = [p for p in verdict.land if p != "scratch" and not p.startswith("scratch/") and p not in withheld]
+        # A halted run lands its halt record and declared writes only; review edits stay in the tree.
+        unlanded = {p: HALT_RUN_REASON for p in sorted({*verdict.halt, *verdict.land})}
+        probe = [p for p in verdict.land if p != "scratch" and not p.startswith("scratch/")]
         review_holds: list = []
-        review_warnings = commit_v2._peer_claim_warnings(
-            worktree_root, stageable, review_holds, own_sid=session_id
-        )
-        review_held = {p for p, _sid in review_holds}
-        for p in stageable:
-            if p in review_held:
-                unlanded[p] = "peer-held"
-                withheld[p] = "peer-held"
-            elif any(
-                w.startswith("claim state indeterminate")
-                and (w.startswith("claim state indeterminate (") or f"claim state indeterminate for {p!r}" in w)
-                for w in review_warnings
-            ):
-                unlanded[p] = "peer-claim-indeterminate"
-                withheld[p] = "peer-claim-indeterminate"
-            else:
-                review_landed.append(p)
-        unlanded.update({p: HALT_RUN_REASON for p in verdict.land if p not in stageable})
-        paths = paths + [p for p in review_landed if p not in paths]
-        if review_landed:
-            landed_classes["review-edit"] = len(review_landed)
+        if probe:
+            commit_v2._peer_claim_warnings(worktree_root, probe, review_holds, own_sid=session_id)
+        for p, _sid in review_holds:
+            unlanded[p] = "peer-held"
+            withheld[p] = "peer-held"
     review_reply["review_edits_unlanded"] = unlanded
 
     # Trap: taken before _record_kept appends kept.json/returns.json to ``paths``; the record files are
     # never post-checkpoint candidates, so they must not count as landed here.
     landed_now = set(paths) | set(deleted)
     _withhold_run_dirt(withheld, [*run_written, *post_candidates, *uncoded_dirt], snapshot.changed, landed_now)
-    eviction = plan_tree_eviction(
-        worktree_root, record_dir_rel, run_written, snapshot.changed,
-        [*run_written, *owner, *declared], withheld, paths,
-    )
 
     if process_withheld:
         process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
@@ -1099,8 +1079,7 @@ def _land(
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
         _record_withheld_prints(worktree_root, record_dir_rel, withheld, paths)
     kept_reply = _record_kept(
-        worktree_root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
-        halted, paths, params.get(CONSUMED_RETURNS_PARAM),
+        worktree_root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM),
         post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
         common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
     )
@@ -1119,19 +1098,11 @@ def _land(
         message += "\nLands-Artifacts: " + ", ".join(f"{c}={n}" for c, n in sorted(landed_classes.items()))
     if deleted:
         message += "\nRemoves: " + ", ".join(deleted)
-    if eviction is not None:
-        try:
-            eviction.apply()
-        except OSError as exc:
-            return _error(f"evicting unimportable run bytes failed: {exc}", **base)
-        extra_evicted = {"evicted": eviction.evicted, **({"unimportable_unowned": eviction.unowned} if eviction.unowned else {})}
-    else:
-        extra_evicted = {}
     commit_params: dict = {"paths": paths, "message": message, "carry_stopped_runs": False}
     if deleted:
         commit_params["deleted_paths"] = deleted
         commit_params["declared_reverts"] = deleted
-    if product or art_paths or review_landed:
+    if product or art_paths:
         commit_params["ignored_untracked"] = snapshot.ignored_among(paths)
     if session_id is not None:
         commit_params["session_id"] = session_id
@@ -1148,7 +1119,7 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **coded_reply, **kept_reply, **extra_evicted}
+    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **coded_reply, **kept_reply}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         extra.update(_baton_cascade(worktree_root, repo_root, run_id))

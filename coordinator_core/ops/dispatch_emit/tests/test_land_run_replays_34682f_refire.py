@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, UNCHANGED_SINCE_HALT_REASON
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import halted  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_product_changes import (
@@ -23,7 +24,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_prod
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SID = "11111111-2222-3333-4444-555555555555"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = reviewed()
 REFUSED = [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 

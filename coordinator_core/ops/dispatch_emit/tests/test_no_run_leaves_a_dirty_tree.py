@@ -21,11 +21,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = reviewed()
 RUN = "ask-20261016T120000-aaaaaa"
 OLD_RUN = "ask-20261016T100000-bbbbbb"
 SIZING = "state/sizings/2026-10-16-x.yaml"
@@ -303,10 +304,25 @@ def test_a_review_written_file_outside_every_declared_path_is_committed_or_named
         seed = _git(["rev-list", "--max-parents=0", "HEAD"], repo).strip()
         assert f"Review-Residue: {REVIEW_FILE}" in _git(["log", f"{seed}..HEAD", "--format=%B"], repo)
     else:
-        assert reply.get("review_edits_unlanded") == {REVIEW_FILE: "halted-run"}, reply
-    if dirty:
-        assert reply.get("ok") is False or reply.get("refused") or reply.get("review_edits_unlanded"), reply
-        assert REVIEW_FILE in json.dumps(reply), reply
+        assert reply["review_edits_unlanded"] == {REVIEW_FILE: "halted-run"}, reply
+        seed = _git(["rev-list", "--max-parents=0", "HEAD"], repo).strip()
+        assert REVIEW_FILE not in _git(["log", f"{seed}..HEAD", "--name-only", "--format="], repo).split(), reply
+        tree_dirty = {
+            line[3:] for line in _git(["status", "--porcelain", "--untracked-files=all"], repo).splitlines() if line
+        }
+        assert tree_dirty == {REVIEW_FILE}, (tree_dirty, reply)
+
+
+def test_a_review_write_stays_unclaimed_while_another_run_holds_the_session(repo):
+    _setup("completed", repo)
+    _prepare_ask_commit(repo)
+    _author_review_edit(repo)
+    run_token.mint(repo, OLD_RUN, "other.mjs", session_id=SESSION)
+
+    reply = _land_completed(repo)
+
+    assert "review_residue" not in reply, reply
+    assert _git(["status", "--porcelain", "--untracked-files=all", "--", REVIEW_FILE], repo).strip()
 
 
 def test_the_review_edit_oracle_goes_red_when_the_source_cannot_see_the_touch_record(repo, monkeypatch):
@@ -331,7 +347,7 @@ def test_the_composed_halt_call_still_carries_the_plan_and_doc_paths(monkeypatch
     script = ask_compose.compose_ask_script(
         repo_root="REPO", prompt=None, sizing_rel=SIZING, run_id="run-1", session_id=None,
         wrap_stage=lambda _t: (blitz, ["Size", "Plan"]), plan_blitz_text="stub",
-        script_path="scratch/warp/x.mjs", in_run_commit=True, **REVIEW_KW,
+        script_path="scratch/warp/x.mjs", in_run_commit=True, **{**REVIEW_KW, "run_base_sha": "a" * 40},
     )
 
     assert f"{HALT_PLAN_FIELD}: _planRel" in script

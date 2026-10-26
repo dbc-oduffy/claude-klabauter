@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -17,7 +18,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 2, "fixes": 0}
+_REVIEWED = {**reviewed(), "slices": 2}
 
 
 def _git(args, cwd: Path) -> str:

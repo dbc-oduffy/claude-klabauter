@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.review_mint import wave_bookkeeping
 from coordinator_core.session import touch_record
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -92,6 +93,7 @@ def _fire(tmp_path, monkeypatch, recorded: str) -> tuple:
             "run_id": "run-1", "run_token": token,
             "inline_review": {
                 "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+                "wave_reviews": reviewed()["wave_reviews"],
                 "prep_sidecar": "prep.md", "plan_id": "pln-ex-abc123",
                 "wave_sidecar_paths": ["w.md"],
             },

@@ -328,11 +328,7 @@ def _resolve_override_keys_doc_display() -> str:
     that preferred an absolute, machine-resolved path to a trivial return of
     the repo-qualified ``OVERRIDE_KEYS_DOC_DISPLAY`` constant. The absolute
     form was strictly worse than this hint on every axis that matters for a
-    guard MESSAGE (as opposed to a command a reader pastes and runs, e.g.
-    ``block_unauthorized_claude_md_write._grant_cli_invocation()``, which
-    legitimately still resolves an absolute, in-process root because that
-    text is only ever read on the SAME machine that renders it, immediately,
-    by the operator about to run it): it leaked this operator's home
+    guard MESSAGE: it leaked this operator's home
     directory and repo name into every guard firing, AND it only resolved
     correctly in the process that rendered it -- wrong on Windows, wrong for
     any other username, wrong for any other checkout location. See

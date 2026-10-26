@@ -11,6 +11,7 @@ import yaml
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops import review_stamp
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -54,6 +55,7 @@ def _review(base: str, files: int) -> dict:
     return {
         "integration_stem": "pln-x-123456.review-wave-bookkeeping", "slices": 1, "fixes": 0,
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
+        "wave_reviews": reviewed()["wave_reviews"],
         "prep": {"run_base_sha": base, "product_files": files, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": files, "claims_unbacked": 0},
         "tests": {"status": "pass", "run": 2, "failed": 0, "sidecar": "t.md"},

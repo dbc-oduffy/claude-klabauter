@@ -27,7 +27,9 @@ SELF = "wh-self"
 RUN = "ask-20261016T110000-bbbbbb"
 OLD_RUN = "ask-20261016T100000-aaaaaa"
 SIZING = "state/sizings/s.yaml"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+
+_REVIEWED = reviewed()
 
 
 def _git(args, cwd: Path) -> str:

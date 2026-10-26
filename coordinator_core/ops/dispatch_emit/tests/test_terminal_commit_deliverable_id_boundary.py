@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
     valid_deliverable_id,
 )
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -72,7 +73,7 @@ def _run(
     (repo / "run.mjs").write_text(render_marker(req) + "\n", encoding="utf-8")
     head = _git(["rev-parse", "HEAD"], repo)
     out = terminal_commit._handler(
-        {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}},
+        {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": reviewed()},
         repo_root=repo / ".git"
     )
     return out, head

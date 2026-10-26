@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     record_dir,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import (  # noqa: F401
     RUN2,
     _second_run,
@@ -121,7 +122,7 @@ def _terminal_with(root, token: str, resume: dict, verdict: dict) -> dict:
     return land_run._handler(
         {
             "script_path": "run2.mjs", "run_id": RUN2, "run_token": token, "incomplete_chunks": [],
-            "inline_review": {"integration_stem": "rev-stem", "slices": 1, "fixes": 0},
+            "inline_review": reviewed(),
             "session_id": "11111111-2222-3333-4444-555555555555", "ledger_verdict": verdict,
             "resume_ledger": resume,
         },

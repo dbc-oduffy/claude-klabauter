@@ -119,6 +119,8 @@ def _migrate_family(
     names, existing_titles = _existing_state(family_dir)
     confined_dir = family_dir.resolve()
     seen: Set[str] = set()
+    # Every entry shares one output dir; resolve() is a per-call realpath, so memoise it per dirname.
+    resolved_dirs: Dict[str, Path] = {}
 
     for row in parsed.rows:
         cand = fill_fields(family, row)
@@ -156,7 +158,10 @@ def _migrate_family(
             continue
 
         if not dry_run:
-            out_dir = Path(prepared.out_path).resolve().parent
+            raw_dir = os.path.dirname(prepared.out_path)
+            out_dir = resolved_dirs.get(raw_dir)
+            if out_dir is None:
+                out_dir = resolved_dirs[raw_dir] = Path(raw_dir).resolve()
             if out_dir != confined_dir:
                 return report, (
                     f"queue entry path {prepared.out_path!r} is outside {str(confined_dir)!r}; "

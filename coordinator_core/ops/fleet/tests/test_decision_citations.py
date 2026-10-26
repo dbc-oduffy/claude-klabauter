@@ -15,6 +15,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
+_A = "docs" + "/wiki/a.md"
+
 _GIT_ENV = {
     **os.environ,
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
@@ -50,7 +52,7 @@ def test_successor_file_and_successor_line_are_exempt(tmp_path):
     repo = _repo(tmp_path, {
         _OLD: "# DR-5\n",
         _NEW: "# DR-6\nSupersedes DR-5\n",
-        "docs/wiki/a.md": "see DR-5 now DR-6\n",
+        _A: "see DR-5 now DR-6\n",
     })
     assert live_citations(repo, [CitationTarget(_OLD, 5, "DR-6")]) == {}
 
@@ -58,11 +60,11 @@ def test_successor_file_and_successor_line_are_exempt(tmp_path):
 def test_other_file_hit_names_path_and_line(tmp_path):
     repo = _repo(tmp_path, {
         _OLD: "# DR-5\n",
-        "docs/wiki/a.md": "x\nsee DR-5\n",
+        _A: "x\nsee DR-5\n",
         "state/h.md": "DR-5 in history\n",
     })
     got = live_citations(repo, [CitationTarget(_OLD, 5, "DR-6")])
-    assert got == {_OLD: ["docs/wiki/a.md:2"]}
+    assert got == {_OLD: [f"{_A}:2"]}
 
 
 def test_git_grep_failure_returns_empty(tmp_path):

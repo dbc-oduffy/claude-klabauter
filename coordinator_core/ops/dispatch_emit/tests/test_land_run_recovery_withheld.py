@@ -93,6 +93,32 @@ def test_an_exhausted_record_below_the_cap_does_not_back_the_param(repo):
     assert out["refused"] == "recovery-withheld-unbacked", out
 
 
+def test_a_no_progress_exhausted_record_below_the_cap_backs_the_param(repo):
+    from coordinator_core.ops.dispatch_emit import self_correction as sc
+
+    base._write(repo, "b.py", "b\n")
+    base._write(repo, "c.py", "c\n")
+    _chunks(repo, {"C1": ["a.py"], "C2": ["b.py"], "C3": ["c.py"]})
+    _record(repo, {"C3": {**_exhausted(), "attempts": 1, "last_reason": sc.NO_PROGRESS}})
+
+    out = _call(repo, **{lr.RECOVERY_WITHHELD_PARAM: ["C3"]})
+
+    assert out["committed"] is True, out
+    assert out["recovery"]["withheld"] == {"C3": f"{sc.NO_PROGRESS} (1 attempts): {sc.NO_PROGRESS}"}
+
+
+def test_a_no_progress_reason_at_zero_attempts_does_not_back_the_param(repo):
+    from coordinator_core.ops.dispatch_emit import self_correction as sc
+
+    base._write(repo, "c.py", "c\n")
+    _chunks(repo, {"C1": ["a.py"], "C3": ["c.py"]})
+    _record(repo, {"C3": {**_exhausted(), "attempts": 0, "last_reason": sc.NO_PROGRESS}})
+
+    out = _call(repo, **{lr.RECOVERY_WITHHELD_PARAM: ["C3"]})
+
+    assert out["refused"] == "recovery-withheld-unbacked", out
+
+
 def test_a_finished_chunk_importing_the_exhausted_chunks_new_module_is_withheld_not_refused(repo):
     _package(repo)
     base._write(repo, "pkg/new_mod.py", "X = 1\n")

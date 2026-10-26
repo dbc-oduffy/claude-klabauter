@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import
     PLAN,
     RUN,
     SIZING,
+    WAVE_REVIEW,
     _git,
     _write,
     repo,
@@ -36,9 +37,9 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _SID = "11111111-2222-3333-4444-555555555555"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0, "wave_reviews": [WAVE_REVIEW]}
 _MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
-
+_MET_FOREIGN = {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": "f" * 40}]}
 
 B = "README.md"
 
@@ -74,11 +75,11 @@ def _refire(root, *, edit: bool = True) -> dict:
     return {"token": token, "head_sha": manifest["head_sha"]}
 
 
-def _terminal(root, token: str, resume: dict) -> dict:
+def _terminal(root, token: str, resume: dict, ledger_verdict: dict = _MET) -> dict:
     return land_run._handler(
         {
             "script_path": "run2.mjs", "run_id": RUN2, "run_token": token, "incomplete_chunks": [],
-            "inline_review": _REVIEWED, "session_id": _SID, "ledger_verdict": _MET,
+            "inline_review": _REVIEWED, "session_id": _SID, "ledger_verdict": ledger_verdict,
             "resume_ledger": resume,
         },
         repo_root=root / ".git",
@@ -118,10 +119,20 @@ def test_met_refire_that_changed_nothing_is_still_refused_and_names_the_since_ha
     refire = _refire(halted, edit=False)
     head = _git(halted, "rev-parse", "HEAD")
 
-    out = _terminal(halted, refire["token"], resume)
+    out = _terminal(halted, refire["token"], resume, _MET_FOREIGN)
 
     assert out["committed"] is False and out["refused"] == "ledger-unmet", out
     assert out["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
     assert out["since_halt"]["outcome"] == "unchanged", out
     assert out["since_halt"]["base"] and out["since_halt"]["base_source"] in {"param", "resolved", "stage-head"}
     assert _git(halted, "rev-parse", "HEAD") == head
+
+
+def test_bare_met_unchanged_refire_closes_as_already_landed(halted):  # noqa: F811
+    resume = _composed(halted)
+    refire = _refire(halted, edit=False)
+
+    out = _terminal(halted, refire["token"], resume)
+
+    assert out.get("refused") is None and out["committed"] is True, out
+    assert out.get("ledger_failures") in (None, []), out

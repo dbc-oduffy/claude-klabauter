@@ -23,7 +23,8 @@ import yaml
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 DLV = "dlv-alpha-aaaaaa"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+_REVIEWED = reviewed()
 
 
 def _git(args, cwd, check=True):

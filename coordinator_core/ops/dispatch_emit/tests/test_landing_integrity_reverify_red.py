@@ -82,6 +82,28 @@ def test_mixed_pre_existing_and_caused_names_only_the_caused_id(tmp_path):
     assert f"{TEST}::new" in found[0].detail and f"{TEST}::old" not in found[0].detail
 
 
+def test_foreign_only_red_over_a_landing_path_gives_none(tmp_path):
+    _tree(tmp_path)
+    ids = [f"{TEST}::a", f"{TEST}::b"]
+    p = _params(status_after="fail", failing=ids, **{li.FOREIGN_FIELD: ids})
+    assert li.reverify_red_findings(tmp_path, p, [LANDED]) == []
+
+
+def test_mixed_foreign_and_owned_names_only_the_owned_id(tmp_path):
+    _tree(tmp_path)
+    p = _params(status_after="fail", failing=[f"{TEST}::theirs", f"{TEST}::mine"],
+                **{li.FOREIGN_FIELD: [f"{TEST}::theirs"]})
+    found = li.reverify_red_findings(tmp_path, p, [LANDED])
+    assert len(found) == 1
+    assert f"{TEST}::mine" in found[0].detail and f"{TEST}::theirs" not in found[0].detail
+
+
+def test_record_without_foreign_key_still_refuses(tmp_path):
+    _tree(tmp_path)
+    p = _params(status_after="fail", failing=[f"{TEST}::a"])
+    assert len(li.reverify_red_findings(tmp_path, p, [LANDED])) == 1
+
+
 def test_fail_with_empty_failing_still_trips_the_naming_trap(tmp_path):
     _tree(tmp_path)
     found = li.reverify_red_findings(tmp_path, _params(status_after="fail", failing=[], pre_existing=[]), [LANDED])

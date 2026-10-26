@@ -715,7 +715,10 @@ def _read_deliverable_id_from_frontmatter(full_path: Union[str, Path]) -> str:
 
 
 def _resolve_deliverable_id_from_paths(
-    paths: Optional[Sequence[str]], cwd: Union[str, Path]
+    paths: Optional[Sequence[str]],
+    cwd: Union[str, Path],
+    session_id: str = "",
+    git_dir: str = "",
 ) -> str:
     """Tier-0 fallback: resolve straight off the committed artifact(s), not
     the session.
@@ -748,16 +751,41 @@ def _resolve_deliverable_id_from_paths(
     it run exactly as they did before this tier existed, same as the
     empty/no-match case above. No trailer is stamped from a divergent
     pathspec; nothing raises.
+
+    Contention gate (DR-207): when `session_id` is given, an artifact claimed
+    by a DIFFERENT session (`claim_state.resolve_claim_state` holder) is
+    dropped from consideration, so a write-through into a peer's artifact does
+    not enroll this commit in the peer's chain. Unclaimed or self-claimed is
+    not contention. A failed claim lookup keeps the artifact's id (the
+    pre-gate behaviour); omitting `session_id` skips the gate. `git_dir` is
+    forwarded as `resolve_claim_state`'s `common_dir`; empty means the lookup
+    resolves it itself.
     """
     if not paths:
         return ""
+
+    resolve_claim_state = None
+    if session_id:
+        try:
+            from coordinator_core.claim_state import resolve_claim_state
+        except Exception:
+            resolve_claim_state = None
+    common_dir = Path(git_dir) if git_dir else None
 
     found: dict[str, str] = {}
     for rel_path in paths:
         full_path = Path(cwd) / rel_path
         deliverable_id = _read_deliverable_id_from_frontmatter(full_path)
-        if deliverable_id:
-            found[str(rel_path)] = deliverable_id
+        if not deliverable_id:
+            continue
+        if resolve_claim_state is not None:
+            try:
+                holder = resolve_claim_state(full_path, common_dir=common_dir).holder
+            except Exception:
+                holder = None
+            if holder and holder != session_id:
+                continue
+        found[str(rel_path)] = deliverable_id
 
     # When two or more paths carry the same raw value, the raw value is
     # chosen deterministically -- sorted by repo-relative path -- so the
@@ -836,7 +864,7 @@ def _resolve_deliverable_id(
     `git_dir`, ONLY that `git_dir`'s pickup tier is skipped; the claimed-plan
     tier (tier 3) below still runs unconditionally on the pickup gate (it is
     gated only by the plan-claim ambiguity gate above, unchanged)."""
-    deliverable_id = _resolve_deliverable_id_from_paths(paths, cwd)
+    deliverable_id = _resolve_deliverable_id_from_paths(paths, cwd, session_id, git_dir)
     if deliverable_id:
         return deliverable_id
 

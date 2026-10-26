@@ -197,7 +197,15 @@ def test_main_prints_one_verdict_line_and_writes_only_scratch(tmp_path, capsys):
         (root / rel).write_text("x\n", encoding="utf-8")
     _event(sessions, SID_A, "T", "src/one.py")
     _event(sessions, SID_B, "T", "src/two.py")
-    before = {p for p in root.rglob("*") if p.is_file() and "scratch" not in p.parts}
+    def _tracked_files():
+        # `claim_index.lookup` builds its index beside the sessions dir; that is production state.
+        return {
+            p for p in root.rglob("*")
+            if p.is_file() and "scratch" not in p.parts
+            and not any(part.endswith("-claim-index") for part in p.parts)
+        }
+
+    before = _tracked_files()
     stamp = {p: p.stat().st_mtime_ns for p in before}
     code = spike.main([
         "--samples", "3", "--work-dir", "scratch/w", "--repo-root", str(root),
@@ -208,7 +216,7 @@ def test_main_prints_one_verdict_line_and_writes_only_scratch(tmp_path, capsys):
     assert len(verdicts) == 1 and out[-1] == verdicts[0]
     assert code == (0 if "AT-BAR" in verdicts[0] else 1)
     assert "parity vs today_split: P ok  J ok" in out
-    after = {p for p in root.rglob("*") if p.is_file() and "scratch" not in p.parts}
+    after = _tracked_files()
     assert after == before and {p: p.stat().st_mtime_ns for p in after} == stamp
     assert (root / "scratch" / "w" / "J" / "journal.json").is_file()
     assert os.path.isdir(root / "scratch" / "w" / "P")

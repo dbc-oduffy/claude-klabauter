@@ -232,6 +232,18 @@ def _is_delete_operand(prefix: str) -> bool:
     return bool(_DELETE_CALL_RE.search(prefix) or _DELETE_CMD_RE.search(re.split(r"[;&|\n]", prefix)[-1]))
 
 
+def _quoted_word(cmd: str, m: "re.Match[str]") -> str:
+    """The candidate widened to its closing quote when a quote opens right before it and
+    whitespace ends the match: a quoted path with spaces is one word."""
+    start, end = m.start(), m.end()
+    if start == 0 or cmd[start - 1] not in "\"'" or end >= len(cmd) or cmd[end] not in " \t":
+        return m.group(0)
+    close = cmd.find(cmd[start - 1], end)
+    if close == -1 or "\n" in cmd[end:close]:
+        return m.group(0)
+    return cmd[start:close]
+
+
 def _interpreter_new_entry(cmd: str, cwd: Optional[str], env: Optional[Mapping[str, str]]) -> Optional[str]:
     """Both readings of each `/x/...` literal (MSYS and cwd-drive) when a native interpreter runs."""
     if not _host_is_windows() or not _INTERPRETER_RE.search(cmd):
@@ -239,7 +251,7 @@ def _interpreter_new_entry(cmd: str, cwd: Optional[str], env: Optional[Mapping[s
     eff = _effective_cwd(cmd, cwd)
     invoked = _invoked_heads(cmd)
     for m in _CAND_RE.finditer(cmd):
-        cand = m.group(0)
+        cand = _quoted_word(cmd, m)
         if _MSYS_DRIVE_CAND_RE.match(cand) and cand not in invoked and not _is_delete_operand(cmd[: m.start()]):
             name = new_top_level_entry(cand, eff, env=env, interpreter=True)
             if name:

@@ -5,9 +5,13 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_import_with_lib_cached_and_bin_lib_absent():
     code = textwrap.dedent(
         """

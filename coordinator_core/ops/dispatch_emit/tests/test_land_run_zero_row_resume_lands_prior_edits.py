@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import (  # noqa: F401
     RUN2,
     _second_run,
@@ -50,7 +51,7 @@ def _terminal(root, resume, *, tests=None, footprint=(EDITED, CLEAN, REVERTED)) 
     return land_run._handler(
         {
             "script_path": "run2.mjs", "run_id": RUN2, "run_token": token, "incomplete_chunks": [],
-            "inline_review": {"integration_stem": "rev-stem", "slices": 1, "fixes": 0, "tests": tests or {}},
+            "inline_review": {**reviewed(), "tests": tests or {}},
             "session_id": _SID, "ledger_verdict": _MET, "resume_ledger": resume,
         },
         repo_root=root / ".git",

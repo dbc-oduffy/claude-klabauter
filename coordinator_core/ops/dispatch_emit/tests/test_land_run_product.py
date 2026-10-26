@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
@@ -28,7 +29,7 @@ SELF = "5e1f0000-0000-4000-8000-0000000000a1"
 RUN = "plan-20261021T100000-aaaaaa"
 SCRIPT = "run-a.mjs"
 PLAN = "docs/plans/p.md"
-REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+REVIEWED = reviewed()
 LAUNCHED: list = []
 
 

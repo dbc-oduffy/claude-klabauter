@@ -50,6 +50,7 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md
 from __future__ import annotations
 
 import json
+import re
 from typing import Mapping, Optional, Sequence
 
 from coordinator_core.bug_blitz.contract import (
@@ -770,6 +771,31 @@ def _image_command_parts(
     ]
 
 
+def _declared_delete_clause_parts(
+    run_id_part: tuple[str, str], row_id_part: tuple[str, str]
+) -> list[tuple[str, str]]:
+    """The declared-delete marker clause as prompt parts, empty while the channel is dormant.
+
+    The clause text comes from ``brief_clause`` so the grind route and the execute-plan route
+    cannot drift; sentinels stand in for the run and row ids so each can be a runtime JS expression.
+    """
+    from coordinator_core.bash_guards import _declared_delete_license as lic
+    from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+
+    if not guard._DECLARED_DELETE_CHANNEL_LIVE:
+        return []
+    run_s, row_s = "@@RUN@@", "@@ROW@@"
+    parts: list[tuple[str, str]] = [("lit", " ")]
+    for chunk in re.split("(" + run_s + "|" + row_s + ")", lic.brief_clause(run_s, row_s)):
+        if chunk == run_s:
+            parts.append(run_id_part)
+        elif chunk == row_s:
+            parts.append(row_id_part)
+        elif chunk:
+            parts.append(("lit", chunk))
+    return parts
+
+
 def compose_fix_call(
     *,
     models: Optional[Mapping[str, str]] = None,
@@ -922,6 +948,7 @@ def compose_fix_call(
         parts.append(("expr", refute_note_js))
     if ruling_note_js:
         parts.append(("expr", ruling_note_js))
+    parts.extend(_declared_delete_clause_parts(fix_run_id_part, row_id_part))
     parts.append(("lit", " " + _JUDGE_AGAINST_HEAD_CLAUSE + " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",

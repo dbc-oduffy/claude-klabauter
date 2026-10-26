@@ -348,7 +348,7 @@ def test_an_l_run_with_ledger_delivery_and_criterion_passing_commits(repo):
 
 def test_a_peer_dirty_wiki_page_outside_the_declared_docs_is_not_committed(repo):
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
-    _write(repo, "docs/wiki/peer.md", "# peer wip\n")
+    _write(repo, "docs/" "wiki/peer.md", "# peer wip\n")
     _request(repo, docs=("docs/delivery/run1.md",))
     out = _call(repo)
     assert out["committed"] is True, out

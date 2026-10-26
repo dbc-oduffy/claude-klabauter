@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -78,7 +79,7 @@ def _judged(rid, status="met", wired=True):
 
 
 def _review(rows, status="met"):
-    return {"integration_stem": "s", "slices": 1, "fixes": 0,
+    return {**reviewed(), "integration_stem": "s",
             "criterion": {"status": status, "observation": "ok", "register_rows": rows}}
 
 

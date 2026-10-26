@@ -53,6 +53,9 @@ _R5_OPEN = loop._unmet(
     [f"Fix the 2 failing tests in {_TEST_FILE}", "Prove bare-name or production-entry run from a foreign cwd"],
     "the foreign-cwd recogniser test fails", rid="R5",
 )
+_R5_PARTIAL = loop._unmet(
+    ["Prove bare-name or production-entry run from a foreign cwd"], "the foreign-cwd recogniser test fails", rid="R5",
+)
 _FIXED = {"status": "DONE", "paths": ["pkg/producer.py"], "reason": "fixed"}
 _ESCAPED = {"status": "DONE", "paths": ["pkg/producer.py", "pkg/_producer_substrate.py"], "reason": "needs the substrate"}
 _PARAMS_RE = re.compile(r"-----BEGIN TERMINAL-COMMIT PARAMS-----\n(.*?)\n-----END TERMINAL-COMMIT PARAMS-----", re.S)
@@ -93,7 +96,7 @@ def _land(repo: Path, out: dict) -> dict:
     params = _commit_params(out)
     for key in ("run_id", "run_token", "resume_ledger"):
         params.pop(key, None)
-    params.update(script_path="run.mjs", session_id=base._SID)
+    params.update(script_path="run.mjs", session_id=base._SID, inline_review=base._REVIEWED)
     return land_run._handler(params, repo_root=repo / ".git")
 
 
@@ -157,7 +160,7 @@ def test_r43_fixed_in_one_attempt_lands_all_three_chunks(monkeypatch, repo):  # 
 
 
 def test_r43_exhausted_at_the_cap_withholds_the_chunk_and_lands_the_rest(monkeypatch, repo):  # noqa: F811
-    out = _drive(monkeypatch, {"ledger-fix:C1": _FIXED, lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_OPEN]}})
+    out = _drive(monkeypatch, {"ledger-fix:C1": _FIXED, lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_PARTIAL]}})
 
     assert _fix_calls(out) == ["ledger-fix:C1"] * lr.RECOVERY_ATTEMPT_CAP
     assert not _agent_labels_outside(out, {"C1"})
@@ -178,8 +181,17 @@ def test_r43_exhausted_at_the_cap_withholds_the_chunk_and_lands_the_rest(monkeyp
     assert landed["recovery"]["open_rows"] == ["R5"]
 
 
+def test_r43_a_fix_that_changes_nothing_ends_after_one_attempt(monkeypatch, repo):  # noqa: F811
+    out = _drive(monkeypatch, {"ledger-fix:C1": _FIXED, lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_OPEN]}})
+
+    assert _fix_calls(out) == ["ledger-fix:C1"]
+    rec = loop._record(out)["chunks"]["C1"]
+    assert rec["status"] == "exhausted" and rec["attempts"] == 1
+    assert _commit_params(out)[lr.RECOVERY_WITHHELD_PARAM] == ["C1"]
+
+
 def test_r43_footprint_escape_blocks_the_chunk_withholds_its_importer_and_still_lands(monkeypatch, repo):  # noqa: F811
-    out = _drive(monkeypatch, {"ledger-fix:C1": [_FIXED, _ESCAPED], lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_OPEN]}})
+    out = _drive(monkeypatch, {"ledger-fix:C1": [_FIXED, _ESCAPED], lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_PARTIAL]}})
 
     assert _fix_calls(out) == ["ledger-fix:C1"] * 2
     assert not _agent_labels_outside(out, {"C1"})

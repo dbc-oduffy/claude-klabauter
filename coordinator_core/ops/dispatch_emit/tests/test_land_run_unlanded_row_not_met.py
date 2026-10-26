@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import land_run, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
@@ -84,7 +85,7 @@ def _land(repo: Path, *, peer_holds_c2: bool) -> dict:
     _write(repo, SCRIPT, "// emitted\n" + render_marker(request) + "\n")
     return land_run._handler(
         {"script_path": SCRIPT, "incomplete_chunks": [],
-         "inline_review": {"integration_stem": "s", "slices": 1, "fixes": 0, "criterion": dict(MET)},
+         "inline_review": {**reviewed(), "integration_stem": "s", "criterion": dict(MET)},
          "session_id": SELF, "run_id": RUN_A},
         repo_root=repo / ".git",
     )

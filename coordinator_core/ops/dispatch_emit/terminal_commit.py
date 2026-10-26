@@ -166,7 +166,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
-from coordinator_core.ops.dispatch_emit import cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy, review_floor  # noqa: E402 -- sibling-package group
+from coordinator_core.ops.dispatch_emit import bug_close, cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy, review_floor  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
     _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
     foreign_halted_withheld, held_revision_refusal,
@@ -3457,6 +3457,24 @@ def _review_recorded_edits(inline_review: object) -> frozenset:
     return frozenset(found)
 
 
+def _sole_run_review_writes(
+    worktree_root: Path, session_id: Optional[str], run_id: Optional[str], inline_review: object
+) -> frozenset:
+    """Normalised in-worktree paths the session's review agents wrote while this run is the only
+    one the session holds; a review write outside every declared path lands or halts instead of
+    staying untracked."""
+    from coordinator_core.ops.dispatch_emit import review_edit_source, review_edits
+
+    try:
+        raw = review_edit_source.sole_run_attested_writes(
+            worktree_root, session_id, run_id, _review_since(worktree_root, run_id, inline_review)
+        )
+    except OSError:  # only an unreadable store attributes nothing; any other error is a bug and propagates
+        return frozenset()
+    normed = (review_edits.norm(p) for p in raw)
+    return frozenset(p for p in normed if not review_edits.out_of_worktree(p))
+
+
 def _review_edit_verdict(
     worktree_root: Path, writes: Optional[dict], snapshot: Optional[_Snapshot],
     session_id: Optional[str], run_id: Optional[str], committed: set,
@@ -3471,15 +3489,15 @@ def _review_edit_verdict(
     from coordinator_core.ops.dispatch_emit import review_edits
 
     if writes is not None and own_files is not None:
-        writes = {k: v for k, v in writes.items() if review_edits._norm(k) in own_files}
+        writes = {k: v for k, v in writes.items() if review_edits.norm(k) in own_files}
 
     if writes is None or snapshot is None:
         return review_edits.partition(
             None, changed=set(), ignored=(), committed=set(), sibling_declared={},
             contested=set(), present=lambda _p: False,
         )
-    paths = [review_edits._norm(k) for k in writes]
-    inside = [p for p in paths if not review_edits._out_of_worktree(p)]
+    paths = [review_edits.norm(k) for k in writes]
+    inside = [p for p in paths if not review_edits.out_of_worktree(p)]
     candidates = [p for p in inside if p in snapshot.changed and p not in committed]
     contested: set = set()
     if candidates and session_id:
@@ -3519,7 +3537,8 @@ def _commit_siblings(
     return out
 
 
-_STATUS_FIELD = r'^[ \t>#-]*"?[*_`]{0,2}status[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*'
+from coordinator_core.ops.dispatch_emit.bug_close import _PARTIAL_REPORT_RE, _STATUS_FIELD  # noqa: E402 -- the one definition both readers share
+
 _DELIVERED_REPORT_RE = re.compile(
     r'^\s*"?[*_`]{0,2}DONE(?:_WITH_CONCERNS)?[*_`]{0,2}:|<exit-status>DONE</exit-status>'
     rf'|(?i:{_STATUS_FIELD}DONE(?:_WITH_CONCERNS)?\b)',
@@ -3528,11 +3547,6 @@ _DELIVERED_REPORT_RE = re.compile(
 _UNDELIVERED_REPORT_RE = re.compile(
     r'^\s*"?[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|<exit-status>(?:PARTIAL|BLOCKED)</exit-status>'
     rf'|(?i:{_STATUS_FIELD}(?:PARTIAL|BLOCKED)\b)',
-    re.MULTILINE,
-)
-_PARTIAL_REPORT_RE = re.compile(
-    r'^\s*"?[*_`]{0,2}PARTIAL[*_`]{0,2}:|<exit-status>PARTIAL</exit-status>'
-    rf'|(?i:{_STATUS_FIELD}PARTIAL\b)',
     re.MULTILINE,
 )
 _UNDONE_LINE_RE = re.compile(r"^\s*[-*]?\s*[*_`]{0,2}(?:not done|undone|remaining)", re.IGNORECASE)
@@ -3576,7 +3590,9 @@ def _partial_chunks(
 ) -> list:
     """Incomplete chunks whose executor itself reported DONE/DONE_WITH_CONCERNS: the row
     is incomplete only because the delivery verdict failed (an AC needing a later runtime
-    step), and its files were reviewed with the wave. An executor PARTIAL or BLOCKED, an
+    step), and its files were reviewed with the wave. A PARTIAL report undone only by
+    ``post-commit: bug_close <id>`` markers (``bug_close.delivered_with_post_commit``) lands
+    too: the landing closes those rows. Any other executor PARTIAL or BLOCKED, an
     unreadable report, or one carrying no DONE status stays stranded; a PARTIAL row is
     recorded in ``withheld`` as ``{id: undone AC text}``."""
     out: list = []
@@ -3586,7 +3602,9 @@ def _partial_chunks(
         text = _read_rel(worktree_root, chunk.report)
         if text is None:
             continue
-        if _DELIVERED_REPORT_RE.search(text) and not _UNDELIVERED_REPORT_RE.search(text):
+        if (_DELIVERED_REPORT_RE.search(text) and not _UNDELIVERED_REPORT_RE.search(text)) or (
+            bug_close.delivered_with_post_commit(text)
+        ):
             out.append(chunk)
         elif withheld is not None and _PARTIAL_REPORT_RE.search(text):
             withheld[chunk.id] = _undone_summary(text)
@@ -3715,7 +3733,8 @@ def _lifecycle_owed(
     verdict: dict, sha: str, reply: dict, consumed_baton: Optional[str], close_ctx: Optional[dict],
 ) -> list:
     """``post_commit_owed`` entries once the close stamp ran: a lifecycle act counts as performed
-    when the plan reads implemented, or the consumed baton was archived or shipped inline."""
+    when the plan reads implemented, or the consumed baton was archived or shipped inline;
+    ``bug_close`` counts when the landing closed its marked rows without a refusal."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
 
     done: set = set()
@@ -3727,6 +3746,8 @@ def _lifecycle_owed(
         getattr(shipped, "status", None) in ("ran", "discharged")
     ):
         done.add("baton_archive")
+    if reply.get("bugs_closed") and not reply.get("bug_close_refused"):
+        done.add(bug_close.ACT)
     return requirements_ledger.post_commit_owed(verdict, sha, discharged=done)
 
 
@@ -4218,6 +4239,58 @@ def _restore_texts(worktree_root: Path, saved: dict) -> None:
     for rel, text in saved.items():
         if text is not None:
             replace_text(worktree_root / rel, text)
+
+
+def _ask_named_bug_ids(worktree_root: Path, ledger: object) -> tuple:
+    """Ids of existing bug rows the ledger's ask rows or the bound sizing's ``em_rationale`` state closure
+    intent for (``bug_close.closing_bug_ids``), whatever the route. In-process reads: no spawn."""
+    if ledger is None:
+        return ()
+    texts = [str(getattr(i, "text", "") or "") for i in getattr(ledger, "items", ()) or ()]
+    sizing_rel = getattr(ledger, "sizing_rel", None)
+    raw = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
+    if raw:
+        try:
+            doc = _yaml_load(raw)
+        except Exception:  # noqa: BLE001 -- an unreadable sizing contributes no ids
+            doc = None
+        analysis = doc.get("em_analysis") if isinstance(doc, dict) else None
+        rationale = analysis.get("em_rationale") if isinstance(analysis, dict) else None
+        if isinstance(rationale, str):
+            texts.append(rationale)
+    return bug_close.closing_bug_ids(worktree_root, "\n".join(texts))
+
+
+def _close_marked_bugs(
+    worktree_root: Path, chunks: Sequence, sha: str, snapshot: Optional[_Snapshot],
+    report_cache: dict, ledger: object = None,
+) -> tuple:
+    """Close the bug rows the credited chunks' reports mark ``post-commit: bug_close <id>``, plus the
+    existing rows the run's ask rows and the sizing's ``em_rationale`` name, at ``sha``. Returns
+    ``(reply fields, rels the stamp commit carries, saved texts for rollback)``; the fields are empty
+    when nothing names a row."""
+    ids: dict = {}
+    for bug_id in _ask_named_bug_ids(worktree_root, ledger):
+        ids.setdefault(bug_id, None)
+    for chunk in chunks:
+        if not chunk.report:
+            continue
+        if chunk.report not in report_cache:
+            report_cache[chunk.report] = _read_rel(worktree_root, chunk.report)
+        for bug_id in bug_close.marker_ids(report_cache[chunk.report] or ""):
+            ids.setdefault(bug_id, None)
+    if not ids:
+        return {}, [], {}
+    rels = {i: bug_close.bug_row_rel(worktree_root, i) for i in ids}
+    saved = {rel: _read_rel(worktree_root, rel) for rel in rels.values() if rel}
+    result = bug_close.close_rows(worktree_root, tuple(ids), sha)
+    written = list(result["closed"].values())
+    if snapshot is not None:
+        snapshot.note_written(written)
+    fields: dict = {"bugs_closed": {**result["closed"], **result["already"]}}
+    if result["refused"]:
+        fields["bug_close_refused"] = result["refused"]
+    return fields, written, {rel: saved[rel] for rel in written if rel in saved}
 
 
 def _launch_close_job(worktree_root: Path, run_id: str, batons: list, memo: Optional[str]) -> bool:
@@ -5414,7 +5487,7 @@ def _terminal_commit_inner(
         except Exception:  # noqa: BLE001 -- an unreadable source is unanswerable, never "no edits"
             review_writes = None
         if review_writes is not None:
-            review_writes = {review_edits._norm(k): v for k, v in review_writes.items()}
+            review_writes = {review_edits.norm(k): v for k, v in review_writes.items()}
             for recorded in sorted(_review_recorded_edits(inline_review)):
                 review_writes.setdefault(recorded, "review-record")
     from coordinator_core.ops.dispatch_emit import run_touched as _run_touched
@@ -5437,7 +5510,7 @@ def _terminal_commit_inner(
         + companions
         + ([ask_note_rel] if ask_note_rel else [])
         + (list(artifacts.paths()) if artifacts is not None else [])
-        + [p for p in (review_writes or ()) if not review_edits._out_of_worktree(p)]
+        + [p for p in (review_writes or ()) if not review_edits.out_of_worktree(p)]
         + sorted(_run_touched.touched_paths(
             request, inline_review, artifacts.paths() if artifacts is not None else ()
         )),
@@ -5889,7 +5962,7 @@ def _terminal_commit_inner(
     scope["stranded_residue"] = residue
     review_land: tuple = ()
     review_unanswerable: Optional[str] = None
-    from coordinator_core.ops.dispatch_emit.review_edits import _norm as review_edits_norm
+    from coordinator_core.ops.dispatch_emit.review_edits import norm as review_edits_norm
 
     sibling_claim_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
     sibling_claims_seen: set = set()
@@ -5922,7 +5995,7 @@ def _terminal_commit_inner(
     if review_checked:
         checkpointed = _plan_checkpoint_touched(
             worktree_root, request.plan_path,
-            [p for p in (review_writes or ()) if not review_edits._out_of_worktree(p)],
+            [p for p in (review_writes or ()) if not review_edits.out_of_worktree(p)],
         )
         verdict = _review_edit_verdict(
             worktree_root, review_writes, snapshot, session_id, review_run_id,
@@ -5942,6 +6015,7 @@ def _terminal_commit_inner(
                     review_edits_norm(p)
                     for p in (_leg_footprint_writes(worktree_root, ask_run_dir) or () if ask_run_dir is not None else ())
                 }
+                | _sole_run_review_writes(worktree_root, read_session, read_run_id, inline_review)
             ),
         )
         if verdict.halt:
@@ -6921,6 +6995,14 @@ def _terminal_commit_inner(
                 and _differs_from_commit(worktree_root, sha_now, p)
             ]
             also_commit += tuple(late_rewrites)
+        bug_rels: list = []
+        bug_saved: dict = {}
+        if not foreign_repo:
+            bug_fields, bug_rels, bug_saved = _close_marked_bugs(
+                worktree_root, [*done_chunks, *partial_chunks], str(reply["sha"]), snapshot, report_cache, ledger,
+            )
+            reply.update(bug_fields)
+            also_commit += tuple(p for p in bug_rels if p not in also_commit)
         paying_close = close_ctx is not None and close_ctx["applies"]
         if close_ctx is not None:
             prep = inline_review.get("prep")
@@ -6958,7 +7040,7 @@ def _terminal_commit_inner(
             and snapshot is not None
             and not snapshot.ignored_among([request.plan_path])
         )
-        stamp_commit = bool(shipped_sizing) or plan_commits or bool(late_rewrites)
+        stamp_commit = bool(shipped_sizing) or plan_commits or bool(late_rewrites) or bool(bug_rels)
         if not foreign_repo:
             reply.update(
                 _stamp_coded_commit(
@@ -6978,6 +7060,15 @@ def _terminal_commit_inner(
             )
         flipped = reply.pop("_flip", None)
         stamp_committed = tuple(reply.pop("_committed", ()))
+        if bug_rels and ("coded_stamp_error" in reply or not set(bug_rels) <= set(stamp_committed)):
+            _restore_texts(worktree_root, bug_saved)
+            reply["bug_close_refused"] = [
+                *reply.get("bug_close_refused", ()),
+                *({"id": i, "reason": "stamp commit did not land; row restored"} for i, r in reply["bugs_closed"].items() if r in bug_rels),
+            ]
+            reply["bugs_closed"] = {i: r for i, r in reply["bugs_closed"].items() if r not in bug_rels}
+            if not reply["bugs_closed"]:
+                del reply["bugs_closed"]
         scope["landed"].update(stamp_committed)
         if shipped_sizing:
             archived_to = reply.get("archived") or {}

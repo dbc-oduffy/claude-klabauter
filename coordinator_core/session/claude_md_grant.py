@@ -77,24 +77,23 @@ Public functions:
                                     denial even when the grant reads
                                     UNGRANTED.
 
-CLI-reachable acquisition (module-level ``main`` mirrors
-``coordinator/bin/tier-u-grant-cli``'s subcommand shape, but stays inside
-this module rather than a new ``coordinator/bin/`` trampoline — C5's
-declared write-scope is ``coordinator_core/session/`` only):
+CLI-reachable acquisition: the shell entrypoint is the ``claude-md-grant-cli``
+bin wrapper (``GRANT_CLI_NAME``), which forwards its argv to the module-level
+``main`` here; ``main`` mirrors ``coordinator/bin/tier-u-grant-cli``'s
+subcommand shape. The in-module form stays available:
+
+    claude-md-grant-cli grant pm "<verbatim PM note>"
+    claude-md-grant-cli read
+    claude-md-grant-cli check
 
     python3 -m coordinator_core.session.claude_md_grant grant pm "<verbatim PM note>"
-    python3 -m coordinator_core.session.claude_md_grant read
-    python3 -m coordinator_core.session.claude_md_grant check
 
-Run with ``CLAUDE_KLABAUTER_ROOT`` (or the claude-klabauter checkout) on ``PYTHONPATH``
-so ``coordinator_core`` is importable, and from the repo whose CLAUDE.md-
-class write the grant should cover (the CLI resolves the calling session
-via cwd, same as every other session-hub op). Exit codes mirror
-``tier-u-grant-cli``: 0/1 for the mapped bool-returning function, 2 on a
-usage/validation error, 3 on a transport failure (import/argv problem
-internal to this trampoline — there is no CLAUDE_KLABAUTER_ROOT indirection here
-since the module already lives in ``coordinator_core``, so 3 is reserved
-for import-shape errors only).
+Run from the repo whose CLAUDE.md-class write the grant should cover (the
+CLI resolves the calling session via cwd, same as every other session-hub
+op). The ``python -m`` form needs ``coordinator_core`` importable. Exit codes
+mirror ``tier-u-grant-cli``: 0/1 for the mapped bool-returning function, 2 on
+a usage/validation error, 3 on a transport failure (the wrapper's import
+leg; ``main`` itself never returns it).
 
 Spec backlink: coordinator-content-repo coordinator-content-repo:pln-claude-md-altitude-triage-earn-31f32e § C5
 Precedent: coordinator_core/session/grant.py (Tier-U grant, DR-088 layer 5)
@@ -368,15 +367,22 @@ def check_claude_md_write_grant(
 
 
 # ---------------------------------------------------------------------------
-# CLI trampoline — see module docstring "CLI-reachable acquisition" for the
-# exact invocation the EM runs between waves. Kept in-module (not a new
-# coordinator/bin/ script) because C5's declared write-scope is
-# coordinator_core/session/ only. Subcommand shape mirrors
-# coordinator/bin/tier-u-grant-cli exactly (grant | read | check), minus the
-# --ceremony flag this module's single-value granted_by has no use for.
+# CLI entry — the shell entrypoint is the `claude-md-grant-cli` bin wrapper,
+# which forwards argv to `main`; `python -m` on this module stays the
+# in-module form. Subcommand shape mirrors coordinator/bin/tier-u-grant-cli
+# (grant | read | check), minus the --ceremony flag this module's
+# single-value granted_by has no use for.
 # ---------------------------------------------------------------------------
 
+#: Bare bin name of the shell entrypoint; the deny texts and guards read this.
+GRANT_CLI_NAME = "claude-md-grant-cli"
+
+#: The one command an EM runs once the PM approves a CLAUDE.md-class write.
+GRANT_CLI_COMMAND = 'claude-md-grant-cli grant pm "<the PM\'s words>"'
+
 __all__ = [
+    "GRANT_CLI_NAME",
+    "GRANT_CLI_COMMAND",
     "write_claude_md_write_grant",
     "read_claude_md_write_grant",
     "check_claude_md_write_grant",

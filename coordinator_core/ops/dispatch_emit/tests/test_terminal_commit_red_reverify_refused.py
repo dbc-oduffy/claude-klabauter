@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_landing_integrity import (  # noqa: F401
     _fire,
     _git,
@@ -16,7 +17,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _review(reverify):
-    return {"integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+    return {**reviewed(),
             "tests": {"status": "pass"}, li.REVERIFY_KEY: reverify}
 
 

@@ -24,7 +24,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+_REVIEWED = reviewed()
 RUN = "ask-20261022T120000-cccccc"
 SIZING = "state/sizings/2026-10-22-x.yaml"
 PLAN = "docs/plans/2026-10-22-x.md"

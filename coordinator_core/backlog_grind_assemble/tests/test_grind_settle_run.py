@@ -93,7 +93,7 @@ def test_evidence_reconstruction_lands_declared_and_archive_and_drops_unlandable
     code, reply = _run(capsys, _argv(tmp_path, repo))
     assert code == 0 and reply["committed"] is True and reply["source"] == "evidence"
     assert [r["row_id"] for r in reply["rows"]] == ["r1"]
-    assert {d["reason"] for d in reply["dropped"]} == {"deletion-git-cannot-see"}
+    assert reply["dropped"] == []
     assert "Grind-Row: r1 settled" in _git(["log", "-1", "--format=%B"], repo)
     assert "settled-after-run" in _git(["log", "-1", "--format=%B"], repo)
     status = _status(repo)

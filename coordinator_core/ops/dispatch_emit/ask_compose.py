@@ -130,6 +130,20 @@ from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     ledger_fix_prompt,
     remnant_prompt,
 )
+from coordinator_core.ops.dispatch_emit.self_correction import (
+    CLASSIFY_REDS_JS,
+    FOREIGN_FIELD,
+    HALT_FIX_LABEL,
+    HALT_FIX_PHASE,
+    HALT_FIX_SCHEMA,
+    HALT_REVERIFY_LABEL,
+    HALT_REVERIFY_SCHEMA,
+    NO_PROGRESS,
+    PROGRESSED_JS,
+    SELF_CORRECTION_CAP,
+    SELF_CORRECTION_FIELD,
+    halt_fix_prompt,
+)
 
 #: Pull or re-plan attempts on one plan before the run dispatches research instead of another round. The only place n is written.
 REPLAN_ATTEMPT_CAP = 2
@@ -592,7 +606,8 @@ _LEDGER_ITEMS_RULES = (
     "replaces it, named as superseded_by; 'post_commit' when everything the item asks that can be "
     "true before the commit is met and what remains is only an act that exists after the terminal "
     "commit -- the commit itself, reporting the landed sha, a memo naming it, the run's baton archived "
-    "(baton_archive), or the plan stamped implemented (plan_implemented); the terminal commit writes both "
+    "(baton_archive), the plan stamped implemented (plan_implemented), or a bug row closed with the landing sha "
+    "(bug_close); the terminal commit writes all three "
     "lifecycle acts -- named in "
     "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
     "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. A 'not_met' item blocks "
@@ -1009,10 +1024,16 @@ _JOIN_REVERIFY_JS = (
 def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = True, after_join: bool = False) -> str:
     """The BLOCKED-review halt; its next_action names the engine-ask refire, since journal replay
     hands back the cached BLOCKED wave. `read_reverify=False` is the pre-verify slice halt; `after_join`
-    is the post-join pass that also upgrades a slice halt with the re-verify test blockers."""
+    is the post-join pass that also upgrades a slice halt with the re-verify test blockers.
+
+    Reds in `_foreignReds` (set by `_reviewRecover`) never reach it; `_selfCorrection` rides on every halt.
+    """
     guard = "(!_halted || _halted.halted === " + json.dumps(HALT_REVIEW_BLOCKED) + ")" if after_join else "!_halted"
     reverify_expr = (
-        "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null"
+        "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
+        "? (() => { const _fs = new Set(typeof _foreignReds !== 'undefined' ? _foreignReds : []); "
+        "const _f = _reviewReverify.failing; return { ..._reviewReverify, failing: "
+        "(Array.isArray(_f) ? _f : (typeof _f === 'string' ? [_f] : [])).filter((n) => !_fs.has(String(n))) }; })() : null"
         if read_reverify
         else "null"
     )
@@ -1020,6 +1041,13 @@ def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = 
         "  if (" + guard + ") {\n"
         "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
         "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
+        "    const _sc = (typeof _selfCorrection !== 'undefined') ? _selfCorrection : null;\n"
+        "    const _scPre = _sc ? ('Self-correction ran ' + _sc.attempts + ' fix leg(s) and ended ' + _sc.status + "
+        "(_sc.gaps.length ? ', leaving: ' + _sc.gaps.join('; ') : '') + '. ') : '';\n"
+        "    const _scNa = (t) => (_sc && _sc.status === 'scope') ? (_scPre + 'Closing the gap needs paths outside the "
+        "run footprint: ' + _sc.needs_paths.join(', ') + '. Add a row first: coordinator-invoke plan.tasks.mutate verb "
+        "add-task (params plan_path=' + ((typeof _planRel !== 'undefined' && _planRel) ? _planRel : '<the plan>') + ', task) "
+        "with a unique id, a title and declared `writes` covering them; then ') : (_scPre + t);\n"
         + _test_blockers_js(
             reverify_expr,
             "_rv",
@@ -1032,15 +1060,146 @@ def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = 
         "failing: _rvFailing, gaps: _rvGaps, "
         + HALT_PLAN_FIELD + ": (typeof _planRel !== 'undefined' ? _planRel : null), "
         "items: _claimed.map((id) => ({ id, remaining: _rvGaps, evidence: _rvGaps.join('; ') })), "
-        "slices: _slicesJs, "
-        "next_action: 'The refire runs an executor fix leg against these failing tests: ' + _rvGaps.join('; ') + '; ' + "
+        "slices: _slicesJs, " + SELF_CORRECTION_FIELD + ": _sc, "
+        "next_action: _scNa('The refire runs an executor fix leg against these failing tests: ' + _rvGaps.join('; ') + '; ') + "
         + _refire_js(sizing_rel) + " };\n"
         "    } else if (_blockedSlices.length) _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", run_id: _runId, "
         "unapplied_findings: _blockedSlices.reduce((n, w) => n + (w.findings - (w.applied ?? 0)), 0), "
-        "slices: _slicesJs, "
-        "next_action: 'The refire re-runs the review wave over the blocked slices: ' + "
+        "slices: _slicesJs, " + SELF_CORRECTION_FIELD + ": _sc, "
+        "next_action: _scNa('The refire re-runs the review wave over the blocked slices: ') + "
         + _refire_js(sizing_rel) + " };\n"
         "  }"
+    )
+
+
+_REVIEW_RECOVER_JS = r"""
+  let _selfCorrection = null; let _foreignReds = [];
+  __CLASSIFY__
+  __PROGRESSED__
+  const _hfPosix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const _reviewRecover = async () => {
+    if (_gate.arm === __XS__ || _reviewReused) return;
+    const gapsOf = () => {
+      const rv = (_reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null;
+      const excluded = new Set([...(rv?.pre_existing ?? []), ...(rv?.kept ?? [])].map(String));
+      const raw = rv?.failing;
+      const failing = (rv && rv.status_after !== 'pass')
+        ? [...new Set((Array.isArray(raw) ? raw : (typeof raw === 'string' ? [raw] : [])).map(String))].filter((n) => !excluded.has(n)) : [];
+      const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { pre_existing: rv?.pre_existing ?? [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
+      const detail = new Map();
+      for (const d of (Array.isArray(rv?.failing_detail) ? rv.failing_detail : [])) if (d && d.node_id) detail.set(_hfPosix(d.node_id), String(d.message ?? ''));
+      const ownedTxt = split.owned.map((n) => n + ': ' + ((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300));
+      const slices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter((w) => w && __BLOCKED__)
+        .map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));
+      const foreign = failing.filter((n) => split.foreign.includes(_hfPosix(n)));
+      return { owned: split.owned, ownedTxt, foreign, unverified: split.unverified, slices,
+        keys: [...split.owned, ...slices.map((s) => 'slice:' + s.slice_id)] };
+    };
+    const applyForeign = (g) => {
+      _foreignReds = g.foreign;
+      if (_reviewReverify && typeof _reviewReverify === 'object') {
+        _reviewReverify.__FOREIGN__ = g.foreign;
+        if (g.unverified.length) _reviewReverify.foreign_unverified = g.unverified;
+      }
+    };
+    let g = gapsOf(); applyForeign(g);
+    if (!g.keys.length) return;
+    const footprint = [...new Set((_manifest?.review_declared_paths ?? []).map(_hfPosix))];
+    const inFp = (p) => footprint.some((f) => p === f || p.startsWith(f.replace(/\/+$/, '') + '/'));
+    let status = 'exhausted'; let attempts = 0; const needs = [];
+    for (let attempt = 1; attempt <= __CAP__ && !_halted; attempt++) {
+      const before = g.keys;
+      const gapsText = JSON.stringify(g.ownedTxt); const slicesText = JSON.stringify(g.slices);
+      const idsText = JSON.stringify(g.owned); const fpText = JSON.stringify(footprint);
+      attempts = attempt;
+      let r = null;
+      try { r = await __FIXCALL__; }
+      catch (e) {
+        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        log('halt-fix leg threw: ' + String((e && e.message) ?? e));
+      }
+      if (_halted) return;
+      if (!r || typeof r !== 'object') { status = 'blocked'; break; }
+      const outside = (Array.isArray(r.paths) ? r.paths : []).map(_hfPosix).filter((p) => !inFp(p));
+      if (r.status === 'SCOPE' || outside.length) {
+        needs.push(...(Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_hfPosix), ...outside);
+        status = 'scope'; break;
+      }
+      if (r.status === 'BLOCKED') { status = 'blocked'; break; }
+      let rv = null;
+      try { rv = await __REVERIFYCALL__; }
+      catch (e) {
+        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        log('halt-reverify leg threw: ' + String((e && e.message) ?? e));
+      }
+      if (_halted) return;
+      if (rv && rv.test && typeof rv.test === 'object') _reviewReverify = rv.test;
+      if (rv && Array.isArray(rv.slices) && Array.isArray(_reviewWave)) {
+        _reviewWave = _reviewWave.map((w) => {
+          const s = w ? rv.slices.find((x) => x && x.slice_id === w.slice_id) : null;
+          if (!s) return w;
+          const left = s.applied ? 0 : (Array.isArray(s.findings) ? s.findings.length : (w.findings ?? 0));
+          return { ...w, applied: Math.max(w.applied ?? 0, (w.findings ?? 0) - left) };
+        });
+      }
+      g = gapsOf(); applyForeign(g);
+      if (!g.keys.length) { status = 'fixed'; break; }
+      if (!progressed(before, g.keys)) { status = 'no-progress'; break; }
+    }
+    const left = g.ownedTxt.concat(g.slices.map((s) => 'slice ' + s.slice_id + ': ' + (s.findings - s.applied) + ' unapplied finding(s), see ' + (s.sidecar_path ?? 'its review sidecar')));
+    _selfCorrection = { phase: 'review', attempts, status, gaps: status === 'fixed' ? [] : left,
+      needs_paths: [...new Set(needs)], foreign: g.foreign, unverified: g.unverified };
+    log('review self-correction: ' + status + ' after ' + attempts + ' fix leg(s)');
+  };
+  if (!_halted) await _reviewRecover();
+"""
+
+
+def _review_recover_js(
+    *, head: str, anchor: str, session_tail: str, record_dir: str, run_id: str
+) -> str:
+    """`_reviewRecover()` and its one call, composed between the review wave and `_review_blocked_halt_js`.
+
+    Closes the run's own failing tests and blocked-slice findings in at most `SELF_CORRECTION_CAP`
+    `halt-fix` legs, each followed by one `halt-reverify` leg; foreign reds are recorded, never fixed.
+    Trap: the fix footprint is `_manifest.review_declared_paths` only; a write outside it ends the loop as `scope`.
+    """
+    fix_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nHalt-fix leg (review). ",
+        *_prompt_parts(halt_fix_prompt("gapsText", "slicesText", "fpText", f"{record_dir}/notes.jsonl")),
+        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
+    )
+    fix_call = _agent(
+        fix_prompt, label=HALT_FIX_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=HALT_FIX_SCHEMA, run_id=run_id,
+    )
+    reverify_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Re-run ONLY these failing test ids and "
+        "the scoped tests of these files (nothing wider): ",
+        "js:idsText",
+        " and ",
+        "js:fpText",
+        ". Return `test` for that run (status_after pass|fail, failing, failing_detail, pre_existing, reverted). "
+        "Then, for each blocked slice below, read its review sidecar and judge each finding against the current tree: "
+        "return `slices` entries with `findings` (the findings that still stand; empty when all are closed) and "
+        "`applied` (true when none stand). Blocked slices: ",
+        "js:slicesText",
+        ". Edit nothing.",
+        f" {session_tail}",
+    )
+    reverify_call = _agent(
+        reverify_prompt, label=HALT_REVERIFY_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=HALT_REVERIFY_SCHEMA, run_id=run_id,
+    )
+    return (
+        _REVIEW_RECOVER_JS.replace("__CLASSIFY__", CLASSIFY_REDS_JS)
+        .replace("__PROGRESSED__", PROGRESSED_JS)
+        .replace("__XS__", _lit(ARM_XS))
+        .replace("__BLOCKED__", _BLOCKED_UNAPPLIED_JS)
+        .replace("__FOREIGN__", FOREIGN_FIELD)
+        .replace("__CAP__", str(SELF_CORRECTION_CAP))
+        .replace("__FIXCALL__", fix_call)
+        .replace("__REVERIFYCALL__", reverify_call)
     )
 
 
@@ -1364,17 +1523,34 @@ _LEDGER_RECOVER_JS = r"""
     };
     const _ledgerRecover = async () => {
       if (_gate.arm === __XS__) return;
-      const blocking = _ledger ? _ledgerBlocking(_ledger) : [];
-      if (!blocking.length) return;
-      const rulable = _manifest?.rulable_ids ?? _gate.__RL__?.rulable_ids ?? [];
-      if (blocking.some((i) => rulable.includes(i.id))) return;
-      if (blocking.every((i) => Array.isArray(i.owed_by) && i.owed_by.length > 0)) return;
+      if (!_ledger) return;
       const mrows = (_manifest.rows ?? []).filter((r) => r && typeof r === 'object');
       const rowOf = (cid) => mrows.find((r) => String(r.id) === cid) ?? {};
       const tr = __TEST__;
-      const failed = [...(tr?.baseline?.caused ?? []), ...(tr?.baseline?.foreign ?? []), ...(tr?.baseline?.pre_existing ?? [])].map(String);
+      const bl = tr?.baseline ?? {};
+      const allFailed = [...(bl.caused ?? []), ...(bl.foreign ?? []), ...(bl.pre_existing ?? [])].map(String);
+      const _isNode = (s) => /^\S+\.py::\S+$/.test(String(s).trim());
+      const _remNodes = (_ledger.items ?? []).flatMap((i) => (i && Array.isArray(i.remaining) ? i.remaining : [])).map((s) => String(s).trim()).filter(_isNode);
+      const _ownPaths = [...new Set([...allFailed, ..._remNodes].map((t) => _fpPosix(String(t).split('::')[0])))].filter((f) => mrows.some((r) => _fpOwns(r, f)));
+      const _split = classifyReds(allFailed, _ownPaths, { caused: bl.caused ?? [], foreign: bl.foreign ?? [], pre_existing: bl.pre_existing ?? [], reverted: null });
+      const failed = _split.owned;
+      const _remSplit = classifyReds(_remNodes, _ownPaths, { caused: bl.caused ?? [], foreign: bl.foreign ?? [], pre_existing: bl.pre_existing ?? [], reverted: null });
+      const _foreignRem = new Set(_remSplit.foreign);
+      _foreignReds = [...new Set([..._foreignReds, ..._split.foreign, ..._remSplit.foreign])];
+      const _stampForeign = () => {
+        for (const i of _ledger.items ?? []) {
+          const rem = i && i.status === 'not_met' && Array.isArray(i.remaining) ? i.remaining.map((s) => String(s).trim()) : [];
+          if (rem.length && rem.every((s) => _isNode(s) && _foreignRem.has(_fpPosix(s)))) i.foreign_only = true;
+        }
+      };
+      _stampForeign();
+      const blocking = _ledgerBlocking(_ledger);
+      const cands = blocking.filter((i) => Array.isArray(i.remaining) && i.remaining.length > 0
+        && !i.remaining.every((a) => _postCommitActs.includes(a)) && !(Array.isArray(i.owed_by) && i.owed_by.length > 0));
+      if (!cands.length) return;
       const heldIds = [...(_manifest.gated ?? []), ...(_manifest.slot_withheld ?? [])].map((g) => String(g.id)).concat((_manifest.held_ids ?? []).map(String));
-      const plan = _reopenPlan(blocking, mrows, failed, heldIds);
+      const plan = _reopenPlan(cands, mrows, failed, heldIds);
+      const _remKeys = (cid) => rec[cid].rows.flatMap((id) => { const it = (_ledger.items ?? []).find((x) => x && x.id === id); return (it && Array.isArray(it.remaining) ? it.remaining : []).map((r) => id + '|' + String(r)); });
       const rec = {};
       for (const [cid, ids] of Object.entries(plan.held)) {
         rec[cid] = { rows: ids, attempts: 0, status: 'held', footprint: [], paths: [], last_reason: 'withheld at stage; never ran' };
@@ -1400,6 +1576,8 @@ _LEDGER_RECOVER_JS = r"""
       for (let attempt = 1; attempt <= _recoveryCap && !_halted; attempt++) {
         const open = Object.keys(rec).filter((c) => rec[c].status === 'open');
         if (!open.length) break;
+        const beforeKeys = {};
+        for (const c of open) beforeKeys[c] = _remKeys(c);
         const fixed = await parallel(open.map((cid) => () => _fixOne(cid)));
         if (_halted) return;
         open.forEach((cid, k) => {
@@ -1432,6 +1610,7 @@ _LEDGER_RECOVER_JS = r"""
             if (at >= 0) _ledger.items[at] = it; else _ledger.items.push(it);
           }
           _normaliseLedger();
+          _stampForeign();
           __RECONCILE__
         }
         const t = rv && rv.test;
@@ -1446,9 +1625,22 @@ _LEDGER_RECOVER_JS = r"""
         for (const c of stillOpen) {
           if (!rec[c].rows.some((id) => still.has(id))) { rec[c].status = 'fixed'; continue; }
           rec[c].last_reason = JSON.stringify(rec[c].rows.map((id) => ((_ledger.items ?? []).find((i) => i && i.id === id) ?? {}).remaining ?? [])).slice(0, 300);
+          if (!progressed(beforeKeys[c], _remKeys(c))) { rec[c].status = 'exhausted'; rec[c].last_reason = __NOPROGRESS__; }
         }
       }
       for (const c of Object.keys(rec)) if (rec[c].status === 'open') rec[c].status = 'exhausted';
+      const _attempted = Object.keys(rec).filter((c) => rec[c].attempts > 0);
+      if (_attempted.length) {
+        const _stuck = _ledgerBlocking(_ledger);
+        _ledgerSc = {
+          phase: 'ledger', attempts: Math.max(..._attempted.map((c) => rec[c].attempts)),
+          status: !_stuck.length ? 'fixed' : _attempted.some((c) => rec[c].last_reason === __NOPROGRESS__) ? 'no-progress'
+            : _attempted.some((c) => rec[c].status === 'blocked') ? 'blocked' : 'exhausted',
+          gaps: _stuck.flatMap((i) => (Array.isArray(i.remaining) ? i.remaining : []).map(String)),
+          needs_paths: [...new Set(_attempted.flatMap((c) => rec[c].paths))],
+          foreign: _foreignReds,
+        };
+      }
       const _out = ['exhausted', 'blocked', 'held'];
       for (const i of _ledgerBlocking(_ledger)) {
         const cs = Object.keys(rec).filter((c) => rec[c].rows.includes(i.id));
@@ -1481,7 +1673,7 @@ def _ledger_recover_js(
         f". Its brief is the file ",
         "js:(_fixRow.brief_path ?? '(none)')",
         ". ",
-        *_prompt_parts(ledger_fix_prompt("remText", "evText", "failTxt", "fpText")),
+        *_prompt_parts(ledger_fix_prompt("remText", "evText", "failTxt", "fpText", f"{record_dir}/notes.jsonl")),
         f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
     )
     fix_call = _agent(
@@ -1522,7 +1714,7 @@ def _ledger_recover_js(
     )
     return (
         _LEDGER_RECOVER_JS.replace("__CAP__", str(RECOVERY_ATTEMPT_CAP))
-        .replace("__RL__", RESUME_LEDGER_KEY)
+        .replace("__NOPROGRESS__", _lit(NO_PROGRESS))
         .replace("__XS__", _lit(ARM_XS))
         .replace("__TEST__", test_var)
         .replace("__FIXCALL__", fix_call)
@@ -2873,6 +3065,7 @@ def compose_ask_script(
     b.append("  let _ledger = null;")
     b.append("  let _consumedReturns = {};")
     b.append("  let _recoveryWithheld = [];")
+    b.append("  let _ledgerSc = null;")
     b.append(_AGENT_DEFS_HELPER_JS)
     if rb_fn:
         from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_DECLS
@@ -4429,7 +4622,12 @@ def compose_ask_script(
         f"  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== {_lit(ARM_XS)}) "
         f"{{ {INTEGRATION_NOT_RUN_VAR} = true; }}"
     )
-    b.append(_review_blocked_halt_js(sizing_rel, read_reverify=False))
+    # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
+    b.append("  if (!_reverifyJoined) { _reviewReverify = await " + _JOIN_REVERIFY_JS + "; _reverifyJoined = true; }")
+    b.append(
+        _review_recover_js(head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id)
+    )
+    b.append(_review_blocked_halt_js(sizing_rel))
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
         "  if (!_halted && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) { _halted = { halted: "
@@ -4519,7 +4717,8 @@ def compose_ask_script(
         "    let _verify = null;",
         f"    const _runVerify = async () => {{ try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
-        "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), " + _JOIN_REVERIFY_JS + "]);",
+        # A self-correction leg may have replaced the joined result; never rejoin the stale promise.
+        "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : " + _JOIN_REVERIFY_JS + "]);",
         "    _reverifyJoined = true;",
         "    if (!_halted && !_reviewReused && _reviewReverify && ((Array.isArray(_reviewReverify.unapplied) && _reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }",
         f"    if (_testWanted && _verify && _verify.test) {{ {_emit._TEST_RESULT_VAR} = _verify.test; }}",
@@ -4642,7 +4841,7 @@ def compose_ask_script(
         f"    const _postCommitActs = {json.dumps(list(POST_COMMIT_ACTS))};\n"
         f"    const _emContextIds = {json.dumps(_em_context_row_ids(repo_root, sizing_rel))};\n"
         "    const _ledgerBlocking = (l) => (l?.items ?? []).filter((i) => {\n"
-        "      if (!i || _emContextIds.includes(i.id)) return false;\n"
+        "      if (!i || _emContextIds.includes(i.id) || i.foreign_only === true) return false;\n"
         "      const rem = Array.isArray(i.remaining) ? i.remaining : [];\n"
         "      const status = i.status === 'not_met' && rem.length && rem.every((a) => _postCommitActs.includes(a)) "
         "? 'post_commit' : i.status;\n"
@@ -4716,7 +4915,7 @@ def compose_ask_script(
         "{ _halted = { halted: 'ledger-check', "
         "items: _emptyVerdict ? _owedIds.map((id) => ({ id, status: 'not_met' })) : (_ledger ? _ledgerBlocking(_ledger) : []), "
         f"conflicts: _ledger?.conflicts ?? [], ledger: {_lit(ledger_rel)}, sizing: _sizingRel, run_id: _runId, "
-        f"{HALT_PLAN_FIELD}: _planRel, "
+        f"{HALT_PLAN_FIELD}: _planRel, {SELF_CORRECTION_FIELD}: _ledgerSc, "
         "next_action: _allOwed ? 'Everything left is EM or operator work: ' + _owedNamed.join('; ') "
         "+ '. Perform each, record it (em-performed: plan.tasks.mutate verb em-discharge; operator: verb resolve, "
         "disposition coded, disposition_ref <sha>), then refire to re-judge ' + _blkIds.join(', ') + '.' "

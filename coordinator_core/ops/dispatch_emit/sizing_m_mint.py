@@ -111,6 +111,13 @@ def mint_m_spine(
         claim = _text(acc.get("statement"))
         check = _text(acc.get("check"))
         title = next((ln.strip() for ln in claim.splitlines() if ln.strip()), rid)
+        post_commit = ""
+        if repo_root is not None:
+            from coordinator_core.ops.dispatch_emit import bug_close
+
+            bug_ids = bug_close.named_bug_ids(repo_root, claim + "\n" + check)
+            if bug_ids:
+                post_commit = bug_close.post_commit_clause(bug_ids) + "\n"
         out_rows.append(
             {
                 "id": rid,
@@ -121,6 +128,7 @@ def mint_m_spine(
                     f"Spec: {sizing_rel} ({rid})\n"
                     f"Acceptance:\n{claim}\n"
                     f"Verification (this row is DONE only when this holds): {check}\n"
+                    + post_commit
                     + "".join(
                         f"{body} is routed to {sidecar}: record plan evidence with coordinator-invoke "
                         "plan.tasks.mutate evidence-append; an executor row never edits a plan body.\n"

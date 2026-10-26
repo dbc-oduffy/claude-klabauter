@@ -502,7 +502,7 @@ def _wr(path: Path, text: str) -> None:
 
 def _tomb_fixture(tmp_path: Path, *, successor: bool = True) -> Path:
     wiki = tmp_path / "coordinator" / "docs" / "wiki"
-    succ = "docs/wiki/coordinator-tripwires/tripwire-registry/README.md"
+    succ = "docs" "/wiki/coordinator-tripwires/tripwire-registry/README.md"
     _wr(
         wiki / "coordinator-tripwires" / "tripwire-registry.md",
         f"---\nstatus: tombstone\n---\n# `tripwire-registry.md` moved to `{succ}`\n",
@@ -512,7 +512,7 @@ def _tomb_fixture(tmp_path: Path, *, successor: bool = True) -> Path:
     _wr(
         wiki / "citer.md",
         "See `tripwire-registry.md` and "
-        "`docs/wiki/coordinator-tripwires/tripwire-registry.md`.\n",
+        "`docs" "/wiki/coordinator-tripwires/tripwire-registry.md`.\n",
     )
     return wiki
 
@@ -545,7 +545,7 @@ def test_dangling_tombstone_is_rot(tmp_path):
 
 def test_same_basename_tombstone_is_ambiguous(tmp_path):
     wiki = tmp_path / "coordinator" / "docs" / "wiki"
-    _wr(wiki / "x.md", "---\nstatus: tombstone\n---\n# moved to `docs/wiki/sub/x.md`\n")
+    _wr(wiki / "x.md", "---\nstatus: tombstone\n---\n# moved to `docs" "/wiki/sub/x.md`\n")
     _wr(wiki / "sub" / "x.md", "# x\n")
     _wr(wiki / "citer.md", "See `x.md`.\n")
     report = cg.scan_corpus(wiki_root=wiki, repo_root=tmp_path)

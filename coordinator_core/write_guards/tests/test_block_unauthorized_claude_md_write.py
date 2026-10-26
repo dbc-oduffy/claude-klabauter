@@ -279,7 +279,6 @@ class TestDenyTextNamesAlternativeAndOverride:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "Report BLOCKED to your EM" in reason
         assert "EM runs this, not you" not in reason
-        assert "coordinator_core.session.claude_md_grant grant pm" not in reason
 
     def test_deny_text_no_longer_names_the_rare_use_env_override(self, monkeypatch):
         """The env-override affordance is likewise gone from the rendered
@@ -296,54 +295,25 @@ class TestDenyTextNamesAlternativeAndOverride:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "coordinator/CLAUDE.md" in reason
 
-    def test_grant_cli_interpolates_the_resolved_claude_klabauter_root(self, monkeypatch):
-        import coordinator_core.engine_root as mr
-
-        monkeypatch.setattr(mr, "coordinator_engine_root", lambda: "/opt/some/claude-klabauter")
-        assert guard._grant_cli_invocation() == (
-            'PYTHONPATH="/opt/some/claude-klabauter" '
-            'python3 -m coordinator_core.session.claude_md_grant grant pm '
-            '"<verbatim PM note>"'
+    def test_deny_text_names_the_em_grant_wrapper_without_an_invocation(self, monkeypatch):
+        from coordinator_core.session.claude_md_grant import (
+            GRANT_CLI_COMMAND,
+            GRANT_CLI_NAME,
         )
 
-    def test_grant_cli_falls_back_when_root_unresolvable(self, monkeypatch):
-        import coordinator_core.engine_root as mr
-
-        def _raise():
-            raise RuntimeError("cannot resolve CLAUDE_KLABAUTER_ROOT")
-
-        monkeypatch.setattr(mr, "coordinator_engine_root", _raise)
-        assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
-
-    def test_grant_cli_falls_back_on_empty_root(self, monkeypatch):
-        import coordinator_core.engine_root as mr
-
-        monkeypatch.setattr(mr, "coordinator_engine_root", lambda: "")
-        assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
-
-    def test_grant_cli_never_propagates_an_unexpected_resolver_error(
-        self, monkeypatch, capsys
-    ):
-        import coordinator_core.engine_root as mr
-
-        def _raise():
-            raise AttributeError("resolver drifted")
-
-        monkeypatch.setattr(mr, "coordinator_engine_root", _raise)
-        assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
-        assert "could not resolve the claude-klabauter root" in capsys.readouterr().err
-
-    @pytest.mark.parametrize(
-        "hostile_root",
-        ['/opt/mak"ima', "/opt/$(whoami)", "/opt/mak`ima`", "/opt/mak\nima"],
-    )
-    def test_grant_cli_falls_back_on_a_shell_unsafe_root(
-        self, monkeypatch, hostile_root
-    ):
-        import coordinator_core.engine_root as mr
-
-        monkeypatch.setattr(mr, "coordinator_engine_root", lambda: hostile_root)
-        assert guard._grant_cli_invocation() == guard._GRANT_CLI_INVOCATION_FALLBACK
+        result = guard.check(_payload("CLAUDE.md"))
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert (
+            f"  Unblock: the EM obtains PM approval, then runs {GRANT_CLI_NAME} in the "
+            "target repo and re-sends the edit through workflow.revise.\n"
+        ) in reason
+        assert GRANT_CLI_COMMAND not in reason
+        assert "grant pm" not in reason
+        assert "Target:" in reason
+        assert "Reason:" in reason
+        assert "Report BLOCKED to your EM" in reason
+        assert "PYTHONPATH" not in reason
+        assert "python3 -m" not in reason
 
     def test_deny_text_never_dead_ends(self, monkeypatch):
         result = guard.check(_payload("CLAUDE.md"))

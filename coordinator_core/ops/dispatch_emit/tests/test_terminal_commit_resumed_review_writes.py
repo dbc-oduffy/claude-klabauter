@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import review_edits, terminal_commit
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
     RESUMED_RUN_ID_KEY,
@@ -26,7 +27,7 @@ HALTED = "run-halted"
 RESUMED = "run-resumed"
 HALTED_STARTED = 1000.0
 RESUMED_STARTED = 5000.0
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 1}
+_REVIEWED = {**reviewed(), "fixes": 1}
 
 
 def _git(args, cwd: Path) -> str:

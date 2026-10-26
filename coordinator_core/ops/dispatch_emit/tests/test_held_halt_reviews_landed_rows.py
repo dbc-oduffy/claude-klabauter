@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session.record_homes import record_path
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -107,7 +108,7 @@ def test_terminal_commit_lands_the_done_rows_of_a_held_halt_outcome(tmp_path, mo
         {
             "script_path": "run.mjs",
             "incomplete_chunks": ["X0", "B"],
-            "inline_review": {"integration_stem": "rev-stem", "slices": 1, "fixes": 0},
+            "inline_review": reviewed(),
         },
         repo_root=root / ".git",
     )

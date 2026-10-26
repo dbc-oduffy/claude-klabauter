@@ -25,8 +25,8 @@ import hashlib
 import json
 import re
 from dataclasses import replace
-from pathlib import Path
-from typing import Mapping, Sequence
+from pathlib import Path, PurePosixPath
+from typing import Mapping, Optional, Sequence
 
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
@@ -521,6 +521,14 @@ def claims_output(manifest: Manifest) -> str:
 def compare_output(manifest: Manifest) -> str:
     """The repo-compare manifest's single stage output relative to its segment dir."""
     return manifest.stages[-1].output.removeprefix(_SCRATCH_PREFIX)
+
+
+def synthesis_output(manifest: Manifest) -> Optional[str]:
+    """The first stage output whose basename is `synthesis.md`, relative to its segment dir, else None."""
+    for stage in manifest.stages:
+        if PurePosixPath(stage.output).name == "synthesis.md":
+            return stage.output.removeprefix(_SCRATCH_PREFIX)
+    return None
 
 
 def _ref_slug(ref: str) -> str:

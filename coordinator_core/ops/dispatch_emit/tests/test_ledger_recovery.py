@@ -144,6 +144,11 @@ def test_fix_prompt_carries_the_negative_specs():
         assert needle in p
 
 
+def test_fix_prompt_names_the_notes_file_only_when_given_one():
+    assert "state/warp/r/notes.jsonl" in lr.ledger_fix_prompt("r", "e", "f", "fp", "state/warp/r/notes.jsonl")
+    assert "notes.jsonl" not in lr.ledger_fix_prompt("r", "e", "f", "fp")
+
+
 def test_fix_prompt_frames_remaining_as_gaps_to_close():
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_GAP_RULE
 

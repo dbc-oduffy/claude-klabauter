@@ -666,6 +666,19 @@ def _demote_unregistered_memo_rows(
     return [r for r in rows if r.id not in root_of], new_owed
 
 
+def _declared_delete_brief_clause(run_id: str, row_id: str, writes: Sequence[str]) -> str:
+    """The declared-delete marker clause for one executor brief; empty while the channel is dormant
+    or when every declared write is under scratch/. Every executor brief route appends this."""
+    from coordinator_core.bash_guards import _declared_delete_license
+    from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+
+    if not guard._DECLARED_DELETE_CHANNEL_LIVE:
+        return ""
+    if all(str(w).replace("\\", "/").startswith("scratch/") for w in writes):
+        return ""
+    return _declared_delete_license.brief_clause(run_id, row_id)
+
+
 def _memo_draft_steps(
     root: Path,
     run_dir: Path,
@@ -722,6 +735,9 @@ def _memo_draft_steps(
             "`cross-repo-memo send`: the EM sends. Touch no other file.\n\n"
             f"Row body:\n\n{body}\n"
         )
+        delete_clause = _declared_delete_brief_clause(run_dir.name, step_id, (draft_rel,))
+        if delete_clause:
+            text = text.rstrip() + "\n\n" + delete_clause + "\n"
         _write(brief, (intent + "\n" + text) if intent else text)
         steps.append(
             ManifestRow(
@@ -1153,14 +1169,9 @@ def stage(
                 scratch_clause = scratch_delete.brief_clause(run_id, row.id, row.writes)
                 if scratch_clause:
                     text = text.rstrip() + "\n\n" + scratch_clause + "\n"
-                from coordinator_core.bash_guards import block_subagent_destructive_action as _destructive_guard
-
-                if _destructive_guard._DECLARED_DELETE_CHANNEL_LIVE and any(
-                    not str(w).replace("\\", "/").startswith("scratch/") for w in row.writes
-                ):
-                    from coordinator_core.bash_guards import _declared_delete_license
-
-                    text = text.rstrip() + "\n\n" + _declared_delete_license.brief_clause(run_id, row.id) + "\n"
+                delete_clause = _declared_delete_brief_clause(run_id, row.id, row.writes)
+                if delete_clause:
+                    text = text.rstrip() + "\n\n" + delete_clause + "\n"
                 if prior:
                     text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
                 for dep in after.get(row.id, ()):

@@ -7468,10 +7468,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # (run_git), refusal path only.
     "dispatch.land_run": 5,
     "dispatch.reap_abandoned_runs": 1,
-    # 1c5f1b9da6 routed both _git runners through git.run; live=1
-    "doctor.recover_kept_blobs": 1,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
+    # doctor_kept_blobs and kept_blob_replay spawn only through git.run.run_git.
+    "doctor.recover_kept_blobs": 1,
     "fleet.delete_superseded_decisions": 8,
     "fleet.prune_closed_bugs": 3,
     "goal.kr2_two_repo_rate": 1,

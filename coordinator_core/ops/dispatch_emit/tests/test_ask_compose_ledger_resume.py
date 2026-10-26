@@ -116,10 +116,10 @@ def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):
     script = _script(monkeypatch)
     # e312728c2c gated the review block on `!_reviewReused` (phase reuse).
     review = script.index(
-        "if (!_halted && !_reviewReused && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {"
+        "if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {"
     )
     assert script.index("else if (!_ledgerOwes) { _xsTail = true; }") < review < script.index("label: 'verify'")
-    assert "if (!_halted && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
+    assert "if (!_halted && !_codeReviewOwed && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
 
 
 def test_the_verify_prompt_names_exactly_the_blocking_ids(monkeypatch):

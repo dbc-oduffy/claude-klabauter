@@ -165,7 +165,7 @@ def test_oversize_slug_entry_gets_its_own_shard():
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
 
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
-    payload["wikiSlugs"] = {"a": "docs/wiki/a.md", "huge": "z" * SLUG_SHARD_MAX_BYTES, "b": "docs/wiki/b.md"}
+    payload["wikiSlugs"] = {"a": "docs" + "/wiki/a.md", "huge": "z" * SLUG_SHARD_MAX_BYTES, "b": "docs" + "/wiki/b.md"}
     payload["wikiSlugCount"] = 3
     manifest, files = shard_workflow_input(payload)
     assert [list(files[n]["entries"]) for n in manifest["slugShardFiles"]] == [["a"], ["huge"], ["b"]]

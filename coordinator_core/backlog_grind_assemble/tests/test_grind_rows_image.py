@@ -80,6 +80,7 @@ def test_corrupt_record_refused_and_left_byte_identical(tmp_path):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_writer_reader_round_trip_excludes_peer_hunk(tmp_path):
     import subprocess
 
@@ -100,6 +101,6 @@ def test_writer_reader_round_trip_excludes_peer_hunk(tmp_path):
     assert _run(tmp_path, "pre", "s.txt") == 0
     f.write_bytes(b"PEER\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nROW\n")
     assert _run(tmp_path, "post", "s.txt") == 0
-    sel = grind_landing_select.select(tmp_path, "R1", {"s.txt": "C1"})
+    sel = grind_landing_select.select(tmp_path, "R1", {"s.txt": ["C1"]})
     assert sel.dropped == {}
     assert sel.landed_text("s.txt") == "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nROW\n"

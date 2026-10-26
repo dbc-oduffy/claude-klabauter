@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import land_run, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import claim_index, liveness
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
@@ -100,7 +101,7 @@ def _scenario(root: Path, *, checkpointed: tuple, declared_by_senior: tuple) -> 
 
 
 def _land(root: Path, base: str) -> dict:
-    review = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0, "prep": {"run_base_sha": base}}
+    review = {**reviewed(), "prep": {"run_base_sha": base}}
     return land_run._handler(
         {"script_path": SCRIPT, "incomplete_chunks": [], "inline_review": review,
          "session_id": SELF, "run_id": RUN_A},

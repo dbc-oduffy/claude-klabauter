@@ -85,7 +85,7 @@ def test_commit_halt_withholds_sibling_path(repo, halted):
     assert out["withheld"][SIBLING_SIZING] == "sibling-claimed"
 
 
-def test_review_edit_lands_and_trailer_never_names_a_sibling_path(repo, monkeypatch):
+def test_halted_run_leaves_review_edits_unlanded_and_names_them(repo, monkeypatch):
     _sibling(repo, halted=True)
     _run_a(repo)
     (repo / "a_review.py").write_text("r = 1\n", encoding="utf-8")
@@ -97,11 +97,13 @@ def test_review_edit_lands_and_trailer_never_names_a_sibling_path(repo, monkeypa
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert out["review_edits_unlanded"] == {}
-    assert "a_review.py" in _landed(repo, out, "--name-only")
+    assert out["review_edits_unlanded"] == {"a_review.py": "halted-run", SIBLING_FILE: "halted-run"}
+    names = _landed(repo, out, "--name-only")
+    assert "a.py" in names and "a_review.py" not in names and SIBLING_FILE not in names
+    status = _git(["status", "--porcelain", "-uall"], repo)
+    assert "a_review.py" in status and SIBLING_FILE in status
     message = _git(["log", "-1", "--format=%B"], repo)
-    assert "Review-Edit-Unlanded" not in message
-    assert SIBLING_FILE not in message
+    assert "Review-Edit-Unlanded: a_review.py" in message
 
 
 def test_own_declared_path_a_sibling_also_claims_still_lands(repo):

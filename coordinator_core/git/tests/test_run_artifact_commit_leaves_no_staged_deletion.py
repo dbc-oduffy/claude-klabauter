@@ -1,9 +1,9 @@
 """A run-artifact commit whose shared-index splice lost the lock race leaves no staged deletion.
 
-(a) pins the producer: `commit_paths` under a lock held throughout lands the commit, raises
-`IndexStaleAfterCommit`, and the shared index is behind HEAD (a `D` entry under state/warp/).
-(b) pins the run-level contract: through `ceremony.commit_v2`, a lock released before the leg ends
-leaves the index at HEAD for the committed path.
+(a) pins the producer: `commit_paths` under a lock held throughout raises `CommitRefused`
+before any commit lands; HEAD is unmoved and `git diff --cached` is empty.
+(b) pins the run-level contract: through `ceremony.commit_v2`, a publish that fails after the ref
+moved, with the in-commit reset failing once, still leaves the index at HEAD for the committed path.
 """
 
 from __future__ import annotations
@@ -53,28 +53,32 @@ def repo(tmp_path):
     return root
 
 
-def test_a_commit_paths_under_held_lock_leaves_staged_deletion(repo):
-    """The producer: splice and reset both lose to a held index.lock; the commit still lands."""
+def test_a_commit_paths_under_held_lock_refuses_and_leaves_index_intact(repo, monkeypatch):
+    """The producer: a held index.lock refuses before any commit lands; the index is untouched."""
+    monkeypatch.setattr(commit, "_SPLICE_LOCK_BACKOFF_SECS", ())
+    head_before = _git(["rev-parse", "HEAD"], repo)
+    cached_before = _git(["diff", "--cached"], repo)
     lock = repo / ".git" / "index.lock"
     lock.write_text("", encoding="utf-8")
     try:
-        with pytest.raises(index_write.IndexStaleAfterCommit) as caught:
+        with pytest.raises(commit.CommitRefused):
             commit.commit_paths(
                 repo, [_ARTIFACT], "land artifact\n",
                 blob_fallback=partial(commit.hash_worktree_blobs_via_spawn, cwd=repo),
             )
     finally:
         lock.unlink(missing_ok=True)
-    assert _ARTIFACT in caught.value.paths
-    assert _git(["cat-file", "-e", f"HEAD:{_ARTIFACT}"], repo) == ""
-    assert _staged_head_deletions(repo, "state/warp/") == [_ARTIFACT]
+    assert _git(["rev-parse", "HEAD"], repo) == head_before
+    assert _git(["diff", "--cached"], repo) == cached_before == ""
+    assert _staged_head_deletions(repo, "state/warp/") == []
 
 
-def test_b_commit_v2_leg_heals_when_lock_released_before_leg_ends(repo, monkeypatch):
-    """The lock outlasts the in-commit reset, then releases: the leg must end with the index at HEAD."""
+def test_b_commit_v2_leg_heals_when_publish_fails_after_the_ref_moved(repo, monkeypatch):
+    """The publish fails after the ref moved and the in-commit reset fails once: the leg must still end with the index at HEAD."""
 
-    def busy(_repo_path, _updates, **_kw):
-        raise index_write.IndexWriteLockBusy("simulated peer lock")
+    def failing_publish(self):
+        self.abort()
+        raise index_write.IndexWriteError("simulated publish failure")
 
     real_reset = commit._reset_index_paths
     calls = {"n": 0}
@@ -85,7 +89,7 @@ def test_b_commit_v2_leg_heals_when_lock_released_before_leg_ends(repo, monkeypa
             return False
         return real_reset(repo_path, paths)
 
-    monkeypatch.setattr(index_write, "splice_index", busy)
+    monkeypatch.setattr(index_write.PreparedSplice, "publish", failing_publish)
     monkeypatch.setattr(commit, "_reset_index_paths", reset_fails_once)
 
     reply = commit_v2._handler(

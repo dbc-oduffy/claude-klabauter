@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.credit_gate import KEPT_REVIEW_CHUNK_ID
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -25,7 +26,10 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 SELF = "5e1f0000-0000-4000-8000-0000000000c5"
 HUNK_A = "rev/a.py"
 HUNK_B = "rev/b.py"
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 1, "prep": {"slice_files": []}}
+_REVIEWED = {
+    "integration_stem": "rev-stem", "slices": 1, "fixes": 1, "prep": {"slice_files": []},
+    "wave_reviews": reviewed()["wave_reviews"],
+}
 
 
 def _git(args, cwd: Path) -> str:

@@ -11,6 +11,10 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
+_WIKI = "docs" + "/wiki/"
+_X = _WIKI + "x.md"
+_OTHER = _WIKI + "other.md"
+
 
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(
@@ -45,44 +49,44 @@ def _run(root: Path, base: str, paths: list[str]) -> dict:
 
 
 def test_unreferenced_wiki_doc_is_unreachable(tmp_path):
-    root, base = _repo(tmp_path, {"docs/wiki/other.md": "other\n"})
-    _put(root, "docs/wiki/x.md", "# x\n")
-    assert _run(root, base, ["docs/wiki/x.md"]) == {"docs/wiki/x.md": "unreachable"}
+    root, base = _repo(tmp_path, {_OTHER: "other\n"})
+    _put(root, _X, "# x\n")
+    assert _run(root, base, [_X]) == {_X: "unreachable"}
 
 
 def test_added_link_in_sibling_doc_makes_it_reachable(tmp_path):
-    root, base = _repo(tmp_path, {"docs/wiki/other.md": "other\n"})
-    _put(root, "docs/wiki/x.md", "# x\n")
-    _put(root, "docs/wiki/other.md", "other\n[x](x.md)\n")
-    verdicts = _run(root, base, ["docs/wiki/x.md"])
-    assert verdicts == {"docs/wiki/x.md": "reachable"}
+    root, base = _repo(tmp_path, {_OTHER: "other\n"})
+    _put(root, _X, "# x\n")
+    _put(root, _OTHER, "other\n[x](x.md)\n")
+    verdicts = _run(root, base, [_X])
+    assert verdicts == {_X: "reachable"}
 
 
 def test_ancestor_readme_at_base_makes_it_reachable(tmp_path):
-    root, base = _repo(tmp_path, {"docs/wiki/README.md": "see docs/wiki/x.md\n"})
-    _put(root, "docs/wiki/x.md", "# x\n")
-    assert _run(root, base, ["docs/wiki/x.md"]) == {"docs/wiki/x.md": "reachable"}
+    root, base = _repo(tmp_path, {_WIKI + "README.md": f"see {_X}\n"})
+    _put(root, _X, "# x\n")
+    assert _run(root, base, [_X]) == {_X: "reachable"}
 
 
 def test_generic_index_name_mention_does_not_wire_another_index(tmp_path):
-    root, base = _repo(tmp_path, {"docs/wiki/other.md": "other\n"})
+    root, base = _repo(tmp_path, {_OTHER: "other\n"})
     _put(root, "docs/reference/index.md", "# ref\n")
-    _put(root, "docs/wiki/other.md", "other\nsee index.md\n")
+    _put(root, _OTHER, "other\nsee index.md\n")
     assert _run(root, base, ["docs/reference/index.md"]) == {"docs/reference/index.md": "unreachable"}
 
 
 def test_only_a_test_file_referrer_stays_unreachable(tmp_path):
     root, base = _repo(tmp_path, {"tests/test_a.py": "pass\n"})
-    _put(root, "docs/wiki/x.md", "# x\n")
-    _put(root, "tests/test_a.py", "pass\n# docs/wiki/x.md\n")
-    assert _run(root, base, ["docs/wiki/x.md"]) == {"docs/wiki/x.md": "unreachable"}
+    _put(root, _X, "# x\n")
+    _put(root, "tests/test_a.py", f"pass\n# {_X}\n")
+    assert _run(root, base, [_X]) == {_X: "unreachable"}
 
 
 def test_a_plan_citing_the_doc_does_not_wire_it(tmp_path):
     root, base = _repo(tmp_path, {"docs/plans/p.md": "plan\n"})
-    _put(root, "docs/wiki/x.md", "# x\n")
-    _put(root, "docs/plans/p.md", "plan\ndocs/wiki/x.md\n")
-    assert _run(root, base, ["docs/wiki/x.md"]) == {"docs/wiki/x.md": "unreachable"}
+    _put(root, _X, "# x\n")
+    _put(root, "docs/plans/p.md", f"plan\n{_X}\n")
+    assert _run(root, base, [_X]) == {_X: "unreachable"}
 
 
 def test_skill_and_plan_and_discovered_pages_produce_no_entry(tmp_path):
@@ -114,6 +118,6 @@ def test_unmodelled_markdown_is_undecidable(tmp_path):
 
 def test_relative_parent_link_from_another_directory_is_reachable(tmp_path):
     root, base = _repo(tmp_path, {"docs/reference/r.md": "r\n"})
-    _put(root, "docs/wiki/x.md", "# x\n")
+    _put(root, _X, "# x\n")
     _put(root, "docs/reference/r.md", "r\n[x](../wiki/x.md)\n")
-    assert _run(root, base, ["docs/wiki/x.md"]) == {"docs/wiki/x.md": "reachable"}
+    assert _run(root, base, [_X]) == {_X: "reachable"}

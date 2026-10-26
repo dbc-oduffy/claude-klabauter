@@ -124,16 +124,7 @@ renders the sentinel path at all -- the exemption that used to cover it
 unused, so `annotate_deny`'s output is now covered by this ratchet with
 NO exception, same as any other guard message:
 
-  1. ``grant-cli-invocation`` -- `block_unauthorized_claude_md_write.
-     _grant_cli_invocation()` legitimately resolves an absolute,
-     in-process root into a command the SAME operator pastes into their
-     OWN shell immediately after reading it (that module's own docstring
-     names this as the deliberate exception to the portable-pointer rule
-     `_resolve_override_keys_doc_display` now follows). Exempted by
-     calling the function fresh and stripping its EXACT literal output,
-     not a wildcard pattern -- so a change to what it renders is measured
-     against its own current behavior, never silently widened.
-  2. ``corpus-fixture-echo`` -- this suite's own firing corpus builds
+  1. ``corpus-fixture-echo`` -- this suite's own firing corpus builds
      REAL scratch git repos/files (see `guard_message_corpus.py`'s
      `fire_row`/`fire_write_guard_row`/`fire_hook_row`, all rooted under
      `tempfile.TemporaryDirectory()`) specifically so a guard has a real
@@ -227,9 +218,6 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
 )
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.session.guard_unlock_sentinel import annotate_deny
-from coordinator_core.write_guards.block_unauthorized_claude_md_write import (
-    _grant_cli_invocation,
-)
 from coordinator_core.ops.check_posix_exec_assumptions import (
     _CROSS_PATH_PATTERNS as _TIER_D_CROSS_PATH_PATTERNS,
 )
@@ -364,10 +352,8 @@ def _contains_normalized(haystack: str, needle: str) -> bool:
 
 
 def _is_exempt(
-    span: str, *, row_input: str, grant_cli_text: str, interpreter_text: str = ""
+    span: str, *, row_input: str, interpreter_text: str = ""
 ) -> bool:
-    if grant_cli_text and _contains_normalized(grant_cli_text, span):
-        return True
     if interpreter_text and _contains_normalized(interpreter_text, span):
         return True
     if row_input and _contains_normalized(row_input, span):
@@ -396,7 +382,6 @@ def _collect_violations(
     envelope: Any,
     *,
     row_input: str = "",
-    grant_cli_text: str = "",
     interpreter_text: str = "",
 ) -> List[str]:
     violations: List[str] = []
@@ -407,7 +392,6 @@ def _collect_violations(
                 if not _is_exempt(
                     span,
                     row_input=row_input,
-                    grant_cli_text=grant_cli_text,
                     interpreter_text=interpreter_text,
                 ):
                     violations.append(
@@ -425,7 +409,6 @@ def _collect_violations(
 
 
 def test_no_machine_absolute_path_in_any_corpus_guard_message():
-    grant_cli_text = _grant_cli_invocation()
     interpreter_text = _bt_python3_invocation()
     violations: List[str] = []
 
@@ -439,7 +422,6 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
                 row.row_id,
                 envelope_of(capture.envelope, "em"),
                 row_input=row.input,
-                grant_cli_text=grant_cli_text,
                 interpreter_text=interpreter_text,
             )
         )
@@ -455,7 +437,6 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
                 row.guard,
                 row.row_id,
                 capture.envelope,
-                grant_cli_text=grant_cli_text,
                 interpreter_text=interpreter_text,
             )
         )
@@ -469,7 +450,6 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
                 row.guard,
                 row.row_id,
                 capture.envelope,
-                grant_cli_text=grant_cli_text,
                 interpreter_text=interpreter_text,
             )
         )

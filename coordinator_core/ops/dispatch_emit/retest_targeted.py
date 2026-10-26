@@ -86,20 +86,13 @@ def _run_argv(
             sink.close()
 
 
-#: ``_run_session`` code for a session never started because the shared deadline was already spent.
+#: ``main`` return code for a session never started because the shared deadline was already spent.
 _NOT_LAUNCHED = "not-launched"
 
 
-def _run_session(run, argv: list[str], root: Path, log: Path, deadline: float, append: bool):
-    """``(code, error)`` for one session under the shared ``deadline`` (monotonic): ``_NOT_LAUNCHED``
-    when no time remains, ``(None, message)`` when the launcher could not start."""
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        return _NOT_LAUNCHED, None
-    try:
-        return run(argv, root, log=log, timeout=remaining, append=append), None
-    except OSError as exc:
-        return None, str(exc)
+def _time_left(deadline: float) -> float:
+    """Seconds left under the shared ``deadline`` (monotonic); ``<= 0`` means launch nothing."""
+    return deadline - time.monotonic()
 
 
 def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
@@ -251,18 +244,21 @@ def _scopes_conflict(root: Path, scopes: dict[str, list[str]]) -> bool:
     return sum(1 for s in scopes if (root / s / "conftest.py").is_file()) > 1
 
 
-def _launch_argv(root: Path, tests: list[str], *, keep_tier: bool = False) -> "list[list[str]] | str":
-    """The commands that run ``tests``. A declared ``targeted_test_launcher`` (pinned interpreter, else
-    this one) gets every node id in one command unless the scopes' conftests collide, then one per
-    conftest scope. Else ``fast_test_cmd`` minus its collection roots and markers, one command per scope
-    with the paths appended; its ``--tier`` option is dropped unless ``keep_tier`` (the fallback when a
-    runner needs it). A string return is the reason no command could be built."""
-    from coordinator_core import diff_scoped_tests, resolve_validation_cmd
+def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "tuple[list[str], list[list[str]]] | str":
+    """``(base, groups)``: the command prefix and the test groups it runs, one session per group. Both
+    arms share one grouping: every node id in one group (input order) unless the scopes' conftests
+    collide, then one group per scope. A declared ``targeted_test_launcher`` (pinned interpreter, else
+    this one) supplies the prefix, else ``fast_test_cmd`` minus its collection roots and markers; its
+    ``--tier`` option is dropped unless
+    ``keep_tier`` (the fallback when a runner needs it). A string return is the reason no command could
+    be built."""
+    from coordinator_core import resolve_validation_cmd
     from coordinator_core.ops.dispatch_emit import test_interpreter as ti
 
     scopes: dict[str, list[str]] = {}
     for t in tests:
         scopes.setdefault(_scope_of(root, t), []).append(t)
+    groups = list(scopes.values()) if _scopes_conflict(root, scopes) else [tests]
 
     declared = resolve_validation_cmd.read_local_md_key(str(root), ti.LAUNCHER_KEY).strip()
     if declared:
@@ -271,14 +267,12 @@ def _launch_argv(root: Path, tests: list[str], *, keep_tier: bool = False) -> "l
             return f"{ti.LAUNCHER_KEY} {declared!r} is not a repo-relative file that exists"
         pin = ti.resolve_targeted_test_python(root)
         python = pin.command if pin.command and pin.defect is None else sys.executable
-        groups = list(scopes.values()) if _scopes_conflict(root, scopes) else [tests]
-        return [[python, *shlex.split(declared), *group] for group in groups]
+        return [python, *shlex.split(declared)], groups
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
     if resolved.returncode != 0:
         return f"fast_test_cmd unresolved: {resolved.stderr.strip()}"
     base = _strip_collection_roots(root, resolved.stdout.strip())
-    stripped = shlex.join(base if keep_tier else _drop_tier_options(base))
-    return [shlex.split(diff_scoped_tests.append_test_paths(stripped, group)) for group in scopes.values()]
+    return (base if keep_tier else _drop_tier_options(base)), groups
 
 
 def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], head_sha: Callable) -> int:
@@ -421,23 +415,40 @@ def _start_detached(
 def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float):
     """One full pass of ``tests`` with cwd ``root`` under the shared ``deadline`` (monotonic):
     ``(status, reason, codes, log_used)``."""
-    argv_or_err = _launch_argv(root, tests)
-    if isinstance(argv_or_err, str):
-        return "error", argv_or_err, [], False
+    plan = _launch_plan(root, tests)
+    if isinstance(plan, str):
+        return "error", plan, [], False
+    base, groups = plan
     budget = RETEST_CHILD_TIMEOUT_SECS
     codes: list = []
     failed_cmds: list[str] = []
     broken_msgs: list[str] = []
-    for n, argv in enumerate(argv_or_err):
+    kept: "tuple[list[str], list[list[str]]] | str | None" = None
+    # One session per conftest-bearing scope when two or more collide, else exactly one; the
+    # partition is the conftest-collision floor, so nothing further batches.
+    sessions = [[*base, *group] for group in groups]
+    for n, (argv, group) in enumerate(zip(sessions, groups)):
         offset = _log_size(log_path) if n > 0 else 0
-        rc, err = _run_session(run, argv, root, log_path, deadline, n > 0)
+        rc, err = _NOT_LAUNCHED, None
+        if (left := _time_left(deadline)) > 0:
+            try:
+                rc = run(argv, root, log=log_path, timeout=left, append=n > 0)
+            except OSError as exc:
+                rc, err = None, str(exc)
+        cmd_base = base
         if rc == 2 and not _collection_failed_since(log_path, offset):
-            kept = _launch_argv(root, tests, keep_tier=True)
-            if isinstance(kept, list) and len(kept) == len(argv_or_err) and kept[n] != argv:
-                argv = kept[n]
-                rc, err = _run_session(run, argv, root, log_path, deadline, True)
+            if kept is None:
+                kept = _launch_plan(root, tests, keep_tier=True)
+            if not isinstance(kept, str) and kept[0] != base:
+                cmd_base = kept[0]
+                rc, err = _NOT_LAUNCHED, None
+                if (left := _time_left(deadline)) > 0:
+                    try:
+                        rc = run([*cmd_base, *group], root, log=log_path, timeout=left, append=True)
+                    except OSError as exc:
+                        rc, err = None, str(exc)
         codes.append(rc)
-        cmd = shlex.join(argv)
+        cmd = shlex.join([*cmd_base, *group])
         if err is not None:
             broken_msgs.append(f"launcher could not start: {err}: {cmd}")
         elif rc == _NOT_LAUNCHED:

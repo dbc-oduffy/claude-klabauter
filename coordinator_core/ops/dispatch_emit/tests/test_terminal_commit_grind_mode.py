@@ -80,12 +80,10 @@ def test_halted_still_lands_finished_rows_and_names_the_halt(repo):
     assert "budget-exhausted" in _git(["log", "-1", "--format=%B"], repo)
 
 
-def test_untracked_deletion_is_dropped_not_refused(repo):
+def test_untracked_deletion_is_already_true_not_dropped_or_refused(repo):
     out = _call(repo, [_row("r1", ["a.py"], ["state/bug-backlog/r1.yaml"])])
     assert out["committed"] is True
-    assert out["dropped"] == [
-        {"row_id": "r1", "path": "state/bug-backlog/r1.yaml", "reason": "deletion-git-cannot-see"}
-    ]
+    assert out["dropped"] == []
     assert _head_files(repo) == {"a.py"}
 
 

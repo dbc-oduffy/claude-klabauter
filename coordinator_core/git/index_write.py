@@ -104,9 +104,10 @@ class IndexStaleAfterCommit(IndexWriteError):
     """THE COMMIT LANDED AND ONLY THE INDEX IS STALE -- the one outcome on
     this surface that must not be retried.
 
-    `commit.py` splices the index AFTER the ref swap, deliberately: an index
-    matching a commit that never landed is the same lie in the other
-    direction. So a failure at the splice is on the far side of durability.
+    `commit.py` takes `index.lock` before the ref swap but renames the built
+    index onto `.git/index` only AFTER it: an index matching a commit that
+    never landed is the same lie in the other direction. So a failure at the
+    rename is on the far side of durability.
     The work is in history, the caller holds a real sha, and the only damage
     is that peers' `git status` misreports those paths until any subsequent
     index write refreshes it.
@@ -220,6 +221,23 @@ def splice_index(
     collapse_unmerged: Collection[str] = frozenset(),
 ) -> None:
     """Splice `updates` into `.git/index` under `index.lock`.
+    See `prepare_splice` for the arguments and the two-phase form.
+    """
+    prepare_splice(
+        repo, updates, stat_fallback=stat_fallback, collapse_unmerged=collapse_unmerged
+    ).publish()
+
+
+def prepare_splice(
+    repo: Union[str, Path],
+    updates: Mapping[str, object],
+    *,
+    stat_fallback: bool = False,
+    collapse_unmerged: Collection[str] = frozenset(),
+) -> PreparedSplice:
+    """Take `index.lock` and build the spliced index in it; `.git/index` is untouched until
+    `PreparedSplice.publish()`. Raises `IndexWriteLockBusy` when a peer holds the lock, with
+    nothing written; any failure while building releases the lock.
 
     `collapse_unmerged`: paths whose stage 1-3 entries are dropped and replaced by their stage-0
     update. Each must appear in `updates` (an ABSENT value resolves it to deletion); any other
@@ -252,17 +270,16 @@ def splice_index(
     except FileExistsError as exc:
         raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc
 
+    prepared = PreparedSplice(lock_path, index_path)
     try:
         with os.fdopen(fd, "wb") as handle:
             _splice_locked(
                 handle, root, index_path, lock_path, updates, stat_fallback, collapse
             )
-    finally:
-        if lock_path.exists():
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+    except BaseException:
+        prepared.abort()
+        raise
+    return prepared
 
 
 def _splice_locked(
@@ -393,23 +410,47 @@ def _splice_locked(
         handle.write(piece)
     handle.write(digest.digest())
     handle.close()
-    if not _replace_with_retry(lock_path, index_path):
-        # WAS UNWRAPPED, AND THAT BROKE THE DOCUMENTED CONTRACT. This
-        # function's own docstring promises `IndexWriteLockBusy` or
-        # `IndexWriteError`; the `try:` around this line carries only a
-        # `finally:`, so a Windows `PermissionError` escaped as neither and
-        # a caller written correctly against that contract still would not
-        # catch it. Captured at 2/200 with 12 concurrent committers.
-        #
-        # A LOST INDEX WRITE IS NOT A LOST COMMIT, and the distinction is
-        # the whole disposition here: `commit.py` splices the index AFTER
-        # the ref swap, deliberately (an index matching a commit that never
-        # landed is the same lie in the other direction), so reaching this
-        # line means the commit ALREADY LANDED. The failure leaves a stale
-        # index, not lost work, and the honest report says so rather than
-        # implying the commit failed.
-        raise IndexStaleAfterCommit(
-            f"{index_path} could not be updated -- a peer held it. The "
-            f"commit LANDED; only the shared index is stale. `git status` "
-            f"may misreport these paths until any index write refreshes it."
-        )
+
+
+class PreparedSplice:
+    """A fully built replacement index sitting in a held `index.lock`.
+
+    Exactly one of `publish()` / `abort()` ends it; both release the lock. `publish()` is the
+    only step that touches `.git/index`, so a caller can move a ref between `prepare_splice`
+    and `publish` and know the index write cannot be refused by a peer's lock.
+    """
+
+    def __init__(self, lock_path: Path, index_path: Path) -> None:
+        self._lock_path = lock_path
+        self._index_path = index_path
+
+    def abort(self) -> None:
+        if self._lock_path.exists():
+            try:
+                self._lock_path.unlink()
+            except OSError:
+                pass
+
+    def publish(self) -> None:
+        # Abort only on failure: after a successful rename the lock path is free, and a peer may
+        # already hold a fresh `index.lock` there that `abort()` would delete.
+        try:
+            self._publish()
+        except BaseException:
+            self.abort()
+            raise
+
+    def _publish(self) -> None:
+        lock_path, index_path = self._lock_path, self._index_path
+        if not _replace_with_retry(lock_path, index_path):
+            _raise_stale(index_path)
+
+
+def _raise_stale(index_path: Path) -> None:
+    """The rename onto `.git/index` failed (a Windows reader held it): a typed stale-index report,
+    not a bare `PermissionError`. When a ref moved first, the commit already landed."""
+    raise IndexStaleAfterCommit(
+        f"{index_path} could not be updated -- a peer held it. The "
+        f"commit LANDED; only the shared index is stale. `git status` "
+        f"may misreport these paths until any index write refreshes it."
+    )

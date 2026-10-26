@@ -174,10 +174,12 @@ def test_a_named_chunk_is_fixed_and_the_run_commits_with_no_halt(monkeypatch):
     assert RECOVERY_WITHHELD_PARAM not in _commit_prompt(out)
 
 
-def test_every_fix_failing_stops_at_the_cap_and_withholds_the_chunk(monkeypatch):
+def test_a_fix_that_progresses_but_never_finishes_stops_at_the_cap_and_withholds_the_chunk(monkeypatch):
+    two = _unmet(["C1: part one", "C1: part two"])
+    one = _unmet(["C1: part two"])
     out = _run(
-        _script(monkeypatch), items=[_NAMED],
-        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_NAMED]}},
+        _script(monkeypatch), items=[two],
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [one]}},
     )
     assert _fix_labels(out) == ["ledger-fix:C1"] * RECOVERY_ATTEMPT_CAP
     assert _labels(out).count(LEDGER_REVERIFY_LABEL) == RECOVERY_ATTEMPT_CAP
@@ -187,6 +189,37 @@ def test_every_fix_failing_stops_at_the_cap_and_withholds_the_chunk(monkeypatch)
     assert res["halted_by"] is None
     assert "C1" in res["incomplete"]
     assert f'"{RECOVERY_WITHHELD_PARAM}":["C1"]' in _commit_prompt(out)
+
+
+def test_a_fix_whose_reverify_returns_the_same_remaining_is_one_attempt_then_no_progress(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_NAMED]}},
+    )
+    assert _fix_labels(out) == ["ledger-fix:C1"]
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["status"] == "exhausted" and rec["attempts"] == 1
+    assert rec["last_reason"] == "self-correction-no-progress"
+
+
+def test_a_ledger_halt_after_recovery_carries_the_self_correction_record(monkeypatch):
+    manifest = {**_DISK, "rulable_ids": ["R1"]}
+    out = _run(
+        _script(monkeypatch), items=[_NAMED, _unmet(["no owner"], rid="R2")], manifest=manifest,
+        replies={"ledger-fix:C1": {"status": "BLOCKED", "paths": [], "reason": "no"}},
+    )
+    sc = out["result"]["halted_by"]["self_correction"]
+    assert out["result"]["halted_by"]["halted"] == "ledger-check"
+    assert sc["phase"] == "ledger" and sc["attempts"] == 1 and sc["status"] == "blocked"
+
+
+def test_the_fix_leg_is_told_where_the_revise_notes_are(monkeypatch):
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
+    )
+    prompt = next(c for c in out["calls"] if c["label"] == "ledger-fix:C1")["prompt"]
+    assert "/notes.jsonl" in prompt
 
 
 def test_a_blocked_fix_spends_no_more_attempts(monkeypatch):
@@ -224,11 +257,44 @@ def test_a_held_only_item_runs_no_fix_leg_and_is_withheld(monkeypatch):
     assert out["result"]["halted_by"] is None
 
 
-def test_a_rulable_blocking_item_runs_no_fix_leg(monkeypatch):
+def test_a_rulable_row_with_a_remaining_list_naming_a_chunks_file_runs_its_fix_leg(monkeypatch):
     manifest = {**_DISK, "rulable_ids": ["R1"]}
-    out = _run(_script(monkeypatch), items=[_NAMED], manifest=manifest)
+    out = _run(
+        _script(monkeypatch), items=[_NAMED], manifest=manifest,
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
+    )
+    assert _fix_labels(out) == ["ledger-fix:C1"]
+    assert out["result"]["halted_by"] is None
+
+
+def test_a_rulable_row_with_empty_remaining_runs_no_fix_leg_and_halts_ledger_check(monkeypatch):
+    manifest = {**_DISK, "rulable_ids": ["R1"]}
+    out = _run(_script(monkeypatch), items=[_unmet([], "C1 pkg/a.py")], manifest=manifest)
     assert _fix_labels(out) == []
     assert out["result"]["halted_by"]["halted"] == "ledger-check"
+
+
+def test_a_row_whose_remaining_is_only_foreign_test_ids_runs_no_fix_leg_and_does_not_halt(monkeypatch):
+    foreign = _unmet(["other/test_x.py::test_a", "other/test_y.py::test_b"])
+    out = _run(_script(monkeypatch), items=[foreign])
+    assert _fix_labels(out) == []
+    assert out["result"]["halted_by"] is None
+
+
+def test_foreign_ids_stay_out_of_the_failing_list_the_fix_leg_gets(monkeypatch):
+    test = {
+        "status": "fail", "summary": "s",
+        "baseline": {"caused": ["tests/test_a.py::test_own", "other/test_x.py::test_theirs"],
+                     "foreign": ["other/test_x.py::test_theirs"], "pre_existing": ["old/test_p.py::test_old"]},
+    }
+    out = _run(
+        _script(monkeypatch), items=[_unmet(["C1: fix tests/test_a.py::test_own"])], test=test,
+        replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
+    )
+    prompt = next(c for c in out["calls"] if c["label"] == "ledger-fix:C1")["prompt"]
+    assert "tests/test_a.py::test_own" in prompt
+    assert "other/test_x.py" not in prompt.split("Failing output:", 1)[1]
+    assert "old/test_p.py" not in prompt
 
 
 def test_an_owed_blocking_item_runs_no_fix_leg(monkeypatch):

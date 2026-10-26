@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift import (  # noqa: F401 -- fixture
     SID,
     _git,
@@ -18,7 +19,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+REVIEWED = reviewed()
 _TEXT = {"a.py": "A\n", "shared.py": "S\n", "b.py": "B\n"}
 
 

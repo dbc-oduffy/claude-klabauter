@@ -81,6 +81,7 @@ READ_ONLY_GETTEMPDIR = frozenset(
         ("coordinator_core/bash_guards/guard_post_executor_verification.py", "_is_probe_script"),
         ("coordinator_core/hooks/_em_write_budget.py", "_is_scratch_or_tmp"),
         ("coordinator_core/ops/dispatch_emit/ask_brief.py", "_in_session_scratchpad"),
+        ("coordinator_core/ops/dispatch_emit/cross_repo_write_refusal.py", "in_session_scratchpad"),
         # Not read-only: a byte-sized --check-only probe file, os.remove'd in a finally.
         ("coordinator_core/ops/gen_claude_author_launcher.py", "main"),
         ("coordinator_core/ops/gen_claude_author_shim.py", "main"),

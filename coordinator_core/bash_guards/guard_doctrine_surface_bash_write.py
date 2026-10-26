@@ -1482,6 +1482,9 @@ _SIZING_WRITER_BASENAMES = frozenset(
 
 _SCRIPT_SUFFIX_RE = re.compile(r"\.(?:py|cmd|ps1)$", re.IGNORECASE)
 
+#: A leading PowerShell call / dot-source operator is not the program.
+_POWERSHELL_CALL_OPERATORS = frozenset({"&", "."})
+
 
 def _segment_program_basename(segment: str) -> Optional[str]:
     """Lower-cased basename (no ``.py``/``.cmd``/``.ps1``) of the program the
@@ -1491,6 +1494,8 @@ def _segment_program_basename(segment: str) -> Optional[str]:
     tokens = segment.split()
     idx = 0
     while idx < len(tokens) and _ASSIGN_RE.match(tokens[idx]):
+        idx += 1
+    if idx < len(tokens) and tokens[idx] in _POWERSHELL_CALL_OPERATORS:
         idx += 1
     if idx >= len(tokens):
         return None
@@ -1513,7 +1518,11 @@ def _runs_only_named_program_operands(
     if "<<" in segment or _has_live_command_substitution(segment):
         return False
     bare = _strip_quoted_spans(segment)
-    return "<(" not in bare and not _has_write_marker(bare)
+    if "<(" in bare or _has_redirect_marker(bare):
+        return False
+    # Operands are data: a write word is a write only as a pipe's downstream stage.
+    _, pipe, downstream = bare.partition("|")
+    return not (pipe and _has_non_redirect_write_marker(downstream))
 
 
 def _is_sanctioned_sizing_writer_shape(segment: str) -> bool:
@@ -1551,6 +1560,8 @@ def _segment_command_word_is_python(segment: str) -> bool:
     tokens = segment.split()
     idx = 0
     while idx < len(tokens) and _ASSIGN_RE.match(tokens[idx]):
+        idx += 1
+    if idx < len(tokens) and tokens[idx] in _POWERSHELL_CALL_OPERATORS:
         idx += 1
     return idx < len(tokens) and _command_token_basename(tokens[idx]).lower() in {
         "python",

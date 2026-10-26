@@ -20,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     render_marker,
 )
 from coordinator_core.ops.dispatch_emit.tests import test_ask_run_product_commit as ask
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo as ask_repo  # noqa: F401 -- fixture
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
@@ -27,7 +28,7 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "c4e53fa2-2bda-51b1-833a-cf629f2b0cb6"
-REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+REVIEWED = reviewed()
 _TOKENS: dict = {}
 
 

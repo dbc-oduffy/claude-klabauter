@@ -1305,6 +1305,7 @@ def _recovery_backing(chunks: dict, ids: Sequence[str]) -> tuple[dict, list]:
     the re-verify agent: this catches a param the record does not support, not an agent misreporting its
     own attempts."""
     from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+    from coordinator_core.ops.dispatch_emit import self_correction as sc
 
     reasons: dict = {}
     unbacked: list = []
@@ -1315,6 +1316,13 @@ def _recovery_backing(chunks: dict, ids: Sequence[str]) -> tuple[dict, list]:
         last = str(entry.get("last_reason") or "") if isinstance(entry, dict) else ""
         if status == lr.STATUS_EXHAUSTED and attempts == lr.RECOVERY_ATTEMPT_CAP:
             reasons[cid] = f"{lr.CAP_EXHAUSTED} ({attempts} attempts): {last}"
+        elif (
+            status == lr.STATUS_EXHAUSTED
+            and type(attempts) is int
+            and 1 <= attempts <= lr.RECOVERY_ATTEMPT_CAP
+            and last == sc.NO_PROGRESS
+        ):
+            reasons[cid] = f"{sc.NO_PROGRESS} ({attempts} attempts): {last}"
         elif status == lr.STATUS_BLOCKED and isinstance(attempts, int):
             reasons[cid] = f"{lr.FIX_BLOCKED} ({attempts} attempts): {last}"
         elif status == lr.STATUS_HELD:

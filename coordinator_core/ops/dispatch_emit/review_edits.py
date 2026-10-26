@@ -30,14 +30,16 @@ class ReviewEditVerdict:
     unanswerable: Optional[str]
 
 
-def _norm(path: str) -> str:
+def norm(path: str) -> str:
+    """Forward-slash form of ``path`` with leading ``./`` removed."""
     text = str(path).replace("\\", "/")
     while text.startswith("./"):
         text = text[2:]
     return text
 
 
-def _out_of_worktree(path: str) -> bool:
+def out_of_worktree(path: str) -> bool:
+    """True for a normalised path that is absolute, drive-qualified or climbs out via ``..``."""
     return (
         path.startswith("/")
         or path.startswith("../")
@@ -82,7 +84,7 @@ def live_sibling_declared(
             continue
         for p in paths:
             if isinstance(p, str) and p:
-                out.setdefault(_norm(p), run_id)
+                out.setdefault(norm(p), run_id)
     return out
 
 
@@ -100,16 +102,16 @@ def partition(
     sibling-declared write is neither."""
     if writes is None:
         return ReviewEditVerdict(land=(), halt={}, unanswerable="review-write source unanswerable")
-    changed_n = {_norm(p) for p in changed}
-    ignored_n = {_norm(p) for p in ignored}
-    committed_n = {_norm(p) for p in committed}
-    sibling_n = {_norm(p) for p in sibling_declared}
-    contested_n = {_norm(p) for p in contested}
+    changed_n = {norm(p) for p in changed}
+    ignored_n = {norm(p) for p in ignored}
+    committed_n = {norm(p) for p in committed}
+    sibling_n = {norm(p) for p in sibling_declared}
+    contested_n = {norm(p) for p in contested}
     land: list[str] = []
     halt: dict[str, str] = {}
     for raw in writes:
-        path = _norm(raw)
-        if _out_of_worktree(path):
+        path = norm(raw)
+        if out_of_worktree(path):
             halt[path] = HALT_OUT_OF_WORKTREE
             continue
         if path in committed_n or path in ignored_n or path in sibling_n:

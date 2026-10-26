@@ -27,12 +27,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+from coordinator_core.install import substrate
 from coordinator_core.install.substrate import (
     _CH_FAMILY_FILES,
     _derive_agent_helper_target_map,
     _install_bin_resolvers,
     _load_bin_templates_manifest,
     _resolve_bin_templates_manifest_root,
+    _split_live_source_tree_map,
 )
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -69,6 +71,10 @@ def _run_install(tmp_path: Path, monkeypatch, bin_dst: Path) -> None:
         _write(ch_bin / f, f"ch-source-content::{f}\n")
 
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    # A box with a published engine writes <name>.exe door images, which would
+    # make bare-name is_file checks machine-dependent. Published-root door
+    # coverage lives in install/tests/test_door_image_currency.py.
+    monkeypatch.setattr(substrate, "_door_engine_root", lambda: None)
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,
@@ -85,8 +91,17 @@ def test_every_derived_agent_helper_forwarder_is_written(tmp_path, monkeypatch):
     target_map = _derive_agent_helper_target_map(_AGENT_BIN)
     assert target_map, "expected at least one derived agent-helper forwarder from the live coordinator/bin/"
 
-    missing = [name for name in target_map if not (bin_dst / name).is_file()]
+    # Publisher-only targets with no launcher are withheld on purpose (and any
+    # leftover file under those names is unlinked); pin both directions.
+    no_launcher = set(_split_live_source_tree_map(_REPO_ROOT, _AGENT_BIN)[1])
+    assert no_launcher, "expected a non-empty no-launcher set; the subtraction below would be a no-op"
+
+    expected = set(target_map) - no_launcher
+    missing = [name for name in expected if not (bin_dst / name).is_file()]
     assert not missing, f"{len(missing)} derived forwarder(s) never materialized: {sorted(missing)[:10]}..."
+
+    leaked = [name for name in no_launcher if (bin_dst / name).exists()]
+    assert not leaked, f"{len(leaked)} no-launcher name(s) were written: {sorted(leaked)[:10]}..."
 
 
 def test_sample_forwarders_execute_and_resolve_their_real_target(tmp_path, monkeypatch):

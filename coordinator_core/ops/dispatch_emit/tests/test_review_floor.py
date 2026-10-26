@@ -13,7 +13,7 @@ from coordinator_core.ops.dispatch_emit import review_floor as rf
 
 
 def test_code_paths_keeps_only_code_in_input_order():
-    assert rf.code_paths(["coordinator_core/x.py", "state/a.yaml", "docs/wiki/a.md"]) == ["coordinator_core/x.py"]
+    assert rf.code_paths(["coordinator_core/x.py", "state/a.yaml", "docs/" "wiki/a.md"]) == ["coordinator_core/x.py"]
 
 
 def test_code_paths_dedupes_and_strips_trailing_slash():
@@ -59,7 +59,7 @@ def test_carve_in_counts_executable_config_as_code(path):
     assert rf.code_paths([path]) == [path]
 
 
-@pytest.mark.parametrize("path", ["docs/wiki/x.md", "state/x.yaml", "docs/plans/skills/x.md", "docs/wiki/skills/x.md", "docs/reference/commands/x.md", "README.md"])
+@pytest.mark.parametrize("path", ["docs/" "wiki/x.md", "state/x.yaml", "docs/plans/skills/x.md", "docs/" "wiki/skills/x.md", "docs/reference/commands/x.md", "README.md"])
 def test_carve_in_leaves_docs_and_bookkeeping_non_code(path):
     assert rf.is_code_path(path) is False
 

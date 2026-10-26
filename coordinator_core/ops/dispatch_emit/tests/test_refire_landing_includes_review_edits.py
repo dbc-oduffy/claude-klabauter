@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import review_edits, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.session import core as session_core
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -18,7 +19,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 SELF = "5e1f0000-0000-4000-8000-000000000031"
 EARLIER = "pkg/reach_claims.py"
 OTHER = "pkg/other.py"
-_REVIEW = {"integration_stem": "rev-stem", "slices": 1, "fixes": 1}
+_REVIEW = {**reviewed(), "fixes": 1}
 
 
 def _git(args, cwd: Path) -> str:

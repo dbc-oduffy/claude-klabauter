@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -44,7 +45,7 @@ def _script(repo: Path, request: CommitRequest) -> str:
     return "run.mjs"
 
 
-_REVIEWED = {"integration_stem": "s", "slices": 1, "fixes": 0}
+_REVIEWED = {**reviewed(), "integration_stem": "s"}
 
 
 def _call(repo: Path, script: str, incomplete: list) -> dict:

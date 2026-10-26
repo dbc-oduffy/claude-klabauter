@@ -111,6 +111,27 @@ def test_pre_existing_id_implicating_an_applied_finding_is_not_inverted(world):
     assert out["pre_existing"] == []
 
 
+def test_red_that_still_fails_after_its_revert_is_pre_existing_on_the_settle_call(world):
+    first = _call(world, failing=FAILING, failing_at_base=[], sidecars=SIDECARS)
+    assert first["error"] is None and first["pre_existing"] == []
+    assert [r["tests"] for r in first["reverted"]] == [FAILING]
+    again = _call(world, failing=FAILING, failing_at_base=[], sidecars=SIDECARS)
+    assert again["error"] is None
+    assert again["pre_existing"] == FAILING and again["reverted"] == [] and again["unattributed"] == []
+    record = json.loads((world / again["record"]).read_text(encoding="utf-8"))
+    assert record["pre_existing"] == FAILING
+
+
+def test_unreverted_red_not_at_base_is_still_not_pre_existing(world):
+    other = ["tests/test_elsewhere.py::test_other"]
+    out = _call(world, failing=FAILING + other, failing_at_base=[], sidecars=SIDECARS)
+    assert out["pre_existing"] == [] and out["unattributed"] == other
+    again = _call(world, failing=other, failing_at_base=[], sidecars=SIDECARS)
+    assert again["pre_existing"] == []
+    mixed = _call(world, failing=FAILING + other, failing_at_base=[], sidecars=SIDECARS)
+    assert mixed["pre_existing"] == FAILING and mixed["unattributed"] == other
+
+
 def test_at_base_id_outside_failing_is_never_reported(world):
     out = _call(world, failing=FAILING, failing_at_base=["tests/test_x.py::test_z"], sidecars=SIDECARS)
     assert out["pre_existing"] == []

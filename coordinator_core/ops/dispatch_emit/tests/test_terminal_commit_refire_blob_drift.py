@@ -28,7 +28,9 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 SID = "c4e53fa2-2bda-51b1-833a-cf629f2b0cb6"
 RUN = "run-1"
 PLAN = "docs/plans/2026-10-16-refire.md"
-REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+
+REVIEWED = reviewed()
 
 
 def _git(args, cwd: Path) -> str:

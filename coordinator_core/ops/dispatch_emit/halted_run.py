@@ -156,11 +156,12 @@ def halted_run_base(record_dir: Path) -> Optional[str]:
     return value if isinstance(value, str) and _SHA40.fullmatch(value) else None
 
 
-def halted_ask_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:
+def halted_ask_run_for(repo_root: Path, sizing_rel: str, *, ignore_superseded: bool = False) -> Optional[str]:
     """Return the newest halted `ask-<stamp>` run naming `sizing_rel`, else None.
 
     Only ask dirs stamped on or after the sizing filename's YYYY-MM-DD prefix are read (None for an
-    undated name), and a `warp-<stem>-*` dir stamped later supersedes the ask run.
+    undated name), and a `warp-<stem>-*` dir stamped later supersedes the ask run unless
+    `ignore_superseded` (the notes-carrying lookup, which resumes nothing).
     """
     norm = _norm(sizing_rel)
     stem = PurePosixPath(norm).stem
@@ -187,7 +188,7 @@ def halted_ask_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:
     except OSError:
         return None
     for stamp in sorted(asks, reverse=True):
-        if stamp < newest_warp:
+        if stamp < newest_warp and not ignore_superseded:
             return None
         name = f"ask-{stamp}"
         marker = _read(root / name)

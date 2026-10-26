@@ -141,11 +141,13 @@ Authorizing decisions: coordinator-content-repo docs/decisions/DR-104 (this over
 from __future__ import annotations
 
 import os
-import sys
 from typing import Any, Dict, Optional
 
 from coordinator_core.claude_md_budget import is_claude_md_class
-from coordinator_core.session.claude_md_grant import check_claude_md_write_grant
+from coordinator_core.session.claude_md_grant import (
+    GRANT_CLI_NAME,
+    check_claude_md_write_grant,
+)
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -184,113 +186,6 @@ PRIORITY = 45
 _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CLAUDE_MD_WRITE"
-
-#: Fallback form of the grant-CLI invocation the advisory (shrink/size-
-#: neutral) text names as the legitimate, PM-ratified override path (C5's
-#: grant CLI) -- the deny leg no longer renders this invocation at all
-#: (C4(b), docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-
-#: keys.md). Used only when this host's claude-klabauter root cannot be resolved
-#: in-process — see ``_grant_cli_invocation()``, which is what
-#: ``_advisory_reason`` calls.
-#:
-#: Two preconditions are stated inline because omitting them made the
-#: remediation fail SILENTLY: the grant module is claude-klabauter-resident but the
-#: grant file is written into a session dir resolved from CWD, so running
-#: this from claude-klabauter (the obvious place, since that is where the module
-#: lives) files the grant against claude-klabauter's session dir while the guard
-#: checking a write in the consumer repo looks up that repo's — a mismatch
-#: that reads as "no grant" with no error. Hence: cwd is the repo being
-#: unblocked, and claude-klabauter reaches the interpreter via PYTHONPATH rather than
-#: cwd.
-#:
-#: This env-ladder form was ALSO a silent-failure shape, in a third way, and
-#: that is why it is now only the fallback: it asks the reader's shell to
-#: resolve the root, and on a host where neither variable is exported and the
-#: repo does not sit at ``$HOME/claude-klabauter`` every rung misses. The reader
-#: then runs a command that cannot work, against a guard whose whole contract
-#: is to name a remediation that does. Resolving the root here instead — this
-#: code runs inside claude-klabauter — is what keeps the deny from dead-ending.
-_GRANT_CLI_INVOCATION_FALLBACK = (
-    'PYTHONPATH="${REPO_CLAUDE_KLABAUTER:-${CLAUDE_KLABAUTER_ROOT:-$HOME/claude-klabauter}}" '
-    'python3 -m coordinator_core.session.claude_md_grant grant pm "<verbatim PM note>"'
-)
-
-
-#: Characters that would break out of, or be interpreted inside, the double-quoted
-#: ``PYTHONPATH="…"`` the resolved root is interpolated into. The rendered command is
-#: meant to be pasted verbatim into a shell, so a root carrying any of these would
-#: produce a remediation that silently does the wrong thing — the same class of defect
-#: as the dead-end deny this resolution exists to fix, one layer down.
-#:
-#: Rejected rather than escaped on purpose: ``shlex.quote`` is POSIX-specific and would
-#: render wrongly for a reader on cmd/PowerShell, and this text reaches both. Falling
-#: back to the env-ladder form is the honest answer for a path we cannot quote correctly
-#: for every shell the reader might be in.
-_ROOT_SHELL_UNSAFE = set('"\'`$\\\n\r')
-
-
-def _grant_cli_invocation() -> str:
-    """The grant-CLI command line the deny text offers, with this host's claude-klabauter
-    root already resolved into it.
-
-    The env-ladder form is only correct on a host where one of those variables
-    is exported or where the repo sits at ``$HOME/claude-klabauter``. On a host
-    where neither holds, every rung misses and the remediation the deny text
-    names silently fails to run — a dead-end deny, which is the one thing a
-    design-as-offers guard must never be. This guard executes inside the claude-klabauter
-    engine, so it can resolve the root itself instead of asking the reader's
-    shell to.
-
-    Falls back to the env-ladder form whenever the resolved root cannot be used:
-    a deny rendered with an imperfect remediation still beats a guard that raises
-    while explaining itself. This function is called during deny RENDERING, so it
-    must not propagate — an exception here converts a clean block into a crashed
-    PreToolUse guard.
-
-    The import is local rather than module-scope to keep ``engine_root``'s
-    ``subprocess``/``shutil`` chain off the import path of every hook dispatch that
-    never renders a deny.
-
-    ``coordinator_engine_root()`` can reach Rung 2 (the ``machine-local``
-    subprocess ladder, bounded at 2s) on this deny-render path, the opposite
-    choice from ``bash_guards._helpers._resolve_override_keys_doc_display()``,
-    which deliberately skips Rung 2 with the stated reason "a message
-    builder must never spawn a process to render itself." The two differ
-    deliberately, not by drift: this guard's deny renders only on a
-    CLAUDE.md-write attempt (rare), vs. ``operator_override_note``'s pointer
-    rendering on EVERY guard firing across the whole suite (hot path) --
-    the render-frequency gap is what makes a bounded, occasional subprocess
-    spawn here an accepted cost that would not be accepted on that hotter
-    path.
-
-    ``RuntimeError`` is the resolver's one documented failure (unresolvable
-    ``repos.claude_klabauter``) and falls back silently. Anything else means this
-    call site has drifted from the resolver — a rename, a signature change, a bug
-    in the resolver itself — which would otherwise degrade this guard back to the
-    exact defect it was written to fix, permanently and invisibly. That case still
-    falls back, but says so on stderr rather than passing for normal operation.
-    """
-    try:
-        from coordinator_core.engine_root import coordinator_engine_root
-
-        root = coordinator_engine_root()
-    except RuntimeError:
-        return _GRANT_CLI_INVOCATION_FALLBACK
-    except Exception as exc:  # noqa: BLE001 — deny-render path must never propagate
-        print(
-            "coordinator: block_unauthorized_claude_md_write could not resolve the "
-            f"claude-klabauter root ({type(exc).__name__}: {exc}); the grant command below falls "
-            "back to environment resolution and may not run as printed.",
-            file=sys.stderr,
-        )
-        return _GRANT_CLI_INVOCATION_FALLBACK
-    if not root or _ROOT_SHELL_UNSAFE & set(root):
-        return _GRANT_CLI_INVOCATION_FALLBACK
-    return (
-        f'PYTHONPATH="{root}" '
-        'python3 -m coordinator_core.session.claude_md_grant grant pm "<verbatim PM note>"'
-    )
-
 
 _CONTROL_CHARS = str.maketrans({c: " " for c in "\t\r\n\f\v"})
 
@@ -432,9 +327,11 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
     message that refuses and says who to ask is complete. The text now
     hands the agent only the two pieces its BLOCKED report needs: the
     governed surface (``Target:``) and the structural reason
-    (``Reason:``). No override pointer, wiki reference, or "an unlock
-    exists" marker replaces the deleted lines — this guard fires only on
-    a dispatched subagent's write and has no EM audience to point at.
+    (``Reason:``), then one ``Unblock:`` line naming the EM's wrapper
+    (``GRANT_CLI_NAME``) with no invocation. The line is attributed to the
+    EM: the reader is a dispatched agent the bash guard denies the wrapper,
+    so the line is a route to relay in its BLOCKED report, not a key. No
+    wiki reference or env override is named.
 
     PARAGRAPH TRIM (C8, docs/plans/2026-08-13-guard-messages-stop-handing-
     agents-the-keys.md, PM ruling 2026-08-13): the "This is not a judgment
@@ -465,9 +362,9 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
         "Report BLOCKED to your EM instead:\n"
         f"  Target: `{file_path_safe}`\n"
         "  Reason: no live CLAUDE.md write grant.\n"
+        f"  Unblock: the EM obtains PM approval, then runs {GRANT_CLI_NAME} in the target "
+        "repo and re-sends the edit through workflow.revise.\n"
     )
-    # knows the answer to. `_OVERRIDE_ENV_VAR` stays wired in `check()`.
-    # C4(b) removed the resolved `PYTHONPATH=... python3 -m ...` grant
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -494,7 +391,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if granted:
         return None
 
-    # MATCHERS/PRIORITY): only a net-growth edit is denied. A shrink or
+    # Only a net-growth edit is denied; a shrink or size-neutral edit advises.
     tool_input = payload.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         tool_input = {}

@@ -223,6 +223,24 @@ def _is_em_row_surface(path: str, base: str, session_id: str) -> bool:
     return False
 
 
-def deny_envelope() -> dict | None:
+def _deny_text(paths: tuple[str, ...]) -> str:
+    """The generic deny, or the CLAUDE.md variant naming the EM grant route when any of `paths` is
+    CLAUDE.md-class. Any import or classify failure answers the generic text."""
+    try:
+        from coordinator_core.claude_md_budget import is_claude_md_class
+        from coordinator_core.session.claude_md_grant import GRANT_CLI_COMMAND
+
+        if any(is_claude_md_class(p) for p in paths):
+            return (
+                "This session already fired engine-ask; its CLAUDE.md edit belongs to the run. "
+                f"With the PM's approval run `{GRANT_CLI_COMMAND}` from the repo that holds the "
+                "CLAUDE.md, then send the edit through workflow.revise."
+            )
+    except Exception:
+        pass
+    return _POST_FIRE_DENY
+
+
+def deny_envelope(paths: tuple[str, ...] = ()) -> dict | None:
     """The PreToolUse deny, passed through `apply_guard_level` (floor: denies at every level)."""
-    return apply_guard_level(GUARD_NAME, deny("PreToolUse", _POST_FIRE_DENY))
+    return apply_guard_level(GUARD_NAME, deny("PreToolUse", _deny_text(paths)))

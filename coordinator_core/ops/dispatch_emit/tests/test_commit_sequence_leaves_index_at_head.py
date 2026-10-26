@@ -19,11 +19,12 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
     CommitRequest,
     render_marker,
 )
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+_REVIEWED = reviewed()
 _NEW = [f"pkg{i % 4}/sub{i % 3}/new{i}.py" for i in range(30)]
 _EDITED = [f"keep/edit{i}.py" for i in range(12)]
 
@@ -127,10 +128,11 @@ def test_splice_failure_after_the_ref_moves_is_repaired_by_reset(repo, monkeypat
         (repo / rel).write_text("edited\n", encoding="utf-8")
     (repo / "fresh.py").write_text("fresh\n", encoding="utf-8")
 
-    def boom(*_a, **_k):
+    def boom(self):
+        self.abort()
         raise index_write.IndexWriteError("simulated splice failure")
 
-    monkeypatch.setattr(index_write, "splice_index", boom)
+    monkeypatch.setattr(index_write.PreparedSplice, "publish", boom)
     out = commit_v2._handler(
         {"paths": [*_EDITED[:3], "fresh.py"], "message": "land"}, repo_root=repo / ".git"
     )
@@ -145,10 +147,11 @@ def test_unrepairable_splice_failure_names_the_reset_command(repo, monkeypatch):
 
     (repo / "fresh.py").write_text("fresh\n", encoding="utf-8")
 
-    def boom(*_a, **_k):
+    def boom(self):
+        self.abort()
         raise index_write.IndexWriteError("simulated splice failure")
 
-    monkeypatch.setattr(index_write, "splice_index", boom)
+    monkeypatch.setattr(index_write.PreparedSplice, "publish", boom)
     monkeypatch.setattr(commit, "_reset_index_paths", lambda *_a: False)
     out = commit_v2._handler({"paths": ["fresh.py"], "message": "land"}, repo_root=repo / ".git")
     assert out["committed"] is True, out

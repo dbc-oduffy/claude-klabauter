@@ -29,7 +29,7 @@ def test_review_block_gated_on_declared_paths(monkeypatch):
     assert "const _noReviewPaths = !_reviewPaths.length;" in script
     assert "!!((_manifest?.rows ?? []).length &&" not in script
     # e312728c2c (phase reuse) added the `!_reviewReused` guard to the review block.
-    assert "if (!_halted && !_reviewReused && _gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {\n  phase('Review wave');" in script
+    assert "if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {\n  phase('Review wave');" in script
 
 
 def test_no_path_run_logs_and_empties_wave(monkeypatch):

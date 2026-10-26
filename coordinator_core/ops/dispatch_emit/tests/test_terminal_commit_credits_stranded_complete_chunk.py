@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -49,6 +50,7 @@ def _write(repo: Path, rel: str, text: str) -> None:
 def _review(slice_files=("a.py",), **over) -> dict:
     review = {
         "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
+        "wave_reviews": reviewed()["wave_reviews"],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [],
                  "slice_files": list(slice_files)},
         "delivery": {"verdict": "FAIL", "product_files": 1},

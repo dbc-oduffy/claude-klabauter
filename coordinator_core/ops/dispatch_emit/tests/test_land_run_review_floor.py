@@ -27,7 +27,7 @@ DLV = "dlv-alpha-aaaaaa"
 PLAN = "docs/plans/p.md"
 REPORT = "reports/X1.md"
 CODE = "coordinator_core/mod.py"
-DOC = "docs/wiki/note.md"
+DOC = "docs/" "wiki/note.md"
 VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 

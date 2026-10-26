@@ -20,6 +20,8 @@ def _compose(**extra):
         executor_rows=9,
         prep_in_wave=True,
     )
+    if extra.get("prep_run_id") is not None:
+        kwargs["plan_path"] = "state/warp/r/manifest.json"
     kwargs.update(extra)
     return compose_execute_review(_ratio_review(), **kwargs)
 
@@ -64,6 +66,72 @@ def test_prep_run_id_may_equal_run_key():
 def test_prep_run_id_guards_raise(extra):
     with pytest.raises(ValueError):
         _compose(prep_run_id="ask-x", **extra)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"slice_identity_sha": "b" * 40},
+        {"plan_path": "docs/plans/example.md"},
+        {"slice_key_js": "x"},
+    ],
+)
+def test_prep_run_id_refuses_inputs_that_fork_the_composer_id_from_the_op(extra):
+    with pytest.raises(ValueError):
+        _compose(prep_run_id="ask-x", **extra)
+
+
+@pytest.mark.parametrize("base", ["", None])
+@pytest.mark.parametrize("run_key", [None, "ask-x"])
+def test_prep_run_id_without_a_base_preps_in_paths_mode_keyed_on_the_run(base, run_key):
+    # Outside a git checkout there is no base for the op's run mode, which refuses one.
+    phases = _compose(prep_run_id="ask-x", run_key=run_key, run_base_sha=base)
+    commands = [c.replace('\\"', '"') for c in _prep_commands(phases)]
+    assert commands
+    assert all('"run_id"' not in c and "slice_prefix" in c for c in commands)
+    assert "manifest-ask-x-nobase-prep" in dict(phases)["Review wave"]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"slice_identity_sha": "b" * 40},
+        {"plan_path": "docs/plans/example.md"},
+        {"slice_key_js": "x"},
+    ],
+)
+def test_prep_run_id_without_a_base_still_refuses_forking_inputs(extra):
+    with pytest.raises(ValueError):
+        _compose(prep_run_id="ask-x", run_base_sha="", **extra)
+
+
+def test_paths_mode_prep_carries_no_run_id_beside_its_paths():
+    # review.prep refuses a command carrying both.
+    commands = [c.replace('\\"', '"') for c in _prep_commands(_compose(run_key="ask-x"))]
+    assert commands
+    assert all('"run_id"' not in c for c in commands)
+
+
+def test_prep_run_id_accepts_matching_slice_identity_sha():
+    assert _compose(prep_run_id="ask-x", slice_identity_sha="a" * 40)
+
+
+def test_prep_run_id_slice_id_is_the_canonical_run_prefix_and_unchanged():
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+    run = "warp-x-20261026T133215-c4413e"
+    legacy = f"manifest-{run}-{'a' * 12}-prep"
+    assert run_prep_slice_prefix(run, "a" * 40) == legacy
+    block = dict(_compose(prep_run_id=run, run_key=run))["Review wave"]
+    assert legacy in block
+    assert legacy not in "".join(_prep_commands(_compose(prep_run_id=run, run_key=run)))
+
+
+def test_no_run_id_mode_prep_command_carries_slice_prefix():
+    commands = _prep_commands(_compose(prep_run_id="ask-x"))
+    assert commands
+    assert all("slice_prefix" not in c for c in commands)
+    assert all("slice_prefix" in c for c in _prep_commands(_compose()))
 
 
 def test_run_id_leg_note_never_quotes_a_leg_value_line():

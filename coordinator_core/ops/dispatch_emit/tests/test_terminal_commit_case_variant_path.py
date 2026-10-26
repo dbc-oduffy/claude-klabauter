@@ -23,7 +23,8 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 0}
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+_REVIEWED = reviewed()
 _ENGINE_ROW = "claude-klabauter"
 _BIN_ROW = "claude-klabauter-coordinator-bin"
 _PORTABLE = "setup/publish-targets.portable"

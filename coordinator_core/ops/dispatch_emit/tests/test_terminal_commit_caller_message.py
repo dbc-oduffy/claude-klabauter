@@ -9,11 +9,15 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_REVIEWED = {"integration_stem": "rev-stem", "slices": 3, "fixes": 3}
+_REVIEWED = {
+    "integration_stem": "rev-stem", "slices": 3, "fixes": 3,
+    "wave_reviews": reviewed()["wave_reviews"],
+}
 _CALLER = "terminal commit: own-paths XS budget -- Closes rows b59ee4, 6c1d83"
 
 
