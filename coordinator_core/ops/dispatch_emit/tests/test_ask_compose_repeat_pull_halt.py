@@ -13,6 +13,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.ask_contract import HALT_RESEARCH
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 
@@ -39,25 +40,26 @@ def _compare_line(script: str) -> str:
 
 
 def _halt_clause(script: str) -> str:
-    start = script.index("if (_repeatBlocking && !_halted.next_action)")
+    start = script.index("if (_replanCapped && !_pullSplit && !_halted.next_action)")
     return script[start : script.index("\n", start)]
 
 
-def test_repeat_halt_reason_and_payload_and_resumable_refire():
-    clause = _halt_clause(_script())
-    assert "reason: 'plan-blitz pulled twice on the same blocking set'" in clause
-    assert "blocking: _repeatBlocking" in clause
-    assert "kind: 'rule_on_blocking_rows'" in clause
+def test_repeat_halt_is_a_research_halt_carrying_the_findings():
+    script = _script()
+    clause = _halt_clause(script)
+    assert f"halted: '{HALT_RESEARCH}'" in clause
+    assert "pulled twice on the same blocking set" not in script
+    assert "blocking: _pullFindings" in clause
+    assert "fire: [_researchFire()]" in clause
     assert "plan: _pullPlan, rulings: _pullRulings" in clause
-    assert "refire:" in clause
-    assert "revise:" in clause
+    assert "if (_repeatBlocking || _pullAttempts() >= " in script
 
 
 def test_old_halt_string_and_emission_unchanged():
     script = _script()
     assert "reason: ('plan-blitz reported no ready plan' + (((_blitz?.regate ?? _blitz)?.pulled ?? [])" in script
     assert ", blitz: _blitz, sizing: _sizingRel, run_id: _runId };" in script
-    assert script.index("plan-blitz reported no ready plan") < script.index("if (_repeatBlocking && !_halted.next_action)")
+    assert script.index("plan-blitz reported no ready plan") < script.index("if (_replanCapped && !_pullSplit && !_halted.next_action)")
 
 
 @pytest.mark.spawns_process

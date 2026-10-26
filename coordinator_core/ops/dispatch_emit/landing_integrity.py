@@ -564,9 +564,17 @@ def invariant_findings(
     worktree_root: Path, landed_paths: Sequence[str], run_id: Optional[str], params: Mapping,
 ) -> list[Finding]:
     """One finding per repo-wide invariant a landing diff touches that no fresh passing retest
-    ran. Table lookup plus one record read; zero spawns."""
+    ran. Table lookup plus one record read; zero spawns. Paths other halted runs withhold
+    (``halted_hold_release.residue_paths``) are residue at HEAD, not this run's diff: they select no
+    invariant. Residue bytes are never touched."""
     from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
 
+    if run_id:
+        from coordinator_core.ops.dispatch_emit.halted_hold_release import residue_paths
+
+        residue = residue_paths(worktree_root, run_id)
+        if residue:
+            landed_paths = [p for p in landed_paths if p.replace("\\", "/") not in residue]
     owed = imp.existing_invariants(worktree_root, imp.invariants_for_paths(landed_paths, worktree_root))
     if not owed:
         return []

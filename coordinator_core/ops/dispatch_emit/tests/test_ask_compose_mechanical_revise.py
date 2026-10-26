@@ -48,9 +48,10 @@ def test_revise_prompt_runs_the_readiness_verdict_op_with_pull_values():
     assert "re-run the op with the plan alone" in block
 
 
-def test_mechanical_ready_reply_is_accepted_without_a_reblitz():
+def test_mechanical_or_none_ready_reply_is_accepted_without_a_reblitz():
     block = _pulled_block()
-    branch = block.index("_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready'")
+    assert "_revised?.pull_class === 'none'" in block
+    branch = block.index("_revised?.verdict === 'ready' && (_revised?.pull_class === 'mechanical'")
     accept = block.index("_planRel = _revised.plan_rel", branch)
     assert accept < block.index("else {", branch) < block.index("await planBlitz(")
 

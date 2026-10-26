@@ -609,3 +609,80 @@ def test_hunks_present_still_refuses_missing_and_unbounded_middle():
     base = "".join(f"x{i}\n" for i in range(600))
     kept = "".join(f"y{i}\n" for i in range(600))
     assert not hr._hunks_present(base, kept, base)
+
+
+def _green(root: Path, run_id: str, *, incomplete=None, sidecar=True) -> None:
+    rel = f"docs/reviews/{run_id}.md"
+    if sidecar:
+        _write(root / rel, "review\n")
+    outcome = {"inline_review": {"integration": {"sidecar": rel}}}
+    if incomplete:
+        outcome["incomplete_chunks"] = incomplete
+    _write(root / "state/warp" / run_id / "run-outcome.json", json.dumps(outcome))
+
+
+def _index(root: Path, run_id: str, *paths: str) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    idx.add_run(root, run_id, paths)
+
+
+def _sub(base: Path, name: str) -> Path:
+    (base / name).mkdir()
+    return base / name
+
+
+def _auto_land_fixture(root: Path, *, peer_marker="halted"):
+    me, peer = _rid("ask", 10, "bbbbbb"), _rid("ask", 300, "aaaaaa")
+    _run(root, me, sizing="state/sizings/other.yaml", writes=("a.py", "b.py"))
+    _green(root, me)
+    _run(root, peer, marker=peer_marker, plan="docs/plans/z.md")
+    _index(root, peer, "a.py", "residue.py")
+    return me, peer
+
+
+def test_halted_only_withholders_all_halted_and_green(tmp_path):
+    root = _root(tmp_path)
+    me, peer = _auto_land_fixture(root)
+    assert hr.halted_only_withholders(root, me) == [peer]
+
+
+def test_halted_only_withholders_none_for_live_unreadable_or_red(tmp_path):
+    root = _root(tmp_path)
+    me, peer = _auto_land_fixture(root)
+    live = _rid("ask", 200, "cccccc")
+    _run(root, live, writes=("b.py",))
+    _index(root, live, "b.py")
+    assert hr.halted_only_withholders(root, me) is None  # live holder (no halt marker)
+    root2 = _root(_sub(tmp_path, "two"))
+    me2, peer2 = _auto_land_fixture(root2)
+    _corrupt(root2, peer2)
+    assert hr.halted_only_withholders(root2, me2) is None  # unreadable claim
+    root3 = _root(_sub(tmp_path, "three"))
+    me3, _ = _auto_land_fixture(root3)
+    _green(root3, me3, incomplete=["X1"])
+    assert hr.halted_only_withholders(root3, me3) is None  # red outcome
+    _green(root3, me3)
+    (root3 / f"docs/reviews/{me3}.md").unlink()
+    assert hr.halted_only_withholders(root3, me3) is None  # no review record
+
+
+def test_halted_only_withholders_none_when_nothing_withholds_or_released(tmp_path):
+    root = _root(tmp_path)
+    me, peer = _auto_land_fixture(root)
+    _sizing(root, "state/sizings/other.yaml")
+    _run(root, peer, marker="landed", plan="docs/plans/z.md")
+    assert hr.halted_only_withholders(root, me) is None
+    other = _rid("ask", 5, "dddddd")
+    _run(root, other, sizing="state/sizings/other.yaml", writes=("zzz.py",))
+    _green(root, other)
+    assert hr.halted_only_withholders(root, other) is None
+
+
+def test_residue_paths_excludes_own_paths_and_other_states(tmp_path):
+    root = _root(tmp_path)
+    me, peer = _auto_land_fixture(root)
+    assert hr.residue_paths(root, me) == frozenset({"residue.py"})
+    assert hr.residue_paths(root, peer) == frozenset()
+    _run(root, peer, marker="landed", plan="docs/plans/z.md")
+    assert hr.residue_paths(root, me) == frozenset()

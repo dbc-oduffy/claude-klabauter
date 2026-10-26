@@ -112,7 +112,8 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "xl-exit", "the APM picks the XL exit; absorbed the split fanout op"),
     _earns("ask", "plan", "authors the plan"),
     _earns("ask", "plan-review", "reviews the plan"),
-    _earns("ask", "plan-revise", "revises the plan against its review"),
+    _earns("ask", "plan-revise", "revises the plan against its review; spawned only when a pull's review found the plan unsaveable (PIVOT, ABORT, premise-failure REJECTED)"),
+    _earns("ask", "plan-patch", "applies a pulled plan's mechanical readiness repairs in place when its review did not find it unsaveable; no re-plan, no second blitz"),
     _earns("ask", "work:", "executes one row"),
     _earns("ask", "verify:", "runs a row's or a wave's scoped tests and reports"),
     _earns(

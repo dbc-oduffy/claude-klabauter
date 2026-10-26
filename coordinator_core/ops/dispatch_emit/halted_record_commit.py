@@ -380,6 +380,80 @@ def _withhold_run_dirt(withheld: dict, written: list, changed: set, landed: set)
             withheld[p] = RUN_DIRT_UNCOMMITTED
 
 
+#: ``withheld`` reason for a run-owned ``.py`` whose bytes were moved into the halted record because
+#: the tree would not import with them.
+EVICTED_NOT_IMPORTABLE = "evicted-not-importable"
+
+#: Withheld reasons that mark a path as not this run's: never judged for eviction, never reset.
+_NOT_RUN_OWNED = frozenset({"peer-held", "peer-claim-indeterminate", "sibling-claimed", "foreign-halted-withheld"})
+
+
+class TreeEviction:
+    """A planned eviction of unimportable run-owned bytes. ``plan`` mutates nothing on disk; ``apply``
+    copies the bytes into the record and resets the tree. Trap: run ``apply`` only after
+    ``_record_kept``, which fingerprints the run's bytes, not HEAD's."""
+
+    def __init__(self, root: Path, record_dir_rel: str, head_blobs: dict, origin: dict, unowned: dict) -> None:
+        self.root, self.record_dir_rel = root, record_dir_rel
+        self.head_blobs, self.origin, self.unowned = head_blobs, origin, unowned
+
+    @property
+    def evicted(self) -> list:
+        return sorted(self.head_blobs)
+
+    def kept_view(self, withheld: dict) -> dict:
+        """``withheld`` with each evicted path back at its pre-eviction reason, so a kept chunk stays kept."""
+        return {**withheld, **self.origin}
+
+    def apply(self) -> None:
+        from coordinator_core.ops.dispatch_emit import halt_tree_evict
+
+        halt_tree_evict.evict(self.root, self.root / self.record_dir_rel, self.evicted, self.head_blobs)
+
+
+def plan_tree_eviction(
+    root: Path, record_dir_rel: str, run_written: list, changed: set, write_set: list,
+    withheld: dict, paths: list,
+) -> Optional[TreeEviction]:
+    """Judge the run's own changed ``.py`` files and their write-set importers for importability, in
+    process. Each unimportable run-owned path is named in ``withheld`` as ``EVICTED_NOT_IMPORTABLE``,
+    and the record's ``evicted.json`` plus its blobs are appended to ``paths`` (in place). Call after
+    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is evicted."""
+    from coordinator_core.authoring_leaks import HeadView
+    from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, kept_work
+
+    if not (root / record_dir_rel).is_dir():
+        return None
+    landed = set(paths)
+    own = [
+        p for p in run_written
+        if p.endswith(".py") and p in changed and p not in landed and withheld.get(p) not in _NOT_RUN_OWNED
+    ]
+    if not own:
+        return None
+    broken = halt_tree_check.broken_paths(root, own, write_set)
+    targets = [p for p in own if p in broken]
+    unowned = {p: why for p, why in broken.items() if p not in targets}
+    prints: dict = {}
+    for p in targets:
+        try:
+            prints[p] = kept_work.blob_sha((root / p).read_bytes())
+        except OSError:
+            continue
+    if not prints:
+        return None
+    head = HeadView(root, prints)
+    head_blobs = {p: head.head_bytes(p) for p in prints}
+    origin = {p: withheld[p] for p in prints if p in withheld}
+    for p in prints:
+        withheld[p] = EVICTED_NOT_IMPORTABLE
+    for rel in (f"{record_dir_rel}/{halt_tree_evict.EVICTED_FILE}",
+                *(f"{record_dir_rel}/{halt_tree_evict.BLOBS_DIR}/{sha}" for sha in prints.values())):
+        if rel not in paths:
+            paths.append(rel)
+    return TreeEviction(root, record_dir_rel, head_blobs, origin, unowned)
+
+
 def _integrity_findings(
     worktree_root: Path, run_id: str, base: Optional[str], paths: list, plan: Optional[str] = None
 ) -> list:
@@ -604,7 +678,8 @@ def _record_kept(
     ``next_action.resume.stage``. ``post_candidates`` that are in ``withheld``, not in ``landed`` and
     owned by no kept chunk are fingerprinted under ``post_checkpoint`` when their blob was persisted;
     the rest are named under ``post_checkpoint_unpersisted``. Every kept chunk path's blob is
-    persisted too; those that could not be are named under ``kept_unpersisted``.
+    persisted too; a chunk with a path that could not be is left out of ``kept.json`` and its
+    unpersisted paths are named under ``kept_unpersisted``.
     Returns ``{"kept": {...}}`` (plus ``"returns": [ids]``) when anything was recorded, else ``{}``."""
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit import kept_work, row_returns
@@ -645,10 +720,13 @@ def _record_kept(
     post = {p: blob for p, blob in wanted.items() if p in stored}
     kept_paths = {p: fp for entry in chunks.values() for p, fp in entry["paths"].items()}
     kept_stored = _persist_blobs(root, common_dir, kept_paths)
+    unpersisted = set(kept_paths) - kept_stored
+    if unpersisted:
+        chunks = {c: e for c, e in chunks.items() if not unpersisted.intersection(e["paths"])}
     written = kept_work.write(record_dir, chunks, gate, post)
     reply: dict = {"returns": sorted(persisted)} if persisted else {}
-    if len(kept_stored) != len(kept_paths):
-        reply["kept_unpersisted"] = sorted(set(kept_paths) - kept_stored)
+    if unpersisted:
+        reply["kept_unpersisted"] = sorted(unpersisted)
     if len(post) != len(wanted):
         reply["post_checkpoint_unpersisted"] = sorted(set(wanted) - set(post))
     if written is None:
@@ -1000,6 +1078,10 @@ def _land(
     # never post-checkpoint candidates, so they must not count as landed here.
     landed_now = set(paths) | set(deleted)
     _withhold_run_dirt(withheld, [*run_written, *post_candidates, *uncoded_dirt], snapshot.changed, landed_now)
+    eviction = plan_tree_eviction(
+        worktree_root, record_dir_rel, run_written, snapshot.changed,
+        [*run_written, *owner, *declared], withheld, paths,
+    )
 
     if process_withheld:
         process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
@@ -1017,7 +1099,8 @@ def _land(
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
         _record_withheld_prints(worktree_root, record_dir_rel, withheld, paths)
     kept_reply = _record_kept(
-        worktree_root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM),
+        worktree_root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
+        halted, paths, params.get(CONSUMED_RETURNS_PARAM),
         post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
         common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
     )
@@ -1036,6 +1119,14 @@ def _land(
         message += "\nLands-Artifacts: " + ", ".join(f"{c}={n}" for c, n in sorted(landed_classes.items()))
     if deleted:
         message += "\nRemoves: " + ", ".join(deleted)
+    if eviction is not None:
+        try:
+            eviction.apply()
+        except OSError as exc:
+            return _error(f"evicting unimportable run bytes failed: {exc}", **base)
+        extra_evicted = {"evicted": eviction.evicted, **({"unimportable_unowned": eviction.unowned} if eviction.unowned else {})}
+    else:
+        extra_evicted = {}
     commit_params: dict = {"paths": paths, "message": message, "carry_stopped_runs": False}
     if deleted:
         commit_params["deleted_paths"] = deleted
@@ -1057,7 +1148,7 @@ def _land(
         return _error("ceremony.commit_v2 is not registered", **base)
     if not isinstance(reply, dict):
         return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **coded_reply, **kept_reply}
+    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **coded_reply, **kept_reply, **extra_evicted}
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         extra.update(_baton_cascade(worktree_root, repo_root, run_id))

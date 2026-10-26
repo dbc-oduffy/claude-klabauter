@@ -68,6 +68,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     write_run_outcome,
 )
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
+from coordinator_core.ops.dispatch_emit.halt_gap_reverify_closure import closed_by_reverify
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
 from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM, _posix as _norm_rel
 from coordinator_core.ops.dispatch_emit.refire_inherited_scope import (
@@ -149,6 +150,25 @@ _SIZING_OBJECT_RESOLUTION = re.compile(r"^[0-9a-f]{7,64}$")
 
 def _error(message: str, **extra: object) -> dict:
     return {"committed": False, "sha": None, "error": message, **extra}
+
+
+def held_revision_refusal(root: Path, ledger: object, run_dir: Path) -> Optional[dict]:
+    """Refusal (``refused="held-revision-unconsumed"``) when a ``workflow.revise`` held for the
+    ledger's sizing was never folded into the run; else None. One indexed read, shared by both commit gates."""
+    from coordinator_core.ops.dispatch_emit import held_revisions
+
+    sizing_rel = getattr(ledger, "sizing_rel", None)
+    if not sizing_rel:
+        return None
+    held = held_revisions.unconsumed(root, sizing_rel, run_dir.name)
+    if not held:
+        return None
+    names = ", ".join(f"{h.get('id')} (run {h.get('run_id')}, {h.get('at')})" for h in held)
+    return _error(
+        f"held revision unconsumed for {sizing_rel}: {names}. Re-fire the sizing so bind folds it",
+        refused="held-revision-unconsumed",
+        held=[{"id": h.get("id"), "run_id": h.get("run_id"), "at": h.get("at")} for h in held],
+    )
 
 
 def _read_rel(root: Path, rel: Optional[str]) -> Optional[str]:
@@ -993,7 +1013,8 @@ UNREADABLE_HALT_RECORD = "unreadable-halt-record"
 
 def _read_markers_strict(root: Path, exclude_run: Optional[str]) -> None:
     """Read every in-TTL sibling record dir's `halted.json` strictly; ValueError on a corrupt or
-    unreadable one (absent is fine). `_unlanded_run_ids` cannot list such a run, so it is scanned here."""
+    unreadable one (absent is fine). `_unlanded_run_ids` cannot list such a run, so it is scanned here.
+    Cost: one scandir plus one read per in-TTL record dir, per call; unmeasured against the 500ms bar."""
     import os
     import time
 
@@ -1070,6 +1091,51 @@ def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optiona
         return {p: UNREADABLE_HALT_RECORD for p in wanted}
 
 
+def _halted_only_release(
+    root: Path, run_id: Optional[str], plan_rel: Optional[str], foreign_held: dict, declared: Sequence[str],
+    minted_before: Optional[tuple],
+) -> Optional[list]:
+    """Ids of the halted runs whose hold on `foreign_held` the landing run `run_id` may override, else None.
+
+    Armed only when `run_id` itself carries a halted marker (the door `record_halted_run_landed` takes),
+    `halted_hold_release.halted_only_withholders` names every withholder and each is a halted run, and no
+    sibling `co_declared_peer_holds` reports is outside that set. Whole paths only (DR-462): the caller
+    lands the held paths as ordinary candidates. Never raises; None keeps the refusal.
+    """
+    if not foreign_held or not run_id:
+        return None
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, peer_hunk_gate
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        marker = halted_run._read(record_dir(root, run_id))
+        if not marker or marker.get("status") != halted_run.STATUS_HALTED:
+            return None
+        holders = halted_hold_release.halted_only_withholders(root, run_id)
+        if not holders or not set(foreign_held.values()) <= set(holders):
+            return None
+        holds = peer_hunk_gate.co_declared_peer_holds(
+            root, run_id, sorted(foreign_held), declared, own_plan=plan_rel, minted_before=minted_before,
+        )
+        if any(sibling not in holders for _, sibling in holds):
+            return None
+        return list(holders)
+    except Exception:  # noqa: BLE001 -- unknown claim: the refusal stands
+        return None
+
+
+def _record_halted_auto_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) -> dict:
+    """Close `run_id` as landed at `sha` through `dispatch.record_halted_run_landed`, in process. Never raises."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+        params = {"run_id": run_id, "sha": sha, **({"session_id": session_id} if session_id else {})}
+        out = halted_run_landed._handler(params, root)
+        return {"run_id": run_id, "ok": bool(out.get("ok")), **({"error": out["error"]} if out.get("error") else {})}
+    except Exception as exc:  # noqa: BLE001 -- the commit stands
+        return {"run_id": run_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 def _em_discharged_rows(resume: object, items: Sequence) -> frozenset:
     """Ids of ``met`` verdict items an EM-performed row discharged between halts: the resume's
     ``em_discharged`` map ``{plan row id: text}`` links to an item when the item's ``met_by`` names a
@@ -1111,7 +1177,7 @@ def _halt_gap_lines(root: Path, resume: object) -> dict:
     return dict(record.remaining) if record is not None else {}
 
 
-def _unclosed_halt_gaps(resume: object, verdict: object, gap_lines: object) -> list:
+def _unclosed_halt_gaps(resume: object, verdict: object, gap_lines: object, reverify: object = None) -> list:
     """``[{id, reason}]`` for each blocking row the verdict calls met or post_commit while one of its
     halt gap lines (stripped, exact) has no ``gaps_closed`` entry of the same gap with a non-empty
     ``how``. Pure; rows with no gap lines owe nothing.
@@ -1141,7 +1207,10 @@ def _unclosed_halt_gaps(resume: object, verdict: object, gap_lines: object) -> l
         acts = item.get("post_commit_acts")
         discharged = {"commit", *(str(a).strip().lower() for a in (acts if isinstance(acts, list) else []))}
         for line in lines:
-            if isinstance(line, str) and line.strip() and line.strip() not in covered and line.strip().lower() not in discharged:
+            if (
+                isinstance(line, str) and line.strip() and line.strip() not in covered
+                and line.strip().lower() not in discharged and not closed_by_reverify(line, reverify)
+            ):
                 failures.append({"id": item["id"], "reason": f"{HALT_GAP_UNCLOSED_REASON}: {line.strip()}"})
                 break
     return failures
@@ -1314,6 +1383,9 @@ def _ledger_gate(
         ), None, []
     if ledger is None:
         return None, None, []
+    held_refusal = held_revision_refusal(root, ledger, run_dir)
+    if held_refusal is not None:
+        return held_refusal, ledger, []
     if not isinstance(verdict, dict):
         return _error(
             "the run is ledger-bearing but params.ledger_verdict is absent: the final ledger "
@@ -1404,7 +1476,9 @@ def _ledger_gate(
         stale = _unchanged_since_halt(
             root, resume_ledger, verdict, manifest_abs, plan_rel, since_halt, fenced.get("breach") or (),
         )
-        stale = [*stale, *_unclosed_halt_gaps(resume_ledger, verdict, _halt_gap_lines(root, resume_ledger))]
+        stale = [*stale, *_unclosed_halt_gaps(
+            resume_ledger, verdict, _halt_gap_lines(root, resume_ledger), inline_review.get("reverify"),
+        )]
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
     if fenced.get("breach"):
@@ -2347,7 +2421,27 @@ def _land_product(root: Path, repo_root: Path, params: dict, token_state: dict) 
             reply = {**reply, **close, "nothing_to_commit": False}
     if reply.get("refused") not in _STRANDED_UNKNOWN_REFUSALS and not reply.get(ALREADY_LANDED_KEY):
         reply.setdefault("stranded", {c: sorted(ps) for c, ps in stranded.items()})
-    return reply
+    return _with_peer_drift(root, reply)
+
+
+def _with_peer_drift(root: Path, reply: dict) -> dict:
+    """Attach ``peer_publish_drift`` and a fold note when HEAD lacks commits on the peer-publish ref.
+
+    Surface only, never a refusal; a failed probe leaves the reply untouched.
+    """
+    try:
+        from coordinator_core.percolate.peer_publish_drift import peer_publish_drift
+
+        drift = peer_publish_drift(root)
+    except Exception:
+        return reply
+    if drift is None:
+        return reply
+    return {
+        **reply,
+        "peer_publish_drift": {"ref": drift.ref, "missing": drift.missing, "sample": list(drift.sample)},
+        "peer_publish_drift_note": f"HEAD lacks {drift.missing} commit(s) on {drift.ref}; fold with: git merge {drift.ref}",
+    }
 
 
 def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token_state: dict) -> dict:
@@ -2804,6 +2898,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     footprint_breach = set(fence.get("breach") or ())
     declared_changed = [p for p in declared if p in changed and p not in ignored]
     foreign_held = foreign_halted_withheld(root, art_run_id, request.plan_path, declared_changed)
+    own_seniority = _own_run_seniority(root, rid, script_path)
+    auto_landed_holders = _halted_only_release(
+        root, art_run_id or sibling_run_id, request.plan_path, foreign_held, declared, own_seniority,
+    )
+    if auto_landed_holders:
+        foreign_held = {}
     own_halt_reason = _withheld_of(root, params.get(TERMINAL_RESUME_LEDGER_PARAM) or {}) if inherited else {}
 
     def _own_inherited(p: str) -> bool:
@@ -2866,7 +2966,6 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     carried_probe = [*candidates, *art_present, *art_deleted]
     prep = inline_review.get("prep")
     run_base = prep.get("run_base_sha") if isinstance(prep, dict) else None
-    own_seniority = _own_run_seniority(root, rid, script_path)
     peer_held = _peer_held(
         root, carried_probe, session_id, rid, script_path,
         plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
@@ -3048,7 +3147,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     findings = _integrity(
         root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
         own_declared=declared, session_id=session_id, minted_before=own_seniority,
-        deleted_notes=deleted_notes,
+        deleted_notes=deleted_notes, released_holders=frozenset(auto_landed_holders or ()),
     )
     if foreign_held:
         from coordinator_core.ops.dispatch_emit import landing_integrity as li, peer_hunk_gate
@@ -3356,6 +3455,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             root, request.plan_path, sha, list(paths), exclude_run=sibling_run_id,
         )
 
+    halted_auto_landed = (
+        _record_halted_auto_landed(root, art_run_id or sibling_run_id, sha, session_id)
+        if auto_landed_holders else None
+    )
+
     # ---- the reply
     reply: dict = {
         "committed": True, "sha": sha, "error": None, "refused": None,
@@ -3397,6 +3501,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["siblings"] = siblings
     if origin_landed:
         reply["origin_landed"] = origin_landed
+    if halted_auto_landed is not None:
+        reply["halted_auto_landed"] = {"holders": auto_landed_holders, **halted_auto_landed}
     criterion = inline_review.get("criterion")
     if isinstance(criterion, dict) and criterion.get("status"):
         reply["criterion_status"] = "not_met" if unlanded_rows else criterion["status"]
@@ -3677,13 +3783,14 @@ def _integrity(
     root: Path, params: dict, paths: list, deleted: list, record_abs: Optional[Path], run_id: str,
     plan: Optional[str], *, residue_py: Sequence[str] = (), own_declared: Sequence[str] = (),
     session_id: Optional[str] = None, minted_before: Optional[tuple] = None,
-    deleted_notes: Optional[list] = None,
+    deleted_notes: Optional[list] = None, released_holders: frozenset = frozenset(),
 ) -> list:
     """Pre-commit findings over the landing set: unparseable ``.py``, a ``.py`` importing what the
     commit leaves out of HEAD, a dirty declared ``.py`` the landing leaves behind that imports what
     it deletes, a blob dropping lines a foreign commit added since the run base, and a carried test
     verdict naming a run-caused failure. ``deleted_notes`` is an out-list: the test gate's
-    run-deleted-targets line is appended when present."""
+    run-deleted-targets line is appended when present. A co-declared hold by a ``released_holders``
+    run is skipped."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
     skip = set(deleted)
@@ -3731,6 +3838,8 @@ def _integrity(
     for path, sibling in merge_ancestry_release.release(root, peer_hunk_gate.co_declared_peer_holds(
         root, run_id, live, own_declared, own_plan=plan, minted_before=minted_before,
     )):
+        if sibling in released_holders:
+            continue
         findings.append(li.Finding(
             path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
             f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off",

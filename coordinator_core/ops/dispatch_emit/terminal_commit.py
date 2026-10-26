@@ -169,7 +169,7 @@ from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispa
 from coordinator_core.ops.dispatch_emit import cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy, review_floor  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
     _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
-    foreign_halted_withheld,
+    foreign_halted_withheld, held_revision_refusal,
 )
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix  # noqa: E402
 from coordinator_core.ops.dispatch_emit.refire_inherited_scope import inherited_scope  # noqa: E402
@@ -577,6 +577,67 @@ def _xs_over_budget_refusal(
         measured={"files": v["files"], "lines": v["lines"]},
         next_action=message,
     )
+
+
+_TEST_PATH = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$|[^/]*\.(test|spec)\.[jt]sx?$)")
+_NOT_RUN_TEXT = re.compile(r"\bnot[ _]run\b", re.I)
+REFUSED_TESTS_NOT_RUN = "tests-not-run"
+
+
+def _tests_not_run_refusal(
+    worktree_root: Path, params: dict, request: CommitRequest, inline_review: dict
+) -> Optional[dict]:
+    """The ``tests-not-run`` refusal when an XS-arm run declares a test file yet its
+    ``inline_review.tests.status`` is ``not_run`` or its ledger verdict calls an item ``met`` on
+    evidence that says the tests were not run, else None. Other arms and runs declaring no test
+    file are not gated."""
+    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
+
+    if _run_arm(worktree_root, params, request) != ARM_XS:
+        return None
+    declared = [p for c in request.chunks for p in (*c.paths, *c.prefixes) if p]
+    if not any(_TEST_PATH.search(p) for p in declared):
+        return None
+    tests = inline_review.get("tests") if isinstance(inline_review.get("tests"), dict) else {}
+    if tests.get("status") == "not_run":
+        return _error(
+            "inline_review.tests.status is not_run and the XS diff declares a test file; "
+            "run the scoped tests (named test files only) and re-fire with their result",
+            refused=REFUSED_TESTS_NOT_RUN,
+        )
+    verdict = params.get("ledger_verdict")
+    items = verdict.get("items") if isinstance(verdict, dict) else None
+    for item in items if isinstance(items, list) else ():
+        if not isinstance(item, dict) or item.get("status") != "met":
+            continue
+        text = " ".join(str(v) for k, v in item.items() if k != "id" and isinstance(v, (str, list)))
+        if _NOT_RUN_TEXT.search(text):
+            return _error(
+                f"ledger item {item.get('id')!r} is met on evidence saying its tests were not run; "
+                "run the scoped tests and re-judge",
+                refused=REFUSED_TESTS_NOT_RUN,
+            )
+    return None
+
+
+def _declared_reconcile(run_dir: Optional[Path], delivered: Sequence[str]) -> dict:
+    """``renamed``/``undelivered`` of the run's caller-declared writes (``declared_writes.json``)
+    against the landing set. Empty when the run declared none; no git spawn."""
+    if run_dir is None:
+        return {}
+    try:
+        declared = json.loads((run_dir / "declared_writes.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(declared, list) or not declared:
+        return {}
+    from coordinator_core.ops.dispatch_emit.declared_writes_reconcile import reconcile
+
+    out = reconcile([p for p in declared if isinstance(p, str)], delivered)
+    reply = {"renamed": out["renamed"], "undelivered": out["undelivered"]}
+    if out["undelivered"]:
+        reply["undeclared"] = out["undeclared"]
+    return reply
 
 
 def _review_floor_refusal(
@@ -2260,24 +2321,50 @@ def _every_staged_row_landed(resume: object) -> bool:
     return isinstance(raw, list) and not raw
 
 
-def _withheld_work_pending(worktree_root: Path, resume: object, declared: Sequence[str]) -> bool:
-    """True when a declared path the halt withheld (``run_artifacts.withheld`` of the resume, else
-    of the halted run's ``halted.json``) is dirty or untracked: the halt left that product in the
-    tree with the halt state's own bytes, so ``git diff <halt_sha>`` reads it as unchanged while
-    it is exactly the work this refire has to land."""
+def _withheld_of(worktree_root: Path, resume: object) -> dict:
+    """The paths the halt withheld: ``run_artifacts.withheld`` of the resume, else the halted run's
+    ``halted.json``; ``{}`` when neither is readable."""
     if not isinstance(resume, dict):
-        return False
+        return {}
     arts = resume.get("run_artifacts")
     withheld = arts.get("withheld") if isinstance(arts, dict) else None
-    if not isinstance(withheld, dict):
-        run_id = resume.get("run_id")
-        from coordinator_core.ops._path_guard import safe_id
+    if isinstance(withheld, dict):
+        return withheld
+    run_id = resume.get("run_id")
+    from coordinator_core.ops._path_guard import safe_id
 
-        if not (isinstance(run_id, str) and safe_id(run_id)):
-            return False
-        from coordinator_core.ops.dispatch_emit.halted_run import halted_withheld
+    if not (isinstance(run_id, str) and safe_id(run_id)):
+        return {}
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_withheld
 
-        withheld = halted_withheld(worktree_root / RECORD_DIR_ROOT / run_id)
+    return halted_withheld(worktree_root / RECORD_DIR_ROOT / run_id)
+
+
+def _worktree_differs_from_head(worktree_root: Path, resume: object) -> bool:
+    """True when a path of the run's write set (``run_write_set``, no own session so every live
+    claim is foreign) differs from HEAD in the worktree or is untracked. Two git spawns at most."""
+    run_id = resume.get("run_id") if isinstance(resume, dict) else None
+    from coordinator_core.ops._path_guard import safe_id
+
+    if not (isinstance(run_id, str) and safe_id(run_id)):
+        return False
+    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set
+
+    paths = list(run_write_set(worktree_root, run_id, ""))
+    if not paths:
+        return False
+    cwd = str(worktree_root)
+    if run_git(["--literal-pathspecs", "diff", "--quiet", "HEAD", "--", *paths], cwd=cwd).returncode == 1:
+        return True
+    created = run_git(["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "--", *paths], cwd=cwd)
+    return created.returncode == 0 and bool(created.stdout.strip())
+
+
+def _withheld_work_pending(worktree_root: Path, resume: object, declared: Sequence[str]) -> bool:
+    """True when a declared path the halt withheld (``_withheld_of``) is dirty or untracked: the
+    halt left that product in the tree with the halt state's own bytes, so ``git diff <halt_sha>``
+    reads it as unchanged while it is exactly the work this refire has to land."""
+    withheld = _withheld_of(worktree_root, resume)
     pending = [p for p in declared if p in withheld]
     if not pending:
         return False
@@ -2348,6 +2435,10 @@ def _unchanged_since_halt_failures(
             if created.returncode == 0 and created.stdout.strip():
                 return []
             if created.returncode == 0 and _withheld_work_pending(worktree_root, resume, paths):
+                return []
+            if created.returncode == 0 and (
+                (credited & set(judged)) or _withheld_of(worktree_root, resume)
+            ) and _worktree_differs_from_head(worktree_root, resume):
                 return []
             if created.returncode != 0:
                 outcome = f"git-exit-{created.returncode}"
@@ -2671,6 +2762,9 @@ def _ledger_gate(
         ), None, []
     if ledger is None:
         return None, None, []
+    held_refusal = held_revision_refusal(worktree_root, ledger, run_dir)
+    if held_refusal is not None:
+        return held_refusal, ledger, []
     gated = [*(gated or ()), *recovery_reasons]
     if not isinstance(verdict, dict):
         return _error(
@@ -5046,6 +5140,9 @@ def _terminal_commit_inner(
             refused="unreviewed",
         )
     floor_code = review_floor.floor_code_paths(request, inline_review, prep_from_disk)
+    not_run = _tests_not_run_refusal(worktree_root, params, request, inline_review)
+    if not_run is not None:
+        return not_run
     floor_refusal = _review_floor_refusal(request, inline_review, prep_from_disk, worktree_root)
     if floor_refusal is not None:
         return floor_refusal
@@ -7009,10 +7106,10 @@ def _terminal_commit_inner(
         reply["shipped_claims"] = shipped_reply_field
     reply["targeted_tests_check"] = integrity_extra["targeted_tests_check"]
     reply["reverify_check"] = integrity_extra["reverify_check"]
-    if "targeted_tests_note" in integrity_extra:
-        reply["targeted_tests_note"] = integrity_extra["targeted_tests_note"]
     if "retested_tests" in integrity_extra:
         reply["retested_tests"] = integrity_extra["retested_tests"]
+    if "targeted_tests_note" in integrity_extra:
+        reply["targeted_tests_note"] = integrity_extra["targeted_tests_note"]
     reply["receipts"] = receipt_paths
     reply["receipt_coverage"] = "written" if receipt_paths else "unidentified"
     if (
@@ -7047,6 +7144,7 @@ def _terminal_commit_inner(
     if unsent_memos:
         reply["memo_unsent"] = dict(sorted(unsent_memos.items()))
     reply["prefix_files"] = prefix_files
+    reply.update(_declared_reconcile(ask_run_dir, all_paths))
     reply.update(usage_reply)
     if reply.get("committed") or reply.get("nothing_to_commit"):
         _with_siblings(reply)

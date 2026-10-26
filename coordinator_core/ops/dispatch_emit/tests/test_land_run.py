@@ -1,6 +1,6 @@
 """land_run.foreign_halted_withheld: a hold that cannot be computed holds every wanted path.
 
-Also the hunk differ's process-time bound on a land_run.py-sized file (`own_hunk_stage`, `run_hunk_claims`).
+Also the review_reverify peer-withheld keep, the halted-record review-edit hold, and the hunk differ's process-time bound on a land_run.py-sized file (`own_hunk_stage`, `run_hunk_claims`).
 """
 
 import difflib

@@ -124,7 +124,30 @@ def test_kept_chunk_path_that_cannot_be_persisted_is_named(repo, tmp_path, monke
     out = _terminal(repo, _halted(False))
 
     assert out["kept_unpersisted"] == ["a.py"]
-    assert out["kept"]["chunks"] == ["C1"]
+    assert "kept" not in out
+    assert KEPT_REL not in _head_names(repo)
+
+
+def test_kept_json_names_only_paths_whose_blob_is_in_the_object_store(repo, monkeypatch):
+    _chunks(repo, {"C1": ["a.py"], "C2": ["b.py"]}, {"C1": "DONE: C1\n", "C2": "DONE: C2\n"})
+    real = kept_work.fingerprint(repo, "a.py")
+    stale = kept_work.fingerprint(repo, "b.py")
+    orig = kept_work.fingerprint
+
+    def fp(root, rel):
+        return stale if rel == "b.py" else orig(root, rel)
+
+    _write(repo, "b.py", "changed after fingerprinting\n")
+    monkeypatch.setattr(kept_work, "fingerprint", fp)
+    out = _terminal(repo, _halted(False))
+
+    assert out["kept_unpersisted"] == ["b.py"]
+    kept = json.loads(_git(repo, "show", f"HEAD:{KEPT_REL}"))
+    assert list(kept["chunks"]) == ["C1"]
+    for chunk in kept["chunks"].values():
+        for sha in chunk["paths"].values():
+            assert _git(repo, "cat-file", "-t", sha).strip() == "blob"
+    assert kept["chunks"]["C1"]["paths"]["a.py"] == real
 
 
 @WRITERS

@@ -190,6 +190,85 @@ def held_paths(
         )
 
 
+def _own_paths(root: Path, run_id: str) -> Optional[tuple]:
+    """`(declared, prefixes)` of the run's manifest, or None when the manifest is unreadable or declares nothing."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    declared, prefixes, unreadable = wrd._manifest_declared(run_id, Path(root))
+    if unreadable or (not declared and not prefixes):
+        return None
+    return tuple(declared), tuple(prefixes)
+
+
+def _is_halted_holder(root: Path, owner: str, run_id: str) -> Optional[bool]:
+    """True when `owner` is a halted/resumed run that still holds against `run_id`; False when its hold is
+    released; None when its marker is missing, unreadable or in any other state (treated as live)."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    marker = halted_run._read(record_dir(Path(root), owner))
+    if not marker or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+        return False if release_reason(root, owner, run_id, None) is not None else None
+    return release_reason(root, owner, run_id, None) is None
+
+
+def _review_green(root: Path, run_id: str) -> bool:
+    """The run's outcome record carries an inline review with no incomplete chunk and its review sidecar resolves."""
+    from coordinator_core.ops.dispatch_emit import ask_contract
+    from coordinator_core.ops.dispatch_emit.halted_run_landed import _review_record
+
+    outcome = ask_contract.read_run_outcome(Path(root), run_id)
+    if not outcome or outcome.get("incomplete_chunks"):
+        return False
+    return _review_record(Path(root), run_id, None) is not None
+
+
+def _covers(path: str, declared: tuple, prefixes: tuple) -> bool:
+    return path in declared or any(path == pre or path.startswith(pre + "/") for pre in prefixes)
+
+
+def halted_only_withholders(root: Path, run_id: str) -> Optional[list]:
+    """Sorted ids of the other runs withholding `run_id`'s declared paths, when every one is a halted/resumed
+    run still holding and `run_id` is reviewed-green; else None.
+
+    None for: a review that is not green, an unreadable or empty manifest, a holder with no halted marker
+    (live or unreadable), or no halted withholder at all. In process, no spawn. Never raises.
+    """
+    try:
+        own = _own_paths(root, run_id)
+        if own is None or not _review_green(root, run_id):
+            return None
+        from coordinator_core.ops.dispatch_emit.halted_withheld_index import withheld_by_path
+
+        owners = {o for p, o in withheld_by_path(Path(root)).items() if o != run_id and _covers(p, *own)}
+        holders = []
+        for owner in sorted(owners):
+            holds = _is_halted_holder(root, owner, run_id)
+            if holds is None:
+                return None
+            if holds:
+                holders.append(owner)
+        return holders or None
+    except Exception:  # noqa: BLE001 -- unknown claim: the refusal stands
+        return None
+
+
+def residue_paths(root: Path, run_id: str) -> frozenset:
+    """Paths other halted runs withhold that are not `run_id`'s own declared paths: residue a tree-wide
+    invariant should not charge to `run_id`. Empty on any error (nothing is excused unread)."""
+    try:
+        from coordinator_core.ops.dispatch_emit.halted_withheld_index import withheld_by_path
+
+        own = _own_paths(root, run_id) or ((), ())
+        out = set()
+        for path, owner in withheld_by_path(Path(root)).items():
+            if owner != run_id and not _covers(path, *own) and _is_halted_holder(root, owner, run_id):
+                out.add(path)
+        return frozenset(out)
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
 def _squash(text: str) -> str:
     return "".join(text.split())
 
@@ -353,6 +432,8 @@ def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
 
 
 def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
+    from coordinator_core.ops.dispatch_emit import kept_work
+
     plan = _kept_plan(record)
     if plan is None:
         return set()

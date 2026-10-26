@@ -409,6 +409,45 @@ def test_per_path_mixed_landed_and_superseded_closes_and_records_every_path(halt
     assert not _indexed(root)
 
 
+MISSING_BLOB = "5f1d0587" + "0" * 32
+
+
+def _lose_kept_blob(root, record, path):
+    """Re-record `path`'s kept blob as an id that was never written to the object store."""
+    paths = {"a.txt": _blob(root, "a-kept"), "b.txt": _blob(root, "b-kept"), path: MISSING_BLOB}
+    kept_work.write(record, {"c": {"paths": paths}}, None)
+
+
+def test_missing_kept_blob_is_lost_with_reason_and_needs_no_superseding_commit(halted):
+    root, record, _ = halted
+    _lose_kept_blob(root, record, "a.txt")
+    sha = _commit(root, {"b.txt": "b-later"})
+    reply = _call(root)
+    assert reply["ok"] is True
+    assert reply["dispositions"]["a.txt"] == {"disposition": halted_run.DISPOSITION_LOST, "reason": op._LOST_REASON}
+    assert reply["dispositions"]["b.txt"] == {"disposition": halted_run.DISPOSITION_SUPERSEDED, "sha": sha}
+    assert reply["evidence"] == {"b.txt": sha}
+    assert not _indexed(root)
+
+
+def test_lost_path_untouched_since_halt_closes_with_landed_rest(halted):
+    root, record, _ = halted
+    _lose_kept_blob(root, record, "a.txt")
+    _commit(root, {"b.txt": "b-kept"})
+    reply = _call(root)
+    assert reply["ok"] is True and reply["evidence"] == {}
+    assert reply["dispositions"]["a.txt"]["disposition"] == halted_run.DISPOSITION_LOST
+    assert reply["dispositions"]["b.txt"]["disposition"] == halted_run.DISPOSITION_LANDED
+    assert halted_run._read(record)["status"] == halted_run.STATUS_SUPERSEDED
+
+
+def test_present_kept_blob_unrelated_to_lost_path_still_refuses_untouched(halted):
+    root, record, _ = halted
+    reply = _call(root)
+    assert reply["ok"] is False and "a.txt" in reply["error"]
+    assert _indexed(root)
+
+
 def test_per_path_landed_untouched_after_anchor_still_landed(halted):
     root, record, _ = halted
     pre = _commit(root, {"b.txt": "b-kept"}, date=PRE_HALT)

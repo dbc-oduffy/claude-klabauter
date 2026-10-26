@@ -5,7 +5,9 @@ is ``halted`` (not resumed, landed or live) and withholds at least one path; the
 ``halted`` with a parseable ``last_activity_at`` that resolves to a commit (the halt anchor); every
 withheld path classifies as exactly one of: ``landed`` (HEAD blob equals the kept blob), ``superseded`` (a commit in
 ``<halt_anchor>..HEAD`` touched it and a HEAD blob exists that differs from the kept blob) or ``scratch-abandoned``
-(under ``scratch/``, untouched since the halt, absent from both the anchor tree and HEAD). Any path that classifies
+(under ``scratch/``, untouched since the halt, absent from both the anchor tree and HEAD) or ``lost`` (the kept blob
+is absent from the object store: recorded with a reason, no superseding commit needed, and a run with a lost path
+closes even with no superseded path). Any path that classifies
 as none refuses naming every such path; so does a run with no superseded path (all landed, or landed plus scratch:
 ``dispatch.record_halted_run_landed`` records those). Any gap leaves marker and index unchanged.
 On success the marker is rewritten ``status: superseded`` with ``superseded_evidence: {path: sha}``
@@ -114,6 +116,7 @@ def _blob_ids(root: Path, specs: list) -> Optional[list]:
     return out
 
 
+_LOST_REASON = "kept blob absent from the object store; no content left to protect"
 _SCRATCH_PREFIX = "scratch/"
 _SCRATCH_REASON = "under scratch/, never tracked at halt or HEAD"
 
@@ -136,11 +139,11 @@ def _classify_paths(paths: list, touched: dict, head: dict, keep: dict, base: di
         h, k = head.get(p), keep.get(p)
         if h is not None and h == k:
             done[p] = {"disposition": halted_run.DISPOSITION_LANDED, "blob": h}
+        elif keep and k is None:
+            done[p] = {"disposition": halted_run.DISPOSITION_LOST, "reason": _LOST_REASON}
         elif p in touched:
             if p in head and h is None:
                 bad.append(f"{p} (absent at HEAD; deletion is not verified as supersession)")
-            elif keep and k is None:
-                bad.append(f"{p} (kept blob is missing; supersession cannot be verified)")
             else:
                 done[p] = {"disposition": halted_run.DISPOSITION_SUPERSEDED, "sha": touched[p][0][0]}
         elif _is_scratch_path(p) and p in head and h is None and base.get(p) is None:
@@ -155,10 +158,10 @@ def _refuse_unclassified(bad: list) -> dict:
 
 
 def _refuse_without_supersession(done: dict) -> Optional[dict]:
-    """None when some path is superseded; else the refusal (a superseded close claims a later commit replaced work)."""
+    """None when some path is superseded or lost; else the refusal (a superseded close claims a later commit replaced work)."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
-    if any(d["disposition"] == halted_run.DISPOSITION_SUPERSEDED for d in done.values()):
+    if any(d["disposition"] in (halted_run.DISPOSITION_SUPERSEDED, halted_run.DISPOSITION_LOST) for d in done.values()):
         return None
     scratch = sorted(p for p, d in done.items() if d["disposition"] == halted_run.DISPOSITION_SCRATCH)
     if not scratch:
