@@ -136,6 +136,31 @@ def test_created_test_file_named_by_failing_id_is_removed(world, monkeypatch):
     out = _revert(root, ["tests/test_new.py::test_n"])
     assert [(e["path"], e["action"]) for e in out["reverted"]] == [("tests/test_new.py", "removed")]
     assert not new.exists()
+    kept = root / out["reverted"][0]["kept_at"]
+    assert kept.read_text(encoding="utf-8") == "def test_n():\n    assert False\n"
+    assert "removed" in kept.parts
+
+
+def test_untracked_file_of_an_agent_that_wrote_a_foreign_path_is_foreign_and_untouched(world, monkeypatch):
+    """A sibling run's agent wrote a declared path and an undeclared untracked one; neither is this run's."""
+    root, _orig, _ = world
+    declared = root / "docs/plans/sib.md"
+    undeclared = root / "scratch/sib/notes.md"
+    own = root / "tests/test_own.py"
+    for f in (declared, undeclared, own):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"def test_x():\n    assert False\n")
+    monkeypatch.setattr(
+        review_edits, "review_writes",
+        lambda *_a, **_k: {"docs/plans/sib.md": "sib", "scratch/sib/notes.md": "sib", "tests/test_own.py": "mine"},
+    )
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {"docs/plans/sib.md": "run-b"})
+    listed = _list(root)
+    assert listed["created"] == ["tests/test_own.py"]
+    assert listed["foreign"] == ["docs/plans/sib.md", "scratch/sib/notes.md"]
+    out = _revert(root, ["scratch/sib/notes.md::test_x", "tests/test_own.py::test_x"])
+    assert [r["path"] for r in out["reverted"]] == ["tests/test_own.py"]
+    assert declared.exists() and undeclared.exists()
 
 
 def test_id_implicating_nothing_is_unattributed(world):

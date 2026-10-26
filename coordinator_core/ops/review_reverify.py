@@ -38,7 +38,9 @@ path is rewritten as its current bytes with each applied finding on it inverted 
 ``after`` replaced by its ``before``; ``action`` ``"reverted-findings"``, ``source`` ``"findings"``);
 every other byte, executor hunks included, is untouched. A finding that cannot be inverted, and an
 implicated path with no applied finding, go to ``kept`` with a reason and write nothing. A created
-path is removed, but one tracked at HEAD is restored to HEAD's bytes, never unlinked. Before
+path is removed by moving its bytes to ``<snapshot>/removed/<path>`` (``kept_at`` in the entry),
+never unlinked; one tracked at HEAD is restored to HEAD's bytes. A created path whose writing
+agent also wrote a foreign path is foreign. Before
 anything is written, the revert (tripwire-named paths included) refuses (``error``, nothing written,
 the whole call) when it would remove a top-level symbol that a committed file in the run's surface
 (manifest paths plus paths changed anchor..HEAD) still uses. An id implicating nothing is
@@ -66,6 +68,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -101,6 +104,7 @@ MUTATES = [
 
 _MANIFEST = "manifest.json"
 _RECORD = "reverify.json"
+_REMOVED = "removed"
 _MACHINERY_PREFIXES = (".coordinator-local/", "state/")
 
 
@@ -164,8 +168,9 @@ def _created(
     repo_root: Path, session: str, manifest: dict, share: Path, slice_prefix: str = ""
 ) -> Tuple[List[str], List[str]]:
     """(created, foreign). The session's write record spans every run the session fired, so a
-    path is this run's only when no other live run declared it and it was written after the
-    snapshot; anything else is foreign and is never reverted."""
+    path is this run's only when no other live run declared it, it was written after the
+    snapshot, and its writing agent wrote no foreign path; anything else is foreign and is
+    never reverted."""
     from coordinator_core.ops.dispatch_emit import review_edits
 
     since = _since(manifest.get("recorded_at"))
@@ -179,6 +184,8 @@ def _created(
     share_rel = _rel(str(share), repo_root)
     out: Set[str] = set()
     foreign: Set[str] = set()
+    foreign_agents: Set[str] = set()
+    candidates: List[Tuple[str, str]] = []
     for raw in writes:
         rel = _rel(raw, repo_root)
         if rel in known or rel.startswith(_MACHINERY_PREFIXES) or rel.startswith(share_rel + "/"):
@@ -188,8 +195,11 @@ def _created(
             continue
         if rel in sibling or rel in tracked or _predates(target, since):
             foreign.add(rel)
+            foreign_agents.add(writes[raw])
         else:
-            out.add(rel)
+            candidates.append((rel, writes[raw]))
+    for rel, agent in candidates:
+        (foreign if agent in foreign_agents else out).add(rel)
     return sorted(out), sorted(foreign)
 
 
@@ -654,11 +664,15 @@ def review_reverify(
     for rel in sorted(plan):
         target = repo_root / rel
         data, source = plan[rel]
+        kept_at = None
         if data is None:
+            dest = snapshot_dir / _REMOVED / rel
             try:
-                target.unlink()
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(target, dest)
             except OSError:
-                return _fail(f"could not remove {rel}", True)
+                return _fail(f"could not move {rel} aside", True)
+            kept_at = _rel(str(dest), repo_root)
             action = "removed"
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -671,6 +685,7 @@ def review_reverify(
             "source": source,
             "tests": sorted(set(implicated[rel])),
             "findings": _refs(refs_by_rel.get(rel, [])),
+            **({"kept_at": kept_at} if kept_at else {}),
         })
 
     # A removed path an author `git add -N`'d leaves an empty-blob entry with no file; drop only
