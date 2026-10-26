@@ -547,6 +547,28 @@ def _carried_returns(root: Path, record_dir: Path, returns: dict) -> dict:
     return out
 
 
+def _record_withheld_prints(root: Path, record_dir_rel: str, withheld: dict, paths: list) -> None:
+    """Write ``WITHHELD_PRINTS_FILE`` beside the marker: blob id of each withheld path still in the
+    tree, so a refire credits a path as the predecessor's only while its bytes are unchanged. The
+    file joins ``paths`` (in place) so it lands with the record."""
+    import json
+
+    from coordinator_core.atomic_replace import atomic_write_bytes
+    from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
+    from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE
+
+    prints = {p: f for p in sorted(withheld) if isinstance(p, str) and (f := fingerprint(root, p)) is not None}
+    if not prints:
+        return
+    rel = f"{record_dir_rel}/{WITHHELD_PRINTS_FILE}"
+    try:
+        atomic_write_bytes(root / rel, (json.dumps(prints, indent=2) + "\n").encode("utf-8"))
+    except OSError:
+        return
+    if rel not in paths:
+        paths.append(rel)
+
+
 def _persist_blobs(root: Path, common_dir: Optional[Path], post: dict) -> set:
     """Write each ``post`` path's bytes as a git blob (in-process, no spawn) when its sha still
     equals the recorded fingerprint, so a reviewed hunk stays recoverable after a refire; returns the
@@ -677,6 +699,17 @@ def _land(
     owner = declared
     home, _siblings = split_sibling_paths(list(owner), worktree_root)
     declared = [p for p in home if not p.startswith(record_dir_rel + "/")]
+    if not params.get("script_path"):
+        # Land-only ask: no script names the product, so the marker's withheld paths are it. Not put
+        # in ``owner``: no chunk owns them, so the record-only/closure legs never re-withhold them.
+        # Every recorded reason is declared; peer-held, sibling and foreign-halted paths are re-withheld
+        # by the gates below. Paths come from the marker uncontained: ``snapshot.changed`` bounds them.
+        try:
+            withheld_recorded = sorted(halted_run.halted_withheld_strict(worktree_root / record_dir_rel))
+        except halted_run.UnreadableHaltRecord as exc:
+            return _error(f"halt marker unreadable, its paths are held: {exc.reason}", refused=exc.reason, **base)
+        recorded, _ = split_sibling_paths(withheld_recorded, worktree_root)
+        declared += [p for p in recorded if p not in declared and not p.startswith(record_dir_rel + "/")]
     sizing_rel = record_sizing_rel(worktree_root, run_id)
     if (
         sizing_rel
@@ -819,6 +852,20 @@ def _land(
         art_paths, w3 = sibling_claims.filter_own(art_paths, sibling, own_declared)
         art_deleted, w4 = sibling_claims.filter_own(art_deleted, sibling, own_declared)
         withheld.update({p: sibling_claims.SIBLING_WITHHELD_REASON for p in (*w1, *w2, *w3, *w4)})
+
+    from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
+
+    halt_plan = halted.get(HALT_PLAN_FIELD)
+    foreign = foreign_halted_withheld(
+        worktree_root, run_id, halt_plan if isinstance(halt_plan, str) else None,
+        product + gone + art_paths + art_deleted + review_literals,
+    )
+    if foreign:
+        withheld.update({p: "foreign-halted-withheld" for p in foreign})
+        product = [p for p in product if p not in withheld]
+        gone = [p for p in gone if p not in withheld]
+        art_paths = [p for p in art_paths if p not in withheld]
+        art_deleted = [p for p in art_deleted if p not in withheld]
 
     holds: list = []
     warnings = commit_v2._peer_claim_warnings(
@@ -968,6 +1015,7 @@ def _land(
 
     if (worktree_root / record_dir_rel).is_dir():
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
+        _record_withheld_prints(worktree_root, record_dir_rel, withheld, paths)
     kept_reply = _record_kept(
         worktree_root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM),
         post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,

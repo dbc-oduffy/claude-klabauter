@@ -3470,7 +3470,7 @@ def test_git_subcommand_and_remaining_for_segment_bare_git_still_none_subcmd():
 # ---------------------------------------------------------------------------
 
 
-def test_fail_open_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
+def test_main_thread_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     payload = {
@@ -3481,7 +3481,8 @@ def test_fail_open_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
     }
     assert _enveloped(guard.check)(payload) is None
     content = log_path.read_text(encoding="utf-8")
-    assert "FAIL-OPEN" in content
+    assert "main-thread-out-of-scope" in content
+    assert "FAIL-OPEN" not in content
     assert "branch='no-agent-id-key'" in content
     assert "git rm --cached secret.txt" in content
 
@@ -4268,23 +4269,108 @@ def test_git_apply_writing_forms_deny(cmd):
     assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-# ---- process-kill by explicit PID inside the session tree ----
+# ---- process-kill by explicit PID owned by the calling agent ----
 
 _EXEC = "coordinator:executor"
 
 
+@pytest.fixture(autouse=True)
+def _ledger_home(tmp_path, monkeypatch):
+    """Keep the guard's ledger append out of the real settings home."""
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    monkeypatch.setattr(apo, "settings_home", lambda: tmp_path / "settings-home")
+
+
 @pytest.fixture
 def tree_pids(monkeypatch):
-    """Pin which PIDs count as inside the session tree: 4242 and 4243."""
-    monkeypatch.setattr(guard, "_pid_in_session_tree", lambda pid: pid in (4242, 4243))
+    """Ownership fake: agent `deadbeef0123` owns 4242 and 4243; `sibling` owns 5555."""
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    owned = {("deadbeef0123", 4242), ("deadbeef0123", 4243), ("sibling", 5555)}
+    monkeypatch.setattr(
+        apo, "pid_owned_by_agent", lambda pid, agent_id, session_id: (agent_id, pid) in owned
+    )
 
 
 @pytest.mark.parametrize(
     "cmd",
     ["kill 4242", "kill -9 4242", "kill -TERM 4242 4243", "kill -s KILL 4242", "kill -- 4242"],
 )
-def test_kill_of_session_tree_pid_allows(tree_pids, cmd):
+def test_own_descendant_kill_allows(tree_pids, cmd):
     assert _enveloped(guard.check)(_payload(cmd, agent_type=_EXEC)) is None
+
+
+@pytest.mark.parametrize("cmd", ["kill 5555", "kill -9 4242 5555", "kill 1", "kill 77777"])
+def test_sibling_em_and_foreign_pid_kill_denies(tree_pids, cmd):
+    _assert_denies(_payload(cmd, agent_type=_EXEC))
+
+
+def test_reused_pid_start_time_mismatch_kill_denies(monkeypatch):
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    class _Proc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return 500.0
+
+        def cmdline(self):
+            return ["python", "scratch/x/rescore.py"]
+
+        def parent(self):
+            return None
+
+    class _Ps:
+        Process = _Proc
+
+        @staticmethod
+        def process_iter(*a, **k):
+            return iter([_Proc(100)])
+
+    monkeypatch.setattr(apo, "_psutil", lambda: _Ps)
+    apo.record_agent_command("sess1", "deadbeef0123", "python scratch/x/rescore.py")
+    out = _enveloped(guard.check)(_payload("kill 4242", agent_type=_EXEC))
+    assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("cmd", ["pkill -f rescore.py", "killall python", "pkill 4242"])
+def test_pkill_killall_deny_naming_kill_pid(tree_pids, cmd):
+    out = _enveloped(guard.check)(_payload(cmd, agent_type=_EXEC))
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "kill <pid>" in reason
+
+
+def test_benign_launch_command_is_ledgered_before_layer1_exit():
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    assert _enveloped(guard.check)(_payload("python scratch/x/rescore.py &")) is None
+    rows = apo._read_rows("sess1", "deadbeef0123")
+    assert [r["cmd"] for r in rows] == ["python scratch/x/rescore.py &"]
+
+
+def test_main_thread_payload_is_not_ledgered():
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    assert _enveloped(guard.check)(_payload("echo hi", agent_id=None)) is None
+    assert not apo.ledger_path("sess1").exists()
+
+
+def test_own_descendant_kill_through_dispatch(tree_pids):
+    import json
+
+    from coordinator_core.bash_guards import dispatch
+
+    allowed = dispatch.evaluate_payload_json(
+        json.dumps(_payload("kill 4242", agent_type=_EXEC))
+    )
+    denied = dispatch.evaluate_payload_json(
+        json.dumps(_payload("kill 5555", agent_type=_EXEC))
+    )
+    assert "block_subagent_destructive_action" not in json.dumps(allowed or {})
+    assert denied and "deny" in json.dumps(denied)
 
 
 @pytest.mark.parametrize(
@@ -4338,40 +4424,18 @@ def test_powershell_stop_process_outside_tree_or_unprovable_denies(tree_pids, cm
     _assert_denies(_ps_payload(cmd, agent_type=_EXEC))
 
 
-def test_kill_deny_message_names_main_session_and_forbids_peer_relay(tree_pids):
+def test_kill_deny_message_names_kill_pid_alternative(tree_pids):
     out = _enveloped(guard.check)(_payload("kill -9 9999", agent_type=_EXEC))
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "main session" in reason
-    assert "Group EM" in reason and "permission laundering" in reason
+    assert "kill <pid>" in reason
+    assert "permission laundering" not in reason and "memo D2" not in reason
 
 
 @requires_powershell_grammar
-def test_stop_process_deny_message_names_main_session(tree_pids):
+def test_stop_process_deny_message_names_kill_pid_alternative(tree_pids):
     out = _enveloped(guard.check)(_ps_payload("Stop-Process -Id 9999", agent_type=_EXEC))
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "main session" in reason and "permission laundering" in reason
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_pid_in_session_tree_uses_real_process_ancestry(monkeypatch):
-    import subprocess
-    import sys
-
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    try:
-        monkeypatch.setenv("CLAUDE_PID", str(os.getpid()))
-        assert guard._pid_in_session_tree(child.pid) is True
-        assert guard._pid_in_session_tree(os.getppid()) is False
-        assert guard._pid_in_session_tree(os.getpid()) is False
-        monkeypatch.delenv("CLAUDE_PID")
-        assert guard._pid_in_session_tree(child.pid) is False
-    finally:
-        child.kill()
-        child.wait()
+    assert "Stop-Process -Id <pid>" in reason
 
 
 @pytest.fixture

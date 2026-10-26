@@ -2121,7 +2121,13 @@ def _neutralize_home_path_operands(
 
 
 _PY_C_SUBSTITUTION_RE = re.compile(r"\$\(\s*python3?(?:\.\d+)?\s+-c\s+'(?P<body>[^'`]*)'\s*\)")
-_PY_C_SAFE_IMPORT_RE = re.compile(r"\bimport\s+([\w\s,]+)")
+#: A bare ``python -c '<body>'`` / ``python -c "<body>"`` command (not a
+#: substitution); a double-quoted body with ``$``/backslash is shell-expanded
+#: and stays unmatched.
+_PY_C_DIRECT_RE = re.compile(
+    r"(?<![\w$./-])python3?(?:\.\d+)?\s+-c\s+(?:'(?P<sq>[^'`]*)'|\"(?P<dq>[^\"`$\\]*)\")"
+)
+_PY_C_SAFE_IMPORT_RE =re.compile(r"\bimport\s+([\w\s,]+)")
 _PY_C_SAFE_MODULES = frozenset({"json", "sys", "re", "datetime", "time"})
 _PY_C_CAPABILITY_RE = re.compile(
     r"\b(?:open|exec|eval|compile|getattr|setattr|globals|locals|vars|input|breakpoint|"
@@ -2156,7 +2162,14 @@ def _neutralize_mention_only_python_substitutions(
             return "x"
         return match.group(0)
 
-    return _PY_C_SUBSTITUTION_RE.sub(_swap, segment)
+    def _swap_direct(match: "re.Match[str]") -> str:
+        body = match.group("sq") if match.group("sq") is not None else match.group("dq")
+        if _mentions_governed_identifier(body, identifiers_lower) and _is_pure_python_c_body(body):
+            return "x"
+        return match.group(0)
+
+    segment = _PY_C_SUBSTITUTION_RE.sub(_swap, segment)
+    return _PY_C_DIRECT_RE.sub(_swap_direct, segment)
 
 
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:

@@ -41,10 +41,12 @@ Spec backlink: docs/decisions/DR-276-operator-clis-record-session-writes-at-a.md
 
 from __future__ import annotations
 
-import contextlib
 import os
 from contextvars import ContextVar
-from typing import Iterator, List, Optional
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import List, Optional
 
 __all__ = ["declare_write", "collecting", "active_declarations"]
 
@@ -79,14 +81,22 @@ def declare_write(path: object) -> None:
     active.append(text)
 
 
-@contextlib.contextmanager
-def collecting(into: Optional[List[str]] = None) -> Iterator[List[str]]:
-    collected: List[str] = into if into is not None else []
-    token = _ACTIVE.set(collected)
-    try:
-        yield collected
-    finally:
-        _ACTIVE.reset(token)
+class collecting:
+    """Context manager: `with collecting() as declared` collects every `declare_write` inside.
+
+    A class, not `contextlib.contextmanager`: contextlib stays off this module's import path.
+    """
+
+    def __init__(self, into: Optional[List[str]] = None) -> None:
+        self._collected: List[str] = into if into is not None else []
+        self._token = None
+
+    def __enter__(self) -> List[str]:
+        self._token = _ACTIVE.set(self._collected)
+        return self._collected
+
+    def __exit__(self, *exc_info: object) -> None:
+        _ACTIVE.reset(self._token)
 
 
 def active_declarations() -> Optional[List[str]]:

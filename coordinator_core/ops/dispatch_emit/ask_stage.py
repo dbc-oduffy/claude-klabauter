@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import re
 import shlex
-import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Optional, Sequence
@@ -750,7 +749,7 @@ def _group_rows(
     units = []
     for r in rows:
         solo = r.agent_type == REVIEWER_AGENT_TYPE or (raw_by_id.get(r.id) or {}).get("needs_slot") is True
-        key = f"solo:{r.id}" if solo else f"{r.wave}|{','.join(sorted(r.deps))}|{r.agent_type}|{r.model}"
+        key = f"solo:{r.id}" if solo else f"{r.wave}|{','.join(sorted(r.deps))}|{r.agent_type}|{r.model}|{r.effort or ''}"
         units.append(Unit(r.id, key, sizes.get(r.id, 0)))
     groups = propose_groups(sorted(units, key=lambda u: u.key))
     group_of = {m: f"g{next(r.wave for r in rows if r.id == g[0])}-{g[0]}" for g in groups if len(g) > 1 for m in g}
@@ -1171,6 +1170,7 @@ def stage(
                     id=row.id,
                     agent_type=agent_type,
                     model=model,
+                    effort=row.effort,
                     brief_path=_rel(root, brief),
                     writes=tuple(paths),
                     wave=wave_no,
@@ -1441,7 +1441,8 @@ def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow], record: Optio
     halted run's own stage recorded for every path it covers, since the live tree already holds that
     fire's output. A refire never reads the live tree: a path the prior manifest never baselined (or
     a manifest that is absent, unreadable or lacks `write_baseline`) takes its blob at the run base,
-    one `git cat-file --batch --filters`; a failed lookup raises `RefireBaselineError`."""
+    an in-process object read (one `git cat-file --batch --filters` only for conversions it cannot
+    reproduce); a failed lookup raises `RefireBaselineError`."""
     prior: Mapping = {}
     base = halted_run_base(record) if record is not None else None
     if base:
@@ -1469,17 +1470,60 @@ class RefireBaselineError(AskStageError):
 def _run_base_blobs(root: Path, base: str, paths: Sequence[str]) -> dict[str, Optional[str]]:
     """`blob_sha` of each path's content at commit `base` after checkout conversion (None: absent there).
 
-    Trap: the domain is `kept_work.fingerprint` (raw working-tree bytes), so the base content is read
-    through `--filters`; a committed blob sha would never equal an unchanged file under an eol/smudge
-    rule. One git spawn, none for no paths."""
+    Trap: the domain is `kept_work.fingerprint` (raw working-tree bytes), so the base content is the
+    checkout-converted blob; a committed blob sha would never equal an unchanged file under an eol rule.
+    Zero spawns on the common path (an in-process object read). A path whose checkout conversion
+    cannot be reproduced in process (`filter=`, `text=auto`, a config-set eol, `core.autocrlf` truthy at
+    any config level, an included or env-injected config, native CRLF) takes ONE
+    `git cat-file --batch --filters` for all such paths together and succeeds."""
     if not paths:
         return {}
-    from coordinator_core.git.run import run_git
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import read_commit, read_tree_spine
     from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
 
     fail = f"refire write_baseline: cannot read paths at run_base_sha {base}"
     if any(ch.isspace() for p in paths for ch in p):
         raise RefireBaselineError(f"{fail} (a whitespace path cannot be named to cat-file --batch)")
+    commit = read_commit(root, base)
+    if commit is None:
+        raise RefireBaselineError(f"{fail} (not a readable commit)")
+    spine = read_tree_spine(root, list(paths), root_tree_sha=commit.tree)
+    if spine is None:
+        raise RefireBaselineError(f"{fail} (unreadable tree)")
+    common = resolve_git_common_dir(root)
+    config_forces_git = _config_forces_git(root)
+    out: dict[str, Optional[str]] = {}
+    needs_git: list[str] = []
+    for p in paths:
+        entry = spine.get(p.rpartition("/")[0], {}).get(p.rpartition("/")[2])
+        if entry is None or entry[0] in (0o40000, 0o160000):
+            out[p] = None
+            continue
+        obj = read_object(common, entry[1])
+        if obj is None or obj[0] != "blob":
+            raise RefireBaselineError(f"{fail} (blob {entry[1]} of {p} unreadable)")
+        data = obj[1]
+        if entry[0] != 0o120000:
+            converted = None if config_forces_git else _checkout_convert(root, p, data)
+            if converted is None:
+                needs_git.append(p)
+                continue
+            data = converted
+        out[p] = blob_sha(data)
+    if needs_git:
+        out.update(_git_filtered_blobs(root, base, needs_git, fail))
+    return {p: out[p] for p in paths}
+
+
+def _git_filtered_blobs(root: Path, base: str, paths: Sequence[str], fail: str) -> dict[str, Optional[str]]:
+    """`blob_sha` of each path at `base` as git's checkout converts it: ONE `git cat-file --batch --filters`."""
+    import uuid
+
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+
     # Git's `--filters` header reports the unconverted size, so entries are split on a sentinel
     # object (answered `<sentinel> missing`), never on the header size.
     tok = uuid.uuid4().hex
@@ -1516,6 +1560,92 @@ def _run_base_blobs(root: Path, base: str, paths: Sequence[str]) -> dict[str, Op
         else:
             out[paths[i - 1]] = None
     return out
+
+
+_CONFIG_CONVERSION_KEY = re.compile(r"^\s*(?:autocrlf\s*(?:=\s*(?P<crlf>[^\s#;]*))?|eol\s*=|\[\s*include)", re.I | re.M)
+_CONFIG_ENV_KEYS = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
+
+
+def _config_forces_git(root: Path) -> bool:
+    """True when any config level git reads could change checkout conversion, or cannot be read here.
+
+    Over-triggering only costs the one spawn; under-triggering would baseline the wrong content.
+    Levels: system (`GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_SYSTEM`), global (`GIT_CONFIG_GLOBAL`, else
+    XDG then `~/.gitconfig`), repo, and `config.worktree`; env-injected config and any `[include`
+    section force it."""
+    import os
+
+    from coordinator_core.git.content_hash import _read_text_scoped, _system_gitconfig_paths
+    from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+
+    env = os.environ
+    if any(env.get(k) for k in _CONFIG_ENV_KEYS):
+        return True
+    if env.get("GIT_CONFIG_NOSYSTEM"):
+        files: list[Path] = []
+    elif env.get("GIT_CONFIG_SYSTEM"):
+        files = [Path(env["GIT_CONFIG_SYSTEM"])]
+    else:
+        files = list(_system_gitconfig_paths())
+    if "GIT_CONFIG_GLOBAL" in env:
+        if env["GIT_CONFIG_GLOBAL"]:
+            files.append(Path(env["GIT_CONFIG_GLOBAL"]))
+    else:
+        try:
+            home = Path.home()
+        except (RuntimeError, KeyError):
+            return True
+        xdg = env.get("XDG_CONFIG_HOME")
+        files.append((Path(xdg) if xdg else home / ".config") / "git" / "config")
+        files.append(home / ".gitconfig")
+    files += [resolve_git_common_dir(root) / "config", resolve_git_dir(root) / "config.worktree"]
+    for cfg in files:
+        for m in _CONFIG_CONVERSION_KEY.finditer(_read_text_scoped(cfg) or ""):
+            if (m.group("crlf") or "true").lower() not in ("false", "input"):
+                return True
+    return False
+
+
+def _checkout_convert(root: Path, rel: str, data: bytes) -> Optional[bytes]:
+    """`data` as git's checkout would write `rel`: LF->CRLF under an explicit `eol=crlf`, verbatim when
+    nothing converts, None when the conversion is not reproduced in process (the caller takes git)."""
+    from coordinator_core.git.checkin_attrs import BINARY, TEXT, UNSET, checkin_disposition
+    from coordinator_core.git.content_hash import _attributes_pattern_matches, _clean_filter_may_apply, _read_text_scoped
+    from coordinator_core.git.git_dir import resolve_git_dir
+
+    if _clean_filter_may_apply(root, rel):
+        return None
+    disposition = checkin_disposition(root, rel)
+    if disposition == BINARY:
+        return data
+    if disposition not in (TEXT, UNSET):
+        return None
+    eol: Optional[str] = None
+    parts = rel.split("/")
+    candidates = [(resolve_git_dir(root) / "info" / "attributes", rel)]
+    for depth in range(len(parts)):
+        candidates.append((root.joinpath(*parts[:depth]) / ".gitattributes", "/".join(parts[depth:])))
+    for attrs, sub in candidates:
+        text = _read_text_scoped(attrs)
+        for line in (text or "").splitlines():
+            toks = line.split("#", 1)[0].split()
+            if len(toks) > 1 and _attributes_pattern_matches(toks[0], sub):
+                for tok in toks[1:]:
+                    if tok == "text=auto":
+                        return None
+                    if tok.startswith("eol="):
+                        eol = tok[4:]
+    if disposition == UNSET:
+        return data
+    if eol is None:
+        import os
+
+        return None if os.linesep == "\r\n" else data
+    if eol == "lf":
+        return data
+    if eol == "crlf":
+        return re.sub(rb"(?<!\r)\n", b"\r\n", data)
+    return None
 
 
 def manifest_payload(root: Path, manifest: StageManifest) -> dict:

@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops import review_findings_ledger
 from coordinator_core.ops import review_reverify as rr
-from coordinator_core.ops.dispatch_emit import review_edits
+from coordinator_core.ops.dispatch_emit import review_edit_source, review_edits
 from coordinator_core.ops.tests.test_review_tripwires import stage
 from coordinator_core.session.machinery_paths import share_dir
 
@@ -53,6 +53,15 @@ def world(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {})
+
+    def run_member_agents(*_a, **_k):
+        """Every agent in the patched write record also wrote under this run's slice prefix."""
+        by_agent: dict = {}
+        for path, agent in review_edits.review_writes().items():
+            by_agent.setdefault(agent, {f".coordinator-local/x/{PREFIX}/note.md"}).add(path)
+        return by_agent
+
+    monkeypatch.setattr(review_edit_source, "session_agent_writes", run_member_agents)
     declared: list = []
     monkeypatch.setattr(rr, "declare_write", lambda p: declared.append(Path(p).as_posix()))
 

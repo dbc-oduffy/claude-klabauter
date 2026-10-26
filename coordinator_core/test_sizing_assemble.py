@@ -555,7 +555,7 @@ def test_cli_main_scout_evidence_flag(capsys):
 
 @pytest.mark.parametrize(
     "tshirt,expected_route",
-    [("L", "plan"), ("XL", "pm-decision"), ("XXL", "goal-setting")],
+    [("L", "spec-dispatch"), ("XL", "pm-decision"), ("XXL", "goal-setting")],
 )
 def test_premise_unproven_fires_at_large_plan_routed(tshirt, expected_route):
     decision = sa.route(
@@ -588,7 +588,7 @@ def test_premise_not_applicable_fires_at_large_plan_routed():
     decision = sa.route(
         appetite="large", estimate={"tshirt": "L"}, premise_provenance="not-applicable"
     )
-    assert decision["route"] == "plan"
+    assert decision["route"] == "spec-dispatch"
     assert "premise_not_applicable" in decision["detents"]
 
 
@@ -904,10 +904,12 @@ def test_absent_appetite_sets_post_size_prompt_pending_at_xl():
     assert "post_size_prompt_pending" in decision["detents"]
 
 
-@pytest.mark.parametrize("tshirt", ["M", "L"])
-def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt):
+@pytest.mark.parametrize(
+    "tshirt,expected_route", [("M", "plan"), ("L", "spec-dispatch")]
+)
+def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt, expected_route):
     decision = sa.route(estimate={"tshirt": tshirt})
-    assert decision["route"] == "plan"
+    assert decision["route"] == expected_route
     assert "post_size_prompt_pending" not in decision["detents"]
     assert "?" not in decision["next_move"]
     assert "coordinator:engine-ask" in decision["next_move"]
@@ -1693,8 +1695,8 @@ def test_substrate_condition_raise_is_not_applied():
     )
     assert out["resolved_estimate"]["tshirt"] == "L"
     assert "probe_raise_on_substrate_condition" in out["detents"]
-    # The whole point: L routes to plan, XL would have routed to pm-decision.
-    assert out["route"] == "plan"
+    # The whole point: L routes to spec-dispatch, XL would have routed to pm-decision.
+    assert out["route"] == "spec-dispatch"
     assert "route_boundary_crossed" not in out["detents"]
 
 
@@ -1770,7 +1772,7 @@ def test_shipped_before_precedent_fires_and_names_the_discharge():
     assert "precedent_shipped_before" in out["detents"]
     assert "SHIPPED IN THIS REPO BEFORE" in out["next_move"]
     # Advisory only — never touches the route (module negative-spec).
-    assert out["route"] == "plan"
+    assert out["route"] == "spec-dispatch"
 
 
 def test_novel_precedent_fires_nothing():
@@ -1912,8 +1914,8 @@ def test_breadth_raise_is_not_applied():
     assert out["resolved_estimate"]["tshirt"] == "L"
     assert "probe_raise_on_breadth" in out["detents"]
     assert "probe_raise_on_substrate_condition" not in out["detents"]
-    # The whole point: L routes to plan, XL would have routed to pm-decision.
-    assert out["route"] == "plan"
+    # The whole point: L routes to spec-dispatch, XL would have routed to pm-decision.
+    assert out["route"] == "spec-dispatch"
     assert "route_boundary_crossed" not in out["detents"]
 
 

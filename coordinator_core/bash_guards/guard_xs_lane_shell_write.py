@@ -10,12 +10,17 @@ lane measure reads blobs in process. Fail-open on a crash; the Edit/Write path s
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import os
+import re
+from typing import Any, Dict, List, Optional
+
+from coordinator_core.bash_guards._shell_write_projection import ShellWrite
 
 _PREFILTER_TOKENS = (">", "tee", "<<", "-c", "sed", "cp", "mv")
 _NOT_PROJECTABLE = "shell write not projectable"
 _GUARD_NAME = "xs-lane-shell-write"
-_EDIT_ROUTE = "one plain Edit per file"
+_EDIT_ROUTE = "Size S or larger"
+_UNMEASURABLE = "Budget unmeasurable"
 
 
 def _record(envelope: Dict[str, Any]) -> Any:
@@ -30,7 +35,7 @@ def _record(envelope: Dict[str, Any]) -> Any:
         _GUARD_NAME,
         text,
         (AdaptableOffer(template=_EDIT_ROUTE, what_to_adapt="the change"),),
-        em_text=text if _EDIT_ROUTE in text else None,
+        em_text=text if _UNMEASURABLE in text else None,
     )
 
 
@@ -47,6 +52,36 @@ def check(cmd: str, session_id: str, cwd: str, payload: Optional[Dict[str, Any]]
         return None
 
 
+_REDIRECT_TARGET_RE = re.compile(r"(?<![<>])(?:&>>?|\d*>\|?|\d*>>)\s*(?!&)([^\s;&|<>()]+)")
+_PATH_TOKEN_SPLIT_RE = re.compile(r"[\s'\"()|;&=,{}]+")
+
+
+def _unprojectable_extras(cmd: str, cwd: str, root: str, found: List[Any]) -> List[Any]:
+    """In-repo paths the command names but `shell_writes` did not classify as targets: every
+    redirect target, and -- when a heredoc or here-string feeds something other than a literal
+    `cat`/`tee` write -- every path-like token, since an interpreter body can write any of them.
+    Each joins as a body-less target, so the verdict denies it as unmeasurable."""
+    from coordinator_core.bash_guards.write_claim_record import _rel_if_inside
+
+    if any(t.body is not None for t in found):
+        return []
+    tokens = [m.group(1) for m in _REDIRECT_TARGET_RE.finditer(cmd)]
+    if "<<" in cmd:
+        tokens.extend(_PATH_TOKEN_SPLIT_RE.split(cmd))
+    seen = {t.abs_path for t in found}
+    out: List[Any] = []
+    for raw in tokens:
+        tok = raw.strip("'\"").lstrip("<>&|")
+        if not tok or tok.startswith("-") or ("/" not in tok and "." not in tok):
+            continue
+        absp = os.path.normpath(tok if os.path.isabs(tok) else os.path.join(cwd, tok))
+        if absp in seen or _rel_if_inside(absp, root) is None:
+            continue
+        seen.add(absp)
+        out.append(ShellWrite(absp, None, False))
+    return out
+
+
 def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
     from coordinator_core.bash_guards._shell_write_projection import shell_writes
     from coordinator_core.hooks._em_write_budget import shell_write_budget
@@ -61,7 +96,10 @@ def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
     if not root:
         return None
     advisory = None
-    for target in shell_writes(cmd, cwd or payload.get("cwd") or "", root):
+    base = cwd or payload.get("cwd") or ""
+    targets = list(shell_writes(cmd, base, root))
+    targets.extend(_unprojectable_extras(cmd, base, root, targets))
+    for target in targets:
         projected = None
         if target.body is not None:
             projected = xlb.project_shell_write(target.abs_path, target.body, target.append)

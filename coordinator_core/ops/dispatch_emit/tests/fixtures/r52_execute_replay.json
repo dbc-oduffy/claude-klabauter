@@ -1,0 +1,88 @@
+{
+  "provenance": {
+    "repo": "experiments",
+    "commit": "7cbbff5",
+    "run": "ladder-xl-dispatch-ontology__coordinator__r52"
+  },
+  "workflows": [
+    {
+      "wf": "wf_880f9f12-75f",
+      "rows": [
+        {"id": "C1", "wave": 0, "deps": [], "writes": ["example_retrieval_repo_core/dispatch_points.py", "tests/test_dispatch_points.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 72.6},
+        {"id": "C2", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_priming/producers/dispatch_point_producer.py", "example_retrieval_repo_priming/manifest.yaml", "example_retrieval_repo_priming/producer_fingerprint.py", "tests/test_dispatch_point_producer.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 113.0},
+        {"id": "C3", "wave": 0, "deps": [], "writes": ["tests/fixtures/pluggy_dispatch/hookspecs.py", "tests/fixtures/pluggy_dispatch/impl_plugin.py", "tests/fixtures/pluggy_dispatch/host.py", "tests/fixtures/pluggy_dispatch/README.md"], "agent_type": null, "model": null, "effort": null, "duration_s": 31.2},
+        {"id": "C4", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/symbol_references.py", "tests/test_symbol_references_dispatch_impl.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 117.5},
+        {"id": "C5", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/dispatch_trace.py", "example_retrieval_repo_mcp/tools/live.py", "tests/test_dispatch_point_trace_lane.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 988.8},
+        {"id": "C6", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/registry.py", "tests/test_dispatch_point_routing.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 107.1},
+        {"id": "C7", "wave": 2, "deps": ["C2", "C3", "C4", "C5", "C6"], "writes": ["tests/test_dispatch_point_end_to_end.py", "docs/wiki/dispatch-point-inference/dispatch-point-inference.md", "docs/wiki/DIRECTORY_GUIDE.md", "docs/wiki/mcp-tools/envelope-verdict-contract.md", "DELIVERY.md"], "agent_type": null, "model": null, "effort": null, "duration_s": 305.0}
+      ],
+      "legs": [
+        {"label": "verify:wave-0", "duration_s": 19.6},
+        {"label": "commit:wave-0", "duration_s": 24.2},
+        {"label": "verify:wave-1", "duration_s": 35.5},
+        {"label": "halt-commit", "duration_s": 7.7}
+      ]
+    },
+    {
+      "wf": "wf_eb34339a-09e",
+      "rows": [
+        {"id": "F1", "wave": 0, "deps": [], "writes": ["example_retrieval_repo_mcp/tools/symbol_references.py", "tests/test_symbol_references_dispatch_impl.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 83.8},
+        {"id": "F2", "wave": 1, "deps": ["F1"], "writes": ["example_retrieval_repo_mcp/tools/live.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 26.0},
+        {"id": "F3", "wave": 0, "deps": [], "writes": ["tests/test_dispatch_point_trace_lane.py", "example_retrieval_repo_mcp/tools/dispatch_trace.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 27.8},
+        {"id": "F4", "wave": 0, "deps": [], "writes": ["tests/acl/test_read_surface_completeness.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 25.1},
+        {"id": "F5", "wave": 0, "deps": [], "writes": ["tests/test_dispatch_point_routing.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 18.1},
+        {"id": "F6", "wave": 0, "deps": [], "writes": ["example_retrieval_repo_priming/producer_fingerprint.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 32.5},
+        {"id": "F7", "wave": 2, "deps": ["F1", "F2", "F3"], "writes": ["tests/test_dispatch_point_end_to_end.py", "DELIVERY.md", "example_retrieval_repo_mcp/tools/live.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 1081.6}
+      ],
+      "legs": [
+        {"label": "verify:wave-0", "duration_s": 38.0},
+        {"label": "commit:wave-0", "duration_s": 20.5},
+        {"label": "verify:wave-1", "duration_s": 26.9},
+        {"label": "commit:wave-1", "duration_s": 22.5},
+        {"label": "verify", "duration_s": 78.0},
+        {"label": "commit", "duration_s": 9.1},
+        {"label": "halt-commit", "duration_s": 7.7}
+      ]
+    },
+    {
+      "wf": "wf_f1c2ae8d-7b7",
+      "rows": [
+        {"id": "C1", "wave": 0, "deps": [], "writes": [], "agent_type": null, "model": null, "effort": null, "duration_s": 219.6},
+        {"id": "C2", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/symbol_references.py", "tests/test_cpp_symbol_lite_fallback.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 44.6},
+        {"id": "C3", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/live.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 47.9},
+        {"id": "C4", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/dispatch_trace.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 24.6},
+        {"id": "C5", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/registry.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 40.0},
+        {"id": "C6", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_priming/producer_fingerprint.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 28.6},
+        {"id": "C7", "wave": 0, "deps": [], "writes": ["docs/wiki/DIRECTORY_GUIDE.md", "docs/wiki/dispatch-point-inference/dispatch-point-inference.md", "example_retrieval_repo_core/dispatch_points.py", "example_retrieval_repo_priming/manifest.yaml", "example_retrieval_repo_priming/producers/dispatch_point_producer.py", "tests/acl/test_read_surface_completeness.py", "tests/test_dispatch_point_end_to_end.py", "tests/test_symbol_references_dispatch_impl.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 23.6},
+        {"id": "C8", "wave": 2, "deps": ["C1", "C2"], "writes": ["DELIVERY.md"], "agent_type": null, "model": null, "effort": null, "duration_s": 65.3}
+      ],
+      "legs": [
+        {"label": "verify:wave-0", "duration_s": 21.7},
+        {"label": "verify:wave-1", "duration_s": 76.5},
+        {"label": "verify", "duration_s": 73.5},
+        {"label": "commit", "duration_s": 7.1},
+        {"label": "halt-commit", "duration_s": 9.4}
+      ]
+    },
+    {
+      "wf": "wf_ef2d2419-024",
+      "rows": [
+        {"id": "C1", "wave": 0, "deps": [], "writes": [], "agent_type": null, "model": null, "effort": null, "duration_s": 31.8},
+        {"id": "C2", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/symbol_references.py", "tests/test_cpp_symbol_lite_fallback.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 47.4},
+        {"id": "C3", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/live.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 67.7},
+        {"id": "C4", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/dispatch_trace.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 25.5},
+        {"id": "C5", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_mcp/tools/registry.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 19.4},
+        {"id": "C6", "wave": 1, "deps": ["C1"], "writes": ["example_retrieval_repo_priming/producer_fingerprint.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 21.9},
+        {"id": "C7", "wave": 0, "deps": [], "writes": ["docs/wiki/DIRECTORY_GUIDE.md", "docs/wiki/dispatch-point-inference/dispatch-point-inference.md", "example_retrieval_repo_core/dispatch_points.py", "example_retrieval_repo_priming/manifest.yaml", "example_retrieval_repo_priming/producers/dispatch_point_producer.py", "tests/acl/test_read_surface_completeness.py", "tests/test_dispatch_point_end_to_end.py", "tests/test_symbol_references_dispatch_impl.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 26.8},
+        {"id": "C8", "wave": 2, "deps": ["C1", "C2"], "writes": ["DELIVERY.md"], "agent_type": null, "model": null, "effort": null, "duration_s": 50.1},
+        {"id": "C9", "wave": 2, "deps": ["C3"], "writes": ["tests/test_dispatch_point_trace_lane.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 42.8},
+        {"id": "C10", "wave": 2, "deps": ["C5"], "writes": ["tests/test_dispatch_point_routing.py", "tests/test_dispatch_point_producer.py"], "agent_type": null, "model": null, "effort": null, "duration_s": 32.2}
+      ],
+      "legs": [
+        {"label": "verify:wave-0", "duration_s": 20.5},
+        {"label": "commit:wave-0", "duration_s": 23.9},
+        {"label": "verify:wave-1", "duration_s": 37.5}
+      ]
+    }
+  ]
+}

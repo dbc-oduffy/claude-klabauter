@@ -77,7 +77,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Mapping, Optional, Sequence
 
 import yaml
 
@@ -88,6 +88,7 @@ from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun, blocks, holders_from_held, owns_path
 from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
@@ -260,6 +261,24 @@ def foreign_claims(repo_root: Path, rev_range: str, paths: List[str], own_sessio
         for p in changed
         if any(c not in (own_session, claim_index.UNANSWERABLE) for c in claims.get(p, []))
     ]
+
+
+def live_runs_from_params(raw: object) -> Optional[dict]:
+    """Parse ``{run_id: {plan, superseded_by, successor_landed, withheld, claims}}`` into ``LiveRun``s; None when absent or malformed."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out = {}
+    for rid, run in raw.items():
+        if not isinstance(run, dict):
+            return None
+        out[str(rid)] = LiveRun(
+            plan=str(run.get("plan") or ""),
+            superseded_by=str(run.get("superseded_by") or ""),
+            successor_landed=bool(run.get("successor_landed")),
+            withheld=frozenset(str(p) for p in run.get("withheld") or []),
+            claims=frozenset(str(p) for p in run.get("claims") or []),
+        )
+    return out
 
 
 def _rel(path: Path, repo_root: Path) -> str:
@@ -469,9 +488,13 @@ def review_prep(
     session_id: str = "",
     group_index: Optional[int] = None,
     group_count: Optional[int] = None,
+    run_id: str = "",
+    live_runs: Optional[Mapping[str, LiveRun]] = None,
 ) -> dict:
     """Freeze, partition and claim-check one run's diff once per ``slice_prefix``; see the module
-    docstring."""
+    docstring. With ``live_runs``, a path another live run withholds or claims leaves the reviewed
+    paths before anything is frozen. The handler derives ``live_runs`` from halted runs' withheld sets
+    (``land_run.foreign_halted_withheld``) when ``params.run_id`` is given and ``params.live_runs`` is not."""
     if not base or not slice_prefix or not plan_path:
         return _fail("base, paths, slice_prefix and plan_path are required")
     if not _SHA_RE.match(base):
@@ -481,6 +504,8 @@ def review_prep(
     if group_count is not None and not (group_count >= 1 and 0 <= group_index < group_count):
         return _fail("group_index must be in [0, group_count) and group_count at least 1")
     paths = [posixpath.normpath(p.replace("\\", "/")) if ".." in p else p for p in paths if _inside_repo(p)]
+    if live_runs:
+        paths = [p for p in paths if not blocks(owns_path(run_id, p, live_runs, plan_path))]
     if not paths:
         # A pathspec-less `git diff <base>` would diff the whole tree: answer before any git, lock or sidecar.
         zero = _fail("")
@@ -797,6 +822,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     group_index, group_count = params.get("group_index"), params.get("group_count")
     if any(v is not None and (isinstance(v, bool) or not isinstance(v, int)) for v in (group_index, group_count)):
         return _fail("review.prep group_index and group_count must be integers")
+    live_runs = live_runs_from_params(params.get("live_runs"))
+    if params.get("live_runs") and live_runs is None:
+        return _fail("review.prep params.live_runs must map run ids to objects")
+    run_id = str(params.get("run_id") or "")
+    if live_runs is None and run_id:
+        from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
+
+        held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
+        live_runs = holders_from_held(held) or None
     return review_prep(
         repo_root,
         base=str(params.get("base") or ""),
@@ -807,4 +841,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         session_id=str(params.get("session_id") or ""),
         group_index=group_index,
         group_count=group_count,
+        run_id=run_id,
+        live_runs=live_runs,
     )

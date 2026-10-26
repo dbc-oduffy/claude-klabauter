@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit import retest_targeted
 from coordinator_core.testing.git_write import write_seen_by_git
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -222,8 +223,8 @@ def test_covered_excludes_plan_evidence_sidecar_tracked_or_new(repo):
     (repo / "docs" / "plans").mkdir(parents=True)
     tracked = repo / "docs" / "plans" / "p.evidence.yaml"
     tracked.write_text("a: 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "e"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, **no_console_creationflags())
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "e"], cwd=repo, check=True, **no_console_creationflags())
     write_seen_by_git(tracked, "a: 2\n")
     write_seen_by_git(repo / "docs" / "plans" / "q.evidence.yaml", "b: 1\n")
     write_seen_by_git(repo / "test_a.py", "changed\n")

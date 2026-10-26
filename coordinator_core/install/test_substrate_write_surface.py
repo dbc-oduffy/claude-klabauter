@@ -276,7 +276,7 @@ def test_whoami_src_machine_local_key_clause():
     assert entry.key == "coordinator.whoami_src"
 
 
-def test_legacy_venv_delete_clause_is_distinct_from_ensure_venv_surface():
+def test_legacy_venv_delete_clause_is_retired_but_declared():
     clause = target.WRITE_SURFACE.clauses[25]
     assert isinstance(clause, StaticClause)
     assert clause.effect == "delete"

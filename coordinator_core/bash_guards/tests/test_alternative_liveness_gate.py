@@ -359,6 +359,7 @@ RUNG_FLOORS: Dict[str, str] = {
     "block_disarm_marker_sentinel_creation": "DCC",
     "block_drive_root_new_dir_bash_write": "BDD",
     "block_editor_kill_by_name": "DDD",
+    "block_em_halted_withheld_commit": "BDD",
     "block_external_workspace_vcs_write": "BDD",
     "block_fleet_delegation_creation": "DCC",
     "block_hand_authored_handoff_creation": "ACA",
@@ -402,6 +403,7 @@ RUNG_FLOORS: Dict[str, str] = {
     "check_stale_write": "ACA",
     "guard_deploy_dirty_tree": "ADA",
     "guard_doctrine_surface_bash_write": "DCC",
+    "guard_em_post_fire_shell_write": "BDD",
     "guard_grep_via_bash": "CCC",
     "guard_heavy_command_admission": "DCC",
     "guard_host_subagent_bash_ban": "BCC",
@@ -439,8 +441,10 @@ EM_TEXT_OFFER_GAPS = frozenset(
         "block_worktree_creation",
         "block_worktree_sentinel_creation",
         "check_blanket_git_add",
+        # Real offer defect, fix in the guard: its em_text prints the `git -c coordinator.staged=`
+        # command, but the AdaptableOffer template carries a trailing parenthetical so it never matches.
+        "check_git_commit_safe_commit_advise",
         "check_no_verify",
-        "guard_doctrine_surface_bash_write",
         "guard_grep_via_bash",
         "guard_post_executor_verification",
         "guard_powershell_via_bash",

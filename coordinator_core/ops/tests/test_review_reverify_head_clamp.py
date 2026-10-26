@@ -12,7 +12,7 @@ import pytest
 
 from coordinator_core.ops import review_findings_ledger
 from coordinator_core.ops import review_reverify as rr
-from coordinator_core.ops.dispatch_emit import review_edits
+from coordinator_core.ops.dispatch_emit import review_edit_source, review_edits
 from coordinator_core.session.machinery_paths import share_dir
 
 _REAL_RUN = subprocess.run
@@ -88,6 +88,13 @@ class Repo:
 
         self.monkeypatch.setattr(subprocess, "Popen", boom)
 
+    def members(self, agent: str, *paths: str, record: bool = True) -> None:
+        """Per-run membership record: ``agent`` wrote ``paths`` plus a path named for this run's slice."""
+        by_agent = {agent: {*paths, f".coordinator-local/x/{PREFIX}/note.md"}} if record else {}
+        self.monkeypatch.setattr(
+            review_edit_source, "session_agent_writes", lambda *_a, **_k: by_agent
+        )
+
     def list(self, base: str) -> dict:
         return rr.review_reverify(self.root, base=base, slice_prefix=PREFIX, session_id=SESSION)
 
@@ -156,6 +163,7 @@ def test_created_path_a_commit_tracks_is_restored_to_head_never_unlinked(repo):
     repo.commit("checkpoint adds a test")
     repo.write({"tests/test_new.py": b"def test_n():\n    assert False\n"})
     repo.arm({"tests/test_new.py": "a1"})
+    repo.members("a1", "tests/test_new.py")
     out = repo.revert(base, ["tests/test_new.py::test_n"])
     assert out["error"] is None
     assert [(e["path"], e["action"], e["source"]) for e in out["reverted"]] == [
@@ -170,9 +178,30 @@ def test_created_untracked_path_is_still_removed(repo):
     repo.snapshot(base, base, BASE_FILES)
     repo.write({"tests/test_new.py": b"def test_n():\n    assert False\n"})
     repo.arm({"tests/test_new.py": "a1"})
+    repo.members("a1", "tests/test_new.py")
     out = repo.revert(base, ["tests/test_new.py::test_n"])
     assert [(e["path"], e["action"]) for e in out["reverted"]] == [("tests/test_new.py", "removed")]
     assert not (repo.root / "tests/test_new.py").exists()
+
+
+@pytest.mark.parametrize("record", [False, True], ids=["unreadable-record", "sibling-agent"])
+def test_unattributable_created_path_is_left_in_place(repo, record):
+    repo.write(BASE_FILES)
+    base = repo.commit("base")
+    repo.snapshot(base, base, BASE_FILES)
+    body = b"def test_n():\n    assert False\n"
+    repo.write({"tests/test_new.py": body})
+    repo.arm({"tests/test_new.py": "a1"})
+    if record:
+        repo.monkeypatch.setattr(
+            review_edit_source, "session_agent_writes",
+            lambda *_a, **_k: {"a1": {"tests/test_new.py"}, "a2": {f"x/{PREFIX}/note.md"}},
+        )
+    else:
+        repo.members("a1", record=False)
+    out = repo.revert(base, ["tests/test_new.py::test_n"])
+    assert out["reverted"] == []
+    assert (repo.root / "tests/test_new.py").read_bytes() == body
 
 
 def test_revert_that_strands_a_committed_caller_is_refused_whole(repo):

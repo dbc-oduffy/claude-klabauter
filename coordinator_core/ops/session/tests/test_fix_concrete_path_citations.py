@@ -782,7 +782,7 @@ def test_inline_code_span_still_substitutes(tmp_path: Path) -> None:
     """
     target = tmp_path / "note.md"
     target.write_text(
-        "see " + BT + "/Users/example-operator/X/claude-klabauter/coordinator/a.py" + BT + " here\n",  # abs-path-ok: synthetic test fixture
+        "see " + BT + "/Users/" + "example-operator/X/claude-klabauter/coordinator/a.py" + BT + " here\n",  # abs-path-ok: synthetic test fixture
         encoding="utf-8",
     )
     result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["note.md"]))

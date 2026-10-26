@@ -6,6 +6,7 @@ In-process only: file stats and `shutil.which`, never a subprocess.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -158,6 +159,28 @@ def _default_sidecar_cli(
     )
 
 
+def _plan_review_roster(plugin_root: Path | None) -> dict | None:
+    """The `plan_review` block of `contract/review-roster-fragment.json`, or None.
+
+    Probes `<plugin_root>/coordinator/contract/` (repo-root layout) then `<plugin_root>/contract/`
+    (the resolved plugin root is the `coordinator` dir itself). None for no plugin root, an
+    absent or unparseable file, or an absent block.
+    """
+    if plugin_root is None:
+        return None
+    for rel in (Path("coordinator") / "contract", Path("contract")):
+        path = plugin_root / rel / "review-roster-fragment.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        block = data.get("plan_review") if isinstance(data, dict) else None
+        return block if isinstance(block, dict) else None
+    return None
+
+
 def resolve(
     *,
     plugin_root: Path | None,
@@ -188,4 +211,10 @@ def resolve(
 
         out["chatty"] = True
         out[chatty.REVIEW_WAVE_ARG] = chatty.review_wave_args(chatty_run_id)
+    else:
+        from coordinator_core.ops.dispatch_emit import review_wave
+
+        wave = review_wave.review_wave_args(_plan_review_roster(plugin_root))
+        if wave is not None:
+            out[review_wave.PARALLEL_REVIEW_ARG] = wave
     return out

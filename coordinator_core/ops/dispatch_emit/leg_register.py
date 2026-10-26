@@ -10,6 +10,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
 
@@ -20,6 +21,7 @@ from coordinator_core.ops._workflow_contract import (
     _template_end,
     scrub,
 )
+from coordinator_core.session.record_homes import record_path
 
 
 class LegClass(str, Enum):
@@ -78,7 +80,9 @@ def relay_markers(prompt: Optional[str]) -> tuple[str, ...]:
     return tuple(marker for marker in RELAY_MARKERS if marker in prompt)
 
 
-RUNTIME_FLOOR_RULING = "state/apm-rulings/2026-10-15-engine-ask-phase-consolidation.md"
+RUNTIME_FLOOR_RULING = Path(
+    record_path("", "apm-rulings", "2026-10-15-engine-ask-phase-consolidation.md")
+).as_posix()
 
 
 def _earns(workflow: str, label: str, reason: str) -> LegDecl:
@@ -125,6 +129,9 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "ledger-fix:", "fixes one reopened chunk behind a not_met ledger row inside its footprint; the chunks run in parallel"),
     _earns("ask", "ledger-reverify", "re-judges only the reopened rows and re-runs only the reopened chunks' scoped tests"),
     _earns("ask", "ledger-recovery-record", "writes recovery.json once the loop's final chunk statuses are known; a held-only run has no other agent to fold the write into"),
+    _earns("ask", "remnant-complete", "completes the not_met remnant (unattributed or capped ledger rows, a not_met criterion, a delivery FAIL) inside its footprint; the judge stays read-only"),
+    _earns("ask", "remnant-reverify", "re-runs the scoped tests and re-rules the ledger, criterion and delivery once after the remnant leg"),
+    _earns("ask", "remnant-record", "records the remnant attempt under recovery.json's `remnant` key once the re-verify settled"),
     _floor(
         "ask", "blitz-stage-read",
         "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "

@@ -506,16 +506,22 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # on a box where the global triple is set, so the suite runs UNPROTECTED and
     # any test shelling out to `git <verb> --help` sprays browser tabs (observed:
     # dozens a minute from the bash-guard alternative-liveness gate).
-    # `GIT_CONFIG_*` is the injection form that survives a quarantined HOME.
+    # Carried as a gitconfig INSIDE the quarantined HOME, never as GIT_CONFIG_*
+    # env: process env reaches every git child, a real repo's included, and
+    # trips env-config gates (`ask_stage._config_forces_git`). A test that
+    # re-points HOME itself leaves this file behind; it then owns its git config.
     # `browser.noop.cmd` is `eval`-ed by `git-web--browse`, so its value must
     # stay free of shell metacharacters -- a parenthesis is a hard syntax error.
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "help.format")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "web")
-    monkeypatch.setenv("GIT_CONFIG_KEY_1", "web.browser")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "noop")
-    monkeypatch.setenv("GIT_CONFIG_KEY_2", "browser.noop.cmd")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_2", "echo not-opening-browser-for:")
+    # TRAP: a global commit.gpgsign=true makes every temp-repo seed `git commit`
+    # exit 128; the quarantine gitconfig pins signing off.
+    (quarantine / ".gitconfig").write_text(
+        "[help]\n\tformat = web\n"
+        "[web]\n\tbrowser = noop\n"
+        "[browser \"noop\"]\n\tcmd = echo not-opening-browser-for:\n"
+        "[commit]\n\tgpgsign = false\n"
+        "[tag]\n\tgpgsign = false\n",
+        encoding="utf-8",
+    )
 
     # Belt-and-braces companion to the HOME/USERPROFILE quarantine above: this
     # fixture redirects the FILESYSTEM a test writes into, but a 2026-07-28

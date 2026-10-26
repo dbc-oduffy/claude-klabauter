@@ -308,12 +308,10 @@ never as a substitute for seeding it.
 `coordinator_core/install/fleet_env.py::ensure_fleet_env()` creates/refreshes the environment at
 the root C1 + C5 resolve to (`resolve_environment_root()`), installing exactly C3's committed lock
 (`docs/install/fleet-env.lock`, via `uv sync --frozen --no-install-project` — never re-resolved).
-It mirrors `coordinator_core/install/ensure_venv.py`'s proven shape (idempotent health-gated fast
-path, a build-lock sidecar on the same shared `locked_write` primitive, and a rename-swap rebuild
-that never mutates the live tree in place) rather than inventing a second one; see that module's
-own docstring and `fleet_env.py`'s module docstring for the full rationale. The rename-swap
-property matters more here than for the settings-home coordinator venv: this environment has the
-whole fleet as readers, with no lock of their own, on a 50-70-session box.
+It is an idempotent health-gated fast path, a build-lock sidecar on the shared `locked_write`
+primitive, and a rename-swap rebuild that never mutates the live tree in place; see
+`fleet_env.py`'s module docstring for the full rationale. The rename-swap property matters because
+this environment has the whole fleet as readers, with no lock of their own, on a 50-70-session box.
 
 **Health contract — the probe set, named so it is what consumers are promised, not an executor's
 private choice:** `fleet_env.py::_FLEET_ENV_IMPORT_PROBES` = `yaml`, `pydantic`, `psutil`, `numpy`,
@@ -338,7 +336,7 @@ contracted minor to whatever a stale catalog happens to carry is not one.
 **Idempotency.** A second run against a healthy environment is a no-op: the health probe (above)
 gates every mutation, and only an unhealthy or absent environment takes the build lock at all.
 Concurrent callers on a 50-70-session box are serialised through the same fail-loud,
-no-polling build-lock contract `ensure_venv` uses (`FleetEnvContention` on contention, not a hang).
+no-polling build-lock contract (`FleetEnvContention` on contention, not a hang).
 
 **Health-stamp fast path.** `ensure_fleet_env`'s `check_only` branch and its unlocked
 already-healthy fast path skip the child import probe when a stamp file inside the generation
@@ -452,7 +450,7 @@ needs to wire it in for replay to happen.
 
 **Concurrency.** The registry file and the `.pth` writes it drives are protected by
 `coordinator_core.locked_write.held_lock` — the same locking primitive this repo already uses
-elsewhere (e.g. `ensure_venv`'s build lock), reused rather than a second file-locking mechanism
+elsewhere, reused rather than a second file-locking mechanism
 invented here. The registry mutation and the site-packages `.pth` write are two distinct,
 never-nested lock acquisitions (the registry lock is released before any site-packages lock is
 taken), respecting `held_lock`'s non-reentrancy contract.

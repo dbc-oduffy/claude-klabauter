@@ -56,6 +56,17 @@ def test_superseded_sizing_releases_halted(tmp_path):
     assert hr.release_reason(root, h, _rid("ask", 10, "bbbbbb"), None) == hr.RELEASE_SUPERSEDED
 
 
+def test_superseded_marker_releases_while_halted_with_open_sizing_holds(tmp_path):
+    root = _root(tmp_path)
+    c = _rid("ask", 10, "bbbbbb")
+    sup, held = _rid("ask", 300, "aaaaaa"), _rid("ask", 290, "cccccc")
+    _run(root, sup, marker="superseded")
+    _run(root, held, marker="halted", sizing="state/sizings/other.yaml", plan="docs/plans/z.md")
+    assert hr.release_reason(root, sup, c, None) == hr.RELEASE_MARKER_SUPERSEDED
+    assert hr.RELEASE_MARKER_SUPERSEDED == "marker-superseded"
+    assert hr.release_reason(root, held, c, None) is None
+
+
 def test_successor_same_sizing_releases(tmp_path):
     root = _root(tmp_path)
     h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
@@ -366,3 +377,235 @@ def test_kept_at_head_paths_nothing_withheld_spawns_nothing(tmp_path, monkeypatc
     _write(rec / "halted.json", json.dumps(halted))
     monkeypatch.setattr(hr, "_blob_batch", lambda *a: (_ for _ in ()).throw(AssertionError("spawned")))
     assert hr.kept_at_head_paths(tmp_path, rec, halted) == set()
+
+
+def _withhold(root: Path, run_id: str, *paths: str) -> None:
+    rec = root / "state/warp" / run_id
+    body = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
+    body["run_artifacts"] = {"withheld": {p: "kept" for p in paths}}
+    _write(rec / "halted.json", json.dumps(body))
+
+
+def test_held_paths_is_the_normalized_withheld_set_while_the_run_holds(tmp_path):
+    root = _root(tmp_path)
+    h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
+    _run(root, h, marker="halted", writes=("a.py", "b.py"))
+    _run(root, c, sizing="state/sizings/other.yaml")
+    _withhold(root, h, "./DELIVERY.md", "a.py")
+    held = hr.held_paths(root, h, c, "docs/plans/q.md")
+    assert held == frozenset({"DELIVERY.md", "a.py"})
+    assert "b.py" not in held
+
+
+def test_held_paths_empty_when_released_and_when_nothing_withheld(tmp_path):
+    root = _root(tmp_path)
+    h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
+    _run(root, h, marker="halted")
+    _run(root, c)
+    _withhold(root, h, "a.py")
+    assert hr.release_reason(root, h, c, None) == hr.RELEASE_SUCCESSOR
+    assert hr.held_paths(root, h, c, None) == frozenset()
+    other = _rid("ask", 10, "cccccc")
+    _run(root, other, sizing="state/sizings/other.yaml")
+    _write(root / "state/warp" / h / "halted.json", json.dumps({"status": "halted", "sizing_rel": SIZING}))
+    assert hr.held_paths(root, h, other, None) == frozenset()
+    assert hr.held_paths(root, "missing-20260101T000000-abcdef", other, None) == frozenset()
+
+
+def test_held_paths_fails_closed_when_release_or_normalizer_errors(tmp_path, monkeypatch):
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    root = _root(tmp_path)
+    h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
+    _run(root, h, marker="halted")
+    _run(root, c, sizing="state/sizings/other.yaml")
+    _withhold(root, h, "./a.py")
+
+    def boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(hr, "release_reason", boom)
+    assert hr.held_paths(root, h, c, None) == frozenset({"a.py"})
+    monkeypatch.setattr(wrd, "halted_withheld_paths", boom)
+    assert hr.held_paths(root, h, c, None) == frozenset({"a.py"})
+
+
+def _corrupt(root: Path, run_id: str) -> None:
+    _write(root / "state/warp" / run_id / "halted.json", "{not json")
+
+
+def test_corrupt_marker_held_paths_raises_not_empty(tmp_path):
+    from coordinator_core.ops.dispatch_emit.halted_run import UnreadableHaltRecord
+
+    root = _root(tmp_path)
+    h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
+    _run(root, h)
+    _corrupt(root, h)
+    assert hr.release_reason(root, h, c, None) is None
+    with pytest.raises(UnreadableHaltRecord) as err:
+        hr.held_paths(root, h, c, None)
+    assert err.value.reason == f"unreadable-halt-record:{h}"
+
+
+def test_corrupt_marker_kept_at_head_frees_nothing(tmp_path):
+    root = _root(tmp_path)
+    h = _rid("ask", 300, "aaaaaa")
+    _run(root, h)
+    _corrupt(root, h)
+    rec = root / "state/warp" / h
+    assert hr.kept_at_head_paths(root, rec, {}) == set()
+    assert hr._kept_at_head(root, rec, {}) is False
+
+
+def test_corrupt_marker_halted_run_landed_refuses_with_reason(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    root = _root(tmp_path)
+    h = _rid("ask", 300, "aaaaaa")
+    _run(root, h)
+    _corrupt(root, h)
+    out = halted_run_landed._handler({"run_id": h, "sha": "abc1234"}, root)
+    assert out["ok"] is False
+    assert f"unreadable-halt-record:{h}" in out["error"]
+    assert "never ran" not in out["error"]
+    refusal, covers = halted_run_landed._carries_withheld(root, h, ["abc1234"])
+    assert refusal and f"unreadable-halt-record:{h}" in refusal and covers == {}
+
+
+def test_corrupt_marker_halted_record_commit_holds_with_reason(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
+
+    root = _root(tmp_path)
+    h = _rid("ask", 300, "aaaaaa")
+    _run(root, h)
+    _corrupt(root, h)
+    out = hrc._land(root, root, {"run_id": h}, h, f"state/warp/{h}", {"halted": "stop_rule"})
+    assert out["committed"] is False
+    assert out["refused"] == f"unreadable-halt-record:{h}"
+
+
+def _count(monkeypatch, name: str) -> list:
+    calls: list = []
+    real = getattr(hr, name)
+
+    def wrapper(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(hr, name, wrapper)
+    return calls
+
+
+def test_scope_evaluates_release_reason_body_once_per_key(tmp_path, monkeypatch):
+    h, c = _kept_repo(tmp_path, KEPT, KEPT)
+    body = _count(monkeypatch, "_release_reason")
+    kept = _count(monkeypatch, "_blob_batch")
+    with hr.release_scope():
+        results = [hr.release_reason(tmp_path, h, c, None) for _ in range(3)]
+        results.append(hr.release_reason(tmp_path, h, c, "docs/plans/other.md"))
+    assert results == [hr.RELEASE_KEPT_AT_HEAD] * 4
+    assert len(body) == 2
+    assert len(kept) == 1  # the plan-independent kept-at-head leg ran once for both keys
+
+
+def test_scope_memoises_none_from_the_except_arm(tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
+    _run(root, h, marker="halted")
+    monkeypatch.setattr(hr, "_halted_sizing", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+    with hr.release_scope():
+        assert hr.release_reason(root, h, c, None) is None
+        monkeypatch.undo()
+        _sizing(root, SIZING, "superseded")
+        assert hr.release_reason(root, h, c, None) is None  # the failed evaluation is not retried into a release
+    assert hr.release_reason(root, h, c, None) == hr.RELEASE_SUPERSEDED
+
+
+def test_scope_corrupt_marker_still_holds(tmp_path):
+    from coordinator_core.ops.dispatch_emit.halted_run import UnreadableHaltRecord
+
+    root = _root(tmp_path)
+    h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
+    _run(root, h)
+    _corrupt(root, h)
+    with hr.release_scope():
+        assert hr.release_reason(root, h, c, None) is None
+        with pytest.raises(UnreadableHaltRecord):
+            hr.held_paths(root, h, c, None)
+
+
+def test_prefetch_is_one_batch_for_every_run_and_kept_at_head_uses_it(tmp_path, monkeypatch):
+    h, c, rec, halted = _two_path_run(tmp_path, KEPT)
+    batches = _count(monkeypatch, "_blob_batch")
+    with hr.release_scope():
+        hr.prefetch_kept_at_head(tmp_path, [h, "ask-20260101T000000-ffffff"])
+        assert len(batches) == 1
+        assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py", "b.py"}
+        assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
+    assert len(batches) == 1
+
+
+def test_failed_prefetch_leaves_every_run_held(tmp_path, monkeypatch):
+    h, c, rec, halted = _two_path_run(tmp_path, KEPT)
+    real = hr._blob_batch
+    monkeypatch.setattr(hr, "_blob_batch", lambda *a: None)
+    with hr.release_scope():
+        hr.prefetch_kept_at_head(tmp_path, [h])
+        monkeypatch.setattr(hr, "_blob_batch", real)
+        assert hr.kept_at_head_paths(tmp_path, rec, halted) == set()
+        assert hr.release_reason(tmp_path, h, c, None) is None
+
+
+def test_spec_absent_from_prefetch_falls_back_to_own_batch(tmp_path, monkeypatch):
+    h, c, rec, halted = _two_path_run(tmp_path, KEPT)
+    batches = _count(monkeypatch, "_blob_batch")
+    with hr.release_scope():
+        hr.prefetch_kept_at_head(tmp_path, [])  # nothing prefetched: not "prefetched"
+        assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py", "b.py"}
+    assert len(batches) == 1
+
+
+def test_outside_scope_nothing_is_cached(tmp_path, monkeypatch):
+    h, c = _kept_repo(tmp_path, KEPT, KEPT)
+    body = _count(monkeypatch, "_release_reason")
+    assert hr._SCOPE.get() is None
+    hr.release_reason(tmp_path, h, c, None)
+    hr.release_reason(tmp_path, h, c, None)
+    hr.prefetch_kept_at_head(tmp_path, [h])  # no scope: no-op
+    assert len(body) == 2 and hr._SCOPE.get() is None
+    with hr.release_scope():
+        hr.release_reason(tmp_path, h, c, None)
+    assert hr._SCOPE.get() is None
+    with hr.release_scope() as outer, hr.release_scope() as inner:
+        assert inner is outer
+
+
+def test_scope_computes_kept_at_head_paths_once_per_record(tmp_path, monkeypatch):
+    h, c, rec, halted = _two_path_run(tmp_path, KEPT)
+    plans = _count(monkeypatch, "_kept_plan")
+    with hr.release_scope():
+        first = hr.kept_at_head_paths(tmp_path, rec, halted)
+        first.add("mutated")  # a caller's mutation must not poison the memo
+        assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py", "b.py"}
+        assert hr.release_reason(tmp_path, h, c, None) == hr.RELEASE_KEPT_AT_HEAD
+    assert len(plans) == 1
+
+
+def test_hunks_present_diffs_each_pair_once_per_scope(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_hunk_claims
+
+    calls = []
+    real = run_hunk_claims.changed_opcodes
+    monkeypatch.setattr(run_hunk_claims, "changed_opcodes", lambda a, b: calls.append(1) or real(a, b))
+    with hr.release_scope():
+        assert hr._hunks_present("a\nb\n", "a\nc\n", "a\nc\n")
+        assert hr._hunks_present("a\nb\n", "a\nc\n", "a\nc\n")
+    assert len(calls) == 1
+
+
+def test_hunks_present_still_refuses_missing_and_unbounded_middle():
+    """Fail-closed: a hunk absent from HEAD, or a middle past the diff bound, stays held."""
+    assert not hr._hunks_present("a\nb\n", "a\nc\n", "a\nb\n")
+    base = "".join(f"x{i}\n" for i in range(600))
+    kept = "".join(f"y{i}\n" for i in range(600))
+    assert not hr._hunks_present(base, kept, base)

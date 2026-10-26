@@ -184,6 +184,19 @@ def _tests_to_run(explicit: Sequence[str], params: dict) -> list[str]:
     return li.targeted_set(params, li.targeted_test_verdict(params), tests)
 
 
+def _with_invariants(root: Path, tests: list[str], dirty: Callable[[Path], list[str]]) -> list[str]:
+    """``tests`` plus every repo-wide invariant whose measured set the dirty paths touch. A git
+    failure adds none; the caller's own ``dirty`` call reports it."""
+    from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
+
+    try:
+        touched = dirty(root)
+    except RuntimeError:
+        return tests
+    owed = imp.existing_invariants(root, imp.invariants_for_paths(touched, root))
+    return list(dict.fromkeys([*tests, *owed]))
+
+
 _recorded_targeted_set = li.recorded_targeted_set
 
 #: pytest output that marks a collection failure (exit 2), which a ``--tier`` retry cannot fix.
@@ -441,6 +454,7 @@ def main(
     tests = _tests_to_run(args.tests, params)
     if not tests:
         return _write_stale(root, run_id, dirty, head_sha)
+    tests = _with_invariants(root, tests, dirty)
 
     escaping = [t for t in tests if contained_path(root / t.split("::")[0], [root]) is None]
     if escaping:

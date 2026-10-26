@@ -1,4 +1,4 @@
-"""Tests for warp_run_deliverable.halted_run_write_claims."""
+"""Tests for warp_run_deliverable.halted_run_write_claims and its scoped `_manifest_declared` memo."""
 
 from __future__ import annotations
 
@@ -252,3 +252,123 @@ def test_b9002c_replay_superseded_sizing_halted_run_claims_nothing_for_a_landing
     _bind(repo, OTHER_ID, sizing="state/sizings/land.yaml", marker=STATUS_HALTED)
     (repo / "state/warp" / OTHER_ID / halted_run.HALTED_FILE).unlink()
     assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {}
+
+
+def _live_run(repo, run_id, session, writes):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    rec = repo / "state/warp" / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    (rec / "manifest.json").write_text(json.dumps({"rows": [{"id": "C1", "writes": writes}], "doc_writes": []}), encoding="utf-8")
+    run_token.mint(repo, run_id, "s.mjs", session_id=session)
+
+
+def test_scan_lists_each_declarer_oldest_first_and_session_reader_dedupes(repo, monkeypatch):
+    from coordinator_core.session import touch_record
+
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
+    me, peer = "1" * 8 + "-1111-1111-1111-111111111111", "2" * 8 + "-2222-2222-2222-222222222222"
+    _live_run(repo, HALTED_ID, peer, [JOB])
+    _live_run(repo, OTHER_ID, peer, [JOB])
+    _live_run(repo, "ask-20261019T120000-dddddd", peer, ["other.py"])
+    got = wrd._live_claim_scan(repo, [JOB], me, None, None, None)[JOB]
+    assert got == sorted(got)
+    assert sorted(r for _, r, _ in got) == [HALTED_ID, OTHER_ID]
+    senior, junior = got
+    assert wrd.live_run_write_claims(repo, [JOB], exclude_session=me, minted_before=(junior[0], junior[1])) == {JOB: [peer]}
+    assert wrd.live_run_write_claims(repo, [JOB], exclude_session=me, minted_before=(senior[0], senior[1])) == {}
+    assert wrd.live_run_write_claims(repo, [JOB], exclude_session=me) == {JOB: [peer]}
+
+
+def test_scan_halted_run_is_not_a_holder(repo, monkeypatch):
+    from coordinator_core.session import touch_record
+
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
+    peer = "2" * 8 + "-2222-2222-2222-222222222222"
+    _live_run(repo, HALTED_ID, peer, [JOB])
+    (repo / "state/warp" / HALTED_ID / halted_run.HALTED_FILE).write_text(json.dumps({"status": STATUS_HALTED}), encoding="utf-8")
+    assert wrd._live_claim_scan(repo, [JOB], "x", None, None, None) == {}
+
+
+def _corrupt(repo, run_id, *, writes=(JOB,)):
+    rec = _record(repo, run_id, writes=writes, status=None)
+    (rec / halted_run.HALTED_FILE).write_text("{not json", encoding="utf-8")
+    return rec
+
+
+def test_corrupt_marker_is_a_holding_halt(repo):
+    _corrupt(repo, HALTED_ID)
+    assert wrd._halted(repo, HALTED_ID) is True
+
+
+def test_absent_marker_is_not_halted_or_landed(repo):
+    _record(repo, HALTED_ID, status=None)
+    assert wrd._halted(repo, HALTED_ID) is False
+    assert wrd._landed(repo, HALTED_ID) is False
+    assert wrd.halted_withheld_paths(repo, HALTED_ID) == set()
+
+
+def test_a_claim_reason_string_is_not_a_run_id_and_is_neither_halted_nor_landed(repo):
+    reason = f"unreadable-halt-record:{HALTED_ID}"
+    assert wrd._halted(repo, reason) is False
+    assert wrd._landed(repo, reason) is False
+
+
+def test_corrupt_marker_is_not_landed_and_not_released(repo):
+    _corrupt(repo, HALTED_ID)
+    assert wrd._landed(repo, HALTED_ID) is False
+    assert wrd.resumed_run_released(repo, HALTED_ID, None) is False
+
+
+def test_corrupt_marker_claims_every_wanted_path_with_run_reason(repo):
+    _corrupt(repo, HALTED_ID)
+    reason = f"unreadable-halt-record:{HALTED_ID}"
+    assert _claims(repo, [JOB, "src/other.py"]) == {JOB: [reason], "src/other.py": [reason]}
+
+
+def test_corrupt_marker_withheld_paths_raise_with_run_reason(repo):
+    _corrupt(repo, HALTED_ID)
+    with pytest.raises(halted_run.UnreadableHaltRecord) as exc:
+        wrd.halted_withheld_paths(repo, HALTED_ID)
+    assert exc.value.reason == f"unreadable-halt-record:{HALTED_ID}"
+
+
+def _count_parses(monkeypatch):
+    calls = []
+    real = wrd._manifest_declared_uncached
+
+    def spy(run_id, root):
+        calls.append(run_id)
+        return real(run_id, root)
+
+    monkeypatch.setattr(wrd, "_manifest_declared_uncached", spy)
+    return calls
+
+
+def test_manifest_declared_parses_once_per_run_inside_a_scope(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    _record(repo, HALTED_ID, writes=[JOB])
+    calls = _count_parses(monkeypatch)
+    with halted_hold_release.release_scope():
+        first = wrd._manifest_declared(HALTED_ID, repo)
+        second = wrd._manifest_declared(HALTED_ID, repo)
+    assert first == second == ((JOB,), (), False)
+    assert calls == [HALTED_ID]
+
+
+def test_manifest_declared_caches_nothing_outside_a_scope(repo, monkeypatch):
+    _record(repo, HALTED_ID, writes=[JOB])
+    calls = _count_parses(monkeypatch)
+    wrd._manifest_declared(HALTED_ID, repo)
+    wrd._manifest_declared(HALTED_ID, repo)
+    assert calls == [HALTED_ID, HALTED_ID]
+
+
+def test_unreadable_manifest_still_flags_unreadable_when_memoised(repo):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    _record(repo, HALTED_ID, manifest_text="{not json")
+    with halted_hold_release.release_scope():
+        assert wrd._manifest_declared(HALTED_ID, repo)[2] is True
+        assert wrd._manifest_declared(HALTED_ID, repo)[2] is True

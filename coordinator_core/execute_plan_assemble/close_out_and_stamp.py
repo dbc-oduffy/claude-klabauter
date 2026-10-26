@@ -219,6 +219,8 @@ from coordinator_core.execute_plan_assemble.falsifier_shape import (
     goal_falsifier_defect,
 )
 
+from coordinator_core.execute_plan_assemble.falsifier_run import run_recorded_falsifier
+
 #: Re-exported from `goal_gate` (the light leaf `plan_status_transition`
 #: imports so the implemented flip never loads this module): one definition,
 #: and a monkeypatch of any of these names must target `goal_gate`.
@@ -1574,8 +1576,65 @@ def _stamp_plan_landed(
 
 _CLOSE_OUT_PARTIAL_FIELD = "close_out_last_partial"
 
+#: Sizes below L keep the recorded-verdict path; every other tshirt value runs the falsifier.
+_BELOW_L_TSHIRTS = frozenset({"XS", "S", "M"})
 
-def _close_out_partial_stamp_value(missing_chunk_ids: list[str]) -> str:
+#: Wall bound on the plan's own falsifier child, under `ipc.DISPATCH_TIMEOUT_SECS`.
+L_PLUS_FALSIFIER_TIMEOUT_S: float = 20.0
+
+
+def _plan_is_l_plus_fail_closed(fm: dict, root: Path) -> bool:
+    """Whether the plan's sizing makes it L or larger. Fails CLOSED: a
+    `sizing_object` that is present but unreadable, or carries no tshirt, reads
+    as L+ (`_plan_is_m_plus` fails toward False, which would skip the falsifier
+    silently). An absent or null `sizing_object` reads as below L."""
+    sizing_ref = fm.get("sizing_object")
+    if sizing_ref is None or (isinstance(sizing_ref, str) and not sizing_ref.strip()):
+        return False
+    if not isinstance(sizing_ref, str):
+        return True
+    try:
+        doc = yaml.safe_load((root / sizing_ref.strip()).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return True
+    estimate = doc.get("estimate") if isinstance(doc, dict) else None
+    tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None
+    if not isinstance(tshirt, str) or not tshirt.strip():
+        return True
+    return tshirt.strip().upper() not in _BELOW_L_TSHIRTS
+
+
+def _evaluate_l_plus_falsifier_gate(plan_text: str, root: Path) -> Optional[dict[str, Any]]:
+    """At L+, run the plan's `prime_exit_criterion.falsifier.how` and report
+    `{"passed": bool, "ran": bool, "exit_code": ..., "detail": str}`; `passed` is
+    True only for a command that ran and exited 0 (indeterminate is not a pass).
+    `None` when the plan is below L or carries no usable falsifier. Never raises."""
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        fm = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    block = _falsifier_block(fm.get("prime_exit_criterion"))
+    if block is None or not _plan_is_l_plus_fail_closed(fm, root):
+        return None
+    observation = run_recorded_falsifier(
+        block["how"], repo_root=root, timeout_s=L_PLUS_FALSIFIER_TIMEOUT_S
+    )
+    return {
+        "passed": observation.passed is True,
+        "ran": observation.ran,
+        "exit_code": observation.exit_code,
+        "detail": observation.output,
+    }
+
+
+def _close_out_partial_stamp_value(
+    missing_chunk_ids: list[str], falsifier_failed: bool = False
+) -> str:
     """The single-line value `_stamp_close_out_partial_evaluation` writes --
     a UTC timestamp plus the exact verdict this run reached, so a later
     reader sees not just THAT a partial evaluation happened but WHAT it
@@ -1586,12 +1645,17 @@ def _close_out_partial_stamp_value(missing_chunk_ids: list[str]) -> str:
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
     ids = ",".join(missing_chunk_ids)
-    return f"{timestamp} -- {len(missing_chunk_ids)} missing: {ids}"
+    value = f"{timestamp} -- {len(missing_chunk_ids)} missing: {ids}"
+    if falsifier_failed:
+        value += " -- falsifier did not pass"
+    return value
 
 
 def _stamp_close_out_partial_evaluation(
     plan_text: str,
     missing_chunk_ids: list[str],
+    *,
+    falsifier_failed: bool = False,
 ) -> Optional[str]:
     """Defect 2 fix (2026-08-06): "a skipped stamp is indistinguishable from
     an unrun one." Before this fix, the halted/partial branch of
@@ -1686,7 +1750,7 @@ def _stamp_close_out_partial_evaluation(
         return None
     if read_fm_field(split.fm_text, _CLOSE_OUT_PARTIAL_FIELD) is not None:
         return None
-    value = _close_out_partial_stamp_value(missing_chunk_ids)
+    value = _close_out_partial_stamp_value(missing_chunk_ids, falsifier_failed)
     new_fm = insert_fm_field(
         split.fm_text, _CLOSE_OUT_PARTIAL_FIELD, value, after_key="status"
     )
@@ -2277,6 +2341,14 @@ def close_out_and_stamp(
         if goal_gate is not None and goal_gate.get("refused"):
             status_target = None
 
+    # L+ runs the falsifier itself; the recorded verdict above is not enough.
+    # Runs under dry_run too (a read), so both legs report one verdict.
+    falsifier_gate: Optional[dict[str, Any]] = None
+    if status_target == "implemented":
+        falsifier_gate = _evaluate_l_plus_falsifier_gate(text, root)
+        if falsifier_gate is not None and not falsifier_gate["passed"]:
+            status_target = None
+
     # Item 29 (2026-09-26): a computed CONTRADICTION refuses the stamp too --
     # evaluated ONLY on the branch that would otherwise ship `implemented`,
     # same posture as the goal-falsifier gate immediately above (a halted
@@ -2512,8 +2584,11 @@ def close_out_and_stamp(
     # so this write is folded into the SAME commit as any AC8 auto-resolve
     # that also fired this run, rather than needing a second commit.
     partial_evaluation_stamped = False
-    if status_target is None and missing:
-        new_text = _stamp_close_out_partial_evaluation(text, missing)
+    falsifier_failed = falsifier_gate is not None and not falsifier_gate["passed"]
+    if status_target is None and (missing or falsifier_failed):
+        new_text = _stamp_close_out_partial_evaluation(
+            text, missing, falsifier_failed=falsifier_failed
+        )
         if new_text is not None and new_text != text:
             text = new_text
             partial_evaluation_stamped = True
@@ -2552,6 +2627,11 @@ def close_out_and_stamp(
         subject = (
             f"close-out: {plan_path_rel} not stamped -- review_stamp refused "
             f"({review_stamp_gate['reason']})"
+        )
+    elif falsifier_failed:
+        subject = (
+            f"close-out: {plan_path_rel} partial -- L+ prime exit criterion "
+            "falsifier did not pass"
         )
     else:
         subject = (
@@ -2784,6 +2864,13 @@ def close_out_and_stamp(
             f"{plan_path_rel}: not stamped -- review_stamp refused "
             f"({review_stamp_gate['reason']})"
         )
+    elif falsifier_failed:
+        message = (
+            f"{plan_path_rel}: not stamped -- the L+ prime exit criterion falsifier "
+            f"did not pass (ran={falsifier_gate['ran']}, "
+            f"exit_code={falsifier_gate['exit_code']}); closed partial. "
+            f"{falsifier_gate['detail']}".rstrip()
+        )
     else:
         memo_notes, code_missing = _memo_route_notes(missing, rows, root)
         message = (
@@ -2908,6 +2995,8 @@ def close_out_and_stamp(
     # uncommitted" wording even when N == 0.
     if review_stamp_gate is not None:
         result["review_stamp_gate"] = review_stamp_gate
+    if falsifier_gate is not None:
+        result["falsifier_gate"] = falsifier_gate
     return EXIT_OK, result
 
 

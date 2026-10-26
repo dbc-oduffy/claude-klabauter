@@ -1,0 +1,15 @@
+{
+  "ask_file": "ask.txt",
+  "ask_sha_note": "prompt.txt of ladder-l-close-out-artifacts coordinator r40-r49 is byte-identical across all reps (md5 e6c901583a0263263b3b1d030fcf2ade)",
+  "rung_label": "L",
+  "reps": [
+    {"rep": 41, "run_id": "ladder-l-close-out-artifacts__coordinator__r41", "cost_usd": 50.19311426999997, "tshirt": "M", "route": "plan", "sizing_file": "state/sizings/2026-10-23-close-out-mechanism-criteria-gate-116020.yaml", "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist; report the offending criteria by id."},
+    {"rep": 42, "run_id": "ladder-l-close-out-artifacts__coordinator__r42", "cost_usd": 3.97508955, "tshirt": "M", "route": "plan", "sizing_file": "state/sizings/2026-10-23-mechanism-criterion-artifact-gate-1b0ac0.yaml", "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist. Make it so, and report the offending criteria by id."},
+    {"rep": 43, "run_id": "ladder-l-close-out-artifacts__coordinator__r43", "cost_usd": 9.946394849999999, "tshirt": "S", "route": "spec-dispatch", "sizing_file": "state/sizings/2026-10-23-close-out-refuses-missing-mechanism-artifact-137bd5.yaml", "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist; refuse status implemented at both the close-out and direct stamp doors and report the offending criteria by id."},
+    {"rep": 44, "run_id": "ladder-l-close-out-artifacts__coordinator__r44", "cost_usd": 30.03625220999999, "tshirt": "M", "route": "plan", "sizing_file": "state/sizings/2026-10-23-mechanism-ac-artifact-gate-b4c2d9.yaml", "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist. Make it so, and report the offending criteria by id."},
+    {"rep": 45, "run_id": "ladder-l-close-out-artifacts__coordinator__r45", "cost_usd": 23.57097587499998, "tshirt": "M", "route": "plan", "sizing_file": "state/sizings/2026-10-23-close-out-refuses-ticked-mechanism-ac-without-artifact-04e99b.yaml", "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist. Make it so, and report the offending criteria by id."},
+    {"rep": 46, "run_id": "ladder-l-close-out-artifacts__coordinator__r46", "cost_usd": 19.112189544999996, "tshirt": "M", "route": "plan", "sizing_file": "state/sizings/2026-10-24-close-out-refuses-absent-mechanism-artifact-67f021.yaml", "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist; make it so, and report the offending criteria by id."},
+    {"rep": 49, "run_id": "ladder-l-close-out-artifacts__coordinator__r49", "cost_usd": 6.831128095000003, "tshirt": "XS", "route": "dispatch", "sizing_file": "state/sizings/2026-10-24-mechanism-criterion-artifact-gate-ebec8d.yaml", "intent": "Close-out should not accept a mechanism criterion whose named artifact does not exist; report the offending criteria by id."}
+  ],
+  "omitted_reps": "r40, r47, r48 omitted: r40 and r48 minted several sizings in one cell and the ask's own record was not unambiguous in the diff; r47 has no work.diff."
+}

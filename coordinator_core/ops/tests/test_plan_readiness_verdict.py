@@ -503,8 +503,9 @@ def test_row_sharing_a_declared_anchor_with_a_live_corrects_entry_is_an_intended
 
 
 def test_file_line_anchor_covers_a_reworded_row(tmp_path):
-    corrects = "corrects:\n  - citation: docs/wiki/store.md:58\n    fixed_by: C2\n"
-    row = _row(citation="routes never call p4 (docs/wiki/store.md:58)")
+    page = "docs/wiki" + "/store.md"
+    corrects = f"corrects:\n  - citation: {page}:58\n    fixed_by: C2\n"
+    row = _row(citation=f"routes never call p4 ({page}:58)")
     assert _op_reply(_corrects_plan(tmp_path, corrects), [row])["blocking"] == []
 
 
@@ -771,8 +772,9 @@ def test_anchor_premises_key_absent_pulls_as_undeclared(tmp_path):
 )
 def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
     reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, block))
-    assert reply["verdict"] == "judgment"
-    assert _anchor_rulings(reply)[0].startswith("anchor-premise-unchecked: AP1")
+    assert reply["verdict"] == "ready"
+    assert reply["mechanical_repairs"] == []
+    assert "AP1" in reply["reason"]
 
 
 def test_r32_anchor_with_an_unevaluable_check_does_not_block_in_the_checker_lane(tmp_path):

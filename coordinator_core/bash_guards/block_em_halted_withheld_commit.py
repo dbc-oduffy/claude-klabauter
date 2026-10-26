@@ -324,9 +324,11 @@ def _deny_record(run_id: str, path: str) -> Any:
     from coordinator_core.bash_guards._rewrite_support import _deny_record as _build
     from coordinator_core.bash_guards._rewrite_support import _offer
 
+    from coordinator_core.ops.dispatch_emit.halt_refire import EM_ACTION_AFTER_HALT_RULE
+
     text = (
         f"BLOCKED: halted run {run_id} withholds {path}; a hand commit would land it. "
-        f"Alternative: re-fire the run, or workflow.revise {run_id}."
+        f"{EM_ACTION_AFTER_HALT_RULE} Alternative: re-fire the run, or workflow.revise {run_id}."
     )
     return _build(
         GUARD_NAME,

@@ -108,58 +108,35 @@ def _write(root, rel, text="n\n"):
     p.write_text(text, encoding="utf-8", newline="\n")
 
 
-def test_a_clean_tracked_directory_is_backed_by_head(repo):
-    assert _judge(repo, "pkg", "pkg/") == {"pkg": "backed", "pkg/": "backed"}
-
-
-def test_an_unlanded_untracked_directory_is_refused_and_a_landed_one_is_backed(repo):
+def test_an_undeclared_directory_is_a_mention_never_a_claim(repo):
     for f in ("run/a.txt", "run/sub/b.txt"):
         _write(repo, f)
-    assert _judge(repo, "run") == {"run": "untracked"}
-    assert _judge(repo, "run", landing_paths=["run/a.txt"]) == {"run": "untracked"}
-    assert _judge(repo, "run", landing_paths=["run/a.txt", "run/sub/b.txt"]) == {"run": "backed"}
-    note = "## What shipped\n- `run/`\n"
-    refusal, _ = shipped_gate(repo, note)
-    assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED) and "run/a.txt" in refusal
-    assert shipped_gate(repo, note, landing_paths=["run/a.txt", "run/sub/b.txt"])[0] is None
-
-
-def test_a_tracked_directory_with_a_differing_file_is_not_in_commit(repo):
     _write(repo, "pkg/m.py", "changed\n")
-    assert _judge(repo, "pkg") == {"pkg": "not-in-commit"}
-    assert _judge(repo, "pkg", landing_paths=["pkg/m.py"]) == {"pkg": "backed"}
-
-
-def test_a_gitignored_file_under_a_landed_directory_does_not_refuse(repo):
-    _write(repo, ".gitignore", "*.log\n")
-    _write(repo, "run/a.txt")
-    _write(repo, "run/noise.log")
-    assert _judge(repo, "run", landing_paths=["run/a.txt"]) == {"run": "backed"}
-
-
-def test_a_directory_whose_files_are_all_withheld_is_withheld(repo):
-    _write(repo, "run/a.txt")
-    got = _judge(repo, "run", landing_paths=["run/a.txt"], withheld_paths=["run/a.txt"])
-    assert got == {"run": "withheld"}
-
-
-def test_an_empty_or_missing_directory_claim_stays_unresolved(repo):
+    assert _judge(repo, "run", "run/", "pkg", "pkg/") == {
+        "run": "unresolved", "run/": "unresolved", "pkg": "unresolved", "pkg/": "unresolved",
+    }
     (repo / "empty").mkdir()
     assert _judge(repo, "empty", "ghost") == {"empty": "unresolved", "ghost": "unresolved"}
 
 
-def test_directory_claims_cost_one_spawn_and_file_claims_none(repo, monkeypatch):
+def test_a_directory_the_landing_declares_is_backed_or_withheld(repo):
+    _write(repo, "run/a.txt")
+    _write(repo, "run/untracked_peer.txt")
+    assert _judge(repo, "run", landing_paths=["run/a.txt"]) == {"run": "backed"}
+    got = _judge(repo, "run", landing_paths=["run/a.txt"], withheld_paths=["run/a.txt"])
+    assert got == {"run": "withheld"}
+    assert _judge(repo, "run", deleted_paths=["run/a.txt"]) == {"run": "backed"}
+
+
+def test_directory_claims_cost_no_spawn(repo, monkeypatch):
     from coordinator_core.git import run as git_run
 
     calls = []
     real = git_run.run_git
     monkeypatch.setattr(git_run, "run_git", lambda *a, **k: calls.append(a) or real(*a, **k))
     _write(repo, "run/a.txt")
-    _write(repo, "run2/a.txt")
-    _judge(repo, "clean.py", "new.py")
+    _judge(repo, "clean.py", "new.py", "run", "pkg", landing_paths=["run/a.txt"])
     assert calls == []
-    _judge(repo, "run", "run2", "pkg")
-    assert len(calls) == 1
 
 
 def test_a_deleted_landing_path_is_backed(repo):
@@ -185,6 +162,18 @@ def test_gate_lands_backed_and_unresolved_claims(repo):
     refusal, reply = shipped_gate(repo, "## What shipped\n`clean.py`, `op_scopes.py`\n")
     assert refusal is None
     assert reply == {"checked": 2, "unbacked": [], "unresolved": [reply["unresolved"][0]]}
+
+
+def test_a_backticked_directory_in_a_shipped_note_is_not_refused_but_an_undelivered_file_is(repo):
+    _write(repo, "run/a.txt")
+    note = "## What shipped\n- `clean.py`\n- test case: redirect into `run`, and `run/` again\n"
+    refusal, reply = shipped_gate(repo, note)
+    assert refusal is None and reply["checked"] == 3
+    assert shipped_gate(repo, "## What shipped\n- `run/`\n1. `run`\n")[0] is None
+    assert shipped_gate(repo, "## What shipped\n- redirect into `run`\n- `new.py`\n")[0].startswith(
+        SHIPPED_CLAIM_REFUSED
+    )
+    assert shipped_gate(repo, "## What shipped\nWrote `new.py` here.\n")[0].startswith(SHIPPED_CLAIM_REFUSED)
 
 
 def test_gate_is_empty_without_a_note_or_a_shipped_heading(repo):

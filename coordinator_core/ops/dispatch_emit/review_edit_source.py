@@ -74,6 +74,23 @@ def session_review_writes(
 
     None means the source cannot answer (no session, no ``since``, no store, or an unreadable or malformed record) and is never "no writes".
     """
+    got = _collect(worktree_root, session_id, since)
+    return None if got is None else got[0]
+
+
+def session_agent_writes(
+    worktree_root: Path, session_id: Optional[str], since: Optional[float]
+) -> Optional[dict[str, set[str]]]:
+    """agent id -> every path it wrote since ``since`` (same agent set and None contract as
+    ``session_review_writes``). Lets a caller ask which paths one agent touched, which the
+    path -> latest-agent map cannot answer."""
+    got = _collect(worktree_root, session_id, since)
+    return None if got is None else got[1]
+
+
+def _collect(
+    worktree_root: Path, session_id: Optional[str], since: Optional[float]
+) -> Optional[tuple[dict[str, str], dict[str, set[str]]]]:
     if not session_id or since is None:
         return None
     hub = core.sessions_dir(str(worktree_root))
@@ -83,6 +100,7 @@ def session_review_writes(
     if ids is None:
         return None
     writes: dict[str, str] = {}
+    by_agent: dict[str, set[str]] = {}
     stamped: dict[str, float] = {}
     for agent_id in ids:
         agent_dir = os.path.join(hub, _AGENTS_SUBDIR, agent_id)
@@ -107,7 +125,8 @@ def session_review_writes(
                     continue
                 if event.timestamp < since:
                     continue
+                by_agent.setdefault(agent_id, set()).add(event.path)
                 if event.timestamp >= stamped.get(event.path, float("-inf")):
                     stamped[event.path] = event.timestamp
                     writes[event.path] = agent_id
-    return writes
+    return writes, by_agent

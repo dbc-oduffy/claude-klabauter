@@ -469,6 +469,51 @@ def _spawn_orphaned_server_darwin(isolated_root: Path, env: dict) -> int:
     return int(data.strip())
 
 
+_RETIRE_WAIT_SECS = 30.0
+
+
+def _retire_orphaned_server_darwin(isolated_root: Path, server_pid: Optional[int]) -> None:
+    """Retire the double-forked isolated server and its detached listener.
+
+    Both are reparented out of this test's process tree, so a terminate on
+    them trips conftest's `ForeignProcessKill` tripwire. Rotating the clone's
+    `_engine_stamp` (unlink first: the file is a hardlink of the source
+    root's, and writing through it would rotate the real stamp) makes them
+    self-evict through their own skew watchdogs; this waits for that exit so
+    `reap_processes_under` finds nothing foreign left to signal.
+    """
+    import uuid
+
+    import psutil
+
+    from coordinator_core.warm import supervisor
+
+    pids = set()
+    if server_pid is not None:
+        pids.add(server_pid)
+    for record in (breadcrumb.read_breadcrumb(engine_root=isolated_root),
+                   supervisor.read_discovery(isolated_root)):
+        if record and isinstance(record.get("pid"), int):
+            pids.add(record["pid"])
+    stamp = isolated_root / "coordinator_core" / "_engine_stamp"
+    if stamp.exists():
+        stamp.unlink()
+    stamp.write_text(f"sha:warm-door-gate-retire-{uuid.uuid4().hex}\n", encoding="utf-8")
+    deadline = time.time() + _RETIRE_WAIT_SECS
+
+    def _alive(pid: int) -> bool:
+        # `psutil.pid_exists` probes with `os.kill(pid, 0)`, which the conftest
+        # tripwire refuses for a pid outside this tree.
+        try:
+            proc = psutil.Process(pid)
+            return proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE
+        except psutil.Error:
+            return False
+
+    while time.time() < deadline and any(_alive(p) for p in pids):
+        time.sleep(_BOOT_POLL_INTERVAL_SECS)
+
+
 def _short_runtime_base() -> Path:
     """A `COORDINATOR_WARM_RUNTIME_BASE` short enough that
     `<base>/coordinator/warm/<16-hex>/<16-hex>.sock` fits `sun_path`.
@@ -516,7 +561,12 @@ def warm_engine_root_darwin() -> Iterator[Path]:
             f"warm server from; point {ENGINE_ROOT_OVERRIDE_ENV} at one to run this gate"
         )
 
-    tmp_parent = mkdtemp_for_clone(source_root, prefix="warm-door-gate-")
+    # Not mkdtemp_for_clone: its stale-clone reaper terminates a concurrent
+    # run's live server under the shared scratch dir, which the foreign-kill
+    # guard refuses at setup. Mint the private dir without reaping peers.
+    clones_dir = source_root / "scratch" / "benchmark-clones"
+    clones_dir.mkdir(parents=True, exist_ok=True)
+    tmp_parent = Path(tempfile.mkdtemp(prefix="warm-door-gate-", dir=str(clones_dir)))
     isolated_root = tmp_parent / "clone"
     runtime_base = _short_runtime_base()
     server_pid: Optional[int] = None
@@ -527,18 +577,13 @@ def warm_engine_root_darwin() -> Iterator[Path]:
         server_pid = _spawn_orphaned_server_darwin(isolated_root, dict(os.environ))
         crumb = _wait_for_live_breadcrumb(isolated_root, _BOOT_WAIT_DEADLINE_SECS)
         if crumb is None:
-            _terminate(server_pid)
             pytest.skip(
                 f"isolated warm server (source={source_root}) did not reach a "
                 f"PID-alive breadcrumb within {_BOOT_WAIT_DEADLINE_SECS}s"
             )
         yield isolated_root
     finally:
-        crumb = breadcrumb.read_breadcrumb(engine_root=isolated_root)
-        if crumb and crumb.get("pid") is not None:
-            _terminate(int(crumb["pid"]))
-        elif server_pid is not None:
-            _terminate(server_pid)
+        _retire_orphaned_server_darwin(isolated_root, server_pid)
         reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
         shutil.rmtree(runtime_base, ignore_errors=True)

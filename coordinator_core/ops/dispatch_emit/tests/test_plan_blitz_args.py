@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,84 @@ def test_chatty_run_id_none_adds_no_keys(isolated, tmp_path):
     explicit = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s", chatty_run_id=None)
     assert plain == explicit
     assert "chatty" not in plain and "chattyReview" not in plain
+
+
+_ROSTER = {
+    "plan_review": {
+        "tiers": {
+            "M": {"reviewers": [{"agentType": "coordinator:staff-eng", "model": "opus"}]},
+            "XXL": {
+                "reviewers": [
+                    {"agentType": "coordinator:staff-eng", "model": "opus"},
+                    {"agentType": "coordinator:the Staff Engineer", "model": "sonnet"},
+                ]
+            },
+        },
+        "signal_reviewers": {},
+        "lead_round_cap": None,
+        "revise": {"step": "merged", "after": "parallel-review-wave"},
+    }
+}
+
+
+def _write_roster(root: Path, data) -> None:
+    d = root / "coordinator" / "contract"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "review-roster-fragment.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_default_path_emits_parallel_review_from_roster(isolated, tmp_path):
+    root = _plugin(tmp_path)
+    _write_roster(root, _ROSTER)
+    out = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    assert out["parallelReview"]["models"] == {"coordinator:staff-eng": "opus", "coordinator:the Staff Engineer": "sonnet"}
+    assert out["parallelReview"]["tiers"] == {
+        "coordinator:staff-eng": ["M", "XXL"],
+        "coordinator:the Staff Engineer": ["XXL"],
+    }
+    assert out["parallelReview"]["revise"] == {"agent": "coordinator:plan-author", "model": "opus"}
+
+
+def test_roster_edit_changes_wave_without_code_edit(isolated, tmp_path):
+    root = _plugin(tmp_path)
+    _write_roster(root, _ROSTER)
+    first = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")["parallelReview"]
+    edited = json.loads(json.dumps(_ROSTER))
+    edited["plan_review"]["tiers"]["XXL"]["reviewers"][1]["model"] = "haiku"
+    edited["plan_review"]["tiers"]["L"] = {
+        "reviewers": [{"agentType": "coordinator:the Staff Engineer", "model": "haiku"}]
+    }
+    _write_roster(root, edited)
+    second = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")["parallelReview"]
+    assert second != first
+    assert second["models"]["coordinator:the Staff Engineer"] == "haiku"
+    assert second["tiers"]["coordinator:the Staff Engineer"] == ["XXL", "L"]
+
+
+def test_roster_read_from_plugin_root_contract_dir(isolated, tmp_path):
+    root = _plugin(tmp_path)
+    (root / "contract").mkdir()
+    (root / "contract" / "review-roster-fragment.json").write_text(json.dumps(_ROSTER), encoding="utf-8")
+    out = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    assert out["parallelReview"]["revise"]["agent"] == "coordinator:plan-author"
+
+
+def test_chatty_branch_has_no_parallel_review(isolated, tmp_path):
+    root = _plugin(tmp_path)
+    _write_roster(root, _ROSTER)
+    out = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s", chatty_run_id="r")
+    assert "parallelReview" not in out
+    assert "chattyReview" in out
+
+
+def test_parallel_review_omitted_when_unresolvable(isolated, tmp_path):
+    root = _plugin(tmp_path)
+    assert "parallelReview" not in pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    _write_roster(root, {"other": 1})
+    assert "parallelReview" not in pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    (root / "coordinator" / "contract" / "review-roster-fragment.json").write_text("{bad", encoding="utf-8")
+    assert "parallelReview" not in pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    assert "parallelReview" not in pba.resolve(plugin_root=None, engine_root=None, sizing_abs="s")
 
 
 def test_chatty_run_id_adds_review_wave(isolated, tmp_path):

@@ -775,11 +775,20 @@ _PLAN_TASKS_SCHEMA = (
 )
 
 
-@functools.cache
-def change_kind_members() -> frozenset:
-    """The closed ``change_kind`` enum, read from plan-tasks.schema.json (never copied)."""
-    schema = json.loads(_PLAN_TASKS_SCHEMA.read_text(encoding="utf-8"))
+@functools.lru_cache(maxsize=4)
+def _members_at(schema_path: str, mtime_ns: int, size: int) -> frozenset:
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
     return frozenset(schema["properties"]["change_kind"]["enum"])
+
+
+def change_kind_members() -> frozenset:
+    """The closed ``change_kind`` enum, read from plan-tasks.schema.json (never copied).
+
+    Memoised on the schema file's (mtime, size) so a long-lived engine sees an
+    enum edited after it loaded, as a fresh process does.
+    """
+    st = _PLAN_TASKS_SCHEMA.stat()
+    return _members_at(str(_PLAN_TASKS_SCHEMA), st.st_mtime_ns, st.st_size)
 
 
 class InvalidRowIdError(SpineReadError):
@@ -833,6 +842,7 @@ class EmitterRow(NamedTuple):
     second place the pattern could drift from the vendored schema's own
     ``pattern``. Both default to ``None``, and a spine declaring neither key
     carries both as ``None`` here exactly as before this field existed.
+    ``effort`` is read the same tolerant way and carried unjudged to ``WaveRow``.
 
     ``body`` is carried for exactly one reader: ``emit.py``'s
     ``_row_agent_type`` asks whether a row's verification has to RUN
@@ -879,6 +889,7 @@ class EmitterRow(NamedTuple):
     depends_on: list
     agent_type: Optional[str] = None
     agent_model: Optional[str] = None
+    effort: Optional[str] = None
     body: str = ""
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
@@ -1388,6 +1399,7 @@ def read_spine(
                 depends_on=depends_on,
                 agent_type=raw.get("agent_type"),
                 agent_model=raw.get("agent_model"),
+                effort=raw.get("effort"),
                 body=raw.get("body") or "",
                 writes_under=writes_under,
                 verification_runs=(

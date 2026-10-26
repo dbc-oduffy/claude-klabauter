@@ -77,7 +77,9 @@ def test_record_released_stamps_only_a_halted_marker(tmp_path):
 def test_newest_dir_rule(tmp_path):
     old = _dir(tmp_path, "20261016T010000-aaaaaa")
     hr.write_halt_marker(old, halted="x", sizing_rel=SIZING)
-    _dir(tmp_path, "20261016T020000-bbbbbb").mkdir(parents=True)
+    newer = _dir(tmp_path, "20261016T020000-bbbbbb")
+    newer.mkdir(parents=True)
+    (newer / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
     assert hr.halted_run_for(tmp_path, SIZING) is None
 
 
@@ -313,3 +315,49 @@ def test_worktree_rooted_record_dir_indexes_in_that_checkout(tmp_path):
     hr.record_withheld(d, {"a.py": "r"})
     assert _indexed(wt) == {"a.py": d.name}
     assert _indexed(main) == {}
+
+
+def test_read_strict_absent_is_none_and_corrupt_raises(tmp_path):
+    import pytest
+
+    assert hr.read_strict(tmp_path) is None
+    (tmp_path / hr.HALTED_FILE).write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError):
+        hr.read_strict(tmp_path)
+    assert hr._read(tmp_path) is None
+    (tmp_path / hr.HALTED_FILE).write_text('{"status": "halted"}', encoding="utf-8")
+    assert hr.read_strict(tmp_path) == {"status": "halted"}
+
+
+def test_halted_withheld_strict_absent_is_empty(tmp_path):
+    assert hr.halted_withheld_strict(tmp_path / "ask-x") == {}
+    assert hr.read_strict_run(tmp_path) is None
+
+
+def test_halted_withheld_strict_reads_the_withheld_map(tmp_path):
+    hr.write_halt_marker(tmp_path, halted="x", sizing_rel="s.yaml")
+    assert hr.record_withheld(tmp_path, {"a.py": "dirty"})
+    assert hr.halted_withheld_strict(tmp_path) == {"a.py": "dirty"}
+
+
+def test_corrupt_marker_raises_with_the_run_dir_reason(tmp_path):
+    import pytest
+
+    run = tmp_path / "ask-20260101T000000-abcdef"
+    run.mkdir()
+    (run / hr.HALTED_FILE).write_text("{not json", encoding="utf-8")
+    with pytest.raises(hr.UnreadableHaltRecord) as exc:
+        hr.halted_withheld_strict(run)
+    assert exc.value.run_id == run.name
+    assert exc.value.reason == f"unreadable-halt-record:{run.name}"
+    assert isinstance(exc.value, ValueError)
+    assert hr.halted_withheld(run) == {}
+
+
+def test_non_object_marker_raises(tmp_path):
+    import pytest
+
+    (tmp_path / hr.HALTED_FILE).write_text("[1]", encoding="utf-8")
+    with pytest.raises(hr.UnreadableHaltRecord) as exc:
+        hr.read_strict_run(tmp_path)
+    assert exc.value.reason == f"unreadable-halt-record:{tmp_path.name}"

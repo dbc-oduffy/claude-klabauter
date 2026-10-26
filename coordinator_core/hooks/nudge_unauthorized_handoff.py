@@ -49,7 +49,7 @@ _INSTALL_CHAIN_ORDER_RE = re.compile(r"^install_chain_order:\s*[0-9]", re.MULTIL
 
 
 _NUDGE_MSG_TEMPLATE = (
-    "[nudge] {parent_dir}/: no /handoff|/workstream-complete|/spinoff active. "
+    "[nudge] {parent_dir}/: no authoring skill active. "
     "Done: /workstream-complete. Fork: /handoff|/spinoff (PM-gated). "
     "Cross-repo: SendMessage the live owner; none live -> cross-repo-memo. Recovery/pickup: ignore."
 )

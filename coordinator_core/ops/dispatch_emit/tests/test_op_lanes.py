@@ -216,23 +216,22 @@ def test_a_part_the_estimate_cannot_shrink_is_refused_after_three_headroom_reduc
 ):
     from coordinator_core.ops.dispatch_emit import emit
 
+    def chain(n):
+        return _inventory(
+            [(f"H{i}", "shared/hot.py", "-" if i == 1 else f"H{i - 1}", "pending") for i in range(1, n + 1)]
+        )
+
+    # The fixed shell alone exceeds the tightened part budget of a cap sized
+    # to a few rows, so the cap is the size of the chain one row short of
+    # the real one: exactly the last row overflows.
     probe_root = tmp_path / "probe"
-    probe_inv = _write_master(probe_root, _inventory([("H1", "shared/hot.py", "-", "pending")]))
-    one_row = _lanes(probe_inv, probe_root, hot_files=0)["parts"][0]
-    one_row_bytes = Path(one_row["path"]).stat().st_size
+    probe_inv = _write_master(probe_root, chain(4))
+    probe_parts = _lanes(probe_inv, probe_root, hot_files=0)["parts"]
+    four_row_bytes = max(Path(p["path"]).stat().st_size for p in probe_parts)
 
     root = tmp_path / "real"
-    inv = _write_master(
-        root,
-        _inventory(
-            [
-                ("H1", "shared/hot.py", "-", "pending"),
-                ("H2", "shared/hot.py", "H1", "pending"),
-                ("H3", "shared/hot.py", "H2", "pending"),
-            ]
-        ),
-    )
-    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", int(one_row_bytes * 1.28))
+    inv = _write_master(root, chain(5))
+    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", four_row_bytes + 1)
     monkeypatch.setattr(emit, "row_block_bytes", lambda rows, **kw: {r.id: 1 for r in rows})
 
     with pytest.raises(lanes.RowOverBudgetError, match="3 headroom reductions"):

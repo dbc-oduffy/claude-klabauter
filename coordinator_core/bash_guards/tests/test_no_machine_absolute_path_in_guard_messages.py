@@ -288,18 +288,35 @@ def _reap_probe_session_dir():
 # offending path sits mid-string (e.g. "-- full list: /Users/..."), so each
 # pattern's anchor is stripped and recompiled unanchored below rather than
 # hand-copying new regex bodies that could drift from the shared source.
+#
+# Token boundary: a match starts where its path TOKEN starts (start of string,
+# whitespace or a quote) and absorbs any non-delimiter prefix, so
+# `/a/private/tmp/x` is one span, never the `/tmp/x` suffix of it. A suffix
+# span would not `startswith` its fixture root and a sanctioned echo would
+# read as a leak.
+#
+# The prefix is either empty, an `opt=` / `scheme:` head, or begins at a `/`
+# root: a relative token such as `scratch/x/tmp/y` is a repo-relative pointer,
+# not a machine-absolute path, and reads as no match.
+_TOKEN_START = (
+    r"(?<![^\s\"'`()\[\]<>])"
+    r"(?:[^\s\"'`()\[\]<>/=:]*[=:])?"
+    r"(?:/[^\s\"'`()\[\]<>]*?)?"
+)
+
+
 def _unanchor(pattern: re.Pattern) -> re.Pattern:
     body = pattern.pattern.lstrip("^")
     if body == r"\\\\":
         return re.compile(body + r"[^\s\\]+\\[^\s\"'`]*")
-    return re.compile(body + r"[^\s\"'`]*")
+    return re.compile(_TOKEN_START + body + r"[^\s\"'`]*")
 
 
 _ABS_PATH_PATTERNS: Tuple[re.Pattern, ...] = tuple(
     _unanchor(p) for p in _TIER_D_CROSS_PATH_PATTERNS
 ) + (
-    re.compile(r"/var/[^\s\"'`]+"),
-    re.compile(r"/tmp/[^\s\"'`]+"),
+    re.compile(_TOKEN_START + r"/var/[^\s\"'`]+"),
+    re.compile(_TOKEN_START + r"/tmp/[^\s\"'`]+"),
     # The Windows half of this module's stated predicate, which was ABSENT
     # while the docstring claimed it twice ("drive-letter, and UNC forms";
     # "Matches ... Windows (`C:\...`, `C:/...`, UNC `\\server\share\...`)
@@ -356,6 +373,10 @@ def _is_exempt(
     if row_input and _contains_normalized(row_input, span):
         return True
     if is_fixture_scratch_path(span):
+        return True
+    # macOS spells the same temp root `/private/var/...` once resolved; the
+    # root itself is unchanged, so this adds no exempt root.
+    if span.startswith("/private/") and is_fixture_scratch_path(span[len("/private"):]):
         return True
     # The conftest quarantine home is minted under pytest's basetemp, which a
     # box can place outside the system temp root; it is a fixture echo by identity.
@@ -459,6 +480,37 @@ def test_no_machine_absolute_path_in_any_corpus_guard_message():
         "one of these is a false positive, not a real leak:\n  "
         + "\n  ".join(sorted(set(violations)))
     )
+
+
+def test_span_under_relocated_tmpdir_with_inner_tmp_segment_is_one_exempt_token(
+    tmp_path, monkeypatch
+):
+    """A relocated TMPDIR whose path holds an inner `tmp` segment (the
+    `/private/tmp/claude-501/...` shape) must match as ONE whole token that is
+    exempt by identity -- not as its `/tmp/...` suffix, which is no fixture root."""
+    import tempfile
+
+    from coordinator_core.bash_guards.tests import guard_message_corpus
+
+    relocated = tmp_path / "private" / "tmp" / "claude-501"
+    relocated.mkdir(parents=True)
+    monkeypatch.setenv("TMPDIR", str(relocated))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    monkeypatch.setattr(
+        guard_message_corpus, "FIXTURE_SCRATCH_ROOTS", (tempfile.gettempdir(),)
+    )
+    span = str(relocated / "s" / "f.md")
+    assert set(_find_absolute_paths("x %s y" % span)) == {span}
+    assert _is_exempt(span, row_input="", grant_cli_text="")
+
+    outside = "/a/private/tmp/elsewhere/f.md"
+    assert set(_find_absolute_paths("x %s y" % outside)) == {outside}
+    assert not _is_exempt(outside, row_input="", grant_cli_text="")
+
+
+def test_windows_drive_rooted_relocated_root_is_one_token():
+    span = "C:\\Users\\x\\AppData\\Local\\Temp\\claude\\s\\f.md"
+    assert span in _find_absolute_paths("x %s y" % span)
 
 
 def test_override_keys_doc_display_is_portable():

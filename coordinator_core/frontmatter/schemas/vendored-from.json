@@ -96,7 +96,7 @@
     "doe_commit": "596ef82bb0f05877b13e8a46944b4faa4def8afc"
   },
   "plan-tasks.schema.json": {
-    "blob": "218718519d38a99d0e623e0d33c9b2f20ec47ac2",
+    "blob": "5f1e07ca7d8f3ed9526e160a332f31cd6f6a94b5",
     "doe_commit": "2eee177a8f4588f92bcc2fb781b2b00f99d5c33c"
   },
   "plan.schema.json": {
@@ -128,8 +128,8 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "review-findings.schema.json": {
-    "blob": "ea820db802ac94d020f6f4de05b490860b35bab9",
-    "doe_commit": "b6f0694c43cc57446e9e245b3473d24596c6327a"
+    "blob": "8a43ef2e62f3a4733a899f307e49e49ed91756e6",
+    "doe_commit": "0372942d9ba06c0ea21be2038e34cdd949685887"
   },
   "review-sidecar.schema.json": {
     "blob": "69da75a7b40f6917d8a93cec2e16fc0e8c543977",
@@ -152,8 +152,8 @@
     "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
   },
   "sizing-object.schema.json": {
-    "blob": "9b8163748e0130ff21f6c27f16a30c6422d07801",
-    "doe_commit": "2bd852644dd2aa268052046fcbdd56cb8e40beb2"
+    "blob": "5e566880eb595133d130ad1504b6c510932c8bed",
+    "doe_commit": "96a275ac0b5df7ee81d59d495e9b0c389b7b0a65"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",

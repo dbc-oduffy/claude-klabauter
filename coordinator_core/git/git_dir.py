@@ -27,8 +27,10 @@ repo, matching `git_common_dir` keying already used throughout
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from typing import Union
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Union
 
 _GITDIR_PREFIX = "gitdir:"
 
@@ -65,6 +67,8 @@ def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
     twin also honours ``$GIT_DIR`` and returns ``""`` on failure, neither
     of which this function does. See its docstring for the full argument.
     """
+    from pathlib import Path
+
     repo_root = Path(repo_root)
     dot_git = repo_root / ".git"
 
@@ -95,6 +99,8 @@ def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
 
 
 def resolve_git_common_dir(repo_root: Union[str, Path]) -> Path:
+    from pathlib import Path
+
     repo_root = Path(repo_root)
     dot_git = repo_root / ".git"
 
@@ -137,6 +143,8 @@ def common_dir_from_gitdir(
     site (`resolve_git_common_dir` wants its literal `<repo_root>/.git`
     join; a gitdir-holding caller wants the gitdir itself).
     """
+    from pathlib import Path
+
     private_gitdir = Path(private_gitdir)
     try:
         commondir_file = private_gitdir / "commondir"

@@ -204,6 +204,18 @@ def test_outside_a_git_repo_passes(tmp_path, spawns):
     assert _verdict(tmp_path, "git commit -m x -- a.py") is None
 
 
+def test_denial_states_the_one_shared_rule_and_engine_forced_actions_pass(repo, spawns):
+    from coordinator_core.ops.dispatch_emit.halt_refire import EM_ACTION_AFTER_HALT_RULE
+
+    assert EM_ACTION_AFTER_HALT_RULE in _text(_verdict(repo, "git commit -m x -- a.py"))
+    for cmd in (
+        f"workflow.revise {RUN} --note 'name the undelivered rows'",
+        f"warp fire {RUN}",
+        f"credit {RUN} a.py",
+    ):
+        assert _verdict(repo, cmd) is None
+
+
 def test_message_is_one_fact_plus_alternative_without_override(repo, spawns):
     text = _text(_verdict(repo, "git commit -m x -- a.py"))
     assert f"workflow.revise {RUN}" in text

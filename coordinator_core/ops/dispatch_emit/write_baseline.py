@@ -1,8 +1,8 @@
 """Write baseline: the bytes at each declared write path before any executor ran.
 
 Invariant: the baseline is taken at stage, before any executor. A path whose bytes still equal
-it was not written by this run, whatever HEAD says. Spawn-free; stdlib, ``kept_work`` and the
-run's own record files only.
+it was not written by this run, whatever HEAD says. Spawn-free; stdlib, ``kept_work``, ``git_state.head_blobs``
+(in-process HEAD read) and run records under ``RECORD_DIR_ROOT``.
 """
 
 from __future__ import annotations
@@ -85,9 +85,85 @@ def pre_existing_dirt(
 ) -> list[str]:
     """Claimed paths that are foreign dirt: present in the tree, unchanged since ``baseline``, and
     not in ``own_written`` (paths the run's earlier passes or checkpoint commits wrote). An absent
-    path is never dirt; ``unwritten`` still counts it, for the no-change refusal."""
+    path is never dirt; ``unwritten`` still counts it, for the no-change refusal. A path whose bytes
+    equal HEAD's blob has no diff to land (another run committed it), so it is never dirt either;
+    HEAD is read in-process (``head_blobs``), no git spawn."""
     own = set(own_written)
-    return [p for p in unwritten(root, baseline, paths) if p not in own and fingerprint(root, p) is not None]
+    cand = [p for p in unwritten(root, baseline, paths) if p not in own and fingerprint(root, p) is not None]
+    if not cand:
+        return cand
+    from coordinator_core.git.git_state import head_blobs
+
+    head = head_blobs(root, cand)
+    return [p for p in cand if p not in head or head[p][1] != fingerprint(root, p)]
+
+
+#: Record-dir file mapping each path a halt withheld to the blob id its bytes had at the halt.
+WITHHELD_PRINTS_FILE = "withheld-prints.json"
+
+
+def _norm_rel(p: object) -> Optional[str]:
+    if not isinstance(p, str) or not p:
+        return None
+    cleaned = _clean_paths([p])
+    return next(iter(cleaned), None)
+
+
+def _read_prints(run_record: Path) -> dict[str, str]:
+    try:
+        data = json.loads((run_record / WITHHELD_PRINTS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in data.items():
+        key = _norm_rel(k)
+        if key is not None and isinstance(v, str) and v:
+            out[key] = v
+    return out
+
+
+def predecessor_withheld(root: Path, sizing_rel: Optional[str], run_dir: Path) -> frozenset[str]:
+    """Keys of ``halted.json`` ``run_artifacts.withheld`` of every other run whose halt marker is
+    bound to ``sizing_rel``: the work an earlier run of the same sizing left on disk. Spawn-free;
+    a dir without a readable matching marker contributes nothing. ``run_dir`` itself is skipped.
+    A path is credited only while its current blob equals the one the halt recorded in
+    ``WITHHELD_PRINTS_FILE``; a missing record, a missing print or a mismatch credits nothing
+    (a foreign edit after the halt stays dirt)."""
+    if not sizing_rel:
+        return frozenset()
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.halted_withheld_index import withheld_by_path
+
+    norm = PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
+    out: set[str] = set()
+    run_ids = sorted(set(withheld_by_path(Path(root)).values()) - {run_dir.name})
+    for run_id in run_ids:
+        try:
+            data = json.loads((Path(root) / RECORD_DIR_ROOT / run_id / "halted.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        bound = data.get("sizing_rel") if isinstance(data, dict) else None
+        if not isinstance(bound, str) or PurePosixPath(bound.replace("\\", "/")).as_posix() != norm:
+            continue
+        arts = data.get("run_artifacts")
+        withheld = arts.get("withheld") if isinstance(arts, dict) else None
+        if isinstance(withheld, dict):
+            prints = _read_prints(Path(root) / RECORD_DIR_ROOT / run_id)
+            out.update(p for p in _clean_paths(withheld) if prints.get(p) is not None and prints[p] == fingerprint(root, p))
+    return frozenset(out)
+
+
+def _clean_paths(paths: Iterable) -> set[str]:
+    out = set()
+    for p in paths:
+        if not isinstance(p, str) or not p:
+            continue
+        pure = PurePosixPath(p.replace("\\", "/"))
+        if not pure.is_absolute() and ".." not in pure.parts and not (len(p) > 1 and p[1] == ":") and pure.as_posix() != ".":
+            out.add(pure.as_posix())
+    return out
 
 
 def prior_pass_written(root: Path, run_dir: Path) -> frozenset[str]:

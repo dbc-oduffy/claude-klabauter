@@ -728,3 +728,17 @@ def test_a_served_reply_costs_exactly_one_peer_log_spawn(repo, monkeypatch):
     monkeypatch.setattr(rp, "freeze_diff", lambda *a, **k: pytest.fail("froze"))
     assert _prep(repo, base) == first
     assert len(calls) == 1
+
+
+def test_handler_with_run_id_drops_a_path_a_halted_peer_withholds(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    _write(repo, ["a/mine.py", "a/theirs.py"], 3)
+    monkeypatch.setattr(land_run, "foreign_halted_withheld", lambda root, rid, plan, paths: {"a/theirs.py": "peer"})
+    result = rp._handler(
+        {"paths": ["a/mine.py", "a/theirs.py"], "worktree": True, "base": _base(repo), "slice_prefix": "prep-h",
+         "plan_path": "docs/plans/p.md", "session_id": SESSION, "run_id": "me"},
+        repo,
+    )
+    assert result["error"] is None
+    assert [f for s in result["slices"] for f in s["files"]] == ["a/mine.py"]

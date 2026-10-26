@@ -802,14 +802,26 @@ _REVERIFY_UNAPPLIED_JS = (
 )
 
 
-def _base_measure_clause(base_ref: str) -> str:
+def _owned_red_clause(owned_red_path: str) -> str:
+    """Step text crediting a red another run owns (``owned_red.jsonl``, written by workflow.revise): those
+    ids join ``failing_at_base`` and are named, never blocking this run's landing."""
+    if not owned_red_path:
+        return ""
+    return (
+        f"Also read `{owned_red_path}` (or the same file under `scratch/warp/` while the run is in flight; one JSON object per line, `nodeid` and `owner_run_id`; absent means none): "
+        "every failing id listed there joins `failing_at_base`, and your sidecar names it with its owner_run_id. "
+    )
+
+
+def _base_measure_clause(base_ref: str, owned_red_path: str = "") -> str:
     """Prompt step measuring ``failing_at_base``: one baseline-export run over the failing ids at the
     snapshot base. Empty-set fallback when the base is the unset placeholder.
 
     Its id placeholder must differ from step 4's "<all failing node ids>", which must appear exactly once."""
+    owned = _owned_red_clause(owned_red_path)
     if base_ref == "run_base_sha":
-        return "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. "
-    return (
+        return "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. " + owned
+    return owned + (
         "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
         f"(never per test): `python -m coordinator_core.testing.baseline_export --sha {base_ref} -- "
         "python -m pytest -rfE <the failing ids above>`. The ids on its `FAILED`/`ERROR` lines are "
@@ -818,6 +830,9 @@ def _base_measure_clause(base_ref: str) -> str:
         "them: they are never pre_existing; drop them and re-run that same command ONCE over the "
         "remaining ids. A second exit 4, an export error or any other result: "
         "`failing_at_base` is `[]`. "
+        "A peer's commit can turn an id red after the run base, so run that same command ONCE more "
+        "with `--sha HEAD` (the HEAD at review start) over the ids still green at the run base; "
+        "the ids red there join `failing_at_base`. "
     )
 
 
@@ -833,6 +848,8 @@ def _reverify_phase(
     sc,
     group_prefixes: Sequence[str] = (),
     verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
+    owned_red_path: str = "",
+    run_id: str = "",
 ) -> Tuple[str, str]:
     """The ``Review re-verify`` phase: a test-runner lists what review changed (``review.reverify``
     list mode), runs only the tests covering it, and reverts the implicated files in revert mode
@@ -848,6 +865,7 @@ def _reverify_phase(
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
     invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
     base_args = f'"base":"{base_ref}","slice_prefix":"{prep_slice_id}"'
+    run_args = f',"run_id":{json.dumps(run_id)},"plan_path":{json.dumps(plan_path)}' if run_id else ""
     sidecars_js = _REVERIFY_SIDECARS_JS
     if group_prefixes:
         prefixes = [*group_prefixes, prep_slice_id]
@@ -896,7 +914,7 @@ def _reverify_phase(
             "3. When any failed, measure which were already failing before review, once for every "
             "prefix, each time with the same failing set: call review.reverify with "
             f"`\"probe\":\"open\"`: `{invoke} review.reverify "
-            f"'{{{sliced},\"probe\":\"open\",\"failing\":[<all failing node ids>],"
+            f"'{{{sliced}{run_args},\"probe\":\"open\",\"failing\":[<all failing node ids>],"
             f"\"sidecars\":[<that prefix's review_sidecars paths below>]}}'{repo_pin}` "
             "(add `session_id` as in step 1). If it returns an error because a probe is already "
             "open, call it with `\"probe\":\"close\"` first and open once more; on any other open "
@@ -906,7 +924,7 @@ def _reverify_phase(
             f"'{{{sliced},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
             "returns an error, return it as the sidecar's finding and do not call revert for that "
             "prefix.\n"
-            f"4. {_base_measure_clause(base_ref)}"
+            f"4. {_base_measure_clause(base_ref, owned_red_path)}"
             f"Call review.reverify in revert mode for EVERY prefix, each time with the same "
             f"failing set (all failing node ids) and the same `failing_at_base`: `{invoke} review.reverify '{{{sliced},"
             f"\"failing\":[<all failing node ids>],\"failing_before\":[<that prefix's "
@@ -947,7 +965,7 @@ def _reverify_phase(
         f" For every failing node id also give its one-line assertion message: `{FAILING_DETAIL_FIELD}` is a list of {{node_id, message}}, one per failing node id (empty when none failed).\n"
         f"3. When any failed, measure which were already failing before review: call review.reverify "
         f"with `\"probe\":\"open\"`: `{invoke} review.reverify "
-        f"'{{{base_args},\"probe\":\"open\",\"failing\":[<failing node ids>],\"sidecars\":[<the "
+        f"'{{{base_args}{run_args},\"probe\":\"open\",\"failing\":[<failing node ids>],\"sidecars\":[<the "
         f"review_sidecars paths below>]}}'{repo_pin}` (add `session_id` as in step 1). If it "
         "returns an error because a probe is already open, call it with `\"probe\":\"close\"` "
         "first and open once more; on any other open error, pass no `failing_before` and go to "
@@ -955,7 +973,7 @@ def _reverify_phase(
         f"Then ALWAYS call `{invoke} review.reverify "
         f"'{{{base_args},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
         "returns an error, return it as the sidecar's finding and do not call revert.\n"
-        f"4. {_base_measure_clause(base_ref)}"
+        f"4. {_base_measure_clause(base_ref, owned_red_path)}"
         f"Call review.reverify in revert mode: `{invoke} review.reverify "
         f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
         f"ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
@@ -1025,6 +1043,7 @@ def compose_execute_review(
     review_groups: Optional[Sequence[ReviewGroup]] = None,
     verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
     slice_filter_js: Optional[str] = None,
+    owned_red_path: str = "",
     prep_run_id: Optional[str] = None,
 ) -> List[Tuple[str, str]]:
     """Compose the roster-v5 ``execute_review`` wave into ``(phase_title,
@@ -1081,7 +1100,11 @@ def compose_execute_review(
     owning its whole slice objects. A one-slice group's prompt equals the per-slice prompt.
 
     ``tshirt`` / ``tshirt_js`` (at most one) is the plan's t-shirt, literal or fire-time; it omits
-    or run-time gates every agent whose ``min_tshirt`` exceeds it. An unknown size admits.
+    or run-time gates every agent whose ``min_tshirt`` exceeds it. An unknown size admits
+    (``_tshirt_gate``), matching run_truth_contract.mandatory_stages.
+
+    ``owned_red_path`` is the run's ``owned_red.jsonl``; unset, it defaults to the record-dir file of a
+    safe ``run_key`` (an absent file means no owned red).
 
     When the roster names no delivery verifier the wave binds ``_deliveryVerdict`` to ``null`` and
     ``_deliveryNotRun`` to ``DELIVERY_NOT_ROSTERED``.
@@ -1169,6 +1192,13 @@ def compose_execute_review(
     if slice_key_js and run_key:
         raise ValueError("compose_execute_review takes at most one of run_key / slice_key_js")
     sidecar_key = run_key or Path(plan_path.replace("\\", "/")).stem or "run"
+    safe_run_id = ""
+    if run_key:
+        from coordinator_core.ops._path_guard import safe_id
+
+        if safe_id(run_key):
+            safe_run_id = run_key
+            owned_red_path = owned_red_path or f"state/warp/{run_key}/owned_red.jsonl"
 
     def _sc(call: str, stage: str, agent_type: str, label_js: Optional[str] = None) -> str:
         """Append this run's sidecar clause to one finished agent call."""
@@ -1295,11 +1325,25 @@ def compose_execute_review(
     rows_expr = str(executor_rows) if executor_rows is not None else f"({executor_rows_js})"
 
     def _tshirt_gate(agent: ReviewAgent) -> Optional[str]:
-        """JS test that ``agent`` is admitted at the fire-time t-shirt; an unknown size excludes."""
+        """JS test that ``agent`` is admitted at the fire-time t-shirt; an unknown size admits."""
         if tshirt_js is None or agent.min_tshirt is None:
             return None
         admitted = [t for t in _TSHIRT_ORDER if agent.admits_tshirt(t)]
-        return f"{json.dumps(admitted)}.includes({tshirt_js})"
+        return f"(({tshirt_js}) == null || {json.dumps(admitted)}.includes({tshirt_js}))"
+
+    def _skip_subject_js(agent: ReviewAgent) -> str:
+        """JS string naming the gate that excluded ``agent``: the t-shirt size when that gate failed, else the tier."""
+        tier_part = f"'tier ' + String({tier_js})"
+        if _tshirt_gate(agent) is None:
+            return tier_part
+        size_part = f"'size ' + String({tshirt_js})"
+        tier_gate = _tier_gate(agent)
+        return size_part if tier_gate is None else f"({tier_gate} ? {size_part} : {tier_part})"
+
+    def _skip_head_js(agent: ReviewAgent, subject: str) -> str:
+        if _tshirt_gate(agent) is None:
+            return f"{_js_string_literal(_WAVE_SKIPPED + 'tier ')} + String({tier_js})"
+        return f"{_js_string_literal(_WAVE_SKIPPED)} + {subject}"
 
     def _agent_gate(agent: ReviewAgent) -> Optional[str]:
         gates = [g for g in (_tier_gate(agent), _tshirt_gate(agent)) if g]
@@ -1307,7 +1351,13 @@ def compose_execute_review(
 
     def _runs_at_compile_tier(agent: ReviewAgent) -> bool:
         # A fire-time t-shirt is judged by `_tshirt_gate`, never at compose time.
-        return agent.runs_at(tier) and (tshirt_js is not None or agent.admits_tshirt(tshirt))
+        return agent.runs_at(tier) and (tshirt_js is not None or tshirt is None or agent.admits_tshirt(tshirt))
+
+    def _compile_skip_subject(agent: ReviewAgent) -> str:
+        """Compose-time skip subject: the tier when it excluded ``agent``, else the actual size ("unknown" when null)."""
+        if not agent.runs_at(tier):
+            return f"tier {tier}"
+        return f"size {tshirt if tshirt is not None else 'unknown'}"
 
     all_whole_diff_agents = [a for a in review.review_wave if a.per != "slice"]
     slice_agents = [a for a in review.review_wave if a.per == "slice" and _runs_at_compile_tier(a)]
@@ -1315,6 +1365,8 @@ def compose_execute_review(
 
     item_lines: List[str] = []
     wave_mode_args = f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
+    if safe_run_id:
+        wave_mode_args += f",\"run_id\":{json.dumps(safe_run_id)}"
     wave_tail_js = (
         (f" + ' ' + JSON.stringify({declared_paths_js})" if declared_paths_js else "")
         + (f" + {prep_suffix_js}" if declared_paths_js and prep_suffix_js else "")
@@ -1639,12 +1691,13 @@ def compose_execute_review(
             line = _degrading(call, degrade_on_error)
             gate = _agent_gate(agent)
             if gate:
+                subject = _skip_subject_js(agent)
                 skipped = (
-                    f"({_DELIVERY_REASON_VAR} = 'tier ' + String({tier_js}) + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
+                    f"({_DELIVERY_REASON_VAR} = {subject} + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
                     if is_delivery_verifier
                     else "("
                     + _not_run_expr(
-                        f"{_js_string_literal(_WAVE_SKIPPED + 'tier ')} + String({tier_js}) + "
+                        f"{_skip_head_js(agent, subject)} + "
                         f"{_js_string_literal(' excludes ' + agent.agent_type)}"
                     )
                     + ", null)"
@@ -1690,12 +1743,13 @@ def compose_execute_review(
         )
         gate = _agent_gate(agent)
         if gate:
+            subject = _skip_subject_js(agent)
             skipped = (
-                f"({_DELIVERY_REASON_VAR} = 'tier ' + String({tier_js}) + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
+                f"({_DELIVERY_REASON_VAR} = {subject} + ' excludes {_DELIVERY_VERIFIER_AGENT_TYPE}', null)"
                 if is_delivery_verifier
                 else "("
                 + _not_run_expr(
-                    f"{_js_string_literal(_WAVE_SKIPPED + 'tier ')} + String({tier_js}) + "
+                    f"{_skip_head_js(agent, subject)} + "
                     f"{_js_string_literal(' excludes ' + agent.agent_type)}"
                 )
                 + ", null)"
@@ -1786,10 +1840,11 @@ def compose_execute_review(
             f"  const _deliveryNotRun = _deliveryVerdict ? null : ({_DELIVERY_REASON_VAR} ?? 'returned no result');"
         )
     elif any(a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE for a in all_whole_diff_agents):
+        _dv_agent = next(a for a in all_whole_diff_agents if a.agent_type == _DELIVERY_VERIFIER_AGENT_TYPE)
         wave_lines.append("  const _deliveryVerdict = null;")
         wave_lines.append(
             "  const _deliveryNotRun = "
-            + _js_string_literal(f"tier {tier} excludes {_DELIVERY_VERIFIER_AGENT_TYPE}")
+            + _js_string_literal(f"{_compile_skip_subject(_dv_agent)} excludes {_DELIVERY_VERIFIER_AGENT_TYPE}")
             + ";"
         )
     else:
@@ -1859,6 +1914,8 @@ def compose_execute_review(
                 sc=_sc,
                 group_prefixes=group_prefixes,
                 verify_scope_targets=verify_scope_targets if group_prefixes else None,
+                owned_red_path=owned_red_path,
+                run_id=safe_run_id,
             )
         )
 

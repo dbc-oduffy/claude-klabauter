@@ -62,12 +62,19 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RUN_DIR_ROOT,
     TERMINAL_RESUME_LEDGER_PARAM,
+    read_run_outcome,
     record_dir,
     UNCHANGED_SINCE_HALT_REASON,
+    write_run_outcome,
 )
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix
 from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM, _posix as _norm_rel
+from coordinator_core.ops.dispatch_emit.refire_inherited_scope import (
+    ORIGIN_PREDECESSOR_WITHHELD,
+    inherited_scope,
+    withheld_of as _withheld_of,
+)
 from coordinator_core.ops.dispatch_emit import review_floor
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
@@ -193,9 +200,12 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
         import importlib
 
         return importlib.import_module(contract.MODE_MODULES[mode]).land(root, repo_root, params)
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
     token_state: dict = {}
     try:
-        return _land_product(root, repo_root, params, token_state)
+        with halted_hold_release.release_scope():
+            return _land_product(root, repo_root, params, token_state)
     finally:
         _settle_token(token_state, landed=bool(token_state.get("landed")))
 
@@ -420,12 +430,135 @@ def _derive_judge_status(inline_review: object) -> Optional[str]:
     return note
 
 
+_RETHINK_EXITS = {
+    "impossible": ("impossible", "impossible"),
+    "first_officer": ("doctrine_conflict", "first_officer"),
+    "doctrine_conflict": ("doctrine_conflict", "first_officer"),
+    "ceiling": ("doctrine_conflict", "ceiling"),
+}
+#: Outcomes the workflow's terminal gate records in run-outcome.json that no loop-file line carries.
+_RECORDED_EXIT_OUTCOMES = ("impossible", "doctrine_conflict")
+
+
+def _read_loop_lines(path: Path) -> list:
+    """The loop file's JSON object lines; an unreadable file or a bad line contributes nothing."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out = []
+    for raw in text.splitlines():
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+
+def _objective_gate(root: Path, run_id: object, inline_review: object) -> Optional[dict]:
+    """Terminal objective gate for a run whose record dir holds objective.json, else None.
+
+    Folds the loop with ``close_verdict``: done only on a passing last check; otherwise the close is
+    the loop's recorded exit (impossible, or doctrine_conflict), an empty loop being doctrine_conflict
+    (no-check); an unmet fold with no recorded exit reports exhausted, never done. Trap: no op appends
+    `rethink` or `reacher` loop lines, so an impossible or doctrine_conflict exit reaches here only through
+    the `objective_loop` the workflow wrote to run-outcome.json, which is read before it is overwritten.
+    Settles ``inline_review.criterion.status`` in place to met or not_met, overriding any derived
+    indeterminate. Returns ``{status, outcome, exit_reason, unmet_axes, summary, objective_loop}``.
+    """
+    from coordinator_core.ops.dispatch_emit import objective_contract as oc
+
+    try:
+        rdir = record_dir(root, run_id)
+    except (ValueError, TypeError):
+        return None
+    objective_path = rdir / oc.OBJECTIVE_FILE
+    if not objective_path.is_file():
+        return None
+    objective_readable = True
+    try:
+        axis_ids = [a.id for a in oc.Objective.from_json(json.loads(objective_path.read_text(encoding="utf-8"))).axes]
+    except (OSError, ValueError, TypeError, AttributeError):
+        axis_ids, objective_readable = [], False
+    lines = _read_loop_lines(rdir / oc.LOOP_FILE)
+    verdict = oc.close_verdict(lines, axis_ids)
+    if not objective_readable:  # no declared axes to hold the last check to: never done
+        verdict = {"status": oc.STATUS_NOT_MET, "unmet": verdict["unmet"], "reason": "objective-unreadable"}
+    rethinks = [
+        oc.Rethink(
+            trigger=str(ln.get("trigger") or ""), approach_path=ln.get("approach_path") or ln.get("delta_plan_path"),
+            verdict=str(ln.get("verdict") or ln.get("reason") or ""),
+        )
+        for ln in lines if ln.get("kind") == oc.LINE_RETHINK
+    ]
+    outcome = exit_reason = None
+    if verdict["status"] != oc.STATUS_DONE:
+        if verdict.get("reason") == oc.REASON_NO_CHECK:
+            outcome, exit_reason = oc.OUTCOME_DOCTRINE_CONFLICT, "no-check"
+        else:
+            for rethink in reversed(rethinks):
+                if rethink.verdict in _RETHINK_EXITS:
+                    outcome, exit_reason = _RETHINK_EXITS[rethink.verdict]
+                    break
+            if outcome is None:
+                recorded = (read_run_outcome(root, run_id) or {}).get("objective_loop")
+                if isinstance(recorded, dict) and recorded.get("outcome") in _RECORDED_EXIT_OUTCOMES:
+                    outcome, exit_reason = recorded["outcome"], recorded.get("exit_reason")
+                    rethinks = [r for r in (recorded.get("rethinks") or []) if isinstance(r, dict)] or rethinks
+            if outcome is None:
+                outcome, exit_reason = oc.OUTCOME_EXHAUSTED, oc.EXIT_UNRESOLVED
+    calibration = next((ln.get("calibration") for ln in reversed(lines) if ln.get("kind") == oc.LINE_CALIBRATION), None)
+    result = oc.objective_loop_result(
+        lines, calibration, rethinks=rethinks, outcome=outcome, exit_reason=exit_reason, axis_ids=axis_ids,
+    )
+    spends = [ln.get("spend_usd") for ln in lines if isinstance(ln.get("spend_usd"), (int, float))]
+    summary = {
+        "checks": sum(1 for ln in lines if ln.get("kind", oc.LINE_CHECK) == oc.LINE_CHECK),
+        "reacher_iterations": sum(1 for ln in lines if ln.get("kind") == oc.LINE_REACHER),
+        "spend_usd": max(spends) if spends else 0.0,
+    }
+    status = "met" if verdict["status"] == oc.STATUS_DONE else "not_met"
+    if isinstance(inline_review, dict):
+        crit = inline_review.get("criterion")
+        crit = crit if isinstance(crit, dict) else {}
+        # A judged not_met is never softened by a passing falsifier; its own reason stays.
+        if status == "not_met" or crit.get("status") != "not_met":
+            crit["status"] = status
+        crit["unmet_axes"] = list(result["unmet_axes"])
+        if status == "not_met":
+            crit["reason"] = f"objective not met ({result['exit_reason']}): {', '.join(result['unmet_axes']) or 'no axes'}"
+        inline_review["criterion"] = crit
+        inline_review["objective_gate"] = {
+            "outcome": result["outcome"], "exit_reason": result["exit_reason"],
+            "unmet_axes": list(result["unmet_axes"]), **summary,
+        }
+    return {
+        "status": status, "outcome": result["outcome"], "exit_reason": result["exit_reason"],
+        "unmet_axes": list(result["unmet_axes"]), "summary": summary, "objective_loop": result,
+    }
+
+
+def _record_objective_outcome(root: Path, run_id: object, inline_review: object, gate: dict) -> None:
+    """Write ``objective_loop`` (and the settled review) into run-outcome.json; best-effort."""
+    if not isinstance(inline_review, dict):
+        return
+    try:
+        existing = read_run_outcome(root, run_id) or {}
+        write_run_outcome(root, run_id, {**existing, "inline_review": inline_review, "objective_loop": gate["objective_loop"]})
+    except (ValueError, OSError):
+        return
+
+
 def _stage_returns(inline_review: dict) -> Optional[dict]:
     """The run record's stage-return fields out of the digest's ``inline_review``; None when the
     digest carries no ``prep`` block."""
     if not isinstance(inline_review.get("prep"), dict):
         return None
     out: dict = {k: inline_review.get(k) for k in ("prep", "delivery", "tests", "criterion")}
+    if isinstance(inline_review.get("objective_gate"), dict):
+        out["objective_gate"] = inline_review["objective_gate"]
     not_run = inline_review.get("delivery_not_run")
     if isinstance(not_run, str) and not_run:
         out["delivery_not_run"] = not_run
@@ -762,6 +895,21 @@ def _leg_footprint_writes(root: Path, run_dir: Path) -> Optional[list]:
     return [w.replace("\\", "/") for w in writes if isinstance(w, str) and w]
 
 
+def _remnant_breach(root: Path, run_dir: Path) -> list:
+    """Paths the run's ``recovery.json`` ``remnant`` record shows the remnant-complete leg wrote
+    outside its recorded footprint (``ledger_recovery.remnant_breach``); ``[]`` when absent."""
+    from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+
+    for d in (run_dir, root / RECORD_DIR_ROOT / run_dir.name):
+        try:
+            remnant = json.loads((d / lr.RECOVERY_RECORD_FILE).read_text(encoding="utf-8")).get("remnant")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(remnant, dict):
+            return lr.remnant_breach(remnant)
+    return []
+
+
 def _resume_recorded_paths(root: Path, run_dir: Path, inline_review: object) -> list:
     """Repo-relative paths the run's earlier legs and review recorded as edited: the leg footprint's
     ``writes`` plus the review test-runner's ``edited``/``created`` where present."""
@@ -840,19 +988,86 @@ def _work_since_halt(root: Path, base: str, declared: Sequence[str], withheld: d
     return "unchanged"
 
 
-def _withheld_of(root: Path, resume: dict) -> dict:
-    arts = resume.get("run_artifacts")
-    withheld = arts.get("withheld") if isinstance(arts, dict) else None
-    if isinstance(withheld, dict):
-        return withheld
-    run_id = resume.get("run_id")
-    from coordinator_core.ops._path_guard import safe_id
+UNREADABLE_HALT_RECORD = "unreadable-halt-record"
 
-    if not (isinstance(run_id, str) and safe_id(run_id)):
+
+def _read_markers_strict(root: Path, exclude_run: Optional[str]) -> None:
+    """Read every in-TTL sibling record dir's `halted.json` strictly; ValueError on a corrupt or
+    unreadable one (absent is fine). `_unlanded_run_ids` cannot list such a run, so it is scanned here."""
+    import os
+    import time
+
+    from calendar import timegm
+
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    def _stamp_epoch(run_id: str) -> Optional[float]:
+        match = re.search(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})-[0-9a-f]{6}$", run_id)
+        if match is None:
+            return None
+        try:
+            y, mo, d, h, mi, s = (int(g) for g in match.groups())
+            return float(timegm((y, mo, d, h, mi, s, 0, 0, 0)))
+        except (ValueError, OverflowError):
+            return None
+
+    now = time.time()
+    base = Path(root) / RECORD_DIR_ROOT
+    try:
+        with os.scandir(base) as entries:
+            names = sorted(e.name for e in entries if e.is_dir())
+    except FileNotFoundError:
+        return
+    for name in names:
+        stamp = _stamp_epoch(name)
+        if name == exclude_run or (stamp is not None and now - stamp > run_token.TTL_SECONDS):
+            continue
+        halted_run.read_strict(base / name)
+
+
+def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optional[str], paths: Sequence[str]) -> dict:
+    """`{path: holding run id}` for each of `paths` another still-held halted run withholds.
+
+    A landing run's own declaration never overrides this: the other run's hunks sit in the path. A halted
+    run the landing releases (`halted_hold_release`) holds nothing; `_unlanded_run_ids` already drops it.
+    A corrupt or unreadable `halted.json` (absent is not) in any unlanded run's record dir holds every
+    wanted path (`UNREADABLE_HALT_RECORD`), as does an OSError or ValueError reading them; any other
+    exception propagates.
+    """
+    wanted = [p for p in paths if p]
+    if not wanted:
         return {}
-    from coordinator_core.ops.dispatch_emit.halted_run import halted_withheld
+    try:
+        from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import run_ownership, sibling_claims
 
-    return halted_withheld(root / RECORD_DIR_ROOT / run_id)
+        _read_markers_strict(root, run_id)
+        unlanded = list(sibling_claims._unlanded_run_ids(root, run_id, plan_rel))
+        live = {
+            rid: run_ownership.LiveRun(withheld=frozenset(warp_run_deliverable.halted_withheld_paths(root, rid)))
+            for rid in unlanded
+            if warp_run_deliverable._halted(root, rid)
+        }
+        if not any(r.withheld for r in live.values()):
+            return {}
+        out: dict = {}
+        for p in wanted:
+            for rid in sorted(live):
+                if run_ownership.owns_path(run_id or "", p, {rid: live[rid]}) == run_ownership.FOREIGN_WITHHELD:
+                    out[p] = rid
+                    break
+        if out:
+            # A phantom or criterion-met holder is released here, before its withhold is applied.
+            from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+
+            kept = set(peer_hunk_gate._release_criterion_met(
+                root, sorted(out.items()), landing_run_id=run_id, landing_plan=plan_rel,
+            ))
+            out = {p: rid for p, rid in out.items() if (p, rid) in kept}
+        return out
+    except (OSError, ValueError):  # a hold that cannot be computed holds
+        return {p: UNREADABLE_HALT_RECORD for p in wanted}
 
 
 def _em_discharged_rows(resume: object, items: Sequence) -> frozenset:
@@ -1139,6 +1354,7 @@ def _ledger_gate(
         from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
         from coordinator_core.ops.dispatch_emit.write_baseline import (
             pre_existing_dirt,
+            predecessor_withheld,
             prior_pass_written,
             unwritten,
         )
@@ -1147,7 +1363,7 @@ def _ledger_gate(
         prep = inline_review.get("prep")
         base = prep.get("run_base_sha") if isinstance(prep, dict) else None
         dirt: list = []
-        prior = prior_pass_written(root, run_dir)
+        prior = prior_pass_written(root, run_dir) | predecessor_withheld(root, _cited_sizing(root, plan_rel), run_dir)
         for it in verdict.get("items") or []:
             if not isinstance(it, dict) or it.get("status") not in ("met", "post_commit"):
                 continue
@@ -1171,11 +1387,18 @@ def _ledger_gate(
         if dirt:
             result = {**result, "pass": False, "failures": [*result["failures"], *dirt]}
     since_halt: dict = {}
+    remnant_breach = _remnant_breach(root, run_dir)
+    fenced: dict = {}
+    if resume_ledger is None and remnant_breach:
+        fenced = {"recorded": True, "breach": remnant_breach}
+        if fence is not None:
+            fence.update(fenced)
     if resume_ledger is not None:
         from coordinator_core.ops.dispatch_emit.pre_halt_credit import with_notes
 
         resume_ledger = with_notes(resume_ledger, requirements_ledger.read_notes(run_dir))
         fenced = _footprint_fence(root, run_dir, resume_ledger, manifest_abs, plan_rel)
+        fenced = {**fenced, "breach": list(dict.fromkeys([*(fenced.get("breach") or ()), *remnant_breach]))} if remnant_breach else fenced
         if fence is not None:
             fence.update(fenced)
         stale = _unchanged_since_halt(
@@ -1184,20 +1407,20 @@ def _ledger_gate(
         stale = [*stale, *_unclosed_halt_gaps(resume_ledger, verdict, _halt_gap_lines(root, resume_ledger))]
         if stale:
             result = {**result, "pass": False, "failures": [*result["failures"], *stale]}
-        if fenced.get("breach"):
-            from coordinator_core.ops.dispatch_emit import footprint_breach
+    if fenced.get("breach"):
+        from coordinator_core.ops.dispatch_emit import footprint_breach
 
-            rows = manifest_data.get("rows") if isinstance(manifest_data, dict) else None
-            row_writes = {
-                str(r["id"]): [w for w in r.get("writes") or () if isinstance(w, str)]
-                for r in rows if isinstance(r, dict) and r.get("id") is not None
-            } if isinstance(rows, list) else {}
-            items = verdict.get("items")
-            on_breach = footprint_breach.met_on_breach(
-                items if isinstance(items, list) else [], fenced["breach"], row_writes,
-            )
-            if on_breach:
-                result = {**result, "pass": False, "failures": [*result["failures"], *on_breach]}
+        rows = manifest_data.get("rows") if isinstance(manifest_data, dict) else None
+        row_writes = {
+            str(r["id"]): [w for w in r.get("writes") or () if isinstance(w, str)]
+            for r in rows if isinstance(r, dict) and r.get("id") is not None
+        } if isinstance(rows, list) else {}
+        items = verdict.get("items")
+        on_breach = footprint_breach.met_on_breach(
+            items if isinstance(items, list) else [], fenced["breach"], row_writes,
+        )
+        if on_breach:
+            result = {**result, "pass": False, "failures": [*result["failures"], *on_breach]}
     if result["pass"]:
         return None, ledger, [
             {**r, "reason": recovery_reasons.get(str(r["reason"])[len("withheld_by "):], r["reason"])}
@@ -2162,6 +2385,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         except ValueError as exc:
             return _error(str(exc))
     if isinstance(params, dict) and not params.get("script_path"):
+        from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
+        from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
+        from coordinator_core.ops.dispatch_emit.halted_run_route import land_only_commit_route
+
+        payload = land_only_commit_route(root, params.get("run_id"))
+        if payload is not None:
+            return commit_halted_record(root, root, {**params, HALTED_RECORD_PARAM: payload})
         halted = halted_refusal(root, params.get("run_id"), "run outcome")
         if halted is not None:
             return _error(halted, refused="halted-run")
@@ -2373,8 +2603,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         )
 
     # ---- bookkeeping record and evidence rows, written before the commit so they ride it
+    objective_gate: Optional[dict] = None
     if not anchor_only:
         _derive_judge_status(inline_review)
+        objective_gate = _objective_gate(root, sibling_run_id, inline_review)
+        if objective_gate is not None:
+            _record_objective_outcome(root, sibling_run_id, inline_review, objective_gate)
     record: Optional[dict] = None
     record_abs: Optional[Path] = None
     bookkeeping_path: Optional[str] = None
@@ -2503,11 +2737,22 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             if chunk.id not in owner[p]:
                 owner[p].append(chunk.id)
     declared = list(owner)
+    inherited: dict = {}
+    if ask_run_dir is not None:
+        inherited = {
+            p: origin for p, origin in inherited_scope(root, params.get(TERMINAL_RESUME_LEDGER_PARAM)).items()
+            if (root / p).is_file()
+        }
+        declared += [p for p in inherited if p not in owner]
 
     # ---- membership (ii) and (iii): artifacts and superseded predecessors
     recorded: list = []
     if ask_run_dir is not None and isinstance(params.get(TERMINAL_RESUME_LEDGER_PARAM), dict):
-        recorded = [p for p in _resume_recorded_paths(root, ask_run_dir, inline_review) if p not in owner]
+        recorded = [p for p in _resume_recorded_paths(root, ask_run_dir, inline_review) if p not in owner and p not in inherited]
+    if ask_run_dir is not None:
+        recorded += [
+            p for p in fence.get("breach") or () if p not in owner and p not in inherited and p not in recorded
+        ]
     recorded_pc = _recorded_post_checkpoint(
         root, [art_run_id, _resumed_review_source(root, inline_review, rid, session_id)[0]], ask_run_dir,
     )
@@ -2558,14 +2803,25 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     footprint_breach = set(fence.get("breach") or ())
     declared_changed = [p for p in declared if p in changed and p not in ignored]
+    foreign_held = foreign_halted_withheld(root, art_run_id, request.plan_path, declared_changed)
+    own_halt_reason = _withheld_of(root, params.get(TERMINAL_RESUME_LEDGER_PARAM) or {}) if inherited else {}
+
+    def _own_inherited(p: str) -> bool:
+        return p in inherited and p not in foreign_held
+
     for p in declared_changed:
         if is_never_commit(p):
             withhold_reason[p] = "never-commit"
         elif sibling_write(p, root) is not None:
             withhold_reason[p] = "sibling-repo"
-        elif p in em_withheld and em_withheld[p] not in SELF_APPLIED_WITHHOLDS:
+        elif p in em_withheld and em_withheld[p] not in SELF_APPLIED_WITHHOLDS and not (
+            _own_inherited(p) and inherited[p] == ORIGIN_PREDECESSOR_WITHHELD
+            and em_withheld[p] == own_halt_reason.get(p)
+        ):
             withhold_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
-        elif p in footprint_breach:
+        elif p in foreign_held:
+            withhold_reason[p] = f"withheld by {foreign_held[p]}"
+        elif p in footprint_breach and not _own_inherited(p):
             withhold_reason[p] = OUTSIDE_ROW_FOOTPRINT
     recorded_reason: dict = {}  # recorded (chunk-less) path -> reason it stays out
     recorded_changed = [
@@ -2578,6 +2834,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             recorded_reason[p] = "sibling-repo"
         elif p in em_withheld and em_withheld[p] not in SELF_APPLIED_WITHHOLDS:
             recorded_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
+        elif p in footprint_breach:
+            recorded_reason[p] = OUTSIDE_ROW_FOOTPRINT
         elif p in reverted:
             recorded_reason[p] = "reverted"
     candidates = [p for p in declared_changed if p not in withhold_reason]
@@ -2725,7 +2983,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     withheld_product: list = []
     if ledger is not None:
-        held_product = shared_path_landing.sibling_held_product(unlanded, peer_held)
+        held_product = shared_path_landing.sibling_held_product(
+            unlanded, peer_held, root=root, own_session=session_id,
+            own_run_id=str(sibling_run_id or rid), own_plan=request.plan_path,
+        )
         if held_product:
             return _error(
                 shared_path_landing.refusal_message(held_product, str(sibling_run_id or rid), root),
@@ -2789,6 +3050,23 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         own_declared=declared, session_id=session_id, minted_before=own_seniority,
         deleted_notes=deleted_notes,
     )
+    if foreign_held:
+        from coordinator_core.ops.dispatch_emit import landing_integrity as li, peer_hunk_gate
+
+        findings += [
+            li.Finding(
+                p, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
+                (
+                    f"{sibling}: a peer's claims could not be read, so the path is held"
+                    if sibling == peer_hunk_gate.UNREADABLE_PEER_CLAIMS
+                    else f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off"
+                ),
+            )
+            for p, sibling in peer_hunk_gate.co_declared_peer_holds(
+                root, sibling_run_id, sorted(foreign_held), declared, own_plan=request.plan_path,
+                minted_before=own_seniority,
+            )
+        ]
     if findings:
         _remove(root, receipt_paths)
         first = findings[0]
@@ -2824,14 +3102,15 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
         gate_withheld = {
             p: (
-                f"held chunk {', '.join(held_paths[p])}" if p in held_paths and label == "withheld"
-                else f"withheld by the EM: {em_withheld[p]}" if p in em_withheld and label == "withheld"
-                else label
+                f"held chunk {', '.join(held_paths[p])}" if p in held_paths and why == "withheld"
+                else f"withheld by the EM: {em_withheld[p]}" if p in em_withheld and why == "withheld"
+                else why
             )
-            for p, label in {
+            for p, why in {
                 **{p: "withheld" for p in held_paths}, **art_withheld, **art_dropped, **recorded_reason,
                 **withhold_reason,
             }.items()
+            if not (_own_inherited(p) and p not in withhold_reason)
         }
         refusal, reach_summary = reach_gate(
             root, note_text, landing_paths=paths, deleted_paths=deleted, withheld_paths=gate_withheld,
@@ -3121,6 +3400,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     criterion = inline_review.get("criterion")
     if isinstance(criterion, dict) and criterion.get("status"):
         reply["criterion_status"] = "not_met" if unlanded_rows else criterion["status"]
+    if objective_gate is not None:
+        reply["objective_gate"] = {k: objective_gate[k] for k in ("outcome", "exit_reason", "unmet_axes", "summary")}
     reasons = _incomplete_reasons(
         incomplete, held_now, _held_reasons(params), withheld_by_gate, blockers, regraded, unlanded
     )
@@ -3227,9 +3508,17 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             reply["error"] = reply.get("error") or f"close job not started: {type(exc).__name__}: {exc}"
         if legs or "close" not in reply:
             legs.setdefault("review", _leg("queued", "queued by the review-stamp leg"))
-            from coordinator_core.ops.dispatch_emit.run_close import build_close_block
+            from coordinator_core.ops.dispatch_emit.run_close import build_close_block, receipt_inputs
+            from coordinator_core.session.record_homes import home_dir
 
-            reply["close"] = build_close_block(ctx["key"], True, legs, None, kind=kind)
+            sizing_rel = _cited_sizing(root, request.plan_path)
+            sizing_text = _read_rel(root, sizing_rel) if sizing_rel else None
+            arm, tshirt = receipt_inputs(sizing_text)
+            reply["close"] = build_close_block(
+                ctx["key"], True, legs, None, kind=kind, parts=_close_parts_of(sizing_text),
+                run_dir=Path(home_dir(str(root), "warp")) / sibling_run_id if sibling_run_id else None,
+                arm=arm, tshirt=tshirt,
+            )
             if siblings is not None:
                 reply["close"]["siblings"] = siblings
             if blocked_rows and isinstance(reply["close"], dict):
@@ -3237,6 +3526,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 close_siblings["blocked_rows"] = blocked_rows
                 reply["close"]["siblings"] = close_siblings
     return reply
+
+
+def _close_parts_of(sizing_text: Optional[str]):
+    """The run's `Close` read off the register of the plan's cited sizing text; no sizing means no parts."""
+    from coordinator_core.ops.dispatch_emit.run_close_parts import close_from_sizing_text
+
+    return close_from_sizing_text(sizing_text)
 
 
 def _falsifier_broken_tells(marks: object, plan_path: Optional[str]) -> Optional[list]:
@@ -3441,7 +3737,7 @@ def _integrity(
         ))
     for path, stem, line in peer_hunk_gate.out_of_ask_holds(root, session_id or "", run_id, live):
         findings.append(li.Finding(path, peer_hunk_gate.OUT_OF_ASK_HUNKS, f"{stem}: {line}"))
-    tested, _check = li.landing_test_gate(root, params, run_id)
+    tested, _check = li.landing_test_gate(root, params, run_id, live)
     if deleted_notes is not None and tested.deleted_note:
         deleted_notes.append(tested.deleted_note)
     return findings + tested

@@ -718,7 +718,9 @@ ROWS_DROPPED_WITHOUT_REASON = "ROWS-DROPPED-WITHOUT-REASON"
 RESUME_LEDGER_KIND_FIELD = "kind"
 #: The run's recorded review outcome, in its record dir; the source of a re-fire's `inline_review`.
 RUN_OUTCOME_FILE = "run-outcome.json"
-RUN_OUTCOME_KEYS = ("inline_review", "incomplete_chunks", "landed_chunks", "ledger_verdict", "plan_path")
+RUN_OUTCOME_KEYS = (
+    "inline_review", "incomplete_chunks", "landed_chunks", "ledger_verdict", "plan_path", "objective_loop",
+)
 #: `inline_review` key naming the halted run whose review a resumed landing reuses.
 RESUMED_RUN_ID_KEY = "resumed_run_id"
 
@@ -1100,6 +1102,8 @@ class ManifestRow:
     #: True for a row that adopts stranded dirt under review; it writes nothing by design, so
     #: the no-change rules skip its paths. Serialised only when true.
     adopts_stranded: bool = False
+    #: The row's reasoning-effort tag; serialised only when set, and part of the shared-agent key.
+    effort: Optional[str] = None
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -1111,6 +1115,8 @@ class ManifestRow:
             "wave": self.wave,
             "deps": list(self.deps),
         }
+        if self.effort is not None:
+            out["effort"] = self.effort
         if self.group:
             out["group"] = self.group
         if self.route is not None:

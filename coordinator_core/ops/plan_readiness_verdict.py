@@ -423,8 +423,8 @@ def readiness_verdict(
     Each ``anchor_findings`` entry is a blocking judgment no ``corrects``/``declared_absent`` exempts;
     rows carrying ``anchor`` are judged only through them. ``anchor_verdicts`` is the recorded
     per-anchor verdict list: it is echoed in the reply and feeds a ready-reason note. With
-    ``checker_ran`` False (no premise-checker output in the call) each anchor of it whose check
-    was not evaluable in-process is a mechanical repair, not a blocking finding."""
+    ``checker_ran`` either way, an anchor whose check is not evaluable in-process, or that the
+    census screen refuses, is a note naming its id: never a repair, a pull or a halt."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -510,13 +510,7 @@ def readiness_verdict(
                 premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
             uncheckable += 1
-    if not checker_ran:
-        for anchor_id, detail in _anchor_premise.unevaluable_anchors(anchor_verdicts or []):
-            repairs.append(_repair(
-                "anchor-check-not-evaluable", anchor_id,
-                f"Rewrite anchor {anchor_id}'s check as {_anchor_check.GRAMMAR} (no premise-checker "
-                f"runs in this lane; detail: {detail}), or re-plan around a fact that form can check.",
-            ))
+    anchor_findings, refused = _anchor_premise.split_screen_refused(anchor_findings or [])
     blocking_findings += len(premise_blocking) + len(anchor_findings or [])
     counts = f"needs an agent: {blocking_findings} blocking, {advisory_findings} advisory: "
     # Anchor findings are budgeted before premise rows: the reason is cut at _INSTRUCTION_MAX,
@@ -558,13 +552,13 @@ def readiness_verdict(
     engine_checked = sum(1 for v in anchor_verdicts or [] if v.get("source") == "engine-check")
     if engine_checked:
         notes.append(f"{engine_checked} anchor premise(s) resolved by in-process check")
-    if checker_ran:
-        unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or [])
-        if unevaluable:
-            notes.append(
-                "anchor check not evaluable in-process, not blocking (premise-checker ran, no "
-                "blocking row): " + "; ".join(f"{i} ({d[:80]})" for i, d in unevaluable)
-            )
+    unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or []) + refused
+    if unevaluable:
+        lane = "premise-checker ran, no blocking row" if checker_ran else "no premise-checker in this lane"
+        notes.append(
+            f"anchor check not evaluable in-process, not blocking ({lane}): "
+            + "; ".join(f"{i} ({d[:80]})" for i, d in unevaluable)
+        )
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:

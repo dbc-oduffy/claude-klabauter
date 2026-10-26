@@ -743,6 +743,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "coordinator-validate-local-config.py": frozenset({"self_location"}),
     "cross-repo-memo.py": frozenset({"env_first", "self_location"}),
     "debash-scorecard.py": frozenset({"env_first"}),
+    "deferral-prose-audit.py": frozenset({"env_first"}),
     "discharge-landed.py": frozenset({"env_first"}),
     "distill-delete-guard.py": frozenset({"self_location"}),
     "distill-harvest-debt.py": frozenset({"self_location"}),

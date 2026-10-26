@@ -36,6 +36,7 @@ _SHIPPED_HEAD = re.compile(r"^(#{2,6})[ \t]+(?:what[ \t]+)?shipped\b", re.I)
 _ANY_HEAD = re.compile(r"^(#{1,6})[ \t]+\S")
 _TICKED = re.compile(r"`([^`\n]+)`")
 _LINE_SUFFIX = re.compile(r":\d+(?:-\d+)?$")
+_LIST_ITEM = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+")
 
 
 _INPUT_WORDS = r"provenance|inputs?|sources?|references?|read-only"
@@ -55,6 +56,7 @@ def _cited_as_input(line: str, m: "re.Match[str]") -> bool:
 class ShippedClaim:
     path: str
     anchor: str
+    listed: bool = True  # False: the ticked token sits in prose, not on a list item
 
 
 @dataclass(frozen=True)
@@ -106,7 +108,7 @@ def extract_shipped_claims(note_text: str) -> tuple[ShippedClaim, ...]:
             if _cited_as_input(line, m):
                 continue
             seen.add(path)
-            out.append(ShippedClaim(path, line.strip()[:_ANCHOR_CAP]))
+            out.append(ShippedClaim(path, line.strip()[:_ANCHOR_CAP], bool(_LIST_ITEM.match(line))))
     return tuple(out)
 
 
@@ -128,81 +130,15 @@ def _under(path: str, d: str) -> bool:
     return path.startswith(d + "/")
 
 
-def _head_files_under(common, head: str, d: str):
-    """`{path: blob sha}` of every file HEAD carries under directory `d`; None when a tree is unreadable."""
-    from coordinator_core.git.rollback_check import _TREE_MODE, _tree_entries, commit_meta
-
-    meta = commit_meta(common, head)
-    cur = meta.get("tree") if meta else None
-    for part in d.split("/"):
-        if not cur:
-            return None
-        entries = _tree_entries(common, cur)
-        if entries is None:
-            return None
-        entry = entries.get(part)
-        if entry is None or entry[0] != _TREE_MODE:
-            return {}
-        cur = entry[1]
-    out: dict = {}
-    stack = [(d, cur)]
-    while stack:
-        prefix, tree = stack.pop()
-        entries = _tree_entries(common, tree)
-        if entries is None:
-            return None
-        for name, (mode, sha) in entries.items():
-            if mode == _TREE_MODE:
-                stack.append((f"{prefix}/{name}", sha))
-            else:
-                out[f"{prefix}/{name}"] = sha
-    return out
-
-
-def _untracked_under(root: Path, dirs: list[str]):
-    """Untracked, not-ignored files under `dirs` in one spawn; None when git could not answer."""
-    from coordinator_core.git.run import run_git
-
-    res = run_git(
-        ["-C", str(root), "--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "-z", "--", *dirs]
-    )
-    if not res.ok:
-        return None
-    return {_posix(p) for p in res.stdout.split("\0") if p}
-
-
-def _judge_dir(root, d, *, head, common, untracked, landing, deleted, withheld):
-    """`(verdict, why)` for directory claim `d` from its landing paths, untracked files and HEAD's files."""
-    from coordinator_core.ops.dispatch_emit.land_run import _FILTERED, _worktree_blob
-
-    at_head = _head_files_under(common, head, d)
-    if at_head is None:
-        return "unresolved", "HEAD's tree is unreadable"
-    if untracked is None:
-        return "unresolved", "git could not list its untracked files"
+def _judge_dir(d, *, landing, deleted, withheld):
+    """`(verdict, why)` for directory `d` from the landing alone: a directory is a claim only when
+    the landing carries files under it; untracked or tracked-differing files never decide it."""
     carried = {p for p in landing | deleted if _under(p, d)}
-    unlanded = sorted(p for p in untracked if _under(p, d) and p not in landing)
-    differing = []
-    for p, sha in at_head.items():
-        if differing or p in landing or p in deleted:
-            continue
-        now = _worktree_blob(root, p)
-        if now == _FILTERED:
-            continue
-        if now != sha:
-            differing.append(p)
-    files = set(at_head) | carried | {p for p in untracked if _under(p, d)}
-    if not files:
-        return "unresolved", "no files under it"
-    if all(p in withheld for p in files):
-        return "withheld", "the landing withholds every file under it"
-    if unlanded:
-        return "untracked", f"`{unlanded[0]}` under it is on disk, untracked, and not in the landing"
-    if differing:
-        return "not-in-commit", f"`{differing[0]}` under it is tracked, differs from HEAD, and not in the landing"
-    if carried:
-        return "backed", "the landing carries files under it"
-    return "backed", "tracked at HEAD with unchanged bytes"
+    if not carried:
+        return "unresolved", "a directory no landed row declares is a mention, not a claim"
+    if all(p in withheld for p in carried):
+        return "withheld", "the landing withholds every file it carries under it"
+    return "backed", "the landing carries files under it"
 
 
 def judge_shipped_claims(
@@ -214,8 +150,7 @@ def judge_shipped_claims(
     Precedence runs in that order. Reads HEAD's tree and the worktree in process; a claim that
     names no file, or a file whose checkin filter cannot be reproduced, is `unresolved`, which
     never refuses. A bare file name (no directory) is therefore never refused. A directory claim
-    is judged over the files under it: one `ls-files --others` spawn covers every directory claim
-    and none is spawned when no claim is a directory.
+    is backed only by landing paths under it and otherwise unresolved. No subprocess is spawned.
     Each verdict's `left_out` is the landing's reason the file is not carried. A refusing verdict on
     a path in `row_of` ({path: (row id, grade)}) becomes `row-ungraded`, except a withhold carrying
     a reason (content or ownership): crediting the row would not land that file.
@@ -238,12 +173,6 @@ def judge_shipped_claims(
     rows = {_posix(p): v for p, v in (row_of or {}).items()}
     out: list[ShippedVerdict] = []
     claims = tuple(claims)
-    dir_of = {}
-    for c in claims:
-        d = c.path.rstrip("/")
-        if d and d != "." and _safe_rel(d) and c.path not in withheld | landing | deleted and (root / d).is_dir():
-            dir_of[c.path] = d
-    untracked = _untracked_under(root, sorted(set(dir_of.values()))) if dir_of and head else None
     for claim in claims:
         rel = claim.path
 
@@ -270,14 +199,8 @@ def judge_shipped_claims(
         if not head:
             verdict("unresolved", "HEAD is unreadable")
             continue
-        if rel in dir_of:
-            verdict(*_judge_dir(
-                root, dir_of[rel], head=head, common=common, untracked=untracked,
-                landing=landing, deleted=deleted, withheld=withheld,
-            ))
-            continue
-        if (root / rel).is_dir():
-            verdict("unresolved", "not a repo file path")
+        if rel.endswith("/") or (root / rel).is_dir():
+            verdict(*_judge_dir(rel.rstrip("/"), landing=landing, deleted=deleted, withheld=withheld))
             continue
         at_head = _blob_at_commit(common, head, rel)
         if at_head is None:

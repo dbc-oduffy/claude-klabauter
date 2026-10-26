@@ -24,7 +24,6 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _SIG = "sig-0000000000000000000000000000000000000001"
-_POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="the disk exec bit is not modelled on Windows")
 
 _GATES = (
     "dispatch_end_of_run_identity_check",
@@ -205,7 +204,7 @@ def test_every_retained_file_lands_at_its_source_tree_mode(world):
     assert _tree_mode(world.dest, "HEAD", "bin/kept-tool") == _EXEC
 
 
-@_POSIX_ONLY
+@pytest.mark.skipif(os.name == "nt", reason="the disk exec bit is not modelled on Windows")
 def test_every_retained_file_has_a_disk_exec_bit_equal_to_its_head_mode(world):
     rc, out = world.run()
 
@@ -215,7 +214,7 @@ def test_every_retained_file_has_a_disk_exec_bit_equal_to_its_head_mode(world):
         assert bool((world.dest / rel).stat().st_mode & 0o111) == head_exec, rel
 
 
-@_POSIX_ONLY
+@pytest.mark.skipif(os.name == "nt", reason="the disk exec bit is not modelled on Windows")
 def test_a_head_exec_file_drifted_to_644_on_disk_is_converged_back(world):
     assert not (world.dest / "bin" / "kept-tool").stat().st_mode & 0o111
 

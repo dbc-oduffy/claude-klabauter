@@ -69,7 +69,13 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 GENERATES = []
 
 _PHASE = "Delivery re-verify"
-_CRITERION_STATUSES = ("met", "not_met", "indeterminate")
+_CRITERION_STATUSES = ("met", "not_met")
+_LEGACY_INDETERMINATE = "indeterminate"
+
+
+def _read_criterion_status(status: object) -> object:
+    """Reader view of a recorded criterion status: a legacy `indeterminate` reads as `not_met`, never a pass."""
+    return "not_met" if status == _LEGACY_INDETERMINATE else status
 _TESTS_PHASE = "Tests re-run"
 _TESTS_STATUSES = ("pass", "fail", "error")
 _VERIFY_PHASE = "Verify"
@@ -151,10 +157,10 @@ def load_delivery(repo_root: Optional[Path], record: dict, prep: Optional[dict] 
 
 
 def _criterion_unsettled(record: dict) -> bool:
-    """True when the run record's frozen criterion status is `not_met`, `indeterminate` or `not_run`."""
+    """True when the run record's frozen criterion status is `not_met` or `not_run` (legacy `indeterminate` reads as `not_met`)."""
     for holder in (record, record.get("inline_review"), record.get("review")):
         block = holder.get("criterion") if isinstance(holder, dict) else None
-        if isinstance(block, dict) and block.get("status") in ("not_met", "indeterminate", "not_run"):
+        if isinstance(block, dict) and _read_criterion_status(block.get("status")) in ("not_met", "not_run"):
             return True
     return False
 
@@ -185,7 +191,7 @@ def prior_unbacked_claims(
     record_path: Path, repo_root: Optional[Path] = None
 ) -> tuple[Dict[str, Any], List[dict]]:
     """`(record, claims)` of a run record's frozen delivery FAIL, each claim `{claim, anchor}`.
-    A delivery PASS whose criterion is `not_met`/`indeterminate`, or whose tests
+    A delivery PASS whose criterion is `not_met` (or `not_run`), or whose tests
     are `fail`/`error`, returns `(record, [])`: there is
     nothing to re-check claim by claim, but the verdict and criterion are stale. A null delivery
     slot on a run whose review ran returns `(record, [])` too: the verdict was never produced.
@@ -997,7 +1003,7 @@ def recorded_unmet_criterion(
     repo_root: Path, plan_id: Optional[str], plan_path: Optional[str] = None
 ) -> Optional[dict]:
     """`{status, run_base_sha}` when the delivery verdict in force for a plan records its exit
-    criterion `not_met`/`indeterminate` (the newest superseding verdict's, else the run record's
+    criterion `not_met` (legacy `indeterminate` reads as `not_met`; the newest superseding verdict's, else the run record's
     frozen one); `None` when nothing resolves or the criterion is not unmet."""
     path, _block = resolve_delivery_in_force(repo_root, plan_id, plan_path)
     fm = _frontmatter(path) if path else None
@@ -1010,8 +1016,8 @@ def recorded_unmet_criterion(
             if isinstance(block, dict) and block.get("status"):
                 criterion = block
                 break
-    status = criterion.get("status") if criterion else None
-    if status not in ("not_met", "indeterminate"):
+    status = _read_criterion_status(criterion.get("status")) if criterion else None
+    if status != "not_met":
         return None
     prep = prep_of(repo_root, fm)
     return {"status": status, "run_base_sha": prep.get("run_base_sha") if isinstance(prep, dict) else None}

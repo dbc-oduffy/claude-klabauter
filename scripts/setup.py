@@ -60,7 +60,7 @@ Resolver reference: this file's own `resolve_claude_klabauter_root` (CLAUDE_KLAB
 Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
-                            [--allow-venv-fallback] [--with-test-deps]
+                            [--with-test-deps]
                             [--register-only] [--check] [--help]
 
 Negative-spec:
@@ -79,12 +79,7 @@ Negative-spec:
   externally-managed is a DESIGNED REFUSAL (exit 96,
   EXIT_INTERPRETER_UNSUPPORTED), naming that interpreter and the consumer
   that resolves to it — never an automatic fallback and never
-  --break-system-packages, EXCEPT the single narrow exception below. The
-  settings-home
-  coordinator venv (coordinator_core.install.ensure_venv) remains reachable
-  ONLY via the explicit --allow-venv-fallback opt-in, and only for a
-  genuine machine-level install failure that is NOT a PEP-668 refusal — a
-  guarded interpreter is swapped, never fallen back from. See §
+  --break-system-packages, EXCEPT the single narrow exception below. See §
   Dependency provisioning below.
   The single narrow exception (docs/decisions/DR-411-the-pep-668-refusal-does-not-reach-an-ephemeral-container.md):
   a caller passing the internal-only `--i-assert-no-other-consumer` opt-in,
@@ -319,13 +314,6 @@ Options:
   --accept-missing-deps-risk         Accept hallucination risk from missing deps (pair with --skip-dep-check)
   --claude-klabauter-live-root <path>               Explicit CLAUDE_KLABAUTER_ROOT override (default: CLAUDE_KLABAUTER_ROOT env -> repo-root)
   --coordinator-root <path>          Explicit coordinator-claude root override (default: COORDINATOR_CLAUDE_ROOT env -> sibling-dir)
-  --allow-venv-fallback               Explicit opt-in, break-glass only: on a machine-level
-                                      dependency install failure that is NOT a PEP-668 refusal,
-                                      fall back to the settings-home coordinator venv instead of
-                                      exiting non-zero. Never reached automatically, and never
-                                      reached for a PEP-668 externally-managed interpreter — that
-                                      is always a designed refusal (exit 96), not a failure to
-                                      fall back from.
   --with-test-deps                   Also install the declared test extra (pytest + plugins). Off by
                                       default: the installer provisions the engine, not the dev loop
   --register-only                    Skip Step Zero + dep check; run registration + verification only
@@ -405,7 +393,6 @@ class Args:
         self.agent_mode = False
         self.skip_dep_check = False
         self.accept_risk = False
-        self.allow_venv_fallback = False
         self.container_optin = False
         self.with_test_deps = False
         self.register_only = False
@@ -431,8 +418,6 @@ def parse_args(argv: list[str]) -> Args:
             args.skip_dep_check = True
         elif tok == "--accept-missing-deps-risk":
             args.accept_risk = True
-        elif tok == "--allow-venv-fallback":
-            args.allow_venv_fallback = True
         elif tok == "--i-assert-no-other-consumer":
             # DR-411's container opt-in. Deliberately absent from HELP_TEXT and
             # from docs/install/agent-install-manifest.json's override_flags —
@@ -663,9 +648,7 @@ def _run_pip(argv: list[str]) -> subprocess.CompletedProcess:
     """Run a pip subprocess bounded by `PACKAGE_INSTALL_SECS`, the `install`
     timeout family's member for one `pip install` (Review: code-reviewer
     2026-07-21 Finding 5, P2: an unbounded pip subprocess can hang forever on
-    a stalled network). ensure_venv.py's `_install_deps` derives the same
-    member, so the two are one number rather than a convention two files
-    happen to share.
+    a stalled network).
     `LC_ALL=C` is pinned so the PEP-668 substring match in `provision_deps`
     below stays valid regardless of the invoking environment's locale
     (Finding 10, nit). stderr is merged into stdout via `stderr=STDOUT`
@@ -1166,67 +1149,9 @@ def convert_editable_finder_to_plain_path(
     return "; ".join(results)
 
 
-def _fallback_to_venv(
-    claude_klabauter_root: Path,
-    settings_home_path: Path,
-    venv_dir: Path,
-    venv_py: Path,
-    dep_specs: list[str],
-    import_names: list[str],
-) -> str:
-    """Provision the settings-home coordinator venv (purpose (c),
-    `docs/reference/shared-fleet-venv-contract.md`) with the DECLARED
-    THIRD-PARTY DEPS ONLY — deliberately NOT `-e <claude_klabauter_root>`. The
-    contract doc is explicit that an editable `coordinator_core` in this
-    venv is "NOT guaranteed" and "a rebuild drops it"; this stays true
-    here rather than being contradicted by a new install-chain call site.
-    Reaching this function at all means machine-first provisioning failed
-    for a NON-PEP-668 reason with `--allow-venv-fallback` passed — a
-    guarded (PEP-668) interpreter never reaches here (see
-    `provision_deps`; a guarded interpreter is a designed refusal, exit 96,
-    with no fallback of any kind).
-
-    Idempotent: an already-healthy venv (deps importable there) is left
-    alone rather than re-installed on every run. This also covers the case
-    where `provision_deps`'s per-candidate loop calls this function more
-    than once in a single run (one call per failing non-first candidate,
-    all sharing the one settings-home `venv_py`) — the second call's
-    `deps_importable` check sees the venv the first call just provisioned
-    and no-ops, so repeated calls converge rather than re-installing."""
-    if venv_py.exists() and deps_importable(str(venv_py), import_names):
-        print(f"PASS [deps] fallback venv already provisioned ({venv_dir}) — no-op.")
-        return str(venv_py)
-
-    if str(claude_klabauter_root) not in sys.path:
-        sys.path.insert(0, str(claude_klabauter_root))
-    from coordinator_core.install.ensure_venv import EnsureVenvError, ensure_coordinator_venv
-
-    try:
-        venv_status = ensure_coordinator_venv(
-            claude_klabauter_root, settings_home_path, claude_home=os.environ.get("CLAUDE_HOME")
-        )
-    except EnsureVenvError as exc:
-        print(f"FAIL [deps] settings-home coordinator venv provisioning failed: {exc}", file=sys.stderr)
-        _exit_flushed(1)
-    print(f"  settings-home coordinator venv: {venv_status}")
-
-    try:
-        venv_pip = _run_pip([str(venv_py), "-m", "pip", "install", *dep_specs])
-    except subprocess.TimeoutExpired:
-        print(f"FAIL [deps] venv fallback pip install timed out after 600s under {venv_py}.", file=sys.stderr)
-        _exit_flushed(1)
-    print(venv_pip.stdout, end="")
-    if venv_pip.returncode != 0 or not deps_importable(str(venv_py), import_names):
-        print("FAIL [deps] venv fallback install failed — see output above.", file=sys.stderr)
-        _exit_flushed(1)
-    print(f"PASS [deps] venv fallback install succeeded ({venv_dir}).")
-    return str(venv_py)
-
-
 def provision_deps(
     claude_klabauter_root: Path,
     py: str,
-    allow_venv_fallback: bool,
     *,
     container_optin: bool = False,
     installs_engine: bool = True,
@@ -1269,8 +1194,7 @@ def provision_deps(
 
     A guarded (PEP-668) candidate is a DESIGNED REFUSAL: exits
     `EXIT_INTERPRETER_UNSUPPORTED` (96) naming the interpreter and the
-    consumer that resolves to it. This is unconditional — `allow_venv_fallback`
-    does NOT reach the venv here; the anti-scope is explicit ("when an
+    consumer that resolves to it. This is unconditional ("when an
     interpreter raises a guard, swap the interpreter", never narrow the
     blast radius with an override flag). On macOS with Homebrew's guarded
     `python3`, the operator is offered (interactively, PM-authorized,
@@ -1279,13 +1203,8 @@ def provision_deps(
     way; a fresh supported interpreter still needs to be installed and the
     installer re-run.
 
-    `allow_venv_fallback` survives as explicit break-glass ONLY for a
-    genuine machine-level install failure that is NOT PEP-668 (permission-
-    denied, network, disk) — `_fallback_to_venv` provisions ONLY the
-    third-party deps there, deliberately never `-e .` (see that function's
-    docstring); `coordinator-invoke`/`coordinator-cockpit-emit-schema`
-    remain unmaterialized on that degraded path, which is the accepted
-    shape of a break-glass fallback, not a defect.
+    A genuine machine-level install failure that is NOT PEP-668 (permission-
+    denied, network, disk) exits 1 naming the machine-level remediation.
 
     Idempotence keys on `_engine_installed` (deps importable AND
     `coordinator_core` pip-installed as a distribution), not on import
@@ -1320,29 +1239,17 @@ def provision_deps(
     print(f"Derived dependency specs:  {' '.join(dep_specs)}")
     print(f"Derived import-probe list: {' '.join(import_names)}")
 
-    # coordinator_core.install.ensure_venv is stdlib-only (see its own module
-    # docstring), so it's importable here even before coordinator_core's
-    # third-party deps (pydantic, jsonschema, ...) are provisioned — but it
-    # is NOT necessarily pip-installed under the interpreter running THIS
-    # script, so resolve it against claude_klabauter_root's local source tree directly.
     if str(claude_klabauter_root) not in sys.path:
         sys.path.insert(0, str(claude_klabauter_root))
     from coordinator_core._settings_home import settings_home
-    from coordinator_core.install.ensure_venv import venv_python_path
 
-    # settings_home()
-    # resolves through `CLAUDE_HOME`/`Path.home()`, and `Path.home()` raises
-    # `RuntimeError` when neither `HOME` (POSIX) nor `USERPROFILE` (Windows)
-    # is resolvable. Fail loud with an actionable message instead of a bare
-    # traceback.
+    # `Path.home()` raises RuntimeError when neither HOME nor USERPROFILE resolves.
     try:
         settings_home_path = settings_home()
     except RuntimeError as exc:
         print(f"FAIL [deps] cannot resolve settings-home: {exc}", file=sys.stderr)
         print("  Remediation: set CLAUDE_HOME (or HOME on POSIX / USERPROFILE on Windows) and re-run.", file=sys.stderr)
         _exit_flushed(1)
-    venv_dir = settings_home_path / ".coordinator-venv"
-    venv_py = venv_python_path(venv_dir)
 
     candidates = enumerate_provisioning_candidates(py)
     print(f"Predictable consumer-resolved interpreter set ({len(candidates)}):")
@@ -1417,12 +1324,6 @@ def provision_deps(
                 "replacement, then re-run.",
                 file=sys.stderr,
             )
-        if allow_venv_fallback:
-            print(
-                "  --allow-venv-fallback was also passed: this refusal is unconditional and does "
-                "not honour it — a PEP-668 guard is swapped, never fallen back from.",
-                file=sys.stderr,
-            )
         _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
 
     def _satisfied(interpreter: str) -> bool:
@@ -1476,35 +1377,23 @@ def provision_deps(
                 _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
 
             if pip_proc.returncode != 0 or not _satisfied(candidate.path):
-                if not allow_venv_fallback:
-                    print(
-                        f"FAIL [deps] machine-level install failed under {candidate.path} — "
-                        "see output above.",
-                        file=sys.stderr,
-                    )
-                    print(
-                        "  Remediation — pick ONE: fix the machine-level install, or re-run with "
-                        f"--allow-venv-fallback (settings-home venv at {venv_dir}, third-party deps only).",
-                        file=sys.stderr,
-                    )
-                    _exit_flushed(1)
                 print(
-                    f"  --allow-venv-fallback passed — falling back to the settings-home "
-                    f"coordinator venv at {venv_dir} for {candidate.label}.",
+                    f"FAIL [deps] machine-level install failed under {candidate.path} — "
+                    "see output above.",
                     file=sys.stderr,
                 )
-                resolved = _fallback_to_venv(
-                    claude_klabauter_root, settings_home_path, venv_dir, venv_py, dep_specs, import_names
+                print(
+                    "  Remediation: fix the machine-level install (permissions, network, disk), "
+                    "then re-run this installer.",
+                    file=sys.stderr,
                 )
-            else:
-                print(f"PASS [deps] {candidate.label} ({candidate.path}) provisioned and verified.")
-                resolved = candidate.path
+                _exit_flushed(1)
+            print(f"PASS [deps] {candidate.label} ({candidate.path}) provisioned and verified.")
+            resolved = candidate.path
 
-        if resolved == candidate.path and installs_engine:
+        if installs_engine:
             # Plan C8: the engine's editable-install finder -> plain-path
-            # .pth conversion. Skipped for the venv-fallback branch above
-            # (`resolved != candidate.path` there) — that path never runs
-            # `-e .`, so there is no finder to convert.
+            # .pth conversion.
             conv_result = convert_editable_finder_to_plain_path(
                 candidate.path, claude_klabauter_root, engine_link=os.environ.get("COORDINATOR_ENGINE_ROOT")
             )
@@ -1616,17 +1505,9 @@ def _probe_dist_versions(interpreter: str, dist_names: list[str]) -> dict[str, s
 def _install_test_deps(engine_py: str, specs: list[str]) -> None:
     """pip-install the test extra under `engine_py` — the interpreter
     `provision_deps` already resolved and verified (a machine-first
-    candidate, or the settings-home fallback venv when every machine
-    candidate was unusable and `--allow-venv-fallback` was passed).
+    candidate).
 
-    Deliberately does NOT repeat provision_deps' venv-bootstrap ladder, and
-    that is a settings-path constraint before it is a DRY one. The fallback
-    venv location is owned by `coordinator_core._settings_home.settings_home()`
-    + `coordinator_core.install.ensure_venv` (the contract-sanctioned durable
-    prefix, CLAUDE.md § durable-data plane); re-deriving it here would mean a
-    SECOND resolver for a path that already has exactly one, and any drift
-    between them lands test tooling under an interpreter the suite never runs
-    from. Taking `engine_py` as given is what keeps this function free of any
+    Taking `engine_py` as given keeps this function free of any
     home/settings-path resolution of its own — no `expanduser`, no
     `Path.home()`, no hand-built `~/...`.
 
@@ -2120,7 +2001,7 @@ def _resolve_plugin_root_for_machine_local(coord_path: Path) -> Path | None:
     module's docstring). Imported INSIDE the function, not at module scope:
     this script is the bootstrap installer and runs before `coordinator_core`'s
     third-party deps are provisioned, mirroring the established pattern at
-    this file's `_ensure_venv`-adjacent call site."""
+    this file's other in-function `coordinator_core` imports."""
     from coordinator_core.coordinator_root import (
         _resolve_plugin_root_for_machine_local as _impl,
     )
@@ -3176,8 +3057,7 @@ def verify_coordinator_core_importable(claude_klabauter_root_resolved: Path, eng
     """Verification — coordinator_core importable from CLAUDE_KLABAUTER_ROOT.
 
     Uses engine_py (the interpreter dependency provisioning resolved above —
-    the machine interpreter on a successful machine-level install, or the
-    fallback venv's interpreter otherwise). If this import fails, the repo
+    the machine interpreter of a successful machine-level install). If this import fails, the repo
     checkout is incomplete, CLAUDE_KLABAUTER_ROOT is wrong, or a declared dependency is
     missing under engine_py.
     """
@@ -3266,9 +3146,7 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
       - bare `python3` on PATH, because `hooks.json` registers every bash
         guard hook under exactly that bare name — checking only `engine_py`
         would miss the actual disarmed case on a box where `engine_py`
-        happens to be a healthy fallback venv (the exact shape measured
-        2026-08-17: ARMED under `.coordinator-venv`, SILENT under bare
-        `python3`).
+        is armed but bare `python3` is not.
 
     Returns the interpreters under which the guard is DISARMED (empty when
     armed everywhere); `main` turns a non-empty result into
@@ -3290,8 +3168,7 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
     )
 
     # Grouped by RESOLVED interpreter path, not label: bare `python3` and
-    # `engine_py` are the same file on a box where the fallback venv IS the
-    # engine interpreter, and probing that path twice wastes a real child
+    # `engine_py` are the same file on a box where they coincide, and probing that path twice wastes a real child
     # spawn for a foregone result. Dedup shape mirrors `bin/claude-klabauter-doctor-
     # probe.py::_run_probe_dialect_guard_armed`'s `bare_python3 !=
     # sys.executable` guard (reviewer finding) -- but unlike that probe's
@@ -3414,7 +3291,7 @@ def run_health_probe(claude_klabauter_root_resolved: Path, engine_py: str, agent
         return False
 
     # Invoked directly via engine_py rather than the bin/claude-klabauter-doctor-probe
-    # wrapper (retired in C7) — this honors the fallback venv's dependency
+    # wrapper (retired in C7) — this honors the dependency
     # provisioning resolved above.
     proc = subprocess.run(
         [engine_py, str(probe), "--step-zero", "--required-only"],
@@ -3985,7 +3862,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     `--setup-only` (substrate.py's own CLI flag, previously wired to nothing
     but `install-maximalist`'s full `run(setup_only=False, ...)` call) is the
     right-sized leg here: it lands the machine-local + bin-resolver substrate
-    (Steps 1-3, C10a venv/whoami, seed-wikis) and explicitly skips the
+    (Steps 1-3, whoami, seed-wikis) and explicitly skips the
     heavier fnm/Windows-machine-env steps (`_fnm_step`, `_windows_health_steps`)
     that belong to the full maximalist chain, not this standalone installer's
     scope (see module docstring's Negative-spec on `--with-test-deps` for the
@@ -4039,8 +3916,6 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
     # function, instead of propagating and aborting the rest of setup.
     try:
         substrate_argv = [engine_py, "-m", "coordinator_core.install.substrate", "--setup-only"]
-        if args.allow_venv_fallback:
-            substrate_argv.append("--allow-venv-fallback")
         proc = subprocess.run(
             substrate_argv,
             cwd=str(claude_klabauter_root_resolved),
@@ -4269,7 +4144,7 @@ def install_precompiled_bytecode(claude_klabauter_root_resolved: Path, args: Arg
         return
 
     try:
-        interpreters = _compileall_interpreters(args.allow_venv_fallback)
+        interpreters = _compileall_interpreters()
     except (ImportError, OSError) as exc:
         print(f"[ADVISORY] could not resolve a precompile interpreter: {exc}", file=sys.stderr)
         return
@@ -4899,7 +4774,6 @@ def main(argv: list[str]) -> int:
         engine_py, import_names = provision_deps(
             claude_klabauter_root_resolved,
             py,
-            args.allow_venv_fallback,
             container_optin=args.container_optin,
             installs_engine=resolve_repo_identity(claude_klabauter_root_resolved) == IDENTITY_MIRROR,
         )

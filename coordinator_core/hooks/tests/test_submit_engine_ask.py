@@ -519,6 +519,42 @@ def test_sizing_scout_with_a_live_run_names_the_run(tmp_path):
     assert "ask-20261013T000000-abcdef" not in _hso(other)["permissionDecisionReason"]
 
 
+def test_sizing_scout_deny_names_the_live_runs_actual_stage(tmp_path):
+    root = _repo(tmp_path)
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
+    stage_dir = root / "state" / "warp" / "ask-20261013T000000-abcdef"
+    stage_dir.mkdir(parents=True)
+    (stage_dir / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
+    reason = _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecisionReason"]
+    assert "in stage staged" in reason
+    assert "already sizing" not in reason
+
+
+def test_sizing_scout_deny_without_a_stage_file_claims_no_sizing(tmp_path):
+    root = _repo(tmp_path)
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
+    reason = _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecisionReason"]
+    assert "ask-20261013T000000-abcdef is live" in reason
+    assert "sizing;" not in reason
+
+
+def test_a_readonly_marked_brief_is_admitted_and_an_unmarked_or_embedded_one_is_denied(tmp_path):
+    from coordinator_core.hooks.sizing_scout_deny import READONLY_MARKER
+
+    root = _repo(tmp_path)
+    mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
+    marked = _scout_payload(root)
+    marked["tool_input"]["prompt"] = f"measure at base abc\n{READONLY_MARKER}\nwrite nothing"
+    assert mod.sizing_scout_deny(marked) is None
+    no_run = _scout_payload(_repo(tmp_path / "b"))
+    no_run["tool_input"]["prompt"] = READONLY_MARKER
+    assert mod.sizing_scout_deny(no_run) is None
+    inline = _scout_payload(root)
+    inline["tool_input"]["prompt"] = f"please do not use {READONLY_MARKER} here"
+    assert _hso(mod.sizing_scout_deny(inline))["permissionDecision"] == "deny"
+    assert _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecision"] == "deny"
+
+
 def test_a_scout_payload_with_an_agent_id_is_not_denied_without_a_run(tmp_path):
     assert mod.sizing_scout_deny(_scout_payload(_repo(tmp_path), agent_id="a1")) is None
 

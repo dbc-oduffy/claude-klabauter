@@ -169,8 +169,10 @@ from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispa
 from coordinator_core.ops.dispatch_emit import cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy, review_floor  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
     _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
+    foreign_halted_withheld,
 )
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix  # noqa: E402
+from coordinator_core.ops.dispatch_emit.refire_inherited_scope import inherited_scope  # noqa: E402
 from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM  # noqa: E402
 from coordinator_core.ops.dispatch_emit.halt_landing import (  # noqa: E402
     landed_before_halt as _landed_before_halt,
@@ -739,7 +741,7 @@ def _landing_integrity_gate(
             findings.append(li.Finding(held_path, peer_hunk_gate.OUT_OF_ASK_HUNKS, f"{stem}: {line}"))
     # Trap: ``inline_review.tests.status`` is already baseline-aware (a baseline-cleared run folds
     # to ``pass``), so a carried ``fail`` here is run-caused or a failed row verification.
-    tested, tcheck = li.landing_test_gate(worktree_root, params, run_id)
+    tested, tcheck = li.landing_test_gate(worktree_root, params, run_id, paths)
     findings += tested
     extra["targeted_tests_check"] = tcheck
     if tested.deleted_note:
@@ -1407,6 +1409,55 @@ def _ship_cited_sizing(worktree_root: Path, repo_root: Path, plan_path: Optional
     if not isinstance(reply, dict) or reply.get("exit_code") != 0:
         return {"sizing_ship_skipped": str(reply.get("error") if isinstance(reply, dict) else reply)}
     return {"sizing_shipped": sizing_rel} if reply.get("applied") else {}
+
+
+def _dropped_part_rows(worktree_root: Path, sizing_rel: str, note_text: str) -> dict:
+    """Mint an open ``relayed`` register row on ``sizing_rel`` for each part ``note_text`` records as
+    not done, not investigated or out of scope with no ruling; the open row keeps ``sizing.ship``
+    refusing. A part is ruled when its ``(label)`` row (or its row id) is ``waived`` or deferred by a
+    ``workflow.revise`` ruling. ``{"closed_as": "partial", "dropped_parts": [{label, text, row_id}]}``
+    when any part was found, ``{}`` otherwise; ``dropped_parts_error`` and no ``row_id`` when the
+    write failed. Never raises."""
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit import requirements_ledger, stated_parts
+
+    sizing_text = _read_rel(worktree_root, sizing_rel)
+    register = rr.read_register(sizing_text) if sizing_text else None
+    rows = register.rows if register is not None else []
+    deferred = set(requirements_ledger.ruled_out_ids(rows))
+    ruled: set = set()
+    for row in rows:
+        if row.get(rr.ROW_STATUS) != rr.STATUS_WAIVED and str(row.get(rr.ROW_ID)) not in deferred:
+            continue
+        ruled.add(str(row.get(rr.ROW_ID)))
+        lead = re.match(r"\(([a-z])\)\s", str(row.get(rr.ROW_TEXT) or ""), re.IGNORECASE)
+        if lead:
+            ruled.add(lead.group(1).lower())
+    dropped = stated_parts.dropped_parts(note_text, ruled=ruled)
+    if not dropped:
+        return {}
+    texts = [
+        f"({p.label}) {p.text}" if len(p.label) == 1 else f"{p.label}: {p.text}" for p in dropped
+    ]
+    error: Optional[str] = None
+    on_disk: list = []
+    try:
+        on_disk = requirements_ledger._append_rows(
+            worktree_root, sizing_rel, [(t, requirements_ledger.ORIGIN_RELAYED) for t in texts]
+        )
+    except Exception as exc:  # noqa: BLE001 -- surfaced; the product commit stands
+        error = str(exc)
+    by_text = {str(r.get(rr.ROW_TEXT) or "").strip(): str(r.get(rr.ROW_ID)) for r in on_disk}
+    out: dict = {
+        "closed_as": "partial",
+        "dropped_parts": [
+            {"label": p.label, "text": p.text, "row_id": by_text.get(t.strip())}
+            for p, t in zip(dropped, texts)
+        ],
+    }
+    if error is not None:
+        out["dropped_parts_error"] = error
+    return out
 
 
 def _recorded_fingerprints(
@@ -2449,7 +2500,13 @@ def _pre_existing_dirt_refusal(
     the manifest carries no baseline."""
     if manifest is None or not manifest.write_baseline:
         return None
-    prior = _prior_pass_written(worktree_root, run_dir) if run_dir is not None else frozenset()
+    prior = frozenset()
+    if run_dir is not None:
+        from coordinator_core.ops.dispatch_emit.write_baseline import predecessor_withheld
+
+        prior = _prior_pass_written(worktree_root, run_dir) | predecessor_withheld(
+            worktree_root, _cited_sizing(worktree_root, plan_rel), run_dir
+        )
     failures: list = []
     for item in verdict.get("items") or []:
         if not isinstance(item, dict) or item.get("status") not in ("met", "post_commit"):
@@ -2479,6 +2536,33 @@ def _pre_existing_dirt_refusal(
         all_of_pm_ask=ledger.all_of_pm_ask,
         awaiting_operator=[],
     )
+
+
+def _live_claimed_inherited(root: Path, inherited: dict, claims: dict, chunk_declared: set) -> set:
+    """Inherited paths a non-halted (live) sibling claims: inheritance overrides only a halted run's
+    hold, so these stay withheld unless the request itself declares them."""
+    if not inherited:
+        return set()
+    from coordinator_core.ops import warp_run_deliverable
+    from coordinator_core.ops.dispatch_emit.sibling_claims import _norm as claim_norm
+
+    out: set = set()
+    for path in inherited:
+        owner = claims.get(claim_norm(path))
+        if path not in chunk_declared and owner is not None and not warp_run_deliverable._halted(root, owner):
+            out.add(path)
+    return out
+
+
+def _drop_inherited_withheld(
+    root: Path, withheld: dict, inherited: dict, run_id: Optional[str], plan_rel: Optional[str],
+) -> dict:
+    """``withheld`` minus the refire's inherited paths; a path another halted run still holds stays."""
+    mine = [p for p in inherited if p in withheld]
+    if not mine:
+        return withheld
+    foreign = foreign_halted_withheld(root, run_id, plan_rel, mine)
+    return {p: why for p, why in withheld.items() if p not in inherited or p in foreign}
 
 
 def _no_change_refusal(
@@ -4212,7 +4296,19 @@ def _close_block(ctx: dict, reply: dict) -> dict:
                 continue  # unpaid on a landed run: build_close_block reads it not-applicable
             legs.setdefault(leg, _leg("failed", why))
         legs.update(ctx["presets"])
-    block = build_close_block(ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"])
+    from coordinator_core.ops.dispatch_emit.run_close import receipt_inputs
+    from coordinator_core.ops.dispatch_emit.run_close_parts import close_from_sizing_text
+
+    root = Path(ctx["root"])
+    sizing_rel = _cited_sizing(root, ctx.get("plan_rel"))
+    sizing_text = _read_rel(root, sizing_rel) if sizing_rel else None
+    arm, tshirt = receipt_inputs(sizing_text)
+    block = build_close_block(
+        ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"],
+        parts=close_from_sizing_text(sizing_text),
+        run_dir=Path(home_dir(str(root), "warp")) / (ctx.get("sibling_run_id") or ctx["run_id"]),
+        arm=arm, tshirt=tshirt,
+    )
     sha = reply.get("sha")
     if ctx["applies"]:
         from coordinator_core.ops.dispatch_emit.run_close import sibling_release
@@ -4610,11 +4706,14 @@ def _terminal_commit(
 ) -> dict:
     """Run the commit and settle the run token it redeemed: a landed commit consumes the claim;
     every other return, and an exception raised before commit_v2 landed one, releases it."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
     token_state: dict = {}
     try:
-        reply = _terminal_commit_inner(
-            params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx, token_state
-        )
+        with halted_hold_release.release_scope():
+            reply = _terminal_commit_inner(
+                params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx, token_state
+            )
     except BaseException:
         _settle_token(token_state, landed=bool(token_state.get("landed")))
         raise
@@ -4746,7 +4845,15 @@ def _terminal_commit_inner(
 
     if isinstance(params, dict) and not params.get("script_path"):
         from coordinator_core.lifecycle import main_worktree_root
-        halted = halted_refusal(main_worktree_root(repo_root), params.get("run_id"), "terminal commit")
+        from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
+        from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
+        from coordinator_core.ops.dispatch_emit.halted_run_route import land_only_commit_route
+
+        root = main_worktree_root(repo_root)
+        payload = land_only_commit_route(root, params.get("run_id"))
+        if payload is not None:
+            return commit_halted_record(root, repo_root, {**params, HALTED_RECORD_PARAM: payload})
+        halted = halted_refusal(root, params.get("run_id"), "terminal commit")
         if halted is not None:
             return _error(halted, refused="halted-run")
 
@@ -5504,7 +5611,18 @@ def _terminal_commit_inner(
         all_paths = [p for p in all_paths if p not in held_paths]
     note_committed = note_rel if note_rel is not None and note_rel in all_paths else None
 
-    declared_writes = {p for c in done_chunks + partial_chunks for p in c.paths}
+    # Done and partial chunks' paths only (an undone chunk's are not own-declared), respelled to the tracked case: a refire's withheld scope must survive a spelling variant.
+    declared_writes = {case_map.get(p, p) for c in done_chunks + partial_chunks for p in c.paths}
+    chunk_declared = set(declared_writes)
+    inherited_paths: dict = {}
+    if ask_run_dir is not None:
+        inherited_paths = {
+            p: origin
+            for p, origin in inherited_scope(worktree_root, params.get(TERMINAL_RESUME_LEDGER_PARAM)).items()
+            if (worktree_root / p).is_file()
+        }
+        declared_writes |= set(inherited_paths)
+        all_paths.extend(p for p in inherited_paths if p not in all_paths and p not in held_paths)
     absent = [p for p in all_paths if not (worktree_root / p).exists()]
     dropped_absent: list = []
     deleted_paths: list = []
@@ -6025,7 +6143,11 @@ def _terminal_commit_inner(
     from coordinator_core.ops.dispatch_emit import sibling_claims as _sc
 
     own_declared = {
-        *declared_writes, *run_owned, *receipt_paths,
+        *(declared_writes - _live_claimed_inherited(
+            worktree_root, inherited_paths, claims_over(list(inherited_paths)),
+            {p for c in request.chunks for p in c.paths},
+        )),
+        *run_owned, *receipt_paths,
         *(p for p in (ask_note_rel, bookkeeping_record_path, cited_sizing, allowlist_path) if p),
     }
     if record_dir_rel:
@@ -6037,6 +6159,14 @@ def _terminal_commit_inner(
     )
     deleted_paths, withheld_deleted = _sc.filter_own(deleted_paths, sibling_claims, own_declared)
     sibling_withheld.update(withheld_deleted)
+    foreign_held = foreign_halted_withheld(
+        worktree_root, sibling_run_id, request.plan_path,
+        [p for p in (*all_paths, *deleted_paths) if p not in chunk_declared],
+    )
+    if foreign_held:
+        all_paths = [p for p in all_paths if p not in foreign_held]
+        deleted_paths = [p for p in deleted_paths if p not in foreign_held]
+        sibling_withheld.update(foreign_held)
     if sibling_withheld:
         review_land = tuple(p for p in review_land if p not in sibling_withheld)
         if not all_paths and not deleted_paths:
@@ -6262,6 +6392,7 @@ def _terminal_commit_inner(
 
     reach_reply_field: dict = {}
     shipped_reply_field: dict = {}
+    ask_note_text: Optional[str] = None
     if ask_note_rel is not None:
         reach_withheld = {
             **(dict(art_landable.withheld) if art_landable is not None else {}),
@@ -6271,9 +6402,12 @@ def _terminal_commit_inner(
             **{p: str(wh_reasons[p]) for p in wh_map},
         }
         ask_note_text = _read_rel(worktree_root, ask_note_rel)
+        shipped_withheld = _drop_inherited_withheld(
+            worktree_root, reach_withheld, inherited_paths, sibling_run_id, request.plan_path,
+        )
         reach_refused, reach_reply_field = reach_gate(
             worktree_root, ask_note_text, landing_paths=all_paths,
-            deleted_paths=deleted_paths, withheld_paths=reach_withheld,
+            deleted_paths=deleted_paths, withheld_paths=shipped_withheld,
         )
         if reach_refused is not None:
             _unstamp_landed()
@@ -6312,7 +6446,7 @@ def _terminal_commit_inner(
 
         shipped_refused, shipped_reply_field = shipped_gate(
             worktree_root, ask_note_text, landing_paths=all_paths,
-            deleted_paths=deleted_paths, withheld_paths=reach_withheld,
+            deleted_paths=deleted_paths, withheld_paths=shipped_withheld,
             own_paths=declared_writes, row_of=stranded_rows, owners=_claim_owners, run_id=sibling_run_id,
         )
         if shipped_refused is not None:
@@ -6650,7 +6784,19 @@ def _terminal_commit_inner(
                 str(params.get("run_id") or ask_run_dir.name), str(reply["sha"]),
             ))
         shipped_sizing = None
-        if not anchor_only and not incomplete_chunks and not foreign_repo:
+        dropped_sizing = None
+        dropped_mint_failed = False
+        if ask_note_text and not anchor_only and not foreign_repo:
+            dropped_sizing = cited_sizing or (ledger.sizing_rel if ledger is not None else None)
+            if dropped_sizing:
+                dropped = _dropped_part_rows(worktree_root, dropped_sizing, ask_note_text)
+                dropped_mint_failed = "dropped_parts_error" in dropped
+                reply.update(dropped)
+                if not dropped:
+                    dropped_sizing = None
+        if dropped_mint_failed:
+            reply["sizing_ship_skipped"] = "a dropped part could not be written to the register"
+        elif not anchor_only and not incomplete_chunks and not foreign_repo:
             shipped = _ship_cited_sizing(worktree_root, repo_root, request.plan_path)
             shipped_sizing = shipped.pop("sizing_shipped", None)
             reply.update(shipped)
@@ -6662,6 +6808,7 @@ def _terminal_commit_inner(
                 request.plan_path if reply.get("review_stamp") == "minted" else None,
                 reply.get("review_receipt"),
                 register_sizing,
+                dropped_sizing,
                 shipped_sizing,
             ) if p
         )

@@ -1526,11 +1526,17 @@ def _research_route_setup(
     if any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments):
         slugs = [rc.COMBINED_SCOUT_ITEM] * len(questions) if mode == "combine" else research_emit.scout_slugs(questions)
         scout_targets = [{"slug": s, "targets": q["targets"]} for s, q in zip(slugs, questions)]
+    depth = str(research.get("depth") or "standard")
+    if depth != "standard" and any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments):
+        from coordinator_core.ops.dispatch_emit.pipeline_compose import scouts_at_depth
+
+        segments = scouts_at_depth(segments, depth)
     research_ctx = {
         "root": root,
         "run_id": run_id,
         "brief": brief_rel,
         "segments": segments,
+        "scouts_per_question": depth != "standard" and any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments),
         "shape": {
             "tier": shape["tier"],
             "reason": shape["reason"],
@@ -2531,7 +2537,7 @@ def _dispatch_emit_body(
             agent_type_host=agent_type_host,
             next_action=research_ctx["next_action"],
             legs=research_ctx["legs"],
-            **fanout_kwargs,
+            **({**fanout_kwargs, "fanout_group": "split"} if research_ctx.get("scouts_per_question") else fanout_kwargs),
         )
         script = chain_parts[0].script
         receipt_extras = {

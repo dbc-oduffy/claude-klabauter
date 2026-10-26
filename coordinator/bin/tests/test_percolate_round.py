@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import List, Tuple
 
@@ -2783,15 +2784,14 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
     _init_publishable_dest(root_a)
     _init_publishable_dest(root_b)
 
-    # Speed up the timeout for this test only -- `timeout` is a keyword-only
-    # parameter on the real generator function `@contextmanager` wraps
-    # (`held_lock.__wrapped__`), so its default lives in that function's own
-    # `__kwdefaults__` and is safely patchable without touching any call
-    # site. Governs the PARENT's own `_round_held_lock` acquisition below;
-    # `publish.py`'s own lock loop no longer reads this at all -- its wait
-    # now resolves via `publish_contention_wait_secs()` (0.0 by default,
-    # deny-at-once), which is exactly the C3 behaviour under re-verify here.
-    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    # Speed up the timeout for this test only -- `held_lock` is a plain
+    # function whose keyword-only `timeout` default lives in its own
+    # `__kwdefaults__`. Governs the PARENT's own `_round_held_lock`
+    # acquisition below; `publish.py`'s own lock loop no longer reads this at
+    # all -- its wait now resolves via `publish_contention_wait_secs()` (0.0
+    # by default, deny-at-once), which is exactly the C3 behaviour under
+    # re-verify here.
+    monkeypatch.setitem(locked_write.held_lock.__kwdefaults__, "timeout", 1.0)
 
     # `publish_mod.main` runs IN-PROCESS below (no subprocess spawn despite
     # this test's `spawns_process` marker), so `os.getppid()` observed
@@ -2842,7 +2842,18 @@ def test_non_inherited_root_still_locked(tmp_path, monkeypatch):
     _init_git_repo_for_lock(root_a)
     _init_git_repo_for_lock(root_b)
 
-    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    monkeypatch.setitem(locked_write.held_lock.__kwdefaults__, "timeout", 1.0)
+
+    # The override must be live: a contended default-timeout acquire gives up
+    # near 1s, far under the 10s `LOCK_TIMEOUT_SECS` default.
+    probe_root = tmp_path / "probe"
+    probe_root.mkdir()
+    with locked_write.held_lock(probe_root, holder_label="probe-holder"):
+        started = time.monotonic()
+        with pytest.raises(locked_write.LockTimeout):
+            with locked_write.held_lock(probe_root, holder_label="probe-waiter"):
+                pass
+        assert time.monotonic() - started < locked_write.LOCK_TIMEOUT_SECS / 2
     # `publish.py`'s lock loop passes `timeout=` explicitly, resolved via
     # `percolate.wire_contract.publish_contention_wait_secs()` (0.0 by
     # default, deny-at-once) rather than `CONTENDED_LOCK_WAIT_ENV` -- the
@@ -2884,7 +2895,7 @@ def test_inherited_root_pid_mismatch_still_locked(tmp_path, monkeypatch):
     root_a.mkdir()
     _init_git_repo_for_lock(root_a)
 
-    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    monkeypatch.setitem(locked_write.held_lock.__kwdefaults__, "timeout", 1.0)
     # `publish.py`'s lock loop passes `timeout=` explicitly, resolved via
     # `percolate.wire_contract.publish_contention_wait_secs()` (0.0 by
     # default, deny-at-once) rather than `CONTENDED_LOCK_WAIT_ENV` -- the
@@ -2929,7 +2940,7 @@ def test_inherited_root_malformed_token_still_locked(tmp_path, monkeypatch):
     root_a.mkdir()
     _init_git_repo_for_lock(root_a)
 
-    monkeypatch.setitem(locked_write.held_lock.__wrapped__.__kwdefaults__, "timeout", 1.0)
+    monkeypatch.setitem(locked_write.held_lock.__kwdefaults__, "timeout", 1.0)
     # `publish.py`'s lock loop passes `timeout=` explicitly, resolved via
     # `percolate.wire_contract.publish_contention_wait_secs()` (0.0 by
     # default, deny-at-once) rather than `CONTENDED_LOCK_WAIT_ENV` -- the
@@ -3705,3 +3716,124 @@ def test_green_field7_proceeds_with_one_check(tmp_path, monkeypatch):
     assert rc == _mod._EXIT_OK
     assert reached == [1]
     assert publish.checks == 1
+
+
+_BAR_SHA = "a" * 40
+
+
+def _bar_repo(tmp_path, verdict=None):
+    src = tmp_path / "bar-source"
+    (src / ".git").mkdir(parents=True)
+    (src / ".git" / "HEAD").write_text(_BAR_SHA + "\n", encoding="utf-8")
+    if verdict is not None:
+        vp = src / "state" / "warp" / "suite-verdicts" / f"{_BAR_SHA}.json"
+        vp.parent.mkdir(parents=True)
+        vp.write_text(json.dumps(verdict), encoding="utf-8")
+    return src
+
+
+def _green(**over):
+    v = {"sha": _BAR_SHA, "tier": "full", "failed": 0, "passed": 5, "skipped": 0, "reds": [], "grant_ref": "g1"}
+    v.update(over)
+    return v
+
+
+def _drive_bar_round(tmp_path, monkeypatch, src, capsys, source_ref=None, fake_resolve=True):
+    if fake_resolve:
+        monkeypatch.setattr(_mod, "_resolve_shipped_sha", lambda root, ref: _BAR_SHA)
+    percolate_root = tmp_path / "percolate-root"
+    (percolate_root / "setup").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(src))
+    monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "dest"))
+    reached = []
+    import coordinator_core.percolate.source_preflight as sp
+
+    def _stop(*a, **k):
+        reached.append(1)
+        return "stop-here"
+
+    monkeypatch.setattr(sp, "check_source_published", _stop)
+    argv = ["alpha", "--percolate-root", str(percolate_root), "--yes"]
+    if source_ref:
+        argv += ["--source-ref", source_ref]
+    args = _mod._build_parser().parse_args(argv)
+    rc = _mod._cmd_round(args)
+    return rc, reached, capsys.readouterr().err
+
+
+def _detached_git_repo(tmp_path):
+    import subprocess
+
+    src = tmp_path / "detached-source"
+    src.mkdir()
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+    def git(*a):
+        import os
+
+        r = subprocess.run(["git", "-C", str(src), *a], capture_output=True, text=True, env={**os.environ, **env},
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip()
+
+    git("init", "-q")
+    git("commit", "-q", "--allow-empty", "-m", "one")
+    shipped = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "two")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "--detach", head)
+    git("-c", "tag.gpgsign=false", "-c", "tag.forceSignAnnotated=false", "update-ref", "refs/tags/ship", shipped)
+    return src, shipped, head
+
+
+@pytest.mark.fold_bar_real
+class TestFoldBarRefusal:
+    def test_no_verdict_is_advisory_and_round_proceeds(self, tmp_path, monkeypatch, capsys):
+        _rc, reached, err = _drive_bar_round(tmp_path, monkeypatch, _bar_repo(tmp_path), capsys)
+        assert reached == [1]
+        assert "advisory, proceeding: fold bar: no recorded" in err
+
+    def test_red_without_first_red_commit_is_advisory(self, tmp_path, monkeypatch, capsys):
+        v = _green(failed=1, reds=[{"nodeid": "t.py::x"}])
+        _rc, reached, err = _drive_bar_round(tmp_path, monkeypatch, _bar_repo(tmp_path, v), capsys)
+        assert reached == [1]
+        assert "advisory, proceeding" in err and "t.py::x" in err and "failed=1" in err
+
+    def test_failed_with_bisected_red_is_advisory(self, tmp_path, monkeypatch, capsys):
+        v = _green(failed=1, reds=[{"nodeid": "t.py::x", "first_red_commit": "b" * 40}])
+        _rc, reached, err = _drive_bar_round(tmp_path, monkeypatch, _bar_repo(tmp_path, v), capsys)
+        assert reached == [1]
+        assert "advisory, proceeding" in err and "failed=1" in err
+
+    def test_detached_head_with_source_ref_is_gated_on_the_ref_verdict(self, tmp_path, monkeypatch, capsys):
+        src, shipped, head = _detached_git_repo(tmp_path)
+        seen = []
+        from coordinator_core.ops import fold_bar
+
+        def _verdict(sha, repo_root):
+            seen.append(sha)
+            return fold_bar.FoldBarResult(sha == shipped, sha)
+
+        monkeypatch.setattr(fold_bar, "verdict", _verdict)
+        rc, reached, err = _drive_bar_round(tmp_path, monkeypatch, src, capsys, source_ref="ship", fake_resolve=False)
+        assert seen == [shipped]
+        assert reached == [1]
+        assert "fold bar" not in err
+        seen.clear()
+        rc, reached, err = _drive_bar_round(tmp_path, monkeypatch, src, capsys, fake_resolve=False)
+        assert seen == [head]
+        assert "advisory, proceeding" in err
+        assert reached == [1]
+
+    def test_unresolvable_ref_advises_naming_the_ref(self, tmp_path, monkeypatch, capsys):
+        src, _shipped, _head = _detached_git_repo(tmp_path)
+        _rc, _reached, err = _drive_bar_round(
+            tmp_path, monkeypatch, src, capsys, source_ref="no-such-ref", fake_resolve=False
+        )
+        assert "no-such-ref" in err
+        assert "no sha given" not in err
+
+    def test_green_full_tier_verdict_lets_the_round_proceed(self, tmp_path, monkeypatch, capsys):
+        _rc, reached, err = _drive_bar_round(tmp_path, monkeypatch, _bar_repo(tmp_path, _green()), capsys)
+        assert reached == [1]
+        assert "fold bar" not in err

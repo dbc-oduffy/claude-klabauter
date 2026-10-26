@@ -121,8 +121,14 @@ from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     RECOVERY_ATTEMPT_CAP,
     RECOVERY_RECORD_FILE,
     RECOVERY_WITHHELD_PARAM,
+    REMNANT_ATTEMPT_CAP,
+    REMNANT_ITEMS_JS,
+    REMNANT_LABEL,
+    REMNANT_PHASE,
+    REMNANT_REVERIFY_LABEL,
     REOPEN_PLAN_JS,
     ledger_fix_prompt,
+    remnant_prompt,
 )
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
@@ -297,13 +303,17 @@ def _agent(
     run_id: str = _UNKEYED_RUN,
     agent_model: Optional[str] = None,
     effort: Optional[str] = None,
+    inherit_model: bool = False,
 ) -> str:
     """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
 
     Trap: a composer call site that omits ``run_id`` files its sidecar under ``_UNKEYED_RUN``;
     ``test_ask_prompts_name_sidecar_dir`` pins that no composed ask script does.
+    ``inherit_model`` emits no `model:`/`effort:` option: a typed plugin agent's definition supplies both,
+    and an explicit model on a typed call is denied.
     """
-    effort_opt = f"effort: {_lit(effort)}, " if effort else ""
+    effort_opt = f"effort: {_lit(effort)}, " if effort and not inherit_model else ""
+    model_opt = "" if inherit_model else f"{_emit._model_opt(agent_type, agent_model)}, "
     clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, label)))
     if "coordinator-invoke" in prompt_expr:
         if LAND_RUN_OP in prompt_expr:
@@ -318,7 +328,7 @@ def _agent(
             clause = _lit(_emit._INVOKE_LITERAL_CLAUSE) + " + " + clause
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
-        f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, {effort_opt}"
+        f"agentType: {_lit(agent_type)}, {model_opt}{effort_opt}"
         f"schema: {json.dumps(schema, sort_keys=True)} }})"
     )
 
@@ -354,6 +364,13 @@ _ANCHOR_PREMISES_SENTENCE = (
     f"The gate evaluates a check in-process only as {_ANCHOR_GRAMMAR}: grep -c stages joined by "
     "&&, one file each, no pipes, redirects or other shell operators; any other check is pulled "
     "as anchor-premise-no-verdict. "
+)
+#: Appended to the plan-revise and ledger-replan prompts: the author edits the plan it is handed.
+_EDIT_IN_PLACE_NO_REREAD = (
+    " Work from the existing plan and the findings, premise-check and prior-art outputs carried "
+    "here: re-reading the repo as a fresh author is the cost this leg avoids. Open a file only to "
+    "check a path or symbol a finding or row names, and keep every plan row and section the "
+    "findings do not touch byte-for-byte."
 )
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
@@ -547,9 +564,9 @@ _LEDGER_ITEMS_RULES = (
     "(baton_archive), or the plan stamped implemented (plan_implemented); the terminal commit writes both "
     "lifecycle acts -- named in "
     "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
-    "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. Set essential false only for an "
-    "item that is an aside rather than something the PM asked to have delivered; when the ledger "
-    "says all_of_pm_ask yes, every item is mandatory and essential does not apply. evidence is one "
+    "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. A 'not_met' item blocks "
+    "the close whatever its essential flag (the gate resets it to true); when the ledger "
+    "says all_of_pm_ask yes, every item is mandatory. evidence is one "
     "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
     "part of the item not yet true, naming a post-commit act exactly (" + ", ".join(POST_COMMIT_ACTS) + ") "
     "and any other gap in plain words. On a design-registry item (anchor design-registry:<id>) judged "
@@ -931,7 +948,7 @@ def _test_blockers_js(src_expr: str, out_prefix: str, own_paths_expr: Optional[s
     return (
         f"    const {p}Src = {src_expr};\n"
         + own
-        + f"    const {p}Excluded = new Set([...({p}Src?.pre_existing ?? []), ...({p}Src?.kept ?? [])].map(String));\n"
+        + f"    const {p}Excluded = new Set([...({p}Src?.pre_existing ?? []), ...({p}Src?.sibling_owned ?? []), ...({p}Src?.kept ?? [])].map(String));\n"
         f"    const {p}Resolved = {p}Src?.status_after === 'pass';\n"
         f"    const {p}Detail = new Map();\n"
         f"    const {p}Raw = {p}Src?.{FAILING_DETAIL_FIELD};\n"
@@ -1018,9 +1035,13 @@ _WAVE_TESTS_GATE_FN = "_waveTestsGreen"
 
 
 def _wave_tests_green_js(
-    agent_type_host: Optional[str], *, repo_root: Optional[str], run_id: str, em_brief: bool = False
+    agent_type_host: Optional[str], *, repo_root: Optional[str], run_id: str, em_brief: bool = False,
+    objective: bool = False,
 ) -> str:
     """`_waveTestsGreen(n, ids)`: the checkpoint's pre-commit gate over wave n's cumulative declared tests.
+
+    With `objective`, the gate opens with `_objectiveWaveCheck(n)`: the wave's falsifier check rides the
+    checkpoint leg and never gates the commit.
 
     An empty scope passes. Otherwise one test-runner leg runs the scope, and only the returned
     `status` gates (`pass` / `pass-with-skips` land); a throw, a missing sidecar or any other
@@ -1035,7 +1056,8 @@ def _wave_tests_green_js(
     return (
         "  const _checkpointWithheld = [];\n"
         f"  async function {_WAVE_TESTS_GATE_FN}(n, ids) {{\n"
-        "    const scope = ((_manifest && _manifest.wave_test_targets) ?? {})[String(n)] ?? [];\n"
+        + ("    await _objectiveWaveCheck(n);\n" if objective else "")
+        + "    const scope = ((_manifest && _manifest.wave_test_targets) ?? {})[String(n)] ?? [];\n"
         "    if (!scope.length) return true;\n"
         "    let r = null;\n"
         "    try {\n"
@@ -1458,6 +1480,171 @@ def _ledger_recover_js(
     )
 
 
+_REMNANT_COMPLETE_JS = r"""
+    const _remnantComplete = async () => {
+      if (_gate.arm === __XS__ || _halted) return;
+      const rulable = _manifest?.rulable_ids ?? _gate.__RL__?.rulable_ids ?? [];
+      const heldIds = [...(_manifest.gated ?? []), ...(_manifest.slot_withheld ?? [])].map((g) => String(g.id)).concat((_manifest.held_ids ?? []).map(String));
+      const open = (_ledger ? _ledgerBlocking(_ledger) : []).filter((i) => !rulable.includes(i.id) && !(Array.isArray(i.owed_by) && i.owed_by.length > 0));
+      const capped = (_ledger?.items ?? []).filter((i) => i && i.status === 'not_met' && typeof i.withheld_by === 'string' && _recoveryWithheld.includes(i.withheld_by) && !heldIds.includes(i.withheld_by));
+      const origWithheld = Object.fromEntries(capped.map((i) => [i.id, i.withheld_by]));
+      const view = [...open, ...capped].map((i) => (i.id in origWithheld ? { ...i, withheld_by: undefined } : i));
+      const rmItems = _remnantItems(view, open.map((i) => i.id), capped.map((i) => i.id), __FV__, _deliveryVerdict);
+      if (!rmItems.length) return;
+      const _fpP = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+      const footprint = [...new Set([
+        ...rmItems.flatMap((i) => i.paths ?? []),
+        ...(_manifest.rows ?? []).flatMap((r) => [...(r?.writes ?? []).map(_fpP), ...(r?.writes_under ?? []).map((d) => _fpP(d).replace(/\/+$/, '') + '/')]),
+        ...(_manifest.doc_writes ?? []).map(_fpP),
+      ])];
+      const inFootprint = (p) => footprint.some((f) => (f.endsWith('/') ? p.startsWith(f) : f === p));
+      const itemsText = JSON.stringify(rmItems);
+      const fpText = JSON.stringify(footprint);
+      const rec = { field: 'remnant', loop_owner: 'engine', cap: __CAP__, items: rmItems.map((i) => ({ kind: i.kind, id: i.id })), footprint, status: 'open', paths: [], last_reason: '' };
+      let leg = null;
+      try { leg = await __REMNANTCALL__; }
+      catch (e) {
+        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        log('remnant-complete leg threw: ' + String((e && e.message) ?? e));
+      }
+      if (_halted) return;
+      if (!leg || typeof leg !== 'object') { rec.status = 'blocked'; rec.last_reason = 'remnant leg returned no result'; }
+      else {
+        const outside = (Array.isArray(leg.paths) ? leg.paths : []).map(_fpP).filter((p) => !inFootprint(p));
+        rec.last_reason = String(leg.reason ?? '');
+        if (outside.length) { rec.paths = outside; rec.status = 'blocked'; rec.last_reason = 'remnant wrote outside the footprint: ' + outside.join(', '); }
+        else if (leg.status === 'BLOCKED') rec.status = 'blocked';
+      }
+      if (rec.status === 'open') {
+        const rmTestWanted = !!((_manifest.test_targets ?? []).length);
+        __DOCSWANTED__
+        let rv = null;
+        try { rv = await __REVERIFYCALL__; }
+        catch (e) {
+          if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+          log('remnant-reverify leg threw: ' + String((e && e.message) ?? e));
+        }
+        if (_halted) return;
+        if (rv && typeof rv === 'object') {
+          if (rmTestWanted && rv.test) __TEST__ = rv.test;
+          if (rmDocsWanted && Array.isArray(rv.doc_paths)) _docs = { doc_paths: rv.doc_paths, note_path: rv.note_path ?? null, stale_docs: Array.isArray(rv.stale_docs) ? rv.stale_docs : [] };
+          __JUDGE__
+          if (Array.isArray(rv.items)) {
+            _ledger = { all_of_pm_ask: rv.all_of_pm_ask === true, items: rv.items, conflicts: Array.isArray(rv.conflicts) ? rv.conflicts : [] };
+            _normaliseLedger();
+            __RECONCILE__
+            for (const i of _ledger.items) if (i && i.status === 'not_met' && origWithheld[i.id]) i.withheld_by = origWithheld[i.id];
+          }
+          if (rv.delivery && typeof rv.delivery === 'object' && rv.delivery.verdict) _deliveryVerdict = { ...(_deliveryVerdict ?? {}), ...rv.delivery };
+        } else { rec.last_reason = 'remnant re-verify returned no result'; }
+        const stillOpen = [];
+        if (_ledger) for (const i of _ledgerBlocking(_ledger)) stillOpen.push(i.id);
+        if (__FV__?.status === 'not_met') stillOpen.push('criterion');
+        if (_deliveryVerdict?.verdict === 'FAIL') stillOpen.push('delivery');
+        rec.status = stillOpen.length ? 'exhausted' : 'fixed';
+        rec.still_open = stillOpen;
+      }
+      const recordText = JSON.stringify(rec);
+      try { await __RECORDCALL__; }
+      catch (e) {
+        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        log('remnant record leg threw: ' + String((e && e.message) ?? e));
+      }
+    };
+    if (!_halted) await _remnantComplete();
+"""
+
+
+def _remnant_complete_js(
+    *,
+    head: str,
+    anchor: str,
+    session_tail: str,
+    record_dir: str,
+    run_id: str,
+    judged: bool,
+    test_js: str,
+    docs_parts: Sequence[str],
+    verdict_parts: Sequence[str],
+    schema: dict,
+) -> str:
+    """The `_remnantComplete()` definition and its one call, composed right after `_ledger_recover_js`.
+
+    One writing leg over `_remnantItems(...)`, then one re-verify that re-reads `_ledger`, the
+    falsifier verdict and `_deliveryVerdict`. A gap still open leaves them not_met, so the close
+    halts with today's codes. The attempt lands in recovery.json under `remnant` (loop owner: engine).
+    Trap: it reads `_ledgerBlocking`, `_normaliseLedger` and
+    `_remnantItems`, which must precede it in the script.
+    """
+    fv = _emit._FALSIFIER_RESULT_VAR
+    leg_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nRemnant-completion leg. ",
+        *_prompt_parts(remnant_prompt("itemsText", "fpText")),
+        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
+    )
+    leg_call = _agent(
+        leg_prompt, label=REMNANT_LABEL, phase=REMNANT_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=LEDGER_FIX_SCHEMA, run_id=run_id,
+    )
+    docs_js = (
+        f"js:(rmDocsWanted ? ({_cat(*docs_parts)}) : {_lit(_VERIFY_NO_DOCS)})" if docs_parts else _VERIFY_NO_DOCS
+    )
+    reverify_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nRemnant re-verify. A remnant leg just ran over these items (each gap was still true): ",
+        "js:itemsText",
+        ". You edit, stage and commit nothing apart from step 2's declared doc writes, and you never change a file "
+        "to make a requirement true. (1) TESTS. Start the scoped tests first. ",
+        f"js:(rmTestWanted ? ({test_js}) : {_lit(_VERIFY_NO_TESTS)})",
+        "\n\n(2) DOCS. ",
+        docs_js,
+        "\n\n(3) VERDICT. Once the test result is in, read it before you rule. Re-run each item's checks first: ",
+        "js:JSON.stringify(rmItems.map((i) => ({ id: i.id, checks: i.checks })))",
+        ". Then rule the whole run again. ",
+        *verdict_parts,
+        "\n\nReturn one object: `test`, " + ("`judge`, " if judged else "") + "`items`, `all_of_pm_ask` and `conflicts`, "
+        "`doc_paths`, `note_path` and `stale_docs`, and `delivery` ({verdict: PASS or FAIL, reason}) ruled on the "
+        "delivery items above.",
+    )
+    props = dict(schema["properties"])
+    props["delivery"] = _obj(["verdict"], {"verdict": _STR, "reason": _STR})
+    reverify_call = _agent(
+        reverify_prompt, label=REMNANT_REVERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema={**schema, "properties": props}, run_id=run_id,
+    )
+    record_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nUpdate the file {record_dir}/{RECOVERY_RECORD_FILE} with the Write tool (create its "
+        "directory if missing). When it exists, read it and keep every key it holds; set its top-level key `remnant` to "
+        "exactly this JSON text: ",
+        "js:recordText",
+        ". Edit nothing else. Return {written: true} once it is on disk.",
+    )
+    record_call = _agent(
+        record_prompt, label="remnant-record", phase=REMNANT_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        effort=_MECHANICAL_EFFORT, schema=_obj(["written"], {"written": {"type": "boolean"}}), run_id=run_id,
+    )
+    docs_wanted = (
+        "const rmDocsWanted = !!(!_halted && !_resumeLedger && _manifest && !_manifest.error && !_viaRoadmap && _RUN_TOKEN);"
+        if docs_parts
+        else "const rmDocsWanted = false;"
+    )
+    judge = (
+        f"if (rv.judge) {fv} = {_emit._JUDGE_VERDICT_RULES_JS}(rv.judge, {_GATED_LIST_JS});" if judged else ""
+    )
+    return (
+        _REMNANT_COMPLETE_JS.replace("__CAP__", str(REMNANT_ATTEMPT_CAP))
+        .replace("__RL__", RESUME_LEDGER_KEY)
+        .replace("__XS__", _lit(ARM_XS))
+        .replace("__TEST__", _emit._TEST_RESULT_VAR)
+        .replace("__FV__", fv if judged else "null")
+        .replace("__REMNANTCALL__", leg_call)
+        .replace("__REVERIFYCALL__", reverify_call)
+        .replace("__RECORDCALL__", record_call)
+        .replace("__DOCSWANTED__", docs_wanted)
+        .replace("__JUDGE__", judge)
+        .replace("__RECONCILE__", "_reconcileJudged();" if judged else "")
+    )
+
+
 def _fire_tier_js() -> str:
     """JS expression for the execute wave's tier at fire time, from `_gate.tshirt`.
 
@@ -1872,6 +2059,322 @@ def _routed_row_js(work_label: str, exec_phase: str) -> str:
     )
 
 
+OBJECTIVE_FALSIFIER_AGENT = "coordinator:exit-criterion-falsifier"
+OBJECTIVE_JUDGE_AGENT = "coordinator:exit-criterion-judge"
+OBJECTIVE_RESEARCH_AGENT = "coordinator:research-scout"
+#: Falsifier rewrites the wave-0 calibration leg grants before it halts with the calibration record.
+OBJECTIVE_CALIBRATION_REWRITES = 1
+#: Delta rows one reacher batch runs in parallel (the `cap_waves` role for rows the plan never staged).
+OBJECTIVE_WAVE_CAP = 4
+#: Rethinks one run may spend; the next exhaustion escalates as ceiling. The script has no clock
+#: (`Date.now()` is forbidden in a Workflow script), so this is the only hard bound: the spend ceiling sums
+#: the `cost_usd` agents report in their replies and stays 0 when they omit it.
+OBJECTIVE_MAX_RETHINKS = 3
+HALT_OBJECTIVE_CALIBRATION = "objective_calibration"
+HALT_OBJECTIVE_IMPOSSIBLE = "objective_impossible"
+HALT_OBJECTIVE_ESCALATED = "objective_escalated"
+_OBJECTIVE_LINE = (
+    "Objective: read {objective} on entry. It holds the PM's verbatim promise, the falsifier and the "
+    "axes this run is held to; an agent's own sense of done never replaces the falsifier."
+)
+
+
+def objective_settings(repo_root: str, objective_rel: str) -> Optional[dict]:
+    """The run's objective.json knobs (attempts, minutes, tokens, ceilings, falsifier path), else None.
+
+    None means the file is absent or unreadable: the composed script then carries no objective legs.
+    `minutes` and `ceiling_wall_minutes` are returned but no leg enforces them.
+    """
+    try:
+        data = json.loads((Path(repo_root) / objective_rel).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    out = objective_defaults()
+    for key in ("attempts_n", "minutes", "tokens", "ceiling_spend_usd", "ceiling_wall_minutes"):
+        value = data.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            out[key] = value
+    out["falsifier_script"] = str(data.get("falsifier_script") or "")
+    return out
+
+
+def objective_defaults() -> dict:
+    """The loop knobs objective.json may override: attempts n, minutes, tokens and the outer ceiling."""
+    from coordinator_core.ops.dispatch_emit import objective_contract as oc
+
+    return {
+        "attempts_n": oc.MAX_REACHER_ITERATIONS,
+        "minutes": oc.DEFAULT_MINUTES,
+        "tokens": oc.DEFAULT_TOKENS,
+        "ceiling_spend_usd": oc.DEFAULT_CEILING_SPEND_USD,
+        "ceiling_wall_minutes": oc.DEFAULT_CEILING_WALL_MINUTES,
+        "falsifier_script": "",
+    }
+
+
+_OBJECTIVE_JS = r"""
+  const _OBJ = __SETTINGS__;
+  let _objSpend = 0, _objTokens = 0, _objWindowTokens = 0, _objLast = null, _objEverFailed = false;
+  let _objCalibration = null, _objResult = null, _objWaveMax = 0;
+  const _objRethinks = [], _objIterations = [], _objChecked = new Set();
+  const _objCmd = (op, p) => 'coordinator-invoke ' + op + " '" + String(JSON.stringify(p)).replace(/'/g, "'\\''") + "'";
+  const _objNote = (r) => {
+    if (r && typeof r.cost_usd === 'number') _objSpend += r.cost_usd;
+    if (r && typeof r.tokens === 'number') { _objTokens += r.tokens; _objWindowTokens += r.tokens; }
+  };
+  const _objCaught = (e) => { if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) _haltOnUsageLimit(e); return null; };
+  async function _objCheck(n, iteration) {
+    _objWaveMax = Math.max(_objWaveMax, n);
+    const cmd = _objCmd(__OPCHECK__, { run_id: _runId, wave: n, iteration, spend_usd: _objSpend, diff_range: _runBase, plan_path: _planRel ?? '', check_cost_usd: 0, check_llm_calls: 0 });
+    let r = null;
+    try { r = await __CHECKCALL__; } catch (e) { r = _objCaught(e); }
+    const out = { status: (r && r.status === 'met') ? 'met' : 'not_met', wave: n, iteration,
+      axes: Array.isArray(r?.axes) ? r.axes : [], failing: Array.isArray(r?.failing) ? r.failing : [],
+      error: r?.error ?? (r ? null : 'no check reply') };
+    if (out.status !== 'met') _objEverFailed = true;
+    _objLast = out;
+    _objIterations.push({ iteration, wave: n, falsifier_lines: out.axes, delta_plan_path: null, spend_usd: _objSpend,
+      check_cost_usd: Number(r?.check_cost_usd ?? 0), check_llm_calls: Number(r?.check_llm_calls ?? 0) });
+    return out;
+  }
+  async function _objectiveWaveCheck(n) {
+    if (_objChecked.has(n)) return;
+    _objChecked.add(n);
+    try { const o = await _objCheck(n, 0); log('objective check of wave ' + n + ': ' + o.status); } catch (e) { _objCaught(e); }
+  }
+  async function _objectiveCalibrate() {
+    if (_halted) return;
+    const credited = __CREDITED__.filter((c) => c && typeof c === 'object' && c.sha)
+      .map((c) => ({ sha: String(c.sha), repo_root: c.repo_root ?? REPO_ROOT, axes: Array.isArray(c.axes) ? c.axes : [] }));
+    for (let rewrites = 0; ; rewrites++) {
+      const cmd = _objCmd(__OPCALIBRATE__, { run_id: _runId, at: 'wave0', credited });
+      let r = null;
+      try { r = await __CALIBRATECALL__; } catch (e) { r = _objCaught(e); }
+      _objCalibration = r?.calibration ?? { base: [], credited: [], verdict: 'fail' };
+      if (r && r.calibrated === true && r.verdict === 'pass') return;
+      if (rewrites >= __REWRITES__) {
+        _halted = { halted: __HALTCAL__, reason: 'falsifier calibration failed: ' + JSON.stringify((r?.problems ?? [r?.error ?? 'no calibration reply'])).slice(0, 400),
+          calibration: _objCalibration, sizing: _sizingRel, run_id: _runId };
+        return;
+      }
+      const problems = JSON.stringify(r?.problems ?? [r?.error ?? 'no calibration reply']);
+      try { _objNote(await __REWRITECALL__); } catch (e) { _objCaught(e); }
+    }
+  }
+  async function _objRunRows(rows, iteration) {
+    const byWave = {};
+    for (const row of rows) (byWave[Number(row.wave ?? 0)] ??= []).push(row);
+    for (const w of Object.keys(byWave).map(Number).sort((a, b) => a - b)) {
+      for (let i = 0; i < byWave[w].length; i += __WAVECAP__) {
+        const out = await Promise.all(byWave[w].slice(i, i + __WAVECAP__).map(async (row) => {
+          try { return await __ROWCALL__; } catch (e) { return _objCaught(e); }
+        }));
+        out.forEach(_objNote);
+      }
+    }
+  }
+  function _objBuild(outcome, exitReason) {
+    const failing = (_objLast?.failing ?? []).map((a) => a.axis);
+    return { iterations: _objIterations, outcome, first_pass: outcome === 'met' && !_objEverFailed && !_objRethinks.length,
+      exit_reason: exitReason, unmet_axes: outcome === 'met' ? [] : failing, rethinks: _objRethinks, calibration: _objCalibration };
+  }
+  function _objExit(outcome, exitReason, haltCode, reason) {
+    _objResult = _objBuild(outcome, exitReason);
+    if (outcome !== 'met') {
+      _halted = { halted: haltCode, reason, sizing: _sizingRel, run_id: _runId, objective_loop: _objResult,
+        next_action: { kind: 'escalate_to_em_pm', op: null, params: { run_id: _runId, outcome, exit_reason: exitReason, unmet_axes: _objResult.unmet_axes } } };
+    }
+  }
+  async function _objectiveGate() {
+    if (_halted || !_manifest || _manifest.error) return;
+    let last = _objLast ?? await _objCheck(_objWaveMax, 0);
+    let attempts = 0, iteration = 0;
+    while (last.status !== 'met') {
+      const exhausted = attempts >= _OBJ.attempts_n || _objWindowTokens >= _OBJ.tokens;
+      if (_objSpend >= _OBJ.ceiling_spend_usd || (exhausted && _objRethinks.length >= __MAXRETHINKS__)) {
+        _objExit('doctrine_conflict', 'ceiling', __HALTESC__, 'objective ceiling reached (spend or rethinks) with axes unmet');
+        return;
+      }
+      iteration++;
+      const budgetLeft = Math.max(0, _OBJ.ceiling_spend_usd - _objSpend);
+      let plan = null;
+      if (exhausted) {
+        const trigger = attempts >= _OBJ.attempts_n ? 'attempts' : 'tokens';
+        let found = null;
+        try { found = await __RESEARCHCALL__; _objNote(found); } catch (e) { _objCaught(e); }
+        let rv = null;
+        try { rv = await __RETHINKCALL__; _objNote(rv); } catch (e) { _objCaught(e); }
+        const verdict = rv && ['impossible', 'escalate', 'new_plan'].includes(rv.verdict) ? rv.verdict : 'escalate';
+        _objRethinks.push({ trigger, approach_path: rv?.approach_path ?? null, verdict });
+        if (verdict === 'impossible') { _objExit('impossible', 'impossible', __HALTIMP__, String(rv?.reason ?? 'rethink found the objective impossible')); return; }
+        if (verdict === 'escalate') { _objExit('doctrine_conflict', 'first_officer', __HALTESC__, String(rv?.reason ?? 'rethink found the objective against First Officer doctrine')); return; }
+        attempts = 0; _objWindowTokens = 0;
+        plan = rv;
+      } else {
+        let jv = null;
+        try { jv = await __JUDGECALL__; _objNote(jv); } catch (e) { _objCaught(e); }
+        attempts++;
+        plan = jv;
+      }
+      const rows = Array.isArray(plan?.rows) ? plan.rows : [];
+      _objIterations.push({ iteration, wave: _objWaveMax, falsifier_lines: [], delta_plan_path: plan?.delta_plan_path ?? plan?.approach_path ?? null, spend_usd: _objSpend, check_cost_usd: 0, check_llm_calls: 0 });
+      if (rows.length) await _objRunRows(rows, iteration);
+      last = await _objCheck(_objWaveMax + iteration, iteration);
+    }
+    _objExit('met', 'verified', null, '');
+  }
+"""
+
+
+def _objective_js(
+    *, head: str, anchor: str, session_tail: str, run_id: str, objective_rel: str, settings: dict,
+    credited_js: str,
+) -> str:
+    """The objective legs' definitions: the per-wave check, wave-0 calibration and the bounded terminal gate.
+
+    The check is deterministic code behind one haiku relay; the judge fires only at the terminal gate on
+    not_met, and an exhausted attempt budget enters the Opus rethink, never a close. Trap: reads
+    `_runBase`, `_planRel`, `_halted`, `_manifest`, `_USAGE_LIMIT_RE` and `_haltOnUsageLimit`.
+    """
+    from coordinator_core.ops.dispatch_emit import objective_contract as oc
+
+    phase = _emit._EXECUTE_PHASE_TITLE
+    ledger_obj = f"Read {objective_rel} first: the PM's verbatim promise and the axes. "
+    relay_tail = (
+        "Run exactly this one command as its own Bash call, with its command word as written, and return its JSON reply "
+        "verbatim. Run nothing else."
+    )
+    check_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nObjective check leg (code, not a judgment). {relay_tail}\n\n",
+        "js:cmd",
+        "\n\nIf the reply's `failing` holds a behaviour-kind axis whose `command` is empty and which carries no `reason`, "
+        "judge that one axis yourself from its evidence against the claim in " + objective_rel + " (at most one judgment per such "
+        "axis), then run the same command once more with `haiku_axes` added ({axis: {pass, evidence}}) and `check_llm_calls` "
+        "set to the number of axes you judged, and return that second reply instead. Never pass an axis that has a command.",
+        session_tail,
+    )
+    reply_schema = _obj(
+        ["status"],
+        {
+            "status": _STR,
+            "axes": {"type": "array", "items": {"type": "object"}},
+            "failing": {"type": "array", "items": {"type": "object"}},
+            "error": {"type": ["string", "null"]},
+            "check_cost_usd": {"type": "number"},
+            "check_llm_calls": {"type": "number"},
+        },
+    )
+    check_call = _agent(
+        check_prompt, label="objective-check:wave-", phase=phase, agent_type=_emit._TEST_AGENT_TYPE,
+        schema=reply_schema, run_id=run_id, inherit_model=True,
+    ).replace("label: 'objective-check:wave-',", "label: 'objective-check:wave-' + n,", 1)
+
+    calibrate_prompt = _cat(
+        f"{head}\n\n{anchor}\n\nWave-0 falsifier calibration leg (code, not a judgment). {relay_tail}\n\n",
+        "js:cmd",
+        session_tail,
+    )
+    calibrate_call = _agent(
+        calibrate_prompt, label="objective-calibrate", phase=phase, agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_obj(["calibrated"], {
+            "calibrated": {"type": "boolean"}, "verdict": _STR, "pinned": {"type": "boolean"},
+            "problems": {"type": "array", "items": {"type": "object"}}, "calibration": {"type": "object"},
+            "error": {"type": ["string", "null"]},
+        }),
+        run_id=run_id, inherit_model=True,
+    )
+    rewrite_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n{ledger_obj}Falsifier rewrite leg. The wave-0 calibration found a falsifier that cannot tell "
+        "base from the credited work: ",
+        "js:problems",
+        f". Rewrite {settings['falsifier_script'] or 'the falsifier script named in the objective'} so every axis not yet done "
+        "fails at base and every credited axis passes at its credited sha, then set `falsifier_candidate_sha256` in "
+        f"{objective_rel} to the new script's sha256 (that key only). Edit nothing else and run no executor work.{session_tail}",
+    )
+    rewrite_call = _agent(
+        rewrite_prompt, label="objective-falsifier-rewrite", phase=phase, agent_type=OBJECTIVE_FALSIFIER_AGENT,
+        schema=_obj(["rewritten"], {"rewritten": {"type": "boolean"}}), run_id=run_id, inherit_model=True,
+    )
+    judge_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n{ledger_obj}Objective gate. The falsifier ruled not_met. Input ",
+        "js:JSON.stringify({ objective_path: " + _lit(objective_rel) + ", failing: last.failing, diff_range: _runBase, "
+        "budget_left_usd: budgetLeft, iteration })",
+        ". You rule not_met with the failing axes, never indeterminate and never done: only a passing falsifier "
+        "ends this. Write a delta plan to "
+        f"{objective_rel.rsplit('/', 1)[0]}/delta-plan-<iteration>.md and return it as `delta_plan_path` with `rows` "
+        "([{id, title, body, writes, wave}]) that make the failing axes pass. Do not edit the falsifier, base.json or objective.json."
+        f"{session_tail}",
+    )
+    judge_call = _agent(
+        judge_prompt, label="objective-judge", phase=phase, agent_type=OBJECTIVE_JUDGE_AGENT,
+        schema=_obj(["delta_plan_path", "rows"], {
+            "delta_plan_path": _STR, "rows": {"type": "array", "items": {"type": "object"}}, "reason": _STR,
+            "cost_usd": {"type": "number"}, "tokens": {"type": "number"},
+        }),
+        run_id=run_id, inherit_model=True,
+    ).replace("label: 'objective-judge',", "label: 'objective-judge:' + iteration,", 1)
+    research_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n{ledger_obj}Rethink research. ",
+        "js:(trigger + ' exhausted after ' + attempts + ' attempts; failing: ' + JSON.stringify(last.failing))",
+        f". Do not retry: research why the attempts failed and how to actually succeed, and write findings next to "
+        f"{objective_rel}. Return `findings_path`.{session_tail}",
+    )
+    research_call = _agent(
+        research_prompt, label="objective-research", phase=phase, agent_type=OBJECTIVE_RESEARCH_AGENT,
+        schema=_obj(["findings_path"], {"findings_path": _STR, "cost_usd": {"type": "number"}, "tokens": {"type": "number"}}),
+        run_id=run_id, inherit_model=True,
+    ).replace("label: 'objective-research',", "label: 'objective-research:' + iteration,", 1)
+    rethink_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n{ledger_obj}Rethink plan. Findings: ",
+        "js:String(found?.findings_path ?? 'none')",
+        ". Decide: the objective is `impossible` (record the evidence), `escalate` (pursuing it would go against First Officer "
+        "doctrine; the EM and PM decide), or `new_plan` (a new approach, written as a delta plan, with `rows` "
+        f"[{{id, title, body, writes, wave}}]). Return `verdict`, `reason`, `approach_path` and `rows`.{session_tail}",
+    )
+    rethink_call = _agent(
+        rethink_prompt, label="objective-rethink", phase=phase, agent_type=_PLAN_AUTHOR_AGENT_TYPE,
+        schema=_obj(["verdict"], {
+            "verdict": {"type": "string", "enum": ["impossible", "escalate", "new_plan"]}, "reason": _STR,
+            "approach_path": {"type": ["string", "null"]}, "rows": {"type": "array", "items": {"type": "object"}},
+            "cost_usd": {"type": "number"}, "tokens": {"type": "number"},
+        }),
+        run_id=run_id, inherit_model=True,
+    ).replace("label: 'objective-rethink',", "label: 'objective-rethink:' + iteration,", 1)
+    row_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n{ledger_obj}Objective row ",
+        "js:JSON.stringify(row)",
+        ". Deliver exactly this row and write only the paths in its `writes`; never edit the falsifier script, base.json or "
+        f"objective.json. You stage and commit nothing.{session_tail}",
+    )
+    row_call = _agent(
+        row_prompt, label="objective-row:", phase=phase, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        schema=_obj(["status"], {"status": _STR, "summary": _STR, "cost_usd": {"type": "number"}, "tokens": {"type": "number"}}),
+        run_id=run_id, inherit_model=True,
+    ).replace("label: 'objective-row:',", "label: 'objective-row:' + String(row.id),", 1)
+
+    return (
+        _OBJECTIVE_JS.replace("__SETTINGS__", json.dumps({k: v for k, v in settings.items() if k != "falsifier_script"}))
+        .replace("__OPCHECK__", _lit(oc.OP_CHECK))
+        .replace("__OPCALIBRATE__", _lit(oc.OP_CALIBRATE))
+        .replace("__CHECKCALL__", check_call)
+        .replace("__CALIBRATECALL__", calibrate_call)
+        .replace("__REWRITECALL__", rewrite_call)
+        .replace("__REWRITES__", str(OBJECTIVE_CALIBRATION_REWRITES))
+        .replace("__CREDITED__", credited_js)
+        .replace("__WAVECAP__", str(OBJECTIVE_WAVE_CAP))
+        .replace("__MAXRETHINKS__", str(OBJECTIVE_MAX_RETHINKS))
+        .replace("__ROWCALL__", row_call)
+        .replace("__JUDGECALL__", judge_call)
+        .replace("__RESEARCHCALL__", research_call)
+        .replace("__RETHINKCALL__", rethink_call)
+        .replace("__HALTCAL__", _lit(HALT_OBJECTIVE_CALIBRATION))
+        .replace("__HALTIMP__", _lit(HALT_OBJECTIVE_IMPOSSIBLE))
+        .replace("__HALTESC__", _lit(HALT_OBJECTIVE_ESCALATED))
+    )
+
+
 def _row_runner_js() -> str:
     """Declarations `_emit._run_row_helper_js` reads, with no plan-scoped halting (one run, one plan)."""
     return "\n".join(
@@ -1939,6 +2442,7 @@ def compose_ask_script(
     run_base_sha: Optional[str] = None,
     route_preference: Optional[_route_pref.RoutePreference] = None,
     launcher_child: bool = False,
+    objective: Optional[dict] = None,
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -2082,6 +2586,16 @@ def compose_ask_script(
         return _cat(f"{head}\n\n{anchor}\n\n", *lines_and_exprs)
 
     ledger_rel = f"{record_dir}/{LEDGER_VIEW_FILE}"
+    from coordinator_core.ops.dispatch_emit import objective_contract as _oc
+
+    objective_rel = f"{record_dir}/{_oc.OBJECTIVE_FILE}"
+    objective_cfg = (
+        {**objective_defaults(), **objective}
+        if objective is not None
+        else objective_settings(repo_root, objective_rel)
+    )
+    if objective_cfg is not None:
+        ledger_clause_text = ledger_clause_text + " " + _OBJECTIVE_LINE.format(objective=objective_rel)
     ledger_clause = "\n\n" + ledger_clause_text.format(ledger=ledger_rel)
     intent_clause = (
         f"\n\nFirst read {record_dir}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
@@ -2196,8 +2710,17 @@ def compose_ask_script(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
         runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN,
     ))
-    b.append(_wave_tests_green_js(agent_type_host, repo_root=repo_root, run_id=run_id, em_brief=bool(em_brief)))
+    b.append(_wave_tests_green_js(
+        agent_type_host, repo_root=repo_root, run_id=run_id, em_brief=bool(em_brief), objective=objective_cfg is not None,
+    ))
     b.append(_usage_limit_helper_js())
+    if objective_cfg is not None:
+        b.append(_objective_js(
+            head=head, anchor=anchor, session_tail=session_tail, run_id=run_id, objective_rel=objective_rel,
+            settings=objective_cfg,
+            credited_js=f"(Array.isArray(_gate?.{RESUME_LEDGER_KEY}?.{RESUME_LEDGER_CREDITED_FIELD}) "
+            f"? _gate.{RESUME_LEDGER_KEY}.{RESUME_LEDGER_CREDITED_FIELD} : [])",
+        ))
     b.append(_refire_next_action_helper_js(sizing_rel))
     b.append(_halt_next_action_text_helper_js(sizing_rel))
     for name in (*_REVIEW_RESULT_NAMES, _emit._TEST_RESULT_VAR):
@@ -2270,7 +2793,8 @@ def compose_ask_script(
     # behind `_NO_RESUME`, and `_gate` is seeded from the block instead of a leg's reply.
     _NO_RESUME = "!_STAGED_RESUME" if launcher_child else "true"
     _gate_seed_js = (
-        "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, tshirt: null, route: null, "
+        "{ arm: _STAGED_RESUME.arm, halt: null, baton: null, "
+        "tshirt: (typeof _STAGED_RESUME.tshirt === 'string' && _STAGED_RESUME.tshirt) ? _STAGED_RESUME.tshirt : null, route: null, "
         f"resume_plan: (_STAGED_RESUME.arm !== {_lit(ARM_XS)} && typeof _STAGED_RESUME.plan_rel === 'string' "
         "&& _STAGED_RESUME.plan_rel) ? _STAGED_RESUME.plan_rel : null, "
         "resume_rows: null, resume_ledger: null, pending_rulings: null, resume_ready: null, resume_phases: null, spine_plan: null, "
@@ -2893,7 +3417,8 @@ def compose_ask_script(
             " IN PLACE with Edit -- never scaffold a new plan, never change its path -- adding one new row, "
             "disposition open, per piece of owed work, each with bounded declared `writes` covering the "
             "paths the work lies on and a done condition that is a runnable check. Do not edit, reopen or "
-            "remove any existing row: the rows that landed stay landed. Return the plan's repo-relative "
+            "remove any existing row: the rows that landed stay landed." + _EDIT_IN_PLACE_NO_REREAD
+            + " Return the plan's repo-relative "
             "path as plan_rel and the ids of exactly the rows you added as added_rows. Commit nothing. "
             f"As your very last act, when you added at least one row, run `{_INVOKE} {OP_ASK_STAGE} '<params>'` "
             "once, <params> being the JSON object ",
@@ -3177,7 +3702,9 @@ def compose_ask_script(
             "js:_pulledEntry.planPath",
             " at its prep gate. Revise that plan IN PLACE with Edit -- never scaffold a new one, never "
             "change its path -- so every finding below is resolved, then return its repo-relative path "
-            "as plan_rel. "
+            "as plan_rel."
+            + _EDIT_IN_PLACE_NO_REREAD
+            + " "
             + _ANCHOR_PREMISES_SENTENCE
             + "Then run the `plan.readiness_verdict` op on the revised plan, passing the "
             "pull's coverage and reviews values below when they are not null, apply every "
@@ -3467,10 +3994,16 @@ def compose_ask_script(
     b.append("  if (!_halted && (!_resumeLedger || _ledgerExec)) {")
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")
+    if objective_cfg is not None:
+        b.append("  await _objectiveCalibrate();")
     b.append(
         f"  const _rowVerifyWanted = !(_gate.arm !== {_lit(ARM_XS)} && !_xsTail && (_manifest.test_targets ?? []).length);"
     )
-    b.append("  const _waves = [...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);")
+    b.append(
+        "  const _waves = "
+        + ("_halted ? [] : " if objective_cfg is not None else "")
+        + "[...new Set(_manifest.rows.map((r) => r.wave))].sort((a, b) => a - b);"
+    )
     b.append("  if (_manifest.fanout) log('Fanout: ' + JSON.stringify(_manifest.fanout));")
     row_prompt = _cat(
         f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
@@ -3563,6 +4096,8 @@ def compose_ask_script(
         "  if (!_halted) { const _r = _heldDependentsReason(); if (_r) "
         f"_halted = {{ halted: {_lit(HALT_DEPENDENTS_UNSTARTED)}, detail: _r }}; }}"
     )
+    if objective_cfg is not None:
+        b.append("  await _objectiveGate();")
 
     review_text = _single_exit_review(
         [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]
@@ -3825,7 +4360,7 @@ def compose_ask_script(
         "      if (status === 'drifted') return true;\n"
         "      if (status === 'not_met' && typeof i.withheld_by === 'string' && i.withheld_by) "
         "return !((_manifest?.gated ?? []).map((g) => g.id).includes(i.withheld_by) || _recoveryWithheld.includes(i.withheld_by));\n"
-        "      if (status === 'not_met') return l.all_of_pm_ask === true || i.essential !== false;\n"
+        "      if (status === 'not_met') { if (i.essential === false) i.essential = true; return true; }\n"
         "      if (status === 'post_commit') return !Array.isArray(acts) || !acts.length "
         "|| acts.some((a) => !_postCommitActs.includes(a));\n"
         "      return false;\n"
@@ -3837,6 +4372,16 @@ def compose_ask_script(
             _ledger_recover_js(
                 head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, ledger_rel=ledger_rel,
                 run_id=run_id, judged=judged, test_var=_emit._TEST_RESULT_VAR,
+            )
+        )
+        b.append(REMNANT_ITEMS_JS)
+        b.append(
+            _remnant_complete_js(
+                head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id,
+                judged=judged, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
+                docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
+                verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS, "js:" + _MEMO_CLOSE_CLAUSE_JS),
+                schema=_verify_schema(judge_brief[1] if judged else None),
             )
         )
     # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
@@ -3973,6 +4518,8 @@ def compose_ask_script(
     )
     if judged:
         b.append(_criterion_blocker_halt_js(sizing_rel) + " }")
+    if objective_cfg is not None:
+        b.append("  if (_nextAction.params && _objResult) { _nextAction.params.objective_loop = _objResult; }")
     b.append(
         "  if (_nextAction.params && _ledger) { _nextAction.params.ledger_verdict = { items: (_ledger.items ?? [])"
         ".map((i) => ({ id: i.id, status: i.status, essential: i.essential !== false, wired: i.wired === true, "
@@ -4019,6 +4566,8 @@ def compose_ask_script(
         f"(_halted && _halted.halted === {_lit(HALT_RESEARCH)} && Array.isArray(_halted.fire) ? _halted.fire : "
         "(_commit?.close?.siblings?.released ?? [])), "
         f"manifest: {_lit(manifest_rel)}, rows: (_manifest?.rows ?? []).map((r) => r.id), "
+        + ("objective_loop: _objResult, " if objective_cfg is not None else "")
+        +
         "incomplete: _incompleteChunks, "
         "withheld: ((_manifest && !_manifest.error) ? (_manifest.gated ?? []) : []).map((g) => ({ id: g.id, owner_repo: g.owner_repo ?? '', closure_key: g.closure_key ?? null })), "
         "owed: ((_manifest && !_manifest.error) ? (_manifest.owed ?? []) : []).map((o) => ({ id: o.id, reason: o.reason ?? '', detail: o.detail ?? '' })), "
@@ -4059,7 +4608,7 @@ def compose_ask_script(
                 *(["xl-exit"] if accept_pending or sized_in_run else []),
                 *(["roadmap-blitz", *rb_phases] if rb_fn else []),
                 ASK_VERIFY_PHASE,
-                *((LEDGER_FIX_PHASE,) if known_arm != ARM_XS else ()),
+                *((LEDGER_FIX_PHASE, REMNANT_PHASE) if known_arm != ARM_XS else ()),
                 *(("commit",) if in_run_commit else ()),
             ],
         ),
@@ -4209,6 +4758,15 @@ _DOCS_PRE_TAIL_GUARD = (
 )
 
 
+#: Appended to the docs prompt when no review verdict exists: the note's review section must say the
+#: review did not run, never "None" or "no findings" (which reads as a clean review).
+REVIEW_NOT_RUN_CLAUSE = (
+    "\n\nNo review ran for this run (the XS arm skips review): the empty verdicts above are not a clean "
+    "review. In the note's review section write exactly `Review: not run (XS arm)` and list no "
+    "findings; never write `None`, `no findings` or `clean` for it."
+)
+
+
 def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
     """Step 2 of the merged verify prompt, as `_cat` parts: the declared docs and the delivery note.
 
@@ -4225,6 +4783,8 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
         f", and the run manifest at {manifest_rel}. The review's verdicts, verbatim:\n",
         "js:_cap(JSON.stringify({ delivery: _deliveryVerdict, integration: _reviewIntegration, "
         "wave: _reviewWave }), 12000)",
+        "js:((Array.isArray(_reviewWave) ? _reviewWave.length === 0 : true) && !_deliveryVerdict "
+        f"&& !_reviewIntegration ? {_lit(REVIEW_NOT_RUN_CLAUSE)} : '')",
         "\n\nThe files you may write are exactly this run's declared doc writes: ",
         "js:JSON.stringify(_manifest.doc_writes ?? [])",
         ". Edit no other file: a README or wiki page the change makes stale that is not in that list "

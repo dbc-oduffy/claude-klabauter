@@ -7,12 +7,17 @@ the epoch deadline after which it reads as stale.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
-from pathlib import Path
-from typing import Callable, Optional
+
+# json, pathlib and typing stay off the marker-absent path: this module loads on every hook
+# start and the import budget counts each stdlib module they drag in. The literal False (not
+# typing.TYPE_CHECKING) keeps typing itself unimported.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Callable, Optional
 
 MARKER_NAME = "coordinator-engine-landing"
 
@@ -31,6 +36,8 @@ _reported_overrun = False
 
 def marker_path(engine_root: Path) -> Optional[Path]:
     """Marker location for an engine root, or None when <root>/.git is not a directory."""
+    from pathlib import Path
+
     git_dir = Path(engine_root) / ".git"
     if not git_dir.is_dir():
         return None
@@ -39,6 +46,8 @@ def marker_path(engine_root: Path) -> Optional[Path]:
 
 def begin_swap(engine_root: Path, *, deadline_s: float) -> Optional[Path]:
     """Raise the marker (tmp + os.replace) with a deadline deadline_s from now; None if unguardable."""
+    import json
+
     target = marker_path(engine_root)
     if target is None:
         return None
@@ -74,6 +83,8 @@ def swap_in_progress(engine_root: Path) -> bool:
         os.stat(path)
     except OSError:
         return False
+    import json
+
     try:
         with open(path, encoding="utf-8") as fh:
             deadline = float(json.load(fh)["deadline_epoch"])
@@ -86,7 +97,7 @@ def wait_until_clear(
     engine_root: Path,
     *,
     budget_s: float = WAIT_BUDGET_S,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: "Callable[[float], None]" = time.sleep,
 ) -> bool:
     """Stat-poll until no swap is live; False (reported on stderr) when budget_s runs out."""
     global _reported_overrun

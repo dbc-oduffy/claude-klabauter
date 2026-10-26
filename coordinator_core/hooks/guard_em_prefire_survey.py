@@ -31,8 +31,7 @@ DENY_PREFIX = "[em-prefire-survey]"
 
 def prefire_deny_text(n: int, budget: int) -> str:
     return (
-        f"{DENY_PREFIX} {n} exploratory calls since the last turn with no engine-ask fire, "
-        f"budget {budget} (THE-EM-FIRES-ENGINE-ASK-WITHOUT-A-PREFIRE-SURVEY). "
+        f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (retries too). "
         + fire_step()
         + " A reworded or cd-prefixed retry of a survey call is denied too: fire the engine-ask now,"
         " with what you already know in em_context. Exempt after a landing:"
@@ -42,10 +41,9 @@ def prefire_deny_text(n: int, budget: int) -> str:
 
 def postlanding_deny_text(n: int, budget: int) -> str:
     return (
-        f"{DENY_PREFIX} {n} exploratory calls since the landing, budget {budget} "
-        "(THE-EM-FIRES-ENGINE-ASK-WITHOUT-A-PREFIRE-SURVEY). Spot-check one run, then send the gap "
-        "through workflow.revise (exempt form: coordinator-invoke workflow.revise --params-file <file>), or fire a follow-up engine-ask whose em_context quotes the "
-        "receipt's gap line."
+        f"{DENY_PREFIX} {n} exploratory calls since the landing, budget {budget} (verify). "
+        "Send the gap: coordinator-invoke workflow.revise --params-file <file> (exempt), "
+        "or fire a follow-up engine-ask quoting its gap line."
     )
 
 

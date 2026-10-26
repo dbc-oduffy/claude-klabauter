@@ -543,6 +543,46 @@ class GateFindings(list):
 
 
 def landing_test_gate(
+    worktree_root: Path, params: Mapping, run_id: Optional[str],
+    landed_paths: Optional[Sequence[str]] = None,
+) -> tuple[list[Finding], str]:
+    """``_landing_test_gate_core`` plus the invariant gate: with ``landed_paths`` given, every
+    repo-wide invariant whose measured set they touch must be in the run's fresh passing retest,
+    else one ``TARGETED_TESTS_FAILED`` finding per missing invariant (check ``"failed"``)."""
+    findings, check = _landing_test_gate_core(worktree_root, params, run_id)
+    if not landed_paths:
+        return findings, check
+    owed = invariant_findings(worktree_root, landed_paths, run_id, params)
+    if not owed:
+        return findings, check
+    return [*findings, *owed], "failed"
+
+
+def invariant_findings(
+    worktree_root: Path, landed_paths: Sequence[str], run_id: Optional[str], params: Mapping,
+) -> list[Finding]:
+    """One finding per repo-wide invariant a landing diff touches that no fresh passing retest
+    ran. Table lookup plus one record read; zero spawns."""
+    from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
+
+    owed = imp.existing_invariants(worktree_root, imp.invariants_for_paths(landed_paths, worktree_root))
+    if not owed:
+        return []
+    fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
+    ran = set(fresh.get("tests") or []) if fresh and fresh.get("status") == "pass" else set()
+    out = []
+    for node in owed:
+        if node in ran or node.split("::")[0] in ran:
+            continue
+        out.append(Finding(
+            node.split("::")[0], TARGETED_TESTS_FAILED,
+            f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
+            f"retest ran it; re-run: {retest_remedy(params, [node])}",
+        ))
+    return out
+
+
+def _landing_test_gate_core(
     worktree_root: Path, params: Mapping, run_id: Optional[str]
 ) -> tuple[GateFindings, str]:
     """``(findings, check)`` as ``_landing_test_gate``; on a benign ``no-verdict`` or ``not-run``

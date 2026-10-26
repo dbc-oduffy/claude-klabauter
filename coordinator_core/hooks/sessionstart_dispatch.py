@@ -28,6 +28,7 @@ COMPOSED HERE, in DoE's REGISTRY order, each with its `sources` set:
   - `guard_hook_generation_self_probe` (`startup`, `clear`, `compact`)
   - `compact_summary_constraints` (`compact`) -- warns on uncited constraints
     in the compaction summary
+  - `objective_resume` (`compact`) -- re-injects the bound warp run's objective.json
   "All five" is `startup`, `resume`, `clear`, `compact`, `fork`. Every leg is a
   direct import of an already-registered engine function; no `hooks.*` wrapper
   op exists for the three adapters defined here.
@@ -56,6 +57,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -150,6 +152,76 @@ def _leg_governed_surface_drift(payload: dict) -> "Optional[str]":
     return "\n".join([_DRIFT_HEADER, *(f"  - {r}" for r in refusals)])
 
 
+def _repo_root_of(cwd: "Optional[str]") -> "Optional[Path]":
+    """Nearest ancestor of `cwd` holding `.git` (zero spawns); None when there is none."""
+    if not cwd:
+        return None
+    start = Path(cwd)
+    for candidate in (start, *start.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _last_check_axes(loop_path: Path) -> "list":
+    """Axis entries of the last `check` line in objective-loop.jsonl; [] when none."""
+    from coordinator_core.ops.dispatch_emit.objective_contract import LINE_CHECK
+
+    axes: list = []
+    try:
+        lines = loop_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return axes
+    for raw in lines:
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and obj.get("kind", LINE_CHECK) == LINE_CHECK:
+            axes = obj.get("axes") or []
+    return axes
+
+
+def _leg_objective_resume(payload: dict) -> "Optional[str]":
+    """Re-inject the bound warp run's durable objective after compaction; None when unbound or absent."""
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.objective_contract import LOOP_FILE, OBJECTIVE_FILE
+
+    session_id = payload.get("session_id")
+    cwd = payload.get("cwd")
+    root = _repo_root_of(cwd if isinstance(cwd, str) and cwd else str(Path.cwd()))
+    if root is None or not isinstance(session_id, str) or not session_id:
+        return None
+    transcript = payload.get("transcript_path")
+    run_id = warp_live.live_run_for_session(
+        root, session_id, transcript_path=transcript if isinstance(transcript, str) else None
+    )
+    if not run_id:
+        return None
+    run_dir = record_dir(root, run_id)
+    objective_path = run_dir / OBJECTIVE_FILE
+    try:
+        data = json.loads(objective_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    axes = data.get("axes") or []
+    ids = [str(a["id"]) for a in axes if isinstance(a, dict) and a.get("id")]
+    status = {
+        str(a.get("axis")): ("pass" if a.get("pass") is True else "not_met")
+        for a in _last_check_axes(run_dir / LOOP_FILE)
+        if isinstance(a, dict)
+    }
+    lines = [
+        f"DURABLE OBJECTIVE (run {run_id}); re-read {objective_path} before acting.",
+        f"Verbatim promise: {data.get('verbatim', '')}",
+        "Axes: " + (", ".join(f"{i} [{status.get(i, 'unchecked')}]" for i in ids) or "none"),
+    ]
+    return "\n".join(lines)
+
+
 # (module_key, sources, leg callable name) in DoE REGISTRY order. Each leg takes
 # the payload dict and returns a result `_extract_context` understands, or text.
 _LEGS = (
@@ -163,6 +235,7 @@ _LEGS = (
     ("governed_surface_drift", _ALL_SOURCES, "_leg_governed_surface_drift"),
     ("guard_hook_generation_self_probe", _START_CLEAR_COMPACT, "_leg_self_probe"),
     ("compact_summary_constraints", _COMPACT, "_leg_compact_summary_constraints"),
+    ("objective_resume", _COMPACT, "_leg_objective_resume"),
 )
 
 

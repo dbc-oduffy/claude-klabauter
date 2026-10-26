@@ -105,6 +105,7 @@ from coordinator_core.completion_receipts.verdict import (
     superseding_delivery,
 )
 from coordinator_core.session.claimed_write import replace_text
+from coordinator_core.session.record_homes import home_dir
 
 
 #: The product-file rule's one home. A diff line touching only these prefixes
@@ -799,7 +800,7 @@ def _resolve_mint(
         if record is None:
             raise MintRefusal(f"review-stamp: could not read superseding record {record_path}")
         if record.get("kind") != "superseding-review":
-            real = sorted((repo_root / "state" / "superseding-reviews").glob(f"*/{record_path.stem}.md"))
+            real = sorted(Path(home_dir(str(repo_root), "superseding-reviews")).glob(f"*/{record_path.stem}.md"))
             hint = (
                 f"the record with this stem is {real[-1].relative_to(repo_root).as_posix()}"
                 if real

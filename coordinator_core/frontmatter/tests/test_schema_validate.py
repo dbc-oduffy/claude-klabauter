@@ -4422,9 +4422,10 @@ _QUEUE_SCHEMA_PINS = {
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
 #
-# sizing-object: claude-klabauter 1.47.0 adds the `fan_out` xl_exit value (claude-klabauter-first); DoE
-# still reads 1.46.0 at the doe_ref below and has not vendored it yet.
-# Exit path: once DoE vendors 1.47.0, delete this entry and run
+# sizing-object: claude-klabauter 1.48.0 adds optional `provenance` after 1.47.0's `fan_out`
+# xl_exit value (claude-klabauter-first); DoE still reads 1.46.0 at the doe_ref below and has
+# not vendored either yet.
+# Exit path: once DoE vendors 1.48.0, delete this entry and run
 # bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
 # check_schema_drift byte-pin.
 #
@@ -4438,28 +4439,32 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
     'sizing-object': {
         'doe_ref': "86eb0e39a7ca45ceb432de9b3d828d9078f91d3e",
         'reason': (
-            "claude-klabauter-first sizing-object 1.47.0 adds the `fan_out` xl_exit value; "
-            "DoE's copy is still 1.46.0 and its own vendor of 1.47.0 is pending"
+            "claude-klabauter-first sizing-object 1.48.0 adds optional `provenance` (after 1.47.0's "
+            "`fan_out` xl_exit value); DoE's copy is still 1.46.0 and its own vendor is pending"
         ),
         'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
         'exempt_paths': frozenset({('properties', 'xl_exit', 'description')}),
-        'local_shape_hash': "2536a4cf618d48d977010e5354697a819369e8a0225d7853fcbef061d63b9d5c",
+        'local_shape_hash': "b1fdc1dcff177878aedb7929062fe306add58377d62935e20fc91fcd298107b5",
     },
     'plan-tasks': {
         'doe_ref': "4c2317da8e6f2eeb3b83e606a8dd8ef15ad736fb",
         'reason': (
             "claude-klabauter-first plan-tasks 3.20.0 admits signoff history on apm, g-em and uhura "
             "records and adds the pm_signoff_record history arm; DoE's copy is still 3.19.0 "
-            "and its own vendor of 3.20.0 is pending"
+            "and its own vendor of 3.20.0 is pending; 3.21.0 adds the optional row property "
+            "`acceptance` and 3.22.0 the optional row property `effort`, both claude-klabauter-first"
         ),
-        'provenance': "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2",
+        'provenance': (
+            "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2; "
+            "3.22.0 `effort` property from plan 2026-10-25-a-refire-path-and-ea2e26-finish C16"
+        ),
         'exempt_paths': frozenset({
             ('$defs', 'signoff', 'allOf', 1, 'then', 'properties', 'history'),
             ('$defs', 'signoff', 'allOf', 2, 'then', 'properties', 'history'),
             ('$defs', 'signoff', 'description'),
             ('$defs', 'signoff', 'properties', 'history', 'description'),
         }),
-        'local_shape_hash': "ddf754d085825850719c0076c2dfcc0e82639ccf9983df075fbad15f60e83f65",
+        'local_shape_hash': "7183c3a533605d74220c501e77a301816bcb62679d605eedc0e0d767ec3a1c7f",
     },
 }
 

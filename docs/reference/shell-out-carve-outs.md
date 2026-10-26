@@ -88,6 +88,8 @@ is an optional verification-only tool. See the per-site table below.
 | `ops/gate_dimension_docstrings.py` `_run_interrogate()` | (f) | 3rd-party Python CLI (interrogate), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` docstrings dimension, merge-gate cadence |
 | `ops/gate_dimension_tests.py` pytest `--cov` invocation (named at landing) | (f) | pytest, resolved with its `pytest-cov` plugin (`importlib.util.find_spec`), degrade-to-UNAVAILABLE | No — `gate.validate_invocable` tests dimension, merge-gate cadence; not yet landed |
 | `ops/gate_dimension_tests.py` diff-cover invocation (named at landing) | (f) | 3rd-party Python CLI (diff-cover), PATH-resolved via `gate_tool_resolve`, degrade-to-UNAVAILABLE | No — `gate.validate_invocable` tests dimension, merge-gate cadence; not yet landed |
+| `coordinator/bin/suite-verdict.py` `build_verdict()` | (f) | pytest, resolved with `importlib.util.find_spec("pytest")`, degrade-to-UNAVAILABLE verdict + exit 0; ruled 2026-10-25 (G-EM under PM delegation) | No — EM-launched background job under a live tier-u grant, outside the 500ms bar |
+| `coordinator/bin/suite-verdict.py` `_red_at()` | (f) | pytest bisect probe of one nodeid in a `git archive` export, same resolution and degrade path; ruled 2026-10-25 (G-EM under PM delegation) | No — same background job |
 | `coordinator/bin/statusline.py` `_run_inner()` (`shell=True` leg) | (h) | operator-supplied command string, shell parsing by definition | No — statusline delegation, outside the commit and session-start paths |
 
 ## Adversarial standard applied — no carve-out fails it
@@ -255,6 +257,7 @@ Sites:
 - `coordinator_core/ops/gate_dimension_types.py` `_run_mypy()` (mypy over the changed `.py` set; types dimension)
 - `coordinator_core/ops/gate_dimension_docstrings.py` `_run_ruff()` (`ruff check --select D1`; docstrings dimension)
 - `coordinator_core/ops/gate_dimension_docstrings.py` `_run_interrogate()` (`interrogate --fail-under`; docstrings dimension)
+- `coordinator/bin/suite-verdict.py` `build_verdict()` and `_red_at()` (pytest over a `git archive` export of the verdict sha / of each bisect commit; resolved with `importlib.util.find_spec("pytest")`; writes a tier-`unavailable` verdict + exit 0 when unresolved). The file's `git` plumbing (`rev-list`, `log`, `archive`) takes no carve-out and runs through `coordinator_core.git.run`, not a private runner. **Ruled 2026-10-25:** approved as class (f) by G-EM `group-em-fe` under the PM's delegation, G-EM session fe6732ef-020a-4517-8adf-20765fa4b6a9 `pm_turns.jsonl` turn 18 (2026-10-25T16:43:30Z: "Claude please act as the G-EM and don't bother me with stuff like 'should scripts run the test suite'"). Only the two pytest subprocess sites are carved out, never the git spawns.
 - `coordinator_core/ops/gate_dimension_tests.py` pytest `--cov` and diff-cover invocations (tests dimension; not yet landed). Two sites, named here by shape only: the module does not exist, so neither can be digest-pinned. The commit that lands each adds its register row below, or the site is unsanctioned under the enumeration rule.
 
 ## (g) mutating 3rd-party cache-prune CLI, PATH-resolved, degrades to UNAVAILABLE
@@ -447,6 +450,22 @@ entered below.
   argv_digest: "b78e5586548a"
   reason: "DoD docstrings dimension: optional interrogate coverage, resolved by gate_tool_resolve, degrades to UNAVAILABLE"
   ruled_on: "2026-09-30"
+- cls: f
+  path: coordinator/bin/suite-verdict.py
+  enclosing: build_verdict
+  argv0: <dynamic>
+  ordinal: 0
+  argv_digest: "04dc5b213632"
+  reason: "full-suite run: pytest resolved by importlib.util.find_spec, degrades to a tier-unavailable verdict + exit 0"
+  ruled_on: "2026-10-25 G-EM group-em-fe under PM delegation, session fe6732ef-020a-4517-8adf-20765fa4b6a9 pm_turns.jsonl turn 18 (2026-10-25T16:43:30Z)"
+- cls: f
+  path: coordinator/bin/suite-verdict.py
+  enclosing: _red_at
+  argv0: <dynamic>
+  ordinal: 0
+  argv_digest: "6339e0a5e98f"
+  reason: "bisect probe of one red nodeid: pytest resolved by importlib.util.find_spec, degrades to a tier-unavailable verdict + exit 0"
+  ruled_on: "2026-10-25 G-EM group-em-fe under PM delegation, /Users/example-operator/.coordinator-claude-settings/group-em/.git/coordinator-sessions/fe6732ef-020a-4517-8adf-20765fa4b6a9/pm_turns.jsonl turn 18 (2026-10-25T16:43:30Z)"
 - cls: h
   path: coordinator/bin/statusline.py
   enclosing: _run_inner

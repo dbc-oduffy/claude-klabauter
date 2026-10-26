@@ -1,0 +1,26 @@
+A plan can be closed as implemented when every acceptance criterion is ticked,
+even if a criterion that names a mechanism (a lint, guard, test, hook or script)
+has nothing on disk behind it. Last time two of thirteen such criteria had no
+artifact and the table still read as satisfied.
+
+Close-out should not accept a mechanism criterion whose named artifact does not
+exist. Make it so, and report the offending criteria by id.
+
+---
+
+## Deliverable
+
+Do the work in this repository. When you are done, write `DELIVERY.md` at the
+repository root containing:
+
+1. **What you built** — the surfaces and files you added or changed.
+2. **The product judgement you made** — what you chose to do, what you chose
+   NOT to do, and why. Name anything you deliberately left out of scope.
+3. **How it fits the existing codebase** — the conventions, constraints, or
+   prior decisions you found and followed, and anywhere you knowingly departed
+   from one.
+4. **What you would do next** and what you are least confident about.
+
+Working code is worth more than a plan. Prefer a coherent, genuinely finished
+vertical slice over a broad sketch that does not hold together. Record the decisions you
+make in `DELIVERY.md`.

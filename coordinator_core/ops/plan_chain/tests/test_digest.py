@@ -72,7 +72,21 @@ def test_a_demoted_criterion_reason_reaches_the_final_digest_capped():
     ex = {"criterion": {"status": "indeterminate", "observation": "o", "sidecar": None, "reason": "r" * 500}}
     d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=ex)
     D.validate_final_digest(d)
-    assert d["criterion"]["reason"] == "r" * 200
+    assert d["criterion"]["status"] == "not_met"
+    assert d["criterion"]["reason"].startswith(D._LEGACY_INDETERMINATE_REASON)
+    assert len(d["criterion"]["reason"]) == 200
+
+
+def test_legacy_indeterminate_without_reason_maps_to_not_met_with_a_reason():
+    state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
+    ex = {"criterion": {"status": "indeterminate", "observation": "o", "sidecar": None}}
+    d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=ex)
+    assert d["criterion"]["status"] == "not_met"
+    assert d["criterion"]["reason"] == D._LEGACY_INDETERMINATE_REASON
+
+
+def test_criterion_status_sets_are_pinned():
+    assert D._CRITERION_STATUSES == ("met", "not_met", "not_run", "unstructured")
 
 
 def test_invalid_digest_raises_and_is_not_written(tmp_path):
