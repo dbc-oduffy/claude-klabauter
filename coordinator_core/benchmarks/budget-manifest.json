@@ -363,6 +363,18 @@
       },
       "_rationale": "One bounded `git log --numstat` over the session's own commits (guard_terminal_review._session_commits via git/run.py::run_git); it is the terminal-review gate's only source for which commits are this session's and what code they touch, and every other leg of the Stop fan-in reads files. Counted by coordinator_core/hooks/tests/test_stop_dispatch_spawn_count.py with exact equality; a second spawn on the Stop path fails that test."
     },
+    "dispatch.record_halted_run_landed": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "ancestry_check": 1,
+        "prefix_resolve": 1
+      },
+      "_rationale": "Two batched git spawns through git/run.py::run_git in git_ancestry.py, whatever the number of shas, withheld paths or commits behind HEAD. ancestry_check=1: one `git rev-list <shas> ^HEAD` (git_ancestry.ancestors_of) deciding which of all the distinct full shas are ancestors of HEAD, merge-reached ones included; it justifies a spawn because the repo carries a commit-graph chain (.git/objects/info/commit-graphs), which makes reachability a near-constant-time query where the in-process walk measured about 2.2ms per commit cold. prefix_resolve=1: one `git rev-parse <prefix>^{commit}...` (git_ancestry.resolve_commit_prefixes) resolving every abbreviated sha, paid only when an abbreviation is passed. Full-sha commit existence, the withheld-path coverage compare and the idempotent landed path are in-process object reads and spawn nothing. Counted by coordinator_core/ops/dispatch_emit/tests/test_halted_run_landed_spawn_count.py with exact equality. target_ms/tolerance copy the MUTATING class default and satisfy budget.py._validated_budget's required override shape only; spawn_count_budget is the enforced invariant."
+    },
     "session.reap": {
       "target_ms": 300,
       "tolerance": {

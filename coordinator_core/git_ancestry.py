@@ -36,13 +36,21 @@ pre-existing callers. Behaviour is unchanged for the returncode-based paths
 only — the git-not-on-PATH/timeout exception path now fails closed (returns
 `False`) instead of propagating an uncaught exception; see `_is_ancestor`'s
 own docstring.
+
+Batched forms: `resolve_commit_prefixes` and `ancestors_of` answer many
+abbreviations / many targets in exactly one `run_git` call each (an empty
+input spawns nothing). They lean on the repo's commit-graph, so cost is the
+spawn, not history depth; `is_ancestor` stays the single-commit probe.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+import re
+from typing import Iterable, Optional, Tuple
 
 from coordinator_core.git.run import run_git
+
+_HEX_PREFIX = re.compile(r"[0-9a-f]{4,40}")
 
 
 def is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> Tuple[bool, Optional[bool]]:
@@ -81,6 +89,64 @@ def is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> Tuple[bool,
 def _is_ancestor(commit: str, ref: str, cwd: Optional[str] = None) -> bool:
     read_ok, observed = is_ancestor(commit, ref, cwd=cwd)
     return read_ok and bool(observed)
+
+
+def resolve_commit_prefixes(
+    prefixes: Iterable[str], cwd: Optional[str] = None
+) -> Tuple[dict, Optional[str]]:
+    """Resolve hex abbreviations to full commit shas in ONE `git rev-parse`.
+
+    Returns `({prefix: full_sha}, None)` or `({}, refusal)` naming the first
+    failing prefix ("ambiguous" or "matches no commit"). Inputs must be
+    `[0-9a-f]{4,40}`. Trap: git resolves a ref name ahead of an object
+    prefix, so a result that does not start with its prefix refuses as
+    ambiguous.
+    """
+    unique = list(dict.fromkeys(prefixes))
+    if not unique:
+        return {}, None
+    malformed = next((p for p in unique if not _HEX_PREFIX.fullmatch(p)), None)
+    if malformed is not None:
+        return {}, f"sha prefix {malformed!r} is not 4-40 lowercase hex"
+    result = run_git(["rev-parse", *[f"{p}^{{commit}}" for p in unique]], cwd=cwd)
+    if result.returncode in (-1, 127):
+        return {}, "sha prefixes could not be resolved (git unavailable or timed out)"
+    lines = result.stdout.split()
+    resolved: dict = {}
+    for prefix, line in zip(unique, lines):
+        if len(line) == 40 and line.startswith(prefix.lower()):
+            resolved[prefix] = line
+        elif len(line) == 40:
+            return {}, f"sha prefix {prefix} is ambiguous (also names a ref)"
+        else:
+            break
+    if result.returncode == 0 and len(resolved) == len(unique):
+        return resolved, None
+    failing = next((p for p in unique if p not in resolved), unique[0])
+    if "short object ID" in result.stderr and "is ambiguous" in result.stderr:
+        return {}, f"sha prefix {failing} is ambiguous"
+    return {}, f"sha prefix {failing} matches no commit"
+
+
+def ancestors_of(
+    targets: Iterable[str], ref: str, cwd: Optional[str] = None
+) -> Tuple[bool, Optional[frozenset]]:
+    """Which of `targets` are `ref` or its ancestors, in ONE `git rev-list`.
+
+    `rev-list <targets> ^<ref>` prints every commit reachable from a target
+    and not from `ref`; a target is `ref`-or-ancestor iff it is absent from
+    the output. Returns `(True, frozenset)` or `(False, None)` on any failed
+    read (never "not an ancestor"). Never passes `--max-count`: truncation
+    would read an unmerged target as an ancestor. `targets` are full shas.
+    """
+    unique = list(dict.fromkeys(targets))
+    if not unique:
+        return True, frozenset()
+    result = run_git(["rev-list", *unique, f"^{ref}"], cwd=cwd)
+    if result.returncode != 0:
+        return False, None
+    unreached = set(result.stdout.split())
+    return True, frozenset(t for t in unique if t not in unreached)
 
 
 def is_covered(commit: str, start_sha: str, end_sha: str, cwd: Optional[str] = None) -> bool:

@@ -236,22 +236,14 @@ def test_sha_not_a_commit_refuses(repo):
     assert _status(root, "A")["status"] == "halted"
 
 
-def test_sha_off_first_parent_chain_refuses(repo):
+def test_unmerged_side_branch_sha_refuses(repo):
     root, first, _ = repo
     _git(root, "checkout", "-q", "-b", "side", first)
     side = _commit(root, "side")
     _git(root, "checkout", "-q", "-")
     _seed(root, {"A": {"status": "halted"}})
     out = _call(root, run_id="A", sha=side)
-    assert not out["ok"] and "first-parent" in out["error"]
-
-
-def test_sha_beyond_window_refuses(repo, monkeypatch):
-    root, first, _ = repo
-    _seed(root, {"A": {"status": "halted"}})
-    monkeypatch.setattr(op, "ANCESTRY_WINDOW", 1)
-    out = _call(root, run_id="A", sha=first)
-    assert not out["ok"] and "first-parent" in out["error"]
+    assert not out["ok"] and "ancestor" in out["error"]
 
 
 @pytest.mark.parametrize("params", [
@@ -282,12 +274,14 @@ def test_abbreviated_sha_idempotent_after_landing(repo):
 
 
 def test_ambiguous_abbreviation_refuses_by_name(repo, monkeypatch):
-    from coordinator_core.git import rollback_check
+    from coordinator_core import git_ancestry
 
     root = repo[0]
     _seed(root, {"A": {"status": "halted"}})
-    fake =["abcd" + "1" * 36, "abcd" + "2" * 36]
-    monkeypatch.setattr(rollback_check, "_first_parent_ancestors", lambda *a, **k: [(0, s) for s in fake])
+    monkeypatch.setattr(
+        git_ancestry, "resolve_commit_prefixes",
+        lambda prefixes, cwd=None: ({}, f"sha prefix {next(iter(prefixes))} is ambiguous"),
+    )
     out = _call(root, run_id="A", sha="abcd")
     assert not out["ok"] and "abcd" in out["error"] and "ambiguous" in out["error"]
     assert _status(root, "A")["status"] == "halted"
@@ -300,33 +294,6 @@ def test_unknown_abbreviation_refuses_by_name(repo):
     out = _call(root, run_id="A", sha=prefix)
     assert not out["ok"] and prefix in out["error"] and "no commit" in out["error"]
     assert _status(root, "A")["status"] == "halted"
-
-
-def test_op_spawns_no_process(repo, monkeypatch, launches):
-    root, first, _ = repo
-    _seed(root, {"A": {"status": "halted"}, "B": {"status": "after"}})
-    _plan_marker(root, "A")
-
-    def boom(*a, **k):
-        raise AssertionError("spawned a process")
-
-    monkeypatch.setattr(subprocess, "Popen", boom)
-    out = _call(root, run_id="A", sha=first)
-    assert out["ok"] and out["written"] is True
-    assert launches == ["A"]
-
-
-def test_op_spawns_no_process_solo(repo, monkeypatch, launches):
-    root, first, _ = repo
-    _solo(root, plan=PLAN)
-
-    def boom(*a, **k):
-        raise AssertionError("spawned a process")
-
-    monkeypatch.setattr(subprocess, "Popen", boom)
-    out = _call(root, run_id=SOLO, sha=first)
-    assert out["ok"] and out["written"] is True
-    assert launches == [SOLO]
 
 
 PLAN = "docs/plans/p.md"

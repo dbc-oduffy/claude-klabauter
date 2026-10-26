@@ -2342,7 +2342,22 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         counter=_SEAM,
         counted_by="coordinator_core/ops/dispatch_emit/tests/test_halted_run_landed_op.py",
         executed="Seam substitution under `test_launch_calls_spawn_detached_once_on_close_background` "
-        "(`(args, kwargs), = seen`) and `test_op_spawns_no_process` (`launches == [\"A\"]`).",
+        "(`(args, kwargs), = seen`) and `test_a_written_landing_launches_the_close_job_exactly_once` "
+        "in test_halted_run_landed_spawn_count.py (`launches == [\"A\"]`).",
+    ),
+    (
+        "dispatch.record_halted_run_landed",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_halted_run_landed_spawn_count.py",
+        executed="Measured 2026-10-26: attributed by stack to git/run.py::run_git under "
+        "`test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check` (`assert len(spawns) == "
+        "budget`, read from the manifest's dispatch.record_halted_run_landed `ancestry_check` plus "
+        "`prefix_resolve`); the attribution is itself asserted on every run.",
     ),
     (
         "session.reap",

@@ -456,6 +456,20 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "dispatch.record_halted_run_landed": {
+        "ancestry_check": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-26 at the value it entered with: one batched rev-list answers reachability from HEAD for every sha at once."
+            ),
+        },
+        "prefix_resolve": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-10-26 at the value it entered with: one batched rev-parse resolves every abbreviated sha, paid only for abbreviations."
+            ),
+        },
+    },
 }
 
 _MIN_REASON_LEN = 40

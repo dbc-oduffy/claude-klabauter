@@ -4,17 +4,17 @@ Params: ``run_id`` (string, required: the halted run), ``sha`` (string: one comm
 (list of strings: further commit shas, unioned with ``sha``; at least one of the two is required),
 ``session_id`` (string, optional uuid: the calling session, used to find the run's review sidecar).
 Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
-characters; an abbreviation must name exactly one commit in the first-parent window and the reply and
+characters; an abbreviation must name exactly one commit and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
-``halted`` (or already ``landed`` at the same sha) and ``sha`` must be a commit on HEAD's first-parent
-chain within ``ANCESTRY_WINDOW``. A solo run's marker may also read ``resumed`` when no live run's
+``halted`` (or already ``landed`` at the same sha) and ``sha`` must be HEAD or an ancestor of HEAD,
+merge-reached included. A solo run's marker may also read ``resumed`` when no live run's
 ledger names it as ``resumed_from``. The write and the release of ``after`` successors are
 ``run_close.sibling_release``'s; this op never writes the sibling status file itself. A solo run has
 no sibling status: its halt marker (``halted_run``) is read and rewritten to ``landed`` instead, and
 the reply names that tracked path as ``recorded``; a sibling run's still-``halted`` marker is flipped
-the same way. The op never commits: commit existence and ancestry are in-process object reads, and
-the close legs (``CLOSE_LEGS``) are queued in a close-job record paid by one detached launch
-(``_launch``), never inline. The record is written only when the marker names a ``plan`` and no
+the same way. The op never commits: commit existence is an in-process object read, and ancestry and
+abbreviation resolution are at most two batched git spawns; the close legs (``CLOSE_LEGS``) are
+queued in a close-job record paid by one detached launch (``_launch``), never inline. The record is written only when the marker names a ``plan`` and no
 close-job record exists yet.
 Reply: ``{ok, run_id, sha, written, shas?, covers?, siblings?, recorded?, close, blocking_rows}`` or
 ``{ok: false, error}``; ``blocking_rows`` is the marker's ``blocking`` register-row ids (not paths; the
@@ -24,7 +24,9 @@ each to the withheld paths it changed (``{}`` when the run withholds nothing); `
 When the halt marker records withheld paths (``run_artifacts.withheld``), ``sha`` must have changed
 every one of them versus its first parent, or several shas must together (each changing at least one),
 so recording landed cannot release the withheld-commit guard for a commit that never carried them; a
-later follow-up commit that changed them qualifies. A set records its newest sha.
+later follow-up commit that changed them qualifies. The path match is case-insensitive (directory
+components too) and a path counts as changed when either side of a rename carries its casefolded
+name; ``covers`` keeps the marker's spelling. A set records its newest sha.
 """
 
 from __future__ import annotations
@@ -38,9 +40,6 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 
 OP_NAME = "dispatch.record_halted_run_landed"
-
-#: First-parent commits from HEAD searched for the sha; matches rollback_check's default window.
-ANCESTRY_WINDOW = 1000
 
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA_PREFIX = re.compile(r"[0-9a-f]{4,40}")
@@ -187,48 +186,6 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) 
     return {**out, **_queue_close(root, run_id, sha, marker, session_id)}
 
 
-def _resolve_prefix(root: Path, prefix: str) -> tuple[Optional[str], Optional[str]]:
-    """``(full_sha, None)`` when *prefix* names exactly one commit in the first-parent window, else ``(None, refusal)``."""
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_state import head_sha
-    from coordinator_core.git.rollback_check import _first_parent_ancestors
-
-    head = head_sha(root)
-    if not head:
-        return None, "HEAD is unreadable; retry"
-    common = resolve_git_common_dir(root)
-    matches = {s for _, s in _first_parent_ancestors(common, head, ANCESTRY_WINDOW) if s.startswith(prefix)}
-    if len(matches) > 1:
-        return None, f"sha prefix {prefix} is ambiguous ({len(matches)} commits match); pass more characters"
-    if not matches:
-        return None, (
-            f"sha prefix {prefix} matches no commit on HEAD's first-parent chain within "
-            f"{ANCESTRY_WINDOW} commits; pass the commit that landed the work"
-        )
-    return next(iter(matches)), None
-
-
-def _reachable(root: Path, sha: str) -> Optional[str]:
-    """None when *sha* is a commit on HEAD's first-parent chain, else the refusal text."""
-    from coordinator_core.git.commit_walk import commit_meta
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_state import head_sha
-    from coordinator_core.git.rollback_check import _first_parent_ancestors
-
-    common = resolve_git_common_dir(root)
-    if commit_meta(common, sha) is None:
-        return f"{sha} is not a commit in this repo; pass the landing commit's full sha"
-    head = head_sha(root)
-    if not head:
-        return "HEAD is unreadable; retry"
-    if not any(s == sha for _, s in _first_parent_ancestors(common, head, ANCESTRY_WINDOW)):
-        return (
-            f"{sha} is not on HEAD's first-parent chain within {ANCESTRY_WINDOW} commits; "
-            "pass the commit that landed the work"
-        )
-    return None
-
-
 def _live_successor(root: Path, run_id: str) -> Optional[str]:
     """The id of a live run whose ledger resumes *run_id*, else None; scans both run record roots once, reading one ledger per run dir (cost grows with the run-dir count)."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl, run_token
@@ -264,6 +221,34 @@ def _terminal(cand: Path) -> bool:
     return isinstance(stage, dict) and stage.get("stage") in ("halted", "landed")
 
 
+def _casefolded_entries(load_dir, root_tree: str, path: str) -> Optional[frozenset]:
+    """Every tree entry under *root_tree* whose path casefolds to *path*, as ``{(exact_path, mode, oid)}``.
+
+    *load_dir* maps a tree sha to its parsed entries (None when unreadable). Directory components
+    match casefolded too; the exact spelling is in the key so a case-only rename, which keeps the
+    blob oid, still differs. None when any tree on the way is unreadable.
+    """
+    parts = path.casefold().split("/")
+    frontier = [("", root_tree)]
+    found: set = set()
+    for i, part in enumerate(parts):
+        nxt = []
+        for prefix, tree_sha in frontier:
+            entries = load_dir(tree_sha)
+            if entries is None:
+                return None
+            for name, (mode, oid) in entries.items():
+                if name.casefold() != part:
+                    continue
+                full = f"{prefix}/{name}" if prefix else name
+                if i == len(parts) - 1:
+                    found.add((full, mode, oid))
+                elif mode == 0o40000:
+                    nxt.append((full, oid))
+        frontier = nxt
+    return frozenset(found)
+
+
 def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str], dict]:
     """``(None, covers)`` when *shas* together changed every path the run's halt marker withholds, else ``(refusal, {})``.
 
@@ -274,7 +259,8 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_state import read_tree_spine
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import _parse_tree_entries
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
     try:
@@ -286,9 +272,13 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
     if not withheld:
         return None, {}
     common = resolve_git_common_dir(root)
+    dirs: dict = {}
 
-    def _entry(spine: dict, path: str):
-        return spine.get(path.rpartition("/")[0], {}).get(path.rpartition("/")[2])
+    def _dir(tree_sha: str):
+        if tree_sha not in dirs:
+            got = read_object(common, tree_sha)
+            dirs[tree_sha] = _parse_tree_entries(got[1]) if got and got[0] == "tree" else None
+        return dirs[tree_sha]
 
     covered: set = set()
     covers: dict = {}
@@ -298,11 +288,14 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
         parent_meta = commit_meta(common, parents[0]) if parents else None
         if meta is None or not meta.get("tree") or (parents and (parent_meta is None or not parent_meta.get("tree"))):
             return f"{sha} or its parent is unreadable; retry", {}
-        after = read_tree_spine(root, withheld, root_tree_sha=meta["tree"])
-        before = read_tree_spine(root, withheld, root_tree_sha=parent_meta["tree"]) if parent_meta else {}
-        if after is None or before is None:
-            return f"{sha} tree is unreadable; retry", {}
-        changed = {p for p in withheld if _entry(after, p) != _entry(before, p)}
+        changed = set()
+        for p in withheld:
+            after = _casefolded_entries(_dir, meta["tree"], p)
+            before = _casefolded_entries(_dir, parent_meta["tree"], p) if parent_meta else frozenset()
+            if after is None or before is None:
+                return f"{sha} tree is unreadable; retry", {}
+            if after != before:
+                changed.add(p)
         if len(shas) > 1 and not changed:
             return f"{sha} changed none of the run's withheld paths; drop it from shas", {}
         covered |= changed
@@ -323,30 +316,70 @@ def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optiona
 
     ``echo`` is ``{"shas": every verified full sha, "covers": {sha: withheld paths it changed}}``.
     """
+    from coordinator_core import git_ancestry
+    from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_sha
-    from coordinator_core.git.rollback_check import _first_parent_ancestors
 
-    full: list = []
+    common = resolve_git_common_dir(root)
     for sha in shas:
-        if not _FULL_SHA.fullmatch(sha):
-            sha, problem = _resolve_prefix(root, sha)
-            if problem:
-                return None, problem, {}
-        full.append(sha)
-    full = list(dict.fromkeys(full))
+        if _FULL_SHA.fullmatch(sha) and commit_meta(common, sha) is None:
+            return None, f"{sha} is not a commit in this repo; pass the landing commit's full sha", {}
+    head = head_sha(root)
+    if not head:
+        return None, "HEAD is unreadable; retry", {}
+    abbreviated = [s for s in shas if not _FULL_SHA.fullmatch(s)]
+    resolved, problem = git_ancestry.resolve_commit_prefixes(abbreviated, cwd=str(root))
+    if problem:
+        return None, problem, {}
+    full = list(dict.fromkeys(resolved.get(s, s) for s in shas))
+    read_ok, reached = git_ancestry.ancestors_of(full, head, cwd=str(root))
+    if not read_ok:
+        return None, "ancestry of the sha could not be read; retry", {}
     for sha in full:
-        problem = _reachable(root, sha)
-        if problem:
-            return None, problem, {}
+        if sha not in reached:
+            return None, f"{sha} is not an ancestor of HEAD; pass the commit that landed the work", {}
     problem, covers = _carries_withheld(root, run_id, full)
     if problem:
         return None, problem, {}
     echo = {"shas": full, "covers": covers}
     if len(full) == 1:
         return full[0], None, echo
-    order = {s: i for i, s in _first_parent_ancestors(resolve_git_common_dir(root), head_sha(root), ANCESTRY_WINDOW)}
-    return min(full, key=lambda s: order.get(s, ANCESTRY_WINDOW)), None, echo
+    newest = full[0]
+    for sha in full[1:]:
+        if _newer(common, sha, newest):
+            newest = sha
+    return newest, None, echo
+
+
+_TIE_WALK_CAP = 256
+
+
+def _newer(common, a: str, b: str) -> bool:
+    """True when commit *a* is newer than *b*: a later committer epoch, or on a tie *a* descends from *b*.
+
+    The tie walk is an in-process parent walk pruned below *b*'s epoch and capped at ``_TIE_WALK_CAP`` commits;
+    a walk that hits the cap, or finds no descent, answers False, so an equal-epoch pair deeper than the cap
+    keeps the caller's earlier pick.
+    """
+    from coordinator_core.git.commit_walk import commit_meta
+
+    meta_a, meta_b = commit_meta(common, a) or {}, commit_meta(common, b) or {}
+    epoch_a, epoch_b = meta_a.get("committer_epoch") or 0, meta_b.get("committer_epoch") or 0
+    if epoch_a != epoch_b:
+        return epoch_a > epoch_b
+    seen, stack = {a}, list(meta_a.get("parents") or [])
+    while stack and len(seen) < _TIE_WALK_CAP:
+        sha = stack.pop()
+        if sha == b:
+            return True
+        if sha in seen:
+            continue
+        seen.add(sha)
+        meta = commit_meta(common, sha) or {}
+        if (meta.get("committer_epoch") or 0) >= epoch_b:
+            stack.extend(meta.get("parents") or [])
+    return False
 
 
 def _shas_param(params: dict) -> tuple[list, Optional[str]]:
