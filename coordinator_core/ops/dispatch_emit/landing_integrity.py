@@ -545,7 +545,7 @@ class GateFindings(list):
 def landing_test_gate(
     worktree_root: Path, params: Mapping, run_id: Optional[str],
     landed_paths: Optional[Sequence[str]] = None,
-) -> tuple[list[Finding], str]:
+) -> tuple[GateFindings, str]:
     """``_landing_test_gate_core`` plus the invariant gate: with ``landed_paths`` given, every
     repo-wide invariant whose measured set they touch must be in the run's fresh passing retest,
     else one ``TARGETED_TESTS_FAILED`` finding per missing invariant (check ``"failed"``)."""
@@ -555,7 +555,9 @@ def landing_test_gate(
     owed = invariant_findings(worktree_root, landed_paths, run_id, params)
     if not owed:
         return findings, check
-    return [*findings, *owed], "failed"
+    out = GateFindings([*findings, *owed])
+    out.deleted_note = findings.deleted_note
+    return out, "failed"
 
 
 def invariant_findings(

@@ -582,3 +582,24 @@ def test_gate_receipt_names_run_deleted_targets_and_stays_no_verdict(tmp_path):
     out = terminal_commit._landing_integrity_gate(root, ["mod.py"], [], None, params, "r1")
     assert out["targeted_tests_check"] == "no-verdict"
     assert "test_gone.py" in out["targeted_tests_note"]
+
+
+def test_owed_invariant_branch_keeps_the_gate_findings_shape(tmp_path, monkeypatch):
+    owed = [li.Finding("test_inv.py", li.TARGETED_TESTS_FAILED, "invariant owed")]
+    monkeypatch.setattr(li, "invariant_findings", lambda *a, **k: owed)
+    findings, check = li.landing_test_gate(tmp_path, {}, None, ["mod.py"])
+    assert isinstance(findings, li.GateFindings)
+    assert findings.deleted_note == ""
+    assert check == "failed"
+    assert list(findings)[-1] == owed[0]
+
+
+def test_terminal_commit_gate_returns_owed_invariant_findings_without_raising(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit
+
+    owed = li.Finding("test_inv.py", li.TARGETED_TESTS_FAILED, "invariant owed")
+    monkeypatch.setattr(li, "invariant_findings", lambda *a, **k: [owed])
+    out = terminal_commit._landing_integrity_gate(tmp_path, ["mod.py"], [], None, {}, "r1")
+    assert out["targeted_tests_check"] == "failed"
+    assert out["refused"] == li.TARGETED_TESTS_FAILED
+    assert {"path": "test_inv.py", "reason": li.TARGETED_TESTS_FAILED, "detail": "invariant owed"} in out["integrity"]
