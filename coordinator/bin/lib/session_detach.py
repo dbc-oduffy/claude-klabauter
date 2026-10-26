@@ -28,15 +28,15 @@ _NODE_IMAGES = frozenset({"node", "node.exe"})
 _MAX_DEPTH = 64
 
 
-def _host():
-    """The sibling box_memory_host module, loaded by path once."""
-    mod = sys.modules.get("box_memory_host")
+def _sibling(name):
+    """A sibling module of this file, loaded by path once."""
+    mod = sys.modules.get(name)
     if mod is not None:
         return mod
-    path = Path(__file__).resolve().with_name("box_memory_host.py")
-    spec = importlib.util.spec_from_file_location("box_memory_host", path)
+    path = Path(__file__).resolve().with_name(f"{name}.py")
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load box_memory_host from {path}")
+        raise ImportError(f"cannot load {name} from {path}")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     try:
@@ -45,6 +45,14 @@ def _host():
         sys.modules.pop(spec.name, None)
         raise
     return mod
+
+
+def _interp():
+    return _sibling("python_interp")
+
+
+def _host():
+    return _sibling("box_memory_host")
 
 
 def _is_claude(image: str, cmdline) -> bool:
@@ -204,8 +212,9 @@ def ensure_detached(
     script = str(Path(sys.argv[0] if script is None else script).resolve())
     argv = list(argv)
     child_env = {**env, DETACHED_ENV: "1"}
+    py = _interp().resolve_console_python() or sys.executable
     pid = spawn_detached(
-        [sys.executable, script, *argv],
+        [py, script, *argv],
         log,
         strict=True,
         popen=popen,
@@ -213,7 +222,7 @@ def ensure_detached(
         env=child_env,
     )
     if pid is None:
-        print(_remedy(prog, plat, sys.executable, script, argv), file=err or sys.stderr)
+        print(_remedy(prog, plat, py, script, argv), file=err or sys.stderr)
         return _host().CANNOT_DETACH_EXIT
     print(f"DETACHED {prog} pid={pid} log={log}", file=out or sys.stdout)
     return 0

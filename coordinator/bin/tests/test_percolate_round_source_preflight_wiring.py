@@ -53,6 +53,7 @@ def _source_with_origin(tmp_path: Path) -> Path:
 
 def _run(monkeypatch, tmp_path, source: Path, *extra: str):
     reached = []
+    (tmp_path / "root").mkdir(exist_ok=True)
     monkeypatch.setattr(_mod, "_resolve_percolate_root", lambda override: str(tmp_path / "root"))
     monkeypatch.setattr(_mod, "_branch0_gate", lambda target, root: str(source))
     monkeypatch.setattr(_mod, "_resolve_dest", lambda target, root: str(tmp_path / "dest"))

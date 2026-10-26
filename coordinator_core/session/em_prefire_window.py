@@ -293,8 +293,8 @@ def lifecycle_ops() -> frozenset:
 
 
 _LEAD_CD_RE = re.compile(r"""^\s*cd\s+[^\s;&|<>`$()"'\\]+\s*&&\s*""")
-_CAT_SUBST_RE = re.compile(r"""\"\$\(cat\s+[^\s;&|<>`$()"'\\]+\)\"""")
-_TRIM_TAIL_RE = re.compile(r"\s*(?:2>&1\s*)?\|\s*(?:head|tail)\s+(?:-[cn]\s*\d+|-\d+|\d+)\s*$")
+_CAT_SUBST_RE = re.compile(r"""\"\$\(cat\s+(?!-)[^\s;&|<>`$()"'\\~*?\[\]{}]+\)\"""")
+_TRIM_TAIL_RE = re.compile(r"[ \t]*(?:2>&1[ \t]*)?\|\s*(?:head|tail)\s+(?:-[cn]\s*\d+|-\d+|\d+)\s*$")
 
 
 def _strip_harmless_frame(command: str) -> str:
@@ -573,8 +573,7 @@ def touches_landed_run(name: object, tool_input: object, run_id: object, repo_ro
         return False
     footprint = run_footprint(repo_root, run_id)
     known = footprint is not None
-    if footprint is None:
-        footprint = frozenset()
+    footprint = frozenset(_norm(f) for f in footprint or ())
     inp = tool_input if isinstance(tool_input, dict) else {}
     cands: list = []
     if name == "Read":

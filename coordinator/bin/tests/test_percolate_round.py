@@ -74,6 +74,13 @@ def _load_module():
 _mod = _load_module()
 
 
+@pytest.fixture(autouse=True)
+def _no_origin_slot(monkeypatch):
+    """The fake dest is a plain directory under a Popen-forbidden spy: the slot
+    gate sees no origin. Slot behaviour is pinned in test_percolate_round_publish_slot."""
+    monkeypatch.setattr(_mod._publish_slot, "slot_remote", lambda repo_root: None)
+
+
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 

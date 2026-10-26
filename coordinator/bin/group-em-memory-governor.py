@@ -35,6 +35,9 @@ suspending a language server hangs every LSP call in its session.
 On win32 only, the first critical sample of an episode also prints one GOVERNOR CACHE-TRIM-HINT line
 naming the elevated `trim-file-cache.py --apply` command; a calm verdict re-arms it.
 
+When available memory rises `HEADROOM_RISE_GIB` over its low-water mark, or the verdict goes calm
+after a PAUSED, it prints one `GOVERNOR HEADROOM available=<GiB>` line so the Group EM wakes.
+
 NEGATIVE SPEC: suspends and resumes only; never runs a cache trim; never kills, never signals a protected process; reads the
 box admission channel but never writes outside stdout. A suspended process it can no longer find
 (exited) is dropped silently.
@@ -473,6 +476,32 @@ def thaw_leftovers(pidfile: Optional[Path],
     return thawed
 
 
+HEADROOM_RISE_GIB = 8.0
+
+
+def avail_gib() -> Optional[float]:
+    """Kernel-available memory in GiB, or None when it cannot be read."""
+    try:
+        from coordinator_core.telemetry import host_sampler
+
+        avail, _total = host_sampler.avail_mb()
+        return None if avail is None else avail / 1024
+    except Exception:
+        return None
+
+
+def headroom_line(avail: Optional[float], low: Optional[float], recovered: bool) -> tuple[Optional[str], Optional[float]]:
+    """(line or None, new low-water mark). Fires on a rise of HEADROOM_RISE_GIB over the low-water
+    mark since the last line, or on `recovered` (calm again after a PAUSED); a fall lowers the mark."""
+    if avail is None:
+        return None, low
+    if low is None:
+        return None, avail
+    if recovered or avail - low >= HEADROOM_RISE_GIB:
+        return f"GOVERNOR HEADROOM available={avail:.1f}", avail
+    return None, min(low, avail)
+
+
 def cache_trim_hint(bin_dir: Path) -> str:
     """The hint line for the elevated cache trim; the unavailable form when the sibling is absent."""
     sibling = Path(bin_dir) / "trim-file-cache.py"
@@ -489,7 +518,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         notice_path: Optional[Path] = None,
         notice_fn: Callable[[Optional[Path], list[Proc]], frozenset] = read_noticed_pids,
         bin_dir: Optional[Path] = None, pidfile: Optional[Path] = None,
-        start_time_fn: Optional[Callable[[int], Optional[float]]] = None) -> None:
+        start_time_fn: Optional[Callable[[int], Optional[float]]] = None,
+        avail_fn: Optional[Callable[[], Optional[float]]] = None) -> None:
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
     start_times_fn = process_start_times if start_time_fn is None else (
         lambda pids: {p: start_time_fn(p) for p in pids})
@@ -502,6 +532,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
     flagged: set[int] = set()
     calm = crit_streak = ticks = 0
     gave_up = False
+    low_gib: Optional[float] = None
+    pause_recovery = False
     # A governor that exits (session end, SIGTERM) must never leave a peer's command frozen.
     # A hard kill (Windows TerminateProcess, SIGKILL) skips this finally; the pids are in `pidfile`
     # before the freeze signal, and the next governor or waiter start thaws them.
@@ -540,6 +572,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                         signal_fn(tree, True)
                         paused.append((victim, tree))
                         crit_streak = 0
+                        pause_recovery = True
                         emit(f"GOVERNOR PAUSED pid={victim.pid} rss={victim.rss_mb:.0f}MB "
                              f"tree={len(tree)} cmd={victim.cmd[:160]}")
                 elif due and not gave_up:
@@ -556,6 +589,11 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                     paused.clear()
                     _write_frozen(pidfile, paused, start_times_fn)
                     gave_up = False
+            if avail_fn is not None:
+                line, low_gib = headroom_line(avail_fn(), low_gib, pause_recovery and not paused)
+                if line:
+                    pause_recovery = False
+                    emit(line)
             sleep(args.interval)
     finally:
         if paused:
@@ -606,7 +644,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None:
             signal.signal(sig, lambda *_: sys.exit(0))
-    run(args, notice_path=resolve_notice_path(), pidfile=default_pidfile())
+    run(args, notice_path=resolve_notice_path(), pidfile=default_pidfile(), avail_fn=avail_gib)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.git.git_state import parse_publish_trailers
 
 from . import test_percolate_round as base
@@ -13,6 +15,11 @@ _mod = base._mod
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
+
+
+@pytest.fixture(autouse=True)
+def _no_origin_slot(monkeypatch):
+    monkeypatch.setattr(_mod._publish_slot, "slot_remote", lambda repo_root: None)
 
 
 def _drive(tmp_path, monkeypatch, *, stamp_source_head="", stamp_signature=""):

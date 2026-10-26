@@ -139,10 +139,10 @@ def test_new_user_resets_flags_but_not_fire_seen(tmp_path):
 def test_incremental_read_and_partial_line(tmp_path):
     path = tmp_path / "t.jsonl"
     first = user() + tool_use("a", "Read", {"file_path": "x"})
-    path.write_text(first + tool_use("b", "Read", {"file_path": "y"})[:20], encoding="utf-8")
+    path.write_bytes((first + tool_use("b", "Read", {"file_path": "y"})[:20]).encode("utf-8"))
     st = epw.advance(path, epw.fresh_state())
     assert st["pre"] == ["a"] and st["offset"] == len(first.encode())
-    path.write_text(first + tool_use("b", "Read", {"file_path": "y"}), encoding="utf-8")
+    path.write_bytes((first + tool_use("b", "Read", {"file_path": "y"})).encode("utf-8"))
     st = epw.advance(path, st)
     assert st["pre"] == ["a", "b"]
 
@@ -244,6 +244,19 @@ def test_workflow_revise_with_cd_cat_substitution_and_trim_is_exempt():
         "cd x; coordinator-invoke workflow.revise x",
         "cd $(pwd) && coordinator-invoke workflow.revise x",
         "cd x && grep y z && coordinator-invoke workflow.revise x",
+        'coordinator-invoke workflow.revise "$(cat -n f)"',
+        'coordinator-invoke workflow.revise "$(cat ~/.ssh/id_rsa)"',
+        'coordinator-invoke workflow.revise "$(cat /etc/*)"',
+        'coordinator-invoke workflow.revise "$(cat $(evil))"',
+        'coordinator-invoke workflow.revise "$(cat a)$(rm b)"',
+        "coordinator-invoke workflow.revise $(cat a)",
+        "coordinator-invoke workflow.revise `cat a`",
+        "coordinator-invoke workflow.revise x || tail -5",
+        "coordinator-invoke workflow.revise x > out | tail -5",
+        "coordinator-invoke workflow.revise x\n| tail -5",
+        "cd x\ncoordinator-invoke workflow.revise x",
+        "cd x || coordinator-invoke workflow.revise x",
+        "cd x && coordinator-invoke workflow.revise x && rm y",
     ):
         assert epw.lifecycle_op(bad) is None, bad
 
@@ -287,7 +300,7 @@ def test_unreadable_transcript_returns_state(tmp_path):
 def test_state_roundtrip_and_malformed_reset(tmp_path):
     p = tmp_path / "em-prefire.json"
     t = tmp_path / "t.jsonl"
-    t.write_text("abc\n", encoding="utf-8")
+    t.write_bytes(b"abc\n")
     p.write_text("{not json", encoding="utf-8")
     assert epw.load_state(p, t)["offset"] == 4
     epw.save_state(p, {**epw.fresh_state(), "pre": ["a"]})

@@ -186,13 +186,22 @@ def test_mutex_released_when_the_run_raises(fixture_tree, monkeypatch):
     assert suite_mutex.holder() is None
 
 
-def test_contended_run_proceeds_unserialized_rather_than_failing(fixture_tree, monkeypatch):
+def test_contended_run_refuses_exit_75_and_never_runs(fixture_tree, monkeypatch, capsys):
     from coordinator_core.testing import full_runner
 
     tree = fixture_tree()
+    ran = []
+    monkeypatch.setattr(full_runner, "run_suites", lambda *a, **k: ran.append(True) or [])
     monkeypatch.setattr(full_runner.suite_mutex, "MUTEX_WAIT_SECS", 0.0)
     monkeypatch.setattr(full_runner.suite_mutex, "acquire", lambda *a, **k: False)
-    assert full_runner.main(["--repo", str(tree.repo_root), "--jobs", "1"]) == 0
+    monkeypatch.setattr(
+        full_runner.suite_mutex, "holder", lambda **k: {"owner": "other-owner"}
+    )
+    assert full_runner.main(["--repo", str(tree.repo_root), "--jobs", "1"]) == 75
+    assert ran == []
+    err = capsys.readouterr().err
+    assert "suite mutex held by other-owner" in err
+    assert "proceeding unserialized" not in err
 
 
 def test_timeout_ends_a_gil_holding_test(tmp_path: Path) -> None:

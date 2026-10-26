@@ -135,19 +135,13 @@ def main(argv: list[str]) -> int:
     # queued run, and aborting it would turn a resource control into a
     # correctness-irrelevant failure. ``suite_mutex.MUTEX_WAIT_SECS`` bounds
     # the wait so a stale-but-not-yet-reclaimable holder cannot wedge a run
-    # forever; a timed-out acquire proceeds unserialized rather than
-    # refusing, matching the fail-OPEN posture the guard's own mutex leg
-    # takes.
+    # forever; a timed-out acquire refuses (exit 75) and never runs.
     owner = suite_mutex.mutex_owner("full_runner")
     start = time.monotonic()
     with suite_mutex.held(owner, "full_runner", timeout=suite_mutex.MUTEX_WAIT_SECS) as acquired:
         if not acquired:
-            current = suite_mutex.holder() or {}
-            print(
-                "[WARN] suite mutex held by %s for %ss — proceeding unserialized"
-                % (current.get("owner", "<unknown>"), int(suite_mutex.MUTEX_WAIT_SECS)),
-                file=sys.stderr,
-            )
+            print(suite_mutex.timeout_refusal(suite_mutex.MUTEX_WAIT_SECS), file=sys.stderr)
+            return suite_mutex.EX_TEMPFAIL
         results = run_suites(suites, repo_root=repo_root, timeout=args.timeout, jobs=args.jobs)
     duration = time.monotonic() - start
 

@@ -160,9 +160,11 @@ _META_FILENAME = "meta.json"
 # consumer-repo suites are a few times that. 600s is well past that budget —
 # long enough that no honest run is ever reclaimed out from under itself,
 # short enough that a genuinely wedged holder does not stall a caller
-# indefinitely; a timed-out acquire proceeds unserialized (fail OPEN) rather
-# than refusing, matching this module's own read-path fail-open posture.
+# indefinitely; a timed-out acquire is a refusal (EX_TEMPFAIL), never a run.
 MUTEX_WAIT_SECS: float = 600.0
+
+# EX_TEMPFAIL, matching `with-suite-mutex`'s held-mutex refusal.
+EX_TEMPFAIL: int = 75
 
 _POLL_INITIAL_SECS = 0.1
 _POLL_MAX_SECS = 5.0
@@ -192,6 +194,16 @@ def mutex_owner(prefix: str) -> str:
         if value:
             return value
     return "%s-pid-%d" % (prefix, os.getpid())
+
+
+def timeout_refusal(wait_secs: float) -> str:
+    """Refusal text for a wait that timed out, naming the current holder."""
+    current = holder() or {}
+    return "[REFUSED] suite mutex held by %s; waited %ss; suite not run (exit %d)" % (
+        current.get("owner", _UNKNOWN_OWNER),
+        int(wait_secs),
+        EX_TEMPFAIL,
+    )
 
 
 def lock_path() -> Path:
@@ -421,6 +433,28 @@ def _try_mkdir(path: Path) -> bool:
     return True
 
 
+def _holder_is_self_or_ancestor(holder_pid: int) -> bool:
+    """True when ``holder_pid`` is this process or one of its ancestors.
+
+    Same-owner re-entry is for a nested acquire inside the holder's own run (the
+    wrapper holds on the child's pid; the runner it spawned re-acquires). Two
+    sibling processes sharing one session-id owner are NOT nested: the second
+    must wait. An unknown pid (0) is never an ancestor. When the process tree
+    cannot be read the answer is True, keeping the owner-only behaviour.
+    """
+    if holder_pid <= 0:
+        return False
+    if holder_pid == os.getpid():
+        return True
+    try:
+        import psutil
+
+        return any(p.pid == holder_pid for p in psutil.Process().parents())
+    except Exception as exc:
+        _LOG.warning("suite_mutex: ancestry unreadable, treating same owner as nested: %s", exc)
+        return True
+
+
 def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = None,
             path: Optional[Path] = None) -> bool:
     """Acquire the machine-wide suite mutex for ``owner``. True iff held on return.
@@ -478,7 +512,7 @@ def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = 
                 reclaim_retries,
             )
             return False
-        if current["owner"] == owner:
+        if current["owner"] == owner and _holder_is_self_or_ancestor(current["pid"]):
             return True
 
         remaining = deadline - time.monotonic()

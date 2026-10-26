@@ -469,7 +469,7 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
             self.assertIsNotNone(observed_holder[0], "mutex was not held during the suite call")
             self.assertIsNone(suite_mutex.holder())
 
-    def test_t11_held_elsewhere_warns_and_proceeds(self) -> None:
+    def test_t11_held_elsewhere_refuses_exit_75(self) -> None:
         import tempfile
 
         from coordinator_core.testing import suite_mutex
@@ -492,10 +492,10 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
             finally:
                 suite_mutex.release("other-owner")
 
-            self.assertEqual((validation_result, exit_code), ("0", 0))
-            self.assertEqual(ran, [True])
+            self.assertEqual((validation_result, exit_code), ("mutex-refused", 75))
+            self.assertEqual(ran, [])
             self.assertIn("suite mutex held by other-owner", stderr_buf.getvalue())
-            self.assertIn("proceeding unserialized", stderr_buf.getvalue())
+            self.assertNotIn("proceeding unserialized", stderr_buf.getvalue())
 
 
 class SuiteRunReuseTest(unittest.TestCase):

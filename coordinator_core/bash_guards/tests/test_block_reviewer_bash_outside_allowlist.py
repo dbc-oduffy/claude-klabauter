@@ -1704,10 +1704,32 @@ def test_the_posix_halt_cd_prefixed_review_prep_allows(monkeypatch):
         "cd $(evil) && " + _EMITTED_PREP,
         "cd '/x y' && " + _EMITTED_PREP,
         _EMITTED_PREP + " && rm -rf /y",
+        _EMITTED_PREP + " || rm -rf /y",
+        _EMITTED_PREP + " `rm -rf /y`",
+        _EMITTED_PREP + " $(rm -rf /y)",
+        _EMITTED_PREP + " > out.txt",
+        _EMITTED_PREP + "\nrm -rf /y",
+        "cd /x || " + _EMITTED_PREP,
+        "cd /x\n" + _EMITTED_PREP,
+        "cd C:\\x && " + _EMITTED_PREP,  # abs-path-ok: shell-syntax fixture
+        "cd `evil` && " + _EMITTED_PREP,
+        'cd "/x" && ' + _EMITTED_PREP,
     ],
 )
 def test_other_chaining_around_review_prep_still_denies(cmd, monkeypatch):
     _deny(cmd, monkeypatch)
+
+
+_RUN_ID_PREP = (
+    '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke" '
+    'review.prep \'{"run_id":"ask-20261025T214249-835ae8","leg":true}\' --repo \'/r\''
+)
+
+
+def test_the_run_id_review_prep_brief_allows(monkeypatch):
+    _allow(_RUN_ID_PREP, monkeypatch)
+    _allow("cd /x && " + _RUN_ID_PREP, monkeypatch)
+    _allow("cd C:/x && " + _RUN_ID_PREP, monkeypatch)  # abs-path-ok: shell-syntax fixture
 
 
 def test_another_engine_op_still_denies(monkeypatch):

@@ -236,6 +236,60 @@ def test_second_invocation_waits_for_first(tmp_path):
     assert not _lock_dir(tmp_path).exists()
 
 
+def test_same_session_concurrent_invocations_do_not_overlap(tmp_path):
+    """Two invocations sharing one session id (an admit loop's duplicate gate) serialize."""
+    env = _base_env(tmp_path)
+    env["CLAUDE_CODE_SESSION_ID"] = "shared-session"
+    log_path = tmp_path / "timeline.log"
+    script = (
+        "import sys, time\n"
+        "label, log_path = sys.argv[1], sys.argv[2]\n"
+        "with open(log_path, 'a') as f:\n"
+        "    f.write(f'{label} start {time.time()}\\n')\n"
+        "time.sleep(1.5)\n"
+        "with open(log_path, 'a') as f:\n"
+        "    f.write(f'{label} end {time.time()}\\n')\n"
+    )
+    results = {}
+
+    def _launch(label):
+        results[label] = _run(
+            ["--", sys.executable, "-c", script, label, str(log_path)], env=env, timeout=60
+        )
+
+    t1 = threading.Thread(target=_launch, args=("A",))
+    t2 = threading.Thread(target=_launch, args=("B",))
+    t1.start()
+    time.sleep(0.5)
+    t2.start()
+    t1.join(timeout=60)
+    t2.join(timeout=60)
+
+    for label in ("A", "B"):
+        assert results[label].returncode == 0, results[label].stderr
+    events = {}
+    for line in log_path.read_text().strip().splitlines():
+        label, kind, ts = line.split()
+        events.setdefault(label, {})[kind] = float(ts)
+    a, b = events["A"], events["B"]
+    assert not (a["start"] < b["end"] and b["start"] < a["end"]), f"overlapped: {a} {b}"
+    assert not _lock_dir(tmp_path).exists()
+
+
+def test_wrapped_child_with_same_session_id_reacquires_nested(tmp_path):
+    """The runner the wrapper spawns (same session owner) still re-enters the held mutex."""
+    env = _base_env(tmp_path)
+    env["CLAUDE_CODE_SESSION_ID"] = "shared-session"
+    env["PYTHONPATH"] = str(_REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    script = (
+        "import sys\n"
+        "from coordinator_core.testing import suite_mutex\n"
+        "sys.exit(0 if suite_mutex.acquire(suite_mutex.mutex_owner('x'), 'nested') else 3)\n"
+    )
+    result = _run(["--", sys.executable, "-c", script], env=env)
+    assert result.returncode == 0, result.stderr
+
+
 def test_interrupted_run_releases_lock(tmp_path):
     """A SIGINT/terminate to the wrapper during a child run leaves no lock."""
     env = _base_env(tmp_path)
@@ -863,6 +917,22 @@ def test_reuse_fresh_held_mutex_exits_75_with_wait_advice(tmp_path, monkeypatch,
     monkeypatch.setattr(module.suite_mutex, "holder", lambda *a, **k: {"owner": "peer"})
     assert _in_process_main(module, monkeypatch, repo, _reuse_args(cmd)) == 75
     assert "--wait" in capfd.readouterr().err
+    assert counter.read_text() == ""
+
+
+def test_contended_acquire_timeout_refuses_exit_75_and_never_runs_child(
+    tmp_path, monkeypatch, capfd
+):
+    repo, cmd, counter = _counter_setup(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    module = _load_wrapper_module()
+    monkeypatch.setattr(module.suite_mutex, "holder", lambda *a, **k: {"owner": "peer-x"})
+    monkeypatch.setattr(module.suite_mutex, "acquire", lambda *a, **k: False)
+    assert _in_process_main(module, monkeypatch, repo, ["--", *cmd]) == 75
+    err = capfd.readouterr().err
+    assert "peer-x" in err and "--wait" in err
+    assert "proceeding unserialized" not in err
+    time.sleep(0.6)
     assert counter.read_text() == ""
 
 

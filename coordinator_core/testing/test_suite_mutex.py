@@ -119,6 +119,44 @@ def test_reentrant_same_owner_is_noop_success() -> None:
     assert suite_mutex.holder() is None
 
 
+def test_same_owner_other_live_process_is_not_admitted() -> None:
+    import subprocess
+    import sys
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    sibling = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        **no_console_creationflags(),
+    )
+    try:
+        assert suite_mutex.acquire("session-a", "pytest", pid=sibling.pid) is True
+        assert suite_mutex.acquire("session-a", "pytest") is False
+        assert suite_mutex.acquire("session-a", "pytest", timeout=0.3) is False
+    finally:
+        sibling.kill()
+        sibling.wait()
+
+
+def test_same_owner_holder_that_is_an_ancestor_is_admitted() -> None:
+    import psutil
+
+    parent = psutil.Process().parent()
+    assert parent is not None
+    assert suite_mutex.acquire("session-a", "pytest", pid=parent.pid) is True
+    assert suite_mutex.acquire("session-a", "pytest") is True
+
+
+def test_same_owner_ancestry_unreadable_keeps_owner_only_admission(monkeypatch) -> None:
+    import psutil
+
+    def _boom(*_a, **_k):
+        raise psutil.Error("ancestry unreadable")
+
+    monkeypatch.setattr(psutil, "Process", _boom)
+    assert suite_mutex._holder_is_self_or_ancestor(os.getpid() + 1_000_003) is True
+
+
 def test_stale_by_dead_pid_is_reclaimed() -> None:
     _write_meta(pid=_dead_pid(), owner="crashed-session", started_at=_iso_ago(60))
 

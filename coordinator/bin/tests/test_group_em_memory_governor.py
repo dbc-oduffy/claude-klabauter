@@ -591,6 +591,36 @@ def test_relaunching_parent_costs_under_budget(tmp_path, monkeypatch):
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
+def _headroom(avails, verdicts=None):
+    a, v = iter(avails), iter(verdicts or [False] * len(avails))
+    lines = []
+    gov.run(_args(), emit=lines.append, sample=lambda: next(v), procs_fn=lambda: PROCS,
+            signal_fn=lambda *x: None, sleep=lambda s: None, max_ticks=len(avails),
+            avail_fn=lambda: next(a))
+    return [x for x in lines if "HEADROOM" in x]
+
+
+def test_headroom_prints_exactly_one_line_low_to_high():
+    assert _headroom([5.0, 5.5, 6.0, 58.0, 58.5, 59.0]) == ["GOVERNOR HEADROOM available=58.0"]
+
+
+def test_headroom_silent_under_threshold_and_without_avail_fn():
+    assert _headroom([5.0, 8.0, 12.9]) == []
+    lines = []
+    gov.run(_args(), emit=lines.append, sample=lambda: False, procs_fn=lambda: PROCS,
+            signal_fn=lambda *x: None, sleep=lambda s: None, max_ticks=3)
+    assert lines == []
+
+
+def test_headroom_fires_when_calm_returns_after_paused():
+    lines = _headroom([2.0, 2.0, 3.0, 3.1], [True, True, False, False])
+    assert lines == ["GOVERNOR HEADROOM available=3.1"]
+
+
+def test_headroom_rearms_from_the_lower_mark_after_a_fall():
+    assert len(_headroom([30.0, 10.0, 20.0, 21.0])) == 1
+
+
 def test_place_engine_on_path_is_false_when_the_engine_is_unresolvable(monkeypatch):
     import types
 
