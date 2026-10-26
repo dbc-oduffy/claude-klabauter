@@ -40,7 +40,17 @@ def _run_id_of(params: dict) -> str:
     rid = params.get("run_id")
     if isinstance(rid, str) and rid:
         return rid
-    return PurePosixPath(str(params.get("script_path") or "").replace("\\", "/")).stem
+    stem = PurePosixPath(str(params.get("script_path") or "").replace("\\", "/")).stem
+    return stem.removesuffix(".workflow")
+
+
+def _outside_own_records(run_id: str, paths: Sequence[str]) -> list[str]:
+    """``paths`` minus ``state/warp/<run_id>/``: the landing rewrites those after the retest, so a
+    fingerprint holding them reads stale."""
+    from coordinator_core.session.record_homes import home_dir
+
+    prefix = f"{PurePosixPath(home_dir('', 'warp').replace(chr(92), '/'))}/{run_id}/"
+    return [p for p in paths if not str(p).replace("\\", "/").startswith(prefix)]
 
 
 #: Bound on one detached targeted rerun, not on the pool: past it the child records ``error``.
@@ -279,7 +289,7 @@ def _write_stale(root: Path, run_id: str, dirty: Callable[[Path], list[str]], he
     """Write a ``stale`` verdict (non-blocking to the landing gate) with a named note when no
     targeted set is recorded and no ``--tests`` was given."""
     try:
-        covered_paths = dirty(root)
+        covered_paths = _outside_own_records(run_id, dirty(root))
     except RuntimeError as exc:
         print(f"retest_targeted: {exc}", file=sys.stderr)
         return 2
@@ -304,7 +314,7 @@ def _write_no_tests(root, path, run_id, dropped, note, dirty, head_sha) -> int:
     """Record ``no-tests`` (tests_run 0, non-blocking, not ``error``) when every named target was
     dropped as nonexistent. Nothing is launched."""
     try:
-        covered_paths = dirty(root)
+        covered_paths = _outside_own_records(run_id, dirty(root))
     except RuntimeError as exc:
         print(f"retest_targeted: {exc}", file=sys.stderr)
         return 2
@@ -659,7 +669,7 @@ def main(
 
     test_files = [t.split("::")[0] for t in tests]
     try:
-        covered_paths = list(dict.fromkeys([*test_files, *dirty(root)]))
+        covered_paths = _outside_own_records(run_id, list(dict.fromkeys([*test_files, *dirty(root)])))
     except RuntimeError as exc:
         print(f"retest_targeted: {exc}", file=sys.stderr)
         _write_record(path, {

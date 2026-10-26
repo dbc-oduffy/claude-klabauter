@@ -74,7 +74,7 @@ def _holder(root, run_id: str, marker: str | None, *, sizing: str = SIZING, plan
     """A peer run declaring PATH through its manifest (or, without one, its sizing's plan spine), with an
     optional halt marker and fresh token. The manifest carries a `write_baseline` for PATH (a
     pre-stage fingerprint the tree no longer matches), the evidence the peer wrote there."""
-    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit import kept_work, run_token
 
     rdir = root / "state" / "warp" / run_id
     rdir.mkdir(parents=True, exist_ok=True)
@@ -86,6 +86,9 @@ def _holder(root, run_id: str, marker: str | None, *, sizing: str = SIZING, plan
                 "write_baseline": {PATH: LIVE_BASELINE},
             }), encoding="utf-8"
         )
+        # A real holder owns the dirt on PATH: its kept.json fingerprints the bytes `_land_dirty` authors.
+        # Without it the shared baseline (PATH absent at HEAD) makes the dirt the landing run's own.
+        kept_work.write(rdir, {"C1": {"paths": {PATH: kept_work.blob_sha(b"x = 1\n")}}}, None)
     if marker:
         body = {"status": marker, "sizing_rel": sizing, **({"plan": plan} if plan else {})}
         if withheld:

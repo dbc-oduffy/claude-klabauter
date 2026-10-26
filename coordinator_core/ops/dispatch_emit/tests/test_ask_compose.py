@@ -23,6 +23,8 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _RUN_ID = "run-1"
+# repo_root is the fake "REPO", so head_sha cannot supply the base the run-prep review needs.
+_FAKE_BASE_SHA = "a" * 40
 
 
 def _stub_wrap(text):
@@ -38,6 +40,7 @@ def _compose(**over):
         session_id=None,
         wrap_stage=_stub_wrap,
         plan_blitz_text="stub",
+        run_base_sha=_FAKE_BASE_SHA,
         **REVIEW_KW,
     )
     kw.update(over)
@@ -605,6 +608,7 @@ def _ratio_kw(*extra_agents):
             "execute_review": {"stages": stages},
         },
         "review_stage_schemas": REVIEW_KW["review_stage_schemas"],
+        "run_base_sha": _FAKE_BASE_SHA,
     }
 
 

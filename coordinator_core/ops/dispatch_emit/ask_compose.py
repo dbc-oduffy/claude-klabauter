@@ -20,6 +20,7 @@ from coordinator_core.git.git_state import head_sha
 from coordinator_core.git.residue_classes import REPLY_KEY as _RESIDUE_REPLY_KEY, RESIDUE_DIRECTIVE as _RESIDUE_DIRECTIVE
 from coordinator_core.warp_fire import _ASK_PLACEHOLDER, SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
+from coordinator_core.ops.dispatch_emit import agent_body_dedupe as _agent_body_dedupe
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY, STAGED_INLINE_SLOT, STAGED_RESUME_KEY
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
@@ -5184,6 +5185,7 @@ def _finish_script(
         + "\n"
     )
     script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
+    script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)
     if len(script.encode("utf-8")) > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
         raise AskComposeRefused(
             f"composed ask script is over the Workflow runner's {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte cap"
