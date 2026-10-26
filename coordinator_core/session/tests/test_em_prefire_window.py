@@ -420,3 +420,100 @@ def test_missing_or_bad_manifest_fails_open_but_records_still_count(tmp_path):
     assert t("Bash", {"command": "ls state/warp/" + RUN})
     assert epw.run_footprint(tmp_path, "") is None
     assert epw.run_footprint(tmp_path, "../x") is None
+
+
+def _w(tid, path, name="Write"):
+    return tool_use(tid, name, {"file_path": path})
+
+
+def test_self_written_scratch_reads_and_syntax_checks_are_free(tmp_path):
+    st = run(
+        tmp_path,
+        [
+            user(),
+            _w("w", "/r/scratch/chk/a.py"),
+            tool_use("a", "Read", {"file_path": "/r/scratch/chk/a.py"}),
+            tool_use("b", "Bash", {"command": "python3 -m py_compile /r/scratch/chk/a.py"}),
+            tool_use("c", "Bash", {"command": "cat /r/scratch/chk/a.py"}),
+            tool_use("d", "Bash", {"command": "wc -l /r/scratch/chk/a.py"}),
+            tool_use("e", "Grep", {"pattern": "x", "path": "/r/scratch/chk/a.py"}),
+        ],
+    )
+    assert st["written"] == ["/r/scratch/chk/a.py"] and st["pre"] == []
+
+
+def test_self_written_backslash_and_edit_tools(tmp_path):
+    st = run(
+        tmp_path,
+        [user(), _w("w", "C:\\r\\scratch\\n.py", "Edit"), tool_use("a", "Read", {"file_path": "C:/r/scratch/n.py"})],
+    )
+    assert st["pre"] == []
+
+
+def test_self_written_does_not_exempt_other_or_mixed_paths(tmp_path):
+    st = run(
+        tmp_path,
+        [
+            user(),
+            _w("w", "/r/scratch/chk/a.py"),
+            tool_use("a", "Read", {"file_path": "scratch/base-HEAD/coordinator_core/x.py"}),
+            tool_use("b", "Bash", {"command": "cat /r/scratch/chk/a.py coordinator_core/x.py"}),
+            tool_use("c", "Bash", {"command": "python3 -m py_compile coordinator_core/x.py"}),
+            tool_use("d", "Bash", {"command": "cat /r/scratch/chk/a.py; grep -r q ."}),
+            tool_use("e", "Read", {"file_path": "/r/coordinator_core/a.py"}),
+        ],
+    )
+    assert st["pre"] == ["a", "b", "c", "d", "e"]
+
+
+def test_self_written_cleared_on_new_user_turn_and_py_compile_not_for_named(tmp_path):
+    st = run(tmp_path, [user(), _w("w", "/r/scratch/a.py"), user("next"), tool_use("a", "Read", {"file_path": "/r/scratch/a.py"})])
+    assert st["written"] == [] and st["pre"] == ["a"]
+    assert epw.named_read("Bash", {"command": "python3 -m py_compile plan.md"}, ["plan.md"]) is False
+
+
+def test_memo_tooling_is_exempt_whatever_the_tail(tmp_path):
+    cmds = [
+        "cross-repo-memo send --to x --body y",
+        "$HOME/.coordinator-claude-settings/bin/cross-repo-memo list; echo done",
+        "cd /r && cross-repo-memo send --body \"$(cat m.md)\" | head -5",
+    ]
+    st = run(tmp_path, [user()] + [tool_use(f"m{i}", "Bash", {"command": c}) for i, c in enumerate(cmds)])
+    assert st["pre"] == [] and st["all"] == []
+    st = run(tmp_path, [user(), tool_use("g", "Bash", {"command": "grep -r cross-repo-memo ."})])
+    assert st["pre"] == ["g"]
+
+
+def test_task_reset_on_changed_in_progress_task_only(tmp_path):
+    def upd(tid, task, status="in_progress"):
+        return tool_use(tid, "TaskUpdate", {"taskId": task, "status": status})
+
+    st = run(
+        tmp_path,
+        [
+            user(),
+            upd("u1", "1"),
+            tool_use("a", "Read", {"file_path": "x.py"}),
+            _w("w", "/r/scratch/z.py"),
+            upd("u1b", "1"),
+            tool_use("b", "Read", {"file_path": "y.py"}),
+            tool_use("c1", "TaskCreate", {"subject": "t2"}),
+            tool_use("c", "Read", {"file_path": "z.py"}),
+        ],
+    )
+    assert st["pre"] == ["a", "b", "c"] and st["task_key"] == "1"
+    st = run(tmp_path, [user(), upd("u1", "1"), tool_use("a", "Read", {"file_path": "x.py"}), upd("u2", "2"), tool_use("b", "Read", {"file_path": "y.py"})])
+    assert st["pre"] == ["b"] and st["task_key"] == "2" and st["written"] == []
+    st = run(tmp_path, [user(), upd("u1", "1"), tool_use("a", "Read", {"file_path": "x.py"}), upd("u2", "2", "pending")])
+    assert st["pre"] == ["a"]
+    todo = {"todos": [{"content": "second", "status": "in_progress"}, {"content": "first", "status": "pending"}]}
+    st = run(tmp_path, [user(), tool_use("a", "Read", {"file_path": "x.py"}), tool_use("t", "TodoWrite", todo), tool_use("b", "Read", {"file_path": "y.py"})])
+    assert st["pre"] == ["b"] and st["task_key"] == "second"
+
+
+def test_written_list_is_capped_and_paths_past_the_cap_are_charged(tmp_path):
+    over = epw.WRITTEN_CAP + 1
+    events = [user()] + [_w(f"w{i}", f"/r/scratch/f{i}.py") for i in range(over)]
+    events.append(tool_use("last", "Read", {"file_path": f"/r/scratch/f{over - 1}.py"}))
+    st = run(tmp_path, events)
+    assert len(st["written"]) == epw.WRITTEN_CAP and st["pre"] == ["last"]

@@ -5,8 +5,8 @@ bytes remove is attributed by position to the first-parent commit that introduce
 introduced by a commit that is not the run's own is a finding. Zero spawns: objects are read
 through ``git_objects``. A run's own commits are those whose message carries ``Checkpoint-Base:``
 (or ``Checkpoint-Review-Base:``) equal to the run base; when the plan is known, those carrying
-``Checkpoint-Plan:`` equal to it with a stamped base anywhere on the walked chain. ``Session-Id``
-cannot discriminate (concurrent runs share it).
+``Checkpoint-Plan:`` equal to it with a stamped base on the walked chain or among the run base's first-parent
+ancestors. ``Session-Id`` cannot discriminate (concurrent runs share it).
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
 
 WALK_CAP = 1000
 VERSIONS_PER_PATH_CAP = 64
+ANCESTOR_CAP = 256
 
 NOTE_WALK_CAPPED = "walk-capped"
 NOTE_UNREADABLE = "unreadable"
@@ -32,11 +33,18 @@ _PLAN_RE = re.compile(r"^Checkpoint-Plan: (\S.*?)\s*$", re.M)
 _BASE_RE = re.compile(r"^Checkpoint-(?:Review-)?Base: ([0-9a-f]{7,40})\s*$", re.M)
 
 
-def is_own_commit(message: str, plan: Optional[str], base_sha: str, chain: Sequence[str] = ()) -> bool:
+def is_own_commit(
+    message: str,
+    plan: Optional[str],
+    base_sha: str,
+    chain: Sequence[str] = (),
+    ancestors: Sequence[str] = (),
+) -> bool:
     """True when the message's checkpoint trailers name this run's plan and base.
 
-    With ``plan`` a stamped base is accepted when it prefix-matches ``base_sha`` or any sha in
-    ``chain`` (every re-fire of a run stamps a new base, so the run base alone under-matches);
+    With ``plan`` a stamped base is accepted when it prefix-matches ``base_sha``, any sha in
+    ``chain`` or any sha in ``ancestors`` (first-parent history below the run base: a re-fire
+    stamps the base it started from, which may predate the run base);
     without ``plan`` only a stamped base prefix-matching ``base_sha`` (either direction) counts.
     """
     stamped = _BASE_RE.findall(message)
@@ -44,8 +52,21 @@ def is_own_commit(message: str, plan: Optional[str], base_sha: str, chain: Seque
         return any(base_sha.startswith(b) or b.startswith(base_sha) for b in stamped)
     if not any(checkpoint_plan_matches(p, plan) for p in _PLAN_RE.findall(message)):
         return False
-    anchors = (base_sha, *chain)
+    anchors = (base_sha, *chain, *ancestors)
     return any(a.startswith(b) for b in stamped for a in anchors)
+
+
+def _base_ancestors(common_dir: Path, base: str) -> List[str]:
+    """First-parent shas below ``base``, newest first, bounded by ``ANCESTOR_CAP``."""
+    out: List[str] = []
+    meta = commit_meta(common_dir, base)
+    while meta and len(out) < ANCESTOR_CAP:
+        parents = meta.get("parents") or []
+        if not parents:
+            break
+        out.append(parents[0])
+        meta = commit_meta(common_dir, parents[0])
+    return out
 
 
 def _head_sha(worktree_root: Path) -> Optional[str]:
@@ -148,9 +169,10 @@ def check(
     from coordinator_core.ops.dispatch_emit.ask_contract import halted_run_id
 
     own = set()
+    ancestors = _base_ancestors(common_dir, base_sha) if plan is not None else []
     for sha in newest_first:
         message = (commit_meta(common_dir, sha) or {}).get("message", "")
-        if is_own_commit(message, plan, base_sha, newest_first) or (
+        if is_own_commit(message, plan, base_sha, newest_first, ancestors) or (
             run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id
         ):
             own.add(sha)

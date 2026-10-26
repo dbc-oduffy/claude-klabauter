@@ -239,10 +239,31 @@ RESEARCH_CLASSIFY_CLAUSE = (
     "for a binary verdict on one unproven mechanism. More thoroughness is `depth` or "
     "`appetite: large`, never `deep`. "
     "URLs the ask names to study go in `seeds` as `<kind>=<url>`, kind video, doc, repo or paper, "
-    "and never in `targets`."
+    "and never in `targets`. "
+    "An ask that declares one writes path and reads a bounded input set it names (files, "
+    "transcripts, cells) is a change to files, not knowledge: return `research` null, even "
+    "when it says census or classify or is read-only."
 )
 #: `ask_gate` halt route for a research sizing: the hand-back to the sizing door.
 RESEARCH_HANDBACK_ROUTE = "research"
+_BOUNDED_INPUT_RE = re.compile(
+    r"\b\d+\s+(?:cells?|files?|transcripts?|runs?|logs?|records?|rows?|reports?)\b"
+    r"|\b(?:XXL|XS|XL|S|M|L)\s*[–—-]\s*(?:XXL|XS|XL|S|M|L)\b"
+)
+
+
+def research_is_bounded_single_write(sizing: Mapping, writes: Sequence[str]) -> bool:
+    """True when a research-carrying sizing declares exactly one writes path over a bounded, enumerated
+    input set (a counted noun or a size range in its intent): a file change, so the execute arm, not research.
+
+    Trap: lexical; an input set described without a count or range is not recognised."""
+    paths = {str(w).strip() for w in writes if str(w).strip()}
+    research = sizing.get("research")
+    if len(paths) != 1 or not (isinstance(research, Mapping) and research):
+        return False
+    return _BOUNDED_INPUT_RE.search(str(sizing.get("intent") or "")) is not None
+
+
 #: `ask_gate` refusal for a research sizing whose request carries `writes`.
 RESEARCH_MIXED_REFUSAL = (
     "Research ask also names file writes. Submit the research ask alone to /coordinator:research. "

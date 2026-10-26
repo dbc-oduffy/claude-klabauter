@@ -3,25 +3,31 @@
 Params: ``run_id`` (string, required: the halted run). Fail-closed: the op writes only when the marker
 is ``halted`` (not resumed, landed or live) and withholds at least one path; the run-stage record is
 ``halted`` with a parseable ``last_activity_at`` that resolves to a commit (the halt anchor); every
-withheld path has a kept blob, a commit in ``<halt_anchor>..HEAD`` that touched it, and a HEAD blob that
-differs from the kept blob. Any gap refuses and leaves marker and index unchanged.
+withheld path classifies as exactly one of: ``landed`` (HEAD blob equals the kept blob), ``superseded`` (a commit in
+``<halt_anchor>..HEAD`` touched it and a HEAD blob exists that differs from the kept blob) or ``scratch-abandoned``
+(under ``scratch/``, untouched since the halt, absent from both the anchor tree and HEAD). Any path that classifies
+as none refuses naming every such path; so does a run with no superseded path (all landed, or landed plus scratch:
+``dispatch.record_halted_run_landed`` records those). Any gap leaves marker and index unchanged.
 On success the marker is rewritten ``status: superseded`` with ``superseded_evidence: {path: sha}``
-(the newest post-halt commit touching the path) and the run leaves the halt-withheld index. It never
-marks a run landed. Three git spawns: ``rev-list`` (anchor), ``log --name-only``, ``cat-file --batch-check``.
+(superseded paths only: the newest post-halt commit touching the path) and ``path_dispositions`` (every path),
+and the run leaves the halt-withheld index. It never marks a run landed. Three git spawns: ``rev-list`` (anchor),
+``log --name-only``, ``cat-file --batch-check`` (HEAD, kept and anchor blobs in one batch).
 Legacy route: taken ONLY when the halt has neither a kept file nor a withheld-prints file (written before both); a
 present but unreadable, malformed or blob-less one refuses fail-closed. A withheld path whose newest post-halt touch
 is a deletion refuses, evidence sha or not. It takes ``evidence_shas`` (list of full shas,
 required): each must be an ancestor of HEAD and touch a withheld path in ``<halt_anchor>..HEAD``, none may have
 deleted a withheld path, and between them they cover every withheld path; ``superseded_evidence`` records
-``{path: evidence sha}``. ``memo_id`` (optional string) is echoed in the legacy reply only. A halt with a kept
+``{path: evidence sha}`` for the touched paths; an untouched ``scratch/`` path needs no evidence sha and costs one
+extra ``cat-file --batch-check`` spawn (anchor and HEAD absence); there is no landed class. ``memo_id`` (optional string) is echoed in the legacy reply only. A halt with a kept
 file keeps the gate above and ignores ``evidence_shas``.
 With no run-stage record the anchor is the newest commit touching the run's ``halted.json`` (one extra ``log`` spawn).
 Trap: the anchor is the halt, never ``run_base_sha``; base..HEAD would count the run's own pre-halt commits.
-Reply: ``{ok, run_id, evidence, recorded}`` (legacy adds ``legacy: true`` and ``memo_id``) or ``{ok: false, error}``.
+Reply: ``{ok, run_id, evidence, dispositions, recorded}`` (legacy adds ``legacy: true`` and ``memo_id``) or ``{ok: false, error}``.
 """
 
 from __future__ import annotations
 
+import posixpath
 import re
 from pathlib import Path
 from typing import Optional
@@ -108,6 +114,64 @@ def _blob_ids(root: Path, specs: list) -> Optional[list]:
     return out
 
 
+_SCRATCH_PREFIX = "scratch/"
+_SCRATCH_REASON = "under scratch/, never tracked at halt or HEAD"
+
+
+def _is_scratch_path(p: str) -> bool:
+    """Under ``scratch/`` by its normalized spelling: ``scratch/../src/x`` names a path outside scratch/, and git
+    does not resolve ``..`` in a ``<rev>:<path>`` spec, so it would read as absent everywhere."""
+    return p.startswith(_SCRATCH_PREFIX) and "\\" not in p and posixpath.normpath(p) == p
+
+
+def _classify_paths(paths: list, touched: dict, head: dict, keep: dict, base: dict, anchor: str) -> tuple:
+    """``(dispositions, unclassified)``: ``{path: {disposition, blob|sha|reason}}`` for the classified paths and
+    ``["path (reason)", ...]`` for the rest. ``head``/``base`` map a path to its blob id at HEAD / the halt anchor
+    (None when absent); a path missing from ``head`` was not read (legacy touched path: never landed or scratch).
+    ``keep`` maps a path to its withheld blob (empty on the legacy route, which has no landed class)."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    done, bad = {}, []
+    for p in paths:
+        h, k = head.get(p), keep.get(p)
+        if h is not None and h == k:
+            done[p] = {"disposition": halted_run.DISPOSITION_LANDED, "blob": h}
+        elif p in touched:
+            if p in head and h is None:
+                bad.append(f"{p} (absent at HEAD; deletion is not verified as supersession)")
+            elif keep and k is None:
+                bad.append(f"{p} (kept blob is missing; supersession cannot be verified)")
+            else:
+                done[p] = {"disposition": halted_run.DISPOSITION_SUPERSEDED, "sha": touched[p][0][0]}
+        elif _is_scratch_path(p) and p in head and h is None and base.get(p) is None:
+            done[p] = {"disposition": halted_run.DISPOSITION_SCRATCH, "reason": _SCRATCH_REASON}
+        else:
+            bad.append(f"{p} (no commit after the halt ({anchor[:12]}) touched it, and it is neither landed nor untracked scratch)")
+    return done, bad
+
+
+def _refuse_unclassified(bad: list) -> dict:
+    return _refuse(f"cannot classify {len(bad)} withheld path(s), the run is not closed: " + "; ".join(sorted(bad)))
+
+
+def _refuse_without_supersession(done: dict) -> Optional[dict]:
+    """None when some path is superseded; else the refusal (a superseded close claims a later commit replaced work)."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    if any(d["disposition"] == halted_run.DISPOSITION_SUPERSEDED for d in done.values()):
+        return None
+    scratch = sorted(p for p, d in done.items() if d["disposition"] == halted_run.DISPOSITION_SCRATCH)
+    if not scratch:
+        landed = sorted(done)
+        return _refuse(
+            f"HEAD's blob of {landed[0]} equals the withheld blob; the run's work landed, record it landed with dispatch.record_halted_run_landed"
+        )
+    return _refuse(
+        f"no withheld path was superseded; scratch-only {', '.join(scratch)} is not closable as superseded: "
+        "record the landed rest with dispatch.record_halted_run_landed"
+    )
+
+
 def _evidence_shas(params: dict) -> tuple:
     """``(sorted unique 40-hex shas, None)`` or ``(None, reason)`` from ``params["evidence_shas"]``."""
     raw = params.get("evidence_shas")
@@ -153,12 +217,25 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
     touching = _newest_touch(root, anchor, paths)
     if touching is None:
         return _refuse(f"git log over {anchor[:12]}..HEAD failed; retry")
-    untouched = [p for p in paths if p not in touching]
-    if untouched:
-        return _refuse(f"no commit after the halt ({anchor[:12]}) touched withheld {untouched[0]}; the run is not superseded")
+    scratchy = [p for p in paths if p not in touching and _is_scratch_path(p)]
+    head, base = {}, {}
+    if scratchy:
+        ids = _blob_ids(root, [f"HEAD:{p}" for p in scratchy] + [f"{anchor}:{p}" for p in scratchy])
+        if ids is None:
+            return _refuse("git cat-file failed; retry")
+        head = dict(zip(scratchy, ids))
+        base = dict(zip(scratchy, ids[len(scratchy):]))
+    dispositions, bad = _classify_paths(paths, touching, head, {}, base, anchor)
+    if bad:
+        return _refuse_unclassified(bad)
+    why = _refuse_without_supersession(dispositions)
+    if why:
+        return why
     given = set(shas)
     evidence = {}
     for p in paths:
+        if p not in touching:
+            continue
         if touching[p][0][1] == "D":
             return _refuse(f"newest touch of withheld {p} ({touching[p][0][0][:12]}) deleted it; a deletion is not verified as supersession")
         hit = next((s for s, _ in touching[p] if s in given), None)
@@ -168,14 +245,15 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
         if deleted:
             return _refuse(f"evidence sha {deleted[:12]} deleted withheld {p}; a deletion is not shipping it")
         evidence[p] = hit
-    unused = sorted(given - {s for p in paths for s, _ in touching[p]})
+        dispositions[p]["sha"] = hit
+    unused = sorted(given - {s for p in paths for s, _ in touching.get(p, ())})
     if unused:
         return _refuse(f"evidence sha {unused[0][:12]} touches no withheld path in {anchor[:12]}..HEAD")
-    if not halted_run.mark_superseded(record, marker, evidence):
+    if not halted_run.mark_superseded(record, marker, evidence, dispositions):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
     reply = {
-        "ok": True, "run_id": run_id, "evidence": evidence, "legacy": True,
+        "ok": True, "run_id": run_id, "evidence": evidence, "dispositions": dispositions, "legacy": True,
         "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
     }
     memo = params.get("memo_id")
@@ -233,26 +311,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     touched = _newest_touch(root, anchor, paths)
     if touched is None:
         return _refuse(f"git log over {anchor[:12]}..HEAD failed; retry")
-    untouched = [p for p in paths if p not in touched]
-    if untouched:
-        return _refuse(f"no commit after the halt ({anchor[:12]}) touched withheld {untouched[0]}; the run is not superseded")
-    ids = _blob_ids(root, [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths])
+    n = len(paths)
+    ids = _blob_ids(root, [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths] + [f"{anchor}:{p}" for p in paths])
     if ids is None:
         return _refuse("git cat-file failed; retry")
-    n = len(paths)
-    for i, p in enumerate(paths):
-        head, keep = ids[i], ids[n + i]
-        if keep is None:
-            return _refuse(f"kept blob for withheld {p} is missing; supersession cannot be verified")
-        if head is None:
-            return _refuse(f"{p} is absent at HEAD; deletion is not verified as supersession")
-        if head == keep:
-            return _refuse(f"HEAD's blob of {p} equals the withheld blob; the run's work landed, record it landed")
-    evidence = {p: touched[p][0][0] for p in paths}
-    if not halted_run.mark_superseded(record, marker, evidence):
+    dispositions, bad = _classify_paths(
+        paths, touched, dict(zip(paths, ids[:n])), dict(zip(paths, ids[n:2 * n])), dict(zip(paths, ids[2 * n:])), anchor,
+    )
+    if bad:
+        return _refuse_unclassified(bad)
+    why = _refuse_without_supersession(dispositions)
+    if why:
+        return why
+    evidence = {p: d["sha"] for p, d in dispositions.items() if d["disposition"] == halted_run.DISPOSITION_SUPERSEDED}
+    if not halted_run.mark_superseded(record, marker, evidence, dispositions):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
     return {
-        "ok": True, "run_id": run_id, "evidence": evidence,
+        "ok": True, "run_id": run_id, "evidence": evidence, "dispositions": dispositions,
         "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
     }

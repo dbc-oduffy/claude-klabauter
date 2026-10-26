@@ -104,6 +104,11 @@ def _tests_prompt(
     return (
         f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
         f"{interpreter_clause(repo_root)} "
+        "Run them through the engine entry `emit-dispatch-workflow --retest-targeted "
+        "--from-task-output <file> --isolated-export`, then `emit-dispatch-workflow --retest-targeted "
+        "--poll --from-task-output <file>` until it is no longer running. "
+        "Report the record's `export` and `live` results. "
+        "Never build an export yourself: no git read-tree or checkout-index. "
         "Report raw evidence; do not gate. "
         + (
             "Write your record and return sidecar_path -- required. "

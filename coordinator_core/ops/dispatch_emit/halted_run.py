@@ -36,6 +36,10 @@ STATUS_RESUMED = "resumed"
 STATUS_LANDED = "landed"
 STATUS_SUPERSEDED = "superseded"
 SUPERSEDED_EVIDENCE_FIELD = "superseded_evidence"
+PATH_DISPOSITIONS_FIELD = "path_dispositions"
+DISPOSITION_LANDED = "landed"
+DISPOSITION_SUPERSEDED = "superseded"
+DISPOSITION_SCRATCH = "scratch-abandoned"
 HALT_RUN_BASE_FIELD = "run_base_sha"
 HALT_REASON_FIELD = "reason"
 HALT_RUN_ARTIFACTS_FIELD = "run_artifacts"
@@ -373,13 +377,18 @@ def mark_resumed(record_dir: Path) -> bool:
     return True
 
 
-def mark_superseded(record_dir: Path, expected: dict, evidence: dict) -> bool:
+def mark_superseded(record_dir: Path, expected: dict, evidence: dict, dispositions: Optional[dict] = None) -> bool:
     """Rewrite the marker as `superseded` with `evidence` only if it still equals `expected` (the marker the
-    caller verified against); False and no write when it is absent, changed, or no longer `halted`."""
+    caller verified against); False and no write when it is absent, changed, or no longer `halted`.
+
+    `dispositions` (path -> DISPOSITION_*), when given, is also recorded under PATH_DISPOSITIONS_FIELD."""
     marker = _read(Path(record_dir))
     if marker is None or marker != expected or marker.get("status") != STATUS_HALTED:
         return False
-    _write(Path(record_dir), {**marker, "status": STATUS_SUPERSEDED, SUPERSEDED_EVIDENCE_FIELD: evidence})
+    updated = {**marker, "status": STATUS_SUPERSEDED, SUPERSEDED_EVIDENCE_FIELD: evidence}
+    if dispositions is not None:
+        updated[PATH_DISPOSITIONS_FIELD] = dispositions
+    _write(Path(record_dir), updated)
     return True
 
 

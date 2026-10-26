@@ -403,6 +403,7 @@ def _start_detached(
         "--repo-root", str(root),
         *[x for t in tests for x in ("--tests", t)],
         *[x for t in dropped for x in ("--dropped", t)],
+        *(["--isolated-export"] if args.isolated_export else []),
         "--detached-child",
     ]
     if not spawn(str(engine), str(Path(__file__).resolve()), child_argv, site_free=True):
@@ -415,6 +416,170 @@ def _start_detached(
         return 2
     print(f"{path} running; poll: {poll}")
     return 0
+
+
+def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float):
+    """One full pass of ``tests`` with cwd ``root`` under the shared ``deadline`` (monotonic):
+    ``(status, reason, codes, log_used)``."""
+    argv_or_err = _launch_argv(root, tests)
+    if isinstance(argv_or_err, str):
+        return "error", argv_or_err, [], False
+    budget = RETEST_CHILD_TIMEOUT_SECS
+    codes: list = []
+    failed_cmds: list[str] = []
+    broken_msgs: list[str] = []
+    for n, argv in enumerate(argv_or_err):
+        offset = _log_size(log_path) if n > 0 else 0
+        rc, err = _run_session(run, argv, root, log_path, deadline, n > 0)
+        if rc == 2 and not _collection_failed_since(log_path, offset):
+            kept = _launch_argv(root, tests, keep_tier=True)
+            if isinstance(kept, list) and len(kept) == len(argv_or_err) and kept[n] != argv:
+                argv = kept[n]
+                rc, err = _run_session(run, argv, root, log_path, deadline, True)
+        codes.append(rc)
+        cmd = shlex.join(argv)
+        if err is not None:
+            broken_msgs.append(f"launcher could not start: {err}: {cmd}")
+        elif rc == _NOT_LAUNCHED:
+            broken_msgs.append(f"launcher not started, the {budget:g}s budget was spent: {cmd}")
+            break
+        elif rc == LAUNCH_TIMED_OUT:
+            broken_msgs.append(f"launcher exceeded {budget:g}s: {cmd}")
+            break
+        elif rc == 1:
+            failed_cmds.append(cmd)
+        elif rc not in (0, NO_TESTS_COLLECTED):
+            broken_msgs.append(f"launcher exited {rc} with no test results (denied, missing or crashed launcher): {cmd}")
+    status, reason = "pass", ""
+    if broken_msgs:
+        status = "error"
+        reason = "; ".join(broken_msgs)
+        if failed_cmds:
+            reason += "; failing session(s): " + ", ".join(failed_cmds)
+    elif failed_cmds:
+        status = "fail"
+    elif all(c == NO_TESTS_COLLECTED for c in codes):
+        status = NO_TESTS_STATUS
+        reason = f"launcher collected no tests from: {', '.join(tests)}"
+    return status, reason, codes, True
+
+
+def _run_write_set(root: Path, params: dict, dirty: Callable[[Path], list[str]]) -> tuple[list[str], str]:
+    """``(paths, source)``: the union of the run manifest's ``rows[].writes`` (``"manifest"``), the manifest
+    located as ``land_run`` locates it; ``covering_dirty_paths`` (``"covering_dirty_paths"``) when none is
+    reachable. Raises RuntimeError when that fallback's git call fails."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_manifest_marker
+
+    script_path = params.get("script_path")
+    try:
+        script = contained_path(root / script_path, [root]) if isinstance(script_path, str) and script_path else None
+        manifest_rel = parse_manifest_marker(script.read_text(encoding="utf-8")) if script else None
+        manifest_abs = (
+            contained_path(root / manifest_rel, [root / RECORD_DIR_ROOT, root / RUN_DIR_ROOT]) if manifest_rel else None
+        )
+        data = json.loads(manifest_abs.read_text(encoding="utf-8")) if manifest_abs else None
+    except (OSError, ValueError, MalformedCommitRequestError):
+        data = None
+    rows = data.get("rows") if isinstance(data, dict) else None
+    if isinstance(rows, list):
+        writes = [w.replace("\\", "/") for r in rows if isinstance(r, dict)
+                  for w in r.get("writes") or () if isinstance(w, str) and w]
+        return sorted(set(writes)), "manifest"
+    return dirty(root), "covering_dirty_paths"
+
+
+def _isolated_child(
+    root: Path, path: Path, log_path: Path, run_id: str, params: dict, tests: list[str],
+    dropped: list[str], drop_note: str, run, dirty, head_sha,
+) -> int:
+    """``--isolated-export`` child: build ``scratch/warp/<run>/export`` (HEAD plus the run write set), run
+    ``tests`` there then in the live tree under one shared deadline, and record both. Top-level ``status``
+    is the export's. A failed export build is ``error``, never a live-only run. A passing or
+    no-tests export is removed; any other keeps its path in the record."""
+    from coordinator_core.ops.dispatch_emit import landing_export as le
+    from coordinator_core.testing import baseline_export
+
+    deadline = time.monotonic() + RETEST_CHILD_TIMEOUT_SECS
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = lambda: datetime.now(timezone.utc).isoformat()  # noqa: E731
+
+    def _fail(reason: str, meta: dict) -> int:
+        _write_record(path, {
+            "run_id": run_id, "status": "error", "tests": tests, "reason": reason,
+            "isolated_export": meta, "at": now(),
+        })
+        print(f"{path} error: {reason}")
+        return 2
+
+    meta: dict = {}
+    try:
+        write_set, source = _run_write_set(root, params, dirty)
+        export_root = le.run_export_root(root, run_id)
+        meta = {"root": export_root.as_posix(), "write_set": write_set, "write_set_source": source}
+        meta["head"] = le.build_head_export(root, export_root, write_set).head_sha
+    except RuntimeError as exc:
+        return _fail(str(exc), meta)
+    except le.LandingExportError as exc:
+        return _fail(f"isolated export failed: {exc}", meta)
+
+    export_log = path.with_suffix(".export.log")
+    status = "error"
+    try:
+        status, reason, codes, export_log_used = _run_pass(run, export_root, tests, export_log, deadline)
+        live_status, live_reason, live_codes, live_log_used = _run_pass(run, root, tests, log_path, deadline)
+        return _write_dual(
+            root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
+            (status, reason, codes, export_log_used), (live_status, live_reason, live_codes, live_log_used), _fail,
+        )
+    finally:
+        if status in ("pass", NO_TESTS_STATUS):
+            baseline_export.remove(export_root)
+
+
+def _write_dual(
+    root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
+    export_pass, live_pass, fail,
+) -> int:
+    """Write the dual record of ``_isolated_child``; top-level ``status`` is the export pass's."""
+    now = lambda: datetime.now(timezone.utc).isoformat()  # noqa: E731
+    status, reason, codes, export_log_used = export_pass
+    live_status, live_reason, live_codes, live_log_used = live_pass
+    export_failed = _failed_node_ids(export_log) if export_log_used and 1 in codes else []
+    live_failed = _failed_node_ids(log_path) if live_log_used and 1 in live_codes else []
+
+    test_files = [t.split("::")[0] for t in tests]
+    try:
+        covered_paths = list(dict.fromkeys([*test_files, *dirty(root)]))
+    except RuntimeError as exc:
+        return fail(str(exc), meta)
+    record = {
+        "run_id": run_id,
+        "head": head_sha(root),
+        "tests": tests,
+        "covered": li.landing_fingerprint(root, covered_paths),
+        "status": status,
+        "at": now(),
+        "isolated_export": meta,
+        "export": {"status": status, "failed_tests": export_failed},
+        "live": {"status": live_status, "failed_tests": live_failed},
+    }
+    if live_reason:
+        record["live"]["reason"] = live_reason
+    if reason:
+        record["reason"] = reason
+    if status == NO_TESTS_STATUS:
+        record["tests_run"] = 0
+    if status in ("fail", "error") and export_failed:
+        record[li.FAILED_TESTS_PARAM] = export_failed
+    if dropped:
+        record["dropped"] = dropped
+        record["note"] = drop_note
+    record["log"] = str(export_log)
+    record["live_log"] = str(log_path)
+    _write_record(path, record)
+    print(f"{path} {status}" + (f": {reason}" if reason else ""))
+    return {"pass": 0, "fail": 1, NO_TESTS_STATUS: 0}.get(status, 2)
 
 
 def main(
@@ -434,6 +599,7 @@ def main(
     ap.add_argument("--dropped", action="append", default=[], help=argparse.SUPPRESS)
     ap.add_argument("--detached-child", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--poll", action="store_true")
+    ap.add_argument("--isolated-export", action="store_true")
     args = ap.parse_args(argv)
 
     try:
@@ -472,51 +638,13 @@ def main(
     if not args.detached_child:
         return _start_detached(args, root, path, log_path, run_id, tests, spawn or spawn_detached, dropped)
 
-    status, reason = "pass", ""
-    log_used = False
-    argv_or_err = _launch_argv(root, tests)
-    if isinstance(argv_or_err, str):
-        status, reason = "error", argv_or_err
-    else:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        log_used = True
-        budget = RETEST_CHILD_TIMEOUT_SECS
-        deadline = time.monotonic() + budget
-        codes: list = []
-        failed_cmds: list[str] = []
-        broken_msgs: list[str] = []
-        for n, argv in enumerate(argv_or_err):
-            offset = _log_size(log_path) if n > 0 else 0
-            rc, err = _run_session(run, argv, root, log_path, deadline, n > 0)
-            if rc == 2 and not _collection_failed_since(log_path, offset):
-                kept = _launch_argv(root, tests, keep_tier=True)
-                if isinstance(kept, list) and len(kept) == len(argv_or_err) and kept[n] != argv:
-                    argv = kept[n]
-                    rc, err = _run_session(run, argv, root, log_path, deadline, True)
-            codes.append(rc)
-            cmd = shlex.join(argv)
-            if err is not None:
-                broken_msgs.append(f"launcher could not start: {err}: {cmd}")
-            elif rc == _NOT_LAUNCHED:
-                broken_msgs.append(f"launcher not started, the {budget:g}s budget was spent: {cmd}")
-                break
-            elif rc == LAUNCH_TIMED_OUT:
-                broken_msgs.append(f"launcher exceeded {budget:g}s: {cmd}")
-                break
-            elif rc == 1:
-                failed_cmds.append(cmd)
-            elif rc not in (0, NO_TESTS_COLLECTED):
-                broken_msgs.append(f"launcher exited {rc} with no test results (denied, missing or crashed launcher): {cmd}")
-        if broken_msgs:
-            status = "error"
-            reason = "; ".join(broken_msgs)
-            if failed_cmds:
-                reason += "; failing session(s): " + ", ".join(failed_cmds)
-        elif failed_cmds:
-            status = "fail"
-        elif all(c == NO_TESTS_COLLECTED for c in codes):
-            status = NO_TESTS_STATUS
-            reason = f"launcher collected no tests from: {', '.join(tests)}"
+    if args.isolated_export:
+        return _isolated_child(root, path, log_path, run_id, params, tests, dropped, drop_note, run, dirty, head_sha)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    status, reason, codes, log_used = _run_pass(
+        run, root, tests, log_path, time.monotonic() + RETEST_CHILD_TIMEOUT_SECS,
+    )
 
     test_files = [t.split("::")[0] for t in tests]
     try:

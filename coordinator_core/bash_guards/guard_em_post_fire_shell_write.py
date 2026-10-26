@@ -42,6 +42,32 @@ def check(cmd: str, session_id: str, cwd: str, payload: Optional[Dict[str, Any]]
         return None
 
 
+_COMPOUND_MARKERS = ("&", ";", "|", "\n", "`", "$(", ">", "<")
+
+
+def _is_plain_rm(cmd: str) -> bool:
+    """True for one simple `rm` segment: no chaining, redirection or substitution, no recursive or
+    directory flag."""
+    import shlex
+
+    if any(m in cmd for m in _COMPOUND_MARKERS):
+        return False
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        return False
+    if len(tokens) < 2 or tokens[0] != "rm":
+        return False
+    for tok in tokens[1:]:
+        if tok == "--":
+            break
+        if tok in ("--recursive", "--dir"):
+            return False
+        if tok.startswith("-") and not tok.startswith("--") and any(c in tok for c in "rRd"):
+            return False
+    return True
+
+
 def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
     from coordinator_core.bash_guards._shell_write_projection import shell_writes
     from coordinator_core.hooks import _em_post_fire
@@ -54,7 +80,12 @@ def _check(cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]) -> Any:
     root = _repo_root(payload)
     if not root:
         return None
-    for target in shell_writes(cmd, cwd or payload.get("cwd") or "", root, with_git=True):
+    targets = shell_writes(cmd, cwd or payload.get("cwd") or "", root, with_git=True)
+    if targets and _is_plain_rm(cmd) and all(
+        _em_post_fire.is_empty_untracked(t.abs_path, root) for t in targets
+    ):
+        return None
+    for target in targets:
         if _em_post_fire.is_product_path(target.abs_path, root, session_id):
             envelope = _em_post_fire.deny_envelope() or {}
             out = envelope.get("hookSpecificOutput") or {}

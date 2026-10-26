@@ -2441,6 +2441,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commits.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.commit_halted_rows": OpClass.MUTATING,
+    # dispatch.commit_merge — MUTATING: commits an already-resolved two-parent merge through a private index,
+    # syncs the shared index/worktree, then moves the ref by compare-and-swap (ops/dispatch_emit/merge_commit.py).
+    # DR-208 five-question affirmation (citing dispatch.commit_merge handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      A merge commit object and the checked-out branch ref; no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Reads the resolved files; the private index is built by git.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The git index, worktree and history.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The landed merge commit.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.commit_merge": OpClass.MUTATING,
     # dispatch.supersede_slice — MUTATING: writes one write-once scratch marker naming the run that
     # supersedes a held sibling slice (ops/dispatch_emit/slice_supersede.py).
     # DR-208 five-question affirmation (citing dispatch.supersede_slice handler):

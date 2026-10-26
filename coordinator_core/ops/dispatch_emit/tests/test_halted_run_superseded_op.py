@@ -127,10 +127,10 @@ def test_path_with_no_post_halt_commit_refuses(halted):
 
 def test_head_blob_equal_to_withheld_blob_refuses(halted):
     root, record, _ = halted
-    _commit(root, {"a.txt": "a-later", "b.txt": "b-kept"})
+    _commit(root, {"a.txt": "a-kept", "b.txt": "b-kept"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     reply = _call(root)
-    assert reply["ok"] is False and "b.txt" in reply["error"] and "equals" in reply["error"]
+    assert reply["ok"] is False and "equals" in reply["error"] and "record_halted_run_landed" in reply["error"]
     _unchanged(root, record, before)
 
 
@@ -321,7 +321,7 @@ def test_legacy_evidence_sha_not_ancestor_of_head_refuses(legacy):
 
 def test_record_with_kept_blobs_ignores_evidence_and_keeps_kept_blob_gate(halted):
     root, record, _ = halted
-    s = _commit(root, {"a.txt": "a-later", "b.txt": "b-kept"})
+    s = _commit(root, {"a.txt": "a-kept", "b.txt": "b-kept"})
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     reply = _legacy_call(root, [s])
     assert reply["ok"] is False and "equals" in reply["error"] and "legacy" not in reply
@@ -384,3 +384,156 @@ def test_legacy_anchor_trap_pre_halt_touch_is_not_evidence(legacy):
     reply = _legacy_call(root, [pre, post])
     assert reply["ok"] is False and pre[:12] in reply["error"]
     _unchanged(root, record, before)
+
+
+def _scratch_halted(root, record, extra):
+    """Withhold `extra` (path -> text) on top of a.txt/b.txt; kept blobs stored for the kept route."""
+    withheld = {"a.txt": "kept", "b.txt": "kept", **{p: "kept" for p in extra}}
+    halted_run.record_withheld(record, withheld)
+    paths = {"a.txt": _blob(root, "a-kept"), "b.txt": _blob(root, "b-kept"), **{p: _blob(root, t) for p, t in extra.items()}}
+    kept_work.write(record, {"c": {"paths": paths}}, None)
+
+
+def test_per_path_mixed_landed_and_superseded_closes_and_records_every_path(halted):
+    root, record, _ = halted
+    sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-kept"})
+    reply = _call(root)
+    assert reply["ok"] is True
+    assert reply["evidence"] == {"a.txt": sha}
+    disp = reply["dispositions"]
+    assert disp["a.txt"] == {"disposition": halted_run.DISPOSITION_SUPERSEDED, "sha": sha}
+    assert disp["b.txt"]["disposition"] == halted_run.DISPOSITION_LANDED
+    marker = halted_run._read(record)
+    assert marker["status"] == halted_run.STATUS_SUPERSEDED
+    assert marker[halted_run.PATH_DISPOSITIONS_FIELD] == disp
+    assert not _indexed(root)
+
+
+def test_per_path_landed_untouched_after_anchor_still_landed(halted):
+    root, record, _ = halted
+    pre = _commit(root, {"b.txt": "b-kept"}, date=PRE_HALT)
+    assert pre
+    sha = _commit(root, {"a.txt": "a-later"})
+    reply = _call(root)
+    assert reply["ok"] is True and reply["evidence"] == {"a.txt": sha}
+    assert reply["dispositions"]["b.txt"]["disposition"] == halted_run.DISPOSITION_LANDED
+
+
+def test_per_path_kept_route_scratch_never_tracked_closes(halted):
+    root, record, _ = halted
+    _scratch_halted(root, record, {"scratch/x/diag.log": "log"})
+    sha = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    reply = _call(root)
+    assert reply["ok"] is True
+    assert reply["dispositions"]["scratch/x/diag.log"]["disposition"] == halted_run.DISPOSITION_SCRATCH
+    assert "scratch/x/diag.log" not in reply["evidence"] and reply["evidence"]["a.txt"] == sha
+
+
+def test_per_path_kept_route_spawn_count_unchanged(halted, monkeypatch):
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-kept"})
+    spawned = []
+    real_popen = subprocess.Popen
+
+    class _Counting(real_popen):
+        def __init__(self, args, *a, **kw):
+            spawned.append(list(args)[:1])
+            super().__init__(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", _Counting)
+    start = _cpu()
+    reply = _call(root)
+    elapsed = _cpu() - start
+    monkeypatch.undo()
+    assert reply["ok"] is True and len(spawned) == 3 and elapsed < 0.5
+
+
+def test_per_path_deleted_at_head_in_mixed_run_refuses_naming_it(halted):
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later"})
+    _git(root, "rm", "-q", "b.txt")
+    _git(root, "commit", "-q", "-m", "rm", date=POST_HALT)
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = _call(root)
+    assert reply["ok"] is False and "b.txt" in reply["error"] and "a.txt" not in reply["error"]
+    _unchanged(root, record, before)
+
+
+def test_per_path_two_unclassifiable_paths_are_both_named(halted):
+    root, record, _ = halted
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = _call(root)
+    assert reply["ok"] is False and "a.txt" in reply["error"] and "b.txt" in reply["error"]
+    _unchanged(root, record, before)
+
+
+def test_per_path_tracked_scratch_untouched_after_anchor_refuses(halted):
+    root, record, _ = halted
+    _commit(root, {"a.txt": "a-later"})
+    (root / "scratch").mkdir()
+    _commit(root, {"scratch/t.log": "t"}, date=PRE_HALT)
+    _scratch_halted(root, record, {"scratch/t.log": "t2"})
+    _commit(root, {"b.txt": "b-later"})
+    reply = _call(root)
+    assert reply["ok"] is False and "scratch/t.log" in reply["error"]
+    assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
+
+
+def test_per_path_scratch_only_with_landed_rest_refuses_pointing_to_landed_op(halted):
+    root, record, _ = halted
+    _scratch_halted(root, record, {"scratch/x.log": "log"})
+    _commit(root, {"a.txt": "a-kept", "b.txt": "b-kept"})
+    reply = _call(root)
+    assert reply["ok"] is False and "scratch/x.log" in reply["error"] and "record_halted_run_landed" in reply["error"]
+    assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
+
+
+def test_per_path_legacy_scratch_log_plus_evidence_paths_closes(legacy):
+    root, record, _ = legacy
+    halted_run.record_withheld(record, {"a.txt": "kept", "b.txt": "kept", "scratch/r/diag.log": "kept"})
+    s1 = _commit(root, {"a.txt": "a-later"})
+    s2 = _commit(root, {"b.txt": "b-later"})
+    reply = _legacy_call(root, [s1, s2])
+    assert reply["ok"] is True and reply["evidence"] == {"a.txt": s1, "b.txt": s2}
+    assert reply["dispositions"]["scratch/r/diag.log"]["disposition"] == halted_run.DISPOSITION_SCRATCH
+    marker = halted_run._read(record)
+    assert marker[halted_run.PATH_DISPOSITIONS_FIELD]["a.txt"] == {"disposition": halted_run.DISPOSITION_SUPERSEDED, "sha": s1}
+    assert not _indexed(root)
+
+
+def test_per_path_legacy_without_scratch_spawns_no_cat_file(legacy, monkeypatch):
+    root, _, _ = legacy
+    s = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    seen = []
+    real_popen = subprocess.Popen
+
+    class _Counting(real_popen):
+        def __init__(self, args, *a, **kw):
+            seen.append(list(args))
+            super().__init__(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", _Counting)
+    reply = _legacy_call(root, [s])
+    monkeypatch.undo()
+    assert reply["ok"] is True and not any("cat-file" in a for a in seen)
+
+
+@pytest.mark.parametrize("sneaky", ["scratch/../src/x.py", "scratch//x.log", "scratch/./x.log"])
+def test_per_path_non_normalized_scratch_spelling_is_not_scratch(halted, sneaky):
+    root, record, _ = halted
+    _scratch_halted(root, record, {sneaky: "log"})
+    _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
+    reply = _call(root)
+    assert reply["ok"] is False and sneaky in reply["error"]
+    assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
+
+
+def test_per_path_legacy_tracked_scratch_untouched_refuses(legacy):
+    root, record, _ = legacy
+    (root / "scratch").mkdir()
+    _commit(root, {"scratch/t.log": "t"}, date=PRE_HALT)
+    halted_run.record_withheld(record, {"a.txt": "kept", "scratch/t.log": "kept"})
+    s1 = _commit(root, {"a.txt": "a-later"})
+    reply = _legacy_call(root, [s1])
+    assert reply["ok"] is False and "scratch/t.log" in reply["error"]
+    assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED

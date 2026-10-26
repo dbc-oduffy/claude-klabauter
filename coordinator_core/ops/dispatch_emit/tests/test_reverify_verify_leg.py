@@ -47,6 +47,15 @@ def test_the_verify_prompt_carries_the_test_step_then_the_judge_brief():
     assert "never the verdict itself" in script
 
 
+def test_the_tests_brief_runs_retest_targeted_isolated_export_and_reports_both_results():
+    script = _compose()
+    step = script[script.index("Step 1 -- scoped tests"):script.index("Step 2 -- criterion verdict")]
+
+    assert "--retest-targeted" in step and "--isolated-export" in step and "--poll" in step
+    assert "`export` and `live`" in step
+    assert "Never build an export yourself" in step
+
+
 def test_the_test_runner_sidecar_clause_does_not_reach_the_merged_prompt():
     script = _compose()
 

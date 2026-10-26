@@ -171,3 +171,51 @@ def test_a_crash_admits(repo, monkeypatch):
 
     monkeypatch.setattr(proj, "shell_writes", boom)
     assert guard.check("echo x > a.py", SID, str(repo), {"cwd": str(repo)}) is None
+
+
+def _write_index(root, paths):
+    body = b"DIRC" + (2).to_bytes(4, "big") + len(paths).to_bytes(4, "big")
+    for p in paths:
+        name = p.encode()
+        entry = b"\x00" * 60 + len(name).to_bytes(2, "big") + name
+        body += entry + b"\x00" * (8 - len(entry) % 8)
+    (root / ".git" / "index").write_bytes(body + b"\x00" * 20)
+
+
+def _check(repo, cmd):
+    return guard.check(cmd, SID, str(repo), {"cwd": str(repo)})
+
+
+def test_rm_of_empty_untracked_file_is_admitted(repo, monkeypatch):
+    _fire(monkeypatch, ["run-1"])
+    _write_index(repo, ["a.py"])
+    (repo / "=").write_bytes(b"")
+    assert _check(repo, "rm =") is None
+
+
+@pytest.mark.parametrize(
+    "setup,cmd",
+    (
+        ("tracked", "rm ="),
+        ("nonempty", "rm ="),
+        ("untracked", "rm -rf ="),
+        ("untracked", "rm -r ="),
+        ("untracked", "rm --recursive ="),
+        ("untracked", "rm = && echo x > f.py"),
+        ("untracked", "rm =; echo x > f.py"),
+        ("untracked", "rm = | tee f.py"),
+    ),
+)
+def test_rm_deny_stands_outside_the_empty_untracked_case(repo, monkeypatch, setup, cmd):
+    _fire(monkeypatch, ["run-1"])
+    _write_index(repo, ["a.py", "="] if setup == "tracked" else ["a.py"])
+    (repo / "=").write_bytes(b"x" if setup == "nonempty" else b"")
+    assert _check(repo, cmd) is not None
+
+
+def test_rm_of_empty_and_tracked_mix_is_denied(repo, monkeypatch):
+    _fire(monkeypatch, ["run-1"])
+    _write_index(repo, ["a.py"])
+    (repo / "=").write_bytes(b"")
+    (repo / "a.py").write_bytes(b"")
+    assert _check(repo, "rm = a.py") is not None

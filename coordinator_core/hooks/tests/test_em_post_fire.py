@@ -150,3 +150,65 @@ def test_row_surface_lookup_is_inside_the_bar(em_repo):
     t = time.perf_counter()
     pf.is_product_path(str(em_repo / "docs" / "verdict.md"), str(em_repo), "s1")
     assert time.perf_counter() - t < 0.5
+
+
+def _index(paths, version=2, extension=b""):
+    body = b"DIRC" + version.to_bytes(4, "big") + len(paths).to_bytes(4, "big")
+    for p in paths:
+        name = p.encode()
+        entry = b"\x00" * 60 + len(name).to_bytes(2, "big") + name
+        body += entry + b"\x00" * (8 - len(entry) % 8)
+    return body + extension + b"\x00" * 20
+
+
+def _repo(tmp_path, index=None):
+    (tmp_path / ".git").mkdir()
+    if index is not None:
+        (tmp_path / ".git" / "index").write_bytes(index)
+    return str(tmp_path)
+
+
+def test_empty_untracked_true_when_index_lacks_the_path(tmp_path):
+    root = _repo(tmp_path, _index(["a.py", "dir/b.py"]))
+    (tmp_path / "=").write_bytes(b"")
+    assert pf.is_empty_untracked(str(tmp_path / "="), root) is True
+
+
+def test_empty_untracked_false_when_tracked(tmp_path):
+    root = _repo(tmp_path, _index(["a.py", "="]))
+    (tmp_path / "=").write_bytes(b"")
+    assert pf.is_empty_untracked(str(tmp_path / "="), root) is False
+
+
+def test_empty_untracked_false_when_nonempty_missing_or_symlink(tmp_path):
+    root = _repo(tmp_path, _index(["a.py"]))
+    (tmp_path / "f").write_bytes(b"x")
+    assert pf.is_empty_untracked(str(tmp_path / "f"), root) is False
+    assert pf.is_empty_untracked(str(tmp_path / "nope"), root) is False
+    (tmp_path / "empty").write_bytes(b"")
+    (tmp_path / "ln").symlink_to(tmp_path / "empty")
+    assert pf.is_empty_untracked(str(tmp_path / "ln"), root) is False
+
+
+def test_empty_untracked_false_on_v4_link_extension_and_unreadable_index(tmp_path):
+    (tmp_path / "=").write_bytes(b"")
+    target = str(tmp_path / "=")
+    assert pf.is_empty_untracked(target, _repo(tmp_path)) is False
+    (tmp_path / ".git" / "index").write_bytes(_index(["a.py"], version=4))
+    assert pf.is_empty_untracked(target, str(tmp_path)) is False
+    link = b"link" + (0).to_bytes(4, "big")
+    (tmp_path / ".git" / "index").write_bytes(_index(["a.py"], extension=link))
+    assert pf.is_empty_untracked(target, str(tmp_path)) is False
+    (tmp_path / ".git" / "index").write_bytes(b"garbage")
+    assert pf.is_empty_untracked(target, str(tmp_path)) is False
+
+
+def test_empty_untracked_resolves_a_gitdir_file(tmp_path):
+    gitdir = tmp_path / "wt-gitdir"
+    gitdir.mkdir()
+    (gitdir / "index").write_bytes(_index(["a.py"]))
+    root = tmp_path / "wt"
+    root.mkdir()
+    (root / ".git").write_text(f"gitdir: {gitdir}\n")
+    (root / "=").write_bytes(b"")
+    assert pf.is_empty_untracked(str(root / "="), str(root)) is True

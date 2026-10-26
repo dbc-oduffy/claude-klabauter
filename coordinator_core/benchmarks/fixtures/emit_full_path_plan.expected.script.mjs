@@ -323,7 +323,7 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     return p;
   }
   const _REFUSAL_RE = /out[ -]of[ -]role|\bI ran nothing\b|\bNot run\b|test_verdict"?\s*:\s*"?not_run/i;
-  const _RAN_FAIL_RE = /\bFAIL(?:ED)?\b|\b[1-9]\d* failed\b/;
+  const _RAN_FAIL_RE = /\bFAIL(?:ED)?\b|\b[1-9]\d* (?:tests? )?failed\b/;
   async function _runRowInner(id, deps, verifyScope, run, commit, reroute) {
     if (typeof id !== 'string' || !id) {
       if (!_halted) _halted = 'refusal: invalid chunk id ' + JSON.stringify(id ?? null) + ' at row position ' + _rowSeq;

@@ -25,6 +25,12 @@ def test_own_diff_blockers_excludes_sibling_owned():
     assert [b.node_id for b in own_diff_blockers(_result(), ["a/t.py"])] == ["a/t.py::new"]
 
 
+def test_foreign_red_keys_are_excluded_from_blockers():
+    r = {**_result(), "foreign_red": {"a/t.py::new": ["x/y.py"]}}
+    assert from_reverify(r) == []
+    assert own_diff_blockers(r, ["a/t.py"]) == []
+
+
 def test_composed_js_excluded_set_names_sibling_owned():
     from coordinator_core.ops.dispatch_emit import ask_compose
 

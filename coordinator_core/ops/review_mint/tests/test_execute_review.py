@@ -513,6 +513,17 @@ def test_a_tshirt_gated_slot_skip_reason_names_the_size_not_the_tier():
     assert "'skipped: tier ' + String(_tier) + ' excludes coordinator:overengineering-reviewer'" not in block
 
 
+def test_a_slot_gated_by_tier_and_tshirt_picks_the_excluding_gate_at_fire_time():
+    fragment = _ratio_fragment(kira_min="L")
+    fragment["execute_review"]["stages"][1]["agents"][1]["tiers"] = ["standard", "full"]
+    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    block = _wave_block(review, executor_rows=4, tshirt_js="'M'", tier_js="_tier")
+    assert (
+        "reason: 'skipped: ' + ([\"standard\", \"full\"].includes(_tier) ? 'size ' + String('M') : "
+        "'tier ' + String(_tier)) + ' excludes coordinator:overengineering-reviewer' }), null)"
+    ) in block
+
+
 def test_verify_only_skip_records_skipped_verify_only():
     block = _wave_block(_persona_review())
     assert block.count("reason: 'skipped: verify-only' }), null)") == 2
@@ -1730,32 +1741,38 @@ def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
     assert "failing_at_base" in block
 
 
-def _run_reverify_block(reply, *, verify_only=False):
-    """Run the emitted re-verify block under node with the agent stubbed to return ``reply``."""
+def _run_reverify_block(reply, *, verify_only=False, applied=1, deferred=False, calls=None):
+    """Run the emitted re-verify block under node with the agent stubbed to return ``reply``.
+
+    ``applied`` is the first wave review's applied count; ``calls`` (a list) receives the number of agent calls made."""
     import shutil
     import subprocess
 
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
-    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    block = dict(_reverify_phases(reverify=True, reverify_deferred=deferred))["Review re-verify"]
     body = "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("phase("))
+    var = "_reviewReverifyP" if deferred else "_reviewReverify"
     prep = {"slices": [
         {"id": "s1", "files": ["a/x.py"], "sidecar_path": "prep-s1.md"},
         {"id": "s2", "files": ["b/y.py"], "sidecar_path": "prep-s2.md"},
     ]}
-    wave = [{"slice_id": "s1", "sidecar_path": "wave-s1.md"}, None]
+    wave = [{"slice_id": "s1", "sidecar_path": "wave-s1.md", "applied": applied}, None]
     script = (
         f"const _reviewPrep = {json.dumps(prep)}; const _reviewWave = {json.dumps(wave)};\n"
-        f"const _verifyOnly = {json.dumps(verify_only)};\n"
-        f"const agent = async (p, o) => ({json.dumps(reply)});\n"
-        f"(async () => {{ {body}\n console.log(JSON.stringify(_reviewReverify)); }})();"
+        f"const _verifyOnly = {json.dumps(verify_only)}; const _reviewIntegration = {{ fixes_applied: 0 }};\n"
+        f"let _n = 0; const agent = async (p, o) => {{ _n++; return {json.dumps(reply)}; }};\n"
+        f"(async () => {{ {body}\n console.log(JSON.stringify([await {var}, _n])); }})();"
     )
     out = subprocess.run(
         [node, "-e", script], capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    return json.loads(out.stdout)
+    result, count = json.loads(out.stdout)
+    if calls is not None:
+        calls.append(count)
+    return result
 
 
 def test_unapplied_maps_a_reverted_path_to_its_slice_and_wave_sidecar():
@@ -1781,6 +1798,47 @@ def test_unapplied_maps_a_reverted_path_to_its_slice_and_wave_sidecar():
 def test_reverify_is_null_under_verify_only_and_when_the_agent_returns_null():
     assert _run_reverify_block({"edited": []}, verify_only=True) is None
     assert _run_reverify_block(None) is None
+
+
+def test_reverify_runs_as_pinned_haiku_not_a_sonnet_override():
+    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    assert "agentType: 'coordinator:test-runner', model: 'haiku'" in block
+    assert "model: 'sonnet'" not in block
+    degraded = dict(_reverify_phases(reverify=True, host_degraded=True))["Review re-verify"]
+    assert "model:" not in degraded
+
+
+def test_reverify_is_skipped_and_spawns_nothing_when_review_applied_no_edit():
+    calls = []
+    assert _run_reverify_block({"edited": ["a/x.py"]}, applied=0, calls=calls) is None
+    assert calls == [0]
+    assert _run_reverify_block({"edited": ["a/x.py"]}, applied=2, calls=calls) is not None
+    assert calls == [0, 1]
+
+
+def test_integration_fixes_count_toward_the_applied_guard():
+    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    assert "_reviewIntegration.fixes_applied" in block
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].pop()
+    no_integration = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    phases = compose_execute_review(
+        no_integration, stage_schemas=_STAGE_SCHEMAS, plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40, declared_paths=["x.py"], reverify=True,
+    )
+    assert "_reviewIntegration" not in dict(phases)["Review re-verify"]
+
+
+def test_deferred_reverify_binds_an_unawaited_promise_with_the_same_guard():
+    block = dict(_reverify_phases(reverify=True, reverify_deferred=True))["Review re-verify"]
+    assert "const _reviewReverifyP =" in block
+    assert "const _reviewReverify =" not in block
+    calls = []
+    assert _run_reverify_block({"edited": []}, deferred=True, applied=0, calls=calls) is None
+    assert calls == [0]
+    assert _run_reverify_block({"edited": []}, deferred=True, applied=1, calls=calls) is not None
+    assert calls == [0, 1]
+    assert _run_reverify_block({"edited": []}, deferred=True, verify_only=True) is None
 
 
 _NOTES_LABEL = "Executor delivery notes in the brief"

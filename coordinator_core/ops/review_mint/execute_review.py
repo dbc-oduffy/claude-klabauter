@@ -850,6 +850,8 @@ def _reverify_phase(
     verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
     owned_red_path: str = "",
     run_id: str = "",
+    deferred: bool = False,
+    integration_bound: bool = False,
 ) -> Tuple[str, str]:
     """The ``Review re-verify`` phase: a test-runner lists what review changed (``review.reverify``
     list mode), runs only the tests covering it, and reverts the implicated files in revert mode
@@ -860,7 +862,12 @@ def _reverify_phase(
     revert attributes a failure only to the files of the prefix it is called with, so no call is
     conditional), with the same failing set, and union the lists; empty keeps the single-prefix
     prompt byte-identical. ``verify_scope_targets`` (path -> test targets, group mode only) widens
-    the rerun set with the verify-scope targets of every edited path."""
+    the rerun set with the verify-scope targets of every edited path.
+
+    The call is skipped (``_reviewReverify`` is ``null``) when no review applied an edit: the summed
+    ``applied`` of ``_reviewWave`` (plus ``fixes_applied`` of ``_reviewIntegration`` when
+    ``integration_bound``) is 0. ``deferred`` binds the un-awaited promise ``_reviewReverifyP``
+    instead, for a caller that awaits it alongside other work; it resolves to the same value."""
     agent_type, role = _host_native(_REVERIFY_AGENT_TYPE, host_degraded)
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
     invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
@@ -988,13 +995,18 @@ def _reverify_phase(
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}"
     ).strip()
+    agent_opts = None
+    if agent_type == _REVERIFY_AGENT_TYPE:
+        from coordinator_core.ops.dispatch_emit.emit import resolve_agent_model
+
+        agent_opts = {agent_type: {"model": resolve_agent_model(agent_type)}}
     call = _agent_call_literal(
         agent_type,
         prompt,
         REVERIFY_PHASE,
         schema=True,
         as_arrow=False,
-        agent_opts={agent_type: {"model": "sonnet"}},
+        agent_opts=agent_opts,
         schema_literal=json.dumps(_REVERIFY_SCHEMA, sort_keys=True),
     )
     prefix = f"agent({_prompt_literal(prompt)}, "
@@ -1002,12 +1014,25 @@ def _reverify_phase(
         raise ValueError("re-verify agent call does not open with its prompt literal")
     call = f"agent({_prompt_literal(prompt)} + '\\n' + {sidecars_js}, " + call[len(prefix):]
     call = sc(call, "reverify", agent_type)
-    block = (
-        f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
-        f"  const _reviewReverify = _verifyOnly ? null : "
+    applied_js = "(Array.isArray(_reviewWave) ? _reviewWave : []).reduce((n, r) => n + ((r && r.applied) || 0), 0)"
+    if integration_bound:
+        applied_js += " + ((_reviewIntegration && _reviewIntegration.fixes_applied) || 0)"
+    run_js = (
         f"((r) => r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null)"
-        f"(await {_degrading(call)});"
+        f"(await {_degrading(call)})"
     )
+    if deferred:
+        block = (
+            f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
+            f"  const _reviewReverifyP = (_verifyOnly || !({applied_js})) ? Promise.resolve(null) : "
+            f"(async () => {run_js})();"
+        )
+    else:
+        block = (
+            f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
+            f"  const _reviewReverify = _verifyOnly ? null : "
+            f"(!({applied_js}) ? null : {run_js});"
+        )
     return REVERIFY_PHASE, block
 
 
@@ -1039,6 +1064,7 @@ def compose_execute_review(
     repo_root: Optional[str] = None,
     prep_in_wave: bool = False,
     reverify: bool = False,
+    reverify_deferred: bool = False,
     delivery_notes_js: Optional[str] = None,
     review_groups: Optional[Sequence[ReviewGroup]] = None,
     verify_scope_targets: Optional[Mapping[str, Sequence[str]]] = None,
@@ -1132,7 +1158,9 @@ def compose_execute_review(
     ``_reviewReverify`` (``null`` under ``_verifyOnly`` or when the agent call degrades): a
     ``coordinator:test-runner`` agent lists the review-edited files with ``review.reverify``, runs
     the tests covering them, and reverts the implicated files when any fail. ``False`` keeps the
-    output byte-identical.
+    output byte-identical. The re-verify agent runs as its pinned haiku and is skipped
+    (``_reviewReverify`` null) when the review applied no edit. ``reverify_deferred`` binds the
+    un-awaited promise ``_reviewReverifyP`` instead of ``_reviewReverify``.
 
     ``review_groups`` (needs ``prep_in_wave=False``, a worktree run and no ``slice_key_js``)
     pipelines the per-``slice`` agents: a leading "Review groups" phase starts, per group with
@@ -1916,6 +1944,8 @@ def compose_execute_review(
                 verify_scope_targets=verify_scope_targets if group_prefixes else None,
                 owned_red_path=owned_red_path,
                 run_id=safe_run_id,
+                deferred=reverify_deferred,
+                integration_bound=review.integration is not None,
             )
         )
 

@@ -41,9 +41,12 @@ def params_digest(params: Mapping) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def write(record_dir: Path, digest: str, handle: Mapping) -> None:
-    """Atomically write the receipt (ASCII JSON, trailing newline). Call it after manifest.json landed."""
+def write(record_dir: Path, digest: str, handle: Mapping, spine_sha: Optional[str] = None) -> None:
+    """Atomically write the receipt (ASCII JSON, trailing newline). Call it after manifest.json landed.
+    `spine_sha` fingerprints the plan spine the manifest was staged from."""
     body = {"digest": digest, "manifest_handle": dict(handle)}
+    if spine_sha is not None:
+        body["spine_sha"] = spine_sha
     text = json.dumps(body, sort_keys=True, ensure_ascii=True) + "\n"
     atomic_write_bytes(Path(record_dir) / RECEIPT_NAME, text.encode("ascii"), preserve_mode=False)
 
@@ -76,11 +79,14 @@ def _manifest_matches(record_dir: Path, handle: Mapping) -> bool:
     return hashlib.sha256(raw).hexdigest() == handle["sha256"] and len(raw) == handle["bytes"]
 
 
-def landed(record_dir: Path, digest: str) -> Optional[dict]:
+def landed(record_dir: Path, digest: str, spine_sha: Optional[str] = None) -> Optional[dict]:
     """The recorded manifest handle when the receipt's digest equals `digest` and the manifest still
-    hashes to it; None otherwise."""
+    hashes to it; None otherwise. With `spine_sha`, a receipt staged from a different spine (a re-plan
+    rewrote the rows) is a miss, so the re-run stages the new rows and briefs."""
     data = _read_receipt(record_dir)
     if data is None or data["digest"] != digest:
+        return None
+    if spine_sha is not None and data.get("spine_sha") != spine_sha:
         return None
     handle = data["manifest_handle"]
     return dict(handle) if _manifest_matches(record_dir, handle) else None

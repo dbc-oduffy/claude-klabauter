@@ -54,7 +54,9 @@ live population. Measured (``time.process_time``, ~1570 files, ~35MB):
 The asserted budget is 200ms flat (never the repo's 500ms brightline), the
 AC6 ceiling ("at or below 200ms"). If a future change pushes the live scan
 over 200ms, the fix is to cut the walk's cost further (fewer files touched twice, a cheaper prefilter) — a looser
-assertion is not a fix.
+assertion is not a fix. The live scan memoises per-file verdicts by (size, mtime_ns), so the
+live budget test measures the warm (stat-only) path; the cold full-read path is ungated. A rewrite
+that preserves size and mtime (``cp -p``, ``touch -r``) outside the racy window is served stale.
 
 The vocabulary (``_RAW_LITERALS`` / ``_RAW_OPEN_RE`` / ``_RAW_MODE_RE``
 below) is census row 2's ``RAW`` pattern, decomposed into a literal-substring
@@ -167,6 +169,8 @@ Named residuals (negative spec) — what this gate does NOT prove
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import pathlib
 import re
@@ -329,6 +333,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/kept_work.py': ('claims-explicitly', 'kept.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/row_returns.py': ('claims-explicitly', 'returns.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/run_withhold.py':('claims-explicitly', 'withhold.jsonl appended under the run dir, declared through declare_write: record'),
+    'coordinator_core/ops/dispatch_emit/halt_tree_evict.py': ('claims-explicitly', 'evicted blobs and index under the run record dir, declared through declare_write; tree restored to HEAD bytes: write_bytes, write_text'),
     'coordinator_core/ops/dispatch_emit/objective_calibrate.py': ('in-repo-non-state', 'objective.json, base file and loop log under the tracked record dir state/warp/<run_id>/, calibration checkouts under gitignored scratch/: _atomic_write, append'),
     'coordinator_core/ops/dispatch_emit/objective_check.py': ('in-repo-non-state', 'loop log appended under the tracked record dir state/warp/<run_id>/: _append_line'),
     'coordinator_core/ops/dispatch_emit/objective_write.py': ('in-repo-non-state', 'objective.json and base file under the tracked record dir state/warp/<run_id>/ via atomic_write_bytes: write'),
@@ -360,7 +365,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/stage_receipts.py': ('in-repo-non-state', 'stage receipt under the tracked record dir state/warp/<run_id>/receipts: write_receipt, atomic tmp then replace'),
     'coordinator_core/ops/dispatch_emit/run_close.py': ('ignored-target', 'close-job record under .coordinator-local/close-jobs (gitignored): _write_atomic'),
     'coordinator_core/ops/ceremony/close_background.py': ('in-repo-non-state', 'no write: the vocabulary hit is dataclasses.replace; the legs write through their own seams'),
-    'coordinator_core/ops/dispatch_emit/retest_targeted.py': ('ignored-target', 'fresh test-verdict record and the launcher log beside it under the retest dir (landing_integrity.RETEST_DIR): the two path.write_text calls and the _run_argv log open'),
+    'coordinator_core/ops/dispatch_emit/retest_targeted.py': ('ignored-target', 'fresh test-verdict record and the launcher log beside it under the retest dir (landing_integrity.RETEST_DIR): the two path.write_text calls and the _run_argv log open; --isolated-export also builds the gitignored scratch/warp/<run>/export via landing_export.build_head_export and removes it on pass'),
     'coordinator_core/ops/dispatch_emit/launcher_staged_twin.py': ('ignored-target', 'staged launcher twin under the gitignored scratch/warp/<run_id>/, contained by contained_path; carries the PLAINTEXT single-op run token inlined as runToken, so it must stay gitignored: ensure_twin tmp write_bytes, os.replace'),
     'coordinator_core/ops/dispatch_emit/reply_sidecar.py': ('in-repo-non-state', 'content-addressed stage readers under scratch/stage-readers and reply pages under the run record dir state/warp/<run_id>/: _ensure_reader, write_reply'),
     'coordinator_core/ops/plan_premise_carry.py': ('ignored-target', 'premise-carry record under .coordinator-local/plan-sidecars (gitignored): _write_atomic'),
@@ -411,6 +416,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/authz/token.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_tokens'),
     'coordinator_core/backlog_grind_assemble/grind_rows.py': ('claims-explicitly', 'claim token in _declare_under_repo_root: rows, run records and the ledger under state/queue-grind stay raw (temp file + os.replace, one appended line) because the claim must anchor on the verb\'s --repo-root via a nested recording scope; the seam claims on the ambient cwd, which a dispatched agent rarely shares with its target repo'),
     'coordinator_core/bash_guards/_alternative_liveness.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: <module-level>, _trigger_destructive_git_revert, _trigger_destructive_git_revert_advisory, _trigger_host_subagent_policy_guard'),
+    'coordinator_core/bash_guards/agent_process_ownership.py': ('outside-repo', 'append-only per-session agent command ledger under settings_home() state: record_agent_command (os.open O_APPEND, 0o600); never raises'),
     'coordinator_core/bash_guards/_dialect.py': ('to-fix', 'raw-write site(s): _log_dialect_parser_unavailable; runtime observed=yes (n=24), sample=/tmp/pytest-of-root/pytest-716/home-quarantine21712/.coordinator-claude-settings/state/dialect-parser-unavailable.log'),
     'coordinator_core/bash_guards/_rewrite_support.py': ('outside-repo', 'best-effort interpreter-resolution cache (atomic tmp+os.replace) under state/cache with an OS-tempdir fallback: _bt_python3_invocation; fail-open, no cross-session claim semantics'),
     'coordinator_core/bash_guards/_heavy_lease_store.py': ('outside-repo', 'lease records under settings_home()/heavy-admission/leases, outside every repo: write_lease'),
@@ -757,23 +763,76 @@ def _is_raw_writer_by_definition(content: bytes) -> bool:
 
 _READ_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0)
 
+#: A file modified within this window of the memo's write is never memoised:
+#: a same-tick rewrite could keep (size, mtime_ns) and hide behind a stale verdict.
+_MEMO_RACY_NS = 2_000_000_000
+
+
+def _memo_digest() -> str:
+    """Identity of the classifier; any edit to this file (vocabulary or the
+    ``_is_raw_writer*`` logic) discards every memoised verdict."""
+    return hashlib.sha1(pathlib.Path(__file__).read_bytes()).hexdigest()
+
+
+def _memo_path(root: pathlib.Path) -> Optional[pathlib.Path]:
+    """The live-tree memo under the gitignored pytest cache; a synthetic root has none."""
+    if pathlib.Path(root).resolve() != _REPO_ROOT:
+        return None
+    return _REPO_ROOT / ".pytest_cache" / "d" / "scan-memo" / "raw-writes.json"
+
+
+def _load_memo(path: Optional[pathlib.Path], digest: str) -> Dict[str, list]:
+    if path is None:
+        return {}
+    try:
+        body = json.loads(path.read_bytes())
+        if body["digest"] == digest and isinstance(body["files"], dict):
+            return {
+                k: v for k, v in body["files"].items()
+                if isinstance(v, list) and len(v) == 3 and isinstance(v[2], bool)
+            }
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return {}
+
+
+def _save_memo(path: Optional[pathlib.Path], files: Dict[str, list], digest: str) -> None:
+    if path is None:
+        return
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps({"digest": digest, "files": files}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
 
 def scan_raw_writers(root: pathlib.Path) -> List[str]:
     """Return sorted POSIX paths (rooted at ``coordinator_core/...``, matching
     the register's keying) of every non-test ``.py`` module under ``root /
     "coordinator_core"`` whose bytes match the raw-write vocabulary. ``root``
-    is the repo root (real ``_REPO_ROOT`` or a synthetic ``tmp_path`` holding
-    its own ``coordinator_core/`` subtree). Exposed (not private) so the AC6
+    is the repo root (real ``_REPO_ROOT``) or a synthetic ``tmp_path`` holding
+    its own ``coordinator_core/`` subtree. Exposed (not private) so the AC6
     proof tests can drive it against a synthetic tree.
 
-    The inner loop avoids ``pathlib`` per-file overhead (``relative_to``,
-    ``as_posix``) in favour of plain string joins, keeping per-file overhead
-    out of the budgeted walk."""
+    The live tree keeps a ``(size, mtime_ns) -> verdict`` memo under
+    ``.pytest_cache``: an unchanged file is stat-ed, never opened. A cold or
+    discarded memo costs the full read of every file; a synthetic root is
+    always read in full."""
     scan_root_str = os.path.join(str(root), _SCAN_ROOT)
     if not os.path.isdir(scan_root_str):
         return []
     root_str = str(root)
     prefix_len = len(root_str) + 1 if not root_str.endswith(os.sep) else len(root_str)
+    memo_path = _memo_path(root)
+    digest = _memo_digest() if memo_path is not None else ""
+    old = _load_memo(memo_path, digest)
+    fresh: Dict[str, list] = {}
+    horizon_ns = time.time_ns() - _MEMO_RACY_NS
     found: List[str] = []
     for dirpath, dirnames, filenames in os.walk(scan_root_str):
         dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
@@ -785,19 +844,32 @@ def scan_raw_writers(root: pathlib.Path) -> List[str]:
             ):
                 continue
             full = os.path.join(dirpath, filename)
+            rel = full[prefix_len:].replace(os.sep, "/")
             try:
-                fd = os.open(full, _READ_FLAGS)
+                st = os.stat(full)
             except OSError:
                 continue
-            try:
-                # One unbuffered read sized past EOF: no file-object setup.
-                content = os.read(fd, os.fstat(fd).st_size + 1)
-            except OSError:
-                continue
-            finally:
-                os.close(fd)
-            if _is_raw_writer(content):
-                found.append(full[prefix_len:].replace(os.sep, "/"))
+            hit = old.get(rel)
+            if hit is not None and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
+                verdict = hit[2]
+            else:
+                try:
+                    fd = os.open(full, _READ_FLAGS)
+                except OSError:
+                    continue
+                try:
+                    content = os.read(fd, st.st_size + 1)
+                except OSError:
+                    continue
+                finally:
+                    os.close(fd)
+                verdict = _is_raw_writer(content)
+            if memo_path is not None and st.st_mtime_ns < horizon_ns:
+                fresh[rel] = [st.st_size, st.st_mtime_ns, verdict]
+            if verdict:
+                found.append(rel)
+    if memo_path is not None and fresh != old:
+        _save_memo(memo_path, fresh, digest)
     return sorted(found)
 
 
@@ -943,6 +1015,92 @@ def _write(root: pathlib.Path, rel: str, text: str) -> None:
     target = root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
+
+
+def _scan_with_memo(monkeypatch, root: pathlib.Path, memo: pathlib.Path):
+    """Drive scan_raw_writers on a synthetic root with a memo file; returns
+    (found, classifier_call_count, digest_call_count)."""
+    calls = {"classify": 0, "digest": 0}
+    real_classify = _is_raw_writer
+    real_digest = _memo_digest
+
+    def counting_classify(content):
+        calls["classify"] += 1
+        return real_classify(content)
+
+    def counting_digest():
+        calls["digest"] += 1
+        return real_digest()
+
+    monkeypatch.setattr(f"{__name__}._memo_path", lambda r: memo)
+    monkeypatch.setattr(f"{__name__}._is_raw_writer", counting_classify)
+    monkeypatch.setattr(f"{__name__}._memo_digest", counting_digest)
+    found = scan_raw_writers(root)
+    return found, calls["classify"], calls["digest"]
+
+
+def _age(path: pathlib.Path, seconds_ago: int) -> None:
+    t = time.time_ns() - seconds_ago * 1_000_000_000
+    os.utime(path, ns=(t, t))
+
+
+def test_memo_is_invalidated_by_a_same_size_rewrite_with_a_new_mtime(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    writer = "def f(p):\n    open(p, 'w').write('x')\n"
+    reader = "def f(p):\n    open(p, 'r').read( 'x')\n"
+    assert len(writer) == len(reader)
+    _write(tmp_path, "coordinator_core/m.py", writer)
+    target = tmp_path / "coordinator_core" / "m.py"
+    _age(target, 100)
+
+    found, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert found == ["coordinator_core/m.py"] and classified == 1 and memo.exists()
+
+    found, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert found == ["coordinator_core/m.py"] and classified == 0, "unchanged file must hit the memo"
+
+    target.write_text(reader, encoding="utf-8")
+    _age(target, 50)
+    found, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert found == [] and classified == 1, "same size + new mtime must re-read and change the verdict"
+
+
+def test_memo_is_discarded_when_the_classifier_digest_changes(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    _write(tmp_path, "coordinator_core/m.py", "def f(p):\n    open(p, 'w').write('x')\n")
+    _age(tmp_path / "coordinator_core" / "m.py", 100)
+
+    _scan_with_memo(monkeypatch, tmp_path, memo)
+    _, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert classified == 0
+
+    monkeypatch.setattr(f"{__name__}._memo_digest", lambda: "different-classifier")
+    monkeypatch.setattr(f"{__name__}._memo_path", lambda r: memo)
+    calls = []
+    real = _is_raw_writer
+    monkeypatch.setattr(
+        f"{__name__}._is_raw_writer", lambda c: calls.append(1) or real(c)
+    )
+    assert scan_raw_writers(tmp_path) == ["coordinator_core/m.py"]
+    assert len(calls) == 1, "a changed digest must force a rescan"
+
+
+def test_memo_digest_is_computed_once_per_scan(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    for name in ("a", "b", "c"):
+        _write(tmp_path, f"coordinator_core/{name}.py", "def f(p):\n    open(p, 'w').write('x')\n")
+        _age(tmp_path / "coordinator_core" / f"{name}.py", 100)
+    _, _, digests = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert digests == 1
+
+
+def test_a_file_modified_inside_the_racy_window_is_never_memoised(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    _write(tmp_path, "coordinator_core/m.py", "def f(p):\n    open(p, 'w').write('x')\n")
+    _, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert classified == 1
+    _, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert classified == 1, "a just-written file must be re-read, not served from the memo"
 
 
 def test_an_undispositioned_raw_writer_goes_red(tmp_path):

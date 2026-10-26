@@ -29,6 +29,21 @@ def test_round_trip(tmp_path):
     assert hr.mark_resumed(d) is False
 
 
+def test_mark_superseded_writes_dispositions_only_when_given(tmp_path):
+    a = _dir(tmp_path, "20261016T010000-aaaaaa")
+    b = _dir(tmp_path, "20261016T020000-bbbbbb")
+    for d in (a, b):
+        hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    disp = {"a.py": hr.DISPOSITION_LANDED, "b.py": hr.DISPOSITION_SUPERSEDED, "scratch/c.log": hr.DISPOSITION_SCRATCH}
+    assert hr.mark_superseded(a, hr._read(a), {"e": 1}, dispositions=disp) is True
+    data = json.loads((a / hr.HALTED_FILE).read_text())
+    assert data["status"] == hr.STATUS_SUPERSEDED and data[hr.PATH_DISPOSITIONS_FIELD] == disp
+    assert hr.mark_superseded(b, hr._read(b), {"e": 1}) is True
+    data = json.loads((b / hr.HALTED_FILE).read_text())
+    assert data["status"] == hr.STATUS_SUPERSEDED and hr.PATH_DISPOSITIONS_FIELD not in data
+    assert hr.mark_superseded(a, hr._read(a), {"e": 1}, dispositions=disp) is False
+
+
 def test_mark_landed_rewrites_only_a_halted_marker(tmp_path):
     d = _dir(tmp_path, "20261016T010000-aaaaaa")
     sha = "a" * 40

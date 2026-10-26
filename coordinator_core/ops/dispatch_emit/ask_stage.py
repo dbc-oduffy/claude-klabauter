@@ -9,6 +9,7 @@ gitignore-filtered, because that filter spawns git.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shlex
@@ -97,7 +98,7 @@ from coordinator_core.ops import scratch_delete
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.dispatch_emit import kept_work, requirements_ledger, resume_snapshot, row_returns, sibling_split
+from coordinator_core.ops.dispatch_emit import halt_tree_evict, kept_work, requirements_ledger, resume_snapshot, row_returns, sibling_split
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
@@ -113,6 +114,7 @@ from coordinator_core.ops.dispatch_emit import review_floor, run_notes
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
+from coordinator_core.ops._brief_premise import check_brief_claims, render_contradicted
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
 
 # Writes per-run staging files (manifest, commit-request) under a run dir, not a stamped artifact.
@@ -218,13 +220,19 @@ def revisions_block(root: Path, run_id: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def em_brief_block(sizing: Optional[Mapping]) -> str:
+def em_brief_block(sizing: Optional[Mapping], root: Optional[Path] = None) -> str:
     """The brief's EM-diagnosis section (the sizing's `em_analysis.em_brief`), marked as not the
-    PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded."""
+    PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded.
+    With ``root``, the brief's tree-contradicted claims follow as CONTRADICTED lines."""
     brief = read_em_brief(sizing) if isinstance(sizing, Mapping) else None
     if not brief:
         return ""
-    return f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
+    block = f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
+    if root is not None:
+        flagged = render_contradicted(check_brief_claims(brief, root))
+        if flagged:
+            block += f"\n{flagged}\n"
+    return block
 
 
 def _run_sizing_rel(sizing_rel: Optional[str], plan_text: str) -> Optional[str]:
@@ -377,6 +385,7 @@ def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id
         return False
     try:
         run_dir = record_dir(root, snap.kept_run)
+        halt_tree_evict.restore(root, run_dir)  # evicted bytes back first: kept.json fingerprints read them
         entry = kept_work.read(run_dir)["chunks"].get(row_id)
         if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id, record_dir=run_dir):
             return False
@@ -1104,7 +1113,7 @@ def stage(
             intent = intent + ("\n" if intent else "") + revisions
     if plan_rel and not ledger_resume and _split is not None:
         _refuse_unclaimed_register_rows(_split.fm_text, plan_posix, run_sizing_rel, run_sizing)
-    em_block = em_brief_block(run_sizing)
+    em_block = em_brief_block(run_sizing, root)
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block
     test_targets, no_test_target = _test_scope(waves, root)
@@ -1562,7 +1571,7 @@ def _git_filtered_blobs(root: Path, base: str, paths: Sequence[str], fail: str) 
     return out
 
 
-_CONFIG_CONVERSION_KEY = re.compile(r"^\s*(?:autocrlf\s*(?:=\s*(?P<crlf>[^\s#;]*))?|eol\s*=|\[\s*include)", re.I | re.M)
+_CONFIG_CONVERSION_KEY = re.compile(r"^\s*(?:autocrlf\s*(?:=\s*(?P<crlf>[^\s#;]*))?|eol\s*=|attributesfile\s*=|\[\s*include)", re.I | re.M)
 _CONFIG_ENV_KEYS = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
 
 
@@ -1622,9 +1631,11 @@ def _checkout_convert(root: Path, rel: str, data: bytes) -> Optional[bytes]:
         return None
     eol: Optional[str] = None
     parts = rel.split("/")
-    candidates = [(resolve_git_dir(root) / "info" / "attributes", rel)]
-    for depth in range(len(parts)):
-        candidates.append((root.joinpath(*parts[:depth]) / ".gitattributes", "/".join(parts[depth:])))
+    # Later wins: shallow to deep `.gitattributes`, then `info/attributes`, which git ranks highest.
+    candidates = [
+        (root.joinpath(*parts[:depth]) / ".gitattributes", "/".join(parts[depth:])) for depth in range(len(parts))
+    ]
+    candidates.append((resolve_git_dir(root) / "info" / "attributes", rel))
     for attrs, sub in candidates:
         text = _read_text_scoped(attrs)
         for line in (text or "").splitlines():
@@ -1781,6 +1792,24 @@ def _escaping_write_refusal(
     return None
 
 
+def _spine_sha(root: Path, plan_rel: Optional[str]) -> Optional[str]:
+    """sha256 over the plan's parsed task spine (rows, briefs included), or None when there is no readable plan.
+    The plan's status stamp is outside the spine, so staging never moves it."""
+    if not plan_rel:
+        return None
+    try:
+        plan_path = contained_path(root / plan_rel, [root])
+        if plan_path is None or not plan_path.is_file():
+            return None
+        from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
+
+        result = load_rows_memo(plan_path.read_text(encoding="utf-8"))
+        raw = json.dumps(list(result.rows or ()), sort_keys=True, default=str)
+    except (OSError, ValueError, TypeError):
+        return None
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
@@ -1802,13 +1831,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if _consume_park_marker(root, run_id):
         return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None}
     digest = ask_stage_receipt.params_digest(params)
+    spine_sha = _spine_sha(root, params.get("plan_path") or None)
     plan_parse: Optional[_PlanParse] = None
     try:
         prior_dir = record_dir(root, run_id)
     except ValueError:
         prior_dir = None
     if prior_dir is not None:
-        recorded = ask_stage_receipt.landed(prior_dir, digest)
+        recorded = ask_stage_receipt.landed(prior_dir, digest, spine_sha)
         if recorded is not None:
             return {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
         running = ask_stage_receipt.in_flight(prior_dir, digest)
@@ -1850,7 +1880,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if params.get("plan_path"):
             stamp = stamp_plan_executing(root, params["plan_path"])
         handle = reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json")
-        ask_stage_receipt.write(record_dir(root, run_id), digest, handle)
+        ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}
         if getattr(exc, "owed_em_ids", None):

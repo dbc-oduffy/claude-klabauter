@@ -18,7 +18,7 @@ from typing import Callable, Optional, Sequence
 
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.git.residue_classes import REPLY_KEY as _RESIDUE_REPLY_KEY, RESIDUE_DIRECTIVE as _RESIDUE_DIRECTIVE
-from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command
+from coordinator_core.warp_fire import _ASK_PLACEHOLDER, SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY, STAGED_INLINE_SLOT, STAGED_RESUME_KEY
@@ -130,6 +130,9 @@ from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     ledger_fix_prompt,
     remnant_prompt,
 )
+
+#: Pull or re-plan attempts on one plan before the run dispatches research instead of another round. The only place n is written.
+REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
@@ -199,9 +202,6 @@ from coordinator_core.roadmap.post_stamp_clause import (
 from coordinator_core.session.record_homes import home_dir
 
 _OWNER_ROWS_JS = "_crossRepoRows"
-# A prior-wave slice that is BLOCKED with unapplied findings (findings > applied); one with
-# findings == applied (e.g. 0/0) counts as done. Shared by the re-review filter and the _reviewSeed carry-over.
-_BLOCKED_UNAPPLIED_JS = "w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0)"
 # Wave entries carrying a non-empty string verdict and a non-empty sidecar_path; mirrors
 # `review_floor.verdict_count` minus the file-exists check, which only the lander can make. An expression
 # over `_reviewWave` alone, so the halt and the digest receipt both evaluate it where `_reviewVerdicts`
@@ -211,6 +211,9 @@ _VERDICT_COUNT_JS = (
     ".filter((w) => w && typeof w.verdict === 'string' && w.verdict.trim()"
     " && typeof w.sidecar_path === 'string' && w.sidecar_path.trim()).length"
 )
+# A prior-wave slice that is BLOCKED with unapplied findings (findings > applied); one with
+# findings == applied (e.g. 0/0) counts as done. Shared by the re-review filter and the _reviewSeed carry-over.
+_BLOCKED_UNAPPLIED_JS = "w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0)"
 # Ids of the prior review wave's blocked slices ('+'-joined group ids split into members); null on a
 # fresh run, a reused review, or an empty result. Trap: the ids match only if review.prep reissues the
 # halted wave's slice ids on the resumed run; a mismatch leaves reviewers with nothing and the blocked
@@ -239,7 +242,7 @@ SKILL_WEIGHT_HEADROOM_CLAUSE = (
     "leg at commit. Write a tripwire pointer, not prose, wherever a skill or command needs a rule. "
     "Never add or demand a test to pin prose (the wording of a skill, command or doc); pin behavior or a pointer's target instead."
 )
-_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", INTEGRATION_NOT_RUN_VAR, "_reviewReverify")
+_REVIEW_RESULT_NAMES = ("_reviewPrep", "_reviewWave", "_deliveryVerdict", "_deliveryNotRun", WAVE_NOT_RUN_VAR, "_reviewIntegration", INTEGRATION_NOT_RUN_VAR, "_reviewReverify", "_reviewReverifyP")
 
 
 class AskComposeRefused(ValueError):
@@ -273,6 +276,13 @@ def _lit(text: str) -> str:
 def _cat(*parts: str) -> str:
     """JS string-concatenation expression; a part is a quoted literal or a raw `js:` expression."""
     return " + ".join(p[3:] if p.startswith("js:") else _emit._resolve_markers_plus(p) for p in parts)
+
+
+def _authoring_constraints_part() -> str:
+    """The authoring-constraint block as a `js:` part, rendered in process at compose time."""
+    from coordinator_core.roadmap.authoring_constraints import render_prompt
+
+    return "js:" + _lit(render_prompt() + "\n\n")
 
 
 _UNKEYED_RUN = "unkeyed"
@@ -346,6 +356,15 @@ _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
 #: disjoint writes); haiku loses the census/corrects/declared_absent semantics the edit must preserve.
 _RULINGS_AGENT_TYPE = _MECHANICAL_AGENT_TYPE
 _RULINGS_MODEL = "sonnet"
+#: JS predicate over a pull entry (gates plan-revise and the re-blitz): true only when a reviewer's verdict is PIVOT or ABORT, or a
+#: REJECTED carrying a premise failure; an OK or BLOCKED review never re-plans. The `premise-check` entry routes BLOCKED by design and is no reviewer.
+_PULL_REVIEW_UNSAVEABLE_JS = (
+    "(Array.isArray(_pulledEntry.reviews ?? _pulledEntry.reviewVerdicts) "
+    "? (_pulledEntry.reviews ?? _pulledEntry.reviewVerdicts) : []).some((r) => r && r.reviewer !== 'premise-check' "
+    "&& (['PIVOT', 'ABORT'].includes(String(r.verdict ?? '').toUpperCase()) "
+    "|| (String(r.verdict ?? '').toUpperCase() === 'REJECTED' && r.premiseFailure != null "
+    "&& (Array.isArray(r.premiseFailure) ? r.premiseFailure.length : String(r.premiseFailure).length) > 0)))"
+)
 _PLAN_AUTHOR_EFFORT = "low"
 _XL_EXIT_EFFORT = "low"
 #: Models of DoE-defined types (commit, docs executor, sizing-scout) come from `emit._AGENT_MODELS`.
@@ -372,6 +391,18 @@ _EDIT_IN_PLACE_NO_REREAD = (
     "check a path or symbol a finding or row names, and keep every plan row and section the "
     "findings do not touch byte-for-byte."
 )
+
+
+def _carried_outputs_part(plan_js: str) -> str:
+    """A `js:` part naming the run's prior-art and premise-check sidecars beside the plan at `plan_js`:
+    paths to read, not to re-run."""
+    stem = f"String({plan_js}).split('/').pop().replace(/\\.md$/, '')"
+    return (
+        "js:' Existing check outputs, read them if present and never re-run the checks: "
+        f"docs/plans/' + {stem} + '.prior-art-check.md and docs/plans/' + {stem} + '.premise-check.md.'"
+    )
+
+
 #: Every APM ruling in-run: a repo memo never outranks a live PM verbatim (an executor once
 #: followed a memo over the ask on the strength of an APM ruling).
 _KEEP_THE_ASK = (
@@ -608,6 +639,12 @@ REVISE_NEXT_ACTION_JS = (
 #: plan_path stage instead of `workflow.revise`. No engine op consumes this kind yet (op is null): the
 #: reading EM stages `plan_path` itself.
 XS_MISROUTED_CODE = "XS-MINT-MISROUTED"
+
+#: JS predicate: an XS run whose test targets name a test file runs its scoped test leg even when no
+#: review fix was applied (XS skips review, so `_reviewApplied` is always 0 there).
+XS_TEST_TARGET_JS = (
+    r"(_manifest.test_targets ?? []).some((t) => /(^|\/)(tests?\/|test_[^\/]*$|[^\/]*_test\.py$|[^\/]*\.(test|spec)\.[jt]sx?$)/.test(String(t)))"
+)
 XS_MISROUTED_NEXT_ACTION_JS = (
     "{ kind: 'stage_by_plan_path', op: null, params: { run_id: _runId, sizing: _sizingRel, plan_path: _planRel, "
     "note: 'halted: ' + String(_halted?.halted ?? 'unknown') } }"
@@ -948,7 +985,7 @@ def _test_blockers_js(src_expr: str, out_prefix: str, own_paths_expr: Optional[s
     return (
         f"    const {p}Src = {src_expr};\n"
         + own
-        + f"    const {p}Excluded = new Set([...({p}Src?.pre_existing ?? []), ...({p}Src?.sibling_owned ?? []), ...({p}Src?.kept ?? [])].map(String));\n"
+        + f"    const {p}Excluded = new Set([...({p}Src?.pre_existing ?? []), ...({p}Src?.sibling_owned ?? []), ...Object.keys({p}Src?.foreign_red ?? {{}}), ...({p}Src?.kept ?? [])].map(String));\n"
         f"    const {p}Resolved = {p}Src?.status_after === 'pass';\n"
         f"    const {p}Detail = new Map();\n"
         f"    const {p}Raw = {p}Src?.{FAILING_DETAIL_FIELD};\n"
@@ -959,17 +996,32 @@ def _test_blockers_js(src_expr: str, out_prefix: str, own_paths_expr: Optional[s
     )
 
 
+#: Joins the deferred review re-verify promise; the reused path keeps its already-bound value.
+_JOIN_REVERIFY_JS = (
+    "(_reviewReused ? Promise.resolve(_reviewReverify) : (_reviewReverifyP ?? Promise.resolve(null)).catch((e) => { "
+    "const _m = String((e && e.message) ?? e); if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } "
+    "else { log('review re-verify leg threw: ' + _m); } return null; }))"
+)
+
+
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
-def _review_blocked_halt_js(sizing_rel: Optional[str]) -> str:
+def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = True, after_join: bool = False) -> str:
     """The BLOCKED-review halt; its next_action names the engine-ask refire, since journal replay
-    hands back the cached BLOCKED wave."""
+    hands back the cached BLOCKED wave. `read_reverify=False` is the pre-verify slice halt; `after_join`
+    is the post-join pass that also upgrades a slice halt with the re-verify test blockers."""
+    guard = "(!_halted || _halted.halted === " + json.dumps(HALT_REVIEW_BLOCKED) + ")" if after_join else "!_halted"
+    reverify_expr = (
+        "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null"
+        if read_reverify
+        else "null"
+    )
     return (
-        "  if (!_halted) {\n"
+        "  if (" + guard + ") {\n"
         "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
         "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
         + _test_blockers_js(
-            "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null",
+            reverify_expr,
             "_rv",
         )
         + "    const _slicesJs = _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
@@ -1716,6 +1768,50 @@ def _known_arm(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
         return None
 
 
+def _static_plan_rel(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
+    """The existing plan a sizing names at compose time (its `plan:` edge, else the arm-S path), or None."""
+    if not sizing_rel:
+        return None
+    from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
+
+    root = Path(repo_root)
+    try:
+        sizing = load_sizing(root, sizing_rel)
+        edge = sizing.get("plan")
+        rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_path(sizing_rel) if resolve_arm(sizing) == ARM_S else None)
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return None
+    return rel if rel and (root / rel).is_file() else None
+
+
+def preblitz_anchor_lines(repo_root: str, plan_rel: Optional[str]) -> list[str]:
+    """`CONTRADICTED: <claim> -- <evidence>` per declared anchor the tree contradicts; [] otherwise.
+
+    Report-only: reads the plan, spawns nothing, and never changes `plan.readiness_verdict`'s outcome.
+    """
+    if not plan_rel:
+        return []
+    from coordinator_core.ops import _anchor_premise, _brief_premise
+    from coordinator_core.ops.plan_readiness_verdict import _plan_inputs
+
+    root = Path(repo_root)
+    try:
+        text = (root / plan_rel).read_text(encoding="utf-8")
+        fm = _plan_inputs(text)[6]
+        anchors, _defects = _anchor_premise.parse_anchors(fm, root)
+        verdicts = _anchor_premise.anchor_verdicts(anchors, [], [], text, root)
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    claims = {a["id"]: a["claim"] for a in anchors}
+    rows = [
+        {"claim": f"anchor {v['id']}: {str(claims.get(v['id'], ''))[:200]}", "verdict": "CONTRADICTED", "evidence": v["observed"] or "engine check broke"}
+        for v in verdicts
+        if v["verdict"] == "CONTRADICTED"
+    ]
+    out = _brief_premise.render_contradicted(rows)
+    return out.splitlines() if out else []
+
+
 def _intake_sizing(repo_root: str, sizing_rel: Optional[str]) -> Optional[dict]:
     """The sizing at `sizing_rel` when its estimate is unsettled (intake mint or draft), else None."""
     if not sizing_rel:
@@ -1758,6 +1854,100 @@ def _source_memo_clause(repo_root: str, prompt: Optional[str], sizing_rel: Optio
         f"frontmatter `source_memo: {refs[0]}` and name the rest in an open question. Author no row "
         "that edits, closes or sends any of them.\n\n"
     )
+
+
+#: Hit kinds the plan-author "Prior work" block names; handoffs and ledgers stay with the scout's near ruling.
+_PRIOR_WORK_KINDS = ("plan", "sizing", "wiki")
+
+
+def _extant_lookup(repo_root: str, prompt: Optional[str], sizing_rel: Optional[str]):
+    """`lookup_extant` for this ask, or an empty lookup when the corpus is unreadable (fail open)."""
+    from coordinator_core.ops.dispatch_emit.extant_work import ExtantLookup, compute_ask_hash, lookup_extant
+
+    intent = prompt or ""
+    if not intent and sizing_rel:
+        try:
+            intent = str(load_sizing(Path(repo_root), sizing_rel).get("intent") or "")
+        except (SizingFireRefused, OSError, ValueError, KeyError):
+            intent = ""
+    from coordinator_core.ops.dispatch_emit.ask_gate import _SIZING_STEM_PREFIX_RE
+
+    slug = _SIZING_STEM_PREFIX_RE.sub("", Path(sizing_rel).stem) if sizing_rel else ""
+    try:
+        return lookup_extant(repo_root, slug, compute_ask_hash(intent) if intent else "", intent,
+                             sizing_rel=sizing_rel or "")
+    except OSError:
+        return ExtantLookup()
+
+
+def _prior_work_block(repo_root: str, lookup, sizing_rel: Optional[str]) -> str:
+    """The plan-author "Prior work" block: related plan, sizing and wiki paths plus the prior-art
+    sidecar when it exists; empty when there is nothing to name."""
+    paths = [
+        f"{h.kind}: {h.path}"
+        for h in dict.fromkeys((*lookup.exact, *lookup.related))
+        if h.kind in _PRIOR_WORK_KINDS and h.path != sizing_rel
+    ]
+    sidecar = ""
+    if sizing_rel:
+        rel = f"docs/plans/{Path(sizing_rel).stem}.prior-art-check.md"
+        if (Path(repo_root) / rel).is_file():
+            sidecar = rel
+    blitz, memos = _blitz_prior_art(repo_root, sizing_rel)
+    if not paths and not sidecar and not blitz:
+        return ""
+    lines = ["\n\nPrior work (read before drafting; cite what you reuse, and do not re-author it):"]
+    lines += [f"- {p}" for p in paths]
+    if sidecar:
+        lines.append(f"- prior-art sidecar: {sidecar}")
+    if blitz:
+        lines.append(f"- prior-art sidecar: {blitz}")
+        lines += [f"- memo cited by that sidecar: {m}" for m in memos]
+    return "\n".join(lines)
+
+
+_MEMO_PATH_RE = re.compile(r"(?<![\w/.\-])((?:docs|state)/[\w./\-]+\.md)")
+
+
+def _blitz_prior_art(repo_root: str, sizing_rel: Optional[str]) -> tuple[str, list[str]]:
+    """plan-blitz's `scratch/warp/<run>/blitz/wave-*/<handoff-stem>.prior-art-check.md`, located from the
+    sizing's own run and baton (one directory listing, never a scan of scratch/), and the memo paths
+    it cites; ("", []) when the sizing names no run or baton or the file is absent."""
+    if not sizing_rel:
+        return "", []
+    from coordinator_core.ops.dispatch_emit.extant_work import SIZING_BYTES, _SAFE_NAME_RE, _head_keys, _read
+
+    keys = _head_keys(_read(str(Path(repo_root) / sizing_rel), SIZING_BYTES), strip_fence=False)
+    run = str(keys.get("run_id") or keys.get("warp_run") or "")
+    baton = str(keys.get("baton") or "")
+    stem = baton.rsplit("/", 1)[-1][:-3] if baton.endswith(".md") else ""
+    if not (_SAFE_NAME_RE.match(run) and _SAFE_NAME_RE.match(stem)):
+        return "", []
+    blitz_dir = Path(repo_root) / "scratch" / "warp" / run / "blitz"
+    try:
+        waves = sorted(p.name for p in blitz_dir.iterdir() if p.name.startswith("wave-"))
+    except OSError:
+        return "", []
+    for wave in waves:
+        rel = f"scratch/warp/{run}/blitz/{wave}/{stem}.prior-art-check.md"
+        text = _read(str(Path(repo_root) / rel), SIZING_BYTES)
+        if text:
+            memos = list(dict.fromkeys(m for m in _MEMO_PATH_RE.findall(text) if m != sizing_rel))
+            return rel, memos[:8]
+    return "", []
+
+
+def _near_ruling_block(lookup, sizing_rel: Optional[str]) -> str:
+    """The sizing-scout block listing near hits for a same/related/unrelated ruling; empty when none."""
+    near = [h for h in lookup.near if h.path != sizing_rel]
+    if not near:
+        return ""
+    lines = [
+        "\n\nNear-miss extant work (a deterministic token match found these; rule on these hits only, "
+        "none other): for each path return same, related or unrelated, with one line of reason."
+    ]
+    lines += [f"- {h.kind}: {h.path}" for h in near]
+    return "\n".join(lines)
 
 
 def _em_context_row_ids(repo_root: str, sizing_rel: Optional[str]) -> list[str]:
@@ -2631,6 +2821,7 @@ def compose_ask_script(
         executor_rows_js="(_manifest?.rows ?? []).length",
         tshirt_js="_gate?.tshirt",
         reverify=True,
+        reverify_deferred=True,
         delivery_notes_js="_deliveryNotes",
         slice_filter_js=_RESUME_REVIEW_SLICE_FILTER_JS,
     )
@@ -2692,6 +2883,9 @@ def compose_ask_script(
         b.append(f"  {brief_decl_js(em_brief)}")
         b.append("  const _askAgent = agent;")
     source_memo_clause = _source_memo_clause(repo_root, prompt, sizing_rel)
+    extant = _extant_lookup(repo_root, prompt, sizing_rel)
+    prior_work_block = _prior_work_block(repo_root, extant, sizing_rel)
+    near_ruling_block = _near_ruling_block(extant, sizing_rel)
     b.append(
         f"  const {_LEDGER_PREFIX_VAR} = "
         f"{_lit(ledger_clause_text.format(ledger=ledger_rel) + chr(10) * 2 + source_memo_clause)};"
@@ -2846,11 +3040,14 @@ def compose_ask_script(
             "[--design-route <design_route> when design_route is returned] "
             f"--write {shlex.quote(f'{repo_root}/{sizing_write_rel}')} --warp-run {shlex.quote(run_id)} --json {NO_PLAN_HAND_OFF_FLAG}{relayed_flag}"
         )
+        _declared = [w for w in writes if isinstance(w, str) and w.strip()]
+        _declared_json = json.dumps(_declared).replace("'", "'\\''")
         gate_template = (
             f"{_INVOKE} {OP_ASK_GATE} '"
             f'{{"sizing_path":"{sizing_write_rel}","run_id":"{run_id}","writes":[<your writes>]'
             + (f',"baton":{json.dumps(baton["path"])}' if baton else "")
             + (f',"route_override_reason":"{_OVERRIDE_SLOT}"' if has_route_pref else "")
+            + (f',"declared_writes":{_declared_json}' if _declared else "")
             + "}'"
         )
         scout_closing_tail = (
@@ -2863,6 +3060,12 @@ def compose_ask_script(
             "and return them as tshirt and route (tshirt replaces your own judged value). "
             "On a non-zero exit_code run no gate command and return no arm or halt."
         )
+        if _declared:
+            scout_closing_tail += (
+                " The caller declared these write paths, which the ask must write verbatim under exactly "
+                "these names: " + ", ".join(_declared) + ". Include every one in the writes array you "
+                "return; add your own paths beside them, never in place of them."
+            )
         if fold_falsifier:
             scout_closing_tail += (
                 " (3) Only when the gate reply's halt is null and its arm is neither null nor XS, author the "
@@ -2908,6 +3111,7 @@ def compose_ask_script(
             + " " + DESIGN_ROUTE_CLAUSE
             + scout_closing
             + ledger_clause
+            + near_ruling_block
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
             f"(`{_INVOKE} baton.pm_turns`) for the prior ones; the EM brief, when present, may note "
             "which prior turns are pertinent."
@@ -2983,7 +3187,11 @@ def compose_ask_script(
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
         # valid only for the criterion and sizing the scout's own gate reply judged.
         b.append(f"  {'' if launcher_child else 'const '}_scoutClean = _scouted.exit_code === 0 && !_scouted.halt && !!_scouted.arm;")
-        b.append("  _writes = _scouted.writes ?? [];")
+        b.append(
+            "  _writes = [...new Set([...(Array.isArray(_scouted.writes) ? _scouted.writes : [])"
+            + "".join(f", {json.dumps(w)}" for w in writes if isinstance(w, str) and w.strip())
+            + "])];"
+        )
         b.append("  _gated = _scouted.gated ?? [];")
         b.append("  const _sizingPath = _boundRelOf(_scouted.sizing_path) ? REPO_ROOT + '/' + _scouted.sizing_path : _sizingPathFor(_scouted);")
         assemble_cmd_js = _assemble_cmd_js("_sizingPath")
@@ -3394,9 +3602,10 @@ def compose_ask_script(
         # agent stages the plan itself over exactly the rows it added, so no standalone stage leg runs.
         replan_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
+            _authoring_constraints_part(),
             "Ledger-resume re-plan leg. An earlier run halted at the ledger check; these requirement rows "
             "stayed not_met: ",
-            f"js:{_rl0}.blocking.join(', ')",
+            f"js:({_rl0}.blocking ?? []).join(', ')",
             f". Read each row's register text in {ledger_rel}. {_GAPS_OPEN_LEAD}",
             f"js:JSON.stringify({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
             f". {HALT_GAP_RULE} Items already credited as landed by rows that landed after the halt (landed work: add no row for them, "
@@ -3417,8 +3626,9 @@ def compose_ask_script(
             " IN PLACE with Edit -- never scaffold a new plan, never change its path -- adding one new row, "
             "disposition open, per piece of owed work, each with bounded declared `writes` covering the "
             "paths the work lies on and a done condition that is a runnable check. Do not edit, reopen or "
-            "remove any existing row: the rows that landed stay landed." + _EDIT_IN_PLACE_NO_REREAD
-            + " Return the plan's repo-relative "
+            "remove any existing row: the rows that landed stay landed." + _EDIT_IN_PLACE_NO_REREAD,
+            _carried_outputs_part("_planRel"),
+            " Return the plan's repo-relative "
             "path as plan_rel and the ids of exactly the rows you added as added_rows. Commit nothing. "
             f"As your very last act, when you added at least one row, run `{_INVOKE} {OP_ASK_STAGE} '<params>'` "
             "once, <params> being the JSON object ",
@@ -3519,6 +3729,7 @@ def compose_ask_script(
     plan_author = _cat(
         "js:" + _DESIGN_PREFIX_JS,
         f"{head}\n\n{anchor}\n\n",
+        _authoring_constraints_part(),
         "Author the plan for the sizing at ",
         "js:_sizingRel",
         f": scaffold it with `{DOC_NEW_CMD} --type plan --sizing-object <that sizing path> --title "
@@ -3533,6 +3744,7 @@ def compose_ask_script(
         "Return its repo-relative path as plan_rel."
         + ledger_clause
         + " Every ledger item is one the plan's rows must serve; quote each in the row that serves it."
+        + prior_work_block
         + (
             " Read the sizing's `scout_evidence` entries, if it has any, before deriving the spine."
             if plan_blitz_args
@@ -3646,8 +3858,13 @@ def compose_ask_script(
                 "gateReportPath: REPO_ROOT + '/' + _sizingRel, "
                 f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
                 "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
+                f"{'anchorPremises: _anchorPremises, ' if anchor_lines else ''}"
                 f"planPath: {plan_path_js}, executionOpen: true }}] }});"
             )
+
+        anchor_lines = preblitz_anchor_lines(repo_root, _static_plan_rel(repo_root, sizing_rel))
+        if anchor_lines:
+            b.append(f"    const _anchorPremises = {json.dumps(anchor_lines)};")
 
         ruled_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -3692,19 +3909,24 @@ def compose_ask_script(
         b.append("    let _pullRulings = [];")
         b.append("    let _pullBlocking = null;")
         b.append("    let _pullSplit = false;")
+        b.append("    let _replanCapped = false;")
+        b.append("    let _replanLegs = 0;")
+        b.append("    let _pullFindings = null;")
         if not (accept_pending or xl_possible):
             b.append("    let _splitSlices = null;")
             b.append("    let _splitFan = null;")
         b.append("    if (!_planRel && _pulledEntry) {")
         revise_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
+            _authoring_constraints_part(),
             "plan-blitz pulled the plan at ",
             "js:_pulledEntry.planPath",
             " at its prep gate. Revise that plan IN PLACE with Edit -- never scaffold a new one, never "
             "change its path -- so every finding below is resolved, then return its repo-relative path "
             "as plan_rel."
-            + _EDIT_IN_PLACE_NO_REREAD
-            + " "
+            + _EDIT_IN_PLACE_NO_REREAD,
+            _carried_outputs_part("_pulledEntry.planPath"),
+            " "
             + _ANCHOR_PREMISES_SENTENCE
             + "Then run the `plan.readiness_verdict` op on the revised plan, passing the "
             "pull's coverage and reviews values below when they are not null, apply every "
@@ -3732,9 +3954,58 @@ def compose_ask_script(
                 else ()
             ),
         )
-        b.append(
-            f"      const _revised = await {_agent(revise_prompt, label='plan-revise', phase='plan', agent_type=_PLAN_AUTHOR_AGENT_TYPE, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id)};"
+        patch_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "plan-blitz pulled the plan at ",
+            "js:_pulledEntry.planPath",
+            " at its prep gate, but its review did not find the plan unsaveable. Do not re-plan or "
+            "rewrite it. Run the `plan.readiness_verdict` op on it, passing the pull's coverage and "
+            "reviews values below when they are not null, apply every mechanical_repairs entry in "
+            "place with Edit (a missing field or a reconciling anti-scope line, nothing more), then "
+            "re-run the op with the plan alone and return that reply's pull_class and verdict "
+            "alongside plan_rel (the plan's repo-relative path, unchanged). Also return that reply's "
+            "rulings, blocking_findings and split_recommended verbatim.",
+            "\n\nPull reason:\n",
+            "js:String(_pulledEntry.reason ?? '')",
+            "\n\nPull coverage: ",
+            "js:JSON.stringify(_pulledEntry.coverage ?? null)",
+            "\nPull reviews: ",
+            "js:JSON.stringify(_pulledEntry.reviews ?? null)",
+            "\n\nGate report (read it first):\n",
+            "js:String(_pulledEntry.prepGateReport ?? '(none)')",
+            ledger_clause,
+            *(
+                stage_fold(
+                    " When the final verdict is `ready`, also stage the plan:"
+                )
+                + (" Otherwise leave `stage_reply` null.",)
+                if fold_stage
+                else ()
+            ),
         )
+        revise_call = _agent(
+            revise_prompt, label="plan-revise", phase="plan", agent_type=_PLAN_AUTHOR_AGENT_TYPE,
+            schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA,
+            effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
+        )
+        patch_call = _agent(
+            patch_prompt, label="plan-patch", phase="plan", agent_type=_RULINGS_AGENT_TYPE,
+            agent_model=_RULINGS_MODEL, schema=_REVISE_STAGED_SCHEMA if fold_stage else _REVISE_SCHEMA,
+            effort=_MECHANICAL_EFFORT, run_id=run_id,
+        )
+        b.append(f"      const _unsaveable = {_PULL_REVIEW_UNSAVEABLE_JS};")
+        b.append(
+            "      const _pullAttempts = () => [...(_blitz?.regate?.pulled ?? []), ...(_blitz?.pulled ?? [])]"
+            ".filter((p) => p && p.planPath === _pulledEntry.planPath).length + _replanLegs;"
+        )
+        b.append("      _pullFindings = Array.isArray(_pulledEntry.blocking) ? _pulledEntry.blocking : null;")
+        b.append(f"      _replanCapped = _pullAttempts() >= {REPLAN_ATTEMPT_CAP};")
+        b.append("      let _revised = null;")
+        b.append("      if (!_replanCapped) {")
+        b.append(f"      if (_unsaveable) {{ _revised = await {revise_call}; }}")
+        b.append(f"      else {{ _revised = await {patch_call}; }}")
+        b.append("      _replanLegs += 1;")
+        b.append("      }")
         b.append("      _pullPlan = _revised?.plan_rel || _pulledEntry.planPath;")
         b.append(
             "      _pullRulings = Array.isArray(_revised?.rulings) && _revised.rulings.length ? _revised.rulings : "
@@ -3743,7 +4014,7 @@ def compose_ask_script(
         )
         b.append("      _pullBlocking = typeof _revised?.blocking_findings === 'number' ? _revised.blocking_findings : null;")
         b.append(
-            "      if (_revised?.pull_class === 'mechanical' && _revised?.verdict === 'ready') "
+            "      if (_revised?.verdict === 'ready' && (_revised?.pull_class === 'mechanical' || _revised?.pull_class === 'none')) "
             "{ _planRel = _revised.plan_rel || _pulledEntry.planPath;"
             + (
                 " if (_planRel === _revised.plan_rel) { await _adoptStageReply(_revised.stage_reply); }"
@@ -3761,6 +4032,7 @@ def compose_ask_script(
             split_prompt, label="pull-split", phase="plan", agent_type=_RULINGS_AGENT_TYPE,
             agent_model=_RULINGS_MODEL, schema=_PULL_SPLIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
         )
+        b.append("      if (_unsaveable) {")
         b.append(
             "      if (_revised?.split_recommended === true && _splitSlices == null "
             f"&& !(String(_pulledEntry.reason ?? '') + String(_pulledEntry.prepGateReport ?? '')).includes({_lit(REGISTER_PIN_DRIFT_KIND)})) {{"
@@ -3772,7 +4044,7 @@ def compose_ask_script(
             "{ _splitSlices = _pullFan.slices; _splitFan = _pullFan; _pullSplit = true; }"
         )
         b.append("      }")
-        b.append("      if (!_planRel && !_pullSplit) {")
+        b.append("      if (!_planRel && !_pullSplit && !_replanCapped) {")
         b.append(f"      const _reblitz = {_blitz_call('_revised?.plan_rel || _pulledEntry.planPath')}")
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
         if fold_stage:
@@ -3792,6 +4064,11 @@ def compose_ask_script(
             "&& _rePulled.blocking.every((r, i) => r === _pulledEntry.blocking[i])) "
             "{ _repeatBlocking = _rePulled.blocking; }"
         )
+        b.append(
+            "      if (!_planRel) { if (Array.isArray(_rePulled?.blocking)) { _pullFindings = _rePulled.blocking; } "
+            f"if (_repeatBlocking || _pullAttempts() >= {REPLAN_ATTEMPT_CAP}) {{ _replanCapped = true; }} }}"
+        )
+        b.append("      }")
         b.append("      }")
         b.append("      }")
         b.append("    }")
@@ -3824,13 +4101,19 @@ def compose_ask_script(
         b.append("    }")
         pull_refire = _refire_js(sizing_rel)
         pull_na = rule_and_refire_next_action_js("_pullPlan", "_pullRulings", pull_refire)
+        fire_head, fire_tail = fire_command(None).split(json.dumps(_ASK_PLACEHOLDER))
         b.append(
-            f"    if (_repeatBlocking && !_halted.next_action) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
-            "reason: 'plan-blitz pulled twice on the same blocking set', blocking: _repeatBlocking, "
-            "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
-            f"next_action: {{ ...{pull_na}, kind: 'rule_on_blocking_rows', blocking: _repeatBlocking, "
-            "note: 'a second pull blocked on the same rows: rule on them (revise the plan or accept them); the same plan pulls again' }, "
-            "blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
+            "    const _researchFire = () => { const _q = 'Research, do not re-plan: the plan at ' + (_pullPlan ?? _planRel ?? '(unplanned)') "
+            f"+ ' was pulled or re-planned {REPLAN_ATTEMPT_CAP} times at its prep gate and another round does not improve the odds. "
+            "Find what the plan must resolve. Blocking findings: ' + JSON.stringify(_pullFindings ?? []) "
+            "+ '. Pull reason: ' + String(_pulledEntry?.reason ?? '').slice(0, 600); "
+            f"return {_lit(fire_head)} + JSON.stringify(_q) + {_lit(fire_tail)}; }};"
+        )
+        b.append(
+            f"    if (_replanCapped && !_pullSplit && !_halted.next_action) {{ _halted = {{ halted: {_lit(HALT_RESEARCH)}, "
+            f"reason: 'plan pulled {REPLAN_ATTEMPT_CAP} times: research before another round', "
+            "blocking: _pullFindings, plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
+            "fire: [_researchFire()], blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
         )
         b.append(
             "    if (_pullSplit && !_halted.next_action) { _halted = { halted: "
@@ -3841,7 +4124,7 @@ def compose_ask_script(
         b.append(
             "    else if (_pullPlan && !_halted.next_action) { _halted = { ..._halted, "
             "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
-            f"next_action: {pull_na} }}; }}"
+            f"next_action: _halted.halted === {_lit(HALT_RESEARCH)} ? undefined : {pull_na} }}; }}"
         )
         b.append("    }")
         b.append("    }")
@@ -4113,6 +4396,7 @@ def compose_ask_script(
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
     # literal `agent(` token, so a renamed call site is invisible to every one of them.
     b.append("  const _reviewOuterAgent = agent;")
+    b.append("  let _reverifyJoined = false;")
     b.append("  let _footprintReviewed = false; // true only when this fire ran the review block; XS / _xsTail / no-paths set _reviewWave = [] without reviewing")
     b.append(
         "  const _reviewReused = _reusePhase('review') && !!_phaseVerdict('review');\n"
@@ -4145,7 +4429,7 @@ def compose_ask_script(
         f"  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== {_lit(ARM_XS)}) "
         f"{{ {INTEGRATION_NOT_RUN_VAR} = true; }}"
     )
-    b.append(_review_blocked_halt_js(sizing_rel))
+    b.append(_review_blocked_halt_js(sizing_rel, read_reverify=False))
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
         "  if (!_halted && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) { _halted = { halted: "
@@ -4154,7 +4438,8 @@ def compose_ask_script(
         "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
     )
     test_guard = (
-        f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _reviewApplied > 0) && (_manifest.test_targets ?? []).length"
+        f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _reviewApplied > 0 || {XS_TEST_TARGET_JS}) "
+        "&& (_manifest.test_targets ?? []).length"
     )
     review_applied = (
         "const _reviewApplied = (Array.isArray(_reviewWave) ? _reviewWave : [])"
@@ -4232,8 +4517,11 @@ def compose_ask_script(
         f"    const _testWanted = !!({test_guard});",
         *([f"    const _docsWanted = !!({_DOCS_PRE_TAIL_GUARD});"] if in_run_commit else []),
         "    let _verify = null;",
-        f"    if (!_halted) try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
-        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } }",
+        f"    const _runVerify = async () => {{ try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
+        "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), " + _JOIN_REVERIFY_JS + "]);",
+        "    _reverifyJoined = true;",
+        "    if (!_halted && !_reviewReused && _reviewReverify && ((Array.isArray(_reviewReverify.unapplied) && _reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }",
         f"    if (_testWanted && _verify && _verify.test) {{ {_emit._TEST_RESULT_VAR} = _verify.test; }}",
         *(
             [
@@ -4263,7 +4551,7 @@ def compose_ask_script(
         f"{head}\n\n{anchor}\n\n",
         "Ledger-resume remaining-work leg. An earlier run halted; its revise notes may ask for work with no "
         "requirement row blocking. Rows still not_met and not ruled out_of_scope by the revise: ",
-        f"js:{_rl}.blocking.join(', ')",
+        f"js:({_rl}.blocking ?? []).join(', ')",
         f". Read each row's register text in {ledger_rel}. {_GAPS_OPEN_LEAD}",
         f"js:JSON.stringify({_rl}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})",
         f". {HALT_GAP_RULE} Revise notes, oldest first: ",
@@ -4295,6 +4583,8 @@ def compose_ask_script(
         "    }"
     ]
     b.extend(verify_lines)
+    b.append("  if (!_reverifyJoined) { _reviewReverify = await " + _JOIN_REVERIFY_JS + "; _reverifyJoined = true; }")
+    b.append(_review_blocked_halt_js(sizing_rel, after_join=True))
     b.append(no_target)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
     b.append(
@@ -4733,9 +5023,9 @@ _RESUME_LEDGER_CLAUSE_JS = (
     "(_resumeLedger ? ' RESUME: ' + (_allLandedResume ? 'every row of the plan landed in an earlier run and no "
     "executor ran in this one. ' : 'an earlier run halted at the ledger check; a remaining-work leg then ran "
     "against the rows it kept. ') + "
-    f"(_gate.{RESUME_LEDGER_KEY}.blocking.length ? 'Judge only these requirement rows, now, against ' + "
+    f"((_gate.{RESUME_LEDGER_KEY}.blocking ?? []).length ? 'Judge only these requirement rows, now, against ' + "
     "(_allLandedResume ? 'the landed work of the plan at HEAD: ' : 'the current tree: ') + "
-    f"_gate.{RESUME_LEDGER_KEY}.blocking.join(', ') + '. ' + (_allLandedResume ? 'A blocking row is met when the "
+    f"(_gate.{RESUME_LEDGER_KEY}.blocking ?? []).join(', ') + '. ' + (_allLandedResume ? 'A blocking row is met when the "
     "landed work satisfies its register text. ' : _preHaltCredit ? 'A blocking row is met when the work at HEAD, "
     "including commits before the halt commit, satisfies its register text as the revise notes rule it; its "
     "met_by must name the commit sha(s) carrying that work, which may be a checkpoint this run made since the halt. ' : 'A blocking row is met on work changed since the halt "
@@ -4763,7 +5053,9 @@ _DOCS_PRE_TAIL_GUARD = (
 REVIEW_NOT_RUN_CLAUSE = (
     "\n\nNo review ran for this run (the XS arm skips review): the empty verdicts above are not a clean "
     "review. In the note's review section write exactly `Review: not run (XS arm)` and list no "
-    "findings; never write `None`, `no findings` or `clean` for it."
+    "findings; never write `None`, `no findings` or `clean` for it. When the verdicts or the manifest "
+    "show review was skipped or failed for another reason, write `Review: not run` and that reason instead "
+    "of `(XS arm)`."
 )
 
 

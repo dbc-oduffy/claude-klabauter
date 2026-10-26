@@ -436,6 +436,13 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_seam_fix.py",
         ("_handler",),
     ),
+    # Enrolled 2026-10-26: measured EMPTY function-granular reachable set (its one run_git site
+    # sits behind a _Repo method the walker does not resolve); C1's 1-vs-6-path spawn-equality test
+    # bounds the real spawn count.
+    "dispatch.commit_merge": (
+        "coordinator_core/ops/dispatch_emit/merge_commit.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-10-22: statically spawn-free (empty function-granular reachable set).
     "fleet.migrate_prose_queue": (
         "coordinator_core/ops/fleet/migrate_prose_queue.py",
@@ -7461,7 +7468,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # (run_git), refusal path only.
     "dispatch.land_run": 5,
     "dispatch.reap_abandoned_runs": 1,
-    "doctor.recover_kept_blobs": 2,
+    # 1c5f1b9da6 routed both _git runners through git.run; live=1
+    "doctor.recover_kept_blobs": 1,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
     "fleet.delete_superseded_decisions": 8,

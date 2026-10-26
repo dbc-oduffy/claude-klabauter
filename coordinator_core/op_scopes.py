@@ -781,6 +781,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.sibling_status":                  "common_dir",
     "dispatch.reap_abandoned_runs":             "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
+    "dispatch.commit_merge":                    "common_dir",
     "dispatch.supersede_slice":                 "common_dir",
     "dispatch.record_halted_run_landed":        "common_dir",
     "dispatch.close_halted_run_superseded":     "common_dir",

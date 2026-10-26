@@ -66,6 +66,72 @@ def is_product_path(abs_path: str, root: str, session_id: str) -> bool:
     return path == base or not _is_em_row_surface(path, base, session_id)
 
 
+def _index_path(root: str) -> str:
+    """`<gitdir>/index` for `root`, resolving a `.git` FILE's `gitdir:` line (linked worktree)."""
+    dot_git = os.path.join(root, ".git")
+    if os.path.isfile(dot_git):
+        with open(dot_git, encoding="utf-8") as fh:
+            line = fh.readline().strip()
+        if not line.startswith("gitdir:"):
+            raise ValueError("unreadable .git file")
+        gitdir = line[len("gitdir:"):].strip()
+        if not os.path.isabs(gitdir):
+            gitdir = os.path.join(root, gitdir)
+        return os.path.join(gitdir, "index")
+    return os.path.join(dot_git, "index")
+
+
+def _index_holds(data: bytes, rel: bytes) -> bool:
+    """True when the v2/v3 index `data` has an entry for `rel`. Raises ValueError for a layout whose
+    miss proves nothing: other versions (v4 prefix-compresses paths), a `link` (split index)
+    extension, or a truncated file."""
+    if len(data) < 12 or data[:4] != b"DIRC":
+        raise ValueError("not a git index")
+    version = int.from_bytes(data[4:8], "big")
+    if version not in (2, 3):
+        raise ValueError("unsupported index version")
+    count = int.from_bytes(data[8:12], "big")
+    pos = 12
+    found = False
+    for _ in range(count):
+        if pos + 62 > len(data):
+            raise ValueError("truncated index")
+        flags = int.from_bytes(data[pos + 60 : pos + 62], "big")
+        name_at = pos + 62 + (2 if version == 3 and flags & 0x4000 else 0)
+        end = data.find(b"\x00", name_at)
+        if end < 0:
+            raise ValueError("truncated index")
+        if data[name_at:end] == rel:
+            found = True
+        pos += (end - pos + 8) // 8 * 8
+    ext_end = len(data) - 20
+    while pos + 8 <= ext_end:
+        sig = data[pos : pos + 4]
+        if sig == b"link":
+            raise ValueError("split index")
+        pos += 8 + int.from_bytes(data[pos + 4 : pos + 8], "big")
+    return found
+
+
+def is_empty_untracked(abs_path: str, root: str) -> bool:
+    """True only for a regular, non-symlink, zero-byte file inside `root` whose repo-relative path
+    the index does not hold. Fails closed (False) on a hit or on anything unreadable, including a
+    v4 or split index. Spawns no process."""
+    try:
+        if os.path.islink(abs_path) or not os.path.isfile(abs_path):
+            return False
+        if os.path.getsize(abs_path) != 0:
+            return False
+        rel = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(root))
+        if rel.startswith("..") or os.path.isabs(rel):
+            return False
+        with open(_index_path(root), "rb") as fh:
+            data = fh.read()
+        return not _index_holds(data, rel.replace(os.sep, "/").encode("utf-8"))
+    except (OSError, ValueError):
+        return False
+
+
 _ROW_START = re.compile(r"^\s*-\s+id:\s*['\"]?([^'\"\s]+)")
 _KEY_LINE = re.compile(r"^\s*([A-Za-z_]+):\s*(.*?)\s*$")
 _ITEM_LINE = re.compile(r"^\s*-\s+['\"]?(.+?)['\"]?\s*$")

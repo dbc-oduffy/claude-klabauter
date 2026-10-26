@@ -43,7 +43,8 @@ def _detail(result: Mapping[str, Any]) -> dict:
 
 
 def from_reverify(result: Mapping[str, Any]) -> List[TestBlocker]:
-    """Blockers for `failing` minus `pre_existing`, `sibling_owned` and `kept`, sorted by node id.
+    """Blockers for `failing` minus `pre_existing`, `sibling_owned`, `foreign_red` (a {node: paths}
+    map; its keys) and `kept`, sorted by node id.
 
     Messages come from `failing_detail`; a node without detail has an empty message.
     """
@@ -53,6 +54,7 @@ def from_reverify(result: Mapping[str, Any]) -> List[TestBlocker]:
     excluded = (
         set(result.get("pre_existing") or [])
         | set(result.get("sibling_owned") or [])
+        | set(result.get("foreign_red") or [])
         | set(result.get("kept") or [])
     )
     detail = _detail(result)

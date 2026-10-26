@@ -36,7 +36,10 @@ Revert mode (``failing`` given, no ``probe``): ``{"reverted", "unattributed", "p
 "sibling_owned", "kept", "record", "error"}``. ``sibling_owned`` is the unattributed node ids whose
 caller-supplied ``cause_files`` (``{node id: [paths]}``) are all outside the run footprint (manifest
 plus created paths) and all withheld by a readable foreign halt record; an unreadable record, an
-in-footprint cause file, or no cause files leaves the node ``unattributed``. Absent ``cause_files``
+in-footprint cause file, or no cause files leaves the node ``unattributed``. ``foreign_red``
+(``{node id: [culprit paths]}``) carries the remaining nodes whose every cause file is outside the
+footprint and dirty versus HEAD, whether or not a halt record holds it (unreadable record excepted): the
+failure is shared-tree contamination, evidence rather than a blocker. Absent ``cause_files``
 they are derived (``_derive_cause_files``); a bare file name resolving nowhere falls back to the sole
 dirty tracked path of that basename. A failing node id's
 test file implicates itself when edited or created, and every edited ``.py`` module it imports, plus
@@ -594,11 +597,13 @@ def _sibling_owned(
     repo_root: Path, candidates: List[str], cause_files: Optional[Dict[str, List[str]]],
     footprint: Set[str], run_id: str, plan_path: str,
 ) -> List[str]:
-    """Unattributed nodes whose every caller-named cause file lies outside ``footprint`` and is withheld
-    by a readable foreign halt record. No cause files, an in-footprint one, an unheld one, or an
-    unreadable record (``UNREADABLE_HALT_RECORD``) leaves the node blocking."""
+    """``(sibling_owned, foreign_red)``. ``sibling_owned``: unattributed nodes whose every caller-named
+    cause file lies outside ``footprint`` and is withheld by a readable foreign halt record.
+    ``foreign_red``: ``{node: [culprit paths]}`` for the rest whose every cause file lies outside
+    ``footprint`` and is dirty versus HEAD (so HEAD passes) and none is held by an unreadable record.
+    No cause files, an in-footprint one, or a clean one leaves the node blocking."""
     if not cause_files:
-        return []
+        return [], {}
     causes: Dict[str, List[str]] = {}
     for node in candidates:
         raw = cause_files.get(node)
@@ -606,15 +611,22 @@ def _sibling_owned(
         if paths and not footprint.intersection(paths):
             causes[node] = paths
     if not causes:
-        return []
+        return [], {}
     from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
 
     wanted = sorted({p for paths in causes.values() for p in paths})
     held = foreign_halted_withheld(repo_root, run_id or None, plan_path or None, wanted)
-    return sorted(
+    owned = sorted(
         node for node, paths in causes.items()
         if all(held.get(p) and held[p] != UNREADABLE_HALT_RECORD for p in paths)
     )
+    dirty = _is_dirty(repo_root, wanted)
+    foreign_red = {
+        node: paths for node, paths in sorted(causes.items())
+        if node not in owned
+        and all(p in dirty and held.get(p) != UNREADABLE_HALT_RECORD for p in paths)
+    }
+    return owned, foreign_red
 
 
 def _open_probe(
@@ -805,9 +817,9 @@ def review_reverify(
     candidates = [n for n in unattributed if n not in not_base_red]
     if cause_files is None and candidates:
         cause_files = _derive_cause_files(repo_root, candidates, failing_output)
-    sibling_owned = _sibling_owned(repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path)
-    if sibling_owned:
-        unattributed = [n for n in unattributed if n not in sibling_owned]
+    sibling_owned, foreign_red = _sibling_owned(repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path)
+    if sibling_owned or foreign_red:
+        unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]
     refusal = _dangling(repo_root, view, manifest, plan)
     if refusal:
         return _fail(refusal, True)
@@ -874,6 +886,7 @@ def review_reverify(
         "unattributed": unattributed,
         "pre_existing": pre_existing,
         "sibling_owned": sibling_owned,
+        "foreign_red": foreign_red,
         "kept": kept,
         "foreign": foreign_ids,
         "index_residue": index_residue,
