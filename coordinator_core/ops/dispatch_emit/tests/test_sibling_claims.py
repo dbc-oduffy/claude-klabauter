@@ -394,6 +394,17 @@ def test_own_dirt_crlf_edit_over_baseline_head_holds_in_lf_form_is_own(tmp_path)
     assert sibling_claims._own_dirt(root, run_id, rel, {rel: "1" * 40}) is False
 
 
+def test_own_dirt_file_created_by_the_run_is_own_while_absent_at_head(tmp_path):
+    run_id = _stamped("c4c4c4")
+    _declare(tmp_path, run_id, "p/new.py", write_baseline={"p/new.py": None})
+    (tmp_path / "p").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "p/new.py").write_bytes(b"created = 1\n")
+    assert sibling_claims._own_dirt(tmp_path, run_id, "p/new.py", {"p/new.py": None}) is True
+    assert sibling_claims._own_dirt(tmp_path, run_id, "p/new.py", {"p/new.py": "1" * 40}) is False
+    assert sibling_claims._own_dirt(tmp_path, run_id, "p/new.py", None) is False
+    assert sibling_claims._own_dirt(tmp_path, run_id, "p/other.py", {"p/other.py": None}) is False
+
+
 def test_b9002c_replay_superseded_halted_run_is_not_unlanded_for_a_landing_on_another_sizing(repo):
     _sizing(repo, SIZING, "superseded")
     _sizing(repo, "state/sizings/land.yaml")

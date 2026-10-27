@@ -363,14 +363,41 @@ def halted_run_write_claims(
             names = sorted(e.name for e in entries if e.is_dir())
     except OSError:
         return claims
+    with halted_hold_release.blob_scope(root):
+        return _halted_claims(
+            root, wanted, names, exclude_run, moment, own_plan, dirty, attributable, halted_hold_release, stopped_runs,
+        )
+
+
+def _halted_claims(
+    root: Path, wanted: set, names: list, exclude_run: Optional[str], moment: float, own_plan: Optional[str],
+    dirty, attributable, halted_hold_release, stopped_runs,
+) -> dict:
+    """`halted_run_write_claims` body, run inside one `halted_hold_release.blob_scope` whose blobs are
+    prefetched for every in-window halted run in a single git spawn."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    claims: dict = {}
+    halted_ids = []
     for run_id in names:
         if exclude_run is not None and run_id == exclude_run:
             continue
         stamp = stopped_runs._stamp_epoch(run_id)
         if stamp is None or moment - stamp > run_token.TTL_SECONDS:
             continue
-        if not _halted(root, run_id):
+        if _halted(root, run_id):
+            halted_ids.append(run_id)
+    plans = []
+    for run_id in halted_ids:
+        try:
+            rdir = record_dir(root, run_id)
+            marker = halted_run._read(rdir)
+        except Exception:  # noqa: BLE001 -- unreadable record: read (and held) on demand
             continue
+        if marker is not None:
+            plans.append((rdir, marker))
+    halted_hold_release.prefetch_kept_blobs(root, plans)
+    for run_id in halted_ids:
         if halted_hold_release.release_reason(root, run_id, exclude_run, own_plan):
             continue
         held = halted_withheld_paths(root, run_id)

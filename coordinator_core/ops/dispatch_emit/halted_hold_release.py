@@ -14,6 +14,8 @@ this module.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 import time
 from pathlib import Path
@@ -125,8 +127,55 @@ def _squash(text: str) -> str:
     return "".join(text.split())
 
 
+_SCOPE: contextvars.ContextVar = contextvars.ContextVar("halted_hold_release_blobs", default=None)
+
+
+@contextlib.contextmanager
+def blob_scope(root: Path):
+    """Memoise `_blob_batch` reads for `root` inside the block (nesting joins the outer scope), so a claim
+    lookup over many halted runs reads each git object once. Trap: HEAD is frozen for the block."""
+    if _SCOPE.get() is not None:
+        yield
+        return
+    token = _SCOPE.set((str(root), {}))
+    try:
+        yield
+    finally:
+        _SCOPE.reset(token)
+
+
 def _blob_batch(root: Path, specs: list) -> Optional[dict]:
-    """`{spec: bytes | None}` for each git object spec, one `git cat-file --batch` spawn; None when git fails."""
+    """`{spec: bytes | None}` for each git object spec; None when git fails. One `git cat-file --batch`
+    spawn for the specs a live `blob_scope` has not already read, none when it holds them all."""
+    scope = _SCOPE.get()
+    if scope is None or scope[0] != str(root):
+        return _blob_fetch(root, specs)
+    seen = scope[1]
+    missing = [s for s in dict.fromkeys(specs) if s not in seen]
+    if missing:
+        fetched = _blob_fetch(root, missing)
+        if fetched is None:
+            return None
+        seen.update(fetched)
+    return {s: seen[s] for s in specs}
+
+
+def prefetch_kept_blobs(root: Path, runs: list) -> None:
+    """Read the blobs every `(record, marker)` in `runs` needs in one spawn, into the live `blob_scope`
+    (a no-op outside one). Never raises: a run that cannot be planned is read on demand later."""
+    if _SCOPE.get() is None:
+        return
+    specs: list = []
+    for record, marker in runs:
+        try:
+            specs.extend(_kept_specs(record, marker)[2])
+        except Exception:  # noqa: BLE001 -- planned again, and held, by kept_at_head_paths
+            continue
+    if specs:
+        _blob_batch(root, specs)
+
+
+def _blob_fetch(root: Path, specs: list) -> Optional[dict]:
     from coordinator_core.git.run import run_git
 
     proc = run_git(["cat-file", "--batch"], cwd=str(root), input="".join(s + "\n" for s in specs).encode())
@@ -167,15 +216,14 @@ def _hunks_present(base: str, kept: str, head: str) -> bool:
     return True
 
 
-def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
-    """The withheld paths of the halt at `record` whose kept content is already at HEAD: blob-equal, or the
-    kept diff against `run_base_sha` already present. A path with no kept blob, a missing object, or an
-    unreadable record is absent (still held). One git spawn for the whole run, none when nothing is withheld."""
+def _kept_specs(record: Path, marker: dict) -> tuple:
+    """`(paths, kept, specs, base_sha)`: the withheld paths with a single kept blob, `{path: blob}`, and the
+    git object specs `kept_at_head_paths` reads for them. Empty `paths` when nothing is comparable."""
     from coordinator_core.ops.dispatch_emit import halted_run, kept_work
 
     withheld = halted_run.halted_withheld(record)
     if not withheld:
-        return set()
+        return [], {}, [], ""
     kept: dict = {}
     for chunk in kept_work.read(record)["chunks"].values():
         paths = chunk.get("paths") if isinstance(chunk, dict) else None
@@ -189,11 +237,24 @@ def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
             kept[p] = next(iter(blobs))
     paths = sorted(p for p in withheld if p in kept)
     if not paths:
-        return set()
+        return [], {}, [], ""
     base_sha = marker.get("run_base_sha")
     base_sha = base_sha if isinstance(base_sha, str) and base_sha else ""
     specs = [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths]
     specs += [f"{base_sha}:{p}" for p in paths] if base_sha else []
+    return paths, kept, specs, base_sha
+
+
+def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
+    """The withheld paths of the halt at `record` whose kept content is already at HEAD: blob-equal, or the
+    kept diff against `run_base_sha` already present. A path with no kept blob, a missing object, or an
+    unreadable record is absent (still held). One git spawn for the whole run (none inside a `blob_scope`
+    that `prefetch_kept_blobs` filled), none when nothing is withheld."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    paths, kept, specs, base_sha = _kept_specs(record, marker)
+    if not paths:
+        return set()
     blobs = _blob_batch(root, specs)
     if blobs is None:
         return set()

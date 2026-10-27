@@ -137,7 +137,8 @@ def _own_dirt(root: Path, run_id: str, path: str, head: Optional[dict] = None) -
     through `kept_work.matches_committed`, as the baseline is a raw-bytes sha). A baseline
     HEAD has moved past (`head[path]` differs; `head` None counts as moved) is no evidence: the
     difference is the landed base, not this run's edit. A run that recorded neither, or whose
-    recorded blob differs from the file, owns none of it."""
+    recorded blob differs from the file, owns none of it. A baseline of None (the run created the
+    path) is own dirt while HEAD still lacks the path."""
     from coordinator_core.ops.dispatch_emit import kept_work
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
 
@@ -154,6 +155,8 @@ def _own_dirt(root: Path, run_id: str, path: str, head: Optional[dict] = None) -
     base = manifest.get("write_baseline")
     if isinstance(base, dict):
         recorded = {_norm(k): v for k, v in base.items()}
+        if path in recorded and recorded[path] is None:
+            return head is not None and path in head and head[path] is None
         return (
             path in recorded and recorded[path] != current
             and head is not None and head.get(path) is not None
@@ -266,10 +269,10 @@ def sibling_run_claims(
     try:
         from coordinator_core.git import git_state
         from coordinator_core.ops import warp_run_deliverable
-        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_hunk_attribution
 
         attr = halted_hunk_attribution.reader(root, own_run_id, landing_plan=own_plan)
-        with git_state.index_read_cache_scope():
+        with git_state.index_read_cache_scope(), halted_hold_release.blob_scope(root):
             halted = warp_run_deliverable.halted_run_write_claims(
                 root, wanted, exclude_run=own_run_id, own_plan=own_plan,
             ) or {}
