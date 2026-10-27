@@ -279,6 +279,11 @@
         "doe_plugin_sha": { "type": ["string", "null"] }
       }
     },
+    "mechanically_uniform": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional. The stated reason an L sizing is mechanically uniform; the router sets it only on an L it routed spec-dispatch instead of plan. Absent for every other sizing."
+    },
     "scout_evidence": {
       "type": "array",
       "description": "Pointers to cartography/scout output that informed this sizing (file paths, wiki citations, prior-art references). Empty array when no scout ran. Each item is EITHER a bare string pointer OR a structured object (`kind`, `finding`, optional `note`) when the pointer needs per-item annotation. NEGATIVE SPEC, load-bearing: the per-item `kind` here is NEVER the same home as `probe.scout_evidence_kind` below and never overrides it — `probe.scout_evidence_kind` is the SIZING-LEVEL answer, the one value the assembler actually consumed at Step 3, mirroring the single `--scout-evidence-kind` flag; a per-item `kind` is finer-grained annotation on one piece of evidence, not a competing sizing-level signal.",

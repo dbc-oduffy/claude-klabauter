@@ -651,6 +651,7 @@ def _fanout(params: Mapping, root: Path) -> dict:
         "exit_code": 0,
         "applied": True,
         **reply,
+        "writer_root": str(worktree),
         "ready": [{"run_id": r.run_id, "sizing": r.slice_sizing} for r in ready],
         "fire": [fire_command(r.slice_sizing) for r in ready],
     }

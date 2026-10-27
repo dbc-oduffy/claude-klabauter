@@ -5,7 +5,7 @@ _BASE_ROUTE_BY_TSHIRT = {
     "XS": "dispatch",
     "S": "spec-dispatch",
     "M": "plan",
-    "L": "spec-dispatch",
+    "L": "plan",
     "XL": "pm-decision",
     "XXL": "goal-setting",
 }

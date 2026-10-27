@@ -1051,6 +1051,8 @@ def route(
     probe_signal: Optional[str] = None,
     jtbd_unclear: bool = False,
     well_trodden_step_change: bool = False,
+    mechanically_uniform: bool = False,
+    mechanically_uniform_reason: Optional[str] = None,
     premise_provenance: Optional[str] = None,
     boundary_in_notch: Optional[str] = None,
     scout_evidence_kind: Optional[str] = None,
@@ -1091,6 +1093,9 @@ def route(
             direction the caller's substrate probe determined (Finding 2).
         jtbd_unclear: D5 shape-entry condition (a).
         well_trodden_step_change: D5 shape-entry condition (b).
+        mechanically_uniform / mechanically_uniform_reason: the only way a resolved L routes
+            spec-dispatch instead of plan; the reason is required, non-blank, and recorded on
+            the sizing as `mechanically_uniform`. Either one alone raises SizingAssembleError.
         premise_provenance: None | "executed" | "read" | "not-applicable" |
             "unrecorded" — where the sizing's underlying mechanism claim
             came from. Advisory only (warn, never block): `read` at a
@@ -1151,6 +1156,15 @@ def route(
     _validate_scope("scope_files", scope_files)
     _validate_scope("scope_lines", scope_lines)
     _refuse_over_cap_scope(scope_files)
+    uniform_reason = (mechanically_uniform_reason or "").strip()
+    if mechanically_uniform and not uniform_reason:
+        raise SizingAssembleError(
+            "--mechanically-uniform needs --mechanically-uniform-reason: a non-empty reason"
+        )
+    if uniform_reason and not mechanically_uniform:
+        raise SizingAssembleError(
+            "--mechanically-uniform-reason needs --mechanically-uniform"
+        )
     scout_evidence = list(scout_evidence or [])
     tier_refusal = suite_tier_refusal(exit_criterion)
     if tier_refusal is not None:
@@ -1235,6 +1249,8 @@ def route(
     if (resized_tshirt in _LARGE_TSHIRTS and jtbd_unclear) or well_trodden_step_change:
         resolved_route = "shape"
         detents.append("scope_boundary_acknowledged")
+    elif resized_tshirt == "L" and mechanically_uniform:
+        resolved_route = "spec-dispatch"
     else:
         resolved_route = _BASE_ROUTE_BY_TSHIRT[resized_tshirt]
 
@@ -1521,6 +1537,11 @@ def route(
         "narration": narration,
         "probe_raise": raise_line,
         "tie_break": tie_break,
+        "mechanically_uniform": (
+            uniform_reason
+            if resized_tshirt == "L" and mechanically_uniform and resolved_route == "spec-dispatch"
+            else None
+        ),
         "next_move": next_move,
         "fire": fire,
         "exit_criterion": exit_criterion_field,
@@ -2020,6 +2041,10 @@ def _write_back(
         from coordinator_core.sizing_assemble.provenance import stamp as _provenance_stamp
 
         text = write_fm_nested_field(text, "provenance", _render_block(_provenance_stamp()))
+        if decision.get("mechanically_uniform"):
+            text = _set_scalar(
+                text, "mechanically_uniform", json.dumps(decision["mechanically_uniform"])
+            )
         if scout_evidence:
             text = _set_scalar(text, "scout_evidence", json.dumps(list(scout_evidence)))
         if doc_consumers is not None:
@@ -2570,6 +2595,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--appetite small|medium|large]\n"
         "    [--express-lane] [--probe-signal collapse|raise] [--jtbd-unclear]\n"
         "    [--well-trodden-step-change]\n"
+        "    [--mechanically-uniform --mechanically-uniform-reason <text>]\n"
         "    [--premise-provenance executed|read|not-applicable|unrecorded]\n"
         "    [--premise-evidence <str>]\n"
         "    [--boundary-in-notch yes|no]\n"
@@ -2775,6 +2801,8 @@ def main(argv: list[str]) -> int:
     probe_signal = None
     jtbd_unclear = False
     well_trodden_step_change = False
+    mechanically_uniform = False
+    mechanically_uniform_reason = None
     premise_provenance = None
     boundary_in_notch = None
     scout_evidence_kind = None
@@ -2923,6 +2951,12 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--name" and i + 1 < len(argv):
             name = argv[i + 1]
+            i += 2
+        elif tok == "--mechanically-uniform":
+            mechanically_uniform = True
+            i += 1
+        elif tok == "--mechanically-uniform-reason" and i + 1 < len(argv):
+            mechanically_uniform_reason = argv[i + 1]
             i += 2
         elif tok == "--precedent" and i + 1 < len(argv):
             precedent = argv[i + 1]
@@ -3289,6 +3323,8 @@ def main(argv: list[str]) -> int:
             probe_signal=probe_signal,
             jtbd_unclear=jtbd_unclear,
             well_trodden_step_change=well_trodden_step_change,
+            mechanically_uniform=mechanically_uniform,
+            mechanically_uniform_reason=mechanically_uniform_reason,
             premise_provenance=premise_provenance,
             boundary_in_notch=boundary_in_notch,
             scout_evidence_kind=scout_evidence_kind,

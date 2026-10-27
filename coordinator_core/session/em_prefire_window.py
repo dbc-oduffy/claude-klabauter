@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core import warp_fire
+from coordinator_core.session import record_homes
 from coordinator_core.session.em_turn_count import READ_CAP, save_state
+
+# Repo-relative, forward-slash form: compared against `_rel()` output, never a filesystem path.
+_REL_WARP = record_homes.home_dir("", "warp").replace(os.sep, "/")
+_REL_SIZINGS = record_homes.home_dir("", "sizings").replace(os.sep, "/")
 
 COUNTED_TOOLS = ("Read", "Grep", "Glob", "Bash")
 OPENING_TEXT_CAP = 8 * 1024
@@ -564,7 +569,9 @@ def run_footprint(repo_root, run_id: object) -> Optional[frozenset]:
     if not isinstance(run_id, str) or not run_id or "/" in run_id or "\\" in run_id:
         return None
     try:
-        man = json.loads((Path(repo_root) / "state" / "warp" / run_id / "manifest.json").read_text(encoding="utf-8"))
+        man = json.loads(
+            (Path(record_homes.record_path(str(repo_root), "warp", run_id)) / "manifest.json").read_text(encoding="utf-8")
+        )
     except (OSError, ValueError):
         return None
     if not isinstance(man, dict):
@@ -591,13 +598,14 @@ def _path_hits_run(token: str, run_id: str, footprint: frozenset, repo_root) -> 
     rel = _rel(token, repo_root)
     if not rel:
         return False
-    if rel.rstrip("/") == "state/warp/" + run_id or rel.startswith("state/warp/" + run_id + "/"):
+    run_rel = _REL_WARP + "/" + run_id
+    if rel.rstrip("/") == run_rel or rel.startswith(run_rel + "/"):
         return True
     suffix = run_id.rsplit("-", 1)[-1]
     base = rel.rsplit("/", 1)[-1]
     if (
         suffix
-        and (rel.startswith("docs/plans/") or rel.startswith("state/sizings/"))
+        and (rel.startswith("docs/plans/") or rel.startswith(_REL_SIZINGS + "/"))
         and re.search(r"-" + re.escape(suffix) + r"\.(md|ya?ml)$", base)
     ):
         return True

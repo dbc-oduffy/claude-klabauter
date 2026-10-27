@@ -855,6 +855,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # signature and the sibling precedents above; if cf467d0abb's author
     # intended a different one, correct it here.
     "git.maintenance":                          "common_dir",
+    # doctor.recover_kept_blobs — common_dir: the handler targets `params["repo_root"]
+    # or the envelope repo_root` and writes loose git objects into that repository's
+    # object store (the git COMMON dir, shared by every worktree), never the worktree.
+    # Same verdict as git.maintenance. BACKFILL: registered in _registry_map.py without
+    # a scope entry, leaving the registration-quad gate RED on HEAD.
+    "doctor.recover_kept_blobs":                "common_dir",
     "tracker.advance_status":                   "common_dir",
     # tracker.fold_observed_set — common_dir, the SAME scope
     # session.boot_sweep itself uses (this op is actuated FROM boot_sweep,

@@ -4440,11 +4440,12 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
         'doe_ref': "86eb0e39a7ca45ceb432de9b3d828d9078f91d3e",
         'reason': (
             "claude-klabauter-first sizing-object 1.48.0 adds optional `provenance` (after 1.47.0's "
-            "`fan_out` xl_exit value); DoE's copy is still 1.46.0 and its own vendor is pending"
+            "`fan_out` xl_exit value); DoE's copy is still 1.46.0 and its own vendor is pending; "
+            "also carries the L `mechanically_uniform` field added by run 04b5ef"
         ),
         'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
         'exempt_paths': frozenset({('properties', 'xl_exit', 'description')}),
-        'local_shape_hash': "b1fdc1dcff177878aedb7929062fe306add58377d62935e20fc91fcd298107b5",
+        'local_shape_hash': "c407cf212d35036c7428883fb3d1259d4a91ed84dfe68858f271bb484d136032",
     },
     'plan-tasks': {
         'doe_ref': "4c2317da8e6f2eeb3b83e606a8dd8ef15ad736fb",

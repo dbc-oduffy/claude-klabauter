@@ -652,8 +652,11 @@ def _launch_all(
     call_stop: Any,
     launch: Optional[Callable[..., Path]],
     approved: bool,
+    sizing_root: Optional[Path] = None,
 ) -> dict:
-    """The rewrite to one launcher script that emits and starts every ready run of an asks submission."""
+    """The rewrite to one launcher script that emits and starts every ready run of an asks submission.
+
+    `sizing_root` is the root the fan-out wrote the child sizings under; each child emit resolves its sizing there."""
     from coordinator_core import warp_live
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
@@ -664,7 +667,7 @@ def _launch_all(
         LaunchChild(
             run_id=r.run_id,
             sizing_rel=r.slice_sizing,
-            emit_params=_child_params(root, tool_input, session_id, r, call_stop, approved),
+            emit_params=_child_params(sizing_root or root, tool_input, session_id, r, call_stop, approved),
         )
         for r in ready
     ]
@@ -855,13 +858,19 @@ def evaluate(
             return deny("PreToolUse", f"The fan-out returned no reply: {fan_reply!r}.")
         if fan_reply.get("error") or fan_reply.get("exit_code") or fan_reply.get("applied") is False:
             return deny("PreToolUse", str(fan_reply.get("error") or "The fan-out was refused."))
-        parent = _read_parent(root, str(fan_reply.get("parent_id")))
+        writer_root = Path(fan_reply["writer_root"]) if isinstance(fan_reply.get("writer_root"), str) else root
+        parent = _read_parent(writer_root, str(fan_reply.get("parent_id")))
         ready = [r for r in (parent.runs if parent else ()) if r.status == "ready"]
         if not ready:
             return deny("PreToolUse", "The fan-out produced no ready run to fire.")
+        unwritten = next((r.slice_sizing for r in ready if not (writer_root / r.slice_sizing).is_file()), None)
+        if unwritten:
+            return deny("PreToolUse", f"The fan-out reported {unwritten} written under {writer_root}, but it is not on disk there.")
         if len(ready) >= 2:
-            return _launch_all(root, payload, fan_reply, ready, call_stop, launch, approved)
+            return _launch_all(root, payload, fan_reply, ready, call_stop, launch, approved, writer_root)
         first = ready[0]
+        # Trap: rebinding moves every later `root` use (cross-repo, live-run, overlap, emit target_root), not only sizing.
+        root = writer_root
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
 
     sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}

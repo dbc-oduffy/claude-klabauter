@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops.dispatch_emit import gate_owed
+from coordinator_core.session import record_homes
 
 ACT = "bug_close"
-BUG_HOME = "state/bug-backlog"
+# Empty repo_root yields the repo-relative home, joined to a root at use.
+BUG_HOME = Path(record_homes.home_dir("", "bug-backlog")).as_posix()
 BUG_ID_RE = re.compile(r"\b[0-9a-f]{12}\b")
 MARKER_PREFIX = "post-commit"
 

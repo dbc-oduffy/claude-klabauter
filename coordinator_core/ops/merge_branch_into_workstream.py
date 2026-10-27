@@ -88,6 +88,7 @@ from coordinator_core.git.git_index import parse_index_identity
 from coordinator_core.git.machine_local_paths import MACHINE_LOCAL_PATHSPEC, machine_local_refusal
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.orphan_branch_sweep import _is_ancestor
+from coordinator_core.session.record_homes import record_path
 
 _PathLike = Union[str, Path, None]
 
@@ -176,7 +177,7 @@ def merge_branch_into_workstream(
             )
         if not stage:
             raise ValueError("branch.merge_into_workstream: `run_id` requires `stage`")
-        if not (Path(repo_root) / "state" / "warp" / run_id).is_dir():
+        if not Path(record_path(str(repo_root), "warp", run_id)).is_dir():
             raise ValueError(
                 f"branch.merge_into_workstream: no run record for run_id {run_id!r}"
             )

@@ -555,7 +555,7 @@ def test_cli_main_scout_evidence_flag(capsys):
 
 @pytest.mark.parametrize(
     "tshirt,expected_route",
-    [("L", "spec-dispatch"), ("XL", "pm-decision"), ("XXL", "goal-setting")],
+    [("L", "plan"), ("XL", "pm-decision"), ("XXL", "goal-setting")],
 )
 def test_premise_unproven_fires_at_large_plan_routed(tshirt, expected_route):
     decision = sa.route(
@@ -588,7 +588,7 @@ def test_premise_not_applicable_fires_at_large_plan_routed():
     decision = sa.route(
         appetite="large", estimate={"tshirt": "L"}, premise_provenance="not-applicable"
     )
-    assert decision["route"] == "spec-dispatch"
+    assert decision["route"] == "plan"
     assert "premise_not_applicable" in decision["detents"]
 
 
@@ -904,12 +904,10 @@ def test_absent_appetite_sets_post_size_prompt_pending_at_xl():
     assert "post_size_prompt_pending" in decision["detents"]
 
 
-@pytest.mark.parametrize(
-    "tshirt,expected_route", [("M", "plan"), ("L", "spec-dispatch")]
-)
-def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt, expected_route):
+@pytest.mark.parametrize("tshirt,route", [("M", "plan"), ("L", "plan")])
+def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt, route):
     decision = sa.route(estimate={"tshirt": tshirt})
-    assert decision["route"] == expected_route
+    assert decision["route"] == route
     assert "post_size_prompt_pending" not in decision["detents"]
     assert "?" not in decision["next_move"]
     assert "coordinator:engine-ask" in decision["next_move"]
@@ -926,7 +924,7 @@ def test_absent_appetite_sets_post_size_prompt_pending_at_xl_and_above(tshirt):
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 @pytest.mark.parametrize("tshirt", ["M", "L"])
 def test_absent_appetite_drops_post_size_prompt_where_engine_skips_acceptance(tshirt, mode):
-    # A plan-route M/L goes straight to execution in every mode, so nothing asks the PM.
+    # A plan- or spec-dispatch-routed M/L goes straight to execution in every mode, so nothing asks the PM.
     decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode=mode)
     assert sa.sizing_acceptance_skipped(decision["route"], tshirt)
     assert "post_size_prompt_pending" not in decision["detents"]
@@ -1275,7 +1273,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # Moved 1.42.0 -> 1.43.0: DoE e6fe40b3cc reconciles both 1.42.0 lines.
     # Moved 1.43.0 -> 1.44.0: claude-klabauter-first optional `design_route`; DoE landed the same bytes at 91f02d8ae1.
     # Moved 1.44.0 -> 1.45.0: claude-klabauter-first `xxl_infra_check_owed` detent; DoE copy pending.
-    assert schema["x-schema-version"] == "1.45.0"
+    # Moved 1.45.0 -> 1.46.0: optional `tie_break`; 1.46.0 -> 1.47.0: `fan_out` joins `xl_exit`.
+    assert schema["x-schema-version"] == "1.47.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1695,8 +1694,8 @@ def test_substrate_condition_raise_is_not_applied():
     )
     assert out["resolved_estimate"]["tshirt"] == "L"
     assert "probe_raise_on_substrate_condition" in out["detents"]
-    # The whole point: L routes to spec-dispatch, XL would have routed to pm-decision.
-    assert out["route"] == "spec-dispatch"
+    # The whole point: L routes to plan, XL would have routed to pm-decision.
+    assert out["route"] == "plan"
     assert "route_boundary_crossed" not in out["detents"]
 
 
@@ -1772,7 +1771,7 @@ def test_shipped_before_precedent_fires_and_names_the_discharge():
     assert "precedent_shipped_before" in out["detents"]
     assert "SHIPPED IN THIS REPO BEFORE" in out["next_move"]
     # Advisory only — never touches the route (module negative-spec).
-    assert out["route"] == "spec-dispatch"
+    assert out["route"] == "plan"
 
 
 def test_novel_precedent_fires_nothing():
@@ -1914,8 +1913,8 @@ def test_breadth_raise_is_not_applied():
     assert out["resolved_estimate"]["tshirt"] == "L"
     assert "probe_raise_on_breadth" in out["detents"]
     assert "probe_raise_on_substrate_condition" not in out["detents"]
-    # The whole point: L routes to spec-dispatch, XL would have routed to pm-decision.
-    assert out["route"] == "spec-dispatch"
+    # The whole point: L routes to plan, XL would have routed to pm-decision.
+    assert out["route"] == "plan"
     assert "route_boundary_crossed" not in out["detents"]
 
 

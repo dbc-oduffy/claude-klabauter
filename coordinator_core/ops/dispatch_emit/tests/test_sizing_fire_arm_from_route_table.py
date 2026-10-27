@@ -50,7 +50,21 @@ def test_arms_per_size():
         "XS": sf.ARM_XS,
         "S": sf.ARM_S,
         "M": sf.ARM_M_PLUS,
-        "L": sf.ARM_S,
+        "L": sf.ARM_M_PLUS,
         "XL": sf.ARM_M_PLUS,
         "XXL": sf.ARM_M_PLUS,
     }
+
+
+def test_l_default_arm_is_m_plus_from_the_table():
+    assert _BASE_ROUTE_BY_TSHIRT["L"] == "plan"
+    assert sf._TSHIRT_ARM["L"] == sf.ARM_M_PLUS
+
+
+def test_l_recorded_spec_dispatch_still_fires_arm_s():
+    assert sf.resolve_arm(_sizing("L", "spec-dispatch")) == sf.ARM_S
+
+
+@pytest.mark.parametrize("tshirt", ["M", "XL", "XXL"])
+def test_recorded_spec_dispatch_moves_only_l_to_arm_s(tshirt):
+    assert sf.resolve_arm(_sizing(tshirt, "spec-dispatch")) == sf.ARM_M_PLUS

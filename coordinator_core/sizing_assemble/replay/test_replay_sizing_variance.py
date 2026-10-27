@@ -60,7 +60,7 @@ def test_route_replay_is_deterministic(reps):
     assert captured == {"XS", "S", "M"}
     outcomes = {_routed(t, **scope) for t in sorted(captured)}
     assert len(outcomes) == 1, f"one scope yielded {sorted(outcomes)} across scout estimates"
-    assert outcomes == {("L", "spec-dispatch")}
+    assert outcomes == {("L", "plan")}
 
 
 def test_route_replay_without_scope_still_diverges(reps):

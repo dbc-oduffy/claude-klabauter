@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Dict, Iterable, List, Optional
 
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import CallerFacingValidationError, register_op
+from coordinator_core.session import record_homes
 
 if TYPE_CHECKING:
     from coordinator_core.ops.doctor import Layer
@@ -74,7 +75,7 @@ def _run_status(run_dir: Path) -> Optional[str]:
 def _kept_entries(repo: Path) -> List[tuple]:
     """(run, kind, path, sha, landed) for every blob named by a kept.json."""
     items: List[tuple] = []
-    for kept in sorted((repo / "state" / "warp").glob("*/kept.json")):
+    for kept in sorted(Path(record_homes.home_dir(str(repo), "warp")).glob("*/kept.json")):
         try:
             doc = json.loads(kept.read_text(encoding="utf-8"))
         except (OSError, ValueError):

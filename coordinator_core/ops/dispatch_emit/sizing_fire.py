@@ -197,10 +197,9 @@ def resolve_arm(sizing: Mapping) -> str:
         raise SizingFireRefused(
             [f"`estimate.tshirt` is {tshirt!r} — expected one of {sorted(_TSHIRT_ARM)}"]
         )
-    # An M-and-above sizing that recorded plan fires m_plus: L sizings written before the table
-    # routed L to spec-dispatch still carry plan, and must keep refiring.
-    if tshirt not in ("XS", "S") and effective_route(sizing) == ARM_ROUTE[ARM_M_PLUS]:
-        arm = ARM_M_PLUS
+    # L's table route is `plan`; a recorded `spec-dispatch` is the one route that moves it to arm S.
+    if tshirt == "L" and sizing.get("route") == ARM_ROUTE[ARM_S]:
+        arm = ARM_S
     if arm == ARM_M_PLUS and tshirt in ("XL", "XXL") and effective_route(sizing) == _ROADMAP_EXIT:
         return ARM_ROADMAP
     return arm

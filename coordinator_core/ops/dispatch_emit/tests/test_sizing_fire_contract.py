@@ -22,10 +22,10 @@ def _sizing(tshirt="S", route="spec-dispatch", **over):
 
 @pytest.mark.parametrize(
     "tshirt,arm",
-    [("XS", "xs"), ("S", "s"), ("M", "m_plus"), ("L", "s"), ("XL", "m_plus"), ("XXL", "m_plus")],
+    [("XS", "xs"), ("S", "s"), ("M", "m_plus"), ("L", "m_plus"), ("XL", "m_plus"), ("XXL", "m_plus")],
 )
 def test_tshirt_maps_to_arm(tshirt, arm):
-    assert sf.resolve_arm(_sizing(tshirt)) == arm
+    assert sf.resolve_arm(_sizing(tshirt, route=sf.ARM_ROUTE[arm])) == arm
 
 
 def test_unknown_tshirt_refuses():

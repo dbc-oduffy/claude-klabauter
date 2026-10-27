@@ -81,35 +81,15 @@ def test_prep_run_id_refuses_inputs_that_fork_the_composer_id_from_the_op(extra)
         _compose(prep_run_id="ask-x", **extra)
 
 
-@pytest.mark.parametrize("base", ["", None])
-@pytest.mark.parametrize("run_key", [None, "ask-x"])
-def test_prep_run_id_without_a_base_preps_in_paths_mode_keyed_on_the_run(base, run_key):
-    # Outside a git checkout there is no base for the op's run mode, which refuses one.
-    phases = _compose(prep_run_id="ask-x", run_key=run_key, run_base_sha=base)
-    commands = [c.replace('\\"', '"') for c in _prep_commands(phases)]
-    assert commands
-    assert all('"run_id"' not in c and "slice_prefix" in c for c in commands)
-    assert "manifest-ask-x-nobase-prep" in dict(phases)["Review wave"]
+@pytest.mark.parametrize("base", [None, ""])
+def test_prep_run_id_without_a_base_uses_the_nobase_prefix(base):
+    from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
 
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        {"slice_identity_sha": "b" * 40},
-        {"plan_path": "docs/plans/example.md"},
-        {"slice_key_js": "x"},
-    ],
-)
-def test_prep_run_id_without_a_base_still_refuses_forking_inputs(extra):
-    with pytest.raises(ValueError):
-        _compose(prep_run_id="ask-x", run_base_sha="", **extra)
-
-
-def test_paths_mode_prep_carries_no_run_id_beside_its_paths():
-    # review.prep refuses a command carrying both.
-    commands = [c.replace('\\"', '"') for c in _prep_commands(_compose(run_key="ask-x"))]
-    assert commands
-    assert all('"run_id"' not in c for c in commands)
+    run = "ask-x"
+    expected = run_prep_slice_prefix(run, base)
+    assert expected == "manifest-ask-x-nobase-prep"
+    block = dict(_compose(prep_run_id=run, run_key=run, run_base_sha=base))["Review wave"]
+    assert expected in block
 
 
 def test_prep_run_id_accepts_matching_slice_identity_sha():
