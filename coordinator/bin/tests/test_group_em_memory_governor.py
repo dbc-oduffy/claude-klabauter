@@ -228,6 +228,21 @@ def test_noticed_harness_process_stays_protected(tmp_path):
     assert _crit(PROCS, path)[1][0][0] == (60,)
 
 
+# Freezing a store owner mid-write stalls or half-applies every client's write (fifa-stats pid 70608).
+STORE_OWNERS = [
+    r"C:\Program Files\nodejs\node.exe --import tsx E:\fifa-stats\packages\ddct\adapters\master\owner.ts E:\fifa-stats\.ddct\pglite",  # abs-path-ok: the exact command line the governor froze
+    "postgres -D /var/lib/postgresql/data",
+    "/usr/sbin/mysqld --basedir=/usr",
+    "node --import tsx ./pglite-server.ts",
+    "sqlite3 ./app.db",
+]
+
+
+@pytest.mark.parametrize("cmd", STORE_OWNERS)
+def test_store_and_database_owners_are_never_candidates(cmd):
+    assert not gov.is_candidate(P(70608, 1, 5, 302, cmd), self_pid=999)
+
+
 def test_tail_read_is_bounded_and_drops_the_cut_line(tmp_path):
     old = '{"phase":"START","pids":[70]}'
     pad = '{"phase":"END","pids":[],"note":"' + "x" * 200 + '"}'

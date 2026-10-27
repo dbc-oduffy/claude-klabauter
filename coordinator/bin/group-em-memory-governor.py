@@ -70,6 +70,9 @@ PROTECTED_HARD = re.compile(
     r"(?:^|/)claude(?:\.exe)?(?:\s|$)|tsserver|language-server|firebase"
     r"|deploy-from-snapshot|deploy:"
     r"|scratch/deploy-|group-em-memory-governor|(?:^|[/\\])conhost(?:\.exe)?(?:\s|$)"
+    # Store and database owners: freezing one mid-write stalls or half-applies every client's write.
+    r"|(?:^|[/\\])owner\.ts\b|pglite|(?:^|[/\\\s])postgres(?:\.exe)?\b|\bmysqld\b|\bmongod\b"
+    r"|\bredis-server\b|\bsqlite3?(?:\.exe)?\b"
 )
 EXAMPLE_RETRIEVAL_REPO = re.compile(r"project_rag")
 MIN_RSS_MB = 300
