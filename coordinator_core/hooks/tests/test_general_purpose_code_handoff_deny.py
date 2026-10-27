@@ -1,4 +1,4 @@
-"""general_purpose_code_handoff_deny: a top-level general-purpose code-edit handoff is refused."""
+"""general_purpose_code_handoff_deny: a top-level general-purpose/fork code handoff is advisory only."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from coordinator_core.hooks import general_purpose_code_handoff_deny as mod
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 
 CODE_PROMPT = "Edit coordinator_core/hooks/foo.py to fix the off-by-one in parse()."
+SCOUT_PROMPT = "Read coordinator_core/hooks/foo.py and report how parse() works. Change no file."
 
 
 def _payload(prompt: str = CODE_PROMPT, subagent_type=None, **extra) -> dict:
@@ -25,32 +26,50 @@ def _call(payload: dict):
 
 
 @pytest.fixture
+def gate_alone(monkeypatch):
+    """The gate with its sibling and later legs silenced, so only this guard speaks."""
+    from coordinator_core.hooks import hand_dispatch_deny, unsized_writer_dispatch_deny
+
+    monkeypatch.setattr(hand_dispatch_deny, "hand_dispatch_deny", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        unsized_writer_dispatch_deny, "unsized_writer_dispatch_deny", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(gate, "_gate_legs", lambda *_a, **_k: None)
+    monkeypatch.setattr(machine_profile, "guard_level", lambda _name: "strict")
+
+
+@pytest.fixture
 def strict(monkeypatch):
     monkeypatch.setattr(machine_profile, "guard_level", lambda _name: "strict")
 
 
-def _decision(out) -> str:
-    return out["hookSpecificOutput"]["permissionDecision"]
+def _hso(out) -> dict:
+    return out["hookSpecificOutput"]
 
 
 @pytest.mark.parametrize("stype", [None, "general-purpose"])
-def test_untyped_code_edit_handoff_is_denied_naming_executor(strict, stype):
-    out = _call(_payload(subagent_type=stype))
-    assert _decision(out) == "deny"
-    assert "coordinator:executor" in out["hookSpecificOutput"]["permissionDecisionReason"]
+def test_untyped_code_edit_handoff_is_allowed_with_executor_advice(strict, stype):
+    hso = _hso(_call(_payload(subagent_type=stype)))
+    assert hso["permissionDecision"] == "allow"
+    assert "coordinator:executor" in hso["additionalContext"]
 
 
-def test_fork_code_edit_handoff_is_denied_naming_sonnet_lane(strict):
-    out = gate.check(_payload(subagent_type="fork"))
-    assert _decision(out) == "deny"
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "coordinator:executor" in reason
-    assert "scratch" in reason
+def test_fork_code_edit_handoff_is_allowed_naming_sonnet_lane(gate_alone):
+    hso = _hso(gate.check(_payload(subagent_type="fork")))
+    assert hso["permissionDecision"] == "allow"
+    assert "coordinator:executor" in hso["additionalContext"]
+    assert "scratch" in hso["additionalContext"]
 
 
-def test_general_purpose_refusal_names_scratch_forensics_lane(strict):
+@pytest.mark.parametrize("stype", [None, "general-purpose", "fork"])
+def test_read_only_scout_naming_code_path_is_never_denied(gate_alone, stype):
+    out = gate.check(_payload(SCOUT_PROMPT, subagent_type=stype))
+    assert out is None or _hso(out)["permissionDecision"] != "deny"
+
+
+def test_general_purpose_advice_names_scratch_forensics_lane(strict):
     out = _call(_payload(subagent_type="general-purpose"))
-    assert "scratch" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "scratch" in _hso(out)["additionalContext"]
 
 
 @pytest.mark.parametrize(
@@ -65,9 +84,9 @@ def test_nested_fork_passes(strict):
     assert _call(_payload(subagent_type="fork", agent_id="a1")) is None
 
 
-def test_gate_check_denies_before_roster(strict):
+def test_gate_check_never_denies_code_handoff(gate_alone):
     out = gate.check(_payload())
-    assert _decision(out) == "deny"
+    assert _hso(out)["permissionDecision"] == "allow"
 
 
 def test_typed_executor_passes(strict):
@@ -103,9 +122,14 @@ def test_doc_data_extensions_never_count_as_code():
     assert not (mod._CODE_EXTENSIONS & _DOC_DATA_EXTENSIONS)
 
 
+def test_off_level_silences_advisory(monkeypatch):
+    monkeypatch.setattr(machine_profile, "guard_level", lambda _name: "off")
+    assert _call(_payload()) is None
+
+
 def test_warn_level_returns_allow_with_context(monkeypatch):
     monkeypatch.setattr(machine_profile, "guard_level", lambda _name: "warn")
-    hso = _call(_payload())["hookSpecificOutput"]
+    hso = _hso(_call(_payload()))
     assert hso["permissionDecision"] == "allow"
     assert hso["additionalContext"]
 

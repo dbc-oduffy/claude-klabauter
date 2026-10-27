@@ -1,9 +1,9 @@
 """coordinator_core.hooks.general_purpose_code_handoff_deny -- the main loop's handoff of a code
-edit to an untyped ``general-purpose`` agent is refused.
+edit to an untyped ``general-purpose`` or ``fork`` agent draws advisory context, never a deny.
 
-Purpose: leaf of ``hooks.block_unenumerated_agent_type.check``. An EM denied a product-code write
-must route the edit to a typed executor, never to the harness default agent.
-Invariant: no module-scope import beyond stdlib, ``hooks._envelope`` and
+Purpose: leaf of ``hooks.block_unenumerated_agent_type.check``. A code-edit handoff should reach a
+typed executor; a read-only scout naming a code path is allowed through.
+Invariant: no module-scope import beyond stdlib and
 ``hooks.doc_data_extensions`` (``test_fleet_mode_reader_set.py`` counts every import edge into the
 guard closure). ``GUARD_NAME`` is the code-dispatch guard's own name, so both share one level.
 
@@ -16,7 +16,6 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Optional
 
-from coordinator_core.hooks._envelope import deny
 from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 
 GUARD_NAME = "nudge-em-code-dispatch"
@@ -36,16 +35,16 @@ _CODE_PATH = re.compile(r"(?<![\w./:@-])((?:[\w.-]+/)*[\w-][\w.-]*(\.[A-Za-z0-9]
 FORK_TYPE = "fork"
 _DEFERRED_TYPES = frozenset({GENERAL_PURPOSE_TYPE, FORK_TYPE})
 _REASON = (
-    "Code edits go to a typed executor: dispatch subagent_type coordinator:executor "
-    "with the file and the change in its brief; general-purpose is untyped and unguarded. "
+    "If this brief changes a file, dispatch subagent_type coordinator:executor with the file "
+    "and the change in its brief; general-purpose is untyped and unguarded. "
     "coordinator:executor (Sonnet) is also the lane for scratch-only forensics "
-    "(scratch/ writes, git hash-object -w)."
+    "(scratch/ writes, git hash-object -w). A read-only scout needs no reroute."
 )
 _FORK_REASON = (
-    "A fork inherits the parent model (Opus) and ignores a model override, so it is not a "
-    "route around the tier rule: dispatch subagent_type coordinator:executor (Sonnet) with "
-    "the file and the change in its brief. coordinator:executor also covers scratch-only "
-    "forensics (scratch/ writes, git hash-object -w)."
+    "If this brief changes a file: a fork inherits the parent model (Opus) and ignores a model "
+    "override, so dispatch subagent_type coordinator:executor (Sonnet) with the file and the "
+    "change in its brief. coordinator:executor also covers scratch-only forensics "
+    "(scratch/ writes, git hash-object -w). A read-only scout needs no reroute."
 )
 
 
@@ -63,8 +62,9 @@ def general_purpose_code_handoff_deny(
 ) -> Optional[dict]:
     """None unless a top-level general-purpose or fork Agent dispatch hands over a code edit.
 
-    The prompt must name a code-extension path and carry an edit verb; the deny goes through
-    ``apply_guard_level`` so the guard level governs it.
+    The prompt must name a code-extension path and carry an edit verb. The result is always an
+    ``allow`` with ``additionalContext`` (a read-only scout is legitimate and the guard cannot
+    tell it from an edit); only guard level ``off`` silences it.
     """
     if (
         payload.get("tool_name") != "Agent"
@@ -76,7 +76,14 @@ def general_purpose_code_handoff_deny(
     prompt = tool_input.get("prompt") if isinstance(tool_input, Mapping) else None
     if not isinstance(prompt, str) or not _EDIT_VERB.search(prompt) or not _names_code_path(prompt):
         return None
-    from coordinator_core.machine_profile import apply_guard_level
+    from coordinator_core.machine_profile import guard_level
 
-    return apply_guard_level(GUARD_NAME, deny("PreToolUse", _FORK_REASON if subagent_type == FORK_TYPE else _REASON)
-    )
+    if guard_level(GUARD_NAME) == "off":
+        return None
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": _FORK_REASON if subagent_type == FORK_TYPE else _REASON,
+        }
+    }

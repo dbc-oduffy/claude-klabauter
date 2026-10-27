@@ -2250,8 +2250,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "06dbb1273f3c36fdb6be08767ec75e73c71630e7",
-    "coordinator_core/_engine_published_at": "b198313d18458a0aaa71585cbc0a44aa53a83320",
-    "coordinator_core/_engine_stamp": "4c1e7d856aa5ff4eb002df762e12b58b80df05ac",
+    "coordinator_core/_engine_published_at": "51a3f977388c2565d6a1e9e95d0c3b532dbabd4f",
+    "coordinator_core/_engine_stamp": "7c97121a6893b82ff63197cf6c20a80be5b904ed",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -3958,7 +3958,7 @@
     "coordinator_core/hooks/fixtures/em_poll_transcript_tail.jsonl": "1632b7bd20c062c93b6206ff5348e0e2347a42ee",
     "coordinator_core/hooks/flag_em_poll_in_flight.py": "bb08cedcc6a65b7ce89a25d7cdffd6782c702011",
     "coordinator_core/hooks/foreign_path_filter.py": "fb109d4c9c758c2ff1b4895b35ba6d454544a810",
-    "coordinator_core/hooks/general_purpose_code_handoff_deny.py": "bb212cf351cfbd57d9b1379ba6d37d25015bf78c",
+    "coordinator_core/hooks/general_purpose_code_handoff_deny.py": "9a77be258f7d93c31254335f59fd83308338db04",
     "coordinator_core/hooks/group_em_autofire.py": "0c3477efd27e8518495d5c759d39dfbecb62e155",
     "coordinator_core/hooks/group_em_park_spool.py": "c1b1c67913fab7ba3d6d58a48eb1a6f5d67b4ac8",
     "coordinator_core/hooks/guard_agent_route_admission.py": "983999aeabe25ab14801ef533182806f64fe5677",
@@ -4149,7 +4149,7 @@
     "coordinator_core/hooks/tests/test_example_retrieval_repo_detect_message_text.py": "45f9c9ed08d105bd731c8c49b248ccce452be1b0",
     "coordinator_core/hooks/tests/test_fleet_mode_reaches_the_hooks.py": "803a2fc9ca0ff03b32f7dc23fb9a7c58626ea6c2",
     "coordinator_core/hooks/tests/test_forwarder_identity_windows.py": "ab09c49427d92e114fbe4af4a021e8e52058d154",
-    "coordinator_core/hooks/tests/test_general_purpose_code_handoff_deny.py": "2e3d6e229f1366ce449a842d29012b01b3624ce0",
+    "coordinator_core/hooks/tests/test_general_purpose_code_handoff_deny.py": "89d476db8ee8654c7f0ea6e0072133631c8d76cc",
     "coordinator_core/hooks/tests/test_guard_agent_route_admission.py": "19383a108532c8bc68f09c347cbe1387ab967b17",
     "coordinator_core/hooks/tests/test_guard_brief_prescribed_method.py": "4f6febbba2df4a9604a00a3d01f1c405b68a83fa",
     "coordinator_core/hooks/tests/test_guard_editor_python_direct.py": "88c5b63728de3bd58542aa1955ca92bd6115a037",
@@ -9967,5 +9967,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "9c1d21540f8479e2b31770b58988ab4b7d198d1d"
+  "source_head": "7d94386b3114b4fcd7317c2562a69a6ad6d11f85"
 }
