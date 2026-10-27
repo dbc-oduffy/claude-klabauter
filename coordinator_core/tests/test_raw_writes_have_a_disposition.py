@@ -317,6 +317,13 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/git/store_hygiene.py': ('git-internal', 'daily-tier claim file created exclusively under <git-common-dir>/coordinator/store-hygiene.claim: _claim'),
     'coordinator_core/install/runtime_ignore_apply.py': ('in-repo-non-state', 'runtime-ignore rule block appended to the repo .gitignore, never state/: _append_rules'),
     'coordinator_core/ops/dispatch_emit/ask_stage_receipt.py': ('in-repo-non-state', 'stage claim exclusive-create and stage-receipt.json under the tracked record dir state/warp/<run_id>/: claim, write'),
+    'coordinator_core/ops/dispatch_emit/ask_stage_blocks.py': ('in-repo-non-state', 'ask-stage block text written under the run scratch/record dir by _write'),
+    'coordinator_core/ops/dispatch_emit/combined_landing.py': ('git-internal', 'throwaway index file under the absolute git dir, created and unlinked in the same call'),
+    'coordinator_core/ops/dispatch_emit/terminal_commit_closeout.py': ('in-repo-non-state', 'mkdir of the sizing-ledger and run-record dirs; bytes go through atomic_append.append_line and replace_text'),
+    'coordinator_core/ops/dispatch_emit/terminal_commit_ledger.py': ('in-repo-non-state', 'verdicts section appended to the run note, committed with the run'),
+    'coordinator_core/ops/dispatch_emit/terminal_commit_stamp.py': ('in-repo-non-state', 'regenerated publish allowlist under coordinator/, committed with the run; move rollback via os.replace'),
+    'coordinator_core/ops/dispatch_emit/held_revisions.py': ('claims-explicitly', 'held-revision store jsonl appended under the run record dir, declared through declare_write: _append'),
+    'coordinator_core/ops/review_reverify.py': ('claims-explicitly', 'reverify and probe records under the gitignored subagent-share pre-review dir, rewritten paths declared through declare_write: os.replace, atomic_write_bytes'),
     'coordinator_core/ops/dispatch_emit/run_credit.py': ('claims-explicitly', 'credit.jsonl appended under the run dir, declared through declare_write: record'),
     'coordinator_core/ops/dispatch_emit/pipeline_run.py': ('claims-explicitly', 'revisions.md appended under the run scratch dir, declared through declare_write: append_revision'),
     'coordinator_core/ops/fleet/scratch_hygiene.py': ('ignored-target', 'sweep cursor tmp + os.replace under the gitignored scratch/ dir: _write_cursor'),
@@ -414,6 +421,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/async_hook_status.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: record_failure'),
     'coordinator_core/authz/classification.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: <module-level>'),
     'coordinator_core/authz/token.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_tokens'),
+    'coordinator_core/authz/landing_waiver.py': ('outside-repo', 'G-EM landing-waiver records and their consume rename under <settings-home>/state/group-em/landing-waivers/<sid>/, never the repo tree: record_waiver, consume'),
     'coordinator_core/backlog_grind_assemble/grind_rows.py': ('claims-explicitly', 'claim token in _declare_under_repo_root: rows, run records and the ledger under state/queue-grind stay raw (temp file + os.replace, one appended line) because the claim must anchor on the verb\'s --repo-root via a nested recording scope; the seam claims on the ambient cwd, which a dispatched agent rarely shares with its target repo'),
     'coordinator_core/bash_guards/_alternative_liveness.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: <module-level>, _trigger_destructive_git_revert, _trigger_destructive_git_revert_advisory, _trigger_host_subagent_policy_guard'),
     'coordinator_core/bash_guards/agent_process_ownership.py': ('outside-repo', 'append-only per-session agent command ledger under settings_home() state: record_agent_command (os.open O_APPEND, 0o600); never raises'),
@@ -891,7 +899,11 @@ def _evaluate(
     root: pathlib.Path,
     register: Dict[str, Tuple[str, str]],
     ceiling: FrozenSet[str],
+    head: Optional[Tuple[FrozenSet[str], FrozenSet[str]]] = None,
 ) -> List[str]:
+    """`head` is (paths tracked at HEAD, paths dirty vs HEAD). A register row whose
+    path is absent at HEAD, or dirty vs HEAD and no longer matching, is not a violation:
+    both the HEAD export and the shared tree stay green. None means strict."""
     violations: List[str] = []
     found = scan_raw_writers(root)
     found_set = set(found)
@@ -910,6 +922,8 @@ def _evaluate(
             violations.append(f"blank reason: {rel}")
 
     for rel in register:
+        if head is not None and (rel not in head[0] or rel in head[1]):
+            continue
         target = root / rel
         if not target.is_file():
             violations.append(f"stale entry (file gone): {rel}")
@@ -919,6 +933,8 @@ def _evaluate(
 
     for rel, (category, _reason) in register.items():
         if category != "claims-explicitly":
+            continue
+        if head is not None and (rel not in head[0] or rel in head[1]):
             continue
         target = root / rel
         if not target.is_file():
@@ -939,8 +955,30 @@ def _evaluate(
     return violations
 
 
+def _head_state(root: pathlib.Path) -> Optional[Tuple[FrozenSet[str], FrozenSet[str]]]:
+    import subprocess
+
+    def _git(*args: str) -> Optional[List[str]]:
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(root), "--no-optional-locks", *args],
+                capture_output=True, text=True, timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout.split("\n") if r.returncode == 0 else None
+
+    tracked = _git("ls-tree", "-r", "--name-only", "HEAD", "--", "coordinator_core")
+    dirty = _git("diff", "--name-only", "HEAD", "--", "coordinator_core")
+    if tracked is None or dirty is None:
+        return None
+    return frozenset(tracked), frozenset(dirty)
+
+
+@pytest.mark.spawns_process
 def test_the_live_gate_is_green():
-    violations = _evaluate(_REPO_ROOT, _DISPOSITIONS, _TO_FIX_CEILING)
+    violations = _evaluate(_REPO_ROOT, _DISPOSITIONS, _TO_FIX_CEILING, _head_state(_REPO_ROOT))
     assert violations == [], (
         "The disposition gate is RED. Every raw-writing module needs a rule "
         "or a _DISPOSITIONS entry (category, reason). See this file's module "
@@ -1250,6 +1288,16 @@ def test_a_conftest_is_never_scanned(tmp_path):
     assert scan_raw_writers(tmp_path) == []
 
 
+def test_a_register_row_absent_at_head_or_dirty_is_not_a_violation(tmp_path):
+    _write(tmp_path, "coordinator_core/migrated.py", "def x():\n    return 1\n")
+    register = {
+        "coordinator_core/migrated.py": ("in-repo-non-state", "no longer a raw writer"),
+        "coordinator_core/ghost.py": ("in-repo-non-state", "absent at HEAD"),
+    }
+    assert _evaluate(tmp_path, register, frozenset(), (frozenset({"coordinator_core/migrated.py"}), frozenset({"coordinator_core/migrated.py"}))) == []
+    clean = _evaluate(tmp_path, register, frozenset(), (frozenset({"coordinator_core/migrated.py"}), frozenset()))
+    assert any("stale entry (no raw token): coordinator_core/migrated.py" in v for v in clean)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
-

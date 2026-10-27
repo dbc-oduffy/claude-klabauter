@@ -69,7 +69,8 @@ EM_RULE_KEY = "em_rule"
 # The one rule for when the EM may act after a halt; the halt next_action and the EM halted-run guards emit it verbatim (same text, no paraphrase).
 EM_ACTION_AFTER_HALT_RULE = (
     "After a halt the EM acts only through the engine: a refire, workflow.revise or credit is engine-forced, "
-    "never EM hand-work. A hand commit of the run's withheld paths is not."
+    "never EM hand-work. A hand commit of the run's withheld paths is not, unless a live G-EM recorded a "
+    "landing waiver covering those paths (python -m coordinator_core.authz.landing_waiver record); ask the G-EM."
 )
 
 

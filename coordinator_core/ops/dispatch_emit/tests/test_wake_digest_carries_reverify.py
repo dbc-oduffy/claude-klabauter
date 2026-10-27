@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import emit, wake_digest
-from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_KEY
+from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_KEY
 
 _BASE = {
     "prep": "_reviewPrep",

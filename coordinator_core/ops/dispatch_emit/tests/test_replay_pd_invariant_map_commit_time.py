@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit import landing_targeted_tests
+from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import retest_targeted
 
 pytestmark = pytest.mark.spawns_process
@@ -132,9 +134,9 @@ def _write_verdict(repo: Path, tests: list[str], status: str = "pass") -> None:
     _git(repo, "add", "-A")
     record = {
         "run_id": RUN_ID, "head": _head(repo), "tests": tests,
-        "covered": li.landing_fingerprint(repo, ["test_a.py"]), "status": status,
+        "covered": landing_retest.landing_fingerprint(repo, ["test_a.py"]), "status": status,
     }
-    path = li.fresh_verdict_path(repo, RUN_ID)
+    path = landing_retest.fresh_verdict_path(repo, RUN_ID)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record), encoding="utf-8")
 
@@ -149,7 +151,7 @@ def test_landing_refuses_a_touched_invariant_no_retest_ran(repo):
     _write_verdict(repo, ["test_a.py"])
     found = li.invariant_findings(repo, ["state/apm-rulings/x.md"], RUN_ID, {})
     assert [f.path for f in found] == [MACHINERY]
-    assert found[0].reason == li.TARGETED_TESTS_FAILED
+    assert found[0].reason == landing_targeted_tests.TARGETED_TESTS_FAILED
 
 
 def test_landing_accepts_when_the_fresh_retest_ran_the_invariant(repo):

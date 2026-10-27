@@ -178,6 +178,7 @@ def test_a_malformed_withhold_paths_refuses_before_any_write(repo):
 
 def test_a_landing_trailer_and_reply_name_the_run_deleted_targets(repo):
     from coordinator_core.ops.dispatch_emit import landing_integrity
+    from coordinator_core.ops.dispatch_emit import landing_retest
 
     _write(repo, "test_gone.py", "def test_g():\n    pass\n")
     _git(["add", "test_gone.py"], repo)
@@ -187,7 +188,7 @@ def test_a_landing_trailer_and_reply_name_the_run_deleted_targets(repo):
     _git(["commit", "-q", "-m", "delete"], repo)
     record = {"run_id": RUN, "head": _git(["rev-parse", "HEAD"], repo).strip(), "status": "no-tests", "tests": [],
               "tests_run": 0, "dropped": ["test_gone.py"], "covered": {}}
-    path = landing_integrity.fresh_verdict_path(repo, RUN)
+    path = landing_retest.fresh_verdict_path(repo, RUN)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record), encoding="utf-8")
     _author(repo, "a.py", "a = 1\n")

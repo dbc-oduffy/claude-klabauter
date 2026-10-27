@@ -118,6 +118,7 @@ def _run_deleted_target(root) -> dict:
     import json
 
     from coordinator_core.ops.dispatch_emit import landing_integrity
+    from coordinator_core.ops.dispatch_emit import landing_retest
 
     (root / "test_gone.py").write_text("def test_g():\n    pass\n", encoding="utf-8")
     _git(["add", "test_gone.py"], root)
@@ -127,7 +128,7 @@ def _run_deleted_target(root) -> dict:
     _git(["commit", "-q", "-m", "delete"], root)
     record = {"run_id": RUN, "head": _git(["rev-parse", "HEAD"], root).strip(), "status": "no-tests", "tests": [],
               "tests_run": 0, "dropped": ["test_gone.py"], "covered": {}}
-    path = landing_integrity.fresh_verdict_path(root, RUN)
+    path = landing_retest.fresh_verdict_path(root, RUN)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record), encoding="utf-8")
     return {"run_base_sha": base}

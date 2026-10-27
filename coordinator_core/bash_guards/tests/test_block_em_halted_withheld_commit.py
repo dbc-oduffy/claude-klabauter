@@ -264,3 +264,83 @@ def test_real_git_staged_withheld_path_denied_then_clean_passes(repo):
     git("reset", "-q")
     git("add", "b.py")
     assert _verdict(repo, "git commit -m x") is None
+
+
+@pytest.fixture
+def gem(repo, tmp_path, monkeypatch):
+    from coordinator_core.authz import landing_waiver as lw
+    from coordinator_core.group_em import nomination, session_registry
+
+    records = tmp_path / "group-em"
+    records.mkdir()
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
+    monkeypatch.setattr(nomination, "is_live", lambda rec: nomination.LivenessResult(True, "live"))
+    monkeypatch.setattr(
+        session_registry,
+        "read_rows",
+        lambda directory=None: [
+            session_registry.RegistryRow(session_id="sid-g", name="g", pid=1, cwd=str(repo), status="")
+        ],
+    )
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-g")
+    nomination.claim(str(repo), "sid-g", directory=records, prompt_id="p-1")
+    real_match, real_record = lw.matching_waiver, lw.record_waiver
+    monkeypatch.setattr(lw, "matching_waiver", lambda *a, **k: real_match(*a, directory=records, **k))
+
+    def record(paths, run_ids=(RUN,), approver="group-em"):
+        return real_record(
+            repo, approver, "PM turn 51", [guard.GUARD_NAME], paths, run_ids, directory=records
+        )
+
+    return SimpleNamespace(record=record)
+
+
+def test_waiver_lets_scoped_commit_through_exactly_once_without_spawn(repo, spawns, gem):
+    assert gem.record(["a.py"]).ok
+    assert _verdict(repo, "git commit -m x -- a.py") is None
+    assert _denied(_verdict(repo, "git commit -m x -- a.py"))
+    assert spawns.calls == []
+
+
+def test_concurrent_consume_loser_is_denied(repo, spawns, gem, monkeypatch):
+    from coordinator_core.authz import landing_waiver as lw
+
+    assert gem.record(["a.py"]).ok
+    monkeypatch.setattr(lw, "consume", lambda *a, **k: False)
+    assert _denied(_verdict(repo, "git commit -m x -- a.py"))
+
+
+def test_waiver_does_not_carry_to_a_second_commit_in_the_same_chain(repo, spawns, gem):
+    assert gem.record(["a.py", "DELIVERY.md"]).ok
+    cmd = "git commit -m x -- a.py && git commit -m y -- DELIVERY.md"
+    assert _denied(_verdict(repo, cmd))
+
+
+def test_hands_on_mode_ignores_a_covering_waiver_and_normal_mode_honours_it(repo, spawns, gem, monkeypatch):
+    assert gem.record(["a.py"]).ok
+    monkeypatch.setattr(guard, "_hands_on", lambda: True)
+    assert _denied(_verdict(repo, "git commit -m x -- a.py"))
+    monkeypatch.setattr(guard, "_hands_on", lambda: False)
+    assert _verdict(repo, "git commit -m x -- a.py") is None
+
+
+def test_waiver_does_not_cover_an_extra_path(repo, spawns, gem):
+    assert gem.record(["a.py"]).ok
+    assert _denied(_verdict(repo, "git commit -m x -- a.py DELIVERY.md"))
+
+
+def test_waiver_for_another_run_still_denies(repo, spawns, gem):
+    assert gem.record(["a.py"], run_ids=["ask-other"]).ok
+    assert _denied(_verdict(repo, "git commit -m x -- a.py"))
+
+
+def test_forged_approver_is_not_recorded_and_denies(repo, spawns, gem):
+    assert not gem.record(["a.py"], approver="em").ok
+    assert _denied(_verdict(repo, "git commit -m x -- a.py"))
+
+
+def test_deny_names_the_gem_and_the_record_route_never_the_pm(repo, spawns):
+    text = _text(_verdict(repo, "git commit -m x -- a.py"))
+    assert "ask the G-EM" in text
+    assert "coordinator_core.authz.landing_waiver record" in text
+    assert "ask the PM" not in text

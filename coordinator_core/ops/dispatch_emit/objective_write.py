@@ -91,6 +91,89 @@ def _run_at_base(root: Path, script: Path, axes: list) -> Optional[list]:
     return [r.to_line() for r in results]
 
 
+_TSHIRT_ORDER = ("XS", "S", "M", "L", "XL", "XXL")
+CRITERION_DETERMINISTIC = "deterministic"
+CRITERION_JUDGED = "judged"
+
+
+def _text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def sizing_criteria(sizing: dict) -> list:
+    """The acceptance criteria the sizing's exit_criterion names, each tagged for the end-stage check.
+
+    Shape: ``{id, statement, kind, command, expect}``. ``kind`` is ``deterministic`` only when the
+    criterion carries both a ``command`` and an ``expect`` result (run as code, no agent); every other
+    criterion is ``judged`` (one judge). Source: ``exit_criterion.criteria`` (strings or mappings)
+    when present, else the statement itself with ``exit_criterion.command`` / ``expect``.
+    """
+    ec = sizing.get("exit_criterion")
+    ec = ec if isinstance(ec, dict) else {}
+    raw = ec.get("criteria")
+    if not isinstance(raw, list) or not raw:
+        raw = [{"statement": ec.get("statement"), "command": ec.get("command"), "expect": ec.get("expect")}]
+    out = []
+    for item in raw:
+        if isinstance(item, str):
+            item = {"statement": item}
+        if not isinstance(item, dict):
+            continue
+        statement, command = _text(item.get("statement")), _text(item.get("command"))
+        expect = item.get("expect")
+        expect = str(expect).strip() if isinstance(expect, (str, int, float)) and not isinstance(expect, bool) else ""
+        if not statement and not command:
+            continue
+        det = bool(command and expect)
+        out.append({
+            "id": f"K{len(out) + 1}", "statement": statement,
+            "kind": CRITERION_DETERMINISTIC if det else CRITERION_JUDGED,
+            "command": command if det else "", "expect": expect if det else "",
+        })
+    return out
+
+
+def write_objective_at_sizing(root, run_id: str, sizing: dict) -> dict:
+    """Write ``state/warp/<run_id>/objective.json`` once from an accepted sizing; no falsifier required.
+
+    No-op (``{written: False, skipped: <reason>}``) below tshirt M, with no exit_criterion statement,
+    or when the file exists. ``verbatim`` is the exit_criterion statement; ``falsifier_script`` is the
+    sizing's falsifier path else ``""`` (judge-only, ``axes`` empty); ``criteria`` is `sizing_criteria`.
+    Never pins and never runs a script.
+    """
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    if not isinstance(sizing, dict):
+        return {"written": False, "skipped": "sizing is not a mapping"}
+    ec = sizing.get("exit_criterion") if isinstance(sizing.get("exit_criterion"), dict) else {}
+    accepted = ec.get("accepted") if isinstance(ec.get("accepted"), dict) else {}
+    est = sizing.get("estimate") if isinstance(sizing.get("estimate"), dict) else {}
+    tshirt = _text(est.get("tshirt")) or _text(accepted.get("tshirt"))
+    if tshirt not in _TSHIRT_ORDER or _TSHIRT_ORDER.index(tshirt) < _TSHIRT_ORDER.index("M"):
+        return {"written": False, "skipped": f"tshirt {tshirt or 'absent'} is below M"}
+    verbatim = _text(ec.get("statement"))
+    if not verbatim:
+        return {"written": False, "skipped": "no exit_criterion statement"}
+    dir_ = rl.run_dir(Path(root), run_id)
+    target = dir_ / oc.OBJECTIVE_FILE
+    if target.exists():
+        return {"written": False, "skipped": f"{oc.OBJECTIVE_FILE} exists"}
+    falsifier = _text(ec.get("falsifier")) or _text(sizing.get("falsifier"))
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = oc.Objective(verbatim=verbatim, falsifier_script=falsifier.replace("\\", "/"), axes=[], written_at=stamp).to_json()
+    body["criteria"] = sizing_criteria(sizing)
+    dir_.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    staged.write_bytes((json.dumps(body, sort_keys=True) + "\n").encode("utf-8"))
+    try:
+        os.link(staged, target)
+    except FileExistsError:
+        return {"written": False, "skipped": f"{oc.OBJECTIVE_FILE} exists"}
+    finally:
+        staged.unlink(missing_ok=True)
+    return {"written": True, "path": str(target), "criteria": body["criteria"]}
+
+
 @register_op("dispatch.objective_write")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Params: ``run_id``, ``verbatim`` (optional), ``falsifier_script``, ``axes``.

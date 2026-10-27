@@ -6,6 +6,11 @@ set comes from `halted_withheld_index` (one small read per repo; no `state/warp`
 pathspec, or a `git add` earlier in the same chain, is matched without spawning git; a bare or `-a`
 commit falls to `git diff --cached --name-only` (plus `git diff --name-only` for `-a`) and only
 while the index is non-empty. Commit detection reuses `block_subagent_commit`'s tokenizer seams.
+
+A live G-EM's recorded landing waiver (`authz.landing_waiver`) covering every hit path and run id
+lets the commit through exactly once. Consumption happens here at PreToolUse, before the commit
+runs: a commit that then fails spends the waiver and the G-EM re-records.
+Cost: file reads, plus one waiver-file rename and rewrite on consumption.
 """
 
 from __future__ import annotations
@@ -66,6 +71,7 @@ class _Scan:
     cwd: str
     indexes: Dict[str, Dict[str, str]]
     hit: Optional[Tuple[str, str]] = None
+    hits: Optional[Dict[str, str]] = None
 
 
 def _index_for(scan: _Scan, root: str) -> Dict[str, str]:
@@ -309,7 +315,10 @@ def _scan_text(cmd: str, scan: _Scan, depth: int) -> None:
             if hits:
                 hits = _drop_landed_merge_paths(root, hits)
         if hits:
+            if _waived(root, {p: indexed[p] for p in hits}):
+                continue
             first = sorted(hits)[0]
+            scan.hits = {p: indexed[p] for p in hits}
             scan.hit = (indexed[first], first if len(hits) == 1 else f"{first} (+{len(hits) - 1} more)")
             return
     if depth >= _MAX_UNWRAP_DEPTH:
@@ -318,6 +327,26 @@ def _scan_text(cmd: str, scan: _Scan, depth: int) -> None:
         _scan_text(payload, scan, depth + 1)
         if scan.hit is not None:
             return
+
+
+def _hands_on() -> bool:
+    """True when the session's resolved interaction mode is ``hands-on`` (no waiver is read);
+    an unresolvable mode is not hands-on."""
+    try:
+        from coordinator_core.session.mode_resolution import resolve_mode
+
+        return resolve_mode("interaction_mode", "sizing-assemble-cli", env=None) == "hands-on"
+    except Exception:
+        return False
+
+
+def _waived(root: str, hit_map: Dict[str, str]) -> bool:
+    """Spend a covering G-EM waiver for this commit segment's hits. Per segment, so a later commit in
+    the same chain is still scanned instead of riding the first segment's waiver."""
+    from coordinator_core.authz.landing_waiver import consume, matching_waiver
+
+    waiver = matching_waiver(root, GUARD_NAME, hit_map, hands_on=_hands_on())
+    return waiver is not None and consume(waiver) is True
 
 
 def _deny_record(run_id: str, path: str) -> Any:

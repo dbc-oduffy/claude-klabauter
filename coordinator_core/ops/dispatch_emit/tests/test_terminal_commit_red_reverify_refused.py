@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_landing_integrity import (  # noqa: F401
     _fire,
@@ -18,7 +19,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 def _review(reverify):
     return {**reviewed(),
-            "tests": {"status": "pass"}, li.REVERIFY_KEY: reverify}
+            "tests": {"status": "pass"}, landing_targeted_tests.REVERIFY_KEY: reverify}
 
 
 def _land(repo) -> None:
@@ -34,7 +35,7 @@ def test_red_reverify_naming_no_failing_test_is_refused(repo, failing):
     out = _fire(repo, "mod.py", inline_review=_review(record))
 
     assert out["committed"] is False
-    assert out["refused"] == li.REVIEW_REVERIFY_FAILED
+    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
     assert out["reverify_check"] == "fail"
     assert _git(["rev-parse", "HEAD"], repo) == head
 

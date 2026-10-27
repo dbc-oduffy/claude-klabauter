@@ -90,6 +90,26 @@ def test_no_writes_executor_heavy_gate_result_reads_mechanical(tmp_path):
     assert out["mechanical_repairs"][0]["kind"] == "executor-heavy-command-row"
 
 
+@pytest.mark.parametrize(
+    "writes,command",
+    [("[src/a.py]", "pnpm vitest run"), ("[]", "pnpm build"), ("[src/a.py]", "pnpm build")],
+    ids=["writes-bearing", "build-class", "writes-bearing-build"],
+)
+def test_writes_bearing_and_build_class_executor_heavy_read_mechanical(tmp_path, writes, command):
+    from coordinator_core.roadmap import prep_gate as pg
+    from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+
+    spine = (
+        "- id: C1\n  title: Baseline\n  change_kind: code-edit\n  surface: src/a.py\n"
+        f"  writes: {writes}\n  disposition: open\n  body: |\n    Run `{command}`.\n"
+    )
+    cls = pg.gate_plan(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))["classes"]["EXECUTOR_HEAVY"]
+    assert cls["status"] == "DEFECT"
+    out = op.readiness_verdict(_gate(cls), None, [])
+    assert (out["verdict"], out["pull_class"]) == ("pulled", "mechanical")
+    assert out["mechanical_repairs"][0]["kind"] == "executor-heavy-command-row"
+
+
 def test_non_mechanical_prep_failure_is_substantive_and_drops_repairs():
     out = op.readiness_verdict(_gate(MECH, JUDG), None, [])
     assert (out["verdict"], out["pull_class"], out["mechanical_repairs"]) == ("pulled", "substantive", [])
@@ -896,3 +916,172 @@ def test_missing_plan_stays_an_error_reply(tmp_path):
     common = _plan(tmp_path)
     with pytest.raises(ValueError):
         op._handler({"plan": "docs/plans/absent.md"}, common)
+
+
+_FILED = "https://example.invalid/issues/1"
+
+
+def _prose_absent_plan(root: Path, citation: str, tracked_by: str) -> Path:
+    block = f'declared_absent:\n  - citation: "{citation}"\n    tracked_by: "{tracked_by}"\n'
+    return _corrects_plan(root, block)
+
+
+def test_declared_absent_entry_with_trailing_parenthetical_covers_the_bare_path_row(tmp_path):
+    common = _prose_absent_plan(
+        tmp_path, ".next/BUILD_ID (the production build the brief says is on disk)", _FILED
+    )
+    reply = _op_reply(common, [_row("UNRESOLVED", citation=".next/BUILD_ID")])
+    assert reply["verdict"] == "ready"
+    assert reply["blocking"] == []
+    assert ".next/BUILD_ID" in reply["reason"]
+
+
+def test_declared_absent_leading_token_matches_whole_tokens_only(tmp_path):
+    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md (note)", _FILED)
+    for cited in ("docs/wiki/perf.md.bak", "other/docs/wiki/perf.md"):
+        reply = _op_reply(common, [_row("UNRESOLVED", citation=cited)])
+        assert reply["verdict"] == "judgment", cited
+
+
+def test_declared_absent_with_junk_tracked_by_prose_still_blocks(tmp_path):
+    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md", "n/a ok")
+    reply = _op_reply(common, [_row("UNRESOLVED", citation="docs/wiki/perf.md")])
+    assert reply["blocking"] == ["premise-check: UNRESOLVED docs/wiki/perf.md"]
+
+
+_WRITES_PATH = "coordinator_core/ops/plan_prep_gate.py"
+
+
+def test_unresolved_row_on_a_path_a_spine_row_writes_is_expected_absent(tmp_path):
+    common = _corrects_plan(tmp_path, "")
+    reply = _op_reply(common, [_row("UNRESOLVED", citation=_WRITES_PATH)])
+    assert reply["verdict"] == "ready"
+    assert reply["blocking"] == []
+    assert f"{_WRITES_PATH} -> expected absent" in reply["reason"]
+
+
+def test_unresolved_citation_naming_a_written_path_and_another_missing_path_blocks(tmp_path):
+    common = _corrects_plan(tmp_path, "")
+    cited = f"{_WRITES_PATH} and docs/wiki/never-declared.md"
+    reply = _op_reply(common, [_row("UNRESOLVED", citation=cited)])
+    assert reply["blocking"] == [f"premise-check: UNRESOLVED {cited}"]
+
+
+def test_written_path_match_is_whole_path_not_a_substring(tmp_path):
+    common = _corrects_plan(tmp_path, "")
+    for cited in (_WRITES_PATH + ".bak", "other/" + _WRITES_PATH):
+        reply = _op_reply(common, [_row("UNRESOLVED", citation=cited)])
+        assert reply["blocking"] == [f"premise-check: UNRESOLVED {cited}"], cited
+
+
+def test_contradicted_row_on_a_written_path_still_blocks(tmp_path):
+    common = _corrects_plan(tmp_path, "")
+    reply = _op_reply(common, [_row("CONTRADICTED", citation=_WRITES_PATH)])
+    assert reply["blocking"] == [f"premise-check: CONTRADICTED {_WRITES_PATH}"]
+
+
+def test_unresolved_row_matching_no_declared_absent_entry_still_blocks(tmp_path):
+    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md", _FILED)
+    reply = _op_reply(common, [_row("UNRESOLVED", citation="bin/unrelated.py")])
+    assert reply["verdict"] == "judgment"
+    assert reply["blocking"] == ["premise-check: UNRESOLVED bin/unrelated.py"]
+
+
+def test_declared_absent_tracked_by_prose_never_resolves(tmp_path):
+    common = _prose_absent_plan(tmp_path, "docs/wiki/perf.md", "Distill pass item 1, absent at head")
+    reply = _op_reply(common, [_row("UNRESOLVED", citation="docs/wiki/perf.md")])
+    assert reply["blocking"] == ["premise-check: UNRESOLVED docs/wiki/perf.md"]
+
+
+def _declared_verdict(citation, declared):
+    rows = [{"verdict": "UNRESOLVED", "citation": citation}]
+    return op.readiness_verdict(
+        _gate(PASS, verdict="PREPPED"), None, [], None, rows, declared=declared
+    )
+
+
+def test_unresolved_row_on_a_declared_absent_path_is_a_visible_non_blocking_note():
+    from coordinator_core.ops.readiness_declared_absent import DeclaredAbsent
+
+    reply = _declared_verdict("docs/new/file.md", DeclaredAbsent(absent=frozenset({"docs/new/file.md"})))
+    assert reply["verdict"] == "ready"
+    assert "expected absent" in reply["reason"]
+
+
+def test_unresolved_row_matching_no_declared_absent_path_still_blocks():
+    from coordinator_core.ops.readiness_declared_absent import DeclaredAbsent
+
+    reply = _declared_verdict("docs/other.md", DeclaredAbsent(absent=frozenset({"docs/new/file.md"})))
+    assert reply["verdict"] == "judgment"
+    assert reply["blocking"] == ["premise-check: UNRESOLVED docs/other.md"]
+
+
+def test_declared_absent_path_present_at_head_blocks_with_its_own_repair_text():
+    from coordinator_core.ops.readiness_declared_absent import DeclaredAbsent
+
+    reply = _declared_verdict("docs/old.md", DeclaredAbsent(present_at_head=frozenset({"docs/old.md"})))
+    assert reply["verdict"] == "judgment"
+    assert reply["blocking"] == ["premise-check: DECLARED-ABSENT-PRESENT docs/old.md"]
+    assert "exists at the base sha" in reply["rulings"][0]["ask"]
+
+
+_CLAIM = "two files carry the marker"
+_CENSUS_OLD = "census:\n  - question: q\n    command: grep -c a b\n    result: '1'\n"
+_CENSUS_MATCH = (
+    "census:\n  - question: 'two files carry the marker'\n    command: grep -c marker docs/m.md\n"
+    "    result: '2 at HEAD'\n"
+)
+
+
+def _unmapped_plan(root: Path, anchors: str, census: str = _CENSUS_MATCH) -> Path:
+    common = _anchor_plan(root, anchors)
+    plan = root / REL
+    plan.write_text(plan.read_text(encoding="utf-8").replace(_CENSUS_OLD, census), encoding="utf-8")
+    return common
+
+
+def test_unmapped_anchor_with_a_census_check_is_a_mechanical_repair(tmp_path):
+    common = _unmapped_plan(tmp_path, f"anchor_premises:\n  - {_CLAIM}\n")
+    reply = op._handler({"plan": REL}, common)
+    _validate(reply)
+    assert reply["verdict"] == "pulled" and reply["pull_class"] == "mechanical"
+    assert reply["rulings"] == [] and reply["blocking_findings"] == 0
+    assert _CLAIM not in reply["reason"]
+    [repair] = [r for r in reply["mechanical_repairs"] if r["kind"] == "anchor-premise-unchecked"]
+    assert repair["target"] == "#0"
+    mapping = json.loads(repair["instruction"].split("mapping ", 1)[1])
+    assert mapping == {
+        "id": "A1", "claim": _CLAIM, "check": {"command": "grep -c marker docs/m.md", "expect": "2"},
+    }
+
+
+def test_unmapped_anchor_without_a_derivable_check_still_rules(tmp_path):
+    common = _unmapped_plan(tmp_path, "anchor_premises:\n  - an unrelated claim\n")
+    reply = op._handler({"plan": REL}, common)
+    assert reply["verdict"] == "judgment" and reply["mechanical_repairs"] == []
+    assert _anchor_rulings(reply) == ["anchor-premise-unchecked: #0 (not a mapping)"]
+
+
+def test_unmapped_anchor_whose_census_command_is_not_grammar_still_rules(tmp_path):
+    census = "census:\n  - question: 'two files carry the marker'\n    command: echo a\n    result: '2'\n"
+    reply = op._handler({"plan": REL}, _unmapped_plan(tmp_path, f"anchor_premises:\n  - {_CLAIM}\n", census))
+    assert reply["verdict"] == "judgment"
+    assert _anchor_rulings(reply) == ["anchor-premise-unchecked: #0 (not a mapping)"]
+
+
+def test_malformed_carried_anchor_row_still_rules_beside_a_repairable_one(tmp_path):
+    block = f"anchor_premises:\n  - {_CLAIM}\n  - id: AP2\n    claim: ''\n"
+    reply = op._handler({"plan": REL}, _unmapped_plan(tmp_path, block))
+    assert reply["verdict"] == "judgment"
+    assert _anchor_rulings(reply) == ["anchor-premise-unchecked: AP2 (id and claim must be non-blank strings)"]
+
+
+def test_failed_anchor_still_rules_and_the_unmapped_one_is_split_out_of_the_rulings():
+    out = op.readiness_verdict(
+        _gate(PASS, verdict="PREPPED"), None, [],
+        anchor_findings=["anchor-premise-unchecked: #0 (not a mapping)", "anchor-premise-CONTRADICTED: A9 -- x"],
+        anchor_entries=[_CLAIM], census=[{"question": _CLAIM, "command": "grep -c a b", "result": "1"}],
+    )
+    assert out["verdict"] == "judgment"
+    assert out["blocking"] == ["anchor-premise-CONTRADICTED: A9 -- x"]
+    assert out["blocking_findings"] == 1

@@ -3178,6 +3178,34 @@ def _is_pytest_collect_only_segment(argv: Sequence[str]) -> bool:
     return any(a.split("=", 1)[0] in _PYTEST_COLLECT_ONLY_FLAGS for a in args)
 
 
+def _is_node_id(arg: str) -> bool:
+    file_part, sep, node = arg.partition("::")
+    return bool(sep and node and file_part.endswith(".py"))
+
+
+def _is_node_id_baseline_rerun(cmd: str, dialect: Optional[_Dialect]) -> bool:
+    """A command whose every runner segment is ``baseline-export ... -- pytest <file::node ids>``
+    (at least one id, no other positional). Review's failing_at_base measurement; in-process, no spawn."""
+    seen = False
+    for raw_argv in _segment_argvs(cmd, dialect):
+        argv = _strip_command_prefix(raw_argv)
+        if not argv or not _runner_recognized(argv):
+            continue
+        idx = 0
+        while idx < len(raw_argv) and _ENV_ASSIGN_RE.match(raw_argv[idx]):
+            idx += 1
+        if idx >= len(raw_argv) or _base(raw_argv[idx]) not in _BASELINE_EXPORT_BASENAMES:
+            return False
+        args = argv[1:] if _base(argv[0]) in _PYTEST_HEADS else _pytest_module_args(argv)
+        if args is None:
+            return False
+        _scoped, positionals = _walk_pytest_args(args)
+        if not positionals or not all(_is_node_id(p) for p in positionals):
+            return False
+        seen = True
+    return seen
+
+
 def _agent_touched_test_files(raw_agent_id: str, session_id: str,
                               repo_root: Optional[str]) -> List[str]:
     """This agent's own touched test files, for the R9 deny text's
@@ -3648,7 +3676,9 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # problem, not a precision one, and should say so). See
     # ``_pytest_directory_args``.
     if is_subagent and detected is None:
-        dir_args = _pytest_directory_args(segments_argv, cwd)
+        if _is_node_id_baseline_rerun(cmd, dialect):
+            return None
+        dir_args =_pytest_directory_args(segments_argv, cwd)
         if dir_args:
             return _deny(
                 _deny_reason_subagent_directory(

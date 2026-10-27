@@ -17,6 +17,8 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.dispatch_emit import land_run, review_edit_source
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit import landing_targeted_tests
+from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_landing_remedies import (  # noqa: F401 -- fixture
     RUN,
@@ -64,11 +66,11 @@ def _agent_write(root, rel: str, text: str, at: float) -> None:
 
 
 def _fresh_verdict(root, *, head: str) -> None:
-    path = li.fresh_verdict_path(root, RUN)
+    path = landing_retest.fresh_verdict_path(root, RUN)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({
-            "run_id": RUN, "head": head, "tests": ["a.py"], "covered": li.landing_fingerprint(root, ["a.py"]),
+            "run_id": RUN, "head": head, "tests": ["a.py"], "covered": landing_retest.landing_fingerprint(root, ["a.py"]),
             "status": "pass",
         }),
         encoding="utf-8",
@@ -93,7 +95,7 @@ def test_p3_control_a_stale_retest_leaves_the_recorded_failure_refusing(repo):
 
     out = _land(repo, targeted_tests=_RECORDED_FAIL)
 
-    assert out["committed"] is False and out["refused"] == li.TARGETED_TESTS_FAILED, out
+    assert out["committed"] is False and out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED, out
 
 
 # ---- P11: a held chunk's sole-declared path is never staged ---------------------------------------

@@ -395,6 +395,17 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         "writes, remove the full-suite or timing command from it, and add a new `performer: em` "
         "verify row carrying that command with `depends_on` the writing row — {detail}",
     ),
+    "register-citations": (
+        True,
+        "set `register_rows` on each named spine row to the claimed ids its own "
+        "`traces_to_brief`/body already cites; give an orphan claimed id to the row whose "
+        "trace quotes that row's source_text — {detail}",
+    ),
+    "done-clause-unmapped": (
+        True,
+        "append the clause verbatim to the named row's `acceptance:` beside its existing "
+        "command — {detail}",
+    ),
     "census-unscreenable": (
         True,
         "rewrite each named census entry's command into the allowed form (" + census.ALLOWED_FORM + "): "
@@ -1398,12 +1409,12 @@ EXECUTOR_HEAVY_FIX = (
 )
 EXECUTOR_HEAVY_SPLIT_FIX = (
     "Fix: a row that writes files cannot be re-typed (test-runner has no Write tool); "
-    "split it into a `coordinator:executor` authoring row plus a "
-    "`agent_type: coordinator:test-runner` verify row."
+    "it keeps its writes and loses the command, and a new `<id>-V` verify row depends on it "
+    "and carries the command, typed `coordinator:test-runner` or `performer: em` as the repair names."
 )
 _EXECUTOR_HEAVY_CATALOGUE_FIX = (
     f"{EXECUTOR_HEAVY_FIX} A row that also writes files: "
-    "split it into an executor authoring row plus a `coordinator:test-runner` verify row."
+    "it keeps its writes and loses the command, and a new `<id>-V` verify row carries the command."
 )
 
 
@@ -1450,7 +1461,7 @@ def build_measure_remedy() -> str:
     """The remedy for a build or measure command: a role that admits both, else the EM leg.
 
     The role is the one ``_roles_admitting_build_and_measure`` finds. With none, the row is
-    ``performer: em`` and the plan keeps pulling until a definition declares the role.
+    ``performer: em``, which the in-wave repair applies mechanically.
     """
     roles = _roles_admitting_build_and_measure()
     if roles:
@@ -1491,6 +1502,50 @@ def _routes_to_executor(row: Dict[str, Any]) -> bool:
     )
 
 
+def _verify_row_id(row_id: str, taken: set) -> str:
+    """``<id>-V``, else ``<id>-V2``, ``-V3``… the first not in ``taken``; the pick is added to it."""
+    candidate = f"{row_id}-V"
+    n = 1
+    while candidate in taken:
+        n += 1
+        candidate = f"{row_id}-V{n}"
+    taken.add(candidate)
+    return candidate
+
+
+def _executor_heavy_repair(
+    row: Dict[str, Any],
+    cls: Any,
+    repo_root: Path,
+    span: str = "",
+    taken_ids: Optional[set] = None,
+) -> str:
+    """One row edit that clears this hit and re-gates PASS on EXECUTOR_HEAVY and TEST_RUNNER_OUT_OF_ROLE.
+
+    Target type: a build-class command takes the ``build_measure_remedy`` target (a role admitting
+    build and measure, else ``performer: em``); any other takes ``coordinator:test-runner`` unless
+    that role refuses the span, then ``performer: em``. A row that writes files keeps its writes
+    and loses the command; a new verify row ``<id>-V`` depends on it and carries the command.
+    ``taken_ids`` is the spine's id set; the verify id is added to it.
+    """
+    row_id = str(row.get("id") or "<row with no id>")
+    if _is_build_class(cls):
+        roles = _roles_admitting_build_and_measure()
+        target = f"`agent_type: {roles[0]}`" if roles else "`performer: em`"
+    elif _span_out_of_role_for_test_runner(span, repo_root):
+        target = "`performer: em`"
+    else:
+        target = "`agent_type: coordinator:test-runner`"
+    writes = row.get("writes")
+    if not (isinstance(writes, list) and writes):
+        return f"row {row_id}: declare {target} (command `{span}`)"
+    verify_id = _verify_row_id(row_id, taken_ids if taken_ids is not None else set())
+    return (
+        f"row {row_id}: keep its writes, remove the command `{span}`, then "
+        f"add row {verify_id} with `depends_on: {row_id}`, running `{span}`, declaring {target}"
+    )
+
+
 def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, Any]:
     """Refuse a plan whose executor-routed rows run a command the heavy-admission guard denies.
 
@@ -1507,6 +1562,8 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
     hits: List[str] = []
     ids: List[str] = []
     fixes: set = set()
+    repairs: List[str] = []
+    taken_ids = {str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id")}
     for row in rows:
         if not isinstance(row, dict) or _row_is_unschedulable(row):
             continue
@@ -1535,6 +1592,7 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
                         if isinstance(writes, list) and writes
                         else EXECUTOR_HEAVY_FIX
                     )
+                repairs.append(_executor_heavy_repair(row, cls, repo_root, span, taken_ids))
                 break
     if not hits:
         return _pass("no executor row runs a heavy command")
@@ -1544,12 +1602,8 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
         f"{' '.join(sorted(fixes, reverse=True))}",
         withheld=sorted(set(ids)),
     )
-    # Mechanical only when every hit row is a pure retype; one writes-bearing hit needs a split.
-    if fixes == {EXECUTOR_HEAVY_FIX}:
-        result["mechanical"] = True
-        result["repair"] = (
-            f"declare `agent_type: coordinator:test-runner` on each named row — {', '.join(hits)[:260]}"
-        )
+    result["mechanical"] = True
+    result["repair"] = "; ".join(repairs)
     return result
 
 
@@ -1581,6 +1635,21 @@ def _is_path_scoped_pnpm_test(span: str) -> bool:
     return any(not a.startswith("-") for a in argv[2:])
 
 
+def _span_out_of_role_for_test_runner(span: str, repo_root: Path) -> bool:
+    """True when ``span`` is an act ``coordinator:test-runner`` refuses: a full or broad suite, or a build.
+
+    Shared by ``_test_runner_out_of_role`` and ``_executor_heavy_repair`` so the repair target
+    can never be a row the out-of-role gate refuses.
+    """
+    from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
+
+    span = span.strip()
+    if not span or _is_path_scoped_pnpm_test(span):
+        return False
+    cls = classify(span, None, str(repo_root), _BROAD_SUITE_WORKER_CAP)
+    return cls is not None and (cls.heavy_class is HeavyClass.TEST_TIER or _is_build_class(cls))
+
+
 def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, Any]:
     """Refuse a row declaring ``coordinator:test-runner`` whose act test-runner cannot perform.
 
@@ -1590,7 +1659,6 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
     pass. Memo-send rows are skipped: the send is the send op's own commit, and the executor's
     brief is fixed. Pure over the parsed row; ``repo_root`` is the gated plan's tree, never process cwd.
     """
-    from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
     from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
 
@@ -1618,12 +1686,7 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
                 span = span.strip()
                 if _is_path_scoped_pnpm_test(span):
                     continue
-                cls = (
-                    classify(span, None, str(repo_root), _BROAD_SUITE_WORKER_CAP) if span else None
-                )
-                if cls is not None and (
-                    cls.heavy_class is HeavyClass.TEST_TIER or _is_build_class(cls)
-                ):
+                if _span_out_of_role_for_test_runner(span, repo_root):
                     act = f"`{span[:60]}`"
                     break
         if act is None:
@@ -2677,6 +2740,29 @@ def _done_clause(
     return _pass(f"{len(clauses)} done-clause(s) of {sizing} carried by row acceptance")
 
 
+def _apply_constraint_waivers(fm: Dict[str, Any], classes: Dict[str, Any]) -> None:
+    """Honour the plan's ``constraint_waived``: a DEFECT whose kind is a waived, waivable
+    constraint id becomes a PASS naming the waiver. A malformed, reasonless, unknown or
+    non-waivable entry is a defect, reported on SCHEMA. A plan without the field is untouched."""
+    from coordinator_core.roadmap.authoring_constraints import WAIVER_FIELD, read_waivers
+
+    if WAIVER_FIELD not in fm:
+        return
+    reading = read_waivers(fm)
+    for key, value in list(classes.items()):
+        if value.get("status") == "DEFECT" and value.get("kind") in reading.waived:
+            cid = value["kind"]
+            classes[key] = _pass(f"waived: {cid} ({reading.waived[cid]})")
+    if not reading.problems:
+        return
+    detail = "; ".join(f"{p['kind']}: {p['detail']}" for p in reading.problems)
+    schema = classes.get("SCHEMA")
+    if schema is not None and schema.get("status") == "PASS":
+        classes["SCHEMA"] = _defect("constraint-waiver-invalid", f"{WAIVER_FIELD} — {detail}")
+    elif schema is not None and schema.get("status") == "DEFECT":
+        schema["detail"] = f"{schema['detail']}; {WAIVER_FIELD} — {detail}"
+
+
 def evaluate_plan(
     plan_path: Path,
     *,
@@ -2752,6 +2838,7 @@ def evaluate_plan(
                 "mechanical": False, "repair": None,
             }
         }
+    _apply_constraint_waivers(fm, classes)
     if any(v["status"] == "ERROR" for v in classes.values()):
         verdict = ENGINE_ERROR
     elif any(v["status"] == "REFUSE" for v in classes.values()):

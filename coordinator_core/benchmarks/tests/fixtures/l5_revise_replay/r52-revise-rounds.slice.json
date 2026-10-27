@@ -1,0 +1,68 @@
+{
+ "source": "naked-vs-coordinator/runs/ladder-xl-dispatch-ontology__coordinator__r52/transcript.tar.gz",
+ "cell": "ladder-xl-dispatch-ontology__coordinator__r52",
+ "round_definition": "one engine-ask fire (fresh ask or sizing resume) from the cell EM; r52 has no workflow.revise calls, so every round after 0 is a refire after a halt",
+ "vendored_from": "experiments@4f59ebb:scratch/r52-fixture/r52-revise-rounds.json",
+ "rounds": [
+  {
+   "round": 0,
+   "status": "completed",
+   "tokens": {"total": 27323927},
+   "requirements": [
+    {"id": "T0.1", "source_text": "**What you built** — the surfaces and files you added or changed."},
+    {"id": "T0.2", "source_text": "**The product judgement you made** — what you chose to do, what you chose"},
+    {"id": "T0.3", "source_text": "**How it fits the existing codebase** — the conventions, constraints, or"},
+    {"id": "T0.4", "source_text": "**What you would do next** and what you are least confident about."},
+    {"id": "R5", "source_text": "When I trace or look up references in this repo's graph, the answer stops at\ndispatch sites: a reference to a pluggy hookspec does not lead to the\nimplementations that will actually run, even though nothing in the static code\nsays so. This repo's own code is dispatch-heavy, so we pay for it more than most.\n\nTeach the graph that a reference to a dispatch point implies the things that\nanswer it. It is done when, on a small fixture project with a hookspec and a\nhookimpl, `project_referencers` and `project_trace` on the dispatch site return\nthe implementation, with no regressions elsewhere.\n\n---\n\n## Deliverable\n\nDo the work in this repository. When you are done, write `DELIVERY.md` at the\nrepository root containing:\n\n1. **What you built** — the surfaces and files you added or changed.\n2. **The product judgement you made** — what you chose to do, what you chose\n   NOT to do, and why. Name anything you deliberately left out of scope.\n3. **How it fits the existing codebase** — the conventions, constraints, or\n   prior decisions you found and followed, and anywhere you knowingly departed\n   from one.\n4. **What you would do next** and what you are least confident about.\n\nWorking code is worth more than a plan. Prefer a coherent, genuinely finished\nvertical slice over a broad sketch that does not hold together. Record the decisions you\nmake in `DELIVERY.md`."}
+   ],
+   "requirements_before": null,
+   "plan_rows": [
+    {"id": "C1"}, {"id": "C2"}, {"id": "C3"}, {"id": "C4"}, {"id": "C5"}, {"id": "C6"}, {"id": "C7"}
+   ],
+   "halted": "review_blocked"
+  },
+  {
+   "round": 1,
+   "status": "completed",
+   "tokens": {"total": 27430015},
+   "requirements": [
+    {"id": "R1", "source_text": "The dispatch-point inferred-edge work from run ask-20261024T164424-ba5d2f is on disk but red at review: finish it. Its own exit criterion must pass — on the pluggy fixture project, project_referencers and project_trace on the dispatch site return the implementation, disclosed as inferred — and the regressions it introduced must be gone, with no new ones."}
+   ],
+   "requirements_before": [
+    {"id": "T0.1", "source_text": "**What you built** — the surfaces and files you added or changed."},
+    {"id": "T0.2", "source_text": "**The product judgement you made** — what you chose to do, what you chose"},
+    {"id": "T0.3", "source_text": "**How it fits the existing codebase** — the conventions, constraints, or"},
+    {"id": "T0.4", "source_text": "**What you would do next** and what you are least confident about."},
+    {"id": "R5", "source_text": "When I trace or look up references in this repo's graph, the answer stops at\ndispatch sites: a reference to a pluggy hookspec does not lead to the\nimplementations that will actually run, even though nothing in the static code\nsays so. This repo's own code is dispatch-heavy, so we pay for it more than most.\n\nTeach the graph that a reference to a dispatch point implies the things that\nanswer it. It is done when, on a small fixture project with a hookspec and a\nhookimpl, `project_referencers` and `project_trace` on the dispatch site return\nthe implementation, with no regressions elsewhere.\n\n---\n\n## Deliverable\n\nDo the work in this repository. When you are done, write `DELIVERY.md` at the\nrepository root containing:\n\n1. **What you built** — the surfaces and files you added or changed.\n2. **The product judgement you made** — what you chose to do, what you chose\n   NOT to do, and why. Name anything you deliberately left out of scope.\n3. **How it fits the existing codebase** — the conventions, constraints, or\n   prior decisions you found and followed, and anywhere you knowingly departed\n   from one.\n4. **What you would do next** and what you are least confident about.\n\nWorking code is worth more than a plan. Prefer a coherent, genuinely finished\nvertical slice over a broad sketch that does not hold together. Record the decisions you\nmake in `DELIVERY.md`."}
+   ],
+   "plan_rows": [
+    {"id": "F1"}, {"id": "F2"}, {"id": "F3"}, {"id": "F4"}, {"id": "F5"}, {"id": "F6"}, {"id": "F7"}
+   ],
+   "halted": "commit"
+  },
+  {
+   "round": 2,
+   "status": "completed",
+   "tokens": {"total": 23213992},
+   "requirements": [
+    {"id": "R1", "source_text": "The dispatch-point work is green on its own oracle but nothing shipped: the commit was refused for an incomplete import closure, so the whole feature is still sitting uncommitted in the worktree. Land it in one commit that satisfies the integrity guard. Before you do, settle the one claim the reviewer would not sign off on: that the 9 tests/test_cpp_symbol_lite_fallback.py failures are red at the baseline commit and not a regression this work introduced. Prove it with evidence, or fix them."}
+   ],
+   "requirements_before": [
+    {"id": "R1", "source_text": "The dispatch-point inferred-edge work from run ask-20261024T164424-ba5d2f is on disk but red at review: finish it. Its own exit criterion must pass — on the pluggy fixture project, project_referencers and project_trace on the dispatch site return the implementation, disclosed as inferred — and the regressions it introduced must be gone, with no new ones."}
+   ],
+   "plan_rows": [
+    {"id": "C1"}, {"id": "C2"}, {"id": "C3"}, {"id": "C4"}, {"id": "C5"}, {"id": "C6"}, {"id": "C7"}, {"id": "C8"}, {"id": "C9"}, {"id": "C10"}
+   ],
+   "halted": "commit"
+  },
+  {
+   "round": 3,
+   "status": "unfinished at cell end (no workflow record)",
+   "tokens": {"total": 11730536},
+   "requirements_before": [
+    {"id": "R1", "source_text": "The dispatch-point work is green on its own oracle but nothing shipped: the commit was refused for an incomplete import closure, so the whole feature is still sitting uncommitted in the worktree. Land it in one commit that satisfies the integrity guard. Before you do, settle the one claim the reviewer would not sign off on: that the 9 tests/test_cpp_symbol_lite_fallback.py failures are red at the baseline commit and not a regression this work introduced. Prove it with evidence, or fix them."}
+   ],
+   "halted": null
+  }
+ ]
+}

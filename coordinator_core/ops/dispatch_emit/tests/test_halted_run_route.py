@@ -56,7 +56,7 @@ def _withheld_marker(root: Path, run_id: str, status: str, withheld: dict) -> No
 
 def test_land_only_commit_route_payload_passes_the_halted_record_shape(tmp_path):
     from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
-    from coordinator_core.ops.dispatch_emit.halted_record_commit import is_halted_record_call
+    from coordinator_core.ops.dispatch_emit.halted_record_request import is_halted_record_call
     from coordinator_core.ops.dispatch_emit.terminal_commit import _is_halted_record_call
 
     _withheld_marker(tmp_path, "r-held", "halted", {"DELIVERY.md": "kept"})

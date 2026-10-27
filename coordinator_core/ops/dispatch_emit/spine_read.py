@@ -207,6 +207,43 @@ _GATE_CLEARED_KEY = "cleared"
 
 _UNDECLARED_GATE_KEY = "awaiting_gate"
 
+#: Plan-row keys the pipeline reads, or deliberately carries as inert metadata.
+#: A key outside this set is warned at read; it is never consumed.
+KNOWN_ROW_KEYS = frozenset({
+    "id", "title", "surface", "change_kind", "body", "disposition", "disposition_ref",
+    "disposition_detail", "disposition_note", "writes", "writes_note", "writes_under",
+    "queue_scope", "traces_to_brief", "depends_on", "depends_on_plan", "register_rows",
+    "reads", "reads_at_head", "consumes", "external_gate", "external_reads_ungated",
+    "authorization", "performer", "deferred", "deferred_until", "agent_type", "agent_model",
+    "model", "effort", "acceptance", "ready", "needs_slot", "execution_mode", "memo_to",
+    "memo_kind", "delivered_via", "case_against", "kind", "pm_approved", "pm_approved_by",
+    "pm_disposition", "receipt", "blocked_on", "host", "appends", "falsifier_review_of",
+    "satisfies", "verification_runs", "done_when",
+})
+
+#: Plan-row key spellings read as another key: ``model`` is ``agent_model``.
+ROW_KEY_ALIASES = MappingProxyType({"model": "agent_model"})
+
+#: A model tag is a short family name or a full ``claude-`` id.
+KNOWN_ROW_MODELS = frozenset({"opus", "sonnet", "haiku"})
+
+
+def _row_agent_model(raw: dict, row_id: str) -> Optional[str]:
+    """The row's model tag from ``agent_model`` or its alias ``model``; refuse an unknown or conflicting value."""
+    values = {k: raw.get(k) for k in ("agent_model", "model") if raw.get(k) is not None}
+    if len(set(values.values())) > 1:
+        raise InvalidFieldTypeError(
+            f"row {row_id!r} carries conflicting model tags {values!r}; keep one of model / agent_model"
+        )
+    if not values:
+        return None
+    value = next(iter(values.values()))
+    if not isinstance(value, str) or not (value in KNOWN_ROW_MODELS or value.startswith("claude-")):
+        raise InvalidFieldTypeError(
+            f"row {row_id!r} model {value!r} is not one of {sorted(KNOWN_ROW_MODELS)} or a claude- id"
+        )
+    return value
+
 
 _TERMINAL_NON_CODED = NON_DISPATCHABLE_DISPOSITIONS - {"coded"}
 
@@ -1254,6 +1291,13 @@ def read_spine(
         _kind = raw.get("change_kind")
         if _kind is not None and _kind not in change_kind_members():
             bad_kinds.append(f"row {row_id!r} field change_kind: {_kind!r}")
+        _unknown = sorted(k for k in raw if k not in KNOWN_ROW_KEYS and k != _UNDECLARED_GATE_KEY)
+        if _unknown:
+            _LOGGER.warning(
+                "read_spine: row %r carries key(s) %s the pipeline does not read; they are ignored",
+                row_id,
+                _unknown,
+            )
         if _UNDECLARED_GATE_KEY in raw:
             raise UndeclaredGateKeyError(
                 f"row {row_id!r} declares {_UNDECLARED_GATE_KEY!r}, which "
@@ -1398,7 +1442,7 @@ def read_spine(
                 reads=reads,
                 depends_on=depends_on,
                 agent_type=raw.get("agent_type"),
-                agent_model=raw.get("agent_model"),
+                agent_model=_row_agent_model(raw, row_id),
                 effort=raw.get("effort"),
                 body=raw.get("body") or "",
                 writes_under=writes_under,

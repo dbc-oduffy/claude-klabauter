@@ -70,6 +70,9 @@ re-ran, but not in ``failing_at_base``, implicates no review edit: its hunks are
 ``unattributed``. An id this record already lists in a ``reverted`` entry's ``tests`` and that is
 passed again in revert mode still fails after its revert: it is ``pre_existing``, never reverted
 twice. An id no closed probe re-ran is never honoured as ``failing_before``.
+Optional ``run_key`` names a run whose ``owned_red.jsonl`` ids join ``failing_at_base``: a failing id
+recorded there (and not in ``failing_at_base``) is reported in the ``owned_red`` bucket, never reverted or
+``unattributed``.
 
 Negative-spec: no test execution and no git verb of its own; the only spawn is the ``git cat-file``
 inside ``land_run.foreign_halted_withheld`` (up to one per still-held halted run), reached on a probe
@@ -102,6 +105,8 @@ from coordinator_core.git.index_write import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import review_reverify_probe as probe_io
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused
+from coordinator_core.ops.owned_red import read_owned_red
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
 from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in, tree_scanners, walked_created
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
@@ -132,7 +137,8 @@ def _fail(message: str, revert: bool, probe: Optional[str] = None) -> dict:
         return {"restored": [], "rerun": [], "error": message}
     if revert:
         return {
-            "reverted": [], "unattributed": [], "pre_existing": [], "kept": [], "record": None, "error": message,
+            "reverted": [], "unattributed": [], "pre_existing": [], "owned_red": [], "kept": [],
+            "record": None, "error": message,
         }
     return {"edited": [], "created": [], "snapshot": None, "error": message}
 
@@ -481,7 +487,7 @@ def _load_record(record: Path) -> dict:
         data = None
     if not isinstance(data, dict):
         data = {}
-    for key in ("reverted", "unattributed", "pre_existing", "kept"):
+    for key in ("reverted", "unattributed", "pre_existing", "owned_red", "kept"):
         data.setdefault(key, [])
     return data
 
@@ -678,6 +684,7 @@ def review_reverify(
     plan_path: str = "",
     cause_files: Optional[Dict[str, List[str]]] = None,
     failing_output: Optional[Dict[str, str]] = None,
+    run_key: str = "",
 ) -> dict:
     """List the review edits since the snapshot, or (``failing`` given) invert the findings those
     tests implicate; ``probe`` opens or closes the pre-review probe. See the module docstring."""
@@ -755,12 +762,20 @@ def review_reverify(
     already = {t for entry in prior["reverted"] if isinstance(entry, dict) for t in entry.get("tests", [])}
     if revert:
         vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
-        at_base = {str(i) for i in failing_at_base or []}
-        pre_existing = sorted(n for n in ids if n in at_base or n in already)
+        explicit_base = {str(i) for i in failing_at_base or []}
+        owned: Set[str] = set()
+        if run_key:
+            try:
+                owned = set(read_owned_red(repo_root, run_key))
+            except LedgerRefused as exc:
+                return _fail(f"run_key refused: {exc}", True)
+        at_base = explicit_base | owned
+        pre_existing = sorted(n for n in ids if n in explicit_base or n in already)
+        owned_red = sorted(n for n in ids if n in owned and n not in explicit_base and n not in already)
         not_base_red = sorted(n for n in ids if n in vouched and n not in at_base and n not in already)
-        skip = set(pre_existing) | set(not_base_red)
+        skip = set(pre_existing) | set(owned_red) | set(not_base_red)
     else:
-        pre_existing, not_base_red, skip = [], [], set()
+        pre_existing, owned_red, not_base_red, skip = [], [], [], set()
     implication = _implication(repo_root, [n for n in ids if n not in skip], edited, created)
     implicated: Dict[str, List[str]] = {}
     unattributed: List[str] = []
@@ -881,6 +896,7 @@ def review_reverify(
         "reverted": [*prior["reverted"], *reverted],
         "unattributed": sorted(set(prior["unattributed"]) | set(unattributed)),
         "pre_existing": sorted(set(prior["pre_existing"]) | set(pre_existing)),
+        "owned_red": sorted(set(prior["owned_red"]) | set(owned_red)),
         "kept": [*prior["kept"], *kept],
     }
     atomic_write_bytes(record_path, (json.dumps(merged, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -889,6 +905,7 @@ def review_reverify(
         "reverted": reverted,
         "unattributed": unattributed,
         "pre_existing": pre_existing,
+        "owned_red": owned_red,
         "sibling_owned": sibling_owned,
         "foreign_red": foreign_red,
         "kept": kept,
@@ -906,6 +923,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     optional ``sidecars`` (list[str]), optional ``failing_before`` (list[str]), optional
     ``failing_at_base`` (list[str]), optional ``probe`` (``"open"`` or ``"close"``), optional
     ``run_id`` and ``plan_path`` (a probe open refuses a path another halted run withholds), optional
+    ``run_key`` (a run whose owned_red ids join ``failing_at_base``), optional
     ``cause_files`` (``{node id: [paths]}``; the caller must supply it for a node to class
     ``sibling_owned``), optional ``failing_output`` (``{node id: failure text}``; absent
     ``cause_files``, the dirty repo paths named by the node id and its text are derived as cause files).
@@ -950,4 +968,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         probe=shape,
         run_id=str(params.get("run_id") or ""),
         plan_path=str(params.get("plan_path") or ""),
+        run_key=str(params.get("run_key") or ""),
     )

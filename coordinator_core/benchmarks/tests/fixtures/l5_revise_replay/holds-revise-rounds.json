@@ -1,0 +1,52 @@
+{
+ "source": "hand-built holds slice: spend falls each round and every prior requirement source_text is carried forward",
+ "cell": "synthetic-holds",
+ "round_definition": "same as the r52 slice: one engine-ask fire per round",
+ "rounds": [
+  {
+   "round": 0,
+   "status": "completed",
+   "tokens": {"total": 3000000},
+   "requirements": [
+    {"id": "R1", "source_text": "Add the widget parser."},
+    {"id": "R2", "source_text": "Document the widget parser in the wiki."}
+   ],
+   "requirements_before": null,
+   "plan_rows": [{"id": "C1"}, {"id": "C2"}, {"id": "C3"}],
+   "halted": "review_blocked"
+  },
+  {
+   "round": 1,
+   "status": "completed",
+   "tokens": {"total": 2000000},
+   "requirements": [
+    {"id": "R1", "source_text": "Add the widget parser."},
+    {"id": "R2", "source_text": "Document the widget parser in the wiki."},
+    {"id": "R3", "source_text": "Fix the parser regression found at review."}
+   ],
+   "requirements_before": [
+    {"id": "R1", "source_text": "Add the widget parser."},
+    {"id": "R2", "source_text": "Document the widget parser in the wiki."}
+   ],
+   "plan_rows": [{"id": "F1"}, {"id": "F2"}],
+   "halted": "commit"
+  },
+  {
+   "round": 2,
+   "status": "completed",
+   "tokens": {"total": 1000000},
+   "requirements": [
+    {"id": "R1", "source_text": "Add the widget parser."},
+    {"id": "R2", "source_text": "Document the widget parser in the wiki."},
+    {"id": "R3", "source_text": "Fix the parser regression found at review."}
+   ],
+   "requirements_before": [
+    {"id": "R1", "source_text": "Add the widget parser."},
+    {"id": "R2", "source_text": "Document the widget parser in the wiki."},
+    {"id": "R3", "source_text": "Fix the parser regression found at review."}
+   ],
+   "plan_rows": [{"id": "G1"}],
+   "halted": null
+  }
+ ]
+}

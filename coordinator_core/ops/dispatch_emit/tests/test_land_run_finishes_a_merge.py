@@ -174,6 +174,7 @@ def test_since_base_still_guards_a_path_the_merge_does_not_move(repo):
 def test_the_two_artifacts_messages_are_pinned_equal(monkeypatch, tmp_path):
     from coordinator_core.git import commit as commit_mod
     from coordinator_core.ops.dispatch_emit import land_run, terminal_commit
+    from coordinator_core.ops.dispatch_emit import terminal_commit_refusals
 
     sha = "a" * 40
     artifacts = {"paths": ["state/r.json"], "deleted": []}
@@ -191,6 +192,6 @@ def test_the_two_artifacts_messages_are_pinned_equal(monkeypatch, tmp_path):
         seen["terminal"] = params["message"]
         return {"committed": True, "sha": "c" * 40}
 
-    terminal_commit._land_merge_artifacts(fake_commit_v2, tmp_path, artifacts, message, sha, None)
+    terminal_commit_refusals._land_merge_artifacts(fake_commit_v2, tmp_path, artifacts, message, sha, None)
 
     assert seen["land_run"] == seen["terminal"] == f"subject line (run artifacts)\n\nFollows merge commit {sha[:12]}.\n"

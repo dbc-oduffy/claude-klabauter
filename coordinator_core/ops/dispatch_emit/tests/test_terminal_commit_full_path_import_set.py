@@ -168,9 +168,10 @@ def test_mirrored_names_match_their_originals():
 def test_mode_predicates_agree_with_their_originals(params):
     from coordinator_core.ops.dispatch_emit import grind_commit_contract as g
     from coordinator_core.ops.dispatch_emit import halted_record_commit as h
+    from coordinator_core.ops.dispatch_emit import halted_record_request
     from coordinator_core.ops.dispatch_emit import roadmap_fanout_commit as f
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
-    assert tc._is_halted_record_call(params) == h.is_halted_record_call(params)
+    assert tc._is_halted_record_call(params) == halted_record_request.is_halted_record_call(params)
     assert tc._is_fanout_record_call(params) == f.is_fanout_record_call(params)
     assert tc._is_grind_call(params) == g.is_grind_call(params)

@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.git import run as git_run
 from coordinator_core.ops.dispatch_emit import landing_export as le
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import retest_targeted
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
 
@@ -106,7 +107,7 @@ def test_export_passes_while_live_fails_with_manifest_write_set(tmp_path, monkey
     out = _task_output(tmp_path, root, manifest=True)
     seen: list = []
     rc = _child(root, out, seen, dirty=lambda r: [])
-    record = json.loads(li.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
+    record = json.loads(landing_retest.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
     assert rc == 0 and record["status"] == "pass"
     assert record["export"]["status"] == "pass"
     assert record["live"]["status"] == "fail"
@@ -126,7 +127,7 @@ def test_failing_export_is_kept_and_is_the_top_level_status(tmp_path, monkeypatc
     (root / "test_a.py").write_text("def test_value():\n    assert False\n", encoding="utf-8")
     out = _task_output(tmp_path, root, manifest=True)
     rc = _child(root, out, [], dirty=lambda r: [])
-    record = json.loads(li.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
+    record = json.loads(landing_retest.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
     assert rc == 1 and record["status"] == "fail" and record["export"]["status"] == "fail"
     assert Path(record["isolated_export"]["root"]).is_dir()
 
@@ -136,7 +137,7 @@ def test_no_manifest_falls_back_to_covering_dirty_paths(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     out = _task_output(tmp_path, root, manifest=False)
     rc = _child(root, out, [], dirty=lambda r: ["test_a.py"])
-    record = json.loads(li.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
+    record = json.loads(landing_retest.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
     assert rc == 0 and record["export"]["status"] == "pass" and record["live"]["status"] == "fail"
     assert record["isolated_export"]["write_set_source"] == "covering_dirty_paths"
     assert record["isolated_export"]["write_set"] == ["test_a.py"]
@@ -153,7 +154,7 @@ def test_export_build_failure_is_an_error_with_no_live_run(tmp_path, monkeypatch
     monkeypatch.setattr(le, "build_head_export", _boom)
     seen: list = []
     rc = _child(root, out, seen, dirty=lambda r: ["test_a.py"])
-    record = json.loads(li.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
+    record = json.loads(landing_retest.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
     assert rc == 2 and record["status"] == "error" and "no head" in record["reason"]
     assert seen == [] and "live" not in record
 
@@ -169,4 +170,4 @@ def test_flag_is_forwarded_to_the_detached_child_only_when_set(tmp_path, monkeyp
             dirty=lambda r: [], spawn=lambda *a, **k: spawned.append(a[2]) or True,
         )
         assert ("--isolated-export" in spawned[0]) is flag
-        li.fresh_verdict_path(root, RUN_ID).unlink()
+        landing_retest.fresh_verdict_path(root, RUN_ID).unlink()

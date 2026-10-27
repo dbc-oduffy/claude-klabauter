@@ -3,54 +3,56 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit import landing_retest
+from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 
-IND = li.REVIEW_REVERIFY_INDETERMINATE
+IND = landing_targeted_tests.REVIEW_REVERIFY_INDETERMINATE
 
 
 def _params(**reverify) -> dict:
-    return {"inline_review": {li.REVERIFY_KEY: reverify}}
+    return {"inline_review": {landing_targeted_tests.REVERIFY_KEY: reverify}}
 
 
 def test_constants():
-    assert li.REVERIFY_INDETERMINATE == "indeterminate"
+    assert landing_targeted_tests.REVERIFY_INDETERMINATE == "indeterminate"
     assert IND == "review-reverify-indeterminate"
 
 
 def test_indeterminate_record_gives_one_finding(tmp_path):
     p = _params(status_before="indeterminate", status_after=None, reverify_error="warm dispatch indeterminate")
-    found = li.reverify_red_findings(tmp_path, p, ["a.py"])
+    found = landing_targeted_tests.reverify_red_findings(tmp_path, p, ["a.py"])
     assert len(found) == 1 and found[0].reason == IND and found[0].path == ""
     assert "warm dispatch indeterminate" in found[0].detail and "engine defect" in found[0].detail
 
 
 def test_indeterminate_without_error_names_none_recorded(tmp_path):
-    found = li.reverify_red_findings(tmp_path, _params(status_before="indeterminate"), [])
+    found = landing_targeted_tests.reverify_red_findings(tmp_path, _params(status_before="indeterminate"), [])
     assert len(found) == 1 and "no error recorded" in found[0].detail
 
 
 def test_reverify_error_alone_gives_one_finding(tmp_path):
-    found = li.reverify_red_findings(tmp_path, _params(status_before="pass", reverify_error="boom"), [])
+    found = landing_targeted_tests.reverify_red_findings(tmp_path, _params(status_before="pass", reverify_error="boom"), [])
     assert len(found) == 1 and found[0].reason == IND and "boom" in found[0].detail
 
 
 def test_blank_error_and_pass_gives_none(tmp_path):
-    assert li.reverify_red_findings(tmp_path, _params(status_before="pass", reverify_error="  "), []) == []
+    assert landing_targeted_tests.reverify_red_findings(tmp_path, _params(status_before="pass", reverify_error="  "), []) == []
 
 
 def test_fail_record_still_reviews_as_failed(tmp_path):
-    found = li.reverify_red_findings(tmp_path, _params(status_before="fail", failing=[]), [])
-    assert len(found) == 1 and found[0].reason == li.REVIEW_REVERIFY_FAILED
+    found = landing_targeted_tests.reverify_red_findings(tmp_path, _params(status_before="fail", failing=[]), [])
+    assert len(found) == 1 and found[0].reason == landing_targeted_tests.REVIEW_REVERIFY_FAILED
 
 
 def test_failed_targeted_tests_indeterminate_is_failed_not_preexisting():
     for extra in ({}, {"tests_run": 0}, {"tests_failed": 0}, {"baseline": {"caused": []}}):
         verdict = {"status": "fail", "status_before": "indeterminate", **extra}
-        findings, check = li.failed_targeted_tests(verdict)
+        findings, check = landing_targeted_tests.failed_targeted_tests(verdict)
         assert check == "failed" and [f.reason for f in findings] == [IND]
 
 
 def test_gate_never_launders_indeterminate_with_explicit_empty_failed_tests(tmp_path, monkeypatch):
-    monkeypatch.setattr(li, "_retest_record_status", lambda *a, **k: "pass")
+    monkeypatch.setattr(landing_retest, "_retest_record_status", lambda *a, **k: "pass")
     params = {"targeted_tests": {"status": "fail", "status_before": "indeterminate"}, "failed_tests": []}
     findings, check = li.landing_test_gate(tmp_path, params, "run1")
     assert check == "failed" and [f.reason for f in findings] == [IND]
@@ -86,10 +88,10 @@ def _gate(repo, record, targeted=("tests/test_mod.py",)):
     if record is not None:
         import json
 
-        path = li.fresh_verdict_path(repo, RUN)
+        path = landing_retest.fresh_verdict_path(repo, RUN)
         path.parent.mkdir(parents=True, exist_ok=True)
         body = {"run_id": RUN, "head": _git(["rev-parse", "HEAD"], repo), "tests": ["tests/test_mod.py::t"],
-                "covered": li.landing_fingerprint(repo, ["mod.py"]), **record}
+                "covered": landing_retest.landing_fingerprint(repo, ["mod.py"]), **record}
         path.write_text(json.dumps(body), encoding="utf-8")
     params = {"inline_review": _params(status_before="indeterminate",
                                        reverify_error="no pre-review snapshot for x-prep")["inline_review"],

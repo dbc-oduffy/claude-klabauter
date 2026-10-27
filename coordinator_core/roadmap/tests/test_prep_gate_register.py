@@ -251,7 +251,7 @@ def test_no_pins_is_legacy_pass(tmp_path):
 
 
 def test_register_in_class_order_and_authoring_lines():
-    assert pg.CLASS_ORDER[-1] == "REGISTER"
+    assert pg.CLASS_ORDER[-2] == "REGISTER"
     assert any("sizing-assemble --register" in ln for ln in pg._authoring_fix_lines({"REGISTER"}))
 
 
@@ -292,3 +292,20 @@ def test_deferred_row_citation_does_not_count(tmp_path):
     plan.write_text(text, encoding="utf-8")
     reg = _gate(tmp_path, plan)["classes"]["REGISTER"]
     assert reg["kind"] == "register-citations" and "R1" in reg["detail"]
+
+
+def test_register_citations_defect_is_mechanical_with_repair_naming_rows(tmp_path):
+    reg = _cited(tmp_path, "[]")
+    assert reg["mechanical"] is True
+    assert "register_rows" in reg["repair"] and "C1" in reg["repair"]
+
+
+def test_orphan_claimed_id_repair_names_it(tmp_path):
+    reg = _cited(tmp_path, "[R1]")
+    assert reg["mechanical"] is True and "R2" in reg["repair"]
+
+
+def test_unruled_register_row_stays_non_mechanical(tmp_path):
+    _sizing(tmp_path, _register_text(("R1", "open", False), ("R2", "deferred", False)))
+    reg = _gate(tmp_path, _plan(tmp_path, _claims()))["classes"]["REGISTER"]
+    assert reg["kind"] == "register-row-unruled" and reg["mechanical"] is False

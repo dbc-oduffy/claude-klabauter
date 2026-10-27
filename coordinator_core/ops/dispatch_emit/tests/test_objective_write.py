@@ -150,6 +150,61 @@ def test_verbatim_falls_back_to_register_first_row_source_text(repo, monkeypatch
     assert obj["verbatim"] == "first row words"
 
 
+def _sizing(tshirt="M", **ec):
+    return {"estimate": {"tshirt": tshirt}, "exit_criterion": {"statement": "ship it", **ec}}
+
+
+def _obj(repo):
+    return json.loads((repo / "state/warp/run-1/objective.json").read_text(encoding="utf-8"))
+
+
+def test_at_sizing_writes_judge_only_objective_without_falsifier(repo):
+    res = ow.write_objective_at_sizing(repo, "run-1", _sizing())
+    assert res["written"] is True
+    obj = _obj(repo)
+    assert obj["verbatim"] == "ship it" and obj["falsifier_script"] == "" and obj["axes"] == []
+    assert obj["falsifier_sha256"] is None and obj["pinned_at"] is None
+    assert obj["criteria"] == [
+        {"id": "K1", "statement": "ship it", "kind": "judged", "command": "", "expect": ""}
+    ]
+    from coordinator_core.ops.dispatch_emit import objective_contract as oc
+
+    assert oc.Objective.from_json(obj).verbatim == "ship it"
+
+
+def test_at_sizing_tags_command_with_expect_deterministic_else_judged(repo):
+    sizing = _sizing(criteria=[
+        {"statement": "greps one", "command": "grep -c x f", "expect": "1"},
+        {"statement": "command but no expected result", "command": "ls"},
+        "plain words",
+    ], falsifier="scripts/f.py")
+    ow.write_objective_at_sizing(repo, "run-1", sizing)
+    obj = _obj(repo)
+    assert obj["falsifier_script"] == "scripts/f.py"
+    assert [c["kind"] for c in obj["criteria"]] == ["deterministic", "judged", "judged"]
+    assert obj["criteria"][0]["command"] == "grep -c x f" and obj["criteria"][0]["expect"] == "1"
+
+
+@pytest.mark.parametrize("tshirt", ["XS", "S", "", "bogus"])
+def test_at_sizing_noop_below_m(repo, tshirt):
+    res = ow.write_objective_at_sizing(repo, "run-1", _sizing(tshirt))
+    assert res["written"] is False
+    assert not (repo / "state/warp/run-1/objective.json").exists()
+
+
+@pytest.mark.parametrize("tshirt", ["M", "L", "XL", "XXL"])
+def test_at_sizing_writes_at_m_and_above(repo, tshirt):
+    assert ow.write_objective_at_sizing(repo, "run-1", _sizing(tshirt))["written"] is True
+
+
+def test_at_sizing_noop_when_file_exists(repo):
+    ow.write_objective_at_sizing(repo, "run-1", _sizing())
+    before = (repo / "state/warp/run-1/objective.json").read_bytes()
+    res = ow.write_objective_at_sizing(repo, "run-1", _sizing(statement="drifted"))
+    assert res["written"] is False
+    assert (repo / "state/warp/run-1/objective.json").read_bytes() == before
+
+
 def test_axes_must_be_unique_and_nonempty(repo):
     _script(repo)
     assert _call(repo, axes=[])["written"] is False

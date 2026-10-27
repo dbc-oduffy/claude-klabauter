@@ -128,6 +128,20 @@ def test_slug_form_in_acceptance_maps_register_clause(tmp_path: Path) -> None:
     assert _cls(tmp_path, _plan(tmp_path, _row("C2", both)))["status"] == "PASS"
 
 
+def test_unmapped_clause_is_mechanical_with_repair_naming_clause(tmp_path: Path) -> None:
+    _sizing(tmp_path, _acceptance_sizing(CLAUSE_A))
+    cls = _cls(tmp_path, _plan(tmp_path))
+    assert cls["kind"] == "done-clause-unmapped"
+    assert cls["mechanical"] is True
+    assert "acceptance" in cls["repair"] and CLAUSE_A in cls["repair"]
+
+
+def test_mapped_clause_carries_no_repair(tmp_path: Path) -> None:
+    _sizing(tmp_path, _acceptance_sizing(CLAUSE_A))
+    cls = _cls(tmp_path, _plan(tmp_path, _row("C2", f"pytest -k '{CLAUSE_A}'")))
+    assert cls["status"] == "PASS" and cls["mechanical"] is False
+
+
 def test_predicate_spawns_no_subprocess(tmp_path: Path, monkeypatch) -> None:
     _sizing(tmp_path, _acceptance_sizing(CLAUSE_A))
     plan = _plan(tmp_path)
