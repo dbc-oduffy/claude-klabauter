@@ -136,10 +136,18 @@ def test_autonomous_still_denies_unfired_s_plus(env, monkeypatch):
     assert mod._ROUTE_UNFIRED_DENY in _reason(result)
 
 
+def _own(root: Path) -> None:
+    """The session's run withholds a.py, so the post-fire deny covers it."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    idx.add_run(root, "run-1", ["a.py"])
+
+
 def test_live_run_gets_the_post_fire_deny_not_the_unfired_text(env, monkeypatch):
     root, _ = env
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: "ask-x")
+    _own(root)
     result = mod.op(_edit(root))
     assert _is_deny(result)
     assert "already fired engine-ask" in _reason(result)
@@ -150,6 +158,7 @@ def test_landed_run_gets_the_post_fire_deny_not_the_unfired_text(env, monkeypatc
     root, _ = env
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
+    _own(root)
     result = mod.op(_edit(root))
     assert _is_deny(result)
     assert "already fired engine-ask" in _reason(result)

@@ -80,7 +80,6 @@ from functools import lru_cache
 from typing import Pattern
 
 HOMES = frozenset({
-    "apm-rulings",
     "audits",
     "backlogs",
     "baselines",
@@ -122,12 +121,10 @@ HOMES = frozenset({
     "review-slices",
     "reviews",
     "roadmap",
-    "rulings",
     "sizings",
     "spawn-deletions",
     "stand-downs",
     "strategic",
-    "superseding-reviews",
     "tasks",
     "test-red",
     "tests",

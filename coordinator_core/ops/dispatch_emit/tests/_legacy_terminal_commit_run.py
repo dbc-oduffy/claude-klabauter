@@ -28,10 +28,9 @@ def prepare(repo: Path, monkeypatch) -> None:
 def run(repo: Path, script: str) -> dict:
     """The op's reply for the fixture's one-row plan run; its close job launches at the no-op script."""
     from coordinator_core.ops.dispatch_emit import terminal_commit
-    from coordinator_core.ops.dispatch_emit import terminal_commit_closeout
 
-    saved = terminal_commit_closeout.CLOSE_JOB_SCRIPT
-    terminal_commit_closeout.CLOSE_JOB_SCRIPT = str(repo.parent / "close_job_noop.py")
+    saved = terminal_commit.CLOSE_JOB_SCRIPT
+    terminal_commit.CLOSE_JOB_SCRIPT = str(repo.parent / "close_job_noop.py")
     try:
         return terminal_commit._handler(
             {
@@ -43,4 +42,4 @@ def run(repo: Path, script: str) -> dict:
             repo_root=repo / ".git",
         )
     finally:
-        terminal_commit_closeout.CLOSE_JOB_SCRIPT = saved
+        terminal_commit.CLOSE_JOB_SCRIPT = saved

@@ -248,30 +248,6 @@ def _discard_fresh(xlb, root, session_id: str) -> None:
         pass
 
 
-def _trajectory(xlb, root, rec: dict, file_path: str) -> str:
-    """The lane's spent and remaining budget before this write; 'used unknown' when the base is unreadable."""
-    try:
-        u = xlb.measure(root, rec, file_path, xlb._read_text(xlb._abs(root, xlb._norm_rel(root, file_path))))
-    except Exception:
-        return f"XS budget used unknown of {xlb.BUDGET_FILES} files, {xlb.BUDGET_LINES} lines."
-    return (
-        f"XS budget used {u.files}/{xlb.BUDGET_FILES} files, {u.lines}/{xlb.BUDGET_LINES} lines; "
-        f"remaining {max(xlb.BUDGET_FILES - u.files, 0)} files, {max(xlb.BUDGET_LINES - u.lines, 0)} lines."
-    )
-
-
-def _applied_text(xlb, root, rec: dict) -> str:
-    """' Applied: <file> (<n> lines), ... Revert: git checkout -- <files>.' for earlier accepted edits; '' when none."""
-    try:
-        changes = xlb.applied_changes(root, rec)
-    except Exception:
-        return ""
-    if not changes:
-        return ""
-    listed = ", ".join(f"{rel} ({n} lines)" for rel, n in changes)
-    return f" Applied: {listed}. Revert: git checkout -- {' '.join(rel for rel, _ in changes)}."
-
-
 def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tuple[bool, dict | None]:
     """Lane open/residue/measure logic shared by the hook's `_budget_decision` and `shell_write_budget`;
     `project()` returns the post-write text or raises."""
@@ -320,7 +296,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
         usage = xlb.measure(root, rec, file_path, project())
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
-        text = f"Budget unmeasurable ({reason}). {_trajectory(xlb, root, rec, file_path)} Size S or larger. {fire_step()}"
+        text = f"Budget unmeasurable ({reason}). Make the change as one plain Edit per file."
         if opened_here:
             _discard_fresh(xlb, root, session_id)
         return True, _budget_deny(text)
@@ -334,7 +310,7 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
                 denies = 0
             if denies >= xlb.GOLF_DENY_LIMIT:
                 return True, _budget_deny(_closed_text(rec))
-        return True, _budget_deny(over_text(usage) + ("" if opened_here else _applied_text(xlb, root, rec)))
+        return True, _budget_deny(over_text(usage))
     try:
         xlb.add_path(root, session_id, file_path)
     except Exception:

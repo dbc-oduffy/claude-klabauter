@@ -170,7 +170,7 @@ from coordinator_core.install.timeouts import PHASE_SUBPROCESS_SECS
 from coordinator_core.git import git_state
 
 # A2: every subprocess.run gets a bounded timeout + stdin=DEVNULL. Cold,
-# one-shot install phases can be slow (compileall, scaffolding)
+# one-shot install phases can be slow (pip installs in ensure-coordinator-venv)
 # but must never hang the orchestrator forever on a wedged child. A member of
 # the named `install` timeout family (DR-349 § Carve-outs); the number and its
 # membership test live in `install/timeouts.py`.
@@ -188,11 +188,16 @@ install-maximalist.sh -- single idempotent orchestrator for the cold maximalist
 coordinator install phase sequence.
 
 Usage:
-  install-maximalist.sh [--check-only] [--non-interactive] [--help|-h]
+  install-maximalist.sh [--check-only] [--non-interactive] [--allow-venv-fallback] [--help|-h]
 
 Flags:
   --check-only       Read-only report pass -- no mutations. Every phase runs its
                       read-only checks / dry-run mode and reports would-do state.
+  --allow-venv-fallback  Explicit opt-in, break-glass only: builds/rebuilds the
+                      .coordinator-venv fallback at Step 6. Omitted by default per
+                      docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4 --
+                      without it, Step 6 is skipped outright and Step 6b precompiles
+                      only under the base interpreter.
   --non-interactive   Suppresses any prompt sub-scripts might otherwise offer.
                       This orchestrator itself never prompts; phases that
                       inherently require a human decision (operator identity,
@@ -215,7 +220,11 @@ What this does:
         (6-6.5 skip when the clone is the standalone plugin -- no content-repo launcher to wrap)
     7.  gen-settings-hooks.sh          (Step 3.5c -- settings.json hook block)
     8.  register-coordinator-mirror.sh (Step 5 -- plugin.mirrors registration)
-    9.5 compileall                    (Step 6b -- precompile coordinator_core bytecode; native)
+    9.  ensure-coordinator-venv         (Step 6 -- coordinator_whoami venv; native;
+                                          break-glass only, requires --allow-venv-fallback,
+                                          skipped by default per docs/plans/2026-08-18-
+                                          retire-coordinator-venv.md chunk C4)
+    9.5 compileall                     (Step 6b -- precompile coordinator_core bytecode; native)
     10. scaffold-canonical-structure    (Step 7 -- canonical doc structure; native)
     11. check-install-singularity.sh   (Step 7.5 -- canonical-locus integrity gate)
     12. capture-fan-out-threshold.sh   (Step 8 -- fan-out large-wave threshold)
@@ -302,15 +311,18 @@ class _UsageError(Exception):
 
 
 def _parse_args(argv: Sequence[str]) -> Optional[Dict[str, bool]]:
-    """Returns {'check_only':.., 'non_interactive':..} or None
+    """Returns {'check_only':.., 'non_interactive':.., 'allow_venv_fallback':..} or None
     (help printed, exit 0)."""
     check_only = False
     non_interactive = False
+    allow_venv_fallback = False
     for arg in argv:
         if arg == "--check-only":
             check_only = True
         elif arg == "--non-interactive":
             non_interactive = True
+        elif arg == "--allow-venv-fallback":
+            allow_venv_fallback = True
         elif arg in ("--help", "-h"):
             print(_USAGE)
             return None
@@ -319,6 +331,7 @@ def _parse_args(argv: Sequence[str]) -> Optional[Dict[str, bool]]:
     return {
         "check_only": check_only,
         "non_interactive": non_interactive,
+        "allow_venv_fallback": allow_venv_fallback,
     }
 
 
@@ -639,19 +652,34 @@ def _environ_patched(env: Dict[str, str]):
         yield
 
 
-def _compileall_interpreters() -> List[str]:
+def _compileall_interpreters(allow_venv_fallback: bool = False) -> List[str]:
     """Resolve the interpreter(s) that actually execute the shipped bins.
 
     ``.pyc`` caches are per-interpreter-version and live in ``__pycache__``
-    beside the source. The coordinator bins resolve a bare
-    ``python3``/``python`` off PATH, which need not be the interpreter running
-    this module -- so this resolves via ``shutil.which``, not ``sys.executable``.
+    beside the source -- precompiling under only the venv interpreter would
+    miss the interpreter that matters most: the coordinator bins resolve a
+    bare ``python3``/``python`` off PATH on Unix and never touch the venv at
+    all. Returns base-python first (if resolvable), then -- only when
+    ``allow_venv_fallback`` (docs/plans/2026-08-18-retire-coordinator-venv.md
+    chunk C4, AC5) -- the venv python when it exists and differs from
+    base-python, deduped, in precompile order. Without the flag this
+    function never imports ``coordinator_core.install.ensure_venv`` at all:
+    that module is break-glass-only now, and a default install run must not
+    probe its (retired-by-default) venv tree merely to precompile it.
     """
-    for name in ("python3", "python"):
-        found = shutil.which(name)
-        if found:
-            return [found]
-    return []
+    from coordinator_core.install.ensure_venv import _resolve_base_python
+
+    interpreters: List[str] = []
+    base_py = _resolve_base_python()
+    if base_py:
+        interpreters.append(base_py)
+    if allow_venv_fallback:
+        from coordinator_core.install.ensure_venv import venv_python_path
+
+        venv_py = venv_python_path(settings_home() / ".coordinator-venv")
+        if venv_py.exists() and str(venv_py) not in interpreters:
+            interpreters.append(str(venv_py))
+    return interpreters
 
 
 def _run_compileall(interp: str, pkg_root: Path) -> subprocess.CompletedProcess:
@@ -1554,6 +1582,7 @@ def run(
     doe_clone: str,
     claude_klabauter_root: str,
     claude_home_dir: Optional[str] = None,
+    allow_venv_fallback: bool = False,
 ) -> int:
     """Core orchestration entry -- callable directly (e.g. from tests) without
     going through argv parsing. ALWAYS returns an int exit code, even though
@@ -1591,6 +1620,7 @@ def run(
         try:
             return _run_body(
                 check_only, non_interactive, coord_root, doe_clone, claude_home_dir, claude_klabauter_root,
+                allow_venv_fallback=allow_venv_fallback,
             )
         except SystemExit as exc:
             return int(exc.code) if isinstance(exc.code, int) else 1
@@ -1603,6 +1633,8 @@ def _run_body(
     doe_clone: str,
     claude_home_dir: Optional[str],
     claude_klabauter_root: str,
+    *,
+    allow_venv_fallback: bool = False,
 ) -> int:
     # Root of the home-resolution seam: three downstream consumers derive real
     # filesystem targets from this one value (the settings-home/PATH prepend,
@@ -2069,6 +2101,35 @@ def _run_body(
         env=env,
     )
 
+    # -- Step 6 -- ensure-coordinator-venv (native, advisory) --
+    # Break-glass only (docs/plans/2026-08-18-retire-coordinator-venv.md
+    # chunk C4, AC5): `ensure_coordinator_venv` is reachable ONLY via the
+    # explicit `--allow-venv-fallback` opt-in. Machine-interpreter
+    # `coordinator_whoami` provisioning no longer depends on this call --
+    # `scripts/setup.py`'s post-registration advisory step (chunk C10)
+    # handles that independently.
+    _venv_desc = "ensure-coordinator-venv (Step 6 -- coordinator_whoami venv)"
+    orch.phase_header(_venv_desc)
+    if not allow_venv_fallback:
+        print(
+            f"{_venv_desc}: skipped -- reachable only via --allow-venv-fallback "
+            "(docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4)."
+        )
+    else:
+        from coordinator_core.install.ensure_venv import EnsureVenvError, ensure_coordinator_venv
+
+        try:
+            venv_status = ensure_coordinator_venv(
+                Path(coord_root), settings_home(), claude_home=claude_home_dir, check_only=check_only,
+            )
+            print(f"ensure-coordinator-venv: {venv_status}")
+        except EnsureVenvError as exc:
+            print(
+                f"WARN: phase '{_venv_desc}' failed -- continuing (advisory, not fatal): {exc}",
+                file=sys.stderr,
+            )
+            orch.failed = True
+
     # -- Step 6b -- compileall (native, advisory) --
     # Recovers first-bin-invocation latency: without this, bytecode compilation
     # cost is paid cold on the FIRST call to any bin after install, not at
@@ -2079,7 +2140,7 @@ def _run_body(
         print("compileall: skipped -- --check-only writes no .pyc")
     else:
         _pkg_root = Path(__file__).resolve().parent.parent
-        _compileall_interps = _compileall_interpreters()
+        _compileall_interps = _compileall_interpreters(allow_venv_fallback)
         if not _compileall_interps:
             print(
                 f"WARN: phase '{_compileall_desc}' found no interpreter to precompile "
@@ -2345,6 +2406,7 @@ def main(argv: List[str]) -> int:
             coord_root=coord_root,
             doe_clone=doe_clone,
             claude_klabauter_root=claude_klabauter_root,
+            allow_venv_fallback=parsed["allow_venv_fallback"],
         )
     except SystemExit as exc:
         # run_required phases sys.exit() directly (matches the bash oracle's
@@ -2424,7 +2486,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 """This module is a genuine ORCHESTRATOR for every OTHER phase — Phase 3
 Step 1 (install-substrate), install-health-run,
 gen-claude-author-launcher, gen-settings-hooks,
-register-coordinator-mirror, scaffold-canonical-
+register-coordinator-mirror, ensure-coordinator-venv, scaffold-canonical-
 structure, check-install-singularity, capture-fan-out-threshold,
 platform-localize, and coordinator-setup-state are each called in-process
 and each already declares (or is separately allowlisted for) its own

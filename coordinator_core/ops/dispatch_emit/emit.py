@@ -382,11 +382,9 @@ from coordinator_core.ops.dispatch_emit.executor_economy import (
     CHECKPOINT_STATUS,
     EXCERPT_HEADING,
     MAX_CONTINUATIONS,
-    SYMBOL_CONTEXT_HEADING,
     checkpoint_path,
 )
 from coordinator_core.ops.dispatch_emit.row_excerpts import excerpt_block
-from coordinator_core.ops.dispatch_emit import symbol_context as _symbol_context
 from coordinator_core.ops.dispatch_emit import fanout_cost as _fanout
 from coordinator_core.ops.dispatch_emit.agent_sidecar import (
     sidecar_clause as _sidecar_clause,
@@ -2798,35 +2796,20 @@ def _bare_excerpts(row: WaveRow) -> str:
     return excerpt_block(row.body, (), ".", "unrecorded", {})
 
 
-def _symbol_context_block(ctx) -> str:
-    """The SYMBOL_CONTEXT_HEADING block: one line per entry, or ``(empty: <reason>)``."""
-    if ctx is None or not ctx.entries:
-        return f"{SYMBOL_CONTEXT_HEADING}\n(empty: {ctx.reason if ctx is not None and ctx.reason else 'no-symbols'})"
-    lines = [f"`{e.symbol}` \u2014 {e.file}:{e.line} ({e.role} of `{e.of}`)" for e in ctx.entries]
-    return "\n".join([SYMBOL_CONTEXT_HEADING, *lines])
+def _row_excerpts_for(repo_root, head: Optional[str], cache: dict):
+    """A ``WaveRow -> excerpt block`` provider sharing one span cache across a compose.
 
-
-def _row_excerpts_for(repo_root, head: Optional[str], cache: dict, rows=None):
-    """A ``WaveRow -> excerpt block + symbol-context block`` provider sharing one span cache.
-
-    Scans each distinct written or read ``.py`` file once; ``symbol_context.lookup`` runs once per
-    compose, lazily on the first row, over ``rows`` (a row outside ``rows`` is looked up alone).
-    Without a ``repo_root`` there is no file to scan and the provider yields ``None``."""
+    Scans each distinct written or read ``.py`` file once. Without a ``repo_root`` there is no
+    file to scan and the provider yields ``None`` (the body-only block)."""
     if repo_root is None:
         return lambda row: None
-    looked: dict = {}
 
     def provide(row: WaveRow) -> str:
-        if not looked:
-            looked.update(_symbol_context.lookup(repo_root, list(rows) if rows else [row], cache))
-        if row.id not in looked:
-            looked.update(_symbol_context.lookup(repo_root, [row], cache))
         paths: list = []
         for p in [*(() if row.writes is UNDECLARED else row.writes), *row.reads]:
             if isinstance(p, str) and p and p not in paths:
                 paths.append(p)
-        block = excerpt_block(row.body, paths, repo_root, (head or "unrecorded")[:12], cache)
-        return block + "\n\n" + _symbol_context_block(looked.get(row.id))
+        return excerpt_block(row.body, paths, repo_root, (head or "unrecorded")[:12], cache)
 
     return provide
 
@@ -3104,14 +3087,6 @@ def _agent_call_over(
         f"stallMs: {_EXECUTOR_STALL_MS} "
         "})"
     )
-
-
-def _reroute_arg(row: WaveRow, call_builder) -> str:
-    """The trailing ``, async () => (<call>)`` argument of a ``_runRow(...)`` registration: the
-    row's prompt re-dispatched as the executor. Empty unless the row runs as the test-runner."""
-    if _row_agent_type(row) != _TEST_AGENT_TYPE:
-        return ""
-    return f", async () => ({call_builder(row._replace(agent_type=_EXECUTOR_AGENT_TYPE, agent_model=None))})"
 
 
 def _routed_agent_call_over(
@@ -4394,9 +4369,6 @@ def _run_row_helper_js(
         # the first other non-status line; '' when the reply has neither.
         f"  const _REASON_STATUS_RE = {_REASON_STATUS_LINE_JS_RE};\n"
         f"  const _REASON_SPLIT_RE = {_REASON_SPLIT_JS_RE};\n"
-        "  function _isPathOnly(s) {\n"
-        "    return !/\\s/.test(s) && /[\\/\\\\]/.test(s) && /\\.(md|json)$/.test(s);\n"
-        "  }\n"
         "  function _reasonOf(result) {\n"
         "    const raw = typeof result === 'string';\n"
         "    const t = raw ? result : JSON.stringify(result ?? null);\n"
@@ -4407,12 +4379,12 @@ def _run_row_helper_js(
         "    const at = lines.findIndex((l) => _REASON_STATUS_RE.test(l));\n"
         "    if (at >= 0) {\n"
         "      const own = tidy(lines[at].replace(_REASON_STATUS_RE, ''));\n"
-        "      if (own && !_isPathOnly(own)) return own.slice(0, 1000);\n"
+        "      if (own) return own.slice(0, 1000);\n"
         "    }\n"
         "    for (const l of lines) {\n"
         "      if (_REASON_STATUS_RE.test(l) || _DEP_ANY_STATUS_RE.test(l)) continue;\n"
         "      const o = tidy(l);\n"
-        "      if (o && !_isPathOnly(o)) return o.slice(0, 1000);\n"
+        "      if (o) return o.slice(0, 1000);\n"
         "    }\n"
         "    return '';\n"
         "  }\n"
@@ -4448,15 +4420,13 @@ def _run_row_helper_js(
         "    return null;\n"
         "  }\n"
         "  let _rowSeq = 0;\n"
-        "  function _runRow(id, deps, verifyScope, run, commit, reroute) {\n"
+        "  function _runRow(id, deps, verifyScope, run, commit) {\n"
         "    _rowSeq++;\n"
-        "    const p = _runRowInner(id, deps, verifyScope, run, commit, reroute);\n"
+        "    const p = _runRowInner(id, deps, verifyScope, run, commit);\n"
         "    _rowIdOf.set(p, id);\n"
         "    return p;\n"
         "  }\n"
-        f"  const _REFUSAL_RE = {_REFUSAL_JS_RE};\n"
-        f"  const _RAN_FAIL_RE = {_RAN_FAIL_JS_RE};\n"
-        "  async function _runRowInner(id, deps, verifyScope, run, commit, reroute) {\n"
+        "  async function _runRowInner(id, deps, verifyScope, run, commit) {\n"
         "    if (typeof id !== 'string' || !id) {\n"
         "      if (!_halted) _halted = 'refusal: invalid chunk id ' + JSON.stringify(id ?? null) + "
         "' at row position ' + _rowSeq;\n"
@@ -4513,13 +4483,6 @@ def _run_row_helper_js(
         "        _contOf[id] = { n: _ckpts, path: _ck[1] };\n"
         "        result = await run();\n"
         "      }\n"
-        "      if (typeof reroute === 'function') {\n"
-        "        const _rt = typeof result === 'string' ? result : JSON.stringify(result ?? null);\n"
-        f"        if (_REFUSAL_RE.test(_rt) && !_RAN_FAIL_RE.test(_rt) && _trVerdictOf(_rt) !== 'fail' && ({_NON_DONE_STATUS_JS_RE}.test(_rt) || _trVerdictOf(_rt) === 'not_run')) {{\n"
-        "          log(id + ': re-routed after refusal');\n"
-        "          result = await reroute();\n"
-        "        }\n"
-        "      }\n"
         "    } catch (e) {\n"
         "      result = null;\n"
         "    }\n"
@@ -4536,16 +4499,12 @@ def _run_row_helper_js(
         "      }\n"
         "    } else if (!" + f"{_ANY_STATUS_JS_RE}.test(_text)) {{\n"
         "      const _tv = _trVerdictOf(_text);\n"
-        "      if (!_tv) {\n"
+        "      if (_tv !== 'pass') {\n"
         "        _incompleteChunks.push(id);\n"
-        "        _unansweredBriefs.push(id);\n"
-        f"        {CHUNK_REASON_VAR}[id] = 'no contract status line in the executor reply';\n"
-        "        incomplete = true;\n"
-        "      } else if (_tv !== 'pass') {\n"
-        "        _incompleteChunks.push(id);\n"
+        "        if (!_tv) _unansweredBriefs.push(id);\n"
         f"        {CHUNK_REASON_VAR}[id] = _tv === 'not_run' ? "
-        "'instrument fault: the test-runner ran nothing (test_verdict: not_run)' : "
-        "'test-runner verdict: ' + _tv;\n"
+        "'instrument fault: the test-runner ran nothing (test_verdict: not_run)' : _tv "
+        "? 'test-runner verdict: ' + _tv : 'no contract status line in the executor reply';\n"
         "        incomplete = true;\n"
         "      }\n"
         "    }\n"
@@ -5396,7 +5355,7 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
     shared = SharedBlocks()
     repo_root = compose_context.get("repo_root")
     out: dict[str, int] = {}
-    excerpts_for = _row_excerpts_for(repo_root, None, {}, list(rows))
+    excerpts_for = _row_excerpts_for(repo_root, None, {})
     for row in rows:
         call_expr = _row_agent_call_expr(
             row,
@@ -5410,23 +5369,10 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
             checkpoint_prefix=_checkpoint_prefix_for(compose_context.get("plan_path"), row.id),
         )
         deps = ", ".join(f"_rows[{_js_string_literal(d)}]" for d in row.depends_on)
-        reroute_arg = _reroute_arg(
-            row,
-            lambda r: _row_agent_call_expr(
-                r,
-                compose_context.get("plan_path"),
-                compose_context.get("plan_context"),
-                shared,
-                agent_type_host=compose_context.get("agent_type_host"),
-                preamble=compose_context.get("preamble"),
-                new_module_paths=tuple(_new_module_paths(row, repo_root)),
-                excerpts=excerpts_for(row),
-            ),
-        )
         text = (
             f"  _rows[{_js_string_literal(row.id)}] = _runRow("
             f"{_js_string_literal(row.id)}, [{deps}], null, async () => ({call_expr}), "
-            f"{{ title: {_js_string_literal(row.title)}, paths: [], declared: [] }}{reroute_arg});"
+            f"{{ title: {_js_string_literal(row.title)}, paths: [], declared: [] }});"
         )
         size = len(text.encode("utf-8"))
         if row.writes is not UNDECLARED:
@@ -6000,7 +5946,7 @@ def compose_script(
                     f"  _seamGates[{n}] = new Promise((res) => {{ _seamRelease[{n}] = res; }});"
                 )
         row_exprs: dict[str, str] = {}
-        excerpts_for = _row_excerpts_for(repo_root, run_base_sha, {}, flat_rows)
+        excerpts_for = _row_excerpts_for(repo_root, run_base_sha, {})
         if roster is None:
             row_exprs, row_group = _plan_row_groups(
                 dag,
@@ -6054,7 +6000,6 @@ def compose_script(
                 else "null"
             )
             continuable = False
-            reroute_arg = ""
             if row.id in row_group:
                 members = row_group[row.id]
                 call_expr = (
@@ -6074,29 +6019,19 @@ def compose_script(
                     label_id=row.id,
                     checkpoint_prefix=_checkpoint_prefix_for(plan_path, row.id),
                 )
-                reroute_arg = _reroute_arg(
-                    row,
-                    lambda r: _agent_call_over(
-                        row_exprs[row.id], r, agent_type_host, label_id=row.id
-                    ),
-                )
             else:
-                def _roster_call(r, row=row):
-                    return _row_agent_call_expr(
-                        r,
-                        plan_path,
-                        plan_context,
-                        shared,
-                        agent_type_host=agent_type_host,
-                        preamble=preamble,
-                        new_module_paths=tuple(_new_module_paths(row, repo_root)),
-                        predecessor_state=predecessor_state,
-                        chatty_brief=_chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id)),
-                        excerpts=excerpts_for(row),
-                    )
-
-                call_expr = _roster_call(row)
-                reroute_arg = _reroute_arg(row, _roster_call)
+                call_expr = _row_agent_call_expr(
+                    row,
+                    plan_path,
+                    plan_context,
+                    shared,
+                    agent_type_host=agent_type_host,
+                    preamble=preamble,
+                    new_module_paths=tuple(_new_module_paths(row, repo_root)),
+                    predecessor_state=predecessor_state,
+                    chatty_brief=_chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id)),
+                    excerpts=excerpts_for(row),
+                )
             row_paths = row_pathspecs.get(row.id) or []
             if row.id in checkpoint_over:
                 unchecked_rows.append(row.id)
@@ -6121,7 +6056,7 @@ def compose_script(
                 (f"  _contOf[{_js_string_literal(row.id)}] = null;\n" if continuable else "")
                 + f"  _rows[{_js_string_literal(row.id)}] = _runRow("
                 f"{_js_string_literal(row.id)}, {deps_expr}, "
-                f"{verify_expr}, async () => ({call_expr}), {commit_expr}{reroute_arg});"
+                f"{verify_expr}, async () => ({call_expr}), {commit_expr});"
             )
 
         for n, wave in enumerate(waves, start=1):
@@ -6718,17 +6653,6 @@ _NON_DONE_STATUS_JS_RE = (
     rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'
     r'|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
 )
-
-#: A reply that refused its row as out of role or ran nothing. Matched against the
-#: JSON-stringified reply; ``_runRowInner`` re-routes such a reply once when the row
-#: carries a reroute closure.
-_REFUSAL_JS_RE = (
-    r'/out[ -]of[ -]role|\bI ran nothing\b|\bNot run\b|test_verdict"?\s*:\s*"?not_run/i'
-)
-
-#: A reply that ran and failed: an uppercase ``FAIL``/``FAILED`` or a non-zero
-#: ``N failed`` count. Such a reply is never re-routed.
-_RAN_FAIL_JS_RE = r'/\bFAIL(?:ED)?\b|\b[1-9]\d* failed\b/'
 
 #: A ``CHECKPOINT: <path>`` status line leading the reply or any line of it; group 1 is the path.
 _CHECKPOINT_JS_RE = (

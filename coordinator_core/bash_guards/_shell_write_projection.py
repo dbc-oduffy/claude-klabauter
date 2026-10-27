@@ -101,13 +101,6 @@ def _body_targets(head: str) -> Dict[str, bool]:
 
 
 _SEPARATORS = frozenset({"&&", ";", "||", "|", "&", ";;", "|&"})
-_COMMIT_VALUE_LONG = frozenset(
-    {
-        "--message", "--file", "--author", "--date", "--reuse-message", "--reedit-message",
-        "--fixup", "--squash", "--cleanup", "--template", "--trailer",
-    }
-)
-_COMMIT_VALUE_SHORT = frozenset("mFCct")
 _APPLY_VALUE_LONG = frozenset({"--directory", "--include", "--exclude", "--whitespace"})
 _APPLY_NO_WRITE = frozenset({"--check", "--stat", "--numstat", "--summary"})
 _PATCH_READ_CAP = 1 << 20
@@ -182,21 +175,6 @@ def _git_segment_specs(toks: List[str], cwd: str, root: str) -> List[str]:
         return os.path.normpath(p if os.path.isabs(p) else os.path.join(gcwd, p))
 
     specs: List[str] = []
-    if sub == "add":
-        dd = False
-        whole = False
-        for a in args:
-            if not dd and a == "--":
-                dd = True
-            elif not dd and a.startswith("--pathspec-from-file"):
-                whole = True
-            elif not dd and a in ("-A", "--all", "-u", "--update"):
-                whole = True
-            elif not dd and a.startswith("-"):
-                continue
-            else:
-                specs.append(a)
-        return [absp(s) for s in specs] if specs else ([root] if whole else [])
     if sub == "checkout":
         if "--" not in args:
             return []
@@ -223,36 +201,6 @@ def _git_segment_specs(toks: List[str], cwd: str, root: str) -> List[str]:
             elif not a.startswith("-"):
                 specs.append(a)
         return [absp(s) for s in specs] or [root]
-    if sub == "commit":
-        every = False
-        dd = False
-        skip = False
-        for a in args:
-            if skip:
-                skip = False
-            elif dd:
-                specs.append(a)
-            elif a == "--":
-                dd = True
-            elif a in ("--all", "--amend"):
-                every = True
-            elif a in _COMMIT_VALUE_LONG:
-                skip = True
-            elif a.startswith("--") or a == "-":
-                continue
-            elif a.startswith("-"):
-                for k, ch in enumerate(a[1:], 1):
-                    if ch == "a":
-                        every = True
-                    if ch in _COMMIT_VALUE_SHORT:
-                        skip = k == len(a) - 1
-                        break
-            else:
-                specs.append(a)
-        if every or not specs:
-            # No pathspec: the staged set is unknowable without a git spawn, so it counts as the root.
-            return [root]
-        return [absp(s) for s in specs]
     if sub == "apply":
         if any(a in _APPLY_NO_WRITE for a in args) or (
             "--cached" in args and "--index" not in args
@@ -398,8 +346,9 @@ def _verb_writes(cmd: str, cwd: str, root: str) -> List[str]:
 
 def shell_writes(cmd: str, cwd: str, root: str, with_git: bool = False) -> List[ShellWrite]:
     """Every in-repo write target of `cmd`, deduplicated, in encounter order. `with_git` adds the
-    pathspecs of `git add/commit/checkout --/restore/apply`; the pre-fire XS budget leaves it off,
-    since those targets carry no projectable body and would be denied as unmeasurable."""
+    pathspecs of `git checkout --/restore/apply`; the pre-fire XS budget leaves it off,
+    since those targets carry no projectable body and would be denied as unmeasurable.
+    `git add` and `git commit` record work already on disk, so they are never write targets."""
     if not cmd or not cmd.strip() or not root:
         return []
     try:

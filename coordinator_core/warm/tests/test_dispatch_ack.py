@@ -283,3 +283,72 @@ def test_wait_on_unknown_or_tombstoned_key_returns_at_once():
 def test_mint_ns_of_parses_the_pid_dash_clock_key_format():
     assert dispatch_ack.mint_ns_of("12345-987654321") == 987654321
     assert dispatch_ack.mint_ns_of("not-a-valid-key-shape-xyz") is None
+
+
+def _bounded(bound: float) -> dispatch_ack.AckStore:
+    return _store(executing_bound=lambda method: bound)
+
+
+def test_overdue_record_inside_the_ceiling_reads_executing_overdue(monkeypatch):
+    store = _bounded(10.0)
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    clock = time.monotonic()
+    monkeypatch.setattr(time, "monotonic", lambda: clock + 10.0)
+    assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING, "overdue": True}
+    monkeypatch.setattr(time, "monotonic", lambda: clock + 9.0)
+    assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING}
+
+
+def test_record_past_the_overdue_ceiling_reads_abandoned(monkeypatch):
+    store = _bounded(10.0)
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    clock = time.monotonic()
+    monkeypatch.setattr(
+        time, "monotonic", lambda: clock + 10.0 * dispatch_ack.OVERDUE_CEILING_FACTOR
+    )
+    assert store.status(key) == {
+        "state": dispatch_ack.STATE_UNKNOWABLE,
+        "reason": dispatch_ack.OUTCOME_ABANDONED,
+    }
+
+
+def test_late_result_supersedes_an_abandoned_stamp():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.stamp(key, dispatch_ack.OUTCOME_ABANDONED)
+    store.stamp(key, dispatch_ack.OUTCOME_RESULT, result={"sha": "abc"})
+    assert store.status(key) == {
+        "state": dispatch_ack.STATE_FINISHED,
+        "outcome": dispatch_ack.OUTCOME_RESULT,
+        "result": {"sha": "abc"},
+    }
+
+
+def test_late_error_supersedes_an_abandoned_stamp():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.stamp(key, dispatch_ack.OUTCOME_ABANDONED)
+    store.stamp(key, dispatch_ack.OUTCOME_ERROR, error_code=-32603)
+    assert store.status(key)["outcome"] == dispatch_ack.OUTCOME_ERROR
+
+
+def test_every_other_restamp_is_still_a_no_op():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.stamp(key, dispatch_ack.OUTCOME_ABANDONED)
+    store.stamp(key, dispatch_ack.OUTCOME_WORKER_LOST)
+    store.stamp(key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+    assert store.status(key)["reason"] == dispatch_ack.OUTCOME_ABANDONED
+
+    done = _key(1, 1_000_200)
+    store.admit(done, "m")
+    store.stamp(done, dispatch_ack.OUTCOME_RESULT, result={"v": 1})
+    store.stamp(done, dispatch_ack.OUTCOME_ERROR, error_code=-1)
+    store.stamp(done, dispatch_ack.OUTCOME_ABANDONED)
+    assert store.status(done)["result"] == {"v": 1}
+    assert store.status(done)["outcome"] == dispatch_ack.OUTCOME_RESULT

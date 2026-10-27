@@ -6378,13 +6378,11 @@ def _ownership_denial_stands_down(
 #: again. Verdict logic (`_git_commit_agent_may_commit`, `check()`) is
 #: UNCHANGED by this correction -- text only.
 _GIT_COMMIT_AGENT_DENY_REASON = (
-    "BLOCKED: git-commit-agent commits in two shapes only, each with a "
+    "BLOCKED: git-commit-agent commits in one shape only, with a "
     "non-sweeping in-scope pathspec -- use instead: "
-    "`coordinator-invoke ceremony.commit_v2 "
-    "'{\"paths\":[\"a.py\"],\"message\":\"subj\"}'` or "
-    "`git commit -m <subj> -- <path>...`, naming each path "
-    "(no `.`, `-A`, globs, ancestors). Argv is not the cause; path scope "
-    "is. Nothing is counted."
+    "`coordinator-invoke ceremony.commit_v2 --params-file <f>`, naming each "
+    "path (no `.`, `-A`, globs, ancestors). Argv is not the cause; path "
+    "scope is. Nothing is counted."
 )
 
 #: 2026-08-30: this message used to name `ceremony.commit_v2` as the route to
@@ -6413,8 +6411,8 @@ _GIT_COMMIT_AGENT_DENY_REASON = (
 #: doctrine and enforcement pointing opposite ways with the agent in between.
 #: The second pass fixed the RECOGNIZER instead -- `_extract_invoke_commit_
 #: v2_paths` repointed off the deleted op onto `ceremony.commit_v2`, the dead
-#: trampoline leg deleted -- so the messages now name TWO shapes, both of
-#: which the allow side can actually read. The verdict-logic change is that
+#: trampoline leg deleted -- so the messages now name the one
+#: `ceremony.commit_v2 --params-file` route, which the allow side can read. The verdict-logic change is that
 #: repoint; these message constants stay in lockstep with it BY RULE, pinned
 #: by `test_deny_message_names_only_recognizable_routes`.
 
@@ -6539,11 +6537,9 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
     ),
     _LEG_NO_PATHSPEC: (
         "BLOCKED: git-commit-agent found no readable pathspec here -- use "
-        "instead: `coordinator-invoke ceremony.commit_v2 "
-        "'{\"paths\":[\"a.py\"],\"message\":\"subj\"}'` or "
-        "`git commit -m <subj> -- <path>...`. An in-process `commit_paths` "
-        "call, or any argv this guard cannot read as one of those two, "
-        "lands here; path scope was never checked."
+        "instead: `coordinator-invoke ceremony.commit_v2 --params-file <f>`. "
+        "An in-process `commit_paths` call, or any argv this guard cannot "
+        "read as that route, lands here; path scope was never checked."
     ),
     _LEG_SWEEPING_PATHSPEC: (
         "BLOCKED: git-commit-agent rejected a SWEEPING pathspec element -- "
@@ -6580,10 +6576,9 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "hook writes it. Run the one coordinator-invoke command alone."
     ),
     _LEG_UNRESOLVABLE_GIT_ROOT: (
-        "BLOCKED: git-commit-agent: no repo root at this cwd; pathspec "
-        "never read -- do not re-check. The cwd is the dispatching "
-        "session's, shared by all its agents. Fix: EM `cd`s into "
-        "the repo, or commit via `git -C <abs-root>`."
+        "BLOCKED: no repo root at this cwd -- do not re-check. The dispatching "
+        "session's cwd is shared; EM `cd`s (or `git -C <abs-root>`), then "
+        "`coordinator-invoke ceremony.commit_v2 --params-file <f>`."
     ),
 }
 
@@ -6835,7 +6830,8 @@ def _deny_reason(
         if summary:
             return (
                 "BLOCKED: git-commit-agent commits only via a non-sweeping, "
-                "in-scope pathspec -- use instead: `ceremony.commit_v2` with "
+                "in-scope pathspec -- use instead: "
+                "`coordinator-invoke ceremony.commit_v2 --params-file <f>` with "
                 "an explicit `paths` list (a deleted path goes in "
                 "`deleted_paths`). Argv shape was fine; denied on path "
                 "scope: `%s`." % summary
@@ -7257,7 +7253,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if shape_ok:
                 return None
         else:
-            ownership_reason = "a persona commit names its paths: `git commit -m <msg> -- <path>...`"
+            ownership_reason = "a persona commit names its paths: `coordinator-invoke ceremony.commit_v2 --params-file <f>`"
 
     is_git_commit_agent = agent_type == _GIT_COMMIT_AGENT_TYPE
     if is_git_commit_agent:

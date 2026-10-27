@@ -12,6 +12,7 @@ from coordinator_core.hooks import flag_em_poll_in_flight as fl
 from coordinator_core.hooks import nudge_em_code_dispatch as mod
 
 SID = "sess-postfire"
+_OWNED = ["pkg/mod.py", "docs/readme.md", "CLAUDE.md", "sub/CLAUDE.md", ".claude/CLAUDE.md"]
 
 
 @pytest.fixture
@@ -24,6 +25,10 @@ def root(tmp_path, monkeypatch):
     for target in (mod, leaf):
         monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
+    monkeypatch.setattr(leaf, "_is_scratch_or_tmp", lambda p: "scratch" in Path(p).parts)
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    idx.add_run(repo, "run-1", _OWNED)
     return repo
 
 
@@ -88,6 +93,36 @@ def test_fired_edit_with_semantic_bypass_shape_is_denied(root, monkeypatch):
 def test_fired_non_product_paths_are_not_denied(root, monkeypatch, rel):
     _fire(monkeypatch, ["run-1"])
     assert not _is_deny(mod.op(_payload(root, "Write", rel, content="x")))
+
+
+def test_fired_product_path_no_run_owns_is_not_denied(root, monkeypatch):
+    _fire(monkeypatch, ["run-1"])
+    result = mod.op(_payload(root, "Edit", "pkg/unowned.py"))
+    assert not _is_deny(result)
+    assert "already fired engine-ask" not in str(result)
+
+
+def test_landed_stage_run_owns_nothing(root, monkeypatch):
+    _fire(monkeypatch, ["run-1"])
+    run = root / "state" / "warp" / "run-1"
+    run.mkdir(parents=True)
+    (run / "run-stage.json").write_text('{"stage": "landed"}')
+    assert not _is_deny(mod.op(_payload(root, "Edit", "pkg/mod.py")))
+    (run / "run-stage.json").write_text('{"stage": "halted"}')
+    assert _is_deny(mod.op(_payload(root, "Edit", "pkg/mod.py")))
+
+
+def test_live_runs_plan_writes_are_denied(root, monkeypatch):
+    _fire(monkeypatch, ["run-2"])
+    run = root / "state" / "warp" / "run-2"
+    run.mkdir(parents=True)
+    (run / "run.json").write_text('{"sizing_rel": "state/sizings/s.yaml"}')
+    (root / "state" / "sizings").mkdir()
+    (root / "state" / "sizings" / "s.yaml").write_text('plan: "docs/plans/p.md"\n')
+    (root / "docs" / "plans").mkdir()
+    (root / "docs" / "plans" / "p.md").write_text("- id: C1\n  writes:\n    - pkg/live.py\n")
+    assert _is_deny(mod.op(_payload(root, "Edit", "pkg/live.py")))
+    assert not _is_deny(mod.op(_payload(root, "Edit", "pkg/other.py")))
 
 
 def test_path_outside_the_repo_is_not_denied(root, monkeypatch, tmp_path):

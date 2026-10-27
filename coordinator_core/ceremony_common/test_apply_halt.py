@@ -425,3 +425,15 @@ def test_directive_progress_writes_one_flushed_stderr_line(capsys) -> None:
     captured = capsys.readouterr()
     assert captured.err == "prog: d1 landed\n"
     assert captured.out == ""
+
+
+def test_value_only_decision_opens_gate_like_disposition() -> None:
+    jp_by_id = {"jp1": _JP_TWO_WAY}
+    ids = frozenset({"d1", "d2"})
+    d1 = {"id": "d1", "depends_on": "jp1"}
+    assert apply_halt._directive_gate_open(d1, jp_by_id, {"jp1": {"value": "yes"}}, ids) is True
+    assert apply_halt._directive_gate_open(d1, jp_by_id, {"jp1": {"value": "no"}}, ids) is False
+    assert apply_halt._directive_gate_open(d1, jp_by_id, {"jp1": {}}, ids) is False
+    # value is a payload, not a disposition, when disposition is present
+    both = {"jp1": {"disposition": "no", "value": "yes"}}
+    assert apply_halt._directive_gate_open(d1, jp_by_id, both, ids) is False

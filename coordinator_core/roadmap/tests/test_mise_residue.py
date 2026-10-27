@@ -9,6 +9,26 @@ import pytest
 
 from coordinator_core.roadmap import census, mise_residue as mr
 
+# `.coordinator-local/` is ignored by every consumer repo; `state/mise-workflows/*.seam/` is not.
+SEAM_HOME = ".coordinator-local/mise-workflows"
+
+
+def test_every_seam_sidecar_lands_under_the_fleet_ignored_root():
+    rows = [
+        {"plan": "docs/plans/a.md", "verdict": "NOT-PREPPED", "failing": [], "detail": [],
+         "outcome": "NOT-PREPPED",
+         "seam": [{"class": "writes-collision", "blocking": True, "plan": "docs/plans/a.md",
+                   "path": "x.py", "counterpart_plan": "docs/plans/b.md"}]},
+    ]
+    paths = list(mr.seam_ref_texts(rows, "r1"))
+    assert paths and all(p.startswith(".coordinator-local/") for p in paths)
+    assert not any(p.startswith("state/") for p in paths)
+
+
+def test_residue_workflow_never_lands_seamref_paths():
+    mjs = Path(mr.__file__).parent / "workflows" / "mise-prep-residue.mjs"
+    assert "addLandPath(p.seamRef)" not in mjs.read_text(encoding="utf-8")
+
 
 @pytest.fixture(autouse=True)
 def _no_git(monkeypatch):
@@ -206,7 +226,7 @@ def test_mixed_pair_yields_no_seamref_for_the_certified_plan():
     ]
     run = "20261019T1630Z-abcd1234"
     texts = mr.seam_ref_texts(rows, run)
-    assert set(texts) == {f"state/mise-workflows/{run}.seam/b.txt"}
+    assert set(texts) == {f"{SEAM_HOME}/{run}.seam/b.txt"}
     members = [m for b in _args(rows)["batches"] for m in b["plans"]]
     assert [m["plan"] for m in members] == ["docs/plans/b.md"]
     assert not any("a.txt" in str(m.get("seamRef")) for m in members)
@@ -219,8 +239,8 @@ def test_two_uncertified_plans_each_keep_their_seamref():
     ]
     run = "20261019T1630Z-abcd1234"
     texts = mr.seam_ref_texts(rows, run)
-    assert set(texts) == {f"state/mise-workflows/{run}.seam/a.txt",
-                          f"state/mise-workflows/{run}.seam/b.txt"}
+    assert set(texts) == {f"{SEAM_HOME}/{run}.seam/a.txt",
+                          f"{SEAM_HOME}/{run}.seam/b.txt"}
     members = [m for b in _args(rows)["batches"] for m in b["plans"]]
     assert {m["seamRef"] for m in members} == set(texts)
 
@@ -234,7 +254,7 @@ def test_counterpart_copy_is_not_in_members_file_and_records_merge():
     ])]
     texts = mr.seam_ref_texts(rows, "r1")
     (path, text), = texts.items()
-    assert path == "state/mise-workflows/r1.seam/a.txt"
+    assert path == f"{SEAM_HOME}/r1.seam/a.txt"
     assert text.endswith("\n") and len(text.splitlines()) == 1
     assert "y.py" not in text and "path=x.py" in text
     assert "also docs/plans/c.md, docs/plans/d.md" in text

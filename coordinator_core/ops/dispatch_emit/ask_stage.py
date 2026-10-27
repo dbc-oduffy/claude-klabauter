@@ -9,10 +9,10 @@ gitignore-filtered, because that filter spawns git.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shlex
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Optional, Sequence
@@ -98,7 +98,7 @@ from coordinator_core.ops import scratch_delete
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
-from coordinator_core.ops.dispatch_emit import halt_tree_evict, kept_work, requirements_ledger, resume_snapshot, row_returns, sibling_split
+from coordinator_core.ops.dispatch_emit import kept_work, requirements_ledger, resume_snapshot, row_returns, sibling_split
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
@@ -114,7 +114,6 @@ from coordinator_core.ops.dispatch_emit import review_floor, run_notes
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
 from coordinator_core.ops.plan_tasks_render import load_rows
-from coordinator_core.ops._brief_premise import check_brief_claims, render_contradicted
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
 
 # Writes per-run staging files (manifest, commit-request) under a run dir, not a stamped artifact.
@@ -220,19 +219,13 @@ def revisions_block(root: Path, run_id: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def em_brief_block(sizing: Optional[Mapping], root: Optional[Path] = None) -> str:
+def em_brief_block(sizing: Optional[Mapping]) -> str:
     """The brief's EM-diagnosis section (the sizing's `em_analysis.em_brief`), marked as not the
-    PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded.
-    With ``root``, the brief's tree-contradicted claims follow as CONTRADICTED lines."""
+    PM's words and placed below the PM-intent and relayed-ask blocks. Empty when none is recorded."""
     brief = read_em_brief(sizing) if isinstance(sizing, Mapping) else None
     if not brief:
         return ""
-    block = f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
-    if root is not None:
-        flagged = render_contradicted(check_brief_claims(brief, root))
-        if flagged:
-            block += f"\n{flagged}\n"
-    return block
+    return f"## EM diagnosis (not the PM's words)\n\n{brief}\n"
 
 
 def _run_sizing_rel(sizing_rel: Optional[str], plan_text: str) -> Optional[str]:
@@ -385,7 +378,6 @@ def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id
         return False
     try:
         run_dir = record_dir(root, snap.kept_run)
-        halt_tree_evict.restore(root, run_dir)  # evicted bytes back first: kept.json fingerprints read them
         entry = kept_work.read(run_dir)["chunks"].get(row_id)
         if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id, record_dir=run_dir):
             return False
@@ -774,7 +766,7 @@ def _group_rows(
     units = []
     for r in rows:
         solo = r.agent_type == REVIEWER_AGENT_TYPE or (raw_by_id.get(r.id) or {}).get("needs_slot") is True
-        key = f"solo:{r.id}" if solo else f"{r.wave}|{','.join(sorted(r.deps))}|{r.agent_type}|{r.model}|{r.effort or ''}"
+        key = f"solo:{r.id}" if solo else f"{r.wave}|{','.join(sorted(r.deps))}|{r.agent_type}|{r.model}"
         units.append(Unit(r.id, key, sizes.get(r.id, 0)))
     groups = propose_groups(sorted(units, key=lambda u: u.key))
     group_of = {m: f"g{next(r.wave for r in rows if r.id == g[0])}-{g[0]}" for g in groups if len(g) > 1 for m in g}
@@ -1129,7 +1121,7 @@ def stage(
             intent = intent + ("\n" if intent else "") + revisions
     if plan_rel and not ledger_resume and _split is not None:
         _refuse_unclaimed_register_rows(_split.fm_text, plan_posix, run_sizing_rel, run_sizing)
-    em_block = em_brief_block(run_sizing, root)
+    em_block = em_brief_block(run_sizing)
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block
     test_targets, no_test_target = _test_scope(waves, root)
@@ -1190,7 +1182,6 @@ def stage(
                     id=row.id,
                     agent_type=agent_type,
                     model=model,
-                    effort=row.effort,
                     brief_path=_rel(root, brief),
                     writes=tuple(paths),
                     wave=wave_no,
@@ -1461,8 +1452,7 @@ def _stage_write_baseline(root: Path, rows: Sequence[ManifestRow], record: Optio
     halted run's own stage recorded for every path it covers, since the live tree already holds that
     fire's output. A refire never reads the live tree: a path the prior manifest never baselined (or
     a manifest that is absent, unreadable or lacks `write_baseline`) takes its blob at the run base,
-    an in-process object read (one `git cat-file --batch --filters` only for conversions it cannot
-    reproduce); a failed lookup raises `RefireBaselineError`."""
+    one `git cat-file --batch --filters`; a failed lookup raises `RefireBaselineError`."""
     prior: Mapping = {}
     base = halted_run_base(record) if record is not None else None
     if base:
@@ -1490,60 +1480,17 @@ class RefireBaselineError(AskStageError):
 def _run_base_blobs(root: Path, base: str, paths: Sequence[str]) -> dict[str, Optional[str]]:
     """`blob_sha` of each path's content at commit `base` after checkout conversion (None: absent there).
 
-    Trap: the domain is `kept_work.fingerprint` (raw working-tree bytes), so the base content is the
-    checkout-converted blob; a committed blob sha would never equal an unchanged file under an eol rule.
-    Zero spawns on the common path (an in-process object read). A path whose checkout conversion
-    cannot be reproduced in process (`filter=`, `text=auto`, a config-set eol, `core.autocrlf` truthy at
-    any config level, an included or env-injected config, native CRLF) takes ONE
-    `git cat-file --batch --filters` for all such paths together and succeeds."""
+    Trap: the domain is `kept_work.fingerprint` (raw working-tree bytes), so the base content is read
+    through `--filters`; a committed blob sha would never equal an unchanged file under an eol/smudge
+    rule. One git spawn, none for no paths."""
     if not paths:
         return {}
-    from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_objects import read_object
-    from coordinator_core.git.git_state import read_commit, read_tree_spine
+    from coordinator_core.git.run import run_git
     from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
 
     fail = f"refire write_baseline: cannot read paths at run_base_sha {base}"
     if any(ch.isspace() for p in paths for ch in p):
         raise RefireBaselineError(f"{fail} (a whitespace path cannot be named to cat-file --batch)")
-    commit = read_commit(root, base)
-    if commit is None:
-        raise RefireBaselineError(f"{fail} (not a readable commit)")
-    spine = read_tree_spine(root, list(paths), root_tree_sha=commit.tree)
-    if spine is None:
-        raise RefireBaselineError(f"{fail} (unreadable tree)")
-    common = resolve_git_common_dir(root)
-    config_forces_git = _config_forces_git(root)
-    out: dict[str, Optional[str]] = {}
-    needs_git: list[str] = []
-    for p in paths:
-        entry = spine.get(p.rpartition("/")[0], {}).get(p.rpartition("/")[2])
-        if entry is None or entry[0] in (0o40000, 0o160000):
-            out[p] = None
-            continue
-        obj = read_object(common, entry[1])
-        if obj is None or obj[0] != "blob":
-            raise RefireBaselineError(f"{fail} (blob {entry[1]} of {p} unreadable)")
-        data = obj[1]
-        if entry[0] != 0o120000:
-            converted = None if config_forces_git else _checkout_convert(root, p, data)
-            if converted is None:
-                needs_git.append(p)
-                continue
-            data = converted
-        out[p] = blob_sha(data)
-    if needs_git:
-        out.update(_git_filtered_blobs(root, base, needs_git, fail))
-    return {p: out[p] for p in paths}
-
-
-def _git_filtered_blobs(root: Path, base: str, paths: Sequence[str], fail: str) -> dict[str, Optional[str]]:
-    """`blob_sha` of each path at `base` as git's checkout converts it: ONE `git cat-file --batch --filters`."""
-    import uuid
-
-    from coordinator_core.git.run import run_git
-    from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
-
     # Git's `--filters` header reports the unconverted size, so entries are split on a sentinel
     # object (answered `<sentinel> missing`), never on the header size.
     tok = uuid.uuid4().hex
@@ -1580,94 +1527,6 @@ def _git_filtered_blobs(root: Path, base: str, paths: Sequence[str], fail: str) 
         else:
             out[paths[i - 1]] = None
     return out
-
-
-_CONFIG_CONVERSION_KEY = re.compile(r"^\s*(?:autocrlf\s*(?:=\s*(?P<crlf>[^\s#;]*))?|eol\s*=|attributesfile\s*=|\[\s*include)", re.I | re.M)
-_CONFIG_ENV_KEYS = ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS")
-
-
-def _config_forces_git(root: Path) -> bool:
-    """True when any config level git reads could change checkout conversion, or cannot be read here.
-
-    Over-triggering only costs the one spawn; under-triggering would baseline the wrong content.
-    Levels: system (`GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_SYSTEM`), global (`GIT_CONFIG_GLOBAL`, else
-    XDG then `~/.gitconfig`), repo, and `config.worktree`; env-injected config and any `[include`
-    section force it."""
-    import os
-
-    from coordinator_core.git.content_hash import _read_text_scoped, _system_gitconfig_paths
-    from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
-
-    env = os.environ
-    if any(env.get(k) for k in _CONFIG_ENV_KEYS):
-        return True
-    if env.get("GIT_CONFIG_NOSYSTEM"):
-        files: list[Path] = []
-    elif env.get("GIT_CONFIG_SYSTEM"):
-        files = [Path(env["GIT_CONFIG_SYSTEM"])]
-    else:
-        files = list(_system_gitconfig_paths())
-    if "GIT_CONFIG_GLOBAL" in env:
-        if env["GIT_CONFIG_GLOBAL"]:
-            files.append(Path(env["GIT_CONFIG_GLOBAL"]))
-    else:
-        try:
-            home = Path.home()
-        except (RuntimeError, KeyError):
-            return True
-        xdg = env.get("XDG_CONFIG_HOME")
-        files.append((Path(xdg) if xdg else home / ".config") / "git" / "config")
-        files.append(home / ".gitconfig")
-    files += [resolve_git_common_dir(root) / "config", resolve_git_dir(root) / "config.worktree"]
-    for cfg in files:
-        for m in _CONFIG_CONVERSION_KEY.finditer(_read_text_scoped(cfg) or ""):
-            if (m.group("crlf") or "true").lower() not in ("false", "input"):
-                return True
-    return False
-
-
-def _checkout_convert(root: Path, rel: str, data: bytes) -> Optional[bytes]:
-    """`data` as git's checkout would write `rel`: LF->CRLF under an explicit `eol=crlf`, verbatim when
-    nothing converts, None when the conversion is not reproduced in process (the caller takes git)."""
-    from coordinator_core.git.checkin_attrs import BINARY, TEXT, UNSET, checkin_disposition
-    from coordinator_core.git.content_hash import _attributes_pattern_matches, _clean_filter_may_apply, _read_text_scoped
-    from coordinator_core.git.git_dir import resolve_git_dir
-
-    if _clean_filter_may_apply(root, rel):
-        return None
-    disposition = checkin_disposition(root, rel)
-    if disposition == BINARY:
-        return data
-    if disposition not in (TEXT, UNSET):
-        return None
-    eol: Optional[str] = None
-    parts = rel.split("/")
-    # Later wins: shallow to deep `.gitattributes`, then `info/attributes`, which git ranks highest.
-    candidates = [
-        (root.joinpath(*parts[:depth]) / ".gitattributes", "/".join(parts[depth:])) for depth in range(len(parts))
-    ]
-    candidates.append((resolve_git_dir(root) / "info" / "attributes", rel))
-    for attrs, sub in candidates:
-        text = _read_text_scoped(attrs)
-        for line in (text or "").splitlines():
-            toks = line.split("#", 1)[0].split()
-            if len(toks) > 1 and _attributes_pattern_matches(toks[0], sub):
-                for tok in toks[1:]:
-                    if tok == "text=auto":
-                        return None
-                    if tok.startswith("eol="):
-                        eol = tok[4:]
-    if disposition == UNSET:
-        return data
-    if eol is None:
-        import os
-
-        return None if os.linesep == "\r\n" else data
-    if eol == "lf":
-        return data
-    if eol == "crlf":
-        return re.sub(rb"(?<!\r)\n", b"\r\n", data)
-    return None
 
 
 def manifest_payload(root: Path, manifest: StageManifest) -> dict:
@@ -1803,24 +1662,6 @@ def _escaping_write_refusal(
     return None
 
 
-def _spine_sha(root: Path, plan_rel: Optional[str]) -> Optional[str]:
-    """sha256 over the plan's parsed task spine (rows, briefs included), or None when there is no readable plan.
-    The plan's status stamp is outside the spine, so staging never moves it."""
-    if not plan_rel:
-        return None
-    try:
-        plan_path = contained_path(root / plan_rel, [root])
-        if plan_path is None or not plan_path.is_file():
-            return None
-        from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
-
-        result = load_rows_memo(plan_path.read_text(encoding="utf-8"))
-        raw = json.dumps(list(result.rows or ()), sort_keys=True, default=str)
-    except (OSError, ValueError, TypeError):
-        return None
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
 @register_op("dispatch.ask_stage")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_stage": params `run_id` (str), exactly one of `plan_path` / `sizing_path`, `writes`.
@@ -1842,14 +1683,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if _consume_park_marker(root, run_id):
         return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None}
     digest = ask_stage_receipt.params_digest(params)
-    spine_sha = _spine_sha(root, params.get("plan_path") or None)
     plan_parse: Optional[_PlanParse] = None
     try:
         prior_dir = record_dir(root, run_id)
     except ValueError:
         prior_dir = None
     if prior_dir is not None:
-        recorded = ask_stage_receipt.landed(prior_dir, digest, spine_sha)
+        recorded = ask_stage_receipt.landed(prior_dir, digest)
         if recorded is not None:
             return {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
         running = ask_stage_receipt.in_flight(prior_dir, digest)
@@ -1891,7 +1731,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if params.get("plan_path"):
             stamp = stamp_plan_executing(root, params["plan_path"])
         handle = reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json")
-        ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
+        ask_stage_receipt.write(record_dir(root, run_id), digest, handle)
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}
         if getattr(exc, "owed_em_ids", None):

@@ -37,6 +37,13 @@ def test_source_lands_through_commit_v2_only():
     assert "landPaths.length > 0" in text
 
 
+def test_land_paths_never_include_seam_refs():
+    text = SOURCE.read_text(encoding="utf-8")
+    assert "addLandPath(p.seamRef)" not in text
+    assert "addLandPath" in text
+    assert "p.seamRef + ' -- read that file" in text
+
+
 def test_land_leg_runs_as_the_commit_agent_the_guard_admits():
     text = SOURCE.read_text(encoding="utf-8")
     land = text[text.index("label: 'land-residue'"):]

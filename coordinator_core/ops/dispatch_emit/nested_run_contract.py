@@ -19,7 +19,7 @@ STAGED_INLINE_SLOT = "const _STAGED_INLINE = null;"
 
 # The inline payload's resume block tells a twin it is past stage and carries what the launcher's own legs settled.
 STAGED_RESUME_KEY = "resume"
-STAGED_RESUME_FIELDS = ("arm", "sizing_rel", "plan_rel", "tshirt")
+STAGED_RESUME_FIELDS = ("arm", "sizing_rel", "plan_rel")
 
 
 def staged_twin_rel(run_id: str, sha256: str) -> str:

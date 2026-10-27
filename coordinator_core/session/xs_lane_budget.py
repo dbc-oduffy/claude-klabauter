@@ -338,24 +338,6 @@ def measure(repo_root, record: dict, triggering_path: str, projected_text: str) 
     return Usage(files, lines, files > BUDGET_FILES or lines > BUDGET_LINES)
 
 
-def applied_changes(repo_root, record: dict) -> list:
-    """[(rel, changed lines)] for each recorded path whose working text differs from its base blob,
-    read in-process from the lane ledger. Empty when the base is unreadable."""
-    rels = list(dict.fromkeys(_norm_rel(repo_root, p) for p in record.get("paths", [])))
-    if not rels:
-        return []
-    try:
-        bases = _base_texts(repo_root, record["base_sha"], rels)
-    except Exception:
-        return []
-    out = []
-    for rel in rels:
-        n = _changed_lines(bases[rel], _read_text(_abs(repo_root, rel)))
-        if n:
-            out.append((rel, n))
-    return out
-
-
 def touched_s_or_larger(sid: str, repo_root) -> bool:
     """True when this session touched a sizing object whose tshirt is not XS (an unreadable object
     counts as larger). The single predicate for the re-size ratchet and the guard's branch order."""

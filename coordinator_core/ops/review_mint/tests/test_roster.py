@@ -79,7 +79,7 @@ def _v5_fragment() -> dict:
                             "effort": "low",
                             "per": "whole-diff",
                             "applies": "none",
-                            "schema": "delivery-verdict-result",
+                            "schema": "delivery-verdict",
                         },
                     ],
                 },

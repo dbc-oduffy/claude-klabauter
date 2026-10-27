@@ -107,6 +107,10 @@ field (the same rides-the-returned-dict shape `_stderr` already uses). The accep
 done-callback pops that field and stamps `not-dispatched` from it. **The field never reaches the
 wire** — it is consumed before the response is written to the connection.
 
+**Supersede.** `stamp` of `result` or `error` on a record already stamped `abandoned` replaces it:
+a late completion outranks the abandonment, and `status` then answers `finished` with the retained
+result. Every other re-stamp (any outcome over any stamped record other than that one) is a no-op.
+
 ### 3a. Result retention
 
 A `finished/result` stamp may carry the handler's JSON-serialisable `result`. The store keeps the
@@ -122,11 +126,11 @@ The poll answers exactly one of four states, always:
 | Poll state | Reached from | What it licenses |
 |---|---|---|
 | `not_received` | Outcome `not-dispatched`, OR an absent key tombstoned by `status` itself (§ 5) | The **only** state that licenses a re-run: "this key has not run and never will." |
-| `executing` | Key admitted, not yet stamped, engine still the one that admitted it, and within its executing bound: `max(_POOL_RESULT_DEADLINE_SECS, ipc._timeout_for(method))` measured from admit | No re-run. Wait or poll again. |
+| `executing` | Key admitted, not yet stamped, engine still the one that admitted it, and within `dispatch_ack.OVERDUE_CEILING_FACTOR` times its executing bound (`max(_POOL_RESULT_DEADLINE_SECS, ipc._timeout_for(method))`) measured from admit. Past the bound itself the answer carries `"overdue": true` | No re-run. Wait or poll again. |
 | `finished` | Outcome `result` or `error` | No re-run. The outcome and its evidence class (sibling contract, § "What this is" above) describe what happened. |
-| `unknowable` | Outcome `abandoned` or `worker-lost`, OR a detectable record-loss case (§ 5), OR an admitted record past its executing bound (reason `abandoned`) | No re-run. The engine cannot say. |
+| `unknowable` | Outcome `abandoned` or `worker-lost`, OR a detectable record-loss case (§ 5), OR an admitted record past its overdue ceiling (reason `abandoned`) | No re-run. The engine cannot say. |
 
-The past-bound `unknowable/abandoned` is derived at read time from the record's age and is not a
+The past-ceiling `unknowable/abandoned` is derived at read time from the record's age and is not a
 stamp: the record stays admitted, so a later stamp moves the key to that stamp's state (a late
 `result` reads `finished`). A poll that reads it just before `_pool_dispatch` withdraws the
 request may later read `not_received`; that only adds a licence, and the reverse order cannot
@@ -211,7 +215,8 @@ Every answer carries:
 | Field | Present when | Meaning |
 |---|---|---|
 | `state` | always | One of `not_received`, `executing`, `finished`, `unknowable` (§ 4). |
-| `reason` | `state == unknowable` | `engine-restarted`, `expired`, `no-resident-engine` (§ 6), or `abandoned` (past the executing bound, § 4). |
+| `reason` | `state == unknowable` | `engine-restarted`, `expired`, `no-resident-engine` (§ 6), or `abandoned` (past the overdue ceiling, § 4). |
+| `overdue` | `state == executing`, past the executing bound | `true`. A wait, not a failure; a late `result` or `error` supersedes (§ 3). |
 | `outcome` | `state == finished` | `result` or `error`, plus the error code for `error` (§ 3). Names the sibling contract's evidence class for the method; makes no claim of its own about the mutation. |
 | `result` | `state == finished`, outcome `result`, and the result was retained (§ 3a) | The handler's original reply. For an `invoke.from_argv` dispatch, a door-form poll replays its `{stdout, stderr, exit_code}`. |
 | `result_retained` | `state == finished`, a result was stamped but not kept | `false`. The op landed; its reply is gone. |

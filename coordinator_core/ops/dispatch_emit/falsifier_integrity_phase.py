@@ -176,51 +176,6 @@ def _instrument_path(how: str, repo_root: Path) -> Optional[str]:
     return None
 
 
-class OracleFalsifierArgMismatch(ValueError):
-    """The acceptance oracle and ``falsifier.how`` invoke one instrument with different arguments."""
-
-
-_ACCEPTANCE_HEADING = re.compile(r"^##\s+Acceptance Criteria\s*$", re.MULTILINE)
-_NEXT_HEADING = re.compile(r"^##\s", re.MULTILINE)
-_BACKTICKED = re.compile(r"`([^`\n]+)`")
-
-
-def _invocation_args(command: str, instrument: str) -> Optional[frozenset[str]]:
-    """Arguments following ``instrument`` in ``command`` (basename match); None when absent."""
-    tokens = command.replace("\\", "/").split()
-    for i, tok in enumerate(tokens):
-        if tok.strip("\"'") == instrument or tok.strip("\"'").endswith("/" + instrument):
-            return frozenset(tokens[i + 1 :])
-    return None
-
-
-def oracle_falsifier_arg_mismatch(plan_text: str) -> Optional[str]:
-    """A refusal message when a backticked command in ``## Acceptance Criteria`` runs an
-    instrument that ``falsifier.how`` also runs, under a different argument set; else None.
-    A command the falsifier never names is not compared."""
-    fals = _falsifier(plan_text)
-    head = _ACCEPTANCE_HEADING.search(plan_text)
-    if fals is None or head is None:
-        return None
-    body = plan_text[head.end() :]
-    nxt = _NEXT_HEADING.search(body)
-    section = body[: nxt.start()] if nxt else body
-    how = fals["how"]
-    for token in dict.fromkeys(_PY_TOKEN.findall(how)):
-        rel = token.replace("\\", "/")
-        falsifier_args = _invocation_args(how, rel)
-        if falsifier_args is None:
-            continue
-        for command in _BACKTICKED.findall(section):
-            oracle_args = _invocation_args(command, rel)
-            if oracle_args is not None and oracle_args != falsifier_args:
-                return (
-                    f"acceptance oracle and falsifier.how run {rel} with different arguments: "
-                    f"oracle {sorted(oracle_args)} vs falsifier {sorted(falsifier_args)}"
-                )
-    return None
-
-
 def _load_verdict_reaches_exit():
     path = _ENGINE_ROOT / _INSTRUMENT_REL
     spec = importlib.util.spec_from_file_location("_instrument_can_report_red", path)
@@ -243,10 +198,7 @@ def review_inputs(
         fals = _falsifier(text)
         if fals is None:
             continue
-        mismatch = oracle_falsifier_arg_mismatch(text)
-        if mismatch is not None:
-            raise OracleFalsifierArgMismatch(f"{plan_path}: {mismatch}")
-        instrument =_instrument_path(fals["how"], repo_root)
+        instrument = _instrument_path(fals["how"], repo_root)
         report_path: Optional[str] = None
         report_json: Optional[str] = None
         source: Optional[str] = None

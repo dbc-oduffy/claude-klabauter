@@ -155,35 +155,6 @@ def test_own_checkpoint_commit_lines_do_not_count(tmp_path: Path) -> None:
     assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None, plan=PLAN) == []
 
 
-def _older_base_setup(tmp_path: Path, plan: str):
-    repo, b0, base_lines = _setup(tmp_path)
-    b1 = repo.commit({PATH: _join(base_lines), "other.txt": "x\n"}, "run base")
-    own_lines = list(base_lines)
-    own_lines.insert(40, "own_checkpoint_line = 1\n")
-    repo.commit({PATH: _join(own_lines)}, f"checkpoint\n\nCheckpoint-Plan: {plan}\nCheckpoint-Base: {b0}")
-    repo.land(_join(base_lines))
-    return b1
-
-
-def test_own_checkpoint_commit_stamped_with_ancestor_of_run_base_is_own(tmp_path: Path) -> None:
-    b1 = _older_base_setup(tmp_path, PLAN)
-
-    assert since_base_overlap.check(tmp_path, [PATH], b1, plan=PLAN) == ([], [])
-
-
-def test_ancestor_walk_is_bounded_by_ancestor_cap(tmp_path: Path, monkeypatch) -> None:
-    b1 = _older_base_setup(tmp_path, PLAN)
-    monkeypatch.setattr(since_base_overlap, "ANCESTOR_CAP", 0)
-
-    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], b1, plan=PLAN)) == 1
-
-
-def test_other_plan_checkpoint_commit_stamped_with_ancestor_of_run_base_is_foreign(tmp_path: Path) -> None:
-    b1 = _older_base_setup(tmp_path, "docs/plans/peer.md")
-
-    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], b1, plan=PLAN)) == 1
-
-
 def test_other_plan_checkpoint_commit_is_foreign(tmp_path: Path) -> None:
     repo, base, base_lines = _setup(tmp_path)
     other = list(base_lines)

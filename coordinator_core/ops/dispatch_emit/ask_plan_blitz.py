@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
+
 STAGE_FN = "planBlitz"
 _META_OPEN = re.compile(r"^export const meta\s*=\s*", re.MULTILINE)
 _TITLE = re.compile(r"\btitle:\s*(?:'((?:[^'\\]|\\.)*)'|\"((?:[^\"\\]|\\.)*)\")")
@@ -95,3 +97,76 @@ def load_plan_blitz_text(plugin_root: str | None = None) -> str:
     if not source.is_file():
         raise AskPlanBlitzRefused(f"no plan-blitz.mjs at {source}")
     return source.read_text(encoding="utf-8")
+
+
+def strip_comment_lines(js: str) -> str:
+    """``js`` without the lines holding only a ``//`` comment.
+
+    Strings, templates, regexes and block comments are untouched.
+
+    Trap: regex-vs-division is decided from the previous significant character, as in
+    ``prompt_fragments._scan_literals``; a regex literal that defeats it can hide a quote and
+    derail the scan, so the only deletions are whole comment lines the scan reached in code mode.
+    """
+    n, i, prev = len(js), 0, ""
+    stack: list = []  # "T" = inside a template body; an int = brace depth inside a `${ }`
+    cuts: list[tuple[int, int]] = []
+    while i < n:
+        c = js[i]
+        if stack and stack[-1] == "T":
+            if c == "\\":
+                i += 2
+            elif c == "`":
+                stack.pop()
+                prev, i = "`", i + 1
+            elif js.startswith("${", i):
+                stack.append(0)
+                prev, i = "{", i + 2
+            else:
+                i += 1
+        elif c in "'\"":
+            j = i + 1
+            while j < n and js[j] != c and js[j] != "\n":
+                j += 2 if js[j] == "\\" else 1
+            prev, i = c, j + 1
+        elif c == "`":
+            stack.append("T")
+            i += 1
+        elif c == "/" and js.startswith("//", i):
+            eol = js.find("\n", i)
+            eol = n if eol < 0 else eol
+            ls = js.rfind("\n", 0, i) + 1
+            if not js[ls:i].strip():
+                cuts.append((ls, min(eol + 1, n)))
+            i = eol
+        elif c == "/" and js.startswith("/*", i):
+            k = js.find("*/", i + 2)
+            i = n if k < 0 else k + 2
+        elif c == "/" and (prev == "" or prev in _prompt_fragments._PREV_OPENERS or js[max(0, i - 8) : i].rstrip().endswith(("return", "typeof"))):
+            j, in_cls = i + 1, False
+            while j < n and (in_cls or js[j] != "/") and js[j] != "\n":
+                if js[j] == "\\":
+                    j += 1
+                elif js[j] == "[":
+                    in_cls = True
+                elif js[j] == "]":
+                    in_cls = False
+                j += 1
+            prev, i = "/", j + 1
+        else:
+            if c == "{" and stack:
+                stack[-1] += 1
+            elif c == "}" and stack:
+                if stack[-1] == 0:
+                    stack.pop()
+                else:
+                    stack[-1] -= 1
+            if not c.isspace():
+                prev = c
+            i += 1
+    out, last = [], 0
+    for a, z in cuts:
+        out.append(js[last:a])
+        last = z
+    out.append(js[last:])
+    return "".join(out)

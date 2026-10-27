@@ -7,7 +7,11 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Mapping
 
-from coordinator_core.ceremony_common.apply_halt import _directive_gate_open, _normalize_depends_on
+from coordinator_core.ceremony_common.apply_halt import (
+    _directive_gate_open,
+    _normalize_depends_on,
+    chosen_disposition,
+)
 from coordinator_core.ceremony_common.run.contract import StepSpec, step_from_directive
 
 
@@ -78,7 +82,7 @@ def ready(
         deps = _normalize_depends_on(step.depends_on)
         jp_deps = [d for d in deps if d in jps]
         decided = all(
-            isinstance(decisions_map.get(d), Mapping) and decisions_map[d].get("disposition")
+            isinstance(decisions_map.get(d), Mapping) and chosen_disposition(decisions_map[d])
             for d in jp_deps
         )
         known = all(d in jps or d in ids for d in deps)

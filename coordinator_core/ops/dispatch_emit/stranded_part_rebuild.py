@@ -87,7 +87,7 @@ def _wave_row(raw: dict):
         reads=[],
         depends_on=[],
         agent_type=raw.get("agent_type"),
-        agent_model=raw.get("agent_model") or raw.get("model"),
+        agent_model=raw.get("agent_model"),
         body=raw.get("body") or "",
         writes_under=tuple(p for p in (raw.get("writes_under") or ()) if isinstance(p, str)),
         change_kind=raw.get("change_kind"),

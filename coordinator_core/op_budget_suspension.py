@@ -238,9 +238,8 @@ Spec backlink: docs/decisions/DR-349-one-budget-governs-every-constructed-op.md
 
 from __future__ import annotations
 
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    from typing import Dict, List, Optional
+import math
+from typing import Dict, List, Optional
 
 __all__ = [
     "SUSPENSION_BAR_MS",
@@ -1190,7 +1189,7 @@ OVER_BAR_OPS_PENDING_REMEDY: Dict[str, Dict[str, object]] = {
 # than silently admitting or excluding rows on a number nobody has ratified yet.
 # This is a ratchet exactly like `SUSPENSION_BAR_MS`: once C6 sets a finite value,
 # it may only be LOWERED, never raised back toward `math.inf`.
-OCCUPANCY_BAR_SECS: float = float("inf")
+OCCUPANCY_BAR_SECS: float = math.inf
 
 
 def admitted_on(max_observed_ms: float, occupancy_secs: float) -> List[str]:

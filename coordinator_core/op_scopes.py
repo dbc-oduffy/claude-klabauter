@@ -17,12 +17,9 @@ Spec backlink: cross-repo/inbox/2026-07-21-claude-central-em-python-bin-cold-inv
 
 from __future__ import annotations
 
-# Import-free module: `typing`/`types` are not loaded on the cold path; annotations stay lazy via the __future__ import.
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    from typing import Dict
+import types as _types
+from typing import Dict
 
-_MappingProxyType = type(type.__dict__)
 
 _OP_KEY_SCOPE: Dict[str, str] = {
     "goal.append":                           "common_dir",
@@ -760,8 +757,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.land_run — MUTATING: lands a run's product and record in one scoped commit via
     # git.commit.commit_paths; the caller's own worktree, never a params override.
     "dispatch.land_run":                        "common_dir",
-    # dispatch.write_receipt — MUTATING: one atomic stage receipt under state/warp/<run_id>/receipts.
-    "dispatch.write_receipt":                   "common_dir",
     # close.background — MUTATING: pays the run's queued close legs; the caller's own worktree.
     "close.background":                         "common_dir",
     # close.review — MUTATING: pays the run's queued review leg; the caller's own worktree.
@@ -771,21 +766,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.ask_stage":                       "common_dir",
     # dispatch.measured_rev — keyed like dispatch.terminal_commit: writes objects and a run record under the caller's own worktree.
     "dispatch.measured_rev":                    "common_dir",
-    # dispatch.objective_write / objective_check / objective_calibrate — write state/warp/<run_id>/objective*.json(l) under the caller's own worktree.
-    "dispatch.objective_write":                 "common_dir",
-    "dispatch.objective_check":                 "common_dir",
-    "dispatch.objective_calibrate":             "common_dir",
     # dispatch.ask_fanout — writes slice sizings and the parent record under the caller's own worktree.
     "dispatch.ask_fanout":                      "common_dir",
     # dispatch.sibling_status — reads the same parent record and status files under the caller's own worktree.
     "dispatch.sibling_status":                  "common_dir",
     "dispatch.reap_abandoned_runs":             "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
-    "dispatch.commit_merge":                    "common_dir",
     "dispatch.supersede_slice":                 "common_dir",
     "dispatch.record_halted_run_landed":        "common_dir",
-    "dispatch.close_halted_run_superseded":     "common_dir",
-    "dispatch.land_combined_index":             "common_dir",
     "dispatch.release_run_token":               "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
@@ -991,7 +979,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
 #   Raw set-equality (A == WORKTREE_SCOPED_OPS) is WRONG when the consumer invokes
 #   only a subset of engine ops. See DR-208 / global-multiplex DR § AC-1b.
 # ---------------------------------------------------------------------------
-OP_KEY_SCOPE = _MappingProxyType(dict(_OP_KEY_SCOPE))
+OP_KEY_SCOPE = _types.MappingProxyType(dict(_OP_KEY_SCOPE))
 WORKTREE_SCOPED_OPS = frozenset(
     op for op, scope in _OP_KEY_SCOPE.items() if scope in ("common_dir", "show_top")
 )

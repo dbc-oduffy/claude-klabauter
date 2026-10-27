@@ -111,6 +111,13 @@ def _read_config_core_autocrlf(config_path: Path) -> Optional[str]:
 
 
 def _system_gitconfig_paths() -> Tuple[Path, ...]:
+    """Memoised per open ``call_io_scope``, keyed on PATH; uncached outside one."""
+    return call_io_scope.memo(
+        "system-gitconfig-paths", os.environ.get("PATH", ""), _system_gitconfig_paths_uncached
+    )
+
+
+def _system_gitconfig_paths_uncached() -> Tuple[Path, ...]:
     candidates: List[Path] = []
     git_exe = shutil.which("git")
     if git_exe:
@@ -131,6 +138,20 @@ def _system_gitconfig_paths() -> Tuple[Path, ...]:
 
 
 def _repo_autocrlf_true(root: Path) -> bool:
+    """Memoised per open ``call_io_scope``, keyed on the root and the three
+    git-config env vars; uncached outside one. See `_repo_autocrlf_true_uncached`."""
+    key = "\0".join(
+        (
+            str(root),
+            os.environ.get("GIT_CONFIG_NOSYSTEM", ""),
+            os.environ.get("GIT_CONFIG_SYSTEM", ""),
+            str(Path.home()),
+        )
+    )
+    return call_io_scope.memo("autocrlf-true", key, lambda: _repo_autocrlf_true_uncached(root))
+
+
+def _repo_autocrlf_true_uncached(root: Path) -> bool:
     """Is `core.autocrlf` resolvable, from sources this module can read
     without a spawn, to exactly `true`? Reads git's full layer stack in
     git's own precedence -- system, then global `~/.gitconfig`, then

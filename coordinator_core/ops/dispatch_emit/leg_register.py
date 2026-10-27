@@ -10,7 +10,6 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from types import MappingProxyType
 from typing import Optional
 
@@ -21,7 +20,6 @@ from coordinator_core.ops._workflow_contract import (
     _template_end,
     scrub,
 )
-from coordinator_core.session.record_homes import record_path
 
 
 class LegClass(str, Enum):
@@ -80,9 +78,7 @@ def relay_markers(prompt: Optional[str]) -> tuple[str, ...]:
     return tuple(marker for marker in RELAY_MARKERS if marker in prompt)
 
 
-RUNTIME_FLOOR_RULING = Path(
-    record_path("", "apm-rulings", "2026-10-15-engine-ask-phase-consolidation.md")
-).as_posix()
+RUNTIME_FLOOR_RULING = "state/apm-rulings/2026-10-15-engine-ask-phase-consolidation.md"
 
 
 def _earns(workflow: str, label: str, reason: str) -> LegDecl:
@@ -112,8 +108,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "xl-exit", "the APM picks the XL exit; absorbed the split fanout op"),
     _earns("ask", "plan", "authors the plan"),
     _earns("ask", "plan-review", "reviews the plan"),
-    _earns("ask", "plan-revise", "revises the plan against its review; spawned only when a pull's review found the plan unsaveable (PIVOT, ABORT, premise-failure REJECTED)"),
-    _earns("ask", "plan-patch", "applies a pulled plan's mechanical readiness repairs in place when its review did not find it unsaveable; no re-plan, no second blitz"),
+    _earns("ask", "plan-revise", "revises the plan against its review"),
     _earns("ask", "work:", "executes one row"),
     _earns("ask", "verify:", "runs a row's or a wave's scoped tests and reports"),
     _earns(
@@ -132,9 +127,6 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "halt-fix", "closes the owned failing tests and blocked-slice findings inside the review footprint before the review_blocked halt"),
     _earns("ask", "halt-reverify", "re-runs only the owned failing ids and re-judges only the blocked slices' findings after a halt-fix leg"),
     _earns("ask", "ledger-recovery-record", "writes recovery.json once the loop's final chunk statuses are known; a held-only run has no other agent to fold the write into"),
-    _earns("ask", "remnant-complete", "completes the not_met remnant (unattributed or capped ledger rows, a not_met criterion, a delivery FAIL) inside its footprint; the judge stays read-only"),
-    _earns("ask", "remnant-reverify", "re-runs the scoped tests and re-rules the ledger, criterion and delivery once after the remnant leg"),
-    _earns("ask", "remnant-record", "records the remnant attempt under recovery.json's `remnant` key once the re-verify settled"),
     _floor(
         "ask", "blitz-stage-read",
         "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "

@@ -47,7 +47,7 @@ def test_example_game_repo_post_is_restated_but_exits_zero(capsys):
 
 @pytest.mark.parametrize("home", [
     "coordinator/docs/wiki/cross-repo-communication/cross-repo-memo-lifecycle.md",
-    "docs" + "/wiki/cross-repo-communication/cross-repo-memo-lifecycle.md",
+    "docs" "/wiki/cross-repo-communication/cross-repo-memo-lifecycle.md",
 ])
 def test_line_naming_the_home_is_a_pointer(tmp_path, capsys, home):
     f = tmp_path / "CLAUDE.md"

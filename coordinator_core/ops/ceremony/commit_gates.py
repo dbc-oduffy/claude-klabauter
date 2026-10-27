@@ -719,6 +719,29 @@ def _head_text(
         return None
 
 
+#: Every `PATTERNS` entry as one alternation, each under its own flags. Whole-text search is a
+#: superset of the per-line scan, so a miss proves `scan_added_lines` would return nothing.
+class _AnyAttributionPattern:
+    """Lazy `search` over the alternation, so importing this module compiles nothing."""
+
+    _compiled: Optional["re.Pattern[str]"] = None
+
+    def search(self, text: str):
+        if self._compiled is None:
+            from coordinator_core.attribution.patterns import PATTERNS
+
+            type(self)._compiled = re.compile(
+                "|".join(
+                    f"(?i:{p.pattern})" if p.flags & re.IGNORECASE else f"(?:{p.pattern})"
+                    for p in PATTERNS.values()
+                )
+            )
+        return self._compiled.search(text)
+
+
+_ANY_ATTRIBUTION_PATTERN = _AnyAttributionPattern()
+
+
 def attribution_gate(
     worktree_root: Union[str, Path],
     gate_paths: Sequence[str],
@@ -745,8 +768,37 @@ def attribution_gate(
     if not remaining:
         return GateOutcome(passed=True, skipped=True, diagnostics=[])
 
+    # Pass 1, worktree bytes only: a path whose worktree text no pattern can match, and whose staged
+    # blob is not also scanned, cannot add an attribution line. Only the rest pay for HEAD/index reads.
+    prefer_staged_set = set(prefer_staged)
+    worktree_texts: Dict[str, Optional[str]] = {}
+    suspects: List[str] = []
+    for path in remaining:
+        worktree_path = root / path
+        text: Optional[str] = None
+        undecodable = False
+        try:
+            text = worktree_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            undecodable = True
+        except OSError:
+            text = None
+        worktree_texts[path] = text
+        if undecodable and not (deliberate_stage or path in prefer_staged_set):
+            # A present non-UTF-8 file adds no candidate text, so it cannot add an attribution line.
+            continue
+        if (
+            text is None
+            or deliberate_stage
+            or path in prefer_staged_set
+            or _ANY_ATTRIBUTION_PATTERN.search(text)
+        ):
+            suspects.append(path)
+    if not suspects:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+
     common_dir = resolve_git_common_dir(root)
-    spine = read_tree_spine(root, remaining)
+    spine = read_tree_spine(root, suspects)
 
     # Rename-source pool: over the UNFILTERED gate set (a source may sit under an exempt root).
     if vacated is not None:
@@ -771,14 +823,13 @@ def attribution_gate(
 
     # Index identities for every path in `remaining`: staged-scan widening and the staged-only check.
     try:
-        index_identities = parse_index_identity(root, wanted=set(remaining))
+        index_identities = parse_index_identity(root, wanted=set(suspects))
     except (IndexParseError, _IndexV4ParseError):
         index_identities = {}
 
-    prefer_staged_set = set(prefer_staged)
     diagnostics: List[str] = []
 
-    for path in remaining:
+    for path in suspects:
         head_text = _head_text(spine, common_dir, path)
         if head_text is not None:
             old_text = head_text
@@ -799,14 +850,9 @@ def attribution_gate(
                     index_text = None
 
         worktree_path = root / path
+        worktree_text = worktree_texts[path]
         candidates: List[str] = []
         if worktree_path.exists():
-            try:
-                worktree_text: Optional[str] = worktree_path.read_text(
-                    encoding="utf-8"
-                )
-            except (OSError, UnicodeDecodeError):
-                worktree_text = None
             if worktree_text is not None:
                 candidates.append(worktree_text)
             widen = path in prefer_staged_set or deliberate_stage

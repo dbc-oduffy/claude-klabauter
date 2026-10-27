@@ -92,6 +92,7 @@ from coordinator_core.bash_guards._dialect import (
     expand_start_process_invocations,
     tokenize_command,
 )
+from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._merge_incoming import merge_incoming_paths
 from coordinator_core.bash_guards._rewrite_support import (
@@ -119,7 +120,7 @@ def _scope_denial(text: str, foreign_hunk: bool) -> Any:
     """Strict-scope denial; `text` is the legacy batched-denial string, returned verbatim to the EM."""
     return _vc(
         text,
-        (_offer('coordinator-safe-commit.py "<subject>" -- <literal paths>', "the subject and your literal paths, never a glob"),),
+        (_offer(COMMIT_ROUTE, "the params file listing your literal paths, never a glob"),),
         "COORDINATOR_SCOPE_STRICT_OFF" if foreign_hunk else None,
         "the commit you need", "committing paths another session owns",
         em_text=text,

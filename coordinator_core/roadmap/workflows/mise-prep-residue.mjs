@@ -204,8 +204,8 @@ if (rulings.length > 0) {
   }
 }
 
-// Landing union: plans the residue stage edited, plans the rulings op rewrote, and the seam notes
-// the launcher wrote. Nothing else.
+// Landing union: plans the residue stage edited and plans the rulings op rewrote. Seam sidecars
+// are git-ignored and never landed.
 const landPaths = [];
 const addLandPath = (p) => { if (typeof p === 'string' && p.length > 0 && !landPaths.includes(p)) landPaths.push(p); };
 for (const res of batchResults) {
@@ -214,9 +214,6 @@ for (const res of batchResults) {
   }
 }
 for (const a of receiptApplied) addLandPath(a && a.plan);
-for (const batch of (args.batches || [])) {
-  for (const p of (batch.plans || [])) addLandPath(p.seamRef);
-}
 
 let landed = null;
 if (landPaths.length > 0) {

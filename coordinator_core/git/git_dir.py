@@ -27,15 +27,21 @@ repo, matching `git_common_dir` keying already used throughout
 from __future__ import annotations
 
 import os
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    from pathlib import Path
-    from typing import Union
+from pathlib import Path
+from typing import Union
+
+from coordinator_core.git import call_io_scope
 
 _GITDIR_PREFIX = "gitdir:"
 
 
 def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
+    """Memoised per open ``call_io_scope`` (keyed on the root); uncached outside one."""
+    root = Path(repo_root)
+    return call_io_scope.memo("git-dir", str(root), lambda: _resolve_git_dir_uncached(root))
+
+
+def _resolve_git_dir_uncached(repo_root: Union[str, Path]) -> Path:
     """Resolve `repo_root`'s (private, per-worktree) git dir without
     spawning `git` -- i.e. what `git rev-parse --git-dir` reports, NOT what
     `--git-common-dir` reports. The two differ inside a linked worktree: this
@@ -67,8 +73,6 @@ def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
     twin also honours ``$GIT_DIR`` and returns ``""`` on failure, neither
     of which this function does. See its docstring for the full argument.
     """
-    from pathlib import Path
-
     repo_root = Path(repo_root)
     dot_git = repo_root / ".git"
 
@@ -99,8 +103,12 @@ def resolve_git_dir(repo_root: Union[str, Path]) -> Path:
 
 
 def resolve_git_common_dir(repo_root: Union[str, Path]) -> Path:
-    from pathlib import Path
+    """Memoised per open ``call_io_scope`` (keyed on the root); uncached outside one."""
+    root = Path(repo_root)
+    return call_io_scope.memo("git-common-dir", str(root), lambda: _resolve_git_common_dir_uncached(root))
 
+
+def _resolve_git_common_dir_uncached(repo_root: Union[str, Path]) -> Path:
     repo_root = Path(repo_root)
     dot_git = repo_root / ".git"
 
@@ -143,8 +151,6 @@ def common_dir_from_gitdir(
     site (`resolve_git_common_dir` wants its literal `<repo_root>/.git`
     join; a gitdir-holding caller wants the gitdir itself).
     """
-    from pathlib import Path
-
     private_gitdir = Path(private_gitdir)
     try:
         commondir_file = private_gitdir / "commondir"

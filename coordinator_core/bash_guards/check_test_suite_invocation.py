@@ -16,19 +16,11 @@ machine-wide (leg 0.5):
      mechanism enforced path-scoped and silently dropped the relevance half,
      so ``pytest tests/workstate_store/`` from an executor that touched three
      files in it passed as a scoped run over 87 files it never touched. For a
-     dispatched caller, Tier T is file-and-node-id precision. For a caller
-     with no agent_id (the top-level EM) a pytest directory strictly under a
-     testpaths root is Tier T while the tracked test files (``test_*.py`` /
-     ``*_test.py``) under all such directories in the invocation sum to at
-     most ``_DIR_TEST_FILE_THRESHOLD`` (50); above that, or when the count
-     cannot be computed, it is suite-shaped and needs a live Tier-U grant and
-     with-suite-mutex. The count is one in-process read of ``.git/index``
-     (zero git spawns, ``_tracked_test_file_count``). A testpaths root, ``.``
-     or an ancestor is broad before any count; an EM directory outside the
-     roots, an EM glob, and every JS/node-runner directory stay suite-shaped.
-     Runs only when the command is NOT suite-shaped, so it is strictly
-     additive: it never restates a deny the identity leg below owns with a
-     better diagnosis. Ruled by DoE 2026-07-28
+     dispatched caller, Tier T is file-and-node-id precision. The EM is
+     unaffected -- directory-level Tier T is unchanged for the top-level
+     session. Runs only when the command is NOT suite-shaped, so it is
+     strictly additive: it never restates a deny the identity leg below owns
+     with a better diagnosis. Ruled by DoE 2026-07-28
      (``cross-repo/inbox/2026-07-28-coordinator-content-repo-em-dr088-tier-t-relevance-
      ruling.md``); DoE refused a breadth/test-count term in the same ruling
      (R8) -- a rule the classifier cannot evaluate without collecting is not
@@ -76,9 +68,8 @@ machine-wide (leg 0.5):
      and composed over 876 records they multiply into a spawn count neither can
      observe.
 
-     The EM's file- and node-id-scoped runs are not rewritten, matching this
-     leg's subagent-only scope: a single session cannot fan out, so they are
-     already serial. The EM's directory runs are judged by leg 0's threshold above.
+     The EM is deliberately unaffected, matching leg 0's subagent-only scope: a
+     single session cannot fan out, so its scoped runs are already serial.
 
   1. IDENTITY leg (layer 3, fail-CLOSED) -- a *suite-shaped* test command
      issued by a SUBAGENT is denied. Tier T (a path/node-id-scoped invocation
@@ -412,11 +403,9 @@ from __future__ import annotations
 
 import configparser
 import contextlib
-import contextvars
 import dataclasses
 import glob
 import io
-import itertools
 import os
 import re
 import shlex
@@ -499,10 +488,6 @@ _RUNNER_PREFILTER_RE = re.compile(
 
 
 _CHEAP_ROOT_WALK_MAX_DEPTH = 64
-
-#: An EM's directory positionals under a testpaths root stay Tier T while their
-#: summed tracked test files number at most this; above it the run is suite-shaped.
-_DIR_TEST_FILE_THRESHOLD = 50
 
 #: Command-prefix words that wrap the real runner without changing what it is.
 #: Widened (2026-07-29, cross-guard fix -- code-reviewer Finding 3): `setsid`,
@@ -1255,71 +1240,7 @@ def _read_testpaths(repo_root: Optional[str]) -> List[str]:
     return [_norm_path(p) for p in found if _norm_path(p)]
 
 
-def _names_directory(raw_path: str, norm: str, cwd: Optional[str]) -> bool:
-    """A path part that is a directory (trailing slash, or a directory on
-    disk) selects everything under it, never a file."""
-    if raw_path.rstrip().endswith("/"):
-        return True
-    if not cwd or _has_glob_magic(norm):
-        return False
-    try:
-        return os.path.isdir(os.path.join(cwd, norm))
-    except OSError:
-        return False
-
-
-def _glob_is_single_file(norm: str, cwd: Optional[str]) -> bool:
-    """A glob is a scope only when it expands to exactly one non-directory.
-    No cwd, zero matches or many matches read as broad."""
-    if not cwd:
-        return False
-    try:
-        matches = list(itertools.islice(
-            glob.iglob(os.path.join(cwd, norm), recursive=True), 2))
-        return len(matches) == 1 and not os.path.isdir(matches[0])
-    except OSError:
-        return False
-
-
-#: True while ``check`` judges a caller with no agent_id (the EM). Outside the
-#: testpaths roots, and for every non-pytest runner, such a caller's directory
-#: positional is suite-shaped; a pytest directory strictly under a root is
-#: instead judged by ``_DIR_TEST_FILE_THRESHOLD`` in ``_classify_pytest``.
-_STRICT_DIRS: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "suite_guard_strict_dirs", default=False)
-
-
-def _is_test_file_name(name: str) -> bool:
-    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
-
-
-def _tracked_test_file_count(dirs: Sequence[str], repo_root: Optional[str]) -> Optional[int]:
-    """Tracked ``test_*.py`` / ``*_test.py`` files under any of ``dirs`` (repo-root
-    relative, ``/``-separated), from one in-process read of ``.git/index`` -- no
-    git spawn. None when the count is unknowable (no root, unreadable or split
-    index, an empty tracked set, an escaping or empty dir): callers treat it as broad."""
-    if not repo_root or not dirs:
-        return None
-    prefixes: List[str] = []
-    for d in dirs:
-        d = _norm_path(d)
-        if not d or d == "." or d == ".." or d.startswith("../"):
-            return None
-        prefixes.append(d + "/")
-    try:
-        from coordinator_core.git.git_state import read_index_paths
-        tracked = read_index_paths(repo_root)
-    except (ImportError, OSError, ValueError, RuntimeError):
-        return None
-    if not tracked:
-        return None
-    pre = tuple(prefixes)
-    return sum(1 for p in tracked
-               if p.startswith(pre) and _is_test_file_name(p.rsplit("/", 1)[-1]))
-
-
-def _is_real_scope(arg: str, testpaths: Sequence[str], cwd: Optional[str],
-                   count_dirs: bool = False) -> bool:
+def _is_real_scope(arg: str, testpaths: Sequence[str], cwd: Optional[str]) -> bool:
     """Does this positional argument narrow the run to something smaller than
     the suite?
 
@@ -1339,17 +1260,8 @@ def _is_real_scope(arg: str, testpaths: Sequence[str], cwd: Optional[str],
         if tp == norm or tp.startswith(norm + "/"):
             return False
 
-    # Under a testpaths root a directory is leg 0's (R9) business for a dispatched
-    # caller and a count (``count_dirs``, pytest only) for the EM; any other EM
-    # judgement, and every EM glob, is made as if outside the roots.
-    outside_roots = not any(norm.startswith(tp + "/") for tp in testpaths) or (
-        _STRICT_DIRS.get() and (not count_dirs or _has_glob_magic(norm)))
-    if outside_roots and _names_directory(token.split("::", 1)[0], norm, cwd):
-        return False
     if "::" in token:
         return True
-    if outside_roots and _has_glob_magic(norm):
-        return _glob_is_single_file(norm, cwd)
     if "/" in norm or norm.endswith(".py"):
         return True
     if cwd:
@@ -1464,81 +1376,10 @@ def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
     """
     if any(a.split("=", 1)[0] in _PYTEST_INFO_ONLY_FLAGS for a in args):
         return None
-    expanded = _expand_pytest_argsfiles(args, cwd)
-    if expanded is None:
-        return label
-    scoped, positionals = _walk_pytest_args(expanded)
-    if "--pyargs" in expanded:
-        # Positionals are importable package names, not paths: a package is a
-        # directory tree, so only an explicit module::node id narrows.
-        return None if any("::" in a for a in positionals) else label
+    scoped, positionals = _walk_pytest_args(args)
     if positionals:
-        if _STRICT_DIRS.get() and _em_dirs_over_threshold(positionals, testpaths, cwd):
-            return label
-        return None if any(_is_real_scope(a, testpaths, cwd, True) for a in positionals) else label
+        return None if any(_is_real_scope(a, testpaths, cwd) for a in positionals) else label
     return None if scoped else label
-
-
-def _em_dirs_over_threshold(positionals: Sequence[str], testpaths: Sequence[str],
-                            cwd: Optional[str]) -> bool:
-    """For the EM: do the plain directory positionals strictly under a testpaths
-    root hold more than ``_DIR_TEST_FILE_THRESHOLD`` tracked test files in sum?
-    An uncomputable count is over. False when no such directory is named."""
-    dirs: List[str] = []
-    for a in positionals:
-        token = a.replace("\\", "/")
-        raw = token.split("::", 1)[0]
-        norm = _norm_path(raw)
-        if "::" in token or not norm or _has_glob_magic(norm):
-            continue
-        if not any(norm.startswith(tp + "/") for tp in testpaths):
-            continue
-        if _names_directory(raw, norm, cwd):
-            dirs.append(norm)
-    if not dirs:
-        return False
-    root = _cheap_repo_root(cwd)
-    if root and cwd:
-        try:
-            dirs = [os.path.relpath(os.path.join(cwd, d), root).replace("\\", "/")
-                    for d in dirs]
-        except ValueError:
-            return True
-    count = _tracked_test_file_count(dirs, root)
-    return count is None or count > _DIR_TEST_FILE_THRESHOLD
-
-
-_ARGSFILE_MAX_BYTES = 1 << 20
-_ARGSFILE_MAX_DEPTH = 3
-
-
-def _expand_pytest_argsfiles(args: Sequence[str], cwd: Optional[str],
-                             depth: int = 0) -> Optional[List[str]]:
-    """Replace each pytest ``@argsfile`` argument with the file's entries (one
-    argument per line, as pytest reads it). Returns None when any argsfile is
-    unreadable, oversized, or nested too deep: its path list is opaque, and an
-    opaque list is never a real scope."""
-    out: List[str] = []
-    for arg in args:
-        if not (arg.startswith("@") and len(arg) > 1):
-            out.append(arg)
-            continue
-        if depth >= _ARGSFILE_MAX_DEPTH:
-            return None
-        raw = arg[1:]
-        path = raw if os.path.isabs(raw) or not cwd else os.path.join(cwd, raw)
-        try:
-            if os.path.getsize(path) > _ARGSFILE_MAX_BYTES:
-                return None
-            with open(path, encoding="utf-8") as fh:
-                lines = [ln.strip() for ln in fh.read().splitlines()]
-        except (OSError, UnicodeDecodeError):
-            return None
-        inner = _expand_pytest_argsfiles([ln for ln in lines if ln], cwd, depth + 1)
-        if inner is None:
-            return None
-        out.extend(inner)
-    return out
 
 
 _PYTEST_INFO_ONLY_FLAGS = frozenset({"--version", "-V", "--help", "-h", "--markers"})
@@ -3178,34 +3019,6 @@ def _is_pytest_collect_only_segment(argv: Sequence[str]) -> bool:
     return any(a.split("=", 1)[0] in _PYTEST_COLLECT_ONLY_FLAGS for a in args)
 
 
-def _is_node_id(arg: str) -> bool:
-    file_part, sep, node = arg.partition("::")
-    return bool(sep and node and file_part.endswith(".py"))
-
-
-def _is_node_id_baseline_rerun(cmd: str, dialect: Optional[_Dialect]) -> bool:
-    """A command whose every runner segment is ``baseline-export ... -- pytest <file::node ids>``
-    (at least one id, no other positional). Review's failing_at_base measurement; in-process, no spawn."""
-    seen = False
-    for raw_argv in _segment_argvs(cmd, dialect):
-        argv = _strip_command_prefix(raw_argv)
-        if not argv or not _runner_recognized(argv):
-            continue
-        idx = 0
-        while idx < len(raw_argv) and _ENV_ASSIGN_RE.match(raw_argv[idx]):
-            idx += 1
-        if idx >= len(raw_argv) or _base(raw_argv[idx]) not in _BASELINE_EXPORT_BASENAMES:
-            return False
-        args = argv[1:] if _base(argv[0]) in _PYTEST_HEADS else _pytest_module_args(argv)
-        if args is None:
-            return False
-        _scoped, positionals = _walk_pytest_args(args)
-        if not positionals or not all(_is_node_id(p) for p in positionals):
-            return False
-        seen = True
-    return seen
-
-
 def _agent_touched_test_files(raw_agent_id: str, session_id: str,
                               repo_root: Optional[str]) -> List[str]:
     """This agent's own touched test files, for the R9 deny text's
@@ -3563,14 +3376,6 @@ def _invokes_suite_cli(cmd: str, dialect: Optional[_Dialect]) -> Optional[str]:
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    token = _STRICT_DIRS.set(not _caller_is_subagent(payload))
-    try:
-        return _check_core(payload)
-    finally:
-        _STRICT_DIRS.reset(token)
-
-
-def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # Read the override off the PER-CALL payload, not this process's environ.
     # Ambient was correct only while every guard evaluation was a fresh child of
     # the caller's own shell. It is not: `warm/hook_http.py :: evaluate_cold`
@@ -3676,9 +3481,7 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # problem, not a precision one, and should say so). See
     # ``_pytest_directory_args``.
     if is_subagent and detected is None:
-        if _is_node_id_baseline_rerun(cmd, dialect):
-            return None
-        dir_args =_pytest_directory_args(segments_argv, cwd)
+        dir_args = _pytest_directory_args(segments_argv, cwd)
         if dir_args:
             return _deny(
                 _deny_reason_subagent_directory(

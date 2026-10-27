@@ -349,7 +349,7 @@ def _cp_mv_lands_in_home(cmd: str, identifiers_lower: Tuple[str, ...]) -> Option
 _READ_ONLY_PROGRAMS = frozenset({
     "grep", "egrep", "fgrep", "rg", "head", "tail", "cat", "wc",
     "ls", "cut", "tr", "echo", "printf", "pwd", "test", "[", "true",
-    "basename", "dirname", "stat", "file", "diff", "realpath",
+    "basename", "dirname", "stat", "file", "diff", "realpath", "cd",
 })
 _XARGS_VALUE_FLAGS = frozenset({"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"})
 
@@ -418,7 +418,17 @@ def _segment_writes_outside_store(segment: str) -> bool:
         idx += 1
     if idx >= len(words):
         return True
-    if _command_token_basename(words[idx]).lower() == "xargs":
+    prog = _command_token_basename(words[idx]).lower()
+    if prog == "coordinator-invoke":
+        return True
+    if (
+        re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", prog)
+        and words[idx + 1:idx + 2] == ["-c"]
+        and len(words) == idx + 3
+        and _is_pure_python_c_body(words[idx + 2])
+    ):
+        return True
+    if prog == "xargs":
         idx += 1
         while idx < len(words) and words[idx].startswith("-"):
             idx += 2 if words[idx] in _XARGS_VALUE_FLAGS else 1
@@ -427,14 +437,58 @@ def _segment_writes_outside_store(segment: str) -> bool:
     return _command_token_basename(words[idx]).lower() in _READ_ONLY_PROGRAMS
 
 
+def _without_data_heredocs(cmd: str) -> Optional[str]:
+    """``cmd`` with each real heredoc's operator, body and terminator removed,
+    so the command is judged by its own redirects. ``None`` when that is not
+    readable: a heredoc that is stdin-as-program (its body is code), an
+    unterminated one, or an unquoted-delimiter body the shell would expand.
+    A ``<<`` inside a quoted span is text, not a heredoc, and is left alone."""
+    lines = cmd.split("\n")
+    out: "list[str]" = []
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        idx += 1
+        mask = _unquoted_mask(line)
+        match = next(
+            (
+                m
+                for m in _HEREDOC_START_RE.finditer(line)
+                if mask[m.start()] and line[m.start() - 1 : m.start()] != "<"
+            ),
+            None,
+        )
+        if match is None:
+            out.append(line)
+            continue
+        if _STDIN_PROGRAM_RE.search(line[: match.start()] + " "):
+            return None
+        scan = idx
+        while scan < len(lines) and lines[scan].strip() != match.group(2):
+            scan += 1
+        if scan >= len(lines):
+            return None
+        if not match.group(1) and any(
+            "`" in body_line or "$(" in body_line for body_line in lines[idx:scan]
+        ):
+            return None
+        out.append(line[: match.start()] + " " + line[match.end():])
+        idx = scan + 1
+    return "\n".join(out)
+
+
 def _writes_nothing_into_store(cmd: str) -> bool:
     """True when every segment of ``cmd`` is judged by its real write
     destination to land outside the sizing store. Text that merely names the
     store inside a quoted argument, or a pipeline of read-only programs, is not
     a write. Heredocs, substitutions and anything unresolved return False and
     fall to the full predicate."""
-    if "<<" in cmd or "<(" in cmd:
+    if "<(" in cmd:
         return False
+    if "<<" in cmd:
+        cmd = _without_data_heredocs(cmd)
+        if cmd is None:
+            return False
     expanded = _expand_local_assignments(cmd)
     if _has_live_command_substitution(expanded):
         return False
@@ -2132,14 +2186,11 @@ def _neutralize_home_path_operands(
 
 
 _PY_C_SUBSTITUTION_RE = re.compile(r"\$\(\s*python3?(?:\.\d+)?\s+-c\s+'(?P<body>[^'`]*)'\s*\)")
-#: A bare ``python -c '<body>'`` / ``python -c "<body>"`` command (not a
-#: substitution); a double-quoted body with ``$``/backslash is shell-expanded
-#: and stays unmatched.
-_PY_C_DIRECT_RE = re.compile(
-    r"(?<![\w$./-])python3?(?:\.\d+)?\s+-c\s+(?:'(?P<sq>[^'`]*)'|\"(?P<dq>[^\"`$\\]*)\")"
-)
-_PY_C_SAFE_IMPORT_RE =re.compile(r"\bimport\s+([\w\s,]+)")
+_PY_C_SAFE_IMPORT_RE = re.compile(r"\bimport\s+([\w\s,]+)")
 _PY_C_SAFE_MODULES = frozenset({"json", "sys", "re", "datetime", "time"})
+_PY_C_GUARD_IMPORT_RE = re.compile(
+    r"\bfrom\s+coordinator_core\.bash_guards\.\w+\s+import\s+\w+(?:\s+as\s+\w+)?"
+)
 _PY_C_CAPABILITY_RE = re.compile(
     r"\b(?:open|exec|eval|compile|getattr|setattr|globals|locals|vars|input|breakpoint|"
     r"os|shutil|subprocess|pathlib|Path|system|popen|write\w*|dump|print_to|modules)\b|__|\bfile\s*=|\bfrom\b"
@@ -2148,8 +2199,9 @@ _PY_C_CAPABILITY_RE = re.compile(
 
 def _is_pure_python_c_body(body: str) -> bool:
     """A ``python -c`` body that can only compute and print: it imports nothing
-    outside ``_PY_C_SAFE_MODULES`` and names no file, process, reflection or
+    outside ``_PY_C_SAFE_MODULES`` (bar one name from a ``bash_guards`` predicate module) and names no file, process, reflection or
     write capability, so a governed path inside it is a string value."""
+    body = _PY_C_GUARD_IMPORT_RE.sub(" ", body)
     if _PY_C_CAPABILITY_RE.search(body):
         return False
     for match in _PY_C_SAFE_IMPORT_RE.finditer(body):
@@ -2173,14 +2225,7 @@ def _neutralize_mention_only_python_substitutions(
             return "x"
         return match.group(0)
 
-    def _swap_direct(match: "re.Match[str]") -> str:
-        body = match.group("sq") if match.group("sq") is not None else match.group("dq")
-        if _mentions_governed_identifier(body, identifiers_lower) and _is_pure_python_c_body(body):
-            return "x"
-        return match.group(0)
-
-    segment = _PY_C_SUBSTITUTION_RE.sub(_swap, segment)
-    return _PY_C_DIRECT_RE.sub(_swap_direct, segment)
+    return _PY_C_SUBSTITUTION_RE.sub(_swap, segment)
 
 
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:

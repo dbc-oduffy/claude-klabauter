@@ -1241,10 +1241,10 @@ REPO_EXAMPLE_GAME_WORKBENCH_REPO = "example_game_workbench_repo"
 _REASON_BYTE_COPIED_POSIX_TARGET = (
     "Admission test: byte-copied POSIX exec target. coordinator/bin/claude-author.py "
     "is installed by byte copy as an extensionless exec target "
-    "(substrate.BYTE_COPIED_BIN_SOURCES); the shebang is the POSIX "
-    "invocation mechanism (the installer chmods +x the copy), guarded by "
+    "(substrate.BYTE_COPIED_BIN_SOURCES); the shebang + exec bit ARE the POSIX "
+    "invocation mechanism, guarded by "
     "coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py. "
-    "Dropping the shebang breaks the POSIX leg. Two-leg pair: the Windows leg is "
+    "Dropping either breaks the POSIX leg. Two-leg pair: the Windows leg is "
     "coordinator/bin/claude-author.cmd (and claude-author.ps1)."
 )
 
@@ -1313,7 +1313,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
-            "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
             "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
             "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
             **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},

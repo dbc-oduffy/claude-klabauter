@@ -61,15 +61,15 @@ def test_known_admitted_size_composes_the_call(size):
 def test_fire_time_size_gates_the_call_in_js():
     block = _integration_block(tshirt=None, tshirt_js="_tshirt")
     assert "coordinator:overengineering-reviewer" in block
-    assert f"const {INTEGRATION_NOT_RUN_VAR} = !(((_tshirt) == null || [" in block
+    assert f"const {INTEGRATION_NOT_RUN_VAR} = !([" in block
     assert '"L"' in block and '"XS"' not in block
     assert "(_verifyOnly || " + INTEGRATION_NOT_RUN_VAR + ")" in block
 
 
-def test_unknown_size_is_admitted_and_composes_the_call():
+def test_unknown_size_follows_the_wave_gate_and_is_skipped():
     block = _integration_block()
-    assert "coordinator:overengineering-reviewer" in block
-    assert f"const {INTEGRATION_NOT_RUN_VAR} = false;" in block
+    assert "coordinator:overengineering-reviewer" not in block
+    assert f"const {INTEGRATION_NOT_RUN_VAR} = true;" in block
 
 
 def test_ungated_integration_still_runs_at_any_size():

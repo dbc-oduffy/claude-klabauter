@@ -8,7 +8,6 @@ import pytest
 
 from coordinator_core.git.git_state import head_sha
 from coordinator_core.ops.dispatch_emit import landing_integrity, land_run_halt
-from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_halt_record as halt_mod
 from coordinator_core.ops.dispatch_emit.tests import test_terminal_commit_halted_record as record_mod
@@ -21,7 +20,7 @@ RECORDED_FAIL = {"targeted_tests": {"status": "fail", "tests_failed": 1, "baseli
 
 
 def _write_fresh(root, run_id, status, *, head=None) -> None:
-    path = landing_retest.fresh_verdict_path(root, run_id)
+    path = landing_integrity.fresh_verdict_path(root, run_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps({

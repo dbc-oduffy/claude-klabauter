@@ -163,7 +163,6 @@ class WaveRow(NamedTuple):
     depends_on: list
     agent_type: Optional[str] = None
     agent_model: Optional[str] = None
-    effort: Optional[str] = None
     body: str = ""
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
@@ -796,7 +795,6 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 depends_on=row.depends_on,
                 agent_type=row.agent_type,
                 agent_model=row.agent_model,
-                effort=row.effort,
                 body=row.body,
                 verification_runs=getattr(row, "verification_runs", None),
                 change_kind=row.change_kind,

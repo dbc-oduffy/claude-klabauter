@@ -57,7 +57,6 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import (
     propose_groups,
     with_fanout,
 )
-from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER, finished_rel, revisions_rel
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 __all__ = ["compose_pipeline_script", "compose_chain_script", "compose_chain_parts", "ChainPart"]
@@ -88,33 +87,6 @@ _PRODUCED = """const produced = async (label, call) => {
 };"""
 
 _RELAY_DECL = f"const RELAY = {_js_string_literal(PIPELINE_RELAY_CLAUSE)};"
-
-
-def _revisions_decl(name: str) -> str:
-    """The script's one `REVISIONS` const: the stage-start read of the run's revisions file, spliced after `RELAY`."""
-    revisions = f"\n\n{REVISIONS_MARKER} Revisions file: {revisions_rel(name)} (read it if it exists; a later revision governs)."
-    # json.dumps, not _js_string_literal: the marker's apostrophe must stay verbatim for reads_revisions.
-    return f"const REVISIONS = {json.dumps(revisions)};"
-
-
-def _finish_decl(name: str) -> str:
-    """The script's `FINISH` const: the final stage's instruction to write the run's terminal marker."""
-    clause = f"\n\nOn finishing, write one line, this stage's label, to {finished_rel(name)}."
-    return f"const FINISH = {json.dumps(clause)};"
-
-
-def _final_stage(schedule: Schedule) -> tuple[str, str] | None:
-    """(scope, stage id) of the stage a run executes last, or None when nothing runs.
-
-    Trap: FINISH rides each fan-out item of that stage and the last subject only, so a sibling item or
-    subject still running can see the run as finished early.
-    """
-    for scope in (SCOPE_POST, SCOPE_SUBJECT, SCOPE_PRE):
-        for level in reversed(schedule.levels.get(scope, ())):
-            if level:
-                return scope, level[-1]
-    return None
-
 
 _RETURN_NAME = {SCOPE_PRE: "pre", SCOPE_SUBJECT: "ret", SCOPE_POST: "post"}
 
@@ -253,11 +225,11 @@ def _agent_options(stage: Stage, manifest: Manifest, agent_type: str, agent_type
 
 def _agent_call(
     stage: Stage, manifest: Manifest, inputs: PipelineInputs, agent_type_host: str | None,
-    prompt: str, label: str, slug: str, finish: str = "",
+    prompt: str, label: str, slug: str,
 ) -> str:
     """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type. Every prompt resolves to the script's `RELAY` clause plus its template."""
     sidecar = sidecar_clause_js("pipeline", manifest.pipeline, label)
-    prompt = f"(RELAY + REVISIONS + '\\n\\n' + {prompt} + {sidecar}{finish})"
+    prompt = f"(RELAY + '\\n\\n' + {prompt} + {sidecar})"
     if stage.agent_type_from is None:
         call = f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, stage.agent_type, agent_type_host)} }})"
         return f"produced({label}, {call})"
@@ -320,11 +292,7 @@ def _stage_expression(
     schedule: Schedule,
     agent_type_host: str | None,
     group_sizes: Sequence[int] = (),
-    final: bool = False,
 ) -> str:
-    finish = ""
-    if final:
-        finish = " + (s === subjects[subjects.length - 1] ? FINISH : '')" if scope == SCOPE_SUBJECT else " + FINISH"
     holder = "s" if scope == SCOPE_SUBJECT else "common"
     prompt = f"{holder}.prompts[{_js_string_literal(stage.id)}]"
     output = f"{holder}.outputs[{_js_string_literal(stage.id)}]"
@@ -340,12 +308,12 @@ def _stage_expression(
         else f"{_js_string_literal(f'{stage.id}:')} + (i + 1)"
     )
     if not fanned:
-        expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item", finish)
+        expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item")
     elif stage.fan_out.emit_time:
         item_prompt = f"(item.prompt ?? withItem({prompt}, item.slug))"
         if group_sizes:
             item_prompt = f"(item.members ? {_member_prompt_chain(prompt, group_sizes)} : {item_prompt})"
-        call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug", finish)
+        call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug")
         expr = (
             "(async () => {\n"
             f"      const items = {holder}.items[{_js_string_literal(stage.id)}];\n"
@@ -358,7 +326,7 @@ def _stage_expression(
         fill = f"withItem({prompt}, item)" if _uses_item(stage, manifest) else prompt
         if not _has_item(stage.output):
             fill += f" + fanTrailer(item, i + 1, items.length, {output})"
-        call = _agent_call(stage, manifest, inputs, agent_type_host, fill, item_label, "item", finish)
+        call = _agent_call(stage, manifest, inputs, agent_type_host, fill, item_label, "item")
         expr = (
             "(async () => {\n"
             f"      const items = {items};\n"
@@ -396,7 +364,6 @@ def _level_lines(
     tag: str = "",
     segment: tuple[str, str] | None = None,
     group_sizes: Mapping[str, Sequence[int]] | None = None,
-    final_stage: tuple[str, str] | None = None,
 ) -> list[str]:
     target = _RETURN_NAME[scope]
     lines: list[str] = []
@@ -406,7 +373,6 @@ def _level_lines(
         exprs = [
             _stage_expression(
                 stages[i], scope, manifest, inputs, stages, schedule, agent_type_host, (group_sizes or {}).get(i, ()),
-                final_stage == (scope, i),
             )
             for i in level
         ]
@@ -554,7 +520,6 @@ def _segment(
     skip_guard: bool = False,
     fanout_group: str = "auto",
     tally: list | None = None,
-    final: bool = False,
 ) -> tuple[list[str], list[str], list[Stage]]:
     """A segment's data consts, its body lines and its active stages; a chained segment leaves `results` to the chain and tags its result entries with the pipeline.
 
@@ -685,7 +650,6 @@ def _segment(
         roster = {n: {e["slug"]: e["agent_type"] for e in inputs.lists[n]} for n in roster_names}
         data.append(f"const rosterTypes = {json.dumps(roster, ensure_ascii=True, indent=1)};")
 
-    final_stage = _final_stage(schedule) if final else None
     tag = f", pipeline: {_js_string_literal(manifest.pipeline)}" if chained else ""
     if chained and inputs.segment_key:
         tag += f", segment: {_js_string_literal(inputs.segment_key)}"
@@ -693,9 +657,9 @@ def _segment(
     if not chained:
         body.append("const results = [];")
     body.append("")
-    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage)
+    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes)
     body += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
-    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes, final_stage=final_stage)
+    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes)
     body += [
         f"    results.push({{ subject: s.subject, returns: ret{tag} }});",
         "  } catch (err) {",
@@ -704,7 +668,7 @@ def _segment(
         "}",
         "",
     ]
-    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage)
+    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes)
     for scope in (SCOPE_PRE, SCOPE_POST):
         if schedule.levels.get(scope):
             body.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});")
@@ -746,7 +710,7 @@ def compose_chain_script(
         parts.append((manifest, inputs, _segment(
             manifest, inputs, schedule, agent_type_host, errors, chained=scoped,
             segment=label, skip_guard=scoped and leg_of[index] in leg_of[:index],
-            fanout_group=fanout_group, tally=tally, final=index == len(segments) - 1,
+            fanout_group=fanout_group, tally=tally,
         )))
     if errors:
         raise PipelineEmitRefused(sorted(set(errors)))
@@ -775,8 +739,6 @@ def compose_chain_script(
         "",
         f"const ITEM_MARK = {json.dumps(ITEM_MARK)};",
         _RELAY_DECL,
-        _revisions_decl(name),
-        _finish_decl(name),
     ]
     if not scoped:
         out += parts[0][2][0]
@@ -829,28 +791,6 @@ def compose_chain_script(
             f"largest segment: {largest} ({sizes[largest]} bytes)"
         ])
     return text
-
-
-def scouts_at_depth(segments: Sequence[Segment], depth: str) -> list[Segment]:
-    """`segments` with the scouts pipeline's question fan-out stage raised from Haiku to Sonnet when `depth` is not `standard`.
-
-    Only a stage fanning out over `inputs.questions` that the manifest pins to haiku changes; probe
-    and grounding stages keep their own model. Callers pair this with `fanout_group="split"`: a
-    deeper scout owns one question, never a group of them.
-    """
-    if depth == "standard":
-        return list(segments)
-    out: list[Segment] = []
-    for manifest, inputs, schedule in segments:
-        if manifest.pipeline == "scouts":
-            stages = tuple(
-                replace(s, model="sonnet")
-                if s.model == "haiku" and s.fan_out.inputs == "questions" else s
-                for s in manifest.stages
-            )
-            manifest = replace(manifest, stages=stages)
-        out.append((manifest, inputs, schedule))
-    return out
 
 
 def _check_fanout_group(fanout_group: str) -> None:

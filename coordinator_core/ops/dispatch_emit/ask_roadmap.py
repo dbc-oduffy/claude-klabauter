@@ -33,6 +33,7 @@ from coordinator_core.ops.dispatch_emit.ask_plan_blitz import (
     AskPlanBlitzRefused,
     _meta_span,
     _TITLE,
+    strip_comment_lines,
 )
 
 ROADMAP_STAGE_FN = "roadmapBlitz"
@@ -47,7 +48,8 @@ def wrap_roadmap_stage(text: str) -> tuple[str, list[str]]:
     phases = [a or b for a, b in _TITLE.findall(text[start:end])]
     if not phases:
         raise AskPlanBlitzRefused("roadmap-blitz.mjs meta declares no phase titles")
-    return f"async function {ROADMAP_STAGE_FN}(args) {{\n{text[:start] + text[end:]}\n}}\n", phases
+    fn = f"async function {ROADMAP_STAGE_FN}(args) {{\n{text[:start] + text[end:]}\n}}\n"
+    return strip_comment_lines(fn), phases
 
 
 def load_roadmap_blitz_text(plugin_root: Optional[str] = None) -> str:
@@ -205,7 +207,7 @@ def compose_roadmap_script(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{ac._INVOKE} {OP_ASK_GATE} '",
         "js:JSON.stringify({ sizing_path: _sizingRel, writes: [] })",
-        "'` and return its JSON reply verbatim as arm, halt and baton. Also read the sizing at ",
+        f"'{ac._repo_flag(repo_root)}` and return its JSON reply verbatim as arm, halt and baton. Also read the sizing at ",
         "js:_sizingRel",
         " and return its estimate.tshirt as tshirt and its route as route.",
     )

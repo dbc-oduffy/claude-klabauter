@@ -93,6 +93,25 @@ def _stub_route(result=None, exc=None):
     return _route
 
 
+def _stub_cold_apply(monkeypatch, result=None, exc=None):
+    """Apply is served cold in-process and never routed warm; its outcome is
+    whatever `_merge_assemble_cold_call` yields. Fails if `route` is reached."""
+    calls = []
+
+    def _cold(op, params):
+        calls.append((op, params))
+        if exc is not None:
+            raise exc
+        return result
+
+    def _no_route(*a, **k):
+        raise AssertionError("apply must not be routed warm")
+
+    monkeypatch.setattr(entry_point_shim, "_merge_assemble_cold_call", _cold)
+    monkeypatch.setattr(cc_invoke, "route", _no_route)
+    return calls
+
+
 # ---------------------------------------------------------------------------
 # AC3 -- exit-code table, one row per code, each a real invocation of the
 # entry (`entry_point_shim._merge_assemble_entry`).
@@ -132,7 +151,7 @@ def _stub_route(result=None, exc=None):
     ],
 )
 def test_exit_code_table(monkeypatch, argv, route_result, route_exc, expected_code):
-    monkeypatch.setattr(cc_invoke, "route", _stub_route(result=route_result, exc=route_exc))
+    _stub_cold_apply(monkeypatch, result=route_result, exc=route_exc)
     code = entry_point_shim._merge_assemble_entry(list(argv))
     assert code == expected_code
 
@@ -211,22 +230,14 @@ def test_seam_absent_routes_through_legacy_fn_not_a_reimplemented_check(monkeypa
     ],
 )
 def test_post_dispatch_transport_failure_does_not_fall_back(monkeypatch, verb, argv, expected_code):
-    calls = _spy_cold_call(monkeypatch, {"exit_code": 0})
-    monkeypatch.setattr(
-        cc_invoke,
-        "route",
-        _stub_route(exc=RuntimeError("connection reset after send")),
-    )
+    calls = _stub_cold_apply(monkeypatch, exc=RuntimeError("connection reset after send"))
     code = entry_point_shim._merge_assemble_entry(list(argv))
-    assert calls == [], "post-dispatch failure must NOT retry cold"
+    assert len(calls) == 1, "post-dispatch failure must NOT retry cold"
     assert code == expected_code
 
 
 def test_apply_post_dispatch_failure_names_partial_mutation_state(monkeypatch, capsys):
-    monkeypatch.setattr(entry_point_shim, "_merge_assemble_cold_call", lambda op, params: {})
-    monkeypatch.setattr(
-        cc_invoke, "route", _stub_route(exc=RuntimeError("connection reset after send"))
-    )
+    _stub_cold_apply(monkeypatch, exc=RuntimeError("connection reset after send"))
     code = entry_point_shim._merge_assemble_entry(["apply"])
     assert code == _APPLY_EXIT_PARTIAL_MUTATION
     err = capsys.readouterr().err
@@ -256,7 +267,10 @@ def test_method_not_found_predicate(message, expected):
 # ---------------------------------------------------------------------------
 
 def _run_dispatch(monkeypatch, route_result, *, is_apply=False):
-    monkeypatch.setattr(cc_invoke, "route", _stub_route(result=route_result))
+    if is_apply:
+        _stub_cold_apply(monkeypatch, result=route_result)
+    else:
+        monkeypatch.setattr(cc_invoke, "route", _stub_route(result=route_result))
     printed = []
     code = entry_point_shim._merge_assemble_dispatch(
         "merge_assemble.apply" if is_apply else "merge_assemble.brief",
@@ -295,13 +309,26 @@ def test_refusal_shape_c_castable_nonzero_exit_code_exits_and_prints_report(monk
 # on both branches.
 # ---------------------------------------------------------------------------
 
+def _dispatch_non_apply(capsys):
+    entry_point_shim._merge_assemble_dispatch(
+        "merge_assemble.brief", {}, lambda _r: None, "decision_object", is_apply=False
+    )
+    return capsys.readouterr().err
+
+
 def test_path_served_indicator_warm(monkeypatch, capsys):
     monkeypatch.setattr(
         cc_invoke, "route", _stub_route(result={"exit_code": 0, "report": {}})
     )
-    entry_point_shim._merge_assemble_entry(["apply"])
-    err = capsys.readouterr().err
+    err = _dispatch_non_apply(capsys)
     assert "path=warm" in err
+
+
+def test_apply_is_served_cold_and_never_routed_warm(monkeypatch, capsys):
+    calls = _stub_cold_apply(monkeypatch, result={"exit_code": 0, "report": {}})
+    assert entry_point_shim._merge_assemble_entry(["apply"]) == 0
+    assert len(calls) == 1
+    assert "path=cold" in capsys.readouterr().err
 
 
 def test_path_served_indicator_engine_spawn_is_not_warm(monkeypatch, capsys):
@@ -310,8 +337,7 @@ def test_path_served_indicator_engine_spawn_is_not_warm(monkeypatch, capsys):
         return {"exit_code": 0, "report": {}}
 
     monkeypatch.setattr(cc_invoke, "route", _route)
-    entry_point_shim._merge_assemble_entry(["apply"])
-    err = capsys.readouterr().err
+    err = _dispatch_non_apply(capsys)
     assert "path=engine-spawn" in err
     assert "path=warm" not in err
 
@@ -322,8 +348,7 @@ def test_path_served_indicator_in_process_is_not_warm(monkeypatch, capsys):
         return {"exit_code": 0, "report": {}}
 
     monkeypatch.setattr(cc_invoke, "route", _route)
-    entry_point_shim._merge_assemble_entry(["apply"])
-    err = capsys.readouterr().err
+    err = _dispatch_non_apply(capsys)
     assert "path=in-process" in err
     assert "path=warm" not in err
 
@@ -352,9 +377,7 @@ def test_checked_repo_root_mismatch_warns_to_stderr_and_still_dispatches(monkeyp
     import repo_identity  # noqa: E402
 
     monkeypatch.setattr(repo_identity, "resolve_checked_repo_root", _fake_resolve_checked_repo_root)
-    monkeypatch.setattr(
-        cc_invoke, "route", _stub_route(result={"exit_code": 0, "report": {}})
-    )
+    _stub_cold_apply(monkeypatch, result={"exit_code": 0, "report": {}})
 
     code = entry_point_shim._merge_assemble_entry(["apply"])
 
@@ -493,3 +516,41 @@ def test_runtime_import_closure_gate_can_actually_fail(tmp_path: Path) -> None:
         "forbidden module. It reported none, which means the gate above proves "
         "nothing."
     )
+
+
+# ---------------------------------------------------------------------------
+# A slow apply (node ceremony suite) outlasts the warm ceremony ceiling: the
+# shim must still return the completed result, never indeterminate/abandoned.
+# ---------------------------------------------------------------------------
+
+_SLOW_APPLY_SECS = 120.0
+
+
+def test_slow_apply_outlasting_warm_ceiling_completes_not_indeterminate(monkeypatch, capsys):
+    from coordinator_core import ipc
+
+    completed = {"exit_code": 0, "report": {"completed": True}}
+    warm_budget = ipc._timeout_for("merge_assemble.apply")
+    assert _SLOW_APPLY_SECS > 30.0
+
+    def _warm_faithful_route(op, params, repo_root, legacy_fn, **kwargs):
+        # Mirrors the warm engine: an op running past its engine budget is
+        # answered with -32004, which cc_invoke raises as WarmDispatchIndeterminate.
+        if _SLOW_APPLY_SECS > warm_budget:
+            raise cc_invoke.WarmDispatchIndeterminate(
+                f"cc_invoke: warm dispatch indeterminate (op={op}): ran past {warm_budget}s",
+                op=op,
+            )
+        return completed
+
+    monkeypatch.setattr(cc_invoke, "route", _warm_faithful_route)
+    cold_calls = _spy_cold_call(monkeypatch, completed)
+
+    code = entry_point_shim._merge_assemble_entry(["apply"])
+    err = capsys.readouterr().err
+
+    assert code == 0, f"slow apply did not complete: exit {code}; stderr: {err}"
+    assert code != _APPLY_EXIT_PARTIAL_MUTATION
+    assert "indeterminate" not in err
+    assert "partial-mutation" not in err
+    assert len(cold_calls) == 1

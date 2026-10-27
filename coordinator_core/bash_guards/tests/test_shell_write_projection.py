@@ -65,21 +65,13 @@ def _paths(cmd, root, cwd=None):
 
 def test_git_targets_are_opt_in(tmp_path):
     root = _root(tmp_path)
-    assert shell_writes("git add pkg/a.py && git commit -m x", root, root) == []
+    assert shell_writes("git checkout -- pkg/a.py", root, root) == []
 
 
-def test_git_add_pathspecs(tmp_path):
+def test_git_add_and_commit_are_never_write_targets(tmp_path):
     root = _root(tmp_path)
-    assert _paths("git add pkg/a.py sub/b.py", root) == ["pkg/a.py", "sub/b.py"]
-    assert _paths("git add -- pkg/a.py", root) == ["pkg/a.py"]
-    assert _paths("cd sub && git add b.py", root) == ["sub/b.py"]
-    assert all(w.body is None for w in shell_writes("git add pkg/a.py", root, root, with_git=True))
-
-
-def test_git_add_all_is_root(tmp_path):
-    root = _root(tmp_path)
-    assert _paths("git add -A", root) == ["."]
-    assert _paths("git add .", root) == ["."]
+    for cmd in ('git add pkg/a.py', 'git add -A', 'git commit -m msg', 'git commit -am msg', 'git commit -m msg -- pkg/a.py', 'git -C . add -- pkg/a.py && git commit -F msg.txt'):
+        assert _paths(cmd, root) == [], cmd
 
 
 def test_git_checkout_only_after_double_dash(tmp_path):
@@ -88,15 +80,6 @@ def test_git_checkout_only_after_double_dash(tmp_path):
     assert _paths("git checkout main", root) == []
     assert _paths("git restore pkg/a.py", root) == ["pkg/a.py"]
     assert _paths("git restore --staged pkg/a.py", root) == []
-
-
-def test_git_commit_forms(tmp_path):
-    root = _root(tmp_path)
-    assert _paths("git commit -m 'msg; x' pkg/a.py", root) == ["pkg/a.py"]
-    assert _paths("git commit -m msg", root) == ["."]
-    assert _paths("git commit -am msg", root) == ["."]
-    assert _paths("git commit -m msg -- pkg/a.py", root) == ["pkg/a.py"]
-    assert _paths('git commit -m "$(cat <<\'EOF\'\nfix\nEOF\n)"', root) == ["."]
 
 
 def test_git_apply_reads_patch_headers(tmp_path):

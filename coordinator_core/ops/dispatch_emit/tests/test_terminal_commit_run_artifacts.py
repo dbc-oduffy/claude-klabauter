@@ -187,12 +187,9 @@ def test_a_candidate_another_run_claims_is_not_this_runs_residue(repo, monkeypat
 
     _stage_graph(repo)
     monkeypatch.setattr(run_artifacts, "landable", lambda *a, **k: run_artifacts.Landable())
-    # **_kw: the real call passes minted_before/own_declared (member 57010e: an uncomputable contest holds every declared wanted path).
     monkeypatch.setattr(
         sibling_claims, "sibling_run_claims",
-        lambda root, rid, paths, own_plan=None, **_kw: {
-            p: "ask-20261016T130000-cccccc" for p in paths if p == EVIDENCE
-        },
+        lambda root, rid, paths, own_plan=None: {p: "ask-20261016T130000-cccccc" for p in paths if p == EVIDENCE},
     )
 
     out = _fire(repo)
@@ -225,12 +222,9 @@ def test_stranded_residue_omits_a_path_another_run_claims(repo, monkeypatch, cla
     _git(["commit", "-q", "-m", "op"], repo)
     _write(repo, "a.py", "a\n")
     _write(repo, "op.py", "v2\n")
-    # **_kw: the real call passes minted_before/own_declared (member 57010e: an uncomputable contest holds every declared wanted path).
     monkeypatch.setattr(
         sibling_claims, "sibling_run_claims",
-        lambda root, rid, paths, own_plan=None, **_kw: {
-            p: "ask-20261016T130000-cccccc" for p in paths if claimed and p == "op.py"
-        },
+        lambda root, rid, paths, own_plan=None: {p: "ask-20261016T130000-cccccc" for p in paths if claimed and p == "op.py"},
     )
 
     out = _fire_stranded(repo, session_id=SESSION)
@@ -238,30 +232,3 @@ def test_stranded_residue_omits_a_path_another_run_claims(repo, monkeypatch, cla
     assert out["committed"] is True, out
     assert "op.py" not in _git(["show", "--name-only", "--format=", "HEAD"], repo)
     assert ("op.py" in out.get("stranded_residue", {}).get("C2", [])) is (not claimed), out
-
-
-def test_an_undone_chunks_path_is_not_own_declared_for_sibling_filtering(repo, monkeypatch):
-    from coordinator_core.ops.dispatch_emit import sibling_claims
-    from coordinator_core.session import core as session_core
-
-    monkeypatch.setenv("COORDINATOR_SESSION_ID", SESSION)
-    session_core.init(SESSION, cwd=str(repo))
-    _write(repo, "op.py", "v1\n")
-    _git(["add", "op.py"], repo)
-    _git(["commit", "-q", "-m", "op"], repo)
-    _write(repo, "a.py", "a\n")
-    _write(repo, "op.py", "v2\n")
-    seen_own: list = []
-
-    def _claims(root, rid, paths, own_plan=None, **kw):
-        seen_own.append(set(kw.get("own_declared") or ()))
-        return {p: "ask-20261016T130000-cccccc" for p in paths if p == "op.py"}
-
-    monkeypatch.setattr(sibling_claims, "sibling_run_claims", _claims)
-
-    out = _fire_stranded(repo, session_id=SESSION)
-
-    assert out["committed"] is True, out
-    assert "op.py" not in _git(["show", "--name-only", "--format=", "HEAD"], repo)
-    assert seen_own, "sibling_run_claims was never consulted"
-    assert all("op.py" not in own for own in seen_own), seen_own

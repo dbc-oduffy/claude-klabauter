@@ -18,11 +18,8 @@ from coordinator_core.ops.dispatch_emit.write_baseline import (
     NO_CHANGE_REFUSAL,
     NON_REFIRE_REFUSALS,
 )
-from coordinator_core.ops.dispatch_emit.run_truth_contract import MutationReply
 
 REFIRE_KIND = "refire"
-APPLIED_KEY = "applied"
-REFUSED_KEY = "refused"
 EXIT_KIND = "exit"
 ROUTE_REVIEW_ONLY = "review-only"
 ROUTE_REVISE = "revise"
@@ -65,14 +62,6 @@ HAND_REPAIR_MARKERS = (
 
 ALL_OWED_PREFIX = "Everything left is EM or operator work:"
 
-EM_RULE_KEY = "em_rule"
-# The one rule for when the EM may act after a halt; the halt next_action and the EM halted-run guards emit it verbatim (same text, no paraphrase).
-EM_ACTION_AFTER_HALT_RULE = (
-    "After a halt the EM acts only through the engine: a refire, workflow.revise or credit is engine-forced, "
-    "never EM hand-work. A hand commit of the run's withheld paths is not, unless a live G-EM recorded a "
-    "landing waiver covering those paths (python -m coordinator_core.authz.landing_waiver record); ask the G-EM."
-)
-
 
 def refire_next_action(
     *,
@@ -100,27 +89,7 @@ def refire_next_action(
         "resume": resume,
         "input": input,
         "detail": detail,
-        EM_RULE_KEY: EM_ACTION_AFTER_HALT_RULE,
-        APPLIED_KEY: refire_applied(run_id, halted, phase),
-        REFUSED_KEY: [],
     }
-
-
-def refire_applied(run_id: str, halted: str, phase: str | None) -> list[str]:
-    """What the refire re-arms: the halted run, its halt kind and the phase it resumes at."""
-    where = f" at phase {phase}" if phase is not None else " as a full pass"
-    return [f"re-arm {halted} halt of run {run_id}{where}"]
-
-
-def refire_reply(envelope: dict) -> MutationReply:
-    """The MutationReply for a refire envelope: its `applied`/`refused` lists, `target` the halted run."""
-    resume = envelope.get("resume") if isinstance(envelope, dict) else None
-    target = resume.get("run_id") if isinstance(resume, dict) else None
-    return MutationReply(
-        applied=tuple(envelope.get(APPLIED_KEY) or ()) if isinstance(envelope, dict) else (),
-        refused=tuple(envelope.get(REFUSED_KEY) or ()) if isinstance(envelope, dict) else (),
-        target=target,
-    )
 
 
 WAVE_COMMIT_FAILED_HEAD = "wave commit failed, dependents held ("
@@ -295,9 +264,6 @@ def refire_next_action_js(
             f"    resume: Object.assign({{ run_id: {run_id_js}, sizing: {sizing_js}, halted: _hk, stage: {stage_js} }}, Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? {{ {j(RESUME_PHASE_KEY)}: _haltPhase[_hk] }} : {{}}),",
             "    input: _input,",
             "    detail: _detail === undefined ? null : _detail,",
-            f"    {EM_RULE_KEY}: {j(EM_ACTION_AFTER_HALT_RULE)},",
-            f"    {APPLIED_KEY}: ['re-arm ' + _hk + ' halt of run ' + {run_id_js} + (Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? ' at phase ' + _haltPhase[_hk] : ' as a full pass')],",
-            f"    {REFUSED_KEY}: [],",
             "  };",
             "}",
         ]

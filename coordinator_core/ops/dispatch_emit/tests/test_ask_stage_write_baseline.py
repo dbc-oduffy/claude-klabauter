@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
-from coordinator_core.git.git_objects import write_object
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
@@ -75,32 +74,39 @@ def _halt(tmp_path, run_id, baseline, base_sha="a" * 40):
     return rec
 
 
+BASE = "b" * 40
 EXTRA_BYTES = b"base content\n"
 BASE_EXTRA = blob_sha(EXTRA_BYTES)
 
 
-def _oid(kind: bytes, payload: bytes) -> str:
-    return hashlib.sha1(kind + b" %d\0" % len(payload) + payload).hexdigest()
+class _FakeGit:
+    """`git cat-file --batch --filters` over a commit `BASE` whose tree holds only pkg/extra.py."""
 
+    def __init__(self, ok=True):
+        self.ok = ok
+        self.calls = 0
 
-_PKG_TREE = b"100644 extra.py\0" + bytes.fromhex(BASE_EXTRA)
-_ROOT_TREE = b"40000 pkg\0" + bytes.fromhex(_oid(b"tree", _PKG_TREE))
-_COMMIT = b"tree " + _oid(b"tree", _ROOT_TREE).encode() + b"\n\nbase\n"
-BASE = _oid(b"commit", _COMMIT)
+    def __call__(self, args, *, cwd=None, input=None, **kw):
+        self.calls += 1
+        out = b""
+        for ln in input.decode().splitlines():
+            if ln == BASE:
+                out += f"{BASE} commit 3\n".encode() + b"abc\n"
+            elif ln.startswith(f"{BASE}:pkg/extra.py "):
+                out += f"{BASE_EXTRA} blob 1\n".encode() + EXTRA_BYTES + b"\n"
+            else:
+                out += f"{ln.split(' ')[0]} missing\n".encode()
+        return SimpleNamespace(returncode=0 if self.ok else 128, stdout_bytes=out if self.ok else b"")
 
 
 @pytest.fixture
-def base_repo(tmp_path):
-    """A `.git` holding commit `BASE` whose tree holds only pkg/extra.py, written in process."""
-    gitdir = tmp_path / ".git"
-    (gitdir / "objects").mkdir(parents=True)
-    (gitdir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8", newline="\n")
-    for kind, payload in ((b"blob", EXTRA_BYTES), (b"tree", _PKG_TREE), (b"tree", _ROOT_TREE), (b"commit", _COMMIT)):
-        write_object(gitdir, kind, payload)
-    return tmp_path
+def fake_git(monkeypatch):
+    fake = _FakeGit()
+    monkeypatch.setattr("coordinator_core.git.run.run_git", fake)
+    return fake
 
 
-def test_refire_baseline_is_the_halted_run_base_not_the_live_tree(tmp_path, base_repo):
+def test_refire_baseline_is_the_halted_run_base_not_the_live_tree(tmp_path, fake_git):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("first fire output\n", encoding="utf-8", newline="\n")
     (tmp_path / "pkg" / "extra.py").write_text("live\n", encoding="utf-8", newline="\n")
@@ -115,7 +121,7 @@ def test_refire_baseline_is_the_halted_run_base_not_the_live_tree(tmp_path, base
     assert ask_stage._write_baseline.unwritten(tmp_path, got, ["pkg/a.py"]) == []
 
 
-def test_refire_without_a_usable_manifest_baselines_at_the_run_base(tmp_path, base_repo):
+def test_refire_without_a_usable_manifest_baselines_at_the_run_base(tmp_path, fake_git):
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "extra.py").write_text("first fire output\n", encoding="utf-8", newline="\n")
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/extra.py", "pkg/new.py"), 0)]
@@ -131,139 +137,8 @@ def test_refire_without_a_usable_manifest_baselines_at_the_run_base(tmp_path, ba
         assert ask_stage._write_baseline.unwritten(tmp_path, got, ["pkg/extra.py"]) == []
 
 
-@pytest.fixture(autouse=True)
-def _hermetic_git_config(tmp_path, monkeypatch):
-    """No system, global or env-injected git config: the zero-spawn path is read against a known stack."""
-    empty = tmp_path.parent / f"{tmp_path.name}-empty-gitconfig"
-    empty.write_text("", encoding="utf-8", newline="\n")
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
-    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
-    monkeypatch.delenv("GIT_CONFIG_PARAMETERS", raising=False)
-
-
-@pytest.fixture
-def git_spawns(monkeypatch):
-    """Counts `run_git` spawns made by `ask_stage`; any other process start fails the test."""
-    from coordinator_core.git import run as git_run
-
-    real = git_run.run_git
-    calls: list[list[str]] = []
-
-    def counting(args, **kw):
-        calls.append(list(args))
-        return real(args, **kw)
-
-    monkeypatch.setattr(git_run, "run_git", counting)
-    return calls
-
-
-def test_refire_baseline_converts_in_process_with_zero_spawns(base_repo, git_spawns, monkeypatch):
-    def boom(*a, **k):
-        raise AssertionError("process spawned")
-
-    monkeypatch.setattr(subprocess, "Popen", boom)
-    assert ask_stage._run_base_blobs(base_repo, BASE, ["pkg/extra.py", "pkg/nope.py"]) == {
-        "pkg/extra.py": BASE_EXTRA,
-        "pkg/nope.py": None,
-    }
-    (base_repo / ".gitattributes").write_text("* text eol=crlf\n", encoding="utf-8", newline="\n")
-    assert ask_stage._run_base_blobs(base_repo, BASE, ["pkg/extra.py"]) == {
-        "pkg/extra.py": blob_sha(b"base content\r\n")
-    }
-    assert git_spawns == []
-
-
-def _real_repo(tmp_path, attrs=None):
-    """A real git repo whose base commit holds LF files f.txt and g.txt; returns (root, base sha)."""
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    root = tmp_path / "real"
-    root.mkdir()
-
-    def git(*a):
-        return subprocess.run(
-            ["git", "-C", str(root), *a], check=True, capture_output=True, text=True, creationflags=flags
-        ).stdout.strip()
-
-    git("init", "-q")
-    if attrs:
-        (root / ".gitattributes").write_text(attrs, encoding="utf-8", newline="\n")
-        git("add", "--", ".gitattributes")
-    for name in ("f.txt", "g.txt"):
-        (root / name).write_bytes(b"a\nb\n")
-        git("add", "--", name)
-    git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", "commit", "-qm", "base")
-    return root, git("rev-parse", "HEAD"), git
-
-
-CRLF_SHA = blob_sha(b"a\r\nb\r\n")
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_plain_config_refire_baseline_spawns_nothing_on_a_real_repo(tmp_path, git_spawns):
-    root, base, _ = _real_repo(tmp_path)
-    assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {
-        "f.txt": blob_sha(b"a\nb\n"),
-        "g.txt": blob_sha(b"a\nb\n"),
-    }
-    assert git_spawns == []
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_eol_crlf_attribute_converts_in_process_on_a_real_repo(tmp_path, git_spawns):
-    root, base, _ = _real_repo(tmp_path, attrs="f.txt text eol=crlf\n")
-    assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {
-        "f.txt": CRLF_SHA,
-        "g.txt": blob_sha(b"a\nb\n"),
-    }
-    assert git_spawns == []
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_repo_autocrlf_true_takes_one_spawn_and_succeeds(tmp_path, git_spawns):
-    root, base, git = _real_repo(tmp_path)
-    git("config", "core.autocrlf", "true")
-    assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {"f.txt": CRLF_SHA, "g.txt": CRLF_SHA}
-    assert len(git_spawns) == 1
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_global_only_autocrlf_true_takes_the_spawn_path(tmp_path, git_spawns, monkeypatch):
-    root, base, _ = _real_repo(tmp_path)
-    glob = tmp_path / "global-gitconfig"
-    glob.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8", newline="\n")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(glob))
-    assert ask_stage._run_base_blobs(root, base, ["f.txt"]) == {"f.txt": CRLF_SHA}
-    assert len(git_spawns) == 1
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_env_injected_autocrlf_takes_the_spawn_path(tmp_path, git_spawns, monkeypatch):
-    root, base, _ = _real_repo(tmp_path)
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
-    assert ask_stage._run_base_blobs(root, base, ["f.txt"]) == {"f.txt": CRLF_SHA}
-    assert len(git_spawns) == 1
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_filter_and_text_auto_paths_share_one_spawn_and_never_refuse(tmp_path, git_spawns):
-    root, base, _ = _real_repo(tmp_path, attrs="f.txt filter=nothing\ng.txt text=auto\n")
-    assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {
-        "f.txt": blob_sha(b"a\nb\n"),
-        "g.txt": blob_sha(b"a\nb\n"),
-    }
-    assert len(git_spawns) == 1
-
-
-def test_refire_whose_run_base_cannot_be_read_refuses_by_name(tmp_path):
+def test_refire_whose_run_base_cannot_be_read_refuses_by_name(tmp_path, monkeypatch):
+    monkeypatch.setattr("coordinator_core.git.run.run_git", _FakeGit(ok=False))
     rec = _halt(tmp_path, "bad", {}, BASE)
     (rec / "manifest.json").unlink()
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/extra.py",), 0)]
@@ -306,19 +181,19 @@ def test_refire_baseline_is_in_the_fingerprint_domain_under_an_eol_rule(tmp_path
     assert ask_stage._write_baseline.unwritten(tmp_path, got, ["f.txt", "g.txt"]) == ["f.txt"]
 
 
-def test_refire_with_a_whitespace_path_refuses_before_spawning_git(tmp_path, base_repo, git_spawns):
+def test_refire_with_a_whitespace_path_refuses_before_spawning_git(tmp_path, fake_git):
     rec = _halt(tmp_path, "ws", {}, BASE)
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/has space.py",), 0)]
     with pytest.raises(ask_stage.RefireBaselineError):
         ask_stage._stage_write_baseline(tmp_path, rows, rec)
-    assert git_spawns == []
+    assert fake_git.calls == 0
 
 
-def test_refire_with_every_path_recorded_spawns_no_git(tmp_path, base_repo, git_spawns):
+def test_refire_with_every_path_recorded_spawns_no_git(tmp_path, fake_git):
     rec = _halt(tmp_path, "full", {"pkg/a.py": None}, BASE)
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/a.py",), 0)]
     assert ask_stage._stage_write_baseline(tmp_path, rows, rec) == {"pkg/a.py": None}
-    assert git_spawns == []
+    assert fake_git.calls == 0
 
 
 def test_non_refire_record_still_captures_the_live_tree(tmp_path):
@@ -331,7 +206,7 @@ def test_non_refire_record_still_captures_the_live_tree(tmp_path):
     assert ask_stage._stage_write_baseline(tmp_path, rows) == {"a.py": fingerprint(tmp_path, "a.py")}
 
 
-def test_stage_of_a_halted_run_keeps_the_prior_baseline(tmp_path, base_repo):
+def test_stage_of_a_halted_run_keeps_the_prior_baseline(tmp_path, fake_git):
     _sizing(tmp_path)
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("first fire output\n", encoding="utf-8", newline="\n")

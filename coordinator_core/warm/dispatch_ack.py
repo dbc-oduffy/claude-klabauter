@@ -42,6 +42,14 @@ OUTCOME_WORKER_LOST = "worker-lost"
 OUTCOME_NOT_DISPATCHED = "not-dispatched"
 
 _FINISHED_OUTCOMES = (OUTCOME_RESULT, OUTCOME_ERROR)
+
+#: Answers "how long past its executing bound may a still-unstamped record read
+#: `executing` (overdue) before a poll reads it abandoned?" A multiple of the
+#: record's own bound, never a raised op budget. 10x the 30s bound is 300s, the
+#: inline executor join (`asyncio.run`), so a handler that finishes inside that
+#: join is read as executing; past it the supersede rule in `stamp`, not this
+#: ceiling, carries a late result.
+OVERDUE_CEILING_FACTOR = 10
 _UNKNOWABLE_OUTCOMES = (OUTCOME_ABANDONED, OUTCOME_WORKER_LOST)
 
 
@@ -134,7 +142,13 @@ class AckStore:
         size = self._measure(result) if outcome == OUTCOME_RESULT and result is not None else None
         with self._lock:
             record = self._records.get(key)
-            if record is None or record["state"] != _ADMITTED:
+            if record is None:
+                return
+            if record["state"] != _ADMITTED and not (
+                record["state"] == _STAMPED
+                and record["outcome"] == OUTCOME_ABANDONED
+                and outcome in _FINISHED_OUTCOMES
+            ):
                 return
             record["state"] = _STAMPED
             record["outcome"] = outcome
@@ -207,8 +221,12 @@ class AckStore:
                 # in `_run_joining_handler` never resolves its future -- so this
                 # read is what ends `executing`. The record stays _ADMITTED so a
                 # late `stamp` still lands.
-                if bound_secs is not None and time.monotonic() - record["admitted_mono"] >= bound_secs:
-                    return {"state": STATE_UNKNOWABLE, "reason": OUTCOME_ABANDONED}
+                if bound_secs is not None:
+                    age = time.monotonic() - record["admitted_mono"]
+                    if age >= bound_secs * OVERDUE_CEILING_FACTOR:
+                        return {"state": STATE_UNKNOWABLE, "reason": OUTCOME_ABANDONED}
+                    if age >= bound_secs:
+                        return {"state": STATE_EXECUTING, "overdue": True}
                 return {"state": STATE_EXECUTING}
 
             outcome = record["outcome"]

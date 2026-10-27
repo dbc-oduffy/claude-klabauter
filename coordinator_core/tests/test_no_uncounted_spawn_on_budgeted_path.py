@@ -398,11 +398,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/ask_fanout.py",
         ("_handler",),
     ),
-    # Measured EMPTY function-granular reachable spawn set.
-    "dispatch.write_receipt": (
-        "coordinator_core/ops/dispatch_emit/stage_receipts.py",
-        ("_handler",),
-    ),
     # Enrolled 2026-10-05: each now measures an EMPTY function-granular reachable spawn set.
     "install.probe_skill_frontmatter_valid": (
         "coordinator_core/install/prereq_probe.py",
@@ -434,13 +429,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "plan.seam_fix": (
         "coordinator_core/ops/plan_seam_fix.py",
-        ("_handler",),
-    ),
-    # Enrolled 2026-10-26: measured EMPTY function-granular reachable set (its one run_git site
-    # sits behind a _Repo method the walker does not resolve); C1's 1-vs-6-path spawn-equality test
-    # bounds the real spawn count.
-    "dispatch.commit_merge": (
-        "coordinator_core/ops/dispatch_emit/merge_commit.py",
         ("_handler",),
     ),
     # Enrolled 2026-10-22: statically spawn-free (empty function-granular reachable set).
@@ -516,6 +504,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "review_stamp.rejudge": (
         "coordinator_core/ops/review_stamp.py",
         ("_rejudge_handler",),
+    ),
+    "review.reverify": (
+        "coordinator_core/ops/review_reverify.py",
+        ("_handler",),
     ),
     "dispatch.sibling_status": (
         "coordinator_core/ops/dispatch_emit/sibling_status.py",
@@ -673,11 +665,6 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "bin.workday_complete_backfill_scan.scan": (
         "coordinator_core/ops/workday_complete_backfill_scan.py",
         ("scan",),
-    ),
-    # Enrolled 2026-10-25: the L+ close runs the plan's own falsifier, at most one spawn per close.
-    "execute_plan_assemble.l_plus_falsifier_gate": (
-        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
-        ("_evaluate_l_plus_falsifier_gate",),
     ),
     "ops.discover_working_repos": (
         "coordinator_core/ops/discover_working_repos.py",
@@ -2121,23 +2108,6 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "three whole-op counters, which assert exact equality against `call_count` AND "
         "cross-check the manifest's own `op_total_*` value (3/3/0, nothing stubbed).",
     ),
-    (
-        "execute_plan_assemble.l_plus_falsifier_gate",
-        "coordinator_core/execute_plan_assemble/falsifier_run.py",
-        "run_recorded_falsifier",
-        "<dynamic>",
-        0,
-    ): _Legitimation(
-        # The plan's own recorded falsifier command: not a leaf (pytest spawns git and
-        # interpreters), run at L+ only, at most once per close.
-        counter=_GLOBAL_SUBPROCESS_RUN,
-        counted_by="coordinator_core/execute_plan_assemble/tests/"
-        "test_close_out_l_plus_runs_falsifier.py",
-        executed="Measured 2026-10-25: attributed by caller frame to falsifier_run.py::"
-        "run_recorded_falsifier under `test_l_plus_close_spawns_the_falsifier_exactly_once` "
-        "(`assert len(spawns) == _L_PLUS_FALSIFIER_SPAWNS_PER_CLOSE`), and 0 at M under "
-        "`test_below_l_close_spawns_no_falsifier`.",
-    ),
     # `memo.send` (2026-09-24, docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-
     # gate.md, C2). The receiver index fallback: a hookless `update-index` when the receiver's
     # index is one `splice_index` refuses (v4), executed by
@@ -2226,28 +2196,6 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log` "
         "(`assert len(spawns) == budget`, read from the manifest's hooks.stop_dispatch "
         "`terminal_review_session_walk`); the attribution is itself asserted on every run.",
-    ),
-    (
-        "dispatch.ask_stage",
-        "coordinator_core/git/run.py",
-        "run_git",
-        "git",
-        0,
-    ): _Legitimation(
-        # EM-ruled (group-em-fe, 2026-10-25, warp f11-tieru-eight-reds-on-day N16): portability
-        # outranks the spawn budget. `ask_stage._run_base_blobs` reads a refire's base blobs in
-        # process; ONLY the checkout conversions it cannot reproduce (`filter=`, `text=auto`,
-        # `core.autocrlf`, `core.eol`, env- or include-injected config, native CRLF) take ONE
-        # `git cat-file --batch --filters` through `ask_stage._git_filtered_blobs`, never a refusal.
-        # Scoped to that single site: no other exemption for this op.
-        counter=_GLOBAL_SUBPROCESS_SPAWN,
-        counted_by="coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py",
-        executed="Common path: the exact-equality figure (`sum(_budget().values())`, the manifest's "
-        "empty `spawn_count_budget`) is asserted over the size-L and 26-row fixtures, so a spawn "
-        "that leaks onto the unconditional path fails it. Conversion path measured 2026-10-25 by "
-        "`test_ask_stage_write_baseline.py` (`assert len(git_spawns) == 1` under repo, "
-        "global-only and env-injected `core.autocrlf=true`, and `filter=`/`text=auto` together; "
-        "`== []` under plain config).",
     ),
     (
         "roadmap.blitz_land",
@@ -7127,10 +7075,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
-    # review.reverify: static reachable-site ceiling, not execution evidence. The one site is
-    # foreign_halted_withheld's run_git (probe-open and revert legs), reached once per still-held
-    # halted run, so the dynamic count scales with halted runs; not enrolled.
-    "review.reverify": 1,
     # Enrolled 2026-08-30 (second reconciliation pass): both entered the live
     # registry mid-close from concurrent peer work, measured at their live
     # reachable-site counts.
@@ -7535,13 +7479,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Enrolled 2026-10-15: new ops, pinned at their measured reachable counts (a ratchet, not execution evidence).
     "plan.readiness_verdict": 1,
     "review.prep": 1,
-    # Enrolled 2026-10-26: halted-run supersede/combined-landing ops, pinned at measured reachable counts.
-    "dispatch.close_halted_run_superseded": 1,
-    "dispatch.land_combined_index": 2,
-    # Enrolled 2026-10-26: objective_* ops, pinned at measured reachable counts (7 (op, site) pairs).
-    "dispatch.objective_calibrate": 1,
-    "dispatch.objective_check": 4,
-    "dispatch.objective_write": 2,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

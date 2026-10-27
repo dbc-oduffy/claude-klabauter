@@ -14,15 +14,12 @@ this module.
 
 from __future__ import annotations
 
-import contextlib
-import contextvars
 import os
 import time
 from pathlib import Path
 from typing import Optional
 
 RELEASE_SUPERSEDED = "sizing-superseded"
-RELEASE_MARKER_SUPERSEDED = "marker-superseded"
 RELEASE_SUCCESSOR = "successor-run"
 RELEASE_PLAN_LANDING = "plan-landing"
 RELEASE_SUCCESSOR_LANDED = "successor-landed"
@@ -74,25 +71,6 @@ def _successor_landed(root: Path, run_id: str, sizing: str) -> bool:
     return False
 
 
-_SCOPE: contextvars.ContextVar = contextvars.ContextVar("halted_hold_release_scope", default=None)
-
-
-@contextlib.contextmanager
-def release_scope():
-    """One terminal commit's release computation: `release_reason` is evaluated once per (halted run, committing
-    run, committing plan) and `prefetch_kept_at_head` blobs are shared. Nested entry reuses the outer scope.
-    The state dies with the scope: nothing is cached across commits. Within one commit HEAD moves only at the
-    landing, so an answer read after it is stale toward holding longer, never toward freeing a run."""
-    if _SCOPE.get() is not None:
-        yield _SCOPE.get()
-        return
-    token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False})
-    try:
-        yield _SCOPE.get()
-    finally:
-        _SCOPE.reset(token)
-
-
 def release_reason(
     root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str] = None,
 ) -> Optional[str]:
@@ -100,20 +78,7 @@ def release_reason(
 
     A `landed` marker always releases; `halted`/`resumed` release per the rules above, and a shipped
     sizing frees either. Any other marker state (none) is None. Never raises: an unreadable record holds.
-    Inside `release_scope()` the answer, None from the except arm included, is memoised per key.
     """
-    state = _SCOPE.get()
-    if state is None:
-        return _release_reason(root, halted_run_id, committing_run_id, committing_plan)
-    key = ("release", str(root), halted_run_id, committing_run_id, committing_plan)
-    if key not in state["memo"]:
-        state["memo"][key] = _release_reason(root, halted_run_id, committing_run_id, committing_plan)
-    return state["memo"][key]
-
-
-def _release_reason(
-    root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str],
-) -> Optional[str]:
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
         from coordinator_core.ops.dispatch_emit import halted_run
@@ -124,8 +89,6 @@ def _release_reason(
         status = marker.get("status") if marker else None
         if status == halted_run.STATUS_LANDED:
             return RELEASE_RECORDED_LANDED
-        if status == halted_run.STATUS_SUPERSEDED:
-            return RELEASE_MARKER_SUPERSEDED
         if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
         released = marker.get(halted_run.HALT_RELEASED_FIELD)
@@ -158,117 +121,6 @@ def _release_reason(
     return None
 
 
-def held_paths(
-    root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str] = None,
-) -> frozenset:
-    """The normalized paths `halted_run_id` still holds against `committing_run_id`'s commit.
-
-    Empty when `release_reason` frees the run; otherwise the paths its halt record withholds. A held
-    path lands whole or not at all (DR-462): this names no hunk subset. Fail-closed: an error computing the
-    release or the normalized set falls back to the raw halt-record withheld set, never to empty; only an
-    unreadable halt record itself propagates. Spawns what `release_reason` spawns (its `_kept_at_head`
-    batched `cat-file`, when no cheaper release applied).
-    """
-    try:
-        if release_reason(root, halted_run_id, committing_run_id, committing_plan) is not None:
-            return frozenset()
-    except Exception:  # noqa: BLE001 -- release unknown: the run still holds
-        pass
-    try:
-        from coordinator_core.ops import warp_run_deliverable as wrd
-
-        return frozenset(wrd.halted_withheld_paths(Path(root), halted_run_id))
-    except Exception as exc:  # noqa: BLE001 -- normalizer unavailable: the raw record still holds
-        from coordinator_core.ops.dispatch_emit import halted_run
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-
-        if isinstance(exc, halted_run.UnreadableHaltRecord):
-            raise
-        return frozenset(
-            p.replace("\\", "/").removeprefix("./")
-            for p in halted_run.halted_withheld_strict(record_dir(Path(root), halted_run_id))
-        )
-
-
-def _own_paths(root: Path, run_id: str) -> Optional[tuple]:
-    """`(declared, prefixes)` of the run's manifest, or None when the manifest is unreadable or declares nothing."""
-    from coordinator_core.ops import warp_run_deliverable as wrd
-
-    declared, prefixes, unreadable = wrd._manifest_declared(run_id, Path(root))
-    if unreadable or (not declared and not prefixes):
-        return None
-    return tuple(declared), tuple(prefixes)
-
-
-def _is_halted_holder(root: Path, owner: str, run_id: str) -> Optional[bool]:
-    """True when `owner` is a halted/resumed run that still holds against `run_id`; False when its hold is
-    released; None when its marker is missing, unreadable or in any other state (treated as live)."""
-    from coordinator_core.ops.dispatch_emit import halted_run
-    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-
-    marker = halted_run._read(record_dir(Path(root), owner))
-    if not marker or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
-        return False if release_reason(root, owner, run_id, None) is not None else None
-    return release_reason(root, owner, run_id, None) is None
-
-
-def _review_green(root: Path, run_id: str) -> bool:
-    """The run's outcome record carries an inline review with no incomplete chunk and its review sidecar resolves."""
-    from coordinator_core.ops.dispatch_emit import ask_contract
-    from coordinator_core.ops.dispatch_emit.halted_run_landed import _review_record
-
-    outcome = ask_contract.read_run_outcome(Path(root), run_id)
-    if not outcome or outcome.get("incomplete_chunks"):
-        return False
-    return _review_record(Path(root), run_id, None) is not None
-
-
-def _covers(path: str, declared: tuple, prefixes: tuple) -> bool:
-    return path in declared or any(path == pre or path.startswith(pre + "/") for pre in prefixes)
-
-
-def halted_only_withholders(root: Path, run_id: str) -> Optional[list]:
-    """Sorted ids of the other runs withholding `run_id`'s declared paths, when every one is a halted/resumed
-    run still holding and `run_id` is reviewed-green; else None.
-
-    None for: a review that is not green, an unreadable or empty manifest, a holder with no halted marker
-    (live or unreadable), or no halted withholder at all. In process, no spawn. Never raises.
-    """
-    try:
-        own = _own_paths(root, run_id)
-        if own is None or not _review_green(root, run_id):
-            return None
-        from coordinator_core.ops.dispatch_emit.halted_withheld_index import withheld_by_path
-
-        owners = {o for p, o in withheld_by_path(Path(root)).items() if o != run_id and _covers(p, *own)}
-        holders = []
-        for owner in sorted(owners):
-            holds = _is_halted_holder(root, owner, run_id)
-            if holds is None:
-                return None
-            if holds:
-                holders.append(owner)
-        return holders or None
-    except Exception:  # noqa: BLE001 -- unknown claim: the refusal stands
-        return None
-
-
-def residue_paths(root: Path, run_id: str) -> frozenset:
-    """Paths other halted runs withhold that are not `run_id`'s own declared paths: residue a tree-wide
-    invariant should not charge to `run_id`. Empty on any error (nothing is excused unread)."""
-    try:
-        from coordinator_core.ops.dispatch_emit.halted_withheld_index import withheld_by_path
-
-        own = _own_paths(root, run_id) or ((), ())
-        out = set()
-        for path, owner in withheld_by_path(Path(root)).items():
-            if owner != run_id and not _covers(path, *own) and _is_halted_holder(root, owner, run_id):
-                out.add(path)
-        return frozenset(out)
-    except Exception:  # noqa: BLE001
-        return frozenset()
-
-
 def _squash(text: str) -> str:
     return "".join(text.split())
 
@@ -299,27 +151,11 @@ def _blob_batch(root: Path, specs: list) -> Optional[dict]:
 def _hunks_present(base: str, kept: str, head: str) -> bool:
     """Every block the kept text adds over `base` sits in `head` (whitespace-insensitive, so a reflow still
     matches), and every block it removes is gone from `head`."""
-    state = _SCOPE.get()
-    if state is None:
-        return _hunks_present_uncached(base, kept, head)
-    key = ("hunks", base, kept, head)
-    if key not in state["memo"]:
-        state["memo"][key] = _hunks_present_uncached(base, kept, head)
-    return state["memo"][key]
-
-
-def _hunks_present_uncached(base: str, kept: str, head: str) -> bool:
-    """The bounded diff is `run_hunk_claims.changed_opcodes` (prefix/suffix trim). Trap: past its bound it
-    returns one coarse span without signalling, so `exceeds_match_bound` is checked first and holds."""
-    from coordinator_core.ops.dispatch_emit.run_hunk_claims import changed_opcodes, exceeds_match_bound
+    import difflib
 
     base_lines, kept_lines = base.splitlines(), kept.splitlines()
     squashed_head = _squash(head)
-    base_b = [line.encode("utf-8", "replace") for line in base_lines]
-    kept_b = [line.encode("utf-8", "replace") for line in kept_lines]
-    if exceeds_match_bound(base_b, kept_b):
-        return False
-    for tag, i1, i2, j1, j2 in changed_opcodes(base_b, kept_b):
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, base_lines, kept_lines, autojunk=False).get_opcodes():
         if tag in ("insert", "replace"):
             added = _squash("\n".join(kept_lines[j1:j2]))
             if added and added not in squashed_head:
@@ -331,27 +167,15 @@ def _hunks_present_uncached(base: str, kept: str, head: str) -> bool:
     return True
 
 
-def _base_sha(marker: dict) -> str:
-    value = marker.get("run_base_sha")
-    return value if isinstance(value, str) and value else ""
-
-
-def _kept_specs(paths: list, kept: dict, base_sha: str) -> list:
-    specs = [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths]
-    return specs + ([f"{base_sha}:{p}" for p in paths] if base_sha else [])
-
-
-def _kept_plan(record: Path):
-    """`(paths, kept)` for the halt at `record`, or None when nothing is withheld, the record is unreadable, or no
-    withheld path has a kept blob."""
+def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
+    """The withheld paths of the halt at `record` whose kept content is already at HEAD: blob-equal, or the
+    kept diff against `run_base_sha` already present. A path with no kept blob, a missing object, or an
+    unreadable record is absent (still held). One git spawn for the whole run, none when nothing is withheld."""
     from coordinator_core.ops.dispatch_emit import halted_run, kept_work
 
-    try:
-        withheld = halted_run.halted_withheld_strict(record)
-    except halted_run.UnreadableHaltRecord:
-        return None
+    withheld = halted_run.halted_withheld(record)
     if not withheld:
-        return None
+        return set()
     kept: dict = {}
     for chunk in kept_work.read(record)["chunks"].values():
         paths = chunk.get("paths") if isinstance(chunk, dict) else None
@@ -364,87 +188,13 @@ def _kept_plan(record: Path):
         if p not in kept and len(blobs) == 1:
             kept[p] = next(iter(blobs))
     paths = sorted(p for p in withheld if p in kept)
-    return (paths, kept) if paths else None
-
-
-def prefetch_kept_at_head(root: Path, run_ids) -> None:
-    """Read every halted run's kept/HEAD/base blobs in one `git cat-file --batch` and stash them in the active
-    `release_scope()`, so `kept_at_head_paths` spawns nothing for those runs. No scope: no-op. A failed batch
-    holds every run's kept-at-head check for the rest of the scope, prefetched or not (`_scoped_blobs`). Never
-    raises."""
-    state = _SCOPE.get()
-    if state is None:
-        return
-    try:
-        from coordinator_core.ops.dispatch_emit import halted_run
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-
-        specs: list = []
-        for run_id in run_ids:
-            record = record_dir(Path(root), run_id)
-            marker = halted_run._read(record)
-            if not marker or marker.get("status") != halted_run.STATUS_HALTED:
-                continue
-            plan = _kept_plan(record)
-            if plan is not None:
-                specs += _kept_specs(plan[0], plan[1], _base_sha(marker))
-        if not specs:
-            return
-        specs = list(dict.fromkeys(specs))
-        blobs = _blob_batch(Path(root), specs)
-        state["prefetched"] = True
-        state["blobs"] = blobs
-        state["specs"] = set(specs) if blobs is not None else set()
-    except Exception:  # noqa: BLE001 -- no prefetch: each run falls back to its own batch
-        return
-
-
-_PREFETCH_FAILED = object()
-
-
-def _scoped_blobs(specs: list):
-    """The prefetched blobs when every spec was prefetched; `_PREFETCH_FAILED` when the prefetch batch failed
-    (the run stays held); None when the caller must batch for itself."""
-    state = _SCOPE.get()
-    if state is None or not state.get("prefetched"):
-        return None
-    if state["blobs"] is None:
-        return _PREFETCH_FAILED
-    if all(s in state["specs"] for s in specs):
-        return state["blobs"]
-    return None
-
-
-def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
-    """The withheld paths of the halt at `record` whose kept content is already at HEAD: blob-equal, or the
-    kept diff against `run_base_sha` already present. A path with no kept blob, a missing object, or an
-    unreadable record is absent (still held). One git spawn for the whole run, none when nothing is withheld
-    or the run's blobs were prefetched in the active `release_scope()`. Inside a scope the answer is memoised per
-    record: `release_reason` and `warp_run_deliverable.halted_run_write_claims` both ask, and the hunk differ
-    behind it costs process time."""
-    state = _SCOPE.get()
-    key = ("kept-paths", str(root), str(record))
-    if state is None:
-        return _kept_at_head_paths(root, record, marker)
-    if key not in state["memo"]:
-        state["memo"][key] = frozenset(_kept_at_head_paths(root, record, marker))
-    return set(state["memo"][key])
-
-
-def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
-    from coordinator_core.ops.dispatch_emit import kept_work
-
-    plan = _kept_plan(record)
-    if plan is None:
+    if not paths:
         return set()
-    paths, kept = plan
-    base_sha = _base_sha(marker)
-    specs = _kept_specs(paths, kept, base_sha)
-    blobs = _scoped_blobs(specs)
-    if blobs is _PREFETCH_FAILED:
-        return set()
-    if blobs is None:
-        blobs = _blob_batch(root, specs)
+    base_sha = marker.get("run_base_sha")
+    base_sha = base_sha if isinstance(base_sha, str) and base_sha else ""
+    specs = [f"HEAD:{p}" for p in paths] + [kept[p] for p in paths]
+    specs += [f"{base_sha}:{p}" for p in paths] if base_sha else []
+    blobs = _blob_batch(root, specs)
     if blobs is None:
         return set()
     released: set = set()
@@ -466,18 +216,8 @@ def _kept_at_head(root: Path, record: Path, marker: dict) -> bool:
     """True when the halt withholds something and every withheld path is `kept_at_head_paths`."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
-    state = _SCOPE.get()
-    key = ("kept", str(root), str(record))
-    if state is not None and key in state["memo"]:
-        return state["memo"][key]
-    try:
-        withheld = set(halted_run.halted_withheld_strict(record))
-    except halted_run.UnreadableHaltRecord:
-        return False
-    result = bool(withheld) and kept_at_head_paths(root, record, marker) == withheld
-    if state is not None:
-        state["memo"][key] = result
-    return result
+    withheld = set(halted_run.halted_withheld(record))
+    return bool(withheld) and kept_at_head_paths(root, record, marker) == withheld
 
 
 def release_calls(root: Path, halted_run_id: str) -> tuple:

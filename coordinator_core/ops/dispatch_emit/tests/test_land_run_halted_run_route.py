@@ -43,36 +43,3 @@ def test_scriptless_land_of_unhalted_run_keeps_generic_refusal(tmp_path):
     out = _land(tmp_path, {"task_output_path": _digest(tmp_path, {"run_id": RUN})})
     assert out.get("refused") != "halted-run"
     assert "script_path" in out["error"]
-
-
-def _halt_withheld(root: Path, run_id: str, withheld: dict) -> None:
-    _halt(root, run_id)
-    p = root / "state" / "warp" / run_id / "halted.json"
-    marker = json.loads(p.read_text(encoding="utf-8"))
-    marker["run_artifacts"] = {"withheld": withheld}
-    p.write_text(json.dumps(marker), encoding="utf-8")
-
-
-def test_land_only_ask_with_withheld_work_commits_halted_record(tmp_path, monkeypatch):
-    from coordinator_core.ops.dispatch_emit import halted_record_commit
-
-    _halt_withheld(tmp_path, RUN, {"a/b.py": "held"})
-    seen = {}
-
-    def fake(worktree_root, repo_root, params):
-        seen.update(params)
-        return {"ok": True}
-
-    monkeypatch.setattr(halted_record_commit, "commit_halted_record", fake)
-    out = _land(tmp_path, {"task_output_path": _digest(tmp_path, {"run_id": RUN})})
-    assert out["ok"] is True
-    assert seen["halted_by"]["halted"] == "ledger-check"
-
-
-def test_land_only_ask_with_nothing_withheld_keeps_refusal(tmp_path, monkeypatch):
-    from coordinator_core.ops.dispatch_emit import halted_record_commit
-
-    _halt(tmp_path, RUN)
-    monkeypatch.setattr(halted_record_commit, "commit_halted_record", lambda *a: {"ok": True})
-    out = _land(tmp_path, {"task_output_path": _digest(tmp_path, {"run_id": RUN})})
-    assert out["refused"] == "halted-run"

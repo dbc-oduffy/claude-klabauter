@@ -299,7 +299,15 @@ def landed(env, monkeypatch):
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
+    _own(root)
     return root, sha
+
+
+def _own(root):
+    """The session's run withholds a.py and b.py, so the post-fire deny covers them."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    idx.add_run(root, "run-1", ["a.py", "b.py"])
 
 
 def test_landed_run_edit_is_denied_post_fire_and_opens_no_lane(landed):
@@ -533,9 +541,7 @@ def test_shell_write_unprojectable_denied_in_lane_only(env):
     xb.open_xs_lane(root, SID, sha)
     result = _shell(root, "a.py", None, "interpolated body")
     assert _is_deny(result)
-    reason = _reason(result)
-    assert "Budget unmeasurable (interpolated body). XS budget used 0/2 files, 0/30 lines; remaining 2 files, 30 lines." in reason
-    assert "one plain Edit" not in reason
+    assert "Budget unmeasurable (interpolated body). Make the change as one plain Edit per file." in _reason(result)
 
 
 def test_shell_write_exemptions_return_none(env):
@@ -650,6 +656,7 @@ def landed_unmarked(env, monkeypatch):
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
+    _own(root)
     return root, sha
 
 
@@ -700,24 +707,3 @@ def test_shell_write_escape_is_consumed_once(env, monkeypatch):
     big = "".join(f"x{i}\n" for i in range(42))
     assert _shell(root, "a.py", big) is None
     assert _is_deny(_shell(root, "a.py", big))
-
-
-def test_refusal_after_accepted_edits_names_applied_files_and_revert(env):
-    root, sha = env
-    xb.open_xs_lane(root, SID, sha)
-    old, new = _insert("l1\n", 20, "p")
-    assert mod.op(_edit(root, "a.py", old, new)) is None
-    _apply(root, "a.py", old, new)
-    denied = mod.op(_edit(root, "b.py", *_insert("l1\n", 11, "q")))
-    assert _is_deny(denied)
-    reason = _reason(denied)
-    assert "Applied: a.py (20 lines). Revert: git checkout -- a.py." in reason
-    assert "b.py (" not in reason
-
-
-def test_refusal_with_nothing_accepted_has_no_applied_clause(env):
-    root, sha = env
-    xb.open_xs_lane(root, SID, sha)
-    denied = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
-    assert _is_deny(denied)
-    assert "Applied:" not in _reason(denied)

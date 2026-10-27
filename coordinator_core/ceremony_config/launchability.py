@@ -45,7 +45,6 @@ def check(argv: List[str], *, platform: str = sys.platform) -> Optional[str]:
             suffix = os.path.splitext(resolved)[1] or "(none)"
             return f"not launchable: '{resolved}' has suffix {suffix}, and only .exe/.com launch directly"
         return None
-    # which() on a path applies the same X_OK test the platform launcher does.
-    if os.path.isfile(resolved) and shutil.which(resolved) is not None:
+    if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
         return None
     return f"not launchable: '{resolved}' is not an executable file"

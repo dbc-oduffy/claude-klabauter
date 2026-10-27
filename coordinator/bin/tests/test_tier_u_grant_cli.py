@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import io
-import json
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -62,73 +61,10 @@ def stub_import_module():
     grant_directive.suite_authority = orig_suite
 
 
-def _record(granted_by="pm", note="yes run it", ceremony=None, sid="sess-1"):
-    return {"session_id": sid, "granted_by": granted_by, "note": note, "ceremony": ceremony}
-
-
-def _run_json(argv):
-    buf = io.StringIO()
-    with redirect_stdout(buf):
-        rc = _cli.main(argv)
-    out = buf.getvalue().strip()
-    return rc, (json.loads(out) if out else None)
-
-
 def test_grant_true_exits_0(stub_import_module):
-    stub_import_module(_StubGrant(read_tier_u_grant=lambda *a, **k: _record()))
-    rc, reply = _run_json(["grant", "pm", "yes run it"])
+    stub_import_module(_StubGrant(write_tier_u_grant=lambda *a, **k: True))
+    rc = _cli.main(["grant", "pm", "yes run it"])
     assert rc == 0
-    assert reply["ok"] is True
-    assert reply["applied"][0]["scope"] == {"session_id": "sess-1", "granted_by": "pm", "ceremony": None}
-
-
-def test_grant_names_the_written_path(stub_import_module):
-    stub = _StubGrant(read_tier_u_grant=lambda *a, **k: _record())
-    stub._grant_file = lambda sid, cwd: Path("/s") / sid / "tier-u-grant.json"
-    stub_import_module(stub)
-    rc, reply = _run_json(["grant", "pm", "yes run it"])
-    assert rc == 0
-    assert reply["target"] == str(Path("/s/sess-1/tier-u-grant.json"))
-    assert reply["applied"][0]["path"] == reply["target"]
-
-
-def test_grant_unconfirmed_by_readback_is_refused(stub_import_module):
-    stub_import_module(_StubGrant(read_tier_u_grant=lambda *a, **k: None))
-    rc, reply = _run_json(["grant", "pm", "yes run it"])
-    assert rc == 1
-    assert reply["ok"] is False and reply["applied"] == []
-    assert "readback" in reply["refused"][0]["reason"]
-
-
-def test_grant_readback_of_other_tier_is_refused(stub_import_module):
-    stub_import_module(_StubGrant(read_tier_u_grant=lambda *a, **k: _record(granted_by="ceremony", ceremony="x")))
-    rc, reply = _run_json(["grant", "pm", "yes run it"])
-    assert rc == 1 and reply["applied"] == []
-
-
-def test_grant_foreign_session_is_refused(stub_import_module):
-    stub = _StubGrant(read_tier_u_grant=lambda *a, **k: _record(sid="other"))
-
-    class _Core:
-        @staticmethod
-        def resolve_session_id(cwd):
-            return "mine"
-
-    stub.core = _Core
-    stub_import_module(stub)
-    rc, reply = _run_json(["grant", "pm", "yes run it"])
-    assert rc == 1
-    assert "different session" in reply["refused"][0]["reason"]
-
-
-def test_grant_unknown_tier_refused_with_reason_json(stub_import_module):
-    def _raise(*a, **k):
-        raise ValueError("granted_by must be one of ['ceremony', 'pm']")
-
-    stub_import_module(_StubGrant(write_tier_u_grant=_raise))
-    rc, reply = _run_json(["grant", "robot", "note"])
-    assert rc == 2
-    assert reply["ok"] is False and "granted_by" in reply["refused"][0]["reason"]
 
 
 def test_grant_false_exits_1(stub_import_module):
@@ -144,10 +80,7 @@ def test_grant_forwards_ceremony_flag(stub_import_module):
         seen["args"] = (granted_by, note, ceremony)
         return True
 
-    stub_import_module(_StubGrant(
-        write_tier_u_grant=_write,
-        read_tier_u_grant=lambda *a, **k: _record("ceremony", "cadence gate", "workday-complete"),
-    ))
+    stub_import_module(_StubGrant(write_tier_u_grant=_write))
     rc = _cli.main(["grant", "ceremony", "cadence gate", "--ceremony", "workday-complete"])
     assert rc == 0
     assert seen["args"] == ("ceremony", "cadence gate", "workday-complete")

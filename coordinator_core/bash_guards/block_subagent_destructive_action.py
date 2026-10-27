@@ -57,7 +57,7 @@ env var in subagent context -- there is NO subagent-reachable escape hatch
 (contrast ``block_subagent_plan_body_bash_write.py``, which DOES honor
 ``COORDINATOR_OVERRIDE_SUBAGENT_PLAN_BODY``). The Python port MUST NOT add
 one. A sanctioned destructive op routes back through the EM main-loop, which
-is never blocked by this guard (no agent_id and no agent_type/subagent_type -> allow).
+is never blocked by this guard (no agent_id -> allow).
 
 FAIL POSTURE -- two independent rules from two different sibling families:
   - Fail OPEN (allow) on every unevaluable input (missing/malformed
@@ -76,9 +76,9 @@ Anti-scope (do NOT extend without a spec update):
     three named classes (docker destructive verbs, kill/pkill of a
     non-liveness-check shape, DB-client DROP/TRUNCATE) -- e.g. do NOT turn
     the docker or DB-client surfaces into a default-deny-with-allowlist like
-    v1's git/rm/chmod-chown. `kill`/`Stop-Process -Id` allow only PIDs
-    `agent_process_ownership.pid_owned_by_agent` proves launched by the calling
-    agent; pkill/killall never allow.
+    v1's git/rm/chmod-chown, and do NOT attempt self-vs-non-self process
+    scoping for kill/pkill (the memo's own recommendation, taken here, is to
+    defer that distinction entirely rather than half-match it).
 
 FAIL-OPEN OBSERVABILITY (2026-07-29 addition, PM-authorized, observability
 only -- see "FAIL-OPEN OBSERVABILITY" comment block above `_log_fail_open`
@@ -87,8 +87,7 @@ Coordinator-content-repo state/audits/2026-07-29-destructive-git-guard-inconsist
 a `git rm --cached` denied in one repo and silently allowed the identical
 shape in another, and `check()` returning `None` on ANY of the three
 fail-open branches above wrote nothing anywhere, so the incident could not
-be reproduced after the fact. Each fail-open branch (and the main-thread
-`no-agent-id-key` allow, under the label `main-thread-out-of-scope`) now
+be reproduced after the fact. Each of the three fail-open branches now
 appends an identity-resolution-tuple record to a settings-home-rooted,
 guard-specific log (`_fail_open_log_path`) whenever Layer 1 has ALREADY
 flagged the command as touching a dangerous surface -- ordinary benign
@@ -408,12 +407,14 @@ surface already denied:
     NAMED deny list, not a default-deny-with-allowlist surface like v1's
     git ladder (the memo's ask was to "distinguish", not to build a docker
     allowlist).
-  - `_evaluate_kill_surface` -- denies `kill`/`pkill`/`killall` UNLESS the
-    only flag present is `-0` (the liveness-check shape: sends no signal)
-    or the command is `kill` of numeric PIDs that ALL pass
-    `pid_owned_by_agent` for the payload's raw `agent_id` (the ledger of
-    that agent's own Bash commands plus one process-table read). pkill and
-    killall are never allowed.
+  - `_evaluate_kill_surface` -- denies `kill`/`pkill` UNLESS the only flag
+    present is `-0` (the liveness-check shape: sends no signal, only tests
+    whether the target exists). The memo's own recommendation is taken
+    verbatim here: scoping "a process this subagent launched" vs "an
+    unrelated one sharing the box" needs a live process-tree fact this text
+    classifier has no access to, so rather than half-match that distinction,
+    every real signal (any flag other than bare `-0`, any target) is denied
+    outright -- deferred, not attempted.
   - `_evaluate_dbclient_surface` -- for a FIXED set of DB-client binaries
     (`psql`/`mysql`/`mariadb`/`sqlite3`), inspects the statement text passed
     via `-c`/`--command`/`-e`/`--execute` (space- or `=`-attached) for a
@@ -535,7 +536,7 @@ _RM_DENY_RE = re.compile(
 # `_evaluate_dbclient_surface`).
 _DOCKER_SURFACE_RE = re.compile(_BOUNDARY_PRE + r"docker" + _BOUNDARY_POST, re.MULTILINE)
 _KILL_SURFACE_RE = re.compile(
-    _BOUNDARY_PRE + r"(?:kill|pkill|killall)" + _BOUNDARY_POST, re.MULTILINE
+    _BOUNDARY_PRE + r"(?:kill|pkill)" + _BOUNDARY_POST, re.MULTILINE
 )
 _DBCLIENT_SURFACE_RE = re.compile(
     _BOUNDARY_PRE + r"(?:psql|mysql|mariadb|sqlite3)" + _BOUNDARY_POST, re.MULTILINE
@@ -1397,38 +1398,50 @@ def _evaluate_docker_surface(cmd_norm: str) -> Optional[str]:
 
 
 #: The ONLY flag this matcher treats as a no-signal liveness check
-#: (`kill -0 <pid>` tests existence, sends nothing). Any other signal needs
-#: every target PID proven owned by the calling agent.
+#: (`kill -0 <pid>` tests existence, sends nothing) -- anything else,
+#: including a bare `kill <pid>` (default `-TERM`), is denied outright per
+#: the memo's own "defer entirely rather than half-match" recommendation.
 _KILL_LIVENESS_ONLY_RE = re.compile(r"^-0$")
 
-#: (raw agent_id, session_id) of the payload under evaluation, for the
-#: PowerShell leg whose classifier signature carries no payload.
-_AGENT_CTX: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
-    "_subagent_agent_ctx", default=("", "")
-)
+
+def _pid_in_session_tree(pid: int) -> bool:
+    """True when `pid` is a live descendant of this session's `claude`
+    process (`CLAUDE_PID`, exported to every hook). psutil's `parents()`
+    validates each link by create time, so a recycled parent PID breaks the
+    chain and the answer is False. No spawn; psutil is imported only when a
+    subagent names an explicit PID. Session-scoped: a subagent's own launch
+    and a peer's are indistinguishable here."""
+    try:
+        claude_pid = int(os.environ.get("CLAUDE_PID", ""))
+    except ValueError:
+        return False
+    if pid <= 1 or claude_pid <= 1 or pid == claude_pid:
+        return False
+    try:
+        import psutil
+
+        return any(p.pid == claude_pid for p in psutil.Process(pid).parents())
+    except Exception:
+        return False
 
 
-def _all_pids_owned_by_agent(values: List[str], agent_id: str, session_id: str) -> bool:
-    """True when `values` is non-empty, all numeric, and every PID is proven
-    launched by `agent_id` (ledger plus process-table read)."""
-    if not values or not agent_id:
+def _all_pids_in_session_tree(values: List[str]) -> bool:
+    if not values:
         return False
     pids = []
     for value in values:
         if not value.isdigit():
             return False
         pids.append(int(value))
-    from coordinator_core.bash_guards.agent_process_ownership import pid_owned_by_agent
-
-    return all(pid_owned_by_agent(p, agent_id, session_id) for p in pids)
+    return all(_pid_in_session_tree(p) for p in pids)
 
 
 _KILL_SIGNAL_FLAG_RE = re.compile(r"^-(?:\d{1,2}|(?:SIG)?[A-Za-z]{2,8})$")
 
 
-def _kill_targets_owned_pids(args: List[str], agent_id: str, session_id: str) -> bool:
+def _kill_targets_session_pids(args: List[str]) -> bool:
     """`kill [-SIGNAL | -s SIGNAL | -n NUM] [--] <numeric pid>...` where every
-    pid is owned by the agent. Anything else (job specs, `$!`, negative or
+    pid is in the session tree. Anything else (job specs, `$!`, negative or
     zero pids, name-based `pkill`) is not provable."""
     pids: List[str] = []
     i = 0
@@ -1448,16 +1461,16 @@ def _kill_targets_owned_pids(args: List[str], agent_id: str, session_id: str) ->
             continue
         pids.append(tok)
         i += 1
-    return _all_pids_owned_by_agent(pids, agent_id, session_id)
+    return _all_pids_in_session_tree(pids)
 
 
 _PS_STOP_PROCESS_SAFE_SWITCHES = frozenset({"-force", "-passthru", "-whatif"})
 _PS_STOP_PROCESS_SAFE_VALUED = frozenset({"-erroraction", "-ea"})
 
 
-def _ps_stop_process_targets_owned_pids(rest: List[str]) -> bool:
+def _ps_stop_process_targets_session_pids(rest: List[str]) -> bool:
     """`Stop-Process -Id <n>[,<n>...]` (plus `-Force`/`-PassThru`/`-WhatIf`/
-    `-ErrorAction x`) where every pid is owned by the agent in `_AGENT_CTX`. `-Name`,
+    `-ErrorAction x`) where every pid is in the session tree. `-Name`,
     `-InputObject`, positional or pipeline-fed targets are not provable."""
     values: List[str] = []
     i = 0
@@ -1484,15 +1497,16 @@ def _ps_stop_process_targets_owned_pids(rest: List[str]) -> bool:
                     break
         else:
             return False
-    agent_id, session_id = _AGENT_CTX.get()
-    return _all_pids_owned_by_agent(values, agent_id, session_id)
+    return _all_pids_in_session_tree(values)
 
 
-def _evaluate_kill_surface(cmd_norm: str, agent_id: str = "", session_id: str = "") -> Optional[str]:
-    """Deny `kill`/`pkill`/`killall` UNLESS the only flag token present is
-    the bare liveness-check `-0`, or the segment is a `kill` whose numeric
-    PIDs are all proven launched by `agent_id` (`pid_owned_by_agent`).
-    pkill and killall match by name and are never allowed.
+def _evaluate_kill_surface(cmd_norm: str) -> Optional[str]:
+    """Deny `kill`/`pkill` UNLESS the only flag token present is the bare
+    liveness-check `-0`. Scoping "a process this subagent itself launched"
+    vs "an unrelated one sharing the box" needs a live process-tree fact
+    this text classifier has no access to, so no attempt is made here --
+    every real-signal shape denies, not just ones a heuristic happens to
+    flag (module comment "DESTRUCTIVE-ACTION GUARD v2").
     """
     all_tokens = _tokenize_full_command(cmd_norm)
     if all_tokens is None:
@@ -1504,14 +1518,14 @@ def _evaluate_kill_surface(cmd_norm: str, agent_id: str = "", session_id: str = 
         if not working:
             continue
         head_base = _normalize_executable_basename(working[0])
-        if head_base not in ("kill", "pkill", "killall"):
+        if head_base not in ("kill", "pkill"):
             continue
         flags = [tok for tok in working[1:] if tok.startswith("-") and tok != "--"]
         if flags == ["-0"] or (len(flags) == 1 and _KILL_LIVENESS_ONLY_RE.match(flags[0])):
             continue
-        if head_base == "kill" and _kill_targets_owned_pids(working[1:], agent_id, session_id):
+        if head_base == "kill" and _kill_targets_session_pids(working[1:]):
             continue
-        return f"{head_base} (process signal -- target not proven launched by this agent)"
+        return f"{head_base} (process signal -- scoping deferred, see memo D2)"
     return None
 
 
@@ -2554,6 +2568,15 @@ def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Opt
         if tgt_root is not None and "scratch" not in tgt_root.parts:
             return f"git -C {subcmd} (only into a repo under the session scratchpad)"
     return _NO_VERDICT
+
+
+def _commit_route_line(deny_kind: str) -> str:
+    """The commit-route sentence for an add/commit deny kind, else ''."""
+    from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
+
+    if deny_kind.startswith(("git -C add", "git -C commit")):
+        return f"\n\nCommit via: `{COMMIT_ROUTE}`."
+    return ""
 
 
 _NO_VERDICT = "\0no-verdict"
@@ -3707,7 +3730,10 @@ def _rm_operand_under_repo_scratch(cmd: str) -> bool:
     """True when an rm operand has a ``scratch`` segment directly under a repo root
     (relative ``scratch/...`` or an absolute path whose parent holds ``.git``)."""
     try:
-        tokens = shlex.split(cmd)
+        # Separators are normalised BEFORE the POSIX split: POSIX mode drops a Windows
+        # operand's backslashes (the `.git` probe then misses), while posix=False ends a
+        # token at a closing quote, splitting a partly quoted `"/my repo"/scratch/x`.
+        tokens = shlex.split(cmd.replace("\\", "/"))
     except ValueError:
         return False
     for tok in tokens:
@@ -3924,16 +3950,18 @@ def _build_reason(
             "subagent that can run Python can still write the registry directly,\n"
             "unseen by this guard. Fix forward, or surface a genuine need to the EM."
         )
-    if deny_kind.startswith(("kill ", "pkill ", "killall ")) or "stop-process" in deny_kind.lower() or (
+    if deny_kind.startswith(("kill ", "pkill ")) or "stop-process" in deny_kind.lower() or (
         deny_kind.startswith("PowerShell ") and "process termination" in deny_kind
     ):
         return (
-            "BLOCKED: this process is not provably launched by this agent.\n\n"
+            "BLOCKED: this process is not provably a descendant of this session.\n\n"
             f"  Subagent: {agent_id} ({effective_type})\n"
             f"  Denied:   {deny_kind}\n"
             f"  Command:  {cmd_safe}\n\n"
-            "Use instead: `kill <pid>` / `Stop-Process -Id <pid>` of a PID you launched\n"
-            "(numeric; pkill and killall are never allowed)."
+            "Stopping it belongs to your main session (your dispatcher). Report the PID\n"
+            "there. Never ask a peer session or the Group EM to stop it: relaying a\n"
+            "denied action is permission laundering.\n"
+            "Allowed: `kill`/`Stop-Process -Id <pid>` of numeric PIDs under this session."
         )
     if deny_kind.startswith(_GIT_RM_DENY_PREFIX):
         return (
@@ -3994,6 +4022,7 @@ def _build_reason(
         f"  Denied:   {deny_kind}\n"
         f"  Command:  {cmd_safe}\n\n"
         "Fix forward, or surface it to the EM."
+        + _commit_route_line(deny_kind)
     )
 
 
@@ -4044,8 +4073,7 @@ def _build_record(
 # path (branch `no-agent-id-key` logs with git_root left unresolved rather
 # than paying a spawn to fill it in, since that branch fires for the
 # EM's own top-level Bash calls too and this module structurally never
-# adds identity-resolution cost there). That branch is a main-thread allow,
-# not a fail-open: it logs under `_MAIN_THREAD_OUT_OF_SCOPE`.
+# adds identity-resolution cost there).
 # ---------------------------------------------------------------------------
 _FAIL_OPEN_LOG_RELPATH = ("state", "destructive-guard-fail-open.log")
 _NOT_ATTEMPTED = "<not-attempted>"
@@ -4125,7 +4153,6 @@ def _log_fail_open(
     agent_type: str = "",
     subagent_type_present: bool = False,
     subagent_type: str = "",
-    label: str = "FAIL-OPEN",
 ) -> None:
     """Best-effort append a fail-open identity-resolution record to the
     settings-home fail-open log (see `_fail_open_log_path`).
@@ -4136,10 +4163,8 @@ def _log_fail_open(
     branch never tried to resolve one), the PRIMARY (`agent_type`) and
     SECONDARY (`subagent_type`) identity legs -- each distinguishing
     "absent from the payload"/"never computed" from "computed and empty"
-    via its own `*_present` flag -- which branch fired, and a
-    safely-truncated command. `label` is the record's
-    leading token: `FAIL-OPEN` by default, `_MAIN_THREAD_OUT_OF_SCOPE` for
-    the main-thread allow (an allow, not a fail-open).
+    via its own `*_present` flag -- which of the three fail-open branches
+    fired, and a safely-truncated command.
 
     A `session_id` matching `_is_synthetic_corpus_session` is dropped before
     any rotation check or write -- this package's own test corpus must never
@@ -4173,23 +4198,13 @@ def _log_fail_open(
             "cmd": _sanitize_command(cmd),
         }
         parts = " ".join(f"{k}={v!r}" for k, v in fields.items())
-        line = f"[{timestamp}] {label} {parts}\n"
+        line = f"[{timestamp}] FAIL-OPEN {parts}\n"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         from coordinator_core.session.claimed_write import append_claimed_line  # noqa: PLC0415 -- deferred: guard hot path
 
         append_claimed_line(log_path, line.encode("utf-8"))
     except Exception:  # noqa: BLE001 -- observability must never raise into check()
         pass
-
-
-_MAIN_THREAD_OUT_OF_SCOPE = "main-thread-out-of-scope"
-
-
-def _payload_names_a_subagent(payload: Dict[str, Any]) -> bool:
-    """True when a payload with no `agent_id` key still carries a non-empty
-    `agent_type` or `subagent_type`: such a payload is a subagent and must be
-    classified, never treated as the main thread."""
-    return bool(payload.get("agent_type") or payload.get("subagent_type"))
 
 
 def _sanitize_command(cmd: str) -> str:
@@ -4352,7 +4367,7 @@ def _evaluate_legacy_powershell_verbs(text):
         elif head in _PS_ICACLS_VERBS:
             return "PowerShell icacls (permission modification)"
         elif head in _PS_STOP_PROCESS_VERBS:
-            if _ps_stop_process_targets_owned_pids(rest):
+            if _ps_stop_process_targets_session_pids(rest):
                 continue
             return "PowerShell stop-process (process termination)"
     return None
@@ -4411,7 +4426,7 @@ def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
             return f"PowerShell {head} (permission modification)"
 
         if head in _PS_STOP_PROCESS_VERBS:
-            if pipe_before or not _ps_stop_process_targets_owned_pids(rest):
+            if pipe_before or not _ps_stop_process_targets_session_pids(rest):
                 return f"PowerShell {head} (process termination)"
 
     return None
@@ -4548,20 +4563,6 @@ def _evaluate_powershell_git_destructive(cmd_norm: str) -> Optional[str]:
     return None
 
 
-def _record_agent_launch(payload: Dict[str, Any], cmd: str) -> None:
-    """Ledger the command of every subagent payload (raw `agent_id`) before any
-    surface gate can exit; never raises."""
-    raw_agent_id = payload.get("agent_id")
-    if not raw_agent_id:
-        return
-    try:
-        from coordinator_core.bash_guards.agent_process_ownership import record_agent_command
-
-        record_agent_command(payload.get("session_id") or "", raw_agent_id, cmd)
-    except Exception:
-        return
-
-
 def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """PowerShell-dialect leg of `check()` -- identity resolution mirrors the
     Bash leg's DUAL OR-resolver (module docstring "IDENTITY AXIS") exactly,
@@ -4580,25 +4581,19 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd_norm = cmd.replace("\r", "")
 
-    _record_agent_launch(payload, cmd)
-    ctx_token = _AGENT_CTX.set((payload.get("agent_id") or "", payload.get("session_id") or ""))
-    try:
-        deny_kind = _evaluate_powershell_git_destructive(cmd_norm)
-        if deny_kind is None:
-            deny_kind = _evaluate_powershell_destructive(cmd_norm)
-    finally:
-        _AGENT_CTX.reset(ctx_token)
+    deny_kind = _evaluate_powershell_git_destructive(cmd_norm)
+    if deny_kind is None:
+        deny_kind = _evaluate_powershell_destructive(cmd_norm)
     if deny_kind is None:
         return None
 
-    if "agent_id" not in payload and not _payload_names_a_subagent(payload):
+    if "agent_id" not in payload:
         _log_fail_open(
             "no-agent-id-key",
             payload,
             cmd,
             agent_type_present="agent_type" in payload,
             agent_type=payload.get("agent_type") or "",
-            label=_MAIN_THREAD_OUT_OF_SCOPE,
         )
         return None
 
@@ -4695,8 +4690,6 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     cmd_norm = cmd.replace("\r", "")
 
-    _record_agent_launch(payload, cmd)
-
     cmd_norm = _strip_heredoc_bodies(cmd_norm)
 
     # 2026-07-28 fix (SPACED-WINDOWS-PATH ARGV0 HOLE, see the module comment
@@ -4751,14 +4744,13 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ):
         return None
 
-    if "agent_id" not in payload and not _payload_names_a_subagent(payload):
+    if "agent_id" not in payload:
         _log_fail_open(
             "no-agent-id-key",
             payload,
             cmd,
             agent_type_present="agent_type" in payload,
             agent_type=payload.get("agent_type") or "",
-            label=_MAIN_THREAD_OUT_OF_SCOPE,
         )
         return None
 
@@ -4882,7 +4874,7 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 deny_kind = verdict
 
         if not deny and is_kill_surface:
-            verdict = _evaluate_kill_surface(cmd_norm, raw_agent_id, session_id)
+            verdict = _evaluate_kill_surface(cmd_norm)
             if verdict is not None:
                 deny = True
                 deny_kind = verdict

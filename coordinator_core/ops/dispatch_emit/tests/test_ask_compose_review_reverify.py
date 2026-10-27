@@ -56,7 +56,7 @@ def test_reverify_phase_names_the_op_and_the_test_runner():
 
 
 def test_return_carries_reverify_under_review():
-    assert "reverify: _reviewReverify, receipt:" in _compose()
+    assert "reverify: _reviewReverify, receipt: 'review: '" in _compose()
 
 
 def test_both_commit_params_blocks_carry_targeted_tests_verbatim():
@@ -88,20 +88,3 @@ def test_composed_script_parses_as_an_async_function_body(tmp_path):
     )
     out = subprocess.run([node, "-", str(path)], input=program, capture_output=True, text=True, **no_console_creationflags())
     assert out.returncode == 0, out.stderr
-
-
-def test_reverify_joins_before_self_correction_reads_it():
-    # Halted-run self-correction reads the re-verify result, so its join precedes the review-blocked
-    # halt; the verify phase's join then resolves the same settled promise.
-    script = _compose()
-    assert "_reviewReverifyP = " in script and "const _reviewReverifyP" not in script
-    join = script.index("[_verify, _reviewReverify] = await Promise.all(")
-    assert script.index("const _runVerify = ") < join
-    early = script.index("if (!_reverifyJoined)")
-    assert early < join
-    assert script.index("_halted.halted === \"review_blocked\")") > join
-
-
-def test_unapplied_reverify_reruns_verify_once():
-    script = _compose()
-    assert "_reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }" in script

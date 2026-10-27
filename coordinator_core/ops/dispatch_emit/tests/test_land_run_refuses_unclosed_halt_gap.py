@@ -11,8 +11,6 @@ import yaml
 from coordinator_core.ops.dispatch_emit import land_run as lr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
-from coordinator_core.ops.dispatch_emit import terminal_commit_ledger
-from coordinator_core.ops.dispatch_emit import terminal_commit_refusals
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     GAPS_CLOSED_FIELD, HALT_GAP_UNCLOSED_REASON, RECORD_DIR_ROOT,
 )
@@ -129,7 +127,7 @@ def test_halted_commit_params_keeps_gaps_closed():
         "ledger": {"items": [{"id": "R1", "status": "met", GAPS_CLOSED_FIELD: [CLOSED]}]},
         "review": {"wave": []},
     }
-    params = terminal_commit_refusals._halted_commit_params(digest)
+    params = tc._halted_commit_params(digest)
     assert params["ledger_verdict"]["items"][0][GAPS_CLOSED_FIELD] == [CLOSED]
 
 
@@ -161,7 +159,7 @@ def run(tmp_path):
 
 def _gate(run, verdict, resume):
     root, run_dir, mpath, _ = run
-    return terminal_commit_ledger._ledger_gate(root, run_dir, verdict, mpath, resume_ledger=resume)[0]
+    return tc._ledger_gate(root, run_dir, verdict, mpath, resume_ledger=resume)[0]
 
 
 def test_terminal_commit_refuses_unclosed_gap_and_passes_closed(run):

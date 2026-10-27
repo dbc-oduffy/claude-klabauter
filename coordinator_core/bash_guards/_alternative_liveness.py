@@ -535,49 +535,6 @@ def _trigger_xs_lane_shell_write() -> Optional[Dict[str, Any]]:
             return guard_xs_lane_shell_write.check(cmd, "altlive-probe", repo, {"cwd": repo})
 
 
-def _trigger_em_halted_withheld_commit() -> Optional[Dict[str, Any]]:
-    """An EM commit naming a path a halted run withholds: the scratch repo carries a built
-    `halt-withheld` index naming `a.py`."""
-    from coordinator_core.bash_guards import block_em_halted_withheld_commit
-
-    with _scratch_git_repo() as repo:
-        repo = os.path.realpath(repo)
-        index = os.path.join(repo, ".coordinator-local", "halt-withheld")
-        os.makedirs(index)
-        with open(os.path.join(index, ".built"), "wb"):
-            pass
-        with open(os.path.join(index, "ask-20260101T000000-altliv.json"), "w", encoding="utf-8") as fh:
-            json.dump({"paths": ["a.py"]}, fh)
-        return block_em_halted_withheld_commit.check(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "git commit -m x -- a.py"},
-                "session_id": "altlive-probe",
-                "cwd": repo,
-            }
-        )
-
-
-def _trigger_em_post_fire_shell_write() -> Optional[Dict[str, Any]]:
-    """A Bash write to a product path in an EM session that has fired a Workflow run. The fired
-    answer and the tmp-path exemption are stubbed so the scratch repo reads as product."""
-    from unittest import mock
-
-    from coordinator_core.bash_guards import guard_em_post_fire_shell_write
-    from coordinator_core.hooks import _em_write_budget as hook
-    from coordinator_core.hooks import flag_em_poll_in_flight
-
-    with _scratch_git_repo() as repo:
-        repo = os.path.realpath(repo)
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(tempfile, "gettempdir", lambda: os.path.join(repo, "_tmp")))
-            stack.enter_context(mock.patch.object(hook, "_is_bootstrap_or_out_of_repo", lambda file_path: False))
-            stack.enter_context(
-                mock.patch.object(flag_em_poll_in_flight, "session_workflow_run_ids", lambda sid: ["altlive-run"])
-            )
-            return guard_em_post_fire_shell_write.check("echo x > a.py", "altlive-probe", repo, {"cwd": repo})
-
-
 def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
     """Advisory sibling of `_trigger_destructive_git_revert` above -- same
     scratch repo shape, but the uncommitted edit lands OUTSIDE any
@@ -806,8 +763,6 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         "cd %s && git status" % shlex.quote(os.path.dirname(_pkg.__file__)), "altlive-probe", ""
     ),
     "guard_xs_lane_shell_write": _trigger_xs_lane_shell_write,
-    "block_em_halted_withheld_commit": _trigger_em_halted_withheld_commit,
-    "guard_em_post_fire_shell_write": _trigger_em_post_fire_shell_write,
     "check_find_exec_rewrite": lambda: _dc.check_find_exec_rewrite(
         'find . -name "*.log" -exec rm {} \\;', "altlive-probe"
     ),

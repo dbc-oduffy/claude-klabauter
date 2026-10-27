@@ -15,8 +15,6 @@ def test_values_pinned():
     assert ee.EXCERPT_HEADING == "## Row excerpts"
     assert ee.EXCERPT_MAX_BYTES == 1200
     assert ee.EXCERPT_MAX_SYMBOLS_PER_FILE == 40
-    assert ee.SYMBOL_CONTEXT_HEADING == "## Symbol context"
-    assert ee.SYMBOL_CONTEXT_MAX_ENTRIES == 24
     assert ee.RUN_COST_FILE == "run-cost.json"
     assert ee.PENDING_REVISIONS_OP == "workflow.pending_revisions"
     assert ee.CLAIM_ROWS_OP == "plan.claim_register_rows"
@@ -27,17 +25,6 @@ def test_values_pinned():
         "executor_max_same_file_reads": 32,
     }
     assert isinstance(ee.MEASURED_BASELINE, dict)
-
-
-def test_symbol_context_contract_pinned():
-    from coordinator_core.ops.dispatch_emit import symbol_context as sc
-
-    assert sc.SYMBOL_CONTEXT_FIELD == "symbol_context"
-    assert sc.SYMBOL_CONTEXT_UNAVAILABLE_FIELD == "symbol_context_unavailable"
-    assert sc.REASONS == ("no-index", "stale-index", "store-error", "no-symbols")
-    e = sc.SymbolContextEntry("f", "a.py", 3, "caller", "g")
-    assert (e.symbol, e.file, e.line, e.role, e.of) == ("f", "a.py", 3, "caller", "g")
-    assert sc.lookup("/r", [{"id": "C0"}]) == {"C0": sc.SymbolContext((), "no-index")}
 
 
 def test_ratchet_metrics_exclude_execute_share_and_match_baseline():

@@ -1,5 +1,6 @@
-"""Shared post-fire predicate: once an EM main-thread session has launched a Workflow run, its
-product writes belong to the run. The Edit/Write hook and the Bash write guard decide through
+"""Shared post-fire predicate: once an EM main-thread session has launched a Workflow run, the
+product paths that run owns (`owns_path`) belong to it; every other product path stays with the XS
+budget. The Edit/Write hook and the Bash write guard decide through
 this one module; `GUARD_NAME` is a floor guard, so no guard level turns the deny into an advisory."""
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ import os
 import re
 
 from coordinator_core._hook_envelope import deny
+from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session import record_homes
 
@@ -17,7 +19,8 @@ GUARD_NAME = "block-em-post-fire-product-write"
 _POST_FIRE_DENY = (
     "This session already fired engine-ask; its product edits belong to the run. "
     "Send the gap through workflow.revise, or fire a follow-up engine-ask whose em_context "
-    "quotes the receipt's gap line."
+    "quotes the receipt's gap line. Committing is not blocked: "
+    f"{COMMIT_ROUTE}."
 )
 
 _NON_PRODUCT_TOP_DIRS = ("state", ".coordinator-local")
@@ -66,80 +69,14 @@ def is_product_path(abs_path: str, root: str, session_id: str) -> bool:
     return path == base or not _is_em_row_surface(path, base, session_id)
 
 
-def _index_path(root: str) -> str:
-    """`<gitdir>/index` for `root`, resolving a `.git` FILE's `gitdir:` line (linked worktree)."""
-    dot_git = os.path.join(root, ".git")
-    if os.path.isfile(dot_git):
-        with open(dot_git, encoding="utf-8") as fh:
-            line = fh.readline().strip()
-        if not line.startswith("gitdir:"):
-            raise ValueError("unreadable .git file")
-        gitdir = line[len("gitdir:"):].strip()
-        if not os.path.isabs(gitdir):
-            gitdir = os.path.join(root, gitdir)
-        return os.path.join(gitdir, "index")
-    return os.path.join(dot_git, "index")
-
-
-def _index_holds(data: bytes, rel: bytes) -> bool:
-    """True when the v2/v3 index `data` has an entry for `rel`. Raises ValueError for a layout whose
-    miss proves nothing: other versions (v4 prefix-compresses paths), a `link` (split index)
-    extension, or a truncated file."""
-    if len(data) < 12 or data[:4] != b"DIRC":
-        raise ValueError("not a git index")
-    version = int.from_bytes(data[4:8], "big")
-    if version not in (2, 3):
-        raise ValueError("unsupported index version")
-    count = int.from_bytes(data[8:12], "big")
-    pos = 12
-    found = False
-    for _ in range(count):
-        if pos + 62 > len(data):
-            raise ValueError("truncated index")
-        flags = int.from_bytes(data[pos + 60 : pos + 62], "big")
-        name_at = pos + 62 + (2 if version == 3 and flags & 0x4000 else 0)
-        end = data.find(b"\x00", name_at)
-        if end < 0:
-            raise ValueError("truncated index")
-        if data[name_at:end] == rel:
-            found = True
-        pos += (end - pos + 8) // 8 * 8
-    ext_end = len(data) - 20
-    while pos + 8 <= ext_end:
-        sig = data[pos : pos + 4]
-        if sig == b"link":
-            raise ValueError("split index")
-        pos += 8 + int.from_bytes(data[pos + 4 : pos + 8], "big")
-    return found
-
-
-def is_empty_untracked(abs_path: str, root: str) -> bool:
-    """True only for a regular, non-symlink, zero-byte file inside `root` whose repo-relative path
-    the index does not hold. Fails closed (False) on a hit or on anything unreadable, including a
-    v4 or split index. Spawns no process."""
-    try:
-        if os.path.islink(abs_path) or not os.path.isfile(abs_path):
-            return False
-        if os.path.getsize(abs_path) != 0:
-            return False
-        rel = os.path.relpath(os.path.abspath(abs_path), os.path.abspath(root))
-        if rel.startswith("..") or os.path.isabs(rel):
-            return False
-        with open(_index_path(root), "rb") as fh:
-            data = fh.read()
-        return not _index_holds(data, rel.replace(os.sep, "/").encode("utf-8"))
-    except (OSError, ValueError):
-        return False
-
-
 _ROW_START = re.compile(r"^\s*-\s+id:\s*['\"]?([^'\"\s]+)")
 _KEY_LINE = re.compile(r"^\s*([A-Za-z_]+):\s*(.*?)\s*$")
 _ITEM_LINE = re.compile(r"^\s*-\s+['\"]?(.+?)['\"]?\s*$")
 
 
-def _open_em_row_writes(plan_text: str) -> list[tuple[str, list[str]]]:
-    """`(row_id, writes)` for each plan row declaring `performer: em` with no disposition or
-    `disposition: open`. A line scan, not a YAML parse: it runs on the deny path under the DR-344 bar."""
+def _plan_rows(plan_text: str) -> list[tuple[str, dict]]:
+    """`(row_id, {writes, performer?, disposition?})` per plan row. A line scan, not a YAML parse: it
+    runs on the deny path under the DR-344 bar."""
     rows: list[tuple[str, dict]] = []
     in_writes = False
     for line in plan_text.splitlines():
@@ -165,11 +102,70 @@ def _open_em_row_writes(plan_text: str) -> list[tuple[str, list[str]]]:
             in_writes = True
         elif name in ("performer", "disposition"):
             info[name] = value.strip("'\"")
+    return rows
+
+
+def _open_em_row_writes(plan_text: str) -> list[tuple[str, list[str]]]:
+    """`(row_id, writes)` for each plan row declaring `performer: em` with no disposition or
+    `disposition: open`."""
     return [
         (rid, info["writes"])
-        for rid, info in rows
+        for rid, info in _plan_rows(plan_text)
         if info.get("performer") == "em" and info.get("disposition", "open") == "open"
     ]
+
+
+def _engine_row_writes(plan_text: str) -> list[str]:
+    """`writes:` of every plan row an engine run executes (any row not `performer: em`)."""
+    return [w for _rid, info in _plan_rows(plan_text) if info.get("performer") != "em" for w in info["writes"]]
+
+
+def _run_stage(root: str, run_id: str) -> str | None:
+    try:
+        with open(os.path.join(record_homes.record_path(root, "warp", run_id), "run-stage.json"), encoding="utf-8") as fh:
+            stage = json.load(fh).get("stage")
+        return stage if isinstance(stage, str) else None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def owns_path(abs_path: str, root: str, session_id: str) -> bool:
+    """True when `abs_path` is, or is a directory holding, a path owned by a run this session fired
+    that has not landed: a path a halted run withholds, or a `writes:` entry of an engine row of the
+    run's plan. Landed runs own nothing.
+    Any read failure answers False: the deny fails open."""
+    try:
+        from pathlib import Path
+
+        from coordinator_core.hooks import flag_em_poll_in_flight
+        from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+        base = os.path.abspath(root)
+        path = os.path.normcase(os.path.abspath(abs_path))
+        prefix = path.rstrip(os.sep) + os.sep
+
+        def hit(rel: str) -> bool:
+            owned = os.path.normcase(os.path.abspath(os.path.join(base, rel)))
+            return owned == path or owned.startswith(prefix)
+
+        live = [r for r in flag_em_poll_in_flight.session_workflow_run_ids(session_id)
+                if _run_stage(base, r) != "landed"]
+        if not live:
+            return False
+        for rel, run_id in halted_withheld_index.withheld_by_path(Path(base)).items():
+            if run_id in live and hit(rel):
+                return True
+        for run_id in live:
+            plan = _run_plan_file(base, run_id)
+            if not plan:
+                continue
+            with open(plan, encoding="utf-8") as fh:
+                writes = _engine_row_writes(fh.read())
+            if any(hit(w) for w in writes):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _run_plan_file(root: str, run_id: str) -> str | None:
@@ -234,7 +230,8 @@ def _deny_text(paths: tuple[str, ...]) -> str:
             return (
                 "This session already fired engine-ask; its CLAUDE.md edit belongs to the run. "
                 f"With the PM's approval run `{GRANT_CLI_COMMAND}` from the repo that holds the "
-                "CLAUDE.md, then send the edit through workflow.revise."
+                "CLAUDE.md, then send the edit through workflow.revise. "
+                f"Committing is not blocked: {COMMIT_ROUTE}."
             )
     except Exception:
         pass

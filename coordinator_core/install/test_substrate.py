@@ -881,9 +881,11 @@ def test_c10a_steps_leave_legacy_whoami_dir_alone(monkeypatch, tmp_path, mutatio
     assert (legacy_whoami / "marker").read_text(encoding="utf-8") == "real dir"
 
 
-def test_c10a_steps_never_touches_a_legacy_venv(monkeypatch, tmp_path, capsys):
-    """Step C10a-3 is deleted: `_c10a_steps` takes no venv flag and leaves a
-    legacy `.coordinator-venv` untouched."""
+def test_c10a_steps_without_allow_venv_fallback_skips_venv_step_entirely(monkeypatch, tmp_path, capsys):
+    """Step C10a-3 (venv rebuild + legacy-venv removal) is break-glass only
+    (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4, AC5):
+    without `allow_venv_fallback=True`, the step is skipped outright and the
+    legacy venv survives regardless of `COORDINATOR_DISABLE_MACHINE_MUTATION`."""
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     install_base = tmp_path / "home"
     settings_home_path = tmp_path / "settings-home"
@@ -901,33 +903,96 @@ def test_c10a_steps_never_touches_a_legacy_venv(monkeypatch, tmp_path, capsys):
     legacy_venv.mkdir(parents=True)
     (legacy_venv / "marker").write_text("legacy venv", encoding="utf-8")
 
+    from coordinator_core.install import ensure_venv as _ensure_venv_module
+
+    def _fail_if_called(*a, **k):
+        raise AssertionError(
+            "ensure_coordinator_venv must not be reached without allow_venv_fallback"
+        )
+
+    monkeypatch.setattr(_ensure_venv_module, "ensure_coordinator_venv", _fail_if_called)
+
     rc = _c10a_steps(str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False)
 
     assert rc == 0
-    assert legacy_venv.is_dir()
-    assert "venv" not in capsys.readouterr().out
+    assert legacy_venv.is_dir(), "no allow_venv_fallback opt-in -- legacy venv must survive"
+    out = capsys.readouterr().out
+    assert "--allow-venv-fallback" in out
 
 
-def test_stale_sitepackages_pointer_is_pruned_when_manifest_recorded_it(monkeypatch, tmp_path):
+def test_c10a_steps_disabled_does_not_remove_legacy_venv(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    install_base = tmp_path / "home"
+    settings_home_path = tmp_path / "settings-home"
+    plugin_root = tmp_path / "plugin-root"
+    bin_dst = settings_home_path / "bin"
+    for d in (install_base, settings_home_path, plugin_root, bin_dst):
+        d.mkdir(parents=True)
+
+    # dst_whoami already populated (skips relocation) and legacy_whoami absent
+    # (skips the pointer-replace leg above) so only the legacy-venv leg fires.
+    dst_whoami = settings_home_path / "coordinator-whoami"
+    dst_whoami.mkdir(parents=True)
+    (dst_whoami / "marker").write_text("already relocated", encoding="utf-8")
+    (dst_whoami / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+
+    legacy_venv = install_base / ".claude" / ".coordinator-venv"
+    legacy_venv.mkdir(parents=True)
+    (legacy_venv / "marker").write_text("legacy venv", encoding="utf-8")
+
+    from coordinator_core.install import ensure_venv as _ensure_venv_module
+
+    monkeypatch.setattr(
+        _ensure_venv_module, "ensure_coordinator_venv",
+        lambda *a, **k: "healthy (stub)",
+    )
+    monkeypatch.setattr(_ensure_venv_module, "_venv_healthy", lambda *a, **k: True)
+
+    rc = _c10a_steps(
+        str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False,
+        allow_venv_fallback=True,
+    )
+
+    assert rc == 0
+    assert legacy_venv.is_dir(), "disabled mutation must not remove the legacy venv"
+    assert "REFUSED" in capsys.readouterr().err
+
+
+def test_c10a_steps_enabled_removes_legacy_venv(monkeypatch, tmp_path):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
-    bin_dst = tmp_path / "bin"
-    bin_dst.mkdir()
-    pointer = bin_dst / "hook-sitepackages.txt"
-    pointer.write_text("/old/site-packages", encoding="utf-8")
-    substrate._write_bin_manifest(bin_dst, frozenset({"hook-sitepackages.txt", "keep"}))
+    install_base = tmp_path / "home"
+    settings_home_path = tmp_path / "settings-home"
+    plugin_root = tmp_path / "plugin-root"
+    bin_dst = settings_home_path / "bin"
+    for d in (install_base, settings_home_path, plugin_root, bin_dst):
+        d.mkdir(parents=True)
 
-    substrate._prune_orphaned_static_bin_names(bin_dst, frozenset({"keep"}), check_only=False)
+    whoami_src = plugin_root / "whoami"
+    whoami_src.mkdir(parents=True)
+    (whoami_src / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
 
-    assert not pointer.exists()
+    legacy_venv = install_base / ".claude" / ".coordinator-venv"
+    legacy_venv.mkdir(parents=True)
+    (legacy_venv / "marker").write_text("legacy venv", encoding="utf-8")
 
+    from coordinator_core.install import ensure_venv as _ensure_venv_module
 
-def test_run_and_cli_expose_no_allow_venv_fallback():
-    import inspect
+    monkeypatch.setattr(
+        _ensure_venv_module, "ensure_coordinator_venv",
+        lambda *a, **k: "healthy (stub)",
+    )
+    monkeypatch.setattr(_ensure_venv_module, "_venv_healthy", lambda *a, **k: True)
 
-    assert "allow_venv_fallback" not in inspect.signature(substrate.run).parameters
-    with pytest.raises(SystemExit):
-        substrate.main(["--allow-venv-fallback"])
+    rc = _c10a_steps(
+        str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False,
+        allow_venv_fallback=True,
+    )
+
+    assert rc == 0
+    assert not legacy_venv.is_dir(), (
+        "with the guard unset the legacy venv removal must still run"
+    )
 
 
 def test_fnm_step_disabled_does_not_spawn_brew_or_curl(monkeypatch, capsys):

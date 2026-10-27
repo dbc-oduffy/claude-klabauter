@@ -2441,20 +2441,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commits.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.commit_halted_rows": OpClass.MUTATING,
-    # dispatch.commit_merge — MUTATING: commits an already-resolved two-parent merge through a private index,
-    # syncs the shared index/worktree, then moves the ref by compare-and-swap (ops/dispatch_emit/merge_commit.py).
-    # DR-208 five-question affirmation (citing dispatch.commit_merge handler):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      A merge commit object and the checked-out branch ref; no queue.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             No.
-    #      Reads the resolved files; the private index is built by git.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      The git index, worktree and history.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The landed merge commit.
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "dispatch.commit_merge": OpClass.MUTATING,
     # dispatch.supersede_slice — MUTATING: writes one write-once scratch marker naming the run that
     # supersedes a held sibling slice (ops/dispatch_emit/slice_supersede.py).
     # DR-208 five-question affirmation (citing dispatch.supersede_slice handler):
@@ -2486,33 +2472,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The status, marker and job record persist on disk; the job runs detached.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.record_halted_run_landed": OpClass.MUTATING,
-    # dispatch.close_halted_run_superseded — MUTATING: rewrites one halted.json marker to
-    # `superseded` and drops the run from the halt-withheld index (ops/dispatch_emit/halted_run_superseded.py).
-    # DR-208 five-question affirmation: 1 YES (marker rewrite, index entry removal); 2 No;
-    # 3 YES (marker and index files); 4 YES (the gates that read the halt-withheld index);
-    # 5 YES (persisted on disk).
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "dispatch.close_halted_run_superseded": OpClass.MUTATING,
-    # dispatch.land_combined_index — MUTATING: writes tree and commit objects, advances HEAD, and records
-    # fully-landed halted runs (ops/dispatch_emit/combined_landing.py).
-    # DR-208 five-question affirmation: 1 YES (git objects, HEAD ref, run markers); 2 No; 3 YES;
-    # 4 YES (HEAD and the markers peers read); 5 YES (persisted).
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "dispatch.land_combined_index": OpClass.MUTATING,
-    # dispatch.objective_write / objective_check / objective_calibrate — MUTATING: each writes
-    # state/warp/<run_id>/objective*.json(l) (ops/dispatch_emit/objective_*.py).
-    # DR-208 five-question affirmation: 1 YES (run-dir objective files); 2 No; 3 YES; 4 YES (the
-    # run's later legs read them); 5 YES (persisted).
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "dispatch.objective_write": OpClass.MUTATING,
-    "dispatch.objective_check": OpClass.MUTATING,
-    "dispatch.objective_calibrate": OpClass.MUTATING,
-    # dispatch.write_receipt — MUTATING: one atomic write of <run_dir>/receipts/<stage>.json
-    # (ops/dispatch_emit/stage_receipts.py).
-    # DR-208 five-question affirmation: 1 YES (one receipt file); 2 No; 3 YES; 4 YES (receipts
-    # readers); 5 YES (persisted).
-    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "dispatch.write_receipt": OpClass.MUTATING,
     # dispatch.release_run_token — MUTATING: deletes one warp run's unclaimed token record
     # (ops/dispatch_emit/release_run_token.py).
     # DR-208 five-question affirmation (citing dispatch.release_run_token handler):

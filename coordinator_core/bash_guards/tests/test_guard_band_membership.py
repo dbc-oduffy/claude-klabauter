@@ -72,7 +72,6 @@ CONFINEMENT_DENY_NAMES = [
     "block-reviewer-bash-outside-allowlist",
     "block-subagent-destructive-action",
     "block-subagent-commit",
-    "block-em-halted-withheld-commit",
     "check-test-suite-invocation",
     "guard-heavy-command-admission",
     "block-subagent-grant-acquisition",

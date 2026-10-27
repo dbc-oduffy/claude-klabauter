@@ -157,10 +157,8 @@ def _halted(root: Path, run_id: str) -> bool:
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
-        marker = halted_run.read_strict_run(record_dir(root, run_id))
-    except halted_run.UnreadableHaltRecord:
-        return True
-    except ValueError:  # not a run id (a claim's reason string): no record, not halted
+        marker = halted_run._read(record_dir(root, run_id))
+    except ValueError:
         return False
     return marker is not None and marker.get("status") == halted_run.STATUS_HALTED
 
@@ -172,7 +170,7 @@ def resumed_run_released(root: Path, run_id: str, exclude_run: Optional[str]) ->
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
 
     try:
-        marker = halted_run.read_strict_run(record_dir(root, run_id))
+        marker = halted_run._read(record_dir(root, run_id))
         if marker is None or marker.get("status") not in (halted_run.STATUS_RESUMED, halted_run.STATUS_LANDED):
             return False
         return bool(halted_hold_release.release_reason(root, run_id, exclude_run, None))
@@ -186,8 +184,8 @@ def _landed(root: Path, run_id: str) -> bool:
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
-        marker = halted_run.read_strict_run(record_dir(root, run_id))
-    except ValueError:  # UnreadableHaltRecord, or not a run id: no landed record
+        marker = halted_run._read(record_dir(root, run_id))
+    except ValueError:
         return False
     return marker is not None and marker.get("status") == halted_run.STATUS_LANDED
 
@@ -196,22 +194,7 @@ def _manifest_declared(run_id: str, root: Path) -> tuple:
     """`(paths, prefixes, unreadable)` a run's `manifest.json` (`rows[].writes`, `doc_writes`)
     and `commit-request.txt` (chunk paths and prefixes) declare, normalized. `unreadable` is True
     when a file exists but does not parse; an absent file is not unreadable. A manifest that fails
-    mid-parse keeps the paths gathered before the failure. Inside `halted_hold_release.release_scope()` the
-    answer, `unreadable` included, is memoised per (root, run_id) in the scope's state; outside a scope
-    nothing is cached."""
-    from coordinator_core.ops.dispatch_emit import halted_hold_release
-
-    state = halted_hold_release._SCOPE.get()
-    if state is None:
-        return _manifest_declared_uncached(run_id, root)
-    memo = state.setdefault("manifest_declared", {})
-    key = (str(root), run_id)
-    if key not in memo:
-        memo[key] = _manifest_declared_uncached(run_id, root)
-    return memo[key]
-
-
-def _manifest_declared_uncached(run_id: str, root: Path) -> tuple:
+    mid-parse keeps the paths gathered before the failure."""
     paths: list = []
     prefixes: list = []
     unreadable = False
@@ -297,16 +280,23 @@ def live_record_dir_owners(
     return {p: sorted(s) for p, s in owners.items()}
 
 
-def _live_claim_scan(
+def live_run_write_claims(
     repo_root: Path,
     paths: Iterable[str],
+    *,
     exclude_session: str,
-    cwd: Optional[str],
-    minted_before: Optional[tuple],
-    exclude_run: Optional[str],
+    cwd: Optional[str] = None,
+    minted_before: Optional[tuple] = None,
+    exclude_run: Optional[str] = None,
 ) -> Optional[dict]:
-    """`{path: [(minted_at, run_id, session_id)]}` oldest first; None when contest unknown.
-    The single `run_token.held_records` pass behind both claim readers; filters as `live_run_write_claims`."""
+    """`{path: sorted peer session ids}` for each of `paths` a live peer run declares it writes.
+
+    A peer run is a held token (`run_token.held_records`, listed once) that is fresh, whose
+    non-empty `session_id` differs from `exclude_session` and is `touch_record.session_live`.
+    `exclude_run` skips that run id before any other test. `minted_before=(minted_at, run_id)`
+    keeps only strictly senior runs. A path matches a declared path or sits under a declared
+    prefix, unless the run recorded it with `workflow.revise withhold_paths`. Returns None (contest unknown) when a live peer's declaration is unparseable and
+    yields no usable paths; {} when nothing is declared."""
     root = Path(repo_root)
     wanted = {_norm(p) for p in paths if p}
     wanted.discard("")
@@ -330,33 +320,8 @@ def _live_claim_scan(
         withheld = _withheld_paths(root, run_id)
         for path in wanted - withheld:
             if path in declared_set or any(path.startswith(pre + "/") or path == pre for pre in prefixes):
-                claims.setdefault(path, []).append((record["minted_at"], run_id, sid))
-    for entries in claims.values():
-        entries.sort()
-    return claims
-
-
-def live_run_write_claims(
-    repo_root: Path,
-    paths: Iterable[str],
-    *,
-    exclude_session: str,
-    cwd: Optional[str] = None,
-    minted_before: Optional[tuple] = None,
-    exclude_run: Optional[str] = None,
-) -> Optional[dict]:
-    """`{path: sorted peer session ids}` for each of `paths` a live peer run declares it writes.
-
-    A peer run is a held token (`run_token.held_records`, listed once) that is fresh, whose
-    non-empty `session_id` differs from `exclude_session` and is `touch_record.session_live`.
-    `exclude_run` skips that run id before any other test. `minted_before=(minted_at, run_id)`
-    keeps only strictly senior runs. A path matches a declared path or sits under a declared
-    prefix, unless the run recorded it with `workflow.revise withhold_paths`. Returns None (contest unknown) when a live peer's declaration is unparseable and
-    yields no usable paths; {} when nothing is declared."""
-    scan = _live_claim_scan(repo_root, paths, exclude_session, cwd, minted_before, exclude_run)
-    if scan is None:
-        return None
-    return {p: sorted({sid for _, _, sid in e}) for p, e in scan.items()}
+                claims.setdefault(path, set()).add(sid)
+    return {p: sorted(s) for p, s in claims.items()}
 
 
 def halted_run_write_claims(
@@ -377,15 +342,14 @@ def halted_run_write_claims(
     once per call, and only when an unreleased halted run declares a candidate; a halted run that
     withheld nothing and left nothing dirty holds nothing.
 
-    The withheld set is `halted_hold_release.held_paths(root, run_id, exclude_run, own_plan)`: empty
-    for a run it frees (superseded sizing, same sizing/deliverable as `exclude_run`, or `own_plan`
-    landing), so a freed run claims nothing from its record either.
+    A halted run `halted_hold_release.release_reason(root, run_id, exclude_run, own_plan)` frees
+    (superseded sizing, same sizing/deliverable as `exclude_run`, or `own_plan` landing) claims nothing.
 
     Only record dirs whose run-id stamp is within `run_token.TTL_SECONDS` of `now` are read; a name
     with no stamp, or an older one, costs no IO. `exclude_run` is skipped. No session filter."""
     import time
 
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, stopped_runs
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, stopped_runs
 
     root = Path(repo_root)
     wanted = {_norm(p) for p in paths if p}
@@ -407,18 +371,16 @@ def halted_run_write_claims(
             continue
         if not _halted(root, run_id):
             continue
-        try:
-            halted_run.read_strict_run(record_dir(root, run_id))
-        except halted_run.UnreadableHaltRecord as exc:
-            for path in wanted:
-                claims.setdefault(path, set()).add(exc.reason)
+        if halted_hold_release.release_reason(root, run_id, exclude_run, own_plan):
             continue
-        held = set(halted_hold_release.held_paths(root, run_id, exclude_run, own_plan))
+        held = halted_withheld_paths(root, run_id)
         freed: set = set()
         if held & wanted:
+            from coordinator_core.ops.dispatch_emit import halted_run
+
             try:
                 rdir = record_dir(root, run_id)
-                marker = halted_run.read_strict_run(rdir)
+                marker = halted_run._read(rdir)
                 if marker is not None:
                     freed = {_norm(p) for p in halted_hold_release.kept_at_head_paths(root, rdir, marker)}
             except Exception:  # noqa: BLE001 -- unreadable record: nothing freed, the hold stands
@@ -443,10 +405,13 @@ def halted_run_write_claims(
 
 def halted_withheld_paths(root: Path, run_id: str) -> set:
     """Normalized paths a halted run's marker records as withheld (hunks it left in the tree);
-    empty when the marker has none or is absent; `UnreadableHaltRecord` when it is corrupt."""
+    empty when the marker has none, is absent, or the run id is invalid."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
-    withheld = halted_run.halted_withheld_strict(record_dir(root, run_id))
+    try:
+        withheld = halted_run.halted_withheld(record_dir(root, run_id))
+    except ValueError:
+        return set()
     return {n for n in (_norm(p) for p in withheld) if n}
 
 

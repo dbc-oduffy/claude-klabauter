@@ -23,7 +23,6 @@ _PINNED = [
     ("governed_surface_drift", _ALL),
     ("guard_hook_generation_self_probe", _SSC),
     ("compact_summary_constraints", frozenset({"compact"})),  # engine-only, no DoE row
-    ("objective_resume", frozenset({"compact"})),  # engine-only, no DoE row
 ]
 _EXCLUDED = {"day_branch_assert"}
 

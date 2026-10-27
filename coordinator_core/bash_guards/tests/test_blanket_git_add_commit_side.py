@@ -101,7 +101,10 @@ def test_commit_dot_pathspec_denies(monkeypatch, tmp_path):
 
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "COMMIT-side" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "COMMIT-side" in reason
+    assert "ceremony.commit_v2 --params-file" in reason
+    assert "--pathspec-from-file" not in reason
 
 
 def test_commit_magic_root_pathspec_denies(monkeypatch, tmp_path):

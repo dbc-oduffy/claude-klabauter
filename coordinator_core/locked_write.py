@@ -245,16 +245,12 @@ flock (one sidecar per directory rather than per file).
 
 from __future__ import annotations
 
+import json
 import os
 import time
-
-# pathlib, typing and contextlib stay off the import path: `coordinator_core.ipc` imports this
-# module and its cold-start module count is ceilinged.
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    import contextlib
-    from pathlib import Path
-    from typing import Callable, Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Callable, Iterator
 
 # ---------------------------------------------------------------------------
 # Platform lock backend detection
@@ -462,8 +458,6 @@ def _machine_lock_dir() -> Path:
     leave is the informational metadata blob, which the next acquirer
     overwrites.
     """
-    from pathlib import Path
-
     override = os.environ.get(MACHINE_LOCK_ROOT_ENV)
     if override:
         return Path(override).expanduser() / "coordinator-locks"
@@ -479,8 +473,6 @@ def _assert_anchor_outside_target(target: Path, lock_dir: Path) -> None:
     normalises a missing path rather than failing, and Path comparison is
     case-insensitive on Windows, so both platforms compare canonically.
     """
-    from pathlib import Path
-
     real_target = Path(os.path.realpath(str(target)))
     real_lock_dir = Path(os.path.realpath(str(lock_dir)))
     if real_lock_dir == real_target or real_target in real_lock_dir.parents:
@@ -700,8 +692,6 @@ def locked_rmw(
             # Resolve symlinks so reads and writes go to the canonical file,
             # not through the symlink.  _lock_key already used realpath, so
             # the lock sidecar is already keyed to this same canonical path.
-            from pathlib import Path
-
             target_path = Path(os.path.realpath(str(target)))
             if not target_path.exists():
                 if missing_ok:
@@ -816,7 +806,6 @@ def _write_holder_metadata(lock_fd: int, holder_label: str) -> None:
     previous one (defends the "corrupt sidecar" read path).
     """
     # Function-local — see `_lock_key`'s note on this module's cold-start budget.
-    import json
     from datetime import datetime, timezone
 
     payload = json.dumps(
@@ -865,8 +854,6 @@ def _describe_holder(lock_path: Path) -> str:
         os.close(fd)
     if not raw:
         return "holder unknown"
-    import json
-
     try:
         data = json.loads(raw.decode("utf-8"))
         pid = data["pid"]
@@ -883,21 +870,8 @@ def _describe_holder(lock_path: Path) -> str:
     )
 
 
+@contextmanager
 def held_lock(
-    target: Path,
-    *,
-    anchor_root: "Path | None" = None,
-    timeout: float = LOCK_TIMEOUT_SECS,
-    holder_label: str = "",
-) -> "contextlib.AbstractContextManager[None]":
-    from contextlib import contextmanager
-
-    return contextmanager(_held_lock_gen)(
-        target, anchor_root=anchor_root, timeout=timeout, holder_label=holder_label
-    )
-
-
-def _held_lock_gen(
     target: Path,
     *,
     anchor_root: "Path | None" = None,
@@ -1024,6 +998,3 @@ def _held_lock_gen(
             _plat_unlock(lock_fd)
     finally:
         os.close(lock_fd)
-
-
-held_lock.__doc__ = _held_lock_gen.__doc__

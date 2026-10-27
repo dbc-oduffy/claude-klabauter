@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, TYPE_CHECKING
 from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command as _bt_tokenize_full_command,
 )
+from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 from coordinator_core.bash_guards._rewrite_support import _bt_git_resolved_subcommand
 from coordinator_core.git.correction_note import SENTINEL as _NOTE_SENTINEL
@@ -726,8 +727,8 @@ _BULK_FOREIGN_INDEX_PATHS = 50
 #: shape (29927e684) and the one way this route can still take a peer's work.
 #: Never soften the clause to just "your own paths".
 _SAFE_COMMIT_ROUTE_CLAUSE = (
-    'Your own paths still commit: coordinator-safe-commit.py "<subject>" '
-    "-- <literal paths>; name them literally, never a glob."
+    "Your own paths still commit: %s; list them literally in the params "
+    "file, never a glob." % COMMIT_ROUTE
 )
 
 

@@ -927,10 +927,41 @@ class TestDecisionsShorthandNormalization:
         assert normalized["j1"] is entry
         assert malformed == []
 
-    def test_object_without_a_disposition_key_is_left_alone(self):
-        normalized, malformed = apply_base.normalize_decisions({"j1": {}})
-        assert normalized == {"j1": {}}
+    def test_object_with_disposition_and_value_payload_is_not_rewritten(self):
+        entry = {"disposition": "override", "value": "v0.16.0"}
+        normalized, malformed = apply_base.normalize_decisions({"j1": entry})
+        assert normalized["j1"] is entry
         assert malformed == []
+
+    def test_value_only_entry_resolves_like_disposition(self, tmp_path):
+        directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE,
+            decisions={"j1": {"value": "accept"}},
+        )
+        assert exit_code == apply_base.APPLY_EXIT_OK
+        assert report["landed"] == ["d1"]
+
+    def test_value_only_entry_naming_a_non_resolving_value_still_gates(self, tmp_path):
+        directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE,
+            decisions={"j1": {"value": "reject"}},
+        )
+        assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["declined_judgment_points"] == ["j1"]
+
+    def test_dict_without_disposition_or_value_refuses_naming_key_and_shapes(self, tmp_path):
+        directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]
+        for bad in ({}, {"note": "x"}):
+            exit_code, report = apply_base.execute_directives(
+                directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions={"j1": bad}
+            )
+            assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL
+            assert "j1" in report["error"]
+            assert '{"value"' in report["error"]
+            assert '{"disposition"' in report["error"]
+            assert report["landed"] == []
 
     def test_non_str_non_dict_entry_refuses_the_whole_run_by_name(self, tmp_path):
         directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]

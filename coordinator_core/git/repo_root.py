@@ -154,17 +154,14 @@ Negative-spec:
 
 from __future__ import annotations
 
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    from pathlib import Path
-    from typing import Dict, Optional, Tuple
-
-    _MemoEntry = Tuple[Optional[str], Optional[str], Optional[str]]
+from pathlib import Path
+from typing import Dict, NamedTuple, Optional, Tuple
 
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 
 _TIMEOUT_SECS = 2.0
 
+_MemoEntry = Tuple[Optional[str], Optional[str], Optional[str]]
 _memo: Dict[str, _MemoEntry] = {}
 
 # (resolved-cwd, form) -> spawned value, for the forms that always spawn
@@ -195,19 +192,13 @@ _WALK_FORMS = frozenset(
 )
 
 
-class _SpawnResult(tuple):
-    """`(ok, value, reason)`. `ok` is False only for an actual resolution failure; `value` is None
-    iff `ok` is False; `reason` is None iff `ok` is True. A tuple subclass, not a
-    `typing.NamedTuple`: typing stays off this module's import path."""
+class _SpawnResult(NamedTuple):
+    """`ok` is False only for an actual resolution failure; `value` is None
+    iff `ok` is False; `reason` is None iff `ok` is True."""
 
-    __slots__ = ()
-
-    def __new__(cls, ok: bool, value: Optional[str], reason: Optional[str]) -> "_SpawnResult":
-        return tuple.__new__(cls, (ok, value, reason))
-
-    ok = property(lambda self: self[0])
-    value = property(lambda self: self[1])
-    reason = property(lambda self: self[2])
+    ok: bool
+    value: Optional[str]
+    reason: Optional[str]
 
 
 def clear_memo() -> None:
@@ -217,8 +208,6 @@ def clear_memo() -> None:
 
 
 def _resolve_cwd(cwd: Optional[str]) -> str:
-    from pathlib import Path
-
     base = Path(cwd) if cwd is not None else Path.cwd()
     try:
         return str(base.resolve())
@@ -312,8 +301,6 @@ def _spawn_rev_parse(args: list, cwd: str) -> _SpawnResult:
 
 
 def _memo_entry(cwd: Optional[str]) -> Tuple[str, _MemoEntry]:
-    from pathlib import Path
-
     resolved = _resolve_cwd(cwd)
     entry = _memo.get(resolved)
     if entry is None:
@@ -367,8 +354,6 @@ def last_failure_reason(
     two spawning forms report the reason their last spawn recorded. A reason
     is never a cached verdict: asking never skips a walk or a spawn.
     """
-    from pathlib import Path
-
     resolved = _resolve_cwd(cwd)
     if form in _WALK_FORMS:
         if _walk_for_repo(Path(resolved)) is not None:

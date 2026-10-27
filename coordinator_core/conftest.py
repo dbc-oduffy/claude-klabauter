@@ -71,6 +71,34 @@ for _mod_name in [
     if _mod_file and not os.path.abspath(_mod_file).startswith(_REPO_ROOT):
         del sys.modules[_mod_name]
 
+_ENGINE_ROOT_ASSERTED_MODULES = ("coordinator_core", "coordinator_core.sizing_assemble")
+
+
+def _assert_engine_under_repo_root(repo_root: str, module_names=_ENGINE_ROOT_ASSERTED_MODULES) -> None:
+    """Raise when any named module resolves outside ``repo_root``.
+
+    A mirror or published checkout winning the import would run the suite
+    against foreign engine code; the message names both paths.
+    """
+    import importlib
+
+    root = os.path.normcase(os.path.realpath(repo_root))
+    for name in module_names:
+        origin = getattr(importlib.import_module(name), "__file__", None) or ""
+        resolved = os.path.normcase(os.path.realpath(origin)) if origin else ""
+        try:
+            inside = bool(resolved) and os.path.commonpath([root, resolved]) == root
+        except ValueError:
+            inside = False
+        if not inside:
+            raise RuntimeError(
+                f"engine-root assertion: {name} resolved to {origin or '<no __file__>'}, "
+                f"outside repo root {repo_root}; the suite would test a foreign engine copy"
+            )
+
+
+_assert_engine_under_repo_root(_REPO_ROOT)
+
 from coordinator_core import memo_corpus
 from coordinator_core.benchmarks.isolated_clone import CloneTeardownLeak, rmtree_or_raise
 
@@ -506,22 +534,16 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # on a box where the global triple is set, so the suite runs UNPROTECTED and
     # any test shelling out to `git <verb> --help` sprays browser tabs (observed:
     # dozens a minute from the bash-guard alternative-liveness gate).
-    # Carried as a gitconfig INSIDE the quarantined HOME, never as GIT_CONFIG_*
-    # env: process env reaches every git child, a real repo's included, and
-    # trips env-config gates (`ask_stage._config_forces_git`). A test that
-    # re-points HOME itself leaves this file behind; it then owns its git config.
+    # `GIT_CONFIG_*` is the injection form that survives a quarantined HOME.
     # `browser.noop.cmd` is `eval`-ed by `git-web--browse`, so its value must
     # stay free of shell metacharacters -- a parenthesis is a hard syntax error.
-    # TRAP: a global commit.gpgsign=true makes every temp-repo seed `git commit`
-    # exit 128; the quarantine gitconfig pins signing off.
-    (quarantine / ".gitconfig").write_text(
-        "[help]\n\tformat = web\n"
-        "[web]\n\tbrowser = noop\n"
-        "[browser \"noop\"]\n\tcmd = echo not-opening-browser-for:\n"
-        "[commit]\n\tgpgsign = false\n"
-        "[tag]\n\tgpgsign = false\n",
-        encoding="utf-8",
-    )
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "3")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "help.format")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "web")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "web.browser")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "noop")
+    monkeypatch.setenv("GIT_CONFIG_KEY_2", "browser.noop.cmd")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_2", "echo not-opening-browser-for:")
 
     # Belt-and-braces companion to the HOME/USERPROFILE quarantine above: this
     # fixture redirects the FILESYSTEM a test writes into, but a 2026-07-28

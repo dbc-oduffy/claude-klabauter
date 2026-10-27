@@ -74,7 +74,7 @@ def test_parse_args_defaults(setup_mod, monkeypatch):
     assert args.agent_mode is False
     assert args.skip_dep_check is False
     assert args.accept_risk is False
-    assert not hasattr(args, "allow_venv_fallback")
+    assert args.allow_venv_fallback is False
     assert args.register_only is False
     assert args.check is False
     assert args.preflight is False
@@ -89,6 +89,7 @@ def test_parse_args_all_flags(setup_mod):
             "--i-am-agent",
             "--skip-dep-check",
             "--accept-missing-deps-risk",
+            "--allow-venv-fallback",
             "--register-only",
             "--claude-klabauter-live-root",
             "/tmp/claude-klabauter",
@@ -99,6 +100,7 @@ def test_parse_args_all_flags(setup_mod):
     assert args.agent_mode is True
     assert args.skip_dep_check is True
     assert args.accept_risk is True
+    assert args.allow_venv_fallback is True
     assert args.register_only is True
     assert args.claude_klabauter_root == "/tmp/claude-klabauter"
     assert args.coordinator_root == "/tmp/coord"
@@ -195,13 +197,19 @@ def _fixture_pyproject(tmp_path):
 
 
 def _stub_settings_home(setup_mod, monkeypatch, tmp_path):
-    """Redirect settings_home() at a tmp dir and return it."""
+    """Redirect settings_home() at a tmp dir and return (settings_home_dir,
+    venv_dir, venv_py) — the venv is NOT built, only its path is resolved,
+    so tests that never expect a fallback never touch disk for it."""
     from coordinator_core import _settings_home as settings_home_mod
+    from coordinator_core.install import ensure_venv as ensure_venv_mod
 
     settings_home_dir = tmp_path / "settings-home"
     settings_home_dir.mkdir(exist_ok=True)
     monkeypatch.setattr(settings_home_mod, "settings_home", lambda: settings_home_dir)
-    return settings_home_dir
+
+    venv_dir = settings_home_dir / ".coordinator-venv"
+    venv_py = ensure_venv_mod.venv_python_path(venv_dir)
+    return settings_home_dir, venv_dir, venv_py
 
 
 def _stub_editable_finder_conversion(setup_mod, monkeypatch):
@@ -263,7 +271,7 @@ def test_provision_deps_machine_first_installs_editable_package(setup_mod, monke
     monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
     _stub_editable_finder_conversion(setup_mod, monkeypatch)
 
-    engine_py, import_names = setup_mod.provision_deps(pyproject_dir, sys.executable)
+    engine_py, import_names = setup_mod.provision_deps(pyproject_dir, sys.executable, False)
 
     assert engine_py == sys.executable
     assert len(calls) == 1
@@ -286,7 +294,7 @@ def test_provision_deps_idempotent_noop_when_already_installed(setup_mod, monkey
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
     _stub_editable_finder_conversion(setup_mod, monkeypatch)
 
-    engine_py, import_names = setup_mod.provision_deps(pyproject_dir, sys.executable)
+    engine_py, import_names = setup_mod.provision_deps(pyproject_dir, sys.executable, False)
 
     assert engine_py == sys.executable
     assert calls == []
@@ -327,7 +335,7 @@ def test_provision_deps_dev_tree_never_editable_installs_itself(setup_mod, monke
 
     monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
 
-    engine_py, _ = setup_mod.provision_deps(root, sys.executable, installs_engine=False)
+    engine_py, _ = setup_mod.provision_deps(root, sys.executable, False, installs_engine=False)
 
     assert engine_py == sys.executable
     assert len(calls) == 1
@@ -344,7 +352,7 @@ def test_provision_deps_dev_tree_refuses_engine_pointed_at_itself(setup_mod, mon
     monkeypatch.setattr(setup_mod, "_installed_engine_root", lambda interpreter: root.resolve())
 
     with pytest.raises(SystemExit) as exc:
-        setup_mod.provision_deps(root, sys.executable, installs_engine=False)
+        setup_mod.provision_deps(root, sys.executable, False, installs_engine=False)
 
     assert exc.value.code == setup_mod.EXIT_ENGINE_AT_DEV_TREE
     assert calls == []
@@ -368,7 +376,7 @@ def test_provision_deps_published_checkout_repairs_engine_pointed_elsewhere(setu
 
     monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
 
-    setup_mod.provision_deps(root, sys.executable, installs_engine=True)
+    setup_mod.provision_deps(root, sys.executable, False, installs_engine=True)
 
     assert len(calls) == 1
     assert calls[0][-2:] == ["-e", str(root)]
@@ -400,8 +408,10 @@ def test_installed_engine_root_reads_only_an_editable_file_url(
 
 def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(setup_mod, monkeypatch, tmp_path, capsys):
     """A PEP-668 externally-managed candidate is a DESIGNED REFUSAL --
-    EXIT_INTERPRETER_UNSUPPORTED (96), unconditional: no pip install is ever
-    attempted (swap the interpreter, never pass an override flag)."""
+    EXIT_INTERPRETER_UNSUPPORTED (96), unconditional: even with
+    --allow-venv-fallback passed, no pip install is ever attempted and the
+    venv is never reached (anti-scope: swap the interpreter, never pass an
+    override flag or narrow the blast radius)."""
     pyproject_dir = tmp_path / "root"
     pyproject_dir.mkdir()
     _fixture_pyproject(pyproject_dir)
@@ -414,13 +424,13 @@ def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(set
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
 
     with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable)
+        setup_mod.provision_deps(pyproject_dir, sys.executable, True)
 
     assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
     assert calls == []
     stderr = capsys.readouterr().err
     assert "PEP-668" in stderr or "PEP 668" in stderr
-    assert "venv" not in stderr
+    assert "does not honour it" in stderr
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +442,8 @@ def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(set
 def test_parse_args_container_optin_flag(setup_mod):
     args = setup_mod.parse_args(["--i-assert-no-other-consumer"])
     assert args.container_optin is True
+    # The flag must not alter the ordinary venv-fallback flag it sits beside.
+    assert args.allow_venv_fallback is False
 
 
 def test_provision_deps_guarded_without_optin_flag_unchanged_no_override_token(
@@ -453,7 +465,7 @@ def test_provision_deps_guarded_without_optin_flag_unchanged_no_override_token(
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
 
     with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable)
+        setup_mod.provision_deps(pyproject_dir, sys.executable, False)
 
     assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
     assert calls == []
@@ -497,7 +509,7 @@ def test_provision_deps_container_optin_honoured_appends_break_system_packages_o
     monkeypatch.setattr(setup_mod.subprocess, "run", _fake_subprocess_run)
 
     engine_py, import_names = setup_mod.provision_deps(
-        pyproject_dir, sys.executable, container_optin=True
+        pyproject_dir, sys.executable, False, container_optin=True
     )
 
     ordinary_argv = [sys.executable, "-m", "pip", "install", "PyYAML", "-e", str(pyproject_dir)]
@@ -523,7 +535,7 @@ def test_provision_deps_container_optin_wrong_host_refuses_exit_96(setup_mod, mo
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
 
     with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable, container_optin=True)
+        setup_mod.provision_deps(pyproject_dir, sys.executable, False, container_optin=True)
 
     assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
     assert calls == []
@@ -542,7 +554,7 @@ def test_provision_deps_container_optin_no_root_refuses_exit_96(setup_mod, monke
     monkeypatch.setattr(setup_mod.os, "geteuid", lambda: 1000, raising=False)
 
     with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable, container_optin=True)
+        setup_mod.provision_deps(pyproject_dir, sys.executable, False, container_optin=True)
 
     assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
     stderr = capsys.readouterr().err
@@ -574,18 +586,57 @@ def test_provision_deps_nonpep668_failure_no_flag_exits_1(setup_mod, monkeypatch
     )
 
     with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable)
+        setup_mod.provision_deps(pyproject_dir, sys.executable, False)
 
     assert exc_info.value.code == 1
     stderr = capsys.readouterr().err
-    assert "machine-level install" in stderr
-    assert "venv" not in stderr
+    assert "--allow-venv-fallback" in stderr
+
+
+def test_provision_deps_nonpep668_failure_flag_falls_back_to_venv_deps_only(setup_mod, monkeypatch, tmp_path):
+    """--allow-venv-fallback survives as explicit break-glass for a genuine
+    (non-PEP-668) failure -- and the venv fallback installs ONLY the
+    third-party deps, never `-e .` (purpose (c) stays deps-only per
+    docs/reference/shared-fleet-venv-contract.md)."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    settings_home_dir, venv_dir, venv_py = _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: False)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+
+    calls = []
+
+    def _fake_run_pip(argv):
+        calls.append(argv)
+        if str(venv_py) in argv:
+            return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="Successfully installed PyYAML")
+        return setup_mod.subprocess.CompletedProcess(argv, 1, stdout="permission denied")
+
+    monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
+    monkeypatch.setattr(setup_mod, "deps_importable", lambda interpreter, import_names: interpreter == str(venv_py))
+
+    from coordinator_core.install import ensure_venv as ensure_venv_mod
+
+    def _fake_ensure_coordinator_venv(*a, **k):
+        venv_py.parent.mkdir(parents=True, exist_ok=True)
+        venv_py.write_text("")
+        return "provisioned"
+
+    monkeypatch.setattr(ensure_venv_mod, "ensure_coordinator_venv", _fake_ensure_coordinator_venv)
+
+    engine_py, import_names = setup_mod.provision_deps(pyproject_dir, sys.executable, True)
+
+    assert engine_py == str(venv_py)
+    venv_call = next(c for c in calls if str(venv_py) in c)
+    assert "-e" not in venv_call
 
 
 def test_provision_deps_mid_install_pep668_refusal_exits_96(setup_mod, monkeypatch, tmp_path):
     """The marker-file probe can miss a guard (probe error -> fails open);
     pip's own refusal string is still the ultimate authority and still
-    exits 96, never falls back."""
+    exits 96, never falls back even with the flag passed."""
     pyproject_dir = tmp_path / "root"
     pyproject_dir.mkdir()
     _fixture_pyproject(pyproject_dir)
@@ -599,7 +650,7 @@ def test_provision_deps_mid_install_pep668_refusal_exits_96(setup_mod, monkeypat
     )
 
     with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable)
+        setup_mod.provision_deps(pyproject_dir, sys.executable, True)
 
     assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
 
@@ -3764,10 +3815,10 @@ def test_input_call_sites_catch_runtime_error_not_only_eof(setup_mod):
 # ---------------------------------------------------------------------------
 
 
-def _precompile_args():
+def _precompile_args(allow_venv_fallback=False):
     import types
 
-    return types.SimpleNamespace()
+    return types.SimpleNamespace(allow_venv_fallback=allow_venv_fallback)
 
 
 def test_precompile_runs_compileall_under_each_resolved_interpreter(

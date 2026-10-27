@@ -178,3 +178,13 @@ def test_decisions_map_has_the_apply_base_shape():
 def test_decide_holds_no_ceremony_name():
     text = DECIDE_SOURCE.read_text(encoding="utf-8")
     assert "workday-start" not in text and "workday_start" not in text
+
+
+def test_agent_result_value_only_decision_is_recorded(tmp_path):
+    results = {"groups": {"judgment": [
+        {"key": "j-1", "outcome": "ok", "decision": {"value": "pin", "rationale": "r"}},
+        {"key": "j-2", "outcome": "ok", "decision": {"rationale": "r"}},
+    ]}}
+    decisions, undecided = decide.record_agent_decisions(tmp_path, [_entry("j-1"), _entry("j-2")], results)
+    assert [(d.point_id, d.decision) for d in decisions] == [("j-1", "pin")]
+    assert undecided == [{"id": "j-2", "reason": "result-carries-no-decision"}]

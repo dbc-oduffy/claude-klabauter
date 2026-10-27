@@ -177,22 +177,3 @@ def test_another_runs_landing_naming_the_holder_in_prose_holds(tmp_path):
     root = _repo(tmp_path)
     _commit(root, f"land (run {OTHER})\n\nInline-Review: {OTHER}\n\nThis follows the halt of {RUN}.")
     assert halted_criterion_met.met_at_head(root, [RUN], _clean) == {}
-
-
-def test_corrupt_halt_marker_holds_the_run(tmp_path):
-    root = _repo(tmp_path)
-    _commit(root, f"land (run {RUN})\n\nInline-Review: {RUN}")
-    assert list(halted_criterion_met.met_at_head(root, [RUN], _clean)) == [RUN]
-    (root / "state" / "warp" / RUN / "halted.json").write_text("{not json", encoding="utf-8")
-    assert halted_criterion_met.met_at_head(root, [RUN], _clean) == {}
-
-
-def test_corrupt_halt_marker_refuses_with_the_run_named(tmp_path):
-    from coordinator_core.ops.dispatch_emit import halted_run_route
-
-    root = _repo(tmp_path)
-    (root / "state" / "warp" / RUN / "halted.json").write_text("{not json", encoding="utf-8")
-    refusal = halted_run_route.halted_refusal(root, RUN, "terminal commit")
-    assert refusal is not None and f"unreadable-halt-record:{RUN}" in refusal
-    assert halted_run_route.halted_refusal(root, OTHER, "terminal commit") is None, "absent marker is no run"
-    assert halted_run_route.land_only_commit_route(root, RUN) is None

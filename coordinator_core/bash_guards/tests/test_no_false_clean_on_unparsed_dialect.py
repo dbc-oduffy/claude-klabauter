@@ -125,7 +125,6 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "block_stash_destruction": lambda mod: "git stash clear",
     "block_subagent_commit": lambda mod: 'git commit -am "wip"',
-    "block_em_halted_withheld_commit": lambda mod: "git commit -m x -- a.py",
     "block_subagent_destructive_action": (
         lambda mod: "Remove-Item -Recurse -Force C:/scratch/target"
     ),
@@ -282,8 +281,6 @@ _ENTRY_OVERRIDE: Dict[str, str] = {}
 #: helpers (default `agent_id="deadbeef0123"`, confined
 #: `agent_type="coordinator:code-reviewer"`).
 _PAYLOAD_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    # Main-loop-only guard: a subagent-shaped caller returns a bare clean.
-    "block_em_halted_withheld_commit": {"agent_id": "", "agent_type": ""},
     "block_reviewer_bash_outside_allowlist": {
         "agent_id": "deadbeef0123",
         "agent_type": "coordinator:code-reviewer",
@@ -355,14 +352,6 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
             "AGENTS.md",
         ]
     },
-    # Fails open with no withheld index; supply one naming the fixture's pathspec.
-    "block_em_halted_withheld_commit": lambda mod, mp: (
-        mp.setattr(
-            "coordinator_core.ops.dispatch_emit.halted_withheld_index.withheld_by_path",
-            lambda root: {"a.py": "ask-20261024T000000-aaaaaa"},
-        ),
-        {},
-    )[-1],
     "block_perforce_submit": lambda mod, mp: (
         mp.setattr(mod, "_armed", lambda: True),
         {},

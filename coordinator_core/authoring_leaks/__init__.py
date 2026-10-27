@@ -201,6 +201,18 @@ def _resolve_default_detectors(names: Sequence[str]) -> Tuple[List[Any], List[st
     return detectors, failures
 
 
+#: Path suffixes a detector judges; `detect` receives only matching paths. A detector absent here sees all.
+#: Keep in step with `import_closure`'s own `.py` filter.
+JUDGED_SUFFIXES: Dict[str, Tuple[str, ...]] = {"import_closure": (".py",)}
+
+
+def _judged_paths(detector: Any, paths: List[str]) -> List[str]:
+    suffixes = JUDGED_SUFFIXES.get(_detector_name(detector))
+    if suffixes is None:
+        return paths
+    return [p for p in paths if p.endswith(suffixes)]
+
+
 def _refusal(diagnostics: List[str]) -> GateOutcome:
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
@@ -246,7 +258,7 @@ def leak_gate(
     findings: List[LeakFinding] = []
     for det in active:
         try:
-            findings.extend(det.detect(root, paths, head))
+            findings.extend(det.detect(root, _judged_paths(det, paths), head))
         except Exception as exc:
             return _refusal([f"leak_gate: detector {_detector_name(det)} raised {type(exc).__name__}: {exc}"])
 

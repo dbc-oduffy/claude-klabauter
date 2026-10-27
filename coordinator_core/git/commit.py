@@ -75,7 +75,7 @@ import re
 import shlex
 import time
 from pathlib import Path
-from typing import Callable, Dict, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.git import index_write
@@ -306,12 +306,33 @@ class StagedRollbackRefused(CommitRefused):
     exempted from refusal."""
 
 
+def _autocrlf_once(root: Path) -> Callable[[], bool]:
+    """A per-call memo of `_repo_autocrlf_true(root)`: a loop over N paths reads
+    the git-config layer stack once, not N times (the shared memo only holds
+    inside an open `call_io_scope`)."""
+    cell: List[bool] = []
+
+    def resolve() -> bool:
+        if not cell:
+            cell.append(_repo_autocrlf_true(root))
+        return cell[0]
+
+    return resolve
+
+
 def _worktree_blob(
-    gitdir: Path, root: Path, rel: str, data: bytes, created: Optional[set] = None
+    gitdir: Path,
+    root: Path,
+    rel: str,
+    data: bytes,
+    created: Optional[set] = None,
+    autocrlf: Optional[Callable[[], bool]] = None,
 ) -> str:
     """The blob sha `git add` would have produced for `rel`, in process.
     Raises `FilterUnsupported` for the shapes `_checkin_bytes` refuses."""
-    return write_object(gitdir, b"blob", _checkin_bytes(root, rel, data), created=created)
+    return write_object(
+        gitdir, b"blob", _checkin_bytes(root, rel, data, autocrlf), created=created
+    )
 
 
 def checkin_sizes(
@@ -328,6 +349,7 @@ def checkin_sizes(
     root = Path(repo)
     sizes: Dict[str, Optional[int]] = {}
     refused = []
+    autocrlf_cached = _autocrlf_once(root)
     for p in paths:
         try:
             data = (root / p).read_bytes()
@@ -335,7 +357,7 @@ def checkin_sizes(
             sizes[p] = None
             continue
         try:
-            sizes[p] = len(_checkin_bytes(root, p, data))
+            sizes[p] = len(_checkin_bytes(root, p, data, autocrlf_cached))
         except FilterUnsupported:
             refused.append(p)
     if refused:
@@ -349,8 +371,12 @@ def checkin_sizes(
     return sizes
 
 
-def _checkin_bytes(root: Path, rel: str, data: bytes) -> bytes:
+def _checkin_bytes(
+    root: Path, rel: str, data: bytes, autocrlf: Optional[Callable[[], bool]] = None
+) -> bytes:
     """The bytes git's checkin filter would hash for `rel`.
+
+    `autocrlf` is a loop-hoisted resolver (`_autocrlf_once`); None resolves per call.
 
     `git add` does not record raw bytes -- it runs git's checkin filters, and
     on this box `core.autocrlf=true` means a CRLF worktree file hashes to its
@@ -424,7 +450,7 @@ def _checkin_bytes(root: Path, rel: str, data: bytes) -> bytes:
     # under autocrlf=true; with autocrlf off or unresolvable, git stores the
     # bytes as-is and so do we.
     if bytes([13]) in data:
-        if _repo_autocrlf_true(root):
+        if (autocrlf or (lambda: _repo_autocrlf_true(root)))():
             return _autocrlf_checkin_normalize(data)
         raise FilterUnsupported(
             f"{rel}: contains CR bytes -- checkin normalization for this path "
@@ -1469,6 +1495,7 @@ def commit_paths(
     assembled: Dict[str, object] = {}
     # Blobs this call placed as new loose objects: the rollback check's novelty oracle.
     created_blobs: set = set()
+    autocrlf_cached = _autocrlf_once(root)
     index_updates: Dict[str, object] = {}
     staged_preferred = []
     staged_passed_over: list = []
@@ -1534,7 +1561,7 @@ def commit_paths(
             if p in exp_content:
                 content_digest[p] = eol_folded_sha256(data)
             try:
-                blob = _worktree_blob(gitdir, root, p, data, created_blobs)
+                blob = _worktree_blob(gitdir, root, p, data, created_blobs, autocrlf_cached)
             except FilterUnsupported:
                 # COLLECT, don't explode. A refusal is "this module cannot
                 # compute this path's blob", not "this commit fails" -- the
@@ -2093,6 +2120,7 @@ def stage_paths_in_process(
     refused: list = []
     spelling: Dict[str, str] = {}
     keys = [_index_key(root, raw_path) for raw_path in paths]
+    autocrlf_cached = _autocrlf_once(root)
     # `git add`'s own mode decision for a TRACKED path is the index's
     # existing entry, not a stat: on Windows `core.fileMode=false` makes
     # the worktree bit uninformative (`_mode_for` always answers 100644
@@ -2122,7 +2150,7 @@ def stage_paths_in_process(
         entry = existing.get(p)
         mode = entry.mode if entry is not None else _mode_for(root / p)
         try:
-            updates[p] = (mode, _worktree_blob(gitdir, root, p, data))
+            updates[p] = (mode, _worktree_blob(gitdir, root, p, data, None, autocrlf_cached))
         except FilterUnsupported:
             refused.append(p)
             continue

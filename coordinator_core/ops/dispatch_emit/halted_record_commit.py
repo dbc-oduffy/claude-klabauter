@@ -380,80 +380,6 @@ def _withhold_run_dirt(withheld: dict, written: list, changed: set, landed: set)
             withheld[p] = RUN_DIRT_UNCOMMITTED
 
 
-#: ``withheld`` reason for a run-owned ``.py`` whose bytes were moved into the halted record because
-#: the tree would not import with them.
-EVICTED_NOT_IMPORTABLE = "evicted-not-importable"
-
-#: Withheld reasons that mark a path as not this run's: never judged for eviction, never reset.
-_NOT_RUN_OWNED = frozenset({"peer-held", "peer-claim-indeterminate", "sibling-claimed", "foreign-halted-withheld"})
-
-
-class TreeEviction:
-    """A planned eviction of unimportable run-owned bytes. ``plan`` mutates nothing on disk; ``apply``
-    copies the bytes into the record and resets the tree. Trap: run ``apply`` only after
-    ``_record_kept``, which fingerprints the run's bytes, not HEAD's."""
-
-    def __init__(self, root: Path, record_dir_rel: str, head_blobs: dict, origin: dict, unowned: dict) -> None:
-        self.root, self.record_dir_rel = root, record_dir_rel
-        self.head_blobs, self.origin, self.unowned = head_blobs, origin, unowned
-
-    @property
-    def evicted(self) -> list:
-        return sorted(self.head_blobs)
-
-    def kept_view(self, withheld: dict) -> dict:
-        """``withheld`` with each evicted path back at its pre-eviction reason, so a kept chunk stays kept."""
-        return {**withheld, **self.origin}
-
-    def apply(self) -> None:
-        from coordinator_core.ops.dispatch_emit import halt_tree_evict
-
-        halt_tree_evict.evict(self.root, self.root / self.record_dir_rel, self.evicted, self.head_blobs)
-
-
-def plan_tree_eviction(
-    root: Path, record_dir_rel: str, run_written: list, changed: set, write_set: list,
-    withheld: dict, paths: list,
-) -> Optional[TreeEviction]:
-    """Judge the run's own changed ``.py`` files and their write-set importers for importability, in
-    process. Each unimportable run-owned path is named in ``withheld`` as ``EVICTED_NOT_IMPORTABLE``,
-    and the record's ``evicted.json`` plus its blobs are appended to ``paths`` (in place). Call after
-    ``_withhold_run_dirt`` and before the nothing-to-commit return. None when nothing is evicted."""
-    from coordinator_core.authoring_leaks import HeadView
-    from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, kept_work
-
-    if not (root / record_dir_rel).is_dir():
-        return None
-    landed = set(paths)
-    own = [
-        p for p in run_written
-        if p.endswith(".py") and p in changed and p not in landed and withheld.get(p) not in _NOT_RUN_OWNED
-    ]
-    if not own:
-        return None
-    broken = halt_tree_check.broken_paths(root, own, write_set)
-    targets = [p for p in own if p in broken]
-    unowned = {p: why for p, why in broken.items() if p not in targets}
-    prints: dict = {}
-    for p in targets:
-        try:
-            prints[p] = kept_work.blob_sha((root / p).read_bytes())
-        except OSError:
-            continue
-    if not prints:
-        return None
-    head = HeadView(root, prints)
-    head_blobs = {p: head.head_bytes(p) for p in prints}
-    origin = {p: withheld[p] for p in prints if p in withheld}
-    for p in prints:
-        withheld[p] = EVICTED_NOT_IMPORTABLE
-    for rel in (f"{record_dir_rel}/{halt_tree_evict.EVICTED_FILE}",
-                *(f"{record_dir_rel}/{halt_tree_evict.BLOBS_DIR}/{sha}" for sha in prints.values())):
-        if rel not in paths:
-            paths.append(rel)
-    return TreeEviction(root, record_dir_rel, head_blobs, origin, unowned)
-
-
 def _integrity_findings(
     worktree_root: Path, run_id: str, base: Optional[str], paths: list, plan: Optional[str] = None
 ) -> list:
@@ -621,28 +547,6 @@ def _carried_returns(root: Path, record_dir: Path, returns: dict) -> dict:
     return out
 
 
-def _record_withheld_prints(root: Path, record_dir_rel: str, withheld: dict, paths: list) -> None:
-    """Write ``WITHHELD_PRINTS_FILE`` beside the marker: blob id of each withheld path still in the
-    tree, so a refire credits a path as the predecessor's only while its bytes are unchanged. The
-    file joins ``paths`` (in place) so it lands with the record."""
-    import json
-
-    from coordinator_core.atomic_replace import atomic_write_bytes
-    from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
-    from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE
-
-    prints = {p: f for p in sorted(withheld) if isinstance(p, str) and (f := fingerprint(root, p)) is not None}
-    if not prints:
-        return
-    rel = f"{record_dir_rel}/{WITHHELD_PRINTS_FILE}"
-    try:
-        atomic_write_bytes(root / rel, (json.dumps(prints, indent=2) + "\n").encode("utf-8"))
-    except OSError:
-        return
-    if rel not in paths:
-        paths.append(rel)
-
-
 def _persist_blobs(root: Path, common_dir: Optional[Path], post: dict) -> set:
     """Write each ``post`` path's bytes as a git blob (in-process, no spawn) when its sha still
     equals the recorded fingerprint, so a reviewed hunk stays recoverable after a refire; returns the
@@ -678,8 +582,7 @@ def _record_kept(
     ``next_action.resume.stage``. ``post_candidates`` that are in ``withheld``, not in ``landed`` and
     owned by no kept chunk are fingerprinted under ``post_checkpoint`` when their blob was persisted;
     the rest are named under ``post_checkpoint_unpersisted``. Every kept chunk path's blob is
-    persisted too; a chunk with a path that could not be is left out of ``kept.json`` and its
-    unpersisted paths are named under ``kept_unpersisted``.
+    persisted too; those that could not be are named under ``kept_unpersisted``.
     Returns ``{"kept": {...}}`` (plus ``"returns": [ids]``) when anything was recorded, else ``{}``."""
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit import kept_work, row_returns
@@ -720,13 +623,10 @@ def _record_kept(
     post = {p: blob for p, blob in wanted.items() if p in stored}
     kept_paths = {p: fp for entry in chunks.values() for p, fp in entry["paths"].items()}
     kept_stored = _persist_blobs(root, common_dir, kept_paths)
-    unpersisted = set(kept_paths) - kept_stored
-    if unpersisted:
-        chunks = {c: e for c, e in chunks.items() if not unpersisted.intersection(e["paths"])}
     written = kept_work.write(record_dir, chunks, gate, post)
     reply: dict = {"returns": sorted(persisted)} if persisted else {}
-    if unpersisted:
-        reply["kept_unpersisted"] = sorted(unpersisted)
+    if len(kept_stored) != len(kept_paths):
+        reply["kept_unpersisted"] = sorted(set(kept_paths) - kept_stored)
     if len(post) != len(wanted):
         reply["post_checkpoint_unpersisted"] = sorted(set(wanted) - set(post))
     if written is None:
@@ -777,17 +677,6 @@ def _land(
     owner = declared
     home, _siblings = split_sibling_paths(list(owner), worktree_root)
     declared = [p for p in home if not p.startswith(record_dir_rel + "/")]
-    if not params.get("script_path"):
-        # Land-only ask: no script names the product, so the marker's withheld paths are it. Not put
-        # in ``owner``: no chunk owns them, so the record-only/closure legs never re-withhold them.
-        # Every recorded reason is declared; peer-held, sibling and foreign-halted paths are re-withheld
-        # by the gates below. Paths come from the marker uncontained: ``snapshot.changed`` bounds them.
-        try:
-            withheld_recorded = sorted(halted_run.halted_withheld_strict(worktree_root / record_dir_rel))
-        except halted_run.UnreadableHaltRecord as exc:
-            return _error(f"halt marker unreadable, its paths are held: {exc.reason}", refused=exc.reason, **base)
-        recorded, _ = split_sibling_paths(withheld_recorded, worktree_root)
-        declared += [p for p in recorded if p not in declared and not p.startswith(record_dir_rel + "/")]
     sizing_rel = record_sizing_rel(worktree_root, run_id)
     if (
         sizing_rel
@@ -931,20 +820,6 @@ def _land(
         art_deleted, w4 = sibling_claims.filter_own(art_deleted, sibling, own_declared)
         withheld.update({p: sibling_claims.SIBLING_WITHHELD_REASON for p in (*w1, *w2, *w3, *w4)})
 
-    from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
-
-    halt_plan = halted.get(HALT_PLAN_FIELD)
-    foreign = foreign_halted_withheld(
-        worktree_root, run_id, halt_plan if isinstance(halt_plan, str) else None,
-        product + gone + art_paths + art_deleted + review_literals,
-    )
-    if foreign:
-        withheld.update({p: "foreign-halted-withheld" for p in foreign})
-        product = [p for p in product if p not in withheld]
-        gone = [p for p in gone if p not in withheld]
-        art_paths = [p for p in art_paths if p not in withheld]
-        art_deleted = [p for p in art_deleted if p not in withheld]
-
     holds: list = []
     warnings = commit_v2._peer_claim_warnings(
         worktree_root, product + gone + art_paths + art_deleted, holds, own_sid=session_id
@@ -1077,7 +952,6 @@ def _land(
 
     if (worktree_root / record_dir_rel).is_dir():
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
-        _record_withheld_prints(worktree_root, record_dir_rel, withheld, paths)
     kept_reply = _record_kept(
         worktree_root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM),
         post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,

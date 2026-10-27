@@ -558,7 +558,7 @@ def test_ac10_vendored_sizing_schema_version_is_pinned():
         Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    pinned = "1.48.0"
+    pinned = "1.47.0"
     assert schema["x-schema-version"] == pinned, (
         f"sizing-object.schema.json's x-schema-version moved off the pinned "
         f"{pinned!r} — check the vendored x-bump-note chain (1.24.0 "
@@ -606,8 +606,7 @@ _VENDORED_SCHEMA_VERSION_PINS = (
     # Re-pinned 1.44.0 -> 1.45.0: `xxl_infra_check_owed` detent (enum-value-additive; claude-klabauter-first, DoE copy pending).
     # Re-pinned 1.45.0 -> 1.46.0: optional top-level `tie_break` (7fb517dc90; additive; claude-klabauter-first, DoE copy pending).
     # Re-pinned 1.46.0 -> 1.47.0: `fan_out` xl_exit enum value (additive; claude-klabauter-first, DoE copy pending).
-    # Re-pinned 1.47.0 -> 1.48.0: optional top-level `provenance` (additive; claude-klabauter-first, DoE copy pending).
-    ("sizing-object.schema.json", "1.48.0", "claude-klabauter-first; DoE copy pending (1.45.0 at 8807597379)"),
+    ("sizing-object.schema.json", "1.47.0", "claude-klabauter-first; DoE copy pending (1.45.0 at 8807597379)"),
     # Re-pinned 1.3.0 -> 1.4.0 on DoE widening `applies_to` to
     # `state/roadmap/**/OVERVIEW.md` (MINOR, on the peer-set-entry 1.0.0 -> 1.1.0
     # precedent), vendored byte-for-byte here at c3bbedf36 with the drift watch

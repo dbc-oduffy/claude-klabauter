@@ -4,86 +4,50 @@ Three named refusal reasons: a landed ``.py`` that fails to parse, a landing blo
 lines a foreign commit added since the run's base, and a targeted-test failure the run caused.
 Everything is in-process: no spawn, and no test is run here, only the verdict the run carries
 (or the fresh one ``retest_targeted`` wrote).
-
-The verdict, dropped-target and retest-record defs live in ``landing_targeted_tests``,
-``landing_dropped_targets`` and ``landing_retest``; this module re-imports them.
 """
 
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
+import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
-from coordinator_core.ops.dispatch_emit.landing_dropped_targets import (  # noqa: F401
-    _blob_elsewhere,
-    _classify_dropped,
-    _dir_files,
-    _index_or_empty,
-    _only_run_deleted_targets,
-    deleted_targets_receipt_note,
-    renamed_dropped_targets,
-    run_deleted_dropped_targets,
-)
-from coordinator_core.ops.dispatch_emit.landing_retest import (  # noqa: F401
-    FAILED_TESTS_PARAM,
-    NO_TESTS_STATUS,
-    RETEST_DIR,
-    RETEST_RUNNING,
-    _SHA_RE,
-    _changed_since_base,
-    _explicit_empty_failed_tests,
-    _explicit_failed_tests,
-    _failed_nodes,
-    _ran_no_tests,
-    _ran_nothing,
-    _retest_record,
-    _retest_record_status,
-    _stale_retest_note,
-    _submission_base,
-    _unchanged_since_base,
-    fresh_targeted_verdict,
-    fresh_verdict_path,
-    landing_fingerprint,
-    run_base_for,
-)
-from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa: F401
-    NOT_RUN_CHECK,
-    RETEST_LAUNCHER,
-    REVERIFY_INDETERMINATE,
-    REVERIFY_KEY,
-    REVIEW_REVERIFY_FAILED,
-    REVIEW_REVERIFY_INDETERMINATE,
-    TARGETED_TESTS_FAILED,
-    TARGETED_TESTS_PARAM,
-    ZERO_FAIL_CHECK,
-    ZERO_FAIL_UNATTRIBUTED,
-    Finding,
-    _FILE_LIKE,
-    _GATE_BLOCKER,
-    _imports_landed,
-    _indeterminate_finding,
-    _module_files,
-    _node_file,
-    _repo_test_path,
-    baseline_caused_files,
-    failed_targeted_tests,
-    named_failures,
-    recorded_targeted_set,
-    retest_remedy,
-    reverify_record,
-    reverify_red_findings,
-    reverify_verdict,
-    targeted_set,
-    targeted_test_verdict,
-)
-from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD  # noqa: F401
+from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
 
 PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
+TARGETED_TESTS_FAILED = "targeted-tests-failed"
 IMPORT_CLOSURE_UNTRACKED = "import-closure-untracked"
+REVIEW_REVERIFY_FAILED = "review-reverify-failed"
+REVERIFY_INDETERMINATE = "indeterminate"
+REVIEW_REVERIFY_INDETERMINATE = "review-reverify-indeterminate"
+REVERIFY_KEY = "reverify"
+TARGETED_TESTS_PARAM = "targeted_tests"
+NOT_RUN_CHECK = "not-run"
+NO_TESTS_STATUS = "no-tests"
+ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
+ZERO_FAIL_CHECK = "zero-fail-unattributed"
+
+RETEST_DIR = ".coordinator-local/retest"
+RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
+RETEST_RUNNING = "running"
+FAILED_TESTS_PARAM = "failed_tests"
+
+_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+@dataclass(frozen=True)
+class Finding:
+    """One refused landing path: the repo-relative path, the reason name, and a one-line detail."""
+
+    path: str
+    reason: str
+    detail: str
 
 
 def unparseable_py(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:
@@ -145,6 +109,33 @@ def unparseable_py_at(worktree_root: Path, rev: str, paths: Sequence[str]) -> li
     return out
 
 
+def _submission_base(worktree_root: Path, run_id: str) -> Optional[str]:
+    try:
+        record = json.loads(
+            (Path(worktree_root) / "scratch" / "warp" / run_id / "submission.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    value = record.get("run_base_sha") if isinstance(record, dict) else None
+    return value if isinstance(value, str) and _SHA_RE.match(value) else None
+
+
+def run_base_for(worktree_root: Path, run_id: Optional[str], params: Mapping) -> Optional[str]:
+    """The run's base sha: ``params['run_base_sha']``, else the submission record's, else the
+    reserved run's recorded base file; None when none exists."""
+    value = params.get("run_base_sha")
+    if isinstance(value, str) and _SHA_RE.match(value):
+        return value
+    if not run_id:
+        return None
+    found = _submission_base(worktree_root, run_id)
+    if found:
+        return found
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract
+
+    return ask_fanout_contract.recorded_run_base(Path(worktree_root), run_id)
+
+
 def closing_bases(worktree_root: Path, run_id: Optional[str], params: Mapping) -> tuple:
     """The 40-hex bases a run's closing or halt trailer names, deduplicated, in order: the stage
     manifest ``head_sha``, then ``run_base_for``, then ``params["review_run_base"]``.
@@ -201,6 +192,353 @@ def _resumed_chain(worktree_root: Path, rid: Optional[str]) -> list:
     return out
 
 
+def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
+    """The test verdict a commit's params carry: ``params["targeted_tests"]``, else
+    ``params["inline_review"]["tests"]`` or ``params["run_outcome"]["inline_review"]["tests"]``
+    mapped to ``{status, tests_failed: failed, tests_run: run, baseline: None}``; None when none is carried."""
+    direct = params.get(TARGETED_TESTS_PARAM)
+    if isinstance(direct, Mapping) and isinstance(direct.get("status"), str):
+        return direct
+    run_outcome = params.get("run_outcome")
+    for holder in (params, run_outcome if isinstance(run_outcome, Mapping) else {}):
+        review = holder.get("inline_review")
+        tests = review.get("tests") if isinstance(review, Mapping) else None
+        if isinstance(tests, Mapping) and isinstance(tests.get("status"), str):
+            return {
+                "status": tests["status"], "tests_failed": tests.get("failed"),
+                "tests_run": tests.get("run"), "baseline": None,
+                **({"status_before": tests["status_before"]} if "status_before" in tests else {}),
+            }
+    return None
+
+
+def _node_file(node_id: str) -> str:
+    head = re.split(r"::| > ", str(node_id), maxsplit=1)[0].strip().replace("\\", "/")
+    return head[2:] if head.startswith("./") else head
+
+
+def recorded_targeted_set(params: Mapping, verdict: object) -> list[str]:
+    """Test paths the run recorded as its targeted set: ``tests`` or ``test_paths`` on the verdict,
+    else ``params["targeted_test_paths"]``. Empty when none is recorded."""
+    holders = [verdict if isinstance(verdict, Mapping) else {}, params]
+    keys = (("tests", "test_paths"), ("targeted_test_paths",))
+    for holder, names in zip(holders, keys):
+        for name in names:
+            raw = holder.get(name)
+            if isinstance(raw, list):
+                found = [_node_file(str(n)) for n in raw if isinstance(n, str)]
+                if any(found):
+                    return found
+    return []
+
+
+def baseline_caused_files(verdict: object) -> list[str]:
+    """Test files of the verdict's ``baseline.caused`` node ids."""
+    baseline = verdict.get("baseline") if isinstance(verdict, Mapping) else None
+    if not isinstance(baseline, Mapping):
+        return []
+    return [_node_file(str(node)) for node in baseline.get("caused") or []]
+
+
+def targeted_set(params: Mapping, verdict: object, explicit: Sequence[str] = ()) -> list[str]:
+    """The run's targeted test paths, deduplicated: ``explicit``, else the baseline's caused files,
+    else the recorded set. The one definition the retest launcher and the landing gate share."""
+    tests = [*explicit, *baseline_caused_files(verdict)]
+    if not any(tests):
+        tests = recorded_targeted_set(params, verdict)
+    return list(dict.fromkeys(t for t in tests if t))
+
+
+_FILE_LIKE = re.compile(r"^[\w@./+-]+\.\w+$")
+_GATE_BLOCKER = re.compile(r"gate-blocker:\s*outside-footprint:\s*(\S.*)$")
+
+
+def named_failures(task_output_path: object) -> list[str]:
+    """Failing test ids a task-output digest names: ``gate-blocker: outside-footprint: <id>`` in
+    ``result.deviations[]`` and ``tests.per_row.failed[]`` anchors. Empty for an unreadable file
+    or a digest naming none; ids whose file part is not a path are dropped."""
+    if not isinstance(task_output_path, str) or not task_output_path.strip():
+        return []
+    try:
+        data = json.loads(Path(task_output_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict) and "deviations" not in data and isinstance(data.get("result"), dict):
+        data = data["result"]
+    if not isinstance(data, dict):
+        return []
+    tests = data.get("tests")
+    per_row = tests.get("per_row") if isinstance(tests, Mapping) else None
+    failed = per_row.get("failed") if isinstance(per_row, Mapping) else None
+    entries = [*(data.get("deviations") or []), *(failed if isinstance(failed, list) else [])]
+    out: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        for field in ("anchor", "reason"):
+            found = _GATE_BLOCKER.search(str(entry.get(field) or ""))
+            if found and _FILE_LIKE.match(_node_file(found.group(1))):
+                out.append(found.group(1).strip())
+    return list(dict.fromkeys(out))
+
+
+def retest_remedy(params: Optional[Mapping], files: Sequence[str] = ()) -> str:
+    """The retest command for a refusal detail, runnable as printed on any OS: the settings-home
+    ``emit-dispatch-workflow --retest-targeted`` launcher (no PYTHONPATH), with the exact
+    ``--from-task-output`` line when ``params.task_output_path`` names the run's task-output file,
+    and one ``--tests`` per file in ``files``."""
+    raw = params.get("task_output_path") if isinstance(params, Mapping) else None
+    if isinstance(raw, str) and raw.strip():
+        path = raw.strip().replace("\\", "/")
+        line = f'{RETEST_LAUNCHER} --from-task-output {json.dumps(path) if " " in path else path}'
+    else:
+        line = f"{RETEST_LAUNCHER} --from-task-output with the run's task-output file"
+    return line + "".join(f" --tests {f}" for f in files)
+
+
+def _indeterminate_finding(error: object, remedy: str) -> Finding:
+    cause = error if isinstance(error, str) and error.strip() else "no error recorded"
+    return Finding(
+        "", REVIEW_REVERIFY_INDETERMINATE,
+        f"re-verify did not run ({cause}); engine defect, not a test result; re-run: {remedy}",
+    )
+
+
+def failed_targeted_tests(
+    verdict: Optional[Mapping], remedy: Optional[str] = None
+) -> tuple[list[Finding], str]:
+    """``(findings, check)`` for a carried test verdict; ``check`` is ``"no-verdict"``, ``"pass"``,
+    ``"not-run"``, ``"pre-existing-only"`` or ``"failed"``.
+
+    A fail/error verdict whose ``tests_run`` is the integer 0 executed nothing: ``([], NOT_RUN_CHECK)``,
+    checked before the baseline, never a TARGETED_TESTS_FAILED finding.
+
+    A fail/error verdict whose ``status_before`` is ``"indeterminate"`` (the re-verify never ran) is
+    one Finding(REVIEW_REVERIFY_INDETERMINATE) with check ``"failed"``, checked ahead of the above
+    and never ``"pre-existing-only"``.
+
+    A fail/error verdict with ``baseline.caused`` yields one Finding(TARGETED_TESTS_FAILED) per
+    distinct caused test file (repo-relative POSIX), the detail naming up to three node ids. A
+    fail/error verdict whose baseline is present with nothing caused is ``"pre-existing-only"``.
+    A ``fail`` verdict with ``tests_failed`` the integer 0 and no baseline names no failure: with
+    ``status_before == "fail"`` it is ``([], "pre-existing-only")``; otherwise one
+    Finding(ZERO_FAIL_UNATTRIBUTED) with check ``ZERO_FAIL_CHECK``, never TARGETED_TESTS_FAILED.
+    Trap: any other fail/error verdict with no baseline yields one Finding with ``path=""`` (unattributed,
+    fail-closed), so a pre-existing failure with no baseline export refuses by design; the remedy
+    is ``remedy`` (default ``retest_remedy(None)``), or a ``failed_tests`` node-id list that
+    ``landing_test_gate`` attributes against the run base."""
+    if not isinstance(verdict, Mapping):
+        return [], "no-verdict"
+    status = verdict.get("status")
+    if status in ("pass", "pass-with-skips"):
+        return [], "pass"
+    if status not in ("fail", "error"):
+        return [], "no-verdict"
+    if verdict.get("status_before") == REVERIFY_INDETERMINATE:
+        return [_indeterminate_finding(verdict.get("reverify_error"), remedy or retest_remedy(None))], "failed"
+    tests_run = verdict.get("tests_run")
+    if isinstance(tests_run, int) and not isinstance(tests_run, bool) and tests_run == 0:
+        return [], NOT_RUN_CHECK
+    baseline = verdict.get("baseline")
+    if not isinstance(baseline, Mapping):
+        count = verdict.get("tests_failed")
+        if status == "fail" and isinstance(count, int) and not isinstance(count, bool) and count == 0:
+            if verdict.get("status_before") == "fail":
+                return [], "pre-existing-only"
+            return [Finding(
+                "", ZERO_FAIL_UNATTRIBUTED,
+                f"the verdict reads fail with 0 failing tests and no failing node id to attribute "
+                f"(status_before not fail); re-run: {remedy or retest_remedy(None)}",
+            )], ZERO_FAIL_CHECK
+        shown = f"{count} " if isinstance(count, int) else ""
+        if status == "error" and count == 0:
+            cause = next((str(verdict[k]) for k in ("reason", "summary", "error") if verdict.get(k)), None)
+            ran = verdict.get("tests_run")
+            return [Finding(
+                "", TARGETED_TESTS_FAILED,
+                f"the test run errored with 0 failing tests"
+                f"{f' of {ran} run' if isinstance(ran, int) and not isinstance(ran, bool) else ''} and named no "
+                f"erroring node (collection or runner error); "
+                f"{f'recorded cause: {cause}; ' if cause else ''}re-run: {remedy or retest_remedy(None)}",
+            )], "failed"
+        return [Finding(
+            "", TARGETED_TESTS_FAILED,
+            f"{shown}tests {status}, no baseline to attribute them; re-run: {remedy or retest_remedy(None)}",
+        )], "failed"
+    caused = [str(n) for n in (baseline.get("caused") or [])]
+    if not caused:
+        return [], "pre-existing-only"
+    by_file: dict[str, list[str]] = {}
+    for node in caused:
+        by_file.setdefault(_node_file(node), []).append(node)
+    return [
+        Finding(path, TARGETED_TESTS_FAILED, "; ".join(nodes[:3]))
+        for path, nodes in by_file.items()
+    ], "failed"
+
+
+def _module_files(module: str) -> list[str]:
+    base = module.replace(".", "/")
+    return [f"{base}.py", f"{base}/__init__.py"]
+
+
+def _repo_test_path(worktree_root: Path, test_file: str, landed: set[str]) -> Optional[str]:
+    """Repo-relative path of a re-verify node's test file. A node id is relative to the directory the
+    suite ran in, which may be a subdirectory of the repo: when ``test_file`` is not at the root, it is
+    sought under each ancestor directory of a landed path (the root match wins; otherwise the first
+    landed path in sorted order)."""
+    root = Path(worktree_root)
+    if (root / test_file).is_file():
+        return test_file
+    for path in sorted(landed):
+        parts = path.split("/")[:-1]
+        for depth in range(len(parts), 0, -1):
+            candidate = "/".join(parts[:depth] + [test_file])
+            if (root / candidate).is_file():
+                return candidate
+    return None
+
+
+def _imports_landed(worktree_root: Path, repo_file: str, landed: set[str]) -> bool:
+    """True when the repo-relative ``repo_file`` imports a module whose file is in ``landed``; False
+    when unreadable. A module resolves from the repo root and from every ancestor directory of the
+    test file, since a suite puts its own directory tree on ``sys.path`` rather than the repo root."""
+    from coordinator_core.pyimports import collect_imports, module_name_for_file, resolve_relative_module
+
+    try:
+        tree = ast.parse((Path(worktree_root) / repo_file).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return False
+    ancestors = ["/".join(repo_file.split("/")[:i]) for i in range(len(repo_file.split("/")) - 1, 0, -1)]
+    records, _ = collect_imports(tree)
+    is_pkg = repo_file.rsplit("/", 1)[-1] == "__init__.py"
+    for rec in records:
+        if rec.level == 0:
+            base = rec.module or None
+        else:
+            base = resolve_relative_module(rec.module, rec.level, module_name_for_file(repo_file), is_pkg)
+        if not base:
+            continue
+        wanted = _module_files(base)
+        for name in rec.names:
+            if name != "*":
+                wanted.extend(_module_files(f"{base}.{name}"))
+        if rec.level == 0:
+            wanted += [f"{a}/{w}" for a in ancestors for w in wanted[:]]
+        if any(p in landed for p in wanted):
+            return True
+    return False
+
+
+def reverify_record(params: Mapping) -> Optional[Mapping]:
+    """The run's ``inline_review`` re-verify record, or None when absent or not a mapping."""
+    review = params.get("inline_review") if isinstance(params, Mapping) else None
+    record = review.get(REVERIFY_KEY) if isinstance(review, Mapping) else None
+    return record if isinstance(record, Mapping) else None
+
+
+def reverify_verdict(record: Mapping) -> object:
+    """``status_after``, else ``status_before`` when after is null."""
+    after = record.get("status_after")
+    return after if after is not None else record.get("status_before")
+
+
+def reverify_red_findings(
+    worktree_root: Path, params: Mapping, landing_paths: Sequence[str]
+) -> list[Finding]:
+    """One Finding(REVIEW_REVERIFY_INDETERMINATE) when the re-verify record reads ``indeterminate`` or
+    carries a non-empty ``reverify_error``: it never ran, an engine defect rather than a test result.
+    Otherwise a Finding(REVIEW_REVERIFY_FAILED) per test file the run's review re-verify left red that the
+    landing touches: ``params["inline_review"]["reverify"]`` reading ``fail`` (``status_after``, else
+    ``status_before``), whose ``failing`` node ids and ``reverted[].tests`` name a file that is itself
+    landing or imports a landing module. An absent or non-dict re-verify, a non-fail verdict, or a
+    failure implicating no landed path yields []. ``failing`` ids also listed in ``pre_existing`` (red at the
+    run base) or under the record's ``foreign`` key (reds the run does not own) are dropped; ``reverted[].tests``
+    are kept. A fail whose every ``failing`` id is pre_existing or foreign and
+    that has no reverted tests yields []; a fail naming no test at all still refuses. In-process; one read per implicated test file."""
+    record = reverify_record(params)
+    if record is None:
+        return []
+    error = record.get("reverify_error")
+    if reverify_verdict(record) == REVERIFY_INDETERMINATE or (isinstance(error, str) and error.strip()):
+        return [_indeterminate_finding(error, retest_remedy(params, []))]
+    if reverify_verdict(record) != "fail":
+        return []
+    landed = {str(p).replace("\\", "/") for p in landing_paths}
+    failing = [str(n) for n in (record.get("failing") or []) if n]
+    pre = {str(n) for n in (record.get("pre_existing") or [])}
+    pre |= {str(n) for n in (record.get(FOREIGN_FIELD) or [])}
+    nodes: list[str] = [n for n in failing if n not in pre]
+    for entry in record.get("reverted") or []:
+        if isinstance(entry, Mapping):
+            nodes += [str(n) for n in (entry.get("tests") or []) if n]
+    if failing and not nodes:
+        return []
+    by_file: dict[str, list[str]] = {}
+    for node in nodes:
+        by_file.setdefault(_node_file(node), []).append(node)
+    out: list[Finding] = []
+    if not any(by_file):
+        # Trap: a red verdict naming no test file cannot be shown off-landing, so it must not land.
+        return [Finding(
+            "", REVIEW_REVERIFY_FAILED,
+            f"re-verify ended red naming no failing test; re-run: {retest_remedy(params, [])}",
+        )]
+    for test_file, ids in by_file.items():
+        repo_file = (_repo_test_path(worktree_root, test_file, landed) or test_file) if test_file else None
+        if not repo_file or not (repo_file in landed or _imports_landed(worktree_root, repo_file, landed)):
+            continue
+        shown = "; ".join(list(dict.fromkeys(ids))[:3])
+        out.append(Finding(
+            test_file, REVIEW_REVERIFY_FAILED,
+            f"{shown}; re-run: {retest_remedy(params, [test_file])}",
+        ))
+    return out
+
+
+def fresh_verdict_path(worktree_root: Path, run_id: str) -> Path:
+    """Where the retest step writes a run's fresh test verdict."""
+    return Path(worktree_root) / RETEST_DIR / f"{run_id}.json"
+
+
+def landing_fingerprint(worktree_root: Path, paths: Sequence[str]) -> dict[str, str]:
+    """Repo-relative POSIX path to the sha256 hex of its bytes, or ``"absent"`` when unreadable.
+    In-process; no spawn."""
+    out: dict[str, str] = {}
+    for rel in paths:
+        key = str(rel).replace("\\", "/")
+        try:
+            out[key] = hashlib.sha256((Path(worktree_root) / key).read_bytes()).hexdigest()
+        except OSError:
+            out[key] = "absent"
+    return out
+
+
+def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping]:
+    """The retest verdict for ``run_id``, only while it still describes the tree: ``run_id`` and
+    HEAD match and every ``covered`` file hashes as recorded. None otherwise, including for an
+    unreadable or malformed file.
+
+    A ``stale`` record (``stale: true`` or status ``"stale"``) and a ``running`` one measured
+    nothing, so neither is ever a fresh verdict."""
+    from coordinator_core.git.git_state import head_sha
+
+    try:
+        record = json.loads(fresh_verdict_path(worktree_root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("run_id") != run_id or not isinstance(record.get("status"), str):
+        return None
+    if record.get("stale") is True or record["status"] in ("stale", RETEST_RUNNING):
+        return None
+    covered = record.get("covered")
+    if not isinstance(covered, dict) or not record.get("head") or record["head"] != head_sha(worktree_root):
+        return None
+    if landing_fingerprint(worktree_root, list(covered)) != covered:
+        return None
+    return record
+
+
 class GateFindings(list):
     """The gate's findings list; ``deleted_note`` is the receipt line naming run-deleted targets
     (``""`` when none). A plain list otherwise, so ``== []`` and unpacking keep working."""
@@ -209,56 +547,6 @@ class GateFindings(list):
 
 
 def landing_test_gate(
-    worktree_root: Path, params: Mapping, run_id: Optional[str],
-    landed_paths: Optional[Sequence[str]] = None,
-) -> tuple[GateFindings, str]:
-    """``_landing_test_gate_core`` plus the invariant gate: with ``landed_paths`` given, every
-    repo-wide invariant whose measured set they touch must be in the run's fresh passing retest,
-    else one ``TARGETED_TESTS_FAILED`` finding per missing invariant (check ``"failed"``)."""
-    findings, check = _landing_test_gate_core(worktree_root, params, run_id)
-    if not landed_paths:
-        return findings, check
-    owed = invariant_findings(worktree_root, landed_paths, run_id, params)
-    if not owed:
-        return findings, check
-    out = GateFindings([*findings, *owed])
-    out.deleted_note = findings.deleted_note
-    return out, "failed"
-
-
-def invariant_findings(
-    worktree_root: Path, landed_paths: Sequence[str], run_id: Optional[str], params: Mapping,
-) -> list[Finding]:
-    """One finding per repo-wide invariant a landing diff touches that no fresh passing retest
-    ran. Table lookup plus one record read; zero spawns. Paths other halted runs withhold
-    (``halted_hold_release.residue_paths``) are residue at HEAD, not this run's diff: they select no
-    invariant. Residue bytes are never touched."""
-    from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
-
-    if run_id:
-        from coordinator_core.ops.dispatch_emit.halted_hold_release import residue_paths
-
-        residue = residue_paths(worktree_root, run_id)
-        if residue:
-            landed_paths = [p for p in landed_paths if p.replace("\\", "/") not in residue]
-    owed = imp.existing_invariants(worktree_root, imp.invariants_for_paths(landed_paths, worktree_root))
-    if not owed:
-        return []
-    fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
-    ran = set(fresh.get("tests") or []) if fresh and fresh.get("status") == "pass" else set()
-    out = []
-    for node in owed:
-        if node in ran or node.split("::")[0] in ran:
-            continue
-        out.append(Finding(
-            node.split("::")[0], TARGETED_TESTS_FAILED,
-            f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
-            f"retest ran it; re-run: {retest_remedy(params, [node])}",
-        ))
-    return out
-
-
-def _landing_test_gate_core(
     worktree_root: Path, params: Mapping, run_id: Optional[str]
 ) -> tuple[GateFindings, str]:
     """``(findings, check)`` as ``_landing_test_gate``; on a benign ``no-verdict`` or ``not-run``
@@ -387,6 +675,240 @@ def _targeted_set_exists(
     ):
         return True
     return bool(_explicit_failed_tests(params) or targeted_set(params, verdict))
+
+
+def run_deleted_dropped_targets(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> list[str]:
+    """The record's ``dropped`` targets whose file the run's own diff deleted (present at the run
+    base, gone from the worktree, its base blob nowhere else); empty when no base is known or the
+    base tree is unreadable. A renamed target is not deleted: see ``renamed_dropped_targets``."""
+    return _classify_dropped(worktree_root, params, run_id, record)[0]
+
+
+def renamed_dropped_targets(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> dict[str, str]:
+    """``{target: new_path}`` for dropped targets whose old name is gone but whose base blob sits at
+    another path (index entry or a file beside the old one; a case-only rename included). Trap: a
+    deleted file byte-identical to another tracked file also reads as renamed, which refuses (fail closed)."""
+    return _classify_dropped(worktree_root, params, run_id, record)[1]
+
+
+def _classify_dropped(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> tuple[list[str], dict[str, str]]:
+    dropped = [d for d in (record.get("dropped") or []) if isinstance(d, str)]
+    base = run_base_for(worktree_root, run_id, params) if dropped else None
+    if not base:
+        return [], {}
+    from coordinator_core.git.git_state import read_tree_spine
+    from coordinator_core.git.ref_cas_retry import _root_tree
+
+    files = {d: d.split("::")[0].replace("\\", "/") for d in dropped}
+    tree = _root_tree(worktree_root, base)
+    spine = read_tree_spine(worktree_root, list(files.values()), root_tree_sha=tree) if tree else None
+    if spine is None:
+        return [], {}
+    deleted: list[str] = []
+    renamed: dict[str, str] = {}
+    index: Optional[Mapping] = None
+    for target, rel in files.items():
+        parent, _, name = rel.rpartition("/")
+        entry = spine.get(parent, {}).get(name)
+        if entry is None:
+            continue
+        beside = _dir_files(Path(worktree_root) / parent) if parent else _dir_files(Path(worktree_root))
+        if name in beside:
+            continue
+        if index is None:
+            index = _index_or_empty(worktree_root)
+        moved = _blob_elsewhere(worktree_root, entry[1], rel, parent, beside, index)
+        if moved:
+            renamed[target] = moved
+        else:
+            deleted.append(target)
+    return deleted, renamed
+
+
+def _dir_files(directory: Path) -> dict[str, Path]:
+    """``{on-disk name: path}`` of the regular files directly in ``directory`` (true case on Windows)."""
+    try:
+        with os.scandir(directory) as it:
+            return {e.name: Path(e.path) for e in it if e.is_file()}
+    except OSError:
+        return {}
+
+
+def _index_or_empty(worktree_root: Path) -> Mapping:
+    from coordinator_core.git.git_state import read_index
+
+    try:
+        return read_index(worktree_root)
+    except Exception:
+        return {}
+
+
+def _blob_elsewhere(
+    worktree_root: Path, blob_sha: str, rel: str, parent: str, beside: Mapping[str, Path], index: Mapping
+) -> str:
+    """The first other path holding blob ``blob_sha``: an index entry, else an untracked ``.py`` file
+    beside ``rel`` (only those are hashed); ``""`` when none."""
+    for path, entry in index.items():
+        if path != rel and entry.sha == blob_sha:
+            return path
+    for name, full in beside.items():
+        if not name.endswith(".py") or (f"{parent}/{name}" if parent else name) in index:
+            continue
+        try:
+            data = full.read_bytes()
+        except OSError:
+            continue
+        # core.autocrlf stores a CRLF worktree file as its LF blob, so hash the LF form too.
+        for form in (data, data.replace(b"\r\n", b"\n")):
+            if hashlib.sha1(b"blob %d\0" % len(form) + form).hexdigest() == blob_sha:
+                return f"{parent}/{name}" if parent else name
+    return ""
+
+
+def deleted_targets_receipt_note(
+    worktree_root: Path, params: Mapping, run_id: Optional[str]
+) -> str:
+    """Receipt text naming the dropped targets the run's own diff deleted when that is why the gate
+    read benign (an all-dropped, no-tests record); ``""`` otherwise. Never a refusal."""
+    record = _retest_record(worktree_root, run_id)
+    dropped = record.get("dropped") if record else None
+    if not dropped or record.get("tests"):
+        return ""
+    names = _classify_dropped(worktree_root, params, run_id, record)[0]
+    if set(names) != set(dropped):
+        return ""
+    return "not-run: run deleted " + ", ".join(names)
+
+
+def _only_run_deleted_targets(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], record: Mapping
+) -> bool:
+    """True for an all-dropped record (no tests) whose every dropped target the run's own diff deleted."""
+    dropped = record.get("dropped")
+    if not dropped or record.get("tests"):
+        return False
+    return set(run_deleted_dropped_targets(worktree_root, params, run_id, record)) == set(dropped)
+
+
+def _ran_nothing(tests_run: object) -> bool:
+    """True when ``tests_run`` is absent or the integer 0 (anything else non-numeric reads as absent)."""
+    if isinstance(tests_run, int) and not isinstance(tests_run, bool):
+        return tests_run == 0
+    return True
+
+
+def _ran_no_tests(record: Mapping) -> bool:
+    """True for a fresh ``no-tests`` record (every target dropped or none collected): it measured
+    nothing and did not crash, so it is no verdict and the recorded verdict plus ``failed_tests``
+    attribution decide. A launcher crash (``error`` without ``tests_run``) is not this."""
+    return record.get("status") == NO_TESTS_STATUS
+
+
+def _explicit_failed_tests(params: Mapping) -> list[str]:
+    """Non-empty ``failed_tests`` node ids the caller passed (top level or ``params.params``): an
+    attribution that outranks an errored no-results retest."""
+    nested = params.get("params")
+    out: list[str] = []
+    for holder in (params, nested if isinstance(nested, Mapping) else {}):
+        raw = holder.get(FAILED_TESTS_PARAM)
+        out += [str(n) for n in raw] if isinstance(raw, (list, tuple)) else [raw] if isinstance(raw, str) else []
+    return [n for n in out if n.strip()]
+
+
+def _explicit_empty_failed_tests(params: Mapping) -> bool:
+    """True when the caller passed ``failed_tests`` as an empty list (top level or ``params.params``)
+    and no non-empty one."""
+    nested = params.get("params")
+    lists = [h.get(FAILED_TESTS_PARAM) for h in (params, nested if isinstance(nested, Mapping) else {})]
+    lists = [x for x in lists if isinstance(x, (list, tuple))]
+    return bool(lists) and not any(lists)
+
+
+def _retest_record(worktree_root: Path, run_id: Optional[str]) -> Optional[dict]:
+    """The run's retest record on disk, valid or not; None when absent, unreadable or not an object."""
+    if not run_id:
+        return None
+    try:
+        record = json.loads(fresh_verdict_path(worktree_root, run_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _retest_record_status(worktree_root: Path, run_id: Optional[str]) -> Optional[str]:
+    """Status in the run's retest record on disk, valid or not; None when absent or unreadable."""
+    record = _retest_record(worktree_root, run_id)
+    status = record.get("status") if record else None
+    return status if isinstance(status, str) else None
+
+
+def _stale_retest_note(worktree_root: Path, run_id: Optional[str]) -> str:
+    """Refusal suffix naming a retest record the tree has drifted from (HEAD moved or a covered
+    file changed), with the route that clears it."""
+    status = _retest_record_status(worktree_root, run_id)
+    if status is None:
+        return ""
+    if status == "stale":
+        return (
+            f"; the run's retest record (stale) ran no tests: re-run {RETEST_LAUNCHER}, "
+            f"or pass params.{FAILED_TESTS_PARAM}=[] after a passing retest"
+        )
+    return (
+        f"; the run's retest record ({status}) no longer matches the tree (HEAD or a covered file "
+        f"changed since it was written), so it is ignored: re-run {RETEST_LAUNCHER}, "
+        f"or pass params.{FAILED_TESTS_PARAM}=[] after a passing retest"
+    )
+
+
+def _failed_nodes(params: Mapping, verdict: Optional[Mapping]) -> list[str]:
+    """Failing node ids from every source the gate trusts, in order, deduplicated: the caller's
+    ``failed_tests`` (top level, then ``params.params``), the verdict's, the digest's named ones."""
+    nested = params.get("params")
+    holders = (params, nested if isinstance(nested, Mapping) else {}, verdict if isinstance(verdict, Mapping) else {})
+    out: list[str] = []
+    for holder in holders:
+        raw = holder.get(FAILED_TESTS_PARAM)
+        out += [str(n) for n in raw] if isinstance(raw, (list, tuple)) else [raw] if isinstance(raw, str) else []
+    out += named_failures(params.get("task_output_path"))
+    return list(dict.fromkeys(n.strip() for n in out if n.strip()))
+
+
+def _changed_since_base(worktree_root: Path, params: Mapping, run_id: Optional[str], files: list[str]) -> list[str]:
+    """The ``files`` not proven unchanged since the run base (all of them when no base is known)."""
+    base = run_base_for(worktree_root, run_id, params)
+    if not base:
+        return files
+    if _unchanged_since_base(worktree_root, base, files):
+        return []
+    if len(files) == 1:
+        return files
+    return [f for f in files if not _unchanged_since_base(worktree_root, base, [f])]
+
+
+def _unchanged_since_base(worktree_root: Path, base: str, paths: Sequence[str]) -> bool:
+    """True when every path is byte-identical in the worktree, HEAD and ``base``; in-process."""
+    from coordinator_core.git import ref_cas_retry
+    from coordinator_core.git.git_state import head_blobs, head_sha
+
+    head = head_sha(worktree_root)
+    if not head or ref_cas_retry.paths_unchanged_between(worktree_root, base, head, paths) is not True:
+        return False
+    blobs = head_blobs(worktree_root, paths)
+    for rel in paths:
+        entry = blobs.get(rel)
+        try:
+            data = (Path(worktree_root) / rel).read_bytes()
+        except OSError:
+            return entry is None
+        if entry is None or hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != entry[1]:
+            return False
+    return True
 
 
 def import_closure_findings(

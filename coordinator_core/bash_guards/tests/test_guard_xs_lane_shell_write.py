@@ -106,8 +106,7 @@ def test_python_heredoc_into_product_py_is_denied_unmeasurable(env):
     record = _run(root, cmd)
     assert record is not None and record.verdict_kind == "deny"
     assert "Budget unmeasurable (shell write not projectable)" in record.summary
-    assert "XS budget used 0/2 files, 0/30 lines; remaining 2 files, 30 lines." in record.summary
-    assert "one plain Edit" not in record.summary
+    assert "one plain Edit per file" in record.summary
 
 
 @pytest.mark.parametrize(

@@ -26,7 +26,8 @@ _KILL_SWITCH = "COORDINATOR_HOOK_NUDGE_EM_TURN_BUDGET_DISABLED"
 
 def pre_fire_text(turns: int, bar: int) -> str:
     return (
-        f"[em-turn-budget] {turns} turns before the first engine-ask, bar {bar}. " + fire_step()
+        f"[em-turn-budget] {turns} turns before the first engine-ask, bar {bar} "
+        "(THE-EM-FIRES-ENGINE-ASK-WITHOUT-A-PREFIRE-SURVEY). " + fire_step()
     )
 
 

@@ -319,17 +319,3 @@ def test_range_over_the_cap_is_not_expanded():
     wide = _anchors("P1", "P60")
     out = anchor_findings(wide, [_row(anchor="P1-P60")], [], "p")
     assert out[0].startswith("anchor-premise-unknown: P1-P60")
-
-
-def test_split_screen_refused_separates_unevaluable_from_malformed():
-    from coordinator_core.ops._anchor_premise import split_screen_refused
-
-    findings = [
-        "anchor-premise-unchecked: AP1 (pnpm is not allowed; allowed form: X)",
-        "anchor-premise-unchecked: AP2 (check must be {command, expect})",
-        "anchor-premise-unchecked: AP3 (id and claim must be non-blank strings)",
-        "anchor-premise-unchecked: AP4 (duplicate id)",
-    ]
-    kept, refused = split_screen_refused(findings)
-    assert [i for i, _ in refused] == ["AP1", "AP2"]
-    assert kept == findings[2:]

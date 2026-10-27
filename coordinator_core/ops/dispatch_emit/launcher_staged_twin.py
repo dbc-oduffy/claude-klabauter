@@ -110,10 +110,7 @@ def _resume_block(root: Path, run_id: str) -> dict | None:
         sizing = load_sizing(root, sizing_rel)
         edge = sizing.get("plan")
         plan_rel = edge if isinstance(edge, str) and edge.strip() else None
-        estimate = sizing.get("estimate")
-        size = estimate.get("tshirt") if isinstance(estimate, dict) else None
-        tshirt = size if isinstance(size, str) and size.strip() else None
-        block = {"arm": resolve_arm(sizing), "sizing_rel": sizing_rel, "plan_rel": plan_rel, "tshirt": tshirt}
+        block = {"arm": resolve_arm(sizing), "sizing_rel": sizing_rel, "plan_rel": plan_rel}
     except Exception:
         return None
     return {key: block[key] for key in _nested.STAGED_RESUME_FIELDS}

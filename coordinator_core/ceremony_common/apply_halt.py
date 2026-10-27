@@ -174,6 +174,15 @@ class UnrecognizedDirective(RuntimeError):
     pass
 
 
+def chosen_disposition(entry: Any) -> Any:
+    """The disposition a decisions entry chose: `disposition`, else `value` (only when
+    `disposition` is absent; `value` may be a payload beside a present `disposition`)."""
+    if not isinstance(entry, dict) and not hasattr(entry, "get"):
+        return None
+    chosen = entry.get("disposition")
+    return chosen if chosen else (None if "disposition" in entry else entry.get("value"))
+
+
 def _disposition_resolves_directive(
     judgment_point: dict[str, Any], chosen_value: str, directive_id: str
 ) -> bool:
@@ -248,7 +257,7 @@ def _directive_gate_open(
             decision = decisions.get(dep)
             if not isinstance(decision, dict):
                 return False
-            chosen_value = decision.get("disposition")
+            chosen_value = chosen_disposition(decision)
             if not chosen_value:
                 return False
             if not _disposition_resolves_directive(judgment_point, chosen_value, directive["id"]):

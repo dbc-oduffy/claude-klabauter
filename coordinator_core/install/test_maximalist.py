@@ -8,7 +8,7 @@ install-maximalist.sh's control flow, not from this port's own
 transcription):
   - `run_required` phases halt the WHOLE chain on first non-zero exit
     (`exit "$rc"` inside the bash helper) -- Test: halts_on_required_failure.
-  - `run_advisory` phases (Step 7
+  - `run_advisory` phases (Step 6 ensure-coordinator-venv, Step 7
     scaffold-canonical-structure) log a WARN and continue; the chain reaches
     every later phase and the overall exit code is 1 (FAILED), not the
     advisory phase's own rc -- Test: advisory_failure_continues_chain.
@@ -33,7 +33,7 @@ thin polyglot trampolines back into these same modules). The bash-stub-tree
 mechanism (`_BASH_SUB_SCRIPTS` / `_write_bash_stub`) this file used to build
 for those ten is retired along with them -- coverage moves to Python `_fake_*`
 monkeypatches, the same pattern already used for Step 6/Step 7/Step 3.5c
-(`_fake_scaffold` / `_fake_gen_settings_hooks`). Each
+(`_fake_ensure_venv` / `_fake_scaffold` / `_fake_gen_settings_hooks`). Each
 real engine module has its own co-located pytest coverage (test_capture_fan_out_threshold.py, etc.) -- this file only proves
 maximalist.py reaches each one, in order, with the right argv/rc-propagation,
 and that no `bash` subprocess is spawned to get there.
@@ -59,6 +59,7 @@ import pytest
 
 from coordinator_core.hooks import platform_localize as _platform_localize_module
 from coordinator_core.install import check_install_singularity as _singularity_module
+from coordinator_core.install import ensure_venv as _ensure_venv_module
 from coordinator_core.install import gen_settings_hooks as _gen_hooks_module
 from coordinator_core.install import maximalist
 from coordinator_core.install import scaffold_structure as _scaffold_module
@@ -121,6 +122,23 @@ def _make_recording_record_setup_concluded(receipts):
         return int(os.environ.get(_rc_env("coordinator-setup-state"), "0"))
 
     return _record
+
+
+def _fake_ensure_venv(plugin_root, settings_home_path, *, claude_home=None, check_only=False, **kwargs):
+    """Stands in for coordinator_core.install.ensure_venv.ensure_coordinator_venv
+    -- logs a call-log line (ordering assertions) and honors the same
+    RC_ENSURE_COORDINATOR_VENV env-var failure-injection convention the
+    other fakes use, without touching real disk/pip/network."""
+    call_log = Path(os.environ["CALL_LOG"])
+    suffix = " --check" if check_only else ""
+    with call_log.open("a") as f:
+        f.write(f"ensure-coordinator-venv{suffix}\n")
+    rc = int(os.environ.get("RC_ENSURE_COORDINATOR_VENV", "0"))
+    if rc != 0:
+        raise _ensure_venv_module.EnsureVenvError(
+            f"[ensure-coordinator-venv] simulated failure (rc={rc})"
+        )
+    return "would-rebuild" if check_only else "rebuilt"
 
 
 def _fake_scaffold(root, manifest_root, *, dry_run=False):
@@ -244,6 +262,9 @@ def stub_env(tmp_path, monkeypatch):
     settings_home.mkdir(parents=True, exist_ok=True)
     settings_bin_dir = settings_home / "bin"
     monkeypatch.setattr(_substrate_module, "run", _make_stub_substrate_run(settings_bin_dir))
+    # Step 6 is native (Port B) -- stand in for the real venv-ensure logic,
+    # which has its own co-located coverage in test_ensure_venv.py.
+    monkeypatch.setattr(_ensure_venv_module, "ensure_coordinator_venv", _fake_ensure_venv)
     # Step 7 is native (Port D) -- stand in for the real scaffold logic,
     # which has its own co-located coverage in test_scaffold_structure.py.
     monkeypatch.setattr(_scaffold_module, "scaffold_canonical_structure", _fake_scaffold)
@@ -355,6 +376,10 @@ def test_full_success_returns_zero_and_calls_every_phase_in_order(stub_env):
         "gen-claude-author-launcher",
         "gen-settings-hooks",
         "register-coordinator-mirror",
+        # Step 6 (ensure-coordinator-venv) is break-glass only
+        # (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4, AC5) --
+        # skipped by default here since `run()` is called without
+        # `allow_venv_fallback=True`.
         "scaffold-canonical-structure",
         "check-install-singularity",
         "capture-fan-out-threshold",
@@ -365,6 +390,7 @@ def test_full_success_returns_zero_and_calls_every_phase_in_order(stub_env):
     # asserted here; unrelated interleavings (e.g. no calls at all between
     # two adjacent expected names) aren't expected given the stub tree.
     assert names == expected_order
+    assert "ensure-coordinator-venv" not in names
 
 
 def test_registry_seeds_run_before_install_health_run(stub_env, capsys):
@@ -429,8 +455,34 @@ def test_halts_on_required_failure(stub_env, monkeypatch):
 
 
 def test_advisory_failure_continues_chain_to_completion(stub_env, monkeypatch):
-    # Step 7 scaffold-canonical-structure is the advisory phase injected here.
-    monkeypatch.setenv("RC_SCAFFOLD_CANONICAL_STRUCTURE", "1")
+    # Step 6 only runs at all under the explicit break-glass opt-in
+    # (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4, AC5) --
+    # this test proves the advisory-failure disposition still holds when
+    # a caller passes it.
+    monkeypatch.setenv("RC_ENSURE_COORDINATOR_VENV", "1")
+    rc = maximalist.run(
+        check_only=False,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=str(stub_env["doe_clone"]),
+        claude_home_dir=str(stub_env["claude_home"]),
+        allow_venv_fallback=True,
+    )
+    # Overall run reports FAILED (1) even though no phase halted early.
+    assert rc == 1
+    names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
+    assert "ensure-coordinator-venv" in names
+    # Every later phase still ran; the advisory failure withholds the receipt.
+    assert "scaffold-canonical-structure" in names
+    assert "check-install-singularity" in names
+    assert "coordinator-setup-state" not in names
+
+
+def test_ensure_venv_skipped_by_default_without_allow_venv_fallback(stub_env):
+    """Step 6 (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4,
+    AC5): with no `allow_venv_fallback` opt-in, `ensure_coordinator_venv` is
+    never reached -- the chain still completes successfully."""
     rc = maximalist.run(
         check_only=False,
         non_interactive=True,
@@ -439,13 +491,11 @@ def test_advisory_failure_continues_chain_to_completion(stub_env, monkeypatch):
         doe_clone=str(stub_env["doe_clone"]),
         claude_home_dir=str(stub_env["claude_home"]),
     )
-    # Overall run reports FAILED (1) even though no phase halted early.
-    assert rc == 1
+    assert rc == 0
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
+    assert "ensure-coordinator-venv" not in names
     assert "scaffold-canonical-structure" in names
-    # Every later phase still ran; the advisory failure withholds the receipt.
-    assert "check-install-singularity" in names
-    assert "coordinator-setup-state" not in names
+    assert "coordinator-setup-state" in names
 
 
 def test_step7_scaffold_raw_oserror_is_advisory_not_fatal(stub_env, monkeypatch):
@@ -495,22 +545,33 @@ def test_check_only_skips_mutating_not_singularity(stub_env):
     # check-install-singularity has NO check-only guard in the oracle --
     # it always runs.
     assert "check-install-singularity" in names
+    # Step 6 (ensure-coordinator-venv) is break-glass only
+    # (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4, AC5) --
+    # skipped here regardless of --check-only, since no allow_venv_fallback
+    # opt-in was passed.
+    assert "ensure-coordinator-venv" not in names
     # Read-only phases still ran with --check-only forwarded.
     log_text = stub_env["call_log"].read_text()
     assert "gen-claude-author-launcher --check-only" in log_text
     assert "scaffold-canonical-structure --dry-run" in log_text
 
 
-def test_allow_venv_fallback_flag_is_rejected():
-    with pytest.raises(maximalist._UsageError):
-        maximalist._parse_args(["--allow-venv-fallback"])
-
-
-def test_compileall_interpreters_resolves_path_python(monkeypatch):
-    monkeypatch.setattr(maximalist.shutil, "which", lambda n: "/x/python3" if n == "python3" else None)
-    assert maximalist._compileall_interpreters() == ["/x/python3"]
-    monkeypatch.setattr(maximalist.shutil, "which", lambda n: None)
-    assert maximalist._compileall_interpreters() == []
+def test_check_only_with_allow_venv_fallback_still_forwards_check_to_ensure_venv(stub_env):
+    """Step 6 (docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4,
+    AC5): once the break-glass opt-in is passed, --check-only must still
+    forward through to `ensure_coordinator_venv`'s own dry-run mode."""
+    rc = maximalist.run(
+        check_only=True,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=str(stub_env["doe_clone"]),
+        claude_home_dir=str(stub_env["claude_home"]),
+        allow_venv_fallback=True,
+    )
+    assert rc == 0
+    log_text = stub_env["call_log"].read_text()
+    assert "ensure-coordinator-venv --check" in log_text
 
 
 def test_compileall_failure_is_advisory_not_fatal(stub_env, monkeypatch):
@@ -1166,8 +1227,8 @@ def test_check_only_run_writes_no_stamp(stub_env):
 
 
 def test_advisory_failure_writes_no_stamp(stub_env, monkeypatch, capsys):
-    monkeypatch.setenv("RC_SCAFFOLD_CANONICAL_STRUCTURE", "1")
-    assert _run_live(stub_env) == 1
+    monkeypatch.setenv("RC_ENSURE_COORDINATOR_VENV", "1")
+    assert _run_live(stub_env, allow_venv_fallback=True) == 1
     assert stub_env["receipts"] == []
     assert "receipt not written: an advisory phase failed" in capsys.readouterr().out
 

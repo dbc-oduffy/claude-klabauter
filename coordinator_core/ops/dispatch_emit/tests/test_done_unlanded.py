@@ -40,7 +40,7 @@ def test_missing_report_dir(tmp_path):
 
 
 def test_regex_parity_with_terminal_commit():
-    from coordinator_core.ops.dispatch_emit.terminal_commit_ledger import _is_delivered_report
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _is_delivered_report
 
     samples = [
         "DONE: x", "DONE_WITH_CONCERNS: x", "status: DONE\n", "status: DONE_WITH_CONCERNS",

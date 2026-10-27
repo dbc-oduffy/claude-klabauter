@@ -1,7 +1,7 @@
 """_close_block reports an already-landed refire's legs not-applicable, a genuine non-landing failed."""
 
 from coordinator_core.ops.dispatch_emit import run_close
-from coordinator_core.ops.dispatch_emit.terminal_commit_closeout import _close_block
+from coordinator_core.ops.dispatch_emit.terminal_commit import _close_block
 
 
 def _ctx(tmp_path):

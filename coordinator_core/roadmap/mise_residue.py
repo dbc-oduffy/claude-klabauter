@@ -29,7 +29,10 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
-from coordinator_core.session.record_homes import home_dir
+
+#: Repo-relative home of the per-run seam findings files. `.coordinator-local/` is git-ignored in
+#: every consumer repo, so the sidecars need no ignore line and are never landed.
+SEAM_HOME = ".coordinator-local/mise-workflows"
 from coordinator_core.roadmap import census as _census  # uses its private _split_stages/_PY_HEADS
 
 SCHEMA = "mise-prep-residue-args/4"
@@ -261,7 +264,7 @@ def _collision_refs(short_rows: Iterable[dict], run_id: str) -> dict[str, dict]:
         stem = Path(plan).stem
         if stems.setdefault(stem, plan) != plan:
             raise ValueError(f"plan stem {stem!r} names both {stems[stem]} and {plan}")
-        out[plan] = {"path": Path(home_dir("", "mise-workflows"), f"{run_id}.seam", f"{stem}.txt").as_posix(), "lines": lines}
+        out[plan] = {"path": Path(SEAM_HOME, f"{run_id}.seam", f"{stem}.txt").as_posix(), "lines": lines}
     return out
 
 

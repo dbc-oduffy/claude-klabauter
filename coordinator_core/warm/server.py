@@ -621,7 +621,9 @@ def _run_dispatch(
     import time as _time
 
     from coordinator_core.ipc import (
+        LATE_COMPLETION,
         MEASUREMENT_SCOPE_PROCESS_WIDE,
+        LateCompletion,
         dispatch_message,
         record_op_process_time,
         resolve_caller_cwd,
@@ -692,9 +694,19 @@ def _run_dispatch(
             isolated=isolated,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = asyncio.run(
-                    dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
+                _late = LateCompletion(
+                    sink=(lambda env: _stamp_dispatch_outcome(dispatch_key, env))
+                    if dispatch_key is not None
+                    else None
                 )
+                _late_token = LATE_COMPLETION.set(_late)
+                try:
+                    response = asyncio.run(
+                        dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
+                    )
+                finally:
+                    LATE_COMPLETION.reset(_late_token)
+                _late_envelope = _late.late_envelope()
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)
@@ -746,7 +758,7 @@ def _run_dispatch(
     if _stderr_lines and isinstance(response, dict):
         response = {**response, "_stderr": "\n".join(_stderr_lines)}
     if dispatch_key is not None:
-        _stamp_dispatch_outcome(dispatch_key, response)
+        _stamp_dispatch_outcome(dispatch_key, _late_envelope or response)
     return response
 
 
@@ -928,7 +940,9 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
     import time as _time
 
     from coordinator_core.ipc import (
+        LATE_COMPLETION,
         MEASUREMENT_SCOPE_PER_OP_PROCESS,
+        LateCompletion,
         dispatch_message,
         record_op_process_time,
         resolve_caller_cwd,
@@ -966,9 +980,17 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
             isolated=True,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
-                response = _run_joining_handler(
-                    dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
-                )
+                _late = LateCompletion()
+                _late_token = LATE_COMPLETION.set(_late)
+                try:
+                    response = _run_joining_handler(
+                        dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
+                    )
+                finally:
+                    LATE_COMPLETION.reset(_late_token)
+                _late_envelope = _late.late_envelope()
+                if _late_envelope is not None:
+                    response = _late_envelope
     finally:
         _process_ms = (_time.process_time() - _process_start) * 1000.0
         _repo_root = resolve_request_repo(msg) or resolve_caller_cwd(msg)

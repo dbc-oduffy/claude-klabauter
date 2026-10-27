@@ -64,10 +64,6 @@ def repo(tmp_path):
     (root / "gone.txt").write_bytes(b"committed\n")
     _git(root, "add", "-A")
     _git(root, "update-index", "--chmod=+x", "run.sh")
-    # `commit -a` below re-stages from the work tree; a 0644 work file would
-    # silently downgrade the index's 0755 (core.filemode=true hosts).
-    if os.name != "nt":
-        (root / "run.sh").chmod(0o755)
     _git(root, "commit", "-q", "-m", "one")
     first = _git(root, "rev-parse", "HEAD")
     (root / "pkg" / "mod.py").write_bytes(b"VALUE = 2\n")

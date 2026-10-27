@@ -105,20 +105,6 @@ def test_review_blocked_halt_returns_the_engine_ask_refire():
     assert "fix the" not in json.dumps(action).lower()
 
 
-def test_python_envelope_carries_the_one_shared_rule():
-    env = hr.refire_next_action(call=fire_command(_SIZING), run_id="run-1", sizing=_SIZING, halted="review_blocked")
-    assert env[hr.EM_RULE_KEY] == hr.EM_ACTION_AFTER_HALT_RULE
-    assert hr.is_refire_next_action(env)
-    assert "refire" in hr.EM_ACTION_AFTER_HALT_RULE and "workflow.revise" in hr.EM_ACTION_AFTER_HALT_RULE
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_emitted_finaliser_carries_the_same_rule_string():
-    halted = _run_finaliser("{ halted: 'ledger-check', next_action: 'x' }")
-    assert halted["next_action"][hr.EM_RULE_KEY] == hr.EM_ACTION_AFTER_HALT_RULE
-
-
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_pulled_plan_refusal_nests_the_ruling_under_input():

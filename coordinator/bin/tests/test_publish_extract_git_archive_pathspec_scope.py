@@ -85,9 +85,12 @@ def _resolved_inject_srcs() -> "list[str]":
 def test_pathspec_covers_every_contributing_root_and_inject_src():
     pathspec = publish._required_pathspec_for_toplevel(publish._REPO_ROOT)
     assert pathspec, "expected a non-empty pathspec for this repo's own toplevel"
+    tracked = publish._tracked_paths_at_sha(
+        publish._REPO_ROOT, publish._git_rev_parse(publish._REPO_ROOT, "HEAD")
+    )
 
     for root in _resolved_contributing_roots():
-        if not root.is_dir():
+        if not root.is_dir() or not publish._path_tracked_at_sha(root, publish._REPO_ROOT, tracked):
             continue
         root_toplevel = publish._git_rev_parse(root, "--show-toplevel")
         if root_toplevel is None or Path(root_toplevel).resolve() != publish._REPO_ROOT.resolve():
@@ -275,3 +278,32 @@ def test_scoped_extraction_covers_fewer_files_than_full_tree():
         import shutil
 
         shutil.rmtree(shadow, ignore_errors=True)
+
+
+def test_root_on_disk_but_untracked_at_sha_is_left_out(tmp_path, monkeypatch):
+    root = tmp_path / "tracked-repo"
+    root.mkdir()
+    for args in (["init", "-q", "-b", "main"], ["config", "user.email", "c5-test@claude-klabauter.test"],
+                 ["config", "user.name", "C5 Test"], ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", "-C", str(root), *args], check=True, creationflags=_NO_WINDOW)
+    committed = root / "src"
+    committed.mkdir()
+    (committed / "file.txt").write_bytes(b"hello\n")
+    subprocess.run(["git", "-C", str(root), "add", "src"], check=True, creationflags=_NO_WINDOW)
+    subprocess.run(["git", "-C", str(root), "commit", "-q", "-m", "init"], check=True, creationflags=_NO_WINDOW)
+    sha = publish._git_rev_parse(root, "HEAD")
+    uncommitted = root / "pending"
+    uncommitted.mkdir()
+    (uncommitted / "page.md").write_bytes(b"draft\n")
+
+    monkeypatch.setattr(publish, "_REPO_ROOT", root)
+    monkeypatch.setattr(publish, "load_targets", lambda *a, **k: [
+        f"committed|copy|{committed}|{tmp_path / 'dest'}",
+        f"pending|copy|{uncommitted}|{tmp_path / 'dest'}",
+    ])
+    monkeypatch.setattr(publish, "_all_inject_srcs_resolved", lambda *a, **k: [])
+
+    pathspec = publish._required_pathspec_for_toplevel(root, sha)
+
+    assert publish._relative_pathspec_entry(committed, root) in pathspec
+    assert publish._relative_pathspec_entry(uncommitted, root) not in pathspec

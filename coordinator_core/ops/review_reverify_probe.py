@@ -22,10 +22,9 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from coordinator_core.atomic_replace import atomic_write_bytes
-from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun, blocks, owns_path
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.declared_writes import declare_write
 
@@ -65,29 +64,18 @@ def is_open(snapshot_dir: Path) -> bool:
 
 
 def open_probe(
-    repo_root: Path,
-    snapshot_dir: Path,
-    writes: Dict[str, bytes],
-    rerun: List[str],
-    run_id: str = "",
-    live_runs: Optional[Mapping[str, LiveRun]] = None,
+    repo_root: Path, snapshot_dir: Path, writes: Dict[str, bytes], rerun: List[str]
 ) -> dict:
     """Stash current bytes, record them, then write ``writes`` into the tree.
 
-    Refuses (``error``, nothing written) when a probe is already open, a path escapes the root, a
-    path has no current file to stash, or (with ``live_runs``) a path is another live run's withheld
-    or claimed path. A write that fails midway restores every path already probed.
+    Refuses (``error``, nothing written) when a probe is already open, a path escapes the root or a
+    path has no current file to stash.
     """
     repo_root, snapshot_dir = Path(repo_root), Path(snapshot_dir)
     out = {"probed": [], "rerun": list(rerun), "record": str(snapshot_dir / _PROBE), "error": None}
     if is_open(snapshot_dir):
         out["error"] = "a probe is already open; close it first"
         return out
-    if live_runs:
-        foreign = sorted(r for r in writes if blocks(owns_path(run_id, r, live_runs)))
-        if foreign:
-            out["error"] = "path outside this run (another live run's): " + ", ".join(foreign)
-            return out
     current: Dict[str, bytes] = {}
     for rel in writes:
         target = repo_root / rel
@@ -106,24 +94,8 @@ def open_probe(
         _put(snapshot_dir / _STASH / post, current[rel])
         files[rel] = {"post": post, "probe": _sha(writes[rel])}
     _put_json(snapshot_dir / _PROBE, {"opened_at": _now(), "rerun": list(rerun), "files": files})
-    done: List[str] = []
-    try:
-        for rel in sorted(writes):
-            _put(repo_root / rel, writes[rel])
-            done.append(rel)
-    except Exception as exc:
-        stuck: List[str] = []
-        for rel in done:
-            try:
-                _put(repo_root / rel, current[rel])
-            except Exception:  # keep probe.json: close_probe restores from the stash
-                stuck.append(rel)
-        if stuck:
-            out["error"] = f"probe write failed: {exc}; restore failed for {', '.join(stuck)}, probe left open"
-            return out
-        (snapshot_dir / _PROBE).unlink(missing_ok=True)
-        out["error"] = f"probe write failed, {len(done)} path(s) restored: {exc}"
-        return out
+    for rel in sorted(writes):
+        _put(repo_root / rel, writes[rel])
     out["probed"] = sorted(writes)
     return out
 

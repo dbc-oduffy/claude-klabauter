@@ -96,6 +96,14 @@ def test_claude_md_class_path_gets_the_grant_route_variant(rel):
         assert needle in text
 
 
+@pytest.mark.parametrize("rel", ["src/x.py", "CLAUDE.md"])
+def test_every_deny_variant_names_the_commit_route(rel):
+    from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
+
+    assert COMMIT_ROUTE in _reason(pf.deny_envelope((ROOT + "/" + rel,)))
+    assert COMMIT_ROUTE in _reason(pf.deny_envelope())
+
+
 def test_other_path_keeps_the_generic_deny():
     env = pf.deny_envelope((ROOT + "/src/x.py",))
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -187,63 +195,57 @@ def test_row_surface_lookup_is_inside_the_bar(em_repo):
     assert time.perf_counter() - t < 0.5
 
 
-def _index(paths, version=2, extension=b""):
-    body = b"DIRC" + version.to_bytes(4, "big") + len(paths).to_bytes(4, "big")
-    for p in paths:
-        name = p.encode()
-        entry = b"\x00" * 60 + len(name).to_bytes(2, "big") + name
-        body += entry + b"\x00" * (8 - len(entry) % 8)
-    return body + extension + b"\x00" * 20
+_OWNED_SID = "sess-owned-scope"
 
 
-def _repo(tmp_path, index=None):
-    (tmp_path / ".git").mkdir()
-    if index is not None:
-        (tmp_path / ".git" / "index").write_bytes(index)
-    return str(tmp_path)
+@pytest.fixture
+def owned_repo(tmp_path, monkeypatch):
+    """Repo whose session holds one landed run (no halt marker); `halted_repo` adds a halted run."""
+    import coordinator_core.machine_profile as machine_profile
+    from coordinator_core.hooks import _em_write_budget as leaf
+    from coordinator_core.hooks import nudge_em_code_dispatch as mod
+
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "scripts").mkdir()
+    for target in (mod, leaf):
+        monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    monkeypatch.setattr(leaf, "_is_scratch_or_tmp", lambda p: False)
+    monkeypatch.setattr(machine_profile, "guard_level", lambda name: "warn")
+    _runs(monkeypatch, ["landed-run"])
+    return repo
 
 
-def test_empty_untracked_true_when_index_lacks_the_path(tmp_path):
-    root = _repo(tmp_path, _index(["a.py", "dir/b.py"]))
-    (tmp_path / "=").write_bytes(b"")
-    assert pf.is_empty_untracked(str(tmp_path / "="), root) is True
+def _edit(repo, rel):
+    return {
+        "tool_name": "Edit",
+        "session_id": _OWNED_SID,
+        "cwd": str(repo),
+        "tool_input": {"file_path": str(repo / rel), "old_string": "a = 1\n", "new_string": "a = f(1)\n"},
+    }
 
 
-def test_empty_untracked_false_when_tracked(tmp_path):
-    root = _repo(tmp_path, _index(["a.py", "="]))
-    (tmp_path / "=").write_bytes(b"")
-    assert pf.is_empty_untracked(str(tmp_path / "="), root) is False
+def _post_fire_denied(result) -> bool:
+    if not result:
+        return False
+    out = result["hookSpecificOutput"]
+    return out.get("permissionDecision") == "deny" and "already fired engine-ask" in out.get(
+        "permissionDecisionReason", ""
+    )
 
 
-def test_empty_untracked_false_when_nonempty_missing_or_symlink(tmp_path):
-    root = _repo(tmp_path, _index(["a.py"]))
-    (tmp_path / "f").write_bytes(b"x")
-    assert pf.is_empty_untracked(str(tmp_path / "f"), root) is False
-    assert pf.is_empty_untracked(str(tmp_path / "nope"), root) is False
-    (tmp_path / "empty").write_bytes(b"")
-    (tmp_path / "ln").symlink_to(tmp_path / "empty")
-    assert pf.is_empty_untracked(str(tmp_path / "ln"), root) is False
+@pytest.mark.parametrize("rel", ["scripts/retire_scratch_junctions.py", "scripts/test_retire_scratch_junctions.py"])
+def test_landed_only_session_may_write_unowned_xs_paths(owned_repo, rel):
+    from coordinator_core.hooks import nudge_em_code_dispatch as mod
+
+    assert not _post_fire_denied(mod.op(_edit(owned_repo, rel)))
 
 
-def test_empty_untracked_false_on_v4_link_extension_and_unreadable_index(tmp_path):
-    (tmp_path / "=").write_bytes(b"")
-    target = str(tmp_path / "=")
-    assert pf.is_empty_untracked(target, _repo(tmp_path)) is False
-    (tmp_path / ".git" / "index").write_bytes(_index(["a.py"], version=4))
-    assert pf.is_empty_untracked(target, str(tmp_path)) is False
-    link = b"link" + (0).to_bytes(4, "big")
-    (tmp_path / ".git" / "index").write_bytes(_index(["a.py"], extension=link))
-    assert pf.is_empty_untracked(target, str(tmp_path)) is False
-    (tmp_path / ".git" / "index").write_bytes(b"garbage")
-    assert pf.is_empty_untracked(target, str(tmp_path)) is False
+def test_halted_runs_withheld_path_stays_denied(owned_repo, monkeypatch):
+    _runs(monkeypatch, ["landed-run", "halted-run"])
+    from coordinator_core.hooks import nudge_em_code_dispatch as mod
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 
-
-def test_empty_untracked_resolves_a_gitdir_file(tmp_path):
-    gitdir = tmp_path / "wt-gitdir"
-    gitdir.mkdir()
-    (gitdir / "index").write_bytes(_index(["a.py"]))
-    root = tmp_path / "wt"
-    root.mkdir()
-    (root / ".git").write_text(f"gitdir: {gitdir}\n")
-    (root / "=").write_bytes(b"")
-    assert pf.is_empty_untracked(str(root / "="), str(root)) is True
+    idx.add_run(owned_repo, "halted-run", ["scripts/withheld.py"])
+    assert _post_fire_denied(mod.op(_edit(owned_repo, "scripts/withheld.py")))
+    assert not _post_fire_denied(mod.op(_edit(owned_repo, "scripts/unowned.py")))

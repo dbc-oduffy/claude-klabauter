@@ -171,17 +171,14 @@ from typing import Optional
 from coordinator_core.bash_guards._override_log_path import NO_SESSION_BUCKET
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
 from coordinator_core.bash_guards._write_bump_session_start import (
-    _RECORD_FILENAME as _SESSION_RECORD_FILENAME,
-    _read_settings_home_record,
     read_session_start_record,
 )
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     _host_is_windows,
     nearest_existing_ancestor,
 )
-from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.machine_resolver import _flatten, _load_toml, registry_dir
-from coordinator_core.session.core import now_iso, session_dir, sessions_dir
+from coordinator_core.session.core import now_iso, session_dir
 from coordinator_core.trusted_root_guard import _home_from_env, _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import (
     casefold_path,
@@ -550,58 +547,6 @@ def resolve_launch_anchor(
     env = os.environ if env is None else env
     fallback = env.get("CLAUDE_PROJECT_DIR")
     return fallback or None
-
-
-def _toplevel_key(path: Optional[str]) -> Optional[str]:
-    """normcase+realpath of `path`'s enclosing repo toplevel, or None (walk only, no spawn)."""
-    if not path:
-        return None
-    try:
-        top = show_toplevel(path)
-        if not top:
-            return None
-        return os.path.normcase(os.path.realpath(top))
-    except Exception:
-        return None
-
-
-def launch_anchor_disagreement(
-    session_id: str, cwd: Optional[str], env: Optional[dict] = None
-) -> Optional[tuple[str, str]]:
-    """`(anchor_path, launch_path)` when the session's anchor repo and its launch repo
-    resolve to different `show_toplevel`s, else `None`.
-
-    Anchor is `resolve_launch_anchor`. Launch is `CLAUDE_PROJECT_DIR` when `env` carries it,
-    else the in-repo record under `cwd`'s `sessions_dir` when it differs from the data-root
-    record. FAIL OPEN: no session, no launch source, or either side not resolving to a repo
-    returns `None`. The returned paths are the raw recorded values, for the refusal message.
-    """
-    try:
-        if not session_id:
-            return None
-        anchor = resolve_launch_anchor(session_id, cwd=cwd, env=env)
-        if not anchor:
-            return None
-        env_map = os.environ if env is None else env
-        launch = env_map.get("CLAUDE_PROJECT_DIR") or None
-        if not launch:
-            base = sessions_dir(cwd)
-            if not base:
-                return None
-            record = Path(base) / session_id / _SESSION_RECORD_FILENAME
-            if not record.is_file():
-                return None
-            in_repo = record.read_text(encoding="utf-8").strip()
-            if not in_repo or in_repo == _read_settings_home_record(session_id, env):
-                return None
-            launch = in_repo
-        anchor_top = _toplevel_key(anchor)
-        launch_top = _toplevel_key(launch)
-        if anchor_top is None or launch_top is None or anchor_top == launch_top:
-            return None
-        return (anchor, launch)
-    except Exception:
-        return None
 
 
 def _anchor_is_under_claude_home(anchor: str, env: Optional[dict] = None) -> bool:

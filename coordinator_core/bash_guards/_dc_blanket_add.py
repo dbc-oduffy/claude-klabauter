@@ -34,6 +34,7 @@ from coordinator_core.bash_guards._dc_shell_text import (
     _join_backslash_newlines,
     _shell_c_unwrap_payloads,
 )
+from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 from coordinator_core.bash_guards._rewrite_support import _alt_record, _crlf_strip, _offer, _override
@@ -479,8 +480,8 @@ def check_blanket_git_add(
                 return result
         return None
 
-    _kw = dict(report="the blanket git add or commit you need", authorize="the sweep of sibling sessions' edits")
-    _pick = _offer("git commit -m <subject> -- path/to/file", "the subject and path")
+    _REPORT = "the blanket git add or commit you need"
+    _AUTHORIZE = "the sweep of sibling sessions' edits"
     if commit_matched_cmd and not matched_cmd:
         _commit_note = operator_override_note(
             "COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload, git_root=git_root
@@ -489,14 +490,16 @@ def check_blanket_git_add(
             "BLOCKED: this 'git commit' names a pathspec that sweeps in "
             "sibling sessions' edits (SC-DR-014, COMMIT-side). Matched: %s\n\n"
             "Use instead:\n"
-            "  git commit -m <subject> -- path/to/file"
-            % (commit_matched_cmd,)
+            "  %s"
+            % (commit_matched_cmd, COMMIT_ROUTE)
         ) + ("\n\nOr: %s" % _commit_note if _commit_note else "")
         return _alt_record(
             "deny", "blanket-git-add",
             "BLOCKED: this 'git commit' names a pathspec that sweeps in sibling sessions' "
             "edits (SC-DR-014, COMMIT-side). Matched: %s" % (commit_matched_cmd,),
-            (_pick,), "COORDINATOR_OVERRIDE_BLANKET_ADD", em_text=commit_reason, **_kw,
+            (_offer(COMMIT_ROUTE, "the params file"),),
+            "COORDINATOR_OVERRIDE_BLANKET_ADD", em_text=commit_reason,
+            report=_REPORT, authorize=_AUTHORIZE,
         )
     _add_note = operator_override_note(
         "COORDINATOR_OVERRIDE_BLANKET_ADD", payload=hook_payload, git_root=git_root
@@ -505,29 +508,16 @@ def check_blanket_git_add(
         "BLOCKED: blanket `git add` sweeps in sibling sessions' edits "
         "(SC-DR-014). Matched: %s\n\n"
         "Use instead:\n"
-        "  git add -- path/to/file\n"
-        "  git commit -m <subject> -- path/to/file\n\n"
-        "For many files (keep only yours), use instead:\n"
-        "  git ls-files -om --exclude-standard -- <dir> > \"${TMPDIR:-/tmp}/p\"\n"
-        "  git add --pathspec-from-file=\"${TMPDIR:-/tmp}/p\"\n"
-        "  git commit -m <subject> --pathspec-from-file=\"${TMPDIR:-/tmp}/p\""
-        % (matched_cmd,)
+        "  %s"
+        % (matched_cmd, COMMIT_ROUTE)
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _alt_record(
         "deny", "blanket-git-add",
         "BLOCKED: blanket `git add` sweeps in sibling sessions' edits (SC-DR-014). "
         "Matched: %s" % (matched_cmd,),
-        (
-            _offer("git add -- path/to/file", "the path"),
-            _pick,
-            _offer(
-                'git ls-files -om --exclude-standard -- <dir> > "${TMPDIR:-/tmp}/p"; '
-                'git add --pathspec-from-file="${TMPDIR:-/tmp}/p"; '
-                'git commit -m <subject> --pathspec-from-file="${TMPDIR:-/tmp}/p" (many files, keep only yours)',
-                "the dir and subject",
-            ),
-        ),
-        "COORDINATOR_OVERRIDE_BLANKET_ADD", em_text=reason, **_kw,
+        (_offer(COMMIT_ROUTE, "the params file"),),
+        "COORDINATOR_OVERRIDE_BLANKET_ADD", em_text=reason,
+        report=_REPORT, authorize=_AUTHORIZE,
     )
 
 

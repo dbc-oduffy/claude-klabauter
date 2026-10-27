@@ -38,6 +38,8 @@ def test_admitted_key_reads_executing_then_abandoned_past_the_bound():
     assert store.admit(key, _METHOD)
     assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING}
     time.sleep(0.1)
+    assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING, "overdue": True}
+    time.sleep(0.5)
     assert store.status(key) == {
         "state": dispatch_ack.STATE_UNKNOWABLE,
         "reason": dispatch_ack.OUTCOME_ABANDONED,
@@ -48,7 +50,7 @@ def test_late_stamp_after_the_bound_still_finishes_the_key():
     store = _bounded_store()
     key = dispatch_ack.mint_key()
     store.admit(key, _METHOD)
-    time.sleep(0.1)
+    time.sleep(0.6)
     assert store.status(key)["state"] == dispatch_ack.STATE_UNKNOWABLE
     store.stamp(key, dispatch_ack.OUTCOME_RESULT, result={"ok": 1})
     status = store.status(key)
@@ -62,7 +64,7 @@ def test_wait_on_a_past_bound_key_returns_unknowable_within_its_timeout():
     store = _bounded_store()
     key = dispatch_ack.mint_key()
     store.admit(key, _METHOD)
-    time.sleep(0.1)
+    time.sleep(0.6)
     t0 = time.monotonic()
     status = store.wait(key, 0.2)
     assert time.monotonic() - t0 < 2.0
@@ -172,6 +174,7 @@ def test_blocked_worker_reads_abandoned_then_finishes_when_released(tmp_path, mo
         assert _wait_for(lambda: (tmp_path / "blocked.started").exists())
         assert server._ack_store.status(key)["state"] == dispatch_ack.STATE_EXECUTING
 
+        assert _wait_for(lambda: server._ack_store.status(key).get("overdue") is True, 30.0)
         assert _wait_for(lambda: server._ack_store.status(key)["state"] != dispatch_ack.STATE_EXECUTING, 30.0)
         status = server._ack_store.status(key)
         assert status["state"] == dispatch_ack.STATE_UNKNOWABLE

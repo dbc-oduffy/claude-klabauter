@@ -181,23 +181,8 @@ def build_close_block(
     completion_entry: Any = None,
     *,
     kind: str = "plan-run",
-    parts: Any = None,
-    run_dir: Optional[Union[str, os.PathLike]] = None,
-    arm: Optional[str] = None,
-    tshirt: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build ``{applies, kind, run_id, legs, outstanding, completion_entry}``.
-
-    *parts* is a ``run_truth_contract.Close``; when given the block also carries ``outcome``,
-    ``open_parts`` and ``missing_receipts``.
-
-    *run_dir* is the run's ``state/warp/<run_id>``: when its ``receipts/`` dir exists, a mandatory
-    stage (for *arm* and *tshirt*; unknown means every stage) with no receipt makes the block
-    ``outcome: refused`` and names each stage in ``missing_receipts``. A run with no ``receipts/``
-    dir predates the receipt writers: the block says ``receipts: not-applicable`` and never refuses.
-    Trap: no compose stage calls the writer op (``stage_receipts`` ``dispatch.write_receipt``) yet, so a run
-    whose receipts dir exists is refused for every mandatory stage no caller wrote, a false refusal of a
-    valid run.
 
     ``outstanding`` is every run-bound leg whose status is ``failed``. With ``applies``
     false every run-bound leg is ``not-applicable``. *kind* must be in ``CLOSE_KINDS``.
@@ -219,7 +204,7 @@ def build_close_block(
     for leg in SESSION_BOUND_LEGS:
         out[leg] = LegResult("session-bound").to_dict()
     outstanding = [leg for leg in RUN_BOUND_LEGS if out[leg]["status"] == "failed"]
-    block: dict[str, Any] = {
+    return {
         "applies": applies,
         "kind": kind,
         "run_id": run_id,
@@ -227,39 +212,6 @@ def build_close_block(
         "outstanding": outstanding,
         "completion_entry": completion_entry,
     }
-    if parts is not None:
-        from coordinator_core.ops.dispatch_emit.run_close_parts import with_parts
-
-        block = with_parts(block, parts)
-    if run_dir is not None:
-        if not (Path(run_dir) / "receipts").is_dir():
-            block["receipts"] = "not-applicable: run has no receipts dir (fired before the receipt writers)"
-        else:
-            from coordinator_core.ops.dispatch_emit import stage_receipts
-
-            gone = list(block.get("missing_receipts") or [])
-            gone += [s for s in stage_receipts.missing(run_dir, arm, tshirt) if s not in gone]
-            block["missing_receipts"] = gone
-            if gone:
-                block["outcome"] = "refused"
-    return block
-
-
-def receipt_inputs(sizing_text: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """``(arm, tshirt)`` of a sizing document for ``build_close_block``; unreadable or unsized is
-    ``(None, None)``, which makes every stage mandatory."""
-    if not sizing_text:
-        return None, None
-    try:
-        import yaml
-
-        doc = yaml.safe_load(sizing_text)
-        from coordinator_core.ops.dispatch_emit.sizing_fire import resolve_arm
-
-        est = doc.get("estimate") if isinstance(doc, dict) else None
-        return resolve_arm(doc), (est.get("tshirt") if isinstance(est, dict) else None)
-    except Exception:  # noqa: BLE001 -- an unreadable sizing must fail safe to every-stage-mandatory
-        return None, None
 
 
 def render_unreceipted(

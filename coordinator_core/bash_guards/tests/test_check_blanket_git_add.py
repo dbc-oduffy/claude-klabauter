@@ -347,8 +347,10 @@ def test_blanket_add_deny_offers_scoped_git_commit(monkeypatch, tmp_path, cmd):
     result = _denies(monkeypatch, tmp_path, cmd)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "git add -- path/to/file" in reason
-    assert "git commit -m" in reason and " -- path/to/file" in reason
+    assert "git commit -m" not in reason
     assert "scoped-git-commit" not in reason
+    assert "ceremony.commit_v2 --params-file" in reason
+    assert "--pathspec-from-file" not in reason
 
 
 @pytest.mark.parametrize("cmd", ["git add -A", "git add .", "git add -u"])

@@ -793,18 +793,6 @@ def _deploy_dirty_tree_setup(
     return {}
 
 
-def _em_halted_withheld_commit_setup(
-    scratch_dir: Path, mp: pytest.MonkeyPatch
-) -> Dict[str, str]:
-    from coordinator_core.ops.dispatch_emit import halted_withheld_index
-
-    repo = scratch_dir / "halted-withheld-repo"
-    (repo / ".git").mkdir(parents=True, exist_ok=True)
-    halted_withheld_index.add_run(repo, "ask-20261024T000000-aaaaaa", ["a.py"])
-    halted_withheld_index.rebuild(repo)
-    return {_CWD_OVERRIDE_KEY: str(repo)}
-
-
 def _home_root_bash_write_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1283,27 +1271,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=_control_from_factory(
             "block-subagent-commit", "git status", identity=_EXECUTOR_IDENTITY
         ),
-    ),
-    CorpusRow(
-        "block-em-halted-withheld-commit",
-        "block-em-halted-withheld-commit-fire",
-        "git commit -m msg -- a.py",
-        True,
-        _DENY,
-        False,
-        setup=_em_halted_withheld_commit_setup,
-        # Main-loop-only guard: a subagent-shaped caller is allowed (no message), so the
-        # subagent-audience render of this cell is legitimately empty.
-        audience=EM_AUDIENCE,
-    ),
-    CorpusRow(
-        "block-em-halted-withheld-commit",
-        "block-em-halted-withheld-commit-control",
-        "git commit -m msg -- b.py",
-        False,
-        _DENY,
-        False,
-        setup=_em_halted_withheld_commit_setup,
     ),
     CorpusRow(
         "check-test-suite-invocation",

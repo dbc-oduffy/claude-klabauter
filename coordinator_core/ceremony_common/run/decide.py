@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from coordinator_core.ceremony_common.apply_halt import chosen_disposition
 from coordinator_core.contract.decision_object.judgment import partition_reportable
 
 from .contract import DECISIONS_FILE, HANDBACK_DISPOSITIONS, NEVER_OFFERED_DISPOSITIONS, Decision
@@ -178,10 +179,10 @@ def record_agent_decisions(
             undecided.append({"id": point_id, "reason": "no-agent-result"})
             continue
         answer = result.get("decision")
-        if not isinstance(answer, Mapping) or not answer.get("disposition"):
+        value = chosen_disposition(answer) if isinstance(answer, Mapping) else None
+        if not value:
             undecided.append({"id": point_id, "reason": "result-carries-no-decision"})
             continue
-        value = answer["disposition"]
         payload = result.get("payload")
         declared = {d.get("value") for d in (entry.get("dispositions") or [])}
         if value not in declared:

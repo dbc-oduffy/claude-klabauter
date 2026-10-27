@@ -319,21 +319,25 @@ def normalize_decisions(decisions: dict[str, Any]) -> tuple[dict[str, Any], list
     2026-08-31-coordinator-content-repo-em-blitz-apply-verb-emits-no-commit-directive).
 
     Negative spec:
-    - A dict entry is NEVER rewritten, including one carrying no
-      `disposition` key. Across dispositions, `resolves` is what encodes
-      terminal-vs-non-terminal; a caller that spelled the dict shape and
-      omitted `disposition` made an authored choice not to pick one, and
-      widening that would fabricate a decision.
-    - A non-str, non-dict entry is NEVER coerced — it is returned in the
-      malformed list so the caller can refuse the run by name, because the
-      silent-gate reading is exactly the defect this function exists to
-      remove.
+    - A dict entry carrying `disposition` is NEVER rewritten
+      (merge_assemble's `{"disposition": "override", "value": ...}` uses
+      `value` as a payload). `value` stands in for `disposition` only when
+      `disposition` is absent.
+    - A dict entry carrying neither key, or a non-str, non-dict entry, is
+      NEVER coerced — it is returned in the malformed list so the caller
+      can refuse the run by name, because the silent-gate reading is
+      exactly the defect this function exists to remove.
     """
     normalized: dict[str, Any] = {}
     malformed: list[str] = []
     for jp_id, entry in decisions.items():
         if isinstance(entry, dict):
-            normalized[jp_id] = entry
+            if "disposition" in entry:
+                normalized[jp_id] = entry
+            elif "value" in entry:
+                normalized[jp_id] = {**entry, "disposition": entry["value"]}
+            else:
+                malformed.append(str(jp_id))
         elif isinstance(entry, str):
             normalized[jp_id] = {"disposition": entry}
         else:
@@ -949,9 +953,9 @@ def execute_directives(
         return APPLY_EXIT_TRANSPORT_FAIL, {
             "error": (
                 "malformed --decisions entries for judgment point(s) "
-                f"{sorted(malformed_decisions)} — each value must be a "
-                'disposition string ("<value>") or an object '
-                '({"disposition": "<value>"})'
+                f"{sorted(malformed_decisions)} — each entry must be a "
+                'disposition string ("<value>"), {"disposition": "<value>"} '
+                'or {"value": "<value>"}'
             ),
             "landed": [],
         }

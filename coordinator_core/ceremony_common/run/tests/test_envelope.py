@@ -84,3 +84,10 @@ def test_parse():
     for bad in ("nope", "[1]", ""):
         with pytest.raises(env.EnvelopeError):
             env.parse(bad)
+
+
+def test_value_only_decision_is_decided():
+    jps = [_jp("p", ["b"])]
+    ds = [_d("a", depends_on="p"), _d("b")]
+    assert _split(ds, jps, {"p": {"value": "go"}}) == (["b"], [], ["a"])
+    assert _split(ds, jps, {"p": {}}) == (["b"], ["a"], [])

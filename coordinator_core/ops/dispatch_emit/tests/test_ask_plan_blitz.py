@@ -88,3 +88,38 @@ def test_real_plan_blitz_wraps_when_resolvable():
         pytest.skip("plugin root unresolved")
     _, phases = apb.wrap_stage(text)
     assert phases[0] == "Size" and len(phases) >= 5
+
+
+def test_strip_comment_lines_drops_only_whole_comment_lines():
+    js = (
+        "// head\n"
+        "const a = 1; // trailing stays\n"
+        "  // indented\n"
+        "const s = '// not a comment';\n"
+        "const t = `\n// inside template\n`;\n"
+        "/* block\n// inside block\n*/\n"
+        "const r = /\\//.test(x);\n"
+    )
+    out = apb.strip_comment_lines(js)
+    assert out == (
+        "const a = 1; // trailing stays\n"
+        "const s = '// not a comment';\n"
+        "const t = `\n// inside template\n`;\n"
+        "/* block\n// inside block\n*/\n"
+        "const r = /\\//.test(x);\n"
+    )
+
+
+def test_wrap_roadmap_stage_strips_comment_lines():
+    from coordinator_core.ops.dispatch_emit import ask_roadmap
+
+    text = (
+        "// leading comment\n"
+        "export const meta = { phases: [{ title: 'Pull' }] };\n"
+        "// body comment\n"
+        "const x = 1;\n"
+    )
+    fn, phases = ask_roadmap.wrap_roadmap_stage(text)
+    assert phases == ["Pull"]
+    assert "async function roadmapBlitz(" in fn
+    assert not [ln for ln in fn.splitlines() if ln.lstrip().startswith("//")]

@@ -127,6 +127,7 @@ reason text (ready to paste, verbatim) follows the table for each named reason-i
 
 | file | class | construct (enclosing function) | disposition | reason |
 |---|---|---|---|---|
+| `install/ensure_venv.py` | path_separator | inline CLAUDE_HOME check: `claude_home.replace("\\", "/").rstrip("/").endswith("/.claude")` — own comment already states the Windows-backslash rationale | CARVE-OUT | `REASON_CANON_STRING` |
 | `install/uninstall_legs.py` | path_separator | inline HOME derivation: `_folded_claude_home = claude_home.replace("\\", "/")` — own comment states the same rationale | CARVE-OUT | `REASON_CANON_STRING` |
 | `baton_assemble/__init__.py` | path_separator | 6 sites across `_supersede_continued`'s predecessor-lookup helpers and a path-relativization helper: all `.replace("\\", "/")` on `continued_into`/`predecessor` frontmatter field values or resolved-path fallbacks — one site's comment explicitly names the failure this avoids ("backslash silently produces an EMPTY intersection on Windows … never an error") | CARVE-OUT | `REASON_CANON_STRING` |
 | `diff_scoped_tests.py` | path_separator | scoped-test resolution loop: `posix_path = raw.replace("\\", "/").strip()` on `git diff --name-only` / `git ls-files` output | CARVE-OUT | `REASON_CANON_STRING` |

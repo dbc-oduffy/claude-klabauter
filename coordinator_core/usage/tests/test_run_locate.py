@@ -61,6 +61,27 @@ def test_wrong_description_and_absent_dir_are_none(tmp_path):
     assert rl.locate_run_dir(tmp_path / "missing", "run-1") is None
 
 
+def test_stale_dirs_never_open_metas_and_live_dir_with_older_journal_is_found(tmp_path, monkeypatch):
+    import os
+    session = tmp_path / "s"
+    for i in range(300):
+        _wf(session, f"wf_stale{i}", {f"s{i}": ("commit", "run-1")}, settled={f"s{i}"})
+    live = _wf(session, "wf_live", {"L": ("commit", "run-1")})
+    old = (live / "journal.jsonl").stat().st_mtime - 1000
+    os.utime(live / "journal.jsonl", (old, old))
+    opened = []
+    real = Path.read_text
+
+    def spy(self, *a, **k):
+        if self.name.endswith(".meta.json"):
+            opened.append(self)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    assert rl.locate_run_dir(session, "run-1") == live
+    assert [p for p in opened if "wf_stale" in str(p)] == []
+
+
 def test_path_shaped_ids_are_refused(tmp_path):
     assert rl.locate_run_dir(tmp_path, "../x") is None
     assert rl.session_dir_for("../x", tmp_path) is None

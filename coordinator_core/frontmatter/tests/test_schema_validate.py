@@ -4422,10 +4422,9 @@ _QUEUE_SCHEMA_PINS = {
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
 #
-# sizing-object: claude-klabauter 1.48.0 adds optional `provenance` after 1.47.0's `fan_out`
-# xl_exit value (claude-klabauter-first); DoE still reads 1.46.0 at the doe_ref below and has
-# not vendored either yet.
-# Exit path: once DoE vendors 1.48.0, delete this entry and run
+# sizing-object: claude-klabauter 1.47.0 adds the `fan_out` xl_exit value (claude-klabauter-first); DoE
+# still reads 1.46.0 at the doe_ref below and has not vendored it yet.
+# Exit path: once DoE vendors 1.47.0, delete this entry and run
 # bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
 # check_schema_drift byte-pin.
 #
@@ -4439,33 +4438,29 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
     'sizing-object': {
         'doe_ref': "86eb0e39a7ca45ceb432de9b3d828d9078f91d3e",
         'reason': (
-            "claude-klabauter-first sizing-object 1.48.0 adds optional `provenance` (after 1.47.0's "
-            "`fan_out` xl_exit value); DoE's copy is still 1.46.0 and its own vendor is pending; "
+            "claude-klabauter-first sizing-object 1.47.0 adds the `fan_out` xl_exit value; "
+            "DoE's copy is still 1.46.0 and its own vendor of 1.47.0 is pending; "
             "also carries the L `mechanically_uniform` field added by run 04b5ef"
         ),
         'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
         'exempt_paths': frozenset({('properties', 'xl_exit', 'description')}),
-        'local_shape_hash': "c407cf212d35036c7428883fb3d1259d4a91ed84dfe68858f271bb484d136032",
+        'local_shape_hash': "b7df13b0c74e255f3b947a8648fb14172f8aa63f51e0ca1dd47cfe4d5e54919f",
     },
     'plan-tasks': {
         'doe_ref': "4c2317da8e6f2eeb3b83e606a8dd8ef15ad736fb",
         'reason': (
             "claude-klabauter-first plan-tasks 3.20.0 admits signoff history on apm, g-em and uhura "
             "records and adds the pm_signoff_record history arm; DoE's copy is still 3.19.0 "
-            "and its own vendor of 3.20.0 is pending; 3.21.0 adds the optional row property "
-            "`acceptance` and 3.22.0 the optional row property `effort`, both claude-klabauter-first"
+            "and its own vendor of 3.20.0 is pending"
         ),
-        'provenance': (
-            "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2; "
-            "3.22.0 `effort` property from plan 2026-10-25-a-refire-path-and-ea2e26-finish C16"
-        ),
+        'provenance': "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2",
         'exempt_paths': frozenset({
             ('$defs', 'signoff', 'allOf', 1, 'then', 'properties', 'history'),
             ('$defs', 'signoff', 'allOf', 2, 'then', 'properties', 'history'),
             ('$defs', 'signoff', 'description'),
             ('$defs', 'signoff', 'properties', 'history', 'description'),
         }),
-        'local_shape_hash': "7183c3a533605d74220c501e77a301816bcb62679d605eedc0e0d767ec3a1c7f",
+        'local_shape_hash': "ddf754d085825850719c0076c2dfcc0e82639ccf9983df075fbad15f60e83f65",
     },
 }
 

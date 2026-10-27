@@ -434,15 +434,19 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
 
 
 def _post_fire_deny(session_id: str, paths: tuple[str, ...] = (), root: str | None = None) -> dict | None:
-    """Deny the main EM's product edit once the session has launched a Workflow run, whichever
-    paths that run declared. Before the first fire this returns None and the XS budget decides.
-    With `paths`, the deny needs one of them to be a product path under `root`; with none given
-    the fire alone decides. Any read failure is no signal: the deny fails open."""
+    """Deny the main EM's product edit to a path a run this session fired still owns (a live run's
+    `writes:`, a halted run's withheld set). Every other path, and a session that never fired,
+    falls to the XS budget. With no `paths` the fire alone decides. Any read failure is no signal:
+    the deny fails open."""
     from coordinator_core.hooks import _em_post_fire
 
     if not _em_post_fire.fired(session_id):
         return None
-    if paths and not any(_em_post_fire.is_product_path(p, root or "", session_id) for p in paths):
+    if paths and not any(
+        _em_post_fire.is_product_path(p, root or "", session_id)
+        and _em_post_fire.owns_path(p, root or "", session_id)
+        for p in paths
+    ):
         return None
     return _em_post_fire.deny_envelope(paths)
 
@@ -489,9 +493,8 @@ def op(payload: dict) -> dict | None:
     A recorded XS lane allows in-budget edits and denies the first past 2 files / 30 changed
     lines (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
 
-    Once the session has fired a Workflow run, live or landed, every product Edit is denied
-    (`_post_fire_deny`); only the shell-write path still measures a residue window
-    (pinned by test_landed_residue_shell_write_is_budgeted).
+    A product Edit to a path a fired, unlanded run owns is denied (`_post_fire_deny`); only the
+    shell-write path still measures a residue window (pinned by test_landed_residue_shell_write_is_budgeted).
 
     An S+ sized session whose route has not fired is denied at strict until it fires (advised
     at warn). `touched_s_or_larger` reads the session's whole touch record, so any S+ (or

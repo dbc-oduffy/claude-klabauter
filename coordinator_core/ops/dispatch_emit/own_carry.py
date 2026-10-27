@@ -1,7 +1,8 @@
 """Follow-on commit params for a run's own left-behind claims.
 
 The run's product commit carries only declared paths; the committing session's
-own left-behind claims land in their own attributed commit. Stdlib-only at
+own left-behind claims land in their own attributed commit. The follow-on
+carries only landable paths. Stdlib-only at
 module top: terminal_commit imports this lazily and its cold-import pin must
 stay green.
 """
@@ -26,22 +27,34 @@ def own_carry_params(
     contested: Collection[str],
     product_sha: str,
     session_id: str,
+    *,
+    ignored: Optional[Collection[str]] = None,
 ) -> Optional[dict]:
-    """Build the commit_v2 params for the uncontested part of ``left``.
+    """Build the commit_v2 params for the landable, uncontested part of ``left``.
 
-    Returns None when ``left`` minus ``contested`` is empty. Raises ValueError
-    when ``product_sha`` is not 40 hex chars or ``session_id`` is empty. Pure:
-    no git, no disk. Paths compare and emit with "/" separators.
+    Machine-local paths and every path in ``ignored`` are dropped before the
+    contested subtraction. Returns None when nothing landable remains. Passing
+    ``ignored`` (a complete ignore answer for ``left``) adds
+    ``"ignored_untracked": []`` so commit_v2 skips its check-ignore probe; with
+    ``ignored=None`` the key is omitted. Raises ValueError when ``product_sha``
+    is not 40 hex chars or ``session_id`` is empty. Pure: no git, no disk.
+    Paths compare and emit with "/" separators.
     """
+    from coordinator_core.git.machine_local_paths import machine_local_paths
+
+
     if not isinstance(product_sha, str) or not _SHA40.fullmatch(product_sha):
         raise ValueError(f"product_sha must be 40 hex chars: {product_sha!r}")
     if not session_id:
         raise ValueError("session_id must be non-empty")
     held = {_norm(p) for p in contested}
-    remaining = sorted({_norm(p) for p in left} - held)
+    drop = {_norm(p) for p in machine_local_paths(left)}
+    if ignored is not None:
+        drop |= {_norm(p) for p in ignored}
+    remaining = sorted({_norm(p) for p in left} - held - drop)
     if not remaining:
         return None
-    return {
+    params = {
         "paths": remaining,
         "message": (
             "chore(own-left-behind): land this session's own claimed writes\n\n"
@@ -50,3 +63,6 @@ def own_carry_params(
         "carry_own_left_behind": False,
         "carry_stopped_runs": False,
     }
+    if ignored is not None:
+        params["ignored_untracked"] = []
+    return params

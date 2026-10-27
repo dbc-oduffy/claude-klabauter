@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import os
 import stat as _stat
-import sys
 from pathlib import Path
 from typing import Callable, Dict, FrozenSet, List, NamedTuple, Optional, Sequence, Set, Tuple
 
@@ -362,10 +361,9 @@ def _scoped(
                 continue
         if _stat.S_ISLNK(st.st_mode) or not _stat.S_ISREG(st.st_mode):
             raise _Gap("symlink or non-regular worktree file")
-        if sys.platform == "win32":
-            if e.mode & 0o111:
-                raise _Gap("executable bit unreadable on Windows; core.filemode is not read")
-        elif bool(e.mode & 0o111) != bool(st.st_mode & 0o111):
+        # NTFS st_mode x bits follow the filename suffix, not git's mode, and git on
+        # Windows runs core.filemode=false: the comparison is noise there.
+        if os.name != "nt" and bool(e.mode & 0o111) != bool(st.st_mode & 0o111):
             raise _Gap("executable bit disagrees; core.filemode is not read")
         if e.size != (st.st_size & 0xFFFFFFFF) and e.size != 0:
             changed.add(p)

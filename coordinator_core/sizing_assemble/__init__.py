@@ -74,7 +74,7 @@ pushes the result — it carries no branch-selection prose duplicating this
 table (AC4/AC6).
 
 Route table (PM directive 2026-07-30 — see `_BASE_ROUTE_BY_TSHIRT` for the
-hard-gate ruling): XS->dispatch, S->spec-dispatch, M->plan, L->spec-dispatch,
+hard-gate ruling): XS->dispatch, S->spec-dispatch, M->plan, L->plan,
 XL->pm-decision, XXL->goal-setting (2026-08-07 sizing-ladder-xxl-notch-and-
 goal-setting-route plan, C1). `goal-setting` is a terminal room, not a halt
 like `pm-decision`: an XXL resolves an OKR-scale programme rather than a
@@ -995,6 +995,21 @@ def parse_initiatives(raw: str) -> tuple[Optional[list[dict[str, Any]]], list[st
     return (None, errors) if errors else (out, [])
 
 
+def _has_positive_s_evidence(
+    scout_evidence: list[str],
+    probe_signal: Optional[str],
+    boundary_in_notch: Optional[str],
+    precedent: Optional[str],
+) -> bool:
+    """Any one flag separating S from XS; emptiness only, `scout_evidence` is never parsed."""
+    return bool(
+        scout_evidence
+        or probe_signal == "raise"
+        or boundary_in_notch == "yes"
+        or precedent == "shipped-before"
+    )
+
+
 SCOPE_L_FLOOR_FILES = 5
 SCOPE_L_FLOOR_LINES = 800
 
@@ -1018,28 +1033,6 @@ def _apply_scope_floor(
     ):
         return "L"
     return None
-
-
-#: Composed-script bytes one scoped file implies; calibrated on run a775c4 (1822 files -> 961587 bytes).
-SCRIPT_BYTES_PER_SCOPE_FILE = 528
-
-
-def _refuse_over_cap_scope(scope_files: Optional[int]) -> None:
-    """Raises `SizingAssembleError` naming split when the scope implies a composed workflow script
-    past the Workflow runner's byte cap. Runs before any plan is scaffolded; pure arithmetic."""
-    if scope_files is None or scope_files < SCOPE_L_FLOOR_FILES:
-        return
-    # Trap: importing emit loads a ~6600-line module just for the cap constant, so scopes
-    # below the L floor (far under any cap) skip it.
-    from coordinator_core.ops.dispatch_emit import emit as _emit
-
-    implied = scope_files * SCRIPT_BYTES_PER_SCOPE_FILE
-    if implied > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
-        raise SizingAssembleError(
-            f"scope of {scope_files} files implies a ~{implied}-byte composed script, over the "
-            f"{_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte Workflow cap. Split the ask into smaller "
-            "deliveries (xl_exit split) and size each."
-        )
 
 
 def route(
@@ -1067,6 +1060,7 @@ def route(
     interaction_mode_source: Optional[str] = None,
     premise_evidence: Optional[str] = None,
     initiatives: Optional[list[dict[str, Any]]] = None,
+    research: bool = False,
     scope_files: Optional[int] = None,
     scope_lines: Optional[int] = None,
 ) -> dict[str, Any]:
@@ -1076,6 +1070,8 @@ def route(
         scope_files / scope_lines: files / added lines of a FULL delivery of the task (prior or
             naked deliveries, never the minimal fix). At or above the L thresholds the resolved
             tshirt is raised to L, never lowered; None leaves the size untouched.
+        research: a research-class sizing never opens a hand-edit lane, so it
+            skips the S -> XS tie-break and stays S.
         appetite: one of small|medium|large (Shape-Up budget enum), or
             `None` (the default). Appetite is never collected before a size
             is delivered — `None` means no budget has been stated yet, not a
@@ -1087,7 +1083,8 @@ def route(
         estimate: dict with at least "tshirt" (XS..XXL); "provisional" is
             echoed back true unconditionally per the schema's const:true.
         scout_evidence: echoed back; NOT parsed for signal (see module
-            docstring's negative-spec).
+            docstring's negative-spec). Its non-emptiness alone counts as
+            positive S evidence for the XS/S tie-break.
         express_lane: D3 short-circuit — trivial ask, no ceremony.
         probe_signal: None | "collapse" | "raise" — the symmetric resize
             direction the caller's substrate probe determined (Finding 2).
@@ -1155,7 +1152,6 @@ def route(
     _validate_interaction_mode(interaction_mode)
     _validate_scope("scope_files", scope_files)
     _validate_scope("scope_lines", scope_lines)
-    _refuse_over_cap_scope(scope_files)
     uniform_reason = (mechanically_uniform_reason or "").strip()
     if mechanically_uniform and not uniform_reason:
         raise SizingAssembleError(
@@ -1202,6 +1198,12 @@ def route(
         }
 
     tie_break: Optional[str] = None
+    if tshirt == "S" and not research and not _has_positive_s_evidence(
+        scout_evidence, probe_signal, boundary_in_notch, precedent
+    ):
+        tie_break = "S -> XS: no positive S evidence"
+        tshirt = "XS"
+
     resized_tshirt, resize_changed, raise_suppressed = _apply_symmetric_resize(
         tshirt, probe_signal, probe_raise_basis
     )
@@ -1213,7 +1215,7 @@ def route(
             f"scope floor: {resized_tshirt} -> {floor_tshirt} "
             f"(scope_files={scope_files}, scope_lines={scope_lines})"
         )
-        tie_break = floor_note
+        tie_break = f"{tie_break}; {floor_note}" if tie_break else floor_note
         resized_tshirt = floor_tshirt
         resize_changed = True
 
@@ -2038,9 +2040,6 @@ def _write_back(
                 text = _set_scalar(text, key, decision[key])
         if decision.get("tie_break"):
             text = _set_scalar(text, "tie_break", json.dumps(decision["tie_break"]))
-        from coordinator_core.sizing_assemble.provenance import stamp as _provenance_stamp
-
-        text = write_fm_nested_field(text, "provenance", _render_block(_provenance_stamp()))
         if decision.get("mechanically_uniform"):
             text = _set_scalar(
                 text, "mechanically_uniform", json.dumps(decision["mechanically_uniform"])
@@ -2716,9 +2715,10 @@ def _xs_lane_session(write_path: Optional[str]) -> tuple[Optional[Path], Optiona
     return _cli_repo_root(write_path), sid
 
 
-def _xs_lane_refusal(write_path: Optional[str]) -> Optional[str]:
+def _xs_lane_refusal(write_path: Optional[str], tie_break: Optional[str] = None) -> Optional[str]:
     """The refusal text when this session may not take an XS sizing: a lane record exists in any
-    state, or an S-or-larger sizing was touched. None when the lane may open."""
+    state, or an S-or-larger sizing was touched. None when the lane may open. A tie-break XS names
+    the positive-S-evidence flags, since re-running `--tshirt S` repeats the same demotion."""
     from coordinator_core.session import xs_lane_budget
 
     root, sid = _xs_lane_session(write_path)
@@ -2732,6 +2732,12 @@ def _xs_lane_refusal(write_path: Optional[str]) -> Optional[str]:
                 f"XS refused: this session's hand-edit budget was denied at {du.get('lines')} changed lines "
                 f"over {', '.join(map(str, du['files']))} (cap {xs_lane_budget.BUDGET_LINES} lines / "
                 f"{xs_lane_budget.BUDGET_FILES} files). Size this work S or larger: re-run with `--tshirt S`."
+            )
+        if tie_break:
+            return (
+                "XS refused: this session already holds a lane or an S+ sizing, and S was demoted to XS "
+                "for lack of positive S evidence. Re-run with one of `--scout-evidence`, "
+                "`--boundary-in-notch yes`, `--precedent shipped-before`, `--probe-signal raise`."
             )
         return (
             "XS refused: this session already holds a lane or an S+ sizing. "
@@ -3341,6 +3347,7 @@ def main(argv: list[str]) -> int:
             interaction_mode_source=interaction_mode_source,
             premise_evidence=premise_evidence,
             initiatives=initiatives,
+            research=research_class is not None,
         )
     except SizingAssembleError as exc:
         print(f"{prog}: {exc}", file=sys.stderr)
@@ -3353,7 +3360,7 @@ def main(argv: list[str]) -> int:
     if warp_run is not None and write_path is not None:
         xs_sizing = False
     if xs_sizing:
-        refusal = _xs_lane_refusal(write_path)
+        refusal = _xs_lane_refusal(write_path, decision.get("tie_break"))
         if refusal:
             print(f"{prog}: {refusal}", file=sys.stderr)
             return EXIT_USAGE

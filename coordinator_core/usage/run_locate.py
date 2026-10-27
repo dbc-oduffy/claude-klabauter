@@ -79,7 +79,9 @@ def locate_run_dir(
 ) -> Optional[Path]:
     """The wf_ dir whose unsettled agent (journal `started`, no `result`/`failed`) has a
     `description` in agent_descriptions and a transcript head naming
-    `scratch/warp/<run_id>/terminal-commit-params.json`. None when absent or ambiguous."""
+    `scratch/warp/<run_id>/terminal-commit-params.json`. None when absent or ambiguous.
+    The journal gates the reads: metas and transcripts are opened only for unsettled agents,
+    so a dir whose agents all settled costs one journal read."""
     if not run_id or Path(run_id).name != run_id:
         return None
     needle = f"scratch/warp/{run_id}/{_PARAMS_TAIL}"
@@ -90,24 +92,18 @@ def locate_run_dir(
     except OSError:
         return None
     for wf in wf_dirs:
-        unsettled = None
-        try:
-            metas = [e.name for e in os.scandir(wf) if e.name.startswith("agent-") and e.name.endswith(".meta.json")]
-        except OSError:
-            continue
-        for meta_name in metas:
+        unsettled = _unsettled_agent_ids(wf / "journal.jsonl")
+        for agent_id in sorted(unsettled):
+            meta_name = f"agent-{agent_id}.meta.json"
+            if Path(agent_id).name != agent_id:
+                continue
             try:
                 meta = json.loads((wf / meta_name).read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if not isinstance(meta, dict) or meta.get("description") not in agent_descriptions:
                 continue
-            agent_id = meta_name[len("agent-"):-len(".meta.json")]
             head = _head(wf / f"agent-{agent_id}.jsonl", _HEAD_BYTES).replace("\\\\", "/").replace("\\/", "/")
-            if needle not in head:
-                continue
-            if unsettled is None:
-                unsettled = _unsettled_agent_ids(wf / "journal.jsonl")
-            if agent_id in unsettled:
+            if needle in head:
                 matches.append(wf)
     return matches[0] if len(matches) == 1 else None

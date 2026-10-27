@@ -796,6 +796,12 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # timestamp, so no single invocation answers two of them; the alternative is rebuilding
         # ancestry in Python from a full `rev-list --parents`.
         ('coordinator_core/ops/orphan_branch_sweep.py', 'main', '_git', 0),
+        # 2026-10-26 -- # class: structural-floor. `retest_targeted.main` runs one pytest session
+        # per conftest-bearing scope when two or more scopes collide on a bare `conftest` name,
+        # else exactly one. One process cannot import two same-named conftests, so the partition
+        # is the floor and nothing further batches; N is the count of conflicting scopes in one
+        # landing's targeted set, bounded by the shared RETEST_CHILD_TIMEOUT_SECS deadline.
+        ('coordinator_core/ops/dispatch_emit/retest_targeted.py', 'main', 'run', 0),
         # 2026-09-18 -- # class: measurement-is-the-loop. `stable-suite-run.py::_triage_isolation`
         # re-runs each already-FAILED node id alone, in its own process, to decide GENUINE
         # (fails alone too) vs. ORDER-DEPENDENT (passes alone). The per-node process boundary IS

@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.ops import anchor_lane
+from coordinator_core.ops import _anchor_check
 from coordinator_core.ops._research_grounding import line_hashes
 
 FIELD = "anchor_premises"
@@ -90,26 +90,6 @@ def parse_anchors(fm: dict, repo_root: Optional[Path]) -> tuple[list[dict], list
             continue
         anchors.append({**entry, "id": label})
     return anchors, findings
-
-
-_SCREEN_REFUSED = "anchor-premise-unchecked: "
-
-
-def split_screen_refused(findings: list) -> tuple[list, list[tuple[str, str]]]:
-    """(findings that still block, (id, reason) per unevaluable check). A check the census screen
-    refuses, or that lacks a usable command/expect, is unsatisfiable by design in every lane; an
-    entry without a usable id and claim, or a duplicate id, stays a blocker."""
-    kept: list = []
-    refused: list[tuple[str, str]] = []
-    for finding in findings:
-        if isinstance(finding, str) and finding.startswith(_SCREEN_REFUSED):
-            label, _, rest = finding[len(_SCREEN_REFUSED):].partition(" (")
-            reason = rest.partition("; allowed form: ")[0].rstrip(")")
-            if "; allowed form: " in finding or reason.startswith("check "):
-                refused.append((label, reason))
-                continue
-        kept.append(finding)
-    return kept, refused
 
 
 def unjudged(reason: str) -> str:
@@ -193,7 +173,7 @@ def _verdict_for(
     return None, "none"
 
 
-_ENGINE_VERDICT = {"held": "RESOLVES", "broke": "CONTRADICTED"}
+_ENGINE_VERDICT = {"MATCH": "RESOLVES", "MISMATCH": "CONTRADICTED"}
 
 
 def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dict]:
@@ -208,11 +188,16 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
         verdict, source = _verdict_for(anchor["id"], rows or [], carry_rows or [], live, known)
         observed = ""
         if verdict is None and repo_root is not None:
-            result = anchor_lane.evaluate(anchor, repo_root)
-            observed = result.observed or ""
-            engine = _ENGINE_VERDICT.get(result.outcome)
+            check = anchor.get("check") or {}
+            result = _anchor_check.evaluate(
+                str(check.get("command") or ""), str(check.get("expect") or ""), repo_root
+            )
+            observed = str(result.get("observed") or "")
+            engine = _ENGINE_VERDICT.get(result.get("state"))
             if engine is not None:
                 verdict, source = engine, "engine-check"
+            else:
+                observed = str(result.get("detail") or "")
         out.append({"id": anchor["id"], "verdict": verdict, "source": source, "observed": observed})
     return out
 

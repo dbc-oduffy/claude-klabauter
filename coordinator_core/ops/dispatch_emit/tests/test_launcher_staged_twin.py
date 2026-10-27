@@ -181,12 +181,10 @@ def test_resume_block_for_plan_edged_s_sizing(tmp_path):
     _script(tmp_path)
     _run(tmp_path, "estimate:\n  tshirt: S\nplan: docs/plans/p.md\n")
     _call(tmp_path)
-    block = _inline(tmp_path)[nrc.STAGED_RESUME_KEY]
-    assert block == {
+    assert _inline(tmp_path)[nrc.STAGED_RESUME_KEY] == {
         "arm": resolve_arm({"estimate": {"tshirt": "S"}}),
         "sizing_rel": "state/sizings/s1.yaml",
         "plan_rel": "docs/plans/p.md",
-        "tshirt": "S",
     }
 
 

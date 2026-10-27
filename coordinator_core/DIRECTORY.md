@@ -304,14 +304,6 @@ Python port of the coordinator-content-repo coordinator JS text-manipulation pri
 | `lint_tree.py` | Whole-tree `lint-frontmatter` sweep: verdict store under the git dir, validator imported only on a miss |
 | `body_blocks.py` | Shared fenced-block locator for plan-body YAML blocks (e.g. `## Tasks` `yaml plan-tasks` spine) |
 
-### `ops/dispatch_emit/objective_*` — durable run objective and falsifier loop
-| File | Purpose |
-|---|---|
-| `objective_contract.py` | Stdlib leaf: file names, dataclasses, falsifier-line parse, `close_verdict` fold, `objective_loop_result` |
-| `objective_write.py` | `dispatch.objective_write` — objective.json once at sizing |
-| `objective_check.py` | `dispatch.objective_check` — deterministic per-wave falsifier run, loop line |
-| `objective_calibrate.py` | `dispatch.objective_calibrate` — wave-0 calibration at base and credited shas |
-
 ### `hooks/` — advisory + bookkeeping hook op handlers
 Each sub-module self-registers under the `hooks.<name>` method namespace.
 

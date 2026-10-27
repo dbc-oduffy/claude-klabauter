@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import functools
 import importlib.util
-import re
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -38,7 +37,6 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     UNCLAIMED_ROWS_HALT_KIND,
     RESEARCH_HANDBACK_ROUTE,
     RESEARCH_MIXED_REFUSAL,
-    research_is_bounded_single_write,
     LEDGER_DERIVED_ROW_PREFIX,
     RESUME_LEDGER_ARM_FIELD,
     RESUME_LEDGER_CARRIED_MET_FIELD,
@@ -117,7 +115,6 @@ _ACCEPTED_NULL_PREFIX = "`exit_criterion.accepted`"
 _PARAMS = (
     Field("sizing_path", "nonempty_str", required=True),
     Field("writes", "str_list"),
-    Field("declared_writes", "str_list"),
     Field("baton", "nonempty_str"),
     Field("record", "dict"),
     Field("run_id", "nonempty_str"),
@@ -226,31 +223,6 @@ def gate(
     return replace(verdict, design_brief=brief) if brief else verdict
 
 
-_SIZING_STEM_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(?:[0-9a-f]{6}-\d+-)?")
-
-
-def _accepted_plan_hit(repo_root: Path, sizing: dict, sizing_rel: str) -> Optional[str]:
-    """Repo-relative path of an exact (slug or ask-hash) plan hit in an accepted status, else None.
-
-    Fallback for a sizing minted before intake bound the `plan:` edge; a sizing already naming a plan is skipped.
-    """
-    from coordinator_core.ops.dispatch_emit.extant_work import (
-        ACCEPTED_PLAN_STATUSES,
-        compute_ask_hash,
-        lookup_extant,
-    )
-
-    if sizing.get("plan"):
-        return None
-    intent = str(sizing.get("intent") or "")
-    slug = _SIZING_STEM_PREFIX_RE.sub("", Path(sizing_rel).stem)
-    found = lookup_extant(str(repo_root), slug, compute_ask_hash(intent) if intent else "", intent)
-    for hit in found.exact:
-        if hit.kind == "plan" and hit.plan_status in ACCEPTED_PLAN_STATUSES:
-            return hit.path
-    return None
-
-
 def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, baton: str) -> bool:
     """True when the sizing's `baton:` names `baton`, or the baton's `sizing_object:` names the sizing.
 
@@ -319,7 +291,7 @@ def _arm_verdict(
             handback=handback_line(sizing),
         )
     research = sizing.get("research")
-    if isinstance(research, dict) and research and not research_is_bounded_single_write(sizing, writes):
+    if isinstance(research, dict) and research:
         if writes:
             return _halt(HALT_REFUSAL, RESEARCH_MIXED_REFUSAL)
         return _halt(
@@ -445,15 +417,6 @@ def _arm_verdict(
             arm=arm, halt=None, acceptance=acceptance, resume_plan=resume_plan, resume_rows=resume_rows,
             resume_ledger=resume_ledger, design_route=route_payload, pending_rulings=pending_rulings,
         )
-
-    if resume is None:
-        accepted_plan = _accepted_plan_hit(repo_root, sizing, sizing_rel)
-        if accepted_plan:
-            return _halt(
-                HALT_REFUSAL,
-                f"accepted plan {accepted_plan} already exists for this ask: set `plan: {accepted_plan}` on "
-                f"{sizing_rel} and refire to resume it",
-            )
 
     doc_new = _load_doc_new()
     try:
@@ -853,19 +816,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizing_rel = params["sizing_path"]
     writes = params.get("writes") or []
     root = main_worktree_root(Path(repo_root))
-    declared = [w for w in params.get("declared_writes") or [] if isinstance(w, str) and w.strip()]
-    if declared:
-        writes = list(dict.fromkeys([*writes, *declared]))
-        if params.get("run_id"):
-            import json as _json
-            from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, run_dir as _run_dir
-
-            try:
-                _dir = _run_dir(root, params["run_id"])
-                _dir.mkdir(parents=True, exist_ok=True)
-                (_dir / "declared_writes.json").write_text(_json.dumps(declared), encoding="utf-8")
-            except (LedgerRefused, OSError):
-                pass
     route_verdicts: list = []
     if params.get("run_id"):
         # A refire's refusal returns before the verdict writes its own snapshot; the prior attempt's must not outlive it.

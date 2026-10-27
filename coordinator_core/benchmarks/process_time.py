@@ -230,6 +230,38 @@ if IS_WINDOWS:
             ("ProcessIdList", ctypes.c_size_t * _PID_LIST_CAPACITY),
         ]
 
+    _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+
+    class _JobObjectBasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_ulonglong) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+        )]
+
+    class _JobObjectExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _JobObjectBasicLimitInformation),
+            ("IoInfo", _IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
     _CREATE_SUSPENDED = 0x00000004
     _CREATE_NO_WINDOW = 0x08000000
     _PROCESS_SET_QUOTA = 0x0100
@@ -370,6 +402,29 @@ def _windows_query_job_accounting(job) -> "_JobObjectBasicAccountingInformation"
     return info
 
 
+SPAWN_WAIT_TIMEOUT_S = 1800.0
+
+
+def _windows_create_kill_on_close_job():
+    """Creates a job object that terminates every process in it when its last
+    handle closes, so a dead parent cannot orphan the measured tree."""
+    job = _k32.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    info = _JobObjectExtendedLimitInformation()
+    info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not _k32.SetInformationJobObject(
+        wintypes.HANDLE(job),
+        _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ):
+        err = ctypes.get_last_error()
+        _k32.CloseHandle(wintypes.HANDLE(job))
+        raise ctypes.WinError(err)
+    return job
+
+
 def _windows_spawn_into_job(
     job,
     cmd: Sequence[str],
@@ -377,9 +432,13 @@ def _windows_spawn_into_job(
     cwd: Optional[str],
     stdout=subprocess.DEVNULL,
     stderr=subprocess.DEVNULL,
+    timeout_s: Optional[float] = None,
 ) -> int:
     """Spawns `cmd` CREATE_SUSPENDED, assigns it to `job` before it can
     execute anything chargeable, resumes it, and waits. Returns its rc.
+
+    The wait is bounded by `timeout_s` (default `SPAWN_WAIT_TIMEOUT_S`); on
+    expiry the whole job is terminated and `TimeoutError` is raised.
 
     The single Windows spawn mechanism in this module: both the k-batched
     external-command path and the single-invocation tree path below go
@@ -399,7 +458,16 @@ def _windows_spawn_into_job(
     ):
         raise ctypes.WinError(ctypes.get_last_error())
     _resume_all_threads(proc.pid)
-    return proc.wait()
+    limit = SPAWN_WAIT_TIMEOUT_S if timeout_s is None else timeout_s
+    try:
+        return proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        _k32.TerminateJobObject(wintypes.HANDLE(job), 1)
+        proc.wait()
+        raise TimeoutError(
+            f"process_time: {list(cmd)!r} still running after {limit}s; "
+            "job terminated"
+        ) from None
 
 
 class LiveTreeAccountant:
@@ -602,9 +670,7 @@ def _windows_batched_process_time_ms(
     cwd: Optional[str],
     name_processes: bool = False,
 ) -> dict:
-    job = _k32.CreateJobObjectW(None, None)
-    if not job:
-        raise ctypes.WinError(ctypes.get_last_error())
+    job = _windows_create_kill_on_close_job()
     namer = _JobImageNamer(job) if name_processes else None
     try:
         if namer:
@@ -1623,7 +1689,9 @@ def single_invocation_tree_process_time(
 
     Raises whatever the underlying platform path raises -- `NotImplementedError`
     off Windows/Darwin/Linux, `OSError`/`ctypes.WinError`/`RuntimeError` on a
-    measurement-mechanism failure. Never silently degrades to a wrong unit.
+    measurement-mechanism failure, and on Windows `TimeoutError` (job
+    terminated) when the command outlives `SPAWN_WAIT_TIMEOUT_S`. Never
+    silently degrades to a wrong unit.
     """
     child_env = _env_with_benchmark_origin(env)
 
@@ -1631,9 +1699,7 @@ def single_invocation_tree_process_time(
         out_f = open(stdout_path, "wb") if stdout_path else None
         err_f = open(stderr_path, "wb") if stderr_path else None
         try:
-            job = _k32.CreateJobObjectW(None, None)
-            if not job:
-                raise ctypes.WinError(ctypes.get_last_error())
+            job = _windows_create_kill_on_close_job()
             try:
                 t0 = time.perf_counter()
                 rc = _windows_spawn_into_job(

@@ -39,58 +39,12 @@ Anti-scope: do NOT restore daemon machinery; do NOT restore version-skew subsyst
 
 from __future__ import annotations
 
+import functools
 import os
+from pathlib import Path
+from typing import Optional
 
 from coordinator_core.git import repo_root as _repo_root_seam
-
-# pathlib, typing and functools stay off the import path: `coordinator_core.ipc` imports this
-# module and its cold-start module count is ceilinged. Path is imported function-locally;
-# `lifecycle.Path` still resolves through `__getattr__` for callers that read it.
-TYPE_CHECKING = False
-if TYPE_CHECKING:
-    from pathlib import Path
-    from typing import Optional
-
-
-def __getattr__(name: str):
-    if name == "Path":
-        from pathlib import Path
-
-        return Path
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def _memoize_by_arg(maxsize: int):
-    """`functools.lru_cache(maxsize)` for a one-argument function, with `cache_clear`.
-
-    Oldest-inserted eviction; exceptions are not cached.
-    """
-
-    def decorate(fn):
-        cache: dict = {}
-
-        def wrapper(arg):
-            try:
-                return cache[arg]
-            except KeyError:
-                pass
-            value = fn(arg)
-            if len(cache) >= maxsize:
-                # Concurrent callers (ipc runs handler threads) can empty or resize the dict
-                # between the length check and the pop; a lost eviction only lets it grow by one.
-                try:
-                    cache.pop(next(iter(cache)), None)
-                except (RuntimeError, StopIteration):
-                    pass
-            cache[arg] = value
-            return value
-
-        wrapper.cache_clear = cache.clear
-        wrapper.__name__ = fn.__name__
-        wrapper.__doc__ = fn.__doc__
-        return wrapper
-
-    return decorate
 
 # Deferred-import accessor (Windows hot-path import diet — docs/plans/
 # 2026-08-06-windows-hot-path-less-work-per-interpreter.md § C9c).
@@ -143,12 +97,10 @@ def find_repo_root(cwd: Optional[str] = None) -> Path:
             "git rev-parse --show-toplevel failed (not a git repo?)"
             + (f": {reason}" if reason else "")
         )
-    from pathlib import Path
-
     return Path(toplevel).resolve()
 
 
-@_memoize_by_arg(32)
+@functools.lru_cache(maxsize=32)
 def git_common_dir(repo_root: Path) -> Path:
     """Return the absolute path to the git common directory (always a real directory).
 
@@ -197,8 +149,6 @@ def git_common_dir(repo_root: Path) -> Path:
             f"(or any of the parent directories): {repo_root}"
             + (f" ({reason})" if reason else "")
         )
-    from pathlib import Path
-
     return Path(common_dir)
 
 
@@ -314,8 +264,6 @@ def global_sentinel_dir() -> Path:
 
     Spec backlink: pln-coordinator-core-global-multip-9ddcf7 § C1a
     """
-    from pathlib import Path
-
     svc_root = os.environ.get("COORDINATOR_SVC_ROOT")
     if svc_root:
         d = Path(svc_root) / "coordinator-service"
@@ -369,7 +317,6 @@ def _compute_core_version() -> str:
     # cold-start module count is ceilinged in
     # `coordinator_core/benchmarks/import-budget-manifest.json`. Do not hoist.
     import hashlib
-    from pathlib import Path
 
     pkg_dir = Path(__file__).parent
     hasher = hashlib.sha256()

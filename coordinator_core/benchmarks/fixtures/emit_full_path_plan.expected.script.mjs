@@ -265,9 +265,6 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
   }
   const _REASON_STATUS_RE = /^"?\s*[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|^"?[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(?:PARTIAL|BLOCKED)\b|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/;
   const _REASON_SPLIT_RE = /\r?\n|\\r\\n|\\n|\r/;
-  function _isPathOnly(s) {
-    return !/\s/.test(s) && /[\/\\]/.test(s) && /\.(md|json)$/.test(s);
-  }
   function _reasonOf(result) {
     const raw = typeof result === 'string';
     const t = raw ? result : JSON.stringify(result ?? null);
@@ -277,12 +274,12 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     const at = lines.findIndex((l) => _REASON_STATUS_RE.test(l));
     if (at >= 0) {
       const own = tidy(lines[at].replace(_REASON_STATUS_RE, ''));
-      if (own && !_isPathOnly(own)) return own.slice(0, 1000);
+      if (own) return own.slice(0, 1000);
     }
     for (const l of lines) {
       if (_REASON_STATUS_RE.test(l) || _DEP_ANY_STATUS_RE.test(l)) continue;
       const o = tidy(l);
-      if (o && !_isPathOnly(o)) return o.slice(0, 1000);
+      if (o) return o.slice(0, 1000);
     }
     return '';
   }
@@ -316,15 +313,13 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
     return null;
   }
   let _rowSeq = 0;
-  function _runRow(id, deps, verifyScope, run, commit, reroute) {
+  function _runRow(id, deps, verifyScope, run, commit) {
     _rowSeq++;
-    const p = _runRowInner(id, deps, verifyScope, run, commit, reroute);
+    const p = _runRowInner(id, deps, verifyScope, run, commit);
     _rowIdOf.set(p, id);
     return p;
   }
-  const _REFUSAL_RE = /out[ -]of[ -]role|\bI ran nothing\b|\bNot run\b|test_verdict"?\s*:\s*"?not_run/i;
-  const _RAN_FAIL_RE = /\bFAIL(?:ED)?\b|\b[1-9]\d* (?:tests? )?failed\b/;
-  async function _runRowInner(id, deps, verifyScope, run, commit, reroute) {
+  async function _runRowInner(id, deps, verifyScope, run, commit) {
     if (typeof id !== 'string' || !id) {
       if (!_halted) _halted = 'refusal: invalid chunk id ' + JSON.stringify(id ?? null) + ' at row position ' + _rowSeq;
       return 'BLOCKED: invalid chunk id at row position ' + _rowSeq + ', not dispatched';
@@ -373,13 +368,6 @@ Plan: Script-fired reconcile merge: start, file-only resolver, conclude
         log(id + ': checkpoint ' + _ck[1] + ', continuation ' + _ckpts);
         _contOf[id] = { n: _ckpts, path: _ck[1] };
         result = await run();
-      }
-      if (typeof reroute === 'function') {
-        const _rt = typeof result === 'string' ? result : JSON.stringify(result ?? null);
-        if (_REFUSAL_RE.test(_rt) && !_RAN_FAIL_RE.test(_rt) && _trVerdictOf(_rt) !== 'fail' && (/(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|(?:^"?|\n|\\n)[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(?:PARTIAL|BLOCKED)\b|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/.test(_rt) || _trVerdictOf(_rt) === 'not_run')) {
-          log(id + ': re-routed after refusal');
-          result = await reroute();
-        }
       }
     } catch (e) {
       result = null;

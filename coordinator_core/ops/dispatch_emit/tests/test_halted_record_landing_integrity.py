@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity
-from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     LEDGER,
@@ -58,7 +57,7 @@ def test_since_base_overlap_withholds_whole_chunk(repo, monkeypatch):
     def fake(root, paths, base, *, run_id, plan=None):
         seen["base"] = base
         seen["plan"] = plan
-        return [landing_targeted_tests.Finding("a.py", landing_integrity.SINCE_BASE_OVERLAP, "drops lines of abc1234")]
+        return [landing_integrity.Finding("a.py", landing_integrity.SINCE_BASE_OVERLAP, "drops lines of abc1234")]
 
     monkeypatch.setattr(landing_integrity, "run_base_for", lambda *a, **k: "a" * 40)
     monkeypatch.setattr(landing_integrity, "since_base_findings", fake)

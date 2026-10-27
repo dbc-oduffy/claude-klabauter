@@ -70,7 +70,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops import _anchor_check, _anchor_premise, readiness_declared_absent
+from coordinator_core.ops import _anchor_check, _anchor_premise
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import prep_gate_with_text
 from coordinator_core.ops.review_findings_ledger import read_ledger
@@ -113,8 +113,6 @@ _SUBJECT_MAX = 300
 _PREMISE_ASK = {
     "CONTRADICTED": "add a `corrects:` entry naming the spine row that fixes it, or correct the plan's claim",
     "UNRESOLVED": "add a `declared_absent:` entry with a resolvable `tracked_by`, or supply the evidence",
-    "DECLARED-ABSENT-PRESENT": "the plan declares this path absent but it exists at the base sha: "
-    "drop it from `absent_at_head`, or fix the premise",
 }
 
 
@@ -316,42 +314,9 @@ def _declared_absent_entry(
             continue
         citation, tracked_by = _norm(entry.get("citation")), entry.get("tracked_by")
         tracked = tracked_by.strip() if isinstance(tracked_by, str) else ""
-        if not (citation and tracked and _names_citation(citation, cited)):
-            continue
-        if _tracked(tracked, open_questions, repo_root):
-            return citation, tracked[:120]
+        if citation and citation in cited and tracked and _tracked(tracked, open_questions, repo_root):
+            return citation, tracked
     return None
-
-
-_PATH_TOKEN = re.compile(r"[\w.@~+-]+(?:/[\w.@~+-]+)+|[\w-]+\.\w+")
-
-
-def _writes_paths(spine_rows: Any) -> frozenset:
-    """Posix repo-relative ``writes:`` paths of the spine rows: files the plan itself creates."""
-    return frozenset(readiness_declared_absent._row_writes(spine_rows))
-
-
-def _creates_citation(row: dict, created: frozenset) -> Optional[str]:
-    """The path a spine row's ``writes:`` creates when this UNRESOLVED premise row's citation names
-    it as a whole path and names no other path; None otherwise. Not base-sha gated: a ``writes:``
-    path that exists at the base sha is exempted too; ``readiness_declared_absent`` is the gated check."""
-    if not created:
-        return None
-    text = _norm(row.get("citation")).replace("\\", "/").replace("`", " ")
-    tokens = {t[2:] if t.startswith("./") else t for t in _PATH_TOKEN.findall(text)}
-    named = {t for t in tokens if t in created}
-    if not named or tokens - named:
-        return None
-    return sorted(named)[0]
-
-
-def _names_citation(entry_citation: str, cited: str) -> bool:
-    """True when the premise row's citation contains the entry's citation, or the entry's leading
-    token (its path: an entry may trail a parenthetical) as a whole token."""
-    if entry_citation in cited:
-        return True
-    lead = entry_citation.split(" ", 1)[0].strip("`'\"")
-    return ("/" in lead or "." in lead) and re.search(r"(?<![\w./-])" + re.escape(lead) + r"(?![\w/-]|\.\w)", cited) is not None
 
 
 def _plan_inputs(text: str) -> tuple:
@@ -392,56 +357,6 @@ def _carry_rows(repo_root: Path, plan_rel: str) -> list:
 
 def _repair(kind: str, target: str, instruction: str) -> dict:
     return {"kind": kind[:100], "target": target[:300], "instruction": instruction[:_INSTRUCTION_MAX]}
-
-
-_UNMAPPED_ANCHOR = re.compile(r"anchor-premise-unchecked: #(\d+) \(not a mapping\)")
-_LEADING_COUNT = re.compile(r"\s*(\d+)\b")
-
-
-def _census_check(claim: str, census: Any) -> Optional[dict]:
-    """A GRAMMAR check from the plan's own census whose question or command matches ``claim``;
-    ``expect`` is the entry's own ``expect`` or the leading count of its recorded ``result``."""
-    want = _norm(claim).casefold()
-    for entry in census if isinstance(census, list) else []:
-        if not isinstance(entry, dict):
-            continue
-        command, question = _norm(entry.get("command")), _norm(entry.get("question")).casefold()
-        if not command or _anchor_check.evaluable(command) is not None:
-            continue
-        if not (
-            (question and (question in want or want in question))
-            or command.casefold() in want
-        ):
-            continue
-        expect = entry.get("expect")
-        if not (isinstance(expect, str) and expect.strip()):
-            counted = _LEADING_COUNT.match(str(entry.get("result")))
-            expect = counted.group(1) if counted else ""
-        if expect:
-            return {"command": command, "expect": expect.strip()}
-    return None
-
-
-def _split_unmapped_anchors(findings: list, entries: Any, census: Any) -> tuple:
-    """(findings that still rule, mechanical repairs). A `(not a mapping)` anchor becomes a repair
-    only when the plan's own census yields a GRAMMAR check for its claim; otherwise it stays."""
-    kept: list = []
-    repairs: List[dict] = []
-    for finding in findings:
-        match = _UNMAPPED_ANCHOR.fullmatch(finding) if isinstance(finding, str) else None
-        index = int(match.group(1)) if match else -1
-        claim = entries[index] if isinstance(entries, list) and 0 <= index < len(entries) else None
-        check = _census_check(claim, census) if isinstance(claim, str) and claim.strip() else None
-        if check is None:
-            kept.append(finding)
-            continue
-        mapping = json.dumps({"id": f"A{index + 1}", "claim": claim, "check": check})
-        instruction = f"replace anchor_premises entry #{index} with the mapping {mapping}"
-        if len(instruction) > _INSTRUCTION_MAX:
-            kept.append(finding)
-            continue
-        repairs.append(_repair("anchor-premise-unchecked", f"#{index}", instruction))
-    return kept, repairs
 
 
 def _check_params(params: dict) -> tuple:
@@ -498,9 +413,6 @@ def readiness_verdict(
     anchor_findings: Optional[List[str]] = None,
     anchor_verdicts: Optional[List[dict]] = None,
     checker_ran: bool = True,
-    declared: Optional[Any] = None,
-    anchor_entries: Optional[Any] = None,
-    census: Optional[Any] = None,
 ) -> dict:
     """Verdict over a prep-gate reply plus coverage and reviewer values; the only read beyond
     them is a review's ledger sidecar, resolved against ``repo_root``. Only UNRESOLVED and
@@ -511,8 +423,8 @@ def readiness_verdict(
     Each ``anchor_findings`` entry is a blocking judgment no ``corrects``/``declared_absent`` exempts;
     rows carrying ``anchor`` are judged only through them. ``anchor_verdicts`` is the recorded
     per-anchor verdict list: it is echoed in the reply and feeds a ready-reason note. With
-    ``checker_ran`` either way, an anchor whose check is not evaluable in-process, or that the
-    census screen refuses, is a note naming its id: never a repair, a pull or a halt."""
+    ``checker_ran`` False (no premise-checker output in the call) each anchor of it whose check
+    was not evaluable in-process is a mechanical repair, not a blocking finding."""
     notes: List[str] = []
     repairs: List[dict] = []
     substantive: List[str] = []
@@ -573,7 +485,6 @@ def readiness_verdict(
     absent_notes: List[str] = []
     stale_refs: List[str] = []
     drift_notes: List[str] = []
-    created = _writes_paths(spine_rows)
     for row in premise_rows or []:
         if "anchor" in row:
             continue
@@ -586,36 +497,26 @@ def readiness_verdict(
             continue
         if row["verdict"] in _PREMISE_BLOCKING:
             fixer = _covering_row(row, corrects, spine_rows) if row["verdict"] == "CONTRADICTED" else None
-            ruling = (
-                readiness_declared_absent.classify_unresolved(row.get("citation"), declared)
-                if declared is not None and row["verdict"] == "UNRESOLVED"
-                else readiness_declared_absent.BLOCKS
-            )
-            if ruling == readiness_declared_absent.DECLARED_ABSENT_BUT_PRESENT:
-                premise_blocking.append(f"{_PREMISE_REVIEWER}: DECLARED-ABSENT-PRESENT {row['citation'][:200]}")
-                continue
-            if ruling == readiness_declared_absent.EXPECTED_ABSENT:
-                absent_notes.append(f"{_norm(row.get('citation'))[:120]} -> expected absent: declared absent at the base sha")
-                continue
             absent = (
                 _declared_absent_entry(row, declared_absent, open_questions, repo_root)
                 if row["verdict"] == "UNRESOLVED"
                 else None
             )
-            created_path = _creates_citation(row, created) if row["verdict"] == "UNRESOLVED" else None
             if fixer is not None:
                 covered.append(f"{fixer[0]} -> {fixer[1]}")
-            elif created_path is not None:
-                absent_notes.append(f"{created_path} -> expected absent: created by a spine row's writes")
             elif absent is not None:
                 absent_notes.append(f"{absent[0]} -> {absent[1]}")
             else:
                 premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
             uncheckable += 1
-    anchor_findings, refused = _anchor_premise.split_screen_refused(anchor_findings or [])
-    anchor_findings, anchor_repairs = _split_unmapped_anchors(anchor_findings, anchor_entries, census)
-    repairs.extend(anchor_repairs)
+    if not checker_ran:
+        for anchor_id, detail in _anchor_premise.unevaluable_anchors(anchor_verdicts or []):
+            repairs.append(_repair(
+                "anchor-check-not-evaluable", anchor_id,
+                f"Rewrite anchor {anchor_id}'s check as {_anchor_check.GRAMMAR} (no premise-checker "
+                f"runs in this lane; detail: {detail}), or re-plan around a fact that form can check.",
+            ))
     blocking_findings += len(premise_blocking) + len(anchor_findings or [])
     counts = f"needs an agent: {blocking_findings} blocking, {advisory_findings} advisory: "
     # Anchor findings are budgeted before premise rows: the reason is cut at _INSTRUCTION_MAX,
@@ -657,13 +558,13 @@ def readiness_verdict(
     engine_checked = sum(1 for v in anchor_verdicts or [] if v.get("source") == "engine-check")
     if engine_checked:
         notes.append(f"{engine_checked} anchor premise(s) resolved by in-process check")
-    unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or []) + refused
-    if unevaluable:
-        lane = "premise-checker ran, no blocking row" if checker_ran else "no premise-checker in this lane"
-        notes.append(
-            f"anchor check not evaluable in-process, not blocking ({lane}): "
-            + "; ".join(f"{i} ({d[:80]})" for i, d in unevaluable)
-        )
+    if checker_ran:
+        unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or [])
+        if unevaluable:
+            notes.append(
+                "anchor check not evaluable in-process, not blocking (premise-checker ran, no "
+                "blocking row): " + "; ".join(f"{i} ({d[:80]})" for i, d in unevaluable)
+            )
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
@@ -723,7 +624,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         raise ValueError("plan.readiness_verdict requires a resolved repo_root")
     raw_plan, coverage, reviews, premise_rows = _check_params(params)
-    declared = None
     checker_ran = params.get("premise") is not None or any(
         r.get("reviewer") == _PREMISE_REVIEWER for r in params.get("reviews") or []
     )
@@ -736,12 +636,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "message": reason,
         }
         corrects, spine_rows, ref, absent, questions = None, None, None, None, ""
-        anchor, verdicts, anchor_entries, census = [_anchor_premise.unjudged(reason)], [], None, None
+        anchor, verdicts = [_anchor_premise.unjudged(reason)], []
     else:
         corrects, spine_rows, ref, absent, questions, text, fm = _plan_inputs(plan_text)
         from coordinator_core.lifecycle import main_worktree_root
 
-        anchor_entries, census = fm.get(_anchor_premise.FIELD), fm.get("census")
         anchor_root = Path(main_worktree_root(repo_root))
         anchors, defects = _anchor_premise.parse_anchors(fm, anchor_root)
         carried = _carry_rows(repo_root, str(prep_gate["plan"])) if anchors else []
@@ -749,13 +648,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         anchor = defects + _anchor_premise.anchor_findings(
             anchors, premise_rows, carried, text, anchor_root, verdicts
         )
-        # The plan's falsifier baseline_ref stands in for the run's base sha (the op's one sha input; it can predate the run);
-        # the git read happens only when some UNRESOLVED premise row exists to rule on.
-        if any(r.get("verdict") == "UNRESOLVED" and "anchor" not in r for r in premise_rows or []):
-            declared = readiness_declared_absent.declared_absent_paths(repo_root, ref, spine_rows, fm)
     out = readiness_verdict(
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
-        absent, questions, anchor, verdicts, checker_ran, declared, anchor_entries, census,
+        absent, questions, anchor, verdicts, checker_ran,
     )
     reply = {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}
     if verdicts:

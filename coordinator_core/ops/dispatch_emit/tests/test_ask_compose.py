@@ -157,12 +157,12 @@ def test_m_plus_stage_is_embedded_only_when_the_arm_can_be_m_plus(monkeypatch):
     assert "async function planBlitz(" in _compose()
 
 
-def test_blitz_phases_merge_into_meta_after_plan():
+def test_blitz_phases_merge_into_meta_after_plan(m_plus_known_arm):
     titles = _titles(_compose())
     assert titles.index("plan") < titles.index("Size") and "stage" not in titles
 
 
-def test_wrapped_stage_without_the_entry_function_is_refused():
+def test_wrapped_stage_without_the_entry_function_is_refused(m_plus_known_arm):
     with pytest.raises(AskComposeRefused):
         _compose(wrap_stage=lambda t: ("function other() {}", []))
 
@@ -262,10 +262,7 @@ def test_a_roster_judge_runs_inside_the_one_verify_agent_and_feeds_the_criterion
 
 def test_the_verify_agent_runs_on_the_xs_arm_where_the_scoped_test_does_not():
     script = _compose(**_JUDGE_KW)
-    assert (
-        "const _testWanted = !!(((_gate.arm !== 'xs' && !_xsTail) || _reviewApplied > 0 || "
-        f"{ask_compose.XS_TEST_TARGET_JS}) && (_manifest.test_targets ?? []).length);"
-    ) in script
+    assert "const _testWanted = !!(((_gate.arm !== 'xs' && !_xsTail) || _reviewApplied > 0) && (_manifest.test_targets ?? []).length);" in script
     assert "if (_testWanted && _verify && _verify.test) { _testResult = _verify.test; }" in script
     assert "_falsifierResult = (_verify && _verify.judge)" in script
 
@@ -288,9 +285,12 @@ def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_targe
     assert script.index("label: 'verify'") < script.index("_manifest.no_test_target")
 
 
-def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
+def test_the_review_phase_runs_on_every_arm_but_xs_unless_code_review_is_owed():
     script = _compose()
-    gate = "if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {\n  phase('Review wave');"
+    gate = (
+        "if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {\n"
+        "  phase('Review wave');"
+    )
     assert script.count(gate) == 1
     assert "phase('review')" not in script
     assert script.index("await Promise.all(_verifications);") < script.index(gate) < script.index("label: 'verify'")
@@ -628,7 +628,7 @@ def test_the_ask_wave_sizes_reviewers_from_the_manifest_rows_and_gates_kira_on_t
     assert "(_manifest?.rows ?? []).length" in wave
     assert "_gate?.tshirt" in wave
     kira_line = next(l for l in script.split("\n") if "coordinator:overengineering-reviewer" in l)
-    assert '((_gate?.tshirt) == null || ["L", "XL", "XXL"].includes(_gate?.tshirt)) ?' in kira_line
+    assert '["L", "XL", "XXL"].includes(_gate?.tshirt) ?' in kira_line
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 

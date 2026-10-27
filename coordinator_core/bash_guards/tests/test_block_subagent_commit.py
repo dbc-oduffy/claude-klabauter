@@ -2089,7 +2089,8 @@ def test_ownership_scope_exception_denies(monkeypatch):
 def test_ac16_deny_message_names_sanctioned_route_for_git_commit_agent(monkeypatch):
     result = _gca_denies(monkeypatch, "git commit -m x")
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "git commit -m <subj> -- <path>..." in reason
+    assert "ceremony.commit_v2 --params-file <f>" in reason
+    assert "git commit -m <subj> -- <path>..." not in reason
     assert "scoped-git-commit" not in reason
     assert "subagents may not commit" not in reason
 
@@ -2125,7 +2126,8 @@ def test_ac16_deny_message_names_ownership_scope_leg_not_just_argv_shape(monkeyp
     """
     result = _gca_denies(monkeypatch, "git commit -m x")
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "git commit -m <subj> -- <path>..." in reason
+    assert "ceremony.commit_v2 --params-file <f>" in reason
+    assert "git commit -m <subj> -- <path>..." not in reason
     assert "path scope was never checked" in reason
 
 

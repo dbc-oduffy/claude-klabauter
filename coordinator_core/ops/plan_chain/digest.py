@@ -16,8 +16,7 @@ from coordinator_core.ops.plan_chain.contract import ChainManifest, ChainState, 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[2] / "contract" / "doe-wake-digest.schema.json"
 _PLAN_OUTCOMES = ("pulled", "replan", "surfaced")
-_CRITERION_STATUSES = ("met", "not_met", "not_run", "unstructured")
-_LEGACY_INDETERMINATE_REASON = "legacy indeterminate criterion status read as not_met"
+_CRITERION_STATUSES = ("met", "not_met", "indeterminate", "not_run", "unstructured")
 
 
 @lru_cache(maxsize=1)
@@ -54,15 +53,11 @@ def _criterion(execute_digest: Mapping[str, Any] | None, caps: Mapping[str, int]
     if not isinstance(src, Mapping):
         return {"status": "not_run", "observation": None, "sidecar": None, "reason": None}
     status = src.get("status")
-    reason = src.get("reason")
-    if status == "indeterminate":
-        status = "not_met"
-        reason = f"{_LEGACY_INDETERMINATE_REASON}: {reason}" if reason else _LEGACY_INDETERMINATE_REASON
     return {
         "status": status if status in _CRITERION_STATUSES else "unstructured",
         "observation": _cap(src.get("observation"), caps["observation"]),
         "sidecar": _cap(src.get("sidecar"), caps["sidecar"]),
-        "reason": _cap(reason, caps["reason"]),
+        "reason": _cap(src.get("reason"), caps["reason"]),
     }
 
 

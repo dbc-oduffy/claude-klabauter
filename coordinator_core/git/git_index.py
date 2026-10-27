@@ -152,6 +152,9 @@ def parse_index_identity(
     walked the `k-1` before it. Exploiting the sortedness beyond this linear
     exit would need an offset table the wire format does not carry.
 
+    The walk also stops at the first name sorting past the last-sorting
+    wanted path, so an untracked (absent) wanted path never forces a full walk.
+
     Early exit is a saving, never a semantic difference: a path in `wanted`
     but absent from the index is absent from the result either way, and the
     caller reads that as untracked exactly as it would from a full walk.
@@ -265,6 +268,8 @@ def _parse_index_bytes(
     prefix_under: tuple = ()
     prefix_all = False
     sort_exit: Optional[bytes] = None
+    if prefixes is None and wanted_bytes:
+        sort_exit = max(w + b"\x00" for w in wanted_bytes)
     if prefixes is not None:
         encoded = [p.encode("utf-8", "surrogateescape").rstrip(b"/") for p in prefixes]
         if not encoded and not wanted_bytes:
@@ -318,6 +323,8 @@ def _parse_index_bytes(
         offset = nul + 1 + padding
 
         if prefixes is None:
+            if sort_exit is not None and name >= sort_exit:
+                break
             if wanted_bytes is not None and name not in wanted_bytes:
                 continue
         else:
