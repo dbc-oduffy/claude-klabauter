@@ -79,6 +79,23 @@ def test_an_owned_launched_run_without_terminal_stays_live(repo, dirs, tmp_path,
     assert run_token.is_live(repo, "r1")
 
 
+def test_owner_without_a_row_yet_stays_live_inside_the_grace_window(repo, dirs, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    (tmp_path / "claude" / "sessions").mkdir(parents=True)
+    minted = warp_live.time.time()
+    assert warp_live._owner_exited("s1", minted) is False
+    real = minted
+    monkeypatch.setattr(warp_live.time, "time", lambda: real + warp_live.OWNER_ROW_GRACE_SECONDS + 5)
+    assert warp_live._owner_exited("s1", minted) is True
+
+
+def test_run_ended_does_not_read_a_rowless_fresh_owner_as_exited(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    (tmp_path / "claude" / "sessions").mkdir(parents=True)
+    minted = warp_live.time.time()
+    assert warp_live._run_ended("s1", SCRIPT, None, minted, [], None) != warp_live._EVIDENCE
+
+
 def test_run_ended_unit_contract(monkeypatch):
     minted = warp_live.time.time()
     assert warp_live._run_ended(None, SCRIPT, None, minted, [], None) is None

@@ -50,6 +50,10 @@ SUBMISSION_FILE = "submission.json"
 #: that should have followed the emit is taken to have failed.
 UNLAUNCHED_GRACE_SECONDS = 15 * 60
 
+#: A freshly fired run's owner may not have registered its session row yet; a missing row counts
+#: as an exited owner only after this long since the run was minted.
+OWNER_ROW_GRACE_SECONDS = 120
+
 #: Transcript bytes searched for the terminal notification (the notification is appended after
 #: the launch, so the tail holds it unless the session has run long past the run's end).
 _TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
@@ -253,6 +257,25 @@ def _task_ended(transcript_tail: str, task_id: str) -> bool:
     return _find_terminal_record(transcript_tail, task_id) is not None
 
 
+def _owner_exited(session_id: str, minted_at: float) -> bool:
+    """True when the session registry dir exists and `session_id` has a dead-pid row, or has no row
+    and the run was minted more than `OWNER_ROW_GRACE_SECONDS` ago. An absent dir or a raised error
+    answers False: never ended on a read failure. A row file the registry skips as unreadable counts
+    as no row."""
+    try:
+        from coordinator_core.group_em import session_registry
+
+        directory = session_registry.registry_dir()
+        if not directory.is_dir():
+            return False
+        row = session_registry.find_registry_row(session_id, directory)
+        if row is None:
+            return time.time() - minted_at > OWNER_ROW_GRACE_SECONDS
+        return not session_registry.pid_alive(row.pid)
+    except Exception:
+        return False
+
+
 def _run_ended(
     session_id: object,
     script_path: object,
@@ -269,6 +292,8 @@ def _run_ended(
         # An ownerless token is the unlaunched state with no owner to read: it ages out on the
         # same bound and is never spent.
         return _TIMER if time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS else None
+    if _owner_exited(session_id, minted_at):
+        return _EVIDENCE
     task_ids = _own_launch_ids(session_id, script_path, dirs, tool_use_id, minted_at, snapshot)
     has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
     if not has_transcript:
