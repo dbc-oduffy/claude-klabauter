@@ -24,6 +24,8 @@ EXIT_KIND = "exit"
 ROUTE_REVIEW_ONLY = "review-only"
 ROUTE_REVISE = "revise"
 EXIT_ROUTES = (ROUTE_REVIEW_ONLY, ROUTE_REVISE)
+# plan-blitz's `agentIncidents[].kind` for a roster it could not read: a refire re-enters the same read.
+ROSTER_UNREADABLE_KIND = "roster-unreadable"
 REVIEW_ONLY_CALL = (
     "emit-dispatch-workflow --inventory <inv> --review-only --rows <DONE ids> --run-base <sha>"
 )
@@ -209,6 +211,12 @@ def _exit_route_js(run_id_js: str) -> str:
             f"    return {{ kind: {j(EXIT_KIND)}, route: {j(ROUTE_REVIEW_ONLY)}, call: {j(REVIEW_ONLY_CALL)},",
             "      reason: 'The run produced no review, so its commit refuses as unreviewed. A refire reproduces the refusal: re-emit it review-only.' };",
             "  };",
+            "  const _causeUnchangedByRefire = () => [_halted.blitz, _halted.blitz && _halted.blitz.regate].some((_b) =>",
+            f"    _b && Array.isArray(_b.agentIncidents) && _b.agentIncidents.some((_i) => _i && _i.kind === {j(ROSTER_UNREADABLE_KIND)}));",
+            "  const _rosterExit = () => ({",
+            f"    kind: {j(EXIT_KIND)}, route: {j(ROUTE_REVISE)},",
+            f"    call: 'workflow.revise {{run_id: ' + {run_id_js} + ', note: <name the plan_review roster fix>}}',",
+            "    reason: 'plan-blitz read no reviewer roster although this script passed its plan_review block. A refire reproduces the refusal: revise the run to repair the roster fragment.' });",
         ]
     )
 
@@ -237,6 +245,10 @@ def refire_next_action_js(
             _exit_route_js(run_id_js),
             f"  if ({j(list(NON_REFIRE_REFUSALS))}.includes(_halted.refused)) {{",
             f"    if (!(_halted.next_action && _halted.next_action.kind === {j(EXIT_KIND)})) _halted['next_action'] = _exitRoute(_halted.refused);",
+            "    return;",
+            "  }",
+            "  if (_causeUnchangedByRefire()) {",
+            f"    if (!(_halted.next_action && _halted.next_action.kind === {j(EXIT_KIND)})) _halted['next_action'] = _rosterExit();",
             "    return;",
             "  }",
             f"  const _hk = {kind_js};",

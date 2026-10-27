@@ -6,6 +6,7 @@ In-process only: file stats and `shutil.which`, never a subprocess.
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -158,6 +159,34 @@ def _default_sidecar_cli(
     )
 
 
+def _plan_review_roster(plugin_root: Path | None) -> dict | None:
+    """The `plan_review` block of `contract/review-roster-fragment.json`, or None.
+
+    Probes `<plugin_root>/coordinator/contract/` then `<plugin_root>/contract/`. None for no
+    plugin root, an absent or unparseable file, or a block naming no reviewer (plan-blitz
+    treats such a block as unreadable, so forwarding it would only reproduce the refusal).
+    """
+    if plugin_root is None:
+        return None
+    for rel in (Path("coordinator") / "contract", Path("contract")):
+        path = plugin_root / rel / "review-roster-fragment.json"
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        block = data.get("plan_review") if isinstance(data, dict) else None
+        tiers = block.get("tiers") if isinstance(block, dict) else None
+        if isinstance(tiers, dict) and any(
+            isinstance(s, dict) and isinstance(s.get("reviewers"), list) and s["reviewers"]
+            for s in tiers.values()
+        ):
+            return block
+        return None
+    return None
+
+
 def resolve(
     *,
     plugin_root: Path | None,
@@ -165,7 +194,8 @@ def resolve(
     sizing_abs: str | None,
     chatty_run_id: str | None = None,
 ) -> dict:
-    """planBlitz args for a single-mode ask. A key with no resolvable value is omitted,
+    """planBlitz args for a single-mode ask. `plan_review` carries the fragment's roster block so
+    plan-blitz never dispatches a roster-reader. A key with no resolvable value is omitted,
     except `pluginAgentsAvailable`, which is always present. `sizing_abs` is None on a raw
     ask, whose sizing is minted in-run; the emitted call then binds `gateReportPath` itself.
     `chatty_run_id` set adds `chatty: True` and the `chattyReview` wave template."""
@@ -183,6 +213,9 @@ def resolve(
     arming = _default_arming_check_cli(plugin_root)
     if arming:
         out["armingCheckCli"] = arming
+    roster = _plan_review_roster(plugin_root)
+    if roster is not None:
+        out["plan_review"] = roster
     if chatty_run_id is not None:
         from coordinator_core.ops.dispatch_emit import chatty
 

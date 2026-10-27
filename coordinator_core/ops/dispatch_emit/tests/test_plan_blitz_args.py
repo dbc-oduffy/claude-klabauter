@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -89,3 +90,39 @@ def test_chatty_run_id_adds_review_wave(isolated, tmp_path):
     assert out["chatty"] is True
     assert out["chattyReview"]["roster"]["run_id"] == "run-9"
     assert out["pluginAgentsAvailable"] is True
+
+
+_BLOCK = {
+    "tiers": {"XS": {"reviewers": [{"agentType": "coordinator:plan-reviewer", "model": "sonnet"}]}},
+    "signal_reviewers": {"data-science": {"agentType": "coordinator:staff-data-sci", "model": "opus"}},
+    "revise": {"step": "merged", "after": "parallel-review-wave"},
+}
+
+
+def _write_fragment(root: Path, rel: Path, body: str) -> None:
+    (root / rel).mkdir(parents=True, exist_ok=True)
+    (root / rel / "review-roster-fragment.json").write_text(body, encoding="utf-8")
+
+
+@pytest.mark.parametrize("rel", [Path("contract"), Path("coordinator") / "contract"])
+def test_plan_review_block_is_forwarded_as_arg(isolated, tmp_path, rel):
+    root = _plugin(tmp_path)
+    _write_fragment(root, rel, json.dumps({"plan_review": _BLOCK}))
+    out = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    assert out["plan_review"] == _BLOCK
+
+
+@pytest.mark.parametrize("body", [None, "{not json", '{"execute_review": {}}', '{"plan_review": []}', '{"plan_review": {"tiers": {}}}'])
+def test_unusable_plan_review_block_is_omitted(isolated, tmp_path, body):
+    root = _plugin(tmp_path)
+    if body is not None:
+        _write_fragment(root, Path("contract"), body)
+    out = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    assert "plan_review" not in out
+
+
+def test_plan_review_block_forwarded_on_chatty_path_too(isolated, tmp_path):
+    root = _plugin(tmp_path)
+    _write_fragment(root, Path("contract"), json.dumps({"plan_review": _BLOCK}))
+    out = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s", chatty_run_id="r")
+    assert out["plan_review"] == _BLOCK
