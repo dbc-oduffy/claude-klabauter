@@ -12,7 +12,7 @@ from coordinator_core.warp_fire import fire_command
 
 REL = "state/sizings/2026-10-16-research-gate.yaml"
 RESEARCH = {"value_class": "scouts", "appetite": "small", "sources": ["web"], "questions": ["why?"]}
-ROUTE = {"XS": "dispatch", "S": "spec-dispatch", "M": "plan", "L": "plan", "XL": "plan"}
+ROUTE = {"XS": "dispatch", "S": "spec-dispatch", "M": "plan", "L": "spec-dispatch", "XL": "plan"}
 
 
 @pytest.fixture

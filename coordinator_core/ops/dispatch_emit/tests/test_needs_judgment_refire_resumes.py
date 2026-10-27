@@ -40,7 +40,7 @@ def _pulled_plan(repo):  # noqa: F811
 
 def test_refire_of_a_pulled_plan_halt_resumes_at_m_plus_from_the_plan_edge(repo):  # noqa: F811
     _git_init(repo)
-    _put(repo, tshirt="L", route="plan", accepted=ACCEPTED, plan=PLAN_REL)
+    _put(repo, tshirt="M", route="plan", accepted=ACCEPTED, plan=PLAN_REL)
     _pulled_plan(repo)
     v = gate(repo, REL)
     assert v.halt is None and v.arm == "m_plus"
@@ -59,7 +59,7 @@ def test_resumable_plan_keeps_a_never_staged_plan_at_m_plus(repo):  # noqa: F811
 
 def test_a_sizing_with_no_plan_edge_does_not_resume_at_m_plus(repo):  # noqa: F811
     _git_init(repo)
-    _put(repo, tshirt="L", route="plan", accepted=ACCEPTED)
+    _put(repo, tshirt="M", route="plan", accepted=ACCEPTED)
     _pulled_plan(repo)
     v = gate(repo, REL)
     assert v.resume_plan is None

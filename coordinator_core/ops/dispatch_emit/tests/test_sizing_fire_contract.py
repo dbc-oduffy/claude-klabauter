@@ -22,7 +22,7 @@ def _sizing(tshirt="S", route="spec-dispatch", **over):
 
 @pytest.mark.parametrize(
     "tshirt,arm",
-    [("XS", "xs"), ("S", "s"), ("M", "m_plus"), ("L", "m_plus"), ("XL", "m_plus"), ("XXL", "m_plus")],
+    [("XS", "xs"), ("S", "s"), ("M", "m_plus"), ("L", "s"), ("XL", "m_plus"), ("XXL", "m_plus")],
 )
 def test_tshirt_maps_to_arm(tshirt, arm):
     assert sf.resolve_arm(_sizing(tshirt)) == arm
@@ -97,7 +97,7 @@ def test_load_sizing_contained(tmp_path):
 
 @pytest.mark.parametrize(
     "tshirt,route,asked",
-    [("L", "plan", False), ("M", "dispatch", False), ("XL", "plan", True), ("S", "shape", True), ("M", "pm-decision", True)],
+    [("L", "spec-dispatch", False), ("M", "dispatch", False), ("XL", "plan", True), ("S", "shape", True), ("M", "pm-decision", True)],
 )
 def test_null_acceptance_is_refused_only_outside_the_engine_size_rule(tshirt, route, asked):
     s = _sizing(tshirt, route=route, exit_criterion={"statement": "x", "accepted": None})

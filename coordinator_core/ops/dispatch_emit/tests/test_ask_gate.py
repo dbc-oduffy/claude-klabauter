@@ -89,12 +89,12 @@ def test_xs_s_with_null_acceptance_proceeds(repo, tshirt, route, arm):
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
-@pytest.mark.parametrize("tshirt,route", [("M", "plan"), ("L", "plan")])
+@pytest.mark.parametrize("tshirt,route", [("M", "plan"), ("L", "spec-dispatch")])
 def test_agent_run_plan_and_dispatch_to_l_skip_acceptance_and_stamp_the_engine(repo, mode, tshirt, route):
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     _put(repo, tshirt=tshirt, route=route, mode=mode)
-    v = gate(repo, REL)
-    assert v.halt is None and v.arm == "m_plus"
+    v = gate(repo, REL, writes=["a.py"])
+    assert v.halt is None and v.arm == ("s" if tshirt == "L" else "m_plus")
     assert v.acceptance["by"] == "engine-size-rule" and v.acceptance["mode"] == mode
 
 

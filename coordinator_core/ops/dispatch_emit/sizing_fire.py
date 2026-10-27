@@ -37,20 +37,16 @@ ALL_LANDED_NO_RUN = "none"
 RESUME_LEDGER_HALT_BLOCKING_FIELD = "halt_blocking"
 from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance, sizing_acceptance_skipped
 from coordinator_core.session import record_homes
+from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
 _PM_DECISION = "pm-decision"
 _ROADMAP_EXIT = "roadmap"
 
-_TSHIRT_ARM = {
-    "XS": ARM_XS,
-    "S": ARM_S,
-    "M": ARM_M_PLUS,
-    "L": ARM_M_PLUS,
-    "XL": ARM_M_PLUS,
-    "XXL": ARM_M_PLUS,
-}
+_ARM_BY_ROUTE = {ARM_ROUTE[ARM_XS]: ARM_XS, ARM_ROUTE[ARM_S]: ARM_S}
+# A size's arm follows its routed table entry; routes with no dispatch arm (plan, pm-decision, goal-setting) fire m_plus.
+_TSHIRT_ARM = {t: _ARM_BY_ROUTE.get(r, ARM_M_PLUS) for t, r in _BASE_ROUTE_BY_TSHIRT.items()}
 _FIREABLE_STATUS = ("sized", "routed")
 # Literal `_scaffold_sizing` in coordinator-doc-new writes for intent and premise.evidence.
 _SCAFFOLD_PLACEHOLDER = "PLACEHOLDER"
@@ -201,6 +197,10 @@ def resolve_arm(sizing: Mapping) -> str:
         raise SizingFireRefused(
             [f"`estimate.tshirt` is {tshirt!r} — expected one of {sorted(_TSHIRT_ARM)}"]
         )
+    # An M-and-above sizing that recorded plan fires m_plus: L sizings written before the table
+    # routed L to spec-dispatch still carry plan, and must keep refiring.
+    if tshirt not in ("XS", "S") and effective_route(sizing) == ARM_ROUTE[ARM_M_PLUS]:
+        arm = ARM_M_PLUS
     if arm == ARM_M_PLUS and tshirt in ("XL", "XXL") and effective_route(sizing) == _ROADMAP_EXIT:
         return ARM_ROADMAP
     return arm
