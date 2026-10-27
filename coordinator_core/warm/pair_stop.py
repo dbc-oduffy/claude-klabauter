@@ -136,8 +136,9 @@ def _open_pipe(pipe: str):
 
 
 def _ask_server_to_stop(pipe: str) -> bool:
-    """Graceful ask over the warm pipe. True iff the frame was written (server reachable);
-    False on any transport failure, the caller's cue to signal directly."""
+    """Graceful ask over the warm pipe. True iff the server answered within the read deadline;
+    False on a transport failure or an unanswered ask (a wedged pool), the caller's cue to
+    signal directly instead of waiting out the confirm grace."""
     request = {
         "jsonrpc": "2.0",
         "id": "warm-engine-stop",
@@ -156,8 +157,7 @@ def _ask_server_to_stop(pipe: str) -> bool:
             fh.flush()
         except OSError:
             return False
-        _read_line_with_deadline(fh, _ASK_READ_DEADLINE_SECS)
-        return True
+        return bool(_read_line_with_deadline(fh, _ASK_READ_DEADLINE_SECS))
     finally:
         try:
             fh.close()

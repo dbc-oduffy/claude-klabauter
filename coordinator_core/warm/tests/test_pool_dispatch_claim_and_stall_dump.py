@@ -229,6 +229,24 @@ def test_stall_dump_is_a_gil_holding_timer_and_survives_a_frame_churning_op(tmp_
     log.close()
 
 
+def test_stall_dump_names_the_in_flight_sink_before_the_traceback(tmp_path, monkeypatch):
+    from coordinator_core import atomic_append
+
+    log = (tmp_path / "w.log").open("w")
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", log)
+    monkeypatch.setattr(atomic_append, "in_flight_sinks", lambda: ("wedged/sink.jsonl",))
+
+    disarm = server._arm_stall_dump(0.1)
+    time.sleep(0.6)
+    disarm()
+    log.flush()
+
+    text = (tmp_path / "w.log").read_text()
+    assert "stall-dump sinks: ('wedged/sink.jsonl',)" in text
+    assert text.index("stall-dump sinks:") < text.index("Thread")
+    log.close()
+
+
 def test_a_disarmed_stall_dump_writes_nothing(tmp_path, monkeypatch):
     log = (tmp_path / "w.log").open("w")
     monkeypatch.setattr(server, "_WORKER_STDERR_FILE", log)

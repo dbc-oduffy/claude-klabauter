@@ -151,6 +151,52 @@ def test_graceful_ask_used_for_verified_server_record(tmp_path, monkeypatch):
     assert w.log == []
 
 
+class _Pipe:
+    def __init__(self, reply):
+        self.reply = reply
+        self.released = __import__("threading").Event()
+
+    def write(self, data):
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def readline(self):
+        if self.reply is None:
+            self.released.wait(5)
+            return b""
+        return self.reply
+
+    def close(self):
+        self.released.set()
+
+
+def test_unanswered_ask_is_not_asked_and_terminates_directly(tmp_path, monkeypatch):
+    root = tmp_path / "mirror"
+    w = _World()
+    srv = w.add(40, "python.exe", [sys.executable, _script(root, SRV)])
+    monkeypatch.setattr(
+        breadcrumb, "read_breadcrumb", lambda r=None: {"pid": 40, "pipe": "p", "stable_pid_start_epoch": 1}
+    )
+    monkeypatch.setattr(pair_stop, "stable_pid_alive", lambda pid, stored_start_epoch="": srv.alive)
+    monkeypatch.setattr(pair_stop, "_ASK_READ_DEADLINE_SECS", 0.05)
+    monkeypatch.setattr(pair_stop, "_ASK_CONFIRM_GRACE_SECS", 30.0)
+    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(None))
+    started = pair_stop.time.monotonic()
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert pair_stop.time.monotonic() - started < 5.0
+    assert ("terminate", 40) in w.log and result.ok()
+
+
+def test_answered_ask_is_asked(monkeypatch):
+    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(b'{"id": 1}\n'))
+    assert pair_stop._ask_server_to_stop("p") is True
+    monkeypatch.setattr(pair_stop, "_ASK_READ_DEADLINE_SECS", 0.05)
+    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(None))
+    assert pair_stop._ask_server_to_stop("p") is False
+
+
 def test_match_is_exact_element_and_python_only(tmp_path):
     root = tmp_path / "mirror"
     sibling = tmp_path / "mirror-old"

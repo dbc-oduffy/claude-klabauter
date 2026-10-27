@@ -891,6 +891,13 @@ def _arm_stall_dump(stall_secs: float) -> Callable[[], None]:
         if done.wait(stall_secs):
             return
         try:
+            try:
+                from coordinator_core import atomic_append
+
+                stderr.write(f"stall-dump sinks: {atomic_append.in_flight_sinks()}\n")
+                stderr.flush()
+            except Exception:  # noqa: BLE001 -- the sink line never costs the traceback
+                pass
             faulthandler.dump_traceback(file=stderr, all_threads=True)
         except Exception:  # noqa: BLE001 -- diagnostics never stop an op
             pass
@@ -1072,6 +1079,35 @@ def _pool_not_started_envelope(msg: dict, occupancy: Optional[dict] = None) -> d
         "error": {
             "code": INTERNAL_ERROR,
             "message": _POOL_NOT_STARTED_MESSAGE,
+            "data": {"diagnosis": diagnosis},
+        },
+    }
+
+
+_POOL_SATURATED_MESSAGE = (
+    "warm dispatch refused: every dispatch worker has held a task past {0:.0f}s, so this "
+    "request was not submitted. Nothing was executed or written; it is safe to re-run "
+    "once a holder finishes."
+)
+
+
+def _pool_saturated_envelope(msg: dict, holders: list, stall_dump) -> dict:
+    """Determinate refusal (INTERNAL_ERROR, never indeterminate): the request was
+    never submitted. `holders` names the ops pinning the workers."""
+    diagnosis: dict = {
+        "phase": "saturated",
+        "op": msg.get("method"),
+        "pool_size": DISPATCH_PROCESS_POOL_SIZE,
+        "holders": holders,
+    }
+    if stall_dump:
+        diagnosis["stall_dump"] = str(stall_dump)
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "error": {
+            "code": INTERNAL_ERROR,
+            "message": _POOL_SATURATED_MESSAGE.format(STALL_DUMP_SECS),
             "data": {"diagnosis": diagnosis},
         },
     }
@@ -2492,6 +2528,21 @@ class _ServerContext:
                     )
         return self._dispatch_pool
 
+    def _track_pool_task(self, future: "concurrent.futures.Future", op: Optional[str]) -> None:
+        """Record `future` (op, submit time) until it resolves; feeds `_stalled_holders`."""
+        tasks = self.__dict__.setdefault("_pool_tasks", {})
+        tasks[future] = (op, time.monotonic())
+        future.add_done_callback(lambda f: tasks.pop(f, None))
+
+    def _stalled_holders(self) -> list:
+        """Ops of unresolved pool tasks older than `STALL_DUMP_SECS`."""
+        now = time.monotonic()
+        return [
+            op
+            for op, started in list(self.__dict__.get("_pool_tasks", {}).values())
+            if now - started > STALL_DUMP_SECS
+        ]
+
     def _pool_dispatch(
         self,
         msg: dict,
@@ -2518,6 +2569,11 @@ class _ServerContext:
         """
         try:
             pool = self._ensure_dispatch_pool()
+            holders = self._stalled_holders()
+            if len(holders) >= DISPATCH_PROCESS_POOL_SIZE:
+                return _pool_saturated_envelope(
+                    msg, holders, getattr(self, "_worker_stderr_dir", None)
+                )
             claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
             if claim is None:
                 future = pool.submit(_pool_dispatch_worker, msg, caller)
@@ -2525,6 +2581,7 @@ class _ServerContext:
                 future = pool.submit(
                     _pool_dispatch_worker, msg, caller, dispatch_key, str(claim.parent), STALL_DUMP_SECS
                 )
+            self._track_pool_task(future, msg.get("method"))
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:

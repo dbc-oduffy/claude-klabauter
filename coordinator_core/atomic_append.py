@@ -45,9 +45,18 @@ import os
 import queue
 import sys
 import threading
+import time
 from pathlib import Path
 
 IS_WINDOWS = os.name == "nt"
+
+#: One telemetry line takes ms; a write still pending here is wedged, not slow.
+APPEND_DEADLINE_SECS = 0.2
+_WRITER_IDLE_SECS = 5.0
+_registry_lock = threading.Lock()
+_writers: "dict[str, queue.SimpleQueue]" = {}
+_in_flight: "dict[str, int]" = {}
+_stalled: "dict[str, float]" = {}
 
 
 def _open_append_fd_windows(path: str) -> int:
@@ -112,8 +121,55 @@ def append_line(sink: "Path | str", encoded: bytes) -> None:
     posture requires it — this function itself does not swallow, so a
     concurrency test can observe a real failure if the atomicity guarantee
     is ever violated.
+
+    The write runs on a per-sink daemon writer thread and the caller waits
+    ``APPEND_DEADLINE_SECS``: on expiry the sink is marked stalled, one stderr
+    line names it, and the line is dropped without raising; later calls to
+    that sink drop at once until its writer returns. An error raised inside
+    the deadline is re-raised here.
     """
     sink_str = str(sink)
+    job = _Job(encoded)
+    with _registry_lock:
+        if sink_str in _stalled:
+            return
+        w = _writers.get(sink_str)
+        if w is None:
+            w = _writers[sink_str] = queue.SimpleQueue()
+            threading.Thread(
+                target=_writer_loop, args=(sink_str, w), daemon=True,
+                name=f"atomic-append-writer:{sink_str}",
+            ).start()
+        w.put(job)
+    if job.done.wait(APPEND_DEADLINE_SECS):
+        if job.error is not None:
+            raise job.error
+        return
+    with _registry_lock:
+        if not job.done.is_set():
+            _stalled[sink_str] = time.monotonic()
+            first = True
+        else:
+            first = False
+    if first:
+        try:
+            sys.stderr.write(f"atomic_append: sink stalled past {APPEND_DEADLINE_SECS}s, line dropped: {sink_str}\n")
+        except Exception:
+            pass
+    elif job.error is not None:
+        raise job.error
+
+
+class _Job:
+    __slots__ = ("encoded", "done", "error")
+
+    def __init__(self, encoded: bytes) -> None:
+        self.encoded = encoded
+        self.done = threading.Event()
+        self.error: "BaseException | None" = None
+
+
+def _write_once(sink_str: str, encoded: bytes) -> None:
     if IS_WINDOWS:
         fd = _open_append_fd_windows(sink_str)
     else:
@@ -125,6 +181,45 @@ def append_line(sink: "Path | str", encoded: bytes) -> None:
             view = view[n:]
     finally:
         os.close(fd)
+
+
+def _writer_loop(sink_str: str, w: "queue.SimpleQueue") -> None:
+    while True:
+        try:
+            job = w.get(timeout=_WRITER_IDLE_SECS)
+        except queue.Empty:
+            with _registry_lock:
+                if w.empty():
+                    _writers.pop(sink_str, None)
+                    return
+            continue
+        with _registry_lock:
+            _in_flight[sink_str] = _in_flight.get(sink_str, 0) + 1
+        try:
+            _write_once(sink_str, job.encoded)
+        except Exception as exc:
+            job.error = exc
+        finally:
+            with _registry_lock:
+                if _in_flight[sink_str] <= 1:
+                    del _in_flight[sink_str]
+                else:
+                    _in_flight[sink_str] -= 1
+                if w.empty():
+                    _stalled.pop(sink_str, None)
+            job.done.set()
+
+
+def in_flight_sinks() -> "tuple[str, ...]":
+    """Sink paths whose writer thread is inside an open or write right now."""
+    with _registry_lock:
+        return tuple(_in_flight)
+
+
+def stalled_sinks() -> "dict[str, float]":
+    """Sink path -> ``time.monotonic()`` of the deadline expiry; cleared when the writer returns."""
+    with _registry_lock:
+        return dict(_stalled)
 
 
 _QUEUE_MAX = 512
