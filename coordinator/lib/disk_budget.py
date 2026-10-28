@@ -94,6 +94,8 @@ class Policy:
     throttle_hours: float = 6
     # How many wall-clock seconds may one sweep spend before resuming next boot? None = unbounded.
     deadline_s: Optional[float] = 25
+    # How many bytes must stay free on a volume after a bulk write or copy lands?
+    volume_free_floor: int = 10 * GiB
 
     @classmethod
     def from_env(cls, environ: Optional[Mapping[str, str]] = None) -> "Policy":
