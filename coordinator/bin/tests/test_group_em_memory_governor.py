@@ -35,6 +35,12 @@ def _non_windows_host(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_trim_task(monkeypatch):
+    # Default: BoxCacheTrim absent, so no test ever spawns a real schtasks.
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: None)
+
+
+@pytest.fixture(autouse=True)
 def _inline_marker(monkeypatch):
     # pytest runs under a Claude Code session; the marker keeps in-process main() calls inline.
     monkeypatch.setenv("COORDINATOR_GUARD_DETACHED", "1")
@@ -296,6 +302,48 @@ def test_hint_prints_once_across_critical_streak(tmp_path, monkeypatch):
 def test_hint_rearms_after_calm(tmp_path, monkeypatch):
     lines = _stream([True, False, True], tmp_path, monkeypatch=monkeypatch)
     assert len(_hints(lines)) == 2
+
+
+def _fired(lines):
+    return [x for x in lines if x.startswith("GOVERNOR CACHE-TRIM fired")]
+
+
+def test_task_present_fires_once_per_episode_and_replaces_the_hint(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim",
+                        lambda bin_dir: calls.append(bin_dir) or "2026-10-28T16:00:00Z system cache 11.6 -> 3.0 GB")
+    lines = _stream([True, True, True], tmp_path, monkeypatch=monkeypatch)
+    assert len(calls) == 1
+    assert _fired(lines) == ["GOVERNOR CACHE-TRIM fired 2026-10-28T16:00:00Z system cache 11.6 -> 3.0 GB"]
+    assert _hints(lines) == []
+
+
+def test_task_present_refires_after_calm(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")
+    _stream([True, False, True], tmp_path, monkeypatch=monkeypatch)
+    assert len(calls) == 2
+
+
+def test_task_never_fired_outside_a_critical_episode_or_off_win32(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")
+    _stream([False, False], tmp_path, monkeypatch=monkeypatch)
+    _stream([True, True], tmp_path, plat="linux", monkeypatch=monkeypatch)
+    assert calls == []
+
+
+def test_task_absent_keeps_the_hint_line(tmp_path, monkeypatch):
+    lines = _stream([True, True], tmp_path, monkeypatch=monkeypatch)
+    assert _fired(lines) == [] and len(_hints(lines)) == 1
+
+
+def test_trim_error_falls_back_to_the_hint(tmp_path, monkeypatch):
+    def boom(bin_dir):
+        raise OSError("schtasks")
+
+    monkeypatch.setattr(gov, "fire_cache_trim", boom)
+    assert len(_hints(_stream([True], tmp_path, monkeypatch=monkeypatch))) == 1
 
 
 def test_hint_silent_on_linux(tmp_path, monkeypatch):

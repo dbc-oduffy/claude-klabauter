@@ -57,7 +57,6 @@ def _run(argv, **kw):
     kw.setdefault("cache_host_fn", _cache())
     kw.setdefault("proc_table_fn", lambda: TABLE)
     kw.setdefault("cmdline_fn", _cmdline)
-    kw.setdefault("floor_fn", lambda: 0)
     CMDLINE_CALLS.clear()
     return mod.main(argv, platform="win32", **kw)
 
@@ -134,12 +133,13 @@ def test_dead_holder_reservation_freed(tmp_path):
     assert _run(["--admission-file", path, "--admit-peak", "20"], alive_fn=lambda p: False, **kw) == 0
 
 
-def test_hold_when_peak_fits_but_not_floor_plus_peak(tmp_path, capsys):
-    # avail 40: peak 31 needs 38.75 by cushion (fits) but 10 + 31 = 41 with a 10 GiB floor (does not).
-    adm = ["--admit-peak", "31", "--admission-file", str(tmp_path / "a.jsonl")]
-    assert _run(adm, floor_fn=lambda: 10 * GIB) == 4
+def test_admit_need_is_peak_plus_cushion_with_no_floor(tmp_path, capsys):
+    # avail 40: peak 31 needs 38.75 and admits; peak 33 needs 41 and holds.
+    adm = str(tmp_path / "a.jsonl")
+    assert _run(["--admit-peak", "31", "--admission-file", adm]) == 0
+    assert "need_avail=38.75GiB" in capsys.readouterr().out
+    assert _run(["--admit-peak", "33", "--admission-file", adm]) == 4
     assert "available:" in capsys.readouterr().out
-    assert _run(adm, floor_fn=lambda: 0) == 0
 
 
 def test_recorded_peak_keeps_max_and_drives_admit(tmp_path, capsys):

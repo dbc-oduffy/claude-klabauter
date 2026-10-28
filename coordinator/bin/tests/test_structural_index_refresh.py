@@ -322,6 +322,24 @@ def test_unreadable_memory_defers_and_refresh_reports(tmp_path, monkeypatch):
     assert "deferred" in sir.refresh(tmp_path, 1, env={})
 
 
+def test_flag_staleness_spawns_nothing_and_flags_cold(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sir, "resolve_index_repo", lambda: Path("/rag"))
+    monkeypatch.setattr(sir, "spawn_ensure", lambda *a: pytest.fail("spawned"))
+    monkeypatch.setattr(sir.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    assert "stale" in sir.flag_staleness(tmp_path, env={})
+    assert sir.main(["--root", str(tmp_path), "--flag-only"]) == 0
+    assert "stale" in capsys.readouterr().out
+
+
+def test_flag_staleness_silent_when_current_or_off(tmp_path, monkeypatch):
+    monkeypatch.setattr(sir, "resolve_index_repo", lambda: Path("/rag"))
+    _status(tmp_path, state="fresh")
+    assert sir.flag_staleness(tmp_path, env={}) is None
+    sir._write_record(tmp_path, {"exit_code": 1, "stderr_tail": []})
+    assert "may be stale" in sir.flag_staleness(tmp_path, env={})
+    assert sir.flag_staleness(tmp_path, env={sir.KILL_SWITCH: "1"}) is None
+
+
 def test_main_exits_zero_on_unexpected_error(tmp_path, monkeypatch, capsys):
     def boom(*a, **k):
         raise RuntimeError("boom")

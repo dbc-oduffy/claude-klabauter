@@ -232,7 +232,7 @@ def test_seam_absent_routes_through_legacy_fn_not_a_reimplemented_check(monkeypa
 def test_post_dispatch_transport_failure_does_not_fall_back(monkeypatch, verb, argv, expected_code):
     calls = _stub_cold_apply(monkeypatch, exc=RuntimeError("connection reset after send"))
     code = entry_point_shim._merge_assemble_entry(list(argv))
-    assert len(calls) == 1, "post-dispatch failure must NOT retry cold"
+    assert len(calls) == 1, "a failing cold apply must run once and never be re-run"
     assert code == expected_code
 
 

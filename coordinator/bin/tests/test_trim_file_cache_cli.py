@@ -38,11 +38,12 @@ def _process_is_elevated() -> bool:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="elevation refusal is the Windows path")
-@pytest.mark.parametrize("args", [(), ("--apply",)], ids=["dry-run", "apply"])
-def test_non_elevated_refuses_with_exit_3(tmp_path, args):
+def test_non_elevated_dry_run_refuses_with_exit_3(tmp_path):
+    # Unelevated `--apply` fires the real BoxCacheTrim task, so it is covered with `fire` injected
+    # in test_file_cache_trim.py and never run here.
     if _process_is_elevated():
         pytest.skip("test process is elevated; refusing to risk a real run")
-    result = _run(tmp_path, *args)
+    result = _run(tmp_path)
     assert result.returncode == 3, result.stderr
     assert "elevated" in result.stderr.lower()
 

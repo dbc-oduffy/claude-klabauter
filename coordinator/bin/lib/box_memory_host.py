@@ -11,6 +11,7 @@ Family exit codes: 0 ok, 1 operational failure, 2 usage, 3 not elevated, 4 admis
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import struct
 import sys
@@ -305,7 +306,6 @@ _ADMISSION_TAIL_BYTES = 1 << 20
 def admission_file() -> Path:
     """Default admission channel: ``<settings-home>/state/group-em/box/admission.jsonl``."""
     import os
-    from pathlib import Path
 
     root = os.environ.get("COORDINATOR_SETTINGS_HOME")
     base = Path(root) if root else Path(os.environ.get("CLAUDE_HOME") or Path.home()) / ".coordinator-claude-settings"
@@ -377,17 +377,6 @@ def reserved_bytes(path, rss_fn=tree_rss_mb, alive_fn=pid_alive) -> int:
     return int(total_mb * 1024 * 1024)
 
 
-def guard_floor_bytes() -> int:
-    """The suite guard's free-RAM floor in bytes, read from its own config key; 0 when unreadable."""
-    try:
-        from coordinator_core import machine_resolver
-        from coordinator_core.bash_guards._heavy_admission_contract import KEY_FREE_RAM_FLOOR_MB
-
-        return max(0, int(machine_resolver.merged_flat_registry()[KEY_FREE_RAM_FLOOR_MB])) * 1048576
-    except Exception:
-        return 0
-
-
 def peaks_file(admission_path) -> Path:
     """Recorded-peak store, a sibling of the admission channel."""
     return Path(admission_path).with_name("command-peaks.json")
@@ -407,17 +396,21 @@ def read_recorded_peak(admission_path, key: str) -> float | None:
 def record_peak(admission_path, key: str, peak_gib: float) -> float:
     """Keep the larger of the stored and given peak for ``key``; returns the stored value."""
     import json
+    import os
 
     path = peaks_file(admission_path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        data = data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        data = {}
-    stored = max(peak_gib, float(data.get(key) or 0))
-    data[key] = stored
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
+    with admission_lock(admission_path):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data = data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            data = {}
+        stored = max(peak_gib, float(data.get(key) or 0))
+        data[key] = stored
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, path)
     return stored
 
 
@@ -455,16 +448,76 @@ class AdmitVerdict:
     commit_ok: bool
 
 
+@contextlib.contextmanager
+def admission_lock(admission_path):
+    """Exclusive cross-process lock on ``<admission>.lock`` (blocking, no deadline: a hung holder stalls every admit) for one check-and-reserve section."""
+    path = Path(admission_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "a+b") as fh:
+        if sys.platform == "win32":
+            import msvcrt
+
+            fh.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:
+                    continue
+            try:
+                yield
+            finally:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def admit_and_register(
+    admission_path,
+    key: str,
+    pid: int,
+    peak_gib: float,
+    status: MemoryStatus,
+    *,
+    cushion_pct: float = 25.0,
+    commit_limit: int | None = None,
+    **reserved_kwargs,
+) -> tuple[AdmitVerdict, int]:
+    """Read reservations, decide and write the START line under one lock; returns (verdict, reserved bytes).
+
+    Two concurrent callers serialize, so the second sees the first's reservation.
+    """
+    import dataclasses
+
+    with admission_lock(admission_path):
+        reserved = reserved_bytes(admission_path, **reserved_kwargs)
+        adjusted = dataclasses.replace(
+            status,
+            avail_phys=max(0, status.avail_phys - reserved),
+            commit_used=status.commit_used + reserved,
+        )
+        verdict = admit(int(peak_gib * GIB), adjusted, cushion_pct=cushion_pct, commit_limit=commit_limit)
+        if verdict.admit:
+            register_command(admission_path, key, pid, peak_gib)
+    return verdict, reserved
+
+
 def admit(
     peak: int,
     status: MemoryStatus,
     cushion_pct: float = 25.0,
     cushion_cap: int = 8 * GIB,
     commit_limit: int | None = None,
-    floor: int = 0,
 ) -> AdmitVerdict:
-    """Pure admission check; need is max(peak + cushion, floor + peak) against ``status.avail_phys``."""
-    need_avail = max(peak + min(peak * cushion_pct / 100, cushion_cap), floor + peak)
+    """Pure admission check; need is peak + min(cushion_pct of peak, cushion_cap) against ``status.avail_phys``."""
+    need_avail = peak + min(peak * cushion_pct / 100, cushion_cap)
     avail_ok = need_avail <= status.avail_phys
     commit_ok = status.commit_used + peak <= (status.commit_limit if commit_limit is None else commit_limit)
     return AdmitVerdict(

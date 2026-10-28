@@ -201,11 +201,35 @@ def test_proc_cmdline_nonexistent_pid_is_empty():
     assert host.proc_cmdline(2**22 + 1) == ""
 
 
-def test_admit_need_is_max_of_cushion_and_floor_plus_peak():
-    status = host.MemoryStatus(40 * host.GIB, 64 * host.GIB, 10 * host.GIB, 100 * host.GIB)
-    assert host.admit(31 * host.GIB, status, floor=0).admit
-    refused = host.admit(31 * host.GIB, status, floor=10 * host.GIB)
-    assert not refused.admit and refused.need_avail == 41 * host.GIB and not refused.avail_ok
+@pytest.mark.parametrize(
+    "peak_gib, need_gib",
+    [(2, 2.5), (12.3, 15.375), (32, 40), (40, 48), (100, 108)],
+)
+def test_admit_need_is_peak_plus_cushion_capped_at_8_gib(peak_gib, need_gib):
+    status = host.MemoryStatus(200 * host.GIB, 256 * host.GIB, 0, 1000 * host.GIB)
+    verdict = host.admit(int(peak_gib * host.GIB), status)
+    assert verdict.need_avail == pytest.approx(need_gib * host.GIB, rel=1e-9)
+
+
+def test_admit_has_no_floor_term():
+    status = host.MemoryStatus(3 * host.GIB, 64 * host.GIB, 0, 100 * host.GIB)
+    assert host.admit(2 * host.GIB, status).admit
+    assert not host.admit(2.5 * host.GIB, status).admit
+    assert not hasattr(host, "guard_floor_bytes")
+
+
+def test_admit_and_register_subtracts_live_reservation(tmp_path):
+    adm = tmp_path / "admission.jsonl"
+    host.register_command(adm, "other", 5, 4.0)
+    status = host.MemoryStatus(10 * host.GIB, 64 * host.GIB, 0, 100 * host.GIB)
+    kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True)
+    # 10 - 4 reserved = 6 available; 4.8 needs 6.0 and admits, 4.9 needs 6.125 and holds.
+    verdict, reserved = host.admit_and_register(adm, "k", 6, 4.8, status, **kw)
+    assert reserved == 4 * host.GIB and verdict.admit
+    adm2 = tmp_path / "admission2.jsonl"
+    host.register_command(adm2, "other", 5, 4.0)
+    verdict, _ = host.admit_and_register(adm2, "k", 6, 4.9, status, **kw)
+    assert not verdict.admit
 
 
 def test_peak_store_keeps_largest(tmp_path):
@@ -223,3 +247,35 @@ def test_register_and_release_drive_reserved(tmp_path):
     assert host.reserved_bytes(adm, **kw) == 3 * host.GIB
     host.release_command(adm, "k", 5)
     assert host.reserved_bytes(adm, **kw) == 0
+
+
+def test_concurrent_admits_serialize_check_and_reserve(tmp_path):
+    import threading
+
+    adm = tmp_path / "admission.jsonl"
+    status = host.MemoryStatus(10 * GIB, 64 * GIB, 1 * GIB, 100 * GIB)
+    results = []
+    barrier = threading.Barrier(8)
+
+    def worker(pid):
+        barrier.wait()
+        verdict, _ = host.admit_and_register(
+            adm, "k", pid, 4.0, status, cushion_pct=0.0,
+            rss_fn=lambda p: 0.0, alive_fn=lambda p: True,
+        )
+        results.append(verdict.admit)
+
+    threads = [threading.Thread(target=worker, args=(100 + i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [False] * 6 + [True] * 2
+
+
+def test_admit_and_register_holds_without_writing_a_reservation(tmp_path):
+    adm = tmp_path / "admission.jsonl"
+    status = host.MemoryStatus(3 * GIB, 64 * GIB, 1 * GIB, 100 * GIB)
+    verdict, _ = host.admit_and_register(adm, "k", 7, 4.0, status, cushion_pct=0.0)
+    assert not verdict.admit
+    assert not adm.exists()

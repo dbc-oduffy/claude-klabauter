@@ -32,8 +32,10 @@ servers (unless launched and noticed on the admission channel), anything in a de
 CLI, `deploy-from-snapshot`, `deploy:`, a `scratch/deploy-` snapshot tree), and this process. Suspending a deploy mid-upload could leave prod half-released;
 suspending a language server hangs every LSP call in its session.
 
-On win32 only, the first critical sample of an episode also prints one GOVERNOR CACHE-TRIM-HINT line
-naming the elevated `trim-file-cache.py --apply` command; a calm verdict re-arms it.
+On win32 only, the first critical sample of an episode fires the PM-installed on-demand scheduled
+task BoxCacheTrim and prints one `GOVERNOR CACHE-TRIM fired <trim.log tail>` line; with no such task
+it prints one GOVERNOR CACHE-TRIM-HINT line naming the elevated `trim-file-cache.py --apply`
+command. A calm verdict re-arms it.
 
 When available memory rises `HEADROOM_RISE_GIB` over its low-water mark, or the verdict goes calm
 after a PAUSED, it prints one `GOVERNOR HEADROOM available=<GiB>` line so the Group EM wakes.
@@ -43,7 +45,7 @@ Hourly (first tick, then every `RETENTION_EVERY` samples) it stamp-checks the en
 tick it prints one `GOVERNOR SCRATCH-OVER-BUDGET` line per session whose Temp scratch exceeds
 `scratch_budget.per_session_gib` (report only; the engine sweep does the deleting).
 
-NEGATIVE SPEC: suspends and resumes only; never runs a cache trim itself; never kills, never signals a protected process; reads the
+NEGATIVE SPEC: suspends and resumes only; never trims the cache itself, never creates or schedules a task (it only fires the existing BoxCacheTrim); never kills, never signals a protected process; reads the
 box admission channel but never writes outside stdout. A suspended process it can no longer find
 (exited) is dropped silently.
 """
@@ -518,6 +520,19 @@ def cache_trim_hint(bin_dir: Path) -> str:
     return f'GOVERNOR CACHE-TRIM-HINT run elevated: python "{sibling.as_posix()}" --apply'
 
 
+def fire_cache_trim(bin_dir: Path) -> Optional[str]:
+    """Fire the PM-installed BoxCacheTrim task; the trim.log tail line, or None when the task is
+    absent or would not start."""
+    lib = str(Path(bin_dir) / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    try:
+        from file_cache_trim import fire_box_cache_trim
+    except ImportError:
+        return None
+    return fire_box_cache_trim()
+
+
 def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         sample: Optional[Callable[[], bool]] = None, procs_fn: Callable[[], list[Proc]] = list_procs,
         signal_fn: Callable[[list[int], bool], None] = signal_tree,
@@ -529,7 +544,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         start_time_fn: Optional[Callable[[int], Optional[float]]] = None,
         avail_fn: Optional[Callable[[], Optional[float]]] = None,
         retention_fn: Optional[Callable[[], object]] = None,
-        scratch_fn: Optional[Callable[[], "dict[str, int]"]] = None) -> None:
+        scratch_fn: Optional[Callable[[], "dict[str, int]"]] = None,
+        trim_fn: Optional[Callable[[], Optional[str]]] = None) -> None:
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
     start_times_fn = process_start_times if start_time_fn is None else (
         lambda pids: {p: start_time_fn(p) for p in pids})
@@ -580,8 +596,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
             if sample():
                 calm = 0
                 crit_streak += 1
-                if hint_armed and sys.platform == "win32":
-                    emit(cache_trim_hint(bin_dir))
+                fire_trim = hint_armed and sys.platform == "win32"
                 hint_armed = False
                 # First pause on the first critical sample; each further pause waits two more.
                 due = not paused or crit_streak >= 3
@@ -606,6 +621,13 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 elif due and not gave_up:
                     gave_up = True
                     emit(f"GOVERNOR STILL-CRITICAL after {len(paused)} pause(s); nothing left it may pause")
+                if fire_trim:  # after the pause: the fire can block for seconds on schtasks and the log wait
+                    try:
+                        tail = (trim_fn or (lambda: fire_cache_trim(bin_dir)))()
+                    except Exception:  # a trim failure falls back to the hint
+                        tail = None
+                    emit(cache_trim_hint(bin_dir) if tail is None
+                         else f"GOVERNOR CACHE-TRIM fired {tail}".rstrip())
             else:
                 crit_streak = 0
                 hint_armed = True

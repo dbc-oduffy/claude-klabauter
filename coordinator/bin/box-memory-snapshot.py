@@ -6,8 +6,8 @@ compressed + swapped), which can far exceed `ps` RSS. Prints Available, commit u
 top N consumers by private commit. A counter that fails to read prints `unavailable` for that
 field alone. `--admit-peak GIB` adds one line, `ADMIT ...` (exit 0) or `HOLD ...` naming the
 failed clause (exit 4); the figure is net of `reserved=`, the sum over live START pids without an
-END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is max(peak*1.25, suite-guard floor + peak).
-`--command-key K` with `--record-peak GIB` keeps K's largest seen peak (used when `--admit-peak` is omitted);
+END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is peak + min(0.25*peak, 8 GiB).
+`--command-key K` with `--record-peak GIB` keeps K's largest seen peak (used when `--admit-peak` is omitted, except on a record or release call);
 `--register-pid P` on ADMIT reserves P's headroom, `--release-pid P` frees it. `--json` emits the same
 fields. Other hosts: exit 6.
 """
@@ -139,7 +139,6 @@ def main(
     alive_fn: Optional[Callable] = None,
     proc_table_fn: Optional[Callable] = None,
     cmdline_fn: Optional[Callable] = None,
-    floor_fn: Optional[Callable] = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description="One-screen box memory snapshot.")
     parser.add_argument("--top", type=int, default=10, help="top N consumers (default 10)")
@@ -160,7 +159,7 @@ def main(
         host.release_command(adm_path, args.command_key, args.release_pid)
     if args.command_key and args.record_peak is not None:
         host.record_peak(adm_path, args.command_key, args.record_peak)
-    if args.admit_peak is None and args.command_key:
+    if args.admit_peak is None and args.command_key and args.record_peak is None and args.release_pid is None:
         args.admit_peak = host.read_recorded_peak(adm_path, args.command_key)
     plat = platform if platform is not None else sys.platform
     if plat not in ("win32", "darwin"):
@@ -196,22 +195,29 @@ def main(
             return 1
         peak = int(args.admit_peak * host.GIB)
         limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit
-        reserved = host.reserved_bytes(
-            adm_path,
+        reserved_kw = {
             **({"rss_fn": rss_fn} if rss_fn else {}),
             **({"alive_fn": alive_fn} if alive_fn else {}),
-        )
+        }
+        if args.command_key and args.register_pid is not None:
+            verdict, reserved = host.admit_and_register(
+                adm_path, args.command_key, args.register_pid, args.admit_peak, status,
+                cushion_pct=args.cushion_pct, commit_limit=limit, **reserved_kw,
+            )
+        else:
+            reserved = host.reserved_bytes(adm_path, **reserved_kw)
+            adjusted = dataclasses.replace(
+                status,
+                avail_phys=max(0, status.avail_phys - reserved),
+                commit_used=status.commit_used + reserved,
+            )
+            verdict = host.admit(peak, adjusted, cushion_pct=args.cushion_pct, commit_limit=limit)
+        # Display only: the verdict above already netted `reserved`.
         status = dataclasses.replace(
             status,
             avail_phys=max(0, status.avail_phys - reserved),
             commit_used=status.commit_used + reserved,
         )
-        floor = (floor_fn or host.guard_floor_bytes)()
-        verdict = host.admit(
-            peak, status, cushion_pct=args.cushion_pct, commit_limit=limit, floor=floor
-        )
-        if verdict.admit and args.command_key and args.register_pid is not None:
-            host.register_command(adm_path, args.command_key, args.register_pid, args.admit_peak)
         admit_line = _admit_line(verdict, args.admit_peak, status, limit) + f" reserved={_gib(reserved)}GiB"
         snap["admit"] = {
             "reserved_gib": _gib(reserved),

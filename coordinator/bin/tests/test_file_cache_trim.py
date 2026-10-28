@@ -19,7 +19,7 @@ from file_cache_contract import (  # noqa: E402
     PrivilegeError,
     TrimError,
 )
-from file_cache_trim import project_after, run  # noqa: E402
+from file_cache_trim import fire_box_cache_trim, project_after, run  # noqa: E402
 
 GIB = 1024**3
 BEFORE = MemorySnapshot(40 * GIB, 10 * GIB, 30 * GIB, 1 * GIB)
@@ -75,8 +75,63 @@ class FakeHost:
             raise self.trim_error
 
 
-def _run(host, *argv, platform="win32"):
-    return run(list(argv), host, platform, sleep=lambda s: None)
+def _run(host, *argv, platform="win32", fire=lambda: None):
+    return run(list(argv), host, platform, sleep=lambda s: None, fire=fire)
+
+
+class _CP:
+    def __init__(self, rc):
+        self.returncode = rc
+
+
+def _fake_schtasks(query_rc=0, run_rc=0, log=None, log_after=None):
+    calls = []
+
+    def fake(cmd, **kw):
+        verb = cmd[1]
+        calls.append(verb)
+        if verb == "/run" and log_after is not None:
+            log.write_text(log_after)
+        return _CP(query_rc if verb == "/query" else run_rc)
+
+    return fake, calls
+
+
+def test_fire_returns_new_log_tail_after_run(tmp_path):
+    log = tmp_path / "trim.log"
+    log.write_text("old line\n")
+    fake, calls = _fake_schtasks(log=log, log_after="old line\nnew: system cache 11.6 -> 3.0 GB\n")
+    assert fire_box_cache_trim(fake, log, lambda s: None) == "new: system cache 11.6 -> 3.0 GB"
+    assert calls == ["/query", "/run"]
+
+
+def test_fire_task_absent_returns_none_without_running(tmp_path):
+    fake, calls = _fake_schtasks(query_rc=1)
+    assert fire_box_cache_trim(fake, tmp_path / "trim.log", lambda s: None) is None
+    assert calls == ["/query"]
+
+
+def test_fire_run_failure_returns_none(tmp_path):
+    fake, _ = _fake_schtasks(run_rc=1)
+    assert fire_box_cache_trim(fake, tmp_path / "trim.log", lambda s: None) is None
+
+
+def test_unelevated_apply_fires_task_instead_of_failing(capsys):
+    host = FakeHost(elevated=False)
+    assert _run(host, "--apply", fire=lambda: "tail line") == ExitCode.OK
+    assert host.calls == ["is_elevated"]
+    assert "tail line" in capsys.readouterr().out
+
+
+def test_unelevated_apply_without_task_still_exits_3():
+    assert _run(FakeHost(elevated=False), "--apply", fire=lambda: None) == ExitCode.NOT_ELEVATED
+
+
+def test_unelevated_dry_run_never_fires_the_task():
+    def boom():
+        raise AssertionError("fired")
+
+    assert _run(FakeHost(elevated=False), fire=boom) == ExitCode.NOT_ELEVATED
 
 
 def test_non_windows_exits_6_with_zero_host_calls(capsys):

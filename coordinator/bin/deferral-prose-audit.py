@@ -168,23 +168,19 @@ def seed_plan(launcher: str, root: Path, rel: str, key: str, hits: List[Hit], ru
 
 
 def _git_toplevel() -> Path:
+    """Git toplevel of cwd via the checked resolver; a MISMATCH is reported to stderr and the run proceeds, --seed included."""
     try:
-        from coordinator_core.git.run import run_git
-    except ImportError:
         import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
-        import cc_invoke
-
-        cc_invoke.ensure_engine_on_path(__file__)
-        try:
-            from coordinator_core.git.run import run_git
-        except ImportError as exc:
-            raise AuditError(f"engine unavailable: {exc}") from exc
-    out = run_git(["rev-parse", "--show-toplevel"])
-    if out.returncode == 127:
-        raise AuditError(f"git unavailable: {out.stderr.strip()}")
-    if out.returncode != 0 or not out.stdout.strip():
+        from repo_identity import resolve_checked_repo_root
+    except (ImportError, RuntimeError) as exc:
+        # repo_identity raises RuntimeError at import when the engine is not locatable.
+        raise AuditError(f"engine unavailable: {exc}") from exc
+    root, verdict = resolve_checked_repo_root(explicit_root=None)
+    if verdict["verdict"] == "MISMATCH":
+        print(verdict["message"], file=sys.stderr)
+    if not root:
         raise AuditError("cwd is not inside a git repo; pass --root")
-    return Path(out.stdout.strip())
+    return Path(root)
 
 
 def main(argv: Optional[Sequence[str]] = None, runner: Optional[Runner] = None,

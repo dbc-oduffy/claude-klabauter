@@ -18,7 +18,9 @@ Every run's outcome (started_at, finished_at, exit_code, stderr_tail) lands in
 A launch refused for memory (`post_close_admission.admit`) instead writes a record with
 `exit_code` null and a `deferred` reason, and spawns nothing.
 
-Usage: structural-index-refresh.py [--root DIR] [--timeout SECONDS]
+`--flag-only` (`flag_staleness`) reads the recorded status, prints a staleness line, and spawns nothing.
+
+Usage: structural-index-refresh.py [--root DIR] [--timeout SECONDS] [--flag-only]
 """
 from __future__ import annotations
 
@@ -279,10 +281,35 @@ def refresh(root: Path, timeout: float, env: Optional[dict] = None) -> Optional[
     return None if mode in (None, "noop") else f"structural-index: refreshed ({mode})"
 
 
+def flag_staleness(root: Path, env: Optional[dict] = None) -> Optional[str]:
+    """Return a staleness line from the recorded status, or None when the index looks current.
+
+    Reads status.json and refresh-last.json only; never spawns, admits, or writes. The close
+    ceremonies call this instead of `refresh`.
+    """
+    environ = os.environ if env is None else env
+    if environ.get(KILL_SWITCH):
+        return None
+    if resolve_index_repo() is None:
+        return None
+    status = read_status(root)
+    if status is None or status.get("full_rebuild_required"):
+        return "structural-index: stale (full rebuild needed); refresh runs at workday-start"
+    try:
+        last = json.loads(record_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        last = None
+    if isinstance(last, dict) and (last.get("deferred") or last.get("exit_code") not in (0, ALREADY_RUNNING)):
+        return "structural-index: last refresh did not complete; index may be stale"
+    return None
+
+
 def main(argv: Optional[list] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=".", help="repo root (default: cwd)")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    parser.add_argument("--flag-only", action="store_true",
+                        help="print a staleness line from recorded status; spawn nothing")
     parser.add_argument("--run-and-record", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--rag", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -299,7 +326,8 @@ def _run(args: argparse.Namespace) -> int:
         run_and_record(Path(args.rag), Path(args.root).resolve())
         return 0
     try:
-        line = refresh(Path(args.root).resolve(), args.timeout)
+        root = Path(args.root).resolve()
+        line = flag_staleness(root) if args.flag_only else refresh(root, args.timeout)
     except Exception as exc:  # never block a ceremony
         line = f"structural-index: skipped ({type(exc).__name__}: {exc})"
     if line:
