@@ -775,3 +775,60 @@ def test_targeted_set_is_shared_with_the_landing_gate():
 def test_errored_retest_with_failed_tests_and_no_tests_run_keeps_the_ids(repo, tmp_path, monkeypatch):
     rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [1, 126, 0])
     assert rec["status"] == "error" and "tests_run" not in rec and rec[li.FAILED_TESTS_PARAM]
+
+
+def test_many_node_ids_split_into_bounded_sessions_in_order(repo):
+    tests = [f"test_a.py::t{i}" for i in range(retest_targeted.RETEST_MAX_NODES * 2 + 1)]
+    _base, groups = retest_targeted._launch_plan(repo, tests)
+    assert [len(g) for g in groups] == [retest_targeted.RETEST_MAX_NODES] * 2 + [1]
+    assert [t for g in groups for t in g] == tests
+
+
+def test_node_count_at_the_bound_stays_one_session(repo):
+    tests = [f"test_a.py::t{i}" for i in range(retest_targeted.RETEST_MAX_NODES)]
+    assert len(retest_targeted._launch_plan(repo, tests)[1]) == 1
+
+
+@pytest.mark.parametrize("tokens,expected", [
+    (["pytest", "-n", "auto", "--maxprocesses=7", "-q"], ["pytest", "-n", "2", "-q"]),
+    (["pytest", "-n", "8", "--maxprocesses", "7"], ["pytest", "-n", "2"]),
+    (["pytest", "-n1"], ["pytest", "-n1"]),
+    (["pytest", "--numprocesses=auto"], ["pytest", "--numprocesses=2"]),
+    (["pytest", "-q"], ["pytest", "-q"]),
+])
+def test_cap_workers_clamps_the_worker_count(tokens, expected):
+    assert retest_targeted._cap_workers(tokens, 2) == expected
+
+
+def test_launch_plan_base_never_exceeds_the_worker_cap(repo, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -n auto --maxprocesses=7")
+    base, _groups = retest_targeted._launch_plan(repo, ["test_a.py"])
+    assert base[base.index("-n") + 1] == str(retest_targeted.worker_cap())
+    assert not any(t.startswith("--maxprocesses") for t in base)
+    assert 1 <= retest_targeted.worker_cap() <= retest_targeted.RETEST_MAX_WORKERS
+
+
+def test_declared_launcher_worker_count_is_clamped(repo):
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
+    _declare(repo, targeted_test_launcher="scripts/run.py -n 99 --maxprocesses=50")
+    base, _groups = retest_targeted._launch_plan(repo, ["test_a.py"])
+    assert base[base.index("-n") + 1] == str(retest_targeted.worker_cap())
+    assert not any(t.startswith("--maxprocesses") for t in base)
+
+
+def test_main_launches_one_child_per_node_chunk(repo, tmp_path, monkeypatch):
+    real = retest_targeted._chunks
+    monkeypatch.setattr(retest_targeted, "_chunks", lambda g, size=2: real(g, 2))
+    calls = []
+
+    def run(argv, cwd, **kw):
+        calls.append(argv)
+        return 0
+
+    out = _task_output(tmp_path)
+    ids = [f"test_a.py::t{i}" for i in range(5)]
+    rc = retest_targeted.main(
+        ["--from-task-output", str(out), "--repo-root", str(repo), "--detached-child",
+         *[x for t in ids for x in ("--tests", t)]], run=run, dirty=lambda r: [])
+    assert rc == 0 and [len([a for a in c if "::" in a]) for c in calls] == [2, 2, 1]

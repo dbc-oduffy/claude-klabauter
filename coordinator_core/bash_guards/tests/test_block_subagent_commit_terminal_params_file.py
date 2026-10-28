@@ -80,6 +80,136 @@ def test_the_land_run_argv_is_admitted(repo):
     assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8"))["run_id"] == _RUN
 
 
+def _reason(verdict) -> str:
+    return verdict["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def _no_block_transcript(tmp_path) -> str:
+    d = tmp_path / "proj2" / "subagents" / "workflows" / "wf_y"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "agent-a.jsonl"
+    f.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "Commit."}}) + "\n", encoding="utf-8")
+    return str(f)
+
+
+@pytest.mark.parametrize("verb", ["dispatch.land_run", "dispatch.terminal_commit"])
+def test_an_existing_minted_params_file_is_admitted_without_a_prompt_block(repo, verb):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    path = chan.params_path(repo, _RUN)
+    assert chan.materialize(path, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token})
+    argv = _emitted_argv(repo).replace("dispatch.terminal_commit", verb)
+    assert _check(argv, _no_block_transcript(repo)) is None
+
+
+def test_an_existing_params_file_with_an_unminted_token_is_refused(repo):
+    path = chan.params_path(repo, _RUN)
+    assert chan.materialize(path, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "never-minted"})
+    verdict = _check(_emitted_argv(repo), _no_block_transcript(repo))
+    assert verdict is not None
+    assert "the run token is spent, expired or not the one minted" in _reason(verdict)
+
+
+def test_an_existing_minted_params_file_outside_the_canonical_path_is_refused(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    other = repo / "elsewhere.json"
+    assert chan.materialize(other, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token})
+    argv = f"coordinator-invoke dispatch.land_run --params-file {other.as_posix()}"
+    assert _check(argv, _no_block_transcript(repo)) is not None
+
+
+def test_a_missing_params_file_without_a_prompt_block_is_refused_naming_the_path(repo):
+    path = chan.params_path(repo, _RUN)
+    verdict = _check(_emitted_argv(repo), _no_block_transcript(repo))
+    assert verdict is not None
+    assert "missing" in _reason(verdict)
+    assert path.as_posix() in _reason(verdict)
+
+
+@pytest.mark.parametrize("content", ["{not json", "[]", '{"run_id": "ask-1"}'])
+def test_an_unparseable_params_file_without_a_prompt_block_is_refused_naming_the_path(repo, content):
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    path.write_text(content, encoding="utf-8")
+    verdict = _check(_emitted_argv(repo), _no_block_transcript(repo))
+    assert verdict is not None
+    assert "unparseable" in _reason(verdict)
+    assert path.as_posix() in _reason(verdict)
+
+
+def _cross_repo(tmp_path, monkeypatch):
+    cwd_repo = tmp_path / "cwd_repo"
+    other = tmp_path / "other_repo"
+    for r in (cwd_repo, other):
+        (r / ".git").mkdir(parents=True)
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(cwd_repo))
+    monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
+    monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda root, agent_id: "")
+    monkeypatch.setattr(guard, "_git_commit_agent_may_commit", lambda *a, **k: (False, ""))
+    return cwd_repo, other
+
+
+def _cross_argv(other) -> str:
+    return (
+        f"coordinator-invoke dispatch.land_run --params-file {chan.params_path(other, _RUN).as_posix()}"
+        f" --repo {other.as_posix()}"
+    )
+
+
+def test_a_cross_repo_land_run_params_file_is_admitted_without_a_prompt_block(tmp_path, monkeypatch):
+    _, other = _cross_repo(tmp_path, monkeypatch)
+    token = run_token.mint(other, _RUN, _SCRIPT)
+    assert chan.materialize(chan.params_path(other, _RUN), {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token})
+    assert _check(_cross_argv(other), _no_block_transcript(tmp_path)) is None
+
+
+def test_a_cross_repo_missing_params_file_is_refused_naming_the_path(tmp_path, monkeypatch):
+    _, other = _cross_repo(tmp_path, monkeypatch)
+    verdict = _check(_cross_argv(other), _no_block_transcript(tmp_path))
+    assert verdict is not None
+    assert chan.params_path(other, _RUN).as_posix() in _reason(verdict)
+
+
+def _layered_transcript(tmp_path, params: dict, *, relay: str, attachment_bytes: int) -> str:
+    """Relay record, an `attachment` record (optionally over the read cap), then the computed task."""
+    d = tmp_path / "proj" / "subagents" / "workflows" / "wf_x"
+    d.mkdir(parents=True, exist_ok=True)
+    prompt = "\n".join("  " + ln for ln in ["Commit.", *chan.render_params_block(params).split("\n")])
+    records = [
+        {"type": "user", "message": {"role": "user", "content": relay}},
+        {"type": "attachment", "attachment": {"type": "instructions", "content": "x" * attachment_bytes}},
+        {"type": "user", "message": {"role": "user", "content": prompt}},
+    ]
+    f = d / "agent-a.jsonl"
+    f.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+    return str(f)
+
+
+@pytest.mark.parametrize("attachment_bytes", [30_000, chan.READ_CAP_BYTES + 5_000])
+def test_the_halt_commit_land_run_argv_is_admitted_behind_an_attachment_record(repo, attachment_bytes):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "halted_by": {"reason": "x"}}
+    tp = _layered_transcript(repo, params, relay=f"{chan.RELAY_HEADER} relayed", attachment_bytes=attachment_bytes)
+    argv = _emitted_argv(repo).replace("dispatch.terminal_commit", "dispatch.land_run") + f" --repo {repo.as_posix()}"
+    assert _check(argv, tp) is None
+    assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8"))["run_id"] == _RUN
+
+
+def test_a_params_block_quoted_only_in_the_relay_record_is_still_refused(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token}
+    d = repo / "proj" / "subagents" / "workflows" / "wf_x"
+    d.mkdir(parents=True)
+    relay = f"{chan.RELAY_HEADER}\n" + chan.render_params_block(params)
+    f = d / "agent-a.jsonl"
+    f.write_text(
+        json.dumps({"type": "user", "message": {"content": relay}}) + "\n"
+        + json.dumps({"type": "attachment", "attachment": {}}) + "\n",
+        encoding="utf-8",
+    )
+    assert _check(_emitted_argv(repo), str(f)) is not None
+    assert not chan.params_path(repo, _RUN).exists()
+
+
 def _cd(repo, sep: str) -> str:
     return f"cd {repo.as_posix()} {sep} "
 

@@ -183,9 +183,11 @@ from coordinator_core.benchmarks.process_time import (
     batched_process_time_quantiles,
 )
 from coordinator_core.benchmarks.isolated_clone import (
+    close_clone_job,
     mkdtemp_for_clone,
     reap_processes_under,
     rmtree_or_raise,
+    spawn_clone_server,
 )
 from coordinator_core.warm import breadcrumb
 from coordinator_core.warm.tests.door_test_support import (
@@ -294,17 +296,10 @@ def warm_engine_root() -> Iterator[Path]:
     tmp_parent = mkdtemp_for_clone(source_root, prefix="warm-door-gate-")
     isolated_root = tmp_parent / "clone"
     proc: Optional[subprocess.Popen] = None
+    job = None
     try:
         _hardlink_coordinator_core(source_root, isolated_root)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "coordinator_core.warm.server"],
-            cwd=str(isolated_root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=_CREATE_NO_WINDOW,
-        )
+        proc, job = spawn_clone_server(isolated_root)
         crumb = _wait_for_live_breadcrumb(isolated_root, _BOOT_WAIT_DEADLINE_SECS)
         if crumb is None:
             if proc.poll() is None:
@@ -324,12 +319,8 @@ def warm_engine_root() -> Iterator[Path]:
             except OSError:
                 pass
         # The breadcrumb pid is NOT the whole process set this fixture owns.
-        # `server.py`'s boot starts a daemon thread calling
-        # `supervisor.ensure_listener`, which spawns the http listener
-        # DETACHED -- so terminating the server above leaves that supervisor
-        # running out of this clone, holding it open, and the `rmtree` below
-        # then fails silently. Reap by ROOT, which is the only predicate a
-        # deliberately-reparented process still answers to.
+        # Reap by ROOT, the only predicate a reparented process still answers to.
+        close_clone_job(job)
         reaped = reap_processes_under(tmp_parent)
         # The breadcrumb does NOT live inside `isolated_root` -- `svc_dir`
         # resolves it under the machine-global, per-clone-hash runtime base
@@ -524,7 +515,9 @@ def warm_engine_root_darwin() -> Iterator[Path]:
     os.environ[breadcrumb.RUNTIME_BASE_ENV] = str(runtime_base)
     try:
         _hardlink_coordinator_core(source_root, isolated_root)
-        server_pid = _spawn_orphaned_server_darwin(isolated_root, dict(os.environ))
+        server_pid = _spawn_orphaned_server_darwin(
+            isolated_root, {**os.environ, "COORDINATOR_WARM_LISTENER_AUTOSTART": "0"}
+        )
         crumb = _wait_for_live_breadcrumb(isolated_root, _BOOT_WAIT_DEADLINE_SECS)
         if crumb is None:
             _terminate(server_pid)

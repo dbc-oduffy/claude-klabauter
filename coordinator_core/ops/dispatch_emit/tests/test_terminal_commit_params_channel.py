@@ -134,9 +134,9 @@ def _lines(*records):
     return "".join(json.dumps(r) + "\n" for r in records)
 
 
-def test_read_spawn_prompt_non_relay_first_record_never_reads_second(tmp_path):
+def test_read_spawn_prompt_skips_non_user_records_and_returns_first_non_relay_user_record(tmp_path):
     f = _spawn_file(tmp_path, {"type": "system"}, extra=_lines(_record("second")))
-    assert ch.read_spawn_prompt(str(f)) is None
+    assert ch.read_spawn_prompt(str(f)) == "second"
     g = _spawn_file(tmp_path / "g", _record("first"), extra=_lines(_record("second")))
     assert ch.read_spawn_prompt(str(g)) == "first"
 
@@ -163,6 +163,12 @@ def test_third_record_is_never_read(tmp_path):
     block = _indent(ch.render_params_block(PARAMS))
     f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record("second"), _record(block)))
     assert ch.read_spawn_prompt(str(f)) == "second"
+
+
+def test_prompt_record_beyond_max_prompt_records_is_never_read(tmp_path):
+    filler = [{"type": "attachment"}] * ch.MAX_PROMPT_RECORDS
+    f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(*filler, _record("late")))
+    assert ch.read_spawn_prompt(str(f)) is None
 
 
 def test_materialize_writes_ascii_json_equal_to_input_and_replaces(tmp_path):

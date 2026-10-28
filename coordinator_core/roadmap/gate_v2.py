@@ -75,7 +75,7 @@ _HEAD_WANT = frozenset({
     "baton_role", "deployment_state", "status", "roadmap_id", "stub_id", "handoff_id",
     "deliverable_id", "replan_of", "superseded_by",
 })
-_PLAN_WANT = frozenset({"title", "status", "plan_id", "deliverable_id", "sizing_object", "kind", "plan"})
+_PLAN_WANT = frozenset({"title", "status", "plan_id", "deliverable_id", "sizing_object", "kind", "plan", "mise_prepped_sha"})
 _ID_WANT = frozenset({"stub_id", "handoff_id", "deliverable_id"})
 _TERMINAL_STATUS = frozenset({"claimed", "consumed", "superseded", "closed", "shipped", "done"})
 # A sizing route that holds no planning content: the baton waits for its execution gate.
@@ -437,6 +437,21 @@ def _unlinked_claim(g: _Gate, gp: str) -> dict:
     return {"path": path, "cause": cause, "status": None}
 
 
+def _plan_approved(g: _Gate, plan: dict) -> bool:
+    """Planning-gate approval of a linked plan (status, or reviewed plus a mise-prep stamp)."""
+    if plan["status"] in pg.PLAN_APPROVED_STATUSES:
+        return True
+    entry = g.plans().get(plan["path"])
+    if entry is None:
+        # governing_plan mini-index plans are not in g.plans(); read the stamp directly.
+        try:
+            fm = _head_fields(g.root / plan["path"], _PLAN_HEAD_BYTES, _PLAN_WANT)
+        except OSError:
+            return False
+        return pg.plan_counts_approved(plan["status"], fm)
+    return bool(entry["approved"])
+
+
 def _disposition(g: _Gate, rec: Optional[_Rec]) -> str:
     """Requirement 4: unresolved | unplanned | plan-drafted | plan-approved | coded."""
     if rec is None:
@@ -453,7 +468,7 @@ def _disposition(g: _Gate, rec: Optional[_Rec]) -> str:
             result = "unplanned"
         elif plan["status"] in pg.PLAN_CODED_STATUSES:
             result = "coded"
-        elif plan["status"] in pg.PLAN_APPROVED_STATUSES:
+        elif _plan_approved(g, plan):
             result = "plan-approved"
         else:
             result = "plan-drafted"
@@ -607,7 +622,7 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
     if state == "candidate" and execution and resolved:
         waiting = pg._sizing_route(g.root, resolved) in _NO_PLAN_ROUTES
     candidate = state == "candidate" and not waiting and _shipped_plan(g, rec) is None
-    plan_approved = plan is not None and plan["status"] in pg.PLAN_APPROVED_STATUSES
+    plan_approved = plan is not None and _plan_approved(g, plan)
     gp = _s(fm.get("governing_plan"))
     row = {
         "id": pg._baton_ids(fm, rec.path)[0],

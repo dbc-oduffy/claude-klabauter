@@ -207,7 +207,7 @@ def _judge_dir(root, d, *, head, common, untracked, landing, deleted, withheld):
 
 def judge_shipped_claims(
     root: Path, claims: Iterable[ShippedClaim], *, landing_paths=(), deleted_paths=(), withheld_paths=(),
-    own_paths=None, row_of=None,
+    own_paths=None, row_of=None, widened=(),
 ) -> tuple[ShippedVerdict, ...]:
     """One verdict per claim: withheld, backed, untracked, not-in-commit, else unresolved.
 
@@ -219,6 +219,7 @@ def judge_shipped_claims(
     Each verdict's `left_out` is the landing's reason the file is not carried. A refusing verdict on
     a path in `row_of` ({path: (row id, grade)}) becomes `row-ungraded`, except a withhold carrying
     a reason (content or ownership): crediting the row would not land that file.
+    `widened` (the run's recorded in-run widens) counts as declared writes beside `own_paths`.
     Coupling: `_FILTERED`/`_worktree_blob` are land_run privates, imported lazily to avoid the cycle.
     """
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -234,7 +235,7 @@ def judge_shipped_claims(
     reasons = (
         {_posix(p): str(why) for p, why in withheld_paths.items()} if isinstance(withheld_paths, Mapping) else None
     )
-    own = None if own_paths is None else {_posix(p) for p in own_paths}
+    own = None if own_paths is None else {_posix(p) for p in own_paths} | {_posix(p) for p in widened}
     rows = {_posix(p): v for p, v in (row_of or {}).items()}
     out: list[ShippedVerdict] = []
     claims = tuple(claims)
@@ -345,7 +346,7 @@ def refused_code(reply: Mapping) -> str:
 
 def shipped_gate(
     root, note_text: Optional[str], *, landing_paths=(), deleted_paths=(), withheld_paths=(),
-    own_paths=None, row_of=None, owners=None, run_id=None,
+    own_paths=None, row_of=None, owners=None, run_id=None, widened=(),
 ) -> tuple[Optional[str], dict]:
     """``(refusal | None, reply_field)``; the reply is empty when the note carries no shipped claim.
 
@@ -357,10 +358,10 @@ def shipped_gate(
         return None, {}
     vs = list(judge_shipped_claims(
         Path(root), claims, landing_paths=landing_paths, deleted_paths=deleted_paths,
-        withheld_paths=withheld_paths, own_paths=own_paths, row_of=row_of,
+        withheld_paths=withheld_paths, own_paths=own_paths, row_of=row_of, widened=widened,
     ))
     if owners is not None:
-        skip = {_posix(p) for p in (own_paths or ())} | {_posix(p) for p in (row_of or {})}
+        skip = {_posix(p) for p in (own_paths or ())} | {_posix(p) for p in widened} | {_posix(p) for p in (row_of or {})}
         cand = [v.claim.path for v in vs if v.verdict in _REFUSING and v.claim.path not in skip]
         if cand:
             try:

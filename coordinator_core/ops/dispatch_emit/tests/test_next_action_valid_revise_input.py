@@ -36,8 +36,8 @@ def _emitted_key_sets() -> list[list[str]]:
     return [_top_level_keys(script, m.end()) for m in _ANCHOR.finditer(script)]
 
 
-def test_both_emission_sites_are_found():
-    assert len(_emitted_key_sets()) == 2
+def test_all_emission_sites_are_found():
+    assert len(_emitted_key_sets()) == 3
 
 
 def test_every_recorded_revise_params_key_is_declared_by_revise():
@@ -51,6 +51,8 @@ def test_recorded_note_expression_has_a_nonempty_literal_prefix():
     # The XS-misrouted stage_by_plan_path next_action carries the same note expression; only the
     # workflow.revise sites are the ones whose note revise validates.
     assert script.count("op: 'workflow.revise', params: { run_id: _runId, note: 'halted: ' + ") == 2
+    # Third site: landed-with-rows-open revise, a different literal prefix.
+    assert script.count("op: 'workflow.revise', params: { run_id: _runId, note: 'landed with rows open: ' + ") == 1
 
 
 def test_recorded_revise_params_pass_validation_and_carry_revision_content():

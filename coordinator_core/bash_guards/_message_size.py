@@ -167,6 +167,7 @@ from coordinator_core import machine_profile
 from coordinator_core._hook_envelope import COORDINATOR_PROVENANCE_MARKER
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL, operator_override_note
 from coordinator_core.bash_guards.dispatch import GuardBand
+from coordinator_core.guard_routes.keys import ROUTE_KEY_PATTERN, route_key, route_line
 
 #: The cap on a guard's OWN prose, measured with the mandatory
 #: `operator_override_note` tail already subtracted by identity -- NOT
@@ -459,10 +460,14 @@ _OVERRIDE_NOTE_TAIL = operator_override_note(
 )
 
 
+_ROUTE_LINE_TAIL_RE = re.compile(re.escape(route_line("namex")).replace(re.escape(route_key("namex")), ROUTE_KEY_PATTERN))
+
+
 def _tail_bytes(text: str) -> int:
     """Algorithm step 4: locate the mandatory `operator_override_note` tail
     BY IDENTITY (the fixed string above) and return its byte length if
-    present.
+    present, plus the byte length of the EM-only route line when one is
+    present (matched by `_ROUTE_LINE_TAIL_RE`).
 
     SIMPLIFIED 2026-08-11 (guard-messages-point-to-docs-never-name plan,
     landed the same dispatch as `operator_override_note`'s own second
@@ -481,7 +486,11 @@ def _tail_bytes(text: str) -> int:
     unused -- a regex built to recover a signal the render no longer
     carries is dead code reasoning about a defect class that can no longer
     occur, not a safety net."""
-    return len(_OVERRIDE_NOTE_TAIL.encode("utf-8")) if _OVERRIDE_NOTE_TAIL and _OVERRIDE_NOTE_TAIL in text else 0
+    override = len(_OVERRIDE_NOTE_TAIL.encode("utf-8")) if _OVERRIDE_NOTE_TAIL and _OVERRIDE_NOTE_TAIL in text else 0
+    # The EM-only route line (`guard_routes.keys.route_line`) is also mandatory
+    # tail: it is subtracted from the cap exactly like the override note.
+    route = _ROUTE_LINE_TAIL_RE.search(text)
+    return override + (len(route.group(0).encode("utf-8")) if route else 0)
 
 
 _ADVISORY_TAIL_RE = re.compile(re.escape(machine_profile.advisory_tail("NAMEX")).replace("NAMEX", "[a-z0-9-]+"))

@@ -91,6 +91,15 @@ def execute_section(script: str) -> str:
 
 
 @pytest.fixture
+def m_plus_known_arm(monkeypatch):
+    """Compose as an `--ask --sizing` M+ re-fire: only a known M+/roadmap arm embeds plan-blitz,
+    so a test reading the embedded planBlitz body opts in here rather than composing a raw ask."""
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS)
+
+
+@pytest.fixture
 def verifier_roster(monkeypatch):
     """DoE's live plan-route roster plus a delivery-verifier. The live roster names none
     (delivery-exempt), so a test of the verifier's brief has to add one."""
@@ -109,7 +118,7 @@ def verifier_roster(monkeypatch):
         fragment, schemas = live(route)
         fragment = copy.deepcopy(fragment)
         wave = next(s for s in fragment["execute_review"]["stages"] if s["kind"] == "review-wave")
-        wave["agents"].append(verifier)
+        wave["agents"].append({**verifier, "schema": "delivery-verdict-result"})
         return fragment, schemas
 
     monkeypatch.setattr(emission_receipt, "_load_review_inputs", _with_verifier)

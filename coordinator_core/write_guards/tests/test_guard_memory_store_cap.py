@@ -38,9 +38,8 @@ _LEVEL_ENV = "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_GUARD-MEMORY-STORE-CAP"
 
 
 @pytest.fixture(autouse=True)
-def _plain_deny_and_isolated_lessons(monkeypatch, tmp_path):
-    """Legacy classes assert the plain deny text (reroute unarmed at warn); the
-    lessons root is pinned so no test can write into the real repo."""
+def _warn_level_and_isolated_lessons(monkeypatch, tmp_path):
+    """Guard level pinned to warn; the lessons root is pinned so no test can write into the real repo."""
     monkeypatch.setenv(_LEVEL_ENV, "warn")
     monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path / "lessons-root"))
     (tmp_path / "lessons-root").mkdir()
@@ -257,30 +256,20 @@ class TestExtendedLengthPrefixAsymmetry:
 
 
 class TestDenyMessageShape:
-    def test_row_count_deny_names_eviction_and_routing_test(self, memory_dir):
+    def test_row_count_deny_names_eviction(self, memory_dir):
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(6)
         result = guard.check(_write_payload(target, content))
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "evict" in reason
-        assert "force-read" in reason
-        assert "TRUE" in reason
-        assert "lesson" in reason
-        assert "state/lessons/" in reason
+        assert "vict" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        reason = guard._deny_reason_rows("d", content.splitlines()[2:])
+        assert "evict" in reason.lower()
+        assert "state/lessons/" not in reason
 
-    def test_file_count_deny_names_the_routing_test_and_both_routes(self, memory_dir):
-        import os
-        import time
-        for i in range(guard.MAX_MEMORY_FILES):
-            f = memory_dir / f"mem-{i:02d}.md"
-            f.write_text("x", encoding="utf-8")
-            os.utime(f, (1000 + i, 1000 + i))
-        target = str(memory_dir / "brand-new-memory.md")
-        result = guard.check(_write_payload(target, "y"))
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "force-read" in reason
-        assert "state/lessons/" in reason
-        assert "mem-00.md" in reason, "must name the OLDEST file by mtime"
+    def test_file_count_failed_eviction_deny_names_the_oldest_and_one_instruction(self):
+        reason = guard._deny_reason_file_count("slug/memory/", 5, "mem-00.md")
+        assert "mem-00.md" in reason
+        assert reason.count("then retry") == 1
+        assert "state/lessons/" not in reason
         assert len(reason.encode("utf-8")) <= 220, "220-byte guard prose cap"
 
 
@@ -301,15 +290,31 @@ class TestFileCountCap:
             stamp = now - (n - i) * 10
             os.utime(p, (stamp, stamp))
 
-    def test_20_existing_plus_new_filename_denied_names_oldest(self, memory_dir):
+    def test_at_cap_plus_new_filename_allowed_and_oldest_evicted(self, memory_dir):
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         target = str(memory_dir / "new-one.md")
-        result = guard.check(_write_payload(target, "y"))
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert guard.check(_write_payload(target, "y")) is None
+        assert not (memory_dir / "body-0.md").exists()
+        assert (memory_dir / "body-1.md").exists()
+
+    def test_bash_verdict_evicts_and_returns_none(self, memory_dir):
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
+        assert guard.memory_cap_verdict(memory_dir, "new-one.md") is None
+        assert not (memory_dir / "body-0.md").exists()
+        log = memory_dir.parent / "memory-evictions.jsonl"
+        assert log.read_text(encoding="utf-8").count("\n") == 1
+
+    def test_eviction_oserror_is_a_deny_naming_the_oldest(self, memory_dir, monkeypatch):
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
+
+        def boom(_d):
+            raise OSError("locked")
+
+        monkeypatch.setattr(guard, "evict_oldest", boom)
+        reason = guard.memory_cap_verdict(memory_dir, "new-one.md")
         assert "body-0.md" in reason
-        assert f"{guard.MAX_MEMORY_FILES}/{guard.MAX_MEMORY_FILES}" in reason
+        result = guard.check(_write_payload(str(memory_dir / "new-one.md"), "y"))
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_20_existing_plus_existing_filename_allowed(self, memory_dir):
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
@@ -381,13 +386,12 @@ class TestByteDenyNamesWhereTheBytesAre:
         reason = guard._deny_reason_bytes("repo", 2100, rows)
 
         assert "NOT rows" not in reason
-        assert "evict a row yourself" in reason
+        assert "Evict a row yourself" in reason
 
-    def test_both_shapes_state_the_ladder_and_the_no_auto_trim_rule(self):
+    def test_both_shapes_state_the_ladder(self):
         for rows, size in ((["- [A](a.md) — hook"] * 9, 2149), (["- " + "x" * 90] * 20, 2100)):
             reason = guard._deny_reason_bytes("repo", size, rows)
             assert "stale fact, then doctrine dup, then oldest" in reason
-            assert "auto-trim" in reason
             assert len(reason.encode()) <= 220
 
 
@@ -472,117 +476,96 @@ class TestOverCapNonGrowingEditLandsWithAdvisory:
         assert "permissionDecision" not in out
         assert f"{size}B" in out["additionalContext"] and "1000B" in out["additionalContext"]
 
-    def test_growing_overcap_body_still_denies_with_reroute(self, memory_dir, monkeypatch):
-        monkeypatch.setenv(_LEVEL_ENV, "strict")
+    def test_growing_overcap_body_is_a_plain_shorten_deny(self, memory_dir, tmp_path):
         target = memory_dir / "fat.md"
         target.write_text("y" * 1000, encoding="utf-8")
         result = guard.check(_edit_payload(str(target), old="y" * 10, new="y" * 11))
         out = result["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny"
-        assert "Saved as a lesson" in out["permissionDecisionReason"]
+        assert "Shorten it" in out["permissionDecisionReason"]
+        assert list((tmp_path / "lessons-root").rglob("*")) == []
 
 
-class TestOverCapWriteReroutesToLesson:
-    """At strict the refused content lands in state/lessons/ and the deny names it."""
+def _edit_index_payload(index, old: str, new: str) -> dict:
+    return _edit_payload(str(index), old=old, new=new)
 
-    @pytest.fixture(autouse=True)
-    def _strict(self, monkeypatch):
-        monkeypatch.setenv(_LEVEL_ENV, "strict")
 
-    @staticmethod
-    def _lessons(tmp_path):
-        return sorted((tmp_path / "lessons-root" / "state" / "lessons").glob("*.yaml"))
+class TestMemoryMdBreachEvictsOldest:
+    """An Edit/MultiEdit of MEMORY.md over the row or byte cap evicts oldest until it fits."""
 
     @staticmethod
-    def _seed(memory_dir, n=None):
-        n = guard.MAX_MEMORY_FILES if n is None else n
+    def _seed(memory_dir, n: int = 5):
+        import os
+
+        rows = []
         for i in range(n):
-            (memory_dir / f"body-{i}.md").write_text(f"keep {i}", encoding="utf-8")
-
-    @staticmethod
-    def _snapshot(memory_dir):
-        return {p.name: p.read_bytes() for p in memory_dir.iterdir()}
-
-    @staticmethod
-    def _reason(result):
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-        return result["hookSpecificOutput"]["permissionDecisionReason"]
-
-    def test_overcap_body_write_reroutes_to_lesson_at_strict(self, memory_dir, tmp_path):
-        import yaml
-
-        self._seed(memory_dir)
-        before = self._snapshot(memory_dir)
-        content = "---\nname: Pin root\n---\n\nPin CLAUDE_KLABAUTER_ROOT first.\n"
-        result = guard.check(_write_payload(str(memory_dir / "sixth.md"), content))
-
-        lessons = self._lessons(tmp_path)
-        assert len(lessons) == 1
-        assert yaml.safe_load(lessons[0].read_text(encoding="utf-8"))["body"].strip() == content.strip()
-        reason = self._reason(result)
-        assert lessons[0].name in reason
-        assert "do not retry" in reason
-        assert self._snapshot(memory_dir) == before
-        assert not (memory_dir / "sixth.md").exists()
-
-    def test_overcap_body_bytes_reroute(self, memory_dir, tmp_path):
-        content = "x" * 900
-        reason = self._reason(guard.check(_write_payload(str(memory_dir / "big.md"), content)))
-        lessons = self._lessons(tmp_path)
-        assert len(lessons) == 1 and lessons[0].name in reason
-        assert content in lessons[0].read_text(encoding="utf-8")
-
-    def test_memory_md_reroutes_only_the_added_row(self, memory_dir, tmp_path):
-        import yaml
-
+            p = memory_dir / f"b{i}.md"
+            p.write_text(f"---\ntype: user\n---\nbody {i}\n", encoding="utf-8")
+            os.utime(p, (1000 + i, 1000 + i))
+            rows.append(f"- [b{i}](b{i}.md) note")
         index = memory_dir / "MEMORY.md"
-        original = "# Memory Index\n\n" + _rows(5)
-        index.write_text(original, encoding="utf-8")
-        new_row = "- [brand-new](new.md) added row"
-        result = guard.check(_write_payload(str(index), original + "\n" + new_row))
+        index.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        return index
 
-        lessons = self._lessons(tmp_path)
-        assert len(lessons) == 1
-        body = yaml.safe_load(lessons[0].read_text(encoding="utf-8"))["body"]
-        assert body.strip() == new_row
-        assert lessons[0].name in self._reason(result)
-        assert index.read_text(encoding="utf-8") == original
-
-    def test_warn_level_denies_plainly_and_writes_no_lesson(self, memory_dir, tmp_path, monkeypatch):
-        monkeypatch.setenv(_LEVEL_ENV, "warn")
-        self._seed(memory_dir)
-        reason = self._reason(guard.check(_write_payload(str(memory_dir / "sixth.md"), "y")))
-        assert "evict oldest" in reason
-        assert self._lessons(tmp_path) == []
-
-    def test_failed_reroute_is_the_plain_deny_not_an_allow(self, memory_dir, tmp_path, monkeypatch):
-        monkeypatch.setattr(guard, "reroute_to_lesson", lambda *a, **k: None)
-        self._seed(memory_dir)
-        reason = self._reason(guard.check(_write_payload(str(memory_dir / "sixth.md"), "y")))
-        assert "evict oldest" in reason
-        assert self._lessons(tmp_path) == []
-
-    def test_shrinking_edit_of_overcap_file_allowed_without_lesson(self, memory_dir, tmp_path):
-        target = memory_dir / "fat.md"
-        target.write_text("y" * 1000, encoding="utf-8")
-        result = guard.check(_edit_payload(str(target), old="y" * 1000, new="y" * 900))
+    def test_edit_adding_a_sixth_row_evicts_oldest_and_lands(self, memory_dir):
+        index = self._seed(memory_dir)
+        result = guard.check(
+            _edit_index_payload(index, "- [b4](b4.md) note\n", "- [b4](b4.md) note\n- [n](n.md) new\n")
+        )
         assert result is None
-        assert self._lessons(tmp_path) == []
+        assert not (memory_dir / "b0.md").exists()
+        assert "b0.md" not in index.read_text(encoding="utf-8")
+        assert (memory_dir.parent / "memory-evictions.jsonl").exists()
 
-    def test_same_refused_write_twice_is_one_lesson(self, memory_dir, tmp_path):
-        payload = _write_payload(str(memory_dir / "big.md"), "z" * 900)
-        first = self._reason(guard.check(payload))
-        second = self._reason(guard.check(payload))
-        assert first == second
-        assert len(self._lessons(tmp_path)) == 1
+    def test_multiedit_over_byte_cap_evicts_until_it_fits(self, memory_dir):
+        index = self._seed(memory_dir)
+        text = index.read_text(encoding="utf-8").replace(" note", " " + "n" * 75)
+        index.write_text(text, encoding="utf-8")
+        payload = {
+            "tool_name": "MultiEdit",
+            "tool_input": {
+                "file_path": str(index),
+                "edits": [{"old_string": "- [b4]", "new_string": "# " + "h" * 560 + "\n- [b4]"}],
+            },
+        }
+        assert guard.check(payload) is None
+        assert not (memory_dir / "b0.md").exists()
+        assert (memory_dir / "b1.md").exists()
+        assert len(index.read_bytes()) <= guard.MAX_MEMORY_MD_BYTES
 
-    def test_reroute_leg_process_time_is_under_the_bar(self, memory_dir):
-        import time
+    def test_write_of_memory_md_over_row_cap_stays_a_plain_deny(self, memory_dir):
+        index = self._seed(memory_dir)
+        result = guard.check(_write_payload(str(index), "# Memory Index\n\n" + _rows(6)))
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert (memory_dir / "b0.md").exists()
+        assert not (memory_dir.parent / "memory-evictions.jsonl").exists()
 
-        guard.check(_write_payload(str(memory_dir / "warm.md"), "v" * 900))
-        payload = _write_payload(str(memory_dir / "big.md"), "w" * 900)
-        start = time.process_time()
-        reason = self._reason(guard.check(payload))
-        elapsed = time.process_time() - start
-        assert "Saved as a lesson" in reason
-        assert elapsed < 0.5
+    def test_edit_producing_an_overlong_row_stays_a_plain_deny(self, memory_dir):
+        index = self._seed(memory_dir)
+        result = guard.check(
+            _edit_index_payload(index, "- [b4](b4.md) note", "- [b4](b4.md) " + "q" * 120)
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "chars" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert (memory_dir / "b0.md").exists()
+        assert not (memory_dir.parent / "memory-evictions.jsonl").exists()
+
+    def test_edit_whose_old_string_sits_in_the_evicted_row_is_denied_and_evicts_nothing(
+        self, memory_dir
+    ):
+        index = self._seed(memory_dir)
+        result = guard.check(
+            _edit_index_payload(
+                index, "- [b0](b0.md) note\n", "- [b0](b0.md) note\n- [n](n.md) new\n- [m](m.md) m\n"
+            )
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert (memory_dir / "b0.md").exists()
+        assert "b0.md" in index.read_text(encoding="utf-8")
+        assert not (memory_dir.parent / "memory-evictions.jsonl").exists()
+
+    def test_edit_over_cap_with_nothing_to_evict_is_a_deny(self, memory_dir):
+        index = memory_dir / "MEMORY.md"
+        index.write_text(_rows(5), encoding="utf-8")
+        result = guard.check(_edit_index_payload(index, "short", "short" + "s" * 300))
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"

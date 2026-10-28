@@ -909,12 +909,31 @@ def _admit_guard_result(name: str, out: Any, payload: Optional[Dict[str, Any]]) 
     raise TypeError("guard %r returned %s; return an AlternativeRecord" % (name, type(out).__name__))
 
 
+def _deny_route_line_will_render(record: Any, payload: Optional[Dict[str, Any]]) -> bool:
+    """True when ``annotate_deny`` will append this record's route key.
+
+    Mirrors annotate_deny's route gate (payload present, positive EM audience,
+    index reachable, valid key); any fault is False so the override note stays.
+    """
+    if not isinstance(payload, dict):
+        return False
+    try:
+        from coordinator_core.guard_routes.keys import route_key, routes_index_reachable
+        from coordinator_core.session.identity import resolves_em_audience
+
+        route_key(record.guard_name.replace("_", "-"))
+        return bool(routes_index_reachable() and resolves_em_audience(payload, None))
+    except Exception:
+        return False
+
+
 def _render_record(record: Any, payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Render a guard's AlternativeRecord; the only place a record becomes an envelope.
 
     The audience is resolved only for a record that carries an Override. The
     override note is built here, for EM only, and not at all for a record whose
-    ``em_text`` the EM render returns verbatim.
+    ``em_text`` the EM render returns verbatim, nor for a deny whose route key
+    (appended by ``annotate_deny``) replaces it.
     """
     from coordinator_core.guard_messages.alternative_record import Audience, Override
     from coordinator_core.guard_messages.render import render
@@ -926,7 +945,11 @@ def _render_record(record: Any, payload: Optional[Dict[str, Any]]) -> Dict[str, 
 
     audience, _caller_class = resolve_audience(payload if isinstance(payload, dict) else {})
     note = ""
-    if audience is Audience.EM and record.em_text is None:
+    if (
+        audience is Audience.EM
+        and record.em_text is None
+        and not (record.verdict_kind == "deny" and _deny_route_line_will_render(record, payload))
+    ):
         from coordinator_core.bash_guards._helpers import operator_override_note
 
         note = operator_override_note(
@@ -2217,13 +2240,14 @@ def _evaluate_payload_json_budgeted(
                     _record_deny_fire(name, session_id, False, cwd)
                 except Exception:
                     pass
-            if _is_hard_deny_envelope and _sentinel_eligible and not _suppressed:
+            if _is_hard_deny_envelope and not _suppressed:
                 out = _annotate_unlock(
                     out,
                     session_id,
                     name,
                     _override_keys_doc_display(),
                     agent_id=agent_id,
+                    payload=payload,
                 )
             if _suppressed:
                 emitted = _resolve_suppressed_envelope(out)

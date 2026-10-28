@@ -356,6 +356,17 @@ _cold_reason: "str | None" = None
 #: catch-all `return None`).
 COLD_BUCKET_SPAWN_TRIGGERING_MISS = "spawn-triggering-miss"
 COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE = "drain-window-zero-byte-close"
+COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY = "mutation-deadline-cold-replay"
+
+#: MUTATING ops whose delivered-then-expired warm request may be re-run cold
+#: once. Admission invariant: the op's writes are content-addressed and a
+#: differing re-write is refused, and concurrent duplicate execution is
+#: serialized (the abandoned warm run may still be executing). review.prep:
+#: `ops/review_prep.py` computes only under an O_EXCL lock (the loser waits,
+#: then reads the winner's sidecar or returns a busy refusal), its diff/sha
+#: files refuse a differing re-write of a non-run-keyed id, and the sidecar and
+#: blobs use `atomic_write_bytes`. Re-verify the op against this invariant before adding a name.
+_COLD_REPLAY_SAFE = frozenset({"review.prep"})
 
 #: The bucket classification of THIS call's own `return None` inside
 #: `_try_warm_dispatch_inner`, read back by `_cold_bucket_for_row()`
@@ -1343,6 +1354,14 @@ def _try_warm_dispatch_inner(
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
+                    if msg.get("method") in _COLD_REPLAY_SAFE:
+                        _last_cold_bucket = COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
+                        print(
+                            f"[warm-client] {msg.get('method')} got no warm response within "
+                            f"{mutation_deadline}s; re-running cold once (replay-safe op)",
+                            file=sys.stderr,
+                        )
+                        return None
                     return _indeterminate_envelope(
                         msg,
                         f"no response within {mutation_deadline}s",

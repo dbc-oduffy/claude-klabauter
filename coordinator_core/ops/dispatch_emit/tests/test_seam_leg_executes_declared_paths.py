@@ -1,5 +1,5 @@
-"""The seam leg relays `review.reachability` over the landed range; an unreachable path fails the
-plan that wrote it closed."""
+"""The seam leg returns `plan.seam_record`'s reply verbatim and runs the landed rows' declared tests;
+a failing test fails the plan that wrote it closed."""
 
 from __future__ import annotations
 
@@ -14,18 +14,10 @@ def _seam_prompt(script: str) -> str:
     return script.split("async function _seamLeg", 1)[1].split("  function _seamFail", 1)[0]
 
 
-def test_the_leg_prompt_relays_reachability_over_the_landed_range():
+def test_the_leg_prompt_returns_the_seam_record_reply_verbatim():
     leg = _seam_prompt(_compose(_two_plan_waves()))
-    assert "review.reachability" in leg
-    assert "head_sha: sha" in leg
-    assert "paths:" in leg and "_landed[i].paths" in leg
-
-
-def test_the_leg_prompt_names_what_blocks_and_what_does_not():
-    leg = _seam_prompt(_compose(_two_plan_waves()))
-    assert "`unreachable`" in leg and "`broken`" in leg
-    assert "class: \\'unreachable\\', path, blocking: true" in leg
-    assert "never report `undecidable`" in leg
+    assert "review.reachability" not in leg
+    assert "verbatim from that reply" in leg
     assert "`op-error`" in leg and "REFUSED" in leg
 
 
@@ -72,7 +64,7 @@ def test_an_execution_failed_finding_halts_the_plan_that_wrote_the_failing_file(
     assert "seam-fix:wave-1" in out["calls"]
     assert "in-route repair" in out["reasons"][P1]
     prompt = out["seamParams"][0]
-    listed = json.loads(prompt.split("Tests: ", 1)[1].split(". Step 3", 1)[0])
+    listed = json.loads(prompt.split("Tests: ", 1)[1].split(". Step 2", 1)[0])
     assert "tests/test_a.py" in listed
     assert all(p.endswith(".py") and "test_" in p for p in listed)
 
@@ -81,7 +73,7 @@ def test_an_execution_failed_finding_halts_the_plan_that_wrote_the_failing_file(
 def test_a_leg_with_no_landed_test_file_carries_no_tests_step(tmp_path):
     out = _run_script(tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY)
     assert "Tests: " not in out["seamParams"][0]
-    assert "Step 3" not in out["seamParams"][0]
+    assert "Step 2" not in out["seamParams"][0]
 
 
 def test_the_leg_prompt_sends_a_saved_reply_under_scratch_never_the_repo_root():

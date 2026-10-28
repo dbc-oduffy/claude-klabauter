@@ -38,7 +38,12 @@ naming the elevated `trim-file-cache.py --apply` command; a calm verdict re-arms
 When available memory rises `HEADROOM_RISE_GIB` over its low-water mark, or the verdict goes calm
 after a PAUSED, it prints one `GOVERNOR HEADROOM available=<GiB>` line so the Group EM wakes.
 
-NEGATIVE SPEC: suspends and resumes only; never runs a cache trim; never kills, never signals a protected process; reads the
+Hourly (first tick, then every `RETENTION_EVERY` samples) it stamp-checks the engine's
+`retention_run` and spawns it detached when due; the governor itself deletes nothing. On the same
+tick it prints one `GOVERNOR SCRATCH-OVER-BUDGET` line per session whose Temp scratch exceeds
+`scratch_budget.per_session_gib` (report only; the engine sweep does the deleting).
+
+NEGATIVE SPEC: suspends and resumes only; never runs a cache trim itself; never kills, never signals a protected process; reads the
 box admission channel but never writes outside stdout. A suspended process it can no longer find
 (exited) is dropped silently.
 """
@@ -522,7 +527,9 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         notice_fn: Callable[[Optional[Path], list[Proc]], frozenset] = read_noticed_pids,
         bin_dir: Optional[Path] = None, pidfile: Optional[Path] = None,
         start_time_fn: Optional[Callable[[int], Optional[float]]] = None,
-        avail_fn: Optional[Callable[[], Optional[float]]] = None) -> None:
+        avail_fn: Optional[Callable[[], Optional[float]]] = None,
+        retention_fn: Optional[Callable[[], object]] = None,
+        scratch_fn: Optional[Callable[[], "dict[str, int]"]] = None) -> None:
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
     start_times_fn = process_start_times if start_time_fn is None else (
         lambda pids: {p: start_time_fn(p) for p in pids})
@@ -533,6 +540,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
     self_pid = os.getpid()
     paused: list[tuple[Proc, list[int]]] = []
     flagged: set[int] = set()
+    scratch_flagged: set[str] = set()
     calm = crit_streak = ticks = 0
     gave_up = False
     low_gib: Optional[float] = None
@@ -543,6 +551,23 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
     try:
         while max_ticks is None or ticks < max_ticks:
             ticks += 1
+            if ticks % RETENTION_EVERY == 1 % RETENTION_EVERY:
+                if retention_fn is not None:
+                    try:
+                        retention_fn()
+                    except Exception:  # housekeeping never stops the governor
+                        pass
+                if scratch_fn is not None:
+                    try:
+                        over_sessions = scratch_fn()
+                        scratch_flagged &= set(over_sessions)  # re-report a session that falls under then re-offends
+                        for sess, nbytes in over_sessions.items():
+                            if sess not in scratch_flagged:
+                                scratch_flagged.add(sess)
+                                emit(f"GOVERNOR SCRATCH-OVER-BUDGET session={sess} "
+                                     f"size={nbytes / 1024 ** 3:.1f}GiB")
+                    except Exception:  # a report failure never stops the governor
+                        pass
             if args.runaway_mb > 0 and ticks % max(args.runaway_every, 1) == 1 % max(args.runaway_every, 1):
                 over = {pid: mb for pid, mb in footprint_fn().items()
                         if mb >= args.runaway_mb and pid not in flagged and pid != self_pid}
@@ -611,6 +636,35 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 pass
 
 
+RETENTION_EVERY = 360
+
+
+def spawn_retention_if_due() -> bool:
+    """Stamp-check the engine's retention run and spawn it detached when due; never raises."""
+    try:
+        root = Path(__file__).resolve().parents[2]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from coordinator_core.ops import retention_run
+
+        return retention_run.spawn_if_due(str(root))
+    except Exception:
+        return False
+
+
+def scratch_over_budget() -> "dict[str, int]":
+    """Session temp dirs over the per-session scratch budget (report only); never raises."""
+    try:
+        root = Path(__file__).resolve().parents[2]
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from coordinator_core.ops import prune_claude_temp
+
+        return prune_claude_temp.over_budget_sessions()
+    except Exception:
+        return {}
+
+
 def _settings_home() -> Path:
     env = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if env:
@@ -647,7 +701,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None:
             signal.signal(sig, lambda *_: sys.exit(0))
-    run(args, notice_path=resolve_notice_path(), pidfile=default_pidfile(), avail_fn=avail_gib)
+    run(args, notice_path=resolve_notice_path(), pidfile=default_pidfile(), avail_fn=avail_gib,
+        retention_fn=spawn_retention_if_due, scratch_fn=scratch_over_budget)
 
 
 if __name__ == "__main__":

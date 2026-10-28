@@ -121,15 +121,27 @@ def drop_entries(path: Path) -> list[dict]:
     return out
 
 
+def brief_block(items: list[dict]) -> str:
+    """The executor-brief block quoting each live note; ``""`` when no live note exists."""
+    notes = live(items)
+    if not notes:
+        return ""
+    lines = ["## EM revise notes (the EM's words, not PM verbatim; act on them)", ""]
+    for e in notes:
+        lines += [f"{e['run']} {e['id']} at {e['at']}:", ""]
+        # \x01 is the compose-time marker delimiter: left in, it splices note text into the script as JS.
+        body = e["note"].replace("\x01", "")
+        lines += [f"> {part}" if part else ">" for part in body.splitlines() or [""]]
+        lines.append("")
+    return "\n".join(lines)
+
+
 def render_section(items: list[dict]) -> list[str]:
     """Lines of the ``## Revise notes`` view section; ``[]`` when ``items`` is empty."""
     if not items:
         return []
     lines = [
-        "## Revise notes (EM framing: context for this run, not requirements and not PM words)",
-        "",
-        "The ledger clause's \"each item outranks every brief\" rule covers the register items above, "
-        "not these notes.",
+        "## Revise notes (EM framing: the EM's words, not PM verbatim; the ledger grades them)",
         "",
     ]
     for e in items:

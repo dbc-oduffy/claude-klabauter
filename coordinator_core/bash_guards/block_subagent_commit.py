@@ -6517,11 +6517,13 @@ _LEG_UNRESOLVABLE_GIT_ROOT = "leg:unresolvable-git-root"
 
 #: A `dispatch.terminal_commit --params-file <path>` the run-token leg refused, one leg per cause.
 _LEG_RUN_TOKEN_PARAMS = "leg:run-token-params"
-_LEG_PARAMS_NO_BLOCK = "leg:run-token-params-no-block"
 _LEG_PARAMS_PATH = "leg:run-token-params-path"
 _LEG_PARAMS_TOKEN = "leg:run-token-params-token"
 _LEG_PARAMS_WRITE = "leg:run-token-params-write"
 _LEG_PARAMS_FILE_WRITTEN_BY_COMMAND = "leg:run-token-params-command-writes"
+#: Prefixes: the typed path is appended, so the deny message can name it.
+_LEG_PARAMS_FILE_MISSING = "leg:run-token-params-file-missing:"
+_LEG_PARAMS_FILE_UNPARSEABLE = "leg:run-token-params-file-unparseable:"
 
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
 #: fixes it; none sends the reader to the pathspec-scope check unless the
@@ -6554,10 +6556,6 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
     _LEG_RUN_TOKEN_PARAMS: (
         "BLOCKED: land_run (terminal_commit) params not admitted -- the command is not "
         "one bare params-file segment in a resolvable repo. Report it; do not edit the command."
-    ),
-    _LEG_PARAMS_NO_BLOCK: (
-        "BLOCKED: land_run (terminal_commit) params not admitted -- the spawn prompt is "
-        "unreadable or holds no params block. Report it; do not edit the command."
     ),
     _LEG_PARAMS_PATH: (
         "BLOCKED: land_run (terminal_commit) params not admitted -- the typed path is not "
@@ -6817,6 +6815,15 @@ def _deny_reason(
     if command_leg == _PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT:
         return _PYTHON_HEREDOC_STDIN_IMPORT_DENY_REASON
     if agent_type == _GIT_COMMIT_AGENT_TYPE:
+        for prefix, cause in (
+            (_LEG_PARAMS_FILE_MISSING, "the spawn prompt is unreadable or holds no params block and the params file is missing"),
+            (_LEG_PARAMS_FILE_UNPARSEABLE, "the spawn prompt is unreadable or holds no params block and the params file is unparseable"),
+        ):
+            if ownership_reason.startswith(prefix):
+                return (
+                    f"BLOCKED: land_run (terminal_commit) params not admitted -- {cause}: "
+                    f"`{_clip_bytes(ownership_reason[len(prefix):], 300)}`. Report it; do not edit the command."
+                )
         if ownership_reason.startswith(_LEG_SENTINEL_PREFIX):
             return _GIT_COMMIT_AGENT_LEG_MESSAGES.get(
                 ownership_reason, _GIT_COMMIT_AGENT_DENY_REASON
@@ -6907,6 +6914,29 @@ def _run_root(typed_path: Optional[str], repo_operand: Optional[str], git_root: 
     return git_root
 
 
+def _params_from_existing_file(typed_path: str) -> "Tuple[Optional[Dict[str, Any]], str]":
+    """(params, "") from an existing, parseable params file, else (None, refusal leg naming the path).
+
+    Trap: the file is only a carrier; the caller still requires the canonical path and an
+    engine-minted token, so an arbitrary file authorizes nothing. Never raises.
+    """
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    try:
+        with open(typed_path, "rb") as fh:
+            raw = fh.read(chan.READ_CAP_BYTES + 1)
+        if len(raw) > chan.READ_CAP_BYTES:
+            return None, _LEG_PARAMS_FILE_UNPARSEABLE + typed_path
+        params = json.loads(raw.decode("utf-8"))
+    except FileNotFoundError:
+        return None, _LEG_PARAMS_FILE_MISSING + typed_path
+    except (OSError, ValueError):
+        return None, _LEG_PARAMS_FILE_UNPARSEABLE + typed_path
+    if not isinstance(params, dict) or not all(isinstance(params.get(k), str) for k in chan.REQUIRED_STR_KEYS):
+        return None, _LEG_PARAMS_FILE_UNPARSEABLE + typed_path
+    return params, ""
+
+
 def _prompt_sourced_params_admit(
     typed_path: str, git_root: str, transcript_path: Any
 ) -> Optional[str]:
@@ -6924,8 +6954,11 @@ def _prompt_sourced_params_admit(
     from coordinator_core.ops.dispatch_emit import run_token, terminal_commit_params_channel as chan
 
     params = chan.prompt_params(chan.read_spawn_prompt(transcript_path))
-    if params is None:
-        return _LEG_PARAMS_NO_BLOCK
+    from_file = params is None
+    if from_file:
+        params, file_leg = _params_from_existing_file(typed_path)
+        if params is None:
+            return file_leg
     canonical = chan.params_path(git_root, params["run_id"])
     if canonical is None:
         return _LEG_PARAMS_PATH
@@ -6937,6 +6970,8 @@ def _prompt_sourced_params_admit(
     rid, tok, script = params["run_id"], params["run_token"], params["script_path"]
     if not (run_token.admits(git_root, rid, tok, script) or run_token.spent_receipt(git_root, rid, tok, script) is not None):
         return _LEG_PARAMS_TOKEN
+    if from_file:
+        return None
     return None if chan.materialize(canonical, params) else _LEG_PARAMS_WRITE
 
 

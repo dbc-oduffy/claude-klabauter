@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER,
+    FAN_OUT_PER_SUBJECT,
     ITEM_MARK,
     PIPELINE_RELAY_CLAUSE,
     PLACEHOLDER_RE,
@@ -235,6 +236,9 @@ def _agent_call(
         return f"produced({label}, {call})"
     name = stage.agent_type_from.split(".", 1)[1]
     types = list(dict.fromkeys(entry["agent_type"] for entry in inputs.lists[name]))
+    if stage.fan_out.kind == FAN_OUT_PER_SUBJECT:
+        call = f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, types[0], agent_type_host)} }})"
+        return f"produced({label}, {call})"
     chain = "".join(
         f"t === {_js_string_literal(t)} ? agent(p, {{ label: l, {_agent_options(stage, manifest, t, agent_type_host)} }}) : "
         for t in types
@@ -626,7 +630,8 @@ def _segment(
     active = [stage for stage in manifest.stages if stage.id not in schedule.skipped]
     has_common = any(common[s]["prompts"] or common[s].get("items") for s in common)
     roster_names = sorted({
-        s.agent_type_from.split(".", 1)[1] for s in active if s.agent_type_from is not None
+        s.agent_type_from.split(".", 1)[1] for s in active
+        if s.agent_type_from is not None and s.fan_out.kind == FAN_OUT_OVER
     })
     data = []
     if skip_guard:

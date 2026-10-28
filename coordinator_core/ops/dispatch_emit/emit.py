@@ -272,6 +272,7 @@ import logging
 import os
 import re
 import shutil
+import sys
 from dataclasses import dataclass, replace as _dc_replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, NamedTuple, Optional, Sequence
@@ -400,6 +401,7 @@ from coordinator_core.executor_return_contract import (
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.ops.review_mint.execute_review import (
     CRITERION_JUDGE_PHASE_TITLE,
+    GROUP_PREP_HALT,
     ROOTS_READ_SCHEMA,
     compose_criterion_judge,
     owner_repo_clause,
@@ -499,7 +501,9 @@ _INDETERMINATE_RECONCILE_CLAUSE = (
     "exactly once and treat its output and exit code as the original command's. If that output is a "
     "status object whose state is not_received, run the original command once more. If its state is "
     "finished with outcome result, the op landed: continue the run and report its reply as not "
-    "retained. On any other status, report it verbatim as the failure."
+    "retained. If its state is executing (overdue or not), the op is still running: run "
+    "reconcile_command once more with its wait before deciding. Only a status that is neither "
+    "finished, executing nor not_received is reported verbatim as the failure."
 )
 
 #: Appended to an emitted leg prompt that prescribes a ``coordinator-invoke`` command line; the
@@ -1477,7 +1481,8 @@ def _review_run_key(session_id: Optional[str], plan_path: Optional[str], script_
     mint disjoint group slice ids (``<key>.g<N>``). Filename-safe; never a path or host name."""
     session = (session_id or "")[:8]
     stem = re.sub(r"[^A-Za-z0-9_.-]", "-", _sidecar_run_key(plan_path)) if plan_path else ""
-    return "-".join(p for p in (session, stem) if p) or (Path(script_path).stem if script_path else None)
+    emit_id = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(script_path.replace("\\", "/")).stem) if script_path else ""
+    return "-".join(p for p in (session, stem, emit_id) if p) or None
 
 
 def _emit_sidecar_clause(plan_path: Optional[str], label: str) -> str:
@@ -2435,6 +2440,10 @@ _ROW_LOCAL_BLOCK_JS_RE = (
     f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_ROW_LOCAL_BLOCK_TOKEN}[*_]{{0,2}}:\\s*{_NIL_VALUE_JS}\\S/"
 )
 
+#: Appended to a row's prompt on its one widen re-dispatch, around the widened path.
+_WIDEN_CLAUSE_HEAD = "\n\nFootprint widened by the run: you may also write `"
+_WIDEN_CLAUSE_TAIL = "` (the file your earlier reply named); it is added to your writes."
+
 _VITEST_CAP_CLAUSE = (
     "Vitest worker cap: every vitest invocation you run passes "
     "`--maxWorkers={cap}` -- this box caps vitest at {cap} workers."
@@ -2524,7 +2533,10 @@ def _stop_rule_clause() -> str:
         "row's own footprint or `writes:` scope being mis-specified is not a "
         "fired stop rule either: report BLOCKED and end with "
         f"`{_ROW_LOCAL_BLOCK_TOKEN}: <the path or scope that is wrong>`; only "
-        "this row stays open and the run goes on without it."
+        "this row stays open and the run goes on without it. When the cause is "
+        "one in-ask file outside your `writes:`, the value is that exact "
+        "repo-relative path alone: the run re-dispatches the row once with it "
+        "added to its writes."
     )
 
 
@@ -3070,6 +3082,8 @@ def _agent_call_over(
     continuation clause and is labelled as the row's n-th continuation."""
     row_agent_type = _row_agent_type(row)
     label_js = _js_string_literal(build_work_label(label_id))
+    widen_of = f"_widenOf[{_js_string_literal(label_id)}]"
+    prompt_literal = f"{prompt_literal} + ({widen_of} ? _widenText({widen_of}) : '')"
     if checkpoint_prefix is not None:
         cont = f"_contOf[{_js_string_literal(label_id)}]"
         prompt_literal = (
@@ -3484,6 +3498,37 @@ def _verify_scope_by_path(rows: Sequence[WaveRow], repo_root: Optional[Path]) ->
     return out
 
 
+_SCOPED_PYTEST_MODULE = "coordinator_core.testing.scoped_pytest"
+
+
+def _launcher_interpreter(repo_root: Optional[Path]) -> str:
+    """The interpreter token for the scoped_pytest launcher: the repo's resolvable pin, else
+    claude-klabauter's own interpreter for a foreign target repo, else portable `python3`."""
+    if repo_root is None:
+        return "python3"
+    root = Path(repo_root)
+    from coordinator_core.ops.dispatch_emit.test_interpreter import resolve_targeted_test_python
+
+    if (root / "coordinator_core" / "testing" / "scoped_pytest.py").is_file():
+        pinned = resolve_targeted_test_python(root)
+        return pinned.command if pinned.command and pinned.defect is None else "python3"
+    return Path(sys.executable).as_posix()
+
+
+def _launcher_command(allow: Sequence[str], targets: str, repo_root: Optional[Path]) -> str:
+    allows = " ".join(f"--allow {a}" for a in allow)
+    return f"{_launcher_interpreter(repo_root)} -m {_SCOPED_PYTEST_MODULE} {allows} -- {targets}"
+
+
+def _launcher_run_clause(scope: Sequence[str], repo_root: Optional[Path]) -> str:
+    """The sentence that runs pytest targets only through the admitted, allow-listed launcher."""
+    return (
+        f"Run pytest only as `{_launcher_command(scope, ' '.join(scope), repo_root)}`; "
+        "never bare `pytest` or `python -m pytest`. Exit 75 = admission refused, 64 = target "
+        "outside --allow, 137 = parent died: report any of them as status: error, not a pass. "
+    )
+
+
 def _scoped_test_steps(
     scope: list[str],
     repo_root: Optional[Path],
@@ -3492,18 +3537,23 @@ def _scoped_test_steps(
     owed_gates: Optional[dict],
     surface: Optional[Sequence[str]],
     review_terminal: Optional[str],
+    box_terms: Sequence[str] = (),
+    slot_rows: Optional[Sequence[str]] = None,
 ) -> str:
     """The scoped-test clauses shared by the test call and the verify test call, ending in a space."""
     scope = collapse_test_scope(scope, repo_root)
     run_clause = (
-        f"Run the scoped test targets: [{', '.join(scope)}]. " if scope else "No scoped test targets. "
+        f"Run the scoped test targets: [{', '.join(scope)}]. " + _launcher_run_clause(scope, repo_root)
+        if scope
+        else "No scoped test targets. "
     )
     return (
-        run_clause
+        _box_terms_clause(box_terms)
+        + run_clause
         + (f"{typecheck_prompt_clause(typecheck)} " if typecheck is not None else "")
         + (f"{_review_edits_clause(review_edits_base, surface, review_terminal)} " if review_edits_base else "")
         + f"{_test_runner_clause(repo_root)} "
-        + (f"{_owed_gates_clause(owed_gates)} " if owed_gates else "")
+        + (f"{_owed_gates_clause(owed_gates, slot_rows)} " if owed_gates else "")
         + (
             f"{_baseline_context_clause(review_edits_base, surface, review_terminal)} "
             if _is_full_sha(review_edits_base)
@@ -3522,6 +3572,8 @@ def _verify_test_call_expr(
     owed_gates: Optional[dict],
     surface: Optional[Sequence[str]],
     review_terminal: Optional[str],
+    box_terms: Sequence[str] = (),
+    slot_rows: Optional[Sequence[str]] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the judge arm's scoped test leg.
 
@@ -3535,7 +3587,10 @@ def _verify_test_call_expr(
     schema = json.loads(stage_schema_literal("test_result"))
     schema["required"] = [k for k in schema["required"] if k != "sidecar_path"]
     prompt = (
-        _scoped_test_steps(scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal)
+        _scoped_test_steps(
+            scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal,
+            box_terms, slot_rows,
+        )
         + "Report raw evidence; do not gate. You have no Write tool: omit sidecar_path."
         + (f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}." if plan_path else "")
         + _emit_sidecar_clause(plan_path, _VERIFY_LABEL)
@@ -3562,6 +3617,8 @@ def _test_agent_call_expr(
     owed_gates: Optional[dict] = None,
     surface: Optional[Sequence[str]] = None,
     review_terminal: Optional[str] = None,
+    box_terms: Sequence[str] = (),
+    slot_rows: Optional[Sequence[str]] = None,
 ) -> str:
     """One ``agent(...)`` call EXPRESSION for the terminal scoped-test run --
     never a full statement (§ Design D4/D1: the caller composes the
@@ -3584,7 +3641,8 @@ def _test_agent_call_expr(
     prompt = (
         f"{prompt_head or ''}{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
         + _scoped_test_steps(
-            scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal
+            scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal,
+            box_terms, slot_rows,
         )
         + "Report raw evidence; do not gate. Write your record and return sidecar_path -- required."
     )
@@ -3604,12 +3662,45 @@ def _test_agent_call_expr(
     )
 
 
-def _owed_gates_clause(owed_gates: dict) -> str:
+_SLOT_OWED_HEAD = (
+    "Build gates owed, NOT run by you: these rows hold no needs_slot slot, so no build may run for them. "
+    "Run none of the commands below; list each under summary as `Owed, not run: <command>` and leave "
+    "build_clean null for them."
+)
+
+
+def _box_terms_clause(box_terms: Sequence[str]) -> str:
+    """The driver's binding box terms as test-runner prompt text, or ``''``."""
+    if not box_terms:
+        return ""
+    return "Box terms (from the driver; binding):" + "".join(f"\n- {t}" for t in box_terms) + "\n\n"
+
+
+def _owed_gates_clause(owed_gates: dict, slot_rows: Optional[Sequence[str]] = None) -> str:
     """Marker-bearing prompt text: empty at run time unless a listed row is in ``_gateOwed``.
 
     Names only the gate-owed rows' commands; a command a guard refuses is reported, never retried.
+    With ``slot_rows`` given (even empty), a row outside it holds no slot: its commands are listed
+    as owed-and-not-run, never as commands to run.
     """
     marker = _SHARED_PATH_MARKER_DELIM
+    if slot_rows is not None:
+        slot = set(slot_rows)
+        run_gates = {i: c for i, c in owed_gates.items() if i in slot}
+        slot_gates = {i: c for i, c in owed_gates.items() if i not in slot}
+        parts = []
+        if run_gates:
+            parts.append(_owed_gates_clause(run_gates))
+        if slot_gates:
+            slot_expr = (
+                "((m) => { const ids = Object.keys(m).filter((i) => "
+                f"{GATE_OWED_VAR}[i]); if (!ids.length) return ''; "
+                f"return {json.dumps(_SLOT_OWED_HEAD)} + '\\n' + ids.map((i) => '- ' + i + ': ' + "
+                "m[i].map((c) => '`' + c + '`').join(', ')).join('\\n'); })("
+                f"{json.dumps(slot_gates, sort_keys=True)})"
+            )
+            parts.append(f"{marker}{slot_expr}{marker}")
+        return " ".join(parts)
     head = (
         "Owed build gates: these rows were delivered with their build gate still owed (a guard refused it, "
         "or its errors lay outside the row's footprint). Run each command below once from the repo root, "
@@ -3715,7 +3806,8 @@ def _review_edits_clause(
         f"rows' writes. From the repo root run {_edited_set_listing(base, surface, review_terminal)}: that is the "
         f"edited set; a peer's commit in the range is never part of it. {_OUT_OF_SCOPE_CLAUSE} "
         "For every edited source file not already covered above, add its test target "
-        "to the run, and for every edited `.ts`/`.tsx` file whose governing tsconfig "
+        f"to the run through the same `-m {_SCOPED_PYTEST_MODULE}` launcher, with `--allow` entries "
+        "only for targets covering files in that edited set (never a wider directory), and for every edited `.ts`/`.tsx` file whose governing tsconfig "
         "directory has no typecheck command above, run `tsc --noEmit -p <that dir>` "
         "the same way and under the same pass/fail rules. "
         "Name the extra targets and directories you added at the head of summary."
@@ -4343,7 +4435,22 @@ def _run_row_helper_js(
             "    }\n"
         )
     )
-    return (
+    from coordinator_core.ops.dispatch_emit.in_run_widen import classify_block_js
+
+    widen_js = (
+        "  const _widenOf = {};\n"
+        "  const _widened = [];\n"
+        "  const _commitOf = {};\n"
+        + "".join("  " + ln + "\n" for ln in classify_block_js().splitlines())
+        + f"  function _widenText(p) {{ return {_js_string_literal(_WIDEN_CLAUSE_HEAD)} + p + {_js_string_literal(_WIDEN_CLAUSE_TAIL)}; }}\n"
+        "  function _blockText(r) {\n"
+        "    if (typeof r === 'string') return r;\n"
+        "    if (Array.isArray(r)) return r.map(_blockText).join('\\n');\n"
+        "    if (r && typeof r === 'object') return Object.values(r).map(_blockText).join('\\n');\n"
+        "    return '';\n"
+        "  }\n"
+    )
+    return widen_js + (
         "  const _falsifierBroken = new Map();\n"
         "  const _routedOut = [];\n"
         "  const _finished = new Set();\n"
@@ -4405,13 +4512,33 @@ def _run_row_helper_js(
         "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
         "    return !m || m[1].replace(/[.,;]$/, '') === id;\n"
         "  }\n"
-        "  function _depBlocker(deps, results, id) {\n"
+        # A needs-dependent row's owed gate is discharged once the row it names finished DONE;
+        # the named row is awaited only when every dependency in its closure is a registered row
+        # that cannot wait on `id` (a seam or commit gate in the closure reads unsafe).
+        "  const _rowById = {};\n"
+        "  const _depIdsOf = {};\n"
+        "  function _awaitSafe(x, id, seen) {\n"
+        "    if (x === id || !(x in _rowById)) return false;\n"
+        "    if (seen.has(x)) return true;\n"
+        "    seen.add(x);\n"
+        "    return (_depIdsOf[x] || []).every((d) => typeof d === 'string' && _awaitSafe(d, id, seen));\n"
+        "  }\n"
+        "  async function _owedDischarged(owed, id) {\n"
+        "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
+        "    const x = m ? m[1].replace(/[.,;]$/, '') : '';\n"
+        "    if (!x || !_awaitSafe(x, id, new Set())) return false;\n"
+        "    const xr = await _rowById[x];\n"
+        "    const xt = JSON.stringify(xr ?? null);\n"
+        "    return xr != null && !_DEP_NON_DONE_RE.test(xt) && _DEP_ANY_STATUS_RE.test(xt);\n"
+        "  }\n"
+        "  async function _depBlocker(deps, results, id) {\n"
         "    for (let i = 0; i < results.length; i++) {\n"
         "      const r = results[i];\n"
         "      const t = JSON.stringify(r ?? null);\n"
         "      const settled = typeof r === 'string' && r.startsWith('ROUTED-OUT:');\n"
         "      const _o = r != null ? _gateOwedOf(t) : null;\n"
         "      if (_o && _owedReleases(_o, id)) continue;\n"
+        "      if (_o && await _owedDischarged(_o, id)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
         "(!settled && !_DEP_ANY_STATUS_RE.test(t) && _trVerdictOf(t) !== 'pass')) {\n"
         "        return _rowIdOf.get(deps[i]) || '?';\n"
@@ -4422,8 +4549,11 @@ def _run_row_helper_js(
         "  let _rowSeq = 0;\n"
         "  function _runRow(id, deps, verifyScope, run, commit) {\n"
         "    _rowSeq++;\n"
+        "    _commitOf[id] = commit;\n"
         "    const p = _runRowInner(id, deps, verifyScope, run, commit);\n"
         "    _rowIdOf.set(p, id);\n"
+        "    _rowById[id] = p;\n"
+        "    _depIdsOf[id] = deps.map((d) => _rowIdOf.get(d));\n"
         "    return p;\n"
         "  }\n"
         "  async function _runRowInner(id, deps, verifyScope, run, commit) {\n"
@@ -4455,7 +4585,7 @@ def _run_row_helper_js(
         "      _routedOut.push(id);\n"
         "      return 'ROUTED-OUT: a dependency was routed out';\n"
         "    }\n"
-        "    const _blocker = _depBlocker(deps, _depResults, id);\n"
+        "    const _blocker = await _depBlocker(deps, _depResults, id);\n"
         "    if (_blocker) {\n"
         "      _notStarted.push(id);\n"
         "      _blockedChunks.push(id);\n"
@@ -4486,7 +4616,23 @@ def _run_row_helper_js(
         "    } catch (e) {\n"
         "      result = null;\n"
         "    }\n"
-        "    const _text = JSON.stringify(result ?? null);\n"
+        "    let _text = JSON.stringify(result ?? null);\n"
+        f"    if ({_ROW_LOCAL_BLOCK_JS_RE}.test(_text) && !_widenOf[id]) {{\n"
+        "      const _held = [];\n"
+        "      for (const k of Object.keys(_commitOf)) {\n"
+        "        if (k !== id && _commitOf[k]) _held.push(...(_commitOf[k].paths || []), ...(_commitOf[k].declared || []));\n"
+        "      }\n"
+        "      const _cls = classifyBlock(_blockText(result), _held);\n"
+        "      if (_cls.widen) {\n"
+        "        _widenOf[id] = _cls.widen;\n"
+        "        _widened.push({ row: id, path: _cls.widen });\n"
+        "        log(id + ': ROW-LOCAL-BLOCK names in-ask path ' + _cls.widen + '; widening and re-dispatching once');\n"
+        "        try { result = await run(); } catch (e) { result = null; }\n"
+        "        _text = JSON.stringify(result ?? null);\n"
+        "      } else {\n"
+        "        log(id + ': ROW-LOCAL-BLOCK stays row-local: ' + _cls.halt);\n"
+        "      }\n"
+        "    }\n"
         "    let incomplete = false;\n"
         f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) {{\n"
         "      const _owed = _gateOwedOf(_text);\n"
@@ -4775,21 +4921,16 @@ def _seam_leg_js(
         f" Step 1: run `{invoke} plan.seam_record{repo_flag} '<params>'` with exactly the "
         "params above as the JSON `<params>`; its reply carries `verdict`, "
         "`per_plan`, `findings`, `sidecars`. "
-        f"Step 2: run `{invoke} review.reachability{repo_flag} '<reach>'` with exactly the "
-        "reach params as the JSON `<reach>`. Add one finding "
-        "`{class: 'unreachable', path, blocking: true}` for each `entries[]` item whose verdict is "
-        "`unreachable` and each `click_paths[]` item whose verdict is `broken`; never report "
-        "`undecidable`. Any such finding makes the `verdict` DRIFT. Return `verdict`, `per_plan`, "
-        "`findings`, `sidecars` with step 1's reply and step 2's findings merged. "
+        "Return `verdict`, `per_plan`, `findings`, `sidecars` verbatim from that reply. "
         "Judge nothing, edit nothing, commit nothing. "
         "A reply saved for inspection goes under `scratch/seam/<run-id>/`, never the repo root."
         + _INVOKE_LITERAL_CLAUSE
-        + " If either op refuses or errors, put its verbatim output in `findings` as one object with "
+        + " If the op refuses or errors, put its verbatim output in `findings` as one object with "
         "`class` `op-error` and report `verdict` REFUSED for any op refusal or error. "
         + _INDETERMINATE_RECONCILE_CLAUSE
     )
     tests_step = (
-        " Step 3, only when tests are listed: run `python -m pytest <tests> -q` once with exactly "
+        " Step 2, only when tests are listed: run `python -m pytest <tests> -q` once with exactly "
         "those paths. A non-zero exit is one finding `{class: 'execution-failed', path: <first "
         "failing file, or the first test path>, blocking: true}` and makes the `verdict` DRIFT. "
         "Run no other command."
@@ -4825,8 +4966,6 @@ def _seam_leg_js(
         + (" certified_plans: _seamCertified," if seam.certified_plans else ""),
         f"      landed_range: {_RUN_BASE_VAR} + '..' + sha,",
         f"      landed_rows: _seamCommitted.filter((i) => !_isSeamFix(i)).map((i) => ({{ plan: _rowPlan[i] || {_js_string_literal(plan_path or '')}, row: i }})) }};",
-        "    const _paths = [...new Set(_seamCommitted.flatMap((i) => _landed[i].paths))];",
-        f"    const reach = {{ base_sha: {_RUN_BASE_VAR}, head_sha: sha, paths: _paths }};",
         "    const tests = [...new Set(_seamCommitted.flatMap((i) => (_seamOwnTests[i] || [])))].filter((p) => /(^|\\/)(test_[^\\/]*|[^\\/]*_test)\\.py$/.test(p));",
         "    const _seamPathPlan = {};",
         f"    _seamCommitted.filter((i) => !_isSeamFix(i)).forEach((i) => [..._landed[i].paths, ..._landed[i].declared].forEach((p) => {{ _seamPathPlan[p] = _rowPlan[i] || {_js_string_literal(plan_path or '')}; }}));",
@@ -4836,7 +4975,7 @@ def _seam_leg_js(
         "    cause = '';",
         "    try {",
         "      r = await agent(",
-        f"        {js(head)} + 'You run the seam check for wave ' + n + '. Params, verbatim: `' + JSON.stringify(params) + '`. Reach params, verbatim: `' + JSON.stringify(reach) + '`.' + "
+        f"        {js(head)} + 'You run the seam check for wave ' + n + '. Params, verbatim: `' + JSON.stringify(params) + '`.' + "
         f"{js(route)} + (tests.length ? ' Tests: ' + JSON.stringify(tests) + '.' + {js(tests_step)} : '') + {sidecar_js},",
         f"        {{ label: 'seam:wave-' + n, phase: {phase}, agentType: {exec_type}, "
         f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: 'low', schema: _SEAM_REPLY_SCHEMA }}",
@@ -6444,6 +6583,8 @@ def compose_script(
                 owed_gates=owed_gates,
                 surface=_plan_surface,
                 review_terminal=_review_terminal,
+                box_terms=box_terms,
+                slot_rows=slot_rows,
             )
             _block = (
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
@@ -6477,7 +6618,7 @@ def compose_script(
                     f"  if (Object.keys({GATE_OWED_VAR}).length) {{\n"
                     f"    phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                     f"    {_TEST_RESULT_VAR} = await "
-                    f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};\n"
+                    f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal, box_terms=box_terms, slot_rows=slot_rows)};\n"
                     "  }"
                 )
                 test_var = _TEST_RESULT_VAR
@@ -6495,7 +6636,7 @@ def compose_script(
             verify_launch_block = _verify_test_launch_js(
                 _verify_test_call_expr(
                     review, scope, repo_root, plan_path, ts_leg, _stage_edits_base, owed_gates,
-                    _plan_surface, _review_terminal,
+                    _plan_surface, _review_terminal, box_terms, slot_rows,
                 )
             )
             guarded_blocks.append(
@@ -6522,7 +6663,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};\n"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal, box_terms=box_terms, slot_rows=slot_rows)};\n"
                 f"  {_FALSIFIER_RESULT_VAR} = await {criterion_expr};"
             )
             test_var = _TEST_RESULT_VAR
@@ -6532,7 +6673,7 @@ def compose_script(
             guarded_blocks.append(
                 f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
                 f"  {_TEST_RESULT_VAR} = await "
-                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal)};"
+                f"{_test_agent_call_expr(scope, agent_type_host=agent_type_host, repo_root=repo_root, plan_path=plan_path, typecheck=ts_leg, review_edits_base=_stage_edits_base, owed_gates=owed_gates, surface=_plan_surface, review_terminal=_review_terminal, box_terms=box_terms, slot_rows=slot_rows)};"
             )
             test_var = _TEST_RESULT_VAR
 
@@ -7122,6 +7263,9 @@ _STOP_RULE_TEXT_RE = re.compile(
 )
 
 
+_OWING_REVIEW_TEXT_RE = re.compile(r"owing_review\\*\"?:\s*\[([^\]]*)\]")
+
+
 def landed_rows_from_text(text: str, *, exclude_stop_rule: bool = True) -> frozenset:
     """Row ids named by the checkpoint commit subjects found in ``text`` (a
     ``git log`` dump or a run's task output). Only the leading comma-separated
@@ -7140,6 +7284,10 @@ def landed_rows_from_text(text: str, *, exclude_stop_rule: bool = True) -> froze
             end = subjects[n + 1].start() if n + 1 < len(subjects) else len(text)
             for s in _STOP_RULE_TEXT_RE.finditer(text, m.end(), end):
                 landed -= {i.strip() for i in s.group(1).split(",")}
+            halt = text.find(GROUP_PREP_HALT, m.end(), end)
+            if halt >= 0:
+                owing = _OWING_REVIEW_TEXT_RE.search(text, halt, end)
+                landed -= set(re.findall(_ROW_ID_PATTERN, owing.group(1))) if owing else landed
         ids.update(landed)
     return frozenset(ids)
 

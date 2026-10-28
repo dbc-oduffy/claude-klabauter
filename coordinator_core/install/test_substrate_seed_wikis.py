@@ -18,6 +18,7 @@ import json
 
 from coordinator_core.install.substrate import (
     SubstrateFatalError,
+    _install_claude_klabauter_guard_routes_folder,
     _install_seed_wikis,
     _load_seed_wiki_manifest,
 )
@@ -200,3 +201,57 @@ def test_rerun_is_noop_when_already_up_to_date(tmp_path):
 
     dst = settings_home / "coordinator-claude" / "docs" / "wiki" / "a.md"
     assert dst.read_text(encoding="utf-8") == "stable\n"
+
+
+# --- guard-routes folder mirror ---------------------------------------------
+
+
+def _routes_fixture(tmp_path):
+    claude_klabauter = tmp_path / "claude-klabauter"
+    src = claude_klabauter / "docs" / "reference" / "guard-routes"
+    src.mkdir(parents=True)
+    (src / "README.md").write_text("index\n", encoding="utf-8")
+    (src / "sec-a.md").write_text("a\n", encoding="utf-8")
+    dst = tmp_path / "home" / "coordinator-claude" / "docs" / "wiki" / "guard-routes"
+    return claude_klabauter, tmp_path / "home", dst
+
+
+def test_guard_routes_mirror_copies_and_removes_stale(tmp_path):
+    claude_klabauter, home, dst = _routes_fixture(tmp_path)
+    dst.mkdir(parents=True)
+    (dst / "dead.md").write_text("stale\n", encoding="utf-8")
+    (dst / "keep.txt").write_text("not md\n", encoding="utf-8")
+
+    _install_claude_klabauter_guard_routes_folder(claude_klabauter, home, check_only=False)
+
+    assert sorted(p.name for p in dst.iterdir()) == ["README.md", "keep.txt", "sec-a.md"]
+    assert (dst / "sec-a.md").read_text(encoding="utf-8") == "a\n"
+
+
+def test_guard_routes_check_only_writes_and_removes_nothing(tmp_path, capsys):
+    claude_klabauter, home, dst = _routes_fixture(tmp_path)
+    dst.mkdir(parents=True)
+    (dst / "dead.md").write_text("stale\n", encoding="utf-8")
+
+    _install_claude_klabauter_guard_routes_folder(claude_klabauter, home, check_only=True)
+
+    assert [p.name for p in dst.iterdir()] == ["dead.md"]
+    assert "would: mirror" in capsys.readouterr().out
+
+
+def test_guard_routes_up_to_date_is_noop(tmp_path, capsys):
+    claude_klabauter, home, dst = _routes_fixture(tmp_path)
+    _install_claude_klabauter_guard_routes_folder(claude_klabauter, home, check_only=False)
+    capsys.readouterr()
+
+    _install_claude_klabauter_guard_routes_folder(claude_klabauter, home, check_only=True)
+
+    assert "up to date" in capsys.readouterr().out
+
+
+def test_guard_routes_missing_source_warns_and_touches_nothing(tmp_path, capsys):
+    home = tmp_path / "home"
+    _install_claude_klabauter_guard_routes_folder(tmp_path / "claude-klabauter", home, check_only=False)
+
+    assert "WARNING" in capsys.readouterr().err
+    assert not home.exists()

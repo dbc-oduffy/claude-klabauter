@@ -16,8 +16,11 @@ TRAP: a scoped run is not a light run. One scoped vitest file has held an 8.6 GB
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence
 
 from coordinator_core.bash_guards import check_test_suite_invocation as _suite
@@ -333,6 +336,105 @@ def _argv_class(argv: Sequence[str]) -> Optional[HeavyClass]:
     return None
 
 
+def _xdist_workers(args: Sequence[str]) -> bool:
+    """True when pytest `args` ask for more than one xdist worker: `-n N`, `-nN`, `--numprocesses N`
+    with N an integer above 1, or the open-ended `auto`/`logical`.
+    The last count given wins, as in pytest.
+
+    TRAP: a target path does not make an xdist run light; the workers are the footprint.
+    """
+    heavy = False
+    for j, tok in enumerate(args):
+        low = tok.lower()
+        if low.startswith("--numprocesses="):
+            raw = low.split("=", 1)[1]
+        elif low == "--numprocesses" or tok == "-n":
+            raw = args[j + 1].lower() if j + 1 < len(args) else ""
+        elif tok.startswith("-n") and not tok.startswith("--") and len(tok) > 2:
+            raw = low[2:].lstrip("=")
+        else:
+            continue
+        if raw in ("auto", "logical"):
+            heavy = True
+            continue
+        try:
+            heavy = int(raw) > 1
+        except ValueError:
+            continue
+    return heavy
+
+
+def _is_xdist_pytest(argv: Sequence[str]) -> bool:
+    """argv (prefix already stripped) runs pytest as its command, `pytest ...` or `python -m pytest ...`,
+    with xdist workers.
+
+    TRAP: pytest is read only at the runner position, so `echo pytest -n 4` and `tail pytest -n 4`
+    stay light."""
+    if not argv:
+        return False
+    base = _suite._base(argv[0]).lower()
+    if base in ("pytest", "py.test"):
+        return _xdist_workers(argv[1:])
+    if base.startswith("python"):
+        for j, tok in enumerate(argv[1:-1], start=1):
+            if tok == "-m" and _suite._base(argv[j + 1]).lower() == "pytest":
+                return _xdist_workers(argv[j + 2:])
+    return False
+
+
+SCOPED_PYTEST_REMEDY = "python -m coordinator_core.testing.scoped_pytest --allow ... -- ..."
+
+_PYTEST_VALUE_FLAGS = frozenset((
+    "-n", "--numprocesses", "--dist", "-k", "-m", "-p", "-c", "-o", "-W", "-r", "--tb", "--rootdir", "--maxfail", "--ignore", "--ignore-glob",
+    "--deselect", "--junitxml", "--basetemp", "--durations", "--color", "--confcutdir", "--import-mode",
+    "--log-level", "--capture", "--override-ini", "--config-file", "--cov", "--timeout",
+))
+
+
+def _pytest_args(argv: Sequence[str]) -> Optional[Sequence[str]]:
+    """Arguments after pytest when argv runs it as its command (`pytest` or `python -m pytest`), else None."""
+    if not argv:
+        return None
+    base = _suite._base(argv[0]).lower()
+    if base in ("pytest", "py.test"):
+        return argv[1:]
+    if base.startswith("python"):
+        for j, tok in enumerate(argv[1:-1], start=1):
+            if tok == "-m" and _suite._base(argv[j + 1]).lower() == "pytest":
+                return argv[j + 2:]
+    return None
+
+
+def _pytest_target_count(args: Sequence[str]) -> int:
+    count = 0
+    skip = False
+    after_dashdash = False
+    for tok in args:
+        if after_dashdash:
+            count += 1
+        elif skip:
+            skip = False
+        elif tok == "--":
+            after_dashdash = True
+        elif tok.startswith("-"):
+            skip = tok in _PYTEST_VALUE_FLAGS
+        else:
+            count += 1
+    return count
+
+
+def _is_unscoped_plain_pytest(argv: Sequence[str]) -> bool:
+    """argv runs pytest as its command with no more than one worker and other than exactly one target.
+
+    The collection is the footprint; `SCOPED_PYTEST_REMEDY` is the admitted launcher. TRAP: pytest is
+    read only at the runner position, so `echo pytest a b` stays light; the launcher's own argv is not
+    a pytest runner here, it admits itself."""
+    args = _pytest_args(argv)
+    if args is None or _xdist_workers(args):
+        return False
+    return _pytest_target_count(args) != 1
+
+
 def _wrapped_command(argv: Sequence[str]) -> Optional[str]:
     if _suite._base(argv[0]) not in _SHELL_WRAPPERS:
         return None
@@ -378,7 +480,10 @@ def _scan(
             ) or _jest_unbounded(argv, worker_cap):
                 found.append(_UNBOUNDED)
             continue
-        if _suite._classify_tokens(argv, testpaths, cwd) is not None:
+        if _is_xdist_pytest(argv) or _is_unscoped_plain_pytest(argv):
+            found.append(HeavyClass.TEST_TIER)
+            found.append(_UNBOUNDED)
+        elif _suite._classify_tokens(argv, testpaths, cwd) is not None:
             found.append(HeavyClass.TEST_TIER)
             if _jest_unbounded(argv, worker_cap):
                 found.append(_UNBOUNDED)
@@ -407,7 +512,7 @@ def classify(
     if not isinstance(command, str) or not command.strip():
         return light
     low = command.lower()
-    if not any(s in low for s in _PREFILTER):
+    if not any(s in low for s in _PREFILTER + _ue._PY_PREFILTER):
         return light
     try:
         if _ue.launches_heavy(command):
@@ -427,3 +532,92 @@ def classify(
         if cls in found:
             return Classification(cls, False, background, noemit, bounded)
     return Classification(None, "scoped" in found, background)
+
+
+@dataclass(frozen=True)
+class SpawnAdmission:
+    """Verdict of `admit_before_spawn`; `reason` is one path-free line safe for a ceremony detail."""
+
+    admitted: bool
+    reason: str
+    key: str
+    peak_gib: float
+
+
+def _load_box_memory_host() -> Any:
+    """`box_memory_host` by file path: it lives in bin/lib, which is not a package. Tries the
+    claude-klabauter layout (`coordinator/bin/lib`) then the OSS mirror layout (`bin/lib`)."""
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    cached = sys.modules.get("box_memory_host")
+    if cached is not None and hasattr(cached, "admit"):
+        return cached
+    root = Path(__file__).resolve().parents[2]
+    for lib in (root / "coordinator" / "bin" / "lib", root / "bin" / "lib"):
+        path = lib / "box_memory_host.py"
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("box_memory_host", path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["box_memory_host"] = module  # its @dataclass classes resolve through it
+            try:
+                spec.loader.exec_module(module)
+            except BaseException:
+                sys.modules.pop("box_memory_host", None)
+                raise
+            return module
+    raise ImportError("box_memory_host.py not found under coordinator/bin/lib or bin/lib")
+
+
+
+def admit_before_spawn(
+    key: str,
+    default_peak_gib: float,
+    host: Any = None,
+    register_pid: Optional[int] = None,
+) -> SpawnAdmission:
+    """The one admit-before-spawn chokepoint for a heavy subprocess an engine op or ceremony launches.
+
+    Peak is the larger of `default_peak_gib` and the recorded peak for `key`; the verdict is
+    `box_memory_host.admit` over measured memory net of peers' reserved headroom, the same
+    arithmetic as `box-memory-snapshot --admit-peak`. An unreadable reading refuses (fail-closed).
+    Call before the spawn; `register_spawn` after it reserves the child's headroom.
+    `register_pid` registers that pid on admit. `host` is a test seam for the host module."""
+    peak_gib = float(default_peak_gib)
+    try:
+        host = host or _load_box_memory_host()
+        adm_path = host.admission_file()
+        recorded = host.read_recorded_peak(adm_path, key)
+        peak_gib = max(peak_gib, recorded or 0.0)
+        status = host.read_memory_status()
+        floor = host.guard_floor_bytes()
+        # TRAP: with a pid to register, the reservation read and the START write share one lock,
+        # or two callers both read zero reservations and both admit.
+        with (host.admission_lock(adm_path) if register_pid is not None else contextlib.nullcontext()):
+            reserved = host.reserved_bytes(adm_path)
+            status = dataclasses.replace(
+                status,
+                avail_phys=max(0, status.avail_phys - reserved),
+                commit_used=status.commit_used + reserved,
+            )
+            verdict = host.admit(int(peak_gib * host.GIB), status, floor=floor)
+            if verdict.admit and register_pid is not None:
+                register_spawn(key, peak_gib, register_pid, host)
+    except Exception as exc:
+        return SpawnAdmission(False, "memory unreadable (%s)" % type(exc).__name__, key, peak_gib)
+    gib = lambda n: round(n / host.GIB, 1)
+    if not verdict.admit:
+        hold = "HOLD %s: need %sGiB avail, %sGiB free after reservations" % (
+            key, gib(verdict.need_avail), gib(status.avail_phys))
+        return SpawnAdmission(False, hold, key, peak_gib)
+    return SpawnAdmission(True, "ADMIT %s: peak %sGiB" % (key, round(peak_gib, 1)), key, peak_gib)
+
+
+def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> None:
+    """Reserve an admitted child's headroom until it exits; never raises."""
+    try:
+        host = host or _load_box_memory_host()
+        host.register_command(host.admission_file(), key, pid, peak_gib)
+    except Exception:
+        pass

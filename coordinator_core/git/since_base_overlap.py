@@ -5,7 +5,7 @@ bytes remove is attributed by position to the first-parent commit that introduce
 introduced by a commit that is not the run's own is a finding. Zero spawns: objects are read
 through ``git_objects``. A run's own commits are those whose message carries ``Checkpoint-Base:``
 (or ``Checkpoint-Review-Base:``) equal to the run base; when the plan is known, those carrying
-``Checkpoint-Plan:`` equal to it with a stamped base anywhere on the walked chain. ``Session-Id``
+``Checkpoint-Plan:`` equal to it and either no stamped base or one on the walked chain. ``Session-Id``
 cannot discriminate (concurrent runs share it).
 """
 
@@ -35,7 +35,8 @@ _BASE_RE = re.compile(r"^Checkpoint-(?:Review-)?Base: ([0-9a-f]{7,40})\s*$", re.
 def is_own_commit(message: str, plan: Optional[str], base_sha: str, chain: Sequence[str] = ()) -> bool:
     """True when the message's checkpoint trailers name this run's plan and base.
 
-    With ``plan`` a stamped base is accepted when it prefix-matches ``base_sha`` or any sha in
+    With ``plan`` a matching ``Checkpoint-Plan`` with no stamped base is own; a stamped base is
+    accepted when it prefix-matches ``base_sha`` or any sha in
     ``chain`` (every re-fire of a run stamps a new base, so the run base alone under-matches);
     without ``plan`` only a stamped base prefix-matching ``base_sha`` (either direction) counts.
     """
@@ -44,6 +45,8 @@ def is_own_commit(message: str, plan: Optional[str], base_sha: str, chain: Seque
         return any(base_sha.startswith(b) or b.startswith(base_sha) for b in stamped)
     if not any(checkpoint_plan_matches(p, plan) for p in _PLAN_RE.findall(message)):
         return False
+    if not stamped:
+        return True
     anchors = (base_sha, *chain)
     return any(a.startswith(b) for b in stamped for a in anchors)
 

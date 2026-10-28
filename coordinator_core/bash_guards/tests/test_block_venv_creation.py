@@ -26,18 +26,12 @@ def _payload(command, tool="Bash"):
     }
 
 
-def _denied(out):
-    assert out is not None, "expected a deny, got silent allow"
-    hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE" in hso["permissionDecisionReason"]
-    return hso["permissionDecisionReason"]
-
-
-def _advisory(out):
-    assert out is not None, "expected an advisory envelope, got silent allow"
+def _advised(out):
+    """Creation shapes advise: allow verdict carrying the tripwire text."""
+    assert out is not None, "expected an advisory, got silent allow"
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
+    assert "PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE" in hso["additionalContext"]
     return hso["additionalContext"]
 
 
@@ -74,7 +68,7 @@ class TestNonMatchingAllowsSilently:
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
 
-class TestVenvCreationShapesDeny:
+class TestVenvCreationShapesAdvise:
     @pytest.mark.parametrize(
         "cmd",
         [
@@ -94,11 +88,11 @@ class TestVenvCreationShapesDeny:
             "echo ok; virtualenv .venv",
         ],
     )
-    def test_denies(self, cmd):
-        _denied(_enveloped(guard.check)(_payload(cmd)))
+    def test_advises(self, cmd):
+        _advised(_enveloped(guard.check)(_payload(cmd)))
 
     def test_message_offers_alternative(self):
-        reason = _denied(_enveloped(guard.check)(_payload("python3 -m venv .venv")))
+        reason = _advised(_enveloped(guard.check)(_payload("python3 -m venv .venv")))
         assert "system interpreter" in reason
 
 
@@ -108,13 +102,12 @@ class TestOverrideKey:
         assert _enveloped(guard.check)(_payload("python3 -m venv .venv")) is None
 
     @pytest.mark.parametrize("value", ["", "0", "true", "yes"])
-    def test_non_one_value_still_denies(self, monkeypatch, value):
+    def test_non_one_value_still_advises(self, monkeypatch, value):
         monkeypatch.setenv(_OVERRIDE, value)
-        _denied(_enveloped(guard.check)(_payload("python3 -m venv .venv")))
+        _advised(_enveloped(guard.check)(_payload("python3 -m venv .venv")))
 
-    def test_message_points_at_override_doc_without_naming_key(self):
-        reason = _denied(_enveloped(guard.check)(_payload("virtualenv .venv")))
-        assert "guard-override-keys" in reason
+    def test_message_does_not_name_the_override_key(self):
+        reason = _advised(_enveloped(guard.check)(_payload("virtualenv .venv")))
         assert _OVERRIDE not in reason
 
 
@@ -132,8 +125,8 @@ class TestPowerShell:
             "& python -m venv .venv",
         ],
     )
-    def test_denies(self, cmd):
-        _denied(_enveloped(guard.check)(_payload(cmd, tool="PowerShell")))
+    def test_advises(self, cmd):
+        _advised(_enveloped(guard.check)(_payload(cmd, tool="PowerShell")))
 
     @pytest.mark.parametrize(
         "cmd",
@@ -151,7 +144,7 @@ class TestPowerShell:
         assert _enveloped(guard.check)(_payload("python -m venv .venv", tool="PowerShell")) is None
 
 
-class TestAdvisoryShapesStayAdvisory:
+class TestSyncShapesAdvise:
     @pytest.mark.parametrize(
         "cmd",
         [
@@ -162,23 +155,45 @@ class TestAdvisoryShapesStayAdvisory:
             "poetry install",
         ],
     )
-    def test_warns_without_denying(self, cmd):
-        reason = _advisory(_enveloped(guard.check)(_payload(cmd)))
-        assert "PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE" in reason
+    def test_advises(self, cmd):
+        _advised(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_deny_wins_over_advisory_in_one_command(self):
-        _denied(_enveloped(guard.check)(_payload("poetry install && python -m venv .venv")))
+    def test_mixed_command_advises(self):
+        _advised(_enveloped(guard.check)(_payload("poetry install && python -m venv .venv")))
 
-
-class TestOverrideClearsAdvisory:
     def test_override_silences_advisory_shape(self, monkeypatch):
         monkeypatch.setenv(_OVERRIDE, "1")
         assert _enveloped(guard.check)(_payload("uv sync")) is None
 
 
+class TestCaseAndFlagVariants:
+    @pytest.mark.parametrize(
+        "cmd",
+        ["PYTHON -m venv .venv", "Python.EXE -m venv .venv", "Virtualenv .venv"],
+    )
+    def test_case_only_executable_advises(self, cmd):
+        _advised(_enveloped(guard.check)(_payload(cmd, tool="PowerShell")))
+
+    @pytest.mark.parametrize(
+        "cmd", ["uv sync --frozen", "uv sync --project sub", "cd sub && uv sync"]
+    )
+    def test_uv_sync_with_prefix_or_flags_advises(self, cmd):
+        _advised(_enveloped(guard.check)(_payload(cmd)))
+
+
+class TestNoPmGrantRoute:
+    def test_advisory_routes_to_no_pm_grant(self):
+        reason = _advised(_enveloped(guard.check)(_payload("python3 -m venv .venv")))
+        assert "the PM" not in reason
+        assert "venv_grant" not in reason
+
+    def test_session_grant_reader_is_gone(self):
+        assert not hasattr(guard, "_all_targets_granted")
+
+
 class TestThroughDispatchChain:
     @pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
-    def test_chain_denies_venv_creation(self, tool):
+    def test_chain_advises_on_venv_creation(self, tool):
         import json
 
         from coordinator_core.bash_guards import dispatch
@@ -188,5 +203,5 @@ class TestThroughDispatchChain:
         )
         assert out is not None
         hso = out["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "deny"
-        assert "PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE" in hso["permissionDecisionReason"]
+        assert hso["permissionDecision"] == "allow"
+        assert "PER-REPO-VENVS-ARE-BANNED-FLEET-WIDE" in hso["additionalContext"]

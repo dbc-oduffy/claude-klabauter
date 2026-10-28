@@ -186,10 +186,11 @@ def test_fresh_pass_over_recorded_fail_is_pass_on_retest(tmp_path):
     assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "pass-on-retest")
 
 
-@pytest.mark.parametrize("breakage", ["head", "covered", "run_id", "corrupt"])
+@pytest.mark.parametrize("breakage", ["empty_covered_head", "covered", "run_id", "corrupt"])
 def test_invalid_fresh_verdict_falls_back_to_recorded(tmp_path, breakage):
     root = _repo(tmp_path)
-    path = _write_fresh(root, head="b" * 40 if breakage == "head" else _HEAD,
+    path = _write_fresh(root, head="b" * 40 if breakage == "empty_covered_head" else _HEAD,
+                        covered={} if breakage == "empty_covered_head" else None,
                         run_id="other" if breakage == "run_id" else "r1")
     if breakage == "covered":
         (root / "t.py").write_text("x = 2\n", encoding="utf-8")
@@ -236,7 +237,8 @@ def test_unattributable_refusal_names_the_failed_tests_param():
 
 def test_explicit_empty_failed_tests_after_a_passing_retest_clears_a_drifted_record(tmp_path):
     root = _repo(tmp_path)
-    _write_fresh(root, status="pass", head="f" * 40)  # HEAD moved since the retest: record is stale
+    _write_fresh(root, status="pass")
+    (root / "t.py").write_text("x = 2\n", encoding="utf-8")  # covered blob changed: record is stale
     params = {**_RECORDED_FAIL, "failed_tests": []}
     assert li.landing_test_gate(root, params, "r1") == ([], "pre-existing-only")
 
@@ -261,11 +263,21 @@ def test_failed_tests_param_outranks_an_errored_no_results_retest(tmp_path, monk
 
 def test_refusal_names_a_drifted_retest_record_and_its_route(tmp_path):
     root = _repo(tmp_path)
-    _write_fresh(root, status="pass", head="f" * 40)
+    _write_fresh(root, status="pass")
+    (root / "t.py").write_text("x = 2\n", encoding="utf-8")
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "failed"
     assert "retest record (pass) no longer matches the tree" in findings[0].detail
     assert li.RETEST_LAUNCHER in findings[0].detail
+
+
+def test_head_movement_alone_never_stales_a_covered_retest(tmp_path):
+    root = _repo(tmp_path)
+    _write_fresh(root, status="pass", head="f" * 40)  # unrelated + halt-record commits moved HEAD
+    assert li.fresh_targeted_verdict(root, "r1")["status"] == "pass"
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "pass-on-retest")
+    (root / "t.py").write_text("x = 2\n", encoding="utf-8")
+    assert li.fresh_targeted_verdict(root, "r1") is None
 
 
 def test_unchanged_failing_files_since_base_are_pre_existing(tmp_path, monkeypatch):

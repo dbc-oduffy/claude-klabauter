@@ -2096,8 +2096,6 @@
     "coordinator_core/write_guards/tests/test_guard_doctrine_surface_edits_gem_doctrine.py",
     "coordinator_core/write_guards/tests/test_guard_memory_store_cap.py",
     "coordinator_core/write_guards/tests/test_guard_registry_manifest.py",
-    "coordinator_core/write_guards/tests/test_memory_reroute.py",
-    "coordinator_core/write_guards/tests/test_memory_reroute_claims_lesson.py",
     "coordinator_core/write_guards/tests/test_no_retired_memo_invocation_offered.py",
     "coordinator_core/write_guards/tests/test_nudge_improvement_queue_write.py",
     "coordinator_core/write_guards/tests/test_nudge_outbox_draft_frontmatter_shape.py",

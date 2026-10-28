@@ -49,16 +49,14 @@ the diff. A simulation failure (unreadable existing file, decode error, any
 exception while reconstructing content) ALLOWs, matching that guard's own
 documented fail-open choice on this leg.
 
-NO AUTO-TRIM, ever. A guard that silently evicts to make room destroys the
-scarcity the cap exists to create and makes a deletion nobody authorized.
-Where the guard's resolved level is strict, the refused content is instead
-written to the writing repo's ``state/lessons/`` (``_memory_reroute``) and the
-deny names that path: nothing is lost and the agent need not retry. Without
-strict (or when the reroute fails) the deny states the routing test the agent
-should apply itself (truth-expiring claims first, then rows restating
-doctrine already loaded elsewhere, then the oldest-unreferenced row) — the
-guard has no semantic access to a row's meaning, so it can name the test, not
-the verdict.
+Eviction, not refusal, at the count caps. A write that lands at a cap lands
+as written and the OLDEST body file (by mtime, any memory type) is evicted
+with every ``MEMORY.md`` row linking it, one ``memory-evictions.jsonl`` line
+per eviction (``_memory_evict.evict_oldest``). A new body file at
+``MAX_MEMORY_FILES`` evicts one; an ``Edit``/``MultiEdit`` of ``MEMORY.md``
+that breaches the row or byte cap evicts until the re-simulated edit fits.
+Stays a plain deny: a ``Write`` of ``MEMORY.md`` over cap, a row over
+``MAX_ROW_CHARS``, an oversize body file, and any eviction ``OSError``.
 
 Shrink-toward-compliance carve-out: an edit that makes the target file
 STRICTLY SMALLER (in bytes) than its current on-disk size is always
@@ -86,30 +84,7 @@ resolved target does not yet exist on disk) when the directory already
 holds ``>= MAX_MEMORY_FILES`` such files — an edit/rewrite of an EXISTING
 body file always passes this cap, even at or over the limit, or a full store
 becomes permanently uneditable and the shrink-toward-compliance carve-out
-below can no longer walk it back. At strict the refused content is rerouted
-to ``state/lessons/`` and the deny names the lesson; otherwise the deny names
-the oldest body file (by mtime) as the eviction candidate.
-
-What memory is FOR, and why the deny says so (PM ruling 2026-08-21). The
-agent reaching for memory is almost always obeying a durability instinct —
-*"that sounded important to the human, it must not be forgotten."* Durability
-is the one thing memory does not uniquely provide: ``state/lessons/`` is the
-durable, findable store, swept and routed by other processes, and it is
-AVAILABLE when someone reaches for it. What memory uniquely does is far
-narrower and strictly more dangerous — it is FORCE-READ, unbidden, by every EM
-at birth, and every one of them treats it as TRUE until somebody purges it.
-A wrong or expired memory is therefore not inert; it is actively believed,
-fleet-wide, for as long as it sits there.
-
-So the routing test the deny states is deliberately NOT "is this important."
-Everything an agent wants to save is important — that test admits everything,
-which is how this store reached 213 entries. The test is "must every EM
-believe this before it does anything at all," and almost nothing clears it.
-*"The percolate button runs the code it is meant to replace, we should fix
-that"* is a lesson: real, worth keeping, findable when reached for, and
-catastrophic as a boot-time assertion once it is fixed. *"This repo's commits
-refuse unless CLAUDE_KLABAUTER_ROOT is pinned"* is a memory: every EM hits it, before
-anything else works.
+below can no longer walk it back.
 
 Spec backlink: coordinator-content-repo
   docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md § C12, AC14.
@@ -127,12 +102,8 @@ Negative-spec:
   - Does NOT extend ``guard_doctrine_surface_edits.py``'s protected-path
     list. Memory is not a doctrine surface and is not subject to the PM
     sentinel (explicit instruction, C12 body).
-  - Does NOT auto-trim, auto-evict, or mutate the memory store on deny; it
-    writes the refused content to state/lessons/ and nothing else.
-  - Does NOT attempt semantic classification of which row is weakest (no
-    truth-expiry detector, no doctrine-overlap detector). The deny message
-    states the routing TEST as instructions for the agent to apply, it does
-    not compute a verdict the guard has no evidentiary basis for.
+  - Does NOT attempt semantic classification of which memory is weakest:
+    eviction is by mtime alone, for every memory type.
   - Does NOT govern anything below ``<slug>/memory/`` at more than one path
     segment of depth, and does NOT govern the ``memory/`` directory entry
     itself (mkdir is not a ``Write``/``Edit``/``MultiEdit`` concern).
@@ -142,7 +113,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import functools
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -153,7 +123,7 @@ from coordinator_core.write_guards._case_fold_path import (
     casefold_path,
     strip_extended_length_prefix,
 )
-from coordinator_core.write_guards._memory_reroute import added_lines, reroute_to_lesson
+from coordinator_core.write_guards._memory_evict import _row_links, evict_oldest
 
 GUARD_NAME = "guard-memory-store-cap"
 
@@ -310,38 +280,40 @@ def _memory_target(target_raw: str) -> "Optional[Tuple[Path, str, str]]":
     return None
 
 
+def _apply_edits(
+    tool_name: str, tool_input: Dict[str, Any], buf: str, strict: bool = False
+) -> Optional[str]:
+    """``buf`` with the ``Edit``/``MultiEdit`` applied. ``strict``: ``None`` when
+    an ``old_string`` is absent from the buffer it applies to."""
+    if tool_name == "Edit":
+        edits = [tool_input]
+    elif tool_name == "MultiEdit":
+        edits = tool_input.get("edits", []) or []
+    else:
+        return None
+    for edit in edits:
+        old_s = edit.get("old_string", "")
+        new_s = edit.get("new_string", "")
+        if strict and old_s not in buf:
+            return None
+        if edit.get("replace_all"):
+            buf = buf.replace(old_s, new_s)
+        else:
+            buf = buf.replace(old_s, new_s, 1)
+    return buf
+
+
 def _simulate(tool_name: str, tool_input: Dict[str, Any], abs_file_path: str) -> Optional[str]:
     if tool_name == "Write":
         return tool_input.get("content", "") or ""
-
-    if tool_name == "Edit":
-        try:
-            with open(abs_file_path, "r", encoding="utf-8") as f:
-                cur = f.read()
-        except FileNotFoundError:
-            cur = ""
-        old_s = tool_input.get("old_string", "")
-        new_s = tool_input.get("new_string", "")
-        if tool_input.get("replace_all"):
-            return cur.replace(old_s, new_s)
-        return cur.replace(old_s, new_s, 1)
-
-    if tool_name == "MultiEdit":
-        try:
-            with open(abs_file_path, "r", encoding="utf-8") as f:
-                buf = f.read()
-        except FileNotFoundError:
-            buf = ""
-        for edit in tool_input.get("edits", []) or []:
-            old_s = edit.get("old_string", "")
-            new_s = edit.get("new_string", "")
-            if edit.get("replace_all"):
-                buf = buf.replace(old_s, new_s)
-            else:
-                buf = buf.replace(old_s, new_s, 1)
-        return buf
-
-    return None
+    if tool_name not in ("Edit", "MultiEdit"):
+        return None
+    try:
+        with open(abs_file_path, "r", encoding="utf-8") as f:
+            cur = f.read()
+    except FileNotFoundError:
+        cur = ""
+    return _apply_edits(tool_name, tool_input, cur)
 
 
 def _index_rows(content: str) -> "List[str]":
@@ -374,9 +346,6 @@ def _advisory(display: str, new_size: int, cap: int) -> Dict[str, Any]:
 
 _EVICT_ORDER ="stale fact, then doctrine dup, then oldest"
 
-_ROUTING = "memory is force-read as TRUE every boot; a lesson is found when reached for"
-
-
 _PREAMBLE_SHARE_WORTH_NAMING = 0.25
 
 
@@ -387,11 +356,11 @@ def _deny_reason_bytes(display: str, new_size: int, rows: "List[str]") -> str:
         return (
             f"[memory cap] {display}: {new_size}B > {MAX_MEMORY_MD_BYTES}B cap "
             f"({len(rows)} rows, {other}B of it NOT rows). Trim the prose first, "
-            f"or evict a row ({_EVICT_ORDER}). No auto-trim."
+            f"or evict a row ({_EVICT_ORDER})."
         )
     return (
         f"[memory cap] {display}: {new_size}B > {MAX_MEMORY_MD_BYTES}B cap "
-        f"({len(rows)} rows). No auto-trim -- evict a row yourself ({_EVICT_ORDER}), "
+        f"({len(rows)} rows). Evict a row yourself ({_EVICT_ORDER}), "
         "then retry."
     )
 
@@ -399,8 +368,7 @@ def _deny_reason_bytes(display: str, new_size: int, rows: "List[str]") -> str:
 def _deny_reason_rows(display: str, rows: "List[str]") -> str:
     return (
         f"[memory cap] {display}: {len(rows)} rows > {MAX_MEMORY_MD_ROWS} cap. "
-        f"{_ROUTING}. Not boot-critical -> state/lessons/. "
-        "Else evict a row."
+        f"Evict a row ({_EVICT_ORDER}), then retry."
     )
 
 
@@ -421,35 +389,30 @@ def _deny_reason_row_length(display: str, overlong_rows: "List[str]") -> str:
 def _deny_reason_body(display: str, new_size: int) -> str:
     return (
         f"[memory cap] {display}: {new_size}B > {MAX_BODY_FILE_BYTES}B cap "
-        "(body file). Trim it, then retry."
+        "(body file). Shorten it, then retry."
     )
 
 
-#: ``(plain deny reason, one-clause cap fact)`` -- the fact leads the reroute deny.
-_Refusal = Tuple[str, str]
+def _overlong_rows(content: str) -> "List[str]":
+    return [r for r in _index_rows(content) if len(r) > MAX_ROW_CHARS]
 
 
-def _check_memory_md(new_content: str, new_size: int, display: str) -> "Optional[_Refusal]":
+def _check_memory_md(new_content: str, new_size: int, display: str) -> "Optional[str]":
+    """Deny reason for ``new_content`` as a ``MEMORY.md`` breaching any cap, else ``None``."""
     rows = _index_rows(new_content)
     if new_size > MAX_MEMORY_MD_BYTES:
-        return (
-            _deny_reason_bytes(display, new_size, rows),
-            f"{new_size}B > {MAX_MEMORY_MD_BYTES}B cap",
-        )
+        return _deny_reason_bytes(display, new_size, rows)
     if len(rows) > MAX_MEMORY_MD_ROWS:
-        return _deny_reason_rows(display, rows), f"{len(rows)} rows > {MAX_MEMORY_MD_ROWS} cap"
-    overlong = [r for r in rows if len(r) > MAX_ROW_CHARS]
+        return _deny_reason_rows(display, rows)
+    overlong = _overlong_rows(new_content)
     if overlong:
-        return (
-            _deny_reason_row_length(display, overlong),
-            f"{len(overlong)} row(s) over {MAX_ROW_CHARS} chars",
-        )
+        return _deny_reason_row_length(display, overlong)
     return None
 
 
-def _check_body_file(new_size: int, display: str) -> "Optional[_Refusal]":
+def _check_body_file(new_size: int, display: str) -> "Optional[str]":
     if new_size > MAX_BODY_FILE_BYTES:
-        return _deny_reason_body(display, new_size), f"{new_size}B > {MAX_BODY_FILE_BYTES}B cap"
+        return _deny_reason_body(display, new_size)
     return None
 
 
@@ -470,13 +433,12 @@ def _body_file_count_and_oldest(mem_dir: Path) -> "Tuple[int, Optional[Path]]":
 
 def _deny_reason_file_count(dir_display: str, count: int, oldest_name: str) -> str:
     return (
-        f"[memory cap] {dir_display}: {count}/{MAX_MEMORY_FILES} memories. "
-        f"{_ROUTING}. Not boot-critical -> state/lessons/. "
-        f"Else evict oldest: {oldest_name}."
+        f"[memory cap] {dir_display}: {count}/{MAX_MEMORY_FILES} memories, eviction failed. "
+        f"Evict oldest, then retry: {oldest_name}."
     )
 
 
-def _check_new_body_file_count(resolved: Path, display: str) -> "Optional[_Refusal]":
+def _check_new_body_file_count(resolved: Path, display: str) -> "Optional[str]":
     """DR-345's fifth limit. Fires ONLY when the write would CREATE a new
     body file -- an edit/rewrite of an EXISTING body file must always pass,
     even at or over the cap, or a full store becomes permanently
@@ -489,22 +451,29 @@ def _check_new_body_file_count(resolved: Path, display: str) -> "Optional[_Refus
         return None
     dir_display = display.rsplit("/", 1)[0] + "/"
     oldest_name = oldest.name if oldest is not None else "?"
-    return (
-        _deny_reason_file_count(dir_display, count, oldest_name),
-        f"{count}/{MAX_MEMORY_FILES} memories",
-    )
+    return _deny_reason_file_count(dir_display, count, oldest_name)
+
+
+def _evict_for_new_file(resolved: Path, refusal: str) -> "Optional[str]":
+    """Evict the oldest memory to make room; ``None`` on success, else the deny reason."""
+    try:
+        evict_oldest(resolved.parent)
+    except OSError:
+        return refusal
+    return None
 
 
 def memory_cap_verdict(store_dir: Path, filename: str) -> "Optional[str]":
-    """Deny reason when creating ``filename`` in the project ``memory/`` dir
-    ``store_dir`` breaches the file-count cap, else ``None``. A Bash write
-    carries no measurable content, so only the count limit applies; a write
-    to an existing file or to ``MEMORY.md`` passes."""
+    """Evict the oldest memory when creating ``filename`` in the project
+    ``memory/`` dir ``store_dir`` breaches the file-count cap and return
+    ``None``; return the deny reason only when the eviction fails. A Bash
+    write carries no measurable content, so only the count limit applies; a
+    write to an existing file or to ``MEMORY.md`` passes."""
     if filename.casefold() == _MEMORY_MD_FILENAME.casefold():
         return None
     display = f"{store_dir.parent.name}/{store_dir.name}/{filename}"
     refusal = _check_new_body_file_count(store_dir / filename, display)
-    return refusal[0] if refusal else None
+    return _evict_for_new_file(store_dir / filename, refusal) if refusal else None
 
 
 def bash_write_verdict(target: str) -> "Optional[str]":
@@ -520,57 +489,44 @@ def bash_write_verdict(target: str) -> "Optional[str]":
         return None
 
 
-def _reroute_armed() -> bool:
-    """True when the guard's resolved level is strict, so the deny stands and
-    a lesson written beside it duplicates nothing."""
+def _evict_index_until_fits(
+    tool_name: str, tool_input: Dict[str, Any], resolved: Path, display: str
+) -> bool:
+    """Pick victims oldest-first against an in-memory copy of ``MEMORY.md`` until
+    the ``Edit``/``MultiEdit`` re-simulated against it passes
+    ``_check_memory_md``, then evict exactly them. False, with nothing evicted,
+    when no victim set makes the edit fit (including an ``old_string`` that sat
+    in a victim's row) or an eviction fails."""
     try:
-        from coordinator_core.machine_profile import guard_level
-
-        return guard_level(GUARD_NAME) == "strict"
+        mem_dir = resolved.parent
+        victims = sorted(
+            (
+                p
+                for p in mem_dir.iterdir()
+                if p.is_file() and p.name.casefold() != _MEMORY_MD_FILENAME.casefold()
+            ),
+            key=lambda p: p.stat().st_mtime,
+        )
+        text = resolved.read_text(encoding="utf-8")
+        count = 0
+        for victim in victims[:MAX_MEMORY_MD_ROWS]:
+            text = "".join(
+                ln
+                for ln in text.splitlines(keepends=True)
+                if not (ln.startswith("- ") and _row_links(ln, victim.name))
+            )
+            count += 1
+            content = _apply_edits(tool_name, tool_input, text, strict=True)
+            if content is None:
+                return False
+            if _check_memory_md(content, len(content.encode("utf-8")), display) is None:
+                for _ in range(count):
+                    if evict_oldest(mem_dir) is None:
+                        return False
+                return True
     except Exception:
         return False
-
-
-def _lesson_display(lesson: str, cwd: Optional[str]) -> str:
-    """Repo-relative form of ``lesson`` when it sits under the payload's repo, else absolute."""
-    try:
-        from coordinator_core.write_guards._repo_root import resolve_repo_root
-
-        root = resolve_repo_root(cwd)
-        if root:
-            return Path(lesson).relative_to(root).as_posix()
-    except Exception:
-        pass
-    return lesson
-
-
-def _refuse(
-    refusal: "_Refusal",
-    rerouted: str,
-    *,
-    display: str,
-    filename: str,
-    payload: Dict[str, Any],
-) -> Dict[str, Any]:
-    """Deny; at strict, first write ``rerouted`` as a lesson and say where. A
-    failed reroute degrades to the plain deny, never an allow."""
-    reason, fact = refusal
-    if _reroute_armed():
-        cwd = payload.get("cwd")
-        lesson = reroute_to_lesson(
-            rerouted,
-            display=display,
-            filename=filename,
-            cwd=cwd if isinstance(cwd, str) else None,
-            session_id=str(payload.get("session_id") or ""),
-        )
-        if lesson:
-            return _deny(
-                f"[memory cap] {display}: {fact}. Saved as a lesson: "
-                f"{_lesson_display(lesson, cwd if isinstance(cwd, str) else None)}. "
-                "Nothing lost; do not retry or add an index row."
-            )
-    return _deny(reason)
+    return False
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -606,18 +562,24 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         except Exception:
             new_content = None
         if new_content is None:
-            return _deny(count_refusal[0]) if count_refusal else None
+            if count_refusal is None:
+                return None
+            reason = _evict_for_new_file(resolved, count_refusal)
+            return _deny(reason) if reason else None
 
-        refuse = functools.partial(_refuse, display=display, filename=filename, payload=payload)
+        new_size = len(new_content.encode("utf-8"))
 
         if count_refusal is not None:
-            return refuse(count_refusal, new_content)
+            body_refusal = _check_body_file(new_size, display)
+            if body_refusal is not None:
+                return _deny(body_refusal)
+            reason = _evict_for_new_file(resolved, count_refusal)
+            return _deny(reason) if reason else None
 
         try:
             old_size = os.path.getsize(resolved) if resolved.exists() else 0
         except OSError:
             old_size = 0
-        new_size = len(new_content.encode("utf-8"))
 
         if new_size < old_size:
             return None
@@ -642,7 +604,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             )
             if was_over is not None:
                 return _advisory(display, new_size, cap)
-        rerouted = (added_lines(current, new_content) or new_content) if is_index else new_content
-        return refuse(refusal, rerouted)
+        if (
+            is_index
+            and tool_name != "Write"
+            and not _overlong_rows(new_content)
+            and _evict_index_until_fits(tool_name, tool_input, resolved, display)
+        ):
+            return None
+        return _deny(refusal)
     except Exception:
         return None

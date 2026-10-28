@@ -348,6 +348,31 @@ def _named(
     )
 
 
+def _ruled_out_rows_writes(rows: Sequence[Any], sizing_rel: Optional[str], repo_root: Path) -> list[str]:
+    """Writes of staged `rows` serving only register ids the sizing's recorded ruling withholds.
+
+    Such a row's id is not blocking, yet its edits are the run's own and belong in the leg footprint.
+    An unreadable sizing yields `[]`, so the footprint stays strict.
+    """
+    if not sizing_rel or not rows:
+        return []
+    try:
+        import yaml
+
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import ruled_out_ids
+
+        reg = (yaml.safe_load((repo_root / sizing_rel).read_text(encoding="utf-8")) or {}).get("requirement_register") or {}
+        out = set(ruled_out_ids([r for r in reg.get("rows") or [] if isinstance(r, dict)]))
+    except Exception:  # noqa: BLE001 -- an unreadable sizing carries nothing
+        return []
+    carried: list[str] = []
+    for r in rows:
+        served = [str(x) for x in getattr(r, "register_rows", ()) or ()]
+        if served and out.issuperset(served):
+            carried.extend(w for w in r.writes if w not in carried)
+    return carried
+
+
 def remaining_leg_plan(
     remaining: Mapping[str, Mapping[str, Any]],
     notes: Sequence[str],
@@ -368,7 +393,9 @@ def remaining_leg_plan(
     with none serves no blocking row), plus the named remaining paths the run's commit can land
     (doc writes or the sizing); `em_owed` = named CLAUDE.md-class paths the EM edits inline (never
     in `writes` or `unwritable`); `unwritable` = other named paths nothing can land.
-    `plan_writes` (see `plan_rows_serving`) joins `writes` after the manifest writes.
+    `plan_writes` (see `plan_rows_serving`) joins `writes` after the manifest writes. The reply's
+    `writes` is the footprint: `writes` plus the writes of staged rows serving only ruled-out register
+    ids (read from the sizing), which never decide the action.
     A note naming a commit sha (digit and letter, 7-40 hex) re-rules the owed rows as met, so
     unwritable paths alone do not refuse, and with no writes the leg skips. A sha-free note with
     owed work and no writes routes to the re-plan leg, which only a non-xs arm runs; at `arm`
@@ -390,6 +417,11 @@ def remaining_leg_plan(
     for p in [*manifest_writes, *plan_writes, *(n for n in named if n in allowed)]:
         if p not in writes:
             writes.append(p)
+    carried = [w.replace("\\", "/").removeprefix("./") for w in _ruled_out_rows_writes(rows, sizing_rel, repo_root)]
+    if spelling is not None and carried:
+        respelled = spelling(carried)
+        carried = [respelled.get(w) or w for w in carried]
+    footprint = [*writes, *(w for w in carried if w not in writes)]
     unwritable = [n for n in named if n not in writes and n not in em_owed]
     owed = [rid for rid, row in remaining.items() if row.get("remaining")]
     rerule = note_rerules(notes)
@@ -401,12 +433,12 @@ def remaining_leg_plan(
         return {"action": LEG_REFUSE, "writes": writes, "unwritable": unwritable, "em_owed": em_owed,
                 "reason": f"{reason}; {_REMEDY}"}
     if not writes and em_owed:
-        return {"action": LEG_SKIP, "writes": [], "unwritable": unwritable, "em_owed": em_owed,
+        return {"action": LEG_SKIP, "writes": footprint, "unwritable": unwritable, "em_owed": em_owed,
                 "reason": "remaining names CLAUDE.md-class paths the EM edits inline: "
                 + ", ".join(em_owed) + "; the verify leg judges the EM's edit"}
     if not writes and notes:
         if rerule or not owed:
-            return {"action": LEG_SKIP, "writes": [], "unwritable": unwritable, "em_owed": em_owed,
+            return {"action": LEG_SKIP, "writes": footprint, "unwritable": unwritable, "em_owed": em_owed,
                     "reason": "re-ruling-only revise: no leg to run, the verify leg judges"}
         from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
 
@@ -414,7 +446,7 @@ def remaining_leg_plan(
             return {"action": LEG_REFUSE, "writes": [], "unwritable": unwritable, "em_owed": em_owed,
                     "reason": "remaining of " + ", ".join(owed) + " owes work but arm xs has no writes and "
                     f"no re-plan leg; {_REMEDY}"}
-        return {"action": LEG_DISPATCH, "writes": [], "unwritable": unwritable, "em_owed": em_owed,
+        return {"action": LEG_DISPATCH, "writes": footprint, "unwritable": unwritable, "em_owed": em_owed,
                 "reason": "revise note asks for work: the re-plan leg adds the rows"}
-    return {"action": LEG_DISPATCH, "writes": writes, "unwritable": unwritable, "em_owed": em_owed,
+    return {"action": LEG_DISPATCH, "writes": footprint, "unwritable": unwritable, "em_owed": em_owed,
             "reason": ""}

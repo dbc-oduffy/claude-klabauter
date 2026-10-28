@@ -594,6 +594,23 @@ def _review_floor_refusal(
     )
 
 
+def _empty_diff_landing(worktree_root: Path, request: CommitRequest) -> Optional[dict]:
+    """The ``already_landed`` reply naming HEAD when every file the request declares exists on disk
+    and equals its HEAD blob (the run's diff is empty), else None. A declared path absent from disk
+    (a deletion) is not empty. No next_action: nothing to refire."""
+    from coordinator_core.git.git_state import head_sha
+
+    paths = sorted({p for c in request.chunks for p in c.paths if p})
+    if not paths:
+        return None
+    head = head_sha(worktree_root)
+    if not head or any(
+        not (worktree_root / p).is_file() or _differs_from_commit(worktree_root, head, p) for p in paths
+    ):
+        return None
+    return {"committed": False, "nothing_to_commit": True, "already_landed": True, "sha": head, "paths": paths}
+
+
 def _error(message: str, **extra: object) -> dict:
     result: dict = {"committed": False, "sha": None, "error": message}
     result.update(extra)
@@ -3007,7 +3024,7 @@ def _ignored_among_left(
                 asked.extend(members)
         result = run_git(
             ["check-ignore", "-z", "--stdin"], cwd=str(worktree_root),
-            input=b"\0".join(p.encode("utf-8") for p in asked),
+            input=b"\0".join(p.encode("utf-8", "surrogateescape") for p in asked),
         )
         if result.timed_out or result.returncode not in (0, 1):
             return None
@@ -5071,7 +5088,20 @@ def _terminal_commit_inner(
     floor_code = review_floor.floor_code_paths(request, inline_review, prep_from_disk)
     floor_refusal = _review_floor_refusal(request, inline_review, prep_from_disk, worktree_root)
     if floor_refusal is not None:
-        return floor_refusal
+        no_op = _empty_diff_landing(worktree_root, request) if ask_run_dir is not None else None
+        if no_op is None:
+            return floor_refusal
+        unmet, no_op_ledger, _ = _ledger_gate(
+            worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
+            [g.id for g in manifest.gated],
+            {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
+            _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
+            inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
+            sidecar_root=worktree_root,
+        )
+        if unmet is not None or no_op_ledger is None:
+            return floor_refusal
+        return no_op
     over_budget = _xs_over_budget_refusal(
         worktree_root, params, _run_id_of(params, ask_run_dir, script_path_raw), request
     )

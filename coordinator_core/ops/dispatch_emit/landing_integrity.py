@@ -515,9 +515,11 @@ def landing_fingerprint(worktree_root: Path, paths: Sequence[str]) -> dict[str, 
 
 
 def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping]:
-    """The retest verdict for ``run_id``, only while it still describes the tree: ``run_id`` and
-    HEAD match and every ``covered`` file hashes as recorded. None otherwise, including for an
-    unreadable or malformed file.
+    """The retest verdict for ``run_id``, only while it still describes the tree: ``run_id`` matches
+    and every ``covered`` file hashes as recorded. HEAD is consulted only when ``covered`` is empty
+    (nothing else pins the record to the tree). A committed, clean source file outside ``covered``
+    (test files plus dirty paths at retest time) can change without staling the record. None
+    otherwise, including for an unreadable or malformed file.
 
     A ``stale`` record (``stale: true`` or status ``"stale"``) and a ``running`` one measured
     nothing, so neither is ever a fresh verdict."""
@@ -532,7 +534,9 @@ def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping
     if record.get("stale") is True or record["status"] in ("stale", RETEST_RUNNING):
         return None
     covered = record.get("covered")
-    if not isinstance(covered, dict) or not record.get("head") or record["head"] != head_sha(worktree_root):
+    if not isinstance(covered, dict):
+        return None
+    if not covered and (not record.get("head") or record["head"] != head_sha(worktree_root)):
         return None
     if landing_fingerprint(worktree_root, list(covered)) != covered:
         return None

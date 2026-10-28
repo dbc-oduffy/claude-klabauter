@@ -239,6 +239,33 @@ def test_low_available_memory_skips_without_spawning(tool, monkeypatch, tmp_path
     assert spawned == []
 
 
+def _write_lease(common, pid):
+    lease = common / "coordinator-sessions" / "scip-rebuild-lease.json"
+    lease.parent.mkdir(parents=True)
+    lease.write_text(json.dumps({"sequencer_pid": pid, "child_pid": None}), encoding="utf-8")
+
+
+def test_live_rebuild_lease_dedupes_without_spawning(tool, monkeypatch, tmp_path):
+    import os
+
+    spawned: list = []
+    _spawnable(tool, monkeypatch, tmp_path, spawned)
+    monkeypatch.setattr(tool, "_git_common_dir", lambda repo_root: tmp_path)
+    _write_lease(tmp_path, os.getpid())
+    line = tool.run("handoff", tmp_path)
+    assert line.startswith("scip-rebuild: skipped -- a rebuild is already running")
+    assert spawned == []
+
+
+def test_stale_rebuild_lease_does_not_block_the_spawn(tool, monkeypatch, tmp_path):
+    spawned: list = []
+    _spawnable(tool, monkeypatch, tmp_path, spawned)
+    monkeypatch.setattr(tool, "_git_common_dir", lambda repo_root: tmp_path)
+    _write_lease(tmp_path, 2**22 + 12345)
+    assert tool.run("handoff", tmp_path).startswith("scip-rebuild: spawned")
+    assert len(spawned) == 1
+
+
 def test_memory_floor_is_overridable_by_env(tool, monkeypatch, tmp_path):
     spawned: list = []
     _spawnable(tool, monkeypatch, tmp_path, spawned)

@@ -176,6 +176,30 @@ def test_ninth_read_denies_with_fire_step(env):
     assert "cd-prefixed retry" in reason(res) and "em_context" in reason(res)
 
 
+STAMP = "[G-EM fifa-ingest a73557ab] ingest the feed"
+
+
+def test_gem_stamped_opening_is_never_denied_prefire(env):
+    env.write(user(STAMP))
+    env.survey(12)
+    assert g.evaluate(env.payload()) is None
+
+
+def test_unstamped_or_malformed_stamp_stays_armed(env):
+    for text in ("ingest the feed", "[G-EM fifa-ingest] x", "[G-EM fifa-ingest zz] x"):
+        env.lines = []
+        env.write(user(text))
+        env.survey(8)
+        assert g.evaluate(env.payload()) is not None, text
+
+
+def test_gem_stamped_opening_is_never_denied_postlanding(env, monkeypatch):
+    env.write(user(STAMP), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch)
+    for t in ("p1", "p2", "p3", "p4", "p5"):
+        assert _step(env, t) is None
+
+
 def test_eighth_read_allows(env):
     env.write(user())
     env.survey(7)

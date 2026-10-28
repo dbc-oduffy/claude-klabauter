@@ -302,7 +302,8 @@ def size_fail_reason(scouted: Mapping[str, Any]) -> str:
     code = scouted.get("exit_code")
     tail = str(scouted.get("stderr") or "").strip()[-300:] or "(no stderr)"
     if code is None:
-        return f"exit missing: the scout ran no size-chain command; {tail}"
+        why = str(scouted.get("reason") or "").strip()
+        return f"exit missing: the scout ran no size-chain command; {why + '; ' if why else ''}{tail}"
     return f"exit {code}: {tail}"
 
 
@@ -818,6 +819,8 @@ def run_admission(
 
     def _size_row(row: Row) -> None:
         scouted = _record_call("size", row.row_id) or {}
+        if scouted.get("tshirt") and not isinstance(scouted.get("exit_code"), int) and not scouted.get("reason"):
+            scouted = {**scouted, **(_record_call("size", row.row_id) or {})}
         tshirt = scouted.get("tshirt")
         if not tshirt:
             reason = scouted.get("reason")
@@ -1279,7 +1282,8 @@ _ROUTING_HELPERS = (
     "function _lockKeysFor(row, rowId) { return row.declaredFiles.concat([`ledger:${rowId}`]); }\n"
     "function _sizeFailReason(s) {\n"
     "  const tail = String(s.stderr || '').trim().slice(-300) || '(no stderr)';\n"
-    "  return s.exit_code === undefined || s.exit_code === null ? 'exit missing: the scout ran no size-chain command; ' + tail : 'exit ' + s.exit_code + ': ' + tail;\n"
+    "  const why = String(s.reason || '').trim();\n"
+    "  return s.exit_code === undefined || s.exit_code === null ? 'exit missing: the scout ran no size-chain command; ' + (why ? why + '; ' : '') + tail : 'exit ' + s.exit_code + ': ' + tail;\n"
     "}\n"
     "function _commitReason(result) { return result && result.reason ? `: ${result.reason}` : ''; }"
 )
@@ -1849,8 +1853,9 @@ def compose_grind_script(
         row_js="{ row_id: row.rowId, path: row.path, digest: row.digest }",
         evidence_js="row.evidence", fix_plan_js="row.fixPlan",
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
+        retry_js="retry",
     )
-    lines.append("async function _sizeCall(row) {\n" + _indent_block(_capture(size_raw, "size"), "  ") + "\n}")
+    lines.append("async function _sizeCall(row, retry) {\n" + _indent_block(_capture(size_raw, "size"), "  ") + "\n}")
 
     if has_close_node:
         close_raw = stages.compose_refute_close_call(
@@ -2145,7 +2150,8 @@ def compose_grind_script(
         "  }\n"
         "  for (const rid of _toSize) {\n"
         "    const row = _rows[rid];\n"
-        "    const scouted = await _issue(batchState.id, rid, () => _sizeCall(row));\n"
+        "    let scouted = await _issue(batchState.id, rid, () => _sizeCall(row));\n"
+        "    if (scouted.tshirt && !Number.isInteger(scouted.exit_code) && !scouted.reason) { const _again = await _issue(batchState.id, rid, () => _sizeCall(row, true)); scouted = { ...scouted, ..._again }; }\n"
         "    if (!scouted.tshirt) {\n"
         "      row.done = true;\n"
         "      _handBack(rid, 'baton', 'size scout returned no size' + (scouted.reason ? ': ' + scouted.reason : ''));\n"

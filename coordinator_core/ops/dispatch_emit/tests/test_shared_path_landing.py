@@ -26,6 +26,38 @@ def test_sibling_held_product_unknown_path_has_empty_holders_and_malformed_tripl
         spl.sibling_held_product([("bad",)], {})
 
 
+class _Found(dict):
+    recorded_kind: dict = {}
+
+
+def _claims(monkeypatch, holders):
+    from coordinator_core.session import claim_index, liveness, touch_record
+
+    found = _Found({"a/x.py": list(holders)})
+    monkeypatch.setattr(claim_index, "lookup", lambda paths, cwd=None: found)
+    monkeypatch.setattr(touch_record, "kind_blocks_a_peer_commit", lambda kind: True)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd: True)
+    monkeypatch.setattr(liveness, "session_abandoned", lambda sid, cwd: False)
+
+
+def test_touch_claim_by_firing_session_is_self_and_a_sibling_claim_still_holds(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    _claims(monkeypatch, ["fire", "sib"])
+    held = land_run._peer_held(tmp_path, ["a/x.py"], "driver", "r1", None, self_sessions={"fire"})
+    assert held == {"a/x.py": ["sib"]}
+    _claims(monkeypatch, ["fire"])
+    assert land_run._peer_held(tmp_path, ["a/x.py"], "driver", "r1", None, self_sessions={"fire"}) == {}
+    assert land_run._peer_held(tmp_path, ["a/x.py"], "driver", "r1", None) == {"a/x.py": ["fire"]}
+
+
+def test_firing_sessions_names_caller_and_run_token_session(tmp_path):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    assert land_run._firing_sessions(tmp_path, None, "sess-1") == {"sess-1"}
+    assert land_run._firing_sessions(tmp_path, "no-such-run", None) == set()
+
+
 def test_withheld_product_paths_all_reasons_unique_sorted():
     assert spl.withheld_product_paths(UNLANDED) == ["a/x.py", "b/y.py", "c/z.py"]
     assert spl.withheld_product_paths([]) == []

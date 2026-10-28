@@ -75,9 +75,11 @@ class _Host:
         self.rows = [CLAUDE, TOOL, CALLER] if rows is None else rows
         self.config = dict(CONFIG) if config is None else config
         self.ram_reads = 0
+        self.exited = set()
 
     def prims(self):
-        return _Prims(self.rows, alive_set={(CLAUDE.pid, CLAUDE.ctime)})
+        live = {(r.pid, r.ctime) for r in (self.rows or ()) if r.pid not in self.exited}
+        return _Prims(self.rows, alive_set=live)
 
     def reading(self):
         self.ram_reads += 1
@@ -273,6 +275,56 @@ class TestScopedCarveOut:
         assert out is not None and "identity" in _reason(out)
 
 
+class TestXdistPytest:
+    CMD = "python -m pytest -n 4 coordinator_core/bash_guards/tests/test_host_probe.py"
+
+    def test_main_thread_xdist_run_is_refused_on_low_memory(self, host):
+        host.avail = 1
+        out = _enveloped(guard.check)(_payload(self.CMD))
+        assert out is not None and "ram-floor" in _reason(out)
+
+    def test_main_thread_xdist_run_is_admitted_with_memory_and_leased(self, host, tmp_path):
+        assert _enveloped(guard.check)(_payload(self.CMD)) is None
+        assert host.ram_reads == 1
+        assert len(_lease_files(tmp_path)) == 1
+
+    def test_executor_xdist_run_is_identity_denied(self, host):
+        out = _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123", agent_type="coordinator:executor"))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_single_worker_scoped_run_stays_scoped(self, host):
+        cmd = "python -m pytest -n 1 coordinator_core/bash_guards/tests/test_host_probe.py"
+        assert _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor")) is None
+
+
+class TestOverlayPythonCli:
+    CMD = (
+        "cd /fixture/likeness-prototype; python -m likeness.dense_map_2d.overlay "
+        "--run-key 2026-10-27-hrn-photo-run --photos-key fifa-photos "
+        "--out-key 2026-10-27-dv01-end/png-kane > scratch/dv01-c3-overlay.log 2>&1"
+    )
+
+    def test_executor_is_refused_at_the_identity_leg(self, host):
+        out = _enveloped(guard.check)(_payload(self.CMD, agent_id="a1", agent_type="coordinator:executor"))
+        assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "identity" in _reason(out)
+        assert host.ram_reads == 0
+
+    def test_main_thread_passes_identity_and_meets_the_ram_leg(self, host, tmp_path):
+        assert _enveloped(guard.check)(_payload(self.CMD)) is None
+        assert host.ram_reads >= 1
+        assert len(_lease_files(tmp_path)) == 1
+        host.avail = 900
+        out = _enveloped(guard.check)(_payload(self.CMD))
+        assert out is not None and "ram-floor" in _reason(out)
+
+    @pytest.mark.parametrize(
+        "cmd", ["python -m pytest a.py", "python -m json.tool", "python -m likeness.dense_map_2d.other"]
+    )
+    def test_light_python_modules_are_not_gated_for_an_executor(self, host, cmd):
+        assert _enveloped(guard.check)(_payload(cmd, agent_id="a1", agent_type="coordinator:executor")) is None
+
+
 class TestBoxHoldLeg:
     SCOPED = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"
 
@@ -383,6 +435,22 @@ class TestSessionCapLeg:
         out = _enveloped(guard.check)(_payload("sleep 600", background=True))
         text = _reason(out)
         assert "session-cap" in text and "background" in text and "400" in text
+
+    def _shell_rows(self, n):
+        return [CLAUDE, TOOL, CALLER] + [
+            ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(n)
+        ]
+
+    def test_exited_shells_in_the_snapshot_are_not_counted(self, host):
+        host.rows = self._shell_rows(5)
+        host.exited = {401, 402, 403}
+        assert _enveloped(guard.check)(_payload("sleep 600", background=True)) is None
+
+    def test_only_live_shells_are_named_when_some_exited(self, host):
+        host.rows = self._shell_rows(5)
+        host.exited = {403}
+        text = _reason(_enveloped(guard.check)(_payload("sleep 600", background=True)))
+        assert "holds 4 background shells" in text and "403" not in text and "400" in text
 
     def test_background_light_command_under_cap_admits(self, host, tmp_path):
         assert _enveloped(guard.check)(_payload("sleep 600", background=True)) is None

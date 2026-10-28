@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from typing import Optional
 
 from coordinator_core._hook_envelope import deny, no_advisory, payload_of
@@ -110,6 +111,15 @@ def _is_group_em_holder(root: str, sid: str) -> bool:
         return False
 
 
+_GEM_STAMP = re.compile(r"\[G-EM [^\s\]]+ [0-9a-fA-F]{8}\]")
+
+
+def _gem_stamped(opening: object) -> bool:
+    """True when the window-opening turn carries a "[G-EM <name> <sid8>]" directive stamp: a scoped
+    G-EM directive started the session, so its reads are the directive's work, not a survey."""
+    return isinstance(opening, str) and _GEM_STAMP.search(opening) is not None
+
+
 def _decide(payload: dict) -> Optional[str]:
     """The deny text, or None. Raises are the caller's fail-open."""
     from coordinator_core.session import em_prefire_window as epw
@@ -145,6 +155,8 @@ def _decide(payload: dict) -> Optional[str]:
     )
     if state != prior:
         epw.save_state(path, state)
+    if _gem_stamped(state.get("opening")):
+        return None
     if not (pre_now or all_now):
         return None
 
@@ -188,10 +200,9 @@ def _decide(payload: dict) -> Optional[str]:
     return None
 
 
-def evaluate(params: dict) -> Optional[dict]:
-    """Deny envelope for an over-budget survey call, else None. Any failure returns None."""
+def _evaluate_payload(payload: dict) -> Optional[dict]:
+    """Deny envelope for an already-normalised event dict, else None. Any failure returns None."""
     try:
-        payload = payload_of(params)
         text = _decide(payload)
         if not text:
             return None
@@ -200,10 +211,16 @@ def evaluate(params: dict) -> Optional[dict]:
         return None
 
 
+def evaluate(params: dict) -> Optional[dict]:
+    """Deny envelope for an over-budget survey call, else None. Any failure returns None."""
+    return _evaluate_payload(payload_of(params))
+
+
 @register_op("hooks.guard_em_prefire_survey")
 async def _handler(params: dict, repo_root=None) -> dict:
+    payload = payload_of(params)
     try:
-        envelope = await asyncio.to_thread(evaluate, params)
+        envelope = await asyncio.to_thread(_evaluate_payload, payload)
     except Exception:
         envelope = None
     return envelope if envelope else no_advisory()

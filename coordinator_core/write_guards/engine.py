@@ -493,6 +493,7 @@ def evaluate(
                 g.name,
                 _override_keys_doc_display(),
                 agent_id=agent_id,
+                payload=payload,
             )
 
     # --- advisory phase, PRIORITY order ---------------------------------------

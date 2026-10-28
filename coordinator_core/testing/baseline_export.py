@@ -27,13 +27,22 @@ EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_EXPORT_FAILED = 3
 EXIT_REMOVAL_FAILED = 4
+EXIT_REFUSED = 5
 
 ROOT_PREFIX = "test-base-"
+#: Box-wide cap on concurrent exports: extraction is disk-bound, so more than two only queue on the disk.
+EXPORT_SLOT_CAP = 2
+SLOTS_DIRNAME = "baseline-export-slots"
+_ROOT_RE = re.compile(re.escape(ROOT_PREFIX) + r"[0-9a-f]{8}-(\d+)")
 USAGE = "usage: baseline-export --sha <sha> [--link <repo-relative-path>]... -- <runner argv...>"
 
 _SHA_RE = re.compile(r"[0-9a-fA-F]{4,40}")
 _IS_NT = os.name == "nt"
 _TERM_GRACE_S = 1.0
+#: Data trees (~60k files) linked from the live tree instead of extracted: extracting them per
+#: export saturated the disk for every peer. Trap: a baseline run reads these at the live
+#: tree's content, not at --sha's, and a test that writes into them writes the live tree.
+DATA_DIRS = ("state", "archive", "docs", "tasks")
 
 
 class UsageError(Exception):
@@ -171,7 +180,8 @@ def export(toplevel: str, sha40: str, root: Path) -> None:
             try:
                 with tarfile.open(fileobj=proc.stdout, mode="r|") as tf:
                     for member in tf:
-                        tf.extract(member, path=root, filter="data")
+                        if member.name.split("/", 1)[0] not in DATA_DIRS:
+                            tf.extract(member, path=root, filter="data")
                 while proc.stdout.read(65536):
                     pass
             except (tarfile.TarError, OSError) as exc:
@@ -366,6 +376,60 @@ def _handled_signals() -> list[int]:
     return [getattr(signal, n) for n in names if hasattr(signal, n)]
 
 
+def _slot_path(index: int) -> Path:
+    from coordinator_core._settings_home import settings_home
+
+    return settings_home() / SLOTS_DIRNAME / f"slot-{index}.lock"
+
+
+def _acquire_slot() -> tuple[int, str] | None:
+    """Take a free box-wide export slot (dead/stale holders reclaimed by suite_mutex); None when all are held."""
+    import uuid
+
+    from coordinator_core.testing import suite_mutex
+
+    for i in range(EXPORT_SLOT_CAP):
+        path = _slot_path(i)
+        token = f"baseline-export#{uuid.uuid4().hex}"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if suite_mutex.holder(path=path) is None and suite_mutex.acquire(
+                token, "baseline-export", 0.0, path=path
+            ):
+                return i, token
+        except Exception as exc:
+            print(f"baseline-export: slot {i} unavailable: {exc}", file=sys.stderr)
+    return None
+
+
+def _release_slot(slot: tuple[int, str]) -> None:
+    from coordinator_core.testing import suite_mutex
+
+    with contextlib.suppress(Exception):
+        suite_mutex.release(slot[1], path=_slot_path(slot[0]))
+
+
+def reap_dead_exports(toplevel: str) -> list[str]:
+    """Remove scratch/test-base-<sha8>-<pid> trees whose pid is dead; returns the names removed."""
+    from coordinator_core.testing import suite_mutex
+
+    scratch = Path(toplevel) / "scratch"
+    reaped: list[str] = []
+    try:
+        names = os.listdir(scratch)
+    except OSError:
+        return reaped
+    for name in names:
+        m = _ROOT_RE.fullmatch(name)
+        if m is None or int(m.group(1)) == os.getpid():
+            continue
+        if suite_mutex._pid_alive(int(m.group(1))) is not False:
+            continue
+        if remove(scratch / name):
+            reaped.append(name)
+    return reaped
+
+
 def _finish(sha: str, export_state: str, why: str | None, runner_exit: int | None, removed: bool, code: int) -> int:
     sys.stdout.flush()
     sys.stderr.flush()
@@ -387,6 +451,12 @@ def main(argv: list[str]) -> int:
         print(f"baseline-export: {exc}", file=sys.stderr)
         return _finish(inv.sha, "failed", str(exc), None, True, EXIT_EXPORT_FAILED)
 
+    slot = _acquire_slot()
+    if slot is None:
+        why = f"no free export slot (cap {EXPORT_SLOT_CAP}); retry later"
+        print(f"baseline-export: {why}", file=sys.stderr)
+        return _finish(sha40, "refused", why, None, True, EXIT_REFUSED)
+
     root = export_root(toplevel, sha40, os.getpid())
     sigs = _handled_signals()
     previous: dict[int, object] = {}
@@ -406,6 +476,7 @@ def main(argv: list[str]) -> int:
     refused = False
     try:
         try:
+            reap_dead_exports(toplevel)
             with _signals_blocked(sigs):
                 root.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -416,7 +487,9 @@ def main(argv: list[str]) -> int:
             if refused:
                 raise ExportError(f"export root already exists: {root}")
             export(toplevel, sha40, root)
-            link(toplevel, root, inv.links)
+            data = tuple(d for d in DATA_DIRS if os.path.isdir(os.path.join(toplevel, d)))
+            links = tuple(p for p in inv.links if p.split("/", 1)[0] not in data)
+            link(toplevel, root, data + links)
             export_state = "ok"
             run_cwd = counterpart_cwd(toplevel, cwd, root)
             try:
@@ -437,6 +510,7 @@ def main(argv: list[str]) -> int:
                 signal.signal(s, signal.SIG_IGN)
         group.terminate()
         removed = remove(root) if owned else True
+        _release_slot(slot)
         if interrupted is None and group.proc is not None and runner_exit is None:
             runner_exit = group.proc.poll()
         for s, handler in previous.items():

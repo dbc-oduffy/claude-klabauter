@@ -140,8 +140,18 @@ STAGE_AGENT_TYPES: dict[str, str] = {
 #: The grind size scout's return: the shared scout fields plus its closing sizing chain's result.
 SIZE_SCOUT_SCHEMA = {
     **SCOUT_SCHEMA,
-    "properties": {**SCOUT_SCHEMA["properties"], **ASSEMBLE_SCHEMA["properties"]},
+    "properties": {
+        **SCOUT_SCHEMA["properties"],
+        **ASSEMBLE_SCHEMA["properties"],
+        "reason": {"type": "string", "description": "the cause you ran no size-chain command; omit when you ran it"},
+    },
 }
+
+_SIZE_RETRY_NOTE = (
+    "\n\nYour previous reply carried no exit_code: you ran neither the size-chain command nor the "
+    "fail command. Run the size-chain command now, and return its exit code as exit_code. If you "
+    "cannot, run the fail command and return the same <why> as reason."
+)
 
 #: Model per stage. General-purpose stages carry their own default (a run's
 #: ``models`` mapping overrides it); every other stage reads the engine's
@@ -661,8 +671,10 @@ def compose_size_call(
     repo_root_js: str = "REPO_ROOT",
     preamble_expr: Optional[str] = None,
     models: Optional[Mapping[str, str]] = None,
+    retry_js: Optional[str] = None,
 ) -> str:
-    """One sizing-scout call for one backlog row. ``row_js`` evaluates at run
+    """One sizing-scout call for one backlog row. ``retry_js``, when given, is a JS boolean
+    expression that appends the re-dispatch note to the prompt. ``row_js`` evaluates at run
     time to ``{row_id, path, digest}``; ``evidence_js`` and ``fix_plan_js`` to
     strings. The prompt never carries triage's size verdict. The scout's last
     act is the row's sizing-assemble chain (``SIZE_ASSEMBLE_JS``'s
@@ -702,10 +714,13 @@ def compose_size_call(
             "--well-trodden-step-change when well_trodden_step_change is true. Return its exit code "
             "as exit_code, its stdout verbatim as stdout and its stderr as stderr. Do not edit, "
             "retry or repair it. When you run no command, run this once instead, replacing <why> with the "
-            "cause (the quotes around it stay; an embedded ' is written '\\''), and return no exit_code:\n\n",
+            "cause (the quotes around it stay; an embedded ' is written '\\''), return that cause as reason and "
+            "return no exit_code:\n\n",
         ),
         ("expr", f"_sizeFailTemplate({row_js})"),
     ]
+    if retry_js:
+        parts.append(("expr", f"({retry_js} ? {_js_string_literal(_SIZE_RETRY_NOTE)} : '')"))
     return _agent_call(
         _join_prompt_parts(parts),
         stage="size",

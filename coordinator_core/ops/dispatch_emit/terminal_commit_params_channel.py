@@ -25,6 +25,7 @@ BLOCK_OPEN = "-----BEGIN TERMINAL-COMMIT PARAMS-----"
 BLOCK_CLOSE = "-----END TERMINAL-COMMIT PARAMS-----"
 RELAY_HEADER = "[Workflow harness — user request]"
 READ_CAP_BYTES = 64 * 1024
+MAX_PROMPT_RECORDS = 8
 
 # Emitted into the composed script; must stay byte-equal to `render_params_block`
 # (pinned by the node-gated agreement test). JSON.stringify never emits a raw newline.
@@ -127,34 +128,47 @@ def spawn_transcript_path(payload: dict) -> Optional[str]:
     return str(hits[0]) if len(hits) == 1 else None
 
 
-def _read_record_content(fh: BinaryIO) -> Optional[str]:
-    """Content of the next capped transcript line when it is a `type: user` string record."""
+def _read_record_content(fh: BinaryIO) -> tuple[bool, Optional[str]]:
+    """(more, content) for the next transcript line; content is its `type: user` string, else None.
+
+    An over-cap line is drained unparsed and yields None content. `more` is False at EOF.
+    """
     line = fh.readline(READ_CAP_BYTES + 1)
+    if not line:
+        return False, None
     if len(line) > READ_CAP_BYTES:
-        return None
+        while not line.endswith(b"\n"):
+            line = fh.readline(READ_CAP_BYTES)
+            if not line:
+                return False, None
+        return True, None
     record = json.loads(line.decode("utf-8"))
     if not isinstance(record, dict) or record.get("type") != "user":
-        return None
+        return True, None
     message = record.get("message")
     content = message.get("content") if isinstance(message, dict) else None
-    return content if isinstance(content, str) else None
+    return True, content if isinstance(content, str) else None
 
 
 def read_spawn_prompt(transcript_path: object) -> Optional[str]:
     """The spawn's computed-task record, or None. Never raises.
 
-    Record 0, unless it is the harness's relayed user request: then record 1, and record 0's
-    content is discarded unsearched because relayed user text can quote a block. At most two capped lines
-    of the path the hook payload hands over: no listing, no third record.
+    The first `type: user` string record that is not the harness's relayed user request,
+    within the first `MAX_PROMPT_RECORDS` lines: the harness can place `attachment` records
+    (instruction files, hook context) ahead of it. The relay record's content is discarded
+    unsearched because relayed user text can quote a block. Over-cap lines are skipped unparsed.
     """
     if not isinstance(transcript_path, str) or not _is_workflow_spawn_path(transcript_path):
         return None
     try:
         with open(transcript_path, "rb") as fh:
-            first = _read_record_content(fh)
-            if first is not None and first.startswith(RELAY_HEADER):
-                return _read_record_content(fh)
-            return first
+            for _ in range(MAX_PROMPT_RECORDS):
+                more, content = _read_record_content(fh)
+                if not more:
+                    return None
+                if content is not None and not content.startswith(RELAY_HEADER):
+                    return content
+            return None
     except (OSError, ValueError):
         return None
 

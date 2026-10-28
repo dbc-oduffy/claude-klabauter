@@ -1,8 +1,9 @@
-"""A Bash write into a project memory dir is held to the memory-store file-count cap
-by the outside-repo leg; under the cap it still passes."""
+"""A Bash write of a new file into a project memory dir at the file-count cap lands
+and evicts the oldest memory, via the outside-repo leg; under the cap nothing is evicted."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -74,8 +75,10 @@ def _reason(result) -> str:
 
 
 @pytest.mark.parametrize("shape", ["heredoc", "cp", "redirect"])
-def test_new_file_at_cap_denies_with_reroute_text(env, shape):
+def test_new_file_at_cap_allows_and_evicts_oldest(env, shape):
     _fill(env["mem"], 5)
+    for i in range(5):
+        os.utime(env["mem"] / f"body-{i}.md", (1000 + i, 1000 + i))
     dest = _posix(env["mem"] / "sixth.md")
     cmd = {
         "heredoc": f"cat > {dest} <<'EOF'\nbody\nEOF",
@@ -85,11 +88,11 @@ def test_new_file_at_cap_denies_with_reroute_text(env, shape):
 
     result = _check(env, cmd)
 
-    assert result is not None
-    reason = _reason(result)
-    assert "[memory cap]" in reason
-    assert "5/5 memories" in reason
-    assert "state/lessons/" in reason
+    assert result is None or result["hookSpecificOutput"].get("permissionDecision") != "deny"
+    assert not (env["mem"] / "body-0.md").exists()
+    assert (env["mem"] / "body-1.md").exists()
+    log = env["mem"].parent / "memory-evictions.jsonl"
+    assert '"name": "body-0.md"' in log.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("shape", ["heredoc", "cp", "redirect"])

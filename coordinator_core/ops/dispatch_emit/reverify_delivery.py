@@ -16,7 +16,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -90,13 +90,96 @@ def _sidecar(call: str, plan_path: str, label: str) -> str:
     return with_sidecar_clause(call, "reverify", Path(plan_path.replace("\\", "/")).stem or "run", label)
 
 
+_Scope = Tuple[Optional[List[str]], str, List[str]]
+
+
+def _select_scope(repo_root: Optional[Path], base: Optional[str], head_sha: str) -> _Scope:
+    """`(tests, error, unmapped)`: the engine-computed test set for `base..head_sha`, or
+    `(None, reason, [])` when the base is unknown or the selection raises. `unmapped` names the
+    changed files no selected test covers: when no test is selected, every non-`.py` file (a
+    non-`.py` file beside selected tests is ordinary and never forbids a pass), and, when
+    selection is not `fully_mapped`, every changed `.py` that is not itself a selected test."""
+    # The literal "run_base_sha" is the unresolved-placeholder value of the caller's `base`.
+    if repo_root is None or not base or base == "run_base_sha":
+        return None, "run_base_sha or repo root unknown", []
+    from coordinator_core.ops.reverify_scope import select_tests
+
+    try:
+        picked = select_tests(Path(repo_root), base, head_sha)
+    except ValueError as exc:
+        return None, str(exc), []
+    tests = list(picked["tests"])
+    unmapped = [p for p in picked["changed"] if not p.endswith(".py")] if not tests else []
+    if not picked["fully_mapped"]:
+        unmapped += [p for p in picked["changed"] if p.endswith(".py") and p not in tests]
+    return tests, "", unmapped
+
+
+#: Paths per `python -m pytest` invocation: keeps each command line well under OS limits.
+_BATCH_SIZE = 40
+
+_NO_STDIN_ASSEMBLY = (
+    "Pass each batch's paths as literal arguments to `python -m pytest <paths> -q`; never assemble "
+    "a command from stdin (`xargs`, a pipe, `$(...)`, a here-doc): the command guard denies it and "
+    "no test runs. "
+)
+
+
+def _batched_paths(tests: List[str]) -> str:
+    """The selected paths, comma-joined for one batch, else numbered batches of `_BATCH_SIZE`."""
+    if len(tests) <= _BATCH_SIZE:
+        return ", ".join(tests)
+    batches = [tests[i : i + _BATCH_SIZE] for i in range(0, len(tests), _BATCH_SIZE)]
+    return "run each batch as its own pytest invocation: " + " ".join(
+        f"[batch {n}/{len(batches)}] " + " ".join(b) + ";" for n, b in enumerate(batches, 1)
+    ).rstrip(";")
+
+
+def _scope_clause(tests: Optional[List[str]], error: str, base: str, unmapped: Optional[List[str]] = None) -> str:
+    """The set-naming sentence: explicit files, run nothing (empty), or an error leg (no set).
+    Any `unmapped` file forbids a `pass`: no test is evidence for it."""
+    if tests is None:
+        return (
+            f"No test set could be computed ({error}). Run nothing, no directory, tier or suite; "
+            "return status `error` naming that reason. "
+        )
+    unmapped_clause = (
+        "These changed files are covered by no test: " + ", ".join(unmapped) + ". "
+        "Name them in `summary` and return status `error`, never `pass`. "
+        if unmapped
+        else ""
+    )
+    if not tests:
+        if unmapped:
+            return "Run nothing: no test covers the run's changes. " + unmapped_clause
+        return "The run changed no test-covered file: run nothing and report status `pass` with tests_run 0. "
+    return (
+        "Run these test files and only these; never a directory, tier or the full suite: "
+        + _batched_paths(tests)
+        + ". "
+        + _NO_STDIN_ASSEMBLY
+        + unmapped_clause
+        + f"Re-run each red at the run base {base} in an export of it and list in `baseline.pre_existing` "
+        "only ids measured red there; a red not re-run or whose export failed is `unverified`, never "
+        "`pre_existing`; a base check that failed in the export itself (`git archive` exit 128, no `.git`) is `unverified`. "
+    )
+
+
 def _tests_prompt(
-    head_sha: str, plan_path: str, base: str, repo_root: Optional[Path] = None, *, write_record: bool = False
+    head_sha: str,
+    plan_path: str,
+    base: str,
+    repo_root: Optional[Path] = None,
+    *,
+    write_record: bool = False,
+    scope: _Scope = (None, "no selection", []),
 ) -> str:
-    """The scoped-test brief. `repo_root` is the repo whose pinned interpreter the clause names.
-    `write_record` adds the test-runner's sidecar clause, which an agent without Write cannot honour."""
+    """The scoped-test brief. `repo_root` is the repo whose pinned interpreter the clause names;
+    `scope` is `_select_scope`'s result. `write_record` adds the test-runner's sidecar clause,
+    which an agent without Write cannot honour."""
     return (
         f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
+        f"{_scope_clause(scope[0], scope[1], base, scope[2])}"
         f"{interpreter_clause(repo_root)} "
         "Report raw evidence; do not gate. "
         + (
@@ -414,6 +497,7 @@ def compose_reverify_script(
     tests_ident: dict[str, str] = {}
     # A degraded host runs the judge as general-purpose, which has Write: keep the two legs there.
     verify_merge = rerun_tests and judge_call is not None and not host_degraded
+    scope = _select_scope(repo_root, run_base_sha, head_sha) if rerun_tests else (None, "no selection", [])
     judge_lines = ""
     criterion_field = ""
     if verify_merge:
@@ -428,7 +512,7 @@ def compose_reverify_script(
         }
         verify_prompt = (
             "Verify in two steps, in order, in one run.\n\n"
-            "Step 1 -- scoped tests. " + _tests_prompt(head_sha, plan_path, base, repo_root)
+            "Step 1 -- scoped tests. " + _tests_prompt(head_sha, plan_path, base, repo_root, scope=scope)
             + "\n\nStep 2 -- criterion verdict. Only once the step 1 result is in, rule the criterion below. "
             "A failing, errored or degraded test result is evidence for your verdict, never the verdict itself. "
             "Return the verdict under `judge`.\n\n"
@@ -460,7 +544,7 @@ def compose_reverify_script(
         tests_ident["tests_agent_type"] = parts.agent_type
     elif rerun_tests:
         phases.append(_js_string_literal(_TESTS_PHASE))
-        tests_prompt = _tests_prompt(head_sha, plan_path, base, repo_root, write_record=True)
+        tests_prompt = _tests_prompt(head_sha, plan_path, base, repo_root, write_record=True, scope=scope)
         tests_type, tests_role = _host_native(review.prep.agent_type, host_degraded)
         tests_ident["tests_agent_type"] = tests_type
         tests_call = _sidecar(
@@ -538,6 +622,58 @@ def _refuse_unless_zero_claim_settled(
         )
 
 
+#: A base-check failure whose text names the export itself failing (no `.git` in it) measured the
+#: environment, not the test at the base.
+_ENV_FAULT_RE = re.compile(r"git archive\b[^\n]*\bexited\s+128\b|not a git repository", re.IGNORECASE)
+
+
+def _entry_id(entry: Any) -> str:
+    return str(entry.get("id") if isinstance(entry, dict) else entry)
+
+
+def _environment_fault_ids(tests: dict, pre_raw: List[Any]) -> set:
+    """Ids in `baseline.pre_existing` whose recorded failure text is an export-environment fault.
+    Text is read from a dict entry's fields and from `tests.failures` (id -> text, or dicts
+    carrying `id` and any text field); such an id was never measured red at the base."""
+    found: set = set()
+    for entry in pre_raw:
+        if isinstance(entry, dict) and _ENV_FAULT_RE.search(" ".join(str(v) for v in entry.values())):
+            found.add(_entry_id(entry))
+    failures = tests.get("failures")
+    pairs = failures.items() if isinstance(failures, dict) else (
+        (f.get("id"), " ".join(str(v) for v in f.values())) for f in failures or [] if isinstance(f, dict)
+    )
+    pre_ids = {_entry_id(e) for e in pre_raw}
+    for fid, text in pairs:
+        if str(fid) in pre_ids and _ENV_FAULT_RE.search(str(text)):
+            found.add(str(fid))
+    return found
+
+
+def charged_status(tests: Optional[dict]) -> Optional[str]:
+    """The tests status after pre_existing reds are set aside. A `fail` is `pass` only when
+    every failing id is export-measured red at the run base (`baseline.pre_existing`): any
+    `caused` or `unverified` id, any listed failing id outside that baseline, and a failed
+    count above the baseline's size each keep it charged. A record naming neither a `failed`
+    count nor any `failing` id measured nothing, so it stays charged."""
+    status = (tests or {}).get("status")
+    baseline = (tests or {}).get("baseline")
+    if status != "fail" or not isinstance(baseline, dict) or tests.get("baseline_method") != "export":
+        return status
+    pre_raw = baseline.get("pre_existing") or []
+    pre = {_entry_id(i) for i in pre_raw}
+    env_faulted = _environment_fault_ids(tests, pre_raw)
+    pre -= env_faulted
+    outside = sorted(env_faulted)
+    outside += [str(i) for i in baseline.get("caused") or []]
+    outside += [str(u.get("id") if isinstance(u, dict) else u) for u in baseline.get("unverified") or []]
+    outside += [str(i) for i in tests.get("failing") or [] if str(i) not in pre]
+    failed = tests.get("failed")
+    over_count = isinstance(failed, int) and failed > len(pre)
+    measured = isinstance(failed, int) or bool(tests.get("failing"))
+    return "pass" if pre and measured and not outside and not over_count else status
+
+
 def record_delivery_verdict(
     *,
     repo_root: Path,
@@ -578,7 +714,7 @@ def record_delivery_verdict(
             raise ReverifyRefused(f"reverify-delivery: criterion status {status!r} is not one of {_CRITERION_STATUSES}")
         fm["criterion"] = {"status": status, "observation": criterion.get("observation"), "sidecar": None}
     if tests is not None:
-        status = tests.get("status")
+        status = charged_status(tests)
         # The re-verify workflow emits `pass-with-skips`; every reader takes the record's status as
         # the terminal verdict, so it lands as `pass` and the skip as its own field.
         skipped = status == "pass-with-skips"

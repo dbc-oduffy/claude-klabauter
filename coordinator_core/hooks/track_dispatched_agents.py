@@ -194,12 +194,20 @@ def _fold_agent_type(value: str) -> str:
 # identity-guard). Only this exact pair is a resume; it keeps the recorded type.
 _RESUME_REPORTED_TYPE = {"workflow-subagent": "general-purpose"}
 
+# A resumed workflow executor (recorded `coordinator:executor`, etc.) is likewise
+# re-reported as `general-purpose`: that incoming type never names a different
+# dispatch, so it keeps any recorded real type. One-directional: a recorded
+# `general-purpose` or a legacy blank/placeholder row is not covered.
+_RESUME_FALLBACK_TYPE = "general-purpose"
+_NON_RESUMABLE_TYPES = frozenset({"", PLACEHOLDER_TYPE, AMBIGUOUS_TYPE.casefold()})
+
 
 def _is_reply_resume(existing_type: str, incoming_type: str) -> bool:
     """True when a second write for a recorded agent_id is the SAME agent resumed.
 
     The one place the resume-identity rule lives: the same (comparison-folded)
-    type, or the harness's known resume re-report in `_RESUME_REPORTED_TYPE`.
+    type, the harness's known resume re-report in `_RESUME_REPORTED_TYPE`, or an
+    incoming `general-purpose` over a recorded real type.
     Any other differing real type is a collision `_resolve_row_collision`
     turns into AMBIGUOUS.
     """
@@ -208,7 +216,9 @@ def _is_reply_resume(existing_type: str, incoming_type: str) -> bool:
     if existing == incoming:
         return True
     reported = _RESUME_REPORTED_TYPE.get(existing)
-    return reported is not None and _fold_agent_type(reported) == incoming
+    if reported is not None and _fold_agent_type(reported) == incoming:
+        return True
+    return incoming == _RESUME_FALLBACK_TYPE and existing not in _NON_RESUMABLE_TYPES
 
 
 def _resolve_row_collision(

@@ -52,6 +52,22 @@ _PASS_THROUGH = frozenset({
 #: skips the tokenizer, so the common case costs one scan.
 _PREFILTER = ("unrealbuildtool", "build.bat", "runuat", "build-plugin", "unrealeditor")
 
+#: Declared-heavy Python CLIs (needs_slot): dotted module names for `python -m`, and script stems
+#: for `python <script>.py`. A new heavy CLI is declared by adding it here.
+_HEAVY_PY_MODULES = frozenset({
+    "likeness.dense_map_2d.bfm_operator",
+    "likeness.dense_map_2d.overlay",
+})
+_HEAVY_PY_SCRIPTS = frozenset({"bfm_operator"})
+
+#: Derived from the sets above (last dotted segment / script stem): import-time only, no hot-path cost.
+_PY_PREFILTER = tuple(sorted(
+    {m.rsplit(".", 1)[-1].lower() for m in _HEAVY_PY_MODULES}
+    | {s.lower() for s in _HEAVY_PY_SCRIPTS}
+))
+
+_PY_LAUNCHERS = frozenset({"python", "python3", "pythonw", "py"})
+
 _PLAIN_INTERPRETERS = frozenset({"dotnet", "bash", "sh", "zsh", "cmd", "cmd.exe"})
 _PWSH_NAMES = frozenset({"pwsh", "powershell"})
 _MAX_DEPTH = 4
@@ -61,6 +77,8 @@ _REASON = (
     "BLOCKED: Unreal builds and editor runs are Group EM slot legs "
     "(AN-EXECUTOR-NEVER-FANS-OUT-HEAVY-RUNS)."
 )
+
+_PY_REASON = "BLOCKED: this Python CLI is a declared needs_slot leg; the Group EM runs it in the slot."
 
 
 def _segments(cmd: str) -> List[List[str]]:
@@ -131,6 +149,33 @@ def _is_heavy(token: str) -> bool:
     return _base(token) in _HEAVY_NAMES
 
 
+def _is_python_launcher(base: str) -> bool:
+    if base in _PY_LAUNCHERS:
+        return True
+    return base.startswith(("python3.", "py-")) and base.replace(".", "").replace("-", "").isalnum()
+
+
+def _python_runs_heavy(rest: List[str]) -> bool:
+    """`rest` are the args after a python launcher: `-m <mod>` or the first `.py` positional."""
+    skip = False
+    for j, tok in enumerate(rest):
+        if skip:
+            skip = False
+            continue
+        if tok in ("-W", "-X"):
+            skip = True
+            continue
+        if tok == "-m" and j + 1 < len(rest):
+            return rest[j + 1].lower() in _HEAVY_PY_MODULES
+        if tok.startswith("-m") and len(tok) > 2 and not tok.startswith("--"):
+            return tok[2:].lower() in _HEAVY_PY_MODULES
+        if tok.startswith("-"):
+            continue
+        name = tok.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        return name.endswith(".py") and name[:-3] in _HEAVY_PY_SCRIPTS
+    return False
+
+
 def _is_env_assign(token: str) -> bool:
     head, eq, _ = token.partition("=")
     return bool(eq) and head.replace("_", "a").isalnum() and not head[:1].isdigit()
@@ -153,6 +198,8 @@ def _segment_launches_heavy(tokens: List[str], depth: int) -> bool:
     if _is_heavy(head):
         return True
     base = _base(head)
+    if _is_python_launcher(base) and _python_runs_heavy(rest):
+        return True
     if depth >= _MAX_DEPTH:
         return False
     if base in _PWSH_NAMES:
@@ -179,7 +226,7 @@ def launches_heavy(cmd: str, depth: int = 0) -> bool:
     """
     if depth == 0:
         low = cmd.lower()
-        if not any(s in low for s in _PREFILTER):
+        if not any(s in low for s in _PREFILTER + _PY_PREFILTER):
             return False
         # The cold copy's byte-compatibility does not cover heredocs: bodies are data here.
         cmd = _strip_heredocs(cmd)
@@ -219,6 +266,7 @@ def check(
             return None
         if not launches_heavy(cmd):
             return None
+        reason = _REASON if any(s in cmd.lower() for s in _PREFILTER) else _PY_REASON
     except Exception:
         return None
     from coordinator_core.bash_guards._rewrite_support import _deny_record, _em_stamped
@@ -226,12 +274,12 @@ def check(
 
     return _deny_record(
         "guard-subagent-heavy-ue-launch",
-        _REASON,
+        reason,
         (
             EscalationRoute(
                 report_what="the run as a needs_slot leg",
                 authorize_what="the Group EM launching it in the slot",
             ),
         ),
-        em_text=_em_stamped(_REASON + " Report the run as a needs_slot leg."),
+        em_text=_em_stamped(reason + " Report the run as a needs_slot leg."),
     )

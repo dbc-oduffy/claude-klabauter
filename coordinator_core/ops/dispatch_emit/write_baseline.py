@@ -109,16 +109,45 @@ def _resumed_withheld(root: Path, run_id: str) -> list:
     return out
 
 
-def prior_pass_written(root: Path, run_dir: Path) -> frozenset[str]:
+def _recorded_paths(home: Path) -> list:
+    """Paths one record home lists as written: slice, test edits/creations and withheld keys."""
+    found: list = []
+    for name in ("run-outcome.json", "halted.json"):
+        try:
+            data = json.loads((home / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        review = data.get("inline_review")
+        review = review if isinstance(review, dict) else {}
+        prep = review.get("prep")
+        tests = review.get("tests")
+        arts = data.get("run_artifacts")
+        withheld = arts.get("withheld") if isinstance(arts, dict) else None
+        for listed in (
+            prep.get("slice_files") if isinstance(prep, dict) else None,
+            tests.get("edited") if isinstance(tests, dict) else None,
+            tests.get("created") if isinstance(tests, dict) else None,
+            list(withheld) if isinstance(withheld, dict) else None,
+        ):
+            if isinstance(listed, list):
+                found.extend(p for p in listed if isinstance(p, str) and p)
+    return found
+
+
+def prior_pass_written(root: Path, run_dir: Path, include_predecessors: bool = True) -> frozenset[str]:
     """Repo-relative paths the run's earlier passes recorded as written, read from its own record
     files: the review slice and test-runner edits in ``run-outcome.json`` and the keys of
-    ``halted.json`` ``run_artifacts.withheld``. Declared footprints are not evidence of a write.
+    ``halted.json`` ``run_artifacts.withheld``. With ``include_predecessors`` the same fields of
+    each ``resumed_from`` predecessor's record are credited too; without it only predecessors'
+    withheld keys are. Declared footprints are not evidence of a write.
     Unreadable or absent records yield nothing.
 
     Trap: ``slice_files`` is the review's worktree diff against the run base, so it also lists
     pre-existing dirt the review froze; crediting it as written masks that dirt, and no code
     separates the two. Only foreign dirt outside ``slice_files`` is still refused
-    (``test_foreign_dirt_beside_a_prior_pass_path_still_refuses``)."""
+    (``test_gate_still_refuses_foreign_dirt_beside_predecessor_write``)."""
     from coordinator_core.ops._path_guard import safe_id
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -130,29 +159,17 @@ def prior_pass_written(root: Path, run_dir: Path) -> frozenset[str]:
         pass
     found: list = []
     for home in homes:
-        for name in ("run-outcome.json", "halted.json"):
-            try:
-                data = json.loads((home / name).read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if not isinstance(data, dict):
-                continue
-            review = data.get("inline_review")
-            review = review if isinstance(review, dict) else {}
-            prep = review.get("prep")
-            tests = review.get("tests")
-            arts = data.get("run_artifacts")
-            withheld = arts.get("withheld") if isinstance(arts, dict) else None
-            for listed in (
-                prep.get("slice_files") if isinstance(prep, dict) else None,
-                tests.get("edited") if isinstance(tests, dict) else None,
-                tests.get("created") if isinstance(tests, dict) else None,
-                list(withheld) if isinstance(withheld, dict) else None,
-            ):
-                if isinstance(listed, list):
-                    found.extend(p for p in listed if isinstance(p, str) and p)
-    if homes and safe_id(run_dir.name):
+        found.extend(_recorded_paths(home))
+    if safe_id(run_dir.name):
         found.extend(_resumed_withheld(root, run_dir.name))
+        if include_predecessors:
+            from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+            for prev in _resumed_chain(root, run_dir.name):
+                try:
+                    found.extend(_recorded_paths(record_dir(root, prev)))
+                except ValueError:
+                    continue
     out = set()
     for p in found:
         p = p.replace("\\", "/")

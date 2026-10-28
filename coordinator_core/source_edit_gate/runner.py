@@ -246,7 +246,20 @@ def find_runner_root(repo_root: str, test_rel: str) -> tuple:
         cur = cur.parent
 
 
-def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> bool:
+_ADMIT_KEY = "source-edit-gate-pytest-xdist"
+
+
+def _admit_xdist(argv: list):
+    """Admission verdict for a pytest `-n <N>` argv; `None` when argv is not an xdist run."""
+    if "-n" not in argv:
+        return None
+    from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn
+
+    workers = int(argv[argv.index("-n") + 1])
+    return admit_before_spawn(_ADMIT_KEY, 0.5 + workers * _XDIST_MB_PER_WORKER / 1024)
+
+
+def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> "bool | None":
     """Runs `argv` as a `Popen` started in its own session/process group
     (`_no_console_group_popen_kwargs`), waits up to `timeout_s`, and ALWAYS terminates
     the whole group in a `finally` (`_terminate_group`) -- whether the run
@@ -254,7 +267,11 @@ def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> bool:
     (whatever its exit code -- the caller parses the report file either way,
     matching the pre-existing `subprocess.run` contract of never raising on a
     non-zero test-runner exit), `False` on a timeout (the caller's cue to
-    treat this the same as a crashed/unparseable run)."""
+    treat this the same as a crashed/unparseable run). Returns `None` without spawning when an
+    xdist run is not admitted on measured memory."""
+    admission = _admit_xdist(argv)
+    if admission is not None and not admission.admitted:
+        return None
     proc = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -262,6 +279,10 @@ def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> bool:
         stderr=subprocess.DEVNULL,
         **_no_console_group_popen_kwargs(),
     )
+    if admission is not None:
+        from coordinator_core.bash_guards._heavy_command_class import register_spawn
+
+        register_spawn(admission.key, admission.peak_gib, proc.pid)
     try:
         proc.wait(timeout=timeout_s)
         return True
@@ -303,6 +324,8 @@ def run_selected(
             if parallel and importlib.util.find_spec("xdist") is not None:
                 argv += ["-n", str(_xdist_worker_count()), "-p", "no:cacheprovider"]
             completed = _run_with_group_cleanup(argv, cwd=repo_root, timeout_s=group_timeout_s)
+            if completed is None:
+                return None
             if not completed:
                 raise GroupTimeout(f"pytest group exceeded {group_timeout_s}s: {repo_root}")
             return parse_junitxml(junit_path)

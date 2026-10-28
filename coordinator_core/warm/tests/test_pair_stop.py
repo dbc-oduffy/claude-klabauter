@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 
 import pytest
 
@@ -154,7 +155,7 @@ def test_graceful_ask_used_for_verified_server_record(tmp_path, monkeypatch):
 class _Pipe:
     def __init__(self, reply):
         self.reply = reply
-        self.released = __import__("threading").Event()
+        self.released = threading.Event()
 
     def write(self, data):
         return len(data)
@@ -195,6 +196,46 @@ def test_answered_ask_is_asked(monkeypatch):
     monkeypatch.setattr(pair_stop, "_ASK_READ_DEADLINE_SECS", 0.05)
     monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(None))
     assert pair_stop._ask_server_to_stop("p") is False
+
+
+def test_dispatch_timeout_reply_is_not_an_acknowledgement(monkeypatch):
+    wedged = b'{"jsonrpc": "2.0", "id": 1, "error": {"code": -32004, "message": "t"}}\n'
+    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(wedged))
+    assert pair_stop._ask_server_to_stop("p") is False
+    other = b'{"jsonrpc": "2.0", "id": 1, "error": {"code": -32001, "message": "skew"}}\n'
+    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(other))
+    assert pair_stop._ask_server_to_stop("p") is True
+
+
+def _spawn_argv(parent):
+    return [
+        sys.executable, "-c",
+        f"from multiprocessing.spawn import spawn_main; spawn_main(parent_pid={parent}, pipe_handle=9)",
+        "--multiprocessing-fork",
+    ]
+
+
+def test_orphaned_pool_children_of_the_server_are_taken_down(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    w.add(40, "python.exe", [sys.executable, _script(root, SRV)])
+    kids = [w.add(pid, "pythonw.exe", _spawn_argv(40)) for pid in (91, 92)]
+    other = w.add(93, "pythonw.exe", _spawn_argv(400))
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert result.ok()
+    assert not any(k.alive for k in kids)
+    assert other.alive
+    assert {("terminate", 91), ("terminate", 92)} <= set(w.log)
+
+
+def test_stubborn_pool_child_is_a_survivor(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    w.add(40, "python.exe", [sys.executable, _script(root, SRV)])
+    w.add(91, "pythonw.exe", _spawn_argv(40), stubborn=True)
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert not result.ok()
+    assert [(p.pid, p.role) for p in result.survivors] == [(91, "pool_child")]
 
 
 def test_match_is_exact_element_and_python_only(tmp_path):

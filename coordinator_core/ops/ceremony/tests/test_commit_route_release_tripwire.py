@@ -335,6 +335,18 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "function threads no session id to release one with",
         "confirmed": True,
     },
+    "benchmarks/reverify_scope_selection.py::_commit": {
+        "reason": "ineligible: a benchmark fixture commit in a throwaway "
+        "repo -- no session holds a claim over these paths, and the "
+        "function threads no session id to release one with",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_run.py::_land_merge_artifacts": {
+        "reason": "ineligible: already routed through the native commit_paths "
+        "writer; lands only the run artifacts the merge commit left out, "
+        "none of which the session claims",
+        "confirmed": True,
+    },
     "ops/handoff_archive_transition.py::_commit_retained_supersede_flip": {
         "reason": "ineligible: threads no session id -- it commits a "
         "supersede flip on a predecessor it did not itself claim",

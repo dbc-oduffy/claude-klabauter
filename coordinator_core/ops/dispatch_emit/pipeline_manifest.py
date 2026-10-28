@@ -16,6 +16,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -29,7 +31,14 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     subject_key, subject_slug, validator_bound,
 )
 
-__all__ = ["load_manifest", "validate"]
+__all__ = ["LoadedManifest", "load_manifest", "validate"]
+
+
+@dataclass(frozen=True)
+class LoadedManifest(Manifest):
+    """A loaded manifest plus `list_defaults`: raw `slug=agent_type` / string entries per list name, applied by the caller only for a list it omits."""
+
+    list_defaults: Mapping[str, tuple] = field(default_factory=dict)
 
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _STAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
@@ -102,7 +111,7 @@ def load_manifest(content_root: Path, pipeline: str) -> Manifest:
         subjects_mode = None
 
     flags = _load_flags(doc.get("inputs"), reasons)
-    lists = _load_lists(doc.get("inputs"), reasons)
+    lists, list_defaults = _load_lists(doc.get("inputs"), reasons)
     stages: list[Stage] = []
     templates: dict[str, str] = {}
     schemas: dict[str, dict] = {}
@@ -118,10 +127,10 @@ def load_manifest(content_root: Path, pipeline: str) -> Manifest:
     _check_graph_shape(stages, schemas, flags, lists, reasons)
     if reasons:
         raise PipelineEmitRefused(reasons)
-    return Manifest(
+    return LoadedManifest(
         pipeline=pipeline, root=root, flags=flags, stages=tuple(stages), templates=templates,
         schemas=schemas, sha256=hashlib.sha256(raw).hexdigest(), description=description,
-        subjects_mode=subjects_mode, lists=lists,
+        subjects_mode=subjects_mode, lists=lists, list_defaults=list_defaults,
     )
 
 
@@ -161,22 +170,45 @@ def _load_flags(inputs: object, reasons: list[str]) -> dict[str, FlagSpec]:
     return flags
 
 
-def _load_lists(inputs: object, reasons: list[str]) -> dict[str, str]:
+def _load_lists(inputs: object, reasons: list[str]) -> tuple[dict[str, str], dict[str, tuple]]:
     raw = inputs.get("lists") if isinstance(inputs, dict) else None
     if raw is None:
-        return {}
+        return {}, {}
     if not isinstance(raw, dict):
         reasons.append("inputs.lists must be a mapping")
-        return {}
+        return {}, {}
     lists: dict[str, str] = {}
+    defaults: dict[str, tuple] = {}
     for name, spec in raw.items():
         if not isinstance(name, str) or not _NAME_KEY_RE.match(name):
             reasons.append(f"list name {name!r} must match ^[a-z][a-z0-9_]*$")
-        elif not isinstance(spec, dict) or set(spec) != {"kind"} or spec["kind"] not in _LIST_KINDS:
-            reasons.append(f"list {name!r} must be a mapping with only kind: strings | roster")
+        elif (
+            not isinstance(spec, dict) or "kind" not in spec or not set(spec) <= {"kind", "default"}
+            or spec["kind"] not in _LIST_KINDS
+        ):
+            reasons.append(f"list {name!r} must be a mapping with kind: strings | roster and an optional default")
         else:
             lists[name] = spec["kind"]
-    return lists
+            if "default" in spec:
+                default = _list_default(name, spec["kind"], spec["default"], reasons)
+                if default:
+                    defaults[name] = default
+    return lists, defaults
+
+
+def _list_default(name: str, kind: str, value: object, reasons: list[str]) -> tuple:
+    """A list default is a non-empty list of non-empty strings; a roster entry is `slug=agent_type`."""
+    if not isinstance(value, list) or not value:
+        reasons.append(f"list {name!r}: default must be a non-empty list")
+        return ()
+    entries = [v.strip() if isinstance(v, str) else "" for v in value]
+    if not all(entries):
+        reasons.append(f"list {name!r}: default must hold non-empty strings")
+        return ()
+    if kind == "roster" and not all(e.partition("=")[1] and e.partition("=")[2].strip() and e.partition("=")[0].strip() for e in entries):
+        reasons.append(f"list {name!r}: a roster default entry must be slug=agent_type")
+        return ()
+    return tuple(entries)
 
 
 def _load_when(raw: object, label: str, reasons: list[str]) -> When | None:
@@ -448,7 +480,7 @@ def _check_graph_shape(
             name = _OVER_INPUTS_RE.match(stage.agent_type_from)
             if name and lists.get(name.group(1)) != "roster":
                 reasons.append(f"stage {stage.id!r}: agent_type_from {stage.agent_type_from!r} is not a declared roster list")
-            if stage.fan_out.kind != FAN_OUT_OVER:
+            if stage.fan_out.kind not in (FAN_OUT_OVER, FAN_OUT_PER_SUBJECT):
                 reasons.append(f"stage {stage.id!r}: agent_type_from needs a fan_out over a list")
         if stage.produces_brief and (position[stage.id] != 0 or stage.fan_out.kind != FAN_OUT_NONE):
             reasons.append(f"stage {stage.id!r}: produces_brief is legal only on stages[0] with fan_out none")
@@ -668,6 +700,17 @@ def _check_lists(manifest: Manifest, inputs: PipelineInputs, skipped: set[str], 
             names = [v["slug"] for v in values if v not in bad]
         if len(set(names)) != len(names):
             reasons.append(f"list {name!r} has duplicate entries")
+        if kind == "roster":
+            typed = next((
+                s for s in manifest.stages
+                if s.id not in skipped and s.agent_type_from == f"inputs.{name}" and s.fan_out.kind == FAN_OUT_PER_SUBJECT
+            ), None)
+            types = {v["agent_type"] for v in values if v not in bad}
+            if typed is not None and len(types) > 1:
+                reasons.append(
+                    f"stage {typed.id!r}: a per_subject stage needs a roster of one agent type; "
+                    f"list {name!r} names {', '.join(sorted(types))}"
+                )
 
 
 def _item_fields(stage: Stage, manifest: Manifest) -> set[str]:

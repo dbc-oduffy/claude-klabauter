@@ -4436,18 +4436,21 @@ _QUEUE_SCHEMA_PINS = {
 # local_shape_hash / re-pin doe_ref before relying on it.
 _QUEUE_SCHEMA_AHEAD_PINS: dict = {
     'sizing-object': {
-        'doe_ref': "86eb0e39a7ca45ceb432de9b3d828d9078f91d3e",
+        'doe_ref': "8e14712c0cdfb022f27597acbf7f6ce0da2f5c97",
         'reason': (
-            "claude-klabauter-first sizing-object 1.47.0 adds the `fan_out` xl_exit value; "
-            "DoE's copy is still 1.46.0 and its own vendor of 1.47.0 is pending; "
-            "also carries the L `mechanically_uniform` field added by run 04b5ef"
+            "claude-klabauter 1.49.0 merges DoE HEAD's top-level `writes` and keeps the "
+            "L `mechanically_uniform` field added by run 04b5ef, which DoE lacks; "
+            "DoE's copy is 1.48.0 and its own vendor of 1.49.0 is pending"
         ),
         'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
-        'exempt_paths': frozenset({('properties', 'xl_exit', 'description')}),
-        'local_shape_hash': "b7df13b0c74e255f3b947a8648fb14172f8aa63f51e0ca1dd47cfe4d5e54919f",
+        'exempt_paths': frozenset({
+            ('properties', 'xl_exit', 'description'),
+            ('x-bump-note',),
+        }),
+        'local_shape_hash': "c00f59f234fb8dd235ec6a2f2495250429136c0d92771481dee96eefc3d2778f",
     },
     'plan-tasks': {
-        'doe_ref': "4c2317da8e6f2eeb3b83e606a8dd8ef15ad736fb",
+        'doe_ref': "7af1b4d3bf2257d018f152300fb060f5dd2b950b",
         'reason': (
             "claude-klabauter-first plan-tasks 3.20.0 admits signoff history on apm, g-em and uhura "
             "records and adds the pm_signoff_record history arm; DoE's copy is still 3.19.0 "
@@ -4460,7 +4463,7 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
             ('$defs', 'signoff', 'description'),
             ('$defs', 'signoff', 'properties', 'history', 'description'),
         }),
-        'local_shape_hash': "ddf754d085825850719c0076c2dfcc0e82639ccf9983df075fbad15f60e83f65",
+        'local_shape_hash': "b2d60f4e4dceb136b9b81d338d5a336605adafccff5d251aa9083f2e2cf62b07",
     },
 }
 

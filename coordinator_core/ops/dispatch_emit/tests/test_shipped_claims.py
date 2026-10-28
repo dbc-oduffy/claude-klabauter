@@ -77,6 +77,27 @@ def _judge(root, *paths, **kw):
     return {v.claim.path: v.verdict for v in judge_shipped_claims(root, claims, **kw)}
 
 
+def test_a_recorded_widen_counts_as_declared_and_an_outside_path_stays_undeclared(repo):
+    from coordinator_core.ops.dispatch_emit.shipped_claims import NOT_DECLARED
+
+    claims = [ShippedClaim(p, f"`{p}`") for p in ("new.py", "dirty.py")]
+    vs = {v.claim.path: v for v in judge_shipped_claims(repo, claims, own_paths={"x.py"}, widened=["new.py"])}
+    assert vs["new.py"].verdict == "untracked" and vs["new.py"].left_out != NOT_DECLARED
+    assert vs["dirty.py"].left_out == NOT_DECLARED
+
+
+def test_a_widened_claim_skips_the_peer_owner_lookup(repo):
+    seen = []
+
+    def owners(paths):
+        seen.extend(paths)
+        return {p: "peer" for p in paths}
+
+    note = "## What shipped\n- `new.py`\n- `dirty.py`\n"
+    shipped_gate(repo, note, own_paths={"x.py"}, widened=["new.py"], owners=owners)
+    assert seen == ["dirty.py"]
+
+
 def test_each_verdict_with_zero_subprocess_calls(repo, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")

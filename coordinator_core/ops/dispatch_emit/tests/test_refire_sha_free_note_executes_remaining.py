@@ -28,6 +28,7 @@ HALTED = "ask-halted"
 FRESH = "warp-fresh-refire"
 REGISTER = {"rows": [{"id": "R1", "source_text": "do the thing", "surface": "internal", "status": "open"}]}
 WRITES = ["pkg/mod.py", "pkg/other.py"]
+DISPATCHED = [*WRITES, "pkg/tests/test_mod.py", "pkg/tests/test_other.py"]
 
 
 def _setup(repo, note, claims="register_claims:\n  rows: [R1]\n"):  # noqa: F811
@@ -72,9 +73,9 @@ def test_a_sha_free_note_dispatches_the_plan_rows_writes(repo):  # noqa: F811
     resume = out["resume_ledger"]
     assert note in resume["revise_notes"], resume
     leg = resume[RESUME_LEDGER_LEG_FIELD]
-    assert leg["action"] == LEG_DISPATCH and leg["writes"] == WRITES, leg
+    assert leg["action"] == LEG_DISPATCH and leg["writes"] == DISPATCHED, leg
     on_disk = json.loads((repo / RECORD_DIR_ROOT / FRESH / LEG_FOOTPRINT_FILE).read_text(encoding="utf-8"))
-    assert on_disk["action"] == LEG_DISPATCH and on_disk["writes"] == WRITES, on_disk
+    assert on_disk["action"] == LEG_DISPATCH and on_disk["writes"] == DISPATCHED, on_disk
 
 
 def test_a_ten_hex_sha_note_still_skips_when_no_row_serves(repo):  # noqa: F811

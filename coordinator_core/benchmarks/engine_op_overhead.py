@@ -15,19 +15,20 @@ import contextlib
 import os
 import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Iterator, NamedTuple, Optional, Sequence
 
 from coordinator_core.benchmarks.isolated_clone import (
+    clone_server_env,
+    close_clone_job,
     mkdtemp_for_clone,
     reap_processes_under,
     rmtree_or_raise,
+    spawn_clone_server,
 )
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.warm import breadcrumb
-from coordinator_core.win_portability import no_console_creationflags
 
 SEGMENTS: tuple[str, ...] = ("dispatch", "job_object", "json", "extra_process", "residual")
 
@@ -117,9 +118,7 @@ def _clone_engine(source_root: Path, root: Path, entrypoints: Sequence[str]) -> 
 
 def _boot_env(engine_root: Path) -> dict:
     env = dict(os.environ)
-    env["COORDINATOR_WARM"] = "1"
-    env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
-    env.pop("VIRTUAL_ENV", None)
+    env.update(clone_server_env(engine_root))
     return env
 
 
@@ -147,17 +146,10 @@ def isolated_warm_engine(source_root: Path, *, entrypoints: Sequence[str]) -> It
     tmp_parent = mkdtemp_for_clone(source_root, prefix="engine-op-overhead-")
     root = tmp_parent / "clone"
     proc: Optional[subprocess.Popen] = None
+    job = None
     try:
         _clone_engine(source_root, root, entrypoints)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "coordinator_core.warm.server"],
-            cwd=str(root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            **no_console_creationflags(),
-        )
+        proc, job = spawn_clone_server(root, _boot_env(root))
         deadline = time.time() + _BOOT_WAIT_SECS
         crumb = None
         while time.time() < deadline:
@@ -179,6 +171,7 @@ def isolated_warm_engine(source_root: Path, *, entrypoints: Sequence[str]) -> It
         if proc is not None:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=5)
+        close_clone_job(job)
         reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=root), ignore_errors=True)
         rmtree_or_raise(tmp_parent, label="engine_op_overhead", reaped=reaped)

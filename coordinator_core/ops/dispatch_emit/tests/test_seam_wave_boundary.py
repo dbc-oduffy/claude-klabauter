@@ -556,3 +556,11 @@ def test_a_single_plan_drift_keeps_the_held_row_out_and_a_clean_leg_dispatches_i
     assert out["notStarted"] == ["C2"]
     clean = _run_script(tmp_path, script, CLEAN_REPLY)
     assert "work:C2" in clean["calls"] and clean["notStarted"] == []
+
+
+def test_the_emitted_leg_names_no_review_reachability():
+    script = _compose(_two_plan_waves())
+    leg = script.split("async function _seamLeg", 1)[1].split("  function _seamFail", 1)[0]
+    assert "review.reachability" not in leg
+    assert "Reach params" not in leg
+    assert "Step 2: run" not in leg

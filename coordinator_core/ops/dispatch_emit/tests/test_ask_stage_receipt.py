@@ -151,3 +151,47 @@ def test_staleness_ceiling_clears_observed_stall():
     assert r.CLAIM_STALE_SECS > 5 * 60
     assert r.CLAIM_STALE_SECS > 2 * 60 + 12
     assert r.CLAIM_STALE_SECS > _POOL_RESULT_DEADLINE_SECS
+
+
+def test_stalled_create_raises_within_deadline_and_late_winner_leaves_no_claim(tmp_path, monkeypatch):
+    import threading
+
+    import pytest
+
+    gate = threading.Event()
+    real_open = os.open
+
+    def slow_open(path, flags, mode=0o777):
+        if str(path).endswith(r.CLAIM_NAME):
+            gate.wait(10)
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(r.os, "open", slow_open)
+    monkeypatch.setattr(r, "CLAIM_CREATE_DEADLINE_SECS", 0.2)
+    t0 = time.perf_counter()
+    with pytest.raises(r.ClaimCreateStalled):
+        r.claim(tmp_path, "d1")
+    assert time.perf_counter() - t0 < 2.0
+    gate.set()
+    deadline = time.monotonic() + 3
+    while any(t.name == "ask-stage-claim-create" for t in threading.enumerate()) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert not (tmp_path / r.CLAIM_NAME).exists()
+    monkeypatch.undo()
+    assert r.claim(tmp_path, "d1") is True
+
+
+def test_handler_answers_a_stalled_claim_with_error(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    def stalled(record_dir, digest):
+        raise r.ClaimCreateStalled("stalled")
+
+    monkeypatch.setattr(r, "claim", stalled)
+    monkeypatch.setattr(ask_stage, "main_worktree_root", lambda p: tmp_path)
+    monkeypatch.setattr(ask_stage, "validate_params", lambda *a, **k: None)
+    monkeypatch.setattr(ask_stage, "_consume_park_marker", lambda *a: False)
+    monkeypatch.setattr(ask_stage, "_escaping_write_refusal", lambda *a, **k: None)
+    monkeypatch.setattr(ask_stage, "record_dir", lambda root, run_id: tmp_path / run_id)
+    reply = ask_stage._handler({"run_id": "r1", "plan_path": "p.md"}, repo_root=tmp_path)
+    assert reply["error"].startswith(ask_stage.STAGE_CLAIM_STALLED)

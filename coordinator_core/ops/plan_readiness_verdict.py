@@ -34,6 +34,9 @@ Wire params:
                                   tracked_by}]``, with ``tracked_by`` an existing repo-relative path,
                                   an http(s) URL, or text in the plan's ``## Open questions``;
                                   CONTRADICTED rows are never exempted by it.
+                                  A CONTRADICTED row citing a path the plan's halted run (its
+                                  ``sizing_object``) withholds is regraded RESOLVES with
+                                  ``own_run_edit: <run_id>`` (``_own_run_premise``).
                                   When passed, a ``premise-check`` reviews entry is dropped: the
                                   rows carry that verdict, and refusing the pair would hand the
                                   caller an unusable reply. A row's optional string ``anchor`` names
@@ -70,7 +73,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 
 from coordinator_core.ipc import register_op
-from coordinator_core.ops import _anchor_check, _anchor_premise
+from coordinator_core.ops import _anchor_check, _anchor_premise, _own_run_premise
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import prep_gate_with_text
 from coordinator_core.ops.review_findings_ledger import read_ledger
@@ -642,8 +645,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.lifecycle import main_worktree_root
 
         anchor_root = Path(main_worktree_root(repo_root))
+        own = _own_run_premise.own_run_paths(anchor_root, fm.get("sizing_object"))
+        premise_rows = _own_run_premise.regrade(premise_rows, own)
         anchors, defects = _anchor_premise.parse_anchors(fm, anchor_root)
-        carried = _carry_rows(repo_root, str(prep_gate["plan"])) if anchors else []
+        carried = (
+            _own_run_premise.regrade(_carry_rows(repo_root, str(prep_gate["plan"])), own) if anchors else []
+        )
         verdicts = _anchor_premise.anchor_verdicts(anchors, premise_rows, carried, text, anchor_root)
         anchor = defects + _anchor_premise.anchor_findings(
             anchors, premise_rows, carried, text, anchor_root, verdicts
@@ -652,7 +659,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         prep_gate, coverage, reviews, repo_root, premise_rows, corrects, spine_rows, ref,
         absent, questions, anchor, verdicts, checker_ran,
     )
-    reply = {"plan": prep_gate["plan"], **out, "prep_gate": prep_gate}
+    # A host may keep only a byte-bounded slice of the reply: the verdict fields lead.
+    # `blocking` is uncapped in count, so on a pull verdict it can still outrun that slice.
+    lead = {k: out[k] for k in ("verdict", "pull_class", "reason", "blocking")}
+    reply = {"plan": prep_gate["plan"], **lead, **out, "prep_gate": prep_gate}
     if verdicts:
         reply["anchor_verdicts"] = verdicts
     return reply

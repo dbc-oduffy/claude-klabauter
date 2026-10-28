@@ -589,12 +589,19 @@ def _cap_leg(
             census,
             launch,
         )
-    if background and len(census.shells) >= bg_cap:
-        pids = ", ".join(str(r.pid) for r in census.shells)
+    # The snapshot can carry shells that exited after it was taken; revalidate only on the
+    # would-deny path so an admit costs nothing extra.
+    live_shells = (
+        [r for r in census.shells if primitives.alive(r.pid, r.ctime)]
+        if background and len(census.shells) >= bg_cap
+        else ()
+    )
+    if background and len(live_shells) >= bg_cap:
+        pids = ", ".join(str(r.pid) for r in live_shells)
         return (
             _deny_text(
                 LEG_SESSION_CAP,
-                "session holds %d background shells (cap %d): pids %s" % (len(census.shells), bg_cap, pids),
+                "session holds %d background shells (cap %d): pids %s" % (len(live_shells), bg_cap, pids),
                 _retry("stop an idle shell first", "the shell to stop"),
                 legacy="Stop an idle shell first",
             ),

@@ -279,3 +279,45 @@ class TestConsumeNeverRaises:
 
         monkeypatch.setattr(gus, "sentinel_path", _raise)
         assert gus.consume(SID, GUARD) is False
+
+
+class TestAnnotateDenyEmRouteLine:
+    """Item 12: the route line renders only for a resolved EM with a reachable index."""
+
+    EM = {"session_id": SID}
+    SUB = {"session_id": SID, "agent_id": "a" + "1" * 16}
+    NAME = "block-dev-repo-sentinel-write"
+
+    def _reason(self, payload, reachable, monkeypatch):
+        from coordinator_core.guard_routes import keys
+
+        monkeypatch.setattr(keys, "routes_index_reachable", lambda: reachable)
+        out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
+        gus.annotate_deny(out, SID, self.NAME, "doc", payload=payload)
+        return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_em_with_reachable_index_gets_route_line(self, monkeypatch):
+        from coordinator_core.guard_routes.keys import route_line
+
+        reason = self._reason(self.EM, True, monkeypatch)
+        assert reason == "denied: reason\n\nGuard: `%s`. %s" % (self.NAME, route_line(self.NAME))
+
+    @pytest.mark.parametrize("payload", [None, SUB, {}])
+    def test_non_em_gets_identity_form_byte_for_byte(self, payload, monkeypatch):
+        reason = self._reason(payload, True, monkeypatch)
+        assert reason == "denied: reason\n\nGuard: `%s`." % self.NAME
+        assert "gr:" not in reason
+
+    def test_route_line_fault_gets_identity_form(self, monkeypatch):
+        from coordinator_core.guard_routes import keys
+
+        def _raise(_name):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(keys, "route_line", _raise)
+        reason = self._reason(self.EM, True, monkeypatch)
+        assert reason == "denied: reason\n\nGuard: `%s`." % self.NAME
+
+    def test_unreachable_index_gets_identity_form(self, monkeypatch):
+        reason = self._reason(self.EM, False, monkeypatch)
+        assert reason == "denied: reason\n\nGuard: `%s`." % self.NAME

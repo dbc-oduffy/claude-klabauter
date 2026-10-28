@@ -3684,10 +3684,13 @@ def apply_settings_manifest_env(repo_root: Path, claude_klabauter_root_resolved:
     return True
 
 
-def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Set `cleanupPeriodDays: 7` in `settings.json` only when the key is absent.
+_RETENTION_DAYS = 2
 
-    ADVISORY, non-fatal. A user's existing value is never overridden; malformed
+
+def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Set `cleanupPeriodDays: 2` in `settings.json` when absent, and lower any larger value.
+
+    ADVISORY, non-fatal. An existing value at or below 2 is never raised; malformed
     JSON is left untouched. Atomic write (temp + os.replace). Refused under
     `COORDINATOR_DISABLE_MACHINE_MUTATION`."""
     print()
@@ -3711,10 +3714,14 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
             if not isinstance(data, dict):
                 print(f"WARN [retention] {settings_path} is not a JSON object — left untouched")
                 return
-        if "cleanupPeriodDays" in data:
-            print(f"SKIP [retention] cleanupPeriodDays already set ({data['cleanupPeriodDays']!r}) in {settings_path}")
+        current = data.get("cleanupPeriodDays")
+        had_key = "cleanupPeriodDays" in data
+        if had_key and not (
+            isinstance(current, (int, float)) and not isinstance(current, bool) and current > _RETENTION_DAYS
+        ):
+            print(f"SKIP [retention] cleanupPeriodDays already set ({current!r}) in {settings_path}")
             return
-        data["cleanupPeriodDays"] = 7
+        data["cleanupPeriodDays"] = _RETENTION_DAYS
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = settings_path.with_name(settings_path.name + f".{os.getpid()}.tmp")
         try:
@@ -3722,7 +3729,7 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
             os.replace(tmp, settings_path)
         finally:
             tmp.unlink(missing_ok=True)
-        print(f"PASS [retention] cleanupPeriodDays=7 set in {settings_path}")
+        print(f"PASS [retention] cleanupPeriodDays={_RETENTION_DAYS} set in {settings_path} (was {current!r})")
     except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
         print(f"WARN [retention] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
 

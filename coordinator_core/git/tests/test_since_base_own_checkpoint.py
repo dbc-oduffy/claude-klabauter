@@ -1,4 +1,4 @@
-"""since_base_overlap: a run's own re-fire checkpoints (plan match + stamped base on the walked
+"""since_base_overlap: a run's own checkpoints (plan match, with no stamped base or one on the walked
 chain) never read as foreign; no-trailer, other-plan and off-chain commits still do."""
 
 from __future__ import annotations
@@ -47,6 +47,25 @@ def test_own_checkpoint_stamped_with_the_run_base_is_not_foreign(tmp_path: Path)
     repo.land(_join(base_lines))
 
     assert _findings(tmp_path, base, PLAN) == []
+
+
+def test_own_checkpoint_without_a_base_trailer_then_review_edit_is_not_foreign(tmp_path: Path) -> None:
+    repo = _Repo(tmp_path)
+    base_lines = _base_lines()
+    base = repo.commit({PATH: _join(base_lines)}, "base")
+    msg = f"checkpoint(wave 0): C2\n\nCheckpoint-Plan: {PLAN}\nSession-Id: s-1"
+    repo.commit({PATH: _join(base_lines + ["checkpoint_line = 1\n"])}, msg)
+    repo.land(_join(base_lines))
+
+    assert _findings(tmp_path, base, PLAN) == []
+
+
+def test_another_plans_checkpoint_without_a_base_trailer_is_foreign(tmp_path: Path) -> None:
+    base = _scenario(
+        tmp_path, lambda peer: "checkpoint(wave 0): C2\n\nCheckpoint-Plan: docs/plans/other-plan.md\nSession-Id: s-1"
+    )
+
+    assert [f.reason for f in _findings(tmp_path, base, PLAN)] == [SINCE_BASE_OVERLAP]
 
 
 def test_a_commit_without_trailers_is_foreign(tmp_path: Path) -> None:

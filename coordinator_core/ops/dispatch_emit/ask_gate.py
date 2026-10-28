@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import json
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -139,6 +141,42 @@ def handback_line(sizing: dict) -> str:
 
 def _halt(kind: str, reason: str, **extra: object) -> GateVerdict:
     return GateVerdict(arm=None, halt={"kind": kind, "reason": reason, **extra})
+
+
+#: Longest the gate waits on any file lock it takes itself; the gate's whole budget is 500ms.
+GATE_LOCK_WAIT_SECS = 0.2
+
+
+def _held_lock_refusal(root: Path, target: Path) -> Optional[str]:
+    """The refusal naming `target` and its lock holder when another process holds `target`'s RMW lock, else None.
+
+    One non-blocking try on the lock sidecar `locked_rmw` keys for `target`: never waits, takes no
+    lock past the probe. The holder is the sidecar's metadata when the holder wrote any (a `held_lock`
+    holder does; a `locked_rmw` holder does not, and reads "holder unknown").
+    """
+    from coordinator_core import locked_write as lw
+
+    try:
+        lock_path = lw._lock_dir(root) / f"{lw._lock_key(target)}.lock"
+    except (RuntimeError, OSError):
+        return None  # no git common dir: `locked_rmw` refuses the same root itself
+    flags = os.O_CREAT | (os.O_WRONLY if lw._FCNTL_AVAILABLE else os.O_RDWR)
+    try:
+        fd = os.open(str(lock_path), flags, 0o600)
+    except OSError:
+        return None
+    try:
+        if lw._plat_try_lock(fd):
+            lw._plat_unlock(fd)
+            return None
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return (
+        f"lock held on {target.as_posix()} (held by: {lw._describe_holder(lock_path)}); "
+        f"the gate does not wait on a held lock. Retry once the holder finishes."
+    )
 
 
 @functools.cache
@@ -368,6 +406,13 @@ def _arm_verdict(
         except SizingFireRefused as exc:
             refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
+        unread = _unread_notes_on_ran_refusal(repo_root, refusals, run_id)
+        if unread:
+            return _halt(
+                HALT_REFUSAL,
+                f"{'; '.join(refusals)}; run {run_id} carries unread revise note(s) {unread}: "
+                "reopen work with `workflow.revise` with `verbatim`",
+            )
         return _halt(HALT_REFUSAL, "; ".join(refusals))
     try:
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
@@ -448,6 +493,22 @@ def _arm_verdict(
     )
 
 
+def _unread_notes_on_ran_refusal(repo_root: Path, refusals: Sequence[str], run_id: Optional[str]) -> list[str]:
+    """Live carried revise notes (each capped at 120 chars) of `run_id`'s chain when `refusals` hold the
+    all-landed "already ran" refusal, else []. A note never reopens landed rows; only a verbatim row does."""
+    # Phrase is built in sizing_fire's all-landed refusal; keep the two in step.
+    if not run_id or not any(" already ran: every row is landed" in r for r in refusals):
+        return []
+    from coordinator_core.ops.dispatch_emit import run_notes
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, carried_notes
+
+    try:
+        live = run_notes.live(carried_notes(Path(repo_root), run_id))
+    except LedgerRefused:
+        return []
+    return [repr(n["note"][:120]) for n in live]
+
+
 def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Optional[dict], pending: Sequence[str], plan_ready) -> dict:
     """`phase_ledger.resume_phases` for a resume of a halted run: landed phases the halt left valid.
 
@@ -469,7 +530,9 @@ def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Opti
             marker = None
         kind = marker.get("halted") if marker else None
     landed = phase_ledger.derive(root, pred) if pred else {}
-    if landed.get("plan") and (pending or not plan_ready(resume.plan_rel)):
+    # An execute-phase halt passed its plan gate: readiness of a refused plan is not its question.
+    past_plan_gate = phase_ledger.HALT_PHASE.get(kind or "unknown") == "execute"
+    if landed.get("plan") and (pending or (not past_plan_gate and not plan_ready(resume.plan_rel))):
         landed.pop("plan", None)
         landed.pop("plan_review", None)
     revised = []
@@ -816,6 +879,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     sizing_rel = params["sizing_path"]
     writes = params.get("writes") or []
     root = main_worktree_root(Path(repo_root))
+    if params.get("run_id") or record is not None:
+        from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+        try:
+            held = _held_lock_refusal(root, requirements_ledger._sizing_path(root, sizing_rel))
+        except requirements_ledger.LedgerRefused:
+            held = None
+        if held is not None:
+            return _halt(HALT_REFUSAL, held).to_json()
     route_verdicts: list = []
     if params.get("run_id"):
         # A refire's refusal returns before the verdict writes its own snapshot; the prior attempt's must not outlive it.
@@ -824,11 +896,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import run_token
 
         if not run_token.is_live(root, params["run_id"]):
+            _mark_token_spent(root, params["run_id"])
             return _halt(
                 HALT_REFUSAL,
                 f"run token for {params['run_id']} is spent or gone (a run that halted or ended no longer "
-                "holds one), so this refire could land nothing. Fire a fresh run, which mints one: "
-                f"{fire_command(sizing_rel)}",
+                "holds one), so this refire could land nothing. This run is retired; the call starts a "
+                f"new run id with a new token: {fire_command(sizing_rel)}",
             ).to_json()
     if params.get("run_id"):
         refused = _bind_run(
@@ -888,6 +961,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             # An empty resume_rows stages no rows (all landed); None would re-stage every row.
             plan_rel, ledger_resume, only_rows = verdict.resume_plan, False, list(verdict.resume_rows)
         else:
+            if verdict.resume_plan and verdict.resume_rows:
+                stale = _release_stale_receipt(
+                    root, params["run_id"], verdict.resume_rows, verdict.resume_plan
+                )
+                if stale:
+                    out["restage_rows"] = stale
             return out
         try:
             if ledger_resume and verdict.arm in (ARM_XS, ARM_S):
@@ -971,6 +1050,62 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     return out
 
 
+def _stale_write_rows(root: Path, plan_rel: str, manifest: dict, open_rows: Sequence[str]) -> list[str]:
+    """Open staged rows whose recorded writes omit a write the plan row lists now.
+
+    A kept (`kept_from`) or stranded-adopting row replays its own receipt and is skipped. A recorded
+    superset (test widening) is not stale. An unreadable plan: `[]`."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    try:
+        loaded = load_rows((root / plan_rel).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if loaded.status is not LocateStatus.LOCATED:
+        return []
+
+    def _norm(paths) -> set[str]:
+        return {str(p).replace("\\", "/") for p in paths or [] if isinstance(p, str)}
+
+    current = {str(r.get("id")): _norm(r.get("writes")) for r in loaded.rows if isinstance(r, dict)}
+    wanted = set(open_rows)
+    stale = []
+    for rec in manifest.get("rows") or []:
+        if not isinstance(rec, dict) or rec.get("kept_from") or rec.get("adopts_stranded"):
+            continue
+        rid = str(rec.get("id"))
+        if rid in wanted and not current.get(rid, set()) <= _norm(rec.get("writes")):
+            stale.append(rid)
+    return stale
+
+
+def _release_stale_receipt(
+    root: Path, run_id: str, open_rows: Sequence[str], plan_rel: Optional[str] = None
+) -> list[str]:
+    """Open rows the run's recorded manifest neither stages nor accounts for (owed, gated, retired),
+    plus staged rows whose recorded writes omit a current plan-row write (`plan_rel` given).
+
+    When there are any, the stage receipt is rewritten as a gate receipt so the next `dispatch.ask_stage`
+    on the run re-stages instead of replaying a stale manifest. Absent manifest or
+    receipt, or an unreadable manifest: `[]`, nothing touched."""
+    try:
+        record = record_dir(root, run_id)
+        manifest = json.loads((record / ask_stage_receipt.MANIFEST_NAME).read_bytes().decode("ascii"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(manifest, dict) or not (record / ask_stage_receipt.RECEIPT_NAME).is_file():
+        return []
+    accounted = {str(r.get("id")) for key in ("rows", "owed", "gated") for r in manifest.get(key) or [] if isinstance(r, dict)}
+    accounted |= {str(i) for i in manifest.get("retired_resume_rows") or []}
+    missing = sorted(set(open_rows) - accounted)
+    if plan_rel:
+        missing = sorted({*missing, *_stale_write_rows(root, plan_rel, manifest, open_rows)})
+    if missing:
+        ask_stage_receipt.write_gate(record, reply_sidecar.handle_for(root, record / ask_stage_receipt.MANIFEST_NAME))
+    return missing
+
+
 def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str]:
     """Ids of the rows serving the resume's open ledger items, appended to the plan's spine.
 
@@ -1027,6 +1162,9 @@ def _append_spine_row(root: Path, plan_rel: str, row: dict) -> Optional[str]:
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
     from coordinator_core.ops import plan_tasks_mutate as ptm
 
+    held = _held_lock_refusal(root, root / plan_rel)
+    if held is not None:
+        return held
     if (root / plan_rel).resolve().is_relative_to((root / "docs" / "plans").resolve()):
         reply = ptm._add_task(plan_rel, row, root, root)
         return None if reply.get("exit_code") == 0 else str(reply.get("error"))
@@ -1042,7 +1180,7 @@ def _append_spine_row(root: Path, plan_rel: str, row: dict) -> Optional[str]:
         return old[:start] + ptm._dump_rows([*rows, row]) + old[end:]
 
     try:
-        locked_rmw(root / plan_rel, mutate, repo_root=root)
+        locked_rmw(root / plan_rel, mutate, repo_root=root, timeout=GATE_LOCK_WAIT_SECS)
     except (MutateAbort, LockTimeout, OSError) as exc:
         return str(exc.args[0]) if exc.args else str(exc)
     return None
@@ -1070,6 +1208,43 @@ def _stamp_landed_rows(root: Path, plan_rel: str, landed: Sequence) -> None:
     if check_plan_tasks_source(updated) is not None and check_plan_tasks_source(text) is None:
         return
     replace_text(plan, updated)
+
+
+#: Sentinel in a run's record dir: its gate found the run token spent, so the run did no work.
+TOKEN_SPENT_FILE = "token-spent.json"
+
+
+def _mark_token_spent(root: Path, run_id: str) -> None:
+    """Leave `TOKEN_SPENT_FILE` in the run's record dir for `retire_token_spent_halt`; best-effort."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, safe_id
+
+    if not safe_id(run_id):
+        return
+    try:
+        target = Path(root) / RECORD_DIR_ROOT / run_id
+        target.mkdir(parents=True, exist_ok=True)
+        (target / TOKEN_SPENT_FILE).write_text("{}\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def retire_token_spent_halt(root: Path, sizing_rel: str) -> Optional[str]:
+    """Mark `resumed` the halted run of `sizing_rel` whose gate refused for a spent run token, so
+    the next emit takes a fresh run id and script. Returns the retired run id, else None.
+
+    Without this a refire re-emits the same id, the gate refuses the same way, and the refusal's own
+    remedy loops.
+    """
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_ask_run_for, halted_run_for, mark_resumed
+
+    for run_id in (halted_run_for(root, sizing_rel), halted_ask_run_for(root, sizing_rel)):
+        if not run_id:
+            continue
+        rd = record_dir(root, run_id)
+        if (rd / TOKEN_SPENT_FILE).is_file() and mark_resumed(rd):
+            return run_id
+    return None
 
 
 def _clear_resume_snapshot(root: Path, run_id: str) -> None:
@@ -1200,7 +1375,10 @@ def _bind_route_preference(
         return text.replace("\n", "\r\n") if crlf else text
 
     try:
-        locked_rmw(requirements_ledger._sizing_path(root, sizing_rel), mutate, repo_root=Path(root))
+        locked_rmw(
+            requirements_ledger._sizing_path(root, sizing_rel), mutate, repo_root=Path(root),
+            timeout=GATE_LOCK_WAIT_SECS,
+        )
     except MutateAbort as exc:
         if verdict_sink is not None:
             verdict_sink.clear()

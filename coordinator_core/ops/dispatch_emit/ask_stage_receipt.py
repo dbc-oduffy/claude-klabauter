@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Mapping, Optional
@@ -27,6 +28,8 @@ CLAIM_NAME = "stage-claim.json"
 # result deadline would declare that still-running handler dead.
 CLAIM_STALE_SECS = 900.0
 _UNREADABLE_CLAIM_GRACE_SECS = 5.0
+# Under the DoE hook's 12s client timeout, so a stalled create answers the submitter.
+CLAIM_CREATE_DEADLINE_SECS = 5.0
 RECEIPT_NAME = "stage-receipt.json"
 MANIFEST_NAME = "manifest.json"
 HALTED_NAME = "halted.json"
@@ -104,17 +107,62 @@ def _claim_live(data: dict) -> bool:
     return session_registry.pid_alive(data["owner_pid"])
 
 
+class ClaimCreateStalled(OSError):
+    """The claim file's exclusive create did not return within `CLAIM_CREATE_DEADLINE_SECS`."""
+
+
+def _create_exclusive(path: Path, deadline: float) -> int:
+    """`os.open(O_CREAT|O_EXCL)` on a helper thread, bounded by `deadline` (monotonic).
+
+    A create that returns after the caller gave up closes its fd and unlinks the file, so a late
+    winner never leaves a live-looking claim behind."""
+    lock = threading.Lock()
+    done = threading.Event()
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        except BaseException as exc:
+            box["exc"] = exc
+            done.set()
+            return
+        with lock:
+            abandoned = box.get("abandoned", False)
+            if not abandoned:
+                box["fd"] = fd
+        if abandoned:
+            os.close(fd)
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        done.set()
+
+    threading.Thread(target=run, daemon=True, name="ask-stage-claim-create").start()
+    done.wait(max(0.0, deadline - time.monotonic()))
+    with lock:
+        if "fd" in box:
+            return box["fd"]
+        if "exc" not in box:
+            box["abandoned"] = True
+            raise ClaimCreateStalled(f"stage claim create did not return within {CLAIM_CREATE_DEADLINE_SECS}s: {path}")
+    raise box["exc"]
+
+
 def claim(record_dir: Path, digest: str) -> bool:
     """Take the stage claim with an exclusive create; False while another live claim holds it.
 
     A dead, stale or unreadable-and-old claim is unlinked and re-created exclusively, so two racing
-    re-runs cannot both win. Call before `stage()` writes anything."""
+    re-runs cannot both win. Call before `stage()` writes anything. Raises `ClaimCreateStalled` when
+    the create blocks past `CLAIM_CREATE_DEADLINE_SECS` in total."""
     path = Path(record_dir) / CLAIM_NAME
     body = {"digest": digest, "owner_pid": os.getpid(), "started_at": time.time()}
     payload = (json.dumps(body, sort_keys=True, ensure_ascii=True) + "\n").encode("ascii")
+    deadline = time.monotonic() + CLAIM_CREATE_DEADLINE_SECS
     for _ in range(2):
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            fd = _create_exclusive(path, deadline)
         except FileExistsError:
             data = _read_claim(record_dir)
             if data is None:

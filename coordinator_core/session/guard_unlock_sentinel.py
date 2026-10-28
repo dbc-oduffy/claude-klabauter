@@ -201,6 +201,7 @@ def annotate_deny(
     *,
     agent_id: str = "",
     git_root: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Append the in-session-unlock block to a firing hard-deny envelope,
     AFTER the guard's own reason.
@@ -502,6 +503,18 @@ def annotate_deny(
         The in-band grant ROUTE stays EM-class-only and is rendered by
         `render_em_message`, not here.
 
+    12. (2026-10-27, PM verbatim turn 10, sizing state/sizings/2026-10-27-em-
+        only-guard-route-wiki-39240f.yaml) An EM-only route returns at deny
+        time: when `payload` resolves a positive EM audience
+        (`identity.resolves_em_audience`) and the guard-routes index is
+        reachable on this host, the line is followed by
+        `guard_routes.keys.route_line(<guard_name, hyphenated>)` -- a lookup key and a
+        folder, grep-able by the EM. Every other case (no payload, a
+        subagent, unresolved, any exception, index absent) renders item 11's
+        form byte for byte. This does not reopen items 3/4/7/9: there is no
+        sentinel path, command, or env key in the line, only a key and a
+        folder; a subagent never receives either.
+
     Never raises. A malformed envelope is returned unchanged: this function
     only ever runs on a deny that has already been decided, and an
     augmentation that crashed would turn that settled deny into an engine
@@ -513,7 +526,7 @@ def annotate_deny(
     # name is IDENTITY, not an affordance: nothing can be written with it,
     # no button is named by it, and B8 grades it clean (measured, see the
     # docstring's item 11) precisely because it is not a gate-referent.
-    del doc_display, agent_id, git_root, session_id
+    del doc_display, agent_id, session_id
     if not guard_name:
         return out
     try:
@@ -523,10 +536,21 @@ def annotate_deny(
         reason = hso.get("permissionDecisionReason")
         if not isinstance(reason, str) or not reason:
             return out
-        hso["permissionDecisionReason"] = "%s\n\nGuard: `%s`." % (
-            reason.rstrip(),
-            guard_name,
-        )
+        text = "%s\n\nGuard: `%s`." % (reason.rstrip(), guard_name)
+        try:
+            from coordinator_core.guard_routes.keys import route_line, routes_index_reachable
+            from coordinator_core.session.identity import resolves_em_audience
+
+            if (
+                payload is not None
+                and resolves_em_audience(payload, git_root)
+                and routes_index_reachable()
+            ):
+                text = "%s %s" % (text, route_line(guard_name.replace("_", "-")))
+        except Exception:
+            # Fail-open: a route-line fault must leave the settled deny intact.
+            pass
+        hso["permissionDecisionReason"] = text
     except Exception:
         return out
     return out

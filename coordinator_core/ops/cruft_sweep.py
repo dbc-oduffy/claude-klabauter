@@ -179,6 +179,8 @@ from coordinator_core.bash_guards._unborn_scratch_repo import scratch_clone_fail
 from coordinator_core.git.repo_root import git_dir, show_toplevel
 from coordinator_core.git.run import LOCAL_PLUMBING_BUDGET_SECS, run_git
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.claude_home_census import DEFAULT_MAX_AGE_HOURS as _CENSUS_DEFAULT_MAX_AGE_HOURS
+from coordinator_core.ops.claude_home_census import DEFAULT_MAX_MB as _CENSUS_DEFAULT_MAX_MB
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.wire_paths import rel_id
 from coordinator_core.win_portability import (
@@ -1374,6 +1376,101 @@ def _sweep_subtier_age(
     return total_bytes, total_items
 
 
+_TRANSCRIPT_RETENTION_CLASSES = frozenset({"transcript", "subagents"})
+_TRANSCRIPT_MAX_BYTES_DEFAULT = 250 * 1024**2
+_TRANSCRIPT_MAX_AGE_SECS_DEFAULT = _CENSUS_DEFAULT_MAX_AGE_HOURS * 3600
+
+
+def box_live_session_ids() -> Optional[frozenset]:
+    """Box-wide live session set, or None when liveness could not be established.
+
+    `live_session_ids(cwd)` is scoped to one repo's `coordinator-sessions`
+    dir, so this unions the current repo, every distinct cwd in the harness
+    registry, and each registry session whose process is still the same
+    process. Any failure returns None: the caller keeps every file.
+    """
+    try:
+        from coordinator_core.session import core as _core
+        from coordinator_core.session import harness_registry
+        from coordinator_core.session.liveness import live_session_ids
+
+        live = set(live_session_ids())
+        registry = harness_registry.snapshot()
+        cwds = {rec.cwd for rec in registry.values() if rec.cwd}
+        for cwd in cwds:
+            live |= live_session_ids(cwd)
+        for sid, rec in registry.items():
+            if _core.stable_pid_alive(str(rec.pid), "", str(int(rec.start_epoch))):
+                live.add(sid)
+        return frozenset(live)
+    except Exception:
+        return None
+
+
+def _transcript_retention_candidates(
+    tuples: List[_UuidArtifactTuple],
+    *,
+    live_ids: frozenset,
+    max_bytes: int,
+    max_age_secs: int,
+    now: int,
+) -> List[_UuidArtifactTuple]:
+    """Transcript and subagent-transcript files over the size or age bound whose
+    session is not live. A subagent file follows its parent uuid."""
+    return [
+        t for t in tuples
+        if t[2] in _TRANSCRIPT_RETENTION_CLASSES
+        and t[1] not in live_ids
+        and (t[3] > max_bytes or (now - t[4]) > max_age_secs)
+    ]
+
+
+def _sweep_transcript_retention(
+    candidates: List[_UuidArtifactTuple],
+    *,
+    now: int,
+    apply: bool,
+    json_mode: bool,
+    quiet: bool,
+    emit_fn: Optional[EmitFn],
+    watchdog: "_Watchdog",
+    max_bytes: int,
+    max_age_secs: int,
+) -> Tuple[int, int]:
+    """Delete the candidates from `_transcript_retention_candidates`. The
+    predecessor blocklist is deliberately not consulted: only liveness exempts."""
+    total_bytes = 0
+    total_items = 0
+    for path, _uuid, artifact_class, size, mtime in sorted(candidates, key=lambda t: (t[4], str(t[0]))):
+        if not watchdog.check():
+            _banner(
+                f"[cruft-sweep] wall-clock ceiling bail on transcript retention "
+                f"after {total_items} files; will finish next run",
+                quiet=quiet,
+            )
+            break
+        age_sec = now - mtime
+        evidence = (
+            f"transcript retention {artifact_class} size {size} / age {age_sec}s "
+            f"vs max {max_bytes} bytes / {max_age_secs}s, session not live"
+        )
+        if apply and not _delete_file(path):
+            _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {path}", quiet=quiet)
+            if json_mode:
+                emit_jsonl("harness", str(path), path.name, size, mtime,
+                           "prune-failed", evidence + "; delete did not confirm removal",
+                           emit_fn=emit_fn)
+            continue
+        total_bytes += size
+        total_items += 1
+        if json_mode:
+            emit_jsonl("harness", str(path), path.name, size, mtime, "auto-prune", evidence, emit_fn=emit_fn)
+    if not json_mode and not quiet and total_items > 0:
+        mode_label = "APPLY" if apply else "DRY-RUN"
+        _banner(f"[cruft-sweep] transcript retention ({mode_label}): {total_items} files reclaimed", quiet=False)
+    return total_bytes, total_items
+
+
 def _sweep_projects_size_cap(
     tuples: List[_UuidArtifactTuple],
     *,
@@ -1489,6 +1586,9 @@ def sweep_harness(
     emit_fn: Optional[EmitFn] = None,
     size_cap_bytes: int = _PROJECTS_SIZE_CAP_BYTES_DEFAULT,
     size_cap_mtime_floor_secs: int = _SIZE_CAP_MTIME_FLOOR_SECS_DEFAULT,
+    transcript_live_ids: Optional[frozenset] = None,
+    transcript_max_bytes: int = _TRANSCRIPT_MAX_BYTES_DEFAULT,
+    transcript_max_age_secs: int = _TRANSCRIPT_MAX_AGE_SECS_DEFAULT,
 ) -> Tuple[int, int]:
     """Sweep projects/<repo>/<uuid>/ dirs, projects/<repo>/<uuid>.jsonl files,
     and file-history/<uuid>/ dirs older than `days`, skipping any UUID present
@@ -1512,7 +1612,26 @@ def sweep_harness(
     # from `wd_subtier_cap` (shared by the two new passes, per Design §
     # Watchdog: "The two new passes share one new _Watchdog(...), the same
     # shape as wd2").
-    subtier_tuples = _walk_uuid_artifacts(projects_root, blocklist, _Watchdog(watchdog_ceiling_secs))
+    all_tuples = _walk_uuid_artifacts(projects_root, (), _Watchdog(watchdog_ceiling_secs))
+    subtier_tuples = [t for t in all_tuples if not _is_blocked(t[1], blocklist)]
+
+    # Transcript retention runs only when the caller supplied a live set
+    # (transcript_live_ids is not None); an unresolved live set keeps everything.
+    retention_bytes = 0
+    retention_items = 0
+    if transcript_live_ids is not None:
+        retention_candidates = _transcript_retention_candidates(
+            all_tuples, live_ids=transcript_live_ids,
+            max_bytes=transcript_max_bytes, max_age_secs=transcript_max_age_secs, now=now,
+        )
+        retention_bytes, retention_items = _sweep_transcript_retention(
+            retention_candidates,
+            now=now, apply=apply, json_mode=json_mode, quiet=quiet, emit_fn=emit_fn,
+            watchdog=_Watchdog(watchdog_ceiling_secs),
+            max_bytes=transcript_max_bytes, max_age_secs=transcript_max_age_secs,
+        )
+        retention_paths = {t[0] for t in retention_candidates}
+        subtier_tuples = [t for t in subtier_tuples if t[0] not in retention_paths]
 
     # jsonl transcripts that are themselves aging-pass candidates (tracked
     # here, at the point the existing jsonl loop below decides candidacy),
@@ -1752,7 +1871,8 @@ def sweep_harness(
     # this one. `total_items` (the function's return value) is the grand
     # total across all five passes.
     harness_items = pruned_dirs + pruned_jsonl + pruned_fh_dirs
-    total_items = harness_items + subtier_items + cap_items
+    total_bytes += retention_bytes
+    total_items = harness_items + subtier_items + cap_items + retention_items
     total_mb = total_bytes // 1048576
 
     if not json_mode and not quiet:

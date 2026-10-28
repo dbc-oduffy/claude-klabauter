@@ -269,6 +269,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import PROMPTS_DIR
 from coordinator_core.ops.dispatch_emit.run_id_occupancy import spent_run_reason
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
@@ -773,6 +774,24 @@ def _record_run_base(root: Path, run_id: str) -> None:
         base = head_sha(root.as_posix())
         if base:
             claimed_write.replace_text(root / _run_base_rel(run_id), base + "\n")
+
+
+def _live_carried_notes(root: Path, run_id: str, prior: Optional[str]) -> list[dict]:
+    """Live revise notes of this run and of the halted predecessor `prior`, oldest first, deduped on
+    (note, at). The refire's run.json `resumed_from` is unwritten at compose time, so `prior` is
+    walked explicitly."""
+    from coordinator_core.ops.dispatch_emit import run_notes
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import carried_notes
+
+    entries = carried_notes(root, run_id) + (carried_notes(root, prior) if prior else [])
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for e in sorted(run_notes.live(entries), key=lambda e: e["at"]):
+        key = (e["note"], e["at"])
+        if key not in seen:
+            seen.add(key)
+            out.append(e)
+    return out
 
 
 def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[object]:
@@ -1451,6 +1470,8 @@ def _research_route_setup(
             pipeline, [q["text"] if isinstance(q, dict) else q for q in questions]
         )
         given = {
+            # getattr: a plain Manifest (no list_defaults) reaches here from callers that skip load_manifest.
+            **{k: v for k, v in getattr(manifest, "list_defaults", {}).items() if k not in inputs.lists},
             **{k: v for k, v in defaults.items() if k in manifest.lists and k not in inputs.lists},
             **{k: tuple(v) for k, v in lists.items() if k in manifest.lists and k != "questions"},
         }
@@ -2557,7 +2578,13 @@ def _dispatch_emit_body(
         manifest = load_manifest(_pipeline_content_root(), pipeline_name)
         pipeline_inputs = replace(
             pipeline_ctx["inputs"],
-            lists=normalize_lists(manifest.lists, pipeline_ctx["inputs"].lists),
+            lists=normalize_lists(
+                manifest.lists,
+                {
+                    **{k: v for k, v in getattr(manifest, "list_defaults", {}).items() if k not in pipeline_ctx["inputs"].lists},
+                    **pipeline_ctx["inputs"].lists,
+                },
+            ),
         )
         pipeline_ctx["inputs"] = pipeline_inputs
         schedule = validate(manifest, pipeline_inputs)
@@ -2608,7 +2635,12 @@ def _dispatch_emit_body(
             and params.get("launcher_child") is True
             and _run_token.escrow(Path(ask_ctx["root"]), ask_ctx["run_id"], ask_run_token)
         )
+        staged_prompts: dict[str, str] = {}
+        ask_ctx["carried_notes"] = _live_carried_notes(
+            Path(ask_ctx["root"]), ask_ctx["run_id"], ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from")
+        )
         script = compose_ask_script(
+            staged_out=staged_prompts,
             review_roster_fragment=review_roster_fragment,
             review_stage_schemas=review_stage_schemas,
             repo_root=Path(ask_ctx["root"]).as_posix(),
@@ -2616,6 +2648,7 @@ def _dispatch_emit_body(
             sizing_rel=ask_ctx["sizing_rel"],
             run_id=ask_ctx["run_id"],
             session_id=emitting_session_id,
+            carried_notes=ask_ctx["carried_notes"],
             script_path=ask_script_path,
             plan_blitz_args=ask_ctx.get("plan_blitz_args"),
             writes=ask_ctx.get("writes", ()),
@@ -2644,15 +2677,22 @@ def _dispatch_emit_body(
             ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
             ask_file.parent.mkdir(parents=True, exist_ok=True)
             ask_file.write_text(ask_body, encoding="utf-8", newline="\n")
+        for staged_name, staged_text in staged_prompts.items():
+            staged_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / PROMPTS_DIR / f"{staged_name}.md"
+            staged_file.parent.mkdir(parents=True, exist_ok=True)
+            staged_file.write_text(staged_text, encoding="utf-8", newline="\n")
         if not ask_ctx["route_preference"].is_empty():
             pref_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / _route_pref.ROUTE_PREFERENCE_FILE
             pref_file.parent.mkdir(parents=True, exist_ok=True)
             pref_file.write_text(_route_pref.to_json(ask_ctx["route_preference"]), encoding="utf-8", newline="\n")
         bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
         ask_ctx["revisions_inherited"] = [
-            {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip()}
+            {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip(), "kind": "revision"}
             for i in (bound.items if bound is not None else ())
             if i.origin == "revision"
+        ] + [
+            {"id": n["id"], "first_line": n["note"].split("\n", 1)[0].strip(), "kind": "note"}
+            for n in ask_ctx["carried_notes"]
         ]
         receipt_plan_path = None
     else:

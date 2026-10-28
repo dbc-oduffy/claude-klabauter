@@ -676,6 +676,15 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
         override_doc_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(override_doc_src, override_doc_dst)
 
+    routes_src = Path(__file__).resolve().parent.parent / "docs" / "reference" / "guard-routes"
+    if routes_src.is_dir():
+        routes_dst = (
+            quarantine / ".coordinator-claude-settings" / "coordinator-claude" / "docs" / "wiki" / "guard-routes"
+        )
+        routes_dst.mkdir(parents=True, exist_ok=True)
+        for page in routes_src.glob("*.md"):
+            shutil.copyfile(page, routes_dst / page.name)
+
     return quarantine
 
 

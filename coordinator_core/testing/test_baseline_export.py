@@ -27,6 +27,14 @@ def _git(repo, *args):
     ).stdout.strip()
 
 
+@pytest.fixture(autouse=True)
+def _slots_home(tmp_path, monkeypatch):
+    home = tmp_path / "settings-home"
+    home.mkdir()
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    return home
+
+
 @pytest.fixture
 def repo(tmp_path):
     root = tmp_path / "repo"
@@ -332,3 +340,86 @@ def test_runs_as_a_module_process(repo):
     assert done.returncode == 0
     assert json.loads(done.stdout.strip().splitlines()[-1])["baseline_export"]["runner_exit"] == 0
     assert _exports(repo) == []
+
+
+def test_data_dirs_are_linked_from_the_live_tree_not_extracted(repo, monkeypatch, capsys, tmp_path):
+    (repo / "state").mkdir()
+    (repo / "state" / "row.yaml").write_text("at-base\n")
+    _git(repo, "add", "state/row.yaml")
+    _git(repo, "commit", "-q", "-m", "state")
+    (repo / "state" / "row.yaml").write_text("live\n")
+    out = tmp_path / "data.json"
+    probe = (
+        "import json, os, sys\n"
+        "json.dump({'linked': os.path.islink('state') or os.path.isjunction('state'),"
+        " 'row': open('state/row.yaml').read(), 'code': open('a.txt').read()}, open(sys.argv[1], 'w'))\n"
+    )
+    sha = _git(repo, "rev-parse", "HEAD")
+    code, res, _ = _run(repo, ["--sha", sha, "--link", "state/row.yaml", *_py(probe, str(out))], monkeypatch, capsys)
+    assert code == 0 and res["removed"] is True
+    assert json.loads(out.read_text()) == {"linked": True, "row": "live\n", "code": "two\n"}
+    assert (repo / "state" / "row.yaml").read_text() == "live\n"
+    assert _exports(repo) == []
+
+
+def _hold_all_slots():
+    held = [be._acquire_slot() for _ in range(be.EXPORT_SLOT_CAP)]
+    assert all(held)
+    return held
+
+
+def test_no_free_slot_is_refused_without_a_tree_or_git_archive(repo, monkeypatch, capsys, tmp_path):
+    held = _hold_all_slots()
+    marker = tmp_path / "ran"
+    calls = []
+    real = be._git_popen
+    monkeypatch.setattr(be, "_git_popen", lambda a, *r, **k: calls.append(a[0]) or real(a, *r, **k))
+    code, res, _ = _run(repo, ["--sha", _base(repo), *_py("import sys; open(sys.argv[1], 'w')", str(marker))], monkeypatch, capsys)
+    assert code == be.EXIT_REFUSED == 5
+    assert res["export"] == "refused" and "no free export slot" in res["why"]
+    assert res["runner_exit"] is None
+    assert not marker.exists() and _exports(repo) == []
+    assert "archive" not in calls and not (repo / "scratch").exists()
+    for s in held:
+        be._release_slot(s)
+
+
+def test_slot_is_released_after_a_run_and_after_an_export_failure(repo, monkeypatch, capsys):
+    for _ in range(be.EXPORT_SLOT_CAP + 1):
+        code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+        assert code == 0
+    monkeypatch.setattr(be.tarfile, "open", lambda *a, **k: (_ for _ in ()).throw(tarfile.TarError("x")))
+    for _ in range(be.EXPORT_SLOT_CAP + 1):
+        code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+        assert code == be.EXIT_EXPORT_FAILED
+    held = _hold_all_slots()
+    for s in held:
+        be._release_slot(s)
+
+
+def test_dead_holder_slot_is_reclaimed(repo, monkeypatch, capsys):
+    from coordinator_core.testing import suite_mutex
+
+    dead = subprocess.Popen([sys.executable, "-c", "pass"], **_NO_CONSOLE)
+    dead.wait()
+    for i in range(be.EXPORT_SLOT_CAP):
+        path = be._slot_path(i)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        assert suite_mutex.acquire(f"dead#{i}", "x", 0.0, pid=dead.pid, path=path)
+    code, res, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+    assert code == 0 and res["export"] == "ok"
+
+
+def test_dead_pid_trees_are_reaped_and_live_ones_kept(repo, monkeypatch, capsys):
+    dead = subprocess.Popen([sys.executable, "-c", "pass"], **_NO_CONSOLE)
+    dead.wait()
+    scratch = repo / "scratch"
+    orphan = scratch / f"{be.ROOT_PREFIX}abcdef12-{dead.pid}"
+    live = scratch / f"{be.ROOT_PREFIX}abcdef12-{os.getppid()}"
+    other = scratch / "keep-me"
+    for d in (orphan, live, other):
+        (d / "sub").mkdir(parents=True)
+        (d / "sub" / "f.txt").write_text("x")
+    code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+    assert code == 0
+    assert not orphan.exists() and live.exists() and other.exists()

@@ -804,9 +804,10 @@ def _writes_shape_refused_at_emit(
 def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Optional[Exception]]":
     """The rows the emitter would refuse to route, judged by the emitter itself.
 
-    ``emit._row_agent_type`` raises one of ``emit.ROW_ROUTING_ERRORS`` on a
-    static spine fact. Calling it here means a plan the gate certifies is one
-    the emitter will route (coordinator-content-repo#75).
+    ``emit._row_agent_type`` and ``emit.resolve_agent_model`` raise one of
+    ``emit.ROW_ROUTING_ERRORS`` on a static spine fact (an unroutable type, or
+    one with no resolvable model). Calling both here means a plan the gate
+    certifies is one the emitter will route (coordinator-content-repo#75).
     """
     from coordinator_core.ops.dispatch_emit import emit
 
@@ -815,7 +816,9 @@ def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Option
     for wave in waves:
         for row in wave:
             try:
-                emit._row_agent_type(row)
+                emit.resolve_agent_model(
+                    emit._row_agent_type(row), getattr(row, "agent_model", None)
+                )
             except emit.ROW_ROUTING_ERRORS as exc:
                 ids.append(row.id)
                 first = first or exc

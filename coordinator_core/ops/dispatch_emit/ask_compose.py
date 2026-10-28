@@ -22,6 +22,8 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_command
 from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import agent_body_dedupe as _agent_body_dedupe
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
+from coordinator_core.ops.dispatch_emit import run_notes as _run_notes
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import Stager, stage as _stage_prompt, stage_literal_runs
 from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGE_PENDING_KEY, STAGED_INLINE_SLOT, STAGED_RESUME_KEY
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
     READ_STAGE_SIDECAR_JS,
@@ -125,7 +127,9 @@ from coordinator_core.ops.dispatch_emit.ledger_recovery import (
     REOPEN_PLAN_JS,
     ledger_fix_prompt,
 )
+from coordinator_core.ops.dispatch_emit.in_run_widen import WIDEN_RECORD_NAME
 from coordinator_core.ops.dispatch_emit.self_correction import (
+    CLASSIFY_FLAKES_JS,
     CLASSIFY_REDS_JS,
     FOREIGN_FIELD,
     HALT_FIX_LABEL,
@@ -188,6 +192,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     NO_SLICES_HALT,
     PREP_BUSY_HALT,
     PREP_MALFORMED_HALT,
+    REVERIFY_PHASE,
     REVIEW_MISSING_HALT,
     SLICE_ID_UNKNOWN_HALT,
     compose_execute_review,
@@ -321,8 +326,13 @@ def _agent(
     run_id: str = _UNKEYED_RUN,
     agent_model: Optional[str] = None,
     effort: Optional[str] = None,
+    stage_as: Optional[str] = None,
+    stager: Optional[Stager] = None,
 ) -> str:
     """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
+
+    With ``stager`` and ``stage_as``, each large static run of ``prompt_expr`` leaves the script as a
+    pointer to a staged file (`ask_staged_prompts`); the sidecar clause and dynamic operands stay inline.
 
     Trap: a composer call site that omits ``run_id`` files its sidecar under ``_UNKEYED_RUN``;
     ``test_ask_prompts_name_sidecar_dir`` pins that no composed ask script does.
@@ -340,6 +350,8 @@ def _agent(
             clause = _lit(" " + reconcile) + " + " + clause
         if _emit._INVOKE_LITERAL_CLAUSE not in prompt_expr:
             clause = _lit(_emit._INVOKE_LITERAL_CLAUSE) + " + " + clause
+    if stager is not None and stage_as:
+        prompt_expr = stage_literal_runs(prompt_expr, stage_as, stager)
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
         f"agentType: {_lit(agent_type)}, {_emit._model_opt(agent_type, agent_model)}, {effort_opt}"
@@ -988,9 +1000,11 @@ def _review_blocked_halt_js(sizing_rel: Optional[str]) -> str:
         "with a unique id, a title and declared `writes` covering them; then ') : (_scPre + t);\n"
         + _test_blockers_js(
             "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
-            "? (() => { const _fs = new Set(typeof _foreignReds !== 'undefined' ? _foreignReds : []); "
+            "? (() => { const _px = (p) => { let s = String(p).replace(/\\\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; }; "
+            "const _fs = new Set([...(typeof _foreignReds !== 'undefined' ? _foreignReds : []), "
+            "...(Array.isArray(_reviewReverify.flaky) ? _reviewReverify.flaky.map((f) => f && f.node_id) : [])].map(_px)); "
             "const _f = _reviewReverify.failing; return { ..._reviewReverify, failing: "
-            "(Array.isArray(_f) ? _f : (typeof _f === 'string' ? [_f] : [])).filter((n) => !_fs.has(String(n))) }; })() : null",
+            "(Array.isArray(_f) ? _f : (typeof _f === 'string' ? [_f] : [])).filter((n) => !_fs.has(_px(n))) }; })() : null",
             "_rv",
         )
         + "    const _slicesJs = _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
@@ -1017,20 +1031,30 @@ _REVIEW_RECOVER_JS = r"""
   let _selfCorrection = null; let _foreignReds = [];
   __CLASSIFY__
   __PROGRESSED__
+  __FLAKES__
   const _hfPosix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const _hfWidenable = (p) => /(^|\/)(tests?\/[^/]+|test_[^/]*\.py|[^/]*_test\.py)$/.test(p)
+    && !/^(state|\.git)\//i.test(p) && !/(^|\/)(CLAUDE\.md|coordinator\.local\.md)$/i.test(p) && !p.startsWith('..') && !/^([A-Za-z]:|\/)/.test(p);
   const _reviewRecover = async () => {
     if (_gate.arm === __XS__ || _reviewReused) return;
+    const flaky = [];
     const gapsOf = () => {
       const rv = (_reviewReverify && typeof _reviewReverify === 'object') ? _reviewReverify : null;
       const excluded = new Set([...(rv?.pre_existing ?? []), ...(rv?.kept ?? [])].map(String));
       const raw = rv?.failing;
-      const failing = (rv && rv.status_after !== 'pass')
+      let failing = (rv && rv.status_after !== 'pass')
         ? [...new Set((Array.isArray(raw) ? raw : (typeof raw === 'string' ? [raw] : [])).map(String))].filter((n) => !excluded.has(n)) : [];
+      if (rv && failing.length) {
+        const [, found] = classifyFlakes({ ...rv, failing }, _runId);
+        const fids = new Set(found.map((f) => f.node_id));
+        for (const f of found) if (!flaky.some((x) => x.node_id === f.node_id)) flaky.push(f);
+        failing = failing.filter((n) => !fids.has(_hfPosix(n)));
+      }
       const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { pre_existing: rv?.pre_existing ?? [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
       const detail = new Map();
       for (const d of (Array.isArray(rv?.failing_detail) ? rv.failing_detail : [])) if (d && d.node_id) detail.set(_hfPosix(d.node_id), String(d.message ?? ''));
       const ownedTxt = split.owned.map((n) => n + ': ' + ((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300));
-      const slices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter((w) => w && __BLOCKED__)
+      const slices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter((w) => w && (w.verdict === 'WARN' || __BLOCKED__) && (w.findings ?? 0) > (w.applied ?? 0))
         .map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));
       const foreign = failing.filter((n) => split.foreign.includes(_hfPosix(n)));
       return { owned: split.owned, ownedTxt, foreign, unverified: split.unverified, slices,
@@ -1040,6 +1064,7 @@ _REVIEW_RECOVER_JS = r"""
       _foreignReds = g.foreign;
       if (_reviewReverify && typeof _reviewReverify === 'object') {
         _reviewReverify.__FOREIGN__ = g.foreign;
+        if (flaky.length) _reviewReverify.flaky = flaky;
         if (g.unverified.length) _reviewReverify.foreign_unverified = g.unverified;
       }
     };
@@ -1047,7 +1072,7 @@ _REVIEW_RECOVER_JS = r"""
     if (!g.keys.length) return;
     const footprint = [...new Set((_manifest?.review_declared_paths ?? []).map(_hfPosix))];
     const inFp = (p) => footprint.some((f) => p === f || p.startsWith(f.replace(/\/+$/, '') + '/'));
-    let status = 'exhausted'; let attempts = 0; const needs = [];
+    let status = 'exhausted'; let attempts = 0; const needs = []; const widened = [];
     for (let attempt = 1; attempt <= __CAP__ && !_halted; attempt++) {
       const before = g.keys;
       const gapsText = JSON.stringify(g.ownedTxt); const slicesText = JSON.stringify(g.slices);
@@ -1061,12 +1086,15 @@ _REVIEW_RECOVER_JS = r"""
       }
       if (_halted) return;
       if (!r || typeof r !== 'object') { status = 'blocked'; break; }
-      const outside = (Array.isArray(r.paths) ? r.paths : []).map(_hfPosix).filter((p) => !inFp(p));
+      const outsideAll = (Array.isArray(r.paths) ? r.paths : []).map(_hfPosix).filter((p) => !inFp(p));
+      const outside = outsideAll.filter((p) => !_hfWidenable(p));
       if (r.status === 'SCOPE' || outside.length) {
         needs.push(...(Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_hfPosix), ...outside);
         status = 'scope'; break;
       }
-      if (r.status === 'BLOCKED') { status = 'blocked'; break; }
+      for (const p of outsideAll) if (!widened.includes(p)) widened.push(p);
+      const noWrite = !(Array.isArray(r.paths) && r.paths.length);
+      if (r.status === 'BLOCKED' && !noWrite) { status = 'blocked'; break; }
       let rv = null;
       try { rv = await __REVERIFYCALL__; }
       catch (e) {
@@ -1084,12 +1112,18 @@ _REVIEW_RECOVER_JS = r"""
         });
       }
       g = gapsOf(); applyForeign(g);
+      if (noWrite) {
+        for (const k of before) if (!k.startsWith('slice:') && !g.keys.includes(k) && !flaky.some((f) => f.node_id === _hfPosix(k))) {
+          flaky.push({ node_id: _hfPosix(k), run: _runId, evidence: 'passed after a no-write halt-fix leg' });
+        }
+        applyForeign(g);
+      }
       if (!g.keys.length) { status = 'fixed'; break; }
       if (!progressed(before, g.keys)) { status = 'no-progress'; break; }
     }
     const left = g.ownedTxt.concat(g.slices.map((s) => 'slice ' + s.slice_id + ': ' + (s.findings - s.applied) + ' unapplied finding(s), see ' + (s.sidecar_path ?? 'its review sidecar')));
     _selfCorrection = { phase: 'review', attempts, status, gaps: status === 'fixed' ? [] : left,
-      needs_paths: [...new Set(needs)], foreign: g.foreign, unverified: g.unverified };
+      needs_paths: [...new Set(needs)], foreign: g.foreign, unverified: g.unverified, widened, flaky };
     log('review self-correction: ' + status + ' after ' + attempts + ' fix leg(s)');
   };
   if (!_halted) await _reviewRecover();
@@ -1097,30 +1131,44 @@ _REVIEW_RECOVER_JS = r"""
 
 
 def _review_recover_js(
-    *, head: str, anchor: str, session_tail: str, record_dir: str, run_id: str
+    *, head: str, anchor: str, session_tail: str, record_dir: str, run_id: str, stager: Optional[Stager] = None,
+    run_dir: Optional[str] = None, notes_block: str = "",
 ) -> str:
     """`_reviewRecover()` and its one call, composed between the review wave and `_review_blocked_halt_js`.
 
-    Closes the run's own failing tests and blocked-slice findings in at most `SELF_CORRECTION_CAP`
-    `halt-fix` legs, each followed by one `halt-reverify` leg; foreign reds are recorded, never fixed.
-    Trap: the fix footprint is `_manifest.review_declared_paths` only; a write outside it ends the loop as `scope`.
+    Closes the run's own failing tests, WARN/BLOCKED slice findings and stale assertions of behaviour the
+    ask changes in at most `SELF_CORRECTION_CAP` `halt-fix` legs, each followed by one `halt-reverify` leg;
+    foreign reds are recorded, never fixed; a red that passes alone is recorded as `flaky`, not a halt.
+    Trap: the fix footprint is `_manifest.review_declared_paths`; the one write allowed outside it is a
+    test file (recorded under `widened`); any other outside write ends the loop as `scope`.
     """
+    widen_record = f"{run_dir or record_dir}/{WIDEN_RECORD_NAME}"
     fix_prompt = _cat(
         f"{head}\n\n{anchor}\n\nHalt-fix leg (review). ",
         *_prompt_parts(halt_fix_prompt("gapsText", "slicesText", "fpText", f"{record_dir}/notes.jsonl")),
-        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
+        " Also fix the WARN findings that fall within the ask. A failing assertion of behaviour this run's "
+        "change deliberately alters is in scope: update that assertion to the new behaviour, even when its "
+        "test file sits outside the footprint (list the path; the run records it as a widen via "
+        f"`record_widen`, one JSON line {{row, path}} appended to {widen_record}). "
+        "A footprint or review path that does not exist in the tree is resolved to the real test file by "
+        "subject name, or dropped and named in `reason`; never trust it. "
+        "A failure that passes when run alone and at base is a combined-run flake: edit nothing, return "
+        "BLOCKED with empty `paths`. A finding that contradicts the ask or needs a direction call: "
+        "return SCOPE and name it in `reason`.",
+        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}{session_tail}",
     )
     fix_call = _agent(
         fix_prompt, label=HALT_FIX_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=HALT_FIX_SCHEMA, run_id=run_id,
+        schema=HALT_FIX_SCHEMA, run_id=run_id, stage_as="halt-fix", stager=stager,
     )
     reverify_prompt = _cat(
         f"{head}\n\n{anchor}\n\nHalt re-verify leg (review). A fix leg just ran. Re-run ONLY these failing test ids and "
-        "the scoped tests of these files (nothing wider): ",
+        "the scoped tests of these files (nothing wider), each id run alone: ",
         "js:idsText",
         " and ",
         "js:fpText",
-        ". Return `test` for that run (status_after pass|fail, failing, failing_detail, pre_existing, reverted). "
+        ". An id that also fails at base is listed in `pre_existing`. Return `test` for that run (status_after pass|fail, failing, failing_detail, pre_existing, reverted, "
+        "passed_alone, passed_at_base): `passed_alone` lists each failing id that passes when run alone, `passed_at_base` each that passes at the base checkout. "
         "Then, for each blocked slice below, read its review sidecar and judge each finding against the current tree: "
         "return `slices` entries with `findings` (the findings that still stand; empty when all are closed) and "
         "`applied` (true when none stand). Blocked slices: ",
@@ -1130,11 +1178,12 @@ def _review_recover_js(
     )
     reverify_call = _agent(
         reverify_prompt, label=HALT_REVERIFY_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=HALT_REVERIFY_SCHEMA, run_id=run_id,
+        schema=HALT_REVERIFY_SCHEMA, run_id=run_id, stage_as="halt-reverify", stager=stager,
     )
     return (
         _REVIEW_RECOVER_JS.replace("__CLASSIFY__", CLASSIFY_REDS_JS)
         .replace("__PROGRESSED__", PROGRESSED_JS)
+        .replace("__FLAKES__", CLASSIFY_FLAKES_JS)
         .replace("__XS__", _lit(ARM_XS))
         .replace("__BLOCKED__", _BLOCKED_UNAPPLIED_JS)
         .replace("__FOREIGN__", FOREIGN_FIELD)
@@ -1177,8 +1226,17 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
         "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
         "&& _testResult.status && _testResult.status !== 'not_run' "
         "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())) "
-        "{ _halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
-        "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests', "
+        "{ const _rvh = (typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
+        "? _reviewReverify : {}; "
+        "const _rvl = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
+        "const _rvx = new Set([..._rvl(_rvh.pre_existing), ..._rvl(_rvh.kept)]); "
+        "const _rvFail = [...new Set(_rvl(_rvh.failing))].filter((n) => !_rvx.has(n)); "
+        "const _rvPre = _rvl(_rvh.pre_existing); "
+        "_halted = { halted: " + json.dumps("test_verdict_empty") + ", run_id: _runId, "
+        "failing: _rvFail, pre_existing: _rvPre, "
+        "detail: 'the test leg returned no verdict (empty sidecar or not_run); the run did not pass its tests' + "
+        "(_rvFail.length ? '; re-verify reds not red at the run base: ' + _rvFail.join(', ') : "
+        "(_rvPre.length ? '; re-verify reds all pre-existing, none this run\\'s: ' + _rvPre.join(', ') : '')), "
         "next_action: 'Refire to re-run the test leg: ' + " + _refire_js(sizing_rel) + " }; }"
     )
 
@@ -1391,6 +1449,7 @@ def _verify_call(
     judged: bool,
     schema: dict,
     run_id: str,
+    stager: Optional[Stager] = None,
 ) -> str:
     """The merged tail's one `agent(...)` call EXPRESSION: scoped tests, declared docs, then the
     criterion and ledger verdict, in that order inside one coordinator:executor agent.
@@ -1422,7 +1481,7 @@ def _verify_call(
     )
     return _agent(
         prompt, label=ASK_VERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=schema, run_id=run_id,
+        schema=schema, run_id=run_id, stage_as="verify", stager=stager,
     )
 
 
@@ -1596,7 +1655,8 @@ _LEDGER_RECOVER_JS = r"""
 
 
 def _ledger_recover_js(
-    *, head: str, anchor: str, session_tail: str, record_dir: str, ledger_rel: str, run_id: str, judged: bool, test_var: str
+    *, head: str, anchor: str, session_tail: str, record_dir: str, ledger_rel: str, run_id: str, judged: bool, test_var: str,
+    stager: Optional[Stager] = None, notes_block: str = "",
 ) -> str:
     """The `_ledgerRecover()` definition and its one call, composed between the verify leg's ledger and the ledger halt.
 
@@ -1610,11 +1670,11 @@ def _ledger_recover_js(
         "js:(_fixRow.brief_path ?? '(none)')",
         ". ",
         *_prompt_parts(ledger_fix_prompt("remText", "evText", "failTxt", "fpText", f"{record_dir}/notes.jsonl")),
-        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{session_tail}",
+        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}{session_tail}",
     )
     fix_call = _agent(
         fix_prompt, label=LEDGER_FIX_LABEL, phase=LEDGER_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=LEDGER_FIX_SCHEMA, run_id=run_id,
+        schema=LEDGER_FIX_SCHEMA, run_id=run_id, stage_as="ledger-fix", stager=stager,
     ).replace(f"label: {_lit(LEDGER_FIX_LABEL)},", f"label: {_lit(LEDGER_FIX_LABEL)} + _cid,", 1)
     reverify_prompt = _cat(
         f"{head}\n\n{anchor}\n\nLedger re-verify leg. Fix legs just ran on the chunks behind these rows. "
@@ -1635,7 +1695,7 @@ def _ledger_recover_js(
     )
     reverify_call = _agent(
         reverify_prompt, label=LEDGER_REVERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=reverify_schema, run_id=run_id,
+        schema=reverify_schema, run_id=run_id, stage_as="ledger-reverify", stager=stager,
     )
     record_prompt = _cat(
         f"{head}\n\n{anchor}\n\nWrite the file {record_dir}/{RECOVERY_RECORD_FILE} with the Write tool (create its "
@@ -2068,6 +2128,8 @@ def compose_ask_script(
     run_base_sha: Optional[str] = None,
     route_preference: Optional[_route_pref.RoutePreference] = None,
     launcher_child: bool = False,
+    staged_out: Optional[dict] = None,
+    carried_notes: Sequence[dict] = (),
 ) -> str:
     """The .mjs text for one ask: a raw `prompt`, or an existing `sizing_rel` (size phase omitted).
 
@@ -2077,6 +2139,10 @@ def compose_ask_script(
 
     `launcher_child` renders a script a launcher starts: the script holds no `workflow()` reader, so it can never
     nest; it returns `stage_pending` until its staged twin fills the inline slot with the verified manifest.
+
+    `staged_out`, when given, receives each large static prompt body as name -> text and the script
+    carries a pointer to `<record_dir>/prompts/<name>.md` in its place; the caller writes the files
+    (`dispatch.emit` does). Absent, every body stays inline.
 
     `run_base_sha`, when given, is the base for the review blocks, the criterion judge brief and
     the test instruction; absent, the base is HEAD at compose time.
@@ -2199,12 +2265,17 @@ def compose_ask_script(
 
     run_dir = f"{RUN_DIR_ROOT}/{run_id}"
     record_dir = f"{RECORD_DIR_ROOT}/{run_id}"
+    stager: Optional[Stager] = (
+        None if staged_out is None else (lambda name, text: _stage_prompt(name, text, staged_out, record_dir=record_dir))
+    )
     parent_copy = run_parent_copy_rel(run_id)
     manifest_rel = f"{record_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
     brief_prefix = f"{_emit._SHARED_PATH_MARKER_DELIM}{EM_BRIEF_VAR}{_emit._SHARED_PATH_MARKER_DELIM}" if em_brief else ""
     head = brief_prefix + _AGENT_DEFS_MARKER + _emit._BRIEF_PRECEDENCE_CLAUSE
     session_tail = _emit._dispatching_session_id_paragraph(session_id)
+    _notes_text = _run_notes.brief_block(list(carried_notes)).rstrip("\n")
+    notes_block = f"\n\n{_notes_text}" if _notes_text else ""
     agent_type = _emit._EXECUTOR_AGENT_TYPE
 
     def prompt_of(*lines_and_exprs: str) -> str:
@@ -2517,13 +2588,18 @@ def compose_ask_script(
             + " When the ask below does not carry the PM's whole ask, read the session's PM turns "
             f"(`{_INVOKE} baton.pm_turns`) for the prior ones; the EM brief, when present, may note "
             "which prior turns are pertinent."
-            + ("\n\n" + _route_pref.scout_block(route_preference).rstrip("\n") if has_route_pref else "")
-            + (
-                "\n\nRelayed ask (an agent's relay, not the PM's words):\n"
-                if relayed
-                else "\n\nAsk:\n"
-            )
-            + (prompt or str((intake or {}).get("intent") or ""))
+            ,
+            # The tail is its own parenthesised operand: a staged run is adjacent literals, and the route
+            # preference, relayed-ask header and ask text must stay in the script.
+            "js:(" + _cat(
+                ("\n\n" + _route_pref.scout_block(route_preference).rstrip("\n") if has_route_pref else "")
+                + (
+                    "\n\nRelayed ask (an agent's relay, not the PM's words):\n"
+                    if relayed
+                    else "\n\nAsk:\n"
+                )
+                + (prompt or str((intake or {}).get("intent") or ""))
+            ) + ")",
         )
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         b.append(
@@ -2570,7 +2646,7 @@ def compose_ask_script(
             f"&& {json.dumps(_SCOUT_ARRAY_FIELDS)}.every((k) => Array.isArray(r[k]));"
         )
         b.append(
-            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)};"
+            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)};"
         )
         # One re-dispatch whenever assemble is unproven. With a full sizing in hand the retry carries
         # the engine-built command over those values; otherwise the scout is told to run it itself.
@@ -2583,7 +2659,7 @@ def compose_ask_script(
         )
         b.append(
             "  " + ("" if launcher_child else "const ") + "_scouted = _assembleProven(_scoutedFirst) ? _scoutedFirst : { ..._scoutedFirst, ...(await "
-            f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id)}) }};"
+            f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)}) }};"
         )
         b.append("  const _scoutAssembled = Number.isInteger(_scouted.exit_code);")
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
@@ -2647,7 +2723,7 @@ def compose_ask_script(
         b.append("    const _asmFields = { ..._scouted, exit_criterion: '<your reworded exit_criterion>' };")
         b.append(f"    const _reassembleCmd = {assemble_cmd_js};")
         b.append(
-            f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA, run_id=run_id)};"
+            f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA, run_id=run_id, stage_as='reword', stager=stager)};"
         )
         b.append(
             "    _scouted.exit_criterion = _reworded.exit_criterion; _scouted.exit_code = _reworded.exit_code; "
@@ -2811,7 +2887,7 @@ def compose_ask_script(
             accept_schema = {**accept_schema, "properties": {**accept_schema["properties"], **_STAGE_REPLY_PROP}}
         apm_call = _agent(
             apm_prompt, label="accept", phase="accept", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=accept_schema, run_id=run_id,
+            schema=accept_schema, run_id=run_id, stage_as="accept", stager=stager,
         )
         xl_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
@@ -2853,7 +2929,7 @@ def compose_ask_script(
         )
         xl_call = _agent(
             xl_prompt, label="xl-exit", phase="xl-exit", agent_type=ADJUDICATOR_AGENT_TYPE,
-            schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT, run_id=run_id,
+            schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT, run_id=run_id, stage_as="xl-exit", stager=stager,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
         take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, resume_ready: %s.resume_ready ?? null, resume_phases: %s.resume_phases ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
@@ -3307,7 +3383,8 @@ def compose_ask_script(
             "js:_pulledEntry.planPath",
             " at its prep gate. Revise that plan IN PLACE with Edit -- never scaffold a new one, never "
             "change its path -- so every finding below is resolved, then return its repo-relative path "
-            "as plan_rel. "
+            "as plan_rel. A finding that carries a proposed before/after edit is applied exactly as "
+            "proposed; never leave it for the EM. "
             + _ANCHOR_PREMISES_SENTENCE
             + "Then run the `plan.readiness_verdict` op on the revised plan, passing the "
             "pull's coverage and reviews values below when they are not null, apply every "
@@ -3390,10 +3467,14 @@ def compose_ask_script(
             "      const _rePulled = (_reblitz?.pulled ?? []).find((p) => p && p.planPath);"
         )
         b.append(
-            "      if (!_planRel && Array.isArray(_pulledEntry.blocking) && Array.isArray(_rePulled?.blocking) "
-            "&& _pulledEntry.blocking.length > 0 && _rePulled.blocking.length === _pulledEntry.blocking.length "
-            "&& _rePulled.blocking.every((r, i) => r === _pulledEntry.blocking[i])) "
-            "{ _repeatBlocking = _rePulled.blocking; }"
+            "      if (!_planRel && Array.isArray(_pulledEntry.blocking) && Array.isArray(_rePulled?.blocking)) "
+            "{ const _fk = (p) => { const _f = (Array.isArray(p.reviews) ? p.reviews : [])"
+            ".flatMap((r) => Array.isArray(r?.findings) ? r.findings : [])"
+            ".map((x) => typeof x === 'string' ? x : JSON.stringify(x)); "
+            "return _f.length ? _f : p.blocking.filter((r) => !/(^|[:\\s])'?(BLOCKED|PIVOT)'?\\s*$/.test(String(r))); }; "
+            "const _fa = _fk(_pulledEntry), _fb = _fk(_rePulled); "
+            "if (_fa.length > 0 && _fa.every((r) => _fb.includes(r)) && _fb.every((r) => _fa.includes(r))) "
+            "{ _repeatBlocking = _fb; } }"
         )
         b.append("      }")
         b.append("      }")
@@ -3432,7 +3513,7 @@ def compose_ask_script(
             "reason: 'plan-blitz pulled twice on the same blocking set', blocking: _repeatBlocking, "
             "plan: _pullPlan, rulings: _pullRulings, blocking_findings: _pullBlocking, "
             f"next_action: {{ ...{pull_na}, kind: 'rule_on_blocking_rows', blocking: _repeatBlocking, "
-            "note: 'a second pull blocked on the same rows: rule on them (revise the plan or accept them); the same plan pulls again' }, "
+            "note: 'a second pull blocked on the same finding rows: the fix needs an opinion no reviewer held, so route them to the APM or the owning domain reviewer, then refire; the same plan pulls again' }, "
             "blitz: _blitz, sizing: _sizingRel, run_id: _runId }; }"
         )
         b.append(
@@ -3607,7 +3688,7 @@ def compose_ask_script(
         f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(preamble)}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
-        f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause}{session_tail}",
+        f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause}{notes_block}{session_tail}",
         "js:" + _row_sidecar_js(run_id, _lit(build_work_label(''))),
     )
     work_label = _lit(build_work_label(''))
@@ -3696,7 +3777,13 @@ def compose_ask_script(
     )
 
     review_text = _single_exit_review(
-        [_emit._unconst(block, _REVIEW_RESULT_NAMES) for _, block in review_blocks]
+        [
+            _emit._unconst(
+                stage_literal_runs(block, "review-reverify", stager) if stager and title == REVERIFY_PHASE else block,
+                _REVIEW_RESULT_NAMES,
+            )
+            for title, block in review_blocks
+        ]
     )
     b.append(
         "  const _reviewPaths = [...(_manifest?.review_declared_paths ?? []), "
@@ -3742,7 +3829,10 @@ def compose_ask_script(
         f"{{ {INTEGRATION_NOT_RUN_VAR} = true; }}"
     )
     b.append(
-        _review_recover_js(head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id)
+        _review_recover_js(
+            head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id, stager=stager,
+            run_dir=run_dir, notes_block=notes_block,
+        )
     )
     b.append(_review_blocked_halt_js(sizing_rel))
     b.append(
@@ -3819,6 +3909,7 @@ def compose_ask_script(
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
         run_id=run_id,
+        stager=stager,
     )
     unjudged = (
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
@@ -3879,7 +3970,7 @@ def compose_ask_script(
     remaining_call = _agent(
         remaining_prompt, label="ledger-remaining", phase=ASK_VERIFY_PHASE,
         agent_type=_emit._EXECUTOR_AGENT_TYPE, schema=_obj(["summary"], {"summary": _STR}),
-        run_id=run_id,
+        run_id=run_id, stage_as="ledger-remaining", stager=stager,
     )
     verify_lines[2:2] = [
         f"    const _reviseNoted = _resumeLedger && ({_rl}.{RESUME_LEDGER_NOTES_FIELD} ?? []).length > 0;\n"
@@ -3970,7 +4061,8 @@ def compose_ask_script(
         b.append(
             _ledger_recover_js(
                 head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, ledger_rel=ledger_rel,
-                run_id=run_id, judged=judged, test_var=_emit._TEST_RESULT_VAR,
+                run_id=run_id, judged=judged, test_var=_emit._TEST_RESULT_VAR, stager=stager,
+                notes_block=notes_block,
             )
         )
     # `out_of_scope` accepts only register rows still open at stage; any other blocking id is named
@@ -4088,6 +4180,12 @@ def compose_ask_script(
     b.append(
         f"  if (_recoveryWithheld.length && _nextAction && _nextAction.params) "
         f"{{ _nextAction.params.{RECOVERY_WITHHELD_PARAM} = [..._recoveryWithheld]; }}"
+    )
+    b.append(
+        "  const _widenList = [...(typeof _widened !== 'undefined' ? _widened : []), "
+        "...((typeof _selfCorrection !== 'undefined' && _selfCorrection ? _selfCorrection.widened ?? [] : [])"
+        ".map((p) => ({ row: 'review', path: p })))]; "
+        "if (_widenList.length && _nextAction && _nextAction.params) { _nextAction.params.widened = _widenList; }"
     )
     b.append(
         f"  if (_resumeLedger && _nextAction && _nextAction.params && _gate.{RESUME_LEDGER_KEY}.inline_review "

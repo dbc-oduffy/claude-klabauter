@@ -692,11 +692,23 @@ def ensure_listener(engine_root: Optional[Path] = None, *, now: Optional[float] 
             if url is not None and check_health(url):
                 return url
 
+        if _listener_autostart_disabled():
+            return None
         if should_spawn(root, now=now):
             spawn_detached(str(root), ENTRY_SCRIPT)
         return None
     except Exception:  # noqa: BLE001 -- fail-open parity (P12): never fail the caller
         return None
+
+
+def _listener_autostart_disabled() -> bool:
+    """True when `COORDINATOR_WARM_LISTENER_AUTOSTART` is exactly "0".
+
+    TRAP: an isolated clone's detached listener is foreign to the test that booted
+    the clone (outside its process tree), so teardown cannot reap it under the
+    suite's foreign-kill tripwire. Clone fixtures set this so it never exists.
+    """
+    return os.environ.get("COORDINATOR_WARM_LISTENER_AUTOSTART") == "0"
 
 
 def spawn_detached(repo_root: str, script_path: str, args: Optional[Any] = None) -> bool:

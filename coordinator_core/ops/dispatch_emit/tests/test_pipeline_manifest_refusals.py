@@ -306,3 +306,61 @@ def test_manifest_glob_two_matches_lists_both(tmp_path):
 def test_manifest_pipeline_must_equal_file_stem(tmp_path):
     reasons = _load_refusal(tmp_path, [_stage("s")], doc={"pipeline": "other"})
     assert any("'other'" in r and "file stem 'p'" in r for r in reasons)
+
+
+def _roster_doc(default):
+    spec = {"kind": "roster"}
+    if default is not None:
+        spec["default"] = default
+    return {"inputs": {"brief": "required", "lists": {"rv": spec}}}
+
+
+def _roster_stage(**over):
+    return _stage("s", fan_out="per_subject", agent_type=None, agent_type_from="inputs.rv", **over)
+
+
+def _typed_stage():
+    stage = _roster_stage()
+    del stage["agent_type"]
+    return stage
+
+
+@pytest.mark.parametrize("bad", ["a=b", [], [3], ["noequals"], ["=type"]])
+def test_roster_default_must_be_a_list_of_slug_eq_type(tmp_path, bad):
+    reasons = _load_refusal(tmp_path, [_typed_stage()], doc=_roster_doc(bad))
+    assert any("'rv'" in r and "default" in r for r in reasons)
+
+
+def test_roster_default_loads_into_list_defaults(tmp_path):
+    manifest = load_manifest(_build(tmp_path, [_typed_stage()], doc=_roster_doc(["x=t:a"])), "p")
+    assert manifest.lists == {"rv": "roster"} and manifest.list_defaults == {"rv": ("x=t:a",)}
+
+
+def test_strings_default_loads_into_list_defaults(tmp_path):
+    doc = {"inputs": {"brief": "required", "lists": {"qs": {"kind": "strings", "default": ["one", "two"]}}}}
+    manifest = load_manifest(_build(tmp_path, [_stage("s")], doc=doc), "p")
+    assert manifest.list_defaults == {"qs": ("one", "two")}
+
+
+def test_list_spec_with_an_unknown_key_is_still_refused(tmp_path):
+    doc = {"inputs": {"brief": "required", "lists": {"rv": {"kind": "roster", "extra": 1}}}}
+    assert any("'rv'" in r for r in _load_refusal(tmp_path, [_stage("s")], doc=doc))
+
+
+def test_per_subject_stage_with_a_two_type_roster_is_refused_naming_the_stage(tmp_path):
+    roster = ({"slug": "a", "agent_type": "t:one"}, {"slug": "b", "agent_type": "t:two"})
+    reasons = _refusal(tmp_path, [_typed_stage()], _inputs(lists={"rv": roster}), doc=_roster_doc(None))
+    assert any("stage 's'" in r and "one agent type" in r for r in reasons)
+
+
+def test_per_subject_stage_with_a_one_type_roster_is_accepted(tmp_path):
+    roster = ({"slug": "a", "agent_type": "t:one"}, {"slug": "b", "agent_type": "t:one"})
+    manifest = load_manifest(_build(tmp_path, [_typed_stage()], doc=_roster_doc(None)), "p")
+    assert validate(manifest, _inputs(lists={"rv": roster})).scope == {"s": SCOPE_SUBJECT}
+
+
+def test_agent_type_from_on_an_unfanned_stage_is_still_refused(tmp_path):
+    stage = _typed_stage()
+    stage["fan_out"] = "none"
+    reasons = _load_refusal(tmp_path, [stage], doc=_roster_doc(None))
+    assert any("agent_type_from needs a fan_out" in r for r in reasons)

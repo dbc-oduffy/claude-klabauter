@@ -15,12 +15,9 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WRAPPER = _REPO_ROOT / "coordinator" / "bin" / "with-tier-t-slot"
 
-# The child sleeps before writing the sentinel: this proves it is terminated on
-# refusal, NOT that it never started (the wrapper launches it before the wait).
-_CHILD_SRC = (
-    "import sys, time, pathlib; time.sleep(3); "
-    "pathlib.Path(sys.argv[1]).write_text('ran')"
-)
+# Writes the sentinel at once: on refusal its absence proves the child was never
+# launched, not merely terminated.
+_CHILD_SRC = "import sys, pathlib; pathlib.Path(sys.argv[1]).write_text('ran')"
 
 
 def _run(tmp_path: Path, wrapper_args: list[str], sentinel: Path):
@@ -59,20 +56,13 @@ def test_timeout_refuses_with_75_naming_holder_and_child_not_run(
     assert result.returncode == 75, result.stderr
     assert "holder-owner-xyz" in result.stderr
     assert "refusing" in result.stderr
-    time.sleep(4)
+    time.sleep(1)
     assert not sentinel.exists()
 
 
 def test_free_slot_still_runs_child_and_passes_exit_code(tmp_path):
     sentinel = tmp_path / "sentinel.txt"
-    env = dict(os.environ, COORDINATOR_SETTINGS_HOME=str(tmp_path))
-    result = subprocess.run(
-        [sys.executable, str(_WRAPPER), "--wait", "5", "--", sys.executable,
-         "-c", "import sys, pathlib; pathlib.Path(sys.argv[1]).write_text('ran')",
-         str(sentinel)],
-        env=env, capture_output=True, text=True, timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    result = _run(tmp_path, ["--wait", "5"], sentinel)
     assert result.returncode == 0, result.stderr
     assert sentinel.read_text() == "ran"
 

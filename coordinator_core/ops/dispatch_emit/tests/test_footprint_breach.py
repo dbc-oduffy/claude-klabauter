@@ -70,3 +70,32 @@ def test_substring_token_does_not_match():
     item = _met(met_by="C55", evidence="my_xs_lane_budget.py and C5-x")
     assert met_on_breach([item], [BREACH], rows) == []
     assert met_on_breach([_met(met_by="C5")], [BREACH], {"C5": ["other.py"]}) == []
+
+
+def _fence(tmp_path, monkeypatch, widened):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import in_run_widen, land_run
+
+    run = tmp_path / "run"
+    run.mkdir(exist_ok=True)
+    (run / land_run.LEG_FOOTPRINT_FILE).write_text(json.dumps({"writes": ["a.py"]}), encoding="utf-8")
+    for p in widened:
+        in_run_widen.record_widen(run, "C1", p)
+    monkeypatch.setattr(land_run, "_manifest_declared", lambda m: (["a.py", "t/test_a.py"], None))
+    monkeypatch.setattr(land_run, "_halt_base", lambda *a: ("base", ""))
+    monkeypatch.setattr(land_run, "_path_changed", lambda *a: True)
+    monkeypatch.setattr("coordinator_core.git.git_dir.resolve_git_common_dir", lambda r: tmp_path)
+    return land_run._footprint_fence(tmp_path, run, {"blocking": []}, None, None)
+
+
+def test_fence_admits_a_recorded_widen_and_still_breaches_an_unrecorded_path(tmp_path, monkeypatch):
+    assert _fence(tmp_path, monkeypatch, [])["breach"] == ["t/test_a.py"]
+    assert _fence(tmp_path, monkeypatch, ["t/test_a.py"]) == {"recorded": True, "breach": []}
+
+
+def test_widened_paths_join_the_resume_recorded_paths(tmp_path):
+    from coordinator_core.ops.dispatch_emit import in_run_widen, land_run
+
+    in_run_widen.record_widen(tmp_path, "C1", "t/test_a.py")
+    assert land_run._resume_recorded_paths(tmp_path, tmp_path, None) == ["t/test_a.py"]

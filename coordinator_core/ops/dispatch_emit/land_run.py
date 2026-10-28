@@ -49,7 +49,7 @@ import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Optional, Sequence
+from typing import Collection, Optional, Sequence
 
 from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.ipc import register_op
@@ -765,7 +765,9 @@ def _leg_footprint_writes(root: Path, run_dir: Path) -> Optional[list]:
 def _resume_recorded_paths(root: Path, run_dir: Path, inline_review: object) -> list:
     """Repo-relative paths the run's earlier legs and review recorded as edited: the leg footprint's
     ``writes`` plus the review test-runner's ``edited``/``created`` where present."""
-    found = list(_leg_footprint_writes(root, run_dir) or ())
+    from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
+
+    found = list(_leg_footprint_writes(root, run_dir) or ()) + widened_paths(run_dir)
     tests = inline_review.get("tests") if isinstance(inline_review, dict) else None
     if isinstance(tests, dict):
         for key in ("edited", "created"):
@@ -794,8 +796,9 @@ def _footprint_fence(
     if writes is None:
         return {"recorded": False}
     from coordinator_core.ops.dispatch_emit import footprint_breach
+    from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
 
-    allowed = set(writes) | set(
+    allowed = set(writes) | set(widened_paths(run_dir)) | set(
         footprint_breach.serving_writes(root / plan_rel if plan_rel else None, resume.get("blocking") or [])
     )
     paths, stage_head = _manifest_declared(manifest_abs)
@@ -1529,6 +1532,23 @@ def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optio
         return None
 
 
+def _firing_sessions(root: Path, run_id: object, session_id: Optional[str]) -> set:
+    """Sessions that are this landing's own hand: the landing caller and the session on the run's token."""
+    own = {session_id} if session_id else set()
+    if isinstance(run_id, str):
+        try:
+            from coordinator_core.ops.dispatch_emit import run_token
+
+            for claimed in (True, False):
+                record = run_token._read(run_token._record_path(root, run_id, claimed=claimed))
+                sid = record.get("session_id") if isinstance(record, dict) else None
+                if isinstance(sid, str) and sid:
+                    own.add(sid)
+        except Exception:  # noqa: BLE001 -- an unreadable token names no extra self session
+            pass
+    return own
+
+
 def _peer_held_left(peer_held: dict) -> dict:
     """``{"peer_held_left": [{path, sessions}]}`` for every peer-held path, sorted; empty when none."""
     if not peer_held:
@@ -1539,9 +1559,12 @@ def _peer_held_left(peer_held: dict) -> dict:
 def _peer_held(
     root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object,
     *, plan_rel: Optional[str] = None, run_base: Optional[str] = None, minted_before: Optional[tuple] = None,
+    self_sessions: Collection = (),
 ) -> dict:
     """``{path: [peer session ids]}`` (DR-462) a live peer session's touch claim or a senior live peer
     run's declared writes holds over ``paths``; ``minted_before`` is ``_own_run_seniority``'s answer.
+    A touch claim by ``own_sid`` or any of ``self_sessions`` (the run's firing session) is self, never a
+    peer; another run's declared writes still hold even from that session.
     A bare declaration never holds a path this run's own checkpoint landed; a live touch claim still
     does. A claim read that fails answers no hold."""
     held: dict = {}
@@ -1564,7 +1587,7 @@ def _peer_held(
                 continue
             kinds = (found.recorded_kind or {}).get(path, {})
             for sid in claimants:
-                if sid == own_sid or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
+                if sid == own_sid or sid in self_sessions or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
                     continue
                 try:
                     live = liveness.session_live(sid, str(root))
@@ -2620,7 +2643,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     peer_held = _peer_held(
         root, carried_probe, session_id, rid, script_path,
         plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
-        minted_before=own_seniority,
+        minted_before=own_seniority, self_sessions=_firing_sessions(root, rid, session_id),
     )
     for p in candidates:
         if p in peer_held:
@@ -2870,9 +2893,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             found.update({p: ", ".join(sorted(s)) for p, s in held.items() if s})
             return found
 
+        from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
+
         refusal, shipped_summary = shipped_gate(
             root, note_text, landing_paths=paths, deleted_paths=deleted, withheld_paths=gate_withheld,
             own_paths=set(declared), row_of=row_of, owners=_owners, run_id=sibling_run_id or rid,
+            widened=widened_paths(ask_run_dir) if ask_run_dir is not None else (),
         )
         if refusal is not None:
             _remove(root, receipt_paths)

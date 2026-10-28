@@ -94,14 +94,14 @@ def test_permission_error_skipped_not_raised(tmp_path, monkeypatch):
     locked = _session(root, "proj", "locked", 10)
     ok = _session(root, "proj", "ok", 10)
 
-    real = pct.shutil.rmtree
+    real = pct._rmtree_tolerant
 
-    def fake(path, **kw):
+    def fake(path):
         if str(path).endswith("locked"):
             raise PermissionError("locked")
-        return real(path, **kw)
+        return real(path)
 
-    monkeypatch.setattr(pct.shutil, "rmtree", fake)
+    monkeypatch.setattr(pct, "_rmtree_tolerant", fake)
     assert pct.prune(roots=[(root, 2, 7)]) == 1
     assert locked.exists() and not ok.exists()
 
@@ -251,6 +251,11 @@ def test_drain_ignores_budget_and_throttle(temp):
 
 def test_main_drain_flag(temp, monkeypatch):
     calls = []
+    import coordinator_core.ops.cruft_sweep as cs
+
+    monkeypatch.setattr(cs, "box_live_session_ids", lambda: frozenset({"L"}))
     monkeypatch.setattr(pct, "prune", lambda *a, **k: calls.append((a, k)) or 0)
     assert pct.main(["x", "--drain", "sid", "/r"]) == 0
-    assert calls == [(("sid",), {"repo_root": "/r", "drain": True})]
+    assert calls == [
+        (("sid",), {"repo_root": "/r", "drain": True, "live_session_ids": frozenset({"L"})})
+    ]

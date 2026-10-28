@@ -54,13 +54,15 @@ class FakeGit:
                 else:
                     out.append(f"{line} missing")
             return SimpleNamespace(ok=True, stdout="\n".join(out) + "\n")
-        return SimpleNamespace(ok=True, stdout="\0".join(self.touched) + "\0")
+        return SimpleNamespace(ok=True, stdout="".join(f"diff --git a/{p} b/{p}\n" for p in self.touched))
 
 
 @pytest.fixture
 def git(monkeypatch):
     fake = FakeGit()
     monkeypatch.setattr(op, "run_git", fake)
+    from coordinator_core.ops import review_reachability
+    monkeypatch.setattr(review_reachability, "_handler", lambda params, repo_root=None: {"entries": [], "click_paths": []})
     return fake
 
 
@@ -807,7 +809,7 @@ def test_universe_findings_persist_in_a_schema_valid_sidecar(tmp_path, git):
     r = op._record_handler({"plans": [a], "phase": "prep", "named_set": True, "universe": True}, repo_root=root)
     assert len(_seams(r)) == 1
     doc = yaml.safe_load((root / "docs/plans/a.seam.yaml").read_text(encoding="utf-8"))
-    assert [f["class"] for f in doc["findings"]] == ["missing-seam"] and doc["schema_version"] == "1.1.0"
+    assert [f["class"] for f in doc["findings"]] == ["missing-seam"] and doc["schema_version"] == "1.2.0"
     assert doc["findings"][0]["blocking"] is False
     _validate(doc)
 

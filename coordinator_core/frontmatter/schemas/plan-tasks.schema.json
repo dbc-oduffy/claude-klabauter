@@ -359,6 +359,10 @@
       "type": "boolean",
       "description": "Optional. True when executing this row holds a scarce slot (a long-running or memory-heavy process); the emit brief surfaces it to the Group EM. Absence means the row holds none."
     },
+    "em_run": {
+      "type": "boolean",
+      "description": "Optional. True when only the EM can run this row because no executor holds the capability (e.g. a UBT or editor launch). Consumer (claude-klabauter, landing separately): the engine's post-fire product-edit guard, which is to key on it and admit the EM's write to the row's declared surface while the run is live. Absence means an ordinary executor row."
+    },
     "blocked_on": {
       "type": "object",
       "properties": {

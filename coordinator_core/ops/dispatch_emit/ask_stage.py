@@ -95,6 +95,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     commit_pathspec_or_none,
     terminal_test_scope,
 )
+from coordinator_core.ops.dispatch_emit.inventory_mint import strip_literal_pathspec
 from coordinator_core.ops import scratch_delete
 from coordinator_core.ops.requirement_register import pin_drift_reason, plan_pin_drift
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
@@ -113,7 +114,12 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
 )
 from coordinator_core.ops.dispatch_emit import review_floor, run_notes
 from coordinator_core.ops.dispatch_emit.requirements_ledger import NOTES_FILE
-from coordinator_core.ops.dispatch_emit.wave_map import build_waves, cap_waves, dag_from_waves
+from coordinator_core.ops.dispatch_emit.wave_map import (
+    _RUNTIME_ORDER_GATE_KINDS,
+    build_waves,
+    cap_waves,
+    dag_from_waves,
+)
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
 
@@ -290,6 +296,17 @@ def _reviewable(declared: Sequence[str]) -> tuple[str, ...]:
 
     skip = (*PRODUCT_FILE_EXCLUDED_PREFIXES, "scratch/")
     return tuple(p for p in declared if not p.replace("\\", "/").removeprefix("./").startswith(skip))
+
+
+def _widen_with_existing_tests(paths: Sequence[str], root: Path) -> list[str]:
+    """`paths` verbatim, plus each stem-derived test candidate that is a file in the tree.
+    A candidate absent from the tree is never emitted: only a declared path may name a file to be created."""
+    declared = list(paths)
+    keep = set(declared)
+    return [
+        p for p in _widen_with_test_candidates(declared, root)
+        if p in keep or (root / strip_literal_pathspec(p)).is_file()
+    ]
 
 
 def _test_scope(waves, root: Path) -> tuple[tuple[str, ...], Optional[dict]]:
@@ -840,6 +857,7 @@ def _excluded_by_ask(sizing: Mapping, writes: Sequence[str]) -> dict[str, str]:
 
 LIVE_RUN_WRITE_OVERLAP = "live-run-write-overlap"
 STAGE_RECEIPT_MISSING = "stage-receipt-missing"
+STAGE_CLAIM_STALLED = "stage-claim-stalled"
 
 
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> None:
@@ -1176,9 +1194,7 @@ def stage(
                             text = text.rstrip() + "\n\n" + line
             _write(brief, text)
             brief_sizes[row.id] = len(text.encode("utf-8"))
-            paths = _widen_with_test_candidates(
-                commit_pathspec_or_none([row]) or [], root
-            )
+            paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
             declared.extend(paths)
             manifest_rows.append(
                 ManifestRow(
@@ -1276,7 +1292,7 @@ def stage(
         # Twin of emit.py prior_landed_rows -> prior_surface. Trap: the review base is the halted
         # run's base, so a dropped row landed before that base adds no hunk.
         for row in dropped_landed:
-            review_paths.extend(_widen_with_test_candidates(commit_pathspec_or_none([row]) or [], root))
+            review_paths.extend(_widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root))
 
     register_rows = [
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
@@ -1347,6 +1363,8 @@ def _unstaged_row_reasons(
         if not reason and rid in excl:
             e = excl[rid]
             reason = " ".join(str(x) for x in (e.get("reason"), e.get("detail")) if x)
+        if not reason:
+            reason = _held_behind_reason(raw, raw_by_id, resume_snap)
         if not reason and resume_snap is None:
             reason = "outside the caller's only_rows"
         if reason:
@@ -1356,11 +1374,30 @@ def _unstaged_row_reasons(
     if unreasoned:
         raise AskStageError(
             f"{ROWS_DROPPED_WITHOUT_REASON}: refire of {plan_posix} leaves unfinished row(s) "
-            f"{sorted(unreasoned)} unstaged with no recorded reason; refire through dispatch.ask_gate, "
-            "which records one per row",
+            f"{sorted(unreasoned)} unstaged with no recorded reason; add each id to only_rows, or "
+            "rewrite the resume snapshot with a reason for it",
             plan_path=plan_posix,
         )
     return tuple(dropped)
+
+
+def _held_behind_reason(
+    raw: Mapping, raw_by_id: Mapping[str, Mapping], resume_snap: Optional[resume_snapshot.Snapshot]
+) -> str:
+    """`held behind <id> (<gate_kind>)` when the row carries a runtime-order edge onto a predecessor
+    that is itself unfinished (dispatchable and not landed per the snapshot), else ``""``."""
+    held: list[str] = []
+    for edge in raw.get("depends_on") or ():
+        if not isinstance(edge, Mapping) or edge.get("gate_kind") not in _RUNTIME_ORDER_GATE_KINDS:
+            continue
+        pred = str(edge.get("chunk"))
+        pred_raw = raw_by_id.get(pred)
+        if pred_raw is None or (resume_snap is not None and pred in resume_snap.not_to_run):
+            continue
+        if (with_canonical_disposition(pred_raw) or {}).get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
+            continue
+        held.append(f"{pred} ({edge.get('gate_kind')})")
+    return "held behind " + ", ".join(held) if held else ""
 
 
 def _record_staging_drops(record: Path, run_id: str, dropped: Sequence[Mapping[str, str]]) -> None:
@@ -1712,7 +1749,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if escaping is not None:
             return {"error": escaping}
         prior_dir.mkdir(parents=True, exist_ok=True)
-        if not ask_stage_receipt.claim(prior_dir, digest):
+        try:
+            claimed = ask_stage_receipt.claim(prior_dir, digest)
+        except ask_stage_receipt.ClaimCreateStalled as exc:
+            return {"error": f"{STAGE_CLAIM_STALLED}: {exc}. Nothing was staged; re-fire the ask."}
+        if not claimed:
             # A racing claim of other params has no matching digest, so `in_flight` is None; the key still answers.
             return {ask_stage_receipt.STAGE_IN_FLIGHT_KEY: ask_stage_receipt.in_flight(prior_dir, digest) or {}}
     stamp = None

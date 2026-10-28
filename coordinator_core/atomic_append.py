@@ -105,7 +105,11 @@ def _open_append_fd_windows(path: str) -> int:
     return msvcrt.open_osfhandle(int(handle), os.O_APPEND)
 
 
-def append_line(sink: "Path | str", encoded: bytes) -> None:
+#: Retained lines a stalled sink's writer may hold; past it a retained line drops like any other.
+_RETAIN_MAX = 256
+
+
+def append_line(sink: "Path | str", encoded: bytes, retain: bool = False) -> None:
     """Atomically append ``encoded`` (already newline-terminated) to ``sink``.
 
     A single write of one pre-encoded line, using the platform's genuinely
@@ -127,11 +131,18 @@ def append_line(sink: "Path | str", encoded: bytes) -> None:
     line names it, and the line is dropped without raising; later calls to
     that sink drop at once until its writer returns. An error raised inside
     the deadline is re-raised here.
+
+    ``retain=True`` marks a line that must not be lost to a stall (an op's completion
+    row): while the sink is stalled it is queued behind the wedged write, without
+    waiting, and lands when that writer returns.
     """
     sink_str = str(sink)
     job = _Job(encoded)
     with _registry_lock:
         if sink_str in _stalled:
+            held = _writers.get(sink_str)
+            if retain and held is not None and held.qsize() < _RETAIN_MAX:
+                held.put(job)
             return
         w = _writers.get(sink_str)
         if w is None:
@@ -233,9 +244,12 @@ _force_async = False
 
 def _drain_worker(q: "queue.Queue") -> None:
     while True:
-        sink, encoded = q.get()
+        sink, encoded, retain = q.get()
         try:
-            append_line(sink, encoded)
+            if retain:  # plain call below keeps the 2-arg shape that test guards wrap
+                append_line(sink, encoded, True)
+            else:
+                append_line(sink, encoded)
         except Exception:
             pass
         finally:
@@ -264,17 +278,17 @@ def flush(timeout: float) -> None:
     done.wait(timeout)
 
 
-def append_line_bounded(sink: "Path | str", encoded: bytes) -> None:
+def append_line_bounded(sink: "Path | str", encoded: bytes, retain: bool = False) -> None:
     """Hand ``encoded`` to a per-process writer thread; never blocks the caller.
 
     For telemetry on an op's critical path: a stalled ``CreateFileW`` (AV
     minifilter, contended sink) must delay only the writer thread. A full queue
-    drops the line. Never raises.
+    drops the line. ``retain`` is ``append_line``'s. Never raises.
     """
     try:
         if "pytest" in sys.modules and not _force_async:
-            append_line(sink, encoded)
+            append_line(sink, encoded, retain)
             return
-        _get_queue().put_nowait((str(sink), encoded))
+        _get_queue().put_nowait((str(sink), encoded, retain))
     except Exception:
         pass

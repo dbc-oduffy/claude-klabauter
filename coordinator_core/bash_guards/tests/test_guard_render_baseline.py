@@ -45,6 +45,7 @@ _ROWS: List[CorpusRow] = CONFINEMENT_ROWS + ADVISORY_REWRITE_ROWS + PLATFORM_CON
 #: Guards with no EM-audience message branch, each with the reason it cannot speak.
 #: Exact-set pinned: a guard leaving this set needs a speaking row and a fixture entry.
 _SILENT_FOR_EM: Dict[str, str] = {
+    "block-em-post-fire-product-write": "corpus fire row names no path owned by a live run (owns_path scope); setup lives in guard_message_corpus.py",
     "block-subagent-stash-creation": "subagent-cohort guard",
     "block-subagent-plan-body-bash-write": "subagent-cohort guard",
     "block-reviewer-bash-outside-allowlist": "reviewer-cohort guard",

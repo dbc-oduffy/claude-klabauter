@@ -322,34 +322,10 @@ Unset reads as on for an author box and off for a consumer box; a consumer opts 
 `machine-local set coordinator.feature.out_of_repo_write_block off`. Clear it with
 `machine-local unset coordinator.feature.out_of_repo_write_block`.
 
-Distinct from both, and not interchangeable with either:
-`.coordinator-doctrine-edit-approved` gates only while
-`machine-local set coordinator.feature.doctrine_edit_gate on` is in effect (off by
-default on every profile); when on, it is read at the **hook process's own cwd repo
-root** — the approval file lives **under that repo's git dir**
-(`<git-dir>/.coordinator-doctrine-edit-approved`), never at the repo root, so no commit
-can carry an approval into a clone. A root-level file is never an approval: the guard unlinks it on the call that sees it
-and denies that call with a message saying it removed a root-level file; the next call
-reads the git-dir sentinel normally. If the unlink fails, the deny stays and the message
-names the file as not an approval.
-The PM creates it out of band:
-
-- bash: `touch "$(git rev-parse --git-dir)/.coordinator-doctrine-edit-approved"`
-- PowerShell: `New-Item -ItemType File -Force "$(git rev-parse --git-dir)/.coordinator-doctrine-edit-approved"`
-
-`guard_doctrine_surface_edits._sentinel_state()` is fed by `_git_root()`,
-which calls `resolve_repo_root()` with no argument, and that resolver's own docstring
-resolves against the process's current cwd. It is not sited "at a target repo's root";
-it is same-repo-only relative to wherever the hook process is running, and the
-protected-path set (`_protected_paths()`) is composed from that same cwd-resolved root.
-It is PM-created and covers every edit inside the PM turn it was touched for, never
-longer than 30 minutes. It disarms itself: at the next PM turn the guard deletes the
-sentinel, and a fresh touch re-arms. The EM never removes it. It does
-**not** clear a cross-repo write, and it is orthogonal to — never additive with — the
-`allow-xrepo-write-*` markers above: because the protected set is composed from the
-session's own root, this guard does not even fire on a peer repo's
-`coordinator.local.md`, so there is no scenario in which a session needs both markers
-together.
+Doctrine-surface edits are not an unlock. `guard_doctrine_surface_edits` allows an edit to an
+always-loaded doctrine surface and emits an advisory naming the byte-budget and
+unprompted-rewrite checks the run answers itself; there is no approval file or key to create
+(`docs/decisions/DR-468-no-pm-only-unlocks-r1-and-r2-override.md`).
 
 An unanchored session — one with no SessionStart record — fails **open** on both
 surfaces, identically. That is deliberate, not a hole: it is the state a hand-constructed
@@ -465,6 +441,7 @@ rationale.
 | `COORDINATOR_OVERRIDE_GIT_CLEAN` | `destructive-git-clean` (`check_destructive_git_clean`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_OVERRIDE_GIT_REVERT` | `destructive-git-revert` (`check_destructive_git_revert`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_OVERRIDE_BLANKET_ADD` | `blanket-git-add` (`check_blanket_git_add`) | `bash_guards/dispatch_checks.py` |
+| `COORDINATOR_OVERRIDE_VENV_CREATION` (launch-time key) | `block-venv-creation` | `bash_guards/block_venv_creation.py` |
 | `COORDINATOR_OVERRIDE_RAW_PID_LIVENESS` | `check-raw-pid-liveness` | `bash_guards/check_raw_pid_liveness.py` |
 | `COORDINATOR_OVERRIDE_ILLEGAL_FILENAME` (Bash leg) | `block-illegal-filename` | `bash_guards/block_illegal_filename.py` |
 | `COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE` | `check_staged_pathspec_divergence` | `bash_guards/commit_tripwires.py` |

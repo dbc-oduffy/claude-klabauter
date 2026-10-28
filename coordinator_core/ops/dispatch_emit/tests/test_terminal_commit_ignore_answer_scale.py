@@ -112,6 +112,16 @@ def test_collapsed_directory_git_does_not_report_refuses_to_answer(repo):
     assert terminal_commit._ignored_among_left(repo, left, None) is None
 
 
+def test_unreported_collapsed_directory_with_ignored_and_force_added_member_makes_one_spawn_and_none(repo, spy):
+    _write(repo, f"{BULK}/forced.txt")
+    _git(repo, "add", "-f", f"{BULK}/forced.txt")
+    left = [f"{BULK}/forced.txt", *_bulk(20)]
+
+    assert terminal_commit._ignored_among_left(repo, left, None) is None
+    assert len(spy) == 1
+    assert _stdin_lines(spy) == 1
+
+
 def test_spawn_failure_still_returns_none(repo, monkeypatch):
     class Failed:
         timed_out = True

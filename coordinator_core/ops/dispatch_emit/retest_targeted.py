@@ -83,14 +83,25 @@ def _run_argv(
     """Exit code, or ``LAUNCH_TIMED_OUT``. Trap: the timeout kills only the direct child; the log is a
     file so a surviving grandchild never blocks this call."""
     limit = RETEST_CHILD_TIMEOUT_SECS if timeout is None else timeout
+    from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn, register_spawn
+
+    workers = next((int(argv[i + 1]) for i, t in enumerate(argv[:-1]) if t == "-n" and argv[i + 1].isdigit()), 1)
+    admission = admit_before_spawn("retest-targeted-pytest", 0.75 + workers * 0.15)
+    if not admission.admitted:
+        raise OSError(f"admission: {admission.reason}")
     sink = open(log, "ab" if append else "wb") if log is not None else subprocess.DEVNULL
     try:
-        return subprocess.run(
+        proc = subprocess.Popen(
             argv, cwd=str(cwd), creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL,
-            stdout=sink, stderr=subprocess.STDOUT, timeout=limit,
-        ).returncode
-    except subprocess.TimeoutExpired:
-        return LAUNCH_TIMED_OUT
+            stdout=sink, stderr=subprocess.STDOUT,
+        )
+        register_spawn(admission.key, admission.peak_gib, proc.pid)
+        try:
+            return proc.wait(timeout=limit)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            return LAUNCH_TIMED_OUT
     finally:
         if log is not None:
             sink.close()
@@ -235,6 +246,53 @@ def _drop_tier_options(tokens: list[str]) -> list[str]:
     return out
 
 
+#: Named targets per pytest session. Measured: 277 nodes under ``-n 4`` peaked 574 MiB tree RSS.
+RETEST_MAX_NODES = 100
+
+#: Worker ceiling per session; 3 workers at the ~0.5 GiB/worker seen under a -n 7 engine run stay under
+#: 2 GiB per invocation.
+RETEST_MAX_WORKERS = 3
+
+
+def worker_cap() -> int:
+    """``min(physical_cores / 2, usable_RAM_GB * 1024 / 150MB, RETEST_MAX_WORKERS)``, at least 1."""
+    import psutil
+
+    cores = (psutil.cpu_count(logical=False) or 2) // 2
+    ram = int(psutil.virtual_memory().available / 2**20 / 150)
+    return max(1, min(cores, ram, RETEST_MAX_WORKERS))
+
+
+def _cap_workers(tokens: list[str], cap: int) -> list[str]:
+    """``tokens`` with any ``-n``/``--numprocesses`` count clamped to ``cap`` (``auto`` becomes ``cap``)
+    and ``--maxprocesses`` dropped; a command naming no worker option is unchanged."""
+    out: list[str] = []
+    skip = False
+    for i, tok in enumerate(tokens):
+        if skip:
+            skip = False
+        elif tok in ("-n", "--numprocesses") and i + 1 < len(tokens):
+            out += [tok, _clamp(tokens[i + 1], cap)]
+            skip = True
+        elif tok.startswith("--numprocesses="):
+            out.append("--numprocesses=" + _clamp(tok.split("=", 1)[1], cap))
+        elif re.fullmatch(r"-n\w+", tok):
+            out.append("-n" + _clamp(tok[2:], cap))
+        elif tok == "--maxprocesses":
+            skip = True
+        elif not tok.startswith("--maxprocesses="):
+            out.append(tok)
+    return out
+
+
+def _clamp(value: str, cap: int) -> str:
+    return str(min(int(value), cap)) if value.isdigit() else str(cap)
+
+
+def _chunks(group: list[str], size: int = RETEST_MAX_NODES) -> list[list[str]]:
+    return [group[i:i + size] for i in range(0, len(group), size)] or [group]
+
+
 def _scopes_conflict(root: Path, scopes: dict[str, list[str]]) -> bool:
     """True when two or more scopes each carry their own ``conftest.py`` (a bare ``from conftest import``
     would collide in one session)."""
@@ -244,8 +302,10 @@ def _scopes_conflict(root: Path, scopes: dict[str, list[str]]) -> bool:
 def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "tuple[list[str], list[list[str]]] | str":
     """``(base, groups)``: the command prefix and the test groups it runs, one session per group. Both
     arms share one grouping: every node id in one group (input order) unless the scopes' conftests
-    collide, then one group per scope. A declared ``targeted_test_launcher`` (pinned interpreter, else
-    this one) supplies the prefix, else ``fast_test_cmd`` minus its collection roots and markers; its
+    collide, then one group per scope; each group is cut into sessions of at most ``RETEST_MAX_NODES``
+    ids and the command's worker count is clamped to ``worker_cap()``. A declared
+    ``targeted_test_launcher`` (pinned interpreter, else this one) supplies the prefix, else
+    ``fast_test_cmd`` minus its collection roots and markers; its
     ``--tier`` option is dropped unless
     ``keep_tier`` (the fallback when a runner needs it). A string return is the reason no command could
     be built."""
@@ -256,6 +316,8 @@ def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "t
     for t in tests:
         scopes.setdefault(_scope_of(root, t), []).append(t)
     groups = list(scopes.values()) if _scopes_conflict(root, scopes) else [tests]
+    groups = [chunk for group in groups for chunk in _chunks(group)]
+    cap = worker_cap()
 
     declared = resolve_validation_cmd.read_local_md_key(str(root), ti.LAUNCHER_KEY).strip()
     if declared:
@@ -264,11 +326,11 @@ def _launch_plan(root: Path, tests: list[str], *, keep_tier: bool = False) -> "t
             return f"{ti.LAUNCHER_KEY} {declared!r} is not a repo-relative file that exists"
         pin = ti.resolve_targeted_test_python(root)
         python = pin.command if pin.command and pin.defect is None else sys.executable
-        return [python, *shlex.split(declared)], groups
+        return [python, *_cap_workers(shlex.split(declared), cap)], groups
     resolved = resolve_validation_cmd.resolve_fast_test_cmd(str(root))
     if resolved.returncode != 0:
         return f"fast_test_cmd unresolved: {resolved.stderr.strip()}"
-    base = _strip_collection_roots(root, resolved.stdout.strip())
+    base = _cap_workers(_strip_collection_roots(root, resolved.stdout.strip()), cap)
     return (base if keep_tier else _drop_tier_options(base)), groups
 
 
@@ -477,8 +539,7 @@ def main(
         failed_cmds: list[str] = []
         broken_msgs: list[str] = []
         kept: "tuple[list[str], list[list[str]]] | str | None" = None
-        # One session per conftest-bearing scope when two or more collide, else exactly one; the
-        # partition is the conftest-collision floor, so nothing further batches.
+        # One session per conftest-bearing scope when two or more collide, each cut to RETEST_MAX_NODES.
         sessions = [[*base, *group] for group in groups]
         for n, (argv, group) in enumerate(zip(sessions, groups)):
             offset = _log_size(log_path) if n > 0 else 0

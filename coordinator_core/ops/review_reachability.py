@@ -116,12 +116,36 @@ def _diff_added(
     res = run_git(args + ["--"])
     if res.returncode != 0:
         return None
+    return parse_diff_added(res.stdout)
+
+
+def diff_names(text: str) -> list[str]:
+    """Every path a `git diff -U0 --no-renames` text names, from its `diff --git a/X b/X` headers
+    (deletions and binary files included); a C-quoted header (a `"` or backslash in the path) is
+    unquoted."""
+    names: list[str] = []
+    for ln in text.splitlines():
+        if ln.startswith('diff --git "a/'):
+            rest = ln[len("diff --git "):]
+            cut = rest.find('" "b/')
+            if cut > 0:
+                names.append(re.sub(r"\\(.)", lambda m: {"t": "\t", "n": "\n"}.get(m.group(1), m.group(1)), rest[3:cut]))
+        elif ln.startswith("diff --git a/"):
+            rest = ln[len("diff --git "):]
+            n = (len(rest) - 5) // 2
+            if n > 0 and rest[2 + n:5 + n] == " b/" and rest[2:2 + n] == rest[5 + n:]:
+                names.append(rest[2:2 + n])
+    return names
+
+
+def parse_diff_added(text: str) -> tuple[dict[str, list[str]], set[str]]:
+    """`_diff_added`'s parse of a caller-supplied `git diff -U0` text."""
     added: dict[str, list[str]] = {}
     created: set[str] = set()
     cur = None
     in_header = False
     from_null = False
-    for ln in res.stdout.splitlines():
+    for ln in text.splitlines():
         if in_header:
             if ln.startswith("--- "):
                 from_null = ln.startswith("--- /dev/null")
@@ -375,7 +399,8 @@ def _summary(ents: list[dict], cps: list[dict]) -> str:
 @register_op("review.reachability")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Params: `repo_root`, `base_sha` (required); `worktree`, `plan`, `paths`, `head_sha`,
-    `click_paths`, `entry_kinds` (optional). Returns the `reachability-result` shape; any failure
+    `click_paths`, `entry_kinds`, `diff_text` (optional; a `git diff -U0 --no-renames` the caller
+    already ran, which replaces this op's own git spawn). Returns the `reachability-result` shape; any failure
     is the same shape with empty lists and `error` set."""
     t0, cpu0 = time.perf_counter(), time.process_time()
     root_raw = params.get("repo_root") or (str(repo_root) if repo_root else "")
@@ -399,7 +424,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         writes = [str(x).replace("\\", "/").removeprefix("./") for x in params["paths"]]
     clicks = params.get("click_paths") if params.get("click_paths") is not None else plan_clicks
 
-    diffed = _diff_added(root, base, params.get("head_sha"), worktree)
+    supplied = params.get("diff_text")
+    diffed = (parse_diff_added(supplied) if isinstance(supplied, str)
+              else _diff_added(root, base, params.get("head_sha"), worktree))
     if diffed is None:
         return _empty(f"git diff failed against base_sha {base}")
     added, created = diffed

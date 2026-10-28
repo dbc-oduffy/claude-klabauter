@@ -1471,6 +1471,46 @@ def test_scout_that_returns_no_exit_code_is_a_baton_naming_a_missing_exit():
     )
 
 
+def test_scout_with_no_exit_code_is_redispatched_once_and_the_second_reply_sizes_the_row():
+    replies = [_scout("M"), _scout("M", exit_code=0)]
+    result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: replies.pop(0)})
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["reason"].startswith("sized at state/sizings/")
+    assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 2
+
+
+def test_scout_with_no_exit_code_twice_hands_back_naming_its_own_reason_after_one_retry():
+    replies = [_scout("M"), _scout("M", reason="could not run: no shell")]
+    result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: replies.pop(0)})
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["reason"] == (
+        "intent M (size step failed: exit missing: the scout ran no size-chain command; "
+        "could not run: no shell; (no stderr))"
+    )
+    assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 2
+
+
+def test_scout_that_ran_the_fail_command_and_named_a_reason_is_not_redispatched():
+    result, _ = _run(
+        [("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("M", reason="no shell")}
+    )
+    assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 1
+
+
+def test_scout_with_an_exit_code_is_not_redispatched():
+    result, _ = _run(
+        [("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("L", exit_code=3)}
+    )
+    assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 1
+
+
+def test_emitted_script_redispatches_a_size_scout_without_an_exit_code_once():
+    script = _compose()
+    assert "Number.isInteger(scouted.exit_code)" in script
+    assert script.count("_sizeCall(row, true)") == 1
+    assert "reason" in gc.stages.SIZE_SCOUT_SCHEMA["properties"]
+
+
 def test_scout_with_no_size_hands_back_baton_without_an_assemble_call():
     script_by_kind = {"triage": _m_triage(["r0"]), "size": lambda rid: {"reason": "refused"}}
     result, _ = _run([("b0", ["r0"])], script_by_kind)
@@ -1603,7 +1643,7 @@ def test_golden_size_scout_hands_back_the_baton_from_its_own_assemble_reply():
     assert "_sizeAssembleCall" not in script and "_sizePending" not in script
     assert "_recordCall('size-assemble')" not in script and "_recordCall('size')" in script
     assert "label: 'size-assemble'" not in script
-    to_size = script[script.index("const scouted = await _issue(batchState.id, rid, () => _sizeCall(row));"):]
+    to_size = script[script.index("let scouted = await _issue(batchState.id, rid, () => _sizeCall(row));"):]
     to_size = to_size[:to_size.index("async function _closeBatch")]
     assert "scouted.exit_code === 0" in to_size
     assert "row.sizingPath = _sizingPath(scouted, rid);" in to_size
@@ -2692,6 +2732,9 @@ def test_retire_verdict_gate_is_in_the_emitted_script():
 def test_size_fail_reason_names_missing_exit_and_exit_code_with_stderr_tail():
     assert gc.size_fail_reason({}) == "exit missing: the scout ran no size-chain command; (no stderr)"
     assert gc.size_fail_reason({"exit_code": 1, "stderr": "x" * 400}) == "exit 1: " + "x" * 300
+    assert gc.size_fail_reason({"reason": "no shell"}) == (
+        "exit missing: the scout ran no size-chain command; no shell; (no stderr)"
+    )
 
 
 def test_fix_target_reached_through_verify_nodes_is_found_and_ambiguity_refused():

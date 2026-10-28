@@ -86,6 +86,17 @@ def test_sibling_run_claims_spawns_once_for_any_halted_count(tmp_path, monkeypat
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("count", [1, 6])
+def test_co_declared_peer_holds_reads_kept_blobs_once_for_any_halted_count(tmp_path, monkeypatch, count):
+    from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+
+    paths = _repo_with_halted_runs(tmp_path, count)
+    calls = _count_fetches(monkeypatch)
+    holds = peer_hunk_gate.co_declared_peer_holds(tmp_path, _rid(5, "ffffff"), paths, paths)
+    assert sorted(p for p, _r in holds) == sorted(paths)  # every halted run still holds its path
+    assert len(calls) == 1
+
+
 def test_a_released_run_is_still_released_in_the_batch(tmp_path, monkeypatch):
     """Both sides: the run whose kept blob is at HEAD frees its path; the others still hold."""
     paths = _repo_with_halted_runs(tmp_path, 3)

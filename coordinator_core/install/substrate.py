@@ -3369,6 +3369,7 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
 
         # --- Step C10b-ii: claude-klabauter-sourced seed-wiki sibling leg (DR-290 form 2) ---
         _install_claude_klabauter_seed_wiki_page(claude_klabauter_root, settings_home_path, check_only)
+        _install_claude_klabauter_guard_routes_folder(claude_klabauter_root, settings_home_path, check_only)
 
         if setup_only:
             seeded_verb = "would be seeded" if check_only else "seeded"
@@ -5140,6 +5141,62 @@ def _install_claude_klabauter_seed_wiki_page(claude_klabauter_root: Path, settin
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
+
+
+#: Repo-root-relative source folder of the generated guard-routes wiki; mirrored
+#: by ``_install_claude_klabauter_guard_routes_folder`` to
+#: ``<settings_home>/coordinator-claude/docs/wiki/guard-routes/``.
+_CLAUDE_KLABAUTER_GUARD_ROUTES_SRC_RELATIVE = "docs/reference/guard-routes"
+
+
+def _install_claude_klabauter_guard_routes_folder(claude_klabauter_root: Path, settings_home_path: Path, check_only: bool) -> None:
+    """Mirror ``<claude_klabauter_root>/docs/reference/guard-routes/*.md`` into
+    ``<settings_home>/coordinator-claude/docs/wiki/guard-routes/``.
+
+    A mirror, not an overlay: destination ``*.md`` files the source lacks are
+    removed, because a section left behind for a retired guard key is a wrong
+    route. Non-``.md`` files in the destination are never touched.
+    """
+    src_dir = claude_klabauter_root / _CLAUDE_KLABAUTER_GUARD_ROUTES_SRC_RELATIVE
+    dst_dir = settings_home_path / "coordinator-claude" / "docs" / "wiki" / "guard-routes"
+
+    if not src_dir.is_dir():
+        print(
+            f"[install-substrate] WARNING: claude-klabauter guard-routes folder missing at {src_dir} "
+            "-- skipping (EM guard-denial route keys will not resolve until it is restored)",
+            file=sys.stderr,
+        )
+        return
+
+    sources = sorted(p for p in src_dir.glob("*.md") if p.is_file())
+    wanted = {p.name for p in sources}
+    stale = (
+        sorted(p for p in dst_dir.glob("*.md") if p.is_file() and p.name not in wanted)
+        if dst_dir.is_dir()
+        else []
+    )
+
+    if check_only:
+        drift = [
+            p.name for p in sources
+            if not ((dst_dir / p.name).is_file() and filecmp.cmp(p, dst_dir / p.name, shallow=False))
+        ]
+        if not drift and not stale:
+            print(f"[install-substrate] check: guard-routes folder up to date -> {dst_dir} (no-op)")
+        else:
+            print(
+                f"[install-substrate] would: mirror guard-routes folder -> {dst_dir} "
+                f"({len(drift)} to copy, {len(stale)} stale to remove)"
+            )
+        return
+
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for p in sources:
+        target = dst_dir / p.name
+        if not (target.is_file() and filecmp.cmp(p, target, shallow=False)):
+            shutil.copy2(p, target)
+    for p in stale:
+        p.unlink()
 
 
 _FNM_MANUAL_INSTALL = (

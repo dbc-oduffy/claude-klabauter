@@ -313,9 +313,11 @@ from coordinator_core.benchmarks.process_time import (
     batched_process_time_ms,
 )
 from coordinator_core.benchmarks.isolated_clone import (
+    close_clone_job,
     mkdtemp_for_clone,
     reap_processes_under,
     rmtree_or_raise,
+    spawn_clone_server,
 )
 from coordinator_core.warm import breadcrumb
 from coordinator_core.session.core import stable_pid_alive
@@ -560,18 +562,11 @@ def warm_engine_root() -> Iterator[Path]:
     tmp_parent = mkdtemp_for_clone(source_root, prefix="commit-op-wallclock-")
     isolated_root = tmp_parent / "clone"
     proc: Optional[subprocess.Popen] = None
+    job = None
     try:
         _hardlink_coordinator_core(source_root, isolated_root)
         _write_isolated_stamp(isolated_root)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "coordinator_core.warm.server"],
-            cwd=str(isolated_root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=_CREATE_NO_WINDOW,
-        )
+        proc, job = spawn_clone_server(isolated_root)
         crumb = _wait_for_live_breadcrumb(isolated_root, _BOOT_WAIT_DEADLINE_SECS)
         if crumb is None:
             if proc.poll() is None:
@@ -592,10 +587,8 @@ def warm_engine_root() -> Iterator[Path]:
             except OSError:
                 pass
         # The breadcrumb pid is NOT the whole process set this fixture owns:
-        # `server.py`'s boot spawns the http listener DETACHED via
-        # `supervisor.ensure_listener`, so it survives the terminate above and
-        # holds this clone open against the removal below. Reap by ROOT, the
-        # one predicate a deliberately-reparented process still answers to.
+        # reap by ROOT, the one predicate a reparented process still answers to.
+        close_clone_job(job)
         reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=isolated_root), ignore_errors=True)
         rmtree_or_raise(tmp_parent, label="commit_op_engine_root", reaped=reaped)

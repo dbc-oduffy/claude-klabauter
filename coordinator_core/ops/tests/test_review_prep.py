@@ -632,6 +632,20 @@ def test_worktree_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo, pee
     assert set(reply) >= set(rp._STORED_KEYS) - {"sidecar_path"} and "peer_bases" not in reply
 
 
+def test_range_mode_whole_run_prep_prefix_has_the_snapshot_review_reverify_looks_up(repo):
+    from coordinator_core.ops import review_reverify as rr
+
+    base = _peer_scenario(repo, PEER, None)
+    head = _commit_as(repo, "v = 0\npeer = 1\nown = 1\n", "own edit", SESSION, DELIVERABLE)
+    prefix = f"p-run-{base[:12]}-prep"
+    for _ in range(2):
+        reply = _prep(repo, base, head=head)
+        assert reply["error"] is None
+        manifest = repo / reply["pre_review_manifest"]
+        assert manifest.parent.name == f"{prefix}.pre-review"
+        assert rr._read_manifest(manifest.parent) is not None
+
+
 def test_range_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo):
     base = _peer_scenario(repo, PEER, None)
     head = _commit_as(repo, "v = 0\npeer = 1\nown = 1\n", "own edit", SESSION, DELIVERABLE)

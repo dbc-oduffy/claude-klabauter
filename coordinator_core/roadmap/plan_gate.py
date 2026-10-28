@@ -66,6 +66,16 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 #: publishes no decisions a dependent can build on.
 PLAN_APPROVED_STATUSES = frozenset({"approved", "executing", "landed", "implemented"})
 
+
+def plan_counts_approved(status: str, fm: Dict[str, Any]) -> bool:
+    """Planning-gate approval: an approved-or-later status, or a `reviewed` plan
+    that carries a `mise_prepped_sha` stamp (the `stop_after: plan` halt parks
+    there and nothing else advances it). Never consulted by the execution gate."""
+    if status in PLAN_APPROVED_STATUSES:
+        return True
+    return status == "reviewed" and bool(str(fm.get("mise_prepped_sha") or "").strip())
+
+
 #: Plan `status` values that mean the work itself landed.
 PLAN_CODED_STATUSES = frozenset({"landed", "implemented"})
 
@@ -175,7 +185,7 @@ _BATON_FIELDS = frozenset(
 _PLAN_FIELDS = frozenset(
     {
         "title", "status", "plan_id", "deliverable_id", "sizing_object", "kind", "plan",
-        "predecessor_handoff",
+        "predecessor_handoff", "mise_prepped_sha",
     }
 )
 
@@ -668,7 +678,7 @@ class PlanIndex:
             "path": rel_path,
             "status": status,
             "title": fm.get("title"),
-            "approved": status in PLAN_APPROVED_STATUSES,
+            "approved": plan_counts_approved(status, fm),
             "coded": status in PLAN_CODED_STATUSES,
             # A plan's OWN `deliverable_id` claim, kept alongside its status so a
             # caller can ask "does THIS deliverable_id have a live plan besides

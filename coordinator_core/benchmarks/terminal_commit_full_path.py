@@ -660,7 +660,29 @@ def _landed_failure(out: dict, kind: str) -> str:
     return ""
 
 
+def _teardown_fixture(repo: Path) -> None:
+    """Remove a directly-built fixture repo and its `<name>-tmp` launch dir; never raises."""
+    from coordinator_core.benchmarks.isolated_clone import _rmtree_clearing_readonly
+
+    for target in (repo, repo.parent / f"{repo.name}-tmp"):
+        try:
+            if target.exists():
+                _rmtree_clearing_readonly(target)
+        except OSError:
+            pass
+
+
 def main(argv: list[str]) -> int:
+    """Run the driver; a fixture this call builds itself (not `--build-only`, not `--prebuilt`) is removed in a finally."""
+    owned: list[Path] = []
+    try:
+        return _main(argv, owned)
+    finally:
+        for repo in owned:
+            _teardown_fixture(repo)
+
+
+def _main(argv: list[str], owned: list[Path]) -> int:
     declare_benchmark_origin()
     argv = list(argv)
     kind = "plan"
@@ -716,6 +738,7 @@ def main(argv: list[str]) -> int:
             digest = Path(manifest["digest"])
     else:
         repo, script = builders[kind](Path(args[0]))
+        owned.append(repo)
         if real_shape:
             token = build_real_shape(repo)
     from coordinator_core.ops.dispatch_emit import land_run  # noqa: F401  (loaded in both modes)

@@ -46,6 +46,7 @@ HALT_PHASE = {
     "review_blocked": "review",
     "review_floor": "review",
     "footprint_gap": "execute",
+    "criterion_not_met": "execute",
     "plan_gate": "plan_gate_rulings",
     "plan_gate_ruling": "plan_gate_rulings",
     "ruling": "plan_gate_rulings",

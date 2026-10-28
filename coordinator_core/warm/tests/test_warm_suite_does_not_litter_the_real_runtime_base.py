@@ -96,6 +96,11 @@ _WRITER_MODULES = (
     # every call site, so this registration records coverage, it does not
     # excuse litter.
     "coordinator_core/warm/tests/test_http_transport_telemetry.py",
+    # Calls `write_discovery` to stand up the predecessor record a
+    # publish-triggered successor warm-up reads.
+    "coordinator_core/warm/tests/test_publish_warms_successor.py",
+    # POSIX election arm; wraps `supervisor.write_discovery`.
+    "coordinator_core/warm/tests/test_supervisor_posix_election.py",
 )
 
 
@@ -113,12 +118,7 @@ def _clone_key_dirs(base: Path) -> set[str]:
     return {entry.name for entry in base.iterdir() if entry.is_dir()}
 
 
-_WRITER_SYMBOLS = ("write_breadcrumb", "telemetry.flush", "write_discovery"    # Added 2026-09-02: calls `write_discovery` to stand up the predecessor
-    # record a publish-triggered successor warm-up reads. Registered on this
-    # guard's first red against it, same as the two entries above -- the guard
-    # names its own remediation and this is it.
-    "coordinator_core/warm/tests/test_publish_warms_successor.py",
-)
+_WRITER_SYMBOLS = ("write_breadcrumb", "telemetry.flush", "write_discovery")
 
 _WARM_TESTS_DIR = _REPO_ROOT / "coordinator_core" / "warm" / "tests"
 
@@ -184,6 +184,10 @@ def test_a_warm_suite_run_creates_no_new_real_runtime_directories() -> None:
 
     child_env = dict(os.environ)
     child_env.pop(breadcrumb.RUNTIME_BASE_ENV, None)
+    # An inherited engine root differs from the tmp roots the supervisor tests
+    # stamp, and the supervisor refuses to boot on that divergence; the child
+    # resolves its engine from `cwd`.
+    child_env.pop("COORDINATOR_ENGINE_ROOT", None)
     # A child pytest that recursed back into this module would spawn its own
     # child, and so on. Deselect this file in the child run.
     child_env["PYTEST_ADDOPTS"] = ""

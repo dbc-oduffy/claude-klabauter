@@ -178,6 +178,26 @@ def test_handler_reply_validates_and_spawns_nothing_under_the_bar(tmp_path, monk
     _validate(reply)
 
 
+def test_oversized_reply_carries_verdict_fields_in_its_first_3000_bytes(tmp_path):
+    common = _plan(tmp_path)
+    plan = tmp_path / REL
+    text = plan.read_text(encoding="utf-8").replace("  disposition: open\n", "  disposition: open\n  performer: em\n")
+    extra = "".join(
+        _SPINE.replace("id: C1", f"id: X{i}").replace("Ship it", "long " * 40) + "  performer: em\n"
+        for i in range(30)
+    )
+    plan.write_text(text.replace("\n```\n", "\n" + extra + "```\n", 1), encoding="utf-8")
+    reply = op._handler({"plan": REL}, common)
+    raw = json.dumps(reply)
+    assert len(raw.encode("utf-8")) > 3000
+    head = raw.encode("utf-8")[:3000].decode("utf-8", errors="ignore")
+    for key in ("verdict", "pull_class", "reason", "blocking"):
+        assert f'"{key}": {json.dumps(reply[key])}' in head, key
+    assert list(reply)[:5] == ["plan", "verdict", "pull_class", "reason", "blocking"]
+    assert {"rulings", "mechanical_repairs", "prep_gate"} <= set(reply)
+    _validate(reply)
+
+
 def _ledger(root: Path, rows: list, *, stamped: bool = True, name: str = "rev.md") -> str:
     stamp = "findings_ledger: {rows: 1}\n" if stamped else ""
     (root / name).write_text(

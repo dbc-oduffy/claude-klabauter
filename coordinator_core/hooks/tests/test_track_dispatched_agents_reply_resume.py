@@ -73,6 +73,31 @@ def test_workflow_agent_resume_reported_as_general_purpose_is_the_same_agent():
     assert tda._resolve_row_collision(row, "unknown", "general-purpose") is None
 
 
+def test_workflow_executor_resume_reported_as_general_purpose_keeps_its_type():
+    row = ["abf59bedf905ef121", "opus", TYPE, "1700000000"]
+    assert tda._is_reply_resume(TYPE, "general-purpose")
+    assert tda._resolve_row_collision(row, "unknown", "general-purpose") is None
+
+
+def test_resume_report_never_rewrites_type_through_the_file_path(tmp_path):
+    f = tmp_path / "dispatched-agents.txt"
+    f.write_text(f"abf59bedf905ef121\topus\t{TYPE}\t1700000000\n", encoding="utf-8")
+    out = tda._make_dispatch_mutate("abf59bedf905ef121", "unknown", "general-purpose")(
+        f.read_text(encoding="utf-8")
+    )
+    assert out.split("\t")[2] == TYPE
+    other = tda._make_dispatch_mutate("abf59bedf905ef121", "opus", "coordinator:code-reviewer")(
+        f.read_text(encoding="utf-8")
+    )
+    assert other.split("\t")[2] == tda.AMBIGUOUS_TYPE
+
+
+def test_general_purpose_fallback_does_not_cover_unrecorded_or_ambiguous_rows():
+    for recorded in ("", tda.PLACEHOLDER_TYPE, tda.AMBIGUOUS_TYPE):
+        assert not tda._is_reply_resume(recorded, "general-purpose")
+    assert not tda._is_reply_resume("general-purpose", TYPE)
+
+
 def test_resume_pair_is_one_directional_and_exact():
     assert not tda._is_reply_resume("general-purpose", "workflow-subagent")
     cols = tda._resolve_row_collision(

@@ -34,10 +34,10 @@ that was absent or unchanged at the freeze and written later recomputes, shelvin
 Range mode ignores it. Trap: both keys are deliberately outside ``_STORED_KEYS``, so an older sidecar
 without them stays readable by ``stored_reply_for_run`` (and recomputes in worktree mode).
 
-Worktree mode also writes a write-once pre-review snapshot beside the sidecar:
+Both modes write a write-once pre-review snapshot beside the sidecar (``review.reverify`` refuses a prefix without one):
 ``<slice_prefix>.pre-review/manifest.json`` (``base``, ``head``, ``recorded_at``, ``paths``, ``files``: product
 path -> sha256) and one blob per distinct hash holding the bytes frozen. The reply names the manifest
-as ``pre_review_manifest`` (outside ``_STORED_KEYS``, like ``reviewed_sha256``). Range mode writes none.
+as ``pre_review_manifest`` (outside ``_STORED_KEYS``, like ``reviewed_sha256``).
 
 Optional ``group_index`` / ``group_count`` (both or neither) narrow the reply's ``slices`` to the
 one contiguous balanced group at ``group_index`` of ``min(slices, group_count)`` groups, the split
@@ -549,7 +549,7 @@ def review_prep(
             if reply is None:
                 reply = _fail(f"{REVIEW_PREP_BUSY_PREFIX} another caller holds the lock")
     manifest = _manifest_path(share, slice_prefix)
-    if not head and not reply.get("error") and "pre_review_manifest" not in reply and manifest.exists():
+    if not reply.get("error") and "pre_review_manifest" not in reply and manifest.exists():
         reply = {**reply, "pre_review_manifest": _rel(manifest, repo_root)}
     return _for_group(reply, group_index, group_count)
 
@@ -603,14 +603,16 @@ def _compute(
     # Trap: hashed after the freeze, so a write landing between the two is recorded as reviewed
     # though the frozen diff lacks it; the moved-bytes check then serves that stale freeze.
     contents = {rel: _read_or_none(repo_root / rel) for rel in product}
-    hashes = {rel: None if data is None else hashlib.sha256(data).hexdigest() for rel, data in contents.items()}
     out["reviewed_sha256"] = {
         rel: eol_folded_sha256(data) for rel, data in contents.items() if data is not None
     }
-    if not head:
+    if head:
+        contents = _range_blob_bytes(repo_root, head, contents)
+    else:
         out["declared_sha256"] = _declared_hashes(repo_root, paths)
-        _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
-        out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
+    hashes = {rel: None if data is None else hashlib.sha256(data).hexdigest() for rel, data in contents.items()}
+    _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
+    out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
 
     out["peer_bases"] = peer_bases
     part = _heavy("partition_slices")(
@@ -655,6 +657,30 @@ def _read_or_none(path: Path) -> Optional[bytes]:
         return path.read_bytes()
     except OSError:
         return None
+
+
+def _range_blob_bytes(repo_root: Path, head: str, worktree: dict) -> dict:
+    """``worktree`` with each path's bytes replaced by its blob at ``head``, the bytes the range's
+    diff names (None when the path is absent at ``head``). In-process object reads, no spawn.
+    Trap: an unreadable ``head`` commit or tree keeps the worktree bytes for every path."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.ref_cas_retry import _root_tree
+
+    tree = _root_tree(repo_root, head)
+    spine = git_state.read_tree_spine(repo_root, list(worktree), root_tree_sha=tree) if tree else None
+    if spine is None:
+        return worktree
+    common_dir = resolve_git_common_dir(repo_root)
+    out: dict = {}
+    for rel in worktree:
+        parent, _, name = rel.rpartition("/")
+        entry = spine.get(parent, {}).get(name)
+        found = read_object(common_dir, entry[1]) if entry is not None and entry[0] != 0o40000 else None
+        if entry is not None and (found is None or found[0] != "blob"):
+            return worktree
+        out[rel] = None if entry is None else found[1]
+    return out
 
 
 def _manifest_path(share: Path, slice_prefix: str) -> Path:

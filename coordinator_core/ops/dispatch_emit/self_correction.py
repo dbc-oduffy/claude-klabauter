@@ -58,6 +58,8 @@ HALT_REVERIFY_SCHEMA = {
                     },
                 },
                 "pre_existing": _STR_LIST,
+                "passed_alone": _STR_LIST,
+                "passed_at_base": _STR_LIST,
                 "reverted": {
                     "type": "array",
                     "items": {
@@ -172,6 +174,37 @@ def classify_reds(
     return RedSplit(tuple(sorted(owned)), tuple(sorted(foreign_out)), tuple(sorted(unverified)))
 
 
+def classify_flakes(test: Mapping[str, Any], run_id: str) -> tuple[list[str], list[dict]]:
+    """Split `test["failing"]` into (remaining_failing, flakes).
+
+    A flake is a failing id present in both `passed_alone` and `passed_at_base`; absent or
+    non-list evidence never makes one. Ids are normalised as classify_reds does.
+    """
+    def ids(key: str) -> list[str]:
+        v = test.get(key)
+        return [_posix(i) for i in v] if isinstance(v, list) else []
+
+    alone, base = set(ids("passed_alone")), set(ids("passed_at_base"))
+    detail = test.get("failing_detail")
+    first: dict[str, str] = {}
+    for d in detail if isinstance(detail, list) else []:
+        if isinstance(d, Mapping) and d.get("node_id") is not None:
+            first.setdefault(_posix(d["node_id"]), str(d.get("message") or "").split("\n", 1)[0])
+    remaining: list[str] = []
+    flakes: list[dict] = []
+    for nid in ids("failing"):
+        if nid in alone and nid in base:
+            head = first.get(nid, "")
+            flakes.append({
+                "node_id": nid,
+                "run": run_id,
+                "evidence": (head + "; " if head else "") + "passed alone; passed at base",
+            })
+        else:
+            remaining.append(nid)
+    return remaining, flakes
+
+
 def progressed(before: Iterable[str], after: Iterable[str]) -> bool:
     """True iff at least one gap key in `before` is absent from `after`."""
     after_s = set(after or ())
@@ -199,6 +232,29 @@ const classifyReds = (failing, ownPaths, opts) => {
   }
   const srt = (s) => [...s].sort();
   return { owned: srt(owned), foreign: srt(foreign), unverified: srt(unverified) };
+};
+"""
+
+CLASSIFY_FLAKES_JS = r"""
+const classifyFlakes = (rv, runId) => {
+  const t = rv || {};
+  const px = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const ids = (k) => (Array.isArray(t[k]) ? t[k].map(px) : []);
+  const alone = new Set(ids('passed_alone')), base = new Set(ids('passed_at_base'));
+  const first = new Map();
+  for (const d of Array.isArray(t.failing_detail) ? t.failing_detail : []) {
+    if (d && typeof d === 'object' && d.node_id != null && !first.has(px(d.node_id))) {
+      first.set(px(d.node_id), String(d.message || '').split('\n')[0]);
+    }
+  }
+  const remaining = [], flakes = [];
+  for (const id of ids('failing')) {
+    if (alone.has(id) && base.has(id)) {
+      const head = first.get(id) || '';
+      flakes.push({ node_id: id, run: runId, evidence: (head ? head + '; ' : '') + 'passed alone; passed at base' });
+    } else remaining.push(id);
+  }
+  return [remaining, flakes];
 };
 """
 

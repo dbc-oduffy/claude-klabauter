@@ -1,0 +1,25 @@
+schema_version: 1
+pipeline: plan-review
+description: "Plan review over a plan set: a claims check per plan, then a domain-reviewer fix pass per plan"
+inputs:
+  brief: required
+  scratch_dir: optional
+  lists:
+    reviewer:
+      kind: roster
+stages:
+  - id: claims-check
+    phase: Claims
+    agent_type: coordinator:docs-checker
+    model: sonnet
+    template: claims-check-prompt-template.md
+    fan_out: per_subject
+    output: "{{scratch_dir}}/{{subject}}-claims.md"
+  - id: fix
+    phase: Fix
+    agent_type_from: inputs.reviewer
+    model: opus
+    template: fix-prompt-template.md
+    fan_out: per_subject
+    depends_on: [claims-check]
+    output: "{{scratch_dir}}/{{subject}}-fix.md"

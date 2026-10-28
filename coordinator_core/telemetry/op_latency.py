@@ -560,7 +560,9 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
 
 
 def _append_line(sink: Path, encoded: bytes) -> None:
-    atomic_append.append_line_bounded(sink, encoded)
+    # A completion row closes its started row, so a stalled sink must not strand the pair.
+    # Keyed off the encoded line so the two-argument signature (test guards wrap it) stays.
+    atomic_append.append_line_bounded(sink, encoded, retain=b'"kind":"complete"' in encoded)
 
 
 def record_op_latency(

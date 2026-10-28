@@ -24,7 +24,9 @@ each to the withheld paths it changed (``{}`` when the run withholds nothing); `
 When the halt marker records withheld paths (``run_artifacts.withheld``), ``sha`` must have changed
 every one of them versus its first parent, or several shas must together (each changing at least one),
 so recording landed cannot release the withheld-commit guard for a commit that never carried them; a
-later follow-up commit that changed them qualifies. The path match is case-insensitive (directory
+later follow-up commit that changed them qualifies. A withheld path a revision voided (``_voided_paths``) is
+not owed and is echoed under ``voided``; so is a withheld path with no delta (same entry in the marker's
+``run_base_sha`` tree and HEAD, working file equal to HEAD's blob; ``_clean_at_head``). The path match is case-insensitive (directory
 components too) and a path counts as changed when either side of a rename carries its casefolded
 name; ``covers`` keeps the marker's spelling. A set records its newest sha.
 """
@@ -249,13 +251,114 @@ def _casefolded_entries(load_dir, root_tree: str, path: str) -> Optional[frozens
     return frozenset(found)
 
 
-def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str], dict]:
-    """``(None, covers)`` when *shas* together changed every path the run's halt marker withholds, else ``(refusal, {})``.
+_VOID_WORDING = re.compile(r"\bvoid\b|never added|remove from this run's diff", re.IGNORECASE)
+_CLOSED_ROW = ("voided", "wont_do")
+
+
+def _voided_paths(root: Path, marker: Optional[dict], withheld: list) -> set:
+    """The *withheld* paths a revision voided, so the landing record does not owe them.
+
+    A path is voided when every plan row declaring it is closed ``voided``/``wont_do``, or when a live
+    revision-origin register row of the marker's sizing carries void wording and names the path's file
+    name or, for a hyphenated or underscored directory, its parent directory. An unreadable plan or
+    sizing voids nothing, so the landing check stays strict.
+
+    Trap: void wording and the name need only co-occur in one revision row's text, and a hyphenated or
+    underscored parent directory name voids every withheld file under it, so a revision that merely
+    mentions such a directory beside "void" releases all of its files.
+    """
+    if not isinstance(marker, dict):
+        return set()
+    voided: set = set()
+    plan = marker.get("plan")
+    if isinstance(plan, str) and plan:
+        try:
+            from coordinator_core.frontmatter.body_blocks import LocateStatus
+            from coordinator_core.ops.plan_tasks_render import load_rows
+
+            loaded = load_rows((root / plan).read_text(encoding="utf-8"))
+            rows = [r for r in loaded.rows if isinstance(r, dict)] if loaded.status is LocateStatus.LOCATED else []
+        except Exception:  # noqa: BLE001 -- an unreadable plan voids nothing
+            rows = []
+        for p in withheld:
+            declaring = []
+            for r in rows:
+                raw = r.get("writes") or []
+                if p.casefold() in {str(w).replace("\\", "/").casefold() for w in ([raw] if isinstance(raw, str) else raw)}:
+                    declaring.append(r.get("disposition"))
+            if declaring and all(d in _CLOSED_ROW for d in declaring):
+                voided.add(p)
+    sizing = marker.get("sizing_rel")
+    if isinstance(sizing, str) and sizing:
+        try:
+            import yaml
+
+            from coordinator_core.ops import requirement_register as rr
+            from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+            reg = (yaml.safe_load((root / sizing).read_text(encoding="utf-8")) or {}).get("requirement_register") or {}
+            texts = [
+                str(r.get(rr.ROW_TEXT) or "").casefold() for r in reg.get("rows") or []
+                if isinstance(r, dict)
+                and rl._origin(r.get(rr.ROW_ANCHOR))[0] == rl.ORIGIN_REVISION
+                and r.get(rr.ROW_STATUS) not in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED)
+                and _VOID_WORDING.search(str(r.get(rr.ROW_TEXT) or ""))
+            ]
+        except Exception:  # noqa: BLE001 -- an unreadable sizing voids nothing
+            texts = []
+        for p in withheld:
+            parts = p.casefold().split("/")
+            names = [parts[-1]] + ([parts[-2]] if len(parts) > 1 and re.search(r"[-_]", parts[-2]) else [])
+            if any(re.search(rf"(?<![\w.-]){re.escape(n)}(?![\w-])", t) for t in texts for n in names):
+                voided.add(p)
+    return voided
+
+
+def _clean_at_head(root: Path, common, load_dir, paths: list, base: Optional[str]) -> set:
+    """The *paths* with no delta: identical in the run's base tree and HEAD, and the working-tree file hashes to HEAD's blob (or is absent from both).
+
+    In-process reads only. No recorded *base*, an unreadable tree, a symlink or a case-variant tree
+    entry leaves the path owed.
+    """
+    import hashlib
+
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_state import head_sha
+
+    head = head_sha(root)
+    meta = commit_meta(common, head) if head else None
+    base_meta = commit_meta(common, base) if base else None
+    if not meta or not meta.get("tree") or not base_meta or not base_meta.get("tree"):
+        return set()
+    clean: set = set()
+    for p in paths:
+        entries = _casefolded_entries(load_dir, meta["tree"], p)
+        if entries is None or len(entries) > 1 or entries != _casefolded_entries(load_dir, base_meta["tree"], p):
+            continue
+        target = root / p
+        try:
+            if not entries:
+                if not target.exists() and not target.is_symlink():
+                    clean.add(p)
+                continue
+            (exact, mode, oid), = entries
+            if exact != p or mode & 0o170000 != 0o100000 or not target.is_file() or target.is_symlink():
+                continue
+            data = target.read_bytes()
+            if hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() == oid:
+                clean.add(p)
+        except OSError:
+            continue
+    return clean
+
+
+def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str], dict, list]:
+    """``(None, covers, voided)`` when *shas* together changed every owed path the run's halt marker withholds, else ``(refusal, {}, [])``.
 
     Each sha is compared with its first parent; the union of changed withheld paths must cover the
-    withheld list, and every sha must change at least one of them. ``covers`` maps each sha to the
-    withheld paths it changed (empty for a run withholding nothing or with no marker, which passes).
-    An unreadable commit or tree refuses.
+    withheld list less the paths a revision voided (``voided``, ``_voided_paths``), and every sha must
+    change at least one owed path. ``covers`` maps each sha to the owed paths it changed (empty for a
+    run withholding nothing or with no marker, which passes). An unreadable commit or tree refuses.
     """
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -264,11 +367,17 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
     try:
-        withheld = sorted(halted_run.halted_withheld(ask_contract.record_dir(root, run_id)))
+        record_dir = ask_contract.record_dir(root, run_id)
+        withheld = sorted(halted_run.halted_withheld(record_dir))
     except ValueError:
-        return None, {}
+        return None, {}, []
     if not withheld:
-        return None, {}
+        return None, {}, []
+    voided = _voided_paths(root, halted_run._read(record_dir), withheld)
+    voided_list = [p for p in withheld if p in voided]
+    withheld = [p for p in withheld if p not in voided]
+    if not withheld:
+        return None, {}, voided_list
     common = resolve_git_common_dir(root)
     dirs: dict = {}
 
@@ -285,28 +394,32 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
         parents = meta.get("parents") if meta else None
         parent_meta = commit_meta(common, parents[0]) if parents else None
         if meta is None or not meta.get("tree") or (parents and (parent_meta is None or not parent_meta.get("tree"))):
-            return f"{sha} or its parent is unreadable; retry", {}
+            return f"{sha} or its parent is unreadable; retry", {}, []
         changed = set()
         for p in withheld:
             after = _casefolded_entries(_dir, meta["tree"], p)
             before = _casefolded_entries(_dir, parent_meta["tree"], p) if parent_meta else frozenset()
             if after is None or before is None:
-                return f"{sha} tree is unreadable; retry", {}
+                return f"{sha} tree is unreadable; retry", {}, []
             if after != before:
                 changed.add(p)
         if len(shas) > 1 and not changed:
-            return f"{sha} changed none of the run's withheld paths; drop it from shas", {}
+            return f"{sha} changed none of the run's withheld paths; drop it from shas", {}, []
         covered |= changed
         covers[sha] = [p for p in withheld if p in changed]
     unchanged = [p for p in withheld if p not in covered]
+    if unchanged:
+        clean = _clean_at_head(root, common, _dir, unchanged, halted_run.halted_run_base(record_dir))
+        voided_list += [p for p in unchanged if p in clean]
+        unchanged = [p for p in unchanged if p not in clean]
     if unchanged:
         more = f" (+{len(unchanged) - 1} more)" if len(unchanged) > 1 else ""
         who = shas[0] if len(shas) == 1 else "shas together"
         return (
             f"{who} did not change withheld {unchanged[0]}{more}; "
             "pass the commit(s) that landed the run's withheld paths"
-        ), {}
-    return None, covers
+        ), {}, []
+    return None, covers, voided_list
 
 
 def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optional[str], dict]:
@@ -337,10 +450,10 @@ def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optiona
     for sha in full:
         if sha not in reached:
             return None, f"{sha} is not an ancestor of HEAD; pass the commit that landed the work", {}
-    problem, covers = _carries_withheld(root, run_id, full)
+    problem, covers, voided = _carries_withheld(root, run_id, full)
     if problem:
         return None, problem, {}
-    echo = {"shas": full, "covers": covers}
+    echo = {"shas": full, "covers": covers, **({"voided": voided} if voided else {})}
     if len(full) == 1:
         return full[0], None, echo
     newest = full[0]

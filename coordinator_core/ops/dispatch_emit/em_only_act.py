@@ -131,11 +131,16 @@ def executor_commit_act(raw: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+#: Agent types naming the EM itself: no agent definition exists, so the row is the EM's to discharge.
+EM_OWNED_AGENT_TYPES = frozenset({"coordinator:em"})
+
+
 def row_is_em_performed(raw: Dict[str, Any]) -> bool:
-    """True for a declared `performer: em` row, one whose only act is agent-forbidden, or one
-    blocked on a capability only the EM session has."""
+    """True for a declared `performer: em` row, an `agent_type` in `EM_OWNED_AGENT_TYPES`, one whose
+    only act is agent-forbidden, or one blocked on a capability only the EM session has."""
     return (
         raw.get("performer") == "em"
+        or raw.get("agent_type") in EM_OWNED_AGENT_TYPES
         or forbidden_sole_act(raw) is not None
         or em_only_capability(raw) is not None
     )

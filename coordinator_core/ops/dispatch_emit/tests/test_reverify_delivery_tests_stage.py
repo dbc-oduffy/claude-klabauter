@@ -144,6 +144,37 @@ def test_a_superseding_fail_with_an_all_pre_existing_baseline_mints(tmp_path):
     assert stamp["terminal_commit_sha"] == head
 
 
+_ENV_TEXT = "git archive HEAD exited 128 (also fails at base)"
+
+
+def _env_fault_tests(failures):
+    return {
+        "status": "fail", "failed": 2, "baseline_method": "export", "failing": ["t::a", "t::b"],
+        "failures": failures,
+        "baseline": {"pre_existing": ["t::a", "t::b"], "caused": [], "unverified": []},
+    }
+
+
+def test_an_export_environment_fault_is_never_set_aside_as_pre_existing():
+    tests = _env_fault_tests({"t::a": _ENV_TEXT, "t::b": "AssertionError: x"})
+    assert rd.charged_status(tests) == "fail"
+    tests = _env_fault_tests([{"id": "t::a", "message": _ENV_TEXT}, {"id": "t::b", "message": "boom"}])
+    assert rd.charged_status(tests) == "fail"
+    tests = _env_fault_tests({})
+    tests["baseline"]["pre_existing"] = [{"id": "t::a", "note": _ENV_TEXT}, "t::b"]
+    assert rd.charged_status(tests) == "fail"
+
+
+def test_a_no_dot_git_export_fault_is_never_set_aside_as_pre_existing():
+    tests = _env_fault_tests({"t::a": "fatal: not a git repository (or any parent)", "t::b": "boom"})
+    assert rd.charged_status(tests) == "fail"
+
+
+def test_a_genuine_base_red_is_still_set_aside():
+    tests = _env_fault_tests({"t::a": "AssertionError: red at base", "t::b": "boom"})
+    assert rd.charged_status(tests) == "pass"
+
+
 def test_a_superseding_fail_with_unverified_failures_still_refuses(tmp_path):
     repo = _repo(tmp_path)
     head = _git(repo, "rev-parse", "HEAD")

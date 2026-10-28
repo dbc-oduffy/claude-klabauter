@@ -31,6 +31,120 @@ from coordinator_core.benchmarks.isolated_clone import (
 )
 
 
+def test_clone_silences_git_daemons(tmp_path: Path) -> None:
+    """The clone's config carries the no-daemon settings (written without a git spawn)."""
+    from coordinator_core.benchmarks.isolated_clone import _silence_clone_git_daemons
+
+    (tmp_path / ".git").mkdir()
+    cfg = tmp_path / ".git" / "config"
+    cfg.write_text("[core]\n\tbare = false\n", encoding="utf-8")
+    _silence_clone_git_daemons(tmp_path)
+    import configparser
+
+    parser = configparser.ConfigParser(strict=False)
+    parser.read_string(cfg.read_text(encoding="utf-8"))
+    assert parser["core"]["fsmonitor"] == "false"
+    assert parser["gc"]["auto"] == "0"
+    assert parser["maintenance"]["auto"] == "false"
+
+
+def test_fresh_git_clone_is_portable_to_long_paths(tmp_path: Path, monkeypatch) -> None:
+    """The clone argv enables core.longpaths and the destination is short."""
+    import coordinator_core.git.run as git_run
+    from coordinator_core.benchmarks.isolated_clone import fresh_git_clone
+
+    (tmp_path / ".git").mkdir()
+    seen: list = []
+
+    class _Result:
+        ok = True
+        returncode = 0
+        stderr = ""
+
+    def _fake(argv, **_kw):
+        seen.append(list(argv))
+        Path(argv[-1]).mkdir(parents=True)
+        (Path(argv[-1]) / ".git").mkdir()
+        (Path(argv[-1]) / ".git" / "config").write_text("", encoding="utf-8")
+        return _Result()
+
+    monkeypatch.setattr(git_run, "run_git", _fake)
+    with fresh_git_clone(tmp_path, prefix="a-very-long-descriptive-prefix-", label="t") as dest:
+        argv = seen[0]
+        assert "core.longpaths=true" in argv
+        assert "clone" in argv
+        scratch = tmp_path.joinpath("scratch", "benchmark-clones")
+        rel = dest.relative_to(scratch)
+        assert len(str(rel)) <= 20, rel
+
+
+def _rooted_sleeper(root: Path):
+    import subprocess
+    import sys
+
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        cwd=str(root),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def test_reap_signals_descendant_holder(tmp_path: Path) -> None:
+    """A rooted process in our own tree is signalled and reported reaped."""
+    from coordinator_core.benchmarks.isolated_clone import reap_processes_under
+
+    proc = _rooted_sleeper(tmp_path)
+    try:
+        reaped = reap_processes_under(tmp_path)
+        assert proc.pid in reaped
+        assert reaped.foreign == []
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
+def test_reap_reports_foreign_holder_without_signalling(tmp_path: Path, monkeypatch) -> None:
+    """A rooted process outside our tree is returned on `.foreign` and left alive."""
+    import psutil
+
+    from coordinator_core.benchmarks.isolated_clone import reap_processes_under
+
+    proc = _rooted_sleeper(tmp_path)
+    try:
+        monkeypatch.setattr(psutil.Process, "children", lambda self, recursive=False: [])
+        reaped = reap_processes_under(tmp_path)
+        assert proc.pid not in reaped
+        assert proc.pid in reaped.foreign
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def test_reap_stale_clones_never_raises_on_foreign_holder(tmp_path: Path, monkeypatch) -> None:
+    import os
+    import psutil
+
+    from coordinator_core.benchmarks.isolated_clone import _reap_stale_clones
+
+    stale = tmp_path / "stale"
+    stale.mkdir()
+    old = stale.stat().st_mtime - 7200
+    os.utime(stale, (old, old))
+    proc = _rooted_sleeper(stale)
+    try:
+        monkeypatch.setattr(psutil.Process, "children", lambda self, recursive=False: [])
+        _reap_stale_clones(tmp_path)
+        assert proc.poll() is None
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
 def test_rootless_destination_is_refused() -> None:
     """A source root with no `.git` above it raises rather than minting.
 

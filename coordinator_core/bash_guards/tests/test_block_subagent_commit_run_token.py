@@ -305,15 +305,26 @@ def test_relay_first_transcript_of_another_run_is_denied_by_path(repo):
     assert "not the run's own params file" in _reason(_check_t(_file_cmd(repo, run_id="ask-2"), tp))
 
 
-def test_planted_params_file_without_a_prompt_block_is_denied(repo):
+def _plant_file_without_block(repo, token: str):
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
-    token = run_token.mint(repo, "ask-1", _SCRIPT)
     path = chan.params_path(repo, "ask-1")
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(_params(token)), encoding="utf-8")
     tp = _spawn(repo, _params(token), name="x.jsonl")
     Path(tp).write_text(json.dumps({"type": "user", "message": {"content": "hello"}}) + "\n", encoding="utf-8")
+    return tp
+
+
+def test_runs_own_params_file_without_a_prompt_block_is_admitted(repo):
+    token = run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _plant_file_without_block(repo, token)
+    assert _check_t(_file_cmd(repo), tp) is None
+
+
+def test_params_file_without_a_prompt_block_and_an_unminted_token_is_denied(repo):
+    run_token.mint(repo, "ask-1", _SCRIPT)
+    tp = _plant_file_without_block(repo, "f" * 32)
     assert _check_t(_file_cmd(repo), tp) is not None
 
 

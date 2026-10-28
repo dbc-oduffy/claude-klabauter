@@ -96,6 +96,31 @@ def _unlanded_run_ids(
     return found
 
 
+def halted_records(root: Path, own_run_id: Optional[str]) -> list:
+    """`[(record dir, halt marker)]` for each halted run other than `own_run_id` within the token TTL:
+    the runs `_unlanded_run_ids` may weigh through `release_reason`, for `prefetch_kept_blobs`. One
+    record-dir scan, file reads only; never raises."""
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    out: list = []
+    try:
+        now = time.time()
+        with os.scandir(root / RECORD_DIR_ROOT) as entries:
+            names = sorted(e.name for e in entries if e.is_dir())
+        for name in names:
+            stamp = stopped_runs._stamp_epoch(name)
+            if name == own_run_id or stamp is None or now - stamp > run_token.TTL_SECONDS:
+                continue
+            record = root / RECORD_DIR_ROOT / name
+            marker = halted_run._read(record)
+            if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
+                out.append((record, marker))
+    except Exception:  # noqa: BLE001 -- the blobs are read on demand instead
+        return out
+    return out
+
+
 def _extra_declared(root: Path, run_id: str) -> set:
     """Paths a run's own records name that the manifest reader does not: `run.json`
     `sizing_rel`, `run-outcome.json` `inline_review.prep.slice_files`, and the manifest's
@@ -243,7 +268,7 @@ def _declares(root: Path, run_id: str, path: str) -> bool:
 def sibling_run_claims(
     worktree_root: Path, own_run_id: Optional[str], candidates: Iterable[str], *,
     own_plan: Optional[str] = None, minted_before: Optional[tuple] = None,
-    own_declared: Optional[Iterable[str]] = None,
+    own_declared: Optional[Iterable[str]] = None, unlanded: Optional[list] = None,
 ) -> dict:
     """`{path: owning run id}` for each of `candidates` another unlanded run claims, paths
     forward-slash normalised. The claim lookup is the one `terminal_commit._live_run_claims`
@@ -257,7 +282,8 @@ def sibling_run_claims(
     parse for the whole call). Dirt another run left in a declared path, or a declarer with no
     hunks in it, claims nothing. A halted run
     whose only declaration of a path is its plan spine's `writes` does not claim it dirty when
-    `own_declared` holds it: the landing run's own write is not that run's dirt."""
+    `own_declared` holds it: the landing run's own write is not that run's dirt. `unlanded` is a
+    caller's `_unlanded_run_ids` for the same arguments, passed so the scan is not repeated."""
     root = Path(worktree_root)
     wanted = {_norm(p) for p in candidates if p}
     wanted.discard("")
@@ -282,7 +308,8 @@ def sibling_run_claims(
             ) or {}
             for path, run_ids in sorted(halted.items()):
                 claims.setdefault(path, run_ids[0])
-            unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
+            if unlanded is None:
+                unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
             extras = {run_id: _held_extras(root, run_id, dirty, wanted, attr) for run_id in unlanded}
             for path, sessions in sorted(live.items()):
                 owner = next((r for r in unlanded if _declares(root, r, path)), sessions[0])

@@ -314,6 +314,11 @@ def _memo_entry(cwd: Optional[str]) -> Tuple[str, _MemoEntry]:
             # this cwd for the rest of the process.
             return resolved, (None, None, None)
         kind, found_path = found
+        if kind == "bare" and found_path.name == ".git":
+            # cwd is inside <repo>/.git/ (group-em sessions live under
+            # .git/coordinator-sessions/<sid>): that dir passes the bare-repo
+            # markers but is a worktree's gitdir, so its parent is the toplevel.
+            kind, found_path = "worktree", found_path.parent
         if kind == "bare":
             entry = (None, str(found_path), str(found_path))
         else:

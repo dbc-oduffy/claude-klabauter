@@ -33,12 +33,25 @@ tier: 37 orphaned supervisors across 37 surviving clones, ~14GB, accumulated
 over two days of gate runs -- 37 idle interpreters on a box whose load norm is
 50-70 concurrent LLMs (`CLAUDE.md` s Load norm; "the load is us").
 
-POSTURE -- REAP BY ROOT, NOT BY PARENTAGE. `reap_processes_under` matches on
-where a process is ROOTED (cmdline or cwd resolving under the clone), never on
-its position in the process table. This is the only predicate that survives the
-detach: a double-forked, reparented grandchild is by construction no longer a
-child of anything this fixture can enumerate downward from, but it is still
-running out of a directory unique to this run.
+NO SUPERVISOR IS SPAWNED IN A CLONE NOW. `engine_env` sets
+`COORDINATOR_WARM_LISTENER_AUTOSTART=0`, so `ensure_listener` never spawns the
+detached listener there, and `spawn_clone_server` holds the server in a
+kill-on-close job (Windows), so the server and its pool children die with the
+test process even when no `finally` runs. The paragraph above is the history
+that motivates both.
+
+POSTURE -- DISCOVER BY ROOT, SIGNAL BY DESCENT. `reap_processes_under` finds
+holders by where a process is ROOTED (cmdline or cwd resolving under the
+clone): a double-forked, reparented grandchild is no longer a child of anything
+this fixture can enumerate, yet still runs out of a directory unique to this
+run, so only a root predicate sees it. But it SIGNALS only descendants of
+`os.getpid()`: the suite's foreign-kill tripwire (`conftest.py`) refuses a
+signal to anything outside the test's tree, and a detached daemon is exactly
+that. Root-matched non-descendants are returned on `.foreign` and left alone;
+`rmtree_or_raise` names them if they pin the clone. `fresh_git_clone` prevents
+the common case at the source (`core.fsmonitor=false`, `gc.auto=0`,
+`maintenance.auto=false`), and `_reap_stale_clones` never signals a stale
+clone's holders (none are descendants) and leaves a pinned dir for a later attempt.
 
 SAFE BY THE UNIQUENESS OF `mkdtemp`. Both functions take a root that is a
 freshly `mkdtemp`'d path unique to THIS run, so nothing outside this run's own
@@ -164,27 +177,41 @@ def mkdtemp_for_clone(source_root: Path, *, prefix: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=prefix, dir=str(scratch)))
 
 
+_SHORT_PREFIX_MAX = 6
+
+
+def _short_clone_prefix(prefix: str) -> str:
+    """Clip a caller's descriptive prefix: the clone's deepest repo paths must fit Windows MAX_PATH."""
+    return prefix[:_SHORT_PREFIX_MAX].rstrip("-") + "-"
+
+
 @contextlib.contextmanager
 def fresh_git_clone(source_root: Path, *, prefix: str, label: str) -> Iterator[Path]:
-    """Yield the path of a throwaway full clone of `source_root`'s HEAD; take it back down on exit.
+    """Yield the path of a throwaway clone of `source_root`'s HEAD; take it back down on exit.
 
-    The checkout is a local bulk copy (`--local`), not a remote contact; `remote=True` only
-    lifts the seam's ceiling to fit a full-tree checkout. Teardown reaps processes rooted
+    The clone borrows `source_root`'s objects (`--shared`, no object copy), so the source must
+    outlive it; `remote=True` only lifts the seam's ceiling to fit a full-tree checkout. Teardown reaps processes rooted
     in the clone before removing it, and raises `CloneTeardownLeak` if anything survives.
     """
     from coordinator_core.git.run import run_git
 
-    tmp = mkdtemp_for_clone(source_root, prefix=prefix)
+    tmp = mkdtemp_for_clone(source_root, prefix=_short_clone_prefix(prefix))
     try:
-        dest = tmp / "clone"
+        dest = tmp / "c"
         result = run_git(
-            ["clone", "-q", "--local", str(source_root), str(dest)], cwd=str(tmp), remote=True
+            [
+                "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+                "clone", "-q", "--shared", str(source_root), str(dest),
+            ],
+            cwd=str(tmp),
+            remote=True,
         )
         if not result.ok:
             raise RuntimeError(
                 f"{label}: git clone of {source_root} failed rc={result.returncode}: "
                 f"{result.stderr.strip()}"
             )
+        _silence_clone_git_daemons(dest)
         yield dest
     finally:
         reaped = reap_processes_under(tmp)
@@ -224,26 +251,66 @@ def _process_is_rooted_under(proc, root_norm: str) -> bool:
     return probe == root_norm or probe.startswith(root_norm + os.sep)
 
 
+class Reaped(list):
+    """Pids signalled by `reap_processes_under`; `.foreign` holds the root-matched pids that
+    were NOT in the caller's process tree and were therefore left running."""
+
+    foreign: List[int]
+
+    def __init__(self, signalled=(), foreign=()):
+        super().__init__(signalled)
+        self.foreign = list(foreign)
+
+
+_CLONE_GIT_CONFIG = (
+    "\n[core]\n\tfsmonitor = false\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"
+)
+
+
+def _silence_clone_git_daemons(dest: Path) -> None:
+    """Append the no-daemon settings to the clone's config (in-process; no git spawn).
+
+    A detached `fsmonitor--daemon` or auto-gc/maintenance process is outside the test's process
+    tree, so the suite's foreign-kill tripwire refuses to let teardown signal it.
+    """
+    with (dest / ".git" / "config").open("a", encoding="utf-8") as fh:
+        fh.write(_CLONE_GIT_CONFIG)
+
+
 def reap_processes_under(root: Path) -> List[int]:
-    """Terminate every live process rooted under `root`; return the pids reaped.
+    """Terminate live processes rooted under `root` that descend from this process; return the
+    pids signalled, with root-matched non-descendants on the result's `.foreign` (never signalled).
+
+    DISCOVERY is by root (cmdline or cwd under `root`), SIGNALLING only by descent from
+    `os.getpid()`: a process outside the tree is another run's or a detached daemon's, and the
+    suite's foreign-kill tripwire refuses to let a test signal it. Callers: `fresh_git_clone` and
+    `booted_warm_engine` teardowns (their workers are descendants, so reaped as before; anything
+    detached is reported, and `rmtree_or_raise` then names it), and `_reap_stale_clones`
+    (a stale clone's holders are never descendants, so it signals nothing and leaves a pinned dir
+    for a later attempt).
 
     Escalates `terminate()` to `kill()` for anything still alive after
-    `_TERMINATE_TIMEOUT_SECS`, because a surviving process is not merely
-    untidy here -- it is what makes the subsequent `rmtree` fail. Best-effort
-    per process (a benchmark teardown must never raise past its own gate's
-    result), but NOT silent in aggregate: the returned list is what
-    `rmtree_or_raise` and the fixtures report.
+    `_TERMINATE_TIMEOUT_SECS`. Best-effort per process; never raises.
     """
     import psutil
 
     root_norm = _normalized(root)
+    try:
+        tree = {p.pid for p in psutil.Process(os.getpid()).children(recursive=True)}
+    except psutil.Error:
+        # Fail safe: an unreadable tree signals nothing; every holder is reported on `.foreign`.
+        tree = set()
     doomed = []
+    foreign: List[int] = []
     for proc in psutil.process_iter():
         if proc.pid == os.getpid():
             continue
         try:
             if _process_is_rooted_under(proc, root_norm):
-                doomed.append(proc)
+                if proc.pid in tree:
+                    doomed.append(proc)
+                else:
+                    foreign.append(proc.pid)
         except psutil.Error:
             continue
 
@@ -260,7 +327,7 @@ def reap_processes_under(root: Path) -> List[int]:
             pass
     psutil.wait_procs(alive, timeout=_KILL_TIMEOUT_SECS)
 
-    return [proc.pid for proc in doomed]
+    return Reaped([proc.pid for proc in doomed], foreign)
 
 
 class WarmEngineBootTimeout(RuntimeError):
@@ -294,8 +361,72 @@ def engine_env(engine_root: Path) -> dict:
     env = dict(os.environ)
     env["COORDINATOR_WARM"] = "1"
     env["COORDINATOR_DOOR_ENGINE_ROOT"] = str(engine_root)
+    env["COORDINATOR_WARM_LISTENER_AUTOSTART"] = "0"
     env.pop("VIRTUAL_ENV", None)
     return env
+
+
+clone_server_env = engine_env
+
+
+def spawn_clone_server(
+    root: Path, env: Optional[dict] = None
+) -> Tuple[subprocess.Popen, Optional[object]]:
+    """Start `coordinator_core.warm.server` in `root`; return `(proc, job)`.
+
+    On Windows the server is born CREATE_SUSPENDED, assigned to a kill-on-close
+    job, then resumed, so pool children spawned at boot are inside the job and
+    the whole tree dies with the holder of `job` even when no `finally` runs.
+    Pass `job` to `close_clone_job` at teardown; `job` is None off Windows.
+    """
+    env = engine_env(root) if env is None else env
+    args = [sys.executable, "-m", "coordinator_core.warm.server"]
+    common = dict(
+        cwd=str(root),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+    if sys.platform != "win32":
+        return subprocess.Popen(args, **common), None
+
+    import ctypes
+    from ctypes import wintypes
+
+    from coordinator_core.benchmarks import process_time as pt
+
+    job = pt._windows_create_kill_on_close_job()
+    try:
+        proc = subprocess.Popen(
+            args, creationflags=pt._CREATE_SUSPENDED | pt._CREATE_NO_WINDOW, **common
+        )
+    except BaseException:
+        pt._k32.CloseHandle(wintypes.HANDLE(job))
+        raise
+    try:
+        if not pt._k32.AssignProcessToJobObject(
+            wintypes.HANDLE(job), wintypes.HANDLE(int(proc._handle))
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        pt._resume_all_threads(proc.pid)
+    except BaseException:
+        proc.kill()
+        pt._k32.CloseHandle(wintypes.HANDLE(job))
+        raise
+    return proc, job
+
+
+def close_clone_job(job: Optional[object]) -> None:
+    """Close the kill-on-close job from `spawn_clone_server`, killing anything left in it."""
+    if job is None:
+        return
+    from ctypes import wintypes
+
+    from coordinator_core.benchmarks import process_time as pt
+
+    pt._k32.CloseHandle(wintypes.HANDLE(job))
 
 
 @contextlib.contextmanager
@@ -311,17 +442,10 @@ def booted_warm_engine(
     tmp_parent = mkdtemp_for_clone(source_root, prefix=prefix)
     root = tmp_parent / "clone"
     proc: Optional[subprocess.Popen] = None
+    job = None
     try:
         clone_engine(source_root, root, entrypoint=entrypoint)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "coordinator_core.warm.server"],
-            cwd=str(root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        proc, job = spawn_clone_server(root)
         deadline = time.time() + boot_wait_secs
         crumb = None
         while time.time() < deadline:
@@ -350,6 +474,7 @@ def booted_warm_engine(
                 pass
         elif proc is not None and proc.poll() is None:
             proc.terminate()
+        close_clone_job(job)
         reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=root), ignore_errors=True)
         rmtree_or_raise(tmp_parent, label=label, reaped=reaped)

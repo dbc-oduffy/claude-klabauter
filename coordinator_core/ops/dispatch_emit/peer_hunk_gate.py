@@ -97,40 +97,44 @@ def co_declared_peer_holds(
         return []
     try:
         from coordinator_core.ops import warp_run_deliverable
-        from coordinator_core.ops.dispatch_emit import sibling_claims
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, sibling_claims
 
-        claims = dict(sibling_claims.sibling_run_claims(
-            root, own_run_id, wanted, own_plan=own_plan, minted_before=minted_before, own_declared=own,
-        ))
-        for run_id in sibling_claims._unlanded_run_ids(root, own_run_id, own_plan, minted_before):
-            if warp_run_deliverable._halted(root, run_id):
-                continue
-            paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
-            if paths or prefixes:
-                continue
-            try:
-                spine = _spine_writes(root, run_id)
-            except Exception:  # noqa: BLE001 -- this sibling's spine unknown: claims nothing
-                continue
-            for path in wanted:
-                if path in spine:
-                    claims.setdefault(path, run_id)
-        holders = {p: [r] for p, r in claims.items()}
-        if holders:
-            for run_id in sibling_claims._unlanded_run_ids(root, own_run_id, own_plan, minted_before):
+        with halted_hold_release.blob_scope(root):
+            halted_hold_release.prefetch_kept_blobs(root, sibling_claims.halted_records(root, own_run_id))
+            unlanded = sibling_claims._unlanded_run_ids(root, own_run_id, own_plan, minted_before)
+            claims = dict(sibling_claims.sibling_run_claims(
+                root, own_run_id, wanted, own_plan=own_plan, minted_before=minted_before, own_declared=own,
+                unlanded=unlanded,
+            ))
+            for run_id in unlanded:
+                if warp_run_deliverable._halted(root, run_id):
+                    continue
+                paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+                if paths or prefixes:
+                    continue
+                try:
+                    spine = _spine_writes(root, run_id)
+                except Exception:  # noqa: BLE001 -- this sibling's spine unknown: claims nothing
+                    continue
                 for path in wanted:
-                    if path in holders and run_id not in holders[path] and _also_claims(root, run_id, path):
-                        holders[path].append(run_id)
-        pairs = [
-            (p, r) for p in wanted if p in holders and p in own
-            for r in sorted(holders[p]) if not _mutual_halted_hold(root, own_run_id, r, p)
-        ]
+                    if path in spine:
+                        claims.setdefault(path, run_id)
+            holders = {p: [r] for p, r in claims.items()}
+            if holders:
+                for run_id in unlanded:
+                    for path in wanted:
+                        if path in holders and run_id not in holders[path] and _also_claims(root, run_id, path):
+                            holders[path].append(run_id)
+            pairs = [
+                (p, r) for p in wanted if p in holders and p in own
+                for r in sorted(holders[p]) if not _mutual_halted_hold(root, own_run_id, r, p)
+            ]
+            holds = pairs
+            if not holds:
+                return holds
+            return _release_criterion_met(root, holds, landing_run_id=own_run_id, landing_plan=own_plan)
     except Exception:  # noqa: BLE001 -- contest unknown: hold nothing
         return []
-    holds = pairs
-    if not holds:
-        return holds
-    return _release_criterion_met(root, holds, landing_run_id=own_run_id, landing_plan=own_plan)
 
 
 def _also_claims(root: Path, run_id: str, path: str) -> bool:

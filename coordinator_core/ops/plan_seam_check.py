@@ -2,9 +2,9 @@
 coordinator_core.ops.plan_seam_check — JSON-RPC "plan.seam_check" and "plan.seam_record".
 
 Purpose: the set-level seam check over plans someone means to run together. It
-reports five finding classes (capability-without-ui-consumer, capabilities-undeclared,
-unpromised-export, writes-collision, drifted-contract) and a verdict; with ``universe`` on
-it adds a sixth, ``missing-seam``, that never blocks and never moves the verdict. The read/write
+reports six finding classes (capability-without-ui-consumer, capabilities-undeclared,
+unpromised-export, writes-collision, drifted-contract, and ``unreachable`` at wave-boundary) and a verdict; with ``universe`` on
+it adds a seventh, ``missing-seam``, that never blocks and never moves the verdict. The read/write
 pair mirrors ``plan.prep_gate`` / ``plan.stamp_prepped``: ``plan.seam_check`` evaluates
 and writes nothing; ``plan.seam_record`` evaluates inside the write so the reply and the
 files describe one tree, writes one ``docs/plans/<plan-stem>.seam.yaml`` per plan at prep
@@ -50,7 +50,11 @@ Negative-spec:
   - The universe pass adds no git call: it reads plan files and shares the
     outside-plan cache; its one HEAD question rides the existing batched cat-file.
   - Git is asked twice at most per call: one ``cat-file --batch-check`` for HEAD's
-    sha and every path-tracked question, and at wave-boundary one name-only diff.
+    sha and every path-tracked question, and at wave-boundary one ``git diff -U0`` whose
+    headers name the changed paths and whose text review.reachability reads in-process.
+  - ``unreachable`` (wave-boundary only) is non-blocking when a live, un-landed row of the same
+    plan declares the path in ``consumes`` or ``reads_at_head``; a consumer in another plan
+    does not exempt it. The sidecar is cut from the same reply.
 """
 
 from __future__ import annotations
@@ -93,7 +97,7 @@ MUTATES = ["docs/plans/*.seam.yaml", "docs/plans/*.fire.seam.yaml", "docs/plans/
 
 _RECORD_SUFFIX = {"prep": ".seam.yaml", "fire": ".fire.seam.yaml"}
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"
 _PHASES = ("prep", "fire", "wave-boundary")
 _RANGE_RE = re.compile(r"^([0-9A-Fa-f]{7,64})\.\.([0-9A-Fa-f]{7,64})$")
 
@@ -103,6 +107,7 @@ EXPORT = "unpromised-export"
 COLLISION = "writes-collision"
 DRIFT_CLASS = "drifted-contract"
 MISSING_SEAM = "missing-seam"
+UNREACHABLE = "unreachable"
 MISSING_SEAM_CAP = 50
 
 
@@ -719,6 +724,65 @@ def _drift_findings(pset, ctx, tree: _Tree, touched: list, landed_head: str) -> 
     return findings
 
 
+def _reachability_findings(pset, ctx) -> list:
+    """`unreachable` findings for the landed rows' paths, from review.reachability run in-process.
+
+    A finding is attributed to the plan whose landed row declared the path (an unattributable one
+    goes to the first set plan) and is non-blocking while a live, un-landed row of that same plan
+    declares the path in `consumes` or `reads_at_head`. An op error raises."""
+    from coordinator_core.ops.review_reachability import _handler as reachability
+
+    landed_rows = _resolve_landed(ctx, pset)
+    landed = set(landed_rows)
+    exact: Dict[str, str] = {}
+    prefixes: Dict[str, str] = {}
+    for rel, row_id in landed_rows:
+        plan = pset.get(rel) or _load_outside(ctx, rel)
+        raw = plan.raw_by_id.get(row_id) if plan is not None else None
+        if raw is None:
+            continue
+        paths, under = _raw_promises(raw)
+        for p in paths:
+            exact.setdefault(p, rel)
+        for p in under:
+            prefixes.setdefault(p, rel)
+    base, head = ctx["landed_range"].split("..")
+    declared = sorted(exact) + sorted(p.rstrip("/") + "/" for p in prefixes)
+    result = reachability(
+        {"repo_root": str(ctx["root"]), "base_sha": base, "head_sha": head,
+         "paths": declared or ["."], "diff_text": ctx["landed_diff"]},
+        ctx["root"],
+    )
+    if result.get("error"):
+        raise ValueError(f"engine failure: review.reachability: {result['error']}")
+    first = ctx["plans"][0]
+    findings: list = []
+    for entry in result.get("entries", ()):
+        if entry.get("verdict") != "unreachable":
+            continue
+        ref = str(entry.get("ref") or "")
+        path = _normalize_path(ref.split(":", 1)[0])
+        owner = exact.get(path) or next(
+            (prefixes[p] for p in prefixes if path == p or path.startswith(p.rstrip("/") + "/")), first)
+        plan = pset.get(owner)
+        awaited = plan is not None and any(
+            (owner, row.id) not in landed
+            and (plan.raw_by_id.get(row.id) or {}).get("disposition") not in ("coded", "wont_do", "voided")
+            and path in (_consumed(plan, row) | {_normalize_path(p) for p in (row.reads_at_head or ()) if isinstance(p, str) and p})
+            for row in plan.live_rows
+        )
+        findings.append(_finding(
+            owner, UNREACHABLE, not awaited,
+            f"{ref} is unreachable from production code"
+            + (": a later row of this plan consumes it" if awaited else ""),
+            path=path))
+    for click in result.get("click_paths", ()):
+        if click.get("verdict") == "broken":
+            findings.append(_finding(first, UNREACHABLE, True,
+                                     f"click path for role {click.get('role')} is broken: {click.get('broken_at')}"))
+    return findings
+
+
 def _hits(touched: str, paths: set, prefixes: set) -> bool:
     return any(a in paths or a in prefixes for a in _ancestors_or_self(touched))
 
@@ -926,13 +990,17 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
 
     touched: list = []
     if ctx["phase"] == "wave-boundary":
+        from coordinator_core.ops.review_reachability import diff_names
+
         diff = run_git(
-            ["-C", str(root), "diff", "--name-only", "--no-renames", "-z", ctx["landed_range"]],
+            ["-C", str(root), "-c", "core.quotepath=off", "diff", "-U0", "--no-color",
+             "--no-ext-diff", "--no-renames", ctx["landed_range"], "--"],
         )
-        _raise_on_timeout(diff, f"diff --name-only {ctx['landed_range']}")
+        _raise_on_timeout(diff, f"diff -U0 {ctx['landed_range']}")
         if not diff.ok:
             raise ValueError(f"cannot diff landed_range {ctx['landed_range']}")
-        touched = [p for p in diff.stdout.split("\0") if p]
+        ctx["landed_diff"] = diff.stdout
+        touched = list(dict.fromkeys(diff_names(diff.stdout)))
         for plan in pset.values():
             for row in plan.live_rows:
                 for p in row.reads or ():
@@ -992,6 +1060,7 @@ def _evaluate(params: dict, root: Path, *, record: bool = False) -> dict:
             path=raw, row=row.id))
     if ctx["phase"] == "wave-boundary":
         findings += _drift_findings(pset, ctx, tree, touched, landed_head)
+        findings += _reachability_findings(pset, ctx)
 
     findings += _cap_seams(seams, ctx["plans"])
     blocked = {f["plan"] for f in findings if f["blocking"]}

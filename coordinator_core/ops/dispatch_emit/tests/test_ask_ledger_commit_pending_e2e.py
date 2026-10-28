@@ -40,7 +40,7 @@ let _stoppedBy = [], _verifications = [], _planHeld = {};
 let _reviewIntegration = { fixes_applied: 0, sidecar_path: 'x' }, _reviewReverify = null, _reviewPrep = { slices: [1] };
 let _reviewWave = [], _deliveryVerdict = null, _deliveryNotRun = null, _waveNotRun = [], _testResult = null;
 let _haltCommit = null; const _commitHaltRecord = async () => null; const _terminalCommitParamsBlock = (p) => JSON.stringify(p);
-let _ledger = null, _falsifierResult = null, _falsifierSpec = null, _recoveryWithheld = [];
+let _ledger = null, _falsifierResult = null, _falsifierSpec = null, _recoveryWithheld = [], _ledgerSc = null;
 const _refireNextAction = () => {}; const _haltNextActionText = () => '';
 const log = () => {};
 let _memoCloseOnly = false;

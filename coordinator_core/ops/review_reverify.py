@@ -460,6 +460,19 @@ def _dangling(repo_root: Path, view: _View, manifest: dict, plan: _Plan) -> Opti
     return None
 
 
+def _orphaned_importer(repo_root: Path, plan: _Plan, edited: List[str], created: List[str]) -> Optional[str]:
+    """An error message when ``plan`` removes a module that a kept (not planned) edited or created
+    ``.py`` file imports; ``None`` when it is safe."""
+    kept_py = {p for p in [*edited, *created] if p.endswith(".py") and p not in plan}
+    for rel in sorted(plan):
+        if plan[rel][0] is not None or not rel.endswith(".py"):
+            continue
+        for importer in sorted(kept_py - {rel}):
+            if _imported_edited(repo_root, importer, {rel}):
+                return f"revert would leave {importer} importing removed {rel}"
+    return None
+
+
 def _load_record(record: Path) -> dict:
     try:
         data = json.loads(record.read_text(encoding="utf-8"))
@@ -624,22 +637,28 @@ def review_reverify(
     if revert:
         vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
         at_base = {str(i) for i in failing_at_base or []}
-        pre_existing = sorted(n for n in ids if n in at_base or n in already)
-        not_base_red = sorted(n for n in ids if n in vouched and n not in at_base and n not in already)
+        recorded_pre = {str(n) for n in prior["pre_existing"]}
+        pre_existing = sorted(n for n in ids if n in at_base or n in already or n in recorded_pre)
+        not_base_red = sorted(
+            n for n in ids if n in vouched and n not in at_base and n not in already and n not in recorded_pre
+        )
         skip = set(pre_existing) | set(not_base_red)
     else:
         pre_existing, not_base_red, skip = [], [], set()
-    implication = _implication(repo_root, [n for n in ids if n not in skip], edited, created)
+    foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
+    foreign_node = {n for n in ids if n not in skip and _node_file(n) in foreign_set}
+    implication = _implication(repo_root, [n for n in ids if n not in skip and n not in foreign_node], edited, created)
     implicated: Dict[str, List[str]] = {}
     unattributed: List[str] = []
-    foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
+    for node in sorted(foreign_node):
+        if node not in already:
+            unattributed.append(node)
+        foreign_ids.append(node)
     for node, targets in implication.items():
         for target in targets:
             implicated.setdefault(target, []).append(node)
         if not targets and node not in already:
             unattributed.append(node)
-            if _node_file(node) in foreign_set:
-                foreign_ids.append(node)
 
     if probe == "open":
         return _open_probe(repo_root, snapshot_dir, list(implication), implicated, created_set, side)
@@ -686,7 +705,7 @@ def review_reverify(
             refs_by_rel[rel] = inv.reverted
 
     unattributed.extend(n for n in not_base_red if n not in unattributed)
-    refusal = _dangling(repo_root, view, manifest, plan)
+    refusal = _orphaned_importer(repo_root, plan, edited, created) or _dangling(repo_root, view, manifest, plan)
     if refusal:
         return _fail(refusal, True)
 

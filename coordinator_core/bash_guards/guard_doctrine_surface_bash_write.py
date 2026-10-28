@@ -386,6 +386,42 @@ def _unquoted_mask(text: str) -> "list[bool]":
     return mask
 
 
+#: Flag names that conventionally name a destination, so their store value is a
+#: write the script performs, not a read argument.
+_WRITE_FLAG_RE = re.compile(
+    r"--(?:[\w-]*-)?(?:out|outfile|output|outputfile|dest|destination|write|save|to|into|target|append|export|emit)(?:-[\w-]*)?",
+    re.IGNORECASE,
+)
+
+
+def _is_script_run_with_store_flag_values(words: "list[str]") -> bool:
+    """``python <script>.py ... --flag <store path> ...``: an interpreter run of a
+    script file whose every store mention is the value of a ``--flag`` (a read
+    argument, as ``--sizing state/sizings/x.yaml``). A positional store path, a
+    short flag, ``-c``/``-m`` or any non-script invocation is not this shape."""
+    if len(words) < 2 or not re.fullmatch(
+        r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", _command_token_basename(words[0]).lower()
+    ):
+        return False
+    if not words[1].lower().endswith(".py") or _names_store(words[1]):
+        return False
+    for pos in range(2, len(words)):
+        word = words[pos]
+        if not _names_store(word):
+            continue
+        if word.startswith("--"):
+            if "=" not in word or _names_store(word.split("=", 1)[0]):
+                return False
+            flag = word.split("=", 1)[0]
+        elif not words[pos - 1].startswith("--") or "=" in words[pos - 1]:
+            return False
+        else:
+            flag = words[pos - 1]
+        if _WRITE_FLAG_RE.fullmatch(flag):
+            return False
+    return True
+
+
 def _segment_writes_outside_store(segment: str) -> bool:
     """True when ``segment`` provably writes nowhere in the sizing store: every
     redirect target resolves to a path outside it, and the command word is a
@@ -427,6 +463,8 @@ def _segment_writes_outside_store(segment: str) -> bool:
         and len(words) == idx + 3
         and _is_pure_python_c_body(words[idx + 2])
     ):
+        return True
+    if _is_script_run_with_store_flag_values(words[idx:]):
         return True
     if prog == "xargs":
         idx += 1
@@ -1329,6 +1367,45 @@ def _has_stdin_program_unresolved_governed_write(
         ):
             return True
     return False
+
+
+#: ``--flag 'value'`` / ``--flag="value"``: a quoted free-text flag value.
+_QUOTED_FLAG_VALUE_RE = re.compile(
+    r"(?<![\w-])(?P<flag>--[\w-]+)(?P<sep>=|[ \t]+)(?P<val>'[^'\n]*'|\"[^\"\n]*\")"
+)
+#: Flags whose quoted value is a destination or a program, never free text.
+_CODE_OR_DEST_FLAG_RE = re.compile(
+    r"--(?:[\w-]*-)?(?:exec|command|cmd|script|eval|expression|program|run|shell"
+    r"|regexp|file|path)(?:-[\w-]*)?",
+    re.IGNORECASE,
+)
+
+
+def _blank_quoted_flag_value_mentions(
+    segment: str, identifiers_lower: Tuple[str, ...]
+) -> str:
+    """``segment`` with each quoted ``--flag`` value that names a governed
+    identifier replaced by ``''``: such a value is content (a ``--body``), not a
+    write target. A destination or program flag, a double-quoted value carrying
+    a live substitution, and a value outside a ``--flag`` are left alone."""
+    if "--" not in segment:
+        return segment
+    mask = _unquoted_mask(segment)
+
+    def _blank(match: "re.Match[str]") -> str:
+        flag = match.group("flag")
+        val = match.group("val")
+        if not mask[match.start()]:
+            return match.group(0)
+        if _WRITE_FLAG_RE.fullmatch(flag) or _CODE_OR_DEST_FLAG_RE.fullmatch(flag):
+            return match.group(0)
+        if not _mentions_governed_identifier(val, identifiers_lower):
+            return match.group(0)
+        if val[0] == '"' and ("`" in val or "$(" in val):
+            return match.group(0)
+        return flag + match.group("sep") + "''"
+
+    return _QUOTED_FLAG_VALUE_RE.sub(_blank, segment)
 
 
 def _blank_prose_literal_mentions(cmd: str, identifiers_lower: Tuple[str, ...]) -> str:
@@ -2286,6 +2363,7 @@ def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
     )
     for segment in data_stripped_segments:
         segment = _neutralize_mention_only_python_substitutions(segment, identifiers_lower)
+        segment = _blank_quoted_flag_value_mentions(segment, identifiers_lower)
         if not _mentions_governed_identifier(segment, identifiers_lower):
             continue
         segment = _neutralize_home_path_operands(segment, identifiers_lower)

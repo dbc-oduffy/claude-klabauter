@@ -31,10 +31,9 @@ Negative spec:
     break; here a wedged run's SLOT is reclaimed by SLOT_STALE_TTL_SECS
     without touching the process, so the box keeps its K and the operator keeps
     their runaway to debug. Killing a scoped test run is not this tool's call.
-  - On acquisition timeout it REFUSES (fail CLOSED): the already-launched
-    child is terminated, stderr names the slot holder(s), and the exit code is
-    75. There is no bypass flag. The child is launched before the wait (its pid
-    keys slot liveness), so it may already have run, or finished, by then.
+  - On acquisition timeout it REFUSES (fail CLOSED): stderr names the slot
+    holder(s), the exit code is 75, and the child was never launched. There is
+    no bypass flag.
   - Otherwise the exit code is the child's, unmodified.
 """
 
@@ -351,18 +350,15 @@ def main(argv: List[str]) -> int:
     owner = tier_t_slots.owner_id() if owner_label is None else owner_label
     cmd_text = " ".join(command)
 
-    # Acquired around the child rather than inside it: the slot must be held
-    # for the child's whole lifetime, and `pid=` is handed the CHILD's pid so a
-    # slot is judged live against the process actually doing the work — the
-    # PID-LIVENESS contract in suite_mutex's module docstring, which this
-    # wrapper would otherwise violate by recording its own short-lived pid.
+    # The slot is acquired BEFORE the child is launched, so a timeout refuses
+    # with the command never started. It is recorded under this wrapper's own
+    # pid, which satisfies the PID-LIVENESS contract in suite_mutex's module
+    # docstring because the wrapper blocks on the child and so outlives it.
     proc: Optional[subprocess.Popen] = None
     slot = None
     try:
-        proc = subprocess.Popen(launch_command, **no_console_passthrough_kwargs())
-        slot = tier_t_slots.acquire_slot(owner, cmd_text, wait, pid=proc.pid)
+        slot = tier_t_slots.acquire_slot(owner, cmd_text, wait, pid=os.getpid())
         if slot is None:
-            _stop_child(proc)
             taken, cap, holders = tier_t_slots.occupancy()
             held_by = "; ".join(
                 f"slot {h.get('slot')} owner={h.get('owner')} pid={h.get('pid')} "
@@ -375,6 +371,7 @@ def main(argv: List[str]) -> int:
                 file=sys.stderr,
             )
             return _EXIT_SLOT_TIMEOUT
+        proc = subprocess.Popen(launch_command, **no_console_passthrough_kwargs())
         return proc.wait()
     except KeyboardInterrupt:
         if proc is not None:

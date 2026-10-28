@@ -280,6 +280,132 @@ def test_no_console_creationflags_used_by_run_and_wait(tool, monkeypatch, tmp_pa
         assert captured.get(key) == value
 
 
+def _lease(tmp_path):
+    """Where `_run_and_wait` puts the single-rebuild lease for a cwd with no `.git`."""
+    return tmp_path / "coordinator-sessions" / "scip-rebuild-lease.json"
+
+
+def _forbid_popen(tool, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("Popen reached")
+
+    monkeypatch.setattr(tool.subprocess, "Popen", boom)
+
+
+def _patch_admission(monkeypatch, admitted):
+    import coordinator_core.bash_guards._heavy_command_class as hcc
+
+    verdict = hcc.SpawnAdmission(admitted, "HOLD scip-rebuild: test" if not admitted else "ADMIT", "scip-rebuild", 4.0)
+    monkeypatch.setattr(hcc, "admit_before_spawn", lambda key, peak: verdict)
+    monkeypatch.setattr(hcc, "register_spawn", lambda *a, **k: None)
+
+
+def _fake_pids(tool, monkeypatch, alive, started=None):
+    killed = []
+    monkeypatch.setattr(tool, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(tool, "_proc_started", lambda pid: (started or {}).get(pid))
+    monkeypatch.setattr(tool, "_kill_tree", killed.append)
+    return killed
+
+
+def test_second_concurrent_rebuild_is_deduped_without_spawning(tool, monkeypatch, tmp_path):
+    _fake_pids(tool, monkeypatch, alive={9001})
+    lease = _lease(tmp_path)
+    lease.parent.mkdir(parents=True)
+    lease.write_text(json.dumps({"sequencer_pid": 9001, "child_pid": None}), encoding="utf-8")
+    _forbid_popen(tool, monkeypatch)
+    code, _out, err = tool._run_and_wait(["cli", "scip-rebuild"], tmp_path, 5)
+    assert code is None and err.startswith("dedupe: ")
+    assert lease.is_file(), "the live holder's lease must survive a deduped caller"
+
+
+def test_dead_sequencers_orphaned_rebuild_is_reaped_and_lease_retaken(tool, monkeypatch, tmp_path):
+    import os
+
+    killed = _fake_pids(tool, monkeypatch, alive={9002})
+    lease = _lease(tmp_path)
+    lease.parent.mkdir(parents=True)
+    lease.write_text(
+        json.dumps({"sequencer_pid": 9001, "child_pid": 9002, "child_started": None}), encoding="utf-8"
+    )
+    assert tool._claim_lease(lease) is None
+    assert killed == [9002]
+    assert json.loads(lease.read_text(encoding="utf-8"))["sequencer_pid"] == os.getpid()
+
+
+def test_recycled_child_pid_is_not_killed(tool, monkeypatch, tmp_path):
+    killed = _fake_pids(tool, monkeypatch, alive={9002}, started={9002: 500.0})
+    lease = _lease(tmp_path)
+    lease.parent.mkdir(parents=True)
+    lease.write_text(
+        json.dumps({"sequencer_pid": 9001, "child_pid": 9002, "child_started": 1.0}), encoding="utf-8"
+    )
+    assert tool._claim_lease(lease) is None
+    assert killed == []
+
+
+def test_refused_admission_spawns_nothing_and_frees_the_lease(tool, monkeypatch, tmp_path):
+    _patch_admission(monkeypatch, admitted=False)
+    _forbid_popen(tool, monkeypatch)
+    code, _out, err = tool._run_and_wait(["cli", "scip-rebuild"], tmp_path, 5)
+    assert code is None and err.startswith("admission: HOLD")
+    assert not _lease(tmp_path).exists()
+
+
+def test_timeout_kills_the_rebuild_tree_and_frees_the_lease(tool, monkeypatch, tmp_path):
+    import subprocess
+
+    _patch_admission(monkeypatch, admitted=True)
+    killed = []
+
+    class _Hung:
+        pid = 4242
+
+        def communicate(self, timeout=None):
+            raise subprocess.TimeoutExpired("cli", timeout)
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(tool.subprocess, "Popen", lambda argv, **kw: _Hung())
+    monkeypatch.setattr(tool, "_kill_tree", killed.append)
+    monkeypatch.setattr(tool, "_bind_child_to_caller", lambda proc: None)
+    code, _out, err = tool._run_and_wait(["cli", "scip-rebuild"], tmp_path, 1)
+    assert (code, err) == (None, "")
+    assert killed == [4242]
+    assert not _lease(tmp_path).exists()
+
+
+def test_admitted_rebuild_is_leased_while_running_then_released(tool, monkeypatch, tmp_path):
+    _patch_admission(monkeypatch, admitted=True)
+    seen = {}
+
+    class _Proc:
+        pid = 5151
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            seen["lease"] = json.loads(_lease(tmp_path).read_text(encoding="utf-8"))
+            return "", ""
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(tool.subprocess, "Popen", lambda argv, **kw: _Proc())
+    monkeypatch.setattr(tool, "_bind_child_to_caller", lambda proc: None)
+    assert tool._run_and_wait(["cli", "scip-rebuild"], tmp_path, 5)[0] == 0
+    assert seen["lease"]["child_pid"] == 5151
+    assert not _lease(tmp_path).exists()
+
+
+def test_run_reports_dedupe_and_does_not_publish(tool, monkeypatch, tmp_path, fake_cli):
+    monkeypatch.setattr(tool, "_git_common_dir", lambda root: None)
+    calls = _calls_recorder(monkeypatch, tool, [(None, "", "dedupe: a rebuild is already running (sequencer pid 7)")])
+    result = tool.run("handoff", tmp_path, cli_override=str(fake_cli))
+    assert result.startswith("publish-repo-bundle: skipped -- scip-rebuild deduped")
+    assert len(calls) == 1
+
+
 def test_main_always_exits_zero_on_registry_failure(tool, monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (None, "registry key unset"))
     exit_code = tool.main(["--ceremony", "handoff", "--repo-root", str(tmp_path)])

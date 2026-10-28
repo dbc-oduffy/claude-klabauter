@@ -2704,27 +2704,10 @@ def _wg_memory_store_cap_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     mp.setenv("USERPROFILE", str(home))
     mp.delenv("CLAUDE_HOME", raising=False)
     mp.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(scratch_dir))
-    content = "# Memory Index\n\n" + ("x" * 2100)
+    content = "---\ntype: project\n---\n" + ("x" * 900)
     return {
         "tool_name": "Write",
-        "tool_input": {"file_path": str(mem / "MEMORY.md"), "content": content},
-    }
-
-
-def _wg_memory_store_cap_reroute_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
-    home = scratch_dir / "home"
-    mem = home / ".claude" / "projects" / "-Some-project" / "memory"
-    mem.mkdir(parents=True)
-    for i in range(5):
-        (mem / f"body-{i}.md").write_text("kept", encoding="utf-8")
-    mp.setenv("HOME", str(home))
-    mp.setenv("USERPROFILE", str(home))
-    mp.delenv("CLAUDE_HOME", raising=False)
-    mp.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(scratch_dir))
-    mp.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_GUARD-MEMORY-STORE-CAP", "strict")
-    return {
-        "tool_name": "Write",
-        "tool_input": {"file_path": str(mem / "sixth.md"), "content": "a sixth memory\n"},
+        "tool_input": {"file_path": str(mem / "big.md"), "content": content},
     }
 
 
@@ -3628,7 +3611,6 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         ),
     ),
     WriteGuardRow("guard_memory_store_cap", "fire", True, _wg_memory_store_cap_fire),
-    WriteGuardRow("guard_memory_store_cap", "reroute-fire", True, _wg_memory_store_cap_reroute_fire),
     WriteGuardRow("guard_memory_store_cap", "control", False, _wg_benign),
     WriteGuardRow("block_cutover_phase_hand_edit", "fire", True, _wg_cutover_phase_fire),
     WriteGuardRow("block_cutover_phase_hand_edit", "control", False, _wg_benign),

@@ -458,3 +458,18 @@ class TestOverCap:
         envelope = _envelope(additional_context="x" * (msz.MESSAGE_PROSE_CAP_BYTES + 1))
         result = msz.measure_envelope(envelope)
         assert result.over_cap is True
+
+
+class TestRouteLineTail:
+
+    def test_route_line_lands_in_tail_bytes(self):
+        from coordinator_core.guard_routes.keys import route_line
+
+        line = route_line("some-guard")
+        text = "Denied: reason.\n\nGuard: `some-guard`. " + line
+        result = msz.measure_envelope(_envelope(permission_reason=text))
+        assert result.tail_bytes == len(line.encode("utf-8"))
+
+    def test_no_route_line_leaves_tail_zero(self):
+        result = msz.measure_envelope(_envelope(permission_reason="Denied.\n\nGuard: `some-guard`."))
+        assert result.tail_bytes == 0

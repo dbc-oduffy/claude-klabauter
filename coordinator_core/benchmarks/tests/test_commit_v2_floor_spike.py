@@ -52,7 +52,6 @@ import os
 import shutil
 import statistics
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path
@@ -64,9 +63,11 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.benchmarks.process_time import IS_WINDOWS, LiveTreeAccountant
 from coordinator_core.benchmarks.isolated_clone import (
+    close_clone_job,
     mkdtemp_for_clone,
     reap_processes_under,
     rmtree_or_raise,
+    spawn_clone_server,
 )
 from coordinator_core.warm import breadcrumb, supervisor
 
@@ -183,18 +184,11 @@ def warm_root() -> Iterator[tuple]:
     tmp_parent = mkdtemp_for_clone(source_root, prefix="commit-v2-floor-spike-")
     root = tmp_parent / "clone"
     proc: Optional[subprocess.Popen] = None
+    job = None
     try:
         _hardlink_coordinator_core(source_root, root)
         _write_isolated_stamp(root)
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "coordinator_core.warm.server"],
-            cwd=str(root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=_CREATE_NO_WINDOW,
-        )
+        proc, job = spawn_clone_server(root)
         deadline = time.time() + _BOOT_WAIT_SECS
         crumb = None
         while time.time() < deadline:
@@ -219,6 +213,7 @@ def warm_root() -> Iterator[tuple]:
         elif proc is not None and proc.poll() is None:
             proc.terminate()
         _retire_detached_listener(root)
+        close_clone_job(job)
         reaped = reap_processes_under(tmp_parent)
         shutil.rmtree(breadcrumb.svc_dir(engine_root=root), ignore_errors=True)
         rmtree_or_raise(tmp_parent, label="commit_v2_floor_spike", reaped=reaped)

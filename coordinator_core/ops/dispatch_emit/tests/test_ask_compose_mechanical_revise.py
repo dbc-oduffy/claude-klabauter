@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 
 
 def _stub_wrap(text):
@@ -60,4 +64,4 @@ def test_substantive_branch_still_reblitzes_once():
     assert block.count("await planBlitz(") == 1
     assert block.count("label: 'plan-revise'") == 1
     assert "_blitz.regate = _reblitz" in block
-    assert "_rePulled" in block and "_repeatBlocking = _rePulled.blocking" in block
+    assert "_rePulled" in block and "_repeatBlocking = _fb" in block

@@ -45,10 +45,9 @@ doc pointer legitimately appears, per AC-2) was the one it could not reach.
 text-composition half, never the one-shot SENTINEL-CONSUME half:
 
   - Mirrored (read-only, side-effect-free): `_is_hard_deny_envelope`
-    (`permissionDecision == "deny"`) and `_sentinel_eligible`
-    (`entry.fail_closed or entry.name in dispatch._SENTINEL_ELIGIBLE_
-    ADVISORY_GUARDS`) -- the exact two predicates `dispatch.py`'s own loop
-    gates on before it would even consider appending the unlock block.
+    (`permissionDecision == "deny"`) -- the one predicate `dispatch.py`'s own
+    loop gates annotation on (every deny is annotated; sentinel eligibility
+    gates only the consume), with `payload` threaded through.
   - Deliberately NOT mirrored: `dispatch._consume_unlock` (unlinks a real
     on-disk sentinel file keyed to `(session_id, guard_name)`). This seam's
     callers (`guard_message_corpus.py`'s ~150+ corpus cells) mint a FRESH
@@ -109,15 +108,12 @@ def _is_hard_deny_envelope(out: Optional[Dict[str, Any]]) -> bool:
 
 def _maybe_annotate_deny(
     entry_name: str,
-    fail_closed: bool,
     envelope: Optional[Dict[str, Any]],
     session_id: str,
     agent_id: str,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not _is_hard_deny_envelope(envelope):
-        return envelope
-    sentinel_eligible = fail_closed or entry_name in dispatch._SENTINEL_ELIGIBLE_ADVISORY_GUARDS
-    if not sentinel_eligible:
         return envelope
     return _annotate_unlock(
         envelope,
@@ -125,6 +121,7 @@ def _maybe_annotate_deny(
         entry_name,
         _override_keys_doc_display(),
         agent_id=agent_id,
+        payload=payload,
     )
 
 
@@ -154,7 +151,7 @@ def capture_all_guards(
         if envelope is not None and not isinstance(envelope, (dict, list)):
             envelope = dispatch._render_record(envelope, payload)
         envelope = _maybe_annotate_deny(
-            entry.name, entry.fail_closed, envelope, session_id, agent_id
+            entry.name, envelope, session_id, agent_id, payload
         )
         captures.append(GuardCapture(name=entry.name, band=entry.band, envelope=envelope))
     return captures

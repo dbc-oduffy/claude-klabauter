@@ -15,6 +15,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
+pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
+
 
 def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]
@@ -68,7 +70,9 @@ def test_old_halt_string_and_emission_unchanged():
     [
         (["a", "b"], ["a", "b"], True),
         (["a", "b"], ["a", "c"], False),
-        (["a", "b"], ["b", "a"], False),
+        (["a", "b"], ["b", "a"], True),
+        (["a", "b"], ["a"], False),
+        (["a", "a"], ["a", "b"], False),
         (None, ["a"], False),
         (["a"], None, False),
         ([], [], False),
@@ -88,3 +92,56 @@ def test_comparison_runs_over_equal_different_and_absent_sets(first, second, exp
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
     assert (json.loads(out) is not None) is expect_halt
+
+
+def _run_compare(first_obj, second_obj):
+    js = (
+        f"const _pulledEntry = {json.dumps(first_obj)}; const _rePulled = {json.dumps(second_obj)};"
+        "let _planRel = null; let _repeatBlocking = null;"
+        f"{_compare_line(_script())}\nconsole.log(JSON.stringify(_repeatBlocking));"
+    )
+    out = subprocess.run(
+        ["node", "-"], input=js, capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout.strip()
+    return json.loads(out)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_same_verdict_label_with_different_findings_does_not_halt():
+    label = ["coordinator:staff-eng: 'BLOCKED'"]
+    first = {"blocking": label, "reviews": [{"findings": ["f1", "f2"]}]}
+    second = {"blocking": label, "reviews": [{"findings": ["f3"]}]}
+    assert _run_compare(first, second) is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_label_only_blocking_never_counts_as_a_repeat_but_identical_findings_do():
+    label = ["coordinator:staff-eng: 'BLOCKED'"]
+    assert _run_compare({"blocking": label}, {"blocking": label}) is None
+    same = {"blocking": label, "reviews": [{"findings": ["f1"]}]}
+    assert _run_compare(same, same) == ["f1"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_same_findings_under_different_blocking_row_count_halt_and_name_findings():
+    reviews = [{"findings": ["f1", "f2"]}]
+    first = {"blocking": ["coordinator:staff-eng: 'BLOCKED'"], "reviews": reviews}
+    second = {"blocking": ["coordinator:staff-eng: 'BLOCKED'", "coordinator:apm: 'PIVOT'"], "reviews": reviews}
+    assert _run_compare(first, second) == ["f1", "f2"]
+    assert _run_compare(second, first) == ["f1", "f2"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+def test_different_findings_under_different_blocking_row_count_do_not_halt():
+    first = {"blocking": ["x: 'BLOCKED'"], "reviews": [{"findings": ["f1"]}]}
+    second = {"blocking": ["x: 'BLOCKED'", "y: 'BLOCKED'"], "reviews": [{"findings": ["f2"]}]}
+    assert _run_compare(first, second) is None

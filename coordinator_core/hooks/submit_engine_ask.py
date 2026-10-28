@@ -887,6 +887,15 @@ def evaluate(
         if clash:
             return deny("PreToolUse", clash)
 
+    retire_note = ""
+    if sizing_rel and reserved_run_id is None:
+        from coordinator_core.ops.dispatch_emit.ask_gate import retire_token_spent_halt
+
+        try:
+            retire_token_spent_halt(root, sizing_rel)
+        except (OSError, ValueError) as exc:  # non-blocking: a failed retire leaves the halted run resumable
+            retire_note = f" Retiring the spent halt failed: {type(exc).__name__}: {exc}."
+
     params: dict = {"session_id": session_id or ""}
     if sizing_rel and _has_research_block(sizing_doc):
         if "ask_brief" in brief or "ask_brief_file" in brief:
@@ -970,7 +979,12 @@ def evaluate(
         new_input["args"] = result["fire_args"]
     inherited = result.get("revisions_inherited")
     carries = (
-        " Carries revisions: " + "; ".join(f"{r['id']} ({r['first_line']})" for r in inherited) + "."
+        " Carries revisions: "
+        + "; ".join(
+            f"{r['id']} (EM note: {r['first_line']})" if r.get("kind") == "note" else f"{r['id']} ({r['first_line']})"
+            for r in inherited
+        )
+        + "."
         if inherited
         else ""
     )
@@ -1013,7 +1027,7 @@ def evaluate(
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived} {tail} {_revise_hint(str(run_id))}",
+        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived}{retire_note} {tail} {_revise_hint(str(run_id))}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
@@ -1037,7 +1051,11 @@ def _handler(params: dict, repo_root=None) -> dict:
     payload = payload_of(params)
     from coordinator_core.machine_profile import apply_guard_level
 
-    return apply_guard_level(GUARD_NAME, evaluate(payload)) or no_advisory()
+    try:
+        envelope = evaluate(payload)
+    except Exception as exc:
+        envelope = deny("PreToolUse", f"The submit hook failed: {type(exc).__name__}: {exc}. Check for an existing run record before re-submitting.")
+    return apply_guard_level(GUARD_NAME, envelope) or no_advisory()
 
 
 __all__ = [

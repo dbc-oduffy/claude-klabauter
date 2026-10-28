@@ -89,6 +89,65 @@ def test_heredoc_opener_and_later_launch_still_denied(command):
     assert check(_payload(command)) is not None
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m likeness.dense_map_2d.bfm_operator --in a",
+        "python3 -m likeness.dense_map_2d.bfm_operator",
+        "py -3 -m likeness.dense_map_2d.bfm_operator",
+        "python -u -m likeness.dense_map_2d.bfm_operator",
+        "python likeness/dense_map_2d/bfm_operator.py --in a",
+        "python3 ./bfm_operator.py",
+        "python -W ignore bfm_operator.py",
+        "python -X utf8 -m likeness.dense_map_2d.bfm_operator",
+        "py bfm_operator.py",
+        ".venv\\Scripts\\python.exe -m likeness.dense_map_2d.bfm_operator",
+        "cd /x && PYTHONPATH=. python -m likeness.dense_map_2d.bfm_operator",
+    ],
+)
+def test_denies_a_declared_heavy_python_cli(command):
+    result = check(_payload(command))
+    assert result is not None
+    reason = _reason(result)
+    assert "needs_slot" in reason
+    assert "Unreal" not in reason
+
+
+def test_every_declared_heavy_python_name_passes_the_prefilter():
+    from coordinator_core.bash_guards import guard_subagent_heavy_ue_launch as g
+
+    declared = {m.rsplit(".", 1)[-1] for m in g._HEAVY_PY_MODULES} | set(g._HEAVY_PY_SCRIPTS)
+    assert declared
+    for name in declared:
+        assert any(p in name.lower() for p in g._PY_PREFILTER), name
+
+
+@pytest.mark.parametrize(
+    "command", ["python -m likeness.dense_map_2d.overlay --in a", "python overlay_other.py"]
+)
+def test_overlay_module_is_denied_only_as_a_declared_module(command):
+    assert (check(_payload(command)) is not None) == ("-m" in command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest tests/test_x.py",
+        "python3 scripts/other.py",
+        "py -3 -m json.tool a.json",
+        "grep -n bfm_operator foo.py",
+        "echo python -m likeness.dense_map_2d.bfm_operator",
+        "python tools/x.py bfm_operator",
+    ],
+)
+def test_allows_a_non_declared_python_command(command):
+    assert check(_payload(command)) is None
+
+
+def test_declared_heavy_python_is_not_guarded_for_the_main_loop():
+    assert check(_payload("python -m likeness.dense_map_2d.bfm_operator", agent_id=None)) is None
+
+
 @pytest.mark.parametrize("agent_id", [None, "", "   "])
 def test_main_loop_is_never_guarded(agent_id):
     assert check(_payload("Build.bat Foo Win64", agent_id=agent_id)) is None
@@ -117,3 +176,30 @@ def test_registered_in_the_roster_as_a_confinement_deny():
     (entry,) = [e for e in guard_roster() if e.id == "guard-subagent-heavy-ue-launch"]
     assert entry.band == "confinement-deny" and entry.fail_closed
     assert entry.script == "bash_guards/guard_subagent_heavy_ue_launch.py"
+
+
+OVERLAY_CMD = (
+    "cd /fixture/likeness-prototype; python -m likeness.dense_map_2d.overlay "
+    "--run-key 2026-10-27-hrn-photo-run --photos-key fifa-photos "
+    "--out-key 2026-10-27-dv01-end/png-kane > scratch/dv01-c3-overlay.log 2>&1"
+)
+
+
+def test_the_overlay_cli_with_cd_prefix_and_redirect_launches_heavy():
+    from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import launches_heavy
+
+    assert launches_heavy(OVERLAY_CMD)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest a.py",
+        "python -m json.tool",
+        "python -m likeness.dense_map_2d.other",
+    ],
+)
+def test_light_python_modules_do_not_launch_heavy(command):
+    from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import launches_heavy
+
+    assert not launches_heavy(command)

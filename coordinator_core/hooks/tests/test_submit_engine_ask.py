@@ -136,6 +136,32 @@ def test_a_refire_echoes_the_revisions_it_carries(tmp_path):
     assert "Carries revisions" not in plain
 
 
+def test_a_refire_names_carried_notes_as_em_notes(tmp_path):
+    root = _repo(tmp_path)
+
+    def emit(params, root_):
+        out = _Emit()(params, root_)
+        out["revisions_inherited"] = [
+            {"id": "R4", "first_line": "cover Windows", "kind": "revision"},
+            {"id": "N1", "first_line": "prefer sqlite", "kind": "note"},
+        ]
+        return out
+
+    ctx = _hso(mod.evaluate(_payload(root, {"ask": "a"}), emit=emit))["additionalContext"]
+    assert "Carries revisions: R4 (cover Windows); N1 (EM note: prefer sqlite)." in ctx
+
+
+def test_handler_turns_an_evaluate_crash_into_a_named_deny(monkeypatch):
+    def boom(payload):
+        raise RuntimeError("kaput")
+
+    monkeypatch.setattr(mod, "evaluate", boom)
+    out = mod._handler({"tool_name": "Workflow", "tool_input": {}})
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "RuntimeError: kaput" in hso["permissionDecisionReason"]
+
+
 def test_the_allow_reason_carries_the_workflow_revise_call_shape(tmp_path):
     root = _repo(tmp_path)
     ctx = _hso(mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit()))["additionalContext"]
@@ -430,6 +456,53 @@ def test_second_submission_of_a_live_sizing_is_denied(tmp_path):
     assert hso["permissionDecision"] == "deny"
     assert "ask-20261013T000000-abcdef is already working state/sizings/a.yaml" in hso["permissionDecisionReason"]
     assert len(emit.calls) == 1
+
+
+_SPENT_SIZING = "state/sizings/2026-10-01-gate.yaml"
+_SPENT_RUN = "warp-2026-10-01-gate-20261027T142436-989a2d"
+
+
+def _halted_run(root: Path, *, token_spent: bool) -> Path:
+    from coordinator_core.ops.dispatch_emit.ask_gate import TOKEN_SPENT_FILE
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+
+    rd = root / "state" / "warp" / _SPENT_RUN
+    write_halt_marker(rd, halted="refusal", sizing_rel=_SPENT_SIZING)
+    if token_spent:
+        (rd / TOKEN_SPENT_FILE).write_text("{}\n", encoding="utf-8")
+    return rd
+
+
+def test_a_sizing_submission_retires_the_halted_run_whose_token_is_spent(tmp_path):
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
+
+    root = _repo(tmp_path)
+    _halted_run(root, token_spent=True)
+    assert halted_run_for(root, _SPENT_SIZING) == _SPENT_RUN
+    emit = _Emit()
+    out = mod.evaluate(_payload(root, {"sizing": _SPENT_SIZING}), emit=emit)
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert halted_run_for(root, _SPENT_SIZING) is None
+    assert len(emit.calls) == 1
+
+
+def test_a_sizing_submission_leaves_a_halted_run_with_a_live_token_resumable(tmp_path):
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
+
+    root = _repo(tmp_path)
+    rd = _halted_run(root, token_spent=False)
+    before = (rd / "halted.json").read_bytes()
+    out = mod.evaluate(_payload(root, {"sizing": _SPENT_SIZING}), emit=_Emit())
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert halted_run_for(root, _SPENT_SIZING) == _SPENT_RUN
+    assert (rd / "halted.json").read_bytes() == before
+
+
+def test_a_sizing_submission_with_no_halted_run_touches_no_run_state(tmp_path):
+    root = _repo(tmp_path)
+    out = mod.evaluate(_payload(root, {"sizing": _SPENT_SIZING}), emit=_Emit())
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert not (root / "state" / "warp").exists()
 
 
 def _tokens(root: Path) -> list:

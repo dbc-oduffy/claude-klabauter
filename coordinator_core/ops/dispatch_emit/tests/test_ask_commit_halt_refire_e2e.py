@@ -100,6 +100,13 @@ def _second_run(root) -> str:
 
 
 def _commit(root, token: str, inline_review: dict) -> dict:
+    # The review floor counts wave reviews whose sidecar exists; the recorded verdict carries only counts.
+    sidecar = root / ".git" / "wave-review-sidecar.md"
+    sidecar.write_text("verdict\n", encoding="utf-8")
+    inline_review = {
+        **inline_review,
+        "wave_reviews": [{"verdict": "clean", "sidecar_path": ".git/wave-review-sidecar.md"}],
+    }
     return terminal_commit._handler(
         {
             "script_path": SCRIPT2, "run_id": RUN2, "run_token": token, "incomplete_chunks": [],

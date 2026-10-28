@@ -17,6 +17,7 @@ PINNED_LEGS = [
     ("sessionstart_ensure_http_forwarder", ALL_FIVE),
     ("session_start_write_plugin_root_breadcrumb", ALL_FIVE),
     ("prune_claude_temp", {"startup"}),
+    ("retention_run", {"startup"}),
 ]
 
 _LEG_ATTRS = {
@@ -25,6 +26,7 @@ _LEG_ATTRS = {
     "sessionstart_ensure_http_forwarder": "_sessionstart_ensure_http_forwarder_handler",
     "session_start_write_plugin_root_breadcrumb": "_session_start_write_plugin_root_breadcrumb_handler",
     "prune_claude_temp": "_prune_claude_temp_leg",
+    "retention_run": "_retention_run_leg",
 }
 
 
@@ -65,6 +67,14 @@ def test_startup_only_leg_runs_on_startup_not_resume(calls, tmp_path):
     assert "session_start_repair_prepare_commit_msg_hook" not in calls
 
 
+def test_retention_run_leg_swallows_spawn_failure(monkeypatch):
+    def boom(_root):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(mod.retention_run, "spawn_if_due", boom)
+    assert mod._retention_run_leg({}) is None
+
+
 def test_missing_source_runs_nothing(calls, tmp_path):
     assert _run({"cwd": str(tmp_path)}) == {}
     assert calls == []
@@ -84,5 +94,5 @@ def test_raising_leg_does_not_drop_others(calls, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_session_start_register_published_engine_handler", boom)
     _run({"source": "startup", "cwd": str(tmp_path)})
     assert "session_start_register_published_engine" not in calls
-    assert calls[-1] == "prune_claude_temp"
-    assert len(calls) == 4
+    assert calls[-1] == "retention_run"
+    assert len(calls) == 5

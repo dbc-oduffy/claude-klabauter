@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ from coordinator_core.warm import breadcrumb
 ROLE_SUPERVISOR = "supervisor"
 ROLE_FRONT_DOOR = "front_door"
 ROLE_SERVER = "server"
+ROLE_POOL_CHILD = "pool_child"
 
 _ROLE_SCRIPTS = {
     ROLE_SUPERVISOR: ("coordinator_core", "warm", "supervisor.py"),
@@ -35,6 +37,12 @@ _ASK_CONFIRM_GRACE_SECS = 40.0
 
 # A deliberately wrong token: warm.server._serve_line evicts (drain and exit) on any mismatch.
 _STOP_REQUEST_TOKEN = "warm-engine-stop-requested-0000"
+
+# warm.server's dispatch-indeterminate code: the ask went through dispatch and timed out, so the
+# server is wedged and an answer carrying it is no acknowledgement of a stop.
+_DISPATCH_TIMEOUT_CODE = -32004
+
+_PARENT_PID_RE = re.compile(r"parent_pid=(\d+)(?!\d)")
 
 
 @dataclass(frozen=True)
@@ -135,9 +143,24 @@ def _open_pipe(pipe: str):
     return open(pipe, "r+b")
 
 
+def _is_stop_acknowledgement(line: "bytes | None") -> bool:
+    """A reply counts only when it is not the wedged-dispatch timeout envelope."""
+    if not line:
+        return False
+    try:
+        reply = json.loads(line)
+    except ValueError:
+        return True
+    error = reply.get("error") if isinstance(reply, dict) else None
+    if isinstance(error, dict) and error.get("code") == _DISPATCH_TIMEOUT_CODE:
+        return False
+    return True
+
+
 def _ask_server_to_stop(pipe: str) -> bool:
-    """Graceful ask over the warm pipe. True iff the server answered within the read deadline;
-    False on a transport failure or an unanswered ask (a wedged pool), the caller's cue to
+    """Graceful ask over the warm pipe. True iff the server answered within the read deadline
+    with something other than the -32004 dispatch-timeout envelope; False on a transport
+    failure, an unanswered ask, or a wedged-dispatch answer, the caller's cue to
     signal directly instead of waiting out the confirm grace."""
     request = {
         "jsonrpc": "2.0",
@@ -157,7 +180,7 @@ def _ask_server_to_stop(pipe: str) -> bool:
             fh.flush()
         except OSError:
             return False
-        return bool(_read_line_with_deadline(fh, _ASK_READ_DEADLINE_SECS))
+        return _is_stop_acknowledgement(_read_line_with_deadline(fh, _ASK_READ_DEADLINE_SECS))
     finally:
         try:
             fh.close()
@@ -225,6 +248,51 @@ def _terminate_pid(pid: int, *, psutil_module=None) -> bool:
     return not proc.is_running()
 
 
+def _pool_children(
+    server_pids: set[int], *, psutil_module=None
+) -> list[PairProcess]:
+    """Python `spawn_main` processes whose `parent_pid=<n>` names one of `server_pids`.
+
+    Trap: a pool child outlives its server's exit and is reparented, so a live-children walk
+    misses it; the spawn argv still names the dead parent. Exact `parent_pid=<n>` element
+    compare, only for a server pid this stop identified.
+    """
+    psutil = psutil_module
+    if psutil is None:
+        import psutil
+
+    wanted = {f"parent_pid={pid}" for pid in server_pids}
+    found: list[PairProcess] = []
+    if not wanted:
+        return found
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            if not name.startswith("python"):
+                continue
+            argv = proc.cmdline()
+            pid = proc.info["pid"]
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if any("spawn_main" in a for a in argv) and any(
+            f"parent_pid={m}" in wanted
+            for a in argv
+            for m in _PARENT_PID_RE.findall(a)
+        ):
+            found.append(PairProcess(pid=pid, role=ROLE_POOL_CHILD, cmdline=" ".join(argv)))
+    return found
+
+
+def _live_descendants(pid: int, *, psutil_module=None) -> list[int]:
+    psutil = psutil_module
+    if psutil is None:
+        import psutil
+    try:
+        return [c.pid for c in psutil.Process(pid).children(recursive=True)]
+    except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+        return []
+
+
 def _record_pid(record: Optional[dict]) -> Optional[tuple[int, str]]:
     """(pid, stored_epoch_str) of a record whose pid is still the same process, else None."""
     if not isinstance(record, dict):
@@ -275,6 +343,12 @@ def stop_warm_pair(
 
     crumb = breadcrumb.read_breadcrumb(engine_root)
     verified = _record_pid(crumb)
+    server_pids: set[int] = {p.pid for p in before if p.role == ROLE_SERVER}
+    child_pids: set[int] = set()
+    if verified is not None:
+        server_pids.add(verified[0])
+    for spid in server_pids:
+        child_pids.update(_live_descendants(spid, psutil_module=psutil_module))
     if verified is not None:
         pid, epoch_str = verified
         pipe = crumb.get("pipe") if isinstance(crumb, dict) else None
@@ -286,9 +360,19 @@ def stop_warm_pair(
     for p in find_pair_processes(engine_root, psutil_module=psutil_module):
         seen.setdefault(p.pid, p)
         if p.role == ROLE_SERVER:
+            server_pids.add(p.pid)
             _terminate_pid(p.pid, psutil_module=psutil_module)
 
-    survivors = tuple(find_pair_processes(engine_root, psutil_module=psutil_module))
+    for child in _pool_children(server_pids, psutil_module=psutil_module):
+        seen.setdefault(child.pid, child)
+        child_pids.add(child.pid)
+    for cpid in sorted(child_pids):
+        _terminate_pid(cpid, psutil_module=psutil_module)
+
+    survivors = tuple(
+        find_pair_processes(engine_root, psutil_module=psutil_module)
+        + _pool_children(server_pids, psutil_module=psutil_module)
+    )
     survivor_pids = {p.pid for p in survivors}
     stopped = tuple(p for pid, p in seen.items() if pid not in survivor_pids)
 

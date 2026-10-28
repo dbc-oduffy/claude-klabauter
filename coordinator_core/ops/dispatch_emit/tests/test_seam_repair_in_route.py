@@ -28,7 +28,7 @@ def _count(out, prefix):
 
 
 def _tests_of(prompt):
-    return json.loads(prompt.split("Tests: ", 1)[1].split(". Step 3", 1)[0])
+    return json.JSONDecoder().raw_decode(prompt.split("Tests: ", 1)[1])[0]
 
 
 def _rows_of(prompt):

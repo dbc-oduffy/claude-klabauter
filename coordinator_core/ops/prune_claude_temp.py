@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -42,9 +42,14 @@ STAMP_NAME = ".prune-stamp"
 REPO_SPACES = ("scratch", "tasks", ".coordinator-local/subagent-share")
 BUDGET_SECONDS = 0.3
 _REPARSE_POINT = 0x400
+_EXT_PREFIX = "\\\\?\\"
 _EMPTY_TMP_RE = re.compile(r"^\.tmp[A-Za-z0-9]{6}$")
 _AUTONOMOUS_PREFIX = "autonomous-run-"
 _PYTEST_CHILD = "pytest"
+KEY_SCRATCH_GIB = "scratch_budget.per_session_gib"
+DEFAULT_SCRATCH_GIB = 5
+GIB = 1024 ** 3
+BUDGET_MIN_IDLE_SECONDS = 3600
 
 
 class _Budget:
@@ -64,6 +69,13 @@ class _Budget:
 
 def claude_temp_root() -> Path:
     return Path(tempfile.gettempdir()) / "claude"
+
+
+def _claude_retention_days() -> float:
+    """Idle age in days for the claude temp root: machine-local `transcript_retention.max_age_hours` (default 48)."""
+    from coordinator_core.ops.claude_home_census import transcript_max_age_seconds
+
+    return transcript_max_age_seconds() / 86400
 
 
 def stamp_is_fresh(root: Path, now: Optional[float] = None) -> bool:
@@ -127,11 +139,14 @@ def _read_index(repo_root: str) -> "Optional[bytes]":
 
 def _has_fresh_entry(path: str, cutoff: float) -> bool:
     """True when `path` or anything beneath it has mtime >= cutoff (early exit)."""
+    path = _long(path)
     try:
         if os.stat(path).st_mtime >= cutoff:
             return True
         if not os.path.isdir(path) or os.path.islink(path):
             return False
+    except FileNotFoundError:
+        return False  # vanished underneath us: nothing left to keep
     except OSError:
         return True  # unreadable: treat as live, keep it
     stack = [path]
@@ -140,24 +155,50 @@ def _has_fresh_entry(path: str, cutoff: float) -> bool:
         try:
             with os.scandir(cur) as it:
                 for entry in it:
-                    if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
-                        return True
-                    if entry.is_dir(follow_symlinks=False) and not _is_link(entry.path):
-                        stack.append(entry.path)
+                    try:
+                        if entry.stat(follow_symlinks=False).st_mtime >= cutoff:
+                            return True
+                        if entry.is_dir(follow_symlinks=False) and not _is_link(entry.path):
+                            stack.append(entry.path)
+                    except FileNotFoundError:
+                        continue  # vanished mid-scan
+        except FileNotFoundError:
+            continue
         except OSError:
             return True
     return False
 
 
-def _skip_error(*_args) -> None:
-    return None
+def _long(path: str) -> str:
+    """Windows extended-length form so >260-char paths stay reachable; identity elsewhere."""
+    if os.name != "nt" or path.startswith(_EXT_PREFIX):
+        return path
+    full = os.path.abspath(path)
+    if full.startswith("\\\\"):
+        return _EXT_PREFIX + "UNC\\" + full[2:]
+    return _EXT_PREFIX + full
+
+
+def _scan_path(path: str) -> str:
+    """Normalise a caller-supplied `\\\\?\\` root before scandir.
+
+    TRAP: a hand-built extended-length root (mixed separators, doubled prefix)
+    made the walk return 0 files; strip it and re-derive one canonical form."""
+    if not path.startswith(_EXT_PREFIX):
+        return path
+    bare = path[len(_EXT_PREFIX):]
+    while bare.startswith(_EXT_PREFIX):
+        bare = bare[len(_EXT_PREFIX):]
+    if bare.startswith("UNC\\"):
+        bare = "\\\\" + bare[4:]
+    return _long(os.path.normpath(bare))
 
 
 def _rmtree_tolerant(path: str) -> None:
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_skip_error)
-    else:
-        shutil.rmtree(path, onerror=_skip_error)
+    """rmtree clearing read-only bits (git objects); a vanished path is a no-op."""
+    from coordinator_core.benchmarks.isolated_clone import _rmtree_clearing_readonly
+
+    _rmtree_clearing_readonly(Path(_long(_scan_path(path))))
 
 
 def _reap_tombstones(path: str, budget: "_Budget") -> int:
@@ -194,14 +235,16 @@ def _prune_level(
     tracked: "Optional[tuple[bytes, str]]" = None,
     budget: "Optional[_Budget]" = None,
     keep: "frozenset[str]" = frozenset(),
+    leaf_keep: "frozenset[str]" = frozenset(),
 ) -> int:
     """Delete stale units at `depth` below the root; rmdir emptied intermediates.
 
-    `keep` names level-0 children never touched. At least one child is examined
-    before the budget can stop the scan."""
+    `keep` names level-0 children never touched; `leaf_keep` names units (deepest
+    level) never touched. At least one child is examined before the budget can
+    stop the scan."""
     removed = 0
     try:
-        children = list(os.scandir(path))
+        children = list(os.scandir(_scan_path(path)))
     except OSError:
         return 0
     for child in children:
@@ -218,7 +261,8 @@ def _prune_level(
             is_dir = child.is_dir(follow_symlinks=False)
             if is_dir and level < depth - 1:
                 removed += _prune_level(
-                    child.path, level + 1, depth, cutoff, session_id, tracked, budget
+                    child.path, level + 1, depth, cutoff, session_id, tracked, budget,
+                    leaf_keep=leaf_keep,
                 )
                 try:
                     os.rmdir(child.path)  # succeeds only when empty
@@ -226,6 +270,8 @@ def _prune_level(
                     pass
                 continue
             if session_id and child.name == session_id:
+                continue
+            if child.name in leaf_keep:
                 continue
             if tracked is not None:
                 if child.name == STAMP_NAME:
@@ -238,13 +284,158 @@ def _prune_level(
             if is_dir:
                 _rmtree_tolerant(child.path)
             else:
-                os.unlink(child.path)
+                os.unlink(_long(child.path))
             removed += 1
         except OSError:
             continue
         finally:
             if budget is not None:
                 budget.check()
+    return removed
+
+
+_LIVE_CHILD_SPACES = ("scratchpad", "tasks")
+
+
+def _prune_live_children(root: Path, live: "frozenset[str]", cutoff: float, budget: "_Budget") -> int:
+    """Live session dirs are never removed, but stale entries in their `scratchpad`/`tasks` children are."""
+    removed = 0
+    if not live:
+        return 0
+    try:
+        projects = list(os.scandir(root))
+    except OSError:
+        return 0
+    for proj in projects:
+        if budget.stopped:
+            break
+        if _is_link(proj.path) or not proj.is_dir(follow_symlinks=False):
+            continue
+        for sid in live:
+            for space in _LIVE_CHILD_SPACES:
+                sub = os.path.join(proj.path, sid, space)
+                if os.path.isdir(sub) and not _is_link(sub):
+                    removed += _prune_level(sub, 0, 1, cutoff, "", None, budget)
+    return removed
+
+
+def scratch_budget_bytes(get=None) -> int:
+    """Per-session scratch ceiling from machine-local `scratch_budget.per_session_gib` (default 5)."""
+    from coordinator_core.ops import claude_home_census as census
+
+    raw = (get or census._registry_get)(KEY_SCRATCH_GIB)
+    return int(census._positive_number(raw, DEFAULT_SCRATCH_GIB) * GIB)
+
+
+def _tree_stats(path: str, budget: "_Budget") -> "Optional[tuple[int, float]]":
+    """(bytes, newest mtime) under `path`; None when the budget stopped the walk. Vanished entries are skipped."""
+    total = 0
+    newest = 0.0
+    try:
+        top = os.lstat(_long(path))
+    except OSError:
+        return 0, 0.0
+    if not stat.S_ISDIR(top.st_mode):
+        return top.st_size, top.st_mtime
+    stack = [_long(path)]
+    while stack:
+        if budget.check():
+            return None
+        cur = stack.pop()
+        try:
+            with os.scandir(cur) as it:
+                for entry in it:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                        newest = max(newest, st.st_mtime)
+                        if entry.is_dir(follow_symlinks=False):
+                            if not _is_link(entry.path):
+                                stack.append(entry.path)
+                        else:
+                            total += st.st_size
+                    except FileNotFoundError:
+                        continue
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+    return total, newest or top.st_mtime
+
+
+def _session_scratch_children(root: Path) -> "list[tuple[str, str]]":
+    """(session key, scratchpad/tasks child path) for every session under every project of `root`."""
+    out: "list[tuple[str, str]]" = []
+    try:
+        projects = list(os.scandir(root))
+    except OSError:
+        return out
+    for proj in projects:
+        try:
+            if _is_link(proj.path) or not proj.is_dir(follow_symlinks=False):
+                continue
+            sessions = list(os.scandir(proj.path))
+        except OSError:
+            continue
+        for sess in sessions:
+            for space in _LIVE_CHILD_SPACES:
+                sub = os.path.join(sess.path, space)
+                if not os.path.isdir(sub) or _is_link(sub):
+                    continue
+                try:
+                    for child in os.scandir(sub):
+                        if not _is_link(child.path):
+                            out.append((sess.path, child.path))
+                except OSError:
+                    continue
+    return out
+
+
+def over_budget_sessions(
+    root: "Optional[Path]" = None, limit: "Optional[int]" = None, budget: "Optional[_Budget]" = None
+) -> "dict[str, int]":
+    """Session dir -> scratch bytes for every session over the per-session budget (report only)."""
+    root = claude_temp_root() if root is None else root
+    limit = scratch_budget_bytes() if limit is None else limit
+    budget = budget or _Budget()
+    sizes: "dict[str, int]" = {}
+    for sess, child in _session_scratch_children(root):
+        stats = _tree_stats(child, budget)
+        if stats is None:
+            break
+        sizes[sess] = sizes.get(sess, 0) + stats[0]
+    return {s: n for s, n in sizes.items() if n > limit}
+
+
+def _enforce_scratch_budget(root: Path, limit: int, now: float, budget: "_Budget") -> int:
+    """Delete the oldest idle scratchpad/tasks children of each over-budget session until it fits.
+
+    A child written within `BUDGET_MIN_IDLE_SECONDS` is never taken, so a session's
+    in-flight work survives even when it alone exceeds the budget."""
+    per_session: "dict[str, list[tuple[float, int, str]]]" = {}
+    for sess, child in _session_scratch_children(root):
+        stats = _tree_stats(child, budget)
+        if stats is None:
+            return 0
+        size, newest = stats
+        per_session.setdefault(sess, []).append((newest, size, child))
+    removed = 0
+    for entries in per_session.values():
+        total = sum(size for _m, size, _c in entries)
+        for newest, size, child in sorted(entries):
+            if total <= limit or budget.stopped:
+                break
+            if now - newest < BUDGET_MIN_IDLE_SECONDS:
+                break
+            try:
+                if os.path.isdir(child):
+                    _rmtree_tolerant(child)
+                else:
+                    os.unlink(_long(child))
+            except OSError:
+                continue
+            total -= size
+            removed += 1
+            budget.check()
     return removed
 
 
@@ -255,7 +446,7 @@ def default_roots(repo_root: str = "") -> "list[tuple[Path, int, float]]":
     names (read as text; no git spawn). The fleet root and the repo's coordinator
     root are pruned at depth 1."""
     roots = [
-        (claude_temp_root(), 2, RETENTION_DAYS),
+        (claude_temp_root(), 2, _claude_retention_days()),
         (fleet_temp_root(), 1, RETENTION_DAYS),
     ]
     if repo_root:
@@ -340,17 +531,20 @@ def prune(
     repo_root: str = "",
     drain: bool = False,
     budget_seconds: "Optional[float]" = BUDGET_SECONDS,
-    live_session_ids: "frozenset[str]" = frozenset(),
+    live_session_ids: "Optional[frozenset[str]]" = frozenset(),
 ) -> int:
     """Prune stale units under each due root; returns the number removed.
 
     The top-level Temp pass runs only when `roots` is None (the default set). A pass
     stamps only when it finished inside the budget. `drain` ignores budget and
     throttle. `autonomous-run-<sid>` in the fleet root is kept for the current and
-    any `live_session_ids` session."""
+    any `live_session_ids` session. The claude temp root deletes a session dir only
+    when idle past `_claude_retention_days()` and not live; `live_session_ids=None`
+    (liveness unresolvable) keeps that whole root."""
     now = time.time() if now is None else now
     budget = _Budget(None if drain else budget_seconds)
-    live = set(live_session_ids)
+    liveness_unknown = live_session_ids is None
+    live = set(live_session_ids or ())
     if session_id:
         live.add(session_id)
     keep_live = frozenset(_AUTONOMOUS_PREFIX + sid for sid in live)
@@ -358,12 +552,25 @@ def prune(
     coord_parent = fleet.parent
     removed = 0
     index = None
+    if repo_root and roots is None:
+        try:
+            from coordinator_core.benchmarks.clone_orphan_sweep import sweep as _sweep_clone_orphans
+
+            _sweep_clone_orphans(repo_root)
+        except Exception:  # noqa: BLE001 -- housekeeping never fails loud
+            pass
     for root, depth, retention_days in default_roots(repo_root) if roots is None else roots:
         if budget.stopped:
             break
         root = Path(root)
         if not root.is_dir() or (not drain and stamp_is_fresh(root, now)):
             continue
+        leaf_keep: "frozenset[str]" = frozenset()
+        if root == claude_temp_root():
+            if liveness_unknown:
+                continue
+            retention_days = _claude_retention_days()
+            leaf_keep = frozenset(live)
         tracked = None
         if repo_root and _is_under(root, repo_root):
             if _is_link(str(root)):
@@ -383,8 +590,13 @@ def prune(
             keep = frozenset({TOMBSTONE_DIRNAME})
             removed += _reap_tombstones(str(root / TOMBSTONE_DIRNAME), budget)
         removed += _prune_level(
-            str(root), 0, depth, now - retention_days * 86400, session_id, tracked, budget, keep
+            str(root), 0, depth, now - retention_days * 86400, session_id, tracked, budget, keep,
+            leaf_keep,
         )
+        if leaf_keep:
+            removed += _prune_live_children(root, leaf_keep, now - retention_days * 86400, budget)
+        if root == claude_temp_root() and not budget.stopped:
+            removed += _enforce_scratch_budget(root, scratch_budget_bytes(), now, budget)
         if not budget.stopped:
             try:
                 (root / STAMP_NAME).touch()
@@ -406,10 +618,19 @@ def prune(
 def main(argv: "list[str]") -> int:
     args = [a for a in argv[1:] if a != "--drain"]
     try:
+        repo_root = args[1] if len(args) > 1 else ""
+        try:
+            from coordinator_core.ops.cruft_sweep import box_live_session_ids
+
+            # The claude temp root is shared by every repo: liveness must be box-wide.
+            live: "Optional[frozenset[str]]" = box_live_session_ids()
+        except Exception:  # noqa: BLE001 -- unresolvable liveness keeps the claude root whole
+            live = None
         prune(
             args[0] if args else "",
-            repo_root=args[1] if len(args) > 1 else "",
+            repo_root=repo_root,
             drain="--drain" in argv[1:],
+            live_session_ids=live,
         )
     except Exception:  # noqa: BLE001 -- housekeeping child never fails loud
         pass

@@ -169,8 +169,14 @@ def _fleet_interaction_mode() -> str | None:
 def effective_route(sizing: Mapping) -> object:
     """`route`, except a `pm-decision` whose recorded `xl_exit` resolves it: the plan-resolving
     exit (plan_gate's constant) to `plan`, `fan_out` to plan_gate's FAN_OUT_ROUTE, `roadmap` to
-    `roadmap`. An unresolved one stays."""
+    `roadmap`. An unresolved one stays. A `goal-setting` route with `xl_exit: roadmap` also
+    resolves to `roadmap`, as does one carrying a `goal_id` (the goal it landed as): the room
+    route is over once the PM has recorded that exit or the goal is ratified."""
     route = sizing.get("route")
+    if route == "goal-setting":
+        goal_id = sizing.get("goal_id")
+        if sizing.get("xl_exit") == _ROADMAP_EXIT or (isinstance(goal_id, str) and goal_id.strip()):
+            return _ROADMAP_EXIT
     if route != _PM_DECISION:
         return route
     from coordinator_core.roadmap.plan_gate import (
@@ -203,6 +209,44 @@ def resolve_arm(sizing: Mapping) -> str:
     if arm == ARM_M_PLUS and tshirt in ("XL", "XXL") and effective_route(sizing) == _ROADMAP_EXIT:
         return ARM_ROADMAP
     return arm
+
+
+def apply_in_run_resize(
+    sizing: Mapping, sizing_rel: str, reported_tshirt: str, repo_root: Path, basis: str
+) -> tuple[str, dict, tuple[str, ...]]:
+    """Apply a planner- or executor-reported t-shirt that differs from the sizing's.
+
+    Returns `(arm, amended sizing, detents)`. `in_run_widen.resize_verdict` decides: continue
+    amends the sizing through `sizing.resize`, re-resolves the arm with `resolve_arm`, and
+    returns the detents `sizing_assemble.route` raises for the new size (a resize basis is not
+    scout evidence, so `xxl_unprobed` fires on XXL as for any XXL sizing); flag raises
+    SizingFireRefused naming a possible engine error or misplaced premise. An unchanged size
+    returns the sizing as is. No budget value is touched.
+    No production caller yet: the planner/executor t-shirt report is not wired into `resolve_arm`.
+    """
+    from coordinator_core.ops.dispatch_emit.in_run_widen import resize_verdict
+
+    est = sizing.get("estimate")
+    old = est.get("tshirt") if isinstance(est, Mapping) else None
+    new = str(reported_tshirt).strip().upper()
+    if old == new:
+        return resolve_arm(sizing), dict(sizing), ()
+    if resize_verdict(str(old), new) == "flag":
+        raise SizingFireRefused(
+            [
+                f"reported size {new} against sizing {old}: a jump this large is a possible engine "
+                "error or misplaced premise; flag to the EM, resize with `sizing.resize` once confirmed"
+            ]
+        )
+    from coordinator_core.ops.sizing_resize import _handler as _resize_op
+    from coordinator_core.sizing_assemble import route as _assemble_route
+
+    res = _resize_op({"sizing": sizing_rel, "tshirt": new, "basis": basis}, repo_root=Path(repo_root))
+    if res.get("exit_code") != 0:
+        raise SizingFireRefused([f"in-run resize to {new} failed: {res.get('error')}"])
+    amended = load_sizing(Path(repo_root), sizing_rel)
+    detents = tuple(_assemble_route(estimate={"tshirt": new}, scout_evidence=[])["detents"])
+    return resolve_arm(amended), amended, detents
 
 
 def s_plan_path(sizing_rel: str) -> str:

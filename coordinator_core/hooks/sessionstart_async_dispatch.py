@@ -62,7 +62,7 @@ from coordinator_core.hooks.sessionstart_ensure_http_forwarder import (
     _handler as _sessionstart_ensure_http_forwarder_handler,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.ops import prune_claude_temp
+from coordinator_core.ops import prune_claude_temp, retention_run
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 
 
@@ -92,6 +92,8 @@ _LEGS: "tuple[tuple[str, frozenset, Callable[[dict], object]], ...]" = (
      lambda p: _session_start_write_plugin_root_breadcrumb_handler(p)),
     ("prune_claude_temp", _STARTUP_ONLY,
      lambda p: _prune_claude_temp_leg(p)),
+    ("retention_run", _STARTUP_ONLY,
+     lambda p: _retention_run_leg(p)),
 )
 
 
@@ -111,6 +113,15 @@ def _prune_claude_temp_leg(payload_params: dict) -> None:
         if repo_root:
             args.append(repo_root)
         spawn_detached(str(_REPO_ROOT), _PRUNER_SCRIPT, args)
+    except Exception:
+        pass
+    return None
+
+
+def _retention_run_leg(payload_params: dict) -> None:
+    """Stamp check only; spawns the detached retention run when due. Never raises."""
+    try:
+        retention_run.spawn_if_due(str(_REPO_ROOT))
     except Exception:
         pass
     return None

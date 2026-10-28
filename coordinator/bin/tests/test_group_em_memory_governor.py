@@ -228,9 +228,9 @@ def test_noticed_harness_process_stays_protected(tmp_path):
     assert _crit(PROCS, path)[1][0][0] == (60,)
 
 
-# Freezing a store owner mid-write stalls or half-applies every client's write (fifa-stats pid 70608).
+# Freezing a store owner mid-write stalls or half-applies every client's write (example-stats-repo pid 70608).
 STORE_OWNERS = [
-    r"C:\Program Files\nodejs\node.exe --import tsx E:\fifa-stats\packages\ddct\adapters\master\owner.ts E:\fifa-stats\.ddct\pglite",  # abs-path-ok: the exact command line the governor froze
+    r"C:\Program Files\nodejs\node.exe --import tsx E:\example-stats-repo\packages\ddct\adapters\master\owner.ts E:\example-stats-repo\.ddct\pglite",  # abs-path-ok: the exact command line the governor froze
     "postgres -D /var/lib/postgresql/data",
     "/usr/sbin/mysqld --basedir=/usr",
     "node --import tsx ./pglite-server.ts",

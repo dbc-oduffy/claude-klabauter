@@ -127,6 +127,48 @@ def test_stale_running_and_failed_retest_records_keep_refusing(repo):
         assert out.get("refused"), record
 
 
-def test_retest_with_drifted_head_keeps_refusing(repo):
+def test_retest_with_drifted_head_still_clears_when_covered_files_match(repo):
     out = _gate(repo, {"status": "pass", "head": "0" * 40})
+    assert out["targeted_tests_check"] == "pass-on-retest"
+    assert "refused" not in out
+
+
+def test_retest_with_drifted_head_and_no_covered_files_keeps_refusing(repo):
+    out = _gate(repo, {"status": "pass", "head": "0" * 40, "covered": {}})
     assert out["refused"] == IND
+
+
+def test_retest_with_changed_covered_file_keeps_refusing(repo):
+    out = _gate(repo, {"status": "pass", "covered": {"mod.py": "0" * 64}})
+    assert out["refused"] == IND
+
+
+def test_real_commits_unrelated_keeps_fresh_covered_touching_stales(repo):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_landing_integrity import _git
+
+    (repo / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    record = {"run_id": RUN, "status": "pass", "head": _git(["rev-parse", "HEAD"], repo),
+              "covered": li.landing_fingerprint(repo, ["mod.py"])}
+    path = li.fresh_verdict_path(repo, RUN)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    (repo / "other.txt").write_text("unrelated\n", encoding="utf-8")
+    _git(["add", "other.txt"], repo)
+    _git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "unrelated"], repo)
+    assert record["head"] != _git(["rev-parse", "HEAD"], repo)
+    assert li.fresh_targeted_verdict(repo, RUN) is not None
+    (repo / "mod.py").write_text("x = 2\n", encoding="utf-8")
+    _git(["add", "mod.py"], repo)
+    _git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "covered"], repo)
+    assert li.fresh_targeted_verdict(repo, RUN) is None
+
+
+def test_live_shape_retest_with_dropped_targets_and_no_snapshot_clears(repo):
+    out = _gate(
+        repo,
+        {"status": "pass", "dropped": ["tests/test_gone.py", "tests/test_gone2.py"], "note": "dropped nonexistent"},
+        targeted=("tests/test_mod.py", "tests/test_gone.py", "tests/test_gone2.py"),
+    )
+    assert "refused" not in out

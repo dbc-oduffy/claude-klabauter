@@ -51,6 +51,7 @@ from __future__ import annotations
 import bisect
 import hashlib
 import os
+import stat
 import struct
 from pathlib import Path
 from types import SimpleNamespace
@@ -213,6 +214,29 @@ def _build_entry(name: bytes, mode: int, sha_hex: str, st: os.stat_result) -> by
     return out + b"\x00" * padding
 
 
+def _worktree_matches_blob(file: Path, mode: int, sha_hex: str, st: os.stat_result) -> bool:
+    """False only when `file` is a regular file whose git blob hash differs from `sha_hex`.
+
+    An entry carrying a differing blob next to the worktree's stat reads clean to git, hiding
+    the unlanded bytes; the caller then records a zeroed stat so git re-hashes. Symlinks,
+    gitlinks and unreadable files keep the real stat (hashing them here is not the contract).
+    Costs one full read per spliced file; clean/autocrlf-filtered files and sha256-format repos
+    always mismatch, which only zeroes the stat (git re-hashes), never hides content.
+    """
+    if mode not in (0o100644, 0o100755) or not stat.S_ISREG(st.st_mode):
+        return True
+    h = hashlib.sha1(b"blob %d\x00" % st.st_size)
+    seen = 0
+    try:
+        with open(file, "rb") as fh:
+            while chunk := fh.read(1 << 20):
+                seen += len(chunk)
+                h.update(chunk)
+    except OSError:
+        return True
+    return seen == st.st_size and h.hexdigest() == sha_hex.lower()
+
+
 def splice_index(
     repo: Union[str, Path],
     updates: Mapping[str, object],
@@ -350,6 +374,10 @@ def _splice_locked(
                 raise IndexWriteError(
                     f"cannot stat {path} to record its index entry: {exc}"
                 ) from exc
+            st = _ZERO_STAT
+        if st is not _ZERO_STAT and not _worktree_matches_blob(
+            root / path, int(mode), str(sha_hex), st
+        ):
             st = _ZERO_STAT
         replacements[key] = _build_entry(key, int(mode), str(sha_hex), st)
 

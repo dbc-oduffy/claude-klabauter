@@ -956,3 +956,63 @@ class TestTailEntriesKeepsNewestRows:
 
         assert head_truncated is False
         assert [e["seq"] for e in entries] == list(range(25))
+
+
+@pytest.mark.deliberate_wall_clock(reason="a completion row written while its sink is stalled must still land once the writer returns")
+def test_completion_row_survives_a_stalled_sink_started_row_drops(tmp_path, monkeypatch):
+    import threading
+
+    from coordinator_core import atomic_append
+    from coordinator_core.telemetry.op_latency import _append_line
+
+    gate = threading.Event()
+    real_write = atomic_append.os.write
+
+    def write(fd, data):
+        if threading.current_thread().name.startswith("atomic-append-writer"):
+            gate.wait(10)
+        return real_write(fd, data)
+
+    monkeypatch.setattr(atomic_append.os, "write", write)
+    sink = tmp_path / "op-latency.jsonl"
+    try:
+        _append_line(sink, b'{"kind":"started","corr_id":"a"}\n')
+        _append_line(sink, b'{"kind":"started","corr_id":"b"}\n')
+        _append_line(sink, b'{"kind":"complete","corr_id":"b"}\n')
+    finally:
+        gate.set()
+    deadline = time.time() + 3
+    while atomic_append.stalled_sinks() and time.time() < deadline:
+        time.sleep(0.01)
+    lines = sink.read_bytes().splitlines()
+    assert b'{"kind":"started","corr_id":"a"}' in lines
+    assert b'{"kind":"complete","corr_id":"b"}' in lines
+    assert b'{"kind":"started","corr_id":"b"}' not in lines
+
+
+@pytest.mark.deliberate_wall_clock(reason="retained lines past the stalled-sink cap must drop, not grow the queue without bound")
+def test_retained_lines_past_the_cap_drop(tmp_path, monkeypatch):
+    import threading
+
+    from coordinator_core import atomic_append
+
+    gate = threading.Event()
+    real_write = atomic_append.os.write
+
+    def write(fd, data):
+        if threading.current_thread().name.startswith("atomic-append-writer"):
+            gate.wait(10)
+        return real_write(fd, data)
+
+    monkeypatch.setattr(atomic_append.os, "write", write)
+    sink = tmp_path / "capped.jsonl"
+    try:
+        atomic_append.append_line(sink, b"wedge\n")
+        for i in range(atomic_append._RETAIN_MAX + 10):
+            atomic_append.append_line(sink, b"r%d\n" % i, True)
+    finally:
+        gate.set()
+    deadline = time.time() + 3
+    while atomic_append.stalled_sinks() and time.time() < deadline:
+        time.sleep(0.01)
+    assert len(sink.read_bytes().splitlines()) == 1 + atomic_append._RETAIN_MAX

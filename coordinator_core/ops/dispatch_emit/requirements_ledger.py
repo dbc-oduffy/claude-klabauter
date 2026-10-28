@@ -93,6 +93,7 @@ _PARAMS = (
     Field("withhold_paths", "list"),
     Field("credit_chunks", "list"),
     Field("retract_note", "dict"),
+    Field("retract_row", "dict"),
     Field("build_only", "bool"),
     Field("stop_after", "str"),
     Field("from", "str"),
@@ -453,6 +454,23 @@ def _validated(text: str) -> str:
     return text
 
 
+_SHIPPED_STATUS_LINE = re.compile(r"^status:[ \t]*[\"']?shipped[\"']?[ \t]*(?=#|$)", re.MULTILINE)
+
+
+def _reopened(text: str, rows: Sequence[Mapping]) -> str:
+    """`text` with a top-level `status: shipped` moved back to `routed` when `rows` holds a row the
+    schema's shipped rule refuses (not met-and-wired, not deferred/waived with a ruling): a
+    requirement landing on a shipped sizing reopens it."""
+    if not _SHIPPED_STATUS_LINE.search(text):
+        return text
+    satisfied = all(
+        (r.get(rr.ROW_STATUS) == rr.STATUS_MET and r.get(rr.ROW_WIRED) is True)
+        or (r.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED) and r.get(rr.ROW_RULING))
+        for r in rows
+    )
+    return text if satisfied else _SHIPPED_STATUS_LINE.sub("status: routed", text, count=1)
+
+
 def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[Mapping] = ()) -> list[dict]:
     """Apply `edit(rows) -> rows | None` to the sizing's register under the file lock; None or an
     unchanged list writes nothing. `unrelated` entries (`{turn, reason}`) join the register's
@@ -482,7 +500,9 @@ def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[M
             waived += [dict(e) for e in unrelated if e["turn"] not in have_turns]
             block[rr.UNRELATED_TURNS_KEY] = waived
         crlf = "\r\n" in old
-        new = _validated(rr.write_register_text(old.replace("\r\n", "\n"), block, datetime.now(timezone.utc)))
+        new = _validated(_reopened(
+            rr.write_register_text(old.replace("\r\n", "\n"), block, datetime.now(timezone.utc)), new_rows
+        ))
         out["rows"] = new_rows
         return new.replace("\n", "\r\n") if crlf else new
 
@@ -591,10 +611,13 @@ FOREIGN_TURN_REASON = "another run's PM turn: the run's ask neither quotes nor a
 def _append_rows(
     root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
     withhold: Optional[Mapping] = None, list_turns: Optional[Mapping[int, str]] = None,
-    plan_rows: Sequence[tuple[str, str]] = (),
+    plan_rows: Sequence[tuple[str, str]] = (), reuse: Optional[dict] = None, retract_row: Optional[str] = None,
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
-    (same verbatim text) is not added twice, a revision always is. `drop_turns` (`{turn: text}`)
+    (same verbatim text) is not added twice, a revision always is, unless `reuse` is a dict: then a
+    revision whose text equals a live (open, partial or met) revision row adds nothing and
+    `reuse["id"]` receives that row's id. `retract_row` (a row id) deletes that row in the same
+    write, refusing unless it is an open, unclaimed revision row. `drop_turns` (`{turn: text}`)
     removes the open, unclaimed rows derived from those PM turns and lists them in
     `unrelated_turns`. `withhold` (`{"ids": [...], "run_id", "verbatim"}`) defers the named rows
     with a ruling quoting the verbatim, in the same register write; it appends no row itself, and
@@ -626,9 +649,29 @@ def _append_rows(
                     and r.get(rr.ROW_STATUS) == rr.STATUS_OPEN and not r.get(rr.ROW_CLAIMED_BY)
                 )
             ]
+        if retract_row is not None:
+            target = by_id.get(retract_row)
+            if target is None:
+                raise MutateAbort(f"retract_row names no register row: {retract_row}")
+            if _origin(target.get(rr.ROW_ANCHOR))[0] != ORIGIN_REVISION:
+                raise MutateAbort(f"retract_row {retract_row} is not a revision row: only a revision can be withdrawn")
+            if target.get(rr.ROW_STATUS) != rr.STATUS_OPEN:
+                raise MutateAbort(f"retract_row {retract_row} is already {target.get(rr.ROW_STATUS)}: only an open row can be withdrawn")
+            if rr.claimants(target):
+                raise MutateAbort(f"retract_row {retract_row} is claimed by {', '.join(rr.claimants(target))}: release the claim first")
+            rows = [r for r in rows if str(r.get(rr.ROW_ID)) != retract_row]
         have = {str(r.get(rr.ROW_TEXT) or "").strip() for r in rows}
+        live_revisions = {
+            str(r.get(rr.ROW_TEXT) or "").strip(): str(r.get(rr.ROW_ID))
+            for r in reversed(rows)
+            if _origin(r.get(rr.ROW_ANCHOR))[0] == ORIGIN_REVISION
+            and r.get(rr.ROW_STATUS) in (rr.STATUS_OPEN, rr.STATUS_PARTIAL, rr.STATUS_MET)
+        }
         for text, anchor in entries:
             t = text.strip()
+            if reuse is not None and t in live_revisions and anchor.startswith(ORIGIN_REVISION + "@"):
+                reuse["id"] = live_revisions[t]
+                continue
             if not t or (anchor in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED) and t in have):
                 continue
             have.add(t)
@@ -903,7 +946,7 @@ def revise(
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
-    claim: bool = False,
+    claim: bool = False, retract_row: Optional[dict] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -934,6 +977,11 @@ def revise(
     this run's notes as applied or superseded: it needs an emitted run (a halted one qualifies), refuses
     an id the run's `NOTES_FILE` lacks or already retracted, appends a retraction line to `NOTES_FILE`
     (nothing is deleted), adds no row, and alone satisfies the non-empty precondition.
+    A `verbatim` equal (after strip) to a live revision row on the register, or to a queued inbox
+    entry, mints nothing and returns that row's id. `retract_row` (`{row_id, reason}`) deletes one
+    open, unclaimed revision row of the bound sizing's register (not claimed by a plan either),
+    adds no row, refuses otherwise with nothing written, and alone satisfies the non-empty
+    precondition; the same verbatim sent afterwards mints a fresh row.
     `claim=True` records a ruling as work: it needs a non-empty `verbatim` (the row it mints), an
     emitted run bound to a sizing, and a sizing whose `plan:` edge names a plan whose
     `register_claims.sizing` is that sizing, else it refuses with nothing written. After the row is
@@ -968,15 +1016,26 @@ def revise(
             retraction = run_notes.validate_retract(retract_note)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
+    row_retraction: Optional[str] = None
+    if retract_row is not None:
+        rid = retract_row.get("row_id") if isinstance(retract_row, dict) else None
+        why = retract_row.get("reason") if isinstance(retract_row, dict) else None
+        if not isinstance(retract_row, dict) or not isinstance(rid, str) or not rid.strip():
+            raise LedgerRefused("retract_row must be an object with row_id and reason")
+        if not isinstance(why, str) or not why.strip():
+            raise LedgerRefused("retract_row.reason is empty")
+        if text or named:
+            raise LedgerRefused("retract_row cannot combine with verbatim or out_of_scope")
+        row_retraction = rid.strip()
     if stop_after is not None and stop_after != STOP_AFTER_PLAN:
         raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
-        and not build_only and stop_after is None and retraction is None
+        and not build_only and stop_after is None and retraction is None and row_retraction is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "credit_chunks, retract_note, build_only, stop_after, or a combination"
+            "credit_chunks, retract_note, retract_row, build_only, stop_after, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -988,7 +1047,7 @@ def revise(
     if run is None:
         if (
             named or all_of_pm_ask is not None or withheld_entries or credit_entries or build_only or stop_after
-            or retraction is not None
+            or retraction is not None or row_retraction is not None
         ):
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
@@ -1003,6 +1062,9 @@ def revise(
             )
         from coordinator_core.atomic_append import append_line
 
+        for n, queued_entry in enumerate(_inbox(dir_)):
+            if queued_entry["text"].strip() == text:
+                return _queued_ledger(dir_, False), dir_, f"Q{n + 1}"
         dir_.mkdir(parents=True, exist_ok=True)
         entry = {"text": text, "at": _now()}
         if _clean_sender(sender):
@@ -1038,6 +1100,17 @@ def revise(
         if not run.get("sizing_rel"):
             raise LedgerRefused(f"{CLAIM_PARAM} needs a run bound to a sizing")
         claim_plan = _claiming_plan(root, run["sizing_rel"])
+    if row_retraction is not None:
+        if not run.get("sizing_rel"):
+            raise LedgerRefused("retract_row needs a run bound to a sizing: a queued revision holds no row yet")
+        _, plan_path, _ = _sizing_plan(root, run["sizing_rel"])
+        if plan_path is not None:
+            from coordinator_core.ops.dispatch_emit import revise_absorb
+
+            plan_text = plan_path.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
+            _, planned = rr.plan_claims(revise_absorb._plan_fm(plan_text))
+            if row_retraction in planned:
+                raise LedgerRefused(f"retract_row {row_retraction} is claimed by the plan's register_claims: release the claim first")
     if build_only and not run.get("sizing_rel"):
         raise LedgerRefused(
             "build_only needs a run bound to a sizing: close the research with research.close and `sizing`"
@@ -1085,13 +1158,18 @@ def revise(
         run_withhold.record(dir_, withheld_entries, _now())
     if credit_entries:
         run_credit.record(dir_, credit_entries, _now())
+    if row_retraction is not None:
+        _append_rows(root, run["sizing_rel"], [], retract_row=row_retraction)
     if named:
         _append_rows(root, run["sizing_rel"], [], withhold=withhold)
     elif text:
         at = _now()
         if run.get("sizing_rel"):
-            rows = _append_rows(root, run["sizing_rel"], [(text, _revision_anchor(at, sender))], withhold=withhold)
-            added = str(rows[-1].get(rr.ROW_ID)) if rows else None
+            reused: dict = {}
+            rows = _append_rows(
+                root, run["sizing_rel"], [(text, _revision_anchor(at, sender))], withhold=withhold, reuse=reused,
+            )
+            added = reused.get("id") or (str(rows[-1].get(rr.ROW_ID)) if rows else None)
             if claim_plan is not None and added:
                 _claim_ruling(root, run["sizing_rel"], claim_plan, run_id, added)
                 if outcome is not None:
@@ -1100,10 +1178,13 @@ def revise(
             from coordinator_core.atomic_append import append_line
 
             who = _clean_sender(sender)
-            entry = {"text": text, "at": at, **({"from": who} if who else {})}
-            append_line(dir_ / INBOX_FILE, (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
-            declare_write(dir_ / INBOX_FILE)
-            added = f"Q{len(_inbox(dir_))}"
+            queued_at = next((n for n, e in enumerate(_inbox(dir_)) if e["text"].strip() == text), None)
+            if queued_at is None:
+                entry = {"text": text, "at": at, **({"from": who} if who else {})}
+                append_line(dir_ / INBOX_FILE, (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
+                declare_write(dir_ / INBOX_FILE)
+                queued_at = len(_inbox(dir_)) - 1
+            added = f"Q{queued_at + 1}"
     ledger = _write_view(root, dir_, run_id)
     if ledger is not None:
         declare_write(dir_ / LEDGER_VIEW_FILE)
@@ -1457,7 +1538,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     the run's `credit.jsonl` for the re-fired terminal commit to re-grade; needs an emitted run, no
     sizing, adds no row; replied as `credit_chunks`), `retract_note` (`{note_id, reason}`: withdraws
     one of the run's notes as applied by hand, appended to the run's `notes.jsonl` and never deleted;
-    needs an emitted run, no sizing, adds no row; replied as `retracted_note`), `build_only` (bool: removes the bound sizing's
+    needs an emitted run, no sizing, adds no row; replied as `retracted_note`), `retract_row`
+    (`{row_id, reason}`: deletes one open, unclaimed revision row of the bound sizing's register;
+    replied as `retracted_row`), `build_only` (bool: removes the bound sizing's
     `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`),
     `stop_after` (str, only "plan": records the park marker so `dispatch.ask_stage` parks the run after
     planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`),
@@ -1488,6 +1571,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
             credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
             retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
+            retract_row=params.get("retract_row"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -1528,6 +1612,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["credit_chunks"] = run_credit.validate(params["credit_chunks"])
     if params.get("retract_note"):
         out["retracted_note"] = {"run_id": params["run_id"], "note_id": params["retract_note"]["note_id"].strip()}
+    if params.get("retract_row"):
+        out["retracted_row"] = {"run_id": params["run_id"], "row_id": params["retract_row"]["row_id"].strip()}
     named = set(params.get("out_of_scope") or ())
     if named:
         out["withheld"] = [w["id"] for w in ledger.withheld if w["id"] in named]
@@ -1668,7 +1754,8 @@ def _refire(
     return {
         "next": {"kind": "refire", "call": fire_command(sizing_rel)},
         "note": (
-            "run halted: resumeFromRunId replays its stages and never reads this revision; refire fresh with next.call."
+            "run halted: resumeFromRunId replays its stages and never reads this revision; "
+            "a fresh refire with next.call reads it."
             if halted else "run finished: nothing reads this revision until a refire."
         ),
     }

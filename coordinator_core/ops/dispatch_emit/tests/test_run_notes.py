@@ -72,6 +72,31 @@ def test_validate_retract_normalises():
     assert run_notes.validate_retract({"note_id": " N3 ", "reason": " why "}) == {"note_id": "N3", "reason": "why"}
 
 
+def test_brief_block_empty_when_no_live_note(tmp_path):
+    assert run_notes.brief_block([]) == ""
+    p = tmp_path / "notes.jsonl"
+    _write(p, {"note": "a", "at": "t1"}, {"retracts": "N1", "reason": "r", "at": "t2"})
+    assert run_notes.brief_block(run_notes.entries(p, "r")) == ""
+
+
+def test_brief_block_quotes_live_only_and_is_not_pm_verbatim(tmp_path):
+    p = tmp_path / "notes.jsonl"
+    _write(p, {"note": "keep\nthis", "at": "t1"}, {"note": "gone", "at": "t2"},
+           {"retracts": "N2", "reason": "r", "at": "t3"})
+    text = run_notes.brief_block(run_notes.entries(p, "run-7"))
+    assert text.startswith("## EM revise notes (the EM's words, not PM verbatim; act on them)")
+    assert "run-7 N1 at t1" in text and "> keep" in text and "> this" in text
+    assert "gone" not in text and "N2" not in text
+    assert "not requirements" not in "\n".join(
+        run_notes.render_section(run_notes.entries(p, "run-7")))
+
+
+def test_brief_block_strips_the_marker_delimiter(tmp_path):
+    p = tmp_path / "notes.jsonl"
+    _write(p, {"note": "a\x01evil()\x01b", "at": "t1"})
+    assert "\x01" not in run_notes.brief_block(run_notes.entries(p, "r"))
+
+
 def test_render_section_empty():
     assert run_notes.render_section([]) == []
 

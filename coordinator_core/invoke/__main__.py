@@ -191,7 +191,7 @@ Sending a mid-run revision to a warp run:
   from (sending peer session); all_of_pm_ask (bool); out_of_scope (row ids, needs verbatim);
   withhold_paths ([{path, reason}]); credit_chunks ([{chunk, evidence}]); build_only (bool);
   stop_after ("plan": park the run after planning); retract_note ({note_id, reason});
-  claim (bool, records the ruling as work; needs verbatim).
+  retract_row ({row_id, reason}: withdraws one open, unclaimed revision row); claim (bool, records the ruling as work; needs verbatim).
   Full contract: coordinator-invoke workflow.revise --describe
 """
 
