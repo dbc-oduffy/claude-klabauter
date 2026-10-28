@@ -80,6 +80,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     _dispatch_report_path,
     _plan_deliverable_id,
     _dedupe_preserve_order,
+    _AGENT_MODELS,
     _model_opt,
     _plan_id,
     _row_agent_type,
@@ -1136,7 +1137,9 @@ def stage(
     for wave_no, wave in enumerate(waves):
         for row in wave:
             agent_type = _row_agent_type(row)
-            _model_opt(agent_type, row.agent_model)  # raises on bad model grammar or a pinned-type override
+            if row.agent_model and agent_type in _AGENT_MODELS:
+                row = row._replace(agent_model=None)  # a pinned type takes its pin; the override is dropped
+            _model_opt(agent_type, row.agent_model)  # raises on bad model grammar of an unpinned override
             model = resolve_agent_model(agent_type, row.agent_model)
             brief = run_dir / "briefs" / f"{row.id}.md"
             report_rel = _dispatch_report_path(plan_posix, row.id)
