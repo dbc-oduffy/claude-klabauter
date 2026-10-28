@@ -34,6 +34,10 @@ EXEMPT_PATH_PREFIXES = (
     "archive/",
     ".coordinator-local/",
     "coordinator_core/attribution/",
+    # Generated mirrors (DoE): exports and baselines regenerated from committed snippets. A `.md`
+    # source is exempt, so its mirror must be too, or every snippet edit trips the gate here.
+    "coordinator/schemas/",
+    "coordinator/tests/baselines/",
 )
 
 

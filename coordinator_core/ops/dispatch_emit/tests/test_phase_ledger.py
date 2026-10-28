@@ -39,6 +39,15 @@ def test_unknown_halt_kind_or_input_is_full_pass():
     assert pl.invalidated(None, ["mystery"]) == frozenset(pl.PHASES)
 
 
+def test_orphaned_kinds_resume_at_named_phase_and_bare_orphaned_is_full_pass():
+    assert pl.HALT_PHASE["orphaned_staged"] == "execute"
+    assert pl.HALT_PHASE["orphaned_planned"] == "plan_review"
+    assert "orphaned" not in pl.HALT_PHASE
+    assert pl.invalidated("orphaned", revised=()) == frozenset(pl.PHASES)
+    assert "plan_review" in pl.invalidated("orphaned_planned", revised=())
+    assert "plan_review" not in pl.invalidated("orphaned_staged", revised=())
+
+
 def test_dag_is_closed_over_phases():
     assert set(pl.DEPENDS) == set(pl.PHASES)
     assert all(d in pl.PHASES for deps in pl.DEPENDS.values() for d in deps)

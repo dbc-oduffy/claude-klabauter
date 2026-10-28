@@ -273,13 +273,12 @@ SIDECAR_MISS_NO_FOREIGN_WRITE = (
 #: `additionalContext` in place of the inlined blocks text.
 BLOCKS_COMPANION_MARKER_PREFIX = "blocks_path: "
 
-#: Composed-TOTAL char cap (AC9 amendment), measured against the documented
-#: ~10,000-char `additionalContext` cliff (spike-verdict
-#: 2026-08-21-subagentstart-additionalcontext-caters-a-workflow-spawn.md).
-#: `coordinator:staff-eng` (11 `contract_blocks`, the widest row on disk)
-#: measured ~31,913 composed chars against this cap -- 10 of 33 catered
-#: types were over it (module docstring § AC9).
-ADDITIONAL_CONTEXT_CHAR_CAP = 10_000
+#: Composed-TOTAL char cap (AC9 amendment). Sized to the largest composed
+#: catering on disk (`coordinator:code-reviewer`, 3860 B) plus headroom; the
+#: documented ~10,000-char `additionalContext` cliff (spike-verdict
+#: 2026-08-21-subagentstart-additionalcontext-caters-a-workflow-spawn.md)
+#: remains the hard ceiling this stays well under.
+ADDITIONAL_CONTEXT_CHAR_CAP = 4_600
 
 #: Prevalence counter (bug-backlog `2026-08-21-named-dispatch-catering-
 #: resolves-contrac-0755d38ec8ea.yaml` deliverable 2) -- same machine-

@@ -987,6 +987,27 @@ def write_run_stage_at(
     return path
 
 
+def adopt_run_stage_at(record_path: Path, session_id: str, *, now: str | None = None) -> Path:
+    """Rewrite `<record_path>/run-stage.json`'s `session_id` to `session_id`, appending the prior one to
+    `adopted_from`; `started_at`, `stage` and `steps_planned` stay. Raises ValueError when the file is
+    absent or malformed, or `session_id` is empty."""
+    from datetime import datetime, timezone
+
+    path = Path(record_path) / RUN_STAGE_FILE
+    data = _read_json_object(path)
+    if data is None or not isinstance(session_id, str) or not session_id:
+        raise ValueError(f"cannot adopt {path}: no run-stage record or empty session id")
+    old = data.get("session_id")
+    adopted = [s for s in data.get("adopted_from") or [] if isinstance(s, str)]
+    if isinstance(old, str) and old and old != session_id and old not in adopted:
+        adopted.append(old)
+    data["session_id"] = session_id
+    data["adopted_from"] = adopted
+    data["last_activity_at"] = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    return path
+
+
 def write_run_stage(repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None) -> Path:
     """`write_run_stage_at` over the run's record dir. Raises ValueError on a bad stage or an unsafe
     run id."""

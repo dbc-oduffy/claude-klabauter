@@ -200,7 +200,6 @@ _GOLDEN_SNAPSHOT = json.loads(
 "nudge_handoff_ac_shape": ["advisory", ["Write", "Edit", "MultiEdit"], 220],
 "nudge_handoff_author_lint": ["advisory", ["Write", "Edit", "MultiEdit"], 225],
 "nudge_improvement_queue_write": ["hard-deny", ["Write", "Edit", "MultiEdit"], 120],
-"nudge_new_sh_file_naked_python": ["advisory", ["Write"], 160],
 "nudge_outbox_draft_frontmatter_shape": ["advisory", ["Write", "Edit", "MultiEdit"], 210],
 "nudge_peer_notice_unread": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 101],
 "nudge_plan_sidecar_family_split": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 141],

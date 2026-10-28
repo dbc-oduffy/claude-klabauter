@@ -106,8 +106,9 @@ def test_owners_is_called_once_with_only_non_own_non_row_would_refuse_paths(repo
     )
     assert calls == [["peer.py", "new.py"]]
     assert reply["peer_owned"] == [{"path": "peer.py", "owner": "run-sib"}]
-    assert "peer.py" not in refusal
-    assert "`new.py`" in refusal and NOT_DECLARED in refusal
+    # `other.py` is this run's own untracked path and still refuses; undeclared `new.py` is dropped.
+    assert "`other.py`" in refusal and "peer.py" not in refusal and "`new.py`" not in refusal
+    assert reply["dropped_foreign"] == ["new.py"]
 
 
 def test_peer_owned_alone_does_not_refuse(repo):
@@ -141,12 +142,12 @@ def test_every_refusing_claim_is_named_with_source_and_reason_unbacked_first(rep
     )
     assert refusal.startswith("shipped-claim-unbacked:")
     assert refusal.index("`held.py`") < refusal.index("`tracked.py`")
-    assert refusal.index("`new.py`") < refusal.index("`tracked.py`")
+    assert "`new.py`" not in refusal and reply["dropped_foreign"] == ["new.py"]
     assert "delivery note's What shipped" in refusal
-    assert "never-commit" in refusal and NOT_DECLARED in refusal
+    assert "never-commit" in refusal
     assert "Decide row C3" in refusal and 'chunk: "C3"' in refusal
     assert refused_code(reply) == SHIPPED_CLAIM_REFUSED
-    assert len(reply["unbacked"]) == 2 and len(reply["row_grade_owed"]) == 1
+    assert len(reply["unbacked"]) == 1 and len(reply["row_grade_owed"]) == 1
 
 
 def test_left_out_reason_per_verdict(repo):

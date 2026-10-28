@@ -86,6 +86,26 @@ def test_a_recorded_widen_counts_as_declared_and_an_outside_path_stays_undeclare
     assert vs["dirty.py"].left_out == NOT_DECLARED
 
 
+def test_a_foreign_dirty_path_no_row_declares_is_dropped_not_refused(repo):
+    note = "## What shipped\n- `new.py`\n- `dirty.py`\n- `clean.py`\n"
+    refusal, reply = shipped_gate(repo, note, own_paths={"x.py"})
+    assert refusal is None
+    assert reply["dropped_foreign"] == ["new.py", "dirty.py"] and reply["unbacked"] == []
+
+
+def test_a_declared_dirty_path_still_refuses_beside_a_dropped_foreign_one(repo):
+    note = "## What shipped\n- `new.py`\n- `dirty.py`\n"
+    refusal, reply = shipped_gate(repo, note, own_paths={"dirty.py"})
+    assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED) and "`dirty.py`" in refusal
+    assert "`new.py`" not in refusal and reply["dropped_foreign"] == ["new.py"]
+
+
+def test_a_withheld_undeclared_path_still_refuses(repo):
+    note = "## What shipped\n- `held.py`\n"
+    refusal, _ = shipped_gate(repo, note, own_paths={"x.py"}, withheld_paths={"held.py": "never-commit"})
+    assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED)
+
+
 def test_a_widened_claim_skips_the_peer_owner_lookup(repo):
     seen = []
 

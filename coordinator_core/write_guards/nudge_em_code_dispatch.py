@@ -32,9 +32,7 @@ denied in exactly one case: the subagent is a spawn of a live warp run that
 has bound no sizing (its size stage), attributed by its spawn transcript dir,
 and the write is a product file
 (`coordinator_core.hooks.nudge_em_code_dispatch._size_stage_write_deny`).
-Writes by any other subagent pass; the dispatch of an executor-family
-or general-purpose agent is itself gated in an unsized session by
-`hooks.unsized_writer_dispatch_deny`. This module re-implements none of that; it delegates to
+Writes by any other subagent pass. This module re-implements none of that; it delegates to
 `op()`.
 
 Fail-open: `op()` is called inside a bare try/except that returns `None` on

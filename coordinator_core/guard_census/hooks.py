@@ -3,16 +3,16 @@
 Fate rule: ``block`` only for a ``deny_registry`` entry; no hook module is registered, so every
 hook is ``guide``. A hook's deny paths resolve through ``machine_profile.apply_guard_level``, which
 logs an off-registry deny and never injects it; ``guard-em-prefire-survey`` emits its own
-context-only nudge. No body is deleted: off the registry ``apply_guard_level`` turns a deny into one
-nudge line, so a deny-only hook still guides, and each is imported by a dispatcher, registry or
-pin file. ``DENY_ONLY_CANDIDATES`` is read by no code; it is the hand-read worklist for the hook delete pass.
+context-only nudge. Off the registry ``apply_guard_level`` turns a deny into one nudge line, so a
+deny-only hook still guides, and each is imported by a dispatcher, registry or pin file; the
+exceptions are ``_DELETED``, bodies removed under DR-475. ``DENY_ONLY_CANDIDATES`` is read by no code; it is the hand-read worklist for the hook delete pass.
 ``WIRED`` records each module's direct DoE ``hooks.json`` event (C6 memo input);
 a module absent from it is reached through a dispatcher or a ``hooks/scripts`` wrapper.
 """
 
 from __future__ import annotations
 
-from coordinator_core.guard_census import GUIDE, Row
+from coordinator_core.guard_census import DELETED, GUIDE, Row
 
 WIRED = {
     "assert-em-role": "SessionStart",
@@ -62,10 +62,8 @@ DENY_ONLY_CANDIDATES = (
     "block-worktree-tool",
     "enforce-agent-dispatch-mode",
     "enforce-agent-model-pin",
-    "general-purpose-code-handoff-deny",
     "hand-dispatch-deny",
     "sizing-scout-deny",
-    "unsized-writer-dispatch-deny",
 )
 
 _HELPERS = (
@@ -143,7 +141,6 @@ _DISPATCHED = (
     "enforce-agent-model-pin",
     "fanin-registries",
     "foreign-path-filter",
-    "general-purpose-code-handoff-deny",
     "group-em-autofire",
     "group-em-park-spool",
     "guard-doctrine-changelog-prose",
@@ -214,6 +211,11 @@ _DISPATCHED = (
     "sweep-boot",
     "track-touched-files",
     "ue-knowledge-distrust",
+)
+
+#: Deny-only bodies executed under DR-475 (commit 900eac166a): the dispatch gate refused recoverable work.
+_DELETED = (
+    "general-purpose-code-handoff-deny",
     "unsized-writer-dispatch-deny",
 )
 
@@ -226,4 +228,5 @@ ROWS = (
     + [Row(n, GUIDE, note="no direct hooks.json entry; reached through a dispatcher or wrapper") for n in _DISPATCHED]
     + [Row(n, GUIDE, note="support module, no verdict of its own") for n in _HELPERS]
     + [Row(n, GUIDE, note="test module sitting in the hooks package; enumerated as a module, no verdict") for n in _TEST_MODULES]
+    + [Row(n, DELETED) for n in _DELETED]
 )

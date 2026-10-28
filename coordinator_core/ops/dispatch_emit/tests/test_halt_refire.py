@@ -21,6 +21,19 @@ def _env(**kw):
     return hr.refire_next_action(**base)
 
 
+def test_adopt_route_accepted_and_unknown_route_refused():
+    ok = hr.exit_next_action(reason="orphan", route=hr.ROUTE_ADOPT, call="coordinator-invoke dispatch.adopt_orphaned_run '{}'")
+    assert hr.ROUTE_ADOPT == "adopt" and hr.is_exit_next_action(ok)
+    assert not hr.is_exit_next_action({**ok, "route": "resurrect"})
+    assert not hr.is_exit_next_action({**ok, "call": "Workflow({ script: 'x' })"})
+
+
+def test_orphaned_envelopes_carry_resume_phase():
+    assert _env(halted="orphaned_staged")["resume"]["phase"] == "execute"
+    assert _env(halted="orphaned_planned")["resume"]["phase"] == "plan_review"
+    assert "phase" not in _env(halted="orphaned")["resume"]
+
+
 def test_builder_output_passes_validator():
     assert hr.is_refire_next_action(_env())
 

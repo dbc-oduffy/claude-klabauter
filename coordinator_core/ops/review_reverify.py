@@ -30,7 +30,7 @@ manifest path whose bytes now differ from its baseline (a missing file counts); 
 session's review stage wrote that the manifest and its declared ``paths`` do not name. ``foreign``
 is such a path under ``scratch/``, or one another live run declared that is tracked in the snapshot's base commit, or that predates the snapshot: the session's write record
 spans concurrent runs, so it is reported, never reverted or removed. In revert mode ``foreign`` lists
-the failing node ids whose test file is foreign.
+the failing node ids whose test file is foreign, plus those implicating none of this run's paths whose test file, imported module or named path another live run declared.
 
 Revert mode (``failing`` given, no ``probe``): ``{"reverted", "unattributed", "pre_existing",
 "sibling_owned", "kept", "record", "error"}``. ``sibling_owned`` is the unattributed node ids whose
@@ -535,6 +535,23 @@ def _implication(
     return out
 
 
+def _sibling_caused(repo_root: Path, node: str, sibling: Set[str]) -> bool:
+    """True when ``node`` implicates none of this run's paths and its cause lies wholly with another
+    live run: its test file, or a module it imports or a path it names, is in that run's declared set."""
+    if not sibling:
+        return False
+    test_file = _node_file(node)
+    if test_file in sibling:
+        return True
+    if not test_file.endswith(".py"):
+        return False
+    sibling_py = {p for p in sibling if p.endswith(".py")}
+    return bool(
+        _imported_edited(repo_root, test_file, sibling_py)
+        or _literal_named(repo_root, test_file, sorted(sibling))
+    )
+
+
 def _current(repo_root: Path, rel: str) -> bytes:
     try:
         return (repo_root / rel).read_bytes()
@@ -800,11 +817,18 @@ def review_reverify(
         if node not in already:
             unattributed.append(node)
         foreign_ids.append(node)
+    sibling_py: Set[str] = set()
+    if any(not t for t in implication.values()):
+        from coordinator_core.ops.dispatch_emit import review_edits
+
+        sibling_py = {_norm(p) for p in review_edits.live_sibling_declared(repo_root, None, slice_prefix)}
     for node, targets in implication.items():
         for target in targets:
             implicated.setdefault(target, []).append(node)
         if not targets and node not in already:
             unattributed.append(node)
+        if not targets and _sibling_caused(repo_root, node, sibling_py):
+            foreign_ids.append(node)
 
     if probe == "open":
         return _open_probe(repo_root, snapshot_dir, list(implication), implicated, created_set, side, run_id, plan_path)

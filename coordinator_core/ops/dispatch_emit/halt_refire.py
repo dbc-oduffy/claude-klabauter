@@ -26,7 +26,8 @@ REFUSED_KEY = "refused"
 EXIT_KIND = "exit"
 ROUTE_REVIEW_ONLY = "review-only"
 ROUTE_REVISE = "revise"
-EXIT_ROUTES = (ROUTE_REVIEW_ONLY, ROUTE_REVISE)
+ROUTE_ADOPT = "adopt"
+EXIT_ROUTES = (ROUTE_REVIEW_ONLY, ROUTE_REVISE, ROUTE_ADOPT)
 # plan-blitz's `agentIncidents[].kind` for a roster it could not read: a refire re-enters the same read.
 ROSTER_UNREADABLE_KIND = "roster-unreadable"
 REVIEW_ONLY_CALL = (

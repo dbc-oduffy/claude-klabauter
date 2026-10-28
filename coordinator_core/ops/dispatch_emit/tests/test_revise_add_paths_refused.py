@@ -1,5 +1,5 @@
-"""workflow.revise refuses, at revise time, an add_paths entry or a note citing a repo file outside the
-run's write set, naming both routes; in-scope notes, withhold_paths and credit_chunks still pass."""
+"""workflow.revise refuses, at revise time, an add_paths entry outside the run's write set, naming both
+routes; a note naming any file is prose and passes, as do withhold_paths and credit_chunks."""
 
 from __future__ import annotations
 
@@ -54,12 +54,10 @@ def test_add_paths_outside_through_the_op_replies_an_error(repo):
     assert OUTSIDE in reply["error"] and "new ask" in reply["error"]
 
 
-def test_note_citing_an_outside_file_is_refused_on_a_staged_run(repo):
+def test_note_naming_an_outside_file_to_run_is_accepted_on_a_staged_run(repo):
     _stage(repo)
-    with pytest.raises(rl.LedgerRefused) as exc:
-        rl.revise(repo, RUN, note=f"please also change `{OUTSIDE}`")
-    _assert_both_routes(str(exc.value), OUTSIDE)
-    assert rl.read_notes(rl.run_dir(repo, RUN)) == []
+    rl.revise(repo, RUN, note=f"run `{OUTSIDE}` to regenerate the export")
+    assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
 def test_note_citing_an_inside_file_is_accepted(repo):

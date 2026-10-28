@@ -98,7 +98,8 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     if out is None:
         return no_advisory()
-    # evaluate() returns one winning envelope; an aggregate shape must gate per guard, not merged.
+    # evaluate() (non-aggregate) returns the single first-matching envelope, so gating it whole
+    # silences no other guard's advisory; keyed by dispatcher name + envelope text shape.
     if isinstance(out, dict):
         return gate_once_per_session("preuse_write_dispatch", out, params)
     return out

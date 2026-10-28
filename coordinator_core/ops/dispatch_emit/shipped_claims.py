@@ -27,7 +27,7 @@ SELF_APPLIED_WITHHOLDS = frozenset({HALT_RECORD_ONLY})  # reasons the halt path 
 ROW_GRADE_OWED = "partial-row-grade-owed"
 NOT_DECLARED = "no row of this run declares it"
 
-SHIPPED_VERDICTS = ("backed", "untracked", "not-in-commit", "withheld", "unresolved", "peer-owned", "row-ungraded")
+SHIPPED_VERDICTS = ("backed", "untracked", "not-in-commit", "withheld", "unresolved", "peer-owned", "row-ungraded", "foreign-dropped")
 
 _REFUSING = ("untracked", "not-in-commit", "withheld")
 _ROW_LEFT_OUT = re.compile(r"^row (\S+) stays out: (.*)$", re.S)
@@ -275,6 +275,8 @@ def shipped_gate(
 
     `owners(paths) -> {path: owner}` is called once, only with refusing claim paths in neither
     `own_paths` nor `row_of`; a mapped claim is `peer-owned` and does not refuse. A raise leaves the refusal.
+    An untracked/not-in-commit claim no row declares (and no owner claims) is `foreign-dropped`: listed
+    under `dropped_foreign`, never refusing. Withheld and declared-path claims still refuse.
     """
     claims = extract_shipped_claims(note_text) if note_text else ()
     if not claims:
@@ -295,6 +297,9 @@ def shipped_gate(
             for i, v in enumerate(vs):
                 if v.claim.path in cand and found.get(v.claim.path):
                     vs[i] = replace(v, verdict="peer-owned", left_out=f"owned by {found[v.claim.path]}")
+    for i, v in enumerate(vs):
+        if v.verdict in ("untracked", "not-in-commit") and v.left_out == NOT_DECLARED:
+            vs[i] = replace(v, verdict="foreign-dropped")
     reply: dict = {
         "checked": len(vs),
         "unbacked": [v.claim.anchor for v in vs if v.verdict in _REFUSING],
@@ -303,6 +308,9 @@ def shipped_gate(
     peer = [{"path": v.claim.path, "owner": v.left_out.removeprefix("owned by ")} for v in vs if v.verdict == "peer-owned"]
     if peer:
         reply["peer_owned"] = peer
+    dropped = [v.claim.path for v in vs if v.verdict == "foreign-dropped"]
+    if dropped:
+        reply["dropped_foreign"] = dropped
     owed = [
         {"chunk": _row_split(v)[0], "path": v.claim.path, "grade": _row_split(v)[1]}
         for v in vs if v.verdict == "row-ungraded"

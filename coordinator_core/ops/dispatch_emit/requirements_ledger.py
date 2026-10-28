@@ -350,12 +350,11 @@ def _addition_route(run_id: str, paths: Sequence[str]) -> str:
 
 
 def _refuse_additions(
-    root: Path, dir_: Path, run_id: str, run: Optional[Mapping], add_paths: Sequence, note: Optional[str],
+    root: Path, dir_: Path, run_id: str, run: Optional[Mapping], add_paths: Sequence,
 ) -> None:
-    """LedgerRefused naming every `add_paths` entry outside the run's write set and, once the run has
-    staged, every existing repo file `note` cites outside it. An unstaged run's write set is its
-    sizing's `writes` alone, which `add_paths` is checked against; notes are checked only against a
-    frozen manifest. Writes nothing."""
+    """LedgerRefused naming every `add_paths` entry outside the run's write set. An unstaged run's
+    write set is its sizing's `writes` alone. A note is prose: a path it names (a tool to run, a
+    source) is never a declared write, so it is never checked. Writes nothing."""
     sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
     declared: list[str] = []
     for entry in add_paths:
@@ -368,10 +367,6 @@ def _refuse_additions(
         footprint = run_footprint(root, dir_, sizing_rel)
         files, dirs = footprint if footprint is not None else (_sizing_writes(root, sizing_rel), [])
         outside = [p for p in dict.fromkeys(declared) if p not in files and not any(p.startswith(d + "/") for d in dirs)]
-    if isinstance(note, str) and note.strip() and run is not None:
-        outside += [
-            p for p in paths_outside_footprint(root, dir_, sizing_rel, _paths_named(root, [note])) if p not in outside
-        ]
     if outside:
         raise LedgerRefused(_addition_route(run_id, outside))
 
@@ -1124,7 +1119,7 @@ def revise(
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
-    _refuse_additions(root, dir_, run_id, run, add_paths, note)
+    _refuse_additions(root, dir_, run_id, run, add_paths)
     if run is None:
         from coordinator_core.ops.dispatch_emit import pipeline_run
         from coordinator_core.ops.dispatch_emit.pipeline_contract import RUN_ID_PREFIX

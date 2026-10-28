@@ -16,7 +16,7 @@ from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 SID = "sess-gem-1"
 HOLDER_NAME = "group-em-44"
 
-_REVIEW_MARK = "The run's review answers"
+_REVIEW_MARK = "Review check"
 
 
 class Box:
@@ -137,7 +137,10 @@ def test_derived_copy_edit_is_not_offered_to_the_live_gem(box):
     payload = box.payload(target)
     assert not _denied(guard.check(payload))
     assert guard.edit_admitted(payload, target) is False
-    assert _denied(derived.check(payload))
+    # DR-475: the derived-copy guard is not registered to deny; it advises.
+    routed = derived.check(payload)
+    assert not _denied(routed)
+    assert "derived global-doctrine" in routed["hookSpecificOutput"]["additionalContext"]
 
 
 NON_GEM_STANDINGS = ["not_live", "pending", "unverified", "ended", "vacant"]

@@ -92,6 +92,12 @@ def test_is_exempt_path_attribution_package_itself():
     assert is_exempt_path("coordinator_core/attribution/patterns.py")
 
 
+def test_is_exempt_path_generated_snippet_mirrors():
+    assert is_exempt_path("coordinator/schemas/subagent-catering-resolution.json")
+    assert is_exempt_path("coordinator/tests/baselines/composed-message-budget.json")
+    assert not is_exempt_path("coordinator/tests/test_compose_review_wave.py")
+
+
 def test_is_exempt_path_windows_separator_state_prefix():
     assert is_exempt_path("state\\handoffs\\2026-09-25-note.md")
 

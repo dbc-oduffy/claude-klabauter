@@ -1190,6 +1190,8 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
 
     session_dir = Path(machinery_paths.share_dir(str(CONTENT_ROOT), "ac9-real-staff-eng"))
     os.environ["SUBAGENT_SANDBOX_POLICY"] = str(policy_file)
+    # staff-eng's blocks now compose under the production cap; force the spill.
+    monkeypatch.setattr(cater_subagent_start, "ADDITIONAL_CONTEXT_CHAR_CAP", 1_600)
     try:
         payload = {
             "agent_type": OVER_CAP_TYPE,
@@ -1198,7 +1200,7 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
         }
         result = compose_catering(payload, cwd=CONTENT_ROOT)
 
-        assert len(result) <= ADDITIONAL_CONTEXT_CHAR_CAP
+        assert len(result) <= cater_subagent_start.ADDITIONAL_CONTEXT_CHAR_CAP
         assert result.count(BLOCKS_COMPANION_MARKER_PREFIX) == 1
 
         result_lines = result.splitlines()

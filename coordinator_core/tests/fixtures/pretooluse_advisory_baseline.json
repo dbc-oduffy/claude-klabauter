@@ -1,7 +1,7 @@
 {
-  "advisory_sites": 25,
-  "fires": 39,
-  "median_bytes": 179,
+  "advisory_sites": 24,
+  "fires": 37,
+  "median_bytes": 185,
   "sites": {
     "agent:block-unenumerated-agent-type": {
       "bytes": 190,
@@ -80,12 +80,8 @@
       "fires": 1
     },
     "write:guard_doctrine_surface_edits": {
-      "bytes": 143,
+      "bytes": 135,
       "fires": 1
-    },
-    "write:nudge_new_sh_file_naked_python": {
-      "bytes": 260,
-      "fires": 2
     },
     "write:nudge_shell_shaped_spawn": {
       "bytes": 283,
@@ -104,5 +100,5 @@
       "fires": 1
     }
   },
-  "total_bytes": 9046
+  "total_bytes": 8778
 }

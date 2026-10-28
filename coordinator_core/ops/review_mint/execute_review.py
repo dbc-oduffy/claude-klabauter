@@ -915,10 +915,10 @@ def _reverify_phase(
     prompt byte-identical. ``verify_scope_targets`` (path -> test targets, group mode only) widens
     the rerun set with the verify-scope targets of every edited path.
 
-    The call is skipped (``_reviewReverify`` is ``null``) when no review applied an edit: the summed
-    ``applied`` of ``_reviewWave`` (plus ``fixes_applied`` of ``_reviewIntegration`` when
-    ``integration_bound``) is 0. ``deferred`` binds the un-awaited promise ``_reviewReverifyP``
-    instead, for a caller that awaits it alongside other work; it resolves to the same value."""
+    The call runs whatever the review applied: halted-run self-correction reads its owned and
+    foreign reds on a wave that applied nothing. ``deferred`` binds the un-awaited promise
+    ``_reviewReverifyP`` instead, for a caller that awaits it alongside other work; it resolves to
+    the same value."""
     agent_type, role = _host_native(_REVERIFY_AGENT_TYPE, host_degraded)
     repo_pin = f" --repo '{repo_root}'" if repo_root else ""
     invoke = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
@@ -1073,9 +1073,6 @@ def _reverify_phase(
         raise ValueError("re-verify agent call does not open with its prompt literal")
     call = f"agent({_prompt_literal(prompt)} + '\\n' + {sidecars_js}, " + call[len(prefix):]
     call = sc(call, "reverify", agent_type)
-    applied_js = "(Array.isArray(_reviewWave) ? _reviewWave : []).reduce((n, r) => n + ((r && r.applied) || 0), 0)"
-    if integration_bound:
-        applied_js += " + ((_reviewIntegration && _reviewIntegration.fixes_applied) || 0)"
     run_js = (
         f"((r) => r ? {{ ...r, unapplied: {_REVERIFY_UNAPPLIED_JS} }} : null)"
         f"(await {_degrading(call)})"
@@ -1083,14 +1080,13 @@ def _reverify_phase(
     if deferred:
         block = (
             f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
-            f"  const _reviewReverifyP = (_verifyOnly || !({applied_js})) ? Promise.resolve(null) : "
+            f"  const _reviewReverifyP = _verifyOnly ? Promise.resolve(null) : "
             f"(async () => {run_js})();"
         )
     else:
         block = (
             f"  phase({_js_string_literal(REVERIFY_PHASE)});\n"
-            f"  const _reviewReverify = _verifyOnly ? null : "
-            f"(!({applied_js}) ? null : {run_js});"
+            f"  const _reviewReverify = _verifyOnly ? null : {run_js};"
         )
     return REVERIFY_PHASE, block
 
@@ -1308,6 +1304,10 @@ def compose_execute_review(
             )
         if slice_key_js:
             raise ValueError("compose_execute_review(prep_run_id=...) takes no slice_key_js")
+        if not run_base_sha:
+            # No base (a compose outside a git checkout): the op's run mode needs a sha, so prep runs in paths mode.
+            run_key, prep_run_id = prep_run_id, None
+    if prep_run_id is not None:
         prep_slice_id = run_prep_slice_prefix(prep_run_id, run_base_sha)
     else:
         prep_slice_id = prep_slice_id_for(
@@ -1469,7 +1469,8 @@ def compose_execute_review(
 
     item_lines: List[str] = []
     wave_mode_args = f"\"head\":\"{review_terminal_sha}\"" if review_terminal_sha else "\"worktree\":true"
-    if safe_run_id:
+    # review.prep takes exactly one of paths or run_id: paths mode carries no run_id.
+    if safe_run_id and prep_run_id is not None:
         wave_mode_args += f",\"run_id\":{json.dumps(safe_run_id)}"
     wave_tail_js = (
         (f" + ' ' + JSON.stringify({declared_paths_js})" if declared_paths_js else "")

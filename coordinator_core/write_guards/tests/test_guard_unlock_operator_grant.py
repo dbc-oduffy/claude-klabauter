@@ -12,8 +12,8 @@ from coordinator_core.write_guards import engine
 
 SENTINEL_BASENAME = ".coordinator-override-worktree-guard"
 GUARD_NAME = "block_worktree_sentinel_write"
-ADVISORY_TARGET = "scratch-nonexistent-dir/brand_new_script.sh"
-ADVISORY_GUARD_NAME = "nudge_new_sh_file_naked_python"
+ADVISORY_TARGET = "tasks/lessons.md"
+ADVISORY_GUARD_NAME = "nudge_tasks_state_folder_split"
 
 
 _REPO_ROOT = "/repo"

@@ -4233,10 +4233,6 @@
       "_FORBIDDEN_SUBSTRINGS"
     ],
     [
-      "coordinator_core/hooks/tests/test_unsized_writer_dispatch_deny.py",
-      "WRITERS"
-    ],
-    [
       "coordinator_core/hooks/tests/test_warm_hook_migration_smoke.py",
       "REGISTERED_OPS"
     ],

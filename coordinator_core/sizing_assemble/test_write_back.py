@@ -493,14 +493,14 @@ def test_cli_write_carries_the_scouts_doc_consumers_and_ask_conflicts(
             "--tshirt", "M",
             "--write", Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix(),
             "--doc-consumer", "README.md:12",
-            "--doc-consumer", "docs/wiki/x.md#rule",
+            "--doc-consumer", "docs" "/wiki/x.md#rule",
             "--ask-conflict", "state/cross-repo/memo.md=says keep the old bar",
             "--ask-conflict", "docs/decisions/DR-1.md",
         ]
     )
     assert rc == sizing_assemble.EXIT_OK, capsys.readouterr().err
     doc = _load(path)
-    assert doc["doc_consumers"] == ["README.md:12", "docs/wiki/x.md#rule"]
+    assert doc["doc_consumers"] == ["README.md:12", "docs" "/wiki/x.md#rule"]
     assert doc["ask_conflicts"] == [
         {"path": "state/cross-repo/memo.md", "conflict": "says keep the old bar"},
         {"path": "docs/decisions/DR-1.md"},

@@ -3021,14 +3021,6 @@ def _wg_improvement_queue_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) 
     }
 
 
-def _wg_new_sh_file_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
-    target = scratch_dir / "foo.sh"
-    return {
-        "tool_name": "Write",
-        "tool_input": {"file_path": str(target), "content": "echo hi\n"},
-    }
-
-
 def _wg_prose_queue_append_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     state_dir = scratch_dir / "state"
     state_dir.mkdir(exist_ok=True)
@@ -3567,8 +3559,6 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "nudge_improvement_queue_write", "fire", True, _wg_improvement_queue_write_fire
     ),
     WriteGuardRow("nudge_improvement_queue_write", "control", False, _wg_benign),
-    WriteGuardRow("nudge_new_sh_file_naked_python", "fire", True, _wg_new_sh_file_fire),
-    WriteGuardRow("nudge_new_sh_file_naked_python", "control", False, _wg_benign),
     WriteGuardRow(
         "nudge_outbox_draft_frontmatter_shape",
         "fire",
@@ -4165,50 +4155,6 @@ def _fire_hand_dispatch_deny_mise_prep_control() -> Optional[Dict[str, Any]]:
 
 def _fire_hand_dispatch_deny_nested_control() -> Optional[Dict[str, Any]]:
     return _fire_hand_dispatch_deny("coordinator:plan-author", "Write the plan.", agent_id="a1")
-
-
-def _fire_general_purpose_code_handoff(
-    prompt: str, subagent_type: str = "general-purpose"
-) -> Optional[Dict[str, Any]]:
-    from coordinator_core.hooks import general_purpose_code_handoff_deny as _leaf
-
-    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": subagent_type, "prompt": prompt}}
-    return _to_envelope_or_none(_leaf.general_purpose_code_handoff_deny(payload, subagent_type))
-
-
-def _fire_general_purpose_code_handoff_fire() -> Optional[Dict[str, Any]]:
-    return _fire_general_purpose_code_handoff("Edit coordinator_core/foo.py to fix the parser.")
-
-
-def _fire_general_purpose_code_handoff_control() -> Optional[Dict[str, Any]]:
-    return _fire_general_purpose_code_handoff(
-        "Edit coordinator_core/foo.py to fix the parser.", "coordinator:executor"
-    )
-
-
-def _fire_unsized_writer_dispatch(sized: bool) -> Optional[Dict[str, Any]]:
-    from coordinator_core.hooks import unsized_writer_dispatch_deny as _leaf
-    from coordinator_core.session import engine_route_state
-
-    payload = {
-        "tool_name": "Agent",
-        "session_id": "corpus-sess",
-        "tool_input": {"subagent_type": "coordinator:executor", "prompt": "Do the work."},
-    }
-    saved = engine_route_state.session_sizing_state
-    engine_route_state.session_sizing_state = lambda p, sid: (sized, False)
-    try:
-        return _to_envelope_or_none(_leaf.unsized_writer_dispatch_deny(payload, "coordinator:executor"))
-    finally:
-        engine_route_state.session_sizing_state = saved
-
-
-def _fire_unsized_writer_dispatch_fire() -> Optional[Dict[str, Any]]:
-    return _fire_unsized_writer_dispatch(False)
-
-
-def _fire_unsized_writer_dispatch_control() -> Optional[Dict[str, Any]]:
-    return _fire_unsized_writer_dispatch(True)
 
 
 def _fire_submit_engine_ask_control() -> Optional[Dict[str, Any]]:
@@ -6739,10 +6685,6 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("hand_dispatch_deny", "fire-roadmap-planner", True, _fire_hand_dispatch_deny_roadmap_planner),
     HookRow("hand_dispatch_deny", "control-mise-prep-brief", False, _fire_hand_dispatch_deny_mise_prep_control),
     HookRow("hand_dispatch_deny", "control-nested-dispatch", False, _fire_hand_dispatch_deny_nested_control),
-    HookRow("unsized_writer_dispatch_deny", "fire-unsized-executor", True, _fire_unsized_writer_dispatch_fire),
-    HookRow("unsized_writer_dispatch_deny", "control-sized-executor", False, _fire_unsized_writer_dispatch_control),
-    HookRow("general_purpose_code_handoff_deny", "fire-code-edit-handoff", True, _fire_general_purpose_code_handoff_fire),
-    HookRow("general_purpose_code_handoff_deny", "control-typed-executor", False, _fire_general_purpose_code_handoff_control),
     HookRow("submit_bug_blitz", "fire-on-main", True, _fire_submit_bug_blitz_main),
     HookRow("submit_bug_blitz", "fire-no-targets", True, _fire_submit_bug_blitz_no_targets),
     HookRow("submit_bug_blitz", "fire-unknown-arg", True, _fire_submit_bug_blitz_unknown_arg),

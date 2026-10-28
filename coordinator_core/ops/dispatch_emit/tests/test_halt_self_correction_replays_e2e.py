@@ -189,6 +189,8 @@ def test_f1d188_an_owned_red_fixed_on_attempt_one_runs_no_review_blocked_halt_an
     assert labels.index(HALT_FIX_LABEL) < labels.index(HALT_REVERIFY_LABEL) < labels.index("verify") < labels.index("commit")
     assert "halt-commit" not in labels
     assert out["result"]["halted_by"] is None
+    # The run records the fixed re-verify, never the stale first one the verify phase could rejoin.
+    assert out["result"]["review"]["reverify"]["failing"] == []
     fix = next(c for c in out["calls"] if c["label"] == HALT_FIX_LABEL)["prompt"]
     assert _OWNED in fix and "AssertionError in" in fix and base.WAVE_SIDECAR in fix
 

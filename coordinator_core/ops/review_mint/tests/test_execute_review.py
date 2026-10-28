@@ -1257,11 +1257,10 @@ def _in_wave(review=None, **kw):
     return compose_execute_review(
         review or _ratio_review(),
         stage_schemas=_STAGE_SCHEMAS,
-        plan_path="docs/plans/example.md",
         run_base_sha="a" * 40,
         declared_paths=["x.py"],
         prep_in_wave=True,
-        **kw,
+        **{"plan_path": "docs/plans/example.md", **kw},
     )
 
 
@@ -1736,7 +1735,8 @@ def test_reverify_slice_key_sentinel_is_resolved():
 
 def test_a_run_key_reaches_the_prep_and_probe_open_calls_so_the_foreign_path_filters_fire():
     key = "warp-x-20261025T000000-aaaaaa"
-    wave = dict(_in_wave(run_key=key))["Review wave"].replace('\\"', '"')
+    # In-wave prep runs in run mode (its one caller, ask_compose); review.prep refuses run_id beside paths.
+    wave = dict(_in_wave(run_key=key, prep_run_id=key, plan_path="state/warp/r/manifest.json"))["Review wave"].replace('\\"', '"')
     reverify = dict(_reverify_phases(reverify=True, run_key=key))["Review re-verify"].replace('\\"', '"')
     assert f'"worktree":true,"run_id":"{key}","base"' in wave
     assert f'"run_id":"{key}","plan_path":"docs/plans/example.md","probe":"open"' in reverify
@@ -1857,36 +1857,20 @@ def test_reverify_runs_as_pinned_haiku_not_a_sonnet_override():
     assert "model:" not in degraded
 
 
-def test_reverify_is_skipped_and_spawns_nothing_when_review_applied_no_edit():
+def test_reverify_runs_when_the_review_applied_no_edit():
+    # Halted-run self-correction reads owned and foreign reds off a wave that applied nothing.
     calls = []
-    assert _run_reverify_block({"edited": ["a/x.py"]}, applied=0, calls=calls) is None
-    assert calls == [0]
-    assert _run_reverify_block({"edited": ["a/x.py"]}, applied=2, calls=calls) is not None
-    assert calls == [0, 1]
+    assert _run_reverify_block({"edited": ["a/x.py"]}, applied=0, calls=calls) is not None
+    assert calls == [1]
 
 
-def test_integration_fixes_count_toward_the_applied_guard():
-    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
-    assert "_reviewIntegration.fixes_applied" in block
-    fragment = _v5_fragment()
-    fragment["execute_review"]["stages"].pop()
-    no_integration = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
-    phases = compose_execute_review(
-        no_integration, stage_schemas=_STAGE_SCHEMAS, plan_path="docs/plans/example.md",
-        run_base_sha="a" * 40, declared_paths=["x.py"], reverify=True,
-    )
-    assert "_reviewIntegration" not in dict(phases)["Review re-verify"]
-
-
-def test_deferred_reverify_binds_an_unawaited_promise_with_the_same_guard():
+def test_deferred_reverify_binds_an_unawaited_promise_that_runs_like_the_awaited_one():
     block = dict(_reverify_phases(reverify=True, reverify_deferred=True))["Review re-verify"]
     assert "const _reviewReverifyP =" in block
     assert "const _reviewReverify =" not in block
     calls = []
-    assert _run_reverify_block({"edited": []}, deferred=True, applied=0, calls=calls) is None
-    assert calls == [0]
-    assert _run_reverify_block({"edited": []}, deferred=True, applied=1, calls=calls) is not None
-    assert calls == [0, 1]
+    assert _run_reverify_block({"edited": []}, deferred=True, applied=0, calls=calls) is not None
+    assert calls == [1]
     assert _run_reverify_block({"edited": []}, deferred=True, verify_only=True) is None
 
 

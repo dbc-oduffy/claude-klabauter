@@ -4713,13 +4713,15 @@ def compose_ask_script(
         f"  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== {_lit(ARM_XS)}) "
         f"{{ {INTEGRATION_NOT_RUN_VAR} = true; }}"
     )
+    # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
+    b.append("  if (!_reverifyJoined) { _reviewReverify = await " + _JOIN_REVERIFY_JS + "; _reverifyJoined = true; }")
     b.append(
         _review_recover_js(
             head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id, stager=stager,
             run_dir=run_dir, notes_block=notes_block,
         )
     )
-    b.append(_review_blocked_halt_js(sizing_rel, read_reverify=False))
+    b.append(_review_blocked_halt_js(sizing_rel))
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
         "  if (!_halted && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) { _halted = { halted: "
@@ -4810,7 +4812,8 @@ def compose_ask_script(
         "    let _verify = null;",
         f"    const _runVerify = async () => {{ try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
-        "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), " + _JOIN_REVERIFY_JS + "]);",
+        # A self-correction leg may have replaced the joined result; never rejoin the stale promise.
+        "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : " + _JOIN_REVERIFY_JS + "]);",
         "    _reverifyJoined = true;",
         "    if (!_halted && !_reviewReused && _reviewReverify && ((Array.isArray(_reviewReverify.unapplied) && _reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }",
         f"    if (_testWanted && _verify && _verify.test) {{ {_emit._TEST_RESULT_VAR} = _verify.test; }}",

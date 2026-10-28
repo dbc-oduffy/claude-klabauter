@@ -51,6 +51,8 @@ HALT_PHASE = {
     "plan_gate_ruling": "plan_gate_rulings",
     "ruling": "plan_gate_rulings",
     "rulings": "plan_gate_rulings",
+    "orphaned_staged": "execute",
+    "orphaned_planned": "plan_review",
 }
 
 #: A revise-changed input -> the first phase that consumes it. An unlisted input invalidates every phase.

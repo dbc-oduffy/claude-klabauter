@@ -294,6 +294,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # .agents/<agent_id>/ dir the session dispatched. A filesystem move, not a
     # read.
     "hooks.sessionend_archive_session": OpClass.MUTATING,
+    # hooks.sessionend_pm_directive_check — MUTATING: writes pm_directive_unmapped.json
+    # into the session directory; no spawn.
+    "hooks.sessionend_pm_directive_check": OpClass.MUTATING,
     # hooks.watchdog_undischarged_next_move — MUTATING (per this chunk's own
     # dispatch brief SCOPE DECISION, decided explicitly rather than defaulted).
     # Five-question checklist, opposite of nudge_autonomous_askuserquestion's
@@ -2426,6 +2429,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commit.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.reap_abandoned_runs": OpClass.MUTATING,
+    # dispatch.adopt_orphaned_run — MUTATING: rewrites a dead session's run-stage.json session_id to the
+    # caller and writes the run's halted.json (ops/dispatch_emit/orphan_adopt.py).
+    # DR-208 five-question affirmation (citing dispatch.adopt_orphaned_run handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      run-stage.json and halted.json of one record dir; no queue, no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Both files are replaced atomically through ask_contract and halted_run helpers.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The run's record dir, read by the ask gate and the cockpit.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The rewritten stage record and the halt marker.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.adopt_orphaned_run": OpClass.MUTATING,
     # dispatch.commit_halted_rows — MUTATING: lands a halted run's delivered rows, one ceremony.commit_v2 call
     # per row, hunk-scoped through `git apply --cached` where a withheld row shares the file
     # (ops/dispatch_emit/halted_rows_commit.py).
@@ -4505,6 +4522,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "git_branch.verify_commit_in_review_window": OpClass.COMPUTE_ONLY,
     "install.detect_cmd_autorun_coverage": OpClass.COMPUTE_ONLY,
     "install.detect_python3_appx_stub": OpClass.COMPUTE_ONLY,
+    "install.content_root_resolve": OpClass.COMPUTE_ONLY,
     "lessons.filter_undated_universal": OpClass.COMPUTE_ONLY,
     "lessons.reject_orphan_strip_entries": OpClass.COMPUTE_ONLY,
     "mcp.resolve_server_cli_path": OpClass.COMPUTE_ONLY,
@@ -5176,6 +5194,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # `_load` only; no lock, no write primitive on this path.
     "baton.pm_turn_append": OpClass.MUTATING,
     "baton.pm_turns": OpClass.COMPUTE_ONLY,
+    # baton.pm_directive_unmapped — COMPUTE_ONLY: reads pm_turns, tasks and dispositions only.
+    # baton.pm_directive_dispose — MUTATING: appends one row to pm_directive_dispositions.jsonl.
+    "baton.pm_directive_unmapped": OpClass.COMPUTE_ONLY,
+    "baton.pm_directive_dispose": OpClass.MUTATING,
 
     # warm.request_status — COMPUTE_ONLY (D5, docs/plans/2026-09-23-warm-
     # dispatch-reconcile.md § C4): a pure poll read of the accept process's

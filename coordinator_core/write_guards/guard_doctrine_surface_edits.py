@@ -359,19 +359,13 @@ def _why_protected(is_local_config: bool) -> str:
             "declarations that discharge the Tier-U authority check for them "
             "(fast_tier_unscoped_reason, fast_tier_shape)"
         )
-    return (
-        "is always-loaded doctrine: it reaches every session and every "
-        "dispatched agent in the fleet"
-    )
+    return "is always-loaded doctrine"
 
 
-_REVIEW_CHECKS_DOCTRINE = (
-    "The edit lands. The run's review answers two checks: the always-loaded "
-    "byte budget still holds, and the change was asked for (no unprompted rewrite)."
-)
+_REVIEW_CHECKS_DOCTRINE = "Review checks: byte budget holds; no unprompted rewrite."
 _REVIEW_CHECKS_CONFIG = (
-    "The edit lands. The run's review answers one check: a narrowed gate "
-    "command is not paired with the declaration that authorizes it."
+    "Review check: a narrowed gate command is not paired with the declaration "
+    "that authorizes it."
 )
 
 
@@ -608,8 +602,8 @@ def _weakening_write(tool_name: str, tool_input: Dict[str, Any], target: str) ->
 
 def _weakening_advisory(what: str) -> str:
     return (
-        f"[doctrine-surface guard] advisory: this edit {what}. The edit lands. "
-        "The run's review answers one check: the change was asked for."
+        f"[doctrine-surface guard] advisory: this edit {what}. "
+        "Review check: the change was asked for."
     )
 
 
