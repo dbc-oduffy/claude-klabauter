@@ -124,6 +124,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from coordinator_core.bounded_slug import bounded_slug
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
     _emit as _envelope_emit,
@@ -172,17 +173,7 @@ _ROADMAP_SEED_FLAG_SPEC: tuple[Flag, ...] = (
 )
 
 
-def _slug(text: str) -> str:
-    out = []
-    prev_dash = False
-    for ch in text.lower():
-        if ch.isalnum():
-            out.append(ch)
-            prev_dash = False
-        elif not prev_dash:
-            out.append("-")
-            prev_dash = True
-    return "".join(out).strip("-") or "untitled"
+_SEED_SLUG_MAX_BYTES = 60
 
 
 def _roadmap_baton_and_seed_directives(
@@ -233,7 +224,7 @@ def _roadmap_baton_and_seed_directives(
 
     if goals:
         goal_slug_source = problem_set_path or resolved_run_id or "roadmap"
-        out_path = f"state/handoffs/{today}-roadmap-seed-{_slug(goal_slug_source)}.md"
+        out_path = f"state/handoffs/{today}-roadmap-seed-{bounded_slug(goal_slug_source, _SEED_SLUG_MAX_BYTES)}.md"
         resolved = {
             "goals": ",".join(goals),
             "out": out_path,

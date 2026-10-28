@@ -68,6 +68,23 @@ def _pin_warm_disabled_for_cli_driving_tests(monkeypatch):
     monkeypatch.setenv("COORDINATOR_WARM", "0")
 
 
+# TRAP: a global commit.gpgsign=true makes every temp-repo seed `git commit`
+# exit 128. Signing is turned off in each NEW repo's own .git/config via a
+# git template dir; never export GIT_CONFIG_COUNT/KEY/VALUE here -- that
+# process-wide env reaches every real repo's git child and gates the
+# in-process snapshot path.
+@pytest.fixture(autouse=True)
+def _temp_repos_sign_off_locally(monkeypatch, tmp_path_factory):
+    template = tmp_path_factory.mktemp("git-template")
+    (template / "config").write_text(
+        "[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n"
+        "[help]\n\tformat = web\n[web]\n\tbrowser = noop\n"
+        "[browser \"noop\"]\n\tcmd = echo not-opening-browser-for:\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(template))
+
+
 # NEGATIVE SPEC: this conftest holds no process-spawning helper, and must not
 # regain one. A conftest cannot carry `@pytest.mark.cadence` — a marker only
 # tiers the test that declares it — so a spawn site here is untierable by

@@ -6,6 +6,8 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity
+from coordinator_core.ops.dispatch_emit import landing_retest
+from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_landing_integrity import (  # noqa: F401
     _fire as _fire_base,
     _git,
@@ -44,7 +46,7 @@ def test_caused_failure_is_refused_naming_the_test_file(repo):
     out = _fire(repo, "ok.py", targeted_tests=verdict)
 
     assert out["committed"] is False
-    assert out["refused"] == landing_integrity.TARGETED_TESTS_FAILED
+    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
     assert out["integrity"][0]["path"] == "pkg/tests/test_a.py"
     assert out["targeted_tests_check"] == "failed"
     assert _git(["rev-parse", "HEAD"], repo) == head
@@ -66,7 +68,7 @@ def test_inline_review_fail_without_targeted_tests_is_refused_unattributed(repo)
     out = _fire(repo, "ok.py", inline_review=inline)
 
     assert out["committed"] is False
-    assert out["refused"] == landing_integrity.TARGETED_TESTS_FAILED
+    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
     assert out["integrity"][0]["path"] == ""
     assert _git(["rev-parse", "HEAD"], repo) == head
 
@@ -84,7 +86,7 @@ def _run_deleted_target(repo, rel: str = "test_gone.py", dropped=None) -> dict:
     _git(["commit", "-q", "-m", "delete"], repo)
     record = {"run_id": "r1", "head": _git(["rev-parse", "HEAD"], repo), "status": "no-tests", "tests": [],
               "tests_run": 0, "dropped": dropped or [rel], "covered": {}}
-    path = landing_integrity.fresh_verdict_path(repo, "r1")
+    path = landing_retest.fresh_verdict_path(repo, "r1")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record), encoding="utf-8")
     return {"run_id": "r1", "run_base_sha": base}
@@ -128,7 +130,7 @@ def test_a_typo_target_beside_the_deleted_one_refuses_and_carries_no_note(repo):
     out = _fire(repo, "ok.py", **params)
 
     assert out["committed"] is False
-    assert out["refused"] == landing_integrity.TARGETED_TESTS_FAILED
+    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
     assert "targeted_tests_note" not in out
 
 

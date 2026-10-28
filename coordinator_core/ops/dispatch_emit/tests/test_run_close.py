@@ -583,3 +583,52 @@ def test_resolve_stem_bare_wins(tmp_path):
 def test_resolve_stem_neither(tmp_path):
     assert rc.resolve_close_job_stem(tmp_path, "r1") is None
     assert rc.resolve_close_job_stem(tmp_path, "r1.workflow") is None
+
+
+def _bind(root, run_id):
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+
+    status = root / contract.status_rel(run_id)
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text('{"status": "running"}\n', encoding="utf-8")
+    return status
+
+
+def test_stalled_status_write_returns_named_outcome_and_releases_nothing(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from coordinator_core.session import claimed_write
+
+    gate = threading.Event()
+    monkeypatch.setattr(claimed_write, "replace_text", lambda *_a, **_k: gate.wait(10))
+    status = _bind(tmp_path, "run-stall-write")
+    try:
+        t0 = time.perf_counter()
+        out = rc.sibling_release(tmp_path, "run-stall-write", None)
+        assert time.perf_counter() - t0 < 3
+    finally:
+        gate.set()
+    assert out["status_write"] == "deadline-missed" and out["phase"] == "write"
+    assert out["run_id"] == "run-stall-write" and out["path"] == status.as_posix()
+    assert out["released"] == [] and out["blocked"] == []
+
+
+def test_stalled_status_read_returns_named_outcome(tmp_path, monkeypatch):
+    import threading
+
+    gate = threading.Event()
+    monkeypatch.setattr(rc, "_read_json", lambda _p: gate.wait(10))
+    _bind(tmp_path, "run-stall-read")
+    try:
+        out = rc.sibling_release(tmp_path, "run-stall-read", None)
+    finally:
+        gate.set()
+    assert out["status_write"] == "deadline-missed" and out["phase"] == "read"
+
+
+def test_healthy_status_write_is_unchanged(tmp_path):
+    status = _bind(tmp_path, "run-healthy")
+    assert rc.sibling_release(tmp_path, "run-healthy", None) is None  # no parent record
+    assert '"halted"' in status.read_text(encoding="utf-8")
+    assert rc.sibling_release(tmp_path, "run-absent", None) is None

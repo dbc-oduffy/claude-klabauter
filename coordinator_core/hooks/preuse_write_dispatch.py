@@ -68,6 +68,7 @@ from __future__ import annotations
 import sys
 
 from coordinator_core._hook_envelope import payload_of
+from coordinator_core.bash_guards._advisory_dedupe import gate_once_per_session
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
 from coordinator_core.write_guards.engine import evaluate
@@ -97,4 +98,7 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     if out is None:
         return no_advisory()
+    # evaluate() returns one winning envelope; an aggregate shape must gate per guard, not merged.
+    if isinstance(out, dict):
+        return gate_once_per_session("preuse_write_dispatch", out, params)
     return out

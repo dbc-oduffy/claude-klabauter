@@ -257,6 +257,8 @@ import pathlib
 import sys
 import typing
 
+import pytest
+
 import coordinator_core.hooks as _hooks
 from coordinator_core.op_census import spawn_bearing_ops
 from coordinator_core.spawn_policy.detect import site_key
@@ -398,6 +400,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/ask_fanout.py",
         ("_handler",),
     ),
+    # Measured EMPTY function-granular reachable spawn set.
+    "dispatch.write_receipt": (
+        "coordinator_core/ops/dispatch_emit/stage_receipts.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-10-05: each now measures an EMPTY function-granular reachable spawn set.
     "install.probe_skill_frontmatter_valid": (
         "coordinator_core/install/prereq_probe.py",
@@ -429,6 +436,13 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "plan.seam_fix": (
         "coordinator_core/ops/plan_seam_fix.py",
+        ("_handler",),
+    ),
+    # Enrolled 2026-10-26: measured EMPTY function-granular reachable set (its one run_git site
+    # sits behind a _Repo method the walker does not resolve); C1's 1-vs-6-path spawn-equality test
+    # bounds the real spawn count.
+    "dispatch.commit_merge": (
+        "coordinator_core/ops/dispatch_emit/merge_commit.py",
         ("_handler",),
     ),
     # Enrolled 2026-10-22: statically spawn-free (empty function-granular reachable set).
@@ -501,13 +515,13 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/scratch_delete.py",
         ("_handler",),
     ),
+    "run.paths_trash": (
+        "coordinator_core/ops/run_paths_trash.py",
+        ("_handler",),
+    ),
     "review_stamp.rejudge": (
         "coordinator_core/ops/review_stamp.py",
         ("_rejudge_handler",),
-    ),
-    "review.reverify": (
-        "coordinator_core/ops/review_reverify.py",
-        ("_handler",),
     ),
     "dispatch.sibling_status": (
         "coordinator_core/ops/dispatch_emit/sibling_status.py",
@@ -587,6 +601,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_admission_post.py",
         ("_groupem_admission_post",),
     ),
+    "groupem.slot_grant": (
+        "coordinator_core/ops/group_em_slot_grant.py",
+        ("_groupem_slot_grant",),
+    ),
+    "groupem.slot_check": (
+        "coordinator_core/ops/group_em_slot_grant.py",
+        ("_groupem_slot_check",),
+    ),
     "workstream_complete.stand_down_watchers": (
         "coordinator_core/ops/watcher_stand_down.py",
         ("_stand_down_watchers",),
@@ -665,6 +687,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "bin.workday_complete_backfill_scan.scan": (
         "coordinator_core/ops/workday_complete_backfill_scan.py",
         ("scan",),
+    ),
+    # Enrolled 2026-10-25: the L+ close runs the plan's own falsifier, at most one spawn per close.
+    "execute_plan_assemble.l_plus_falsifier_gate": (
+        "coordinator_core/execute_plan_assemble/close_out_and_stamp.py",
+        ("_evaluate_l_plus_falsifier_gate",),
     ),
     "ops.discover_working_repos": (
         "coordinator_core/ops/discover_working_repos.py",
@@ -1292,6 +1319,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "updatedocs.gates": (
         "coordinator_core/ops/updatedocs_gates.py",
         ("_updatedocs_gates",),
+    ),
+    "updatedocs.sweeps": (
+        "coordinator_core/ops/updatedocs_sweeps.py",
+        ("_updatedocs_sweeps",),
     ),
     "workday.stitch_sidecar_into_summary": (
         "coordinator_core/ops/workday_stitch_sidecar_summary.py",
@@ -2108,6 +2139,23 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "three whole-op counters, which assert exact equality against `call_count` AND "
         "cross-check the manifest's own `op_total_*` value (3/3/0, nothing stubbed).",
     ),
+    (
+        "execute_plan_assemble.l_plus_falsifier_gate",
+        "coordinator_core/execute_plan_assemble/falsifier_run.py",
+        "run_recorded_falsifier",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        # The plan's own recorded falsifier command: not a leaf (pytest spawns git and
+        # interpreters), run at L+ only, at most once per close.
+        counter=_GLOBAL_SUBPROCESS_RUN,
+        counted_by="coordinator_core/execute_plan_assemble/tests/"
+        "test_close_out_l_plus_runs_falsifier.py",
+        executed="Measured 2026-10-25: attributed by caller frame to falsifier_run.py::"
+        "run_recorded_falsifier under `test_l_plus_close_spawns_the_falsifier_exactly_once` "
+        "(`assert len(spawns) == _L_PLUS_FALSIFIER_SPAWNS_PER_CLOSE`), and 0 at M under "
+        "`test_below_l_close_spawns_no_falsifier`.",
+    ),
     # `memo.send` (2026-09-24, docs/plans/2026-09-12-memo-send-enrolled-in-the-composition-
     # gate.md, C2). The receiver index fallback: a hookless `update-index` when the receiver's
     # index is one `splice_index` refuses (v4), executed by
@@ -2196,6 +2244,28 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log` "
         "(`assert len(spawns) == budget`, read from the manifest's hooks.stop_dispatch "
         "`terminal_review_session_walk`); the attribution is itself asserted on every run.",
+    ),
+    (
+        "dispatch.ask_stage",
+        "coordinator_core/git/run.py",
+        "run_git",
+        "git",
+        0,
+    ): _Legitimation(
+        # EM-ruled (group-em-fe, 2026-10-25, warp f11-tieru-eight-reds-on-day N16): portability
+        # outranks the spawn budget. `ask_stage._run_base_blobs` reads a refire's base blobs in
+        # process; ONLY the checkout conversions it cannot reproduce (`filter=`, `text=auto`,
+        # `core.autocrlf`, `core.eol`, env- or include-injected config, native CRLF) take ONE
+        # `git cat-file --batch --filters` through `ask_stage._git_filtered_blobs`, never a refusal.
+        # Scoped to that single site: no other exemption for this op.
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py",
+        executed="Common path: the exact-equality figure (`sum(_budget().values())`, the manifest's "
+        "empty `spawn_count_budget`) is asserted over the size-L and 26-row fixtures, so a spawn "
+        "that leaks onto the unconditional path fails it. Conversion path measured 2026-10-25 by "
+        "`test_ask_stage_write_baseline.py` (`assert len(git_spawns) == 1` under repo, "
+        "global-only and env-injected `core.autocrlf=true`, and `filter=`/`text=auto` together; "
+        "`== []` under plain config).",
     ),
     (
         "roadmap.blitz_land",
@@ -2320,6 +2390,22 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`test_two_stale_agents_with_touched_paths_spawn_one_status_in_total` (`assert "
         "len(spawns) == budget`, read from the manifest's session.reap "
         "`dirty_touched_path_refusal`); the attribution is itself asserted on every run.",
+    ),
+    # `dispatch.commit_merge`'s `git commit-tree` (git_native.commit_tree_merge), the one spawn
+    # outside the `run_git` spy of test_merge_commit.py, counted by
+    # `test_commit_merge_spawns_one_commit_tree_through_git_invoke` below.
+    (
+        "dispatch.commit_merge",
+        "coordinator_core/ops/ceremony/git_native.py",
+        "_git._invoke",
+        "<dynamic>",
+        0,
+    ): _Legitimation(
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
+        counted_by="coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py",
+        executed="Attributed by stack to git_native.py::_git._invoke under "
+        "`test_commit_merge_spawns_one_commit_tree_through_git_invoke` (`assert len(commit_tree) "
+        "== 1` at 1 and at 6 conflicted paths); the attribution is itself asserted on every run.",
     ),
     (
         "dispatch.ask_gate",
@@ -3360,14 +3446,18 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/discover_working_repos.py", "_sort_unique", "sort", 0),
     ),
     "deliverable.cascade_terminal": (),
+    # `active_reference_guard_many` (2026-10-28): `delete_guard.prefetch_citations` runs it twice
+    # per batch (active + basename scope); measured 4 rg spawns per prefetch at 1 and at 7 needles.
     "distill.apply_disposal": (
         ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
+        ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
         ("coordinator_core/distill/_common.py", "files_citing", "rg", 0),
         ("coordinator_core/distill/delete_guard.py", "_candidate_actioned_date", "git", 0),
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
     "distill.assemble_disposal_manifest": (
         ("coordinator_core/distill/_common.py", "active_reference_guard", "rg", 0),
+        ("coordinator_core/distill/_common.py", "active_reference_guard_many", "rg", 0),
         ("coordinator_core/distill/_common.py", "files_citing", "rg", 0),
         ("coordinator_core/distill/delete_guard.py", "_candidate_actioned_date", "git", 0),
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
@@ -3495,9 +3585,11 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # `cascade_terminal_op.py`, which never reaches `archive_stamp.py::_run_git`.
     # 34 -> 33: `handoff.archive_transition` no longer reaches `archive_stamp.py::_run_git`.
     # 33 -> 35: `sizings.summary` and `workflow_runs.list` each reach resolvers.py::resolve_coordinator_root.
-    assert total_pairs == 35, (
+    # 35 -> 37 on 2026-10-28: `active_reference_guard_many` joins the apply_disposal and
+    # assemble_disposal_manifest rows.
+    assert total_pairs == 37, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "35 measured 2026-10-24 after sizings.summary and workflow_runs.list registered; 33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
+        "37 measured 2026-10-28 after active_reference_guard_many joined the two distill rows; 35 measured 2026-10-24 after sizings.summary and workflow_runs.list registered; 33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -7075,6 +7167,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
+    # review.reverify: static reachable-site ceiling, not execution evidence. The one site is
+    # foreign_halted_withheld's run_git (probe-open and revert legs), reached once per still-held
+    # halted run, so the dynamic count scales with halted runs; not enrolled.
+    "review.reverify": 1,
     # Enrolled 2026-08-30 (second reconciliation pass): both entered the live
     # registry mid-close from concurrent peer work, measured at their live
     # reachable-site counts.
@@ -7207,12 +7303,13 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "fleet.archive_terminal_sizings": 3,
     # 8 -> 9, 2026-10-09: bash guard `deploy-dirty-tree` adds one `git status --porcelain`
     # (session_facts._dirty_paths), reached ONLY when the command resolves to a deploy shape.
-    # 5 -> 6, 2026-10-24: guard `block_em_halted_withheld_commit._git_names` (1233235b64) runs one
-    # `git diff --name-only` per EM commit-shaped command to list the paths a commit would take.
     "warm_guard.evaluate": 5,
     # 9 -> 10, 2026-10-12 (f10d5c0233): `_common.files_citing` is the batched citation
     # prefetch -- one `rg -f` per needle set (live scope, harvest scope), never per candidate.
-    "distill.apply_disposal": 10,
+    # 10 -> 11, 2026-10-28: `_common.active_reference_guard_many` is a new reachable site (the
+    # batched active/basename guards of `delete_guard.prefetch_citations`). Process count did not
+    # grow: measured 4 rg per prefetch at 1 and at 7 needles, replacing per-candidate guard spawns.
+    "distill.apply_disposal": 11,
     "memo.transition": 4,
     "merge_assemble.apply": 1,
     # 8 -> 9 -> 8, 2026-10-22: sweep_scratch asks `_unborn_scratch_repo.scratch_clone_failures`
@@ -7230,7 +7327,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "orientation.regenerate_cache": 1,
     "branch.merge_into_workstream": 3,
     # 3 -> 4, 2026-10-12 (f10d5c0233): same batched `files_citing` prefetch as apply_disposal.
-    "distill.assemble_disposal_manifest": 4,
+    # 4 -> 5, 2026-10-28: same `active_reference_guard_many` site as apply_disposal; same measurement.
+    "distill.assemble_disposal_manifest": 5,
     # 4 -> 5, 2026-09-12: the Perforce second-class plan's p4 leg adds one
     # reachable spawn site (`coordinator_core/p4/runner.py::run`), reached
     # through `p4/shelve.py`. DELIBERATE growth, recorded rather than drifted.
@@ -7439,7 +7537,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.mise_autofire": 1,
     "hooks.pickup_autofire": 1,
     # 8 -> 9, 2026-10-09: same deploy-dirty-tree `git status` as warm_guard.evaluate (gated).
-    # 5 -> 6, 2026-10-24: same site as warm_guard.evaluate (`block_em_halted_withheld_commit._git_names`).
     "hooks.preuse_bash_dispatch": 5,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
@@ -7479,6 +7576,13 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Enrolled 2026-10-15: new ops, pinned at their measured reachable counts (a ratchet, not execution evidence).
     "plan.readiness_verdict": 1,
     "review.prep": 1,
+    # Enrolled 2026-10-26: halted-run supersede/combined-landing ops, pinned at measured reachable counts.
+    "dispatch.close_halted_run_superseded": 1,
+    "dispatch.land_combined_index": 2,
+    # Enrolled 2026-10-26: objective_* ops, pinned at measured reachable counts (7 (op, site) pairs).
+    "dispatch.objective_calibrate": 1,
+    "dispatch.objective_check": 4,
+    "dispatch.objective_write": 2,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 
@@ -7635,3 +7739,21 @@ def test_static_spawn_count_over_budget_list_matches_pins():
         f"{_STATIC_SPAWN_COUNT_OVER_BUDGET_THRESHOLD} -- computed="
         f"{sorted(computed.items())} declared={sorted(_STATIC_SPAWN_COUNT_OVER_BUDGET.items())}"
     )
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_commit_merge_spawns_one_commit_tree_through_git_invoke(tmp_path, monkeypatch):
+    """Companion for the `dispatch.commit_merge` `_git._invoke` legitimization: exactly one
+    `git commit-tree` spawn, attributed to `_git._invoke`, whatever the conflicted-path count."""
+    from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
+    from coordinator_core.ops.dispatch_emit.tests.test_merge_commit import _build, _call
+
+    for n in (1, 6):
+        root, _, params = _build(tmp_path / f"n{n}", n_conflicted=n)
+        with _count_spawns_attributed(monkeypatch) as spawns:
+            out = _call(root, params)
+        assert out["ok"] is True, out
+        commit_tree = [s for s in spawns if "commit-tree" in s.argv]
+        assert len(commit_tree) == 1, [s.argv for s in spawns]
+        assert commit_tree[0].origin == "_git._invoke", commit_tree[0]

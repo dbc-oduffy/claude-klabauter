@@ -407,6 +407,73 @@ def resolve_content_root() -> str:
     )
 
 
+def _registry_content_root_spawn_free() -> Optional[str]:
+    return registry_get("repos.content_root")
+
+
+def _registry_live_path_spawn_free() -> Optional[str]:
+    return registry_get("plugin.mirrors.coordinator-claude.live_path")
+
+
+def resolve_content_root_spawn_free() -> Optional[str]:
+    """`resolve_content_root`'s ladder through in-process rungs only; None where it would
+    raise or need the `machine-local` CLI. Trap: deliberately shares no code path with
+    `_machine_local_get` -- a hot-path caller's static reachability must stay spawn-free."""
+    claude_home = _claude_home_dir()
+    flat = os.path.join(claude_home, "plugins", "coordinator-claude") if claude_home else None
+    oss_present = bool(flat) and os.path.isfile(os.path.join(flat, ".claude-plugin", "plugin.json"))
+
+    for env_key in ("CLAUDE_PLUGIN_ROOT", "COORDINATOR_ROOT"):
+        env_val = os.environ.get(env_key)
+        if env_val:
+            return env_val if os.path.isdir(env_val) else None
+
+    mode_env = os.environ.get("COORDINATOR_SOURCE_MODE")
+    if mode_env and mode_env not in ("dev", "oss"):
+        return None
+    if mode_env == "oss":
+        newest = _newest_cache_dir()
+        if newest:
+            return newest
+        return flat if oss_present else None
+
+    live = _registry_live_path_spawn_free()
+    if not mode_env:
+        candidate = (
+            _registry_content_root_spawn_free()
+            or live
+            or _read_content_root()
+            or (flat if flat and not oss_present and _flat_evidences_coordinator_tree(flat) else "")
+            or ""
+        )
+        candidate_resolved = bool(candidate) and os.path.isdir(candidate)
+        marked = candidate_resolved and os.path.isfile(
+            os.path.join(candidate, ".coordinator-dev-repo")
+        )
+        if not marked:
+            if candidate_resolved and oss_present:
+                return None
+            if oss_present:
+                newest = _newest_cache_dir()
+                if newest:
+                    return newest
+                return flat
+            if not candidate_resolved:
+                return None
+
+    if live and os.path.isdir(live):
+        return live
+    newest = _newest_cache_dir()
+    if newest:
+        return newest
+    content_root = _read_content_root()
+    if content_root:
+        found = _content_root_for(content_root)
+        if found is not None:
+            return str(found)
+    return flat if oss_present else None
+
+
 _FLAG_TO_VERB = {
     "--clone-root": "clone-root",
     "--for-git-ops": "clone-root",

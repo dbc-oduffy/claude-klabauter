@@ -77,7 +77,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
-from typing import Callable, List, Optional, Sequence
+from typing import Callable, List, Mapping, Optional, Sequence
 
 import yaml
 
@@ -88,6 +88,7 @@ from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun, blocks, holders_from_held, owns_path
 from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
@@ -135,6 +136,8 @@ def _fail(message: str) -> dict:
         "foreign_claims": [],
         "slices": [],
         "whole_diff_sidecars": {"kira": "", "personas": [], "delivery": ""},
+        "excluded": [],
+        "peer_held": [],
         "error": message,
     }
 
@@ -187,10 +190,18 @@ def _specs_by_base(paths: List[str], base: str, path_bases: dict) -> List[tuple]
 
 
 def _freeze_whole_by_base(
-    repo_root: Path, base: str, head: Optional[str], paths: List[str], path_bases: dict, slice_prefix: str
+    repo_root: Path,
+    base: str,
+    head: Optional[str],
+    paths: List[str],
+    path_bases: dict,
+    slice_prefix: str,
+    fallback: Optional[List[str]] = None,
+    worktree_paths: Optional[List[str]] = None,
 ) -> dict:
     """Freeze the whole diff with each path taken from its effective base, as the ``freeze_diff``
-    reply shape for ``<slice_prefix>.diff``.
+    reply shape for ``<slice_prefix>.diff``. ``fallback`` (range mode) paths have no range delta;
+    they are frozen HEAD->worktree under ``<slice_prefix>-gfb-prep`` and concatenated last.
 
     One ``freeze_diff`` per distinct base under ids ``<slice_prefix>-g<n>-prep`` (distinct paths
     cannot share a ``freeze_diffs_batch`` call, and worktree mode never batches), concatenated in
@@ -199,14 +210,16 @@ def _freeze_whole_by_base(
     from coordinator_core.ops.review_freeze_diff import _is_run_keyed_prep_id, _shelve_prior_attempt
 
     groups: dict = {}
+    wt_set = set(worktree_paths or [])
     for spec, eb in _specs_by_base(paths, base, path_bases):
-        groups.setdefault(eb, []).append(spec)
+        # `worktree_paths` carry uncommitted bytes on top of a range delta: frozen base..worktree.
+        groups.setdefault((eb, spec in wt_set), []).append(spec)
     texts: List[str] = []
     head_sha: Optional[str] = None
-    for n, (eb, group) in enumerate(groups.items(), 1):
+    for n, ((eb, in_wt), group) in enumerate(groups.items(), 1):
         slice_id = f"{slice_prefix}-g{n}-prep"
         while group:
-            if head:
+            if head and not in_wt:
                 frozen = _heavy("freeze_diff")(repo_root, f"{eb}..{head}", slice_id, group)
             else:
                 frozen = _heavy("freeze_diff")(repo_root, eb, slice_id, group, worktree=True)
@@ -222,6 +235,14 @@ def _freeze_whole_by_base(
                 break
         if not group:
             continue
+        if frozen.get("error"):
+            return frozen
+        head_sha = head_sha or frozen["head_sha"]
+        texts.append(Path(frozen["diff_path"]).read_text(encoding="utf-8"))
+    if fallback:
+        frozen = _heavy("freeze_diff")(
+            repo_root, git_state.head_sha(repo_root), f"{slice_prefix}-gfb-prep", fallback, worktree=True
+        )
         if frozen.get("error"):
             return frozen
         head_sha = head_sha or frozen["head_sha"]
@@ -262,6 +283,24 @@ def foreign_claims(repo_root: Path, rev_range: str, paths: List[str], own_sessio
     ]
 
 
+def live_runs_from_params(raw: object) -> Optional[dict]:
+    """Parse ``{run_id: {plan, superseded_by, successor_landed, withheld, claims}}`` into ``LiveRun``s; None when absent or malformed."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out = {}
+    for rid, run in raw.items():
+        if not isinstance(run, dict):
+            return None
+        out[str(rid)] = LiveRun(
+            plan=str(run.get("plan") or ""),
+            superseded_by=str(run.get("superseded_by") or ""),
+            successor_landed=bool(run.get("successor_landed")),
+            withheld=frozenset(str(p) for p in run.get("withheld") or []),
+            claims=frozenset(str(p) for p in run.get("claims") or []),
+        )
+    return out
+
+
 def _rel(path: Path, repo_root: Path) -> str:
     try:
         return path.relative_to(repo_root).as_posix()
@@ -291,7 +330,7 @@ def _for_group(reply: dict, group_index: Optional[int], group_count: Optional[in
 
 _STORED_KEYS = (
     "plan_id", "share_dir", "run_base_sha", "verdict", "basis", "whole_diff_path", "product_files",
-    "foreign_claims", "slices", "whole_diff_sidecars", "sidecar_path",
+    "foreign_claims", "slices", "whole_diff_sidecars", "sidecar_path", "excluded",
 )
 REVIEW_PREP_BUSY_PREFIX = "review.prep busy:"
 _LOCK_WAIT_SECS = 0.5
@@ -353,6 +392,7 @@ def _stored_reply(
     reply = {**{k: fm[k] for k in _STORED_KEYS}, "error": None}
     if "reviewed_sha256" in fm:
         reply["reviewed_sha256"] = fm["reviewed_sha256"]
+    reply["peer_held"] = fm.get("peer_held") or []
     return reply
 
 
@@ -469,9 +509,15 @@ def review_prep(
     session_id: str = "",
     group_index: Optional[int] = None,
     group_count: Optional[int] = None,
+    run_id: str = "",
+    live_runs: Optional[Mapping[str, LiveRun]] = None,
 ) -> dict:
     """Freeze, partition and claim-check one run's diff once per ``slice_prefix``; see the module
-    docstring."""
+    docstring. With ``live_runs``, a path another live run withholds or claims stays in review and is
+    listed in ``peer_held``; the peer-hunks gate settles it at commit. The handler derives ``live_runs``
+    from halted runs' withheld sets (``land_run.foreign_halted_withheld``) when ``params.run_id`` is
+    given and ``params.live_runs`` is not. ``excluded`` lists each declared path not reviewed with its
+    reason (``outside-repo``, ``no-delta``)."""
     if not base or not slice_prefix or not plan_path:
         return _fail("base, paths, slice_prefix and plan_path are required")
     if not _SHA_RE.match(base):
@@ -480,7 +526,11 @@ def review_prep(
         return _fail("group_index and group_count go together")
     if group_count is not None and not (group_count >= 1 and 0 <= group_index < group_count):
         return _fail("group_index must be in [0, group_count) and group_count at least 1")
+    excluded = [{"path": p, "reason": "outside-repo"} for p in paths if not _inside_repo(p)]
     paths = [posixpath.normpath(p.replace("\\", "/")) if ".." in p else p for p in paths if _inside_repo(p)]
+    peer_held = (
+        [p for p in paths if blocks(owns_path(run_id, p, live_runs, plan_path))] if live_runs else []
+    )
     if not paths:
         # A pathspec-less `git diff <base>` would diff the whole tree: answer before any git, lock or sidecar.
         zero = _fail("")
@@ -489,6 +539,7 @@ def review_prep(
             share_dir=_rel(Path(share_dir(str(repo_root), session_id)), repo_root) if session_id else "",
             basis="range" if head else "worktree",
             run_base_sha=base,
+            excluded=excluded,
             error=None,
         )
         return _for_group(zero, group_index, group_count)
@@ -525,7 +576,8 @@ def review_prep(
     def compute_locked() -> dict:
         try:
             return served() or _compute(
-                repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar, peer_bases()
+                repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar, peer_bases(),
+                excluded, peer_held,
             )
         finally:
             try:
@@ -565,6 +617,8 @@ def _compute(
     share: Path,
     sidecar: Path,
     peer_bases: Optional[dict] = None,
+    excluded: Optional[List[dict]] = None,
+    peer_held: Optional[List[str]] = None,
 ) -> dict:
     if peer_bases is None:
         peer_bases = _peer_bases(repo_root, base, head, paths, session, plan_path)
@@ -581,12 +635,44 @@ def _compute(
         basis="range" if head else "worktree",
         run_base_sha=base,
         whole_diff_sidecars=whole_sidecars,
+        excluded=list(excluded or []),
+        peer_held=list(peer_held or []),
         error=None,
     )
 
+    def run_partition() -> dict:
+        # Range mode: an own file with no `base..head` delta (withheld edit, untracked, peer-held)
+        # is measured and frozen HEAD->worktree. Directory and magic declarations are left to range.
+        fallback = [
+            p for p in paths
+            if head and not is_magic_pathspec(p) and not p.endswith("/") and not (repo_root / p).is_dir()
+        ]
+        return _heavy("partition_slices")(
+            repo_root, base, paths, slice_prefix, head=head or None,
+            **({"path_bases": peer_bases} if peer_bases else {}),
+            **({"head_fallback": fallback} if fallback else {}),
+        )
+
+    # Trap: range mode partitions first; the whole-diff freeze needs the fallback paths it names.
+    part = run_partition() if head else None
+    if part is not None and part["error"]:
+        out["error"] = part["error"]
+        return out
+    fb = list(part.get("fallback_paths") or []) if part else []
+    wt = list(part.get("worktree_paths") or []) if part else []
+    rest = paths
+    if fb:
+        # Trap: with a fallback, only declared paths the partition saw as product are frozen in the whole diff.
+        seen = part.get("product_paths") or []
+        rest = [p for p in paths if not _covers(p, fb) and _covers(p, seen)]
+
     rev_range = f"{base}..{head or 'HEAD'}"
     try:
-        if peer_bases:
+        if fb or wt:
+            whole = _freeze_whole_by_base(
+                repo_root, base, head, rest, peer_bases or {}, slice_prefix, fallback=fb, worktree_paths=wt
+            )
+        elif peer_bases:
             whole = _freeze_whole_by_base(repo_root, base, head, paths, peer_bases, slice_prefix)
         elif head:
             whole = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
@@ -615,12 +701,11 @@ def _compute(
     out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
 
     out["peer_bases"] = peer_bases
-    part = _heavy("partition_slices")(
-        repo_root, base, paths, slice_prefix, head=head or None, **({"path_bases": peer_bases} if peer_bases else {})
-    )
-    if part["error"]:
-        out["error"] = part["error"]
-        return out
+    if part is None:
+        part = run_partition()
+        if part["error"]:
+            out["error"] = part["error"]
+            return out
     out["verdict"] = part["verdict"]
     if part["verdict"] == "PARTITION-MANDATORY":
         out["slices"] = [
@@ -644,12 +729,28 @@ def _compute(
             }
         ]
 
+    sliced = [f for s in out["slices"] for f in s["files"]]
+    if not sliced and paths:
+        out["no_slice_reason"] = (
+            f"verdict {part['verdict']}: the frozen diff of {len(paths)} declared path(s) holds no product file"
+        )
+    out["excluded"].extend(
+        {"path": p, "reason": "no-delta"}
+        for p in paths
+        if not is_magic_pathspec(p) and not _covers(p, sliced)
+    )
     out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session)
     out["sidecar_path"] = _rel(sidecar, repo_root)
     _write_sidecar(sidecar, out, session, paths, head)
     out.pop("declared_sha256", None)
     out.pop("peer_bases", None)
     return out
+
+
+def _covers(declared: str, files: Sequence[str]) -> bool:
+    """True when ``declared`` names one of ``files`` or a directory holding one."""
+    d = declared.rstrip("/")
+    return any(f == d or f.startswith(d + "/") for f in files)
 
 
 def _read_or_none(path: Path) -> Optional[bytes]:
@@ -742,6 +843,7 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         "reviewed_sha256": result.get("reviewed_sha256", {}),
         **({"declared_sha256": result["declared_sha256"]} if "declared_sha256" in result else {}),
         "peer_bases": result.get("peer_bases", {}),
+        "peer_held": result.get("peer_held", []),
         "head": head or None,
         "paths": paths,
     }
@@ -762,12 +864,14 @@ def _read_json_object(path: Path) -> Optional[dict]:
     return got if isinstance(got, dict) else None
 
 
-def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False) -> List[str]:
-    """The run's declared paths from its record: the manifest's ``review_declared_paths``, then,
-    when ``leg``, the leg footprint's ``writes``. Order kept, no dedupe, no normalisation. Raises
-    ValueError (one fact) on an unsafe run_id, a missing manifest, a non-list-of-str field, a
-    missing footprint under ``leg``, or an empty result. Spawns nothing."""
+def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, own_session: str = "") -> List[str]:
+    """The run's whole write set (``run_write_set``: manifest ``review_declared_paths``, leg
+    footprint writes, credited chunk writes, halted-withheld paths), deduped, minus paths a live
+    session other than ``own_session`` holds; an empty ``own_session`` lets ``_peer_held`` resolve
+    the calling session itself. Raises ValueError (one fact) on an unsafe run_id, a missing manifest,
+    a non-list-of-str field, a missing footprint under ``leg``, or an empty write set. Spawns nothing."""
     from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
+    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set
 
     base = record_dir(repo_root, run_id)
     manifest = _read_json_object(base / "manifest.json")
@@ -776,15 +880,14 @@ def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False) -
     declared = manifest.get("review_declared_paths")
     if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
         raise ValueError(f"manifest review_declared_paths for run {run_id!r} is not a list of str")
-    resolved = list(declared)
     if leg:
         footprint = _read_json_object(base / LEG_FOOTPRINT_FILE)
         writes = footprint.get("writes") if footprint is not None else None
         if not isinstance(writes, list) or not all(isinstance(p, str) for p in writes):
             raise ValueError(f"no readable leg footprint writes list for run {run_id!r}")
-        resolved += writes
+    resolved = list(run_write_set(repo_root, run_id, own_session))
     if not resolved:
-        raise ValueError(f"run {run_id!r} declares no paths to review")
+        raise ValueError(f"run {run_id!r} has no reviewable paths (none declared, or all scratch or claimed by another session)")
     return resolved
 
 
@@ -792,7 +895,8 @@ def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False) -
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "review.prep". Params: ``base`` (str sha), exactly one of ``paths`` (list[str]) and
     ``run_id`` (str; the run's declared paths are read from its record), optional ``leg`` (bool,
-    only with ``run_id``; appends the leg footprint's writes), ``slice_prefix``
+    only with ``run_id``; requires the leg footprint; the run's whole write set is reviewed
+    either way), ``slice_prefix``
     (str), ``plan_path`` (str), optional ``session_id``, and exactly one of ``head`` (str,
     committed range mode) or ``worktree: true``. With ``run_id`` the slice prefix is always
     ``review_slice_id.run_prep_slice_prefix(run_id, base)``: a typed ``slice_prefix`` is ignored
@@ -811,7 +915,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if leg is not None and not isinstance(leg, bool):
             return _fail("review.prep leg must be a boolean")
         try:
-            paths = declared_paths_for_run(repo_root, run_id, leg=bool(leg))
+            paths = declared_paths_for_run(
+                repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
+            )
         except ValueError as exc:
             return _fail(str(exc))
     else:
@@ -834,6 +940,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         slice_prefix = run_prep_slice_prefix(run_id, base)
     else:
         slice_prefix = str(params.get("slice_prefix") or "")
+    live_runs = live_runs_from_params(params.get("live_runs"))
+    if params.get("live_runs") and live_runs is None:
+        return _fail("review.prep params.live_runs must map run ids to objects")
+    run_id = str(params.get("run_id") or "")
+    if live_runs is None and run_id:
+        from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
+
+        held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
+        live_runs = holders_from_held(held) or None
     return review_prep(
         repo_root,
         base=base,
@@ -844,4 +959,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         session_id=str(params.get("session_id") or ""),
         group_index=group_index,
         group_count=group_count,
+        run_id=run_id,
+        live_runs=live_runs,
     )

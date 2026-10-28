@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+from _roster_fixture import write_roster_fragment
+
 import pytest
 import yaml
 
@@ -83,6 +85,7 @@ def _capture(tmp_path, monkeypatch, capsys, mode):
     plugin = tmp_path / "doctrine" / "coordinator"
     (plugin / "workflows").mkdir(parents=True)
     (plugin / "workflows" / "plan-blitz.mjs").write_text("// stub\n", encoding="utf-8")
+    write_roster_fragment(plugin)
     (plugin / "agents").mkdir()
     rc = ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),

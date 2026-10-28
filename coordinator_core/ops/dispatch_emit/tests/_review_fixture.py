@@ -11,11 +11,12 @@ from pathlib import Path
 REVIEW_SIDECAR: str = str(Path(__file__).resolve().parent / "fixtures" / "review_sidecar.md")
 
 
-def reviewed() -> dict:
-    """A fresh inline_review carrying one PASS verdict whose absolute sidecar exists on disk."""
+def reviewed(**extra) -> dict:
+    """A fresh inline_review carrying one PASS verdict whose absolute sidecar exists on disk; ``extra`` keys override the base."""
     return {
         "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
         "wave_reviews": [{"slice_id": "s1", "verdict": "PASS", "sidecar_path": REVIEW_SIDECAR}],
+        **extra,
     }
 
 

@@ -1337,7 +1337,9 @@ def commit_paths(
     # PUBLISHED-TREE ALLOWLIST CHECK -- a new top-level name under a
     # generator-owned source dir (`coordinator_core/`, `coordinator/bin/`)
     # that the landing field 7 of its publish row does not admit, and the
-    # landing `deny` list does not withhold. This route fires no native
+    # landing `deny` list does not withhold, and whose file this commit does
+    # not itself carry (a carried file is declared: field 7 is regenerated
+    # at publish). This route fires no native
     # hook -- same reasoning as the PHANTOM DELETION block above -- so the
     # refusal lives here or the defect ships silent until the next publish
     # round catches it. `touched_published_names` is a pure string
@@ -1362,7 +1364,12 @@ def commit_paths(
                 return None
             return obj[1].decode("utf-8")
 
-        refused = published_tree_classification.unclassified(touched, _read_landing)
+        carried = [p for p in path_list if (root / p).is_file()]
+        refused = published_tree_classification.unclassified(
+            touched,
+            _read_landing,
+            published_tree_classification.touched_published_names(carried),
+        )
         if refused:
             detail = ", ".join(f"{row}: {name}" for row, name in refused)
             subdirs = dict(published_tree_classification._ROWS)
@@ -1748,6 +1755,13 @@ def commit_paths(
         paths = ", ".join(shown[:5])
         if len(shown) > 5:
             paths += ", ..."
+        untrack_set_ = set(untrack_list)
+        if all(p in untrack_set_ for p in shown):
+            raise PhantomDeletionDeclared(
+                f"{len(shown)} untracked_paths member(s) are absent from HEAD -- "
+                f"there is no such path to untrack: {paths}. If you meant to "
+                "commit a new file, name it in paths, not untracked_paths."
+            )
         raise PhantomDeletionDeclared(
             f"{len(shown)} declared-deleted path(s) are absent from HEAD -- "
             f"there is no such path to delete: {paths}. If you meant to "

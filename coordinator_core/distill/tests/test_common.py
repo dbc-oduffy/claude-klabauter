@@ -50,7 +50,11 @@ from coordinator_core.distill import _common
 from coordinator_core.distill._common import (
     DISPOSITIONS,
     SIDECAR_SUFFIXES,
+    RipgrepUnavailableError,
     active_reference_guard,
+    active_reference_guard_many,
+    files_citing,
+    referenced_needles,
     is_sidecar_filename,
     parse_distillation_log,
     read_fm_field,
@@ -259,55 +263,80 @@ def _force_rg_absent(monkeypatch):
     monkeypatch.setattr(_common.shutil, "which", lambda _name: None)
 
 
-def test_active_reference_guard_fallback_finds_match(monkeypatch, tmp_path):
+def test_every_reference_guard_refuses_without_rg_and_reads_zero_files(monkeypatch, tmp_path):
     _force_rg_absent(monkeypatch)
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "some-doc.md").write_text("references archive/specs/old-thing.md here\n")
-    assert active_reference_guard("archive/specs/old-thing.md", tmp_path) is True
+    reads: list[object] = []
+    real_read_text = _common.Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(_common.Path, "read_text", counting_read_text)
+    needle = "archive/specs/old-thing.md"
+    with pytest.raises(RipgrepUnavailableError):
+        active_reference_guard(needle, tmp_path)
+    with pytest.raises(RipgrepUnavailableError):
+        active_reference_guard_many([needle], tmp_path)
+    with pytest.raises(RipgrepUnavailableError):
+        files_citing([needle], tmp_path, ["docs"])
+    assert reads == []
 
 
-def test_active_reference_guard_fallback_no_match(monkeypatch, tmp_path):
-    _force_rg_absent(monkeypatch)
+def test_ripgrep_unavailable_is_a_runtime_error():
+    assert issubclass(RipgrepUnavailableError, RuntimeError)
+
+
+def test_referenced_needles_reads_each_file_once(monkeypatch, tmp_path):
+    files = []
+    for i in range(3):
+        f = tmp_path / f"f{i}.md"
+        f.write_text("cites a.md and b.md\n", encoding="utf-8")
+        files.append(str(f))
+    reads: list[object] = []
+    real_read_text = _common.Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(_common.Path, "read_text", counting_read_text)
+    result = referenced_needles(["a.md", "b.md", "c.md"], files)
+    assert result == {"a.md": True, "b.md": True, "c.md": False}
+    assert len(reads) == 3
+
+
+def test_referenced_needles_unreadable_file_blocks_every_needle(tmp_path):
+    result = referenced_needles(["a.md", "b.md"], [str(tmp_path / "missing.md")])
+    assert result == {"a.md": True, "b.md": True}
+
+
+@_requires_rg
+def test_referenced_needles_parity_with_per_needle_guard(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
-    (docs / "some-doc.md").write_text("nothing relevant here\n")
-    assert active_reference_guard("archive/specs/old-thing.md", tmp_path) is False
-
-
-def test_active_reference_guard_fallback_skips_undecodable_file_does_not_universally_block(
-    monkeypatch, tmp_path
-):
-    _force_rg_absent(monkeypatch)
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "binary.bin").write_bytes(b"\xff\xfe\x00\x01not-utf8\x80")
-    (docs / "irrelevant.md").write_text("nothing relevant here\n")
-    assert active_reference_guard("archive/specs/old-thing.md", tmp_path) is False
-
-
-def test_active_reference_guard_fallback_still_finds_match_alongside_undecodable_file(
-    monkeypatch, tmp_path
-):
-    _force_rg_absent(monkeypatch)
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "binary.bin").write_bytes(b"\xff\xfe\x00\x01not-utf8\x80")
-    (docs / "cites-it.md").write_text("references archive/specs/old-thing.md here\n")
-    assert active_reference_guard("archive/specs/old-thing.md", tmp_path) is True
-
-
-def test_active_reference_guard_fallback_skips_vcs_and_build_dirs(monkeypatch, tmp_path):
-    _force_rg_absent(monkeypatch)
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    git_dir = docs / ".git"
-    git_dir.mkdir()
-    (git_dir / "config").write_text("references archive/specs/old-thing.md here\n")
-    pycache_dir = docs / "__pycache__"
-    pycache_dir.mkdir()
-    (pycache_dir / "mod.pyc").write_text("references archive/specs/old-thing.md here\n")
-    assert active_reference_guard("archive/specs/old-thing.md", tmp_path) is False
+    (docs / "live.md").write_text("see x/live.md and x/both.md\n", encoding="utf-8")
+    (docs / "tomb.md").write_text(
+        "---\n"
+        "archived_handoff:\n"
+        "  - path: x/tomb-only.md\n"
+        "  - path: x/both.md\n"
+        "---\n"
+        "body\n",
+        encoding="utf-8",
+    )
+    needles = ["x/live.md", "x/both.md", "x/tomb-only.md", "x/absent.md"]
+    batched = active_reference_guard_many(needles, tmp_path)
+    assert batched == {n: active_reference_guard(n, tmp_path) for n in needles}
+    assert batched == {
+        "x/live.md": True,
+        "x/both.md": True,
+        "x/tomb-only.md": False,
+        "x/absent.md": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -355,26 +384,6 @@ def test_active_reference_guard_excludes_cross_repo_memo_tombstone(tmp_path):
         encoding="utf-8",
     )
     assert active_reference_guard("cross-repo/archive/old-memo.md", tmp_path) is False
-
-
-def test_active_reference_guard_excludes_provenance_block_without_ripgrep(monkeypatch, tmp_path):
-    monkeypatch.setattr(_common.shutil, "which", lambda _name: None)
-    docs = tmp_path / "docs"
-    docs.mkdir()
-    (docs / "harvested.md").write_text(
-        "---\n"
-        "cross_repo_memo:\n"
-        "  - path: cross-repo/archive/old-memo.md\n"
-        "---\n"
-        "body text with nothing else\n",
-        encoding="utf-8",
-    )
-    assert active_reference_guard("cross-repo/archive/old-memo.md", tmp_path) is False
-
-    (docs / "still-cited.md").write_text(
-        "see cross-repo/archive/old-memo.md for context\n", encoding="utf-8"
-    )
-    assert active_reference_guard("cross-repo/archive/old-memo.md", tmp_path) is True
 
 
 @_requires_rg

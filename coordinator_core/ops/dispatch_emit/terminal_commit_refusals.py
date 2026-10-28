@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Sequence, Optional
+from typing import Callable, Sequence, Optional
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit import review_floor
 from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld, _recovery_backing
@@ -61,7 +61,7 @@ def _xs_zero_slice_review(digest: dict) -> Optional[dict]:
     """The zero-slice `inline_review` of an XS digest whose review never ran, else ``None``.
 
     A docs/state-only XS run skips review by design (`_reviewWave = []`; a code-editing one runs or
-    halts `review-floor`, and `_review_floor_refusal` refuses this empty form for it), but a digest composed with an
+    halts `review-floor`, and `_review_floor_note` records this empty form for it), but a digest composed with an
     integration stage derives `inline_review` from that stage's result and so carries null;
     the bookkeeping-stem form below is what the same run emits without one.
     """
@@ -384,21 +384,14 @@ def _declared_reconcile(run_dir: Optional[Path], delivered: Sequence[str]) -> di
     return reply
 
 
-def _review_floor_refusal(
+def _review_floor_note(
     request: CommitRequest, inline_review: object, prep_from_disk: bool, root: Path,
-) -> Optional[dict]:
-    """The ``review-floor`` refusal when the run's floor code set (``review_floor.floor_code_paths``)
-    is non-empty and the review wave returned no sidecar-backed verdict (sidecars resolve against
-    ``root``), else None. Arm-agnostic; a run declaring no code path pays nothing."""
+) -> Optional[str]:
+    """The advisory sentence when the run's floor code set (``review_floor.floor_code_paths``) is
+    non-empty and the review wave returned no sidecar-backed verdict (sidecars resolve against
+    ``root``), else None. The landing proceeds and records the note; a run declaring no code path pays nothing."""
     code = review_floor.floor_code_paths(request, inline_review, prep_from_disk)
-    reason = review_floor.floor_reason(code, review_floor.verdict_count(inline_review, root))
-    if reason is None:
-        return None
-    return _error(
-        reason + "; refire so the review wave runs a reviewer, or resize the run",
-        refused=review_floor.REFUSED_REVIEW_FLOOR,
-        code_paths=code,
-    )
+    return review_floor.floor_reason(code, review_floor.verdict_count(inline_review, root))
 
 
 def _error(message: str, **extra: object) -> dict:
@@ -460,54 +453,12 @@ def _retest_covers_targeted_set(li, params: dict, fresh: Optional[dict]) -> bool
     return (required - dropped) <= ran
 
 
-_WAIVABLE_GUARDS = ("import-closure-untracked", "peer-hunks-co-declared")
-_WAIVER_ROUTE = (
-    "ask the G-EM to record a waiver: python -m coordinator_core.authz.landing_waiver record "
-    "--ruling-ref <turn> --guard {guard} --path <path> --run-id <run>"
-)
+def _claim_provenance(findings: list) -> tuple[list, list]:
+    """``(refusing, provenance)``: the claim findings (peer hunks, out-of-ask, unresolved importer)
+    leave the refusal list and are recorded; a reason ``is_refusal`` names stays. No process spawn."""
+    from coordinator_core.ops.dispatch_emit import landing_integrity
 
-
-def _hands_on() -> bool:
-    """True when the session's resolved interaction mode is ``hands-on`` (no waiver is read);
-    an unresolvable mode is not hands-on."""
-    try:
-        from coordinator_core.session.mode_resolution import resolve_mode
-
-        return resolve_mode("interaction_mode", "sizing-assemble-cli", env=None) == "hands-on"
-    except Exception:
-        return False
-
-
-def _apply_landing_waiver(worktree_root: Path, findings: list, finding_cls) -> list:
-    """Drop import-closure-untracked and peer-hunks-co-declared findings a live G-EM waiver covers
-    (guard and every finding path; these findings carry no run id), consuming each matched waiver
-    once; the remaining findings of those guards name the G-EM route. No process spawn."""
-    from coordinator_core.authz import landing_waiver
-
-    matched: dict = {}
-    hands_on = _hands_on()
-    for guard in _WAIVABLE_GUARDS:
-        mine = [f for f in findings if f.reason == guard]
-        if not mine or any(not f.path for f in mine):
-            continue
-        waiver = landing_waiver.matching_waiver(
-            worktree_root, guard, {f.path: "" for f in mine}, hands_on=hands_on
-        )
-        if waiver is not None:
-            matched[guard] = waiver
-    kept = [f for f in findings if f.reason not in matched]
-    if not kept:
-        spent = [landing_waiver.consume(w) for w in {w.path: w for w in matched.values()}.values()]
-        if not all(spent):
-            kept = list(findings)
-    else:
-        kept = list(findings)
-    out = []
-    for f in kept:
-        if f.reason in _WAIVABLE_GUARDS:
-            f = finding_cls(f.path, f.reason, f"{f.detail} -- {_WAIVER_ROUTE.format(guard=f.reason)}")
-        out.append(f)
-    return out
+    return landing_integrity.split_claim_provenance(findings)
 
 
 def _landing_integrity_gate(
@@ -516,6 +467,7 @@ def _landing_integrity_gate(
     *, residue_py: Sequence[str] = (), residue_known: bool = True, merge_open: bool = False,
     own_declared: Sequence[str] = (), session_id: Optional[str] = None,
     carried_paths: Optional[Sequence[str]] = None, minted_before: Optional[tuple] = None,
+    landed_text: Optional[Callable[[str], Optional[str]]] = None,
 ) -> dict:
     """Pre-commit integrity findings over the product landing set (unparseable ``.py``, an
     import-closure hit where a ``.py`` the commit deletes (or a top-level def/class it removes) is
@@ -533,7 +485,9 @@ def _landing_integrity_gate(
     ``refused`` + ``integrity`` on any finding, ``since_base_check: "no-base"`` when the run has
     no recorded base so the overlap arm was skipped. The co-declared peer-hunk arm tests only
     ``carried_paths`` (None: every landing path), and a fresh-token sibling minted at or after
-    ``minted_before`` is junior and holds nothing."""
+    ``minted_before`` is junior and holds nothing. ``landed_text(rel)`` supplies the bytes the
+    commit lands for a path (a kept blob), so the residue import check judges those and not the
+    worktree; None judges the worktree."""
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
     from coordinator_core.ops.dispatch_emit import landing_retest
     from coordinator_core.ops.dispatch_emit import landing_targeted_tests
@@ -555,7 +509,9 @@ def _landing_integrity_gate(
 
         findings += [
             landing_targeted_tests.Finding(f.path, li.IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}")
-            for f in import_closure.residue_findings(worktree_root, residue_py, paths, deleted_paths)
+            for f in import_closure.residue_findings(
+                worktree_root, residue_py, paths, deleted_paths, landed_text=landed_text,
+            )
         ]
     except Exception as exc:  # fail closed: an unreadable closure must not land
         findings.append(landing_targeted_tests.Finding(
@@ -579,18 +535,27 @@ def _landing_integrity_gate(
     contested = paths if carried_set is None else [p for p in paths if p in carried_set]
     from coordinator_core.ops.dispatch_emit import merge_ancestry_release
 
-    peer_holds = list(merge_ancestry_release.release(
+    peer_holds = merge_ancestry_release.release(
         worktree_root,
         peer_hunk_gate.co_declared_peer_holds(
             worktree_root, run_id, contested, own_declared, own_plan=plan, minted_before=minted_before,
         ),
-    ))
+    )
     for index, (held_path, sibling) in enumerate(peer_holds):
         findings.append(landing_targeted_tests.Finding(
             held_path, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
             peer_hunk_gate.refusal_message(peer_holds, run_id or "", worktree_root) if index == 0
             else f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off",
         ))
+    if run_id and not merge_open:
+        # A conflict resolution rewrites hunks by design; a run with no recorded write_baseline
+        # has nothing to prove against (the since-base arm's `no-base` case).
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution, hunk_provenance
+
+        if halted_hunk_attribution._baseline(worktree_root, run_id) is not None:
+            findings += hunk_provenance.unproduced_hunks(worktree_root, run_id, contested, own_plan=plan)
+        else:
+            extra["hunk_provenance_check"] = "no-baseline"
     if run_id and session_id:
         for held_path, stem, line in peer_hunk_gate.out_of_ask_holds(
             worktree_root, session_id, run_id, paths,
@@ -601,6 +566,8 @@ def _landing_integrity_gate(
     tested, tcheck = li.landing_test_gate(worktree_root, params, run_id, paths)
     findings += tested
     extra["targeted_tests_check"] = tcheck
+    if getattr(tested, "foreign_evidence", None):
+        extra["targeted_tests_foreign"] = tested.foreign_evidence
     if tested.deleted_note:
         extra["targeted_tests_note"] = tested.deleted_note
     fresh_record = None
@@ -624,7 +591,12 @@ def _landing_integrity_gate(
         if ran and all(f.path in ran for f in red):
             red = []
     findings += red
-    findings = _apply_landing_waiver(worktree_root, findings, landing_targeted_tests.Finding)
+    findings, provenance = _claim_provenance(findings)
+    if provenance:
+        extra["provenance"] = [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in provenance]
+    findings, advisory = landing_targeted_tests.split_test_advisory(findings)
+    if advisory:
+        extra["advisory"] = landing_targeted_tests.advisory_entries(advisory)
     if findings:
         extra["refused"] = findings[0].reason
         extra["integrity"] = [
@@ -721,11 +693,12 @@ def _pre_existing_dirt_refusal(
         return None
     prior = frozenset()
     if run_dir is not None:
+        from coordinator_core.ops.dispatch_emit.plan_residue import own_plan_residue
         from coordinator_core.ops.dispatch_emit.write_baseline import predecessor_withheld
 
         prior = _prior_pass_written(worktree_root, run_dir) | predecessor_withheld(
             worktree_root, _cited_sizing(worktree_root, plan_rel), run_dir
-        )
+        ) | own_plan_residue(worktree_root, run_dir)
     from coordinator_core.ops.dispatch_emit import terminal_commit as _tc
 
     failures: list = []

@@ -254,6 +254,11 @@ def _ensure_initialised_session_dir(
     return sdir if (sdir / "meta.json").is_file() else None
 
 
+def _canonical_cwd(path: str) -> str:
+    """Comparison form of a recorded cwd: realpath (symlinked tmp, trailing separator) + normcase."""
+    return os.path.normcase(os.path.realpath(path))
+
+
 def write_session_start_record(
     session_id: str, launch_cwd: Optional[str] = None, env: Optional[dict] = None
 ) -> bool:
@@ -290,21 +295,31 @@ def write_session_start_record(
     function with no `env` argument, and a required parameter would break that cross-repo
     call site.
 
-    RETURN-VALUE SEMANTICS ARE UNCHANGED from this module's original behaviour: the return
+    WRITE-ONCE per session: when the data-root record already exists and names a cwd that
+    differs from `launch_cwd` (compared after `normcase(realpath(...))` on both sides), NEITHER
+    record is written and the call returns `False` — even if an in-repo hub under the new cwd
+    would have been writable. A later `cd` into a nested clone must not move the anchor. Trap:
+    a resumed or colliding `session_id` keeps its FIRST anchor. An unresolvable data root
+    leaves no record to compare, so that call fails open to write-both.
+
+    RETURN-VALUE SEMANTICS: absent a refusal, the return
     value reflects ONLY the in-repo write's own success (`True` iff it wrote; `False` on any
     resolution/write failure — no git root, permission error, read-only filesystem, ...). The
     data-root write in step 2 is a fully independent, best-effort, fail-open side effect:
     its failure (an unresolvable or unwritable data root) is swallowed unconditionally and
     never turns a successful in-repo write into a `False` return, exactly as its own failure
     never turns an ALREADY-failed in-repo write into a `True` one. Never raises, from either
-    write. Idempotent — a later call with the same `session_id` overwrites the same file(s)
-    with the same content; this module does not attempt to detect or reject an already-written
-    record, since a repeat SessionStart fire (double-fire, a compact) recording the same cwd is
-    harmless by construction.
+    write. Idempotent — a later call with the same `session_id` and the same cwd rewrites the
+    same file(s) with the same content, so a repeat SessionStart fire (double-fire, a compact)
+    is harmless; a different cwd is refused per the write-once paragraph above.
     """
     if not session_id:
         return False
     resolved_cwd = launch_cwd if launch_cwd else os.getcwd()
+
+    existing = _read_settings_home_record(session_id, env)
+    if existing is not None and _canonical_cwd(existing) != _canonical_cwd(resolved_cwd):
+        return False
 
     in_repo_ok = False
     try:

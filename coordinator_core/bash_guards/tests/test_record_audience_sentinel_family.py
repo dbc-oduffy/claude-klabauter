@@ -8,11 +8,9 @@ import pytest
 from coordinator_core.bash_guards import (
     block_approval_sentinel_creation as approval,
     block_dev_repo_sentinel_removal as dev_repo,
-    block_disarm_marker_sentinel_creation as disarm,
     block_worktree_creation as worktree,
     block_worktree_sentinel_creation as worktree_sentinel,
 )
-from coordinator_core.bash_guards._blanket_disarm import MARKER_BASENAME
 from coordinator_core.guard_messages.alternative_record import (
     AlternativeRecord,
     Audience,
@@ -35,8 +33,6 @@ def _strict(monkeypatch):
 _CASES = [
     ("approval-direct", lambda: approval.check_ungated(_payload("touch .coordinator-doctrine-edit-approved"))),
     ("approval-indirection", lambda: approval.check_ungated(_payload("xargs rm"))),
-    ("disarm-direct", lambda: disarm.check(_payload("touch %s" % MARKER_BASENAME))),
-    ("disarm-indirection", lambda: disarm.check(_payload("xargs rm"))),
     ("dev-repo-direct", lambda: dev_repo.check(_payload("rm .coordinator-dev-repo"))),
     ("worktree", lambda: worktree.check(_payload("git worktree add ../x"))),
     ("worktree-sentinel-direct", lambda: worktree_sentinel.check(_payload("touch .coordinator-override-worktree-guard"))),
@@ -70,9 +66,6 @@ def test_em_render_is_the_legacy_text_and_subagent_render_denies_with_the_route(
 
 def test_gate_disable_denial_is_a_record(monkeypatch):
     _strict(monkeypatch)
-    from coordinator_core.write_guards import guard_doctrine_surface_edits as g
-
-    monkeypatch.setattr(g, "pm_approval_fresh", lambda *a, **k: False)
     record = approval.gate_disable_denial(_payload("coordinator set doctrine_edit_gate off > x"))
     if record is None:
         pytest.skip("shape not flagged on this host")
@@ -101,7 +94,6 @@ def test_a_non_strict_level_returns_the_leveled_envelope_not_the_record(monkeypa
     "fire",
     [
         lambda: approval.check_ungated(_payload("ls")),
-        lambda: disarm.check(_payload("ls")),
         lambda: worktree.check(_payload("git worktree list")),
         lambda: worktree_sentinel.check(_payload("ls")),
         lambda: dev_repo.check(_payload("ls")),

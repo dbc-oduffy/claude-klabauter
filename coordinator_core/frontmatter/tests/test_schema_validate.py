@@ -2293,6 +2293,21 @@ class TestSizingObjectDeliverableSpineFields:
         fm.update(overrides)
         return fm
 
+    def test_writes_array_of_paths_ok(self):
+        fm = self._minimal_sizing_object(writes=['a.py'])
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert not any(e['field'] == 'writes' for e in errors), errors
+
+    def test_writes_non_array_rejected(self):
+        fm = self._minimal_sizing_object(writes='a.py')
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert any(e['field'] == 'writes' for e in errors), errors
+
+    def test_writes_non_string_item_rejected(self):
+        fm = self._minimal_sizing_object(writes=[1])
+        errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
+        assert any(e['field'].startswith('writes') for e in errors), errors
+
     def test_deliverable_id_valid_pattern_ok(self):
         fm = self._minimal_sizing_object(deliverable_id='dlv-example-abc123')
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
@@ -4296,7 +4311,11 @@ _QUEUE_SCHEMA_PINS = {
     #   DoE moved review-findings past the recorded pin; vendored copy was
     #   unedited, so re-vendor to restore mirror parity (export-portability
     #   f41934 X1)
-    'review-findings': "f5f013a6788421bd9c7e2fcaf76aa333fc81da78",
+    # Pin moved 2026-10-27 to ef75e5f766a9ab02d3487f74788d54ed8f1a5abd (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   routine pin move to DoE HEAD ef75e5f; local bytes already equal HEAD
+    #   (C1 verdict GO)
+    'review-findings': "ef75e5f766a9ab02d3487f74788d54ed8f1a5abd",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -4422,18 +4441,10 @@ _QUEUE_SCHEMA_PINS = {
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
 #
-# sizing-object: claude-klabauter 1.47.0 adds the `fan_out` xl_exit value (claude-klabauter-first); DoE
-# still reads 1.46.0 at the doe_ref below and has not vendored it yet.
-# Exit path: once DoE vendors 1.47.0, delete this entry and run
-# bin/claude-klabauter-revendor-schema.py sizing-object so it returns to a plain
-# check_schema_drift byte-pin.
-#
 # plan-tasks: claude-klabauter 3.20.0 lifts `history: false` on the apm and g-em/uhura signoff
 # branches and adds `$defs.pm_signoff_record`; DoE still reads 3.19.0 at the doe_ref.
 # Exit path: once DoE vendors 3.20.0, delete this entry and run
 # bin/claude-klabauter-revendor-schema.py plan-tasks so it returns to a plain byte-pin.
-# Trap: TestAheadPinRegistryRouting was red with this entry at review time; recompute
-# local_shape_hash / re-pin doe_ref before relying on it.
 _QUEUE_SCHEMA_AHEAD_PINS: dict = {
     'sizing-object': {
         'doe_ref': "8e14712c0cdfb022f27597acbf7f6ce0da2f5c97",
@@ -4454,16 +4465,20 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
         'reason': (
             "claude-klabauter-first plan-tasks 3.20.0 admits signoff history on apm, g-em and uhura "
             "records and adds the pm_signoff_record history arm; DoE's copy is still 3.19.0 "
-            "and its own vendor of 3.20.0 is pending"
+            "and its own vendor of 3.20.0 is pending; 3.21.0 adds the optional row property "
+            "`acceptance` and 3.22.0 the optional row property `effort`, both claude-klabauter-first"
         ),
-        'provenance': "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2",
+        'provenance': (
+            "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2; "
+            "3.22.0 `effort` property from plan 2026-10-25-a-refire-path-and-ea2e26-finish C16"
+        ),
         'exempt_paths': frozenset({
             ('$defs', 'signoff', 'allOf', 1, 'then', 'properties', 'history'),
             ('$defs', 'signoff', 'allOf', 2, 'then', 'properties', 'history'),
             ('$defs', 'signoff', 'description'),
             ('$defs', 'signoff', 'properties', 'history', 'description'),
         }),
-        'local_shape_hash': "b2d60f4e4dceb136b9b81d338d5a336605adafccff5d251aa9083f2e2cf62b07",
+        'local_shape_hash': "722f1910d3b40bfd57f86b8865aecf680977c931dbff23e49e7e49179a26e505",
     },
 }
 
@@ -4534,6 +4549,17 @@ _QUEUE_SCHEMA_NAMES = (
 )
 
 
+_INHERITED_GIT_VARS = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')
+
+
+def _isolated_git_env(repo: Path) -> dict:
+    """Process env for fixture git: inherited repo-selecting vars dropped (they override
+    `git -C`), discovery capped at the repo's parent so no enclosing repo is reachable."""
+    env = {k: v for k, v in os.environ.items() if k not in _INHERITED_GIT_VARS}
+    env['GIT_CEILING_DIRECTORIES'] = os.fspath(Path(repo).parent)
+    return env
+
+
 def _advisory_git(repo: Path, *args: str) -> None:
     subprocess.run(
         ['git', '-C', str(repo), *args],
@@ -4542,6 +4568,7 @@ def _advisory_git(repo: Path, *args: str) -> None:
         text=True,
         timeout=30,
         stdin=subprocess.DEVNULL,
+        env=_isolated_git_env(repo),
         **no_console_creationflags(),
     )
 
@@ -5395,9 +5422,8 @@ class TestAheadPinRegistryRouting:
 
 
 def _ahead_git(repo: Path, *args: str, env: dict | None = None) -> None:
-    run_env = None
+    run_env = _isolated_git_env(repo)
     if env:
-        run_env = dict(os.environ)
         run_env.update(env)
     subprocess.run(
         ['git', '-C', str(repo), *args],
@@ -5470,7 +5496,7 @@ class TestCheckSchemaAheadOfDoe:
         local = self._local(tmp_path, "1.1.0")
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         check_schema_ahead_of_doe(
@@ -5481,7 +5507,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0")
         stale_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         # DoE moves after the pin was recorded.
@@ -5507,7 +5533,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0")
         stale_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         _ahead_git(repo, "checkout", "-q", "-b", "other-branch")
@@ -5538,7 +5564,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0", extra={"applies_to": "state/review-trail/*.json"})
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         # Real divergence, not extension: the leaf value CHANGES, not merely
@@ -5553,7 +5579,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0", extra={"description": "short"})
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0", extra={"description": "short, extended"})
@@ -5570,7 +5596,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0", extra={"x-bump-note": "added an optional field"})
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(
@@ -5587,7 +5613,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0", extra={"x-bump-note": "added an optional field"})
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0", extra={"x-bump-note": "renamed a field"})
@@ -5604,7 +5630,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0", extra={"applies_to": "state/review-trail/*.json"})
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0", extra={"applies_to": "state/review-trail/*.jsonl"})
@@ -5622,7 +5648,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.1.0")
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0")
@@ -5635,7 +5661,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0")
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         # Uncommitted edit on the DoE side — must be refused, not read as "unmoved".
@@ -5653,7 +5679,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0")
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0")
@@ -5669,7 +5695,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0")
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "1.1.0")
@@ -5683,7 +5709,7 @@ class TestCheckSchemaAheadOfDoe:
         repo = fake_doe("1.0.0")
         doe_ref = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, env=_isolated_git_env(repo),
             **no_console_creationflags(),
         ).stdout.strip()
         local = self._local(tmp_path, "not-a-version")
@@ -8078,7 +8104,8 @@ class TestCheckSchemaDriftBatch:
         subprocess.run(
             ['git', '-C', str(repo), *args],
             check=True, capture_output=True, text=True, timeout=30,
-            stdin=subprocess.DEVNULL, **no_console_creationflags(),
+            stdin=subprocess.DEVNULL, env=_isolated_git_env(Path(repo)),
+            **no_console_creationflags(),
         )
 
     @pytest.fixture()

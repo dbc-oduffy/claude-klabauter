@@ -137,7 +137,7 @@ def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger():
     for gone in ("label: 'docs'", "label: 'ledger-check'", "coordinator:criterion-judge", "label: 'test:terminal'"):
         assert gone not in script, gone
     assert "phase('ledger-check')" not in script and "phase('docs')" not in script
-    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "commit"]
+    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "remnant-complete", "remnant-reverify", "remnant-record", "commit"]
     assert "_ledgerBlocking" in after and "halted: 'ledger-check'" in after
 
 

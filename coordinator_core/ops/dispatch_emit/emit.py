@@ -166,8 +166,11 @@ Which model is a per-``agentType`` decision, not one constant. A call-site
 ``test-runner``'s charter tier and billed a Sonnet for mechanical work.
 ``_AGENT_MODELS`` equals the ``model:`` frontmatter of each coordinator-content-repo
 ``coordinator/agents/<name>.md``, pinned by
-``tests/test_agent_model_table_matches_doe.py``; a call-site override of a
-pinned type's model is refused (``resolve_agent_model``).
+``tests/test_agent_model_table_matches_doe.py``. A plan row's ``agent_model``
+naming another model than a pinned type's pin is dropped
+(``effective_agent_model``) and the call carries the pin; a direct
+``resolve_agent_model`` / ``_model_opt`` override of a pinned type's model is
+still refused.
 
 ## Tier-T only (Anti-scope)
 
@@ -298,6 +301,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.ops.dispatch_emit import baseline_reds as _baseline_reds
 from coordinator_core.ops.dispatch_emit.seam_repair import (
     REPAIRABLE_CLASSES as _SEAM_REPAIRABLE_CLASSES,
     SEAM_FIX_LABEL as _SEAM_FIX_LABEL,
@@ -383,9 +387,11 @@ from coordinator_core.ops.dispatch_emit.executor_economy import (
     CHECKPOINT_STATUS,
     EXCERPT_HEADING,
     MAX_CONTINUATIONS,
+    SYMBOL_CONTEXT_HEADING,
     checkpoint_path,
 )
 from coordinator_core.ops.dispatch_emit.row_excerpts import excerpt_block
+from coordinator_core.ops.dispatch_emit import symbol_context as _symbol_context
 from coordinator_core.ops.dispatch_emit import fanout_cost as _fanout
 from coordinator_core.ops.dispatch_emit.agent_sidecar import (
     sidecar_clause as _sidecar_clause,
@@ -515,8 +521,9 @@ _INVOKE_LITERAL_CLAUSE = (
 
 #: The one table of DoE-defined agent types the engine dispatches, each mapped to
 #: the ``model:`` frontmatter of coordinator-content-repo's ``coordinator/agents/<name>.md``.
-#: Pinned by ``tests/test_agent_model_table_matches_doe.py``; a type listed here
-#: refuses any override that names a different model (``resolve_agent_model``).
+#: Pinned by ``tests/test_agent_model_table_matches_doe.py``. A plan row's override
+#: naming another model is dropped (``effective_agent_model``); ``resolve_agent_model``
+#: itself refuses it.
 _AGENT_MODELS = {
     _EXECUTOR_AGENT_TYPE: "sonnet",
     _ENRICHER_AGENT_TYPE: "sonnet",
@@ -574,6 +581,25 @@ def resolve_agent_model(agent_type: str, override: Optional[str] = None) -> str:
             f"{pinned!r} by its DoE definition -- drop agent_model"
         )
     return pinned
+
+
+def effective_agent_model(agent_type: str, agent_model: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """``(override, dropped)``: the row override to resolve with, and the override dropped for a pin.
+
+    A pinned type takes its pin, so an override naming a different model is dropped
+    (``override`` None, ``dropped`` the value). An override equal to the pin, or any
+    override on an unpinned type, passes through unchanged with ``dropped`` None.
+    A dropped value is still held to ``_AGENT_MODEL_GRAMMAR_RE``.
+    """
+    pinned = _AGENT_MODELS.get(agent_type)
+    if not agent_model or pinned is None or agent_model == pinned:
+        return agent_model, None
+    if not _AGENT_MODEL_GRAMMAR_RE.match(agent_model):
+        raise MalformedAgentOverrideError(
+            f"agent_model {agent_model!r} does not match the required grammar {_AGENT_MODEL_GRAMMAR}"
+        )
+    return None, agent_model
+
 
 #: The Workflow runtime aborts an agent call after this many stalled ms
 #: (no progress) and retries it up to 5 times; the runtime default (180000)
@@ -976,6 +1002,73 @@ def _prose_contradicting_fields(raw_row: dict) -> Optional[tuple]:
                 return ("already-happened-prose-open-disposition", match.group(0))
 
     return None
+
+
+def shape_rows_for_emit(rows: list, raw_by_id: dict) -> tuple:
+    """Run the spawn-tax chunk shaper over ``rows``; return ``(rows, raw_by_id, merges)``.
+
+    ``needs_slot`` rows are never merged: each carries a unique agent_model sentinel through
+    the shaper (its candidate test requires equal agent types and models) and gets its own
+    model back. ``raw_by_id`` is returned as a copy gaining one synthesized entry per merged
+    id (union of the constituents' ``register_rows``/``writes``/``depends_on`` plus
+    ``constituents:``); the constituents' own entries stay. ``merges`` is the shaper's
+    ``(merged_id, constituent_ids)`` list.
+    """
+    from coordinator_core.ops.dispatch_emit.chunk_shaper import shape_rows
+
+    slot_ids = {r.id for r in rows if (raw_by_id.get(r.id) or {}).get("needs_slot") is True}
+    models = {r.id: r.agent_model for r in rows}
+    tagged = [r._replace(agent_model=f"\0slot:{r.id}") if r.id in slot_ids else r for r in rows]
+    result = shape_rows(tagged)
+    if not result.merges:
+        return rows, raw_by_id, []
+    # The shaper joins ids with "+", which a row id (a single path segment) cannot carry.
+    renames = {mid: mid.replace("+", "-") for mid, _ in result.merges}
+
+    def _edge(e):
+        cid = e.get("chunk") if isinstance(e, dict) else e
+        if cid not in renames:
+            return e
+        return dict(e, chunk=renames[cid]) if isinstance(e, dict) else renames[cid]
+
+    shaped = [
+        r._replace(
+            id=renames.get(r.id, r.id),
+            agent_model=models[r.id] if r.id in slot_ids else r.agent_model,
+            depends_on=[_edge(e) for e in r.depends_on],
+        )
+        for r in result.rows
+    ]
+    by_id = {r.id: r for r in shaped}
+    raws = dict(raw_by_id)
+    merges = [(renames[mid], parts) for mid, parts in result.merges]
+    for merged_id, constituents in merges:
+        row = by_id[merged_id]
+        regs: list = []
+        for cid in constituents:
+            for reg in (raw_by_id.get(cid) or {}).get("register_rows") or ():
+                if reg not in regs:
+                    regs.append(reg)
+        raws[merged_id] = {
+            "id": merged_id,
+            "title": row.title,
+            "disposition": "open",
+            "body": row.body,
+            "writes": list(row.writes),
+            "depends_on": list(row.depends_on),
+            "register_rows": regs,
+            "constituents": list(constituents),
+        }
+    return shaped, raws, merges
+
+
+def merged_constituents(raw_by_id: dict) -> dict:
+    """``{merged_id: constituent ids}`` for each synthesized entry of ``shape_rows_for_emit``."""
+    return {
+        rid: tuple(raw["constituents"])
+        for rid, raw in raw_by_id.items()
+        if isinstance(raw, dict) and raw.get("constituents")
+    }
 
 
 def check_unschedulable_rows(rows: list, raw_by_id: dict) -> None:
@@ -1545,6 +1638,8 @@ class PlanContext:
     #: Set when ``exit_criterion`` names a typecheck: rows run none for it, the terminal
     #: test phase does.
     criterion_typecheck: Optional[CriterionTypecheck] = None
+    #: Paths a refire's fix leg owns (the leg's named inherited writes); empty on a first run.
+    leg_writes: tuple = ()
 
 
 #: The one absolute path an emitted script carries, and the reason it does.
@@ -2089,11 +2184,47 @@ def _build_gate_clause(commands: list) -> str:
     )
 
 
-def _footprint_miss_clause() -> str:
+def _recorded_leg_writes(script_path: Optional[str], repo_root: Optional[str]) -> tuple:
+    """The `writes` of the run's recorded refire leg footprint, else ``()``.
+
+    The run id is the script's basename minus ``.workflow.mjs``; only a ``dispatch`` leg counts.
+    Any unreadable record yields ``()`` (the unchanged first-run prompt).
+    """
+    if not script_path or repo_root is None:
+        return ()
+    name = Path(script_path).name
+    if not name.endswith(".workflow.mjs"):
+        return ()
+    import json as _json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import LEG_DISPATCH, LEG_FOOTPRINT_FILE, record_dir
+
+    try:
+        leg = _json.loads(
+            (record_dir(Path(repo_root), name[: -len(".workflow.mjs")]) / LEG_FOOTPRINT_FILE).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return ()
+    if not isinstance(leg, dict) or leg.get("action") != LEG_DISPATCH:
+        return ()
+    return tuple(w for w in leg.get("writes") or () if isinstance(w, str))
+
+
+def _footprint_miss_clause(leg_writes: Sequence[str] = ()) -> str:
     """The outside-footprint marker for a row with no build gate: the regrade reads
-    the report line, so the executor must be taught it here too."""
+    the report line, so the executor must be taught it here too. ``leg_writes`` (a
+    refire leg's named inherited paths) are inside the footprint: a failure there is
+    the row's to fix."""
+    own = ""
+    if leg_writes:
+        own = (
+            "Refire write set, inside your footprint: "
+            + ", ".join(f"`{p}`" for p in leg_writes)
+            + ". A failure there is yours to fix, never outside-footprint. "
+        )
     return (
-        "Footprint check: when every test and check inside your footprint passes and "
+        own
+        + "Footprint check: when every test and check inside your footprint passes and "
         "the only failures are in files outside it, your row is delivered: return "
         "PARTIAL with the report line "
         f"`{report_line(KIND_OUTSIDE_FOOTPRINT, '<first failing test>')}` in your "
@@ -2497,6 +2628,17 @@ def _foreign_red_clause() -> str:
     )
 
 
+def _isolated_arm_build_clause() -> str:
+    """Every arm's fix is built against HEAD in an export, then ported into the live tree as its own hunks."""
+    return (
+        "Build against HEAD, never on a peer's dirt: a footprint path another run has "
+        "uncommitted lines in is not rebuilt wholesale. Export HEAD plus nothing "
+        f"(`python -m {_LANDING_EXPORT_MODULE} scratch/arm-<row> <your writes...> --base-export <run-base export> --base-sha <run_base_sha>`), "
+        "build and test the fix there, then Edit only your own hunks into the live path "
+        "so a peer's lines survive. The landed blob is HEAD plus your hunks."
+    )
+
+
 def _stop_rule_clause() -> str:
     """The executor-facing half of the stop-rule halt: how to declare that a
     stop rule fired, and what the declaration costs.
@@ -2727,6 +2869,7 @@ def _row_return_contract(
     parts.append(_stop_rule_clause())
     parts.append(_SCRATCH_HYGIENE_CLAUSE)
     parts.append(_foreign_red_clause())
+    parts.append(_isolated_arm_build_clause())
     parts.append(_declared_scope_block(row))
     return "\n\n".join(parts)
 
@@ -2808,20 +2951,35 @@ def _bare_excerpts(row: WaveRow) -> str:
     return excerpt_block(row.body, (), ".", "unrecorded", {})
 
 
-def _row_excerpts_for(repo_root, head: Optional[str], cache: dict):
-    """A ``WaveRow -> excerpt block`` provider sharing one span cache across a compose.
+def _symbol_context_block(ctx) -> str:
+    """The SYMBOL_CONTEXT_HEADING block: one line per entry, or ``(empty: <reason>)``."""
+    if ctx is None or not ctx.entries:
+        return f"{SYMBOL_CONTEXT_HEADING}\n(empty: {ctx.reason if ctx is not None and ctx.reason else 'no-symbols'})"
+    lines = [f"`{e.symbol}` \u2014 {e.file}:{e.line} ({e.role} of `{e.of}`)" for e in ctx.entries]
+    return "\n".join([SYMBOL_CONTEXT_HEADING, *lines])
 
-    Scans each distinct written or read ``.py`` file once. Without a ``repo_root`` there is no
-    file to scan and the provider yields ``None`` (the body-only block)."""
+
+def _row_excerpts_for(repo_root, head: Optional[str], cache: dict, rows=None):
+    """A ``WaveRow -> excerpt block + symbol-context block`` provider sharing one span cache.
+
+    Scans each distinct written or read ``.py`` file once; ``symbol_context.lookup`` runs once per
+    compose, lazily on the first row, over ``rows`` (a row outside ``rows`` is looked up alone).
+    Without a ``repo_root`` there is no file to scan and the provider yields ``None``."""
     if repo_root is None:
         return lambda row: None
+    looked: dict = {}
 
     def provide(row: WaveRow) -> str:
+        if not looked:
+            looked.update(_symbol_context.lookup(repo_root, list(rows) if rows else [row], cache))
+        if row.id not in looked:
+            looked.update(_symbol_context.lookup(repo_root, [row], cache))
         paths: list = []
         for p in [*(() if row.writes is UNDECLARED else row.writes), *row.reads]:
             if isinstance(p, str) and p and p not in paths:
                 paths.append(p)
-        return excerpt_block(row.body, paths, repo_root, (head or "unrecorded")[:12], cache)
+        block = excerpt_block(row.body, paths, repo_root, (head or "unrecorded")[:12], cache)
+        return block + "\n\n" + _symbol_context_block(looked.get(row.id))
 
     return provide
 
@@ -2948,7 +3106,7 @@ def _row_prompt(
         elif gate_commands:
             body += f"\n\n{_build_gate_clause(gate_commands)}"
         else:
-            body += f"\n\n{_footprint_miss_clause()}"
+            body += f"\n\n{_footprint_miss_clause(plan_context.leg_writes)}"
         if criterion_routed:
             body += f"\n\n{CRITERION_TYPECHECK_CLAUSE}"
     body += sidecar
@@ -3081,6 +3239,12 @@ def _agent_call_over(
     ``{n, path}`` before it re-runs the closure, and a call that finds it set appends the
     continuation clause and is labelled as the row's n-th continuation."""
     row_agent_type = _row_agent_type(row)
+    model_override, dropped = effective_agent_model(row_agent_type, row.agent_model)
+    dropped_note = (
+        f"/* agent_model {_js_string_literal(dropped)[1:-1]} dropped: {row_agent_type} is pinned */ "
+        if dropped
+        else ""
+    )
     label_js = _js_string_literal(build_work_label(label_id))
     widen_of = f"_widenOf[{_js_string_literal(label_id)}]"
     prompt_literal = f"{prompt_literal} + ({widen_of} ? _widenText({widen_of}) : '')"
@@ -3097,10 +3261,18 @@ def _agent_call_over(
         f"label: {label_js}, "
         f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
         f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
-        f"{_model_opt(row_agent_type, row.agent_model)}, "
+        f"{dropped_note}{_model_opt(row_agent_type, model_override)}, "
         f"stallMs: {_EXECUTOR_STALL_MS} "
         "})"
     )
+
+
+def _reroute_arg(row: WaveRow, call_builder) -> str:
+    """The trailing ``, async () => (<call>)`` argument of a ``_runRow(...)`` registration: the
+    row's prompt re-dispatched as the executor. Empty unless the row runs as the test-runner."""
+    if _row_agent_type(row) != _TEST_AGENT_TYPE:
+        return ""
+    return f", async () => ({call_builder(row._replace(agent_type=_EXECUTOR_AGENT_TYPE, agent_model=None))})"
 
 
 def _routed_agent_call_over(
@@ -3446,6 +3618,17 @@ _VERIFY_JUDGE_SUFFIX_JS = (
 )
 
 
+#: The default ask verify leg's landing-gate retest (ask_compose._test_instruction_js appends it): the record it leaves is what `invariant_findings` credits.
+#: An engine op never spawns it (500ms brightline); this agent leg does.
+VERIFY_RETEST_CLAUSE = (
+    "Then run the landing-set retest once: `python -m coordinator_core.ops.dispatch_emit.retest_targeted "
+    "--from-task-output <this run's task-output file>`, and repeat `python -m "
+    "coordinator_core.ops.dispatch_emit.retest_targeted --poll --from-task-output <same file>` until it "
+    "exits 0 or 1 (exit 3 means running; wait and poll again). Exit 0 is a pass. Exit 1 is a failing "
+    "verify: report status `fail` and name the failing tests from the poll output. Exit 2 is `error`."
+)
+
+
 def _verify_test_launch_js(test_call: str) -> str:
     """The Verify test leg started as a promise right after the all-rows barrier, so it runs beside
     whole-diff review and re-verify. A stop-rule halt before launch starts no agent; a later halt
@@ -3756,7 +3939,8 @@ def _baseline_context_clause(
         f"BASELINE_CONTEXT\n```json\n{block}\n```\n"
         "For every id you labelled `caused`, run "
         f"`python -m {_LANDING_EXPORT_MODULE} scratch/test-landing-{run_base_sha[:8]} <diff_files...> --base-export <your run-base export> --base-sha {run_base_sha}`, "
-        "re-run only those ids inside it, and move each one green there into `baseline.foreign`. "
+        "re-run only those ids inside it, and list in `baseline.evidence` the ids that were red in the run-base export run. "
+        "A caused id green in the landing export stays caused, never `baseline.foreign`. "
         "Delete the export afterwards. A failed export leaves the ids `caused`.\n"
     )
 
@@ -3961,6 +4145,32 @@ def _withheld_judge_rows(plan_text: Optional[str], excluded_rows: Optional[list]
     ]
     seen = {g["id"] for g in gated}
     return gated + [r for r in slot_withheld_rows(raw_by_id) if r["id"] not in seen]
+
+
+def _struck_judge_rows(plan_text: Optional[str], repo_root: Path) -> list:
+    """``{id, text}`` of each register row of the plan's sizing that an out-of-scope ruling
+    withheld, for the judge; empty when the plan cites no readable sizing."""
+    if not plan_text:
+        return []
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import ruled_out_ids
+
+    text = plan_text.replace("\r\n", "\n")
+    fm = text.split("\n---", 1)[0] if text.startswith("---\n") else ""
+    rel = rr._fm_scalar(fm, "sizing_object")
+    path = rr._sizing_path(Path(repo_root), rel) if rel else None
+    try:
+        register = rr.read_register(path.read_text(encoding="utf-8")) if path else None
+    except Exception:  # noqa: BLE001
+        return []
+    if register is None:
+        return []
+    struck = set(ruled_out_ids(register.rows))
+    return [
+        {"id": str(r.get(rr.ROW_ID)), "text": str(r.get(rr.ROW_TEXT) or "")}
+        for r in register.rows
+        if str(r.get(rr.ROW_ID)) in struck
+    ]
 
 
 def _falsifier_schema_literal() -> str:
@@ -4241,7 +4451,7 @@ def _plan_row_groups(
         key = (
             f"solo:{row.id}"
             if solo
-            else f"{sorted(node.after)}|{agent_type}|{row.agent_model or ''}|{_row_source_plan(row) or ''}"
+            else f"{sorted(node.after)}|{agent_type}|{effective_agent_model(agent_type, row.agent_model)[0] or ''}|{_row_source_plan(row) or ''}"
         )
         units.append(_fanout.Unit(row.id, key, len(exprs[row.id].encode("utf-8"))))
     group_of: dict[str, tuple[str, ...]] = {}
@@ -4335,7 +4545,11 @@ def _gitignored_prefix_narration(dropped: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _row_state_decls_js(row_plans: Mapping[str, str], carried_gate_owed: Sequence[str]) -> str:
+def _row_state_decls_js(
+    row_plans: Mapping[str, str],
+    carried_gate_owed: Sequence[str],
+    repo_root: Optional[str | Path] = None,
+) -> str:
     """The script-wide bindings ``_run_row_helper_js`` and the wake digest
     (``RUNTIME_VARS`` plus ``PLAN_HELD_VAR``, ``CHUNK_REASON_VAR`` and
     ``GATE_OWED_VAR``) read,
@@ -4354,9 +4568,12 @@ def _row_state_decls_js(row_plans: Mapping[str, str], carried_gate_owed: Sequenc
         f"{_js_string_literal(i)}: {_js_string_literal('gate-blocker: carried: gate owed by a prior run')}"
         for i in carried_gate_owed
     )
+    # No target root reads as an empty manifest; the engine's own checkout is never consulted.
+    repo_root_path = Path(repo_root) if repo_root is not None else Path(os.devnull)
     return "\n".join(
         [
             "  const _incompleteChunks = [];",
+            _baseline_reds.manifest_js(repo_root_path).rstrip("\n"),
             f"  const {GATE_OWED_VAR} = {{ {owed_seed} }};",
             "  const _blockedChunks = [];",
             "  const _unansweredBriefs = [];",
@@ -4476,6 +4693,9 @@ def _run_row_helper_js(
         # the first other non-status line; '' when the reply has neither.
         f"  const _REASON_STATUS_RE = {_REASON_STATUS_LINE_JS_RE};\n"
         f"  const _REASON_SPLIT_RE = {_REASON_SPLIT_JS_RE};\n"
+        "  function _isPathOnly(s) {\n"
+        "    return !/\\s/.test(s) && /[\\/\\\\]/.test(s) && /\\.(md|json)$/.test(s);\n"
+        "  }\n"
         "  function _reasonOf(result) {\n"
         "    const raw = typeof result === 'string';\n"
         "    const t = raw ? result : JSON.stringify(result ?? null);\n"
@@ -4486,12 +4706,12 @@ def _run_row_helper_js(
         "    const at = lines.findIndex((l) => _REASON_STATUS_RE.test(l));\n"
         "    if (at >= 0) {\n"
         "      const own = tidy(lines[at].replace(_REASON_STATUS_RE, ''));\n"
-        "      if (own) return own.slice(0, 1000);\n"
+        "      if (own && !_isPathOnly(own)) return own.slice(0, 1000);\n"
         "    }\n"
         "    for (const l of lines) {\n"
         "      if (_REASON_STATUS_RE.test(l) || _DEP_ANY_STATUS_RE.test(l)) continue;\n"
         "      const o = tidy(l);\n"
-        "      if (o) return o.slice(0, 1000);\n"
+        "      if (o && !_isPathOnly(o)) return o.slice(0, 1000);\n"
         "    }\n"
         "    return '';\n"
         "  }\n"
@@ -4547,16 +4767,18 @@ def _run_row_helper_js(
         "    return null;\n"
         "  }\n"
         "  let _rowSeq = 0;\n"
-        "  function _runRow(id, deps, verifyScope, run, commit) {\n"
+        "  function _runRow(id, deps, verifyScope, run, commit, reroute) {\n"
         "    _rowSeq++;\n"
         "    _commitOf[id] = commit;\n"
-        "    const p = _runRowInner(id, deps, verifyScope, run, commit);\n"
+        "    const p = _runRowInner(id, deps, verifyScope, run, commit, reroute);\n"
         "    _rowIdOf.set(p, id);\n"
         "    _rowById[id] = p;\n"
         "    _depIdsOf[id] = deps.map((d) => _rowIdOf.get(d));\n"
         "    return p;\n"
         "  }\n"
-        "  async function _runRowInner(id, deps, verifyScope, run, commit) {\n"
+        f"  const _REFUSAL_RE = {_REFUSAL_JS_RE};\n"
+        f"  const _RAN_FAIL_RE = {_RAN_FAIL_JS_RE};\n"
+        "  async function _runRowInner(id, deps, verifyScope, run, commit, reroute) {\n"
         "    if (typeof id !== 'string' || !id) {\n"
         "      if (!_halted) _halted = 'refusal: invalid chunk id ' + JSON.stringify(id ?? null) + "
         "' at row position ' + _rowSeq;\n"
@@ -4613,6 +4835,13 @@ def _run_row_helper_js(
         "        _contOf[id] = { n: _ckpts, path: _ck[1] };\n"
         "        result = await run();\n"
         "      }\n"
+        "      if (typeof reroute === 'function') {\n"
+        "        const _rt = typeof result === 'string' ? result : JSON.stringify(result ?? null);\n"
+        f"        if (_REFUSAL_RE.test(_rt) && !_RAN_FAIL_RE.test(_rt) && _trVerdictOf(_rt) !== 'fail' && ({_NON_DONE_STATUS_JS_RE}.test(_rt) || _trVerdictOf(_rt) === 'not_run')) {{\n"
+        "          log(id + ': re-routed after refusal');\n"
+        "          result = await reroute();\n"
+        "        }\n"
+        "      }\n"
         "    } catch (e) {\n"
         "      result = null;\n"
         "    }\n"
@@ -4645,12 +4874,16 @@ def _run_row_helper_js(
         "      }\n"
         "    } else if (!" + f"{_ANY_STATUS_JS_RE}.test(_text)) {{\n"
         "      const _tv = _trVerdictOf(_text);\n"
-        "      if (_tv !== 'pass') {\n"
+        "      if (!_tv) {\n"
         "        _incompleteChunks.push(id);\n"
-        "        if (!_tv) _unansweredBriefs.push(id);\n"
+        "        _unansweredBriefs.push(id);\n"
+        f"        {CHUNK_REASON_VAR}[id] = 'no contract status line in the executor reply';\n"
+        "        incomplete = true;\n"
+        "      } else if (_tv !== 'pass') {\n"
+        "        _incompleteChunks.push(id);\n"
         f"        {CHUNK_REASON_VAR}[id] = _tv === 'not_run' ? "
-        "'instrument fault: the test-runner ran nothing (test_verdict: not_run)' : _tv "
-        "? 'test-runner verdict: ' + _tv : 'no contract status line in the executor reply';\n"
+        "'instrument fault: the test-runner ran nothing (test_verdict: not_run)' : "
+        "'test-runner verdict: ' + _tv;\n"
         "        incomplete = true;\n"
         "      }\n"
         "    }\n"
@@ -4779,7 +5012,17 @@ _SEAM_REPLY_SCHEMA = {
     "properties": {
         "verdict": {"type": "string", "enum": ["CLEAN", "DRIFT", "REFUSED"]},
         "per_plan": {"type": "object"},
-        "findings": {"type": "array", "items": {"type": "object"}},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "failing_ids": {"type": "array", "items": {"type": "string"}},
+                    "errors": {"type": "array", "items": {"type": "string"}},
+                    "red_at_base": {"type": "array", "items": {"type": "string"}},
+                },
+            },
+        },
         "sidecars": {"type": "array", "items": {"type": "string"}},
     },
 }
@@ -4932,7 +5175,15 @@ def _seam_leg_js(
     tests_step = (
         " Step 2, only when tests are listed: run `python -m pytest <tests> -q` once with exactly "
         "those paths. A non-zero exit is one finding `{class: 'execution-failed', path: <first "
-        "failing file, or the first test path>, blocking: true}` and makes the `verdict` DRIFT. "
+        "failing file, or the first test path>, blocking: true}` and makes the `verdict` DRIFT; give "
+        "that finding `failing_ids` (every failing pytest node id), `errors` (the distinct error "
+        "names or lines the failures raised) and `red_at_base` (see below). Then export the run "
+        "base with the same recipe as the baseline context (`python -m "
+        f"{_LANDING_EXPORT_MODULE} scratch/seam/base-export <the failing test files> "
+        f"--base-export <your run-base export> --base-sha {run_base_sha}`), "
+        "re-run only the `failing_ids` there with `python -m pytest "
+        "<failing_ids> -q`, and put in `red_at_base` each id and each error line that is also red "
+        "there. A failed export or re-run leaves `red_at_base` empty. "
         "Run no other command."
     )
     fix_tail = (
@@ -4958,6 +5209,18 @@ def _seam_leg_js(
         f"  const _SEAM_REPLY_SCHEMA = {json.dumps(_SEAM_REPLY_SCHEMA)};",
         "  const _SEAM_OWN_CLASSES = ['unreachable', 'execution-failed'];",
         "  const _SEAM_INFRA = /time[ -]?out|timed out|transport|ETIMEDOUT|ECONN[A-Z]*|EPIPE|ENOTFOUND|socket hang up|connection (reset|refused|closed|lost)|temporarily unavailable/i;",
+        "  const _seamPreExisting = [];",
+        "  const _seamStrs = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s !== '') : []);",
+        "  function _seamBaselineCleared(f) {",
+        "    if (!f || f.class !== 'execution-failed' || f.blocking === false) return false;",
+        "    const ids = _seamStrs(f.failing_ids);",
+        "    const errs = _seamStrs(f.errors);",
+        "    if (!ids.length && !errs.length) return false;",
+        "    const atBase = new Set(_seamStrs(f.red_at_base).map((s) => _baselineNorm(s)));",
+        "    const errOk = errs.every((e) => _isBaselineRed(null, e) || atBase.has(_baselineNorm(e)));",
+        "    const idOk = ids.every((i) => _isBaselineRed(i, null) || atBase.has(_baselineNorm(i)));",
+        "    return errs.length ? errOk : idOk; // error names clear a finding on their own: ids are not consulted",
+        "  }",
         "  const _seamRelease = {};",
         "  const _seamGates = {};",
         "  async function _seamLeg(n, sha) {",
@@ -4994,9 +5257,11 @@ def _seam_leg_js(
         "      _seamFail(n, 'engine defect: seam leg infra refusal persisted after one retry: ' + cause, true);",
         "      return;",
         "    }",
+        "    const preExisting = ((r && Array.isArray(r.findings)) ? r.findings : []).filter(_seamBaselineCleared);",
+        "    preExisting.forEach((f) => _seamPreExisting.push({ wave: n, path: f.path || '', ids: _seamStrs(f.failing_ids), errors: _seamStrs(f.errors) }));",
         "    const marked = (r && r.per_plan && typeof r.per_plan === 'object')",
         "      ? Object.keys(r.per_plan).filter((p) => r.per_plan[p] === 'DRIFT') : [];",
-        "    const found = ((r && r.findings) || []).filter((f) => f && f.blocking !== false);",
+        "    const found = ((r && r.findings) || []).filter((f) => f && f.blocking !== false && !preExisting.includes(f));",
         "    const usable = r && (r.verdict === 'CLEAN' || r.verdict === 'DRIFT') "
         "&& r.per_plan && typeof r.per_plan === 'object' "
         "&& !(r.verdict === 'DRIFT' && !marked.length && !(r.findings || []).length);",
@@ -5005,6 +5270,7 @@ def _seam_leg_js(
         "      return;",
         "    }",
         "    if (r.verdict !== 'DRIFT') return;",
+        "    if (preExisting.length && !found.length) return;",
         "    let repairWhy = '';",
         "    if (!_seamRepaired[n] && found.length && found.every((f) => _SEAM_REPAIRABLE.includes(f.class))) {",
         "      _seamRepaired[n] = true;",
@@ -5122,6 +5388,66 @@ def seam_inputs_for(
             edges[key] = tuple(targets)
         capabilities = capabilities or declared
     return SeamInputs(edges, capabilities, tuple(certified_plans))
+
+
+_OWED_GATES_GATE_FN = "_owedGatesGreen"
+
+
+def _owed_gates_green_js(
+    agent_type_host: Optional[str],
+    *,
+    repo_root: Optional[str],
+    owed_scope: Mapping[str, Sequence[str]],
+    plan_path: Optional[str] = None,
+    sidecar_workflow: str = _SIDECAR_WORKFLOW,
+    sidecar_run_key: Optional[str] = None,
+) -> str:
+    """`_owedGatesGreen(n, done)`: the emit checkpoint's pre-commit gate over gate-owed rows' own tests.
+
+    A wave whose carried-plus-done rows hold no `_gateOwed` entry passes with no leg. Otherwise one
+    test-runner `verify:wave-<n>` leg runs the union of those rows' declared test scope; an empty
+    scope withholds (an owed gate with nothing to retest is not paid), and only `pass` /
+    `pass-with-skips` with a sidecar lets the commit leg run. Trap: the runner reports, the script
+    gates; a withheld row stays in `_gateOwed`, so the terminal commit still trails it owed.
+    """
+    agent_type = _js_string_literal(_degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host))
+    sidecar = _emit_sidecar_clause_js(
+        plan_path, "'verify:wave-' + n", workflow=sidecar_workflow, run_key=sidecar_run_key
+    )
+    scope = json.dumps({rid: list(paths) for rid, paths in owed_scope.items()})
+    phase = _js_string_literal(_EXECUTE_PHASE_TITLE)
+    return (
+        f"  const _owedScope = {scope};\n"
+        "  const _owedWithheld = [];\n"
+        f"  async function {_OWED_GATES_GATE_FN}(n, done) {{\n"
+        f"    const owed = [...new Set([..._carried, ...done])].filter((i) => {GATE_OWED_VAR}[i]);\n"
+        "    if (!owed.length) return true;\n"
+        "    const scope = [...new Set(owed.flatMap((i) => _owedScope[i] ?? []))];\n"
+        "    if (!scope.length) {\n"
+        "      _owedWithheld.push({ wave: n, ids: owed, status: 'no-scope' });\n"
+        "      log('checkpoint of wave ' + n + ' withheld: owed rows ' + owed.join(', ') + ' declare no test to retest');\n"
+        "      return false;\n"
+        "    }\n"
+        "    let r = null;\n"
+        "    try {\n"
+        "      r = await agent(\n"
+        "        'Run and report on the scoped test target(s) that retest the gate-owed rows ' + owed.join(', ') + "
+        "' before the wave ' + n + ' checkpoint: ' + scope.join(', ') + '. ' + "
+        f"{_js_string_literal(_test_runner_clause(repo_root))} + {sidecar},\n"
+        f"        {{ label: 'verify:wave-' + n, phase: {phase}, agentType: {agent_type}, "
+        f"{_model_opt(_TEST_AGENT_TYPE)}, schema: _ROW_VERIFY_SCHEMA }}\n"
+        "      );\n"
+        "    } catch (e) {\n"
+        "      r = null;\n"
+        "    }\n"
+        "    const status = (r && r.status) || null;\n"
+        "    if ((status === 'pass' || status === 'pass-with-skips') "
+        "&& typeof r.sidecar_path === 'string' && r.sidecar_path.trim()) return true;\n"
+        "    _owedWithheld.push({ wave: n, ids: owed, status });\n"
+        "    log('checkpoint of wave ' + n + ' withheld: owed rows ' + owed.join(', ') + ' retest ' + (status || 'returned no verdict'));\n"
+        "    return false;\n"
+        "  }"
+    )
 
 
 def _checkpoint_commit_js(
@@ -5494,7 +5820,7 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
     shared = SharedBlocks()
     repo_root = compose_context.get("repo_root")
     out: dict[str, int] = {}
-    excerpts_for = _row_excerpts_for(repo_root, None, {})
+    excerpts_for = _row_excerpts_for(repo_root, None, {}, list(rows))
     for row in rows:
         call_expr = _row_agent_call_expr(
             row,
@@ -5508,10 +5834,23 @@ def row_block_bytes(rows, *, predispatch: bool, **compose_context) -> dict[str, 
             checkpoint_prefix=_checkpoint_prefix_for(compose_context.get("plan_path"), row.id),
         )
         deps = ", ".join(f"_rows[{_js_string_literal(d)}]" for d in row.depends_on)
+        reroute_arg = _reroute_arg(
+            row,
+            lambda r: _row_agent_call_expr(
+                r,
+                compose_context.get("plan_path"),
+                compose_context.get("plan_context"),
+                shared,
+                agent_type_host=compose_context.get("agent_type_host"),
+                preamble=compose_context.get("preamble"),
+                new_module_paths=tuple(_new_module_paths(row, repo_root)),
+                excerpts=excerpts_for(row),
+            ),
+        )
         text = (
             f"  _rows[{_js_string_literal(row.id)}] = _runRow("
             f"{_js_string_literal(row.id)}, [{deps}], null, async () => ({call_expr}), "
-            f"{{ title: {_js_string_literal(row.title)}, paths: [], declared: [] }});"
+            f"{{ title: {_js_string_literal(row.title)}, paths: [], declared: [] }}{reroute_arg});"
         )
         size = len(text.encode("utf-8"))
         if row.writes is not UNDECLARED:
@@ -5940,6 +6279,7 @@ def compose_script(
         _row_state_decls_js(
             {rid: plan for rid, plan in _row_plans.items() if plan is not None},
             sorted(carried_gate_owed or {}),
+            repo_root,
         )
     )
     if held_rows:
@@ -6009,6 +6349,20 @@ def compose_script(
                 if (tests := tuple(p for p in paths if p not in gitignored and _SEAM_TEST_FILE_RE.search(p)))
             )
             seam_leg = seam_leg._replace(own_tests=own_tests)
+        owed_scope: dict = {}
+        for rid, paths in row_own_writes.items():
+            tests = [p for p in paths if p not in gitignored and _SEAM_TEST_FILE_RE.search(p)]
+            if not tests:
+                tests = [
+                    t
+                    for t in candidate_test_additions(
+                        [p for p in paths if p not in gitignored],
+                        Path(repo_root) if repo_root is not None else None,
+                    )
+                    if repo_root is not None and (Path(repo_root) / t).exists()
+                ]
+            if tests:
+                owed_scope[rid] = tests
         body_blocks.append(
             _checkpoint_commit_js(
                 agent_type_host,
@@ -6018,7 +6372,17 @@ def compose_script(
                 run_base_sha=run_base_sha,
                 seam=seam_leg,
                 prior_run_base=prior_run_base,
+                pre_commit_gate_js=_OWED_GATES_GATE_FN,
                 commit_retry=commit_retry,
+            )
+        )
+        body_blocks.append(
+            _owed_gates_green_js(
+                agent_type_host,
+                repo_root=repo_anchor,
+                owed_scope=owed_scope,
+                plan_path=plan_path,
+                sidecar_run_key=_sidecar_run_key(plan_path),
             )
         )
         row_helper_index = len(body_blocks)
@@ -6085,7 +6449,7 @@ def compose_script(
                     f"  _seamGates[{n}] = new Promise((res) => {{ _seamRelease[{n}] = res; }});"
                 )
         row_exprs: dict[str, str] = {}
-        excerpts_for = _row_excerpts_for(repo_root, run_base_sha, {})
+        excerpts_for = _row_excerpts_for(repo_root, run_base_sha, {}, flat_rows)
         if roster is None:
             row_exprs, row_group = _plan_row_groups(
                 dag,
@@ -6139,6 +6503,7 @@ def compose_script(
                 else "null"
             )
             continuable = False
+            reroute_arg = ""
             if row.id in row_group:
                 members = row_group[row.id]
                 call_expr = (
@@ -6158,19 +6523,29 @@ def compose_script(
                     label_id=row.id,
                     checkpoint_prefix=_checkpoint_prefix_for(plan_path, row.id),
                 )
-            else:
-                call_expr = _row_agent_call_expr(
+                reroute_arg = _reroute_arg(
                     row,
-                    plan_path,
-                    plan_context,
-                    shared,
-                    agent_type_host=agent_type_host,
-                    preamble=preamble,
-                    new_module_paths=tuple(_new_module_paths(row, repo_root)),
-                    predecessor_state=predecessor_state,
-                    chatty_brief=_chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id)),
-                    excerpts=excerpts_for(row),
+                    lambda r: _agent_call_over(
+                        row_exprs[row.id], r, agent_type_host, label_id=row.id
+                    ),
                 )
+            else:
+                def _roster_call(r, row=row):
+                    return _row_agent_call_expr(
+                        r,
+                        plan_path,
+                        plan_context,
+                        shared,
+                        agent_type_host=agent_type_host,
+                        preamble=preamble,
+                        new_module_paths=tuple(_new_module_paths(row, repo_root)),
+                        predecessor_state=predecessor_state,
+                        chatty_brief=_chatty.member_brief(row.id, _chatty.member_nonce(roster, row.id)),
+                        excerpts=excerpts_for(row),
+                    )
+
+                call_expr = _roster_call(row)
+                reroute_arg = _reroute_arg(row, _roster_call)
             row_paths = row_pathspecs.get(row.id) or []
             if row.id in checkpoint_over:
                 unchecked_rows.append(row.id)
@@ -6195,7 +6570,7 @@ def compose_script(
                 (f"  _contOf[{_js_string_literal(row.id)}] = null;\n" if continuable else "")
                 + f"  _rows[{_js_string_literal(row.id)}] = _runRow("
                 f"{_js_string_literal(row.id)}, {deps_expr}, "
-                f"{verify_expr}, async () => ({call_expr}), {commit_expr});"
+                f"{verify_expr}, async () => ({call_expr}), {commit_expr}{reroute_arg});"
             )
 
         for n, wave in enumerate(waves, start=1):
@@ -6482,6 +6857,7 @@ def compose_script(
     judge_withheld = _withheld_judge_rows(plan_text, excluded_rows)
     judge_brief_kwargs = dict(
         withheld_rows=judge_withheld,
+        struck_rows=_struck_judge_rows(plan_text, Path(repo_root) if repo_root is not None else _REPO_ROOT),
         stage_schemas=review_stage_schemas,
         plan_path=plan_path or "",
         run_base_sha=_run_base_marker() if runtime_base else (run_base_sha or ""),
@@ -6794,6 +7170,17 @@ _NON_DONE_STATUS_JS_RE = (
     rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'
     r'|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
 )
+
+#: A reply that refused its row as out of role or ran nothing. Matched against the
+#: JSON-stringified reply; ``_runRowInner`` re-routes such a reply once when the row
+#: carries a reroute closure.
+_REFUSAL_JS_RE = (
+    r'/out[ -]of[ -]role|\bI ran nothing\b|\bNot run\b|test_verdict"?\s*:\s*"?not_run/i'
+)
+
+#: A reply that ran and failed: an uppercase ``FAIL``/``FAILED`` or a non-zero
+#: ``N failed`` count. Such a reply is never re-routed.
+_RAN_FAIL_JS_RE = r'/\bFAIL(?:ED)?\b|\b[1-9]\d* (?:tests? )?failed\b/'
 
 #: A ``CHECKPOINT: <path>`` status line leading the reply or any line of it; group 1 is the path.
 _CHECKPOINT_JS_RE = (
@@ -7564,6 +7951,7 @@ def emit_script(
     absorb_run_id: Optional[str] = None,
     resume_run_base: Optional[str] = None,
     commit_retry: Optional[Mapping[int, str]] = None,
+    leg_writes: Sequence[str] = (),
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
 
@@ -7789,6 +8177,17 @@ def emit_script(
         for raw in _load_raw_rows(plan_text or "").rows
         if isinstance(raw, dict) and isinstance(raw.get("id"), str)
     }
+    if sibling is None and not review_only and not landed_rows and not hold_rows:
+        rows, raw_by_id, _merges = shape_rows_for_emit(rows, raw_by_id)
+        if findings_out is not None:
+            findings_out.extend(
+                Finding(
+                    Severity.WARN,
+                    "CHUNK-SHAPER-MERGED",
+                    f"chunk shaper merged {' + '.join(parts)} into {mid!r} (one spawn, one orientation)",
+                )
+                for mid, parts in _merges
+            )
     check_unschedulable_rows(rows, raw_by_id)
     if repo_root is not None and plan_text is not None:
         from coordinator_core.ops import requirement_register as _rr
@@ -7823,6 +8222,7 @@ def emit_script(
             repo_root=Path(repo_root).as_posix() if repo_root is not None else None,
         ),
         slot_row_ids=frozenset(slot_rows),
+        leg_writes=tuple(leg_writes) or _recorded_leg_writes(script_path, repo_root),
     )
 
     carried_owed_gates = {

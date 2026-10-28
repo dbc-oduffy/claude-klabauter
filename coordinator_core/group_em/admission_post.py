@@ -18,7 +18,7 @@ from typing import Iterable, Optional
 from coordinator_core._settings_home import settings_home
 from coordinator_core.group_em import nomination, session_registry
 
-PHASES = ("START", "END")
+PHASES = ("START", "END", "REQUEST")
 MAX_PIDS = 64
 MAX_TEXT = 512
 MAX_VERIFY_SPAN = 65536
@@ -81,12 +81,13 @@ def post(
 ) -> dict:
     """Append one admission line for the box Group EM; return a structured reply.
 
-    ``posted`` is False with ``reason`` ``bad_phase`` or ``no_box_holder`` when nothing was
+    ``posted`` is False with ``reason`` ``bad_phase``, ``bad_peak`` (REQUEST without a valid
+    ``declared_peak_mb``) or ``no_box_holder`` when nothing was
     written. ``delivered`` is True only when this call's line was verified present at
     ``path``; otherwise ``posted`` and ``delivered`` are False, ``reason`` names the failure
     (``write_failed:*``, ``short_write``, ``not_found_at_path``) and a stderr line is printed.
     ``declared_peak_mb`` (MB the run expects its process tree to reach) is written on START
-    lines only, as ``declared_peak_mb``; an absent or invalid value omits the field.
+    and REQUEST lines only, as ``declared_peak_mb``; an absent or invalid value omits the field.
     A non-live holder still receives the line: it is tailed once the holder is back.
     With ``require_holder=False`` a holderless box is still written (``holder_session`` null,
     ``holder_live`` False) so a governor reading the file sees the line.
@@ -94,6 +95,9 @@ def post(
     phase = str(phase).upper()
     if phase not in PHASES:
         return {"posted": False, "reason": "bad_phase"}
+    peak = valid_peak_mb(declared_peak_mb)
+    if phase == "REQUEST" and peak is None:
+        return {"posted": False, "reason": "bad_peak"}
     holder = nomination.box_holder(directory, now)
     if holder is None:
         if require_holder:
@@ -117,8 +121,7 @@ def post(
         "note": note[:MAX_TEXT],
         "holder_session": holder.get("session_id"),
     }
-    peak = valid_peak_mb(declared_peak_mb)
-    if phase == "START" and peak is not None:
+    if phase in ("START", "REQUEST") and peak is not None:
         line["declared_peak_mb"] = peak
     path = admission_path(directory)
     path.parent.mkdir(parents=True, exist_ok=True)

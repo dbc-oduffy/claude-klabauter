@@ -377,19 +377,10 @@ def _current_agents(
     `raise_on_empty_snapshot` is the one that actually fires; both refusals
     set, why the second is the one that fires: `peer_roster.EmptySnapshotError`.
     """
-    agents = read_pass.fetch_live_agents(
-        repo_root,
-        raise_on_failure=True,
-        raise_on_empty_snapshot=True,
-        **_roster_kwargs(box_wide),
-    )
-    peers = read_pass.enumerate_repo_peers(
-        [a for a in agents if not read_pass.is_eval_sandbox_peer(a)],
-        caller_session_id,
-    )
+    exclude = [caller_session_id]
     if group_em_session_id is not None and group_em_session_id != caller_session_id:
-        peers = read_pass.enumerate_repo_peers(peers, group_em_session_id)
-    return peers
+        exclude.append(group_em_session_id)
+    return read_pass.live_peers(repo_root, exclude, box_wide)
 
 
 def _classify_all(

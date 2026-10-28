@@ -97,6 +97,7 @@ from coordinator_core.warm import (
     cookie,
     election,
     hook_http,
+    idle,
     lifecycle,
     skew,
     telemetry,
@@ -683,7 +684,7 @@ def ensure_listener(engine_root: Optional[Path] = None, *, now: Optional[float] 
     adds no unguarded call of its own.
     """
     root = engine_root if engine_root is not None else _default_engine_clone()
-    if not is_engine_root(root):
+    if not is_engine_root(root) or idle.ladder_gone_tombstoned(root):
         return None
     try:
         record = read_discovery(root)
@@ -819,6 +820,9 @@ class _ServerContext:
         # `GUARD_OP_NAME` names (`warm_guard.evaluate`, `ops/warm_guard_evaluate.py`) so
         self.dispatch = dispatch
         self._skew_watchdog_stop = threading.Event()
+        self._ladder_gone = (
+            idle.make_ladder_gone(Path(engine_root)) if engine_root is not None else None
+        )
 
     def _compute_engine_token(self) -> Optional[str]:
         """This transport's own trust proof, SELF-STAMPED rather than read off a
@@ -899,6 +903,10 @@ class _ServerContext:
         4: "never timer-adjudicated"), so this tick never asks it."""
         if self._token_is_stale():
             self.record_exit(telemetry.EXIT_REASON_SUPERSEDED)
+            self.stop()
+        elif self._ladder_gone is not None and self._ladder_gone():
+            idle.write_ladder_gone_tombstone(Path(self.engine_root))
+            self.record_exit(telemetry.EXIT_REASON_IDLE_DEMOTION)
             self.stop()
 
     def _skew_watchdog_loop(self) -> None:
@@ -1289,6 +1297,10 @@ def main() -> int:
         except Exception:  # noqa: BLE001 -- the failure record must not mask the refusal
             pass
         return 2
+
+    if idle.ladder_gone_tombstoned(root):
+        print(f"[warm-http-supervisor] ladder gone for {root}; not starting", file=sys.stderr)
+        return 0
 
     if breadcrumb.publish_marker_held(breadcrumb.svc_dir(root)):
         print(

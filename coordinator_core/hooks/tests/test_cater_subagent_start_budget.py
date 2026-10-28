@@ -361,6 +361,7 @@ def test_compose_catering_process_time_companion_write_widest_type(
     block_names = policy_data["contract_blocks"][WIDEST_TYPE]
 
     monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy_file))
+    _pin_real_corpus(monkeypatch)
     session_id = "budget-companion-write-widest"
     # `machinery_paths.share_dir`, never a hand-built path: production moved
     # the share root to `.coordinator-local/subagent-share/`, so a literal
@@ -446,6 +447,7 @@ def test_every_catered_type_composes_under_the_char_cap(
     session_dirs: list[Path] = []
     # Same stale-root correction as the sibling test above.
     monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy_file))
+    _pin_real_corpus(monkeypatch)
     try:
         over_cap: list[tuple[str, int]] = []
         for agent_type, block_names in catered_types.items():
@@ -467,6 +469,18 @@ def test_every_catered_type_composes_under_the_char_cap(
     finally:
         for session_dir in session_dirs:
             shutil.rmtree(session_dir, ignore_errors=True)
+
+
+def _pin_real_corpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The suite conftest quarantines HOME and stubs the content-root
+    pointer, so unpinned, the blocks and role legs resolve to nothing and a
+    real-corpus measurement composes only sidecar text -- vacuously under
+    the cap and under any timing ceiling."""
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(CONTENT_ROOT) / "coordinator"))
+    monkeypatch.setattr(
+        "coordinator_core.hooks.cater_subagent_start.read_content_root",
+        lambda: str(CONTENT_ROOT),
+    )
 
 
 def _sanitize(agent_type: str) -> str:

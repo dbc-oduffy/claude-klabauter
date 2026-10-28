@@ -3009,6 +3009,26 @@ def _is_single_repo_relative_path(ref: str) -> bool:
     return True
 
 
+def _plan_tasks_premise_close_stands(row: dict) -> bool:
+    """True only for a `wont_do` row whose `premise_close.chunk` names a
+    depends_on edge on this same row with gate_kind `epistemic-premise`; the
+    one case where pm_approved is waived (a pre-authored close, not a bypass)."""
+    if row.get('disposition') != 'wont_do':
+        return False
+    close = row.get('premise_close')
+    if not isinstance(close, dict) or not close.get('chunk'):
+        return False
+    depends_on = row.get('depends_on')
+    if not isinstance(depends_on, list):
+        return False
+    return any(
+        isinstance(edge, dict)
+        and edge.get('gate_kind') == 'epistemic-premise'
+        and edge.get('chunk') == close['chunk']
+        for edge in depends_on
+    )
+
+
 def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> ErrorDict | None:
     """Hard-reject cross-field validator for one plan-tasks spine row's
     disposition fields — the hard-failing layer of D4's enforcement matrix.
@@ -3093,7 +3113,7 @@ def _cf_plan_tasks_disposition_shape(fm: dict, *, governed: bool = False) -> Err
             ),
         }
     if disposition in _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS and not governed:
-        if fm.get('pm_approved') is not True:
+        if fm.get('pm_approved') is not True and not _plan_tasks_premise_close_stands(fm):
             return {
                 'field': 'pm_approved',
                 'error': (

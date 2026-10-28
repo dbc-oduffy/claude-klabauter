@@ -19,10 +19,11 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import inspect
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Set, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Protocol, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import read_object
@@ -213,6 +214,13 @@ def _judged_paths(detector: Any, paths: List[str]) -> List[str]:
     return [p for p in paths if p.endswith(suffixes)]
 
 
+def _takes_landed_text(detector: Any) -> bool:
+    try:
+        return "landed_text" in inspect.signature(detector.detect).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def _refusal(diagnostics: List[str]) -> GateOutcome:
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
@@ -221,8 +229,12 @@ def leak_gate(
     worktree_root: Union[str, Path],
     gate_paths: Sequence[str],
     detectors: Optional[Sequence[Any]] = None,
+    landed_text: Optional[Callable[[str], Optional[str]]] = None,
 ) -> GateOutcome:
     """Refuse a commit whose `gate_paths` trip any detector.
+
+    `landed_text(rel)` is the text the commit lands for a gate path (None = absent); it replaces the
+    worktree read for detectors whose `detect` takes a `landed_text` keyword, and others ignore it.
 
     `detectors=None` resolves `WIRED_DETECTORS` by fixed module name under this package; an
     ImportError there refuses. An empty `gate_paths` or an empty detector list passes (skipped).
@@ -258,7 +270,8 @@ def leak_gate(
     findings: List[LeakFinding] = []
     for det in active:
         try:
-            findings.extend(det.detect(root, _judged_paths(det, paths), head))
+            extra_kw = {"landed_text": landed_text} if landed_text is not None and _takes_landed_text(det) else {}
+            findings.extend(det.detect(root, _judged_paths(det, paths), head, **extra_kw))
         except Exception as exc:
             return _refusal([f"leak_gate: detector {_detector_name(det)} raised {type(exc).__name__}: {exc}"])
 

@@ -59,19 +59,30 @@ def _env_for(tmp_path: Path, plugin_root: Path) -> dict:
 
 
 class TestPositive:
-    def test_clean_corpus_validates_and_warns_missing(self, tmp_path: Path):
+    def test_missing_bundled_page_exits_3(self, tmp_path: Path):
         plugin_root = _build_plugin_root(tmp_path)
         env = _env_for(tmp_path, plugin_root)
 
         rc, out, err = _run_main([], env)
 
-        assert rc == 0
+        assert rc == 3
         assert "beta.md referenced by plugin file but absent from bundled wiki" in out
-        assert "Plugin-bundled wiki: clean (2 validated, 1 missing-bundled warnings)." in out
+        assert "clean" not in out
         assert "foo.md" not in out
+
+    def test_fully_bundled_tree_exits_0(self, tmp_path: Path):
+        plugin_root = _build_plugin_root(tmp_path)
+        (plugin_root / "docs" / "wiki" / "beta.md").write_text("beta doc\n")
+        env = _env_for(tmp_path, plugin_root)
+
+        rc, out, err = _run_main([], env)
+
+        assert rc == 0
+        assert "Plugin-bundled wiki: clean (3 validated, 0 missing-bundled warnings)." in out
 
     def test_quiet_suppresses_output(self, tmp_path: Path):
         plugin_root = _build_plugin_root(tmp_path)
+        (plugin_root / "docs" / "wiki" / "beta.md").write_text("beta doc\n")
         env = _env_for(tmp_path, plugin_root)
 
         rc, out, err = _run_main(["--quiet"], env)
@@ -111,6 +122,7 @@ class TestPositive:
 
     def test_override_env_suppresses_exit_5(self, tmp_path: Path):
         plugin_root = _build_plugin_root(tmp_path)
+        (plugin_root / "docs" / "wiki" / "beta.md").write_text("beta doc\n")
         env = _env_for(tmp_path, plugin_root)
         dev_wiki = Path(env["HOME"]) / ".claude" / "docs" / "wiki"
         dev_wiki.mkdir(parents=True)

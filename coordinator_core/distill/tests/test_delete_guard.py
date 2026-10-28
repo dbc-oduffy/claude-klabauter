@@ -909,3 +909,75 @@ def test_evaluate_candidate_detailed_blocked_matches(tmp_path: Path):
     assert blocked_from_detailed == set(outcome["blocked_by"])
     assert "shipped_in" in blocked_from_detailed
     assert "realized_by" in blocked_from_detailed
+
+
+def _batch_memos(tmp_path: Path, n: int, fate: str = "ephemeral") -> list[Path]:
+    (tmp_path / "state" / "cross-repo-commitments").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "docs").mkdir(exist_ok=True)
+    memos = []
+    for i in range(n):
+        memo = tmp_path / "cross-repo" / "archive" / f"batch-memo-{i}.md"
+        memo.parent.mkdir(parents=True, exist_ok=True)
+        memo.write_text(
+            "---\nfrom: a\nto: b\nstatus: actioned\nrealized_by: inline\n"
+            f"distill_fate: {fate}\n---\nbody\n",
+            encoding="utf-8",
+        )
+        memos.append(memo)
+    return memos
+
+
+@_requires_rg
+def test_prefetch_makes_constant_rg_spawns_for_n_candidates(tmp_path: Path, monkeypatch):
+    memos = _batch_memos(tmp_path, 6)
+    (tmp_path / "docs" / "note.md").write_text("see cross-repo/archive/batch-memo-3.md\n", encoding="utf-8")
+    needles = [delete_guard.rel_id(m, tmp_path) for m in memos]
+    rg_calls: list[object] = []
+    orig_run = subprocess.run
+
+    def _counting_run(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "rg":
+            rg_calls.append(cmd)
+        return orig_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _counting_run)
+    citations = delete_guard.prefetch_citations(needles, tmp_path)
+    receipts = [evaluate_candidate_receipts(m, tmp_path, (), citations=citations) for m in memos]
+    assert len(rg_calls) <= 4
+    blocked = {m.name for m, r in zip(memos, receipts) if "active-reference" in r["blocked_by"]}
+    assert blocked == {"batch-memo-3.md"}
+
+
+@_requires_rg
+def test_prefetched_commitment_matches_single_candidate_verdict(tmp_path: Path):
+    memos = _batch_memos(tmp_path, 3, fate="commitment")
+    wiki = tmp_path / "docs" / "wiki"
+    wiki.mkdir(parents=True)
+    (wiki / "landing.md").write_text("Landed per batch-memo-1.md\n", encoding="utf-8")
+    needles = [delete_guard.rel_id(m, tmp_path) for m in memos]
+    citations = delete_guard.prefetch_citations(needles, tmp_path)
+    for memo in memos:
+        batched = evaluate_candidate_receipts(memo, tmp_path, (), citations=citations)
+        single = evaluate_candidate_receipts(memo, tmp_path, ())
+        assert batched["blocked_by"] == single["blocked_by"]
+    assert "harvest-provenance" not in evaluate_candidate_receipts(
+        memos[1], tmp_path, (), citations=citations
+    )["blocked_by"]
+    assert "harvest-provenance" in evaluate_candidate_receipts(
+        memos[0], tmp_path, (), citations=citations
+    )["blocked_by"]
+
+
+@pytest.mark.parametrize("fate", ["ephemeral", "commitment"])
+def test_rg_absent_blocks_every_candidate(tmp_path: Path, monkeypatch, fate: str):
+    memos = _batch_memos(tmp_path, 3, fate=fate)
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None)
+    needles = [delete_guard.rel_id(m, tmp_path) for m in memos]
+    citations = delete_guard.prefetch_citations(needles, tmp_path)
+    for memo in memos:
+        for cites in (citations, None):
+            receipt = evaluate_candidate_receipts(memo, tmp_path, (), citations=cites)
+            assert receipt["eligible"] is False
+            assert "active-reference" in receipt["blocked_by"]
+            if fate == "commitment":
+                assert "harvest-provenance" in receipt["blocked_by"]

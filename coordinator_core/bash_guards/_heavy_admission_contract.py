@@ -18,6 +18,8 @@ LEG_IDENTITY = "identity"
 LEG_RAM_FLOOR = "ram-floor"
 LEG_SESSION_CAP = "session-cap"
 LEG_BOX_HOLD = "box-hold"
+# Deny-only leg name (log and message); it has no operator override key, the remedy is the launcher.
+LEG_BARE_PYTEST = "bare-pytest"
 LEGS = (LEG_IDENTITY, LEG_BOX_HOLD, LEG_RAM_FLOOR, LEG_SESSION_CAP)
 # Advisory record kind in the would-deny log: never a leg, never a deny.
 ADVISORY_WORKER_RSS = "worker-rss"
@@ -79,13 +81,16 @@ class Classification:
     explicit-test-target carve-out; background mirrors tool_input.run_in_background; noemit_tsc
     marks a command whose every heavy segment is a one-shot `tsc --noEmit` (the executor carve-out);
     bounded_verify marks one whose heavy segments are all test-tier or typecheck runs that exit on
-    their own, with vitest/jest workers capped at or under the box cap (the verifier carve-out)."""
+    their own, with vitest/jest workers capped at or under the box cap (the verifier carve-out);
+    bare_pytest marks one that runs pytest directly without exactly one file target (the
+    scoped_pytest launcher is the admitted route)."""
 
     heavy_class: Optional[HeavyClass]
     scoped: bool
     background: bool
     noemit_tsc: bool = False
     bounded_verify: bool = False
+    bare_pytest: bool = False
 
 
 @dataclass(frozen=True)

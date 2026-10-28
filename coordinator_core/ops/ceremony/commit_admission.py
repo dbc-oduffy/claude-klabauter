@@ -31,9 +31,10 @@ and a deletion is a shrink.
 It FAILS OPEN, unlike the leg above: DoE's guard is fail-open by contract, so
 a plumbing failure (unreadable baseline, predicate import error) admits the
 commit and yields a `check did not run` note that the commit reply carries as
-a warning; only a measured violation refuses. It loads
-the committing repo's own predicate and harness by file path, restores
-`sys.path` and drops every `sys.modules` key the load added, and spawns nothing.
+a warning. An over-budget `admission_violations` measure is advisory: it admits
+with a warning note. Only `limit_raises` refuses. It loads the committing
+repo's own predicate and harness by file path, restores `sys.path` and drops
+every `sys.modules` key the load added, and spawns nothing.
 
 Two further entry points carry the same predicate to the other places the
 boot payload changes without a tool call:
@@ -247,8 +248,9 @@ def _head_skill_sizes(root: Path, common_dir: Path) -> Dict[str, int]:
 def skill_weight_check(
     root: Path, assembled: Mapping[str, object]
 ) -> Tuple[Optional[str], Optional[str]]:
-    """`(refusal, note)` for the assembled tree: refuse, admit `(None, None)`,
-    or could-not-run `(None, note)`. A weight verdict never yields a note.
+    """`(refusal, note)` for the assembled tree: refuse (baseline limit raise
+    only), admit `(None, None)`, or admit with a warning `(None, note)` for an
+    over-budget measure or a could-not-run check.
 
     Runs the committing repo's own `_skill_weight_admission` predicate and
     harness in-process; a repo without that script is not enforced.
@@ -349,16 +351,17 @@ def _skill_weight_leg(root, touched, changed, baseline_text_for):
             measured = harness.measure_all_skills(sizes=sizes)
             return {name: row["resident"] for name, row in measured.items()}
 
-        violations = admission.admission_violations(
+        over_budget = admission.admission_violations(
             resident(proposed_sizes), resident(base_sizes), baseline
         )
         # A DoE tree predating `limit_raises` has no lock to enforce.
         limit_raises = getattr(admission, "limit_raises", None)
+        violations = []
         if limit_raises is not None:
             head_entry = head_blobs(root, [_SW_BASELINE]).get(_SW_BASELINE)
             base_text = None if head_entry is None else _blob_text(common_dir, head_entry[1])
             base_baseline = None if base_text is None else json.loads(base_text)
-            violations = [*violations, *limit_raises(baseline, base_baseline)]
+            violations = list(limit_raises(baseline, base_baseline))
     except Exception as exc:  # noqa: BLE001 -- fail open, see module docstring.
         _LOG.warning("%s did not run this commit: %s", _SW_TAG, exc)
         return None, f"{_SW_TAG} check did not run: {exc.__class__.__name__}: {exc}"
@@ -367,14 +370,18 @@ def _skill_weight_leg(root, touched, changed, baseline_text_for):
         for key in set(sys.modules) - saved_modules:
             sys.modules.pop(key, None)
 
-    if not violations:
-        return None, None
-    return (
-        "\n".join(
-            [f"{_SW_TAG} commit refused: skill growth over budget", *(f"  {v}" for v in violations)]
-        ),
-        None,
-    )
+    if violations:
+        return (
+            "\n".join(
+                [f"{_SW_TAG} commit refused: baseline limit raised", *(f"  {v}" for v in violations)]
+            ),
+            None,
+        )
+    if over_budget:
+        return None, "\n".join(
+            [f"{_SW_TAG} over budget (advisory)", *(f"  {v}" for v in over_budget)]
+        )
+    return None, None
 
 
 def _incomplete(path: str, exc: Exception) -> str:

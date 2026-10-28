@@ -35,7 +35,8 @@ def test_an_already_absent_block_replies_false_and_writes_nothing(repo):
     _bound(repo, "run-one", ask="first ask")
     before = (repo / REL).read_bytes()
     reply = rl._handler({"run_id": "run-one", "build_only": True}, repo_root=repo)
-    assert reply["ok"] is True and reply["research_dropped"] is False
+    assert reply["ok"] is False and reply["research_dropped"] is False
+    assert [r["input"] for r in reply["refused"]] == ["build_only"]
     assert (repo / REL).read_bytes() == before
 
 

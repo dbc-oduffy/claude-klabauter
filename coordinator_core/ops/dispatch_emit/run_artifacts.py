@@ -20,6 +20,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from glob import escape as glob_escape
 
+from coordinator_core.ops.dispatch_emit import halt_product_gates
 from coordinator_core.session.record_homes import home_dir
 
 ARTIFACT_CLASSES = (
@@ -178,6 +179,9 @@ def _scalar(text: Optional[str], key: str) -> Optional[str]:
     return value or None
 
 
+_is_scratch = halt_product_gates.is_scratch
+
+
 def candidate_paths(
     worktree_root: Path,
     run_id: str,
@@ -194,7 +198,7 @@ def candidate_paths(
 
     def add(cls: str, rel: Optional[str], *, must_exist: bool = True) -> None:
         norm = _norm_rel(rel)
-        if norm is None or norm in seen or not _contained(root, norm):
+        if norm is None or _is_scratch(norm) or norm in seen or not _contained(root, norm):
             return
         if must_exist and not (root / norm).is_file():
             return
@@ -244,7 +248,7 @@ def candidate_paths(
 
     for raw in doc_paths or ():
         norm = _norm_rel(raw)
-        if norm is None or norm.startswith("scratch/") or norm == "scratch":
+        if norm is None:
             continue
         if norm == _RECORD_ROOT or norm.startswith(_RECORD_ROOT + "/"):
             continue
@@ -278,7 +282,7 @@ def mise_candidate_paths(
 
     def add(cls: str, rel: Optional[str]) -> None:
         norm = _norm_rel(rel)
-        if norm is None or norm in seen or not _contained(root, norm):
+        if norm is None or _is_scratch(norm) or norm in seen or not _contained(root, norm):
             return
         if not (root / norm).is_file():
             return
@@ -480,7 +484,7 @@ def landable(
     root = Path(worktree_root)
     changed_set = {str(p).replace("\\", "/") for p in changed}
     ignored_set = {str(p).replace("\\", "/") for p in ignored}
-    cands = [p for p in artifacts.paths() if p in changed_set and p not in ignored_set]
+    cands = [p for p in artifacts.paths() if p in changed_set and p not in ignored_set and not _is_scratch(p)]
     withheld: dict[str, str] = {}
     contest_unknown = False
 

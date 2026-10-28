@@ -171,7 +171,6 @@ BASELINE = frozenset(
         "coordinator_core/test_sizing_assemble.py::foo.md",
         "coordinator_core/test_state_root.py::foo.md",
         "coordinator_core/tests/guard_witnesses/bash_confinement_b.py::governed-thing.md",
-        "coordinator/bin/tests/test_citation_integrity_cli.py::old-location/renamed.md",
         "coordinator_core/tests/test_citation_graph_anchor.py::old/renamed.md",
         "coordinator_core/tests/test_doctrine_prose_op_names_resolve.py::a.md",
         "coordinator_core/tests/test_doctrine_prose_op_names_resolve.py::ceremony-calibration/workstream-complete-conversion-archaeology.md",

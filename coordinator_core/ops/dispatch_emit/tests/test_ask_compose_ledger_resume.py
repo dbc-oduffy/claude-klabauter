@@ -62,7 +62,7 @@ def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work
     # Prompt preamble growth (3256e0bf2a, later additions) pushed the join past the fixed 4200
     # window set by 4912597f37; slice from the prompt's own opening line instead.
     prompt = script[script.index("Ledger-resume re-plan leg.") : leg]
-    assert "_gate.resume_ledger.blocking.join(', ')" in prompt
+    assert "(_gate.resume_ledger.blocking ?? []).join(', ')" in prompt
     assert "_gate.resume_ledger.remaining ?? {}" in prompt
     assert "_gate.resume_ledger.revise_notes ?? []" in prompt
     assert "added_rows" in prompt
@@ -75,7 +75,7 @@ def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch)
     script = _script(monkeypatch)
     leg = script.index("label: 'ledger-replan'")
     prompt = script[leg - 4200 : leg]
-    assert "with only_rows set to the ids of exactly the rows you added" in prompt
+    assert "to the ids of exactly the rows you added" in prompt and "only_rows" in prompt
     assert "' together with these unlanded rows: '" in prompt
     assert "if (_ledgerAdded.length) { _ledgerExec = true; await _adoptStageReply(" in script
     assert (
@@ -124,9 +124,9 @@ def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):
 
 def test_the_verify_prompt_names_exactly_the_blocking_ids(monkeypatch):
     script = _script(monkeypatch)
-    assert "_gate.resume_ledger.blocking.join(', ')" in script
+    assert "(_gate.resume_ledger.blocking ?? []).join(', ')" in script
     assert "Return an item for each of them and no other item." in script
-    assert script.index("_gate.resume_ledger.blocking.join") < script.index("label: 'verify'")
+    assert script.index("(_gate.resume_ledger.blocking ?? []).join") < script.index("label: 'verify'")
 
 
 def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monkeypatch):

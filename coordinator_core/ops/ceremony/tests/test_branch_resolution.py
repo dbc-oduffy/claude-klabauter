@@ -841,6 +841,25 @@ def test_trailer_reliable_when_the_commit_count_probe_computed_a_positive_value(
     )
 
     assert _trailer_reliable(git_repo.root, "sess-c1-count", None) is True
+
+
+def test_attributed_count_and_reliability_follow_the_session_commits_primitive(git_repo, monkeypatch):
+    import coordinator_core.ops.ceremony.branch_resolution as br
+
+    sid = "sess-claude-session-only"
+    br._cached_session_commits.cache_clear()
+    monkeypatch.setattr(
+        br,
+        "_resolve_session_commits_primitive",
+        lambda *_a, **_k: [{"sha": "a" * 40, "subject": "claude-session-only commit"}],
+    )
+    try:
+        assert br.session_commit_count_attributed(git_repo.root, sid) == {"degraded": False, "value": 1}
+        assert _trailer_reliable(git_repo.root, sid, "2000-01-01T00:00:00Z") is True
+    finally:
+        br._cached_session_commits.cache_clear()
+
+
 def test_trailer_reliable_fails_closed_when_count_probe_degraded(git_repo, monkeypatch):
     """A degraded trailer-count probe is indeterminate, never a computed zero: it must
     not fall through to "reliable" (started_at absent / HEAD unmoved), and the

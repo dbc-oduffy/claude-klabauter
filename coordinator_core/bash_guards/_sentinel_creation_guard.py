@@ -515,7 +515,11 @@ class SentinelCreationDetector:
         return None
 
     _XARGS_READ_ONLY_HEADS = frozenset(
-        {"cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
+        {
+            "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo",
+            "basename", "dirname", "realpath", "readlink", "du", "md5sum", "shasum",
+            "sha256sum",
+        }
     )
 
     #: `xargs` options that consume the NEXT token as their operand. An

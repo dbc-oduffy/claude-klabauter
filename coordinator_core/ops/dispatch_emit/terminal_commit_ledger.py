@@ -590,6 +590,7 @@ _UNDELIVERED_REPORT_RE = re.compile(
     re.MULTILINE,
 )
 
+
 _UNDONE_LINE_RE = re.compile(r"^\s*[-*]?\s*[*_`]{0,2}(?:not done|undone|remaining)", re.IGNORECASE)
 
 _CAUSE_HEADING_RE = re.compile(
@@ -947,7 +948,7 @@ def _changed(snapshot: Optional[_Snapshot], worktree_root: Path, paths: list) ->
 def _commit_residue(
     worktree_root: Path, request: CommitRequest, snapshot: Optional[_Snapshot],
     report_cache: dict, session_id: Optional[str], *, excluded: set,
-    unfinished: set, commit_v2_mod, own_prefix_files=None,
+    unfinished: set, commit_v2_mod,
 ) -> dict:
     """``{path: reason}`` for every path a chunk declares (or claims by prefix) that the
     pre-commit read saw changed and the commit did not carry; ``excluded`` holds the paths
@@ -955,9 +956,8 @@ def _commit_residue(
     one scoped status spawn. The reason is the unfinished
     chunk ids declaring it, ``peer-held``, or ``unexplained``."""
     owners: dict = {}
-    claims_of = own_prefix_files or _own_prefix_files
     for chunk in request.chunks:
-        for p in list(chunk.paths) + (claims_of(worktree_root, chunk, report_cache) or []):
+        for p in list(chunk.paths) + (_own_prefix_files(worktree_root, chunk, report_cache) or []):
             owners.setdefault(p, []).append(chunk.id)
     candidates = [p for p in owners if p not in excluded]
     if not candidates:

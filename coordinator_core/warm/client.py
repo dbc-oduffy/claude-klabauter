@@ -618,8 +618,9 @@ def _spawn_once() -> None:
         return
     root = _engine_clone_root()
     from coordinator_core.warm.breadcrumb import should_spawn
+    from coordinator_core.warm.idle import ladder_gone_tombstoned
 
-    if not should_spawn(root):
+    if ladder_gone_tombstoned(root) or not should_spawn(root):
         return
     _spawned_this_process = True
     # Stamp the spawn instant so the CHILD can measure its own boot. Boot has
@@ -660,6 +661,58 @@ def _spawn_once() -> None:
 CONNECT_DEADLINE_SECS = 0.25
 
 
+CONFIGURED_ROOT_ENV = "COORDINATOR_CLONE_ROOT"
+
+
+def _settings_home() -> Path:
+    home = os.environ.get("COORDINATOR_SETTINGS_HOME", "").strip()
+    if home:
+        return Path(home)
+    base = os.environ.get("CLAUDE_HOME", "").strip() or str(Path.home())
+    return Path(base) / ".coordinator-claude-settings"
+
+
+def _settings_configured_root() -> str:
+    """The root named by settings-home `machine-local/.claude-klabauter-root`,
+    the channel the door's rung 3 reads; empty when absent or unreadable."""
+    try:
+        return (_settings_home() / "machine-local" / ".claude-klabauter-root").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _door_sidecar_root() -> str:
+    """The root the installed door's `door.engine-root.txt` names (settings-home
+    `bin/`); empty when absent or unreadable."""
+    try:
+        return (_settings_home() / "bin" / "door.engine-root.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _configured_root() -> str:
+    return (
+        os.environ.get(CONFIGURED_ROOT_ENV, "").strip()
+        or _settings_configured_root()
+        or _door_sidecar_root()
+    )
+
+
+def _configured_root_is_foreign() -> bool:
+    """True when the session names an engine root other than the clone this
+    client was imported from: `COORDINATOR_CLONE_ROOT`, else the settings-home
+    `.claude-klabauter-root`, else the door sidecar's root. This clone's endpoint reaches only this clone's
+    server, so serving the session would run another root's code; the caller
+    goes cold, never spawns. No named root is not foreign."""
+    configured = _configured_root()
+    if not configured:
+        return False
+    try:
+        return Path(configured).resolve() != _engine_clone_root()
+    except (OSError, RuntimeError):
+        return True
+
+
 def _endpoint_name(token: str) -> str:
     """This engine generation's endpoint: a named pipe on Windows, a unix
     socket path everywhere else.
@@ -672,7 +725,19 @@ def _endpoint_name(token: str) -> str:
     election = globals().get("election") or __getattr__("election")
     if sys.platform == "win32":
         return election.pipe_name(token)
-    return str(election.socket_path(token))
+    keyed = _sidecar_keyed_clone()
+    if keyed is None:
+        return str(election.socket_path(token))
+    return str(election.socket_path(token, engine_clone=keyed))
+
+
+def _sidecar_keyed_clone() -> "Optional[Path]":
+    """The door sidecar's root when it is the only configured source, so the
+    endpoint is keyed on it; None keeps the import clone's key."""
+    if os.environ.get(CONFIGURED_ROOT_ENV, "").strip() or _settings_configured_root():
+        return None
+    root = _door_sidecar_root()
+    return Path(root) if root else None
 
 
 def _open_pipe(endpoint: str):
@@ -878,7 +943,7 @@ _MUTATION_INDETERMINATE_MESSAGE = (
     "Deliberately NOT retried and NOT re-run cold here: a mutation the engine "
     "IS executing, re-executed, is the double-execution this refusal prevents "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
-    "d4c7d9dc8e14.yaml)."
+    "d4c7d9dc8e14.yaml). Retry is NOT safe: reconcile first."
 )
 
 
@@ -902,7 +967,7 @@ _OP_TIMEOUT_INDETERMINATE_MESSAGE = (
     "Deliberately NOT retried here: re-executing a dispatched mutation whose "
     "outcome is unknown is exactly the double-execution this refusal prevents "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
-    "d4c7d9dc8e14.yaml)."
+    "d4c7d9dc8e14.yaml). Retry is NOT safe: reconcile first."
 )
 
 
@@ -919,7 +984,7 @@ _FIRE_AND_FORGET_INDETERMINATE_MESSAGE = (
     "NOT retried and NOT re-run cold here: the next cadence tick re-drives "
     "it, not a blind re-run "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
-    "d4c7d9dc8e14.yaml)."
+    "d4c7d9dc8e14.yaml). Retry is NOT safe: none is needed."
 )
 
 
@@ -991,7 +1056,7 @@ def _indeterminate_envelope(
     """
     text = _indeterminate_text_for(msg.get("method"))
     message = f"{text} ({detail})"
-    data: dict = {}
+    data: dict = {"retry_safe": False}
     if waited_secs is not None:
         data["diagnosis"] = {
             "case": "no_reply",
@@ -1173,6 +1238,13 @@ def _try_warm_dispatch_inner(
     if _live_tree_cold and token == "unversioned":
         # Unstamped clone: no server can exist for it and `_spawn_once` is
         # gated off, so everything below (identity, env, pipe open) is wasted.
+        _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
+        return None
+    if _configured_root_is_foreign():
+        # Decided before any connect: a foreign server has already executed
+        # the op by the time a response could name its root.
+        # Bucket is the spawn-triggering-miss label by reuse: no dedicated
+        # refusal bucket exists yet.
         _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
         return None
     pipe = _endpoint_name(token)

@@ -6,6 +6,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+from _roster_fixture import write_roster_fragment
+
 import pytest
 import yaml
 
@@ -47,6 +49,7 @@ def _fire(tmp_path, sizing, *extra):
     root = tmp_path / "doctrine" / "coordinator"
     (root / "workflows").mkdir(parents=True)
     (root / "workflows" / "plan-blitz.mjs").write_text("// stub\n", encoding="utf-8")
+    write_roster_fragment(root)
     (root / "agents").mkdir()
     return ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),
@@ -152,6 +155,7 @@ def _fire_second(tmp_path, monkeypatch, n):
     (tmp_path / sizing_rel).write_text(yaml.safe_dump(_sizing()), encoding="utf-8")
     (tmp_path / baton_rel).write_text(BATON.replace("hnd-1", f"hnd-{n}"), encoding="utf-8")
     (tmp_path / "doctrine/coordinator/workflows/plan-blitz.mjs").write_text("// stub\n", encoding="utf-8")
+    write_roster_fragment(tmp_path / "doctrine/coordinator")
     monkeypatch.setattr(
         ewf, "_load_mint",
         lambda: (lambda *a, **k: {"id": f"hnd-{n}", "path": baton_rel, "title": "Minted baton"}),

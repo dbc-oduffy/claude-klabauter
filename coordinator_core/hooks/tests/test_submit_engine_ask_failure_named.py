@@ -33,6 +33,25 @@ def test_exception_in_evaluate_denies_naming_class_and_message(tmp_path, monkeyp
     assert "is down" not in reason
 
 
+def test_refusal_denies_at_every_guard_level_with_its_reason(tmp_path, monkeypatch):
+    from coordinator_core import machine_profile as mp
+
+    monkeypatch.setattr(mod, "evaluate", lambda _p: mod._refuse("repo X is another checkout."))
+    for level in ("strict", "warn", "off"):
+        monkeypatch.setattr(mp, "guard_level", lambda _name, level=level: level)
+        env = mod._handler(_params(tmp_path, {"ask": "x"}))
+        assert _hso(env)["permissionDecision"] == "deny", level
+        assert "another checkout" in _hso(env)["permissionDecisionReason"], level
+
+
+def test_other_guard_still_lowers_at_warn(monkeypatch):
+    from coordinator_core import machine_profile as mp
+
+    monkeypatch.setattr(mp, "guard_level", lambda _name: "warn")
+    env = mp.apply_guard_level("some-ordinary-guard", mod._refuse("nope."))
+    assert _hso(env)["permissionDecision"] == "allow"
+
+
 def test_non_submission_still_passes_through_the_handler(tmp_path):
     params = _params(tmp_path, {"ask": "x"})
     params["tool_name"] = "Bash"

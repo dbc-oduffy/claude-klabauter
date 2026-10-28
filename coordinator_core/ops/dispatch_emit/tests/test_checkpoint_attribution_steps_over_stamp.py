@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.ops.dispatch_emit import checkpoint_stamp, terminal_commit
+from coordinator_core.ops.dispatch_emit import terminal_commit_checkpoints
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -75,7 +76,7 @@ def test_walk_attributes_a_checkpoint_behind_a_stamp_commit(repo):
     c2 = _checkpoint(repo, "docs/x/c2.txt", "C2")
     terminal = _commit(repo, "docs/x/t.txt", "t\n", "terminal")
 
-    out = terminal_commit._checkpoint_attribution(repo, terminal, _PLAN, _chunks())
+    out = terminal_commit_checkpoints._checkpoint_attribution(repo, terminal, _PLAN, _chunks())
 
     assert out == {"C1": c1, "C2": c2}
 
@@ -87,7 +88,7 @@ def test_walk_attributes_through_consecutive_stamps(repo):
     _stamp(repo, 2, c2)
     terminal = _commit(repo, "docs/x/t.txt", "t\n", "terminal")
 
-    out = terminal_commit._checkpoint_attribution(repo, terminal, _PLAN, _chunks())
+    out = terminal_commit_checkpoints._checkpoint_attribution(repo, terminal, _PLAN, _chunks())
 
     assert out == {"C1": c1, "C2": c2}
     assert s1 not in out.values()
@@ -99,7 +100,7 @@ def test_a_plain_commit_between_checkpoints_still_ends_the_walk(repo):
     c2 = _checkpoint(repo, "docs/x/c2.txt", "C2")
     terminal = _commit(repo, "docs/x/t.txt", "t\n", "terminal")
 
-    out = terminal_commit._checkpoint_attribution(repo, terminal, _PLAN, _chunks())
+    out = terminal_commit_checkpoints._checkpoint_attribution(repo, terminal, _PLAN, _chunks())
 
     assert out == {"C2": c2}
 

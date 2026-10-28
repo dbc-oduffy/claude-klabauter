@@ -181,8 +181,23 @@ def build_close_block(
     completion_entry: Any = None,
     *,
     kind: str = "plan-run",
+    parts: Any = None,
+    run_dir: Optional[Union[str, os.PathLike]] = None,
+    arm: Optional[str] = None,
+    tshirt: Optional[str] = None,
 ) -> dict[str, Any]:
     """Build ``{applies, kind, run_id, legs, outstanding, completion_entry}``.
+
+    *parts* is a ``run_truth_contract.Close``; when given the block also carries ``outcome``,
+    ``open_parts`` and ``missing_receipts``.
+
+    *run_dir* is the run's ``state/warp/<run_id>``: when its ``receipts/`` dir exists, a mandatory
+    stage (for *arm* and *tshirt*; unknown means every stage) with no receipt makes the block
+    ``outcome: refused`` and names each stage in ``missing_receipts``. A run with no ``receipts/``
+    dir predates the receipt writers: the block says ``receipts: not-applicable`` and never refuses.
+    Trap: no compose stage calls the writer op (``stage_receipts`` ``dispatch.write_receipt``) yet, so a run
+    whose receipts dir exists is refused for every mandatory stage no caller wrote, a false refusal of a
+    valid run.
 
     ``outstanding`` is every run-bound leg whose status is ``failed``. With ``applies``
     false every run-bound leg is ``not-applicable``. *kind* must be in ``CLOSE_KINDS``.
@@ -204,7 +219,7 @@ def build_close_block(
     for leg in SESSION_BOUND_LEGS:
         out[leg] = LegResult("session-bound").to_dict()
     outstanding = [leg for leg in RUN_BOUND_LEGS if out[leg]["status"] == "failed"]
-    return {
+    block: dict[str, Any] = {
         "applies": applies,
         "kind": kind,
         "run_id": run_id,
@@ -212,6 +227,39 @@ def build_close_block(
         "outstanding": outstanding,
         "completion_entry": completion_entry,
     }
+    if parts is not None:
+        from coordinator_core.ops.dispatch_emit.run_close_parts import with_parts
+
+        block = with_parts(block, parts)
+    if run_dir is not None:
+        if not (Path(run_dir) / "receipts").is_dir():
+            block["receipts"] = "not-applicable: run has no receipts dir (fired before the receipt writers)"
+        else:
+            from coordinator_core.ops.dispatch_emit import stage_receipts
+
+            gone = list(block.get("missing_receipts") or [])
+            gone += [s for s in stage_receipts.missing(run_dir, arm, tshirt) if s not in gone]
+            block["missing_receipts"] = gone
+            if gone:
+                block["outcome"] = "refused"
+    return block
+
+
+def receipt_inputs(sizing_text: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """``(arm, tshirt)`` of a sizing document for ``build_close_block``; unreadable or unsized is
+    ``(None, None)``, which makes every stage mandatory."""
+    if not sizing_text:
+        return None, None
+    try:
+        import yaml
+
+        doc = yaml.safe_load(sizing_text)
+        from coordinator_core.ops.dispatch_emit.sizing_fire import resolve_arm
+
+        est = doc.get("estimate") if isinstance(doc, dict) else None
+        return resolve_arm(doc), (est.get("tshirt") if isinstance(est, dict) else None)
+    except Exception:  # noqa: BLE001 -- an unreadable sizing must fail safe to every-stage-mandatory
+        return None, None
 
 
 def render_unreceipted(
@@ -565,6 +613,25 @@ def _read_json(path: Path) -> Optional[dict[str, Any]]:
 
 
 ROWS_COMMITTED_KEY = "rows_committed"
+STATUS_WRITE_KEY = "status_write"
+STATUS_WRITE_DEADLINE_MISSED = "deadline-missed"
+_MISSED: Any = object()
+
+
+def _status_write_missed(run_id: str, path: Path, phase: str) -> dict[str, Any]:
+    """The sibling_release reply when the status file's read or write missed its deadline.
+
+    Releases nothing: successor release is predicated on a status write nobody observed. A late
+    write may still land, so ``path`` is the file to re-read to reconcile.
+    """
+    return {
+        "released": [],
+        "blocked": [],
+        STATUS_WRITE_KEY: STATUS_WRITE_DEADLINE_MISSED,
+        "phase": phase,
+        "run_id": run_id,
+        "path": path.as_posix(),
+    }
 
 
 def sibling_release(
@@ -591,9 +658,13 @@ def sibling_release(
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
     from coordinator_core.session import claimed_write
 
+    from coordinator_core.bounded_io import run_bounded
+
     base = Path(root)
     own = base / contract.status_rel(run_id)
-    prior = _read_json(own)
+    prior = run_bounded(f"sibling-release-read:{own}", lambda: _read_json(own), default=_MISSED)
+    if prior is _MISSED:
+        return _status_write_missed(run_id, own, "read")
     if prior is None:
         return None
     if not landed_sha and prior.get("status") == contract.STATUS_LANDED:
@@ -613,7 +684,14 @@ def sibling_release(
             entry[contract.CLOSED_BY_KEY] = kept
     if isinstance(prior.get("parent_id"), str):
         entry["parent_id"] = prior["parent_id"]
-    claimed_write.replace_text(own, json.dumps(entry, sort_keys=True) + "\n")
+    payload = json.dumps(entry, sort_keys=True) + "\n"
+    wrote = run_bounded(
+        f"sibling-release-write:{own}",
+        lambda: claimed_write.replace_text(own, payload) or True,
+        default=_MISSED,
+    )
+    if wrote is _MISSED:
+        return _status_write_missed(run_id, own, "write")
 
     parent_id = entry.get("parent_id") or _own_parent_id(base, run_id, contract)
     parent_data = _read_json(base / contract.parent_record_rel(parent_id)) if parent_id else None
@@ -709,6 +787,9 @@ def close_halted_runs_for_plan(root: Path, plan_rel: str, sizing_rel: str) -> di
     for rid in dict.fromkeys(r for r in found if r):
         reply = sibling_release(base, rid, None, closed_by=plan_rel)
         if reply is None:
+            continue
+        if reply.get(STATUS_WRITE_KEY):
+            out.setdefault("unclosed", []).append({"run_id": rid, "path": reply["path"]})
             continue
         out["closed"].append(rid)
         out["released"].extend(x for x in reply["released"] if x not in out["released"])

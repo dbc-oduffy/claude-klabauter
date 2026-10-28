@@ -7,18 +7,16 @@ Recomputes the brief in-process, then dispatches its `directives[]` through
 per-directive judgment gating, session-identity propagation, and in-repo
 path safety all live in `apply_base`; this module supplies only its own
 closed `_CLI_DISPATCH` table (one handler per `cli` name
-`consolidate_assemble.brief` names: `delete-only`, `cherry-pick-and-delete`,
-`merge-and-delete`, `cherry-pick-only`, `merge-only`, `worktree-remove`, `worktree-prune`, `fetch-prune`) and
+`consolidate_assemble.brief` names: `delete-only`, `merge-and-delete`,
+`merge-only`, `merge-ours`, `worktree-remove`, `worktree-prune`, `fetch-prune`) and
 the git plumbing those handlers invoke.
 
 Every handler shells out to `git` via an explicit argv list through the
 module-local `_run_git` — never a shell string built from `directives[].
 args`. `COORDINATOR_OVERRIDE_BRANCH` (when it names the branch a
-`delete-only`/`*-and-delete` directive is about to remove) selects a force
-branch-delete (`git branch -D`) over the default safe delete (`git branch
--d`, which git itself refuses on an unmerged branch) — the one place this
-module's own mechanics differ from a bare default, and it is expressed as
-an env-var-selected argv flag, never a judgment bypass.
+`delete-only`/`*-and-delete` directive is about to remove) skips the
+tip-reachability and unknown-holder refusals; a definite live holder and
+`refs/preserve/*` still refuse. It is never a judgment bypass.
 
 Contract (frozen, reviewed): coordinator-content-repo coordinator/docs/wiki/computed-skills.md
 Spec backlink: coordinator-content-repo:pln-b4-baton-branch-lifecycle-comp-780d48, chunk C8
@@ -35,13 +33,9 @@ Negative-spec:
       real divergence back into `apply_base`'s parameters instead.
     - Do NOT trust a caller-supplied decision object as the mutation plan —
       `apply()` recomputes `brief()` itself.
-    - Do NOT clean up a failed cherry-pick with `git cherry-pick --abort`,
-      or `--quit` followed by a tree-wide `git reset --hard HEAD` / `git
-      checkout -- .` — `repo_root` is a SHARED working tree serving
-      50-70 concurrent sessions on this machine; any of those destroys
-      every peer session's uncommitted work across the whole repo, not
-      just this cherry-pick's damage. See `_clean_cherry_pick_conflict`,
-      which scopes the restore to exactly the paths git reports unmerged.
+    - Do NOT absorb by cherry-pick: absorb is a true merge, so no commit is
+      orphaned. A conflicted merge runs `git merge --abort`, keeps the
+      branch, and raises naming the ref.
 """
 from __future__ import annotations
 
@@ -88,69 +82,61 @@ def _fail(cli: str, proc: "subprocess.CompletedProcess[str]") -> None:
         )
 
 
-def _current_branch(repo_root: Path) -> str:
-    proc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root)
-    _fail("rev-parse", proc)
-    return proc.stdout.strip()
-
-
-def _unique_commit_shas(repo_root: Path, current: str, ref: str) -> list[str]:
-    proc = _run_git(["log", "--format=%H", "--reverse", f"{current}..{ref}"], repo_root)
-    _fail("log", proc)
-    return [line for line in proc.stdout.splitlines() if line.strip()]
-
-
 def _branch_exists_locally(name: str, repo_root: Path) -> bool:
     return _run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{name}"], repo_root).returncode == 0
 
 
 def _refuse_unmerged_tips(name: str, remote: bool, repo_root: Path) -> Optional[str]:
-    """None when every tip about to be deleted is reachable from
-    `origin/<base>`; else a refusal naming each unreachable tip and its
-    commit count. Counts by patch (`--cherry-pick`), so commits landed under
-    new SHAs count as landed. Spawns: one ref lookup + one `rev-list` per
-    distinct tip (local and remote usually share one)."""
+    """None when every tip about to be deleted is an ancestor of HEAD; else a
+    refusal naming each tip that is not. Spawns: one ref lookup + one
+    `merge-base --is-ancestor` per distinct tip (local and remote usually
+    share one)."""
     wanted = [f"refs/heads/{name}"] + ([f"refs/remotes/origin/{name}"] if remote else [])
-    probe = _run_git(
-        ["for-each-ref", "--format=%(refname) %(objectname)", *wanted,
-         "refs/remotes/origin/main", "refs/remotes/origin/master"],
-        repo_root,
-    )
+    probe = _run_git(["for-each-ref", "--format=%(refname) %(objectname)", *wanted], repo_root)
     _fail("for-each-ref", probe)
     refs = dict(line.split(" ", 1) for line in probe.stdout.splitlines() if " " in line)
-    base = next((f"origin/{b}" for b in ("main", "master") if f"refs/remotes/origin/{b}" in refs), None)
     tips = {r: refs[r] for r in wanted if r in refs}
-    if not tips:
-        return None
-    if base is None:
-        return f"{name}: no origin/main or origin/master to verify against"
-    counts: dict[str, str] = {}
+    reachable: dict[str, bool] = {}
     for sha in sorted(set(tips.values())):
-        proc = _run_git(
-            ["rev-list", "--cherry-pick", "--right-only", "--no-merges", "--count", f"{base}...{sha}"],
-            repo_root,
-        )
-        _fail("rev-list", proc)
-        counts[sha] = proc.stdout.strip()
+        proc = _run_git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_root)
+        if proc.returncode not in (0, 1):
+            _fail("merge-base", proc)
+        reachable[sha] = proc.returncode == 0
     parts = [
-        f"{ref.removeprefix('refs/')} {sha} has {counts[sha]} commits not in {base}"
+        f"{ref.removeprefix('refs/')} {sha} is not an ancestor of HEAD"
         for ref, sha in tips.items()
-        if counts[sha] != "0"
+        if not reachable[sha]
     ]
     return f"{name}: refusing delete: " + "; ".join(parts) if parts else None
+
+
+def _refuse_held_or_protected(name: str, repo_root: Path, force: bool = False) -> Optional[str]:
+    """A refusal when `name` is under refs/preserve/ or a live session may hold
+    it (a holder, or None = unknown; `force` waives only unknown); else None."""
+    if name.removeprefix("refs/").startswith("preserve/"):
+        return f"{name}: refusing delete: refs/preserve/* is never touched"
+    from coordinator_core.consolidate_assemble.live_holders import live_holders
+
+    holders = live_holders(_run_git, repo_root, [name]).get(name)
+    if holders is None:
+        if force:
+            return None
+        return f"{name}: refusing delete: refused-unknown, no live-holder answer for this branch"
+    if holders:
+        return f"{name}: refusing delete: held by {'; '.join(holders)}"
+    return None
 
 
 def _delete_branch(name: str, remote: bool, repo_root: Path) -> dict[str, Any]:
     import os
 
     force = os.environ.get("COORDINATOR_OVERRIDE_BRANCH", "") == name
-    if not force:
+    refusal = _refuse_held_or_protected(name, repo_root, force)
+    if refusal is None and not force:
         refusal = _refuse_unmerged_tips(name, remote, repo_root)
-        if refusal is not None:
-            raise RuntimeError(refusal)
-    # `-D` either way: `_refuse_unmerged_tips` has already proved every commit
-    # patch-equivalent in origin's main, which `-d`'s ancestry test cannot see
-    # once a cherry-pick re-minted the SHAs.
+    if refusal is not None:
+        raise RuntimeError(refusal)
+    # `-D`: `-d` tests ancestry against the branch's upstream, not HEAD.
     flag = "-D"
     detail: dict[str, Any] = {"local_deleted": None, "forced": force}
     if _branch_exists_locally(name, repo_root):
@@ -171,48 +157,6 @@ def _dispatch_delete_only(args: list[str], repo_root: Path) -> dict[str, Any]:
     return {"cli": "delete-only", **detail}
 
 
-def _clean_cherry_pick_conflict(repo_root: Path) -> None:
-    """On a failed multi-commit cherry-pick, restore ONLY the conflicted
-    paths to `HEAD` before clearing the sequencer with `--quit`.
-
-    `--quit` (per `git-cherry-pick(1)`) forgets the sequencer bookkeeping
-    ONLY — it does not touch the index or the working tree. Left alone, the
-    conflicted paths stay as unmerged index entries with live `<<<<<<<`
-    conflict markers written into the files on disk.
-
-    NEGATIVE-SPEC — do NOT replace this with `git cherry-pick --abort`, or
-    `--quit` followed by a tree-wide `git reset --hard HEAD` / `git checkout
-    -- .`. `repo_root` is a SHARED working tree serving 50-70 concurrent
-    sessions on this machine; any of those would discard every peer
-    session's uncommitted work across the ENTIRE repo, not just this
-    cherry-pick's damage. Scoping the restore to exactly the paths git
-    reports as unmerged is safe precisely because git already destroyed
-    those files' content with conflict markers — nothing further is lost by
-    resetting them to HEAD — while every other file, where peer sessions'
-    real uncommitted work lives, is never touched.
-
-    Order: enumerate + restore the conflicted paths FIRST, `--quit` second.
-    The sequencer state (`.git/sequencer/`) is independent bookkeeping from
-    the index/working-tree state these paths carry, so reading the unmerged
-    set before clearing it removes any risk of the enumeration racing its
-    own cleanup.
-    """
-    unmerged_proc = _run_git(["diff", "--name-only", "--diff-filter=U", "-z"], repo_root)
-    _fail("diff --diff-filter=U", unmerged_proc)
-    unmerged_paths = [p for p in unmerged_proc.stdout.split("\0") if p]
-    if unmerged_paths:
-        restore_proc = _run_git(["checkout", "HEAD", "--", *unmerged_paths], repo_root)
-        _fail("checkout-conflict-cleanup", restore_proc)
-    quit_proc = _run_git(["cherry-pick", "--quit"], repo_root)
-    if quit_proc.returncode != 0:
-        raise RuntimeError(
-            "cherry-pick --quit: exited "
-            f"{quit_proc.returncode}: "
-            f"{quit_proc.stderr.strip() or quit_proc.stdout.strip() or '<no output>'} "
-            "— sequencer left in place; clear it by hand with `git cherry-pick --quit`"
-        )
-
-
 def _refuse_machine_local_additions(ref: str, repo_root: Path) -> None:
     """Raise before any merge or pick when `ref` adds a machine-local path HEAD lacks.
     One three-dot diff per directive."""
@@ -227,40 +171,35 @@ def _refuse_machine_local_additions(ref: str, repo_root: Path) -> None:
         raise RuntimeError(f"{ref}: {refusal}")
 
 
-def _cherry_pick_unique(ref: str, repo_root: Path) -> list[str]:
-    _refuse_machine_local_additions(ref, repo_root)
-    current = _current_branch(repo_root)
-    shas = _unique_commit_shas(repo_root, current, ref)
-    if shas:
-        proc = _run_git(["cherry-pick", *shas], repo_root)
-        if proc.returncode != 0:
-            _clean_cherry_pick_conflict(repo_root)
-        _fail("cherry-pick", proc)
-    return shas
-
-
-def _dispatch_cherry_pick_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
-    name, ref = args[0], args[1]
-    remote = len(args) > 2 and args[2] == "origin"
-    shas = _cherry_pick_unique(ref, repo_root)
-    delete_detail = _delete_branch(name, remote, repo_root)
-    return {"cli": "cherry-pick-and-delete", "commits": shas, **delete_detail}
-
-
-def _dispatch_cherry_pick_only(args: list[str], repo_root: Path) -> dict[str, Any]:
-    """Absorb without deleting: the verb for a branch the recency floor keeps."""
-    return {"cli": "cherry-pick-only", "commits": _cherry_pick_unique(args[1], repo_root)}
-
-
 def _merge_ref(ref: str, repo_root: Path) -> None:
     # `--no-edit`: with no terminal the message editor fails AFTER the merge
     # result is staged, stranding MERGE_HEAD in a shared tree for the next
     # committer to consume. Any failure aborts, so no in-progress merge is left.
     _refuse_machine_local_additions(ref, repo_root)
-    merge_proc = _run_git(["merge", "--no-ff", "--no-edit", ref], repo_root)
+    _run_merge(["merge", "--no-ff", "--no-edit", ref], ref, repo_root)
+
+
+def _run_merge(argv: list[str], ref: str, repo_root: Path) -> None:
+    merge_proc = _run_git(argv, repo_root)
     if merge_proc.returncode != 0:
         _run_git(["merge", "--abort"], repo_root)
-    _fail("merge", merge_proc)
+        raise RuntimeError(
+            f"merge conflict or failure absorbing {ref}, merge aborted, branch kept: "
+            f"exited {merge_proc.returncode}: "
+            f"{merge_proc.stderr.strip() or merge_proc.stdout.strip() or '<no output>'}"
+        )
+
+
+def _dispatch_merge_ours(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """Record `ref` as merged without taking its content; `args` = name, ref,
+    superseding sha. Never deletes."""
+    ref, sha = args[1], args[2]
+    _run_merge(
+        ["merge", "-s", "ours", "--no-edit", "-m", f"absorb {ref}: superseded by {sha}", ref],
+        ref,
+        repo_root,
+    )
+    return {"cli": "merge-ours", "superseded_by": sha}
 
 
 def _dispatch_merge_and_delete(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -299,11 +238,11 @@ def _dispatch_fetch_prune(args: list[str], repo_root: Path) -> dict[str, Any]:
 #: C6 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
 #: a-cli.md § C6 / § The discriminator for the mixed end state) — measured
 #: live against `coordinator_core.authz.registration_quad._live_registry()`
-#: this chunk: NONE of consolidate's six verbs (`delete-only`,
-#: `cherry-pick-and-delete`, `merge-and-delete`, `cherry-pick-only`,
-#: `merge-only`, `worktree-remove`, `worktree-prune`, `fetch-prune`) resolve to a registered op, so ALL SIX
+#: this chunk: NONE of consolidate's verbs (`delete-only`,
+#: `merge-and-delete`, `merge-only`, `merge-ours`, `worktree-remove`,
+#: `worktree-prune`, `fetch-prune`) resolve to a registered op, so ALL
 #: stay `cli`-named — none migrate to `op`. No new op is minted to force a
-#: migration (out of scope by name). Every one of the six is a `git`
+#: migration (out of scope by name). Every one of them is a `git`
 #: plumbing call the module's own `_run_git` makes directly off a
 #: hardcoded `["git", ...]` argv — never `bash`/`sh`, so
 #: `docs/reference/shell-out-carve-outs.md` (scoped to interpreter/shell
@@ -318,10 +257,9 @@ def _dispatch_fetch_prune(args: list[str], repo_root: Path) -> dict[str, Any]:
 #: by hand, matching `consolidate_assemble.brief`'s `directives[].cli` values.
 _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "delete-only": _dispatch_delete_only,
-    "cherry-pick-and-delete": _dispatch_cherry_pick_and_delete,
     "merge-and-delete": _dispatch_merge_and_delete,
-    "cherry-pick-only": _dispatch_cherry_pick_only,
     "merge-only": _dispatch_merge_only,
+    "merge-ours": _dispatch_merge_ours,
     "worktree-remove": _dispatch_worktree_remove,
     "worktree-prune": _dispatch_worktree_prune,
     "fetch-prune": _dispatch_fetch_prune,
@@ -334,6 +272,7 @@ def apply(
     repo_root: Optional[Path] = None,
     my_email: Optional[str] = None,
     decisions: Optional[dict[str, Any]] = None,
+    superseded: Optional[dict[str, str]] = None,
 ) -> tuple[int, dict[str, Any]]:
     root = repo_root or Path.cwd()
     composition_budget = make_fleet_budget("consolidate_assemble")
@@ -352,7 +291,7 @@ def apply(
 
     with _session_identity(resolved_sid, env_vars=apply_base.SESSION_ENV_VARS):
         try:
-            decision = brief(repo_root=root, my_email=my_email)
+            decision = brief(repo_root=root, my_email=my_email, superseded=superseded)
         except Exception as exc:  # noqa: BLE001 - transport-failure backstop
             return APPLY_EXIT_TRANSPORT_FAIL, {"error": str(exc)}
 
@@ -380,11 +319,12 @@ def apply(
         return exit_code, report
 
 
-_APPLY_HELP = """usage: {prog} apply [--session-id <id>] [--decisions <json> | --decisions-file <path>]
+_APPLY_HELP = """usage: {prog} apply [--session-id <id>] [--superseded <branch>=<sha>]... [--decisions <json> | --decisions-file <path>]
 
 Recomputes the brief and executes its directives.
 
   --session-id <id>         session identity; falls back to the session env vars
+  --superseded <branch>=<sha>  repeat the brief's flag so its merge-ours directive is recomputed
   --decisions <json>        judgment-point answers, inline JSON
   --decisions-file <path>   judgment-point answers read from a JSON file
                             (exclusive with --decisions)
@@ -402,6 +342,7 @@ def _usage(prog: str) -> int:
 def main_apply(argv: list[str]) -> int:
     session_id: Optional[str] = None
     decisions: Optional[dict[str, Any]] = None
+    superseded: dict[str, str] = {}
     if any(tok in ("--help", "-h") for tok in argv):
         print(_APPLY_HELP.format(prog="consolidate-assemble"))
         return APPLY_EXIT_OK
@@ -417,6 +358,12 @@ def main_apply(argv: list[str]) -> int:
                 return _usage("consolidate-assemble")
             session_id = argv[i + 1]
             i += 2
+        elif tok == "--superseded":
+            branch, sep, sha = (argv[i + 1] if i + 1 < len(argv) else "").partition("=")
+            if not sep or not branch or not sha:
+                return _usage("consolidate-assemble")
+            superseded[branch] = sha
+            i += 2
         elif (payload := resolve_json_payload_flag(argv, i)).consumed:
             if payload.error is not None:
                 print(f"consolidate-assemble apply: {payload.error}", file=sys.stderr)
@@ -427,6 +374,6 @@ def main_apply(argv: list[str]) -> int:
             print(f"consolidate-assemble apply: unrecognized argument {tok!r}", file=sys.stderr)
             return _usage("consolidate-assemble")
 
-    exit_code, report = apply(session_id=session_id, decisions=decisions)
+    exit_code, report = apply(session_id=session_id, decisions=decisions, superseded=superseded)
     print(json.dumps(report, indent=2, sort_keys=True))
     return exit_code

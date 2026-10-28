@@ -103,28 +103,28 @@ def _commit(root, path, content):
     return git_native.commit_authored_content(path, content, msg, root)
 
 
-def test_growth_past_a_skill_limit_is_refused_with_the_guard_lines(tmp_path):
+def test_growth_past_a_skill_limit_lands_and_is_advisory(tmp_path):
     root = _doe_repo(tmp_path)
     before = _head(root)
     result = _commit(root, "coordinator/skills/s0/SKILL.md", "x" * 500)
-    assert not result.ok
-    assert "[skill-weight-budget-guard] commit refused: skill growth over budget" in result.stderr
-    assert "  skill s0: 500 B (+450)" in result.stderr
-    assert _head(root) == before
+    assert result.ok
+    assert _head(root) != before
 
 
-def test_fleet_overrun_is_refused(tmp_path):
+def test_fleet_overrun_is_advisory(tmp_path):
     root = _doe_repo(tmp_path, fleet_limit=160)
-    result = _commit(root, "coordinator/skills/s1/SKILL.md", "x" * 90)
-    assert not result.ok
-    assert "fleet resident" in result.stderr
+    new = {"coordinator/skills/s1/SKILL.md": (0o100644, _blob(root, "x" * 90))}
+    refusal, note = commit_admission.skill_weight_check(root, new)
+    assert refusal is None
+    assert "fleet resident" in note
 
 
-def test_a_new_skill_over_its_limit_is_refused(tmp_path):
+def test_a_new_skill_over_its_limit_is_advisory(tmp_path):
     root = _doe_repo(tmp_path)
     new = {"coordinator/skills/fresh/SKILL.md": (0o100644, _blob(root, "x" * 500))}
-    refusal = commit_admission.skill_weight_check(root, new)[0]
-    assert refusal is not None and "skill fresh" in refusal
+    refusal, note = commit_admission.skill_weight_check(root, new)
+    assert refusal is None
+    assert "skill fresh" in note
 
 
 def test_a_shrink_and_an_unrelated_path_are_admitted(tmp_path):
@@ -181,11 +181,13 @@ def test_a_plumbing_failure_admits_with_a_note(tmp_path, caplog):
     assert "boom" in note
 
 
-def test_a_verdict_never_yields_a_note_and_an_admit_yields_neither(tmp_path):
+def test_an_over_budget_measure_yields_a_warning_note_and_an_admit_yields_neither(tmp_path):
     root = _doe_repo(tmp_path)
     over = {"coordinator/skills/s0/SKILL.md": (0o100644, _blob(root, "x" * 500))}
     refusal, note = commit_admission.skill_weight_check(root, over)
-    assert refusal is not None and note is None
+    assert refusal is None
+    assert note.startswith("[skill-weight-budget-guard] over budget (advisory)")
+    assert "  skill s0: 500 B (+450)" in note
     shrunk = {"coordinator/skills/s0/SKILL.md": (0o100644, _blob(root, "x" * 10))}
     assert commit_admission.skill_weight_check(root, shrunk) == (None, None)
 
@@ -216,14 +218,14 @@ def _v2(root, path):
     )
 
 
-def test_commit_v2_refuses_a_growth_and_moves_no_ref(tmp_path):
+def test_commit_v2_lands_a_growth_with_a_warning(tmp_path):
     root = _doe_repo(tmp_path)
     before = _head(root)
     (root / "coordinator/skills/s0/SKILL.md").write_text("x" * 500, encoding="utf-8")
     result = _v2(root, "coordinator/skills/s0/SKILL.md")
-    assert result["committed"] is False
-    assert "  skill s0: 500 B (+450)" in result["error"]
-    assert _head(root) == before
+    assert result["committed"] is True, result.get("error")
+    assert any("  skill s0: 500 B (+450)" in w for w in result["warnings"])
+    assert _head(root) != before
 
 
 def test_commit_v2_lands_and_warns_when_the_check_could_not_run(tmp_path):
@@ -255,17 +257,15 @@ def test_a_crlf_skill_whose_lf_blob_fits_is_admitted(tmp_path, attributes):
 
 
 @pytest.mark.parametrize("attributes", [None, "* text=auto\n"], ids=["no-attr", "text-auto"])
-def test_a_crlf_skill_whose_lf_blob_is_over_the_limit_is_refused(tmp_path, attributes):
+def test_a_crlf_skill_whose_lf_blob_is_over_the_limit_warns_with_the_blob_size(tmp_path, attributes):
     root = _doe_repo(tmp_path)
     _git(["config", "core.autocrlf", "true"], root)
     if attributes:
         (root / ".gitattributes").write_text(attributes, encoding="utf-8")
-    before = _head(root)
     (root / _SKILL_REL).write_bytes(_crlf_lines(60))  # 180 B as an LF blob
     result = _v2(root, _SKILL_REL)
-    assert result["committed"] is False
-    assert "  skill s0: 180 B (+130)" in result["error"]
-    assert _head(root) == before
+    assert result["committed"] is True, result.get("error")
+    assert any("  skill s0: 180 B (+130)" in w for w in result["warnings"])
 
 
 def test_commit_v2_non_triggering_commit_carries_no_warning(tmp_path):
@@ -296,7 +296,23 @@ def test_a_baseline_limit_raise_is_refused_and_a_lowering_admitted(tmp_path):
     raised = json.dumps({"fleet": {"resident_limit": 200_000}, "exceptions": {}})
     result = _commit(root, _BASELINE_REL, raised)
     assert not result.ok
+    assert "[skill-weight-budget-guard] commit refused" in result.stderr
     assert "limit-raise fleet.resident_limit: 100000 B -> 200000 B (+100000)" in result.stderr
     assert _head(root) == before
     lowered = json.dumps({"fleet": {"resident_limit": 90_000}, "exceptions": {}})
     assert _commit(root, _BASELINE_REL, lowered).ok
+
+
+def test_commit_v2_refuses_a_baseline_limit_raise_while_warning_on_growth(tmp_path):
+    root = _doe_repo(tmp_path, fleet_limit=100_000)
+    _write(root, _ADMISSION_REL, _ADMISSION + _LIMIT_RAISES)
+    _git(["add", _ADMISSION_REL], root)
+    _git(["commit", "-q", "-m", "lock"], root)
+    before = _head(root)
+    (root / _BASELINE_REL).write_text(
+        json.dumps({"fleet": {"resident_limit": 200_000}, "exceptions": {}}), encoding="utf-8"
+    )
+    result = _v2(root, _BASELINE_REL)
+    assert not result.get("committed")
+    assert "limit-raise fleet.resident_limit" in str(result.get("error"))
+    assert _head(root) == before

@@ -86,6 +86,32 @@ def test_same_plan_checkpoint_with_an_off_chain_base_is_foreign(tmp_path: Path) 
     assert [f.reason for f in _findings(tmp_path, base, PLAN)] == [SINCE_BASE_OVERLAP]
 
 
+RUN = "run-own-1"
+EMIT_SHA = "e51c5e50ccff2c5204abee9a6b037a4660afca77"
+
+
+def _record_manifest(root: Path, run_id: str, head_sha: str) -> None:
+    d = root / "state" / "warp" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "manifest.json").write_text(f'{{"head_sha": "{head_sha}"}}', encoding="utf-8")
+
+
+def test_checkpoint_stamped_with_a_base_the_runs_record_names_is_own(tmp_path: Path) -> None:
+    base = _scenario(tmp_path, lambda peer: _trailers(PLAN, EMIT_SHA) + "\nCheckpoint-Not-Landed: run-open")
+    _record_manifest(tmp_path, RUN, EMIT_SHA)
+
+    assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=RUN, plan=PLAN) == []
+
+
+def test_same_plan_not_landed_checkpoint_of_another_run_is_still_foreign(tmp_path: Path) -> None:
+    base = _scenario(tmp_path, lambda peer: _trailers(PLAN, EMIT_SHA) + "\nCheckpoint-Not-Landed: run-open")
+    _record_manifest(tmp_path, RUN, "a" * 40)
+
+    findings = since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=RUN, plan=PLAN)
+
+    assert [f.reason for f in findings] == [SINCE_BASE_OVERLAP]
+
+
 def test_without_a_plan_only_the_exact_run_base_is_own(tmp_path: Path) -> None:
     base = _scenario(tmp_path, lambda peer: _trailers(PLAN, peer[:12]))
 

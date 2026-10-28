@@ -14,7 +14,7 @@ On success the marker is rewritten ``status: superseded`` with ``superseded_evid
 (superseded paths only: the newest post-halt commit touching the path) and ``path_dispositions`` (every path),
 and the run leaves the halt-withheld index. It never marks a run landed. Three git spawns: ``rev-list`` (anchor),
 ``log --name-only``, ``cat-file --batch-check`` (HEAD, kept and anchor blobs in one batch).
-Legacy route: taken ONLY when the halt has neither a kept file nor a withheld-prints file (written before both); a
+Legacy route (anchored at the commit that first added halted.json when one exists, else the halt anchor): taken ONLY when the halt has neither a kept file nor a withheld-prints file (written before both); a
 present but unreadable, malformed or blob-less one refuses fail-closed. A withheld path whose newest post-halt touch
 is a deletion refuses, evidence sha or not. It takes ``evidence_shas`` (list of full shas,
 required): each must be an ancestor of HEAD and touch a withheld path in ``<halt_anchor>..HEAD``, none may have
@@ -203,17 +203,34 @@ def _all_ancestors_of_head(root: Path, shas: list) -> Optional[str]:
     return None
 
 
+def _first_record_anchor(root: Path, run_id: str) -> tuple:
+    """``(sha, None)`` of the commit that first added the run's ``halted.json`` (the halt as first recorded), or
+    ``(None, reason)`` when none is committed. A later revision of the record or run-stage stamp can postdate the shipping commits."""
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    rel = (ask_contract.record_dir(root, run_id) / halted_run.HALTED_FILE).relative_to(root).as_posix()
+    proc = run_git(["log", "--diff-filter=A", "--format=%H", "--", rel], cwd=str(root))
+    shas = proc.stdout.split() if proc.returncode == 0 else []
+    if shas and _SHA40.fullmatch(shas[-1]):
+        return shas[-1], None
+    return None, f"{run_id} has no commit that added its halt record; the halt is unanchored"
+
+
 def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: list, params: dict) -> dict:
     """Close a halt that predates kept blobs: every withheld path must be touched in ``<anchor>..HEAD`` and
-    covered by a caller-named evidence commit that is an ancestor of HEAD. Three git spawns."""
+    covered by a caller-named evidence commit that is an ancestor of HEAD, with HEAD's blob differing from the
+    blob at the anchor. Three git spawns."""
     from coordinator_core.ops.dispatch_emit import halted_run, halted_withheld_index
 
     shas, why = _evidence_shas(params)
     if shas is None:
         return _refuse(why)
-    anchor, why = _halt_anchor(root, run_id)
+    anchor, _ = _first_record_anchor(root, run_id)
     if anchor is None:
-        return _refuse(why)
+        anchor, why = _halt_anchor(root, run_id)
+        if anchor is None:
+            return _refuse(why)
     why = _all_ancestors_of_head(root, shas)
     if why:
         return _refuse(why)
@@ -221,13 +238,14 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
     if touching is None:
         return _refuse(f"git log over {anchor[:12]}..HEAD failed; retry")
     scratchy = [p for p in paths if p not in touching and _is_scratch_path(p)]
-    head, base = {}, {}
-    if scratchy:
-        ids = _blob_ids(root, [f"HEAD:{p}" for p in scratchy] + [f"{anchor}:{p}" for p in scratchy])
-        if ids is None:
-            return _refuse("git cat-file failed; retry")
-        head = dict(zip(scratchy, ids))
-        base = dict(zip(scratchy, ids[len(scratchy):]))
+    probed = scratchy + [p for p in paths if p in touching]
+    ids = _blob_ids(root, [f"HEAD:{p}" for p in probed] + [f"{anchor}:{p}" for p in probed])
+    if ids is None:
+        return _refuse("git cat-file failed; retry")
+    head_all = dict(zip(probed, ids))
+    base_all = dict(zip(probed, ids[len(probed):]))
+    head = {p: head_all[p] for p in scratchy}
+    base = {p: base_all[p] for p in scratchy}
     dispositions, bad = _classify_paths(paths, touching, head, {}, base, anchor)
     if bad:
         return _refuse_unclassified(bad)
@@ -247,6 +265,8 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
         deleted = next((s for s, st in touching[p] if s in given and st == "D"), None)
         if deleted:
             return _refuse(f"evidence sha {deleted[:12]} deleted withheld {p}; a deletion is not shipping it")
+        if head_all[p] == base_all[p]:
+            return _refuse(f"HEAD's blob of withheld {p} equals its blob at the halt ({anchor[:12]}); touched then reverted is not shipped")
         evidence[p] = hit
         dispositions[p]["sha"] = hit
     unused = sorted(given - {s for p in paths for s, _ in touching.get(p, ())})

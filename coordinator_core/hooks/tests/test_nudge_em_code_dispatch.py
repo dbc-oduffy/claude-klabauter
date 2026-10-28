@@ -1,4 +1,6 @@
 
+"""`nudge_em_code_dispatch.op` routing: the unsized refusal is a logged advisory, not a deny."""
+
 from __future__ import annotations
 
 import os
@@ -272,9 +274,10 @@ def test_unsized_advises_and_repeats_at_warn(monkeypatch) -> None:
 def test_unsized_denies_at_strict(monkeypatch) -> None:
     _unsized(monkeypatch)
     _level(monkeypatch, "strict")
-    out = op(_payload())["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    assert "coordinator:engine-ask" in out["permissionDecisionReason"]
+    result = op(_payload())
+    out = result["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow" and result["guardLevel"] == "log"
+    assert "coordinator:engine-ask" in out["additionalContext"]
 
 
 def test_sized_advises_at_strict(monkeypatch) -> None:
@@ -350,7 +353,7 @@ def test_autonomous_does_not_skip_sizing(monkeypatch) -> None:
     _unsized(monkeypatch)
     _level(monkeypatch, "strict")
     monkeypatch.setattr(_mod, "resolve_mode", lambda k, sid: True)
-    assert op(_payload())["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert op(_payload())["guardLevel"] == "log"
 
 
 def test_empty_sentinel_still_advises(monkeypatch) -> None:

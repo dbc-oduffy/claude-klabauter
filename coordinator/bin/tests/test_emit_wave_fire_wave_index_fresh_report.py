@@ -6,6 +6,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+from _roster_fixture import write_roster_fragment
+
 import pytest
 
 _BIN = Path(__file__).resolve().parents[1]
@@ -28,6 +30,7 @@ def _run(tmp_path, report_name, *extra):
     root = tmp_path / "doctrine" / "coordinator"
     (root / "workflows").mkdir(parents=True, exist_ok=True)
     (root / "workflows" / "plan-blitz.mjs").write_text("// stub\n", encoding="utf-8")
+    write_roster_fragment(root)
     return ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(trail),
         "--plugin-root", str(root), "--live-engine-tree", *extra,

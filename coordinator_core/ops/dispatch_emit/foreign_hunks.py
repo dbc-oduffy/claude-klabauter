@@ -9,6 +9,7 @@ through ``kept_work.checkin_form``; a refused lift contributes nothing.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -79,8 +80,7 @@ def _unattributed(root: Path, common_dir: Path, path: str) -> List[str]:
 
 
 def _sort_key(header: str):
-    nums = header.replace("@@", "").replace("-", " ").replace("+", " ").replace(",", " ").split()
-    return tuple(int(n) for n in nums)
+    return tuple(int(n) for n in re.findall(r"\d+", header))
 
 
 def foreign_hunks(
@@ -91,9 +91,10 @@ def foreign_hunks(
     ``attributed`` means the headers were read from the holder's own record (``run_base_sha`` blob
     against its ``kept.json`` blobs): the hunks the holder's recorded blob carries, not proof the
     holder wrote them. Kept and worktree bytes are raw and are lifted with ``kept_work.checkin_form``
-    before diffing against base/HEAD blobs (checkin form). Otherwise headers are HEAD against the worktree bytes on the path. Headers
-    are capped at ``cap`` and carry the uncapped count as ``.total``. Never raises; an unreadable
-    record, object or file contributes nothing for that pair."""
+    before diffing against base/HEAD blobs (checkin form). Otherwise headers are HEAD against the
+    worktree bytes on the path. Headers are capped at ``cap`` and carry the uncapped count as
+    ``.total``. Never raises; an unreadable record, object or file contributes nothing for that
+    pair."""
     out: list[tuple[str, str, list[str], bool]] = []
     try:
         root = Path(worktree_root)

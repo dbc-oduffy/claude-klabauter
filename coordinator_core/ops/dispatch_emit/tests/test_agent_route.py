@@ -339,3 +339,84 @@ def test_fixture_tables_conform_to_doe_schema(env):
         jsonschema.validate(table, schema)
         _write(env, table)
         assert ar.load_route_table(env) is not None
+
+
+_DEFAULTS = {
+    "plan": "coordinator:plan-author",
+    "plan_review": "coordinator:staff-eng",
+    "code_review": "coordinator:code-reviewer",
+}
+GAME = "game-dev:staff-game-dev"
+
+
+def _local_md(repo, body):
+    (repo / "coordinator.local.md").write_text(body, encoding="utf-8")
+
+
+def _stages(repo, ask="refactor the thing", writes=()):
+    return ar.resolve_stage_agents(repo, ask_text=ask, writes=writes, defaults=_DEFAULTS)
+
+
+def test_stage_agents_no_table_no_review_routing_is_defaults(env):
+    assert _stages(env) == {s: (d, "default") for s, d in _DEFAULTS.items()}
+
+
+def test_stage_agents_table_level_routes_plan_review_only(env):
+    _write(env, _table(stage_agents={"plan_review": GAME}))
+    out = _stages(env)
+    assert out["plan_review"] == (GAME, "table")
+    assert out["plan"] == (_DEFAULTS["plan"], "default")
+    assert out["code_review"] == (_DEFAULTS["code_review"], "default")
+
+
+def test_stage_agents_work_class_wins_over_table(env):
+    table = _table(stage_agents={"code_review": "x:table-reviewer"})
+    table["work_classes"][0]["stage_agents"] = {"code_review": GAME}
+    _write(env, table)
+    assert _stages(env, writes=["Content/A.uasset"])["code_review"] == (GAME, "work-class:ue-editor")
+    assert _stages(env, ask="Blueprint rework")["code_review"] == (GAME, "work-class:ue-editor")
+    assert _stages(env, ask="docs only")["code_review"] == ("x:table-reviewer", "table")
+
+
+def test_stage_agents_review_routing_alone_routes_reviews_not_plan(env):
+    _local_md(env, f"---\nreview_routing: {GAME}\n---\nbody\n")
+    out = _stages(env)
+    assert out["plan_review"] == (GAME, "review_routing")
+    assert out["code_review"] == (GAME, "review_routing")
+    assert out["plan"] == (_DEFAULTS["plan"], "default")
+
+
+def test_stage_agents_table_beats_review_routing(env):
+    _local_md(env, f"---\nreview_routing: {GAME}\n---\n")
+    _write(env, _table(stage_agents={"code_review": "x:table-reviewer"}))
+    out = _stages(env)
+    assert out["code_review"] == ("x:table-reviewer", "table")
+    assert out["plan_review"] == (GAME, "review_routing")
+
+
+@pytest.mark.parametrize("value", ["staff-game-dev", "a:b:c", "has space:x"])
+def test_malformed_review_routing_raises(env, value):
+    _local_md(env, f"---\nreview_routing: {value}\n---\n")
+    with pytest.raises(ar.RouteTableError, match="review_routing"):
+        _stages(env)
+
+
+def test_review_routing_absent_cases_return_none(env):
+    assert ar.read_review_routing(env) is None
+    _local_md(env, "---\nother: 1\n---\n")
+    assert ar.read_review_routing(env) is None
+    _local_md(env, "no frontmatter\nreview_routing: a:b\n")
+    assert ar.read_review_routing(env) is None
+    _local_md(env, "---\nreview_routing: 'a:b'\n---\n")
+    assert ar.read_review_routing(env) == "a:b"
+
+
+def test_unknown_stage_agents_key_raises(env):
+    _write(env, _table(stage_agents={"planning": GAME}))
+    with pytest.raises(ar.RouteTableError, match="stage_agents"):
+        ar.load_route_table(env)
+    table = _table()
+    table["work_classes"][0]["stage_agents"] = {"bogus": GAME}
+    _write(env, table)
+    with pytest.raises(ar.RouteTableError, match=r"work_classes\[0\]\.stage_agents"):
+        ar.load_route_table(env)

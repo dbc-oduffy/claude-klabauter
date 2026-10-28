@@ -6,12 +6,10 @@ registry value wins; absent, the box is ``author`` when any registered
 else ``consumer``.
 
 ``coordinator.guard_level`` is ``strict``, ``warn`` or ``off``, with a
-per-guard override ``coordinator.guard_level.<guard-name>``. Absent, a
-``GUARD_DEFAULT_LEVEL`` guard takes its entry; otherwise it follows the profile:
-``strict`` on an author box, ``warn`` on a consumer box. Warn is a consumer
-courtesy; the box that builds coordinator holds the standard.
-``FLOOR_GUARDS`` (irreversible-harm guards and the consumed-handoff freeze)
-never consult it.
+per-guard override ``coordinator.guard_level.<guard-name>``; ``guard_level``
+reads it. It no longer decides a deny: ``resolved_level`` returns ``floor`` for
+a guard registered in ``deny_registry`` and ``log`` for every other guard, so a
+guard outside the registry never refuses work at any level or profile.
 
 Reads go through the in-process registry reader
 (``machine_resolver.registry_get``): no subprocess, no ``machine-local`` CLI.
@@ -31,9 +29,8 @@ scoped commits in a foreign repo. It mirrors coordinator-content-repo's
 ``coordinator/hooks/scripts/_machine_profile.py`` ``_FEATURE_DEFAULT``, which
 must agree.
 ``coordinator.feature.out_of_repo_write_block`` is ``on`` for an author box and
-``off`` for a consumer box: with it on, the ``OUT_OF_REPO_WRITE_GUARDS`` deny
-(an EM write to a destination outside the session repo) holds at every
-``guard_level``, so neither ``warn`` nor ``off`` lowers it.
+``off`` for a consumer box; the bump guards read it to decide whether a marker
+clears their verdict. It never makes a guard deny.
 
 Change the level with ``machine-local set coordinator.guard_level warn``
 (or ``strict`` / ``off``); one guard with
@@ -46,7 +43,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from coordinator_core import machine_resolver
+from coordinator_core import deny_registry, machine_resolver
 
 PROFILE_KEY = "coordinator.machine_profile"
 LEVEL_KEY = "coordinator.guard_level"
@@ -226,8 +223,7 @@ def guard_level(guard_name: str) -> str:
     """``strict``, ``warn`` or ``off`` for ``guard_name``.
 
     Per-guard key, then the guard's ``GUARD_DEFAULT_LEVEL`` entry, then the
-    global key; absent all three, ``strict`` on an author box and ``warn`` on a
-    consumer box.
+    global key; absent all three, ``warn`` on every profile.
     """
     slot = _slot()
     memo = "level:" + guard_name
@@ -238,79 +234,20 @@ def guard_level(guard_name: str) -> str:
         _explicit(LEVEL_KEY + "." + guard_name, LEVELS)
         or GUARD_DEFAULT_LEVEL.get(guard_name)
         or _explicit(LEVEL_KEY, LEVELS)
-        or ("strict" if machine_profile() == "author" else "warn")
+        or "warn"
     )
     slot[memo] = level
     return level
 
 
-#: Per-guard unset default that outranks the global ``coordinator.guard_level``.
-#: Not the floor: the per-guard key still lowers these.
-GUARD_DEFAULT_LEVEL = {
-    # PM ruling 2026-10-04: a fast/full suite run for a one-line change is the
-    # waste this guard exists to stop, so a box-wide `warn` must not open it.
-    "check-test-suite-invocation": "strict",
-    # PM ruling 2026-10-10: blocks. A warning reads as permission to proceed.
-    "guard-heavy-command-admission": "strict",
-    # PM ruling R1 2026-10-15: a cap warning everyone ignores does not hold the cap.
-    "guard-memory-store-cap": "strict",
-}
+#: Per-guard unset default for ``guard_level``. Empty: ``resolved_level`` clamps
+#: every unregistered guard to ``log``, so no default can raise one to a deny.
+GUARD_DEFAULT_LEVEL: Dict[str, str] = {}
 
-#: Guards whose deny is floor for a dispatched caller only: no level lowers it
-#: for a subagent, while the EM's deny still follows ``guard_level``.
-SUBAGENT_FLOOR_GUARDS = frozenset({
-    "check-test-suite-invocation",
-    # A subagent's UE build or editor run overlaps the EM's slot; the prose rule already failed
-    # once (DoE bug 763a311d4442), so a box-wide `warn` must not reopen it.
-    "guard-subagent-heavy-ue-launch",
-})
-
-
-#: Guards whose deny prevents irreversible harm; ``apply_guard_level`` returns
-#: their deny unchanged at every level.
-FLOOR_GUARDS = frozenset(
-    {
-        "destructive-git-orphan",  # orphans unreferenced commits and uncommitted work, unrecoverable
-        "destructive-rm",  # recursive delete has no undo
-        "destructive-git-clean",  # removes untracked files git never stored
-        "destructive-git-revert",  # discards working-tree changes git never committed
-        "block-subagent-destructive-action",  # a subagent's destructive act on a shared tree
-        "block-stash-destruction",  # drop/clear of a stash loses the only copy
-        "block-topic-branch",  # fleet rule: commit only to the day branch; a level must not lower it
-        "block-perforce-submit",  # PM box policy: nothing is submitted or shelved to Perforce
-        "block-external-workspace-vcs-write",  # PM: no commit in someone else's registered code
-        "block-unreal-engine-resave",  # an engine-content rewrite needs a launcher Verify to undo
-        "block-editor-kill-by-name",  # a name-based kill takes down every session's editor
-        # PM-ratified invariant, never let it through (git-revertible, so not irreversible harm):
-        # docs/wiki/pretooluse-write-guards.md § Guard policy permanence
-        "block-consumed-handoff-edit",
-        # a demotable sentinel guard lets an agent lower the level that gates it
-        "block-approval-sentinel-creation",
-        # PM load norm (CLAUDE.md § Load norm): a whole-drive scan occupies the box for
-        # tens of minutes and runs on orphaned after a tool timeout
-        "block-whole-filesystem-scan",
-        # PM load norm (CLAUDE.md § Load norm): concurrent unscoped test runs, builds and dev
-        # servers took the box down; a level must not reopen it (PM ruling 2026-10-10)
-        "guard-heavy-command-admission",
-        # group-em-b7 (G-EM, PM-delegated) strict-by-default ruling after three cell kills under
-        # warn: a post-fire EM product write is an executor write, so no level may advise it
-        "block-em-post-fire-product-write",
-    }
-)
-
-
-#: Guards whose deny holds at every level while ``out_of_repo_write_block`` is on.
-OUT_OF_REPO_WRITE_GUARDS: frozenset[str] = frozenset(
-    {
-        "bump-foreign-repo-write",
-        "bump-outside-repo-write",
-        "bump-out-of-repo-tool-write",
-        "block-drive-root-new-dir-bash-write",
-        "block-drive-root-new-dir-write",
-        "block-home-root-bash-write",
-        "block-home-root-write",
-    }
-)
+#: Derived views of ``deny_registry``: the guards whose deny ``apply_guard_level``
+#: returns unchanged. The registry is the only place to add one.
+FLOOR_GUARDS = frozenset(deny_registry.GUARD_DENY_CLASS)
+SUBAGENT_FLOOR_GUARDS = frozenset(deny_registry.SUBAGENT_DENY_CLASS)
 
 
 def _deny_body(envelope: Any) -> Optional[Dict[str, Any]]:
@@ -343,6 +280,29 @@ def advisory_tail(name: str) -> str:
     )
 
 
+#: Top-level key on a returned envelope naming the level that decided it
+#: (``floor`` or ``log``), so a canary reads it from the hook output.
+LEVEL_RECORD_KEY = "guardLevel"
+
+
+def _record_level(envelope: Dict[str, Any], level: str) -> Dict[str, Any]:
+    """Stamp ``level`` on ``envelope`` in place; identity is preserved."""
+    envelope[LEVEL_RECORD_KEY] = level
+    return envelope
+
+
+def resolved_level(guard_name: str, *, subagent: bool = False) -> str:
+    """``floor`` for a guard registered in ``deny_registry``, else ``log``.
+
+    The single resolution ``apply_guard_level`` and decision records share. No
+    registry key, level key or profile lifts an unregistered guard above ``log``.
+    """
+    name = guard_name.replace("_", "-")
+    if name in FLOOR_GUARDS or (subagent and name in SUBAGENT_FLOOR_GUARDS):
+        return "floor"
+    return "log"
+
+
 def apply_guard_level(
     guard_name: str,
     deny_envelope: Optional[Dict[str, Any]],
@@ -350,71 +310,92 @@ def apply_guard_level(
     risk: Optional[str] = None,
     once: Optional[Tuple[Any, str]] = None,
     subagent: bool = False,
+    session_id: str = "",
+    cwd: Optional[Any] = None,
+    event_id: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """Map a guard's deny envelope through its configured level.
+    """Resolve a guard's deny envelope at the one policy point.
 
     Input that is not a ``permissionDecision: "deny"`` envelope is returned
     unchanged, so a seam may re-apply to an already-resolved envelope.
-    ``guard_name`` is kebab-normalised. A ``FLOOR_GUARDS`` member's deny is
-    returned unchanged at every level, as is a ``SUBAGENT_FLOOR_GUARDS``
-    member's when ``subagent`` is true. strict returns the deny; off returns
-    ``None``; warn returns a one-line advisory shaped by the envelope's
-    ``hookEventName``: PreToolUse becomes ``allow`` plus ``additionalContext``,
-    any other event ``additionalContext`` alone. ``risk=None`` derives the text
-    from the deny's first reason paragraph. ``once=(gitdir, session_id)`` gives
-    once-per-session delivery from a marker under ``gitdir`` (a repeat warn
-    returns ``None``).
+    ``guard_name`` is kebab-normalised. A ``deny_registry`` guard's deny is
+    returned unchanged, stamped ``guardLevel: floor``. Any other guard resolves
+    to ``log``: the would-be deny is recorded through ``guard_advisory_counter``
+    and becomes one ``ADVISORY_PREFIX`` line (an allow plus context on
+    PreToolUse), at every ``guard_level`` and profile. With ``event_id`` (the
+    hook payload's ``tool_use_id``) and a resolvable ``session_id``, only the
+    first call per event across all processes returns the line; later ones
+    return ``None``. ``risk`` overrides the line's text; ``once=(gitdir,
+    session_id)`` or ``session_id``/``cwd`` locate the record, and no record is
+    written without a session id.
     """
     hso = _deny_body(deny_envelope)
     if hso is None:
         return deny_envelope
     name = guard_name.replace("_", "-")
-    if name in FLOOR_GUARDS or (subagent and name in SUBAGENT_FLOOR_GUARDS):
-        return deny_envelope
-    if name in OUT_OF_REPO_WRITE_GUARDS and out_of_repo_write_blocked():
-        return deny_envelope
-    level = guard_level(name)
-    if level == "strict":
-        return deny_envelope
-    if level == "off":
+    level = resolved_level(name, subagent=subagent)
+    if level == "floor":
+        return _record_level(deny_envelope, level)
+    sid = session_id or (once[1] if once else "")
+    where = cwd or (once[0] if once else None)
+    _record_log(name, sid, where)
+    if event_id and not _claim_event(sid, where, event_id):
         return None
-    if once is not None and _already_warned(name, once):
-        return None
+    return _nudge_envelope(name, hso, risk)
+
+
+_NUDGE_MAX = 400
+
+
+def _nudge_envelope(name: str, hso: Dict[str, Any], risk: Optional[str]) -> Dict[str, Any]:
+    """The one-line advisory for a would-be deny; no override key."""
     if risk is None:
-        reason = str(hso.get("permissionDecisionReason") or "").strip()
-        paras = reason.split("\n\n")
-        risk = " ".join(paras[0].split())
-        if risk.endswith(":") and len(paras) > 1:
-            # A paragraph ending in ":" is a header; its list is the content.
-            risk = "\n".join(
-                [risk] + [" ".join(p.split()) for p in paras[1:] if p.strip()]
-            ) + "\n"
-        # A warn-level advisory never blocked anything; do not let the
-        # embedded deny text claim it did.
-        if risk.startswith("BLOCKED:"):
-            risk = "would be blocked at strict level:" + risk[len("BLOCKED:"):]
+        risk = str(hso.get("permissionDecisionReason") or "")
+    line = " ".join(risk.split())
+    if line.startswith("BLOCKED:"):
+        line = line[len("BLOCKED:"):].strip()
+    if len(line) > _NUDGE_MAX:
+        line = line[: _NUDGE_MAX - 3] + "..."
+    advisory = ADVISORY_PREFIX + (line or name)
     event = hso.get("hookEventName") or "PreToolUse"
-    advisory = ADVISORY_PREFIX + risk.strip() + " " + advisory_tail(name)
     if event in ("Stop", "SubagentStop"):
-        # Stop drops hookSpecificOutput; only top-level fields reach anyone.
-        return {"systemMessage": advisory}
+        return _record_level({"systemMessage": advisory}, "log")
     out: Dict[str, Any] = {"hookEventName": event, "additionalContext": advisory}
     if event == "PreToolUse":
         out["permissionDecision"] = "allow"
-    return {"hookSpecificOutput": out}
+    return _record_level({"hookSpecificOutput": out}, "log")
 
 
-def _already_warned(guard_name: str, once: Tuple[Any, str]) -> bool:
-    """True when this session already received ``guard_name``'s warning;
-    records the first delivery. Fails open (returns False) on any error."""
-    gitdir, session_id = once
+def _claim_event(session_id: str, cwd: Optional[Any], event_id: str) -> bool:
+    """True when this call is the first to claim ``event_id``: an ``O_CREAT|O_EXCL``
+    marker under the session share dir. Fails open (True) when it cannot be placed."""
+    if not session_id:
+        return True
     try:
-        from coordinator_core.bash_guards import _advisory_dedupe as dedupe
+        import hashlib
 
-        key = guard_name + "__guard-level-warn"
-        if dedupe.already_advised(gitdir, session_id, key):
+        from coordinator_core.session.machinery_paths import share_dir
+        from coordinator_core.subagent_sandbox import resolve_git_root_cheap
+
+        root = resolve_git_root_cheap(str(cwd) if cwd else None)
+        if not root:
             return True
-        dedupe.mark_advised(gitdir, session_id, key)
-    except Exception:  # noqa: BLE001 -- a marker fault must never swallow the warning
+        key = hashlib.sha256((session_id + "\0" + event_id).encode("utf-8")).hexdigest()[:24]
+        d = Path(share_dir(root, session_id)) / "advisory-event-claims"
+        d.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(str(d / key), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        return True
+    except FileExistsError:
         return False
-    return False
+    except Exception:  # noqa: BLE001 -- a marker fault must never swallow the nudge
+        return True
+
+
+def _record_log(guard_name: str, session_id: str, cwd: Optional[Any]) -> None:
+    """Append the would-be deny to the advisory counter; a fault never reaches the caller."""
+    try:
+        from coordinator_core.guard_advisory_counter import record_advisory_fire
+
+        record_advisory_fire(guard_name, str(session_id or ""), str(cwd) if cwd else None)
+    except Exception:  # noqa: BLE001 -- telemetry must never turn a guard into a crash
+        return

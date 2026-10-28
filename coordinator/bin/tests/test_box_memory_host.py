@@ -199,3 +199,27 @@ def test_proc_table_contains_self_with_true_parent():
 def test_proc_cmdline_nonexistent_pid_is_empty():
     pytest.importorskip("psutil")
     assert host.proc_cmdline(2**22 + 1) == ""
+
+
+def test_admit_need_is_max_of_cushion_and_floor_plus_peak():
+    status = host.MemoryStatus(40 * host.GIB, 64 * host.GIB, 10 * host.GIB, 100 * host.GIB)
+    assert host.admit(31 * host.GIB, status, floor=0).admit
+    refused = host.admit(31 * host.GIB, status, floor=10 * host.GIB)
+    assert not refused.admit and refused.need_avail == 41 * host.GIB and not refused.avail_ok
+
+
+def test_peak_store_keeps_largest(tmp_path):
+    adm = tmp_path / "admission.jsonl"
+    assert host.read_recorded_peak(adm, "k") is None
+    host.record_peak(adm, "k", 2.0)
+    assert host.record_peak(adm, "k", 1.0) == 2.0
+    assert host.read_recorded_peak(adm, "k") == 2.0
+
+
+def test_register_and_release_drive_reserved(tmp_path):
+    adm = tmp_path / "admission.jsonl"
+    host.register_command(adm, "k", 5, 4.0)
+    kw = dict(rss_fn=lambda p: 1024.0, alive_fn=lambda p: True)
+    assert host.reserved_bytes(adm, **kw) == 3 * host.GIB
+    host.release_command(adm, "k", 5)
+    assert host.reserved_bytes(adm, **kw) == 0

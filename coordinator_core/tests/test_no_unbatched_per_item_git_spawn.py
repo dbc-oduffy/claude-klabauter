@@ -5423,7 +5423,7 @@ _ORACLE_CLAIMS: dict[tuple[str, str, str, int], tuple[str, str]] = {
     #: contract to assume. The oracle pins BOTH arms -- collapsing the override arm loses the
     #: per-queue failure attribution, and per-item-ising the default arm is the amplification this
     #: gate exists to catch -- and each arm ships its own fails-when-inverted leg.
-    ("coordinator_core/ops/updatedocs_gates.py", "_gate_queue_prune_sweep", "_run", 0): (
+    ("coordinator_core/ops/updatedocs_sweeps.py", "_gate_queue_prune_sweep", "_run", 0): (
         "test_queue_prune_sweep_spawn_split::test_override_cli_issues_one_spawn_per_queue_file",
         "fast",
     ),

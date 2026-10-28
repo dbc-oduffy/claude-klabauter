@@ -165,6 +165,74 @@ def heavy_roots(
     return roots
 
 
+# Scripts that only poll a remote API; a python process running one is not a heavy command.
+LIGHT_SCRIPTS = frozenset({"pr_watch.py"})
+_PROCESS_COMMAND_LINE = 60
+
+
+def _windows_command_line(pid: int) -> Optional[str]:
+    import ctypes
+
+    k32, nt = ctypes.WinDLL("kernel32"), ctypes.WinDLL("ntdll")
+    k32.OpenProcess.restype = ctypes.c_void_p
+    k32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    nt.NtQueryInformationProcess.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p
+    ]
+    handle = k32.OpenProcess(0x1000, 0, int(pid))
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_string_buffer(8192)
+        need = ctypes.c_uint32(0)
+        if nt.NtQueryInformationProcess(handle, _PROCESS_COMMAND_LINE, buf, 8192, ctypes.byref(need)) != 0:
+            return None
+        length = ctypes.c_uint16.from_buffer(buf).value
+        ptr = ctypes.c_void_p.from_buffer(buf, 8).value
+        return ctypes.wstring_at(ptr, length // 2) if ptr else None
+    finally:
+        k32.CloseHandle(handle)
+
+
+def command_line(pid: int) -> Optional[str]:
+    """The process's command line, or None when unreadable (macOS included): the caller then
+    treats the process as heavy."""
+    import sys
+
+    try:
+        if sys.platform == "win32":
+            return _windows_command_line(pid)
+        if sys.platform.startswith("linux"):
+            with open(f"/proc/{int(pid)}/cmdline", "rb") as fh:
+                return fh.read(4096).replace(b"\0", b" ").decode("utf-8", "replace")
+    except Exception:
+        return None
+    return None
+
+
+def _is_light_poller(row: ProcRow, command_line_of) -> bool:
+    if _stem(row.name) not in ("python", "python3"):
+        return False
+    line = command_line_of(row.pid)
+    if not line:
+        return False
+    script = next((t for t in line.split()[1:] if not t.startswith("-")), "")
+    return script.strip("\"'").replace("\\", "/").rsplit("/", 1)[-1] in LIGHT_SCRIPTS
+
+
+def live_heavy_commands(
+    roots: Sequence[ProcRow], primitives: ProcessPrimitives, command_line_of=None
+) -> List[ProcRow]:
+    """roots minus those that have exited since the snapshot and minus light poller scripts.
+
+    The census counts the process-table snapshot; a pid that exited after it, or a python script
+    that only polls an API, is not a heavy command.
+    """
+    read = command_line_of or command_line
+    return [r for r in roots if primitives.alive(r.pid, r.ctime) and not _is_light_poller(r, read)]
+
+
 def _children(rows: Sequence[ProcRow]) -> Dict[int, List[ProcRow]]:
     out: Dict[int, List[ProcRow]] = {}
     for r in rows:

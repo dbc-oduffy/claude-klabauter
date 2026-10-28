@@ -203,6 +203,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     anchor_subtree_contains,
     bump_applies,
     is_agent_memory_store_path,
+    is_under,
     own_repo_write_gitdir,
     publish_destination_owner,
     record_applicability_event,
@@ -1429,7 +1430,9 @@ def _iter_write_sink_candidates(
                 rc.tokens, effective_cwd, raw_tokens=rc.raw_tokens
             )
             if subcommand and _git_invocation_is_write(subcommand, sub_args):
-                if _is_owner_sync_verb(subcommand, sub_args):
+                if _is_ff_only_pull_from_named_remote(subcommand, sub_args):
+                    scope = _FF_SYNC_SCOPE
+                elif _is_owner_sync_verb(subcommand, sub_args):
                     scope = _OWNER_SYNC_SCOPE
                 else:
                     scope = "scoped" if git_write_is_gem_scoped(subcommand, sub_args) else "unscoped"
@@ -1461,6 +1464,18 @@ def _iter_write_sink_candidates(
 
 #: Candidate scope marking a git verb that only syncs a repo with its own remote.
 _OWNER_SYNC_SCOPE = "owner-sync"
+#: Candidate scope marking `git pull --ff-only <named-remote>`: a mirror catching up to its own
+#: remote, never a divergent write. Admitted for any session when the target is a publish mirror.
+_FF_SYNC_SCOPE = "ff-sync"
+
+
+def _is_ff_only_pull_from_named_remote(subcommand: str, args: List[str]) -> bool:
+    """`git pull --ff-only [<remote-name> [<branch>]]`; a URL or path remote is not its own remote."""
+    if subcommand != "pull" or "--ff-only" not in args:
+        return False
+    # No value-taking option list: an option value read as the remote can only fail closed (routes).
+    positionals = _positionals(args)
+    return not positionals or not any(c in positionals[0] for c in "/\\:")
 
 
 def _is_owner_sync_verb(subcommand: str, args: List[str]) -> bool:
@@ -1488,6 +1503,86 @@ def _session_owns_publish_destination(
         return em_id_for_root(session_root, read_registry_repos()) == owner
     except Exception:  # noqa: BLE001 -- not provably the owner, so not exempt
         return False
+
+
+#: Candidate label of `git apply`, the publisher's way of landing a transformed tree.
+_PUBLISHER_APPLY_LABEL = "git apply"
+
+#: The one file the publisher stamps into the tree it publishes, relative to that tree.
+_PUBLISHER_STAMP_RELPATH = "coordinator_core/_engine_stamp"
+
+_PORTABLE_TARGETS_RELPATH = ("setup", "publish-targets.portable")
+
+
+def _publish_row_destination_roots(session_root: str) -> List[str]:
+    """Resolved destination trees of the rows in THIS repo's
+    `setup/publish-targets.portable` whose source is this repo.
+
+    A row's destination sigil (`publish-mirror:<key>` or `repo:<key>`) resolves
+    through the machine-local registry; a `plugin-source:` source names another
+    repo and is skipped. Unresolvable rows contribute nothing."""
+    from coordinator_core.machine_resolver import registry_get
+
+    portable = Path(session_root).joinpath(*_PORTABLE_TARGETS_RELPATH)
+    roots: List[str] = []
+    for line in portable.read_text(encoding="utf-8").splitlines():
+        row = line.strip()
+        if not row or row.startswith("#"):
+            continue
+        fields = [f.strip() for f in row.split("|")]
+        if len(fields) < 4 or not fields[3] or fields[3].startswith("plugin-source:"):
+            continue
+        kind, _, key = fields[2].partition(":")
+        if not key:
+            continue
+        if kind == "publish-mirror":
+            registry_key = "publish.mirrors.%s.path" % key
+        elif kind == "repo":
+            registry_key = "repos.%s" % key
+        else:
+            continue
+        dest = registry_get(registry_key)
+        resolved = _resolve_and_casefold(dest) if dest else None
+        if resolved:
+            roots.append(resolved)
+    return roots
+
+
+def _session_publishes_into(session_root: Optional[str], tree_root: str) -> bool:
+    """True iff `tree_root` lies under the destination of a publish-targets row
+    whose source is the session repo. Unresolvable is not the publisher."""
+    try:
+        if not session_root or not tree_root:
+            return False
+        tree_cf = _resolve_and_casefold(tree_root)
+        if tree_cf is None:
+            return False
+        return any(is_under(tree_cf, dest) for dest in _publish_row_destination_roots(session_root))
+    except Exception:  # noqa: BLE001 -- not provably the publisher, so not exempt
+        return False
+
+
+def _is_publisher_stamp_write(target_path: str, tree_root: Optional[str]) -> bool:
+    """`target_path` is exactly the publisher's stamp file inside `tree_root`."""
+    if not tree_root:
+        return False
+    stamp = _resolve_and_casefold(os.path.join(tree_root, *_PUBLISHER_STAMP_RELPATH.split("/")))
+    return stamp is not None and stamp == _resolve_and_casefold(target_path)
+
+
+def _anchor_is_scratch_clone_of(anchor_root: Optional[str], target_root: Optional[str]) -> bool:
+    """The session's anchor repo sits under `<target_root>/scratch/`: a scratch
+    clone nested in the target repo does not narrow the session's own repo, so
+    the enclosing target stays own. Only `scratch/` qualifies; any other repo
+    nested in or beside the target is not own. The clone's origin is not
+    checked: any repo under `<target>/scratch/` qualifies."""
+    if not anchor_root or not target_root:
+        return False
+    anchor_cf = _resolve_and_casefold(anchor_root)
+    target_cf = _resolve_and_casefold(target_root)
+    if anchor_cf is None or target_cf is None:
+        return False
+    return is_under(anchor_cf, target_cf.rstrip("/") + "/scratch")
 
 
 def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
@@ -1641,6 +1736,8 @@ def _evaluate_foreign_repo_candidate(
             and _same_repo_root(anchor_common_cf, target_common_cf)
         ):
             return None
+        if _anchor_is_scratch_clone_of(anchor_root or anchor, probe_root):
+            return None
         marker_probe = probe_dir
     else:
         # § No-repo anchor branch -- the session itself owns no repo. A
@@ -1734,10 +1831,18 @@ def _evaluate_foreign_repo_candidate(
             and target_is_publish_destination(probe_root or target_dir, env=env)
         ):
             return None
+        if git_scope == _FF_SYNC_SCOPE and target_is_publish_destination(probe_root or target_dir, env=env):
+            return None
         if git_scope == _OWNER_SYNC_SCOPE and _session_owns_publish_destination(
             session_root_for_marker or anchor, probe_root or target_dir, env
         ):
             return None
+
+    if (
+        write_verb_label == _PUBLISHER_APPLY_LABEL
+        or _is_publisher_stamp_write(target_dir, probe_root)
+    ) and _session_publishes_into(session_root_for_marker or anchor, probe_root or target_dir):
+        return None
 
     gem_refusal = False
     if git_scope is not None:
@@ -1866,8 +1971,8 @@ def _evaluate_foreign_repo_candidate(
             "  has no reader on this host either — so enforcing it would "
             "forbid the only correct\n"
             "  move available. The boundary itself is unchanged: a cross-repo "
-            "commit still needs\n"
-            "  per-session PM assent, and this stand-down is recorded in this "
+            "commit is decided by the G-EM (ownership is the check),\n"
+            "  and this stand-down is recorded in this "
             "session's overrides.log.\n"
             "  If this host DOES carry a fleet, say so with "
             "COORDINATOR_CAP_FLEET_PRESENT=1 and the bump enforces again."

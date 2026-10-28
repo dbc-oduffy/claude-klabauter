@@ -1,4 +1,4 @@
-"""The shared review fixture resolves against the real floor, and a fixture without a sidecar is still refused."""
+"""The shared review fixture resolves against the real floor, and a fixture without a sidecar still yields the floor note."""
 
 from __future__ import annotations
 
@@ -39,20 +39,18 @@ def test_reviewed_counts_one_verdict_without_the_sidecar_under_root(tmp_path):
 
 
 def test_unreviewed_is_still_refused(tmp_path):
-    refused = terminal_commit._review_floor_refusal(_code_request(), unreviewed(), False, tmp_path)
-    assert refused["refused"] == "review-floor"
+    assert terminal_commit._review_floor_note(_code_request(), unreviewed(), False, tmp_path) is not None
     assert review_floor.floor_reason(["a.py"], review_floor.verdict_count(unreviewed(), tmp_path)) is not None
 
 
 def test_reviewed_with_missing_sidecar_is_still_refused(tmp_path):
     review = reviewed()
     review["wave_reviews"][0]["sidecar_path"] = str(tmp_path / "missing.md")
-    refused = terminal_commit._review_floor_refusal(_code_request(), review, False, tmp_path)
-    assert refused["refused"] == "review-floor"
+    assert terminal_commit._review_floor_note(_code_request(), review, False, tmp_path) is not None
 
 
 def test_reviewed_passes_the_floor(tmp_path):
-    assert terminal_commit._review_floor_refusal(_code_request(), reviewed(), False, tmp_path) is None
+    assert terminal_commit._review_floor_note(_code_request(), reviewed(), False, tmp_path) is None
 
 
 @pytest.mark.parametrize("name", _FLOOR_FILES)
@@ -62,6 +60,14 @@ def test_floor_test_files_do_not_import_reviewed(name):
     text = path.read_text(encoding="utf-8")
     imports = [ln for ln in text.splitlines() if "_review_fixture" in ln]
     assert not any(re.search(r"\breviewed\b", ln) for ln in imports)
+
+
+def test_reviewed_merges_extra_keys_over_the_base(tmp_path):
+    review = reviewed(fixes=2, extra_key="x")
+    assert review["fixes"] == 2 and review["extra_key"] == "x"
+    assert review["integration_stem"] == "rev-stem"
+    assert review_floor.verdict_count(review, tmp_path) == 1
+    assert "extra_key" not in reviewed()
 
 
 def test_reviewed_returns_a_fresh_dict_each_call():

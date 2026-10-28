@@ -128,8 +128,8 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "review-findings.schema.json": {
-    "blob": "ea820db802ac94d020f6f4de05b490860b35bab9",
-    "doe_commit": "b6f0694c43cc57446e9e245b3473d24596c6327a"
+    "blob": "8a43ef2e62f3a4733a899f307e49e49ed91756e6",
+    "doe_commit": "0372942d9ba06c0ea21be2038e34cdd949685887"
   },
   "review-sidecar.schema.json": {
     "blob": "69da75a7b40f6917d8a93cec2e16fc0e8c543977",

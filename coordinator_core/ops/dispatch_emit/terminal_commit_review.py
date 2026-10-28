@@ -608,25 +608,6 @@ def _review_recorded_edits(inline_review: object) -> frozenset:
     return frozenset(found)
 
 
-def _sole_run_review_writes(
-    worktree_root: Path, session_id: Optional[str], run_id: Optional[str], inline_review: object
-) -> frozenset:
-    """Normalised in-worktree paths the session's review agents wrote while this run is the only
-    one the session holds; a review write outside every declared path lands or halts instead of
-    staying untracked."""
-    from coordinator_core.ops.dispatch_emit import review_edit_source, review_edits
-    from coordinator_core.ops.dispatch_emit import terminal_commit as _tc
-
-    try:
-        raw = review_edit_source.sole_run_attested_writes(
-            worktree_root, session_id, run_id, _tc._review_since(worktree_root, run_id, inline_review)
-        )
-    except OSError:  # only an unreadable store attributes nothing; any other error is a bug and propagates
-        return frozenset()
-    normed = (review_edits.norm(p) for p in raw)
-    return frozenset(p for p in normed if not review_edits.out_of_worktree(p))
-
-
 def _review_edit_verdict(
     worktree_root: Path, writes: Optional[dict], snapshot: Optional[_Snapshot],
     session_id: Optional[str], run_id: Optional[str], committed: set,

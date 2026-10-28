@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from coordinator_core.bash_guards import (
     block_editor_kill_by_name as kill,
     block_perforce_submit as p4,
-    block_unreal_engine_resave as resave,
     guard_background_publish as publish,
     guard_deploy_dirty_tree as deploy,
     guard_headless_claude_plugin_dir as headless,
@@ -52,11 +51,6 @@ def test_editor_kill_offers_the_pid_form_and_still_allows_a_pid_kill():
     assert kill.check(_bash("taskkill /F /PID 4242")) is None
 
 
-def test_engine_resave_offers_the_scoped_form_and_still_allows_projectonly():
-    record = resave.check(_bash("UnrealEditor-Cmd.exe proj/P.uproject -run=ResavePackages"))
-    _no_override(record)
-    assert "-projectonly" in _em(record)
-    assert resave.check(_bash("UnrealEditor-Cmd.exe proj/P.uproject -run=ResavePackages -projectonly")) is None
 
 
 def test_perforce_submit_carries_a_route_that_survives_the_subagent_render(monkeypatch):

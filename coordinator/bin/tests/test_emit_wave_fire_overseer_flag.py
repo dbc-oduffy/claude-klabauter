@@ -8,6 +8,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+from _roster_fixture import write_roster_fragment
+
 import pytest
 import yaml
 
@@ -46,6 +48,7 @@ def _fire(tmp_path, *extra):
     root = tmp_path / "doctrine" / "coordinator"
     (root / "workflows").mkdir(parents=True)
     (root / "workflows" / "plan-blitz.mjs").write_text("// stub\n", encoding="utf-8")
+    write_roster_fragment(root)
     (root / "agents").mkdir()
     return ewf.main([
         "--repo-root", str(tmp_path), "--trail-dir", str(tmp_path / "trail"),

@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import inspect
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -1060,4 +1061,48 @@ def test_review_stamp_close_survives_a_later_foreign_commit_to_a_declared_write(
     )
 
     gate = wsc._compute_review_receipt_gate(repo, "no-such-session", "implemented", None, plan_path)
+    assert gate.blocks is False
+
+
+# ---------------------------------------------------------------------------
+# klab #59: a swept review reads as swept, not unrun; a tombstone never credits
+# (receipt wins).
+# ---------------------------------------------------------------------------
+
+
+def _tombstone(tmp_path: Path, sid: str) -> None:
+    from coordinator_core.review_trail.sweep_tombstone import record_swept
+
+    record_swept(
+        str(tmp_path), sid, [f"state/subagent-share/{sid}/x.md"], "prune", time.time()
+    )
+
+
+def test_tombstoned_session_with_no_dir_blocks_naming_the_sweep(tmp_path):
+    _tombstone(tmp_path, _SID)
+    gate = wsc._compute_review_receipt_gate(tmp_path, _SID, "implemented", None, None)
+    assert gate.blocks is True
+    assert "swept by prune" in gate.detail
+    assert "re-dispatch a reviewer" in gate.detail
+
+
+def test_tombstoned_session_with_empty_dir_blocks_naming_the_sweep(tmp_path):
+    _tombstone(tmp_path, _SID)
+    (tmp_path / "state" / "subagent-share" / _SID).mkdir(parents=True)
+    gate = wsc._compute_review_receipt_gate(tmp_path, _SID, "implemented", None, None)
+    assert gate.blocks is True
+    assert "swept by prune" in gate.detail
+
+
+def test_untombstoned_session_keeps_the_unrun_detail(tmp_path):
+    gate = wsc._compute_review_receipt_gate(tmp_path, _SID, "implemented", None, None)
+    assert gate.blocks is True
+    assert "swept by" not in gate.detail
+    assert "no counting review receipt" in gate.detail
+
+
+def test_tombstone_plus_real_counting_receipt_passes(tmp_path):
+    _tombstone(tmp_path, _SID)
+    _write_sidecar(tmp_path, _SID)
+    gate = wsc._compute_review_receipt_gate(tmp_path, _SID, "implemented", None, None)
     assert gate.blocks is False

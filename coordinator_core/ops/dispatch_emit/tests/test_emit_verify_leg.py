@@ -214,3 +214,13 @@ def test_the_register_holds_verify_and_still_holds_the_arms_that_keep_the_absorb
     for label in ("verify", "test:terminal", "review:coordinator:exit-criterion-judge"):
         assert leg_register.lookup("emit", label) is not None, label
 
+
+def test_the_retest_clause_launches_once_and_polls_to_a_verdict():
+    from coordinator_core.ops.dispatch_emit.emit import VERIFY_RETEST_CLAUSE as clause
+
+    assert clause.count("retest_targeted --from-task-output") == 1
+    assert "retest_targeted --poll --from-task-output" in clause
+
+
+def test_the_judge_arm_leg_does_not_carry_the_ask_only_retest():
+    assert "retest_targeted" not in _compose()

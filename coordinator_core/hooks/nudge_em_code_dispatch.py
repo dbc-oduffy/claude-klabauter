@@ -434,21 +434,16 @@ def _size_stage_write_deny(payload: dict) -> dict | None:
 
 
 def _post_fire_deny(session_id: str, paths: tuple[str, ...] = (), root: str | None = None) -> dict | None:
-    """Deny the main EM's product edit to a path a run this session fired still owns (a live run's
-    `writes:`, a halted run's withheld set). Every other path, and a session that never fired,
-    falls to the XS budget. With no `paths` the fire alone decides. Any read failure is no signal:
-    the deny fails open."""
+    """The advisory record for the main EM's edit of a path a live Workflow run owns. With no live
+    run this returns None and the XS budget decides. With `paths`, one must be a path a live run
+    declares under `root`. Any read failure is no signal."""
     from coordinator_core.hooks import _em_post_fire
 
-    if not _em_post_fire.fired(session_id):
+    if not _em_post_fire.fired(session_id, root or ""):
         return None
-    if paths and not any(
-        _em_post_fire.is_product_path(p, root or "", session_id)
-        and _em_post_fire.owns_path(p, root or "", session_id)
-        for p in paths
-    ):
+    if paths and not any(_em_post_fire.is_product_path(p, root or "", session_id) for p in paths):
         return None
-    return _em_post_fire.deny_envelope(paths)
+    return _em_post_fire.deny_envelope(session_id, None, paths)
 
 
 def _edit_paths(tool_input: dict, cwd: object) -> tuple[str, ...]:
@@ -493,8 +488,8 @@ def op(payload: dict) -> dict | None:
     A recorded XS lane allows in-budget edits and denies the first past 2 files / 30 changed
     lines (`_budget_decision`). A lane closes after GOLF_DENY_LIMIT projected denies.
 
-    A product Edit to a path a fired, unlanded run owns is denied (`_post_fire_deny`); only the
-    shell-write path still measures a residue window (pinned by test_landed_residue_shell_write_is_budgeted).
+    An Edit of a path a live Workflow run owns is recorded as an advisory (`_post_fire_deny`);
+    a halted or landed run owns nothing.
 
     An S+ sized session whose route has not fired is denied at strict until it fires (advised
     at warn). `touched_s_or_larger` reads the session's whole touch record, so any S+ (or
@@ -522,6 +517,7 @@ def op(payload: dict) -> dict | None:
                 file_path = edit_path
                 break
 
+    # Ahead of the escape sentinel and autonomous mode.
     paths = _edit_paths(tool_input, payload.get("cwd"))
     if paths:
         from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
@@ -529,6 +525,13 @@ def op(payload: dict) -> dict | None:
         post_fire = _post_fire_deny(_resolve_session_id_op(payload), paths, _repo_root(payload))
         if post_fire is not None:
             return post_fire
+        from coordinator_core.hooks._em_write_budget import advised_deny_envelope
+
+        latched = advised_deny_envelope(
+            _repo_root(payload), _resolve_session_id_op(payload), paths
+        )
+        if latched is not None:
+            return latched
 
     if not file_path:
         file_path = tool_input.get("notebook_path")

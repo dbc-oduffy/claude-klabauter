@@ -205,7 +205,8 @@ def test_generic_branch_deny_message_does_not_advise_a_sandbox_scoping_that_does
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "sandbox dir" not in reason
-    assert "surface it to the EM" in reason
+    assert "surface it to the EM" not in reason
+    assert "engine op" in reason
 
 
 def test_generic_branch_deny_message_states_shell_surface_not_capability_boundary():
@@ -228,7 +229,8 @@ def test_generic_branch_deny_message_states_shell_surface_not_capability_boundar
     assert "interpreter" in reason
     assert "EM-locked" not in reason
     assert "No subagent override" not in reason
-    assert "surface it to the EM" in reason
+    assert "surface it to the EM" not in reason
+    assert "engine op" in reason
 
 
 def test_rm_deny_message_states_shell_surface_not_capability_boundary():
@@ -258,7 +260,7 @@ def test_machine_local_write_deny_message_states_shell_surface_not_capability_bo
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "shell surface" in reason
     assert "not a capability boundary" in reason
-    assert "NO subagent-honored override" in reason
+    assert "Surface it to the EM" not in reason and "EM-locked" not in reason.split("DR-125", 1)[-1]
 
 
 def test_ambiguous_identity_denies_even_on_benign_looking_git(monkeypatch):
@@ -2796,19 +2798,32 @@ def test_git_stash_apply_deny_message_names_no_stash_recipe():
     assert "git show <ref>:<path>" in reason
 
 
-def test_git_stash_drop_deny_message_names_em_escalation():
+def test_git_stash_drop_deny_message_does_not_redirect_to_the_em():
     payload = _payload("git stash drop", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "Surface it to the EM" in reason
+    assert "Surface it to the EM" not in reason
+    assert "your report" in reason
     assert "no-stash" in reason
 
 
-def test_git_stash_clear_deny_message_names_em_escalation():
+def test_git_stash_clear_deny_message_does_not_redirect_to_the_em():
     payload = _payload("git stash clear", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "Surface it to the EM" in reason
+    assert "Surface it to the EM" not in reason
+
+
+def test_guard_is_registered_box_degrading_so_dispatch_keeps_its_deny():
+    from coordinator_core import deny_registry
+    from coordinator_core.machine_profile import apply_guard_level
+
+    assert deny_registry.SUBAGENT_DENY_CLASS["block-subagent-destructive-action"] == deny_registry.BOX_DEGRADING
+    result = _enveloped(guard.check)(_payload("git stash drop", agent_type="coordinator:executor"))
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    kept = apply_guard_level("block-subagent-destructive-action", result, subagent=True)
+    assert kept["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert kept["guardLevel"] == "floor"
 
 
 def test_no_stash_pre_existing_failure_recipe_end_to_end_allows():
@@ -3483,7 +3498,7 @@ def test_git_subcommand_and_remaining_for_segment_bare_git_still_none_subcmd():
 # ---------------------------------------------------------------------------
 
 
-def test_fail_open_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
+def test_main_thread_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     payload = {
@@ -3494,7 +3509,8 @@ def test_fail_open_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
     }
     assert _enveloped(guard.check)(payload) is None
     content = log_path.read_text(encoding="utf-8")
-    assert "FAIL-OPEN" in content
+    assert "main-thread-out-of-scope" in content
+    assert "FAIL-OPEN" not in content
     assert "branch='no-agent-id-key'" in content
     assert "git rm --cached secret.txt" in content
 
@@ -4281,23 +4297,110 @@ def test_git_apply_writing_forms_deny(cmd):
     assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-# ---- process-kill by explicit PID inside the session tree ----
+# ---- process-kill by explicit PID owned by the calling agent ----
 
 _EXEC = "coordinator:executor"
 
 
+@pytest.fixture(autouse=True)
+def _ledger_home(tmp_path, monkeypatch):
+    """Keep the guard's ledger append out of the real settings home."""
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    monkeypatch.setattr(apo, "settings_home", lambda: tmp_path / "settings-home")
+
+
 @pytest.fixture
 def tree_pids(monkeypatch):
-    """Pin which PIDs count as inside the session tree: 4242 and 4243."""
-    monkeypatch.setattr(guard, "_pid_in_session_tree", lambda pid: pid in (4242, 4243))
+    """Ownership fake: agent `deadbeef0123` owns 4242 and 4243; `sibling` owns 5555."""
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    owned = {("deadbeef0123", 4242), ("deadbeef0123", 4243), ("sibling", 5555)}
+    monkeypatch.setattr(
+        apo, "pid_owned_by_agent", lambda pid, agent_id, session_id: (agent_id, pid) in owned
+    )
 
 
 @pytest.mark.parametrize(
     "cmd",
     ["kill 4242", "kill -9 4242", "kill -TERM 4242 4243", "kill -s KILL 4242", "kill -- 4242"],
 )
-def test_kill_of_session_tree_pid_allows(tree_pids, cmd):
+def test_own_descendant_kill_allows(tree_pids, cmd):
     assert _enveloped(guard.check)(_payload(cmd, agent_type=_EXEC)) is None
+
+
+@pytest.mark.parametrize("cmd", ["kill 5555", "kill -9 4242 5555", "kill 1", "kill 77777"])
+def test_sibling_em_and_foreign_pid_kill_denies(tree_pids, cmd):
+    _assert_denies(_payload(cmd, agent_type=_EXEC))
+
+
+def test_reused_pid_start_time_mismatch_kill_denies(monkeypatch):
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    class _Proc:
+        def __init__(self, pid):
+            self.pid = pid
+
+        def create_time(self):
+            return 500.0
+
+        def cmdline(self):
+            return ["python", "scratch/x/rescore.py"]
+
+        def parent(self):
+            return None
+
+    class _Ps:
+        Process = _Proc
+
+        @staticmethod
+        def process_iter(*a, **k):
+            return iter([_Proc(100)])
+
+    monkeypatch.setattr(apo, "_psutil", lambda: _Ps)
+    apo.record_agent_command("sess1", "deadbeef0123", "python scratch/x/rescore.py")
+    out = _enveloped(guard.check)(_payload("kill 4242", agent_type=_EXEC))
+    assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("cmd", ["pkill -f rescore.py", "killall python", "pkill 4242"])
+def test_pkill_killall_deny_naming_kill_pid(tree_pids, cmd):
+    out = _enveloped(guard.check)(_payload(cmd, agent_type=_EXEC))
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "kill <pid>" in reason
+
+
+def test_benign_launch_command_is_ledgered_before_layer1_exit():
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    assert _enveloped(guard.check)(_payload("python scratch/x/rescore.py &")) is None
+    rows = apo._read_rows("sess1", "deadbeef0123")
+    assert [r["cmd"] for r in rows] == ["python scratch/x/rescore.py &"]
+
+
+def test_main_thread_payload_is_not_ledgered():
+    from coordinator_core.bash_guards import agent_process_ownership as apo
+
+    assert _enveloped(guard.check)(_payload("echo hi", agent_id=None)) is None
+    assert not apo.ledger_path("sess1").exists()
+
+
+def test_own_descendant_kill_through_dispatch(tree_pids):
+    import json
+
+    from coordinator_core.bash_guards import dispatch
+
+    allowed = dispatch.evaluate_payload_json(
+        json.dumps(_payload("kill 4242", agent_type=_EXEC))
+    )
+    denied = dispatch.evaluate_payload_json(
+        json.dumps(_payload("kill 5555", agent_type=_EXEC))
+    )
+    assert "block_subagent_destructive_action" not in json.dumps(allowed or {})
+    assert '"permissionDecision": "deny"' in json.dumps(denied or {})
+    verdict = _enveloped(guard.check)(_payload("kill 5555", agent_type=_EXEC))
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize(
@@ -4351,40 +4454,18 @@ def test_powershell_stop_process_outside_tree_or_unprovable_denies(tree_pids, cm
     _assert_denies(_ps_payload(cmd, agent_type=_EXEC))
 
 
-def test_kill_deny_message_names_main_session_and_forbids_peer_relay(tree_pids):
+def test_kill_deny_message_names_kill_pid_alternative(tree_pids):
     out = _enveloped(guard.check)(_payload("kill -9 9999", agent_type=_EXEC))
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "main session" in reason
-    assert "Group EM" in reason and "permission laundering" in reason
+    assert "kill <pid>" in reason
+    assert "permission laundering" not in reason and "memo D2" not in reason
 
 
 @requires_powershell_grammar
-def test_stop_process_deny_message_names_main_session(tree_pids):
+def test_stop_process_deny_message_names_kill_pid_alternative(tree_pids):
     out = _enveloped(guard.check)(_ps_payload("Stop-Process -Id 9999", agent_type=_EXEC))
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "main session" in reason and "permission laundering" in reason
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_pid_in_session_tree_uses_real_process_ancestry(monkeypatch):
-    import subprocess
-    import sys
-
-    child = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(30)"],
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    try:
-        monkeypatch.setenv("CLAUDE_PID", str(os.getpid()))
-        assert guard._pid_in_session_tree(child.pid) is True
-        assert guard._pid_in_session_tree(os.getppid()) is False
-        assert guard._pid_in_session_tree(os.getpid()) is False
-        monkeypatch.delenv("CLAUDE_PID")
-        assert guard._pid_in_session_tree(child.pid) is False
-    finally:
-        child.kill()
-        child.wait()
+    assert "Stop-Process -Id <pid>" in reason
 
 
 @pytest.fixture
@@ -4567,3 +4648,136 @@ def test_commit_agent_destructive_neighbours_still_deny(command):
     payload = _payload(command, agent_type="coordinator:git-commit-agent")
     result = _enveloped(guard.check)(payload)
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+# --- declared-pathspec revert admission (`git checkout -- <file>` / `git restore <file>`) ---
+
+_REV_RUN = "warp-2026-10-25-demo-20261025T000000-abcdef"
+_REV_ROW = "C4"
+_REV_SESSION = "sess-emitter"
+_REV_MARK = f"COORDINATOR_DISPATCH_ROW={_REV_RUN}/{_REV_ROW}"
+_REV_DECLARED = "pkg/a.py"
+
+
+@pytest.fixture
+def revert_repo(tmp_path, monkeypatch):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+
+    monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", True)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "a.py").write_text("x", encoding="utf-8")
+    (tmp_path / "pkg" / "b.py").write_text("y", encoding="utf-8")
+    rec = tmp_path / RECORD_DIR_ROOT / _REV_RUN
+    rec.mkdir(parents=True)
+    manifest = {
+        "run_dir": str(rec),
+        "rows": [
+            {"id": _REV_ROW, "agent_type": "x", "model": "m", "brief_path": "b.md",
+             "writes": [_REV_DECLARED], "wave": 0}
+        ],
+        "review_declared_paths": [],
+        "marker_path": "m",
+    }
+    (rec / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    run_dir = tmp_path / RUN_DIR_ROOT
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / f"{_REV_RUN}.workflow.mjs.emitted.json").write_text(
+        json.dumps({"session_id": _REV_SESSION}), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def _revert_check(repo, command, session=_REV_SESSION):
+    payload = _payload(command, agent_type="coordinator:executor", session_id=session)
+    payload["cwd"] = str(repo)
+    return _enveloped(guard.check)(payload)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        f"git checkout -- {_REV_DECLARED}",
+        f"git restore {_REV_DECLARED}",
+        f"git restore -- {_REV_DECLARED}",
+    ],
+)
+def test_declared_pathspec_revert_admitted(revert_repo, tail):
+    assert _revert_check(revert_repo, f"{_REV_MARK} {tail}") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        f"{_REV_MARK} git checkout -- pkg/b.py",
+        f"{_REV_MARK} git checkout -- {_REV_DECLARED} pkg/b.py",
+        f"{_REV_MARK} git restore pkg/b.py",
+        f"{_REV_MARK} git checkout -f -- {_REV_DECLARED}",
+        f"{_REV_MARK} git checkout -- .",
+        f"{_REV_MARK} git checkout -- pkg",
+        f"{_REV_MARK} git checkout HEAD~1 -- {_REV_DECLARED}",
+        f"{_REV_MARK} git restore --source=HEAD~1 {_REV_DECLARED}",
+        f"{_REV_MARK} git restore .",
+        f"{_REV_MARK} git -C pkg checkout -- a.py",
+        f"cd pkg && {_REV_MARK} git checkout -- a.py",
+        f"git checkout -- {_REV_DECLARED}",
+        f"git restore {_REV_DECLARED}",
+        f"COORDINATOR_DISPATCH_ROW={_REV_RUN}/NOPE git checkout -- {_REV_DECLARED}",
+        f"export {_REV_MARK}; git checkout -- {_REV_DECLARED}",
+    ],
+)
+def test_undeclared_or_marker_less_revert_stays_denied(revert_repo, command):
+    result = _revert_check(revert_repo, command)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_revert_foreign_session_stays_denied(revert_repo):
+    assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}", session="sess-other") is not None
+
+
+def test_declared_path_carrying_a_peer_hunk_stays_denied(revert_repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import live_write_guard
+
+    monkeypatch.setattr(live_write_guard, "check_live_write", lambda *a, **k: "drops 1 unlanded hunk(s) held by peer")
+    assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}") is not None
+
+
+def test_declared_path_with_unreadable_head_stays_denied(revert_repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import live_write_guard
+
+    monkeypatch.setattr(live_write_guard, "_head_lines", lambda *a, **k: None)
+    assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}") is not None
+
+
+def test_revert_check_receives_the_marker_run_and_head_bytes(revert_repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import live_write_guard
+
+    seen = {}
+
+    def fake(root, run_id, path, new_bytes):
+        seen.update(run_id=run_id, path=path, new_bytes=new_bytes)
+
+    monkeypatch.setattr(live_write_guard, "check_live_write", fake)
+    monkeypatch.setattr(live_write_guard, "_head_lines", lambda *a, **k: [b"h1\n", b"h2\n"])
+    assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}") is None
+    assert seen == {"run_id": _REV_RUN, "path": _REV_DECLARED, "new_bytes": b"h1\nh2\n"}
+
+
+def test_revert_dormant_channel_stays_denied(revert_repo, monkeypatch):
+    monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", False)
+    assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}") is not None
+
+
+def test_markerless_revert_deny_text_does_not_advertise_the_marker(revert_repo):
+    result = _revert_check(revert_repo, f"git checkout -- {_REV_DECLARED}")
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "COORDINATOR_DISPATCH_ROW" not in reason
+
+
+def test_em_payload_revert_unaffected(revert_repo):
+    payload = _payload(f"git checkout -- {_REV_DECLARED}", agent_id=None)
+    payload["cwd"] = str(revert_repo)
+    assert _enveloped(guard.check)(payload) is None

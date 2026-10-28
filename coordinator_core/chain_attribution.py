@@ -31,7 +31,9 @@ Two independent signals, each derived from ONE `git log` walk over a range
   1. Trailer signal, from one `git log --format=%H%x1f%P%x1f%(trailers:...)`
      walk over the whole window, INCLUDING merges (`bulk_commit_attribution_map`).
   2. Grep signal, from one `git log --no-merges --grep=...` walk over the same
-     window (`bulk_grep_attributed_shas`).
+     window (`bulk_grep_attributed_shas`). It also selects the cold caller's
+     own `Claude-Session:` line; that is part of this signal, not a fourth
+     attribution state.
 
 A caller resolves both once per window, then derives any number of per-range
 foreign-sets from them via pure in-memory set math
@@ -62,6 +64,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Set, Tuple
 
+from coordinator_core.git.commit_trailers import claude_session_grep_pattern, own_claude_session_token
 from coordinator_core.session_attribution import GitLogFailed
 
 #: Same DI contract session_attribution.GitRunner documents: a "never
@@ -232,6 +235,12 @@ def bulk_grep_attributed_shas(
     cannot smuggle a second git argument. `since=None` (every existing
     caller) produces byte-identical argv to before this parameter existed.
 
+    When `own_claude_session_token(session_id)` resolves (cold caller, its own
+    session), one extra `--grep` ORs in that caller's own `Claude-Session:` line
+    in the same spawn, so a hook-less own commit is grep-attributed. Another
+    session's token never matches. Token `None` leaves the argv unchanged. This
+    is not a fourth attribution state.
+
     Returns `[]` on a malformed `session_id` (`_UUID_RE` shape-validation
     fails) or any git failure — never fail-open. The `_UUID_RE` short-circuit
     fires before `since` is ever consulted or any git call is made, so a
@@ -242,8 +251,11 @@ def bulk_grep_attributed_shas(
     argv = [
         "git", "log", "--no-merges",
         f"--grep=^Session-Id: {session_id}$",
-        "--format=%H",
     ]
+    token = own_claude_session_token(session_id)
+    if token is not None:
+        argv.append(f"--grep={claude_session_grep_pattern(token)}")
+    argv.append("--format=%H")
     if since is not None:
         argv.append(_since_arg(since))
     argv.append(range_str)
@@ -327,9 +339,13 @@ def window_needs_grep_signal(window: Mapping[str, CommitAttribution]) -> bool:
     inverted its meaning. And it must stay in lockstep with
     `foreign_shas_from_window`'s ladder: a future edit that widens which shapes
     consult `grep_attributed` MUST widen this predicate in the same commit, or
-    the leg gets skipped where it would have changed the answer. `tests/
-    test_chain_attribution_grep_leg_elision.py` pins the two together by
+    the leg gets skipped where it would have changed the answer.
+    `coordinator_core/tests/test_chain_attribution.py`
+    (`test_window_needs_grep_signal_matches_the_ladder`) pins the two together by
     exercising the ladder rather than by restating it.
+
+    The grep leg's widening to the caller's own `Claude-Session:` line leaves
+    this predicate unchanged: a Claude-Session-only commit is untrailered.
     """
     for attribution in window.values():
         if attribution.trailer_session_id is None and not attribution.is_merge:

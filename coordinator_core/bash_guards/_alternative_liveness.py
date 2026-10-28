@@ -135,16 +135,14 @@ from coordinator_core.bash_guards import (
 )
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.bash_guards import block_approval_sentinel_creation
-from coordinator_core.bash_guards import block_disarm_marker_sentinel_creation
 from coordinator_core.bash_guards import block_illegal_filename
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
+from coordinator_core.bash_guards import block_subagent_plan_body_bash_write
+from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist
 from coordinator_core.bash_guards import block_subagent_commit
 from coordinator_core.bash_guards import guard_post_executor_verification
 from coordinator_core.bash_guards import block_subagent_destructive_action
-from coordinator_core.bash_guards import block_subagent_plan_body_bash_write
-from coordinator_core.bash_guards import block_subagent_stash_creation
-from coordinator_core.bash_guards import block_venv_creation
 from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_topic_branch
@@ -156,12 +154,7 @@ from coordinator_core.bash_guards import block_whole_filesystem_scan
 from coordinator_core.bash_guards import block_perforce_submit
 from coordinator_core.bash_guards import block_external_workspace_vcs_write
 from coordinator_core.bash_guards import block_push_pr_non_owned_remote
-from coordinator_core.bash_guards import block_unreal_engine_resave
-from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal
-from coordinator_core.bash_guards import block_subagent_grant_acquisition
-from coordinator_core.bash_guards import block_subagent_guard_grant
-from coordinator_core.bash_guards import block_subagent_findings_reject
 from coordinator_core.bash_guards import check_raw_pid_liveness
 from coordinator_core.bash_guards import guard_powershell_via_bash
 from coordinator_core.bash_guards import guard_grep_via_bash
@@ -170,8 +163,6 @@ from coordinator_core.bash_guards import guard_inprocess_search
 from coordinator_core.bash_guards import guard_multiprobe_banner
 from coordinator_core.bash_guards import guard_offer_git_c
 from coordinator_core.bash_guards import guard_plumbing_and_loops
-from coordinator_core.bash_guards import block_fleet_delegation_creation
-from coordinator_core.bash_guards import block_hand_authored_handoff_creation
 from coordinator_core.bash_guards import block_home_root_bash_write
 from coordinator_core.bash_guards import block_drive_root_new_dir_bash_write
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
@@ -511,30 +502,6 @@ def _trigger_stale_write() -> Optional[Dict[str, Any]]:
         return _dc.check_stale_write("echo replacement > %s" % rel, "altlive-stale-probe", repo)
 
 
-def _trigger_xs_lane_shell_write() -> Optional[Dict[str, Any]]:
-    """The unmeasurable-write deny: a python heredoc opens a product `.py` for write in a session
-    whose XS lane is open. The lane is stubbed (as the message corpus does for the Edit/Write
-    hook) so no `xs-lane.json` lands in a live session hub, and the scratch repo is lifted out of
-    the tmp-path exemption for the duration of the call."""
-    import tempfile
-    from unittest import mock
-
-    from coordinator_core.bash_guards import guard_xs_lane_shell_write
-    from coordinator_core.hooks import _em_write_budget as hook
-    from coordinator_core.session import xs_lane_budget as xlb
-
-    lane = {"kind": "xs", "state": "open", "base_sha": "0" * 40, "paths": []}
-    with _scratch_git_repo() as repo:
-        repo = os.path.realpath(repo)
-        cmd = "python3 - <<'ALTLIVE_EOF'\nopen('pkg/step_ledger.py', 'w').write('x = 1\\n')\nALTLIVE_EOF"
-        with contextlib.ExitStack() as stack:
-            stack.enter_context(mock.patch.object(tempfile, "gettempdir", lambda: os.path.join(repo, "_tmp")))
-            stack.enter_context(mock.patch.object(hook, "_is_bootstrap_or_out_of_repo", lambda file_path: False))
-            stack.enter_context(mock.patch.object(xlb, "read_lane", lambda root, sid: lane))
-            stack.enter_context(mock.patch.object(xlb, "touched_s_or_larger", lambda sid, root: False))
-            return guard_xs_lane_shell_write.check(cmd, "altlive-probe", repo, {"cwd": repo})
-
-
 def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
     """Advisory sibling of `_trigger_destructive_git_revert` above -- same
     scratch repo shape, but the uncommitted edit lands OUTSIDE any
@@ -581,24 +548,9 @@ def _trigger_plan_body_bash_write() -> Optional[Dict[str, Any]]:
         return block_subagent_plan_body_bash_write.check(payload)
 
 
-#: C1 (docs/plans/2026-08-01-branch-creation-seam-guards.md) is
-#: hazard-repo-scoped (`_is_hazard_repo(resolve_git_root(cwd))` gates it
-#: before its own name predicate runs) -- unlike every guard above this
-#: comment, it does not fire from a bare synthetic payload. `_is_hazard_
-#: repo` is swapped on the guard's OWN module attribute for the duration of
-#: one trigger call, then restored -- never a persistent patch to shipped
-#: guard behavior, and never dependent on this MACHINE's real fleet
-#: registry: `coordinator_core/conftest.py`'s suite-wide `HOME`/
-#: `USERPROFILE` quarantine (autouse) makes the real registry-lookup half of
-#: `_is_hazard_repo` unreachable under pytest regardless of which real repo
-#: `cwd` names, so pointing `cwd` at this package's own working tree (a
-#: hazard repo OUTSIDE pytest, on this dev machine's fleet registry) is
-#: insufficient on its own -- confirmed by this row initially firing under a
-#: bare `python3 -c` probe and then failing under `pytest` with an identical
-#: `cwd`. Mirrors this package's own test suite's injection convention
-#: (`monkeypatch.setattr(guard, "_is_hazard_repo", lambda git_root: True)`),
-#: just without the `monkeypatch` fixture (this module is a library, not a
-#: test) -- manual save/restore in a `try/finally` instead.
+#: Hazard-repo-scoped triggers swap `_is_hazard_repo` on the guard's own module
+#: for one call and restore it; `cwd` names this package's tree because the
+#: suite's `HOME` quarantine makes the real fleet registry unreachable.
 _ALTLIVE_HAZARD_CWD = os.path.dirname(_pkg.__file__)
 
 
@@ -762,7 +714,6 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_offer_git_c": lambda: guard_offer_git_c.check_offer_git_c(
         "cd %s && git status" % shlex.quote(os.path.dirname(_pkg.__file__)), "altlive-probe", ""
     ),
-    "guard_xs_lane_shell_write": _trigger_xs_lane_shell_write,
     "check_find_exec_rewrite": lambda: _dc.check_find_exec_rewrite(
         'find . -name "*.log" -exec rm {} \\;', "altlive-probe"
     ),
@@ -798,14 +749,11 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_worktree_creation": lambda: block_worktree_creation.check(
         _payload("git worktree add ../foo", agent_id=None)
     ),
-    "block_venv_creation": lambda: block_venv_creation.check(
-        _payload("python -m venv .venv", agent_id=None)
-    ),
     "block_stash_destruction": lambda: block_stash_destruction.check(
         _payload("git stash drop", agent_id=None)
     ),
     "block_topic_branch": lambda: block_topic_branch.check(
-        _payload("git checkout -b topic/altlive-probe", agent_id=None)
+        _payload("git commit -m altlive-probe", agent_id=None)
     ),
     "block_editor_kill_by_name": lambda: block_editor_kill_by_name.check(
         _payload("taskkill /IM UnrealEditor.exe", agent_id=None)
@@ -820,40 +768,20 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_whole_filesystem_scan": lambda: block_whole_filesystem_scan.check(
         _payload("find / -name altlive-probe", agent_id=None)
     ),
-    "block_unreal_engine_resave": lambda: block_unreal_engine_resave.check(
-        _payload("UnrealEditor-Cmd Proj.uproject -run=ResavePackages", agent_id=None)
-    ),
     "block_perforce_submit": _trigger_block_perforce_submit,
     "block_external_workspace_vcs_write": _trigger_block_external_workspace_vcs_write,
     "block_push_pr_non_owned_remote": _trigger_block_push_pr_non_owned_remote,
-    "block_subagent_stash_creation": lambda: block_subagent_stash_creation.check(
-        _payload(" ".join(["git", "stash", "push"]), agent_type="coordinator:executor")
-    ),
     "block_worktree_sentinel_creation": lambda: block_worktree_sentinel_creation.check(
         _payload("touch .coordinator-override-worktree-guard", agent_id=None)
     ),
     "block_approval_sentinel_creation": lambda: block_approval_sentinel_creation.check_ungated(
         _payload("touch .coordinator-doctrine-edit-approved", agent_id=None)
     ),
-    "block_disarm_marker_sentinel_creation": lambda: block_disarm_marker_sentinel_creation.check(
-        _payload("touch .coordinator-bash-guards-disarmed", agent_id=None)
-    ),
     "block_dev_repo_sentinel_removal": lambda: block_dev_repo_sentinel_removal.check(
         _payload("rm .coordinator-dev-repo", agent_id=None)
     ),
     "block_illegal_filename": lambda: block_illegal_filename.check(
         _payload("echo x > bad:name.txt", agent_id=None)
-    ),
-    # The three rows below closed a registry gap this gate caught on
-    # 2026-08-30: each module has a top-level `check()` and was in neither
-    # `LIVE_TRIGGERS` nor `UNTRIGGERED`, so its alternatives were never
-    # probed for liveness at all. Every trigger was measured against its own
-    # guard before being written here.
-    "block_fleet_delegation_creation": lambda: block_fleet_delegation_creation.check(
-        _payload("touch fleet-delegation.json", agent_id=None)
-    ),
-    "block_hand_authored_handoff_creation": lambda: block_hand_authored_handoff_creation.check(
-        _payload("echo x > state/handoffs/hand-authored.md", agent_id=None)
     ),
     "block_home_root_bash_write": lambda: block_home_root_bash_write.check(
         _payload("echo x > ~/home-root-liveness-probe.txt", agent_id=None)
@@ -922,28 +850,6 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         _payload("rm -rf /", agent_type="coordinator:code-reviewer")
     ),
     "block_subagent_plan_body_bash_write": _trigger_plan_body_bash_write,
-    "block_subagent_grant_acquisition": lambda: block_subagent_grant_acquisition.check(
-        _payload(
-            'python3 -m coordinator_core.session.claude_md_grant grant pm "note"'
-        )
-    ),
-    # `agent_id` present (the default `_payload()` value) is sufficient to
-    # fire this identity-gated hard-deny -- see `block_subagent_guard_grant.
-    # check`'s own "IDENTITY-GATE POSTURE" docstring section: it denies on
-    # the raw presence of `agent_id` alone, never on further resolution.
-    # `-m coordinator_core.session.em_guard_grant grant` mirrors this
-    # guard's sibling row above (`block_subagent_grant_acquisition`, the
-    # near-identical `claude_md_grant` guard this module was ported from),
-    # substituting the gated module path and dropping the `pm` positional
-    # (this guard's `_GATED_SUBCOMMANDS` check reads only the first token
-    "block_subagent_findings_reject": lambda: block_subagent_findings_reject.check(
-        _payload("python3 -m coordinator_core.ops.review_findings_ledger reject x")
-    ),
-    "block_subagent_guard_grant": lambda: block_subagent_guard_grant.check(
-        _payload(
-            'python3 -m coordinator_core.session.em_guard_grant grant "note"'
-        )
-    ),
     "guard_powershell_via_bash": lambda: guard_powershell_via_bash.check(
         _payload(
             'powershell.exe -NoProfile -Command "$p=Get-Process -Id 1"',
@@ -1009,10 +915,22 @@ KEY_SPECIFIC_TRIGGERS: Dict[Tuple[str, str], Callable[[], Optional[Dict[str, Any
 #: deliberately ignores. Each callable takes the prefix (`"KEY=reason "`).
 INLINE_PREFIX_TRIGGERS: Dict[Tuple[str, str], Callable[[str], Optional[Dict[str, Any]]]] = {
     ("block_topic_branch", "COORDINATOR_OVERRIDE_TOPIC_BRANCH"): lambda prefix: block_topic_branch.check(
-        _payload(prefix + "git checkout -b topic/altlive-probe", agent_id=None)
+        _payload(prefix + "git commit -m altlive-probe", agent_id=None)
     ),
 }
 
+
+#: Guards whose ``check`` never returns a deny, so no alternative exists to probe.
+LOG_ONLY: Dict[str, str] = {
+    "guard_xs_lane_shell_write": (
+        "`check` always returns None: a lane verdict is appended to the advisory counter and "
+        "dropped, so no deny exists to carry an alternative."
+    ),
+    "guard_em_post_fire_shell_write": (
+        "`check` always returns None: a post-fire write is appended to the advisory counter and "
+        "dropped, so no deny exists to carry an alternative."
+    ),
+}
 
 #: Guards this pass could NOT drive to emit within its bounded time, each
 #: with the specific reason -- visible and countable, per this module's own
@@ -1231,6 +1149,19 @@ def _isolated_session_scope():
         rmtree_or_raise(Path(latch_root), label="alternative-liveness latch root")
 
 
+@contextlib.contextmanager
+def pre_clamp_levels():
+    """Resolve every guard at `floor` for the call, so a guard that clamps its own deny to a log
+    inside `check` still yields the deny it would build: the gate probes the deny's alternatives,
+    not the policy that later drops it."""
+    from unittest import mock
+
+    from coordinator_core import machine_profile
+
+    with mock.patch.object(machine_profile, "resolved_level", lambda *a, **k: "floor"):
+        yield
+
+
 def _call_trigger_isolated(trigger: Callable[[], Optional[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
     """Call a zero-arg ``LIVE_TRIGGERS`` entry inside ``_isolated_session_scope``.
     The ONE place in this module that ever calls a ``LIVE_TRIGGERS`` entry --
@@ -1239,7 +1170,7 @@ def _call_trigger_isolated(trigger: Callable[[], Optional[Dict[str, Any]]]) -> O
     not merely true for whichever call site someone remembered to wrap.
     Exceptions propagate to the caller unchanged; this function only
     controls the session-id environment for the duration of the call."""
-    with _isolated_session_scope():
+    with _isolated_session_scope(), pre_clamp_levels():
         return trigger()
 
 

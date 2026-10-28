@@ -304,4 +304,4 @@ def test_relay_clause_is_declared_once_and_prefixed_at_every_agent_call():
     script = _compose()
     assert script.count("Do the whole task and quote that text") == 1
     assert script.count("const RELAY = ") == 1
-    assert script.count("(RELAY + '\\n\\n' + ") == len(agent_graph(script))
+    assert script.count("(RELAY + REVISIONS + '\\n\\n' + ") == len(agent_graph(script))

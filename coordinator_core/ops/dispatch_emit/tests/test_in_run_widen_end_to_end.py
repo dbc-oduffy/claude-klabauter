@@ -69,6 +69,14 @@ def test_1_an_in_ask_row_local_block_widens_redispatches_and_lands(tmp_path, mon
     assert recorded == {"recorded": True, "breach": []}
 
 
+def test_2_an_xs_run_over_budget_resizes_and_lands(root):  # noqa: F811
+    head = _git(root, "rev-parse", "HEAD")
+    reply, _ = _call(root, _new_files(root, 3, 14))
+
+    assert reply.get("refused") != "xs-over-budget", reply
+    assert reply.get("committed") is True, reply
+    assert _git(root, "rev-parse", "HEAD") != head
+
 
 def test_2b_an_unmeasurable_xs_diff_still_refuses(root):  # noqa: F811
     reply, _ = _call(root, _new_files(root, 1, 1), base="0" * 40)
@@ -141,3 +149,29 @@ def test_8_a_review_blocked_run_with_in_ask_warn_findings_is_fixed_in_run_and_la
     assert _labels(out) == [HALT_FIX_LABEL, HALT_REVERIFY_LABEL]
     assert out["halted"] is None
     assert out["wave"][0]["applied"] == 4
+
+
+def test_9_the_scripts_returned_widened_list_is_persisted_by_terminal_commit_and_admitted_by_the_fence(
+    repo, monkeypatch  # noqa: F811
+):
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    run_dir = repo / RUN_DIR_ROOT / RUN
+    adjacent = "pkg/tests/test_helper.py"
+    assert in_run_widen.widened_paths(run_dir) == []
+
+    terminal_commit._handler(
+        {"script_path": "run.mjs", "incomplete_chunks": [], "widened": [{"row": "C1", "path": adjacent}]},
+        repo_root=repo / ".git",
+    )
+
+    assert in_run_widen.widened_paths(run_dir) == [adjacent]
+    (run_dir / land_run.LEG_FOOTPRINT_FILE).write_text(json.dumps({"writes": ["a.py"]}), encoding="utf-8")
+    monkeypatch.setattr(land_run, "_manifest_declared", lambda m: (["a.py", adjacent], None))
+    monkeypatch.setattr(land_run, "_halt_base", lambda *a: ("base", ""))
+    monkeypatch.setattr(land_run, "_path_changed", lambda *a: True)
+    fence = land_run._footprint_fence(repo, run_dir, {"blocking": []}, None, None)
+    assert fence == {"recorded": True, "breach": []}
+
+    (run_dir / in_run_widen.WIDEN_RECORD_NAME).unlink()
+    assert land_run._footprint_fence(repo, run_dir, {"blocking": []}, None, None)["breach"] == [adjacent]

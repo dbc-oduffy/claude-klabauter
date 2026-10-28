@@ -71,7 +71,12 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _scenario(root: Path, *, checkpointed: tuple, declared_by_senior: tuple) -> tuple:
+EMIT_SHA = "e51c5e50ccff2c5204abee9a6b037a4660afca77"
+
+
+def _scenario(
+    root: Path, *, checkpointed: tuple, declared_by_senior: tuple, stamped_base: str = "", manifest_head: str = ""
+) -> tuple:
     """Run base, then a same-plan checkpoint landing ``checkpointed``, a peer commit, a re-dirty of
     P and Q, and a senior same-session run declaring ``declared_by_senior``."""
     base = _git(["rev-parse", "HEAD"], root).strip()
@@ -79,9 +84,10 @@ def _scenario(root: Path, *, checkpointed: tuple, declared_by_senior: tuple) -> 
         _write(root, rel, f"{Path(rel).stem} = 1\n")
     if checkpointed:
         _git(["add", "."], root)
-        _git(
-            ["commit", "-q", "-m", "checkpoint(wave 0): 1 row — C1", "-m", f"Checkpoint-Plan: {PLAN}"], root
-        )
+        trailers = f"Checkpoint-Plan: {PLAN}"
+        if stamped_base:
+            trailers += f"\nCheckpoint-Base: {stamped_base}\nCheckpoint-Not-Landed: run-open"
+        _git(["commit", "-q", "-m", "checkpoint(wave 0): 1 row — C1", "-m", trailers], root)
     _write(root, "peer.txt", "peer\n")
     _git(["add", "peer.txt"], root)
     _git(["commit", "-q", "-m", "peer commit"], root)
@@ -92,6 +98,8 @@ def _scenario(root: Path, *, checkpointed: tuple, declared_by_senior: tuple) -> 
     _write(root, "state/warp/run-b/manifest.json", json.dumps({"rows": [{"id": "C9", "writes": list(declared_by_senior)}]}))
     run_token.mint(root, RUN_B, "b.mjs", session_id=SELF)
     _write(root, f"{RECORD_DIR_ROOT}/{RUN_A}/run.json", json.dumps({"run_id": RUN_A}))
+    if manifest_head:
+        _write(root, f"{RECORD_DIR_ROOT}/{RUN_A}/manifest.json", json.dumps({"head_sha": manifest_head}))
     request = CommitRequest(
         chunks=(ChunkCommit(id="C4", title="t", paths=(P,)), ChunkCommit(id="C5", title="t", paths=(Q,))),
         plan_path=PLAN,
@@ -104,7 +112,7 @@ def _land(root: Path, base: str) -> dict:
     review = {**reviewed(), "prep": {"run_base_sha": base}}
     return land_run._handler(
         {"script_path": SCRIPT, "incomplete_chunks": [], "inline_review": review,
-         "session_id": SELF, "run_id": RUN_A},
+         "session_id": SELF, "run_id": RUN_A, "run_base_sha": base},
         repo_root=root / ".git",
     )
 
@@ -137,6 +145,31 @@ def test_incident_replay_own_checkpointed_path_lands_and_unchecked_declaration_s
     message = _git(["log", "-1", "--format=%B"], repo)
     assert f"Row-Unlanded: C5 {Q} peer-held" in message
     assert "Row-Unlanded: C4" not in message
+
+
+def test_own_off_chain_stamped_checkpoint_does_not_refuse_since_base_overlap(repo):
+    base, _ = _scenario(
+        repo, checkpointed=(P,), declared_by_senior=(Q,), stamped_base=EMIT_SHA, manifest_head=EMIT_SHA
+    )
+
+    out = _land(repo, base)
+
+    assert out.get("refused") != "since-base-overlap", out
+    assert out["committed"] is True, out
+    assert P in _tree(repo)
+
+
+def test_same_plan_off_chain_checkpoint_of_another_run_still_refuses_since_base_overlap(repo):
+    base, _ = _scenario(
+        repo, checkpointed=(P,), declared_by_senior=(Q,), stamped_base=EMIT_SHA, manifest_head="a" * 40
+    )
+    head = _git(["rev-parse", "HEAD"], repo)
+
+    out = _land(repo, base)
+
+    assert out["committed"] is False, out
+    assert out["refused"] == "since-base-overlap", out
+    assert _git(["rev-parse", "HEAD"], repo) == head
 
 
 def test_without_a_checkpoint_the_same_declaration_holds_the_path(repo):

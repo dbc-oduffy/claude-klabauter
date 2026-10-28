@@ -14,7 +14,6 @@ from coordinator_core.bash_guards import guard_host_subagent_bash_ban as ban
 from coordinator_core.bash_guards import guard_host_subagent_bash_spawn_shapes as spawn_shapes
 from coordinator_core.bash_guards import block_illegal_filename as illegal_filename
 from coordinator_core.bash_guards import block_noncanonical_branch_creation as noncanonical
-from coordinator_core.bash_guards import block_venv_creation as venv
 from coordinator_core.bash_guards import guard_no_optional_locks as locks
 from coordinator_core.bash_guards import guard_powershell_via_bash as ps_via_bash
 from coordinator_core.bash_guards import guard_reap_stale_git_lock as reap
@@ -84,9 +83,6 @@ def _fire(name: str, mp, tmp_path: Path):
         mp.setattr(noncanonical, "_is_hazard_repo", lambda root: True)
         p = lambda c: {"tool_name": "Bash", "tool_input": {"command": c}, "cwd": "/repo"}
         return noncanonical.check(p("git checkout -b fix/foo")), noncanonical.check(p("git status"))
-    if name == "venv":
-        p = lambda c: {"tool_name": "Bash", "tool_input": {"command": c}}
-        return venv.check(p("python3 -m venv .venv")), venv.check(p("python3 -m pytest"))
     if name == "powershell":
         p = lambda c: {"tool_name": "Bash", "tool_input": {"command": c}}
         return (
@@ -118,7 +114,6 @@ def _fire(name: str, mp, tmp_path: Path):
 
 _EM_SPEAKING = [
     ("noncanonical", "deny"),
-    ("venv", "deny"),
     ("powershell", "advisory"),
     ("p4", "deny"),
     ("claude_home", "deny"),

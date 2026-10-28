@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 
 from coordinator_core.completion_receipts.verdict import judge_verdict, mint_refusal
 
@@ -171,67 +172,129 @@ import pytest  # noqa: E402
 from coordinator_core.completion_receipts.verdict import baseline_clears, effective_test_verdict  # noqa: E402
 
 
-def _baseline_record(**over):
+def _baseline_record(log_dir, **over):
     record = {
         "test_verdict": "fail",
         "tests_failed": 12,
         "baseline_method": "export",
-        "baseline": {"pre_existing": [f"t{i}" for i in range(12)], "caused": [], "unverified": []},
+        "baseline": {
+            "pre_existing": [f"p.py::t{i}" for i in range(12)],
+            "evidence": [f"p.py::t{i}" for i in range(12)],
+            "caused": [],
+            "unverified": [],
+        },
     }
     record.update(over)
+    evidence = record["baseline"].get("evidence")
+    if isinstance(evidence, list) and "base_log" not in record["baseline"]:
+        log = log_dir / "base.log"
+        log.write_text("".join(f"FAILED {i}\n" for i in evidence if isinstance(i, str)), encoding="utf-8")
+        record["baseline"]["base_log"] = str(log)
     return record
 
 
-def test_failures_identical_at_baseline_read_as_pass():
-    assert baseline_clears(_baseline_record()) and effective_test_verdict(_baseline_record()) == "pass"
+@pytest.fixture
+def baseline_record(tmp_path):
+    return functools.partial(_baseline_record, tmp_path)
 
 
-def test_baseline_equal_tests_do_not_block_the_mint():
+def test_failures_identical_at_baseline_read_as_pass(baseline_record):
+    assert baseline_clears(baseline_record()) and effective_test_verdict(baseline_record()) == "pass"
+
+
+def test_baseline_equal_tests_do_not_block_the_mint(baseline_record):
     integration = {"delivery": {"verdict": "PASS"}, "criterion": {"status": "met"}}
     prep = {"slice_files": ["a.py"], "product_files": ["a.py"]}
-    assert mint_refusal(integration, prep, _baseline_record()) is None
+    assert mint_refusal(integration, prep, baseline_record()) is None
 
 
 @pytest.mark.parametrize(
     "over",
     [
-        {"baseline": {"pre_existing": ["t0"], "caused": ["t1"], "unverified": []}},
-        {"baseline": {"pre_existing": ["t0"], "caused": [], "unverified": ["t1"]}},
+        {"baseline": {"pre_existing": ["p.py::t0"], "caused": ["p.py::t1"], "unverified": []}},
+        {"baseline": {"pre_existing": ["p.py::t0"], "caused": [], "unverified": ["p.py::t1"]}},
         {"tests_failed": 13},
         {"baseline_method": "rerun"},
         {"baseline": {"pre_existing": [], "caused": [], "unverified": []}},
     ],
 )
-def test_a_caused_unverified_or_unattributed_failure_still_refuses(over):
-    record = _baseline_record(**over)
+def test_a_caused_unverified_or_unattributed_failure_still_refuses(over, baseline_record):
+    record = baseline_record(**over)
     assert not baseline_clears(record) and effective_test_verdict(record) == "fail"
 
 
-def test_all_foreign_failures_clear():
-    record = _baseline_record(
-        tests_failed=2, baseline={"pre_existing": [], "foreign": ["a", "b"], "caused": [], "unverified": []}
+def test_all_foreign_failures_clear(baseline_record):
+    record = baseline_record(
+        tests_failed=2,
+        baseline={"pre_existing": [], "foreign": ["p.py::a", "p.py::b"], "evidence": ["p.py::a", "p.py::b"], "caused": [], "unverified": []},
     )
     assert baseline_clears(record) and effective_test_verdict(record) == "pass"
 
 
-def test_pre_existing_plus_foreign_mix_covering_the_failures_clears():
-    record = _baseline_record(
-        tests_failed=2, baseline={"pre_existing": ["a"], "foreign": ["b"], "caused": [], "unverified": []}
+def test_foreign_ids_absent_from_evidence_do_not_clear(baseline_record):
+    record = baseline_record(
+        tests_failed=2, baseline={"pre_existing": [], "foreign": ["p.py::a", "p.py::b"], "caused": [], "unverified": []}
     )
-    assert baseline_clears(record)
+    assert not baseline_clears(record) and effective_test_verdict(record) == "fail"
 
 
-def test_foreign_plus_one_caused_does_not_clear():
-    record = _baseline_record(
-        tests_failed=2, baseline={"pre_existing": [], "foreign": ["a"], "caused": ["b"], "unverified": []}
+def test_a_partly_evidenced_foreign_set_does_not_clear(baseline_record):
+    record = baseline_record(
+        tests_failed=2,
+        baseline={"pre_existing": [], "foreign": ["p.py::a", "p.py::b"], "evidence": ["p.py::a"], "caused": [], "unverified": []},
     )
     assert not baseline_clears(record)
 
 
-def test_foreign_under_a_heuristic_method_does_not_clear():
-    record = _baseline_record(
+def test_evidence_for_an_unattributed_id_does_not_clear_it(baseline_record):
+    record = baseline_record(
+        tests_failed=1,
+        baseline={"pre_existing": [], "foreign": ["p.py::a"], "evidence": ["p.py::z"], "caused": [], "unverified": []},
+    )
+    assert not baseline_clears(record)
+
+
+def test_evidenced_clear_ids_is_the_attributed_and_evidenced_intersection():
+    from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
+
+    baseline = {"pre_existing": ["p.py::a"], "foreign": [{"id": "p.py::b"}, "p.py::c"], "evidence": ["p.py::a", {"id": "p.py::b"}, "p.py::z"]}
+    assert evidenced_clear_ids(baseline, measured=True) == {"p.py::a", "p.py::b"}
+    assert evidenced_clear_ids({"foreign": ["p.py::a"]}, measured=True) == set()
+    assert evidenced_clear_ids(None, measured=True) == set()
+
+
+def test_self_written_evidence_without_a_measured_base_log_never_clears(tmp_path, baseline_record):
+    from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
+
+    base = {"pre_existing": [], "foreign": ["p.py::a"], "evidence": ["p.py::a"], "caused": [], "unverified": []}
+    record = baseline_record(tests_failed=1, baseline=dict(base, base_log=str(tmp_path / "absent.log")))
+    assert not baseline_clears(record) and effective_test_verdict(record) == "fail"
+    assert evidenced_clear_ids(base, measured=False) == set()
+    other = tmp_path / "other.log"
+    other.write_text("FAILED p.py::z\n", encoding="utf-8")
+    assert not baseline_clears(baseline_record(tests_failed=1, baseline=dict(base, base_log=str(other))))
+    assert baseline_clears(baseline_record(tests_failed=1, baseline=dict(base)))
+
+
+def test_pre_existing_plus_foreign_mix_covering_the_failures_clears(baseline_record):
+    record = baseline_record(
+        tests_failed=2,
+        baseline={"pre_existing": ["p.py::a"], "foreign": ["p.py::b"], "evidence": ["p.py::a", "p.py::b"], "caused": [], "unverified": []},
+    )
+    assert baseline_clears(record)
+
+
+def test_foreign_plus_one_caused_does_not_clear(baseline_record):
+    record = baseline_record(
+        tests_failed=2, baseline={"pre_existing": [], "foreign": ["p.py::a"], "caused": ["p.py::b"], "unverified": []}
+    )
+    assert not baseline_clears(record)
+
+
+def test_foreign_under_a_heuristic_method_does_not_clear(baseline_record):
+    record = baseline_record(
         tests_failed=1, baseline_method="heuristic",
-        baseline={"pre_existing": [], "foreign": ["a"], "caused": [], "unverified": []},
+        baseline={"pre_existing": [], "foreign": ["p.py::a"], "caused": [], "unverified": []},
     )
     assert not baseline_clears(record)
 

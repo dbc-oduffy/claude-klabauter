@@ -16,6 +16,15 @@ def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
+_REAL_APPLY_GUARD_LEVEL = guard.apply_guard_level
+
+
+@pytest.fixture(autouse=True)
+def _detection_unclamped(monkeypatch):
+    """The suite pins what the guard detects; the policy clamp is pinned in TestClampedToLog."""
+    monkeypatch.setattr(guard, "apply_guard_level", lambda name, envelope, **kw: envelope)
+
+
 SENTINEL = ".coordinator-doctrine-edit-approved"
 
 
@@ -529,18 +538,18 @@ class TestIndirectionWrapperShapesDenyEndToEnd:
         )
         return "deny" if (out and '"deny"' in json.dumps(out)) else "allow"
 
-    def test_bash_dash_c_denied_end_to_end(self):
-        assert self._decision('bash -c "touch %s"' % SENTINEL) == "deny"
+    def test_bash_dash_c_logged_never_denied_end_to_end(self):
+        assert self._decision('bash -c "touch %s"' % SENTINEL) == "allow"
 
-    def test_env_sh_dash_c_denied_end_to_end(self):
-        assert self._decision('env sh -c "touch %s"' % SENTINEL) == "deny"
+    def test_env_sh_dash_c_logged_never_denied_end_to_end(self):
+        assert self._decision('env sh -c "touch %s"' % SENTINEL) == "allow"
 
-    def test_dd_of_denied_end_to_end(self):
-        assert self._decision("dd if=/dev/null of=%s" % SENTINEL) == "deny"
+    def test_dd_of_logged_never_denied_end_to_end(self):
+        assert self._decision("dd if=/dev/null of=%s" % SENTINEL) == "allow"
 
-    def test_heredoc_fed_bash_denied_end_to_end(self):
+    def test_heredoc_fed_bash_logged_never_denied_end_to_end(self):
         cmd = "bash <<'EOF'\ntouch %s\nEOF" % SENTINEL
-        assert self._decision(cmd) == "deny"
+        assert self._decision(cmd) == "allow"
 
 
 class TestFormerlyAllowedCreationShapesNowDeny:
@@ -569,11 +578,11 @@ class TestFormerlyAllowedCreationShapesNowDeny:
     def test_unzip_dash_d_denies(self):
         _reason(_enveloped(guard.check)(_payload("unzip archive.zip -d %s" % SENTINEL)))
 
-    def test_mkdir_denied_end_to_end(self):
+    def test_mkdir_logged_never_denied_end_to_end(self):
         out = dispatch.evaluate_payload_json(
             json.dumps({"tool_name": "Bash", "tool_input": {"command": "mkdir %s" % SENTINEL}})
         )
-        assert out and '"deny"' in json.dumps(out)
+        assert not out or '"deny"' not in json.dumps(out)
 
 
 class TestSafeArgv0AllowlistStillWorks:
@@ -661,13 +670,13 @@ class TestIndirectionStillCaughtAfterInversion:
     def test_xargs_mkdir_denies(self):
         _reason(_enveloped(guard.check)(_payload("echo %s | xargs mkdir" % SENTINEL)))
 
-    def test_sh_dash_c_mkdir_denied_end_to_end(self):
+    def test_sh_dash_c_mkdir_logged_never_denied_end_to_end(self):
         out = dispatch.evaluate_payload_json(
             json.dumps(
                 {"tool_name": "Bash", "tool_input": {"command": 'sh -c "mkdir %s"' % SENTINEL}}
             )
         )
-        assert out and '"deny"' in json.dumps(out)
+        assert not out or '"deny"' not in json.dumps(out)
 
 
 class TestVariableTaintClosesRoundTwoForge:
@@ -705,7 +714,7 @@ class TestVariableTaintClosesRoundTwoForge:
     def test_untainted_variable_dereference_still_allows(self):
         assert _enveloped(guard.check)(_payload("FOO=bar; mkdir $FOO")) is None
 
-    def test_assign_then_mkdir_denied_end_to_end(self):
+    def test_assign_then_mkdir_logged_never_denied_end_to_end(self):
         out = dispatch.evaluate_payload_json(
             json.dumps(
                 {
@@ -714,7 +723,7 @@ class TestVariableTaintClosesRoundTwoForge:
                 }
             )
         )
-        assert out and '"deny"' in json.dumps(out)
+        assert not out or '"deny"' not in json.dumps(out)
 
     def test_known_open_gap_glob_near_miss_still_allows(self):
         # Documented in the module docstring's "KNOWN OPEN GAP -- DYNAMIC
@@ -823,21 +832,21 @@ class TestReachableThroughTheDispatchChain:
         )
         return "deny" if (out and '"deny"' in json.dumps(out)) else "allow"
 
-    def test_bare_touch_denied_end_to_end(self):
-        assert self._decision("touch %s" % SENTINEL) == "deny"
+    def test_bare_touch_logged_never_denied_end_to_end(self):
+        assert self._decision("touch %s" % SENTINEL) == "allow"
 
-    def test_cd_prefixed_touch_denied_end_to_end(self):
-        assert self._decision("cd /tmp && touch %s" % SENTINEL) == "deny"
+    def test_cd_prefixed_touch_logged_never_denied_end_to_end(self):
+        assert self._decision("cd /tmp && touch %s" % SENTINEL) == "allow"
 
-    def test_semicolon_chained_touch_denied_end_to_end(self):
-        assert self._decision("cd /tmp; touch %s" % SENTINEL) == "deny"
+    def test_semicolon_chained_touch_logged_never_denied_end_to_end(self):
+        assert self._decision("cd /tmp; touch %s" % SENTINEL) == "allow"
 
-    def test_redirect_denied_end_to_end(self):
-        assert self._decision("echo ok > %s" % SENTINEL) == "deny"
+    def test_redirect_logged_never_denied_end_to_end(self):
+        assert self._decision("echo ok > %s" % SENTINEL) == "allow"
 
-    def test_python_dash_c_denied_end_to_end(self):
+    def test_python_dash_c_logged_never_denied_end_to_end(self):
         code = "open('%s', 'w')" % SENTINEL
-        assert self._decision("python3 -c \"%s\"" % code) == "deny"
+        assert self._decision("python3 -c \"%s\"" % code) == "allow"
 
     def test_rm_allowed_end_to_end(self):
         assert self._decision("rm %s" % SENTINEL) == "allow"
@@ -1605,3 +1614,46 @@ class TestBracketedScriptPaths:
         posix = str(script).replace("\\", "/")
         reason = _reason(_enveloped(guard.check)(_payload("python3 " + posix, cwd=str(root))))
         assert "read cap" in reason
+
+
+class TestReadOnlyPipelinesPass:
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "grep -rl foo docs | xargs -n1 basename",
+            "du -sk state/* | sort -n | xargs -n1 du -sk",
+            "ls | xargs -n1 dirname",
+            "ls | xargs -I{} realpath {}",
+            "grep -rl x . | xargs sha256sum",
+        ],
+    )
+    def test_xargs_over_read_only_head_allows(self, cmd):
+        assert _enveloped(guard.check)(_payload(cmd + " && ls " + SENTINEL)) is None
+
+    def test_xargs_over_read_only_head_that_redirects_into_the_sentinel_is_still_detected(self):
+        _reason(_enveloped(guard.check)(_payload("ls | xargs basename > %s" % SENTINEL)))
+
+    def test_cat_heredoc_without_sentinel_write_allows(self):
+        assert _enveloped(guard.check)(_payload("cat <<'EOF'\nhello\nEOF\nls %s" % SENTINEL)) is None
+
+
+class TestClampedToLog:
+    """Unregistered, the guard's deny is clamped to an advisory allow at guardLevel log."""
+
+    @pytest.fixture(autouse=True)
+    def _real_clamp(self, monkeypatch):
+        monkeypatch.setattr(guard, "apply_guard_level", _REAL_APPLY_GUARD_LEVEL)
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "touch %s" % SENTINEL,
+            "echo hello | xargs sh -c 'echo x' && ls %s" % SENTINEL,
+            "S=%s; mkdir $S" % SENTINEL,
+        ],
+    )
+    def test_detected_creation_or_unreadable_payload_returns_advisory_allow(self, cmd):
+        out = guard.check_ungated(_payload(cmd))
+        assert out["guardLevel"] == "log"
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert out["hookSpecificOutput"]["additionalContext"].startswith("Advisory:")

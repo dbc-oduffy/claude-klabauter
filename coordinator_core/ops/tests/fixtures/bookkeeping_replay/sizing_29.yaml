@@ -1,0 +1,77 @@
+schema: sizing-object
+name: 29-b1-authoring-constraints
+intent: 'The engine hands plan-author the prep-gate and readiness rules as authoring
+  constraints before it drafts (lever b1): emit {id, gate, rule, source, satisfy,
+  declared_empty_form?} for each rule; plan frontmatter constraint_waived: [{id, reason}]
+  waives one; an absent field means plan-author proceeds. Test: a cf544a-style plan
+  is no longer pulled for register-rows-unclaimed or anchor-premises-undeclared.'
+intent_source: em-elaborated
+estimate:
+  tshirt: L
+  provisional: true
+route: plan
+detents: ["premise_unproven"]
+fork: null
+xl_exit: null
+status: routed
+plan: "docs/plans/2026-10-25-07e966-3-29-b1-authoring-constraints.md"
+baton: "state/handoffs/2026-10-25-07e966-3-29-b1-authoring-constraints.md"
+premise:
+  provenance: read
+  evidence: Read prep_gate.py evaluate_plan (13 gate classes incl. REGISTER emitting register-rows-unclaimed), ops/_anchor_premise.py (anchor-premises-undeclared), ask_compose.py plan-author category (_PLAN_AUTHOR_AGENT_TYPE) and plan.schema.json; no authoring-constraints emitter exists today.
+em_analysis:
+  intake: sizing.intake_mint
+  ask_source: relayed
+  relayed_text: 'The engine hands plan-author the prep-gate and readiness rules as
+    authoring constraints before it drafts (lever b1): emit {id, gate, rule, source,
+    satisfy, declared_empty_form?} for each rule; plan frontmatter constraint_waived:
+    [{id, reason}] waives one; an absent field means plan-author proceeds. Test: a
+    cf544a-style plan is no longer pulled for register-rows-unclaimed or anchor-premises-undeclared.'
+  ask_parent: ask-parent-20261025T231927-07e966 ask-20261025T231927-81ea9b
+  em_brief: 'EM context (not the PM''s words):
+
+    Seam agreed with DoE, pinned on DoE run ask-20261025T230248-e26211 Q2; DoE owns
+    the plan-author doctrine half.'
+requirement_register:
+  sources:
+  - doc: state/sizings/2026-10-25-07e966-3-29-b1-authoring-constraints.yaml
+    ref: pm_verbatims, ask, workflow.revise
+  rows:
+  - id: R1
+    source_text: 'The engine hands plan-author the prep-gate and readiness rules as authoring constraints before it drafts (lever b1): emit {id, gate, rule, source, satisfy, declared_empty_form?} for each rule; plan frontmatter constraint_waived: [{id, reason}] waives one; an absent field means plan-author proceeds. Test: a cf544a-style plan is no longer pulled for register-rows-unclaimed or anchor-premises-undeclared.'
+    anchor: relayed
+    surface: internal
+    status: open
+    claimed_by: []
+  - id: R2
+    source_text: 'EM context (not the PM''s words):
+
+      Seam agreed with DoE, pinned on DoE run ask-20261025T230248-e26211 Q2; DoE owns the plan-author doctrine half.'
+    anchor: relayed
+    surface: internal
+    status: open
+    claimed_by: []
+  rollup:
+    open: 2
+    partial: 0
+    met: 0
+    deferred: 0
+    waived: 0
+    unclaimed: 2
+    unwired: 0
+    coverage:
+      met: 0
+      total: 2
+    computed_at: '2026-10-25T23:19:34Z'
+deliverable_id: "dlv-the-engine-hands-plan-author-the-prep-d03039"
+tie_break: "scope floor: M -> L (scope_files=7, scope_lines=450)"
+exit_criterion:
+  statement: The engine emits id/gate/rule/source/satisfy constraints to plan-author before drafting, honours plan frontmatter constraint_waived, and a cf544a-style plan is not pulled for register-rows-unclaimed or anchor-premises-undeclared; tests covering touched files pass.
+  accepted:
+    source: engine-size-rule
+    rule: engine-size-rule
+    route: plan
+    tshirt: L
+    'on': '2026-10-25'
+    mode: ceo
+interaction_mode: ceo

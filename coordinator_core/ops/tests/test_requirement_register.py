@@ -121,6 +121,29 @@ def test_apply_verdicts_appends_met_by_and_skips_ruled_rows():
     assert reg["b"]["status"] == "deferred" and reg["b"]["wired"] is False
 
 
+def _verdict_for(entry_point):
+    row = {"id": "a", "claim": "this-plan", "status": "met", "wired": True}
+    if entry_point is not None:
+        row[rr.JUDGE_EVIDENCE_ENTRY_POINT] = entry_point
+    return row
+
+
+def test_hand_built_fixture_evidence_lands_partial_with_no_met_by():
+    # The r40 shape: init_graph_db plus a direct extract_cross_layer_edges call, never reindex.
+    new = rr.apply_verdicts(
+        _sizing([_row("a", claimed_by=[P1])]), [_verdict_for(rr.EVIDENCE_HAND_BUILT)], P1, "new", NOW)
+    row = rr.read_register(new).rows[0]
+    assert row["status"] == "partial" and row["wired"] is True and row["met_by"] == []
+
+
+@pytest.mark.parametrize("entry_point", [rr.EVIDENCE_PRODUCTION, None])
+def test_production_or_absent_evidence_entry_point_lands_met(entry_point):
+    new = rr.apply_verdicts(
+        _sizing([_row("a", claimed_by=[P1])]), [_verdict_for(entry_point)], P1, "new", NOW)
+    row = rr.read_register(new).rows[0]
+    assert row["status"] == "met" and row["met_by"] == [f"{P1}@new"]
+
+
 def test_plan_claims_reads_sizing_and_rows():
     fm = "plan_id: x\nregister_claims:\n  sizing: state/sizings/s.yaml\n  rows: [a, 'T1.2']\n"
     assert rr.plan_claims(fm) == ("state/sizings/s.yaml", frozenset({"a", "T1.2"}))

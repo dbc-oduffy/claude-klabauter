@@ -65,13 +65,27 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 
 PathLike = Union[str, os.PathLike]
 
 
+_STALLED = object()
+
+# The scan is O(archive) (~1.7k records) and gates creation, not a counter append:
+# the 0.2s append deadline would refuse a healthy cold archive. 0.5s is the brightline bar.
+_TWIN_SCAN_DEADLINE_SECS = 0.5
+
+
 class HandoffArchivedTwinError(RuntimeError):
     pass
+
+
+class HandoffTwinScanStalled(HandoffArchivedTwinError):
+    """The handoff_id twin scan overran its deadline. Fail closed: a stalled
+    scan is not evidence of "no twin", so creation callers (which already catch
+    ``HandoffArchivedTwinError``) refuse rather than allow a possible duplicate."""
 
 
 def _archive_handoffs_dir(repo_root: PathLike) -> Path:
@@ -100,10 +114,30 @@ def find_archived_twin_by_handoff_id(handoff_id: Optional[str], repo_root: PathL
     (this module RAISES on a match) calls this rather than carrying its own
     glob-and-compare loop, so guards cannot drift apart on what counts as a
     twin. Only the reaction to a match stays call-site-local.
+
+    Raises ``HandoffTwinScanStalled`` when the scan overruns
+    ``_TWIN_SCAN_DEADLINE_SECS`` (a large archive can overrun it too).
     """
     if not handoff_id:
         return None
     archive_dir = _archive_handoffs_dir(repo_root)
+    result = run_bounded(
+        f"twin-scan:{archive_dir}",
+        lambda: _scan_for_handoff_id(archive_dir, handoff_id),
+        deadline=_TWIN_SCAN_DEADLINE_SECS,
+        default=_STALLED,
+    )
+    if result is _STALLED:
+        raise HandoffTwinScanStalled(
+            f"archived-twin scan of {archive_dir} did not finish within "
+            f"{_TWIN_SCAN_DEADLINE_SECS}s (disk stalled or archive too large to scan "
+            "in that time); refusing rather than risk a duplicate handoff. Retry; "
+            "the late scan warms the cache."
+        )
+    return result  # type: ignore[return-value]
+
+
+def _scan_for_handoff_id(archive_dir: Path, handoff_id: str) -> Optional[Path]:
     if not archive_dir.is_dir():
         return None
     for pattern in ("*.md", os.path.join("*", "*.md")):

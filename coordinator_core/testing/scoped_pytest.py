@@ -17,10 +17,12 @@ import os
 import signal
 import subprocess
 import sys
-import time
+import threading
 from typing import Any, Optional, Sequence
 
 import psutil
+
+from coordinator_core.testing import watch_parent
 
 ADMIT_KEY = "test-runner-pytest"
 # Cold-start floor only: admit_before_spawn takes max(this, the peak recorded for ADMIT_KEY).
@@ -28,7 +30,8 @@ COLD_START_FLOOR_GIB = 1.0
 EXIT_ADMISSION_REFUSED = 75
 EXIT_TARGET_REFUSED = 64
 EXIT_PARENT_DIED = 137
-WATCHDOG_INTERVAL_S = 1.0
+WATCH_INTERVAL_S = 2.0
+_exit = os._exit  # module alias so tests can substitute it; the real call must skip finalizers
 
 _IS_WINDOWS = sys.platform == "win32"
 _SHELL_NAMES = frozenset(
@@ -45,7 +48,8 @@ def _is_shell(name: str) -> bool:
 
 def ancestor_chain(pid: Optional[int] = None) -> list:
     """(pid, create_time) of each ancestor of `pid`, nearest first, ending at the first non-shell
-    one (the agent process). Create time makes a reused pid distinguishable from the original."""
+    one (the agent process). Create times come from watch_parent.process_create_time, the clock
+    watch_parent compares against; psutil's create_time() is a different source and never matches."""
     chain: list = []
     try:
         proc = psutil.Process(pid or os.getpid())
@@ -53,25 +57,14 @@ def ancestor_chain(pid: Optional[int] = None) -> list:
             parent = proc.parent()
             if parent is None:
                 break
-            chain.append((parent.pid, parent.create_time()))
+            created = watch_parent.process_create_time(parent.pid)
+            chain.append((parent.pid, float("nan") if created is None else created))
             if not _is_shell(parent.name()):
                 break
             proc = parent
     except psutil.Error:
         pass
     return chain
-
-
-def ancestors_alive(chain: Sequence) -> bool:
-    """False as soon as any recorded ancestor is gone or its pid belongs to a different process."""
-    for pid, created in chain:
-        try:
-            p = psutil.Process(pid)
-            if p.create_time() != created or p.status() == psutil.STATUS_ZOMBIE:
-                return False
-        except psutil.Error:
-            return False
-    return True
 
 
 def _target_file(token: str) -> str:
@@ -175,7 +168,7 @@ def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
     # The launcher's own pid holds the reservation (it outlives the child and reaps with it): the
     # check and the START write share one lock, so concurrent launchers cannot both read zero.
     admission = hcc.admit_before_spawn(
-        ADMIT_KEY, COLD_START_FLOOR_GIB, host=host, register_pid=os.getpid()
+        ADMIT_KEY, COLD_START_FLOOR_GIB, host=host, register_pid=os.getpid(), wait_kw={}
     )
     if not admission.admitted:
         print("scoped_pytest: %s" % admission.reason, file=sys.stderr)
@@ -183,15 +176,19 @@ def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
 
     chain = ancestor_chain()
     proc, kill = _spawn([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *pytest_args])
+
+    gone = threading.Event()
+
+    def on_gone() -> None:
+        gone.set()  # before kill(): the main thread wakes on the kill and must already see this
+        kill()
+        _exit(EXIT_PARENT_DIED)
+
+    for pid, created in chain:
+        watch_parent.watch_parent(pid, created, on_gone, WATCH_INTERVAL_S)
     try:
-        while True:
-            try:
-                return proc.wait(timeout=WATCHDOG_INTERVAL_S)
-            except subprocess.TimeoutExpired:
-                if not ancestors_alive(chain):
-                    kill()
-                    proc.wait()
-                    return EXIT_PARENT_DIED
+        code = proc.wait()
+        return EXIT_PARENT_DIED if gone.is_set() else code
     finally:
         if proc.poll() is None:
             kill()

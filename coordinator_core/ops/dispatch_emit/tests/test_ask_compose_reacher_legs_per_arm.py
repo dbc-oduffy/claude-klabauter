@@ -17,7 +17,7 @@ from coordinator_core.ops.dispatch_emit.tests._reacher_leg_probe import (
 
 _SIZE_TERMS = ("tshirt", "'L'", "'XL'", "'XXL'")
 _NON_SIZE_SKIPS = {
-    "if (!_halted && (_gate.arm === 'xs' || _xsTail)) { _integrationNotRun = true; }",
+    "if (!_halted && !_codeReviewOwed && (_gate.arm === 'xs' || _xsTail)) { _integrationNotRun = true; }",
     "if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== 'xs') { _integrationNotRun = true; }",
 }
 

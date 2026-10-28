@@ -6,9 +6,8 @@ import glob as _glob
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Optional, Sequence
+from typing import Optional
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.ops.dispatch_emit import bug_close
 from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import reentrant_dispatch
@@ -569,58 +568,6 @@ def _restore_texts(worktree_root: Path, saved: dict) -> None:
             replace_text(worktree_root / rel, text)
 
 
-def _ask_named_bug_ids(worktree_root: Path, ledger: object) -> tuple:
-    """Ids of existing bug rows the ledger's ask rows or the bound sizing's ``em_rationale`` state closure
-    intent for (``bug_close.closing_bug_ids``), whatever the route. In-process reads: no spawn."""
-    if ledger is None:
-        return ()
-    texts = [str(getattr(i, "text", "") or "") for i in getattr(ledger, "items", ()) or ()]
-    sizing_rel = getattr(ledger, "sizing_rel", None)
-    raw = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
-    if raw:
-        try:
-            doc = _yaml_load(raw)
-        except Exception:  # noqa: BLE001 -- an unreadable sizing contributes no ids
-            doc = None
-        analysis = doc.get("em_analysis") if isinstance(doc, dict) else None
-        rationale = analysis.get("em_rationale") if isinstance(analysis, dict) else None
-        if isinstance(rationale, str):
-            texts.append(rationale)
-    return bug_close.closing_bug_ids(worktree_root, "\n".join(texts))
-
-
-def _close_marked_bugs(
-    worktree_root: Path, chunks: Sequence, sha: str, snapshot: Optional[_Snapshot],
-    report_cache: dict, ledger: object = None,
-) -> tuple:
-    """Close the bug rows the credited chunks' reports mark ``post-commit: bug_close <id>``, plus the
-    existing rows the run's ask rows and the sizing's ``em_rationale`` name, at ``sha``. Returns
-    ``(reply fields, rels the stamp commit carries, saved texts for rollback)``; the fields are empty
-    when nothing names a row."""
-    ids: dict = {}
-    for bug_id in _ask_named_bug_ids(worktree_root, ledger):
-        ids.setdefault(bug_id, None)
-    for chunk in chunks:
-        if not chunk.report:
-            continue
-        if chunk.report not in report_cache:
-            report_cache[chunk.report] = _read_rel(worktree_root, chunk.report)
-        for bug_id in bug_close.marker_ids(report_cache[chunk.report] or ""):
-            ids.setdefault(bug_id, None)
-    if not ids:
-        return {}, [], {}
-    rels = {i: bug_close.bug_row_rel(worktree_root, i) for i in ids}
-    saved = {rel: _read_rel(worktree_root, rel) for rel in rels.values() if rel}
-    result = bug_close.close_rows(worktree_root, tuple(ids), sha)
-    written = list(result["closed"].values())
-    if snapshot is not None:
-        snapshot.note_written(written)
-    fields: dict = {"bugs_closed": {**result["closed"], **result["already"]}}
-    if result["refused"]:
-        fields["bug_close_refused"] = result["refused"]
-    return fields, written, {rel: saved[rel] for rel in written if rel in saved}
-
-
 def _launch_close_job(worktree_root: Path, run_id: str, batons: list, memo: Optional[str]) -> bool:
     from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 
@@ -804,7 +751,7 @@ def _close_block(ctx: dict, reply: dict) -> dict:
     arm, tshirt = receipt_inputs(sizing_text)
     block = build_close_block(
         ctx["run_id"], ctx["applies"], legs, ctx["completion_entry"], kind=ctx["kind"],
-        parts=close_from_sizing_text(sizing_text),
+        parts=close_from_sizing_text(sizing_text, ctx.get("ledger_met")),
         run_dir=Path(home_dir(str(root), "warp")) / (ctx.get("sibling_run_id") or ctx["run_id"]),
         arm=arm, tshirt=tshirt,
     )

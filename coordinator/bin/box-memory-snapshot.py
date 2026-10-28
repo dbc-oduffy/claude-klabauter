@@ -6,7 +6,10 @@ compressed + swapped), which can far exceed `ps` RSS. Prints Available, commit u
 top N consumers by private commit. A counter that fails to read prints `unavailable` for that
 field alone. `--admit-peak GIB` adds one line, `ADMIT ...` (exit 0) or `HOLD ...` naming the
 failed clause (exit 4); the figure is net of `reserved=`, the sum over live START pids without an
-END in admission.jsonl of max(0, declared_peak_mb - tree RSS). `--json` emits the same fields. Other hosts: exit 6.
+END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is max(peak*1.25, suite-guard floor + peak).
+`--command-key K` with `--record-peak GIB` keeps K's largest seen peak (used when `--admit-peak` is omitted);
+`--register-pid P` on ADMIT reserves P's headroom, `--release-pid P` frees it. `--json` emits the same
+fields. Other hosts: exit 6.
 """
 
 from __future__ import annotations
@@ -136,6 +139,7 @@ def main(
     alive_fn: Optional[Callable] = None,
     proc_table_fn: Optional[Callable] = None,
     cmdline_fn: Optional[Callable] = None,
+    floor_fn: Optional[Callable] = None,
 ) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description="One-screen box memory snapshot.")
     parser.add_argument("--top", type=int, default=10, help="top N consumers (default 10)")
@@ -144,9 +148,20 @@ def main(
     parser.add_argument("--commit-limit-gib", type=float, help="override the commit limit")
     parser.add_argument("--admission-file", help="admission.jsonl path (default: settings-home channel)")
     parser.add_argument("--json", action="store_true", help="emit JSON")
+    parser.add_argument("--command-key", help="name of the command; keys its recorded peak")
+    parser.add_argument("--record-peak", type=float, metavar="GIB", help="record this command's seen peak (max kept)")
+    parser.add_argument("--register-pid", type=int, help="on ADMIT, reserve this pid's headroom until release or exit")
+    parser.add_argument("--release-pid", type=int, help="free the reservation registered for this pid")
     args = parser.parse_args(argv)
 
     host = _load("box_memory_host")
+    adm_path = args.admission_file or host.admission_file()
+    if args.command_key and args.release_pid is not None:
+        host.release_command(adm_path, args.command_key, args.release_pid)
+    if args.command_key and args.record_peak is not None:
+        host.record_peak(adm_path, args.command_key, args.record_peak)
+    if args.admit_peak is None and args.command_key:
+        args.admit_peak = host.read_recorded_peak(adm_path, args.command_key)
     plat = platform if platform is not None else sys.platform
     if plat not in ("win32", "darwin"):
         return host.unsupported(PROG, plat, "reads Windows or macOS memory counters")
@@ -182,7 +197,7 @@ def main(
         peak = int(args.admit_peak * host.GIB)
         limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit
         reserved = host.reserved_bytes(
-            args.admission_file or host.admission_file(),
+            adm_path,
             **({"rss_fn": rss_fn} if rss_fn else {}),
             **({"alive_fn": alive_fn} if alive_fn else {}),
         )
@@ -191,9 +206,12 @@ def main(
             avail_phys=max(0, status.avail_phys - reserved),
             commit_used=status.commit_used + reserved,
         )
+        floor = (floor_fn or host.guard_floor_bytes)()
         verdict = host.admit(
-            peak, status, cushion_pct=args.cushion_pct, commit_limit=limit
+            peak, status, cushion_pct=args.cushion_pct, commit_limit=limit, floor=floor
         )
+        if verdict.admit and args.command_key and args.register_pid is not None:
+            host.register_command(adm_path, args.command_key, args.register_pid, args.admit_peak)
         admit_line = _admit_line(verdict, args.admit_peak, status, limit) + f" reserved={_gib(reserved)}GiB"
         snap["admit"] = {
             "reserved_gib": _gib(reserved),

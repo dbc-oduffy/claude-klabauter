@@ -85,14 +85,19 @@ def deny_names(declarations_text: str, row_name: str) -> FrozenSet[str]:
 def unclassified(
     touched: Dict[str, FrozenSet[str]],
     read_landing: Callable[[str], Optional[str]],
+    declared: Optional[Dict[str, FrozenSet[str]]] = None,
 ) -> List[Tuple[str, str]]:
+    """Touched names the allowlist leaves unclassified. `declared` holds names
+    whose file the commit itself carries (same shape as `touched`); a carried
+    name is never refused, since field 7 is regenerated only at publish."""
     refused: List[Tuple[str, str]] = []
     portable_text = read_landing(PORTABLE_PATH)
     if portable_text is None:
         return refused
+    declared = declared or {}
     for row_name, names in touched.items():
         inclusions = field7_inclusions(portable_text, row_name)
-        missing = sorted(names - inclusions)
+        missing = sorted(names - inclusions - declared.get(row_name, frozenset()))
         if not missing:
             continue
         declarations_text = read_landing(DECLARATIONS_PATH)

@@ -162,9 +162,10 @@ def _default_sidecar_cli(
 def _plan_review_roster(plugin_root: Path | None) -> dict | None:
     """The `plan_review` block of `contract/review-roster-fragment.json`, or None.
 
-    Probes `<plugin_root>/coordinator/contract/` then `<plugin_root>/contract/`. None for no
-    plugin root, an absent or unparseable file, or a block naming no reviewer (plan-blitz
-    treats such a block as unreadable, so forwarding it would only reproduce the refusal).
+    Probes `<plugin_root>/coordinator/contract/` (repo-root layout) then `<plugin_root>/contract/`
+    (the resolved plugin root is the `coordinator` dir itself). None for no plugin root, an
+    absent or unparseable file, or a block naming no reviewer (plan-blitz treats such a block as
+    unreadable, so forwarding it would only reproduce the refusal).
     """
     if plugin_root is None:
         return None
@@ -221,4 +222,10 @@ def resolve(
 
         out["chatty"] = True
         out[chatty.REVIEW_WAVE_ARG] = chatty.review_wave_args(chatty_run_id)
+    else:
+        from coordinator_core.ops.dispatch_emit import review_wave
+
+        wave = review_wave.review_wave_args(_plan_review_roster(plugin_root))
+        if wave is not None:
+            out[review_wave.PARALLEL_REVIEW_ARG] = wave
     return out

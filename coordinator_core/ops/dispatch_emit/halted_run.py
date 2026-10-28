@@ -6,6 +6,10 @@ uncommitted tracked deletion. The marker may carry `run_base_sha` (the halted ru
 read by `halted_run_base`); `halted_ask_run_for` finds a halted `ask-*` run naming a sizing.
 `revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted run and read by `revised_halt`. Stdlib plus the atomic writer; no subprocess, no git.
 
+`halted_run_for` skips minted-only shell dirs and re-halts a `resumed` marker whose resumer died unstaged.
+Trap: a live resumer still at `minted` looks the same as a dead one, so a second refire in that window re-halts it
+(pinned by `test_replay_halted_run_shadow.py::test_resumed_with_a_dead_unstaged_resumer_is_halted_again`).
+
 Accepted residual: two concurrent refires of one halted sizing can both read `halted` before
 either rewrites it.
 """
@@ -30,6 +34,13 @@ from coordinator_core.ops.dispatch_emit.halt_refire import is_exit_next_action, 
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
 STATUS_LANDED = "landed"
+STATUS_SUPERSEDED = "superseded"
+SUPERSEDED_EVIDENCE_FIELD = "superseded_evidence"
+PATH_DISPOSITIONS_FIELD = "path_dispositions"
+DISPOSITION_LANDED = "landed"
+DISPOSITION_SUPERSEDED = "superseded"
+DISPOSITION_SCRATCH = "scratch-abandoned"
+DISPOSITION_LOST = "lost"
 STATUS_CLOSED = "closed"
 HALT_RUN_BASE_FIELD = "run_base_sha"
 HALT_REASON_FIELD = "reason"
@@ -55,6 +66,40 @@ def _read(record_dir: Path) -> Optional[dict]:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def read_strict(record_dir: Path) -> Optional[dict]:
+    """The marker, None when `halted.json` is absent; ValueError when it exists but is unreadable,
+    not JSON, or not an object. For hold computations, where a corrupt marker must hold."""
+    try:
+        data = json.loads((record_dir / HALTED_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"unreadable halt marker in {record_dir}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"halt marker in {record_dir} is not an object")
+    return data
+
+
+UNREADABLE_HALT_RECORD = "unreadable-halt-record"
+
+
+class UnreadableHaltRecord(ValueError):
+    """A halt marker that exists but cannot be read; `reason` names the run dir it came from."""
+
+    def __init__(self, run_id: str, detail: str = ""):
+        self.run_id = run_id
+        self.reason = f"{UNREADABLE_HALT_RECORD}:{run_id}"
+        super().__init__(f"{self.reason} {detail}".strip())
+
+
+def read_strict_run(record_dir: Path) -> Optional[dict]:
+    """`read_strict` raising `UnreadableHaltRecord` (run_id = the record dir's name) on a corrupt marker."""
+    try:
+        return read_strict(Path(record_dir))
+    except ValueError as exc:
+        raise UnreadableHaltRecord(Path(record_dir).name, str(exc)) from exc
 
 
 def _write(record_dir: Path, payload: dict) -> Path:
@@ -153,33 +198,60 @@ def halted_ask_run_for(repo_root: Path, sizing_rel: str, *, ignore_superseded: b
     return None
 
 
+def _is_shell(run_dir: Path) -> bool:
+    """A minted-only dir: no marker and a progress record that never left `minted` (or none).
+
+    Such a dir holds no work to resume or to supersede with, so it never hides an older halt.
+    """
+    if (run_dir / HALTED_FILE).exists():
+        return False
+    try:
+        stage = json.loads((run_dir / "run-stage.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return isinstance(stage, dict) and stage.get("stage") in (None, "minted")
+
+
 def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:
     """Return the run id a refire of `sizing_rel` resumes, else None.
 
-    Only the lexically greatest `warp-<stem>-*` dir counts (run ids embed %Y%m%dT%H%M%S): a
-    newer unmarked run means the halted one was superseded.
+    Newest `warp-<stem>-*` dir first (run ids embed %Y%m%dT%H%M%S); a minted-only shell is skipped,
+    so a newer unmarked run that got past `minted` still means the halted one was superseded. A
+    `resumed` marker whose every newer dir is such a shell (the resuming run died before staging,
+    e.g. its halt commit was denied) is rewritten `halted` and returned.
     """
-    prefix = f"warp-{PurePosixPath(_norm(sizing_rel)).stem}-"
+    norm = _norm(sizing_rel)
+    prefix = f"warp-{PurePosixPath(norm).stem}-"
     root = Path(repo_root) / RECORD_DIR_ROOT
-    newest = None
+    names = []
     try:
         with os.scandir(root) as it:
             for entry in it:
                 if entry.name.startswith(prefix) and _STAMP.fullmatch(entry.name[len(prefix):]) and entry.is_dir():
-                    if newest is None or entry.name > newest:
-                        newest = entry.name
+                    names.append(entry.name)
     except OSError:
         return None
-    if newest is None or not safe_id(newest):
+    skipped = 0
+    for name in sorted(names, reverse=True):
+        if not safe_id(name):
+            return None
+        if _is_shell(root / name):
+            skipped += 1
+            continue
+        marker = _read(root / name)
+        if marker is None or marker.get("sizing_rel") != norm:
+            return None
+        status = marker.get("status")
+        if status == STATUS_HALTED:
+            return name
+        if status == STATUS_RESUMED and skipped:
+            _write(root / name, {**marker, "status": STATUS_HALTED})
+            _index_call("add_run", root / name, halted_withheld(root / name))
+            return name
         return None
-    marker = _read(root / newest)
-    if (
-        marker is None
-        or marker.get("status") != STATUS_HALTED
-        or marker.get("sizing_rel") != _norm(sizing_rel)
-    ):
-        return None
-    return newest
+    return None
 
 
 #: The `rebind_blocker` reason for a recorded emitter that is no longer a live session.
@@ -256,10 +328,18 @@ def record_resume_stage(record_dir: Path, stage: dict) -> bool:
 
 def halted_withheld(record_dir: Path) -> dict:
     """``{path: reason}`` the halt recorded as withheld; empty when absent or malformed."""
-    marker = _read(Path(record_dir))
+    return _withheld_of(_read(Path(record_dir)))
+
+
+def _withheld_of(marker: Optional[dict]) -> dict:
     arts = marker.get(HALT_RUN_ARTIFACTS_FIELD) if marker else None
     raw = arts.get("withheld") if isinstance(arts, dict) else None
     return {k: v for k, v in raw.items() if isinstance(k, str)} if isinstance(raw, dict) else {}
+
+
+def halted_withheld_strict(record_dir: Path) -> dict:
+    """`halted_withheld` over the strict read: empty when the marker is absent, `UnreadableHaltRecord` when corrupt."""
+    return _withheld_of(read_strict_run(record_dir))
 
 
 def mark_revised(record_dir: Path, at: str) -> bool:
@@ -297,6 +377,21 @@ def mark_resumed(record_dir: Path) -> bool:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_RESUMED})
     _index_call("remove_run", record_dir)
+    return True
+
+
+def mark_superseded(record_dir: Path, expected: dict, evidence: dict, dispositions: Optional[dict] = None) -> bool:
+    """Rewrite the marker as `superseded` with `evidence` only if it still equals `expected` (the marker the
+    caller verified against); False and no write when it is absent, changed, or no longer `halted`.
+
+    `dispositions` (path -> DISPOSITION_*), when given, is also recorded under PATH_DISPOSITIONS_FIELD."""
+    marker = _read(Path(record_dir))
+    if marker is None or marker != expected or marker.get("status") != STATUS_HALTED:
+        return False
+    updated = {**marker, "status": STATUS_SUPERSEDED, SUPERSEDED_EVIDENCE_FIELD: evidence}
+    if dispositions is not None:
+        updated[PATH_DISPOSITIONS_FIELD] = dispositions
+    _write(Path(record_dir), updated)
     return True
 
 

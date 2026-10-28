@@ -13,6 +13,9 @@ EXCERPT_HEADING = "## Row excerpts"
 EXCERPT_MAX_BYTES = 1200
 EXCERPT_MAX_SYMBOLS_PER_FILE = 40
 
+SYMBOL_CONTEXT_HEADING = "## Symbol context"
+SYMBOL_CONTEXT_MAX_ENTRIES = 24
+
 BATCHING_CLAUSE = (
     "Batch independent reads and searches into one turn. Read a file once, by the spans you need. "
     "Run the row's tests once per edit batch."

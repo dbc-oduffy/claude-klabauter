@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clear_clone_root_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("COORDINATOR_CLONE_ROOT", raising=False)
+
+
 def build_spec_backlink_corpus(root: Path) -> dict[str, Path]:
     docs_plans = root / "docs" / "plans"
     archive_specs_dir = root / "archive" / "specs" / "2026-08"

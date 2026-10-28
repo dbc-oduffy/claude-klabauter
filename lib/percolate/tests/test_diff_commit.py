@@ -310,9 +310,6 @@ def test_commit_false_leaves_writes_uncommitted(tmp_path):
     assert _status(root).strip() == "M d0/f0.txt"
 
 
-posix_only = pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
-
-
 def _seed_exec(tmp_path, disk_mode, head_mode="100755"):
     root = _dest(tmp_path, 2)
     tool = root / "bin" / "tool"
@@ -323,7 +320,7 @@ def _seed_exec(tmp_path, disk_mode, head_mode="100755"):
     return root, tool
 
 
-@posix_only
+@pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
 def test_unchanged_path_with_drifted_disk_bit_is_promoted_without_a_commit(tmp_path):
     root, tool = _seed_exec(tmp_path, 0o644)
     head = _git(root, "rev-parse", "HEAD")
@@ -333,7 +330,7 @@ def test_unchanged_path_with_drifted_disk_bit_is_promoted_without_a_commit(tmp_p
     assert _status(root) == ""
 
 
-@posix_only
+@pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
 def test_unchanged_path_with_exec_disk_bit_is_demoted(tmp_path):
     root, tool = _seed_exec(tmp_path, 0o755, head_mode="100644")
     out = land_diff(root, [DestWrite("bin/tool", b"#!/bin/sh\n", 0o100644)], [], "m", commit=True)
@@ -341,7 +338,7 @@ def test_unchanged_path_with_exec_disk_bit_is_demoted(tmp_path):
     assert _status(root) == ""
 
 
-@posix_only
+@pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
 def test_remoded_rides_a_round_that_also_writes(tmp_path):
     root, tool = _seed_exec(tmp_path, 0o644)
     writes = [DestWrite("bin/tool", b"#!/bin/sh\n", 0o100755), _w(0, "new\n")]
@@ -350,7 +347,7 @@ def test_remoded_rides_a_round_that_also_writes(tmp_path):
     assert tool.stat().st_mode & 0o111 and _status(root) == ""
 
 
-@posix_only
+@pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
 def test_unchanged_path_with_hand_edited_bytes_is_not_chmodded(tmp_path):
     root, tool = _seed_exec(tmp_path, 0o644)
     tool.write_bytes(b"#!/bin/sh\necho hand\n")
@@ -358,7 +355,7 @@ def test_unchanged_path_with_hand_edited_bytes_is_not_chmodded(tmp_path):
     assert out.remoded == () and not tool.stat().st_mode & 0o111
 
 
-@posix_only
+@pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
 def test_a_written_path_lands_at_its_declared_mode(tmp_path):
     root = _dest(tmp_path, 2)
     out = land_diff(root, [DestWrite("bin/new", b"#!/bin/sh\n", 0o100755)], [], "m", commit=True)
@@ -366,7 +363,7 @@ def test_a_written_path_lands_at_its_declared_mode(tmp_path):
     assert (root / "bin" / "new").stat().st_mode & 0o111 and _status(root) == ""
 
 
-@posix_only
+@pytest.mark.skipif(os.name == "nt", reason="no disk exec bit on Windows")
 def test_converge_worktree_modes_skips_missing_links_and_reports_only_changes(tmp_path):
     (tmp_path / "a").write_bytes(b"x")
     (tmp_path / "a").chmod(0o644)

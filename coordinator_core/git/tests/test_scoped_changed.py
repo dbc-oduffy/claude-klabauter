@@ -307,18 +307,16 @@ def test_executable_bit_disagreement_gates(tmp_path, monkeypatch):
     assert scoped_changed(repo, ["a.txt"], [], []) is None
 
 
-def test_executable_bit_disagreement_is_ignored_on_windows(tmp_path, monkeypatch):
-    from coordinator_core.git import scoped_changed as mod
+def test_win32_gates_on_an_exec_index_entry_and_not_on_a_plain_one(tmp_path, monkeypatch):
+    import types
 
-    monkeypatch.setattr(mod, "os", _OsView("nt"))
     repo = _repo(tmp_path, _BASE)
+    monkeypatch.setattr(
+        "coordinator_core.git.scoped_changed.sys", types.SimpleNamespace(platform="win32")
+    )
+    assert scoped_changed(repo, ["a.txt"], [], []) is not None
     _git(repo, "update-index", "--chmod=+x", "a.txt")
-    _git(repo, "commit", "-q", "-m", "mode")
-    (repo / "a.txt").chmod(0o644)
-    got = scoped_changed(repo, ["a.txt"], [], [])
-    assert got is not None
-    changed, _ = got
-    assert changed == set()
+    assert scoped_changed(repo, ["a.txt"], [], []) is None
 
 
 def test_literal_naming_a_directory_gates(tmp_path):

@@ -53,3 +53,9 @@ def test_envelope_selects_fail_closed_text_when_lookup_raises(
     monkeypatch.setattr(completion_evidence, "evidence_class", _raise)
     envelope = client._indeterminate_envelope(_MSG, "no response within 5s")
     assert client._MUTATION_INDETERMINATE_MESSAGE in envelope["error"]["message"]
+
+
+def test_envelope_states_retry_is_not_safe() -> None:
+    envelope = client._indeterminate_envelope(_MSG, "no response within 5s")
+    assert envelope["error"]["data"]["retry_safe"] is False
+    assert "Retry is NOT safe" in envelope["error"]["message"]

@@ -42,7 +42,9 @@ def _research_errors(research: dict) -> list[dict]:
 def test_vendored_versions():
     # 1.45.0 -> 1.46.0: optional top-level tie_break; claude-klabauter-first, DoE copy pending.
     # 1.46.0 -> 1.47.0: `fan_out` xl_exit enum value; claude-klabauter-first, DoE copy pending.
-    assert _version(_SIZING) == "1.47.0"
+    # 1.47.0 -> 1.48.0: optional top-level `provenance`; claude-klabauter-first, DoE copy pending.
+    # 1.48.0 -> 1.49.0: shipped-sizing row clause admits an anchored open/partial row; claude-klabauter-first.
+    assert _version(_SIZING) == "1.49.0"
     assert _version(_HANDOFF) == "11.1.0"
     # 3.19.0 -> 3.20.0: signoff history on every source, pm_signoff_record arm; claude-klabauter-first, DoE copy pending.
     assert _version(_PLAN_TASKS) == "3.20.0"

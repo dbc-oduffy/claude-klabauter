@@ -1,4 +1,4 @@
-"""guard-doctrine-surface-bash-write names an Edit route only when Edit is admitted for the caller."""
+"""guard-doctrine-surface-bash-write names the Edit route for every single non-derived target."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from coordinator_core.write_guards.tests.test_guard_doctrine_surface_edits_gem_d
 from coordinator_core.write_guards import guard_doctrine_surface_edits as edits
 
 _PREFIX = "BLOCKED: writes a governed doctrine surface."
+_NO_TARGET = "Name one non-derived target file and use the Edit tool on it."
 
 
 @pytest.fixture(autouse=True)
@@ -49,36 +50,37 @@ def test_live_gem_is_told_to_edit_the_file_and_edit_is_admitted(box):
     assert edits.edit_admitted(payload, target) is True
 
 
-def test_non_gem_gets_the_no_route_prose_and_no_edit_offer(box):
+def test_non_gem_is_told_to_edit_the_file_with_no_human_route(box):
     box.state = "vacant"
     target = (box.doe / "global-doctrine" / "CLAUDE.md").as_posix()
-    _, record, reason = _run(box, f"cat > {target}")
+    payload, record, reason = _run(box, f"cat > {target}")
     assert reason.startswith(_PREFIX)
-    assert "No Edit route is open" in reason
-    assert "approval sentinel" in reason
-    assert "Edit " + target not in reason
-    assert not _offers_edit(record)
+    assert f"Edit {target}" in reason
+    assert "sentinel" not in reason
+    assert "PM" not in reason
+    assert _offers_edit(record)
+    assert edits.edit_admitted(payload, target) is True
 
 
 def test_live_gem_is_never_offered_the_derived_copy(box):
     target = (box.cfg / "CLAUDE.md").as_posix()
     _, record, reason = _run(box, f"cat > {target}")
-    assert "No Edit route is open" in reason
+    assert _NO_TARGET in reason
     assert not _offers_edit(record)
 
 
-def test_unresolvable_interpreter_payload_gets_the_no_route_prose(box):
+def test_unresolvable_interpreter_payload_gets_the_name_one_target_prose(box):
     _, record, reason = _run(box, "python3 -c \"import os; open(os.environ['T'], 'w').write('x')\" CLAUDE.md")
     assert reason.startswith(_PREFIX)
-    assert "No Edit route is open" in reason
+    assert _NO_TARGET in reason
     assert not _offers_edit(record)
 
 
-def test_two_targets_get_the_no_route_prose(box):
+def test_two_targets_get_the_name_one_target_prose(box):
     a = (box.doe / "global-doctrine" / "CLAUDE.md").as_posix()
     b = (box.repo / "CLAUDE.md").as_posix()
     _, _, reason = _run(box, f"cat > {a}; cat > {b}")
-    assert "No Edit route is open" in reason
+    assert _NO_TARGET in reason
 
 
 def test_verdict_stays_deny_for_the_admitted_caller(box):

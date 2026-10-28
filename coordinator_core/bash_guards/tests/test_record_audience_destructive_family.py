@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as destructive
-from coordinator_core.bash_guards import block_subagent_stash_creation as stash_creation
 from coordinator_core.guard_messages.alternative_record import (
     AdaptableOffer,
     AlternativeRecord,
@@ -76,22 +75,6 @@ def test_opaque_indirection_is_an_advisory_record_with_a_route():
     assert not any(isinstance(m, Override) for m in record.members)
 
 
-def test_stash_creation_deny_is_a_record_offering_two_baselines_and_a_route():
-    record = stash_creation.check(_payload("git stash push"))
-    assert isinstance(record, AlternativeRecord)
-    assert record.verdict_kind == "deny"
-    offers = [m.template for m in record.members if isinstance(m, AdaptableOffer)]
-    assert offers == ["git archive <sha> | tar -x -C <tmpdir>", "git show <sha>:<path>"]
-    assert any(isinstance(m, EscalationRoute) for m in record.members)
-    assert not any(isinstance(m, Override) for m in record.members)
-
-
-def test_stash_creation_subagent_render_keeps_the_route():
-    envelope = render(stash_creation.check(_payload("git stash push")), Audience.SUBAGENT)
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "git archive" in reason and "needs authorizing" in reason
-
-
 def test_stash_destruction_deny_keeps_em_text_and_a_typed_subagent_render():
     from coordinator_core.bash_guards import block_stash_destruction as destruction
 
@@ -118,7 +101,3 @@ def test_stash_destruction_still_allows_a_harmless_stash_verb():
     from coordinator_core.bash_guards import block_stash_destruction as destruction
 
     assert destruction.check({"tool_name": "Bash", "tool_input": {"command": "git stash list"}}) is None
-
-
-def test_stash_creation_allows_the_em():
-    assert stash_creation.check({"tool_name": "Bash", "tool_input": {"command": "git stash push"}}) is None

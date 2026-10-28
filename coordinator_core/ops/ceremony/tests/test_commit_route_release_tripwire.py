@@ -741,6 +741,23 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "only a message trailer, so no path claim exists to release",
         "confirmed": True,
     },
+    "ops/dispatch_emit/combined_landing.py::_commit_index": {
+        "reason": "ineligible: commits the already-staged index tree with no "
+        "pathspec; the caller (dispatch.land_combined_index) credits the runs "
+        "after the commit, and no session id reaches this helper",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_run.py::_land_merge_artifacts": {
+        "reason": "ineligible: follow-on commit of run artifacts after the "
+        "merge commit already landed; the land_run caller owns the claim "
+        "release for the whole landing, and this helper threads no session id",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/run_close_parts.py::part_closes": {
+        "reason": "ineligible: pure outcome computation; its commit_paths "
+        "parameter is a read-only commit-to-files lookup, no commit is made",
+        "confirmed": True,
+    },
 }
 
 

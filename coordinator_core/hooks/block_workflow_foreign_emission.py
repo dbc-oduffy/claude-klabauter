@@ -212,7 +212,16 @@ def _plan_amended_reason(script: Path, receipt: Mapping) -> "Optional[str]":
         return None
 
 
+_WAVE_FIRE_NAME_RE = re.compile(r"^(?:repair-)?fire-\d+(?:-\d+)?\.mjs$")
+
+
 def _no_receipt_deny_reason(script_name: str) -> str:
+    if _WAVE_FIRE_NAME_RE.match(script_name):
+        return (
+            f"{script_name}: emit-wave-fire output with no receipt "
+            f"({script_name}.emitted.json missing; the receipt write failed or the "
+            "file was removed). Re-run emit-wave-fire for this wave to re-emit it."
+        )
     launcher = _emitter_launcher_invocation()
     return (
         f"{script_name}: hand-rolled Workflow with an untyped or write-capable "

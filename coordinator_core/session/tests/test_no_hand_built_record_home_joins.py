@@ -74,6 +74,13 @@ _JOIN_PATTERN = re.compile(
 )
 
 _KNOWN_LITERAL_SITES = frozenset({
+    "hooks/sizing_scout_deny.py",
+    "ops/dispatch_emit/extant_work.py",
+    "ops/dispatch_emit/run_truth_contract.py",
+    "ops/doctor_kept_blobs.py",
+    "ops/merge_branch_into_workstream.py",
+    "ops/review_mint/execute_review.py",
+    "session/em_prefire_window.py",
     "backlog_grind_assemble/grind_rows.py",
     "backlog_grind_assemble/readers_blitz.py",
     "backlog_grind_assemble/readers_mise.py",
@@ -194,7 +201,6 @@ _KNOWN_LITERAL_SITES = frozenset({
     "ops/strategic/draft_writer.py",
     "ops/strategic/emit_writer.py",
     "ops/strategic/version_highlights.py",
-    "ops/updatedocs_gates.py",
     "ops/workday_complete_step2_5_dirty_tree.py",
     "ops/workday_stitch_sidecar_summary.py",
     "ops/workweek_trail_scope.py",

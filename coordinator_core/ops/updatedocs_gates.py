@@ -36,11 +36,15 @@ the phase — this is the highest-value item in the memo and the only version th
 does not require re-litigating each phase's blocking-ness by hand every time a
 gate's behavior changes.
 
-Gate coverage this dispatch (7 of the historical battery — see Deferred below):
+Gate coverage this dispatch (5 of the historical battery — see Deferred below):
   fresh-scaffold-probe, repomap-gate, distill-threshold (pre-flight / cadence
   probes ported from update-docs-probes.py), 11f (lens-orthogonality), 11g
-  (plugin-bundled-wiki), 11h (skill-anchor-links), 11i (queue-prune-sweep),
-  11j (reap-stale-subagent-sidecars).
+  (plugin-bundled-wiki), 11h (skill-anchor-links).
+
+This op is READ-ONLY (COMPUTE_ONLY). 11i (queue-prune-sweep) and 11j
+(reap-stale-subagent-sidecars) write, so they live in `updatedocs_sweeps`
+(`updatedocs.sweeps`, MUTATING); naming either in `params["gates"]` is the
+unknown-gate ValueError.
 
 Deferred, NOT wired here: 11h2 (cross-reference coverage / verify-coverage).
 Its backing implementation is `coordinator_core/ops/verify_coverage.py` /
@@ -110,7 +114,11 @@ from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
-from coordinator_core.updatedocs.directory_md import compute_directory_md_drift
+from coordinator_core.updatedocs.directory_md import (
+    COUNT_FORMAT_HINT,
+    DATE_FORMAT_HINT,
+    compute_directory_md_drift,
+)
 from coordinator_core.updatedocs.memo_prune import compute_memo_prune_candidates
 from coordinator_core.updatedocs.plan_prune import compute_plan_prune_candidates
 from coordinator_core.updatedocs.readme_index import compute_readme_index_drift
@@ -200,7 +208,8 @@ _DETAIL_TAIL_CHARS = 2000
 # rather than this module's own literal; `_run`'s `timeout=` param narrows
 # only — a caller passing a larger value is clamped back to the ceiling.
 _CLI_SITE = "coordinator_core/ops/updatedocs_gates.py :: _run"
-_DEFAULT_CLI_TIMEOUT_SECONDS = bound_for(_CLI_SITE)
+_GATE_CLI_BOUND_SECONDS = 10.0  # the gate CLIs cost ~0.1s cold; 100x headroom
+_DEFAULT_CLI_TIMEOUT_SECONDS = min(bound_for(_CLI_SITE), _GATE_CLI_BOUND_SECONDS)
 
 
 def _windows_pathext() -> tuple[str, ...]:
@@ -732,173 +741,6 @@ def _gate_skill_anchor_links(_repo_root: Path, settings_home: Path, overrides: d
 
 
 # ---------------------------------------------------------------------------
-# Gate 11i: Prune resolved-state bloat from queues
-# ---------------------------------------------------------------------------
-
-_DEFAULT_QUEUES = (
-    "state/coordinator-improvement-queue.md",
-    "state/improvement-queue.md",
-    "state/bug-backlog.md",
-)
-
-_YAML_QUEUE_FAMILIES = (
-    ("state/bug-backlog", "prune-closed-bugs.py"),
-    ("state/improvement-queue", "prune-closed-improvements.py"),
-)
-
-
-def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    bin_dir = settings_home / "bin"
-    override_cli = overrides.get("prune_cli")
-    prune_cli = Path(override_cli) if override_cli else None
-    queues = overrides.get("queues") or list(_DEFAULT_QUEUES)
-
-    overall_fail = False
-    any_legacy_present = False
-    total_pruned = 0
-    lines: list[str] = []
-
-    existing_queues = [q for q in queues if (repo_root / q).is_file()]
-    any_legacy_present = bool(existing_queues)
-    before_counts = {
-        q: sum(1 for _ in (repo_root / q).open("r", encoding="utf-8", errors="replace"))
-        for q in existing_queues
-    }
-
-    if existing_queues:
-        if override_cli:
-            # A caller-substituted CLI (overrides["prune_cli"]) is not
-            # guaranteed to accept multiple positionals the way our own
-            # prune-resolved-queue-entries.py now does — keep the original
-            # one-spawn-per-queue contract for this seam rather than
-            # assuming multi-arg support it may not have.
-            for queue in existing_queues:
-                proc = _run(prune_cli, [str(repo_root / queue)])
-                if proc is None or proc.returncode != 0:
-                    overall_fail = True
-                    lines.append(f"prune FAILED for {queue}")
-        else:
-            # The default callee prunes N queue files independently in one call
-            # and reports each failure on stderr, so the sweep is one in-process
-            # call; only an explicit prune_cli override spawns.
-            from coordinator_core.cli_entry import run_op_main
-
-            paths = [str(repo_root / q) for q in existing_queues]
-            proc = _run_in_process(
-                lambda: run_op_main("coordinator_core.ops.prune_resolved_queue_entries", paths, cwd=str(repo_root))
-            )
-            if proc.returncode != 0:
-                overall_fail = True
-                stderr_lines = [ln for ln in (proc.stderr or "").splitlines() if ln.strip()]
-                lines.extend(stderr_lines or ["prune FAILED (nonzero exit, no stderr detail)"])
-
-    for queue in existing_queues:
-        queue_path = repo_root / queue
-        after = sum(1 for _ in queue_path.open("r", encoding="utf-8", errors="replace"))
-        pruned = before_counts[queue] - after
-        total_pruned += pruned
-        if pruned:
-            lines.append(f"pruned {pruned} lines from {queue}")
-
-    any_yaml_present = False
-    for family_dir, cli_name in _YAML_QUEUE_FAMILIES:
-        dir_path = repo_root / family_dir
-        if not dir_path.is_dir():
-            continue
-        any_yaml_present = True
-        cli_path = _resolve_cli(bin_dir, cli_name)
-        if not cli_path.is_file():
-            overall_fail = True
-            lines.append(f"YAML prune CLI missing for {family_dir}: {cli_path}")
-            continue
-        # The YAML leg's exit code was
-        # previously discarded, defeating the F9 fix's whole purpose (a
-        # caller must be able to branch on prune-closed-*.py's non-zero
-        # exit on partial-archive failure). Nonzero/unrecognized MUST NOT
-        # collapse into CLEAN — fold it into overall_fail like the legacy
-        # markdown leg above.
-        yaml_proc = _run(cli_path, ["--repo-root", str(repo_root)])
-        if yaml_proc is None or yaml_proc.returncode != 0:
-            overall_fail = True
-            exit_desc = "could not be spawned" if yaml_proc is None else f"exit {yaml_proc.returncode}"
-            lines.append(f"YAML prune FAILED for {family_dir} ({exit_desc})")
-
-    if not any_legacy_present and not any_yaml_present:
-        return GateResult(
-            "11i-queue-prune-sweep",
-            GateVerdict.UNAVAILABLE,
-            f"no legacy markdown queues and no YAML queue families found under {repo_root} — verify repo_root",
-        )
-
-    if overall_fail:
-        return GateResult(
-            "11i-queue-prune-sweep",
-            GateVerdict.FINDING,
-            "queue prune failed loud on unexpected structure — must not be bypassed",
-            Severity.BLOCKING,
-            detail={"lines": lines},
-        )
-    if total_pruned:
-        return GateResult(
-            "11i-queue-prune-sweep",
-            GateVerdict.FINDING,
-            f"pruned {total_pruned} resolved-state line(s)",
-            Severity.INFORMATIONAL,
-            detail={"lines": lines, "total_pruned": total_pruned},
-        )
-    return GateResult("11i-queue-prune-sweep", GateVerdict.CLEAN, "queue prune clean (no resolved bloat found)")
-
-
-# ---------------------------------------------------------------------------
-# Gate 11j: Reap stale subagent-share sidecars
-# ---------------------------------------------------------------------------
-
-# The reap's own count line reads "N stale subagent-share sidecar(s) reaped"; the
-# leading "reaped N" form is the older shape and is still accepted.
-_REAPED_RE = re.compile(r"reaped\s+(\d+)|(\d+)\s+stale subagent-share sidecar\(s\) reaped", re.IGNORECASE)
-
-
-def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    if overrides.get("cli"):
-        cli = Path(overrides["cli"])
-        if not cli.exists():
-            return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
-        proc = _run(cli, ["--repo-root", str(repo_root)])
-        if proc is None:
-            return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, "CLI could not be spawned")
-    else:
-        from coordinator_core.session.liveness import session_live
-        from coordinator_core.sidecar_reap import reap_stale_sidecars
-
-        out, err = io.StringIO(), io.StringIO()
-        try:
-            code = reap_stale_sidecars(str(repo_root), session_live, out=out, err=err)
-        except Exception as exc:  # noqa: BLE001 — a crashed reap is a failed gate, not a crashed op
-            code = 1
-            err.write(f"{type(exc).__name__}: {exc}\n")
-        proc = subprocess.CompletedProcess([], code, out.getvalue(), err.getvalue())
-    if proc.returncode != 0:
-        return GateResult(
-            "11j-reap-stale-sidecars",
-            GateVerdict.FINDING,
-            f"reap failed (exit {proc.returncode}) — surface, do not skip",
-            Severity.BLOCKING,
-            detail={"stderr": proc.stderr[-_DETAIL_TAIL_CHARS:]},
-        )
-    reaped_match = _REAPED_RE.search(proc.stdout or "")
-    reaped = int(reaped_match.group(1) or reaped_match.group(2)) if reaped_match else 0
-    if reaped:
-        return GateResult(
-            "11j-reap-stale-sidecars",
-            GateVerdict.FINDING,
-            f"reaped {reaped} stale sidecar(s)",
-            Severity.INFORMATIONAL,
-            detail={"reaped": reaped},
-        )
-    return GateResult("11j-reap-stale-sidecars", GateVerdict.CLEAN, "subagent-share sidecar reap clean (nothing stale)")
-
-
-# ---------------------------------------------------------------------------
 # Gates: doc-index drift and prune candidates (bucket-2 extraction)
 #
 # Four detectors backed by coordinator_core.updatedocs. Each compute function
@@ -1036,7 +878,12 @@ def _gate_directory_md_staleness(repo_root: Path, _settings: Path, overrides: di
         # Not the same as "refreshed today" — an unparseable date means the
         # document's own freshness claim could not be read, which is a finding
         # about the document, not a clean bill of health.
-        reasons.append("no readable `Last refreshed:` date")
+        reasons.append(f"no readable `Last refreshed:` date; {DATE_FORMAT_HINT}")
+        detail["date_format_hint"] = DATE_FORMAT_HINT
+    if not drift.count_claims:
+        # No checkable count: silence would read as a clean bill of health.
+        reasons.append(f"no count assertion found; {COUNT_FORMAT_HINT}")
+        detail["format_hint"] = COUNT_FORMAT_HINT
     if mismatched:
         reasons.append(f"{len(mismatched)} count claim(s) disagree with disk")
 
@@ -1141,8 +988,6 @@ _GATES: dict[str, _GateFn] = {
     "11f-lens-orthogonality": _gate_lens_orthogonality,
     "11g-plugin-wiki": _gate_plugin_wiki,
     "11h-skill-anchor-links": _gate_skill_anchor_links,
-    "11i-queue-prune-sweep": _gate_queue_prune_sweep,
-    "11j-reap-stale-sidecars": _gate_reap_stale_sidecars,
     "docs-readme-index-drift": _gate_docs_readme_index_drift,
     "directory-md-staleness": _gate_directory_md_staleness,
     "plans-prune-candidates": _gate_plans_prune_candidates,

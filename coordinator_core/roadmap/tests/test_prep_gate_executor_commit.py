@@ -79,5 +79,6 @@ def test_message_omits_converter_when_only_failing_class(tmp_path):
 def test_class_order(tmp_path):
     result = _gate(tmp_path, _COMMIT_ROW)
     assert tuple(result["classes"]) == pg.CLASS_ORDER
-    assert pg.CLASS_ORDER[-1] == "REGISTER"
+    assert pg.CLASS_ORDER[-1] == "DONE_CLAUSE"
+    assert pg.CLASS_ORDER.index("REGISTER") == len(pg.CLASS_ORDER) - 2
     assert pg.CLASS_ORDER.index("EXECUTOR_COMMIT") == pg.CLASS_ORDER.index("CI_RETIRED") + 1

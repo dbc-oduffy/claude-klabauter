@@ -50,6 +50,31 @@ def test_absent_last_refreshed_line_yields_none_not_zero(tmp_path):
     assert drift.age_days is None
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "**Last refreshed:** 2026-10-12",
+        "**Last refreshed: 2026-10-12**",
+        "Last updated: 2026-10-12",
+        "**Last updated:** 2026-10-12",
+        "- Last refreshed: 2026-10-12",
+    ],
+)
+def test_bold_and_last_updated_date_forms_are_parsed(tmp_path, line):
+    doc = _write(tmp_path, "DIRECTORY.md", line + "\n")
+    assert compute_directory_md_drift(doc).refreshed_on == date(2026, 10, 12)
+
+
+def test_extension_glob_count_with_commas_mismatch_is_a_finding(tmp_path):
+    (tmp_path / "a.py").write_text("", encoding="utf-8")
+    doc = _write(tmp_path, "DIRECTORY.md", "2,288 `*.py` files\n1 `.py` files\n")
+    claims = compute_directory_md_drift(doc).count_claims
+    assert [(c.asserted, c.actual, c.matches) for c in claims] == [
+        (2288, 1, False),
+        (1, 1, True),
+    ]
+
+
 def test_count_claim_matches_when_actual_equals_asserted(tmp_path):
     (tmp_path / "conftest.py").write_text("", encoding="utf-8")
     sub = tmp_path / "sub"

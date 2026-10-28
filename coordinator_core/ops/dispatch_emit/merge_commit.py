@@ -149,8 +149,9 @@ def _build_commit(repo: _Repo, common_dir: Path, resolved: Path, tree: str, conf
         final = written.stdout.strip()
         if not written.ok or not _SHA.match(final):
             return None, "write-tree failed"
-        body = message if message.endswith("\n") else message + "\n"
-        made = repo.git(["commit-tree", final, "-p", old, "-p", theirs], env=env, input=body.encode("utf-8"))
+        from coordinator_core.ops.ceremony.git_native import commit_tree_merge
+
+        made = commit_tree_merge(repo.root, final, [old, theirs], message)
         new = made.stdout.strip()
         if not made.ok or not _SHA.match(new):
             return None, "commit-tree failed: " + made.stderr.strip()

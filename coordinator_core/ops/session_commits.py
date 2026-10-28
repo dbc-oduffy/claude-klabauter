@@ -55,7 +55,9 @@ with more than one session's trailer) — `--grep` matches the commit once
 regardless of how many Session-Id lines it carries, so this op's output has
 no duplicate sha for that shape. A plumbing commit (`git commit-tree`,
 bypassing the porcelain `commit` path) carries no Session-Id trailer at all
-and is correctly absent from the result, same as any other untagged commit
+and is absent from the result unless it carries the caller's own
+`Claude-Session` trailer (selected only for the cold caller's own session, via
+`own_claude_session_token`; ORed with the Session-Id grep), same as any other untagged commit
 — NOT an error, since "session committed nothing (attributable)" is a real,
 representable answer distinct from a git failure (see Returns below).
 
@@ -109,6 +111,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from coordinator_core.git.commit_trailers import (
+    claude_session_grep_pattern,
+    own_claude_session_token,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -228,6 +234,9 @@ def resolve_session_commits(
         )
 
     args = ["log", "--reverse", f"--grep=^Session-Id: {sid}"]
+    claude_token = own_claude_session_token(sid)
+    if claude_token is not None:
+        args.append(f"--grep={claude_session_grep_pattern(claude_token)}")
     if no_merges:
         args.append("--no-merges")
     if not sha_only:

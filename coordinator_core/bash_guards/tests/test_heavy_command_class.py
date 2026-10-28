@@ -459,6 +459,37 @@ def test_admit_before_spawn_refuses_on_an_unreadable_reading():
     assert not v.admitted and "unreadable" in v.reason
 
 
+def _patch_wait(monkeypatch, result):
+    from coordinator_core.group_em import slot_wait
+
+    seen = []
+    monkeypatch.setattr(
+        slot_wait, "request_and_wait", lambda sid, run, mb, **kw: seen.append((sid, run, mb, kw)) or result
+    )
+    return seen
+
+
+def test_hold_over_threshold_waits_for_a_grant_and_admits_on_it(monkeypatch):
+    seen = _patch_wait(monkeypatch, {"admitted": True, "reason": "granted"})
+    host, log = _fake_host(avail_gib=1)
+    v = _hcc.admit_before_spawn("k", 4.0, host=host, register_pid=5, wait_kw={"timeout_s": 3}, session_id="s1")
+    assert v.admitted and seen == [("s1", "k", 4096.0, {"timeout_s": 3})] and log == [("k", 5, 4.0)]
+
+
+def test_hold_keeps_the_refusal_without_a_grant_or_wait_or_session(monkeypatch):
+    seen = _patch_wait(monkeypatch, {"admitted": False, "reason": "timeout"})
+    host, _ = _fake_host(avail_gib=1)
+    v = _hcc.admit_before_spawn("k", 4.0, host=host, wait_kw={}, session_id="s1")
+    assert not v.admitted and "HOLD k" in v.reason and "timeout" in v.reason
+    n = len(seen)
+    assert not _hcc.admit_before_spawn("k", 4.0, host=host, session_id="s1").admitted  # wait_kw None
+    assert not _hcc.admit_before_spawn("k", 1.0, host=host, wait_kw={}, session_id="s1").admitted  # under 2 GiB
+    from coordinator_core.session import core
+
+    monkeypatch.setattr(core, "resolve_session_id", lambda: "")
+    assert not _hcc.admit_before_spawn("k", 4.0, host=host, wait_kw={}).admitted  # no session
+    assert len(seen) == n
+
 
 def test_register_pid_reserves_only_on_admit():
     host, log = _fake_host(avail_gib=10)
@@ -677,3 +708,22 @@ def test_red_set_report_hold_never_spawns(monkeypatch):
 
 def test_the_ratchet_refuses_a_bypass_shape():
     assert _SPAWN.search("subprocess.Popen(argv)") and _SCIP.search('argv = [exe, "scip-rebuild"]')
+
+
+@pytest.mark.parametrize("cmd", ["python -m pytest a.py b.py", "pytest", "pytest -n 4 a.py"])
+def test_bare_pytest_is_marked(cmd):
+    """Any direct pytest other than exactly one file target, xdist included."""
+    assert classify(cmd, CWD).bare_pytest is True
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "pytest a/test_a.py",
+        "python -m coordinator_core.testing.scoped_pytest --allow a.py b.py -- a.py b.py",
+        "echo pytest a.py b.py",
+        "tsc --noEmit",
+    ],
+)
+def test_scoped_or_non_pytest_is_not_marked_bare(cmd):
+    assert classify(cmd, CWD).bare_pytest is False

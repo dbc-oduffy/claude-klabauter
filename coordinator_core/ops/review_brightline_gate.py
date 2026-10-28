@@ -172,6 +172,10 @@ import sys
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from coordinator_core.daily_branch import is_work_branch
+from coordinator_core.git.commit_trailers import (
+    claude_session_grep_pattern,
+    own_claude_session_token,
+)
 from coordinator_core.coverage import (
     _is_planning_artifact_path,
     _resolve_numstat_row_path,
@@ -659,6 +663,18 @@ def _accumulate_countable_rows(
     return result
 
 
+def _own_session_grep_args(session_id: str) -> List[str]:
+    """`--grep` argv selecting this session's commits: its `Session-Id` line,
+    OR'd (git ORs repeated `--grep`) with its own `Claude-Session` line when
+    that token resolves. Only the positive own-session greps use it; the
+    untrailered census below never does."""
+    args = [f"--grep=^Session-Id: {session_id}"]
+    token = own_claude_session_token(session_id)
+    if token is not None:
+        args.append(f"--grep={claude_session_grep_pattern(token)}")
+    return args
+
+
 def _resolve_session_floor(session_id: str) -> Optional[str]:
     """C2 (2026-08-08): the session's own earliest commit reachable from
     HEAD, found via an UNSCOPED (full HEAD ancestry, not merge-base-bounded)
@@ -690,7 +706,7 @@ def _resolve_session_floor(session_id: str) -> Optional[str]:
     line.
     """
     shas_out, rc = _run_git(
-        ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}", "HEAD"]
+        ["log", "--pretty=%H", *_own_session_grep_args(session_id), "HEAD"]
     )
     if rc != 0:
         return None
@@ -717,7 +733,8 @@ def _untrailered_shas_in_range(range_: str, cwd: Optional[str] = None) -> Option
     completeness. The two contracts differ, which is why this helper stays
     neutral and lets each caller do its own mapping.
 
-    NEGATIVE-SPEC: never narrow this to "untrailered commits that look like
+    NEGATIVE-SPEC: greps only `Session-Id`; a Claude-Session-only commit stays untrailered.
+    Never narrow this to "untrailered commits that look like
     this session's". An untrailered commit has no owner on disk; that is the
     whole defect, and any heuristic picking an owner for it recreates the
     confident-wrong answer this census exists to refuse."""
@@ -732,6 +749,8 @@ def _untrailered_shas_in_range(range_: str, cwd: Optional[str] = None) -> Option
 
 def _count_untrailered_commits(range_: str) -> int:
     """How many non-merge commits in `range_` carry no `Session-Id:` trailer.
+
+    NEGATIVE-SPEC: greps only `Session-Id`; a Claude-Session-only commit stays untrailered.
 
     The census the attribution-coverage check in `_session_scoped` reads. A
     nonzero answer means the trailer substrate is incomplete over this range,
@@ -830,7 +849,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
     outcome, not the die-silent infra-failure case below (which prints
     nothing and returns 1)."""
     shas_out, _rc = _run_git(
-        ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}", range_]
+        ["log", "--no-merges", "--pretty=%H", *_own_session_grep_args(session_id), range_]
     )
     filtered_shas = [line for line in shas_out.splitlines() if line.strip()]
     filtered_count = len(filtered_shas)
@@ -840,7 +859,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
         if floor is not None:
             retry_range = f"{floor}..HEAD"
             retry_shas_out, _rc2 = _run_git(
-                ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}", retry_range]
+                ["log", "--no-merges", "--pretty=%H", *_own_session_grep_args(session_id), retry_range]
             )
             retry_shas = [line for line in retry_shas_out.splitlines() if line.strip()]
             if retry_shas:

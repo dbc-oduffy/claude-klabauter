@@ -1,10 +1,10 @@
 """
 coordinator_core.hooks.flag_em_poll_in_flight — PreToolUse(TaskList|TaskGet|TaskOutput|
-ListAgents|ReadNotifications) advisory op.
+ReadNotifications) advisory op.
 
 Purpose: docs/plans/2026-09-27-four-turn-em-loop.md § Settled here 4 / § Pinned interfaces
 (task C17). Flags the EM spending a turn checking on work that a Workflow completion
-notification would wake it for anyway. Denies (short-circuits) the SECOND CONSECUTIVE poll-tool
+notification would wake it for anyway. Advises (never denies) on the SECOND CONSECUTIVE poll-tool
 call with no intervening non-poll tool call, while the session has a fired Workflow with no
 observed completion. Every other case allows silently.
 
@@ -39,14 +39,14 @@ from typing import Any, Mapping, Optional
 
 from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 from coordinator_core.ipc import register_op
-from coordinator_core.hooks._envelope import deny, no_advisory, payload_of
-from coordinator_core.machine_profile import apply_guard_level
+from coordinator_core.hooks._envelope import allow_advisory, no_advisory, payload_of
 
 GUARD_NAME = "flag-em-poll-in-flight"
 
-#: Registered matcher names (C18 narrows hooks.json's HTTP matcher to the same set).
+#: Registered matcher names (C18 narrows hooks.json's HTTP matcher to the same set). ListAgents is
+#: not a poll: it resolves a peer's address before a SendMessage, and a stale read cost a send.
 POLL_TOOLS = frozenset(
-    {"TaskList", "TaskGet", "TaskOutput", "ListAgents", "ReadNotifications"}
+    {"TaskList", "TaskGet", "TaskOutput", "ReadNotifications"}
 )
 
 _TAIL_BYTES = 64 * 1024
@@ -226,7 +226,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(poll tool) advisory: flag a second consecutive EM poll call while a
     dispatched Workflow is in flight and no intervening non-poll tool call was made.
 
-    Denies on a flag (shape e), no_advisory otherwise. Never raises: every internal check is
+    Advises on a flag: a poll degrades nothing, so it never denies (WU-WEI-NO-COERCIVE-GUARDS). Never raises: every internal check is
     wrapped to fail toward NOT flagging.
     """
     payload = payload_of(params)
@@ -277,8 +277,8 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not flagged:
         return no_advisory()
 
-    return apply_guard_level(GUARD_NAME, deny(
+    return allow_advisory(
         "PreToolUse",
         "EM poll while workflow runs — the completion notification wakes you; end the turn. "
         f"See {_ANCHOR}.",
-    )) or no_advisory()
+    )

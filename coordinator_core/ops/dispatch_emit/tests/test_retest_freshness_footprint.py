@@ -81,48 +81,6 @@ def test_halt_replay_peer_commits_outside_footprint_stay_fresh(repo):
     assert record is not None and record["status"] == "pass"
 
 
-def test_commit_changing_a_footprint_file_voids_it(repo):
-    _write_record(repo)
-    _commit(repo, {"pkg/test_a.py": "def test_a():\n    pass\n"}, "peer edits covered test")
-    (repo / "pkg/test_a.py").write_text(
-        "from pkg import helper\n\n\ndef test_a():\n    assert helper.VALUE == 1\n", encoding="utf-8"
-    )
-    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
-
-
-def test_commit_changing_an_imported_module_voids_it(repo):
-    _write_record(repo)
-    _commit(repo, {"pkg/helper.py": "VALUE = 2\n"}, "peer edits imported module")
-    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
-
-
-def test_commit_changing_a_transitive_import_voids_it(repo):
-    _commit(repo, {"pkg/helper.py": "from pkg import deep\nVALUE = deep.X\n", "pkg/deep.py": "X = 1\n"}, "chain")
-    _write_record(repo)
-    _commit(repo, {"state/warp/n.md": "n\n"}, "unrelated")
-    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is not None
-    _commit(repo, {"pkg/deep.py": "X = 2\n"}, "peer edits transitive import")
-    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
-
-
-def test_commit_changing_a_parent_package_init_of_a_dotted_import_voids_it(repo):
-    _commit(repo, {"pkg/sub/__init__.py": "", "pkg/sub/leaf.py": "Y = 1\n"}, "subpackage")
-    (repo / "pkg/test_a.py").write_text("import pkg.sub.leaf\n\n\ndef test_a():\n    pass\n", encoding="utf-8")
-    _write_record(repo)
-    _commit(repo, {"pkg/sub/__init__.py": "Z = 1\n"}, "peer edits parent package init")
-    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
-
-
-def test_unreadable_record_head_is_stale_not_fresh(repo):
-    _write_record(repo)
-    _commit(repo, {"state/warp/n.md": "n\n"}, "unrelated")
-    path = landing_retest.fresh_verdict_path(repo, RUN_ID)
-    record = json.loads(path.read_text(encoding="utf-8"))
-    record["head"] = "0" * 40
-    path.write_text(json.dumps(record), encoding="utf-8")
-    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
-
-
 def test_dirty_covered_bytes_still_void_it(repo):
     _write_record(repo)
     _commit(repo, {"state/warp/n.md": "n\n"}, "unrelated")
@@ -150,7 +108,6 @@ def test_empty_judged_set_across_a_head_move_is_not_fresh(repo):
     assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is not None
     _commit(repo, {"state/warp/n.md": "n\n"}, "unrelated")
     assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
-    assert landing_retest._footprint_unchanged_between(repo, head, _git(repo, "rev-parse", "HEAD"), []) is False
 
 
 def test_workflow_suffixed_run_keeps_its_own_rewritten_run_stage_fresh(repo):
@@ -231,13 +188,6 @@ def test_sibling_run_record_dir_with_shared_prefix_still_voids_it(repo):
     assert landing_retest.fresh_targeted_verdict(repo, run_id) is None
 
 
-def test_truncated_import_closure_is_stale_not_fresh(repo, monkeypatch):
-    _write_record(repo)
-    _commit(repo, {"state/warp/n.md": "n\n"}, "unrelated")
-    monkeypatch.setattr(landing_retest, "_CLOSURE_FILE_CAP", 1)
-    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
-
-
 def test_workflow_written_record_is_credited_when_read_with_the_bare_id(repo):
     _write_covering_record(repo, "run-fp.workflow", [])
     assert landing_retest.fresh_verdict_path(repo, "run-fp") == landing_retest.fresh_verdict_path(repo, "run-fp.workflow")
@@ -248,6 +198,79 @@ def test_workflow_written_record_is_credited_when_read_with_the_bare_id(repo):
 def test_bare_written_record_is_credited_when_read_with_the_workflow_id(repo):
     _write_covering_record(repo, "run-fp", [])
     record = landing_retest.fresh_targeted_verdict(repo, "run-fp.workflow")
+    assert record is not None and record["status"] == "pass"
+
+
+def _manifest_params(repo, writes):
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
+
+    run_dir = repo / "scratch" / "warp" / RUN_ID
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(json.dumps({"rows": [{"id": "C1", "writes": writes}]}), encoding="utf-8")
+    (run_dir / "run.workflow.mjs").write_text(
+        f"{ASK_MANIFEST_MARKER}scratch/warp/{RUN_ID}/manifest.json\n", encoding="utf-8",
+    )
+    return {"run_id": RUN_ID, "script_path": f"scratch/warp/{RUN_ID}/run.workflow.mjs"}
+
+
+@pytest.fixture(autouse=True)
+def _fast_cmd(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
+
+
+def _retest(repo, params, tmp_path):
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+
+    out = tmp_path / "task.output"
+    out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
+    return retest_targeted.main(
+        ["--from-task-output", str(out), "--repo-root", str(repo), "--tests", "pkg/test_a.py", "--detached-child"],
+        run=lambda argv, cwd, **_kw: 0,
+        spawn=lambda *a, **k: pytest.fail("must not spawn"),
+    )
+
+
+def test_peer_write_to_unrelated_dirty_file_keeps_a_passing_retest_fresh(repo, tmp_path):
+    (repo / "peer_dirty.py").write_text("X = 1\n", encoding="utf-8")
+    assert _retest(repo, _manifest_params(repo, ["pkg/landing.py"]), tmp_path) == 0
+    covered = json.loads(landing_retest.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))["covered"]
+    assert "peer_dirty.py" not in covered
+    assert {"pkg/test_a.py", "pkg/helper.py", "pkg/landing.py"} <= set(covered)
+    (repo / "peer_dirty.py").write_text("X = 2\n", encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is not None
+
+
+def test_landing_set_or_import_closure_change_still_voids_a_retest(repo, tmp_path):
+    assert _retest(repo, _manifest_params(repo, ["pkg/landing.py"]), tmp_path) == 0
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is not None
+    (repo / "pkg/landing.py").write_text("changed\n", encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
+    (repo / "pkg/landing.py").unlink()
+    assert _retest(repo, {"run_id": RUN_ID, "script_path": f"scratch/warp/{RUN_ID}/run.workflow.mjs"}, tmp_path) == 0
+    (repo / "pkg/helper.py").write_text("VALUE = 9\n", encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
+
+
+def _write_big_land_record(repo, tests):
+    land = {f"land/f{i}.py": f"V = {i}\n" for i in range(landing_retest._CLOSURE_FILE_CAP + 15)}
+    _commit(repo, land, "land set")
+    path = landing_retest.fresh_verdict_path(repo, RUN_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID, "status": "pass", "head": _git(repo, "rev-parse", "HEAD"), "tests": tests,
+                "covered": landing_retest.landing_fingerprint(repo, ["pkg/test_a.py", *land]),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_red1_large_land_set_stays_fresh_across_an_unrelated_commit(repo):
+    _write_big_land_record(repo, ["pkg/test_a.py::test_a"])
+    _commit(repo, {"state/cross-repo/memo.md": "m\n"}, "unrelated memo delivery")
+    record = landing_retest.fresh_targeted_verdict(repo, RUN_ID)
     assert record is not None and record["status"] == "pass"
 
 

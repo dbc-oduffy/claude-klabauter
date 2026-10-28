@@ -247,6 +247,30 @@ def test_nothing_changed_commits_nothing(repo):
     assert _git(repo, "rev-parse", "HEAD") == head
 
 
+def test_stalled_sibling_status_write_lands_with_a_named_reconcilable_outcome(repo, monkeypatch):
+    import threading
+    import time
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.session import claimed_write
+
+    status = repo / contract.status_rel(RUN)
+    _write(repo, contract.status_rel(RUN), '{"status": "running"}\n')
+    _record(repo)
+    gate = threading.Event()
+    monkeypatch.setattr(claimed_write, "replace_text", lambda *_a, **_k: gate.wait(10))
+    try:
+        t0 = time.perf_counter()
+        out = _call(repo, LEDGER, **PASSING)
+        assert time.perf_counter() - t0 < 8
+    finally:
+        gate.set()
+    assert out["committed"] is True, out
+    assert out["siblings"]["status_write"] == "deadline-missed"
+    assert out["siblings"]["run_id"] == RUN and out["siblings"]["path"] == status.as_posix()
+    assert out["siblings"]["released"] == []
+
+
 @pytest.mark.parametrize(
     "halted, expect",
     [

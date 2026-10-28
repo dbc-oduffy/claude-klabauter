@@ -45,8 +45,6 @@ _ROWS: List[CorpusRow] = CONFINEMENT_ROWS + ADVISORY_REWRITE_ROWS + PLATFORM_CON
 #: Guards with no EM-audience message branch, each with the reason it cannot speak.
 #: Exact-set pinned: a guard leaving this set needs a speaking row and a fixture entry.
 _SILENT_FOR_EM: Dict[str, str] = {
-    "block-em-post-fire-product-write": "corpus fire row names no path owned by a live run (owns_path scope); setup lives in guard_message_corpus.py",
-    "block-subagent-stash-creation": "subagent-cohort guard",
     "block-subagent-plan-body-bash-write": "subagent-cohort guard",
     "block-reviewer-bash-outside-allowlist": "reviewer-cohort guard",
     "block-subagent-destructive-action": "subagent-cohort guard",
@@ -54,11 +52,10 @@ _SILENT_FOR_EM: Dict[str, str] = {
     "guard-host-subagent-bash-ban": "subagent-cohort guard",
     "guard-host-subagent-bash-spawn-shapes": "subagent-cohort guard",
     "guard-subagent-heavy-ue-launch": "subagent-cohort guard",
-    "block-subagent-grant-acquisition": "subagent-cohort guard",
-    "block-subagent-findings-reject": "subagent-cohort guard",
-    "block-subagent-guard-grant": "subagent-cohort guard",
     "guard-post-executor-verification": "subagent-cohort guard",
     "reap-stale-git-lock": "side-effect only; always returns None",
+    "block-em-post-fire-product-write": "advisory fate: off the deny census, speaks no envelope",
+    "xs-lane-shell-write": "advisory fate: off the deny census, speaks no envelope",
 }
 
 _SESSION_RE = re.compile(r"guard-message-corpus-audience-[a-z]+-[0-9a-f]{32}")

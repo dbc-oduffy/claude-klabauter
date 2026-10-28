@@ -100,6 +100,10 @@ from typing import Callable, Optional
 from coordinator_core import locked_write
 from coordinator_core.warm.breadcrumb import svc_dir
 
+# Records are droppable: a writer that cannot take the lock within this
+# deadline drops its record instead of waiting on a saturated disk.
+BEST_EFFORT_LOCK_TIMEOUT_SECS: float = 0.05
+
 __all__ = [
     "EXIT_REASON_SKEW",
     "EXIT_REASON_SUPERSEDED",
@@ -240,7 +244,7 @@ def record_client_cold_fallback(
     path = client_cold_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.client_cold"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.client_cold", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -295,7 +299,7 @@ def record_server_boot(
     path = server_boot_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.server_boot"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.server_boot", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -379,7 +383,7 @@ def record_election_lost(
     path = election_lost_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.election_lost"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.election_lost", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -441,7 +445,7 @@ def record_worker_pool_depth(
     path = worker_pool_depth_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.worker_pool_depth"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.worker_pool_depth", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -495,7 +499,7 @@ def record_sweep(
     path = push_sweep_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.push_sweep"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.push_sweep", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -560,7 +564,7 @@ def record_client_boot_wait(
     path = boot_wait_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.boot_wait"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.boot_wait", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -692,7 +696,7 @@ def record_degrade(
     path = degrade_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.degrade"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.degrade", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -772,7 +776,7 @@ def record_publish_warm_attempt(
     path = publish_warm_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with locked_write.held_lock(path, holder_label="warm.telemetry.publish_warm"):
+        with locked_write.held_lock(path, holder_label="warm.telemetry.publish_warm", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -906,7 +910,7 @@ class ServerTelemetry:
         path = telemetry_path(engine_root)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            with locked_write.held_lock(path, holder_label="warm.telemetry"):
+            with locked_write.held_lock(path, holder_label="warm.telemetry", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
                 with path.open("a", encoding="utf-8") as fh:
                     fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception:

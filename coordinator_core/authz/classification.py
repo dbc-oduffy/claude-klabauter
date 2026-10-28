@@ -2441,6 +2441,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commits.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.commit_halted_rows": OpClass.MUTATING,
+    # dispatch.commit_merge — MUTATING: commits an already-resolved two-parent merge through a private index,
+    # syncs the shared index/worktree, then moves the ref by compare-and-swap (ops/dispatch_emit/merge_commit.py).
+    # DR-208 five-question affirmation (citing dispatch.commit_merge handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      A merge commit object and the checked-out branch ref; no queue.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      Reads the resolved files; the private index is built by git.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The git index, worktree and history.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The landed merge commit.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.commit_merge": OpClass.MUTATING,
     # dispatch.supersede_slice — MUTATING: writes one write-once scratch marker naming the run that
     # supersedes a held sibling slice (ops/dispatch_emit/slice_supersede.py).
     # DR-208 five-question affirmation (citing dispatch.supersede_slice handler):
@@ -2472,6 +2486,33 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The status, marker and job record persist on disk; the job runs detached.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.record_halted_run_landed": OpClass.MUTATING,
+    # dispatch.close_halted_run_superseded — MUTATING: rewrites one halted.json marker to
+    # `superseded` and drops the run from the halt-withheld index (ops/dispatch_emit/halted_run_superseded.py).
+    # DR-208 five-question affirmation: 1 YES (marker rewrite, index entry removal); 2 No;
+    # 3 YES (marker and index files); 4 YES (the gates that read the halt-withheld index);
+    # 5 YES (persisted on disk).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.close_halted_run_superseded": OpClass.MUTATING,
+    # dispatch.land_combined_index — MUTATING: writes tree and commit objects, advances HEAD, and records
+    # fully-landed halted runs (ops/dispatch_emit/combined_landing.py).
+    # DR-208 five-question affirmation: 1 YES (git objects, HEAD ref, run markers); 2 No; 3 YES;
+    # 4 YES (HEAD and the markers peers read); 5 YES (persisted).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.land_combined_index": OpClass.MUTATING,
+    # dispatch.objective_write / objective_check / objective_calibrate — MUTATING: each writes
+    # state/warp/<run_id>/objective*.json(l) (ops/dispatch_emit/objective_*.py).
+    # DR-208 five-question affirmation: 1 YES (run-dir objective files); 2 No; 3 YES; 4 YES (the
+    # run's later legs read them); 5 YES (persisted).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.objective_write": OpClass.MUTATING,
+    "dispatch.objective_check": OpClass.MUTATING,
+    "dispatch.objective_calibrate": OpClass.MUTATING,
+    # dispatch.write_receipt — MUTATING: one atomic write of <run_dir>/receipts/<stage>.json
+    # (ops/dispatch_emit/stage_receipts.py).
+    # DR-208 five-question affirmation: 1 YES (one receipt file); 2 No; 3 YES; 4 YES (receipts
+    # readers); 5 YES (persisted).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.write_receipt": OpClass.MUTATING,
     # dispatch.release_run_token — MUTATING: deletes one warp run's unclaimed token record
     # (ops/dispatch_emit/release_run_token.py).
     # DR-208 five-question affirmation (citing dispatch.release_run_token handler):
@@ -2800,6 +2841,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.admission_post -- MUTATING: appends a line to
     # <settings-home>/state/group-em/box/admission.jsonl.
     "groupem.admission_post": OpClass.MUTATING,
+    # groupem.slot_grant -- MUTATING: writes or removes a record under
+    # <settings-home>/state/group-em/slot-grants/.
+    "groupem.slot_grant": OpClass.MUTATING,
+    # groupem.slot_check -- COMPUTE_ONLY: reads one grant record; writes nothing.
+    "groupem.slot_check": OpClass.COMPUTE_ONLY,
     # workstream_complete.stand_down_watchers -- MUTATING: kills this session's
     # attributed watcher trees and removes the Group EM holder record.
     "workstream_complete.stand_down_watchers": OpClass.MUTATING,
@@ -3827,17 +3873,25 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # distill.workflow_input — COMPUTE_ONLY: pure producer/consumer field
     # translation plus self-validation of its own output. No path is opened.
     "distill.workflow_input": OpClass.COMPUTE_ONLY,
-    # updatedocs.gates — MUTATING, despite reading as a read-only verdict battery.
-    # The 11i queue-prune gate SPAWNS the prune CLIs (see _gate_queue_prune_sweep):
-    # the legacy leg rewrites the queue file in place and the YAML leg archives and
-    # commits entries. Persistent state changes are observable across process
-    # boundaries, so question 5 of the DR-208 checklist answers YES and no
-    # COMPUTE_ONLY reading survives it. The mutation is inherited verbatim from the
-    # update-docs-probes queue-prune-sweep subcommand this op absorbed, not
-    # introduced here — but a gate that writes while being asked for a verdict is a
-    # surprise worth retiring rather than preserving; see the module docstring.
+    # updatedocs.gates — COMPUTE_ONLY: a read-only verdict battery. Its gates read
+    # docs, manifests and indexes and spawn only read-only DoE gate CLIs; the two
+    # writing sweeps (11i queue prune, 11j sidecar reap) moved to updatedocs.sweeps.
+    "updatedocs.gates": OpClass.COMPUTE_ONLY,
+    # updatedocs.sweeps — MUTATING: the 11i sweep rewrites queue files in place and the
+    # YAML leg archives and commits entries; the 11j sweep deletes stale subagent-share
+    # sidecars (ops/updatedocs_sweeps.py).
+    # DR-208 five-question affirmation (citing updatedocs.sweeps handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Queue files, archived entries and their commits; sidecar files deleted.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The queue files, rewritten in place.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The queues and the subagent-share directory.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      Queue rewrites and sidecar deletions persist on disk.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
-    "updatedocs.gates": OpClass.MUTATING,
+    "updatedocs.sweeps": OpClass.MUTATING,
     # git.push_failure_verdict — COMPUTE_ONLY: classifies a non-fast-forward push
     # failure into peer_staged / half_applied_merge / simple_lag / resolved_since /
     # indeterminate so DoE's Stop-hook advisory renders a verdict we computed
@@ -4217,6 +4271,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "scratchpad.sweep": OpClass.MUTATING,
     # scratch.delete — MUTATING: renames a chunk's declared gitignored scratch/ path into scratch/.deleted/.
     "scratch.delete": OpClass.MUTATING,
+    # run.paths_trash — MUTATING: renames a chunk's declared repo paths into scratch/.deleted/ (ops/run_paths_trash.py).
+    "run.paths_trash": OpClass.MUTATING,
     # dispatch.emit — MUTATING: writes the composed Workflow .mjs script text
     # to a caller-named path (ops/dispatch_emit/op.py). The only handler in
     # the dispatch-emit pipeline that touches disk — every upstream module

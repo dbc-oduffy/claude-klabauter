@@ -48,18 +48,24 @@ def _claim_plan(repo, claimed):
     (repo / PLAN_REL).write_text(body.replace("---\n", f"---\n{claims}", 1), encoding="utf-8", newline="\n")
 
 
-def _resume(repo, claimed):
+def _verdict(repo, claimed):
     _halted_repo(repo)
     _put(repo, tshirt="S", route="spec-dispatch", plan=PLAN_REL, requirement_register={"rows": _ROWS})
     _claim_plan(repo, claimed)
     _pointer(repo)
-    verdict = gate(repo, REL)
+    return gate(repo, REL)
+
+
+def _resume(repo, claimed):
+    verdict = _verdict(repo, claimed)
     assert verdict.halt is None and verdict.resume_ledger is not None
     return verdict.resume_ledger
 
 
-def test_resume_ledger_names_the_register_rows_the_plan_omits(repo):  # noqa: F811
-    assert _resume(repo, ["R1"])["unclaimed_rows"] == ["R2", "R3"]
+def test_the_s_arm_resumes_a_refire_whose_plan_omits_register_rows_naming_them(repo):  # noqa: F811
+    verdict = _verdict(repo, ["R1"])
+    assert verdict.halt is None
+    assert verdict.resume_ledger["unclaimed_rows"] == ["R2", "R3"]
 
 
 def test_resume_ledger_names_none_when_the_plan_claims_every_row(repo):  # noqa: F811

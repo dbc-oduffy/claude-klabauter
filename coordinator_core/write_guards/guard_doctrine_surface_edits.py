@@ -1,170 +1,81 @@
-"""coordinator_core.write_guards.guard_doctrine_surface_edits — deny edits to
-always-loaded doctrine surfaces unless a PM-created approval sentinel is
-present and unexpired.
+"""coordinator_core.write_guards.guard_doctrine_surface_edits — advisory on edits
+to always-loaded doctrine surfaces and privileged configuration.
 
-Ported from coordinator-content-repo
-`coordinator/hooks/scripts/guard-doctrine-surface-edits.py` (faithful port —
-see `write_guards/INTERFACE.md`). CLASS is hard-deny and fail-closed; this
-is the one guard in the DoE source tree that deliberately differs from every
-sibling guard's fail-open posture — see "Fail-closed is DELIBERATE" below,
-carried over verbatim from the source docstring.
+An edit to a protected surface lands. The guard returns `additionalContext`
+naming the review checks the run answers for itself (always-loaded byte
+budget; no unprompted rewrite). It never denies and reads no sentinel file,
+transcript turn or other human-created unlock.
 
-Why this exists
-----------------
-Two distinct classes of file are protected here, for two distinct reasons.
-Both reduce to the same structural property — an EM editing one of them
-unilaterally is self-approval of a change nobody else gets to see — so both
-take the same sentinel, but conflating their rationales has already cost a
-sibling repo a round trip (cross-repo/inbox/2026-08-08-example-store-repo-em-…),
-and the deny message is per-class for that reason.
+Two classes of file are protected, for two distinct reasons; the advisory
+text is per-class because a class-1 reason attached to coordinator.local.md
+reads as false to anyone who has looked at the file.
 
 CLASS 1 — always-loaded instruction prose. The global CLAUDE.md, the
 EM-only operating-doctrine channel, and the repo-root project CLAUDE.md are
 injected into every session and every dispatched agent's context. An edit
-here silently changes everyone's instructions, fleet-wide.
+here changes everyone's instructions, fleet-wide.
 
 CLASS 2 — privileged configuration. coordinator.local.md is NOT
-always-loaded prose, and calling it doctrine is a category error. It is
-protected because its frontmatter is the repo's privileged-execution and
-authority surface, which is a stronger reason to gate it, not a weaker one:
+always-loaded prose. Its frontmatter is the repo's privileged-execution and
+authority surface:
   - `fast_test_cmd` / `full_test_cmd` and the `*_post_command` keys are
-    command strings the ceremony machinery EXECUTES
-    (coordinator/bin/coordinator-ceremony-hook.py, argv-only).
+    command strings the ceremony machinery EXECUTES.
   - `fast_tier_unscoped_reason` / `fast_tier_shape` DISCHARGE the Tier-U
-    caller-authority check for this repo's literal resolved `fast_test_cmd`
-    (coordinator_core/session/tier_u_gate.py, DR-088 R6 / DR-235).
-An EM free to edit these keys could narrow the gate command and, in the same
-edit, keep the declaration that authorizes running it — self-approving a
-gutted cadence gate. The file's prose body is the part closest to ordinary
-documentation; the frontmatter is the part that must not move unwitnessed.
+    caller-authority check for this repo's literal resolved `fast_test_cmd`.
+An edit that narrows the gate command while keeping the declaration that
+authorizes it is the one the review looks for.
+
+Negative spec — do NOT "split" this guard by advising on coordinator.local.md's
+prose body while skipping its frontmatter keys: the frontmatter is the
+executed/authority half.
 
 Protected surfaces (resolved, symlink-free, absolute real paths; matched
 exactly — never by substring or basename, so a nested CLAUDE.md deeper in
 the tree, e.g. coordinator/tests/CLAUDE.md, is NOT protected):
-  - <repo-root>/global-doctrine/CLAUDE.md                 (class 1)
+  - <content-root>/global-doctrine/CLAUDE.md              (class 1)
   - $HOME/.claude/CLAUDE.md              (class 1, the derived live copy)
-  - <repo-root>/coordinator/snippets/em-operating-doctrine.md   (class 1)
+  - <content-root>/coordinator/snippets/em-operating-doctrine.md  (class 1)
   - <repo-root>/CLAUDE.md          (class 1, repo-root project instructions)
   - <repo-root>/coordinator.local.md                      (class 2)
 
-PLUS, generically (`_foreign_repo_root_surface`): ANY other
-repo's own `<its-root>/CLAUDE.md` or `<its-root>/coordinator.local.md`, when
-the edit targets it directly regardless of the session's own repo_root —
-e.g. a example-retrieval-repo session editing `example-retrieval-repo-ue-addon/CLAUDE.md`. Owning
-root for the sentinel lookup is that repo's own root, never the session's.
+PLUS, generically (`_foreign_repo_root_surface`): ANY other repo's own
+`<its-root>/CLAUDE.md` or `<its-root>/coordinator.local.md`, when the edit
+targets it directly regardless of the session's own repo_root; and a DoE
+doctrine path edited from a session anchored outside DoE.
 
-Negative spec — do NOT "split" this guard by gating coordinator.local.md's
-prose body while ungating its frontmatter keys. That is the intuitive split
-and it is exactly inverted: the frontmatter is the executed/authority half.
+Gate
+----
+`check()` returns None as its first step only after `machine-local set
+coordinator.feature.doctrine_edit_gate off` has been run
+(`machine_profile.feature_enabled("doctrine_edit_gate")`).
 
-Default-on gate
----------------
-The gate is on every profile. `check()` returns None (allow) as its first
-step only after `machine-local set coordinator.feature.doctrine_edit_gate off`
-has been run (`machine_profile.feature_enabled("doctrine_edit_gate")`).
+Weakening writes
+----------------
+A Write/Edit to a machine-local registry file or a Claude settings file that
+turns the gate off, lowers a guard level, or turns a coordinator feature off
+lands with an advisory naming what it weakens.
 
-Approval mechanism
--------------------
-Sentinel file `.coordinator-doctrine-edit-approved` under the repo's git dir (name
-deliberately NOT printed in the deny message — see Deny message below):
-  - absent -> DENY
-  - a file at the repo root instead -> DENY (a root file never approves)
-  - present, mtime older than APPROVAL_WINDOW_SECONDS (30 minutes) -> DENY
-    (treated as expired)
-  - present, mtime within the window -> ALLOW, whatever PM turn the edit
-    lands in; the window alone gates the edit, so a background run that
-    reaches its edit after the approving turn ended is admitted. EM audience
-    gets a lifetime sentence on allow and on deny; other audiences are
-    unchanged. An expired sentinel is left in place (denied by age).
+A main session `gem_admitted` reports as the verified live holder edits the
+`_gem_doctrine_carve_out` surfaces with only the rot-token advisory.
+`edit_admitted` is the pure verdict for the bash guard's Edit route: an Edit
+is offered for every target except the derived live copy.
 
-Group EM admission: a main session `gem_admitted` reports as the verified live
-holder edits the `_gem_doctrine_carve_out` surfaces with no sentinel (allow
-carries only the rot advisory). DoE doctrine paths edited from a session
-anchored outside DoE are matched here, owned by DoE's root sentinel
-(`bump_out_of_repo_tool_write` defers). `edit_admitted` is the pure verdict
-for the bash guard's Edit route. EM-audience deny: SendMessage the live holder
-for a carve-out surface, else file a `coordinator-queue-append --schema lessons`
-change request.
+Unparseable payload (missing tool_input, no path key, tool not in the guarded
+set, or a path outside the protected surfaces) allows silently.
 
-Fail-closed is DELIBERATE and is the one place this guard differs from
-every sibling guard in this tree. Every other guard fails OPEN on its own
-resolution failures (git root unresolvable, home unresolvable, subprocess
-timeout) because each of those guards protects against a mistake, and
-refusing to protect against a mistake you can't currently detect is the
-safer failure mode. This guard protects a PM approval BOUNDARY, not a
-mistake — a boundary that fails open under an unreadable sentinel or an
-unresolvable repo root is not a boundary at all, it is a suggestion. So: if
-the git root cannot be resolved, this guard falls back to checking ONLY the
-$HOME/.claude/CLAUDE.md protection (the one protected path that does not
-require a repo root), and treats the approval sentinel as ABSENT (deny)
-rather than skipping the check.
-
-The one place this guard still fails OPEN, unconditionally, is an
-unparseable or non-matching payload: if the guard cannot tell what file is
-being edited (missing tool_input, no path key, tool not in the guarded set,
-or the resolved path is not one of the five protected surfaces), it has no
-basis to block anything and allows silently. The distinction that matters:
-unparseable payload -> allow; parseable payload that DOES target a
-protected file but whose approval state cannot be resolved -> deny.
-
-**HARD CONSTRAINT carried from the porting brief — do NOT wrap `check()` in
-a blanket try/except.** Every risky call below (`_git_root`, `_norm`,
-`_protected_paths`, `_sentinel_state`) is individually try/excepted to a
-definite value exactly as in the source, so the fail-closed posture holds
-without needing a function-level catch-all; adding one would convert this
-boundary to fail-open, which is the one identified way to put a hole in it.
-
-Deny message
--------------
-Design-as-offers: leads with why THIS file matters — per class, because a
-class-1 reason attached to coordinator.local.md reads as false to anyone who
-has looked at the file, and a deny message a reader can falsify is a deny
-message they route around — and follows with what to do about it (describe
-the proposed change to the PM and ask for approval).
-
-AUDIENCE-GATED (2026-08-13, C4a; plan
-docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
-docs/wiki/guard-messaging.md § Register, B6). The prior render named the
-sentinel filename and printed its creation command verbatim, paired with an
-explicit "relay this, do NOT run it, you cannot" — the exact BYPASS-in-the-
-denial shape B6 forbids: showing a confined reader the key and forbidding
-its use in the same breath is the disclosure, not a mitigation, because it
-is what makes a well-meaning subagent's rationalisation through the gate
-available ("my EM told me to..., and this guard shows the button, so I
-press it"). Per B6's audience split:
-  - **Dispatched subagent** — no statement that an unlock exists survives in
-    any shape: no filename, no command, no "you cannot" line. The REFUSAL
-    (describe the change to the PM) is the entire message.
-  - **Positively resolved EM** (`resolves_em_audience`,
-    `coordinator_core.session.identity`) — the message additionally routes
-    to `docs/reference/guard-override-keys.md` (which documents this exact
-    sentinel, `.coordinator-doctrine-edit-approved`, under its own entry)
-    and nothing else: no key, no path, no command.
-  - **Unresolved audience** — degrades to the terse (subagent) form, never
-    the mechanism, per B6's unresolved-audience degradation rule.
-`_deny_reason` therefore takes `payload` (the PreToolUse envelope) to
-resolve audience at render time; `check()` threads it through unchanged.
-
-Fail-open paths (all return None, in order):
-  - tool_name not in the guarded set.
-  - no target path in tool_input.
-  - resolved target path is not one of the five protected surfaces.
-
-C4 addendum — advisory repo-identity recording
-------------------------------------------------
-`check()` also calls C1's `coordinator_core.pickup_assemble.compute_repo_identity_gate`
+Repo-identity recording
+-----------------------
+`check()` also calls `coordinator_core.pickup_assemble.compute_repo_identity_gate`
 and logs its verdict (MATCH/MISMATCH/UNRESOLVED) via
 `_write_repo_identity_advisory_log`, best-effort, to
 `<repo-root>/.git/coordinator-sessions/<session_id>/repo-identity-gate.log`.
-**This is READ-ONLY and ADVISORY ONLY — see DR-277
-(`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`).** This
-site clears no DR-277 carve-out, so the verdict is recorded and never
-consulted by the allow/deny decision below, on MISMATCH or any other
-verdict. Do not "finish the job" by wiring a refusal off it.
+**READ-ONLY and ADVISORY ONLY — see DR-277
+(`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`).** The
+verdict is never consulted by the decision below.
 
 Spec backlink: coordinator-content-repo
   coordinator/hooks/scripts/guard-doctrine-surface-edits.py
-Spec backlink (C4 addendum): pln-a-ceremony-must-not-be-able-to-5e9421
+Spec backlink (repo identity): pln-a-ceremony-must-not-be-able-to-5e9421
 """
 
 from __future__ import annotations
@@ -173,33 +84,24 @@ import json
 import os
 import re
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
-from coordinator_core import env_locality, machine_profile, machine_resolver
+from coordinator_core import machine_profile, machine_resolver
 from coordinator_core.content_root import read_content_root
-from coordinator_core.machine_profile import apply_guard_level, feature_enabled
+from coordinator_core.machine_profile import feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
-from coordinator_core.session.identity import resolves_em_audience
 from coordinator_core.bash_guards import _write_bump_applicability
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._gem_doctrine_carve_out import (
     doctrine_root_of,
-    doctrine_surface,
     gem_admitted,
-    live_gem_holder,
 )
-from coordinator_core.write_guards._guard_level import doctrine_surface_risk
 from coordinator_core.write_guards._repo_root import resolve_repo_root
-from coordinator_core.write_guards._sentinel_write_guard import (
-    extract_target_path,
-    sentinel_write_denial,
-)
+from coordinator_core.write_guards._sentinel_write_guard import extract_target_path
 
-CLASS = "hard-deny"
+CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 127
 
@@ -208,12 +110,9 @@ GENERATES = []
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 
 _GATE_FEATURE = "doctrine_edit_gate"
-_SENTINEL_NAME = ".coordinator-doctrine-edit-approved"
-_APPROVAL_WINDOW_SECONDS = 30 * 60
 
-# Rot-token advisory (B06) -- fires only on an ALLOWED doctrine-surface edit
-# (sentinel present and unexpired) that ADDS one of three token shapes the
-# old text lacked. Shapes and rationale: see plan
+# Rot-token advisory (B06) -- fires on an edit that ADDS one of three token
+# shapes the old text lacked. Shapes and rationale: see plan
 # docs/plans/2026-09-26-inbox-blitz-part-b-engine-defects.md, B06 body and
 # "Design decisions". A bare numeral ("count-shaped") is deliberately NOT a
 # shape here -- it cannot be told apart from ordinary prose numbers at write
@@ -370,40 +269,22 @@ def _content_root() -> "str | None":
 
 
 def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]":
-    """Protected paths paired with the root whose sentinel approves each.
+    """Protected paths paired with the root that owns each (None = the session's repo root).
 
-    TWO SURFACE FAMILIES, AND THEY ANCHOR DIFFERENTLY. Composing all four
-    repo-relative surfaces against the session's own repo root was a
-    cross-repo MIS-ANCHOR for two of them, measured 2026-09-17 from a
-    session whose cwd was `claude-klabauter`: `global-doctrine/CLAUDE.md` and
-    `coordinator/snippets/em-operating-doctrine.md` exist ONLY in
-    coordinator-content-repo, so they resolved to two nonexistent `claude-klabauter/...`
-    paths while the real DoE files sat outside the protected set entirely
-    and edited clean. The guard was fail-closed on its own resolution
-    failures and wide open on this one, because a path that resolves
-    successfully to the wrong repo is not a resolution failure.
+    TWO SURFACE FAMILIES, AND THEY ANCHOR DIFFERENTLY. `global-doctrine/CLAUDE.md`
+    and `coordinator/snippets/em-operating-doctrine.md` exist ONLY in
+    coordinator-content-repo, so composing them against the session's own repo root resolves
+    to nonexistent paths while the real DoE files sit outside the protected set
+    (measured 2026-09-17 from a claude-klabauter session).
 
       - DoE-ONLY surfaces anchor on `_content_root()`, never on the session's
         repo. One clone of coordinator-content-repo serves the whole box.
       - PER-REPO surfaces (`CLAUDE.md`, `coordinator.local.md`) stay
-        anchored on the session's own repo root, which is correct and
-        unchanged: every repo has its own copy, each governing that repo's
-        sessions, and DoE's are additionally covered as that repo's
-        per-repo pair whenever a session runs there.
+        anchored on the session's own repo root: every repo has its own copy,
+        each governing that repo's sessions.
 
-    THE SENTINEL FOLLOWS THE OWNING REPO, not the session. An approval to
-    edit DoE's doctrine belongs at DoE's repo root; accepting one created in
-    whatever repo the editing session happens to sit in would let any repo
-    on the box authorize edits to the fleet's doctrine. `None` as the owning
-    root means "approved by the session's repo root", preserving today's
-    behaviour for the HOME surface exactly.
-
-    ADDITIVE BY CONSTRUCTION. Every entry this returns is one `check()` will
-    deny without an approval; nothing is removed relative to the previous
-    composition, so no allow path widens -- the direction a hard-deny guard
-    is allowed to move without a ruling. An unresolvable content-root pointer
-    drops the DoE-anchored entries and lands exactly on the pre-fix
-    protected set rather than on an error.
+    An unresolvable content-root pointer drops the DoE-anchored entries and
+    lands on the per-repo set rather than on an error.
     """
     entries: "list[tuple[str, str | None]]" = []
     seen: "set[str]" = set()
@@ -460,69 +341,6 @@ def _foreign_repo_root_surface(target: str) -> "str | None":
     return _norm(target_root)
 
 
-def _git_dir(repo_root: str) -> "str | None":
-    """The repo's git dir from one `.git` stat plus at most one one-line read, no spawn.
-    A `gitdir:` pointer is joined to the root when relative; None when unresolvable."""
-    dot_git = os.path.join(repo_root, ".git")
-    if os.path.isdir(dot_git):
-        return dot_git
-    try:
-        with open(dot_git, encoding="utf-8") as fh:
-            line = fh.readline().strip()
-    except OSError:
-        return None
-    if not line.startswith("gitdir:"):
-        return None
-    gitdir = line[len("gitdir:"):].strip()
-    if not gitdir:
-        return None
-    if os.path.isabs(gitdir) or re.match(r"^[A-Za-z]:[\\/]", gitdir):
-        return gitdir
-    return os.path.join(repo_root, gitdir)
-
-
-def _sentinel_state(repo_root: "str | None") -> str:
-    """Returns "allow", "deny-absent", "deny-expired", "deny-root" or "deny-root-present".
-
-    The approval lives under the git dir, which no commit can carry into a clone.
-    A file at `<root>/<sentinel>` can never approve: it is unlinked on the call
-    that sees it, and that call is "deny-root"; the next call reads the git dir.
-    "deny-root-present" is the same refusal when the unlink failed.
-
-    No repo root or git dir resolvable -> "deny-absent" (fail closed, per this
-    guard's deliberate fail-closed posture -- see module docstring).
-
-    A DIRECTORY at the sentinel path is treated as ABSENT: `os.path.getmtime`
-    succeeds on a directory, so `mkdir <sentinel>` would otherwise read as an
-    approval. `os.path.isfile()` follows symlinks to a regular file (still
-    approves) and is False for a directory, fifo, socket or device.
-    """
-    if not repo_root:
-        return "deny-absent"
-    git_dir = _git_dir(repo_root)
-    if not git_dir:
-        return "deny-absent"
-    root_file = os.path.join(repo_root, _SENTINEL_NAME)
-    if os.path.lexists(root_file):
-        try:
-            os.unlink(root_file)
-        except OSError:
-            return "deny-root-present"
-        return "deny-root"
-    sentinel_path = os.path.join(git_dir, _SENTINEL_NAME)
-    try:
-        if not os.path.isfile(sentinel_path):
-            return "deny-absent"
-        mtime = os.path.getmtime(sentinel_path)
-    except OSError:
-        return "deny-absent"
-    age = time.time() - mtime
-    # A future mtime (clock skew, touch -d) would otherwise never expire.
-    if age < 0 or age > _APPROVAL_WINDOW_SECONDS:
-        return "deny-expired"
-    return "allow"
-
-
 def _local_config_path(repo_root: "str | None") -> "str | None":
     if not repo_root:
         return None
@@ -535,292 +353,74 @@ def _local_config_path(repo_root: "str | None") -> "str | None":
 def _why_protected(is_local_config: bool) -> str:
     if is_local_config:
         return (
-            "is this repo's privileged configuration — its frontmatter holds "
+            "is this repo's privileged configuration: its frontmatter holds "
             "the command strings the ceremony machinery executes "
             "(fast_test_cmd, full_test_cmd, *_post_command) and the "
             "declarations that discharge the Tier-U authority check for them "
-            "(fast_tier_unscoped_reason, fast_tier_shape). An EM editing "
-            "these could narrow a cadence gate and, in the same edit, keep "
-            "the declaration authorizing the narrowed command — which is "
-            "self-approval, not configuration"
+            "(fast_tier_unscoped_reason, fast_tier_shape)"
         )
     return (
-        "is always-loaded doctrine — it reaches every session and every "
-        "dispatched agent in the fleet, so a change here is not a unilateral "
-        "edit the EM can make on its own"
+        "is always-loaded doctrine: it reaches every session and every "
+        "dispatched agent in the fleet"
     )
 
 
-#: Same env var and literal `_git_root`-independent read as
-#: `coordinator_core.hooks.repin_cloud_engine_root.REMOTE_ENV_VAR` /
-#: `REMOTE_ENV_TRUE` — kept as local literals rather than an import because
-#: that module's constants govern engine-root repinning, an unrelated
-#: concern; the two must stay byte-identical readings of the same venue
-#: signal, not the same symbol.
-_CLOUD_VENUE_ENV_VAR = "CLAUDE_CODE_REMOTE"
-_CLOUD_VENUE_ENV_TRUE = "true"
-
-
-def _in_cloud_session() -> bool:
-    try:
-        rung = env_locality.harness_rung()
-    except Exception:
-        return False
-    return rung is not None and rung.call == "cloud"
-
-
-_TRANSCRIPT_TAIL_BYTES = 512 * 1024
-_WRAPPER_RE = re.compile(
-    r"<(system-reminder|cross-session-message|task-notification)\b.*?</\1>",
-    re.DOTALL,
+_REVIEW_CHECKS_DOCTRINE = (
+    "The edit lands. The run's review answers two checks: the always-loaded "
+    "byte budget still holds, and the change was asked for (no unprompted rewrite)."
 )
-_UNCLOSED_WRAPPER_RE = re.compile(
-    r"<(?:system-reminder|cross-session-message|task-notification)\b.*", re.DOTALL
+_REVIEW_CHECKS_CONFIG = (
+    "The edit lands. The run's review answers one check: a narrowed gate "
+    "command is not paired with the declaration that authorizes it."
 )
 
 
-def _user_turn_text(entry: Any) -> str:
-    """Text a human typed in a transcript entry; "" for any non-genuine one."""
-    if not isinstance(entry, dict) or entry.get("type") != "user" or entry.get("isMeta"):
-        return ""
-    message = entry.get("message")
-    if not isinstance(message, dict) or message.get("role") != "user":
-        return ""
-    content = message.get("content")
-    if isinstance(content, list):
-        content = "\n".join(
-            b.get("text", "")
-            for b in content
-            if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
-        )
-    if not isinstance(content, str):
-        return ""
-    content = _UNCLOSED_WRAPPER_RE.sub("", _WRAPPER_RE.sub("", content))
-    return content.strip()
-
-
-def _pm_turn_entries(transcript_path: Any) -> "list[Dict[str, Any]]":
-    """Newest-first genuine PM turns (at most two) from the transcript tail,
-    each `{"text", "timestamp"}`; [] when the transcript is absent or unreadable."""
-    if not isinstance(transcript_path, str) or not transcript_path:
-        return []
-    try:
-        with open(transcript_path, "rb") as fh:
-            size = fh.seek(0, os.SEEK_END)
-            start = max(0, size - _TRANSCRIPT_TAIL_BYTES)
-            fh.seek(start)
-            data = fh.read().decode("utf-8", "replace")
-    except OSError:
-        return []
-    lines = data.split("\n")
-    if start:
-        lines = lines[1:]
-    turns: "list[Dict[str, Any]]" = []
-    for line in reversed(lines):
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        text = _user_turn_text(entry)
-        if text:
-            turns.append({"text": text, "timestamp": entry.get("timestamp")})
-            if len(turns) == 2:
-                break
-    return turns
-
-
-def _last_pm_turn(transcript_path: Any) -> str:
-    """Most recent genuine user turn from the transcript tail; "" if none."""
-    turns = _pm_turn_entries(transcript_path)
-    return turns[0]["text"] if turns else ""
-
-
-def _pm_turn_names_target(payload: Dict[str, Any], target: str, repo_root: "str | None") -> bool:
-    """Cloud only: the latest PM turn names `target` by repo-relative path or basename."""
-    if not _in_cloud_session():
-        return False
-    text = _last_pm_turn(payload.get("transcript_path"))
-    if not text:
-        return False
-    names = {os.path.basename(target)}
-    if repo_root:
-        try:
-            names.add(os.path.relpath(target, repo_root).replace(os.sep, "/"))
-        except ValueError:
-            pass
-    return any(n and n in text for n in names)
-
-
-_LESSON_ROUTE = (
-    'File it as a change request: `coordinator-queue-append --schema lessons '
-    '--scope project --status open --tags doctrine-change-request '
-    '--title "Doctrine change: {target}" --body "<exact text>; why: <reason>"`. '
-    "Keep working; the next Group EM or /learn-lessons applies it."
-)
-
-
-def _live_holder_route(target: str, payload: Optional[Dict[str, Any]]) -> str:
-    """The SendMessage-the-Group-EM sentence when ``target`` is a surface a live
-    Group EM could edit and the caller is not that holder, else ""."""
-    try:
-        if doctrine_surface(target) is None:
-            return ""
-        holder = live_gem_holder(_git_root())
-        if not holder or not holder.get("name"):
-            return ""
-        caller = (payload or {}).get("session_id") or ""
-        if caller and holder.get("session_id") == caller:
-            return ""
-        return (
-            f"A live Group EM is on the box: SendMessage {holder['name']} the "
-            "proposed text and why. It edits or declines."
-        )
-    except Exception:
-        return ""
-
-
-def _deny_reason(
-    target: str,
-    is_local_config: bool = False,
-    payload: Optional[Dict[str, Any]] = None,
-    root_sentinel: str = "",
-) -> str:
-    """Audience-gated render — see module docstring "Deny message".
-
-    Subagent/unresolved audience: REFUSAL only, no unlock statement in any
-    shape, byte-identical regardless of venue. Positively-resolved EM
-    (`resolves_em_audience`):
-      - workstation (not a cloud session) — the REFUSAL plus a doc pointer,
-        and nothing else — no key, no path, no command. Unchanged from
-        before this venue split.
-      - cloud session (`CLAUDE_CODE_REMOTE == "true"`) — the doc pointer
-        names an approval route (create the sentinel at its owning root)
-        this audience cannot reach: PM assent this guard trusts arrives by
-        the operator creating the sentinel file directly, which requires a
-        workstation session. Naming that unreachable route here is not a
-        remedy (guard-messaging.md § Register, "A remedy that is
-        unreachable in every case is not a remedy") and doubles as a B6
-        artifact leak with no payoff. Render one fact plus one terse
-        alternative instead: approval cannot be granted from here; make the
-        edit from a workstation session. No sentinel name, no doc pointer,
-        no override key — nothing C6's future approval command could turn
-        into a bypass recipe. C6 replaces this alternative with the
-        approval command once it exists.
-    """
-    head = f"[doctrine-surface guard] BLOCKED: {target} {_why_protected(is_local_config)}."
-    tail = (
-        " Consider whether the content belongs in a wiki page or a "
-        "skill surface instead — those need no approval."
+def _surface_advisory(target: str, is_local_config: bool) -> str:
+    checks = _REVIEW_CHECKS_CONFIG if is_local_config else _REVIEW_CHECKS_DOCTRINE
+    return (
+        f"[doctrine-surface guard] advisory: {target} "
+        f"{_why_protected(is_local_config)}. {checks}"
     )
-    base = (
-        head
-        + " Describe the proposed change to the PM and ask them to approve it "
-        "before editing this file."
-        + tail
-    )
-    if resolves_em_audience(payload, _git_root()):
-        holder_route = "" if is_local_config else _live_holder_route(target, payload)
-        if holder_route:
-            base = head + " " + holder_route + tail
-            if root_sentinel == "deny-root":
-                base += " Removed a root-level approval file; approvals live under the git dir."
-            elif root_sentinel == "deny-root-present":
-                base += (
-                    " A root-level approval file is not an approval; "
-                    "approvals live under the git dir."
-                )
-            return base
-        if not is_local_config:
-            base = head + " " + _LESSON_ROUTE.format(target=target) + tail
-        if _in_cloud_session():
-            base += (
-                " Ask the PM to approve this edit to the named file in their "
-                "own words."
-            )
-        else:
-            base += (
-                f" See {resolve_override_keys_doc_display()} for how "
-                "approval works."
-                if is_local_config
-                else f" For an edit needed now, see {resolve_override_keys_doc_display()} "
-                "for how approval works."
-            )
-            if root_sentinel == "deny-root":
-                base += (
-                    " Removed a root-level approval file; "
-                    "approvals live under the git dir."
-                )
-            elif root_sentinel == "deny-root-present":
-                base += (
-                    " A root-level approval file is not an approval; "
-                    "approvals live under the git dir."
-                )
-        base += _LIFETIME_DENY_SUFFIX
-    return base
 
 
-_LIFETIME_CONTEXT = (
-    "[doctrine-surface guard] PM approval in effect for 30 minutes from the "
-    "approval; it expires on its own, so there is nothing to remove."
-)
-_LIFETIME_DENY_SUFFIX = (
-    " An approval lasts 30 minutes and expires on its own; there is nothing to remove."
-)
-
-
-def _with_lifetime_context(advisory: "Optional[Dict[str, Any]]") -> Dict[str, Any]:
-    """EM-audience allow result: the lifetime sentence, joined with the rot advisory when present."""
-    context = _LIFETIME_CONTEXT
-    if advisory:
-        context += "\n" + advisory["hookSpecificOutput"]["additionalContext"]
+def _advisory_envelope(*texts: "Optional[str]") -> Dict[str, Any]:
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "additionalContext": context,
+            "additionalContext": "\n".join(t for t in texts if t),
         }
     }
+
+
+def _rot_text(advisory: "Optional[Dict[str, Any]]") -> "Optional[str]":
+    return advisory["hookSpecificOutput"]["additionalContext"] if advisory else None
 
 
 def _write_repo_identity_advisory_log(
     repo_root: "str | None", session_id: str, gate_result: Dict[str, Any]
 ) -> None:
-    """Best-effort, non-blocking record of C1's `compute_repo_identity_gate`
-    verdict (plan `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
+    """Best-effort, non-blocking record of the repo-identity gate verdict
+    (plan `docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md`
     § C4).
 
     **DR-277 (`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`):
-    this guard is advisory-by-default and clears no hard-deny carve-out for
-    the repo-identity gate, so the verdict computed here is recorded ONLY —
-    it is NEVER consulted by `check()`'s allow/deny decision, on MISMATCH or
-    on any other verdict.** Do not "finish the job" by adding a refusal path
-    off `gate_result["verdict"]`; that would harden this advisory guard into
-    exactly the kind of unratified block DR-277 forbids. If a hard block on
-    repo identity is ever wanted here, it needs its own named DR-277
-    carve-out, not a quiet upgrade of this log call.
+    the verdict computed here is recorded ONLY — it is NEVER consulted by
+    `check()`, on MISMATCH or on any other verdict.** A hard block on repo
+    identity needs its own named DR-277 carve-out, not a quiet upgrade of this
+    log call.
 
     Wrapped so any failure (including no resolvable repo root or session id)
-    can NEVER flip the ALLOW/DENY decision — mirrors
-    `block_subagent_plan_body_write._write_block_log`'s `|| true` posture.
+    can NEVER change the decision.
     """
     if not repo_root or not session_id:
         return
     try:
         log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
-        # NEVER mkdir here. This used to be `mkdir(parents=True,
-        # exist_ok=True)`, which let an ADVISORY log line MINT a session
-        # directory for whatever `session_id` it was handed — including test
-        # fixture ids exercising this guard against the real repo root. Nine
-        # such dirs (`sess-1`, `sess-abc`, `test-session-abc123`, the
-        # `sess-msys-*` dispatcher slugs) had accumulated in this repo's real
-        # hub by 2026-08-19, and `liveness.live_session_ids` enumerates every
-        # non-denylisted child as a SESSION — so an advisory write was
-        # manufacturing phantom sessions into the corpus that claim
-        # attribution and scope computation both read.
-        #
-        # A real session's directory is created by `core.init`. If it does not
-        # exist, there is no session here to annotate and the correct action
-        # is to drop the line — an advisory log has no business creating
-        # session state. Pinned by
+        # NEVER mkdir here: an advisory log line minting a session directory
+        # for whatever `session_id` it is handed manufactured phantom sessions
+        # into the corpus `liveness.live_session_ids` reads (nine such dirs by
+        # 2026-08-19). A real session's directory is created by `core.init`;
+        # absent it, there is no session to annotate. Pinned by
         # `test_advisory_log_never_creates_a_session_dir`.
         if not log_dir.is_dir():
             return
@@ -840,7 +440,6 @@ def _write_repo_identity_advisory_log(
 _PRIVILEGED_KEY_RE = re.compile(
     r"^[ \t]*[\w-]*(?:_cmd|_reason|_post_command|_shape)[ \t]*:", re.MULTILINE
 )
-_GUARD_NAME = "guard-doctrine-surface-edits"
 
 
 def _edit_texts(tool_name: str, tool_input: Dict[str, Any], target: str) -> "tuple[str, str]":
@@ -873,28 +472,6 @@ def _is_first_time_create(tool_name: str, tool_input: Dict[str, Any], target: st
     return base == "coordinator.local.md" and _is_unprivileged_config_edit(
         tool_name, tool_input, target
     )
-
-
-def _sentinel_write_deny_reason() -> str:
-    return (
-        "[doctrine-surface guard] BLOCKED: this file is the PM's approval to "
-        "edit doctrine; you creating it would be self-approval. Ask the PM to "
-        "approve and create it. Deleting it (re-locking) is still allowed."
-    )
-
-
-def pm_approval_fresh(
-    cwd: "str | None" = None, payload: "Optional[Dict[str, Any]]" = None
-) -> bool:
-    """True when the PM's approval sentinel exists under the git dir and is
-    within the approval window; the session repo is resolved from `cwd` when
-    given. `payload` is accepted for caller compatibility and unused. A
-    root-level approval file is unlinked by this call, which returns False once."""
-    try:
-        root = resolve_repo_root(cwd=cwd) if cwd else _git_root()
-    except Exception:
-        return False
-    return _sentinel_state(root or None) == "allow"
 
 
 _GATE_KEY = "coordinator.feature." + _GATE_FEATURE
@@ -951,7 +528,7 @@ def _registry_weakening(before: str, after: str) -> "str | None":
     flat_b = machine_resolver._flatten(machine_resolver._parse_toml_text(before))
     flat_a = machine_resolver._flatten(machine_resolver._parse_toml_text(after))
     if _gate_value(after) == "off" and _gate_value(before) != "off":
-        return "turns off the doctrine-edit approval gate"
+        return "turns off the doctrine-edit gate"
     prefix = machine_profile.LEVEL_KEY + "."
     names = {""} | {
         k[len(prefix):] for k in (*flat_a, *flat_b) if k.startswith(prefix)
@@ -1029,8 +606,11 @@ def _weakening_write(tool_name: str, tool_input: Dict[str, Any], target: str) ->
         return None
 
 
-def _weakening_deny_reason(what: str) -> str:
-    return f"[doctrine-surface guard] BLOCKED: this edit {what}. Ask the PM to change it."
+def _weakening_advisory(what: str) -> str:
+    return (
+        f"[doctrine-surface guard] advisory: this edit {what}. The edit lands. "
+        "The run's review answers one check: the change was asked for."
+    )
 
 
 def _anchor_inside(payload: Dict[str, Any], root: str) -> "bool | None":
@@ -1065,40 +645,15 @@ def _match_protected(
     return False, None
 
 
-def _sentinel_fresh_readonly(root: "str | None") -> bool:
-    """`_sentinel_state() == "allow"` without its root-file unlink."""
-    git_dir = _git_dir(root) if root else None
-    if not git_dir or os.path.lexists(os.path.join(root, _SENTINEL_NAME)):
-        return False
-    sentinel_path = os.path.join(git_dir, _SENTINEL_NAME)
-    try:
-        if not os.path.isfile(sentinel_path):
-            return False
-        age = time.time() - os.path.getmtime(sentinel_path)
-    except OSError:
-        return False
-    return 0 <= age <= _APPROVAL_WINDOW_SECONDS
-
-
 def edit_admitted(payload: Dict[str, Any], target: str) -> bool:
-    """Whether an Edit by this caller on ``target`` passes this guard and is not the derived copy.
+    """Whether an Edit on ``target`` is open to this caller: every path except the derived live copy.
 
-    Pure: reads standing, sentinel and transcript; writes and unlinks nothing.
+    Pure: reads nothing but the derived-copy check; writes and unlinks nothing.
     """
     try:
         from coordinator_core.write_guards import block_derived_global_doctrine_write as derived
 
-        if derived._is_derived_live_copy(target):
-            return False
-        norm = _norm(target)
-        if gem_admitted(payload, norm):
-            return True
-        repo_root = _git_root()
-        matched, owning_root = _match_protected(norm, repo_root, payload)
-        if not matched:
-            return True
-        root = owning_root or repo_root
-        return _sentinel_fresh_readonly(root) or _pm_turn_names_target(payload, norm, root)
+        return not derived._is_derived_live_copy(target)
     except Exception:
         return False
 
@@ -1107,7 +662,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not feature_enabled(_GATE_FEATURE):
         return None
 
-    if payload.get("tool_name", "") not in _GUARDED_TOOLS:
+    tool_name = payload.get("tool_name", "")
+    if tool_name not in _GUARDED_TOOLS:
         return None
 
     tool_input = payload.get("tool_input")
@@ -1125,79 +681,29 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     repo_root = _git_root()
 
-    # C4 (docs/plans/2026-08-11-ceremony-closes-against-a-foreign-repo.md):
-    # record C1's repo-identity gate verdict as an advisory
-    # `gates.repo_identity` fact. Read-only, ADVISORY ONLY — see the
-    # DR-277 note in `_write_repo_identity_advisory_log`'s docstring. The
-    # verdict is NEVER read again below and never participates in the
-    # allow/deny decision this function returns.
+    # Advisory `gates.repo_identity` fact; the verdict never reaches the decision (DR-277).
     session_id = payload.get("session_id") or ""
     if repo_root:
         repo_identity_gate = compute_repo_identity_gate(Path(repo_root), session_id or None)
         _write_repo_identity_advisory_log(repo_root, session_id, repo_identity_gate)
 
-    denial = sentinel_write_denial(
-        target, _SENTINEL_NAME, _sentinel_write_deny_reason(), payload=payload
-    )
-    if denial is not None:
-        return denial
-
-    weakened = _weakening_write(payload.get("tool_name", ""), tool_input, target)
-    if weakened and not pm_approval_fresh(
-        payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
-        payload,
-    ):
-        return apply_guard_level(
-            _GUARD_NAME,
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": _weakening_deny_reason(weakened),
-                }
-            },
-            risk=doctrine_surface_risk(f"This edit {weakened}."),
-        )
+    weakened = _weakening_write(tool_name, tool_input, target)
+    if weakened:
+        return _advisory_envelope(_weakening_advisory(weakened))
 
     if gem_admitted(payload, target):
-        return _rot_token_advisory(payload.get("tool_name", ""), tool_input, target)
+        return _rot_token_advisory(tool_name, tool_input, target)
 
-    matched, owning_root = _match_protected(target, repo_root, payload)
+    matched, _owning_root = _match_protected(target, repo_root, payload)
     if not matched:
         return None
 
-    state = _sentinel_state(owning_root or repo_root)
-    if state != "allow" and _pm_turn_names_target(payload, target, owning_root or repo_root):
-        state = "allow"
-    if state == "allow":
-        advisory = _rot_token_advisory(
-            payload.get("tool_name", ""), tool_input, target
-        )
-        if not resolves_em_audience(payload, _git_root()):
-            return advisory
-        return _with_lifetime_context(advisory)
+    rot = _rot_token_advisory(tool_name, tool_input, target)
 
-    tool_name = payload.get("tool_name", "")
     is_local_config = os.path.basename(target) == "coordinator.local.md"
     if _is_first_time_create(tool_name, tool_input, target):
         return None
     if is_local_config and _is_unprivileged_config_edit(tool_name, tool_input, target):
         return None
 
-    denial = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": _deny_reason(
-                target_raw,
-                is_local_config=is_local_config,
-                payload=payload,
-                root_sentinel=state if state.startswith("deny-root") else "",
-            ),
-        }
-    }
-    return apply_guard_level(
-        _GUARD_NAME,
-        denial,
-        risk=doctrine_surface_risk(f"{target_raw} is a protected doctrine surface."),
-    )
+    return _advisory_envelope(_surface_advisory(target_raw, is_local_config), _rot_text(rot))

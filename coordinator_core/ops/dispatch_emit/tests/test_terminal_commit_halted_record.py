@@ -10,7 +10,6 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
-from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -364,9 +363,10 @@ def test_halted_run_lands_done_chunk_not_unfinished_one(repo):
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert out["landed_chunks"] == ["C1"]
+    assert "landed_chunks" not in out
+    assert out["withheld"]["done.py"] == "halt-record-only"
     names = _landed(repo, out, "--name-only")
-    assert "done.py" in names and "half.py" not in names
+    assert "done.py" not in names and "half.py" not in names
     assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
     assert _status(repo)["half.py"] == "??"
 
@@ -399,7 +399,7 @@ def test_peer_held_path_withholds_its_whole_chunk_and_names_both(repo, monkeypat
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert out["withheld"] == {"other.py": "peer-held", "done.py": "chunk-write-set-partial"}
+    assert out["withheld"] == {"other.py": "peer-held", "done.py": "halt-record-only"}
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names and "other.py" not in names
 
@@ -412,7 +412,8 @@ def test_done_tracked_deletion_is_declared_and_never_tracked_path_is_not_staged(
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert "D\tproduct.py" in _landed(repo, out, "--name-status")
+    assert "D\tproduct.py" not in _landed(repo, out, "--name-status")
+    assert out["withheld"]["product.py"] == "halt-record-only"
     assert out.get("dropped", []) == []
 
 
@@ -432,7 +433,7 @@ def test_token_live_after_halt_landing_done_chunk(repo):
 
     out = _call(repo, LEDGER, run_token=token, **PASSING)
 
-    assert out["landed_chunks"] == ["C1"]
+    assert "landed_chunks" not in out
     assert run_token.admits(repo, RUN, token, "run.mjs")
 
 
@@ -451,68 +452,6 @@ def test_refusal_halt_lands_record_only_and_withholds_chunk_product(repo):
     assert "done.py" not in names and "product.py" not in names
     assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
     assert "Lands-Chunks" not in _git(["log", "-1", "--format=%B"], repo)
-
-
-def test_ledger_halt_withholds_chunk_importing_untracked_py(repo):
-    _write_record(repo, RUN)
-    (repo / "pkg").mkdir()
-    (repo / "pkg" / "__init__.py").write_text("", encoding="utf-8")
-    _git(["add", "pkg"], repo)
-    _git(["commit", "-q", "-m", "pkg"], repo)
-    (repo / "pkg" / "a.py").write_text("from pkg import b\n", encoding="utf-8")
-    (repo / "pkg" / "b.py").write_text("v = 1\n", encoding="utf-8")
-    _marker_script(repo, [("C1", ["pkg/a.py"])], {"C1": "DONE: C1\n"})
-
-    out = _call(repo, LEDGER, **PASSING)
-
-    assert out["committed"] is True, out
-    assert out["withheld"] == {"pkg/a.py": "import-closure-open"}
-    assert list(out["closure_open"]) == ["C1"]
-    assert "landed_chunks" not in out
-    assert "pkg/a.py" not in _landed(repo, out, "--name-only")
-
-
-def test_ledger_halt_withholds_tsx_chunk_importing_untracked_alias_module(repo):
-    _write_record(repo, RUN)
-    (repo / "tsconfig.json").write_text(
-        '{"compilerOptions": {"paths": {"@/*": ["./src/*"]}}}\n', encoding="utf-8"
-    )
-    (repo / "src" / "components").mkdir(parents=True)
-    (repo / "src" / "page.tsx").write_text("export const P = 1;\n", encoding="utf-8")
-    _git(["add", "tsconfig.json", "src"], repo)
-    _git(["commit", "-q", "-m", "ts"], repo)
-    write_seen_by_git(repo / "src" / "page.tsx", 'import { X } from "@/components/x";\nexport const P = X;\n')
-    write_seen_by_git(repo / "src" / "components" / "x.tsx", "export const X = 1;\n")
-    _marker_script(repo, [("C1", ["src/page.tsx"])], {"C1": "DONE: C1\n"})
-
-    out = _call(repo, LEDGER, **PASSING)
-
-    assert out["committed"] is True, out
-    assert out["withheld"] == {"src/page.tsx": "import-closure-open"}
-    assert "ts_import_closure" in " ".join(out["closure_open"]["C1"])
-    assert "src/page.tsx" not in _landed(repo, out, "--name-only")
-    assert _status(repo)["src/components/x.tsx"] == "??"
-
-
-def test_ledger_halt_lands_only_the_closed_chunk(repo):
-    _write_record(repo, RUN)
-    (repo / "pkg").mkdir()
-    (repo / "pkg" / "__init__.py").write_text("", encoding="utf-8")
-    _git(["add", "pkg"], repo)
-    _git(["commit", "-q", "-m", "pkg"], repo)
-    (repo / "pkg" / "a.py").write_text("from pkg import b\n", encoding="utf-8")
-    (repo / "pkg" / "b.py").write_text("v = 1\n", encoding="utf-8")
-    (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
-    _marker_script(
-        repo, [("C1", ["pkg/a.py"]), ("C2", ["done.py"])], {"C1": "DONE: C1\n", "C2": "DONE: C2\n"}
-    )
-
-    out = _call(repo, LEDGER, **PASSING)
-
-    assert out["landed_chunks"] == ["C2"]
-    assert "Lands-Chunks: C2" in _git(["log", "-1", "--format=%B"], repo)
-    names = _landed(repo, out, "--name-only")
-    assert "done.py" in names and "pkg/a.py" not in names
 
 
 def _name_sizing(root: Path, sizing_rel: str) -> None:
@@ -649,8 +588,7 @@ def test_halt_lands_plan_handoff_and_delivery_note_the_halt_names(repo):
 
 
 def test_halt_names_dirty_review_written_file_and_does_not_land_it(repo, monkeypatch):
-    """The halt-record commit lands this run's own review edit: leaving it dirty stranded reviewed
-    work whenever a refire's commit leg closed on a credited halt (the pre-halt-credit incident)."""
+    """The halt-record commit lands only the record and declared writes: a review edit outside them stays dirty and is named."""
     from coordinator_core.ops.dispatch_emit import review_edits
 
     _write_record(repo, RUN)
@@ -661,10 +599,10 @@ def test_halt_names_dirty_review_written_file_and_does_not_land_it(repo, monkeyp
     out = _call(repo)
 
     assert out["committed"] is True, out
-    assert out["review_edits_unlanded"] == {}
-    assert "elsewhere/rev.py" in _landed(repo, out, "--name-only")
-    assert "Review-Edit-Unlanded" not in _git(["log", "-1", "--format=%B"], repo)
-    assert "elsewhere/rev.py" not in _status(repo)
+    assert out["review_edits_unlanded"] == {"elsewhere/rev.py": "halted-run"}
+    assert "elsewhere/rev.py" not in _landed(repo, out, "--name-only")
+    assert "Review-Edit-Unlanded: elsewhere/rev.py" in _git(["log", "-1", "--format=%B"], repo)
+    assert "elsewhere/rev.py" in _status(repo)
 
 
 def test_halt_with_no_review_writes_carries_empty_unlanded(repo, monkeypatch):

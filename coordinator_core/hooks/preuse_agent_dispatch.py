@@ -79,6 +79,7 @@ from __future__ import annotations
 import sys
 from typing import List
 
+from coordinator_core.bash_guards._advisory_dedupe import gate_once_per_session
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
@@ -138,7 +139,7 @@ def _handler(params: dict, repo_root=None) -> dict:
                     pass
             return out
         if leg_advisory is None and isinstance(out, dict) and out.get("hookSpecificOutput"):
-            leg_advisory = out
+            leg_advisory = gate_once_per_session(leg_name, out, params)
 
     if skipped:
         try:

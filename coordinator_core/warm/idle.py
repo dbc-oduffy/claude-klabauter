@@ -87,8 +87,10 @@ second config surface.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core.machine_resolver import registry_get
@@ -100,6 +102,12 @@ __all__ = [
     "ZERO_SERVED_DEADLINE_SECS",
     "ServedCountFn",
     "TokenStaleFn",
+    "LadderGoneFn",
+    "LADDER_GONE_TOMBSTONE",
+    "leases_dir",
+    "make_ladder_gone",
+    "write_ladder_gone_tombstone",
+    "ladder_gone_tombstoned",
     "mark_invocation",
     "seconds_idle",
     "reset_idle_clock_for_test",
@@ -123,6 +131,84 @@ ServedCountFn = Callable[[], int]
 # at server boot, since the whole point is to observe a change that
 # happens mid-life.
 TokenStaleFn = Callable[[], bool]
+
+LadderGoneFn = Callable[[], bool]
+
+LADDER_GONE_TOMBSTONE = ".ladder-gone"
+
+# Left by the ladder engine-copy owner in the directory holding its copies;
+# survives release of any one copy's lease.
+LADDER_LIFECYCLE_LOCK = ".lifecycle.lock"
+
+
+def leases_dir(root: Path) -> Path:
+    """The ladder lease directory beside an engine copy: `<root>.leases`
+    (`experiments/naked-vs-coordinator/disk_lifecycle.py` owns the layout)."""
+    return root.parent / (root.name + ".leases")
+
+
+def _has_live_holder(directory: Path) -> bool:
+    """True iff `directory` holds a `<pid>-<hash>.json` lease whose pid is alive."""
+    from coordinator_core.session.core import pid_alive
+
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return False
+    for name in names:
+        head = name.split("-", 1)[0]
+        if head.isdigit() and pid_alive(int(head)):
+            return True
+    return False
+
+
+def make_ladder_gone(root: Path) -> Optional[LadderGoneFn]:
+    """A `LadderGoneFn` for `root`, or `None` when `root` is not ladder-scoped.
+
+    Scoped means `<root>.leases` exists, `root` itself is gone, or a sibling
+    `*.leases` directory shows `root`'s parent is a ladder engine directory: an
+    ordinary clone has none of these, and a copy booted after its own lease
+    went away must still retire. The returned predicate reads live state and is
+    True once `root` is missing or its lease directory is missing or holds no
+    live holder.
+    """
+    directory = leases_dir(root)
+    if not (directory.is_dir() or not root.exists() or _parent_holds_leases(root)):
+        return None
+    return lambda: not root.exists() or not _has_live_holder(directory)
+
+
+_LADDER_COPY_NAME = re.compile(r"e-[0-9A-Za-z]+")
+
+
+def _parent_holds_leases(root: Path) -> bool:
+    """Sibling-signal arm: only a ladder-named copy (`e-<id>`) qualifies, so
+    an ordinary clone beside another copy's lease is never retired."""
+    if not _LADDER_COPY_NAME.fullmatch(root.name):
+        return False
+    try:
+        return any(
+            n.endswith(".leases") or n == LADDER_LIFECYCLE_LOCK
+            for n in os.listdir(root.parent)
+        )
+    except OSError:
+        return False
+
+
+def write_ladder_gone_tombstone(root: Path) -> None:
+    """Leave `<root>/.ladder-gone` so a later boot or spawn for this copy refuses.
+    Permanent by design: a re-leased copy must clear the file itself.
+    Best-effort: the copy may already be deleted."""
+    try:
+        (root / LADDER_GONE_TOMBSTONE).write_text("ladder gone\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def ladder_gone_tombstoned(root: Path) -> bool:
+    """True iff a pair for `root` already exited because its ladder was gone."""
+    return (root / LADDER_GONE_TOMBSTONE).exists()
+
 
 _clock_lock = threading.Lock()
 _last_invocation_monotonic: Optional[float] = None
@@ -188,6 +274,7 @@ def should_demote(
     *,
     served_count: ServedCountFn,
     token_stale: Optional[TokenStaleFn] = None,
+    ladder_gone: Optional[LadderGoneFn] = None,
     idle_deadline_secs: Optional[float] = None,
     zero_served_deadline_secs: float = ZERO_SERVED_DEADLINE_SECS,
     clock: Callable[[], float] = time.monotonic,
@@ -237,6 +324,10 @@ def should_demote(
     """
     if token_stale is not None and token_stale():
         return True
+    # Like the superseded arm, carries no deadline: a ladder-scoped pair whose
+    # ladder is gone has no caller that should reach it.
+    if ladder_gone is not None and ladder_gone():
+        return True
     idle = seconds_idle(clock=clock)
     deadline = (
         resolve_idle_deadline_secs() if idle_deadline_secs is None else idle_deadline_secs
@@ -250,6 +341,7 @@ def demote_if_idle(
     *,
     served_count: ServedCountFn,
     token_stale: Optional[TokenStaleFn] = None,
+    ladder_gone: Optional[LadderGoneFn] = None,
     close_listener: Callable[[], None],
     in_flight_count: Callable[[], int],
     ctx_shutdown: Callable[[], None],
@@ -269,6 +361,7 @@ def demote_if_idle(
     if not should_demote(
         served_count=served_count,
         token_stale=token_stale,
+        ladder_gone=ladder_gone,
         idle_deadline_secs=idle_deadline_secs,
         zero_served_deadline_secs=zero_served_deadline_secs,
         clock=clock,

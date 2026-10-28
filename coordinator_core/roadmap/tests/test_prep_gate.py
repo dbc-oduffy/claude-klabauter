@@ -1621,3 +1621,47 @@ def test_the_spine_defect_names_every_invalid_change_kind_row(tmp_path):
     assert spine_class["kind"] == "InvalidChangeKindError"
     for rid in ("E1", "E2", "E4", "E7", "T1"):
         assert repr(rid) in spine_class["detail"]
+
+
+def _dr_row(path: str):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id="R1", writes=[path])
+
+
+def test_a_stalled_decisions_listing_skips_the_dr_check_not_flags_it(tmp_path, monkeypatch, capsys):
+    import time
+
+    (tmp_path / "docs" / "decisions").mkdir(parents=True)
+    real = pg.run_bounded
+    monkeypatch.setattr(pg, "run_bounded", lambda k, f, **kw: real(k, f, **{**kw, "deadline": 0.05}))
+    release = []
+
+    def slow_iterdir(self):
+        while not release:
+            time.sleep(0.01)
+        return iter(())
+
+    monkeypatch.setattr(Path, "iterdir", slow_iterdir)
+    start = time.monotonic()
+    try:
+        result = pg._new_dr_number_pinned([_dr_row("docs/decisions/DR-001-x.md")], tmp_path)
+    finally:
+        release.append(1)
+    assert result is None
+    assert time.monotonic() - start < 0.25
+    assert "DR number check skipped" in capsys.readouterr().err
+
+
+def test_an_unreadable_decisions_dir_skips_the_dr_check(tmp_path, capsys):
+    result = pg._new_dr_number_pinned([_dr_row("docs/decisions/DR-001-x.md")], tmp_path)
+    assert result is None
+    assert "DR number check skipped" in capsys.readouterr().err
+
+
+def test_a_readable_decisions_dir_still_flags_a_pinned_new_number(tmp_path):
+    decisions = tmp_path / "docs" / "decisions"
+    decisions.mkdir(parents=True)
+    (decisions / "DR-001-a.md").write_text("x", encoding="utf-8")
+    assert pg._new_dr_number_pinned([_dr_row("docs/decisions/DR-002-new.md")], tmp_path) is not None
+    assert pg._new_dr_number_pinned([_dr_row("docs/decisions/DR-001-a.md")], tmp_path) is None

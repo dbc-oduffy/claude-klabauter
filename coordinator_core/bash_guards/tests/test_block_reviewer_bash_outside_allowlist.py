@@ -1761,3 +1761,22 @@ def test_em_render_is_the_legacy_deny_text_verbatim(monkeypatch):
 def test_allowed_command_still_returns_none_not_a_record(monkeypatch):
     _confine(monkeypatch)
     assert _record_check(_payload("git show HEAD", agent_type=_CONFINED_TYPE)) is None
+
+
+def test_dispatch_logs_an_outside_allowlist_command_and_returns_no_denial_text(monkeypatch, tmp_path):
+    import json
+
+    from coordinator_core import guard_advisory_counter as counter
+    from coordinator_core.bash_guards import dispatch
+
+    cmd = "echo hi > out.txt"
+    _deny(cmd, monkeypatch)  # the guard's own verdict is still a deny
+    logged: list = []
+    monkeypatch.setattr(counter, "record_advisory_fire", lambda name, sid, cwd=None: logged.append(name))
+    payload = dict(_payload(cmd, agent_type=_CONFINED_TYPE, session_id="sess-c9"), cwd=str(tmp_path))
+    out = dispatch.evaluate_payload_json(json.dumps(payload))
+    hso = (out or {}).get("hookSpecificOutput", {})
+    assert hso.get("permissionDecision") != "deny"
+    assert not hso.get("permissionDecisionReason")
+    assert "Bash outside allowlist" not in (hso.get("additionalContext") or "")
+    assert logged.count("block-reviewer-bash-outside-allowlist") == 1

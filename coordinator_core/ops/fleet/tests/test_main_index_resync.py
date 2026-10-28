@@ -688,7 +688,7 @@ def test_moves_resync_failure_is_recoverable_after_process_exit(tmp_path):
         candidate_id="src.md",
     )
     acted_by_id = {move.candidate_id: {"id": move.candidate_id, "archived": True}}
-    fake = _FakeRunGit(results=["index.lock still held after retries"])
+    fake = _FakeRunGit(results=["unable to write new index file"])
 
     _run(
         _resync_main_index_for_moves(
@@ -705,7 +705,7 @@ def test_moves_resync_failure_is_recoverable_after_process_exit(tmp_path):
 
     record_text = written[0].read_text(encoding="utf-8")
     assert "src.md" in record_text
-    assert "index.lock still held after retries" in record_text
+    assert "unable to write new index file" in record_text
     assert "index-resync-failed" in record_text
 
 
@@ -725,7 +725,7 @@ def test_repeated_resync_failure_increments_one_row_instead_of_appending(tmp_pat
     import yaml
 
     for _ in range(4):
-        _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
+        _persist(tmp_path, "state/handoffs/a.md", "unable to write new index file")
 
     written = list((tmp_path / "state" / "bug-backlog").glob("*.yaml"))
     assert len(written) == 1, written
@@ -736,11 +736,11 @@ def test_repeated_resync_failure_increments_one_row_instead_of_appending(tmp_pat
 
 
 def test_distinct_candidate_or_reason_files_a_new_row(tmp_path):
-    _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
-    _persist(tmp_path, "state/handoffs/b.md", "index.lock still held")
+    _persist(tmp_path, "state/handoffs/a.md", "unable to write new index file")
+    _persist(tmp_path, "state/handoffs/b.md", "unable to write new index file")
     _persist(tmp_path, "state/handoffs/a.md", "a different failure")
     # A path that is a suffix of another must not be absorbed into its row.
-    _persist(tmp_path, "a.md", "index.lock still held")
+    _persist(tmp_path, "a.md", "unable to write new index file")
 
     written = list((tmp_path / "state" / "bug-backlog").glob("*.yaml"))
     assert len(written) == 4, written
@@ -755,14 +755,14 @@ def test_closed_row_is_not_bumped(tmp_path):
     """
     import yaml
 
-    _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
+    _persist(tmp_path, "state/handoffs/a.md", "unable to write new index file")
     (row,) = (tmp_path / "state" / "bug-backlog").glob("*.yaml")
     row.write_text(
         row.read_text(encoding="utf-8").replace("status: open", "status: closed"),
         encoding="utf-8",
     )
 
-    _persist(tmp_path, "state/handoffs/a.md", "index.lock still held")
+    _persist(tmp_path, "state/handoffs/a.md", "unable to write new index file")
 
     doc = yaml.safe_load(row.read_text(encoding="utf-8"))
     assert doc["status"] == "open"

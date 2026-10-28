@@ -4,7 +4,8 @@ Invariant: ``kept.json`` lives in the run record dir beside ``notes.jsonl``. A k
 gate is honoured only while every recorded fingerprint still equals the bytes on disk. Stdlib only;
 spawns no process.
 
-Invariant: ``post_checkpoint`` holds hunks no plan row owns, so no reader may treat its keys as row ids.
+Invariant: ``post_checkpoint`` holds hunks no kept chunk records, including a path a peer co-declares
+whose chunk was not kept, so no reader may treat its keys as row ids.
 
 Invariant: one hash mode. Every fingerprint in ``kept.json`` is a RAW-bytes ``blob_sha``; a committed
 blob is the checkin-filtered form (CRLF folded to LF under ``core.autocrlf``). The two domains cross
@@ -89,10 +90,11 @@ def matches_committed(root: Path, rel: str, raw_sha: object, committed_sha: obje
 
 def held_paths(root: Path, rels: Iterable[str]) -> dict[str, str]:
     """``{rel: run_id}`` for each normalised ``rel`` listed in ``kept.json`` (``chunks[*].paths`` or
-    ``post_checkpoint``) of a still-halted run, i.e. one in the withheld index. Trap: ``withheld_by_path``
+    ``post_checkpoint``) of a still-halted run, i.e. one in the withheld index and not superseded
+    (``halted_hold_release.supersession_reason``). Trap: ``withheld_by_path``
     maps a path two runs hold to the lexically last run only, so the run set is that map's values plus
     every indexed run file. Spawn-free; an unreadable index or record contributes nothing."""
-    from coordinator_core.ops.dispatch_emit import ask_contract, halted_withheld_index
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_hold_release, halted_withheld_index
 
     wanted = {k for k in (_norm(r) for r in rels) if k is not None}
     if not wanted:
@@ -103,14 +105,44 @@ def held_paths(root: Path, rels: Iterable[str]) -> dict[str, str]:
     except OSError:
         return {}
     out: dict[str, str] = {}
+    heads: Optional[dict] = None
     for run_id in sorted(run_ids):
+        if halted_hold_release.supersession_reason(root, run_id) is not None:
+            continue
         try:
             prints = kept_fingerprints(ask_contract.record_dir(root, run_id))
         except (OSError, ValueError):
             continue
         for rel in wanted.intersection(prints):
-            out.setdefault(rel, run_id)
+            if rel in out:
+                continue
+            if heads is None:
+                heads = _head_blob_shas(root, wanted)
+            if _pin_is_stale(root, rel, prints[rel], heads.get(rel)):
+                continue
+            out[rel] = run_id
     return out
+
+
+def _head_blob_shas(root: Path, rels: Iterable[str]) -> dict[str, str]:
+    """``{rel: HEAD blob sha}`` for the paths HEAD tracks; empty when HEAD is unreadable. Spawn-free."""
+    from coordinator_core.git.git_state import head_blobs
+
+    try:
+        return {rel: sha for rel, (_mode, sha) in head_blobs(root, sorted(rels)).items()}
+    except Exception:
+        return {}
+
+
+def _pin_is_stale(root: Path, rel: str, pins: frozenset, head_sha: Optional[str]) -> bool:
+    """True only when the path's working bytes and HEAD blob are both readable and no pin equals either
+    (CRLF-safe for HEAD). Fail-closed: any unreadable side keeps the hold."""
+    if head_sha is None:
+        return False
+    working = fingerprint(root, rel)
+    if working is None or working in pins:
+        return False
+    return not any(matches_committed(root, rel, pin, head_sha) for pin in pins)
 
 
 def kept_chunks(

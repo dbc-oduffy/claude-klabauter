@@ -121,6 +121,19 @@ def test_write_is_idempotent_across_repeat_calls(tmp_path):
     assert record.read_text(encoding="utf-8").strip() == str(root)
 
 
+def test_a_compact_fired_from_a_scratch_clone_keeps_the_launch_anchor(tmp_path):
+    root = _init_repo(tmp_path)
+    clone = root / "scratch" / "iso"
+    clone.parent.mkdir()
+    _git(str(root), "clone", "-q", "--shared", str(root), str(clone))
+
+    session_start.write_session_start_record("sess-c", launch_cwd=str(root))
+    session_start.write_session_start_record("sess-c", launch_cwd=str(clone))
+
+    assert session_start.read_session_start_record("sess-c", cwd=str(clone)) == str(root)
+    assert not (clone / ".git" / "coordinator-sessions" / "sess-c").exists()
+
+
 def test_write_fails_open_when_session_id_empty(tmp_path):
     root = _init_repo(tmp_path)
     assert session_start.write_session_start_record("", launch_cwd=str(root)) is False
@@ -550,3 +563,36 @@ def test_write_declines_to_mint_a_dir_when_init_cannot_write_the_record(
     assert not (sdir / "meta.json").exists()
     # The settings-home leg is independent and still carries the anchor.
     assert session_start.read_session_start_record("sid-init-fails") == str(root)
+
+
+def test_second_write_with_different_cwd_is_refused_and_changes_nothing(tmp_path):
+    a = _init_repo(tmp_path, "a")
+    b = _init_repo(tmp_path, "b")
+    assert session_start.write_session_start_record("sid-once", launch_cwd=str(a)) is True
+
+    assert session_start.write_session_start_record("sid-once", launch_cwd=str(b)) is False
+
+    hub_record = _hub() / "sid-once" / "write_bump_launch_cwd"
+    assert hub_record.read_text(encoding="utf-8") == str(a)
+    assert not (b / ".git" / "coordinator-sessions" / "sid-once").exists()
+    a_record = a / ".git" / "coordinator-sessions" / "sid-once" / "write_bump_launch_cwd"
+    assert a_record.read_text(encoding="utf-8") == str(a)
+
+
+def test_repeat_write_with_equivalent_spelling_is_still_idempotent(tmp_path):
+    a = _init_repo(tmp_path, "a")
+    assert session_start.write_session_start_record("sid-eq", launch_cwd=str(a)) is True
+
+    assert session_start.write_session_start_record("sid-eq", launch_cwd=str(a) + os.sep) is True
+
+    recorded = (_hub() / "sid-eq" / "write_bump_launch_cwd").read_text(encoding="utf-8")
+    assert os.path.realpath(recorded) == os.path.realpath(str(a))
+
+
+def test_write_once_fails_open_when_data_root_unresolved(tmp_path, monkeypatch):
+    a = _init_repo(tmp_path, "a")
+    b = _init_repo(tmp_path, "b")
+    monkeypatch.setattr(session_start, "engine_data_root", _raise_unresolved)
+
+    assert session_start.write_session_start_record("sid-open", launch_cwd=str(a)) is True
+    assert session_start.write_session_start_record("sid-open", launch_cwd=str(b)) is True

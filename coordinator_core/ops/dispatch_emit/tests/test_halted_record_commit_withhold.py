@@ -20,6 +20,22 @@ from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
+def test_artifacts_only_ledger_halt_with_zero_review_verdicts_commits(repo):
+    # A ledger halt with no targeted-test verdict withholds product (halt-record-only) and still
+    # commits the record; the review floor never refuses it.
+    _write_record(repo, RUN)
+    (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
+    _marker_script(repo, [("C1", ["done.py"])], {"C1": "DONE: C1\n"})
+
+    out = _call(repo, LEDGER, inline_review={"integration_stem": "s", "slices": 1, "fixes": 0})
+
+    assert out["committed"] is True, out
+    assert out.get("refused") != "review-floor"
+    names = _landed(repo, out, "--name-only")
+    assert "done.py" not in names
+    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+
+
 def test_withheld_dirty_declared_path_stays_out_of_the_halt_commit(repo):
     _write_record(repo, RUN)
     (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
@@ -33,6 +49,6 @@ def test_withheld_dirty_declared_path_stays_out_of_the_halt_commit(repo):
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert out["withheld"] == {"peer_owned.py": "owned by peer run d238dc"}
+    assert out["withheld"] == {"peer_owned.py": "owned by peer run d238dc", "done.py": "halt-record-only"}
     names = _landed(repo, out, "--name-only")
-    assert "done.py" in names and "peer_owned.py" not in names
+    assert "done.py" not in names and "peer_owned.py" not in names

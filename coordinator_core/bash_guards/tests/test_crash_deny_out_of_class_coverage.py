@@ -26,21 +26,13 @@ import pytest
 
 from coordinator_core.bash_guards import (
     block_approval_sentinel_creation,
-    block_disarm_marker_sentinel_creation,
-    block_fleet_delegation_creation,
-    block_hand_authored_handoff_creation,
     block_stash_destruction,
     block_topic_branch,
     block_perforce_submit,
     block_external_workspace_vcs_write,
     block_push_pr_non_owned_remote,
-    block_unreal_engine_resave,
     block_editor_kill_by_name,
     block_whole_filesystem_scan,
-    block_subagent_findings_reject,
-    block_subagent_grant_acquisition,
-    block_subagent_guard_grant,
-    block_subagent_stash_creation,
     block_worktree_creation,
     block_worktree_sentinel_creation,
     dispatch,
@@ -244,8 +236,6 @@ def _split(basename: str) -> str:
 
 _APPROVAL = ".coordinator-doctrine-edit-approved"
 _WORKTREE_SENTINEL = ".coordinator-override-worktree-guard"
-_FLEET = "fleet-delegation.json"
-_DISARM = ".coordinator-bash-guards-disarmed"
 
 Runner = Callable[[str, _Ctx], Optional[Dict[str, Any]]]
 
@@ -281,11 +271,6 @@ _DENIED: List[Tuple[str, str, Runner]] = [
         _non_owned_remote_armed,
     ),
     (
-        "block-unreal-engine-resave",
-        "UnrealEditor-Cmd G.uproject -run=ResavePackages",
-        _check_module(block_unreal_engine_resave, _bash),
-    ),
-    (
         "block-editor-kill-by-name",
         "taskkill /F /IM UnrealEditor.exe",
         _check_module(block_editor_kill_by_name, _bash),
@@ -295,38 +280,6 @@ _DENIED: List[Tuple[str, str, Runner]] = [
         "find / -name x",
         _check_module(block_whole_filesystem_scan, _bash),
     ),
-    ("block-subagent-stash-creation", "git stash", _check_module(block_subagent_stash_creation, _subagent)),
-    ("block-subagent-stash-creation", "git stash push -u", _check_module(block_subagent_stash_creation, _subagent)),
-    (
-        "block-subagent-grant-acquisition",
-        "python -m coordinator_core.session.claude_md_grant grant",
-        _check_module(block_subagent_grant_acquisition, _subagent),
-    ),
-    (
-        "block-subagent-grant-acquisition",
-        'python3 -c "from coordinator_core.session.claude_md_grant import write_claude_md_write_grant as w; w()"',
-        _check_module(block_subagent_grant_acquisition, _subagent),
-    ),
-    (
-        "block-subagent-findings-reject",
-        "python -m coordinator_core.ops.review_findings_ledger reject f1",
-        _check_module(block_subagent_findings_reject, _subagent),
-    ),
-    (
-        "block-subagent-findings-reject",
-        "python3 coordinator/bin/review-findings-ledger.py targets --add x",
-        _check_module(block_subagent_findings_reject, _subagent),
-    ),
-    (
-        "block-subagent-guard-grant",
-        "python -m coordinator_core.session.em_guard_grant grant",
-        _check_module(block_subagent_guard_grant, _subagent),
-    ),
-    (
-        "block-subagent-guard-grant",
-        'python3 -c "from coordinator_core.session.em_guard_grant import write_em_guard_grant as w; w()"',
-        _check_module(block_subagent_guard_grant, _subagent),
-    ),
     ("guard-repo-setup-claude-home-refusal", "python3 -m coordinator_core.install.scaffold_structure", _repo_setup),
     ("guard-repo-setup-claude-home-refusal", "repo-setup-args-and-register --name demo", _repo_setup),
 ]
@@ -334,8 +287,6 @@ _DENIED: List[Tuple[str, str, Runner]] = [
 for _guard, _target, _module, _entry in (
     ("block-approval-sentinel-creation", _APPROVAL, block_approval_sentinel_creation, "check_ungated"),
     ("block-worktree-sentinel-creation", _WORKTREE_SENTINEL, block_worktree_sentinel_creation, "check"),
-    ("block-fleet-delegation-creation", _FLEET, block_fleet_delegation_creation, "check"),
-    ("block-disarm-marker-sentinel-creation", _DISARM, block_disarm_marker_sentinel_creation, "check"),
 ):
     _DENIED.extend(
         [
@@ -345,15 +296,6 @@ for _guard, _target, _module, _entry in (
             (_guard, "ls . | xargs touch", _sentinel(_module, _entry)),
         ]
     )
-
-
-_DENIED.append(
-    (
-        "block-hand-authored-handoff-creation",
-        "echo x > state/handoffs/hand-authored.md",
-        _sentinel(block_hand_authored_handoff_creation, "check"),
-    )
-)
 
 
 def _decision(result: Optional[Dict[str, Any]]) -> Optional[str]:

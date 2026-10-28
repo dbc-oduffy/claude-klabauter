@@ -144,15 +144,12 @@ class _Expected:
 
 EXPECTED: Dict[str, _Expected] = {
     "block-approval-sentinel-creation": _Expected(("Bash", "PowerShell")),
-    "block-disarm-marker-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "block-illegal-filename": _Expected(("Bash", "PowerShell")),
     "block-reviewer-bash-outside-allowlist": _Expected(("Bash", "PowerShell")),
     "block-stash-destruction": _Expected(("Bash", "PowerShell")),
     "block-subagent-destructive-action": _Expected(("Bash", "PowerShell")),
     "block-subagent-plan-body-bash-write": _Expected(("Bash", "PowerShell")),
-    "block-subagent-findings-reject": _Expected(("Bash", "PowerShell")),
     "guard-post-executor-verification": _Expected(("Bash", "PowerShell")),
-    "block-subagent-stash-creation": _Expected(("Bash", "PowerShell")),
     "block-worktree-creation": _Expected(("Bash", "PowerShell")),
     "block-worktree-sentinel-creation": _Expected(("Bash", "PowerShell")),
     "check-raw-pid-liveness": _Expected(("Bash", "PowerShell")),
@@ -180,15 +177,10 @@ EXPECTED: Dict[str, _Expected] = {
     # tool_name`/`resolve_segments_for_dialect` (per docs/reference/guard-
     # tool-name-membership.md § 3), never inferred from command text alone.
     "p4-verb-fence": _Expected(("Bash", "PowerShell")),
-    # block-venv-creation: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`),
-    # PM directive 2026-09-29 -- per-repo/shared venv creation is watched
-    # on both dialects, not Bash-only.
-    "block-venv-creation": _Expected(("Bash", "PowerShell")),
     "block-topic-branch": _Expected(("Bash", "PowerShell")),
     "block-perforce-submit": _Expected(("Bash", "PowerShell")),
     "block-external-workspace-vcs-write": _Expected(("Bash", "PowerShell")),
     "block-push-pr-non-owned-remote": _Expected(("Bash", "PowerShell")),
-    "block-unreal-engine-resave": _Expected(("Bash", "PowerShell")),
     "block-editor-kill-by-name": _Expected(("Bash", "PowerShell")),
     "block-whole-filesystem-scan": _Expected(("Bash", "PowerShell")),
     "block-dev-repo-sentinel-removal": _Expected(("Bash", "PowerShell")),
@@ -304,15 +296,6 @@ EXPECTED: Dict[str, _Expected] = {
     "stash-apply-verification-advisory": _Expected(
         ("Bash", "PowerShell"),
     ),
-    "block-fleet-delegation-creation": _Expected(
-        ("Bash", "PowerShell"),
-    ),
-    "block-hand-authored-handoff-creation": _Expected(
-        ("Bash",),
-        NOT_YET_CONVERTED,
-        "Lexical redirect/tee classifier over POSIX shell text; PowerShell "
-        "Out-File/Set-Content shapes are not audited.",
-    ),
     "block-home-root-bash-write": _Expected(
         ("Bash", "PowerShell"),
     ),
@@ -367,12 +350,6 @@ EXPECTED: Dict[str, _Expected] = {
         ("Bash", "PowerShell"),
     ),
     "block-subagent-commit": _Expected(
-        ("Bash", "PowerShell"),
-    ),
-    "block-subagent-grant-acquisition": _Expected(
-        ("Bash", "PowerShell"),
-    ),
-    "block-subagent-guard-grant": _Expected(
         ("Bash", "PowerShell"),
     ),
     "destructive-git-revert": _Expected(
@@ -509,7 +486,7 @@ def test_discovery_found_the_expected_scope():
     `block_push_pr_non_owned_remote`, and 44 -> 45 with
     `block_drive_root_new_dir_bash_write`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 46, sorted(stems)
+    assert len(stems) == 37, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -538,7 +515,7 @@ def test_every_registered_guard_is_classified():
     `block-em-post-fire-product-write` and `block-em-halted-withheld-commit`; 78 -> 77 retiring
     `block-em-halted-withheld-commit`."""
     actual = _actual_matchers()
-    assert len(actual) == 77, sorted(actual)
+    assert len(actual) == 68, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -579,7 +556,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 77
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 68
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "
@@ -614,7 +591,7 @@ def test_held_cohort_kinds_are_uniform_and_distinct_from_by_construction():
         gid for gid, exp in EXPECTED.items() if exp.kind == NOT_YET_CONVERTED
     }
     assert len(by_construction) == 14
-    assert len(not_yet_converted) == 1
+    assert len(not_yet_converted) == 0
     assert by_construction.isdisjoint(not_yet_converted)
     assert set(held).isdisjoint(by_construction)
     assert HELD_PENDING_TOKENIZER_FIX != BASH_ONLY_BY_CONSTRUCTION != NOT_YET_CONVERTED
@@ -654,8 +631,6 @@ def test_dual_declaring_bash_detecting_kind_is_pinned():
     for gid in (
         "block-noncanonical-branch-creation",
         "block-subagent-commit",
-        "block-subagent-grant-acquisition",
-        "block-subagent-guard-grant",
         "destructive-git-revert",
         "destructive-git-revert-advisory",
         "git-commit-safe-commit-advise",

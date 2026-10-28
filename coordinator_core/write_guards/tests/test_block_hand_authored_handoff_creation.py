@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.bash_guards import block_hand_authored_handoff_creation as bash_guard
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.write_guards import block_hand_authored_handoff_creation as guard
 
@@ -28,10 +27,6 @@ def _write(tmp_path, rel, *, tool="Write", existing=False):
     else:
         tool_input.update(old_string="a", new_string="b")
     return {"tool_name": tool, "tool_input": tool_input, "cwd": str(tmp_path)}
-
-
-def _bash(tmp_path, command):
-    return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path)}
 
 
 def _denied(result):
@@ -68,48 +63,11 @@ def test_override_env_bypasses(tmp_path, monkeypatch):
     assert guard.check(_write(tmp_path, "state/handoffs/x.md")) is None
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        "baton-assemble --out state/handoffs/2026-10-06-x.md",
-        "coordinator-doc-new --type handoff --out state/handoffs/2026-10-06-x.md",
-        "coordinator-doc-new --type recovery --recovers-session abc --out state/handoffs/2026-10-06-r.md",
-    ],
-)
-def test_sanctioned_producers_pass_the_bash_arm(tmp_path, command):
-    assert bash_guard.check(_bash(tmp_path, command)) is None
-
-
 def test_recovery_scaffold_then_body_edit_passes(tmp_path):
     # The sanctioned route writes the scaffold with open() inside the engine;
     # the body fill is an Edit of that now-existing path.
     payload = _write(tmp_path, "state/handoffs/2026-10-06-r.md", tool="Edit", existing=True)
     assert guard.check(payload) is None
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "echo hi > state/handoffs/2026-10-06-x.md",
-        "cat body.md >> .claude/handoffs/2026-10-06-x.md",
-        "echo hi | tee state/handoffs/2026-10-06-x.md",
-        "echo hi | tee -a .claude/handoffs/2026-10-06-x.md",
-    ],
-)
-def test_bash_redirect_and_tee_are_denied(tmp_path, command):
-    assert _denied(bash_guard.check(_bash(tmp_path, command)))
-
-
-def test_bash_redirect_to_existing_handoff_passes(tmp_path):
-    target = tmp_path / "state" / "handoffs" / "x.md"
-    target.parent.mkdir(parents=True)
-    target.write_text("x", encoding="utf-8")
-    assert bash_guard.check(_bash(tmp_path, "echo hi >> state/handoffs/x.md")) is None
-
-
-def test_bash_read_and_fd_dup_pass(tmp_path):
-    assert bash_guard.check(_bash(tmp_path, "cat state/handoffs/x.md 2>&1")) is None
-    assert bash_guard.check(_bash(tmp_path, "ls state/handoffs")) is None
 
 
 def test_edit_of_existing_emitted_baton_passes(tmp_path):

@@ -10,8 +10,7 @@ invocation -- the whole point of the Windows cold-start-tax fix this
 migration exists for):
 
   1. The subagent-identity cohort ported/added as discovery-style modules in
-     this package (``block_subagent_plan_body_bash_write``,
-     ``block_reviewer_bash_outside_allowlist``, ``block_subagent_destructive_
+     this package (``block_reviewer_bash_outside_allowlist``, ``block_subagent_destructive_
      action``, ``block_subagent_commit`` -- CLASS="hard-deny";
      ``block_illegal_filename`` -- CLASS="advisory"). Each exposes
      ``check(payload) -> dict | None`` per write_guards/INTERFACE.md.
@@ -46,7 +45,6 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
        i. check_validate_commit            (content, fail-open, NOT
                                              crash-deny-routed)
   2. block_illegal_filename       (cohort 1, Bash leg -- advisory, fail-open)
-  3. block_subagent_plan_body_bash_write   (cohort 1 -- hard, fail-closed)
   4. block_reviewer_bash_outside_allowlist (cohort 1 -- hard, fail-closed)
   5. block_subagent_destructive_action     (cohort 1 -- hard, fail-closed)
  5a. block_subagent_commit                 (hard, fail-closed) -- NO legacy
@@ -87,17 +85,6 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      directly adjacent to 5d ahead of `offer-git-c` for the identical
      short-circuit reason (see its own registration comment above and its
      module docstring "REGISTRATION ORDERING").
- 5f. block_worktree_sentinel_creation       (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-07-28 (coordinator-content-repo, closing a confirmed
-     security hole: the git-worktree ban's own override sentinel,
-     `.coordinator-override-worktree-guard`, was creatable via Bash `touch`/
-     redirection/etc, reintroducing the exact agent-self-grant that guard's
-     deliberately-omitted env-var override leg exists to prevent). Same
-     posture and registration-ordering rationale as 5e -- not identity-
-     gated, registered directly adjacent to it, ahead of `offer-git-c`.
-     Shares its detection engine with 5e via
-     `_sentinel_creation_guard.SentinelCreationDetector`, parameterized on a
-     different target basename.
  5g. block_stash_destruction                (hard, fail-closed) -- NO legacy
      bash predecessor; added 2026-07-30 (coordinator-content-repo) as the main-loop leg of
      the `git stash drop`/`clear` ban. Entry 5 already classifies both verbs
@@ -109,51 +96,6 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
      5c-5f. Deliberately narrower than entry 5: `pop`/`apply` stay allowed
      for the EM, since `pop` is its own restore path -- see that module's
      "WHY DROP/CLEAR AND NOT POP/APPLY".
- 5h. block_subagent_stash_creation          (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-08-01 closing the CREATE-side half of the
-     gap 5/5g only close on the UNDO side: entry 5 denies a resolved
-     subagent `git stash pop`/`apply`, and 5g denies `drop`/`clear` for
-     everyone, but nothing in the chain ever denied `git stash push` (or
-     bare `git stash`, which is push) for a subagent -- so a dispatched
-     subagent could always CREATE a stash it was structurally incapable of
-     undoing. Confirmed live 2026-08-01: a `coordinator:review-integrator`
-     subagent's `git stash push`, reported as "scoped push on 3 files",
-     instead created a bare 60-file stash sweeping a concurrent peer
-     session's uncommitted work; its own `pop` was then correctly denied by
-     entry 5, and only 3 of the 60 files were recovered by hand. UNLIKE 5g
-     (not identity-gated at all) and entry 5 (identity-gated but fails OPEN
-     on an unresolvable `agent_id`), this entry is identity-gated AND fails
-     CLOSED on a present-but-unresolvable `agent_id` -- the EM is the sole,
-     harness-supplied allow signal (raw `agent_id` ABSENT), because failing
-     open here would silently re-admit the exact hole this entry exists to
-     close. See that module's own "IDENTITY-GATE POSTURE" for the three-way
-     comparison against entries 5/5g. Registered directly adjacent to 5g --
-     same `offer-git-c` short-circuit ordering requirement as every entry in
-     this CONFINEMENT_DENY run.
- 5i. block_subagent_grant_acquisition       (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-08-08 (C2, docs/plans/2026-08-08-
-     discriminate-the-caller-on-the-write-grant.md) to close a caller-
-     discrimination gap on the CLAUDE.md write grant: a dispatched subagent
-     (resolved `agent_id` present) invoking `coordinator_core.session.
-     claude_md_grant grant` was structurally indistinguishable from the
-     EM acquiring its own grant, letting a subagent self-grant write access
-     to doctrine it has no dispatch authority over. Identity-gated to
-     subagents only, same posture as `block-subagent-stash-creation` (5h) --
-     the EM remains the sole allow signal (raw `agent_id` ABSENT). Registered
-     directly adjacent to `check-test-suite-invocation`, at the tail of the
-     hard-deny run -- same `offer-git-c` short-circuit ordering requirement
-     as every entry in this CONFINEMENT_DENY run.
- 5j. block_subagent_findings_reject         (hard, fail-closed) -- NO legacy
-     bash predecessor; added 2026-09-26 (coordinator-content-repo docs/plans/2026-09-26-
-     retire-review-integrator.md, row M3) to make EM-only the `reject`/
-     `targets` subcommands of the reviewer-applies-own-findings ledger op
-     (`coordinator_core.ops.review_findings_ledger`, M2). Same identity-gate
-     posture as `block-subagent-grant-acquisition` (5i) -- raw `agent_id`
-     presence alone is the discriminator, fail CLOSED on unresolvable.
-     `verify` is deliberately not gated: a reviewer's own self-check before
-     returning is the encouraged path. Registered directly adjacent to 5i --
-     same `offer-git-c` short-circuit ordering requirement as every entry
-     in this CONFINEMENT_DENY run.
 
 Because each of the (now 5, post-2026-07-24 retirement of the former #6
 advisory nudge) legacy-shaped processes only ever emits EITHER nothing
@@ -440,21 +382,13 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "p4-verb-fence": ("p4", "git", "attrib", "chmod", "encodedcommand"),
     "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
     "block-worktree-sentinel-creation": (".coordinator-override-worktree-guard", "xargs", "sh", "python"),
-    "block-fleet-delegation-creation": ("fleet-delegation.json", "xargs", "sh", "python"),
-    "block-hand-authored-handoff-creation": ("handoffs",),
-    "block-disarm-marker-sentinel-creation": (".coordinator-bash-guards-disarmed", "xargs", "sh", "python"),
     "block-stash-destruction": ("stash",),
     "block-topic-branch": ("checkout", "switch", "branch", "push"),
     "block-perforce-submit": ("p4", "submit", "shelve"),
     "block-external-workspace-vcs-write": ("git",),
     "block-push-pr-non-owned-remote": ("push", "pr"),
-    "block-unreal-engine-resave": ("-run=",),
     "block-whole-filesystem-scan": ("find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind"),
     "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
-    "block-subagent-stash-creation": ("stash",),
-    "block-subagent-grant-acquisition": ("claude_md_grant",),
-    "block-subagent-findings-reject": ("review-findings-ledger", "review_findings_ledger"),
-    "block-subagent-guard-grant": ("em_guard_grant",),
     "guard-repo-setup-claude-home-refusal": ("repo-setup-args-and-register", "scaffold_structure"),
 }
 """Per-guard necessary preconditions, used ONLY on the crash path to scope a
@@ -477,13 +411,7 @@ is keyed by guard name rather than derived from anything heuristic:
   - ``block_worktree_creation``      -- ``_WORKTREE_WORD_RE`` on the raw text
   - ``p4_verb_fence``                -- a p4/git/attrib/chmod head, ``P4ALIASES``,
                                         ``-EncodedCommand``, or a governed mention
-  - the four sentinel-creation guards -- the target basename, or an indirection
-                                        deny naming no target (``xargs``, a shell
-                                        or python interpreter)
-  - ``block_stash_destruction`` / ``block_subagent_stash_creation`` --
-                                        ``_STASH_WORD_RE`` on the raw text
-  - ``block_subagent_grant_acquisition`` / ``block_subagent_guard_grant`` /
-    ``block_subagent_findings_reject`` -- the gated module or trampoline name
+  - ``block_stash_destruction``      -- ``_STASH_WORD_RE`` on the raw text
   - ``guard_repo_setup_claude_home_refusal`` -- a scaffold-mechanism marker
 
 A word-boundary regex is strictly narrower than the bare substring, and the
@@ -1337,28 +1265,9 @@ def _any_declared_matchers() -> "frozenset[str]":
     in step with that registration list by construction, since both read the
     identical imported names; ``test_tool_name_membership.py`` asserts the
     two agree.
-
-    ``block_disarm_marker_sentinel_creation`` is imported LOCALLY here, not
-    at module top, for the identical circular-import reason
-    ``_build_guard_chain`` already documents for its own deferred import of
-    the same module: that module imports ``_blanket_disarm``, which imports
-    ``GuardBand`` FROM this module at ITS top level, so a module-level
-    import here would resolve before ``GuardBand`` exists on a fresh
-    interpreter. Safe here because this function is only ever CALLED (never
-    imported-from-the-top), after this module has finished executing its
-    own top level -- the same safety argument ``_build_guard_chain`` already
-    makes for its own deferred import.
     """
     global _ANY_DECLARED_MATCHERS_CACHE
     if _ANY_DECLARED_MATCHERS_CACHE is None:
-        from coordinator_core.bash_guards.block_disarm_marker_sentinel_creation import (
-            MATCHERS as _matchers_disarm_marker_sentinel_creation,
-        )
-        # P070-C3: the same MATCHERS-only deferral, for the same reason, as
-        # the `block_disarm_marker_sentinel_creation` import immediately
-        # above -- these symbols used to be imported at module top and are
-        # used ONLY here and in `_build_guard_chain` (which imports its own
-        # copy independently; see that function's own deferred block).
         from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
             MATCHERS as _matchers_plan_body_bash_write,
         )
@@ -1392,9 +1301,6 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_stash_destruction import (
             MATCHERS as _matchers_stash_destruction,
         )
-        from coordinator_core.bash_guards.block_subagent_stash_creation import (
-            MATCHERS as _matchers_subagent_stash_creation,
-        )
         from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
             MATCHERS as _matchers_noncanonical_branch_creation,
         )
@@ -1412,9 +1318,6 @@ def _any_declared_matchers() -> "frozenset[str]":
         )
         from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
             MATCHERS as _matchers_deploy_dirty_tree,
-        )
-        from coordinator_core.bash_guards.block_unreal_engine_resave import (
-            MATCHERS as _matchers_unreal_engine_resave,
         )
         from coordinator_core.bash_guards.block_editor_kill_by_name import (
             MATCHERS as _matchers_editor_kill_by_name,
@@ -1450,21 +1353,18 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_approval_sentinel_creation,
             _matchers_worktree_sentinel_creation,
             _matchers_stash_destruction,
-            _matchers_subagent_stash_creation,
             _matchers_noncanonical_branch_creation,
             _matchers_topic_branch,
             _matchers_perforce_submit,
             _matchers_external_workspace_vcs_write,
             _matchers_push_pr_non_owned_remote,
             _matchers_deploy_dirty_tree,
-            _matchers_unreal_engine_resave,
             _matchers_editor_kill_by_name,
             _matchers_whole_filesystem_scan,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
             _matchers_multiprobe_banner,
             _matchers_plumbing_and_loops,
-            _matchers_disarm_marker_sentinel_creation,
             _matchers_repo_setup_claude_home_refusal,
         )
     return _ANY_DECLARED_MATCHERS_CACHE
@@ -1712,10 +1612,31 @@ def evaluate_payload_json(
     return result
 
 
-def _apply_guard_level(name: str, envelope: Any, subagent: bool = False) -> Any:
+def _apply_guard_level(
+    name: str,
+    envelope: Any,
+    subagent: bool = False,
+    session_id: str = "",
+    cwd: Optional[str] = None,
+    event_id: str = "",
+) -> Any:
+    """Resolve a deny at the policy point: a ``deny_registry`` guard keeps its deny, any other
+    (a crashed unregistered guard included) is logged against ``session_id`` and becomes the
+    event's one nudge line (``event_id`` claims it across processes)."""
     from coordinator_core.machine_profile import apply_guard_level
 
-    return apply_guard_level(name, envelope, subagent=subagent)
+    return apply_guard_level(
+        name, envelope, subagent=subagent, session_id=session_id, cwd=cwd, event_id=event_id
+    )
+
+
+def _event_id(payload: Any, raw_hint: str = "") -> str:
+    """The hook event's identity: the payload's ``tool_use_id``, else ``""`` (no cross-process claim)."""
+    if isinstance(payload, dict):
+        tid = payload.get("tool_use_id")
+        if isinstance(tid, str) and tid:
+            return tid
+    return ""
 
 
 def _evaluate_payload_json_budgeted(
@@ -2030,6 +1951,8 @@ def _evaluate_payload_json_budgeted(
 
     _collected: List[Dict[str, Any]] = []
     _held_demoted: Optional[Dict[str, Any]] = None
+    _event_id_value = _event_id(payload)
+    _nudge_claimed = False
 
     for entry in guard_chain:
         name, fn, fail_closed, _band = entry.name, entry.fn, entry.fail_closed, entry.band
@@ -2074,10 +1997,17 @@ def _evaluate_payload_json_budgeted(
                     )
                     continue
                 _crash = _crash_deny(name, exc, resolution_class=resolution_class)
-                out = _apply_guard_level(name, _crash)
+                out = _apply_guard_level(
+                    name, _crash, session_id=session_id, cwd=cwd, event_id=_event_id_value
+                )
                 if _is_deny_envelope(out):
                     return out
                 _demoted = True
+                if out is not None:
+                    if _nudge_claimed:
+                        out = None
+                    else:
+                        _nudge_claimed = True
             else:
                 print(
                     "bash_guards.dispatch: %s guard crashed (%s: %s); "
@@ -2088,9 +2018,17 @@ def _evaluate_payload_json_budgeted(
                 out = None
         if out is not None and _is_deny_envelope(out):
             from coordinator_core.bash_guards.check_test_suite_invocation import _caller_is_subagent
-            _leveled = _apply_guard_level(name, out, subagent=_caller_is_subagent(payload))
+            _leveled = _apply_guard_level(
+                name, out, subagent=_caller_is_subagent(payload), session_id=session_id, cwd=cwd,
+                event_id=_event_id_value,
+            )
             _demoted = not _is_deny_envelope(_leveled)
             out = _leveled
+            if _demoted and out is not None:
+                if _nudge_claimed:
+                    out = None
+                else:
+                    _nudge_claimed = True
         if out is not None:
             # In-session operator unlock (docs/plans/2026-08-03-in-session-
             # operator-unlock-for-the-hard-.md § C3): mirrors write_guards/
@@ -2341,25 +2279,6 @@ def _build_guard_chain(
     far; see ``check_no_verify``'s own docstring for why the other six stay
     on their own hand-rolled segmentation.
     """
-    # Deferred import, same circular-import reason as `evaluate_payload_
-    # json`'s own `_blanket_disarm` import: `block_disarm_marker_sentinel_
-    # creation.py` imports `_blanket_disarm.MARKER_BASENAME` at ITS top
-    # level, and `_blanket_disarm.py` imports `GuardBand` FROM this module
-    # at ITS top level -- so a module-level import of the sentinel guard
-    # here (or in this file's top-of-file import block) would resolve
-    # `_blanket_disarm` before `GuardBand` exists on a fresh interpreter,
-    # the identical cycle `evaluate_payload_json` already works around.
-    # `_build_guard_chain` is only ever CALLED (never imported-from-the-
-    # top) after this module has finished executing its own top level, so
-    # deferring the import to here (function body, not module top) is safe
-    # for both callers: `evaluate_payload_json` at runtime, and
-    # `test_guard_band_membership.py`'s direct `dispatch._build_guard_
-    # chain(...)` structural call.
-    from coordinator_core.bash_guards.block_disarm_marker_sentinel_creation import (
-        check as _check_disarm_marker_sentinel_creation,
-        MATCHERS as _matchers_disarm_marker_sentinel_creation,
-    )
-
     from coordinator_core.bash_guards.block_subagent_plan_body_bash_write import (
         check as _check_plan_body_bash_write,
         MATCHERS as _matchers_plan_body_bash_write,
@@ -2420,14 +2339,6 @@ def _build_guard_chain(
         check as _check_worktree_sentinel_creation,
         MATCHERS as _matchers_worktree_sentinel_creation,
     )
-    from coordinator_core.bash_guards.block_fleet_delegation_creation import (
-        check as _check_fleet_delegation_creation,
-        MATCHERS as _matchers_fleet_delegation_creation,
-    )
-    from coordinator_core.bash_guards.block_hand_authored_handoff_creation import (
-        check as _check_hand_authored_handoff_creation,
-        MATCHERS as _matchers_hand_authored_handoff_creation,
-    )
     from coordinator_core.bash_guards.block_home_root_bash_write import (
         check as _check_home_root_bash_write,
         MATCHERS as _matchers_home_root_bash_write,
@@ -2446,9 +2357,6 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.block_dev_repo_sentinel_removal import (
         check as _check_dev_repo_sentinel_removal,
         check_advisory as _check_dev_repo_sentinel_removal_advisory,
-    )
-    from coordinator_core.bash_guards.block_venv_creation import (
-        check as _check_venv_creation,
     )
     from coordinator_core.bash_guards.block_topic_branch import (
         check as _check_topic_branch,
@@ -2470,10 +2378,6 @@ def _build_guard_chain(
         check as _check_deploy_dirty_tree,
         MATCHERS as _matchers_deploy_dirty_tree,
     )
-    from coordinator_core.bash_guards.block_unreal_engine_resave import (
-        check as _check_unreal_engine_resave,
-        MATCHERS as _matchers_unreal_engine_resave,
-    )
     from coordinator_core.bash_guards.block_editor_kill_by_name import (
         check as _check_editor_kill_by_name,
         MATCHERS as _matchers_editor_kill_by_name,
@@ -2487,25 +2391,13 @@ def _build_guard_chain(
         check_apply_advisory as _check_stash_apply_advisory,
         MATCHERS as _matchers_stash_destruction,
     )
-    from coordinator_core.bash_guards.block_subagent_stash_creation import (
-        check as _check_subagent_stash_creation,
-        MATCHERS as _matchers_subagent_stash_creation,
-    )
-    from coordinator_core.bash_guards.block_subagent_grant_acquisition import (
-        check as _check_subagent_grant_acquisition,
-        MATCHERS as _matchers_subagent_grant_acquisition,
-    )
-    from coordinator_core.bash_guards.block_subagent_findings_reject import (
-        check as _check_subagent_findings_reject,
-        MATCHERS as _matchers_subagent_findings_reject,
+    from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
+        check as _check_block_noncanonical_branch_creation,
+        MATCHERS as _matchers_noncanonical_branch_creation,
     )
     from coordinator_core.bash_guards.guard_post_executor_verification import (
         check as _check_post_executor_verification,
         MATCHERS as _matchers_post_executor_verification,
-    )
-    from coordinator_core.bash_guards.block_subagent_guard_grant import (
-        check as _check_subagent_guard_grant,
-        MATCHERS as _matchers_subagent_guard_grant,
     )
     from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
         check as _check_repo_setup_claude_home_refusal,
@@ -2514,10 +2406,6 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import (
         check as _check_doctrine_surface_bash_write,
         MATCHERS as _matchers_doctrine_surface_bash_write,
-    )
-    from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
-        check as _check_block_noncanonical_branch_creation,
-        MATCHERS as _matchers_noncanonical_branch_creation,
     )
     from coordinator_core.bash_guards.bump_foreign_repo_write import (
         check_bump_foreign_repo_write as _check_bump_foreign_repo_write,
@@ -2745,22 +2633,6 @@ def _build_guard_chain(
             matchers=tuple(_matchers_worktree_sentinel_creation),
         ),
         GuardEntry(
-            "block-fleet-delegation-creation",
-            lambda: _check_fleet_delegation_creation(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_fleet_delegation_creation),
-        ),
-        GuardEntry(
-            "block-hand-authored-handoff-creation",
-            lambda: _check_hand_authored_handoff_creation(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_hand_authored_handoff_creation),
-        ),
-        GuardEntry(
             "block-home-root-bash-write",
             lambda: _check_home_root_bash_write(payload),
             False,
@@ -2787,26 +2659,6 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=COMMAND_TOOL_NAMES,
         ),
-        # Same ordering requirement as the three sentinel/worktree guards
-        # immediately above, for the identical reason -- and this one is
-        # additionally the guard that closes the disarm marker's own
-        # bootstrap loop: `GuardBand.CONFINEMENT_DENY` is unconditionally
-        # non-suppressible by ANY blanket-disarm marker (see
-        # `_blanket_disarm.py`'s own "BAND-SCOPED SUPPRESSION"), so
-        # registering this guard in a weaker band would let a forged
-        # marker suppress the very guard meant to stop it being forged.
-        # Not identity-gated -- fires for every caller including the
-        # main-loop EM, since `Scope: machine-total` is itself EM-audience-
-        # narrowed precisely because the EM is exactly who this guard also
-        # exists to constrain (see that module's own module docstring).
-        GuardEntry(
-            "block-disarm-marker-sentinel-creation",
-            lambda: _check_disarm_marker_sentinel_creation(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_disarm_marker_sentinel_creation),
-        ),
         GuardEntry(
             "block-stash-destruction",
             lambda: _check_stash_destruction(payload),
@@ -2814,14 +2666,6 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_stash_destruction),
-        ),
-        GuardEntry(
-            "block-subagent-stash-creation",
-            lambda: _check_subagent_stash_creation(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_subagent_stash_creation),
         ),
         GuardEntry(
             "block-topic-branch",
@@ -2867,15 +2711,6 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_deploy_dirty_tree),
         ),
-        # No commandlet rewrites the installed engine.
-        GuardEntry(
-            "block-unreal-engine-resave",
-            lambda: _check_unreal_engine_resave(payload),
-            True,
-            GuardBand.CONFINEMENT_DENY,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_unreal_engine_resave),
-        ),
         # Editors die by the PID of their own launch, never by image name.
         GuardEntry(
             "block-editor-kill-by-name",
@@ -2894,8 +2729,6 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_whole_filesystem_scan),
         ),
-        # Branch-name and plan-body confinement: deny-or-None guards, ahead of
-        # `offer-git-c` so a `cd <dir> && git ...` prefix cannot route around them.
         GuardEntry(
             "block-noncanonical-branch-creation",
             lambda: _check_block_noncanonical_branch_creation(payload),
@@ -3035,31 +2868,10 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_heavy_command_admission),
         ),
-        # block-subagent-grant-acquisition -- see module docstring entry 5i.
-        # Hard-deny, identity-gated to subagents only (same posture as
-        # block-subagent-stash-creation, 5h): denies a resolved subagent
-        # acquiring the CLAUDE.md write grant via `coordinator_core.session.
-        # claude_md_grant grant`. Registered directly adjacent to
-        # check-test-suite-invocation, at the tail of the hard-deny run --
-        # same `offer-git-c` short-circuit ordering requirement as every
-        # entry in this CONFINEMENT_DENY run.
-        GuardEntry("block-subagent-grant-acquisition", lambda: _check_subagent_grant_acquisition(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_grant_acquisition)),
-        # sibling of block-subagent-grant-acquisition: EM-only surface of the
-        # M3, retire-review-integrator: reviewer-applies-own-findings ledger.
-        GuardEntry("block-subagent-findings-reject", lambda: _check_subagent_findings_reject(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_findings_reject)),
         # guard-post-executor-verification -- main-EM-only: after the session has
         # dispatched a coordinator:executor, a second pytest run routes through
         # coordinator:test-runner. Hard-deny, spawn-free, escape = dispatch sentinel.
         GuardEntry("guard-post-executor-verification", lambda: _check_post_executor_verification(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_post_executor_verification)),
-        # block-subagent-guard-grant -- Bash-channel leg of the EM
-        # guard-grant route (plan 2026-08-13-em-exercisable-in-band-grant-
-        # route.md, C3), load-bearing per PM ruling 1 (see that module's own
-        # docstring). Hard-deny, identity-gated to subagents only, same
-        # posture as block-subagent-grant-acquisition immediately above.
-        # Registered directly adjacent to it -- same `offer-git-c`
-        # short-circuit ordering requirement as every entry in this
-        # CONFINEMENT_DENY run.
-        GuardEntry("block-subagent-guard-grant", lambda: _check_subagent_guard_grant(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_subagent_guard_grant)),
         # guard-repo-setup-claude-home-refusal -- ported from coordinator-content-repo's
         # in-process fold (docs/plans/2026-08-28-the-four-folded-bash-
         # guards-get-registered-not-folded.md, C5). Hard-deny, NOT identity-
@@ -3157,12 +2969,6 @@ def _build_guard_chain(
         # comment above: the declaration on this module's dead `check()` leg
         # does not describe `check_advisory`'s own tool-name coverage.
         GuardEntry("block-dev-repo-sentinel-removal-advisory", lambda: _check_dev_repo_sentinel_removal_advisory(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        # block-venv-creation -- per-repo/shared venvs banned fleet-wide.
-        # DENIES python -m venv / virtualenv / uv venv / conda create
-        # (override key COORDINATOR_OVERRIDE_VENV_CREATION); the remaining
-        # provisioner shapes stay advisory. Registered in this band like
-        # `check-raw-pid-liveness`: a deny with no confinement role.
-        GuardEntry("block-venv-creation", lambda: _check_venv_creation(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # `stash-apply-verification-advisory` -- the ADVISORY_REWRITE sibling
         # of the two CONFINEMENT_DENY stash guards above, and deliberately
         # NOT one of them. `git stash apply` used as a data-loss CHECK is a

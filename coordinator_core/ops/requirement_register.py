@@ -77,6 +77,11 @@ JUDGE_RULING_REF = "ruling_ref"
 CLAIM_THIS_PLAN = "this-plan"
 CLAIMS = (CLAIM_THIS_PLAN, "other-plan", "unclaimed")
 JUDGE_ROW_KEYS = ("id", JUDGE_CLAIM, "status", "wired")
+#: Optional judge field: how the row's acceptance evidence was produced. Absent reads production.
+JUDGE_EVIDENCE_ENTRY_POINT = "evidence_entry_point"
+EVIDENCE_PRODUCTION = "production"
+EVIDENCE_HAND_BUILT = "hand-built-fixture"
+EVIDENCE_KINDS = (EVIDENCE_PRODUCTION, EVIDENCE_HAND_BUILT)
 
 STALL_DAYS = 7
 _LIST_CAP = 15
@@ -645,8 +650,9 @@ def apply_verdicts(
     status (met when judged met and wired, else partial when either holds), a `<plan>@<sha>`
     entry in met_by (only when met and wired) and last_progress_at; the rollup is recomputed.
     Only the register block is replaced, keeping `sources`. `deferred`/`waived` rows are never
-    touched. `claim_ids` adds the plan's `register_claims.rows` to the rows it claims. A sizing
-    with no register is returned unchanged."""
+    touched. A verdict whose `evidence_entry_point` is `hand-built-fixture` never counts as met:
+    it lands partial with no met_by entry. `claim_ids` adds the plan's `register_claims.rows` to
+    the rows it claims. A sizing with no register is returned unchanged."""
     register = read_register(sizing_text)
     if register is None:
         return sizing_text
@@ -660,6 +666,8 @@ def apply_verdicts(
             continue
         met = verdict.get(ROW_STATUS) == STATUS_MET
         wired = verdict.get(ROW_WIRED) is True
+        if verdict.get(JUDGE_EVIDENCE_ENTRY_POINT) == EVIDENCE_HAND_BUILT:
+            met = False
         ref = f"{_plan_key(plan_path)}@{sha}"
         met_by = [m for m in row.get(ROW_MET_BY) or [] if isinstance(m, str)]
         target = STATUS_MET if met and wired else STATUS_PARTIAL if met or wired else row.get(ROW_STATUS)

@@ -1110,11 +1110,8 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/benchmarks/maintenance_tier_budget.py", "_make_throwaway_clone", "add"),
         ("coordinator_core/consolidate_assemble/__init__.py", "branches_merged_into", "branch"),
         ("coordinator_core/consolidate_assemble/__init__.py", "list_worktrees", "worktree"),
-        ("coordinator_core/consolidate_assemble/apply.py", "_clean_cherry_pick_conflict", "checkout"),
-        ("coordinator_core/consolidate_assemble/apply.py", "_clean_cherry_pick_conflict", "cherry-pick"),
         ("coordinator_core/consolidate_assemble/apply.py", "_delete_branch", "branch"),
         ("coordinator_core/consolidate_assemble/apply.py", "_delete_branch", "push"),
-        ("coordinator_core/consolidate_assemble/apply.py", "_cherry_pick_unique", "cherry-pick"),
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_prune", "worktree"),
         ("coordinator_core/consolidate_assemble/apply.py", "_dispatch_worktree_remove", "worktree"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "add"),
@@ -1143,7 +1140,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 41
+_PINNED_VERB_CEILING = 38
 
 
 def _runner_message(sites: list) -> str:

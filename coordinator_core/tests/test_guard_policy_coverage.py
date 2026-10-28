@@ -32,7 +32,9 @@ def _hook_modules():
     return sorted(
         p.relative_to(ROOT).as_posix()
         for p in (ROOT / "hooks").rglob("*.py")
-        if "tests" not in p.parts and p.name != "__init__.py" and p.name != "conftest.py"
+        if "tests" not in p.parts
+        and p.name not in ("__init__.py", "conftest.py")
+        and not p.name.startswith("test_")
     )
 
 

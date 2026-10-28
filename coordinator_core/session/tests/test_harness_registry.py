@@ -669,3 +669,19 @@ class TestLinuxBootTicksProcStart:
         _write_record(tmp_path, "9.json", "sid-ticks", 9, str(self._ticks_for(epoch)))
         rec = hr.lookup("sid-ticks")
         assert rec is not None and rec.start_epoch == pytest.approx(epoch, abs=1.0)
+
+
+def test_parse_one_accepts_leading_object_before_stray_brace(tmp_path):
+    path = tmp_path / "1561.json"
+    start = datetime.fromtimestamp(time.time() - 60, tz=timezone.utc).isoformat()
+    payload = {"sessionId": "sid-tail", "pid": 1561, "procStart": start}
+    path.write_text(json.dumps(payload) + "\n}", encoding="utf-8")
+    parsed = hr._parse_one(path)
+    assert parsed is not None
+    assert parsed[0] == "sid-tail" and parsed[1].pid == 1561
+
+
+def test_parse_one_malformed_text_still_none(tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_text("{not json}\n}", encoding="utf-8")
+    assert hr._parse_one(path) is None

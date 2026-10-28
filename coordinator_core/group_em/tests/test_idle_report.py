@@ -72,6 +72,11 @@ def _report(tmp_path, projects_dir, now, names=_UNSET, **kwargs):
     )
 
 
+def _live(names):
+    rows = [{"sessionId": sid, "name": name, "cwd": None} for sid, name in names.items()]
+    return lambda *a, **k: list(rows)
+
+
 def _row(report, prefix):
     return next(row for row in report["peers"] if row["session"].startswith(prefix))
 
@@ -105,7 +110,7 @@ def test_a_file_with_no_parseable_clock_is_unknown_with_a_closed_reason_key(
     tmp_path, projects_dir, now
 ):
     _write(projects_dir, "cccc3333-x", [{"type": "mode"}], mtime_minutes_ago=2, now=now)
-    row = _row(_report(tmp_path, projects_dir, now), "cccc3333")
+    row = _row(_report(tmp_path, projects_dir, now, names={"cccc3333-x": "p"}), "cccc3333")
     assert row["verdict"] == idle_report.VERDICT_UNKNOWN
     assert row["reason"] == idle_report.REASON_CLOCK_UNPARSEABLE
     assert row["reason"] in idle_report.UNKNOWN_REASONS
@@ -116,7 +121,7 @@ def test_an_empty_transcript_is_unknown_no_records(tmp_path, projects_dir, now):
     path.write_text("", encoding="utf-8")
     import os
     os.utime(path, (now - 120, now - 120))
-    row = _row(_report(tmp_path, projects_dir, now), "dddd4444")
+    row = _row(_report(tmp_path, projects_dir, now, names={"dddd4444-x": "p"}), "dddd4444")
     assert (row["verdict"], row["reason"]) == (
         idle_report.VERDICT_UNKNOWN, idle_report.REASON_NO_RECORDS)
 
@@ -160,26 +165,72 @@ def test_the_floor_and_threshold_are_applied_by_the_script(
     assert row["verdict"] == expected
 
 
-def test_absent_from_the_registry_with_a_stalled_clock_is_exited(
+def test_a_transcript_off_the_live_roster_is_not_listed_at_all(tmp_path, projects_dir, now):
+    _write(projects_dir, "3333cccc-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
+    report = _report(tmp_path, projects_dir, now, names={"other": "p"})
+    assert [row["session"] for row in report["peers"]] == ["other"]
+    assert report["counts"]["exited"] == 0
+
+
+def test_a_rostered_peer_with_no_transcript_is_unknown_never_exited(
     tmp_path, projects_dir, now
 ):
-    _write(projects_dir, "3333cccc-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
-    row = _row(_report(tmp_path, projects_dir, now, names={"other": "p"}), "3333cccc")
-    assert row["verdict"] == idle_report.VERDICT_EXITED
-
-
-def test_an_unreadable_registry_never_produces_a_corpse(tmp_path, projects_dir, now):
-    _write(projects_dir, "4444dddd-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
-    report = _report(tmp_path, projects_dir, now, names=None, registry_read=False)
+    report = _report(tmp_path, projects_dir, now, names={"4444dddd-x": "p"})
     row = _row(report, "4444dddd")
     assert row["verdict"] == idle_report.VERDICT_UNKNOWN
-    assert row["reason"] == idle_report.REASON_LIVENESS_UNRESOLVED
-    assert report["registry-available"] is False
+    assert row["reason"] == idle_report.REASON_TRANSCRIPT_UNREADABLE
+    assert row["mtime-age"] is None
+    assert report["counts"]["exited"] == 0
+    assert "n/a" in idle_report.render(report)
 
 
-def test_registry_absence_below_the_threshold_is_not_an_exit(tmp_path, projects_dir, now):
+def test_an_unreadable_live_roster_fails_the_report_rather_than_reading_quiet(
+    tmp_path, monkeypatch, capsys
+):
+    def boom(*a, **k):
+        raise RuntimeError("registry unreadable")
+
+    monkeypatch.setattr(idle_report.read_pass, "live_peers", boom)
+    assert idle_report._cli(["--repo-root", str(tmp_path)]) == 2
+    assert "idle_report failed" in capsys.readouterr().err
+
+
+def test_default_cli_lists_live_roster_peers_and_marks_unresolvable_ones_unknown(
+    tmp_path, monkeypatch, now
+):
+    """A live peer whose transcript sits outside `projects_dir_for` is listed; a stale
+    jsonl with no registry row is not; a rostered peer with no transcript is unknown."""
+    import os
+
+    stale_dir = tmp_path / "home" / ".claude" / "projects" / "-repo"
+    stale_dir.mkdir(parents=True)
+    _write(stale_dir, "dead0000-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _write(elsewhere, "live1111-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
+    roster = [
+        {"sessionId": "live1111-x", "name": "p1", "cwd": str(tmp_path / "wt")},
+        {"sessionId": "gone2222-x", "name": "p2", "cwd": str(tmp_path / "wt")},
+    ]
+    monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(stale_dir))
+    monkeypatch.setattr(idle_report.read_pass, "live_peers", lambda *a, **k: roster)
+    monkeypatch.setattr(
+        idle_report.read_pass, "_transcript_path_for",
+        lambda sid, cwd: os.path.join(str(elsewhere), "%s.jsonl" % sid))
+    monkeypatch.setattr(idle_report, "time", type("T", (), {"time": staticmethod(lambda: now)}))
+    captured = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(a[0]))
+    assert idle_report._cli(["--repo-root", str(tmp_path), "--json"]) == 0
+    rows = {r["session"]: r for r in json.loads(captured[0])["peers"]}
+    assert set(rows) == {"live1111-x", "gone2222-x"}
+    assert rows["live1111-x"]["verdict"] == idle_report.VERDICT_ESCALATE
+    assert rows["gone2222-x"]["verdict"] == idle_report.VERDICT_UNKNOWN
+    assert rows["gone2222-x"]["reason"] == idle_report.REASON_TRANSCRIPT_UNREADABLE
+
+
+def test_a_rostered_peer_below_the_threshold_is_not_an_exit(tmp_path, projects_dir, now):
     _write(projects_dir, "5555eeee-x", [_record(6, now)], mtime_minutes_ago=6, now=now)
-    row = _row(_report(tmp_path, projects_dir, now, names={"other": "p"}), "5555eeee")
+    row = _row(_report(tmp_path, projects_dir, now, names={"5555eeee-x": "p"}), "5555eeee")
     assert row["verdict"] == idle_report.VERDICT_WATCH
 
 
@@ -189,7 +240,8 @@ def test_an_exited_row_dates_itself_and_carries_no_nudge_content(
     _write(projects_dir, "6666ffff-x", [
         _said("I'll now run the suite.", 45, now)
     ], mtime_minutes_ago=45, now=now)
-    row = _row(_report(tmp_path, projects_dir, now, names={"other": "p"}), "6666ffff")
+    row = _row(_report(tmp_path, projects_dir, now, names={"6666ffff-x": "p"},
+                       observed_exits=frozenset({"6666ffff-x"})), "6666ffff")
     assert row["verdict"] == idle_report.VERDICT_EXITED
     assert row["exited-since"].endswith("Z")
     assert row["last-said"] is None and row["named-next-move"] is None
@@ -622,7 +674,7 @@ def test_an_empty_roster_is_a_legible_statement_not_an_absence(
 def test_the_json_arm_carries_the_same_fields(tmp_path, projects_dir, now, monkeypatch):
     _write(projects_dir, "1919aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(projects_dir))
-    monkeypatch.setattr(idle_report, "registry_names", lambda: {"1919aaaa-x": "peer-1"})
+    monkeypatch.setattr(idle_report.read_pass, "live_peers", _live({"1919aaaa-x": "peer-1"}))
     captured = []
     monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(a[0]))
     assert idle_report._cli(
@@ -643,16 +695,10 @@ def test_between_turns_peers_are_counted_but_not_printed(tmp_path, projects_dir,
     assert rendered.startswith("peers=1 ")
 
 
-def test_watch_peer_absent_from_a_read_registry_is_excluded_and_marked_and_never_pushed(
-    tmp_path, projects_dir, now
-):
+def test_a_watch_band_transcript_off_the_roster_is_not_a_peer(tmp_path, projects_dir, now):
     _write(projects_dir, "9a44b41a-x", [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
     report = _report(tmp_path, projects_dir, now, names={})
-    row = _row(report, "9a44b41a")
-    assert row["verdict"] == idle_report.VERDICT_WATCH
-    assert row["registry"] == "absent"
-    assert row["nudge-shape"] != idle_report.SHAPE_PUSH
-    assert any(r["session"] == "9a44b41a-x" for r in report["peers"])
+    assert report["peers"] == []
     assert report["counts"]["peers"] == 0
 
 
@@ -678,7 +724,7 @@ def test_watch_peer_with_an_unreadable_registry_stays_counted_and_unmarked(
     and absent). An unreadable registry answers nothing, so this peer must not
     be excluded or marked -- only a SUCCESSFUL read that says "absent" counts."""
     _write(projects_dir, "9a44b41b-x", [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
-    report = _report(tmp_path, projects_dir, now, names=None, registry_read=False)
+    report = _report(tmp_path, projects_dir, now, names={"9a44b41b-x": "p"})
     row = _row(report, "9a44b41b")
     assert row["verdict"] == idle_report.VERDICT_WATCH
     assert row["registry"] is None
@@ -689,7 +735,7 @@ def test_between_turns_peer_absent_from_registry_is_still_counted(
     tmp_path, projects_dir, now
 ):
     _write(projects_dir, "9a44b41c-x", [_record(0.5, now)], mtime_minutes_ago=0.5, now=now)
-    report = _report(tmp_path, projects_dir, now, names={})
+    report = _report(tmp_path, projects_dir, now, names={"9a44b41c-x": "p"})
     row = _row(report, "9a44b41c")
     assert row["verdict"] == idle_report.VERDICT_BETWEEN_TURNS
     assert row["registry"] is None
@@ -734,22 +780,24 @@ def test_live_count_excludes_exited_rows_the_same_way_peers_excludes_registry_ab
     _write(projects_dir, "4141bbbb-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
     _write(projects_dir, "4242cccc-x", [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
     report = _report(
-        tmp_path, projects_dir, now, names={"4040aaaa-x": "live-peer", "other": "p"})
+        tmp_path, projects_dir, now,
+        names={"4040aaaa-x": "live-peer", "4141bbbb-x": "p"},
+        observed_exits=frozenset({"4141bbbb-x"}))
     live_row = _row(report, "4040aaaa")
     exited_row = _row(report, "4141bbbb")
-    watch_absent_row = _row(report, "4242cccc")
     assert live_row["verdict"] not in (idle_report.VERDICT_EXITED,)
     assert exited_row["verdict"] == idle_report.VERDICT_EXITED
-    assert watch_absent_row["registry"] == "absent"
+    assert all(r["session"] != "4242cccc-x" for r in report["peers"])
     assert report["counts"]["peers"] == 1
     assert report["counts"]["live"] == 1
 
 
 def test_peers_count_excludes_exited_rows(tmp_path, projects_dir, now):
-    names = {"6060aaaa-x": "live-peer"}
+    names = {"6060aaaa-x": "live-peer", "6161bbbb-x": "p"}
     _write(projects_dir, "6060aaaa-x", [_record(2, now)], mtime_minutes_ago=2, now=now)
     _write(projects_dir, "6161bbbb-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
-    report = _report(tmp_path, projects_dir, now, names=names)
+    report = _report(tmp_path, projects_dir, now, names=names,
+                     observed_exits=frozenset({"6161bbbb-x"}))
 
     exited_row = _row(report, "6161bbbb")
     assert exited_row["verdict"] == idle_report.VERDICT_EXITED
@@ -765,13 +813,14 @@ def test_peers_splits_into_quiet_actionable_and_exited_with_no_remainder(
     OUT-OF-WORK/UNKNOWN), and exited (EXITED). Each must land in exactly one
     of the three new/existing named counts, and the three must sum back to
     `peers` with no remainder -- the merge this row exists to undo."""
-    names = {"5050aaaa-x": "quiet-peer", "5252cccc-x": "actionable-peer"}
+    names = {"5050aaaa-x": "quiet-peer", "5252cccc-x": "actionable-peer", "5151bbbb-x": "p"}
     # quiet: BETWEEN-TURNS (fresh content clock)
     _write(projects_dir, "5050aaaa-x", [_record(1, now)], mtime_minutes_ago=1, now=now)
     _write(projects_dir, "5151bbbb-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
     # actionable: ESCALATE (stalled, registry-present, no completion ceremony)
     _write(projects_dir, "5252cccc-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
-    report = _report(tmp_path, projects_dir, now, names=names)
+    report = _report(tmp_path, projects_dir, now, names=names,
+                     observed_exits=frozenset({"5151bbbb-x"}))
 
     quiet_row = _row(report, "5050aaaa")
     exited_row = _row(report, "5151bbbb")
@@ -966,11 +1015,12 @@ def test_talking_about_a_rate_limit_is_not_being_rate_limited(
     assert row["verdict"] == idle_report.VERDICT_ESCALATE
 
 
-def test_a_refused_peer_the_registry_has_forgotten_is_still_exited(
+def test_a_refused_peer_with_an_observed_exit_is_still_exited(
     tmp_path, projects_dir, now
 ):
     _write(projects_dir, "3636aaaa-x", [_refusal(45, now)], mtime_minutes_ago=45, now=now)
-    row = _row(_report(tmp_path, projects_dir, now, names={"other": "p"}), "3636aaaa")
+    row = _row(_report(tmp_path, projects_dir, now, names={"3636aaaa-x": "p"},
+                       observed_exits=frozenset({"3636aaaa-x"})), "3636aaaa")
     assert row["verdict"] == idle_report.VERDICT_EXITED
 
 
@@ -1052,7 +1102,7 @@ def test_record_offer_suppresses_the_same_tick_it_recorded_in(
 ):
     _write(projects_dir, "3838aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(projects_dir))
-    monkeypatch.setattr(idle_report, "registry_names", lambda: {"3838aaaa-x": "peer-1"})
+    monkeypatch.setattr(idle_report.read_pass, "live_peers", _live({"3838aaaa-x": "peer-1"}))
     monkeypatch.setattr(idle_report, "time", type("T", (), {"time": staticmethod(lambda: now)}))
     captured = []
     monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(a[0]))
@@ -1075,7 +1125,7 @@ def test_record_offer_is_one_call_for_n_peers(tmp_path, projects_dir, now, monke
         lambda repo_root, holder, peers, offered_by, **k: calls.append(list(peers)) or [],
     )
     monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(projects_dir))
-    monkeypatch.setattr(idle_report, "registry_names", lambda: {})
+    monkeypatch.setattr(idle_report.read_pass, "live_peers", _live({}))
     captured = []
     monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(a[0]))
     assert idle_report._cli([

@@ -81,7 +81,10 @@ def test_box_em_without_grant_denied_with_grant_reason(repo, free_mutex, monkeyp
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
     result = _enveloped(guard.check)(_payload("with-suite-mutex -- pytest", repo))
     assert result is not None
-    assert "grant" in _reason(result).lower()
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "grant" in hso["additionalContext"].lower()
+    assert "PM" not in hso["additionalContext"]
 
 
 def test_forged_marker_on_attended_machine_is_not_cloud(monkeypatch):
@@ -827,6 +830,30 @@ def test_subagent_deny_names_a_variable_held_path_list(repo, command):
     assert "held in a variable" in reason and "Name the paths literally" in reason
 
 
+@pytest.mark.parametrize("agent_id", [None, "agent-1"])
+@pytest.mark.parametrize("command", [
+    "python -m pytest -q -p no:cacheprovider $(cat $TEMP/f.txt) tests/test_a.py",
+    "pytest `cat f.txt` tests/test_a.py",
+    "pytest $FILES tests/test_a.py",
+    "cat f.txt | xargs pytest -q",
+    "xargs -a f.txt python -m pytest",
+])
+def test_opaque_pytest_path_source_is_refused_naming_the_literal_form(repo, command, agent_id):
+    result = _enveloped(guard.check)(_payload(command, repo, agent_id=agent_id))
+    reason = _reason(result)
+    assert "cannot be counted" in reason and "literally" in reason
+
+
+@pytest.mark.parametrize("command", [
+    "pytest tests/test_a.py::test_one",
+    "pytest -k \"$EXPR\" tests/test_a.py",
+    "pytest --junitxml=$OUT tests/test_a.py",
+])
+def test_literal_pytest_paths_are_not_refused_as_opaque(repo, command):
+    assert guard._opaque_pytest_path_source(guard._segment_argvs(command)) is None
+    assert _enveloped(guard.check)(_payload(command, repo)) is None
+
+
 def test_literal_bound_non_scope_denies_without_the_variable_note(repo):
     """A variable bound to a testpaths root resolves to that literal word, so
     the deny is about breadth, not about a variable the guard could not see."""
@@ -1058,14 +1085,23 @@ def test_wrapper_leg_denial_names_the_accepted_wrapped_form(grant_repo, free_mut
     assert "bash -c" not in reason
 
 
-def test_wrapper_leg_still_requires_a_live_grant_first(grant_repo, free_mutex):
-    """Ordering: an UNGRANTED caller is denied on the grant leg, never told
-    to wrap a command it has no standing to run at all."""
+def test_ungranted_wrapped_suite_run_allows_with_advisory_naming_no_pm(grant_repo, free_mutex):
+    """An UNGRANTED caller running a wrapped suite is allowed with an advisory
+    toward scoped runs; the advisory routes nowhere to a PM, and the bare
+    (unwrapped) twin still denies on the wrapper leg carrying the same advisory."""
     cmd = "with-suite-mutex -- pytest"
     out = _enveloped(guard.check)(_payload(cmd, grant_repo))
-    reason = _reason(out)
-    assert "authorization grant" in reason
-    assert "Route this through the suite mutex" not in reason
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    text = hso["additionalContext"]
+    assert "authorization grant" in text
+    assert "Route this through the suite mutex" not in text
+    assert "PM" not in text
+    assert "grant pm" not in text
+    bare = _reason(_enveloped(guard.check)(_payload("pytest", grant_repo)))
+    assert "Route this through the suite mutex" in bare
+    assert "authorization grant" in bare
+    assert "grant pm" not in bare
 
 
 def test_wrapper_leg_never_fires_for_a_subagent(grant_repo, free_mutex):
@@ -1685,7 +1721,8 @@ class TestGrantLeg:
         assert "ungated by this leg" not in reason
         assert "Tier F, ungated" not in reason
         assert "authorization grant" in reason.lower()
-        assert "tier-u-grant-cli grant pm" in reason
+        assert "tier-u-grant-cli grant pm" not in reason
+        assert "verbatim PM utterance" not in reason
 
     def test_real_resolver_module_configured_cmd_leg_resolves_via_real_module(
         self, grant_repo, free_mutex, monkeypatch
@@ -2581,11 +2618,25 @@ def test_subagent_precision_shapes_still_allowed(repo_with_test_dir, free_mutex,
         "pytest coordinator_core/frontmatter/tests/sub -k test_thing",
     ],
 )
-def test_em_directory_argument_unaffected(repo_with_test_dir, free_mutex, command):
-    """R9 narrows the subagent rung ONLY. Directory-level Tier T for the
-    top-level EM stays exactly as it was -- the amendment is explicit that
-    this is not a fleet-wide narrowing of the EM path."""
-    assert _enveloped(guard.check)(_payload(command, repo_with_test_dir)) is None
+def test_em_directory_under_testpaths_root_is_judged_by_test_file_count(
+    repo_with_test_dir, free_mutex, monkeypatch, command
+):
+    """A directory under a testpaths root is Tier U for a caller with no
+    agent_id only above ``_DIR_TEST_FILE_THRESHOLD`` tracked test files; at the
+    threshold it stays scoped, and an uncomputable count is broad."""
+    n = guard._DIR_TEST_FILE_THRESHOLD
+    monkeypatch.setattr(guard, "_tracked_test_file_count", lambda dirs, root: n)
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo_with_test_dir)))
+
+    monkeypatch.setattr(guard, "_tracked_test_file_count", lambda dirs, root: n + 1)
+    verdict = _enveloped(guard.check)(_payload(command, repo_with_test_dir))
+    assert verdict is not None
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    monkeypatch.setattr(guard, "_tracked_test_file_count", lambda dirs, root: None)
+    verdict = _enveloped(guard.check)(_payload(command, repo_with_test_dir))
+    assert verdict is not None
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_r9_is_additive_suite_shaped_still_gets_the_identity_diagnosis(repo, free_mutex):
@@ -2691,13 +2742,25 @@ def test_subagent_glob_covering_a_real_directory_denied(
     assert "DR-088 R9" in reason
 
 
-def test_em_glob_covering_a_real_directory_unaffected(repo_with_glob_fixtures, free_mutex):
-    """Constraint 1: R9 (including its glob-expansion close) applies to the
-    subagent rung only -- the top-level EM (no ``agent_id``) is unaffected,
-    same as the literal-directory case in ``test_em_directory_argument_
-    unaffected`` above."""
-    assert _enveloped(guard.check)(
+def test_em_glob_covering_a_real_directory_without_grant_denied(
+    repo_with_glob_fixtures, free_mutex, monkeypatch
+):
+    """A glob covering a directory under a testpaths root is suite-shaped for
+    a caller with no ``agent_id``: without a Tier-U grant it is denied."""
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    verdict = _enveloped(guard.check)(
         _payload("pytest coordinator_core/frontmatter/*/sub", repo_with_glob_fixtures)
+    )
+    assert verdict is not None
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_em_glob_covering_a_real_directory_allowed_with_grant_under_mutex(
+    repo_with_glob_fixtures, free_mutex, monkeypatch
+):
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (True, None))
+    assert _enveloped(guard.check)(
+        _payload("with-suite-mutex -- pytest coordinator_core/frontmatter/*/sub", repo_with_glob_fixtures)
     ) is None
 
 
@@ -2968,6 +3031,113 @@ def test_pytest_info_only_flags_are_not_a_suite_run(flag):
     was blocked as a full-suite run."""
     assert guard._classify_python_module(["python", "-m", "pytest", flag], ["tests"], None) is None
     assert guard._classify_pytest([flag], ["tests"], None, "pytest") is None
+
+
+def test_argsfile_unreadable_is_opaque_suite_shaped(tmp_path):
+    missing = str(tmp_path / "nope.txt")
+    assert guard._classify_pytest(["@" + missing, "-n", "7"], ["tests"], str(tmp_path), "pytest") == "pytest"
+    assert guard._classify_python_module(
+        ["python3", "-m", "pytest", "@" + missing], ["tests"], str(tmp_path)
+    ) == "python -m pytest"
+
+
+def test_argsfile_unreadable_beside_a_real_scope_is_still_suite_shaped(tmp_path):
+    args = ["@" + str(tmp_path / "nope.txt"), "tests/test_a.py"]
+    assert guard._classify_pytest(args, ["tests"], str(tmp_path), "pytest") == "pytest"
+
+
+def test_argsfile_entries_are_classified(tmp_path):
+    scoped = tmp_path / "scoped.txt"
+    scoped.write_text("tests/test_a.py\ntests/test_b.py::t\n", encoding="utf-8")
+    broad = tmp_path / "broad.txt"
+    broad.write_text("tests\n", encoding="utf-8")
+    assert guard._classify_pytest(["@" + str(scoped)], ["tests"], str(tmp_path), "pytest") is None
+    assert guard._classify_pytest(["@scoped.txt"], ["tests"], str(tmp_path), "pytest") is None
+    assert guard._classify_pytest(["@" + str(broad)], ["tests"], str(tmp_path), "pytest") == "pytest"
+
+
+def test_argsfile_command_without_mutex_is_denied_through_check(tmp_path):
+    missing = "@" + str(tmp_path / "nope.txt")
+    cmd = "python3 -m pytest %s -n 7" % missing
+    assert guard.classify_command(cmd, cwd=str(tmp_path))
+
+
+@pytest.fixture
+def dir_tree(tmp_path):
+    for sub in ("coordinator_core", "tests/sub", "tests/sub2"):
+        (tmp_path / sub).mkdir(parents=True)
+    (tmp_path / "tests" / "test_a.py").write_text("", encoding="utf-8")
+    (tmp_path / "tests" / "test_b.py").write_text("", encoding="utf-8")
+    (tmp_path / "tests" / "solo").mkdir()
+    (tmp_path / "tests" / "solo" / "test_only.py").write_text("", encoding="utf-8")
+    return str(tmp_path)
+
+
+def _pytest_verdict(args, cwd):
+    return guard._classify_pytest(args, ["coordinator_core"], cwd, "pytest")
+
+
+@pytest.mark.parametrize("args", [
+    ["coordinator_core/"], ["coordinator_core"], ["."], ["./"],
+    ["tests"], ["tests/"], ["./tests"],
+])
+def test_positional_directory_is_broad(dir_tree, args):
+    assert _pytest_verdict(args, dir_tree) == "pytest"
+
+
+@pytest.mark.parametrize("args", [
+    ["tests/*"], ["tests/test_*.py"], ["tests/sub*"], ["tests/**"], ["tests/nomatch_*"],
+])
+def test_glob_over_directories_or_many_files_is_broad(dir_tree, args):
+    assert _pytest_verdict(args, dir_tree) == "pytest"
+
+
+@pytest.mark.parametrize("args", [
+    ["tests/test_a.py"], ["tests/test_a.py::test_x"], ["tests/solo/test_*.py"],
+    ["tests/test_a.py", "tests/test_b.py::t"],
+])
+def test_file_node_and_single_file_glob_stay_narrow(dir_tree, args):
+    assert _pytest_verdict(args, dir_tree) is None
+
+
+@pytest.mark.parametrize("args", [["tests/::test_x"], ["tests::test_x"]])
+def test_node_id_on_a_directory_is_broad(dir_tree, args):
+    assert _pytest_verdict(args, dir_tree) == "pytest"
+
+
+@pytest.mark.parametrize("flags", [
+    ["-k", "expr"], ["-m", "unit"], ["--deselect", "tests/test_a.py::t"],
+    ["--ignore", "tests/sub"], ["--ignore=tests/sub"], ["-k=expr"],
+])
+def test_selection_flags_do_not_narrow_a_directory(dir_tree, flags):
+    assert _pytest_verdict(["tests"] + flags, dir_tree) == "pytest"
+    assert _pytest_verdict(flags + ["tests/"], dir_tree) == "pytest"
+    assert _pytest_verdict(flags + ["tests/test_a.py"], dir_tree) is None
+
+
+@pytest.mark.parametrize("flags", [
+    ["-m", "unit"], ["--deselect", "tests/test_a.py::t"], ["--ignore", "tests/sub"],
+])
+def test_flag_only_runs_without_a_positional_are_broad(dir_tree, flags):
+    assert _pytest_verdict(flags, dir_tree) == "pytest"
+
+
+@pytest.mark.parametrize("args", [
+    ["--pyargs", "pkg"], ["--pyargs", "pkg.sub"], ["--pyargs", "pkg/sub"],
+    ["--pyargs", "pkg", "-k", "expr"],
+])
+def test_pyargs_package_is_broad(dir_tree, args):
+    assert _pytest_verdict(args, dir_tree) == "pytest"
+
+
+def test_pyargs_node_id_stays_narrow(dir_tree):
+    assert _pytest_verdict(["--pyargs", "pkg.test_mod::test_x"], dir_tree) is None
+
+
+def test_directory_positional_is_suite_shaped_through_classify_command(dir_tree):
+    assert guard.classify_command("pytest tests/", cwd=dir_tree) or guard.classify_command(
+        "python -m pytest tests", cwd=dir_tree)
+    assert guard.classify_command("pytest tests/test_a.py", cwd=dir_tree) == []
 
 
 def test_bare_pytest_is_still_suite_shaped():

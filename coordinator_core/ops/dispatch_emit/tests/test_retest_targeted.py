@@ -310,6 +310,28 @@ def test_gate_fresh_fail_record_honours_failed_tests_param(repo, tmp_path):
     assert check != "failed" or "no baseline" not in findings[0].detail
 
 
+@pytest.mark.parametrize(
+    "script_path",
+    ["scratch/warp/run-x/wf/run-x.workflow.js", "scratch\\warp\\run-x\\wf\\run-x.workflow.js"],
+)
+def test_run_id_from_script_stem_drops_workflow_suffix(script_path):
+    assert retest_targeted._run_id_of({"script_path": script_path}) == "run-x"
+    assert retest_targeted._run_id_of({"script_path": script_path, "run_id": "real"}) == "real"
+
+
+def test_record_without_run_id_is_keyed_by_the_real_run_id(repo, tmp_path):
+    params = {"script_path": "s/run-x.workflow.js", "targeted_tests": {"status": "fail", "baseline": None}}
+    out = tmp_path / "task.output"
+    out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
+    rc = retest_targeted.main(
+        ["--from-task-output", str(out), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+    )
+    assert rc == 0
+    rec = json.loads(li.fresh_verdict_path(repo, "run-x").read_text(encoding="utf-8"))
+    assert rec["run_id"] == "run-x"
+    assert [p.name for p in li.fresh_verdict_path(repo, "run-x").parent.glob("*.json")] == ["run-x.json"]
+
+
 @pytest.mark.parametrize("run_id", ["../escape", "a/b", ".."])
 def test_unsafe_run_id_refuses_before_any_write(repo, tmp_path, run_id):
     params = {"run_id": run_id, "script_path": "x/y", "targeted_tests": {"status": "fail", "baseline": None}}
@@ -777,6 +799,66 @@ def test_errored_retest_with_failed_tests_and_no_tests_run_keeps_the_ids(repo, t
     assert rec["status"] == "error" and "tests_run" not in rec and rec[li.FAILED_TESTS_PARAM]
 
 
+def test_covered_is_the_run_manifest_writes_not_foreign_dirt(repo, tmp_path):
+    (repo / "scratch" / "warp" / "run-abc").mkdir(parents=True)
+    (repo / "scratch" / "warp" / "run-abc" / "manifest.json").write_text(
+        json.dumps({"rows": [{"writes": ["mine.py"]}]}), encoding="utf-8")
+    (repo / "scratch" / "warp" / "run-abc" / "run.workflow.js").write_text(
+        "// coordinator:ask-run-manifest v1 scratch/warp/run-abc/manifest.json\n", encoding="utf-8")
+    (repo / "mine.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "foreign.py").write_text("y = 1\n", encoding="utf-8")
+    _git(repo, "add", "foreign.py")
+    params = {"run_id": RUN_ID, "script_path": "scratch/warp/run-abc/run.workflow.js",
+              "targeted_tests": {"status": "fail", "baseline": None}}
+    out = tmp_path / "task.output"
+    out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
+    rc = retest_targeted.main(
+        ["--from-task-output", str(out), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=lambda argv, cwd, **_kw: 0,
+        dirty=lambda r: ["foreign.py", "mine.py"],
+    )
+    assert rc == 0
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert set(record["covered"]) == {"test_a.py", "mine.py"}
+
+
+_STATE_INVARIANT = "coordinator_core/session/tests/test_machinery_paths.py"
+_STATE_NODE = _STATE_INVARIANT + "::test_every_tracked_state_first_segment_is_on_the_allowlist"
+
+
+def _seed_state_invariant_and_run_artifacts(repo: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    target = repo / _STATE_INVARIANT
+    target.parent.mkdir(parents=True)
+    target.write_text("def test_every_tracked_state_first_segment_is_on_the_allowlist():\n    pass\n", encoding="utf-8")
+    ask_contract.write_run_stage(repo, RUN_ID, "staged")
+
+
+def test_run_artifacts_owe_no_state_invariant_but_a_chunk_written_state_path_does(repo, tmp_path):
+    _seed_state_invariant_and_run_artifacts(repo)
+    assert retest_targeted._with_invariants(repo, ["test_a.py"], lambda _root: [], RUN_ID, {}) == ["test_a.py"]
+    dirty = lambda _root: ["state/lessons/x.md"]
+    assert retest_targeted._with_invariants(repo, ["test_a.py"], dirty, RUN_ID, {}) == ["test_a.py", _STATE_NODE]
+
+
+def test_without_a_run_the_clean_tree_owes_no_invariant(repo):
+    _seed_state_invariant_and_run_artifacts(repo)
+    assert retest_targeted._with_invariants(repo, ["test_a.py"], lambda _root: []) == ["test_a.py"]
+
+
+def test_retest_runs_the_state_invariant_and_the_gate_credits_it(repo, tmp_path):
+    _seed_state_invariant_and_run_artifacts(repo)
+    seen = []
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=lambda argv, cwd, **_kw: seen.append(argv) or 0,
+        dirty=lambda _root: ["state/lessons/x.md"],
+    )
+    assert rc == 0
+    assert any(_STATE_INVARIANT in str(arg) for arg in seen[0])
+    found = li.invariant_findings(repo, ["state/lessons/x.md", "state/warp/%s/run-stage.json" % RUN_ID], RUN_ID, {})
+    assert not found
 def test_many_node_ids_split_into_bounded_sessions_in_order(repo):
     tests = [f"test_a.py::t{i}" for i in range(retest_targeted.RETEST_MAX_NODES * 2 + 1)]
     _base, groups = retest_targeted._launch_plan(repo, tests)

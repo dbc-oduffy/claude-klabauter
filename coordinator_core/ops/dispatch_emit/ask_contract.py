@@ -239,10 +239,31 @@ RESEARCH_CLASSIFY_CLAUSE = (
     "for a binary verdict on one unproven mechanism. More thoroughness is `depth` or "
     "`appetite: large`, never `deep`. "
     "URLs the ask names to study go in `seeds` as `<kind>=<url>`, kind video, doc, repo or paper, "
-    "and never in `targets`."
+    "and never in `targets`. "
+    "An ask that declares one writes path and reads a bounded input set it names (files, "
+    "transcripts, cells) is a change to files, not knowledge: return `research` null, even "
+    "when it says census or classify or is read-only."
 )
 #: `ask_gate` halt route for a research sizing: the hand-back to the sizing door.
 RESEARCH_HANDBACK_ROUTE = "research"
+_BOUNDED_INPUT_RE = re.compile(
+    r"\b\d+\s+(?:cells?|files?|transcripts?|runs?|logs?|records?|rows?|reports?)\b"
+    r"|\b(?:XXL|XS|XL|S|M|L)\s*[–—-]\s*(?:XXL|XS|XL|S|M|L)\b"
+)
+
+
+def research_is_bounded_single_write(sizing: Mapping, writes: Sequence[str]) -> bool:
+    """True when a research-carrying sizing declares exactly one writes path over a bounded, enumerated
+    input set (a counted noun or a size range in its intent): a file change, so the execute arm, not research.
+
+    Trap: lexical; an input set described without a count or range is not recognised."""
+    paths = {str(w).strip() for w in writes if str(w).strip()}
+    research = sizing.get("research")
+    if len(paths) != 1 or not (isinstance(research, Mapping) and research):
+        return False
+    return _BOUNDED_INPUT_RE.search(str(sizing.get("intent") or "")) is not None
+
+
 #: `ask_gate` refusal for a research sizing whose request carries `writes`.
 RESEARCH_MIXED_REFUSAL = (
     "Research ask also names file writes. Submit the research ask alone to /coordinator:research. "
@@ -718,7 +739,9 @@ ROWS_DROPPED_WITHOUT_REASON = "ROWS-DROPPED-WITHOUT-REASON"
 RESUME_LEDGER_KIND_FIELD = "kind"
 #: The run's recorded review outcome, in its record dir; the source of a re-fire's `inline_review`.
 RUN_OUTCOME_FILE = "run-outcome.json"
-RUN_OUTCOME_KEYS = ("inline_review", "incomplete_chunks", "landed_chunks", "ledger_verdict", "plan_path")
+RUN_OUTCOME_KEYS = (
+    "inline_review", "incomplete_chunks", "landed_chunks", "ledger_verdict", "plan_path", "objective_loop",
+)
 #: `inline_review` key naming the halted run whose review a resumed landing reuses.
 RESUMED_RUN_ID_KEY = "resumed_run_id"
 
@@ -1079,6 +1102,10 @@ class GateVerdict:
         return out
 
 
+#: Closed set of `ManifestRow.route_source` values.
+ROUTE_SOURCES = ("route-table", "overlay", "default")
+
+
 @dataclass(frozen=True)
 class ManifestRow:
     id: str
@@ -1100,6 +1127,16 @@ class ManifestRow:
     #: True for a row that adopts stranded dirt under review; it writes nothing by design, so
     #: the no-change rules skip its paths. Serialised only when true.
     adopts_stranded: bool = False
+    #: The row's reasoning-effort tag; serialised only when set, and part of the shared-agent key.
+    effort: Optional[str] = None
+    #: Where the row's agent choice came from; one of `ROUTE_SOURCES`. Always serialised.
+    route_source: str = "default"
+    #: Code-index (RAG) calls the row made; `None` until measured. Always serialised.
+    rag_calls: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.route_source not in ROUTE_SOURCES:
+            raise ValueError(f"route_source {self.route_source!r} not in {ROUTE_SOURCES}")
 
     def to_json(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -1110,7 +1147,11 @@ class ManifestRow:
             "writes": list(self.writes),
             "wave": self.wave,
             "deps": list(self.deps),
+            "route_source": self.route_source,
+            "rag_calls": self.rag_calls,
         }
+        if self.effort is not None:
+            out["effort"] = self.effort
         if self.group:
             out["group"] = self.group
         if self.route is not None:
@@ -1138,6 +1179,8 @@ class ManifestRow:
             register_rows=tuple(str(r) for r in data.get("register_rows") or ()),
             kept_from=str(data.get("kept_from") or ""),
             adopts_stranded=bool(data.get("adopts_stranded")),
+            route_source=str(data.get("route_source") or "default"),
+            rag_calls=data.get("rag_calls"),
         )
 
 

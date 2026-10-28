@@ -21,11 +21,12 @@ from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 
 
 def _dirty_paths(root: Path) -> list:
-    out = subprocess.run(
-        ["git", "-C", str(root), "status", "--porcelain", "-z", "--untracked-files=all"],
-        capture_output=True, text=True, check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout
+    from coordinator_core.git.run import run_git
+
+    res = run_git(["status", "--porcelain", "-z", "--untracked-files=all"], cwd=str(root))
+    if res.returncode != 0:
+        raise RuntimeError(f"git status exited {res.returncode}: {res.stderr.strip()}")
+    out = res.stdout
     paths = []
     for entry in out.split("\0"):
         if len(entry) > 3:

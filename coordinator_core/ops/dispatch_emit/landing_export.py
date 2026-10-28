@@ -11,12 +11,14 @@ The tree diff base_sha..HEAD is read from the object store in process; blobs are
 verbatim (no smudge), as `git archive` writes them.
 
 Negative-spec:
-    - Does NOT build a base export. No `base_export` holding `base_sha` -> LandingExportError.
+    - `build_landing_export` does NOT build a base export. No `base_export` holding `base_sha`
+      -> LandingExportError. `build_head_export` is the one function that does (one
+      `git archive`, ~23 s); it belongs in the detached child only, never an inline op.
     - Does NOT leave `base_export` intact: it is moved to `out_dir` and mutated in place
       (copying 40k files costs what extraction costs). A caller that still needs the
       base re-runs against it first.
     - Does NOT write outside `<worktree_root>/scratch/`.
-    - Does NOT spawn git, bash, tar or cp.
+    - `build_landing_export` does NOT spawn git, bash, tar or cp.
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ from typing import NamedTuple, Optional, Sequence
 from coordinator_core.git import git_objects
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_sha
+from coordinator_core.ops._path_guard import safe_id
+from coordinator_core.testing import baseline_export
 
 _MODE_TREE = b"40000"
 _MODE_SUBMODULE = b"160000"
@@ -216,6 +220,72 @@ def build_landing_export(
     except (OSError, ValueError) as exc:
         raise LandingExportError(f"export failed: {exc}") from None
     return LandingExport(out.as_posix(), head, tuple(overlaid), tuple(removed))
+
+
+def run_export_root(worktree_root: Path, run_id: str) -> Path:
+    """`<root>/scratch/warp/<run_id>/export`; LandingExportError on an unsafe `run_id`."""
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        raise LandingExportError(f"unsafe run id: {run_id!r}")
+    return Path(worktree_root).resolve() / "scratch" / "warp" / run_id / "export"
+
+
+def check_cap_adapting(root: Path, *, keep_run: Optional[str] = None) -> None:
+    """`export_lifecycle.check_export_cap(root)`; on a refusal, sweep orphan exports once and
+    re-check. Only the second refusal raises, with the remedy appended."""
+    from coordinator_core.ops.dispatch_emit import export_lifecycle
+
+    try:
+        export_lifecycle.check_export_cap(root)
+        return
+    except LandingExportError:
+        pass
+    export_lifecycle.sweep_orphan_exports(root, keep_run=keep_run)
+    try:
+        export_lifecycle.check_export_cap(root)
+    except LandingExportError as exc:
+        raise LandingExportError(
+            f"{exc}; raise {export_lifecycle.CAP_ENV} or free disk"
+        ) from None
+
+
+def build_head_export(
+    worktree_root: Path, out_dir: Path, landing_paths: Sequence[str]
+) -> LandingExport:
+    """Extract HEAD (one git spawn) at `out_dir`, then overlay `landing_paths` worktree bytes.
+
+    A prior export at `out_dir` is replaced. The extraction goes to the sibling `<out_dir>.base`,
+    which `build_landing_export` consumes; on failure it is removed.
+    """
+    root = Path(worktree_root).resolve()
+    scratch = (root / "scratch").resolve()
+    out = Path(out_dir)
+    out = (out if out.is_absolute() else root / out).resolve()
+    if out == scratch or scratch not in out.parents:
+        raise LandingExportError(f"out_dir must be under {scratch.name}/ of the repo")
+    for p in landing_paths:
+        _norm_landing(root, p)
+    head = head_sha(root, fresh=True)
+    if not head:
+        raise LandingExportError("HEAD unresolved")
+    warp = root / "scratch" / "warp"
+    keep = out.relative_to(warp).parts[0] if warp in out.parents else None
+    check_cap_adapting(root, keep_run=keep)
+    staging = out.with_name(out.name + ".base")
+    try:
+        if out.exists() or out.is_symlink():
+            baseline_export.remove(out)
+        if staging.exists() or staging.is_symlink():
+            baseline_export.remove(staging)
+        staging.mkdir(parents=True)
+        baseline_export.export(root.as_posix(), head, staging)
+        return build_landing_export(
+            root, out, landing_paths, base_export=staging, base_sha=head
+        )
+    except (baseline_export.ExportError, OSError) as exc:
+        raise LandingExportError(f"head export failed: {exc}") from None
+    finally:
+        if staging.exists():
+            baseline_export.remove(staging)
 
 
 def _find_root(start: Path) -> Path:

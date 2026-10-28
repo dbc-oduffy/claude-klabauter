@@ -140,3 +140,27 @@ def test_oversize_note_and_pid_list_are_capped(tmp_path, monkeypatch):
     (line,) = _lines(tmp_path)
     assert len(line["note"]) == admission_post.MAX_TEXT
     assert len(line["pids"]) == admission_post.MAX_PIDS
+
+
+def test_request_carries_declared_peak(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    r = admission_post.post("request", "s1", run="r", directory=tmp_path, declared_peak_mb=4096)
+    assert r["posted"] and r["phase"] == "REQUEST"
+    (line,) = _lines(tmp_path)
+    assert line["phase"] == "REQUEST" and line["declared_peak_mb"] == 4096.0
+
+
+def test_request_without_valid_peak_refused_and_writes_nothing(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    for bad in (None, -1, True, "x", float("nan"), admission_post.MAX_PEAK_MB + 1):
+        r = admission_post.post("REQUEST", "s1", directory=tmp_path, declared_peak_mb=bad)
+        assert r == {"posted": False, "reason": "bad_peak"}
+    assert not (tmp_path / "box").exists()
+
+
+def test_start_and_end_unchanged_without_peak(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    assert admission_post.post("START", "s1", directory=tmp_path)["posted"]
+    assert admission_post.post("END", "s1", directory=tmp_path, declared_peak_mb=5)["posted"]
+    start, end = _lines(tmp_path)
+    assert "declared_peak_mb" not in start and "declared_peak_mb" not in end

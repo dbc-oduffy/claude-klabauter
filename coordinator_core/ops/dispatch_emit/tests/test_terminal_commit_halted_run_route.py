@@ -71,3 +71,32 @@ def test_route_suffix_only_for_a_halted_run(repo):
     assert route_suffix(repo, None) == ""
     _mark(repo)
     assert ROUTE in route_suffix(repo, RUN_ID)
+
+
+def test_land_only_halted_run_with_withheld_work_commits_the_record(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit, halted_run_route
+
+    _mark(repo)
+    seen = {}
+    monkeypatch.setattr(halted_run_route, "land_only_commit_route", lambda root, run_id: {"halted": "ledger-check"})
+
+    def fake_commit(worktree_root, repo_root, params):
+        seen["params"] = params
+        return {"committed": True}
+
+    monkeypatch.setattr(halted_record_commit, "commit_halted_record", fake_commit)
+    out = _call(repo, {"task_output_path": _digest(repo)})
+    assert out["committed"] is True
+    assert seen["params"][ask_contract.HALTED_RECORD_PARAM] == {"halted": "ledger-check"}
+    assert seen["params"]["run_id"] == RUN_ID
+
+
+def test_halted_run_with_nothing_withheld_keeps_the_refusal(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_record_commit, halted_run_route
+
+    _mark(repo)
+    monkeypatch.setattr(halted_run_route, "land_only_commit_route", lambda root, run_id: None)
+    monkeypatch.setattr(halted_record_commit, "commit_halted_record",
+                        lambda *a, **k: pytest.fail("must not commit"))
+    out = _call(repo, {"task_output_path": _digest(repo)})
+    assert out["refused"] == "halted-run"

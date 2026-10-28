@@ -26,13 +26,28 @@ from pathlib import Path
 
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
 
-_LAST_REFRESHED_RE = re.compile(r"Last refreshed:\s*(\d{4}-\d{2}-\d{2})")
+# Accepts `Last refreshed:` / `Last updated:`, optionally bold in either placement
+# (`**Last refreshed:** d` or `**Last refreshed: d**`), optionally list-bulleted.
+_LAST_REFRESHED_RE = re.compile(
+    r"Last\s+(?:refreshed|updated)\s*(?::\s*\*{0,2}|\*{0,2}\s*:)\s*(\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
 
 # Matches assertions of the shape "19 `conftest.py`/test-support files across the
-# tree." — a leading integer, a backtick-quoted filename, then a "files" mention
+# tree." — a leading integer (thousands commas allowed), a filename or extension glob
+# (`conftest.py`, `*.py`, `.py`; backticked or bare `*.py`), then a "files" mention
 # somewhere later on the same line. Only counts the document explicitly states are
 # parsed; nothing here infers a count the document does not claim.
-_COUNT_ASSERTION_RE = re.compile(r"(\d+)\s+`([\w.]+\.\w+)`[^\n]*?\bfiles\b")
+_COUNT_ASSERTION_RE = re.compile(
+    r"(\d[\d,]*)\s+(?:`([\w.*-]+\.\w+|\.\w+)`|(\*\.\w+))[^\n]*?\bfiles\b"
+)
+
+DATE_FORMAT_HINT = (
+    "add a line such as `Last refreshed: YYYY-MM-DD` (bold and `Last updated:` also read)"
+)
+COUNT_FORMAT_HINT = (
+    "state counts as e.g. ``1402 `*.py` files`` or ``19 `conftest.py` files`` so they can be checked"
+)
 
 
 @dataclass(frozen=True)
@@ -71,8 +86,10 @@ def _parse_refreshed_on(text: str) -> date | None:
 def _parse_count_claims(text: str, corpus_root: Path) -> list[CountClaim]:
     claims: list[CountClaim] = []
     for match in _COUNT_ASSERTION_RE.finditer(text):
-        asserted = int(match.group(1))
-        filename = match.group(2)
+        asserted = int(match.group(1).replace(",", ""))
+        filename = match.group(2) or match.group(3)
+        if filename.startswith("."):
+            filename = "*" + filename
         claim_site = match.group(0).strip()
         actual = sum(1 for _ in corpus_root.rglob(filename))
         claims.append(

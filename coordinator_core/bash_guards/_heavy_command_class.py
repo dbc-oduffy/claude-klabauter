@@ -68,6 +68,7 @@ _TEST_FILE_RE = re.compile(r"\.[cm]?[jt]sx?$", re.IGNORECASE)
 _TSC_BUILD_FLAGS = frozenset({"-b", "--build"})
 _NOEMIT = "noemit"
 _UNBOUNDED = "unbounded"
+_BARE_PYTEST = "bare_pytest"
 _VERIFY_CLASSES = frozenset({HeavyClass.TEST_TIER, HeavyClass.TYPECHECK})
 _MAX_WORKERS_CONFIG_RE = re.compile(r"\bmaxWorkers\s*:\s*(\d+)?")
 
@@ -405,13 +406,13 @@ def _pytest_args(argv: Sequence[str]) -> Optional[Sequence[str]]:
     return None
 
 
-def _pytest_target_count(args: Sequence[str]) -> int:
-    count = 0
+def _pytest_targets(args: Sequence[str]) -> List[str]:
+    targets: List[str] = []
     skip = False
     after_dashdash = False
     for tok in args:
         if after_dashdash:
-            count += 1
+            targets.append(tok)
         elif skip:
             skip = False
         elif tok == "--":
@@ -419,20 +420,23 @@ def _pytest_target_count(args: Sequence[str]) -> int:
         elif tok.startswith("-"):
             skip = tok in _PYTEST_VALUE_FLAGS
         else:
-            count += 1
-    return count
+            targets.append(tok)
+    return targets
 
 
 def _is_unscoped_plain_pytest(argv: Sequence[str]) -> bool:
-    """argv runs pytest as its command with no more than one worker and other than exactly one target.
+    """argv runs pytest as its command with no more than one worker and other than exactly one
+    file target (a lone directory is unbounded).
 
-    The collection is the footprint; `SCOPED_PYTEST_REMEDY` is the admitted launcher. TRAP: pytest is
-    read only at the runner position, so `echo pytest a b` stays light; the launcher's own argv is not
-    a pytest runner here, it admits itself."""
+    The collection is the footprint; `SCOPED_PYTEST_REMEDY` is the admitted launcher. TRAP: a lone
+    directory target collects everything under it, so only a `.py` file part (nodeid allowed) is
+    scoped; pytest is read only at the runner position, so `echo pytest a b` stays light, and the
+    launcher's own argv is not a pytest runner here, it admits itself."""
     args = _pytest_args(argv)
     if args is None or _xdist_workers(args):
         return False
-    return _pytest_target_count(args) != 1
+    targets = _pytest_targets(args)
+    return len(targets) != 1 or not targets[0].split("::", 1)[0].lower().endswith(".py")
 
 
 def _wrapped_command(argv: Sequence[str]) -> Optional[str]:
@@ -483,6 +487,7 @@ def _scan(
         if _is_xdist_pytest(argv) or _is_unscoped_plain_pytest(argv):
             found.append(HeavyClass.TEST_TIER)
             found.append(_UNBOUNDED)
+            found.append(_BARE_PYTEST)
         elif _suite._classify_tokens(argv, testpaths, cwd) is not None:
             found.append(HeavyClass.TEST_TIER)
             if _jest_unbounded(argv, worker_cap):
@@ -530,7 +535,7 @@ def classify(
     bounded = bool(heavies) and _UNBOUNDED not in found and all(f in _VERIFY_CLASSES for f in heavies)
     for cls in _PRECEDENCE:
         if cls in found:
-            return Classification(cls, False, background, noemit, bounded)
+            return Classification(cls, False, background, noemit, bounded, _BARE_PYTEST in found)
     return Classification(None, "scoped" in found, background)
 
 
@@ -570,12 +575,30 @@ def _load_box_memory_host() -> Any:
     raise ImportError("box_memory_host.py not found under coordinator/bin/lib or bin/lib")
 
 
+def _wait_for_slot(key: str, peak_gib: float, session_id: str, wait_kw: dict) -> Optional[dict]:
+    """The Group EM slot wait for a HOLD on a step over the slot threshold; None when the peak is
+    at or under it or no session resolves (the HOLD stands)."""
+    from coordinator_core.group_em import slot_wait
+
+    if peak_gib * 1024 <= slot_wait.SLOT_THRESHOLD_MB:
+        return None
+    sid = session_id
+    if not sid:
+        from coordinator_core.session import core
+
+        sid = core.resolve_session_id()
+    if not sid:
+        return None
+    return slot_wait.request_and_wait(sid, key, peak_gib * 1024, **wait_kw)
+
 
 def admit_before_spawn(
     key: str,
     default_peak_gib: float,
     host: Any = None,
     register_pid: Optional[int] = None,
+    wait_kw: Optional[dict] = None,
+    session_id: str = "",
 ) -> SpawnAdmission:
     """The one admit-before-spawn chokepoint for a heavy subprocess an engine op or ceremony launches.
 
@@ -583,7 +606,10 @@ def admit_before_spawn(
     `box_memory_host.admit` over measured memory net of peers' reserved headroom, the same
     arithmetic as `box-memory-snapshot --admit-peak`. An unreadable reading refuses (fail-closed).
     Call before the spawn; `register_spawn` after it reserves the child's headroom.
-    `register_pid` registers that pid on admit. `host` is a test seam for the host module."""
+    `register_pid` registers that pid on admit. `host` is a test seam for the host module.
+    `wait_kw` (None = refuse at once) is the `slot_wait.request_and_wait` deadline kwargs: on a
+    HOLD for a peak over the slot threshold with a resolvable `session_id`, the Group EM's slot
+    grant is awaited and admits; a missing grant keeps the refusal."""
     peak_gib = float(default_peak_gib)
     try:
         host = host or _load_box_memory_host()
@@ -610,7 +636,13 @@ def admit_before_spawn(
     if not verdict.admit:
         hold = "HOLD %s: need %sGiB avail, %sGiB free after reservations" % (
             key, gib(verdict.need_avail), gib(status.avail_phys))
-        return SpawnAdmission(False, hold, key, peak_gib)
+        granted = _wait_for_slot(key, peak_gib, session_id, wait_kw) if wait_kw is not None else None
+        if not (granted and granted.get("admitted")):
+            reason = hold if not granted else "%s; slot wait: %s" % (hold, granted.get("reason"))
+            return SpawnAdmission(False, reason, key, peak_gib)
+        if register_pid is not None:
+            register_spawn(key, peak_gib, register_pid, host)
+        return SpawnAdmission(True, "ADMIT %s: slot %s" % (key, granted.get("reason")), key, peak_gib)
     return SpawnAdmission(True, "ADMIT %s: peak %sGiB" % (key, round(peak_gib, 1)), key, peak_gib)
 
 

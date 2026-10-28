@@ -1,6 +1,6 @@
 """Targeted-test verdict reading for the landing gate: ``Finding``, the carried or recorded verdict,
-the targeted set, re-verify red findings and the retest remedy line. Lowest module of the
-landing-integrity split; it imports no landing sibling."""
+the targeted set, re-verify red findings, the retest remedy line and the in-run retest step. Lowest
+module of the landing-integrity split; it imports no sibling at module level."""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
-
-from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
 
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
 REVIEW_REVERIFY_FAILED = "review-reverify-failed"
@@ -24,6 +22,8 @@ ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
 ZERO_FAIL_CHECK = "zero-fail-unattributed"
 
 RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
+NO_NODE_RECORDED = "no node recorded"
+RETEST_ATTEMPTS_PARAM = "retest_attempts"
 
 
 @dataclass(frozen=True)
@@ -33,6 +33,17 @@ class Finding:
     path: str
     reason: str
     detail: str
+
+
+def tests_failed_finding(path: str, detail: str) -> Finding:
+    """The ``targeted-tests-failed`` finding. The remedy is ``retest_step`` (the run retests in-run); this
+    finding is the refusal only once that remedy is spent, so it is built as the halt of ``remedy_or_halt``."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
+
+    def attempt(_n: int) -> Finding:
+        raise RuntimeError("the in-run retest leg runs the remedy")
+
+    return remedy_or_halt(TARGETED_TESTS_FAILED, attempt, lambda _f: Finding(path, TARGETED_TESTS_FAILED, detail), attempts=1)
 
 
 def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
@@ -139,6 +150,82 @@ def retest_remedy(params: Optional[Mapping], files: Sequence[str] = ()) -> str:
     return line + "".join(f" --tests {f}" for f in files)
 
 
+_INVARIANT_NODE = re.compile(r"repo-wide invariant (\S+)")
+
+
+def remedy_nodes(findings: Sequence[Finding], params: Optional[Mapping] = None) -> list[str]:
+    """The failing test nodes the in-run retest runs, only those: the nodes TARGETED_TESTS_FAILED
+    findings name (a repo-wide invariant node, a ``file::test`` id in the detail), else the finding's
+    test file, plus the task-output digest's ``named_failures``. Never a tier."""
+    out: list[str] = []
+    for f in findings:
+        if f.reason != TARGETED_TESTS_FAILED:
+            continue
+        inv = _INVARIANT_NODE.search(f.detail)
+        if inv:
+            out.append(inv.group(1).rstrip(";,"))
+            continue
+        parts = [t.strip().removeprefix("failing: ") for t in f.detail.split(";") if "::" in t]
+        ids = [i for i in parts if _FILE_LIKE.match(_node_file(i))]
+        out += ids or ([f.path] if f.path else [])
+    if isinstance(params, Mapping) and not out:
+        out += named_failures(params.get("task_output_path"))
+    return list(dict.fromkeys(out))
+
+
+def retests_done(params: Optional[Mapping]) -> int:
+    """In-run retests already launched for this landing (``params.retest_attempts``), 0 when absent or malformed."""
+    raw = params.get(RETEST_ATTEMPTS_PARAM) if isinstance(params, Mapping) else None
+    return raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else 0
+
+
+def retests_spent(params: Optional[Mapping]) -> bool:
+    """True once the in-run retest budget is used: a still-owed invariant then failed its retest."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+
+    return retests_done(params) >= MAX_IN_RUN_REMEDY_ATTEMPTS
+
+
+def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optional[dict]:
+    """The mechanical remedy step for a ``targeted-tests-failed`` refusal, or None when no such
+    finding exists. ``{kind, remedy, nodes, command, attempt, max_attempts, exhausted}``: the run
+    launches the detached retest (``command``) on ``nodes``, polls it, and re-invokes the landing
+    with ``retest_attempts`` raised by one; ``exhausted`` once ``params.retest_attempts`` reached
+    ``MAX_IN_RUN_REMEDY_ATTEMPTS``, when the refusal is the EM's. The landing never spawns pytest."""
+    if not any(f.reason == TARGETED_TESTS_FAILED for f in findings):
+        return None
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+
+    done = retests_done(params)
+    nodes = remedy_nodes(findings, params)
+    return {
+        "kind": TARGETED_TESTS_FAILED, "remedy": "landing-runs-targeted-retest",
+        "nodes": nodes, "command": retest_remedy(params, list(dict.fromkeys(_node_file(n) for n in nodes))),
+        "attempt": done + 1, "max_attempts": MAX_IN_RUN_REMEDY_ATTEMPTS,
+        "exhausted": done >= MAX_IN_RUN_REMEDY_ATTEMPTS,
+    }
+
+
+TEST_EVIDENCE_REASONS = (
+    TARGETED_TESTS_FAILED, REVIEW_REVERIFY_FAILED, REVIEW_REVERIFY_INDETERMINATE, ZERO_FAIL_UNATTRIBUTED,
+)
+
+
+def split_test_advisory(findings: Sequence[Finding]) -> tuple[list[Finding], list[Finding]]:
+    """``(refusing, advisory)``: a test-evidence finding leaves the refusal list and is recorded as an
+    advisory, unless ``landing_refusal_kinds.is_refusal`` names its reason. A run's own work and a
+    peer's dirt are never test evidence against the run."""
+    from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import is_refusal
+
+    kept = [f for f in findings if f.reason not in TEST_EVIDENCE_REASONS or is_refusal(f.reason)]
+    return kept, [f for f in findings if f not in kept]
+
+
+def advisory_entries(advisory: Sequence[Finding]) -> list[dict]:
+    """The reply shape of advisory test findings, each detail carrying the retest remedy it already names."""
+    return [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in advisory]
+
+
 def _indeterminate_finding(error: object, remedy: str) -> Finding:
     cause = error if isinstance(error, str) and error.strip() else "no error recorded"
     return Finding(
@@ -147,8 +234,16 @@ def _indeterminate_finding(error: object, remedy: str) -> Finding:
     )
 
 
+def _node_note(nodes: Sequence[str]) -> str:
+    """``"; failing: a; b"`` (first three) for the nodes a refusal names, else the literal
+    ``NO_NODE_RECORDED``: an unattributed refusal always says which tests, or that none were recorded."""
+    named = [str(n) for n in dict.fromkeys(nodes) if n]
+    return f"; failing: {'; '.join(named[:3])}" if named else f"; {NO_NODE_RECORDED}"
+
+
 def failed_targeted_tests(
-    verdict: Optional[Mapping], remedy: Optional[str] = None
+    verdict: Optional[Mapping], remedy: Optional[str] = None, measured: bool = True,
+    nodes: Sequence[str] = (),
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a carried test verdict; ``check`` is ``"no-verdict"``, ``"pass"``,
     ``"not-run"``, ``"pre-existing-only"`` or ``"failed"``.
@@ -162,16 +257,24 @@ def failed_targeted_tests(
 
     A fail/error verdict with ``baseline.caused`` yields one Finding(TARGETED_TESTS_FAILED) per
     distinct caused test file (repo-relative POSIX), the detail naming up to three node ids. A
-    fail/error verdict whose baseline is present with nothing caused is ``"pre-existing-only"``.
-    A ``fail`` verdict with ``tests_failed`` the integer 0 and no baseline names no failure: with
-    ``status_before == "fail"`` it is ``([], "pre-existing-only")``; otherwise one
-    Finding(ZERO_FAIL_UNATTRIBUTED) with check ``ZERO_FAIL_CHECK``, never TARGETED_TESTS_FAILED.
+    fail/error verdict whose baseline has nothing caused is ``"pre-existing-only"`` only when every
+    failing id (``pre_existing``, ``foreign``, ``unverified``) is in ``evidenced_clear_ids``; otherwise
+    each unevidenced id is a TARGETED_TESTS_FAILED finding (counted caused), and a baseline naming no
+    failing id at all is one unattributed finding.
+    A ``fail`` verdict with ``tests_failed`` the integer 0 and no baseline names no failure and no
+    evidence: one Finding(ZERO_FAIL_UNATTRIBUTED) with check ``ZERO_FAIL_CHECK``, never TARGETED_TESTS_FAILED.
     Trap: any other fail/error verdict with no baseline yields one Finding with ``path=""`` (unattributed,
     fail-closed), so a pre-existing failure with no baseline export refuses by design; the remedy
     is ``remedy`` (default ``retest_remedy(None)``), or a ``failed_tests`` node-id list that
-    ``landing_test_gate`` attributes against the run base."""
+    ``landing_test_gate`` attributes against the run base.
+    Every ``path=""`` finding's detail names ``nodes`` plus the verdict's ``failed_tests``, else
+    ``NO_NODE_RECORDED``.
+    ``measured`` is False for a verdict the caller carried in params: its ``baseline.evidence`` is
+    self-written, not read from a retest record the engine wrote, so no id clears on it."""
     if not isinstance(verdict, Mapping):
         return [], "no-verdict"
+    carried = verdict.get("failed_tests")
+    note = _node_note([*nodes, *(carried if isinstance(carried, list) else [])])
     status = verdict.get("status")
     if status in ("pass", "pass-with-skips"):
         return [], "pass"
@@ -186,38 +289,60 @@ def failed_targeted_tests(
     if not isinstance(baseline, Mapping):
         count = verdict.get("tests_failed")
         if status == "fail" and isinstance(count, int) and not isinstance(count, bool) and count == 0:
-            if verdict.get("status_before") == "fail":
-                return [], "pre-existing-only"
             return [Finding(
                 "", ZERO_FAIL_UNATTRIBUTED,
                 f"the verdict reads fail with 0 failing tests and no failing node id to attribute "
-                f"(status_before not fail); re-run: {remedy or retest_remedy(None)}",
+                f"(no baseline evidence){note}; re-run: {remedy or retest_remedy(None)}",
             )], ZERO_FAIL_CHECK
         shown = f"{count} " if isinstance(count, int) else ""
         if status == "error" and count == 0:
             cause = next((str(verdict[k]) for k in ("reason", "summary", "error") if verdict.get(k)), None)
             ran = verdict.get("tests_run")
-            return [Finding(
-                "", TARGETED_TESTS_FAILED,
+            return [tests_failed_finding("",
                 f"the test run errored with 0 failing tests"
                 f"{f' of {ran} run' if isinstance(ran, int) and not isinstance(ran, bool) else ''} and named no "
                 f"erroring node (collection or runner error); "
-                f"{f'recorded cause: {cause}; ' if cause else ''}re-run: {remedy or retest_remedy(None)}",
+                f"{f'recorded cause: {cause}' if cause else ''}{note}; re-run: {remedy or retest_remedy(None)}",
             )], "failed"
-        return [Finding(
-            "", TARGETED_TESTS_FAILED,
-            f"{shown}tests {status}, no baseline to attribute them; re-run: {remedy or retest_remedy(None)}",
+        return [tests_failed_finding("",
+            f"{shown}tests {status}, no baseline to attribute them{note}; re-run: {remedy or retest_remedy(None)}",
         )], "failed"
+    from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
+
     caused = [str(n) for n in (baseline.get("caused") or [])]
     if not caused:
-        return [], "pre-existing-only"
+        evidenced = evidenced_clear_ids(baseline, measured=True) if measured else set()
+        failing = [
+            str(i.get("id") if isinstance(i, Mapping) else i)
+            for key in ("pre_existing", "foreign", "unverified") for i in (baseline.get(key) or [])
+        ]
+        unevidenced = [n for n in dict.fromkeys(failing) if n not in evidenced]
+        if failing and not unevidenced:
+            return [], "pre-existing-only"
+        if not failing:
+            return [tests_failed_finding("",
+                f"tests {status} with no failing node id and no baseline evidence of a red pre-change{note}; "
+                f"re-run: {remedy or retest_remedy(None)}",
+            )], "failed"
+        return [
+            tests_failed_finding(path,
+                    "; ".join(nodes[:3]) + "; no baseline evidence of red pre-change, counted caused")
+            for path, nodes in _group_by_file(unevidenced).items()
+        ], "failed"
     by_file: dict[str, list[str]] = {}
     for node in caused:
         by_file.setdefault(_node_file(node), []).append(node)
     return [
-        Finding(path, TARGETED_TESTS_FAILED, "; ".join(nodes[:3]))
+        tests_failed_finding(path, "; ".join(nodes[:3]))
         for path, nodes in by_file.items()
     ], "failed"
+
+
+def _group_by_file(nodes: Sequence[str]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for node in nodes:
+        out.setdefault(_node_file(node), []).append(node)
+    return out
 
 
 def _module_files(module: str) -> list[str]:
@@ -309,6 +434,8 @@ def reverify_red_findings(
         return []
     landed = {str(p).replace("\\", "/") for p in landing_paths}
     failing = [str(n) for n in (record.get("failing") or []) if n]
+    from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
+
     pre = {str(n) for n in (record.get("pre_existing") or [])}
     pre |= {str(n) for n in (record.get(FOREIGN_FIELD) or [])}
     nodes: list[str] = [n for n in failing if n not in pre]

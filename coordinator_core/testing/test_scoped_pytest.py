@@ -6,6 +6,7 @@ import contextlib
 import os
 import subprocess
 import sys
+import threading
 import time
 import types
 import uuid
@@ -15,6 +16,7 @@ import psutil
 import pytest
 
 from coordinator_core.testing import scoped_pytest as sp
+from coordinator_core.testing import watch_parent
 
 _REPO = Path(__file__).resolve().parents[2]
 _GIB = 1 << 30
@@ -97,12 +99,41 @@ def test_admitted_run_registers_and_returns_pytest_exit_code(tmp_path, monkeypat
     assert sp.main(["--allow", "test_bad.py", "--", "-q", "test_bad.py"], host=host) == 1
 
 
-def test_ancestor_chain_records_pid_and_create_time():
+def test_ancestor_chain_records_watch_parent_clock():
     chain = sp.ancestor_chain()
     assert chain and chain[0][0] == os.getppid()
-    assert sp.ancestors_alive(chain)
-    pid, created = chain[0]
-    assert not sp.ancestors_alive([(pid, created + 1000.0)])
+    for pid, created in chain:
+        assert created == watch_parent.process_create_time(pid)
+
+
+def test_watch_parent_fires_on_mismatched_create_time_and_not_on_matching():
+    pid, created = sp.ancestor_chain()[0]
+    fired = threading.Event()
+    watch_parent.watch_parent(pid, created + 1000.0, fired.set, 0.05)
+    assert fired.wait(5)
+    healthy = threading.Event()
+    watch_parent.watch_parent(pid, created, healthy.set, 0.05)
+    assert not healthy.wait(0.5)
+
+
+@pytest.mark.spawns_process
+def test_pid_reuse_of_an_ancestor_kills_the_pytest_tree(tmp_path, monkeypatch):
+    (tmp_path / "test_sleep.py").write_text("import time\n\ndef test_sleep():\n    time.sleep(120)\n")
+    monkeypatch.chdir(tmp_path)
+    pid, created = sp.ancestor_chain()[0]
+    monkeypatch.setattr(sp, "ancestor_chain", lambda: [(pid, created + 1000.0)])
+    monkeypatch.setattr(sp, "WATCH_INTERVAL_S", 0.1)
+    exits = []
+    monkeypatch.setattr(sp, "_exit", exits.append)
+    host, _ = _host(avail_gib=99)
+    start = time.monotonic()
+    rc = sp.main(["--allow", "test_sleep.py", "--", "-q", "test_sleep.py"], host=host)
+    assert rc == sp.EXIT_PARENT_DIED
+    assert time.monotonic() - start < 60
+    deadline = time.monotonic() + 5
+    while not exits and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert exits == [sp.EXIT_PARENT_DIED]
 
 
 _LAUNCHER_DRIVER = """

@@ -160,10 +160,20 @@ def test_unfired_rides_the_next_action_and_both_returns(repo):
     assert len(script.encode("utf-8")) < ask_compose._emit._WORKFLOW_SCRIPT_BYTE_CAP
 
 
-def test_unfired_is_in_the_run_embedded_roadmap_return(repo):
-    from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose as raw
+def test_over_cap_refusal_names_largest_component_and_bytes(repo, monkeypatch):
+    _put(repo)
+    big = "  // " + "x" * 3000
+    monkeypatch.setattr(ask_compose._emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 100)
+    with pytest.raises(ask_compose.AskComposeRefused) as ei:
+        _compose(repo, roadmap_blitz_text=_RB + "\n" + big)
+    msg = str(ei.value)
+    assert "100-byte cap" in msg and "largest inlined component" in msg
+    assert "(" in msg.split("component ", 1)[1] and "bytes)" in msg
 
-    script = raw(roadmap_blitz_text=_RB, in_run_commit=True)
+
+def test_unfired_is_in_the_run_embedded_roadmap_return(repo):
+    _put(repo, route="pm-decision", mode="ceo")
+    script = _compose(repo, in_run_commit=True)
     assert "const _unfired = [];" in script
     assert "ready: _ready, fanout: _commit?.fanout ?? null, not_fired: _commit?.fanout?.not_fired ?? _unfired }" in script
 

@@ -156,18 +156,20 @@ def test_a_dead_owner_halted_run_diverts_to_a_fresh_path_named_in_the_result(rep
     assert op._recorded_run_base(repo, reply["run_id"]) == HALTED_BASE != HEAD
 
 
-def test_a_live_peer_halted_run_still_refuses(repo, monkeypatch):
+def test_a_live_peer_halted_run_refire_is_admitted_and_rebinds_the_run(repo, monkeypatch):
     _halt(repo)
-    _emit_by(repo, "live-peer", True, monkeypatch)
-    with pytest.raises(op.ForeignEmissionError):
-        _fire(repo)
+    script, _receipt = _emit_by(repo, "live-peer", True, monkeypatch)
+    reply = _fire(repo)
+    assert reply["run_id"] == OLDER
+    assert "output_path_redirect" not in reply
+    assert script.read_text(encoding="utf-8") != "// peer emission\n"
+    assert _marker(repo)["status"] == "resumed"
 
 
-def test_a_live_peer_refusal_names_only_remedies_the_ask_route_accepts(repo, monkeypatch):
-    _halt(repo)
-    _emit_by(repo, "live-peer", True, monkeypatch)
+def test_a_live_peer_non_halted_run_path_still_refuses(repo, monkeypatch):
+    script, _receipt = _emit_by(repo, "live-peer", True, monkeypatch, run_id="warp-2026-10-16-refire-c3-20260102T000000-bbbbbb")
     with pytest.raises(op.ForeignEmissionError) as excinfo:
-        _fire(repo)
+        op._refuse_foreign_emission(script, "// ours\n", "11111111-2222-3333-4444-555555555555", repo, remedy=op._FOREIGN_REMEDY_ASK)
     msg = str(excinfo.value)
     assert "force" not in msg and "output_path" not in msg
     assert "re-fire" in msg

@@ -35,6 +35,8 @@ def test_path_missing_from_baseline_is_kept(tmp_path):
 def test_record_kept_reads_manifest_baseline(tmp_path):
     owner, withheld, baseline = _setup(tmp_path)
     (tmp_path / "b").write_bytes(b"b1")
+    (tmp_path / ".git" / "objects").mkdir(parents=True)
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     rec = tmp_path / "rec"
     rec.mkdir()
     (rec / "manifest.json").write_text(json.dumps({"write_baseline": baseline}), encoding="utf-8")

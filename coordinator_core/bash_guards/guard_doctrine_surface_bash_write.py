@@ -174,7 +174,7 @@ leg. Filed with its own measurement and a perf constraint at
 identifier-prefilter.yaml``; pinned by a test that asserts the current
 wrong behaviour so the fix cannot land silently.
 
-DEFAULT-ON. The doctrine-edit approval gate is on every profile: ``check``
+DEFAULT-ON. The doctrine-edit gate is on every profile: ``check``
 allows first, before any parsing, only after ``machine-local set
 coordinator.feature.doctrine_edit_gate off`` has been run.
 
@@ -196,6 +196,7 @@ doctrine-cut-and-refill-gate.md § C7a (coordinator-content-repo)
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shlex
 from pathlib import Path
@@ -455,7 +456,7 @@ def _segment_writes_outside_store(segment: str) -> bool:
     if idx >= len(words):
         return True
     prog = _command_token_basename(words[idx]).lower()
-    if prog == "coordinator-invoke":
+    if re.sub(r"\.exe$", "", prog) == "coordinator-invoke":
         return True
     if (
         re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", prog)
@@ -651,6 +652,63 @@ def _sizing_write_denied(cmd: str) -> bool:
     if remainder is None:
         return True
     return is_denied_bash_write(remainder, _SIZING_RECORD_IDENTIFIERS)
+
+
+_OPERATION_HEADS = ("MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD")
+_PLAIN_REV_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./^@-]*")
+
+
+def _git_dir_for(cwd: str) -> Optional[Path]:
+    """The git dir governing ``cwd``, read off the filesystem (no spawn); a
+    ``.git`` file (worktree / submodule) is followed to its ``gitdir:`` target."""
+    here = Path(cwd or os.getcwd())
+    for base in (here, *here.parents):
+        dot_git = base / ".git"
+        if dot_git.is_dir():
+            return dot_git
+        if dot_git.is_file():
+            try:
+                text = dot_git.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None
+            if text.startswith("gitdir:"):
+                target = Path(text[len("gitdir:"):].strip())
+                return target if target.is_absolute() else base / target
+            return None
+    return None
+
+
+def _operation_in_progress(cwd: str) -> bool:
+    git_dir = _git_dir_for(cwd)
+    return git_dir is not None and any((git_dir / head).exists() for head in _OPERATION_HEADS)
+
+
+def _is_committed_blob_checkout(cmd: str) -> bool:
+    """True only for one plain ``git checkout [--ours|--theirs|<rev>] -- <path>...``
+    command whose every path is a literal file under the sizing home: it writes
+    bytes that already passed the sizing gate at their own commit. Any other
+    flag, glob, substitution, chaining or redirect is not this shape."""
+    if any(ch in _CP_MV_UNJUDGED_CHARS for ch in cmd):
+        return False
+    try:
+        words = shlex.split(cmd)
+    except ValueError:
+        return False
+    if len(words) < 5 or words[0] != "git" or words[1] != "checkout" or "--" not in words:
+        return False
+    sep = words.index("--")
+    selector, paths = words[2:sep], words[sep + 1:]
+    if len(selector) != 1 or not paths:
+        return False
+    rev = selector[0]
+    if rev not in ("--ours", "--theirs") and not _PLAIN_REV_RE.fullmatch(rev):
+        return False
+    home = _SIZING_RECORD_IDENTIFIERS[0]
+    for path in paths:
+        norm = posixpath.normpath(path)
+        if not norm.startswith(home):
+            return False
+    return True
 
 
 def _governed_identifiers_lower(surfaces: List[str]) -> Tuple[str, ...]:
@@ -1611,7 +1669,7 @@ _SIZING_WRITER_BASENAMES = frozenset(
 )
 
 
-_SCRIPT_SUFFIX_RE = re.compile(r"\.(?:py|cmd|ps1)$", re.IGNORECASE)
+_SCRIPT_SUFFIX_RE = re.compile(r"\.(?:py|cmd|ps1|exe)$", re.IGNORECASE)
 
 #: A leading PowerShell call / dot-source operator is not the program.
 _POWERSHELL_CALL_OPERATORS = frozenset({"&", "."})
@@ -2263,7 +2321,13 @@ def _neutralize_home_path_operands(
 
 
 _PY_C_SUBSTITUTION_RE = re.compile(r"\$\(\s*python3?(?:\.\d+)?\s+-c\s+'(?P<body>[^'`]*)'\s*\)")
-_PY_C_SAFE_IMPORT_RE = re.compile(r"\bimport\s+([\w\s,]+)")
+#: A bare ``python -c '<body>'`` / ``python -c "<body>"`` command (not a
+#: substitution); a double-quoted body with ``$``/backslash is shell-expanded
+#: and stays unmatched.
+_PY_C_DIRECT_RE = re.compile(
+    r"(?<![\w$./-])python3?(?:\.\d+)?\s+-c\s+(?:'(?P<sq>[^'`]*)'|\"(?P<dq>[^\"`$\\]*)\")"
+)
+_PY_C_SAFE_IMPORT_RE =re.compile(r"\bimport\s+([\w\s,]+)")
 _PY_C_SAFE_MODULES = frozenset({"json", "sys", "re", "datetime", "time"})
 _PY_C_GUARD_IMPORT_RE = re.compile(
     r"\bfrom\s+coordinator_core\.bash_guards\.\w+\s+import\s+\w+(?:\s+as\s+\w+)?"
@@ -2302,7 +2366,14 @@ def _neutralize_mention_only_python_substitutions(
             return "x"
         return match.group(0)
 
-    return _PY_C_SUBSTITUTION_RE.sub(_swap, segment)
+    def _swap_direct(match: "re.Match[str]") -> str:
+        body = match.group("sq") if match.group("sq") is not None else match.group("dq")
+        if _mentions_governed_identifier(body, identifiers_lower) and _is_pure_python_c_body(body):
+            return "x"
+        return match.group(0)
+
+    segment = _PY_C_SUBSTITUTION_RE.sub(_swap, segment)
+    return _PY_C_DIRECT_RE.sub(_swap_direct, segment)
 
 
 def is_denied_bash_write(cmd: str, identifiers_lower: Tuple[str, ...]) -> bool:
@@ -2560,8 +2631,8 @@ def _compose_deny_message(
         prose = f"BLOCKED: writes a governed doctrine surface. Edit {edit_target} with the Edit tool."
     else:
         prose = (
-            "BLOCKED: writes a governed doctrine surface. No Edit route is open "
-            "to you for the file; the PM's doctrine-edit approval sentinel opens one."
+            "BLOCKED: writes a governed doctrine surface. Name one non-derived "
+            "target file and use the Edit tool on it."
         )
     return f"{prose}\n\nSee {citation}."
 
@@ -2617,7 +2688,7 @@ def _check_advisory(
     cmd: str, governed_surfaces: Optional[List[str]], cwd: str
 ) -> Optional[Dict[str, Any]]:
     """Warn-and-pass verdict for a Bash-path write to a CLAUDE.md-class
-    surface; the approval-gate deny in ``check`` supersedes it when armed."""
+    surface; the gate deny in ``check`` supersedes it when armed."""
     identifiers = _advisory_identifiers(governed_surfaces)
     if not is_denied_bash_write(cmd, identifiers):
         return None
@@ -2686,8 +2757,15 @@ def check(
         return None
     cmd = cmd.replace("\r", "")
 
-    if _sizing_write_denied(cmd):
-        return _record("deny", _SIZING_RECORD_DENY)
+    if _sizing_write_denied(cmd) and not (
+        _is_committed_blob_checkout(cmd)
+        and _operation_in_progress(str(payload.get("cwd") or ""))
+    ):
+        return _levelled_deny(
+            _SIZING_RECORD_DENY,
+            doctrine_surface_risk("this command writes the sizing store."),
+            offer_edit=False,
+        )
 
     if not feature_enabled("doctrine_edit_gate"):
         return _check_advisory(cmd, governed_surfaces, str(payload.get("cwd") or ""))

@@ -29,7 +29,7 @@ def _baseline_for(wiki_root: Path, repo_root: Path) -> dict:
 def test_moved_citation_kept_out_of_rot_ratchet_and_reported_as_its_own_count(tmp_path: Path):
     wiki_root = tmp_path / "coordinator" / "docs" / "wiki"
     _write(wiki_root / "new-location" / "renamed.md", "The page, now living here.\n")
-    _write(wiki_root / "citer.md", "See `docs/wiki/old-location/renamed.md` for detail.\n")
+    _write(wiki_root / "citer.md", "See `" + "docs" + "/wiki/old-location/renamed.md` for detail.\n")
     baseline = _baseline_for(wiki_root, tmp_path)
     baseline_path = tmp_path / "baseline.json"
     baseline_path.write_text(json.dumps(baseline), encoding="utf-8")
@@ -86,7 +86,7 @@ def _tomb_wiki(tmp_path: Path, *, citer: bool = True) -> Path:
     wiki = tmp_path / "coordinator" / "docs" / "wiki"
     _write(
         wiki / "old-name.md",
-        "---\nstatus: tombstone\n---\n# `old-name.md` moved to `docs" "/wiki/new/succ.md`\n",
+        "---\nstatus: tombstone\n---\n# `old-name.md` moved to `" + "docs" + "/wiki/new/succ.md`\n",
     )
     _write(wiki / "new" / "succ.md", "# successor\n")
     if citer:

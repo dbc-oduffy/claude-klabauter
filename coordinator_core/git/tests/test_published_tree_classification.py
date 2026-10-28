@@ -80,6 +80,14 @@ def test_unclassified_allows_name_present_in_field7():
     assert result == []
 
 
+def test_unclassified_allows_declared_name_and_still_refuses_undeclared():
+    touched = {"claude-klabauter": frozenset({"newmod.py", "other.py"})}
+    declared = {"claude-klabauter": frozenset({"newmod.py"})}
+    reads = {ptc.PORTABLE_PATH: _PORTABLE_TWO_ROWS, ptc.DECLARATIONS_PATH: _DECLARATIONS_ONE_DENY}
+    result = ptc.unclassified(touched, reads.get, declared)
+    assert result == [("claude-klabauter", "other.py")]
+
+
 def test_unclassified_allows_name_present_in_deny():
     touched = {"claude-klabauter": frozenset({"quux"})}
     reads = {ptc.PORTABLE_PATH: _PORTABLE_TWO_ROWS, ptc.DECLARATIONS_PATH: _DECLARATIONS_ONE_DENY}

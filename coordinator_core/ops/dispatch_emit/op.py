@@ -596,10 +596,7 @@ def _refuse_foreign_emission(
     if session_id and recorded == session_id:
         return
     if run_owned:
-        from coordinator_core.session.liveness import session_live
-
-        if not (isinstance(recorded, str) and recorded and session_live(recorded)):
-            return
+        return
     mtime = datetime.fromtimestamp(output_path.stat().st_mtime).isoformat(timespec="minutes")
     shown = output_path.as_posix()
     if repo_root is not None:
@@ -1554,11 +1551,17 @@ def _research_route_setup(
     if any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments):
         slugs = [rc.COMBINED_SCOUT_ITEM] * len(questions) if mode == "combine" else research_emit.scout_slugs(questions)
         scout_targets = [{"slug": s, "targets": q["targets"]} for s, q in zip(slugs, questions)]
+    depth = str(research.get("depth") or "standard")
+    if depth != "standard" and any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments):
+        from coordinator_core.ops.dispatch_emit.pipeline_compose import scouts_at_depth
+
+        segments = scouts_at_depth(segments, depth)
     research_ctx = {
         "root": root,
         "run_id": run_id,
         "brief": brief_rel,
         "segments": segments,
+        "scouts_per_question": depth != "standard" and any(m.pipeline == rc.SCOUTS_PIPELINE for m, _, _ in segments),
         "shape": {
             "tier": shape["tier"],
             "reason": shape["reason"],
@@ -1735,8 +1738,9 @@ def _emit_script_file(
     """Check, write and receipt one emitted script; returns its path, sha256, receipt and findings.
 
     `ask_run` names a remedy the engine-ask caller can use (its args carry no `force`); `run_owned`
-    marks a path the halted run being refired already owns, so a dead emitter's stale bytes are
-    overwritten and only a live peer's are refused."""
+    marks a path the halted run being refired already owns: its bytes are overwritten whichever
+    session emitted them, since a halted run has no live emission to protect. A path no halted
+    run owns still refuses a differing emission."""
     check_agent_types_resolve(
         script,
         claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
@@ -2104,6 +2108,8 @@ def _dispatch_emit_body(
         chosen_source = params.get("ask_source")
         ask_source = chosen_source if chosen_source else (ASK_SOURCE_PM if sizing_path else ASK_SOURCE_RELAYED)
         pm_verdict: Optional[str] = None
+        pm_advisory: Optional[str] = None
+        pm_turn_recorded: Optional[int] = None
         if ask_source not in ASK_SOURCES:
             raise ValueError(f"dispatch.emit ask_source takes one of {ASK_SOURCES}, got {ask_source!r}")
         if ask_source == ASK_SOURCE_RELAYED and sizing_path:
@@ -2166,17 +2172,21 @@ def _dispatch_emit_body(
                 )
                 pm_verdict = pm_check["verdict"]
                 if pm_verdict == "unmatched":
-                    msg = "dispatch.emit ask_source 'pm': the ask quotes no recorded PM turn of this session."
+                    pm_verdict = "unmatched-admitted"
+                    pm_advisory = (
+                        "ask_source 'pm': the ask quotes no recorded PM turn yet (a mid-turn message "
+                        "is recorded at turn end); admitted and recorded, unreconciled."
+                    )
                     nearest = pm_check.get("nearest")
                     if nearest:
-                        msg += f" Nearest recorded turn {nearest['turn']}: {nearest['text'][:400]!r}."
+                        pm_advisory += f" Nearest recorded turn {nearest['turn']}: {nearest['text'][:400]!r}."
                         if pm_check.get("diff"):
-                            msg += f" Diff: {pm_check['diff']}."
-                    msg += (
-                        " Put one verbatim turn in `ask` and the others in `context`,"
-                        " or mark the ask relayed."
+                            pm_advisory += f" Diff: {pm_check['diff']}."
+                    recorded = _pm_turns.append_turn(
+                        ask, session_id=_receipt_session_id(params) or None,
+                        cwd=params.get("session_root") or str(ask_root),
                     )
-                    raise ValueError(msg)
+                    pm_turn_recorded = recorded.get("turn") if recorded.get("ok") else None
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         reserved_parent = None
@@ -2240,6 +2250,7 @@ def _dispatch_emit_body(
             "inherited_base": inherited_base, "resumes_ask": resumes_ask,
             "resumed_from": resumed_from,
             "ask_source": ask_source, "pm_verification": pm_verdict,
+            "pm_advisory": pm_advisory, "pm_turn_recorded": pm_turn_recorded,
             "relayed_slice_text": relayed_slice_text,
             "route_preference": route_pref,
             "required_reviewers": list(params.get("required_reviewers") or ()),
@@ -2561,7 +2572,7 @@ def _dispatch_emit_body(
             agent_type_host=agent_type_host,
             next_action=research_ctx["next_action"],
             legs=research_ctx["legs"],
-            **fanout_kwargs,
+            **({**fanout_kwargs, "fanout_group": "split"} if research_ctx.get("scouts_per_question") else fanout_kwargs),
         )
         script = chain_parts[0].script
         receipt_extras = {
@@ -2868,6 +2879,9 @@ def _dispatch_emit_body(
         reply["ask_source"] = ask_ctx["ask_source"]
         if ask_ctx.get("pm_verification"):
             reply["pm_verification"] = ask_ctx["pm_verification"]
+        if ask_ctx.get("pm_advisory"):
+            reply["pm_advisory"] = ask_ctx["pm_advisory"]
+            reply["pm_turn_recorded"] = ask_ctx.get("pm_turn_recorded")
         if ask_ctx.get("output_redirect"):
             from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 

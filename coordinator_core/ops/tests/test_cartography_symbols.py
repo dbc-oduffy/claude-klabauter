@@ -51,6 +51,16 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
+@pytest.fixture(autouse=True)
+def _preflight_passes_by_default(request, monkeypatch):
+    """Tests faking build_foreign_symbols must not be pre-empted by the ambient install state."""
+    if "preflight" in request.node.name:
+        return
+    import coordinator_core.ops.cartography_symbols as mod
+
+    monkeypatch.setattr(mod, "_symbol_extract_preflight", lambda: None)
+
+
 @pytest.fixture()
 def target_root(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
@@ -802,3 +812,37 @@ def test_ac8_emit_without_run_id_fails_loud_at_the_handler_boundary(target_root)
     assert "error" in error_response
     assert error_response["error"]["code"] != 0
     assert "run_id" in error_response["error"]["message"]
+
+
+def test_preflight_absent_symbol_extract_degrades_before_extraction_with_install_line(
+    target_root, monkeypatch
+):
+    """A missing symbol_extract degrades in-band at the start, naming the install line."""
+    import coordinator_core.ops.cartography_symbols as mod
+    import coordinator_core.ops.foreign_symbols as fs
+
+    def no_symbol_extract():
+        raise ImportError("No module named 'symbol_extract'")
+
+    def must_not_run(root, files):
+        raise AssertionError("build_foreign_symbols ran despite failed preflight")
+
+    monkeypatch.setattr(fs, "_import_symbol_extract", no_symbol_extract)
+    monkeypatch.setattr(mod, "build_foreign_symbols", must_not_run)
+
+    result = _cartography_symbols({"target_root": str(target_root), "files": ["app.ts"]})
+    assert result["files"][0].get("unavailable") is True
+    note = result["coverage_note"]
+    assert "packaging/symbol-extract" in note
+    assert "python3 -m pip install '.[tree-sitter]'" in note
+    assert "import symbol_extract" in note
+    assert "[symbols]" not in note
+
+
+def test_preflight_present_symbol_extract_proceeds_to_extraction(target_root, monkeypatch):
+    """An importable symbol_extract makes the preflight a no-op (returns None)."""
+    import coordinator_core.ops.cartography_symbols as mod
+    import coordinator_core.ops.foreign_symbols as fs
+
+    monkeypatch.setattr(fs, "_import_symbol_extract", lambda: object())
+    assert mod._symbol_extract_preflight() is None

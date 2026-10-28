@@ -27,6 +27,7 @@ class EmBrief:
     text: str
     source: str
     context: tuple[str, ...]
+    advisories: tuple[str, ...] = ()
 
 
 def _rel(repo_root: Path, raw: str, flag: str) -> tuple[Path, str]:
@@ -101,16 +102,30 @@ def load_em_brief(
     else:
         text, source = brief or "", "inline"
 
+    advisories: list[str] = []
+    spill_rel: str | None = None
     if len(text.encode("utf-8")) > EM_BRIEF_BYTE_CAP:
-        raise EmBriefRefused(f"brief text exceeds {EM_BRIEF_BYTE_CAP} bytes")
+        full = text
+        text = full.encode("utf-8")[:EM_BRIEF_BYTE_CAP].decode("utf-8", errors="ignore")
+        if brief_file:
+            spill_rel = source
+        else:
+            digest = hashlib.sha256(full.encode("utf-8")).hexdigest()[:12]
+            spill_path = repo_root / "scratch" / "em-brief-spill" / f"{digest}.md"
+            spill_path.parent.mkdir(parents=True, exist_ok=True)
+            spill_path.write_text(full, encoding="utf-8", newline="\n")
+            spill_rel = spill_path.relative_to(repo_root).as_posix()
+        advisories.append(
+            f"brief over {EM_BRIEF_BYTE_CAP} bytes: head kept inline, full text at {spill_rel} (read first)"
+        )
 
-    ctx_rel: list[str] = []
+    ctx_rel: list[str] = [spill_rel] if spill_rel else []
     for raw in ctx_paths:
         path, rel = _context_path(repo_root, raw, session_id)
         if not path.is_file():
             raise EmBriefRefused(f"--context {raw}: no such file")
         ctx_rel.append(rel)
-    return EmBrief(text=text, source=source, context=tuple(ctx_rel))
+    return EmBrief(text=text, source=source, context=tuple(ctx_rel), advisories=tuple(advisories))
 
 
 def check_em_brief_paths(repo_root: Path, *, brief_file: str | None, context: Sequence[str] = ()) -> None:
@@ -134,8 +149,11 @@ def brief_decl_js(b: EmBrief) -> str:
 
 
 def receipt_fields(b: EmBrief) -> dict:
-    return {
+    fields = {
         "source": b.source,
         "sha256": hashlib.sha256(b.text.encode("utf-8")).hexdigest(),
         "context": list(b.context),
     }
+    if b.advisories:
+        fields["advisories"] = list(b.advisories)
+    return fields

@@ -109,6 +109,15 @@ def test_an_existing_params_file_with_an_unminted_token_is_refused(repo):
     assert "the run token is spent, expired or not the one minted" in _reason(verdict)
 
 
+def test_a_remint_clears_the_prior_mints_params_file(repo):
+    # e9d482 (2026-10-28): a refire re-minted while the hung first attempt's params file stayed,
+    # and the refire's no-block land_run read the old token back and was refused.
+    path = chan.params_path(repo, _RUN)
+    assert chan.materialize(path, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": run_token.mint(repo, _RUN, _SCRIPT)})
+    run_token.mint(repo, _RUN, _SCRIPT)
+    assert not path.exists()
+
+
 def test_an_existing_minted_params_file_outside_the_canonical_path_is_refused(repo):
     token = run_token.mint(repo, _RUN, _SCRIPT)
     other = repo / "elsewhere.json"

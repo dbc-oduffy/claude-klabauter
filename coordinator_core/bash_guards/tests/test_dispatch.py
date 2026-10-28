@@ -239,3 +239,22 @@ def test_m5_resolve_once_prepass_skips_posix_tokenize_for_powershell_payload(mon
     )
 
 
+def test_halted_withheld_commit_guard_never_denies_through_dispatch(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    (tmp_path / ".git").mkdir()
+    idx.add_run(tmp_path, "ask-20261024T000000-aaaaaa", ["a.py"])
+    idx.rebuild(tmp_path)
+
+    def run(cmd, **extra):
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "session_id": "s-halted",
+            "cwd": str(tmp_path),
+            **extra,
+        }
+        return evaluate_payload_json(json.dumps(payload))
+
+    assert not _is_deny(run("git commit -m x -- a.py"))
+    assert not _is_deny(run("git commit -m x -- b.py"))

@@ -63,16 +63,44 @@ def test_explicit_call_after_run_id_call_is_served_from_the_store(repo, monkeypa
     assert _shape(second) == _shape(first)
 
 
-def test_leg_appends_footprint_writes_and_absent_leg_ignores_them(repo):
+def test_footprint_writes_join_the_write_set_with_or_without_leg(repo):
     _write(repo, ["a/one.py", "b/two.py"], 3)
     _stage(repo, ["a/one.py"], footprint=["b/two.py"])
-    assert rp.declared_paths_for_run(repo, RUN) == ["a/one.py"]
+    assert rp.declared_paths_for_run(repo, RUN) == ["a/one.py", "b/two.py"]
     assert rp.declared_paths_for_run(repo, RUN, leg=True) == ["a/one.py", "b/two.py"]
     with_leg = rp._handler(_params(repo, "prep-l", run_id=RUN, leg=True), repo)
     without = rp._handler(_params(repo, "prep-n", run_id=RUN), repo)
     assert with_leg["error"] is None and without["error"] is None
-    assert with_leg["product_files"] == 2
-    assert without["product_files"] == 1
+    assert with_leg["product_files"] == without["product_files"] == 2
+
+
+def test_run_id_handler_keeps_a_path_a_halted_peer_withholds(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    _write(repo, ["a/theirs.py"], 3)
+    _stage(repo, ["a/theirs.py"])
+    monkeypatch.setattr(land_run, "foreign_halted_withheld", lambda root, rid, plan, paths: {"a/theirs.py": "peer"})
+    reply = rp._handler(_params(repo, "prep-w", run_id=RUN), repo)
+    assert reply["error"] is None
+    assert [f for s in reply["slices"] for f in s["files"]] == ["a/theirs.py"]
+    assert reply["peer_held"] == ["a/theirs.py"] and reply["excluded"] == []
+
+
+def test_credited_chunk_paths_slice_when_manifest_list_is_empty(repo):
+    _write(repo, ["pkg/c1.py"], 3)
+    (repo / "docs/plans").mkdir(parents=True, exist_ok=True)
+    (repo / "docs/plans/p.md").write_text(
+        "# p\n\n## Tasks\n\n```yaml plan-tasks\n- id: C1\n  title: t\n  writes: [pkg/c1.py]\n"
+        "  disposition: open\n```\n", encoding="utf-8")
+    (repo / "state/sizings").mkdir(parents=True, exist_ok=True)
+    (repo / "state/sizings/s.yaml").write_text('plan: "docs/plans/p.md"\n', encoding="utf-8")
+    _stage(repo, [])
+    d = record_dir(repo, RUN)
+    (d / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8")
+    (d / "credit.jsonl").write_text(json.dumps({"chunk": "C1", "evidence": "e"}) + "\n", encoding="utf-8")
+    reply = rp._handler(_params(repo, "prep-c", run_id=RUN), repo)
+    assert reply["error"] is None
+    assert reply["slices"] and reply["product_files"] == 1
 
 
 def _bad(repo, **kw):

@@ -78,7 +78,7 @@ def _v5_fragment() -> dict:
                             "effort": "low",
                             "per": "whole-diff",
                             "applies": "none",
-                            "schema": "delivery-verdict",
+                            "schema": "delivery-verdict-result",
                         },
                     ],
                 },
@@ -104,7 +104,7 @@ _STAGE_SCHEMAS = {
     "review-prep-result": {"type": "object", "properties": {"plan_id": {"type": "string"}}},
     "slice-review-result": {"type": "object", "properties": {"slice_id": {"type": "string"}}},
     "whole-diff-review-result": {"type": "object", "properties": {"verdict": {"type": "string"}}},
-    "delivery-verdict": {"type": "object", "properties": {"verdict": {"type": "string"}}},
+    "delivery-verdict-result": {"type": "object", "properties": {"verdict": {"type": "string"}}},
     "review-integration-result": {"type": "object", "properties": {"fixes_applied": {"type": "integer"}}},
 }
 
@@ -144,7 +144,8 @@ def test_prep_phase_binds_reviewprep_and_carries_plan_and_sha():
 def test_prep_phase_fails_closed_on_no_prep_or_no_slices():
     _, phases = _compose()
     _, prep_block = phases[0]
-    guard = prep_block.splitlines()[-1]
+    # The halt guard is no longer the block's last line: the excluded-paths guard follows it.
+    guard = prep_block.splitlines()[-3]
     assert guard.startswith("  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))")
     assert "product_files" not in guard
     assert "throw" not in guard and "return { halted:" in guard
@@ -176,7 +177,7 @@ def test_every_wave_call_carries_its_roster_model_effort_and_schema():
     # signal-resolved persona carries neither model nor effort
     assert "agentType: 'coordinator:staff-eng', schema:" in wave_block
     assert json.dumps(_STAGE_SCHEMAS["whole-diff-review-result"], sort_keys=True) in wave_block
-    assert json.dumps(_STAGE_SCHEMAS["delivery-verdict"], sort_keys=True) in wave_block
+    assert json.dumps(_STAGE_SCHEMAS["delivery-verdict-result"], sort_keys=True) in wave_block
     assert json.dumps(_STAGE_SCHEMAS["slice-review-result"], sort_keys=True) in wave_block
 
 
@@ -271,7 +272,7 @@ def test_schema_literal_inlines_defs_refs_self_contained():
     # against at agent()-call time.
     schemas_with_ref = dict(_STAGE_SCHEMAS)
     schemas_with_ref["anchor"] = {"type": "string", "format": "uuid"}
-    schemas_with_ref["delivery-verdict"] = {
+    schemas_with_ref["delivery-verdict-result"] = {
         "type": "object",
         "properties": {
             "verdict": {"type": "string"},
@@ -502,6 +503,25 @@ def test_a_gated_slot_records_skipped_with_the_tier():
     assert (
         "_waveNotRun.push({ slot: -3, agent_type: 'coordinator:overengineering-reviewer', "
         "reason: 'skipped: tier ' + String(_tier) + ' excludes coordinator:overengineering-reviewer' }), null)"
+    ) in block
+
+
+def test_a_tshirt_gated_slot_skip_reason_names_the_size_not_the_tier():
+    block = _wave_block(_ratio_review(kira_min="L"), executor_rows=4, tshirt_js="'M'", tier_js="_tier")
+    assert (
+        "reason: 'skipped: ' + 'size ' + String('M') + ' excludes coordinator:overengineering-reviewer' }), null)"
+    ) in block
+    assert "'skipped: tier ' + String(_tier) + ' excludes coordinator:overengineering-reviewer'" not in block
+
+
+def test_a_slot_gated_by_tier_and_tshirt_picks_the_excluding_gate_at_fire_time():
+    fragment = _ratio_fragment(kira_min="L")
+    fragment["execute_review"]["stages"][1]["agents"][1]["tiers"] = ["standard", "full"]
+    review = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    block = _wave_block(review, executor_rows=4, tshirt_js="'M'", tier_js="_tier")
+    assert (
+        "reason: 'skipped: ' + ([\"standard\", \"full\"].includes(_tier) ? 'size ' + String('M') : "
+        "'tier ' + String(_tier)) + ' excludes coordinator:overengineering-reviewer' }), null)"
     ) in block
 
 
@@ -870,6 +890,37 @@ def test_halt_names_the_prep_verdict():
     assert result["prep"]["verdict"] == "PARTITION-MANDATORY"
 
 
+def test_halt_names_the_excluded_paths_and_keeps_the_prefix():
+    excluded = [{"path": "a.py", "reason": "binary"}, {"path": "b.py", "reason": "peer-held"}]
+    result = _run_prep_block({**_PREP, "verdict": "none", "excluded": excluded})
+    assert result["halted"] == (
+        "review prep returned no slices (prep verdict: none); excluded: a.py: binary, b.py: peer-held"
+    )
+
+
+_SLICED_PREP = {**_PREP, "verdict": "PARTITION-MANDATORY", "slices": [{"id": "s1", "files": ["a.py"]}]}
+
+
+def test_non_empty_slices_with_unsliceable_excluded_path_halts_naming_each():
+    excluded = [
+        {"path": "x.py", "reason": "outside-repo"},
+        {"path": "y.py", "reason": "freeze-failed: boom"},
+        {"path": "z.py", "reason": "no-delta"},
+    ]
+    result = _run_prep_block({**_SLICED_PREP, "excluded": excluded})
+    assert result["halted"] == (
+        "review prep excluded declared paths (excluded: x.py: outside-repo, y.py: freeze-failed: boom)"
+    )
+    assert result["prep"]["slices"]
+
+
+def test_empty_or_no_delta_only_excluded_does_not_halt():
+    for excluded in ([], [{"path": "z.py", "reason": "no-delta"}]):
+        result = _run_prep_block({**_SLICED_PREP, "excluded": excluded})
+        assert "halted" not in result
+        assert result["slices"]
+
+
 def test_prep_brief_runs_the_partition_op_and_carries_no_grouping_procedure():
     prep = _compose()[1][0][1]
     assert "session-claim-cli who-claims-path" in prep
@@ -1157,16 +1208,33 @@ def test_fragment_without_a_ratio_is_unchanged_by_the_new_kwargs():
     assert _wave_block(review, executor_rows=7, tshirt="M") == _wave_block(review)
 
 
-@pytest.mark.parametrize("size,present", [("XS", False), ("S", False), ("M", False), ("L", True), ("XL", True), ("XXL", True), (None, False)])
+@pytest.mark.parametrize("size,present", [("XS", False), ("S", False), ("M", False), ("L", True), ("XL", True), ("XXL", True), (None, True)])
 def test_min_tshirt_agent_is_composed_only_at_or_above_the_floor(size, present):
     block = _wave_block(_ratio_review(kira_min="L"), executor_rows=4, tshirt=size)
     assert ("coordinator:overengineering-reviewer" in block) is present
     assert "coordinator:code-reviewer" in block
 
 
-def test_tshirt_js_gates_at_run_time_and_excludes_an_unknown_value():
+def _verifier_gated_review():
+    fragment = _ratio_fragment()
+    fragment["execute_review"]["stages"][1]["agents"][3]["min_tshirt"] = "L"
+    return parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+
+
+def test_a_compile_time_size_exclusion_names_the_size_in_the_delivery_reason():
+    block = _wave_block(_verifier_gated_review(), executor_rows=4, tshirt="M")
+    assert "const _deliveryNotRun = 'size M excludes coordinator:delivery-verifier';" in block
+
+
+def test_an_unknown_compile_time_size_admits_the_delivery_verifier():
+    block = _wave_block(_verifier_gated_review(), executor_rows=4)
+    assert "excludes coordinator:delivery-verifier" not in block
+    assert "const _deliveryVerdict = _reviewWave[_reviewWave.length - 1];" in block
+
+
+def test_tshirt_js_gates_at_run_time_and_admits_an_unknown_value():
     block = _wave_block(_ratio_review(kira_min="L"), executor_rows=4, tshirt_js="_gate?.tshirt")
-    assert '["L", "XL", "XXL"].includes(_gate?.tshirt)' in block
+    assert '((_gate?.tshirt) == null || ["L", "XL", "XXL"].includes(_gate?.tshirt))' in block
     assert "!" + json.dumps(["XS", "S", "M", "L", "XL", "XXL"]) not in block
 
 
@@ -1666,6 +1734,16 @@ def test_reverify_slice_key_sentinel_is_resolved():
     assert "String(_k)" in block
 
 
+def test_a_run_key_reaches_the_prep_and_probe_open_calls_so_the_foreign_path_filters_fire():
+    key = "warp-x-20261025T000000-aaaaaa"
+    wave = dict(_in_wave(run_key=key))["Review wave"].replace('\\"', '"')
+    reverify = dict(_reverify_phases(reverify=True, run_key=key))["Review re-verify"].replace('\\"', '"')
+    assert f'"worktree":true,"run_id":"{key}","base"' in wave
+    assert f'"run_id":"{key}","plan_path":"docs/plans/example.md","probe":"open"' in reverify
+    assert "run_id" not in dict(_in_wave())["Review wave"]
+    assert "run_id" not in dict(_reverify_phases(reverify=True))["Review re-verify"]
+
+
 def _reverify_phase_block(base_ref, group_prefixes=()):
     from coordinator_core.ops.review_mint.execute_review import _reverify_phase
 
@@ -1695,32 +1773,55 @@ def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
     assert "failing_at_base" in block
 
 
-def _run_reverify_block(reply, *, verify_only=False):
-    """Run the emitted re-verify block under node with the agent stubbed to return ``reply``."""
+@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
+def test_reverify_reports_passed_alone_and_passed_at_base(prefixes):
+    from coordinator_core.ops.review_mint.execute_review import _REVERIFY_SCHEMA
+
+    for field in ("passed_alone", "passed_at_base"):
+        assert _REVERIFY_SCHEMA["properties"][field] == {"type": "array", "items": {"type": "string"}}
+        assert field not in _REVERIFY_SCHEMA["required"]
+    measured = _reverify_phase_block("b" * 40, prefixes)
+    assert "ALONE (one pytest per id)" in measured and "`passed_alone`" in measured
+    assert "absence at base is not a pass" in measured
+    assert '"ok"' in measured and "`runner_exit` 0 or 1" in measured
+    unset = _reverify_phase_block("run_base_sha", prefixes)
+    assert "ALONE (one pytest per id)" in unset
+    assert "Return `passed_at_base` []" in unset
+    assert "absence at base" not in unset
+
+
+def _run_reverify_block(reply, *, verify_only=False, applied=1, deferred=False, calls=None):
+    """Run the emitted re-verify block under node with the agent stubbed to return ``reply``.
+
+    ``applied`` is the first wave review's applied count; ``calls`` (a list) receives the number of agent calls made."""
     import shutil
     import subprocess
 
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
-    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    block = dict(_reverify_phases(reverify=True, reverify_deferred=deferred))["Review re-verify"]
     body = "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("phase("))
+    var = "_reviewReverifyP" if deferred else "_reviewReverify"
     prep = {"slices": [
         {"id": "s1", "files": ["a/x.py"], "sidecar_path": "prep-s1.md"},
         {"id": "s2", "files": ["b/y.py"], "sidecar_path": "prep-s2.md"},
     ]}
-    wave = [{"slice_id": "s1", "sidecar_path": "wave-s1.md"}, None]
+    wave = [{"slice_id": "s1", "sidecar_path": "wave-s1.md", "applied": applied}, None]
     script = (
         f"const _reviewPrep = {json.dumps(prep)}; const _reviewWave = {json.dumps(wave)};\n"
-        f"const _verifyOnly = {json.dumps(verify_only)};\n"
-        f"const agent = async (p, o) => ({json.dumps(reply)});\n"
-        f"(async () => {{ {body}\n console.log(JSON.stringify(_reviewReverify)); }})();"
+        f"const _verifyOnly = {json.dumps(verify_only)}; const _reviewIntegration = {{ fixes_applied: 0 }};\n"
+        f"let _n = 0; const agent = async (p, o) => {{ _n++; return {json.dumps(reply)}; }};\n"
+        f"(async () => {{ {body}\n console.log(JSON.stringify([await {var}, _n])); }})();"
     )
     out = subprocess.run(
         [node, "-e", script], capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    return json.loads(out.stdout)
+    result, count = json.loads(out.stdout)
+    if calls is not None:
+        calls.append(count)
+    return result
 
 
 def test_unapplied_maps_a_reverted_path_to_its_slice_and_wave_sidecar():
@@ -1746,6 +1847,47 @@ def test_unapplied_maps_a_reverted_path_to_its_slice_and_wave_sidecar():
 def test_reverify_is_null_under_verify_only_and_when_the_agent_returns_null():
     assert _run_reverify_block({"edited": []}, verify_only=True) is None
     assert _run_reverify_block(None) is None
+
+
+def test_reverify_runs_as_pinned_haiku_not_a_sonnet_override():
+    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    assert "agentType: 'coordinator:test-runner', model: 'haiku'" in block
+    assert "model: 'sonnet'" not in block
+    degraded = dict(_reverify_phases(reverify=True, host_degraded=True))["Review re-verify"]
+    assert "model:" not in degraded
+
+
+def test_reverify_is_skipped_and_spawns_nothing_when_review_applied_no_edit():
+    calls = []
+    assert _run_reverify_block({"edited": ["a/x.py"]}, applied=0, calls=calls) is None
+    assert calls == [0]
+    assert _run_reverify_block({"edited": ["a/x.py"]}, applied=2, calls=calls) is not None
+    assert calls == [0, 1]
+
+
+def test_integration_fixes_count_toward_the_applied_guard():
+    block = dict(_reverify_phases(reverify=True))["Review re-verify"]
+    assert "_reviewIntegration.fixes_applied" in block
+    fragment = _v5_fragment()
+    fragment["execute_review"]["stages"].pop()
+    no_integration = parse_execute_review(fragment, signals={"named": ["coordinator:staff-eng"]})
+    phases = compose_execute_review(
+        no_integration, stage_schemas=_STAGE_SCHEMAS, plan_path="docs/plans/example.md",
+        run_base_sha="a" * 40, declared_paths=["x.py"], reverify=True,
+    )
+    assert "_reviewIntegration" not in dict(phases)["Review re-verify"]
+
+
+def test_deferred_reverify_binds_an_unawaited_promise_with_the_same_guard():
+    block = dict(_reverify_phases(reverify=True, reverify_deferred=True))["Review re-verify"]
+    assert "const _reviewReverifyP =" in block
+    assert "const _reviewReverify =" not in block
+    calls = []
+    assert _run_reverify_block({"edited": []}, deferred=True, applied=0, calls=calls) is None
+    assert calls == [0]
+    assert _run_reverify_block({"edited": []}, deferred=True, applied=1, calls=calls) is not None
+    assert calls == [0, 1]
+    assert _run_reverify_block({"edited": []}, deferred=True, verify_only=True) is None
 
 
 _NOTES_LABEL = "Executor delivery notes in the brief"

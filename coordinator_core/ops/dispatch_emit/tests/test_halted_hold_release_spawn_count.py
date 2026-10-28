@@ -92,9 +92,15 @@ def test_co_declared_peer_holds_reads_kept_blobs_once_for_any_halted_count(tmp_p
 
     paths = _repo_with_halted_runs(tmp_path, count)
     calls = _count_fetches(monkeypatch)
+    scans: list = []
+    real_scan = sibling_claims._unlanded_run_ids
+    monkeypatch.setattr(
+        sibling_claims, "_unlanded_run_ids", lambda *a, **k: scans.append(a) or real_scan(*a, **k),
+    )
     holds = peer_hunk_gate.co_declared_peer_holds(tmp_path, _rid(5, "ffffff"), paths, paths)
     assert sorted(p for p, _r in holds) == sorted(paths)  # every halted run still holds its path
     assert len(calls) == 1
+    assert len(scans) == 1
 
 
 def test_a_released_run_is_still_released_in_the_batch(tmp_path, monkeypatch):

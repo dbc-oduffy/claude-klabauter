@@ -49,23 +49,17 @@ CONFINEMENT_DENY_NAMES = [
     "runaway-find",
     "block-worktree-creation",
     "block-stash-destruction",
-    "block-subagent-stash-creation",
     "block-topic-branch",
     "block-perforce-submit",
     "block-external-workspace-vcs-write",
     "block-push-pr-non-owned-remote",
     "deploy-dirty-tree",
-    "block-unreal-engine-resave",
     "block-editor-kill-by-name",
     "block-whole-filesystem-scan",
     "block-approval-sentinel-creation",
     "block-worktree-sentinel-creation",
-    # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
-    "block-fleet-delegation-creation",
-    "block-hand-authored-handoff-creation",
     "block-home-root-bash-write",
     "block-drive-root-new-dir-bash-write",
-    "block-disarm-marker-sentinel-creation",
     "block-dev-repo-sentinel-removal",
     "block-noncanonical-branch-creation",
     "block-subagent-plan-body-bash-write",
@@ -74,13 +68,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-commit",
     "check-test-suite-invocation",
     "guard-heavy-command-admission",
-    "block-subagent-grant-acquisition",
-    "block-subagent-findings-reject",
     "guard-post-executor-verification",
-    # immediately after, same CONFINEMENT_DENY hard-deny posture -- see
-    # block_subagent_guard_grant.py's own module docstring "NEAR-EXACT
-    # PORT of block_subagent_grant_acquisition.py").
-    "block-subagent-guard-grant",
     "guard-repo-setup-claude-home-refusal",
     "guard-host-subagent-bash-ban",
     "guard-host-subagent-bash-spawn-shapes",
@@ -112,10 +100,6 @@ ADVISORY_REWRITE_NAMES = [
     # Registered immediately after `destructive-git-revert-advisory` and
     # before `offer-git-c`.
     "block-dev-repo-sentinel-removal-advisory",
-    # Denies venv creation (python -m venv / virtualenv / uv venv / conda
-    # create), advisory for the other provisioners; a deny with no
-    # confinement role -- see dispatch.py's own registration comment.
-    "block-venv-creation",
     # ADVISORY, not CONFINEMENT_DENY, and argued that way per DR-277: `git
     # stash apply` read as a data-loss check yields a false green, but the
     # harm is a wrong conclusion rather than lost work, and a deny would also
@@ -359,13 +343,21 @@ def test_inprocess_search_precedes_every_rewrite_and_advise_entry():
 
 
 def _evaluate_with_crashing_no_verify(command):
+    return _evaluate_with_crashing("check_no_verify", command)
+
+
+def _evaluate_with_crashing_git_clean(command):
+    return _evaluate_with_crashing("check_destructive_git_clean", command)
+
+
+def _evaluate_with_crashing(attr, command):
     import json
 
     def _boom(*_a, **_kw):
         raise RuntimeError("synthetic crash for band-membership gate")
 
-    orig = dispatch._dc.check_no_verify
-    dispatch._dc.check_no_verify = _boom
+    orig = getattr(dispatch._dc, attr)
+    setattr(dispatch._dc, attr, _boom)
     try:
         payload = json.dumps(
             {
@@ -377,7 +369,7 @@ def _evaluate_with_crashing_no_verify(command):
         )
         return dispatch.evaluate_payload_json(payload)
     finally:
-        dispatch._dc.check_no_verify = orig
+        setattr(dispatch._dc, attr, orig)
 
 
 def test_crash_deny_short_circuits_immediately():
@@ -392,12 +384,20 @@ def test_crash_deny_short_circuits_immediately():
     on `echo hi` is deliberately no longer a deny (2026-07-30 blast-radius
     reversal; see `dispatch._CRASH_TRIGGER_SUBSTRINGS`).
     """
-    out = _evaluate_with_crashing_no_verify("git commit -m x")
+    out = _evaluate_with_crashing_git_clean("git clean -fd")
 
     assert out is not None
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
-    assert "no-verify" in hso["permissionDecisionReason"]
+    assert "destructive-git-clean" in hso["permissionDecisionReason"]
+
+
+def test_crash_of_an_unregistered_guard_is_dropped_never_denied():
+    """A guard outside deny_registry that crashes is clamped to a log, fail-open."""
+    out = _evaluate_with_crashing_no_verify("git commit -m x")
+    hso = (out or {}).get("hookSpecificOutput") or {}
+    assert hso.get("permissionDecision") != "deny"
+    assert "synthetic crash" not in str(out)
 
 
 def test_crash_deny_is_scoped_to_the_crashed_guard_target_class():
@@ -422,7 +422,7 @@ def test_crash_deny_trigger_runs_on_the_cr_stripped_command():
     -> `gi t`), so it cannot manufacture a keyword, and the guard allows that
     command. Only deletions matter here.
     """
-    out = _evaluate_with_crashing_no_verify("gi\rt commit --no-verify -m x")
+    out = _evaluate_with_crashing_git_clean("gi\rt clean -fd")
 
     assert out is not None, (
         "CR-joined `git` must still reach the crashed guard's target class, "

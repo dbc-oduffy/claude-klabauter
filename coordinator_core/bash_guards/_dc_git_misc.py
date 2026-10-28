@@ -1051,7 +1051,13 @@ def check_destructive_git_orphan(
             # `_heredoc_body_has_spawn_indicator`'s interpreter-gated backtick
             # arm for Python/Node bodies -- so what reaches `after` with
             # delimiters still in it is shell, where they mean what they say.
-            if re.search(r"\$\(.*\)|`.*`", after, re.DOTALL):
+            # Past a bare `--` the operands are pathspecs: an index-only unstage, no ref moves.
+            _ref_part = (
+                after
+                if "<<" in seg or "\n" in seg
+                else re.split(r"(?:^|\s)--(?:\s|$)", after, maxsplit=1)[0]
+            )
+            if re.search(r"\$\(.*\)|`.*`", _ref_part, re.DOTALL):
                 return _alt_record(
                     "deny", "destructive-git-orphan",
                     "BLOCKED: 'git reset %s' targets a subshell-resolved "

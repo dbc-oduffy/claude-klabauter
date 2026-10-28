@@ -200,7 +200,6 @@ SETTINGS_HOME_WRITER_CARVE_OUT = (
     "dep_check",
     "door_install",
     "door_uninstall",
-    "ensure_venv",
     "first_run",
     "forwarder_self_heal",
     "gen_settings_hooks",
@@ -232,10 +231,6 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
     "detect_test_cmd.py": (
         CARVE_OUT_INSTALL_PLANE,
         "upserts frontmatter keys in the project's own coordinator.local.md",
-    ),
-    "ensure_venv.py": (
-        CARVE_OUT_INSTALL_PLANE,
-        "builds and swaps the settings-home venv; its rmtree targets venv build/previous dirs there",
     ),
     "first_run.py": (
         CARVE_OUT_INSTALL_PLANE,
@@ -723,12 +718,8 @@ legacy install-base relocation (Steps C10a-1/2) that used to populate this
 dir is retired — see `_c10a_steps`."""
 
 _LEGACY_VENV_DIRNAME = ".coordinator-venv"
-"""Shared leaf name for both the legacy `<install_base>/.claude/
-.coordinator-venv` directory `_c10a_steps` deletes (its own surface, once
-the settings-home venv passes its health probe) and the CURRENT
-`<settings-home>/.coordinator-venv` tree it only reads the health of — the
-latter is a distinct tree owned and declared by `ensure_venv`, not by this
-module."""
+"""Leaf name of the retired `<install_base>/.claude/.coordinator-venv`
+directory; kept only for the retired write-surface clause that declares it."""
 
 
 def _careful_write_backup_path(install_base: Path, relative_path: str) -> Path:
@@ -3138,18 +3129,9 @@ def resolve_hook_python_bin() -> str:
         return ""
 
 
-def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback: bool = False) -> int:
+def run(setup_only: bool = False, check_only: bool = False) -> int:
     """Entry point mirroring the full bash script body. Returns a process
-    exit code (0 success, 1 FATAL).
-
-    ``allow_venv_fallback`` (default ``False``): gates Step C10a-3's
-    ``.coordinator-venv`` build/rebuild and legacy-venv reclaim -- the ONLY
-    route into ``ensure_venv.ensure_coordinator_venv`` this module reaches,
-    per docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4 (AC5).
-    Machine-interpreter ``coordinator_whoami`` provisioning is handled
-    independently of this flag by ``scripts/setup.py``'s post-registration
-    advisory step (chunk C10); this flag exists solely for the break-glass
-    venv fallback."""
+    exit code (0 success, 1 FATAL)."""
     plugin_root_env = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
     if not plugin_root_env:
         print(
@@ -3356,10 +3338,9 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
         # --- Step 3h: hardware audit ---
         _run_hardware_audit(check_only)
 
-        # --- Step C10a-3: venv rebuild (C10a-1/2 whoami relocation + registry key retired) ---
+        # --- Step C10a: retired whoami residue removal ---
         rc = _c10a_steps(
             install_base, settings_home_path, plugin_root, bin_dst, check_only,
-            allow_venv_fallback=allow_venv_fallback,
         )
         if rc != 0:
             return rc
@@ -4589,27 +4570,13 @@ def _install_bin_resolvers(
         )
 
     # --- Step 3e: general orphan prune (AC18) ---
-    from coordinator_core.install.ensure_venv import (  # local import: avoid import cost on --help
-        SITEPACKAGES_POINTER_NAME,
-    )
-
-    # `SITEPACKAGES_POINTER_NAME` is folded into this union rather than into
-    # `_static_bin_family_names()` -- that function is DERIVED (manifest +
-    # `_CH_FAMILY_FILES` + `_RM_FAMILY_FILES`) and feeds
-    # `test_bin_family_freshness.py`'s `src_by_name` from the same three
-    # sources, which KeyErrors on an installer-synthesized file with no
-    # template source. Registering it here instead means a future RENAME of
-    # the pointer is self-cleaning via `_prune_orphaned_static_bin_names`
-    # (see `ensure_venv.SITEPACKAGES_POINTER_NAME`'s docstring) --
-    # `_prune_orphaned_static_bin_names` only considers names dropped from
-    # THIS union across runs, so an unregistered name is never a prune
-    # candidate in the first place.
+    # `hook-sitepackages.txt` is absent from this union, so a box whose prior
+    # bin manifest recorded it prunes the stale pointer.
     all_current_names = (
         _static_bin_family_names(claude_klabauter_root_resolved)
         | set(agent_helper_target_map) | set(agent_cmd_dest_map.values())
         | written_filenames
         | door_only_filenames
-        | {SITEPACKAGES_POINTER_NAME}
         | live_tree_protected
     )
     _prune_orphaned_static_bin_names(bin_dst, all_current_names, check_only)
@@ -4865,7 +4832,6 @@ def _retire_whoami_residue(dst_whoami: Path, check_only: bool) -> None:
 
 def _c10a_steps(
     install_base: str, settings_home_path: Path, plugin_root: Path, bin_dst: Path, check_only: bool,
-    *, allow_venv_fallback: bool = False,
 ) -> int:
     # Steps C10a-1 (coordinator-whoami/ relocation copy + legacy compat
     # pointer) and C10a-2 (`coordinator.whoami_src` registry key) are
@@ -4873,109 +4839,10 @@ def _c10a_steps(
     # chunk C2, item 1). `coordinator_whoami` ships no package source on any
     # current box (state/cross-repo/archive/2026-09-12-coordinator-content-repo-em-
     # installer-still-registers-retired-whoami-src.md), so both steps only
-    # ever advertised a stale or empty seam. The sole live reader,
-    # `ensure_venv._resolve_whoami_pkg`, already falls back to
-    # `plugin_root / "whoami"` directly whenever the registry key is unset
-    # or stale — not writing the key is the correct behaviour there, not a
-    # regression. `bin_dst` is unused now that C10a-2's registry write is
-    # gone; kept as a parameter for call-site compatibility.
+    # ever advertised a stale or empty seam. `bin_dst` and `plugin_root` are unused; kept as parameters for
+    # call-site compatibility.
     dst_whoami = settings_home_path / _WHOAMI_DIRNAME
     _retire_whoami_residue(dst_whoami, check_only)
-
-    # Step C10a-3: venv rebuild + legacy venv removal (native —
-    # coordinator_core.install.ensure_venv). Reachable ONLY behind
-    # `allow_venv_fallback` (docs/plans/2026-08-18-retire-coordinator-venv.md
-    # chunk C4, AC5) -- machine-interpreter coordinator_whoami provisioning
-    # is handled independently by `scripts/setup.py`'s post-registration
-    # advisory step (chunk C10), so a fresh install with no explicit
-    # break-glass opt-in never reaches `ensure_coordinator_venv` here.
-    if not allow_venv_fallback:
-        print(
-            "[install-substrate] Step C10a-3 (venv rebuild) skipped -- "
-            "ensure_coordinator_venv is reachable only via --allow-venv-fallback "
-            "(docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4)."
-        )
-        return 0
-
-    from coordinator_core.install.ensure_venv import (  # local import: avoid import cost on --help
-        EnsureVenvError,
-        _venv_healthy,
-        ensure_coordinator_venv,
-        venv_python_path,
-    )
-
-    legacy_venv = Path(install_base) / ".claude" / _LEGACY_VENV_DIRNAME
-    venv_py = venv_python_path(settings_home_path / _LEGACY_VENV_DIRNAME)
-
-    has_viable_whoami = (
-        (plugin_root / "whoami" / "pyproject.toml").is_file()
-        or (plugin_root / "whoami" / "setup.py").is_file()
-    )
-    has_fallback_venv = (settings_home_path / ".coordinator-venv").is_dir() or legacy_venv.is_dir()
-    claude_home_env = os.environ.get("CLAUDE_HOME")
-
-    if check_only:
-        if has_viable_whoami:
-            try:
-                status = ensure_coordinator_venv(
-                    plugin_root, settings_home_path, claude_home=claude_home_env, check_only=True,
-                )
-                print(f"[install-substrate] venv check: {status}")
-            except EnsureVenvError as exc:
-                print(f"[install-substrate] WARNING: venv check failed: {exc}", file=sys.stderr)
-        else:
-            print("[install-substrate] WARNING: no valid coordinator_whoami package source found; skipping venv check", file=sys.stderr)
-        if legacy_venv.is_dir():
-            print(f"[install-substrate] would: remove legacy venv at {legacy_venv} (after settings-home venv health probe)")
-    elif has_viable_whoami:
-        try:
-            status = ensure_coordinator_venv(
-                plugin_root, settings_home_path, claude_home=claude_home_env, check_only=False,
-                # Opt into pin-clearing here (unlike the default): this call
-                # site's own disposition is fatal-with-fallback -- a dangling
-                # pin left in place would hard-fail every subsequent
-                # coordinator invocation via pyresolve, not just this one
-                # install run. See ensure_coordinator_venv's docstring.
-                clear_pin_on_failure=True,
-            )
-        except EnsureVenvError as exc:
-            if has_fallback_venv:
-                print(f"[install-substrate] WARNING: venv rebuild failed ({exc}) — substrate seeded; fallback venv retained.", file=sys.stderr)
-                print("[install-substrate]   Transient failure — re-run install or it self-heals at next session-init.", file=sys.stderr)
-            else:
-                print(f"install-substrate C10a: venv rebuild failed ({exc}); no fallback venv available", file=sys.stderr)
-                return 1
-        else:
-            print(f"[install-substrate] venv: {status}")
-            # Use the B2 both-imports health
-            # oracle (coordinator_whoami AND pydantic), not a narrower
-            # coordinator_whoami-only probe, before treating this as the gate
-            # that clears deletion of the legacy venv fallback.
-            venv_healthy = _venv_healthy(venv_py)
-            if not venv_healthy:
-                if has_fallback_venv:
-                    print(f"[install-substrate] WARNING: venv health probe failed (coordinator_whoami/pydantic not importable under {venv_py}); fallback venv retained.", file=sys.stderr)
-                    print("[install-substrate]   Re-run install or it self-heals at next session-init.", file=sys.stderr)
-                else:
-                    print(f"install-substrate C10a: venv health probe failed — coordinator_whoami/pydantic not importable under {venv_py}", file=sys.stderr)
-                    return 1
-            elif legacy_venv.is_dir():
-                blocked = _refuse_machine_mutation(
-                    str(legacy_venv), what="remove legacy .coordinator-venv directory",
-                    check_temp_path=False,
-                )
-                if blocked:
-                    print(f"[install-substrate] REFUSED: {blocked}", file=sys.stderr)
-                else:
-                    shutil.rmtree(legacy_venv)
-                    print(f"[install-substrate] removed legacy venv at {legacy_venv} (settings-home venv healthy)")
-    else:
-        print(
-            f"[install-substrate] WARNING: no valid coordinator_whoami package source found "
-            f"({plugin_root}/whoami has no pyproject.toml/setup.py); "
-            "skipping venv rebuild — venv builds automatically once whoami source is in place (re-run install)",
-            file=sys.stderr,
-        )
 
     return 0
 
@@ -6026,11 +5893,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         ),
         # Clause 25 — RETIRED (same chunk as clause 22). Formerly
         # `_c10a_steps` Step C10a-2's `coordinator.whoami_src`
-        # machine-local key. The sole live reader
-        # (`ensure_venv._resolve_whoami_pkg`) already falls back to
-        # `plugin_root / "whoami"` when this key is unset or stale, so
-        # retiring the write is the correct behaviour there, not a
-        # regression.
+        # machine-local key.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -6040,13 +5903,9 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 ),
             ),
         ),
-        # Clause 26 — `_c10a_steps` Step C10a-3: removal of the LEGACY
-        # `<install_base>/.claude/.coordinator-venv` directory once the
-        # CURRENT settings-home venv passes its health probe. Distinct
-        # from `ensure_venv`'s own declared surface: `ensure_venv` owns the
-        # current `<settings-home>/.coordinator-venv` tree (creation,
-        # interpreter-pin key, build-lock sidecar) — this module owns only
-        # the legacy delete leg, gated by `_refuse_machine_mutation`.
+        # Clause 26 — RETIRED. Formerly `_c10a_steps` Step C10a-3's removal
+        # of the legacy `<install_base>/.claude/.coordinator-venv`
+        # directory. Kept declared/unwritten per the clause 22-25 precedent.
         StaticClause(
             effect="delete",
             entries=(
@@ -6054,7 +5913,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                     kind="file-path",
                     path=f"<install-base>/.claude/{_LEGACY_VENV_DIRNAME}",
                     effect="delete",
-                    reason="shutil.rmtree once the settings-home venv (ensure_venv's surface, not this module's) is healthy; gated by _refuse_machine_mutation",
+                    reason="RETIRED: no longer written — Step C10a-3 is deleted. Entry stays declared, unwritten, for stale-residue recognition on a pre-retirement box",
                 ),
             ),
         ),
@@ -6133,12 +5992,11 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         # exit for a sibling repo's hook bootstrap to read. That authorship
         # is retired outright, not repointed — every rung of DoE's
         # `_hook_venv_inject.py::_resolve_site_packages` ladder is
-        # unreachable for a machine interpreter (see ensure_venv.py's
-        # module docstring). Entry kept (not removed) as a STATIC clause,
-        # unchanged in shape, so `_prune_orphaned_static_bin_names` still
-        # recognizes and prunes a stale pointer left by a pre-migration box
-        # — see the Step 3e union above and
-        # `ensure_venv.SITEPACKAGES_POINTER_NAME`.
+        # unreachable for a machine interpreter. Entry kept (not removed) as
+        # a STATIC clause, unchanged in shape, so a stale pointer left by a
+        # pre-migration box stays a recognized prune candidate — Step 3e's
+        # union no longer names it, so `_prune_orphaned_static_bin_names`
+        # removes it.
         StaticClause(
             entries=(
                 WriteSurfaceEntry(
@@ -6175,9 +6033,8 @@ templates, unreal.toml, registry.toml, hardware.toml), `settings-manifest.md`
 delete, compat-pointer creation, `coordinator.whoami_src` key — clauses
 22-25 RETIRED 2026-09-26 (docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-
 doe-thread.md chunk C2, item 1), kept declared/unwritten per the clause
-28/29 precedent — and legacy-venv delete (clause 26, still live) — NOT
-`ensure_venv`'s own current-venv surface, which stays that module's
-declaration), clause 27 (`_fnm_step`'s brew/curl third-party `fnm`
+28/29 precedent — and legacy-venv delete (clause 26, RETIRED with Step
+C10a-3)), clause 27 (`_fnm_step`'s brew/curl third-party `fnm`
 installer leg, declared via the stated-reason escape hatch rather than left
 silently undeclared — no kind in the frozen eight-kind vocabulary honestly
 expresses an unenumerable third-party installer footprint) — see
@@ -6200,14 +6057,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="install-substrate")
     parser.add_argument("--setup-only", action="store_true")
     parser.add_argument("--check-only", action="store_true")
-    parser.add_argument(
-        "--allow-venv-fallback", action="store_true",
-        help=(
-            "Explicit opt-in, break-glass only: builds/rebuilds the "
-            ".coordinator-venv fallback (Step C10a-3). Omitted by default per "
-            "docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4."
-        ),
-    )
     parser.add_argument(
         "--engine-root", default=None, metavar="PATH",
         help=(
@@ -6241,10 +6090,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
     try:
         with env_overlay(overlay):
-            return run(
-                setup_only=args.setup_only, check_only=args.check_only,
-                allow_venv_fallback=args.allow_venv_fallback,
-            )
+            return run(setup_only=args.setup_only, check_only=args.check_only)
     except SubstrateFatalError as exc:
         print(str(exc), file=sys.stderr)
         return 1

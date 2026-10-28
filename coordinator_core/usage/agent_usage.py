@@ -127,7 +127,7 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
     row: dict[str, Any] = {
         "agent_id": agent_id, "label": label, "model": None, "speed": None,
         **_zero(), "unpriced": False, "unpriced_tokens": 0,
-        "tool_calls": 0, "peak_context": 0, "max_same_file_reads": 0,
+        "tool_calls": 0, "rag_calls": 0, "peak_context": 0, "max_same_file_reads": 0,
     }
     priced = 0
     models: dict[str, int] = {}
@@ -139,6 +139,8 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
             ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")))
         for name, fp in m["tools"].values():
             row["tool_calls"] += 1
+            if isinstance(name, str) and name.startswith("mcp__project-rag__"):
+                row["rag_calls"] += 1
             if name == "Read" and fp:
                 k = _norm_path(fp)
                 reads[k] = reads.get(k, 0) + 1

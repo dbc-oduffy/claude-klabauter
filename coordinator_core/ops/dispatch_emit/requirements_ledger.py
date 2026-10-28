@@ -57,6 +57,8 @@ GENERATES = []
 RUN_FILE = "run.json"
 INBOX_FILE = "revisions.jsonl"
 NOTES_FILE = "notes.jsonl"
+#: Per-run `{nodeid, owner_run_id, reason, at}` lines: failing tests another run owns; recorded only, no landing gate reads it yet.
+OWNED_RED_FILE = "owned_red.jsonl"
 #: run.json key naming the halted run a fresh fire resumed.
 RESUMED_FROM_FIELD = "resumed_from"
 #: Most `resumed_from` hops `carried_notes` follows.
@@ -91,7 +93,9 @@ _PARAMS = (
     Field("all_of_pm_ask", "bool"),
     Field("out_of_scope", "str_list"),
     Field("withhold_paths", "list"),
+    Field("add_paths", "list"),
     Field("credit_chunks", "list"),
+    Field("owned_red", "list"),
     Field("retract_note", "dict"),
     Field("retract_row", "dict"),
     Field("build_only", "bool"),
@@ -321,16 +325,55 @@ def run_footprint(repo_root: Path, dir_: Path, sizing_rel: Optional[str]) -> Opt
         if isinstance(row, dict):
             files.update(w for w in row.get("writes") or [] if isinstance(w, str))
             dirs.extend(d.rstrip("/") for d in row.get("writes_under") or [] if isinstance(d, str))
-    if sizing_rel:
-        import yaml
-
-        try:
-            sizing = yaml.safe_load(_sizing_path(Path(repo_root), sizing_rel).read_text(encoding="utf-8"))
-        except (LedgerRefused, OSError, yaml.YAMLError):
-            sizing = None
-        if isinstance(sizing, dict):
-            files.update(w for w in sizing.get("writes") or [] if isinstance(w, str))
+    files.update(_sizing_writes(repo_root, sizing_rel))
     return files, dirs
+
+
+def _sizing_writes(repo_root: Path, sizing_rel: Optional[str]) -> set[str]:
+    """The bound sizing's `writes` entries; empty when unbound or unreadable."""
+    if not sizing_rel:
+        return set()
+    import yaml
+
+    try:
+        sizing = yaml.safe_load(_sizing_path(Path(repo_root), sizing_rel).read_text(encoding="utf-8"))
+    except (LedgerRefused, OSError, yaml.YAMLError):
+        return set()
+    return {w for w in sizing.get("writes") or [] if isinstance(w, str)} if isinstance(sizing, dict) else set()
+
+
+def _addition_route(run_id: str, paths: Sequence[str]) -> str:
+    return (
+        f"run {run_id}'s write set does not cover {', '.join(paths)}; workflow.revise cannot add scope or "
+        "write paths. Fire a new ask naming them, or resize the sizing (add them to its `writes`) and refire."
+    )
+
+
+def _refuse_additions(
+    root: Path, dir_: Path, run_id: str, run: Optional[Mapping], add_paths: Sequence, note: Optional[str],
+) -> None:
+    """LedgerRefused naming every `add_paths` entry outside the run's write set and, once the run has
+    staged, every existing repo file `note` cites outside it. An unstaged run's write set is its
+    sizing's `writes` alone, which `add_paths` is checked against; notes are checked only against a
+    frozen manifest. Writes nothing."""
+    sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
+    declared: list[str] = []
+    for entry in add_paths:
+        raw = entry.get("path") if isinstance(entry, Mapping) else entry
+        if not isinstance(raw, str) or not raw.strip():
+            raise LedgerRefused("add_paths must be a list of repo-relative path strings")
+        declared.append(raw.strip().replace("\\", "/").removeprefix("./"))
+    outside: list[str] = []
+    if declared:
+        footprint = run_footprint(root, dir_, sizing_rel)
+        files, dirs = footprint if footprint is not None else (_sizing_writes(root, sizing_rel), [])
+        outside = [p for p in dict.fromkeys(declared) if p not in files and not any(p.startswith(d + "/") for d in dirs)]
+    if isinstance(note, str) and note.strip() and run is not None:
+        outside += [
+            p for p in paths_outside_footprint(root, dir_, sizing_rel, _paths_named(root, [note])) if p not in outside
+        ]
+    if outside:
+        raise LedgerRefused(_addition_route(run_id, outside))
 
 
 def paths_outside_footprint(
@@ -869,6 +912,32 @@ def _unbound_followups(
     return {n: t for n, t in recorded.items() if n not in foreign and not any(x in t for x in needles)}
 
 
+def validate_owned_red(raw: object) -> list[dict]:
+    """`[{nodeid, owner_run_id, reason?}]` as clean entries; a malformed entry raises ValueError naming its index."""
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("owned_red must be a list of {nodeid, owner_run_id}")
+    out: list[dict] = []
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"owned_red[{i}] is not an object with nodeid and owner_run_id")
+        nodeid, owner = entry.get("nodeid"), entry.get("owner_run_id")
+        if not isinstance(nodeid, str) or "::" not in nodeid.strip():
+            raise ValueError(f"owned_red[{i}].nodeid {nodeid!r} is not a pytest node id (path::test)")
+        if not isinstance(owner, str) or not owner.strip():
+            raise ValueError(f"owned_red[{i}].owner_run_id is empty")
+        reason = entry.get("reason")
+        out.append({"nodeid": nodeid.strip(), "owner_run_id": owner.strip(), "reason": reason.strip() if isinstance(reason, str) else ""})
+    return out
+
+
+def _lettered_entries(text: object) -> list[tuple[str, str]]:
+    """One `relayed` entry `(label) part` per lettered part of `text`; `_append_rows` skips one the
+    register already holds."""
+    from coordinator_core.ops.dispatch_emit import stated_parts
+
+    return [(f"({p.label}) {p.text}", ORIGIN_RELAYED) for p in stated_parts.lettered_parts(str(text or ""))]
+
+
 def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
     """A sibling slice shares its `pm_verbatims` with every other slice, so it seeds none of them:
     its register already holds the rows the split assigned it, else its `intent` is its one row,
@@ -921,6 +990,7 @@ def bind(
         entries = []
     else:
         entries = [(t, ORIGIN_PM_VERBATIMS) for t in _seedable_words(sizing, {**foreign, **unbound})]
+    entries.extend(_lettered_entries(read_em_brief(sizing)))
     register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
     rows_now = [r for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping)]
     asked = any(r.get(rr.ROW_ANCHOR) in (ORIGIN_ASK, ORIGIN_RELAYED) for r in rows_now)
@@ -946,7 +1016,7 @@ def revise(
     out_of_scope: Sequence[str] = (), note: Optional[str] = None, sender: Optional[str] = None,
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
-    claim: bool = False, retract_row: Optional[dict] = None,
+    claim: bool = False, owned_red: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -962,6 +1032,9 @@ def revise(
     `withhold_paths` (`[{path, reason}]`, `run_withhold.validate` before any write) rules product paths
     out of the run's terminal commit: it is recorded to the run's `withhold.jsonl`, needs no bound
     sizing, adds no register row and no inbox entry, and alone satisfies the non-empty precondition.
+    `add_paths` (repo-relative paths) names write paths the run was not sized for: any outside the run's
+    write set refuses, as does a `note` citing an existing repo file outside a staged run's footprint;
+    the refusal names the routes (a new ask, or resize the sizing) and nothing is written.
     `credit_chunks` (`[{chunk, evidence}]`, `run_credit.validate` before any write) marks stranded
     chunks complete: recorded to the run's `credit.jsonl`, same preconditions and effects as
     `withhold_paths`; the re-fired terminal commit re-grades the named chunks.
@@ -1008,6 +1081,12 @@ def revise(
             credit_entries = run_credit.validate(credit_chunks)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
+    red_entries: list[dict] = []
+    if owned_red:
+        try:
+            red_entries = validate_owned_red(owned_red)
+        except ValueError as exc:
+            raise LedgerRefused(str(exc)) from exc
     retraction: Optional[dict] = None
     if retract_note is not None:
         from coordinator_core.ops.dispatch_emit import run_notes
@@ -1031,7 +1110,8 @@ def revise(
         raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
-        and not build_only and stop_after is None and retraction is None and row_retraction is None
+        and not red_entries and not build_only and stop_after is None and retraction is None and not add_paths
+        and row_retraction is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
@@ -1044,10 +1124,50 @@ def revise(
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
+    _refuse_additions(root, dir_, run_id, run, add_paths, note)
     if run is None:
+        from coordinator_core.ops.dispatch_emit import pipeline_run
+        from coordinator_core.ops.dispatch_emit.pipeline_contract import RUN_ID_PREFIX
+
+        script = pipeline_run.emitted_pipeline_run(root, run_id)
+        if script is None and str(run_id).startswith(RUN_ID_PREFIX):
+            raise LedgerRefused(
+                f"research pipeline run {run_id!r} has no emitted receipt: revision not delivered"
+            )
+        if script is not None:
+            if pipeline_run.pipeline_run_state(root, run_id) == "finished":
+                raise LedgerRefused(f"research pipeline run {run_id!r} is finished: revision not delivered")
+            if (
+                named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
+                or stop_after or retraction is not None or claim
+            ):
+                raise LedgerRefused(
+                    f"{run_id!r} is a research pipeline run: it takes only a verbatim or note revision, "
+                    "not out_of_scope, all_of_pm_ask, withhold_paths, credit_chunks, build_only, stop_after, "
+                    "retract_note or claim"
+                )
+            try:
+                emitted_text = script.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise LedgerRefused(f"cannot read the emitted script of research pipeline run {run_id!r}: {exc}") from exc
+            if not pipeline_run.reads_revisions(emitted_text):
+                raise LedgerRefused(
+                    f"research pipeline run {run_id!r} was emitted by a script that predates revision delivery: "
+                    "its stages read no revisions file; re-fire it to take a revision"
+                )
+            if has_note and len(str(note).encode("utf-8")) > VERBATIM_BYTE_CAP:
+                raise LedgerRefused(f"note exceeds {VERBATIM_BYTE_CAP} bytes")
+            who = _clean_sender(sender) or "em"
+            if text:
+                pipeline_run.append_revision(root, run_id, text, who, "verbatim")
+            if has_note:
+                pipeline_run.append_revision(root, run_id, str(note), who, "note")
+            if outcome is not None:
+                outcome["pipeline_revisions"] = pipeline_run.revisions_rel(run_id)
+            return Ledger((), False), dir_, None
         if (
-            named or all_of_pm_ask is not None or withheld_entries or credit_entries or build_only or stop_after
-            or retraction is not None or row_retraction is not None
+            named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
+            or stop_after or retraction is not None or row_retraction is not None
         ):
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
@@ -1146,6 +1266,10 @@ def revise(
             (json.dumps({"note": note.strip(), "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"),
         )
         declare_write(dir_ / NOTES_FILE)
+        if run.get("sizing_rel"):
+            parts = _lettered_entries(note)
+            if parts:
+                _append_rows(root, run["sizing_rel"], parts)
     if retraction is not None:
         from coordinator_core.atomic_append import append_line
 
@@ -1158,6 +1282,12 @@ def revise(
         run_withhold.record(dir_, withheld_entries, _now())
     if credit_entries:
         run_credit.record(dir_, credit_entries, _now())
+    if red_entries:
+        from coordinator_core.atomic_append import append_line
+
+        for e in red_entries:
+            append_line(dir_ / OWNED_RED_FILE, (json.dumps({**e, "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"))
+        declare_write(dir_ / OWNED_RED_FILE)
     if row_retraction is not None:
         _append_rows(root, run["sizing_rel"], [], retract_row=row_retraction)
     if named:
@@ -1266,6 +1396,16 @@ def normalize_verdict(verdict: object) -> object:
     return {**verdict, "items": out}
 
 
+HAND_BUILT_REASON = (
+    "acceptance evidence hand-built its fixture; add a test through the production entry point "
+    "the requirement names"
+)
+
+
+def _hand_built(row: Mapping) -> bool:
+    return row.get(rr.JUDGE_EVIDENCE_ENTRY_POINT) == rr.EVIDENCE_HAND_BUILT
+
+
 def _roots_read(row: Mapping) -> list[str]:
     value = row.get("root_read")
     if isinstance(value, str):
@@ -1345,7 +1485,7 @@ def judge(
     are default evidence beside the item's own `met_by`.
 
     `code_paths` (the run's declared code paths) with `review_verdicts` 0 or None (unsupplied counts
-    as 0) fails every met or post_commit item: a code-editing run never reads met on an empty review. A non-None
+    as 0) sets `review_floor_note` on the result and fails nothing. A non-None
     `review_verdicts` adds `receipt` ("review: N verdicts") to the result."""
     floor = review_floor.floor_reason(list(code_paths), review_verdicts or 0)
     verdict = normalize_verdict(verdict)
@@ -1389,8 +1529,9 @@ def judge(
             if why is not None:
                 failures.append({"id": item.id, "reason": why})
                 status = "not_met"
-        if floor is not None and status in ("met", "post_commit"):
-            failures.append({"id": item.id, "reason": floor})
+        if status == "met" and _hand_built(row):
+            failures.append({"id": item.id, "reason": HAND_BUILT_REASON})
+            status = "not_met"
         gated_open = status == "not_met" and isinstance(row.get("withheld_by"), str) and row["withheld_by"] in gated_ids
         if routed and item.id in routed and status in ("met", "not_met", "post_commit") and not gated_open:
             reason = _misrouted(row, routed[item.id])
@@ -1444,12 +1585,15 @@ def judge(
     result = {"pass": not failures, "failures": failures, "open": open_rows}
     if review_verdicts is not None:
         result["receipt"] = review_floor.receipt(review_verdicts)
+    if floor is not None:
+        result["review_floor_note"] = floor
     return result
 
 
 def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str) -> list[dict]:
     """Write a passed verdict onto the register once the commit `sha` landed: met and wired ->
-    `met` with `<run_id>@<sha>` in met_by; met alone -> `partial`; superseded -> `waived` with the
+    `met` with `<run_id>@<sha>` in met_by; met alone, or met whose `evidence_entry_point` is
+    `hand-built-fixture` (no met_by entry) -> `partial`; superseded -> `waived` with the
     PM's superseding words as the ruling. A `post_commit` item whose acts are within
     `{commit, sha_reply, baton_archive, plan_implemented, bug_close}` is written as `met` (the landed commit
     is the act, and the landing performs the lifecycle acts); one naming
@@ -1472,7 +1616,7 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
                 status = "met"
             if status == "met" or memo_owed:
                 row[rr.ROW_WIRED] = wired
-                if wired and not memo_owed:
+                if wired and not memo_owed and not _hand_built(got):
                     row[rr.ROW_STATUS] = rr.STATUS_MET
                     ref = f"{run_id}@{sha}"
                     met_by = [m for m in row.get(rr.ROW_MET_BY) or [] if isinstance(m, str)]
@@ -1544,6 +1688,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `research` block; needs an emitted run bound to a sizing; adds no row; replied as `research_dropped`),
     `stop_after` (str, only "plan": records the park marker so `dispatch.ask_stage` parks the run after
     planning; needs an emitted run that has not staged; adds no row; replied as `stop_after`),
+    `owned_red` (list of `{nodeid, owner_run_id, reason?}`: failing tests another run owns, recorded to
+    the run's `owned_red.jsonl`; needs an emitted run, adds no row; replied as `owned_red`),
     `claim` (bool, needs `verbatim` and a run bound to a sizing whose plan claims it: the minted row is
     claimed on the plan with its pin and added to `ruled` on the plan's ledger-halt pointer in the
     same call; replied as `claimed: [id]`).
@@ -1555,7 +1701,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `unclaimed_rows` when its register_claims omit register rows; `item` is the new row id
     (`Q<n>` while a raw ask's sizing is not yet minted), `run_live` is false once the run's commit
     token is redeemed or absent, or the run holds a `halted` marker (nothing will read it: the
-    marker is stamped `revised_at` and the reply names the fresh refire). A refused request replies `{"error": str}`.
+    marker is stamped `revised_at` and the reply names the fresh refire). On an emitted research pipeline
+    run (`pipeline-` id) only `verbatim` and `note` are taken: they append to the run's revisions file and
+    reply `{ok, run_id, delivered, revisions, run_live: None, item: None, note}`; a finished run, a
+    pre-revision script, or any other parameter replies an error. A refused request replies `{"error": str}`.
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
@@ -1571,16 +1720,26 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             sender=params.get("from"), withhold_paths=params.get("withhold_paths") or (),
             credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
             retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
+            owned_red=params.get("owned_red") or (), add_paths=params.get("add_paths") or (),
             retract_row=params.get("retract_row"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
+    if "pipeline_revisions" in outcome:
+        return _mutation_reply(
+            (f"revision appended to {outcome['pipeline_revisions']}",), (), params["run_id"],
+            run_id=params["run_id"], delivered=True, revisions=outcome["pipeline_revisions"],
+            run_live=None, item=None,
+            note="appended to the run's revisions file: if the run is still running, each stage reads it "
+                 "at its next stage start; a stage already running does not see it.",
+        )
     if read_run(dir_) is None:
-        return {
-            "ok": True, "run_id": params["run_id"], "item": added, "items": len(ledger.items),
-            "all_of_pm_ask": False, "sizing": None, "ledger": None, "run_live": False, "held": True,
-            "note": "run not emitted yet: the revision is held and folds into the ledger at emit.",
-        }
+        return _mutation_reply(
+            (f"row {added} held for emit",) if added else (), (), params["run_id"],
+            run_id=params["run_id"], item=added, items=len(ledger.items),
+            all_of_pm_ask=False, sizing=None, ledger=None, run_live=False, held=True,
+            note="run not emitted yet: the revision is held and folds into the ledger at emit.",
+        )
     from coordinator_core.ops.dispatch_emit import halted_run, run_token
 
     halted_run.mark_revised(dir_, _now())
@@ -1610,6 +1769,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import run_credit
 
         out["credit_chunks"] = run_credit.validate(params["credit_chunks"])
+    if params.get("owned_red"):
+        out["owned_red"] = validate_owned_red(params["owned_red"])
     if params.get("retract_note"):
         out["retracted_note"] = {"run_id": params["run_id"], "note_id": params["retract_note"]["note_id"].strip()}
     if params.get("retract_row"):
@@ -1631,21 +1792,61 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["unclaimed_rows"] = unclaimed
         warnings.append(
             f"{unclaimed_plan} omits register row(s) {', '.join(unclaimed)} in register_claims.rows: "
-            "the plan will be pulled on register-rows-unclaimed."
+            "the run's next stage claims them on the plan, and its ledger re-plan leg adds rows serving them."
         )
+    refused: list[dict] = []
+    if params.get("build_only") and not outcome.get("research_dropped"):
+        refused.append({"input": "build_only", "reason": "the bound sizing holds no research block to remove"})
     if warnings:
-        out["warning"] = " ".join(warnings) + (
-            " The refire after this run ends re-plans the omitted rows through its ledger re-plan leg."
-        )
+        out["warning"] = " ".join(warnings)
     if not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
     elif _rows_briefed(dir_):
         out["briefed"] = True
+        out["delta_cycle"] = _record_delta_request(dir_, added, unclaimed)
         out["note"] = (
-            "run live, rows already briefed: no row brief reads this revision; "
-            "refire fresh once the run finishes."
+            "run live, rows already briefed: the revision is queued as a delta cycle on this run "
+            f"({DELTA_REQUEST_FILE}): only the delta rows are planned, run after the current wave and "
+            "reviewed by one overview; no refire."
         )
+    applied = [f"row {added}"] if added else []
+    applied += [k for k in _APPLIED_KEYS if out.get(k)]
+    applied += [k for k in ("note", "all_of_pm_ask") if params.get(k) is not None and params.get(k) != ""]
+    return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
+
+
+_APPLIED_KEYS = ("research_dropped", "claimed", "stop_after", "withhold_paths", "credit_chunks", "owned_red", "retracted_note", "withheld")
+
+
+def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:
+    """The reply of a mutating call: `ok` is true only when `applied` is non-empty; a call that
+    applied nothing replies `ok:false` with its `refused` rows and an `error`."""
+    from coordinator_core.ops.dispatch_emit.run_truth_contract import MutationReply
+
+    reply = MutationReply(applied=applied, refused=refused, target=target)
+    out = {**fields, "ok": reply.ok, "applied": list(reply.applied), "refused": list(reply.refused), "target": reply.target}
+    if not reply.ok:
+        out["error"] = "nothing applied: " + ("; ".join(str(r) for r in refused) or "the revision carried no consumable input")
     return out
+
+
+DELTA_REQUEST_FILE = "delta-request.json"
+
+
+def _record_delta_request(dir_: Path, added: Optional[str], unclaimed: list) -> dict:
+    """Append this revision's delta rows (the minted row plus register rows the plan omits) to the run's
+    `delta-request.json`; the next wave boundary re-plans exactly those rows. Returns the merged request."""
+    path = dir_ / DELTA_REQUEST_FILE
+    try:
+        rows = list(json.loads(path.read_text(encoding="utf-8")).get("rows") or ())
+    except (OSError, ValueError, AttributeError):
+        rows = []
+    for rid in [added, *unclaimed]:
+        if rid and rid not in rows:
+            rows.append(rid)
+    request = {"rows": rows, "review": "delta-only"}
+    path.write_text(json.dumps(request), encoding="utf-8")
+    return request
 
 
 def _rows_briefed(dir_: Path) -> bool:
@@ -1697,33 +1898,19 @@ def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str
     edge, plan, sizing_text = _sizing_plan(root, sizing_rel)
     if plan is None:
         return None, []
+    from coordinator_core.ops.dispatch_emit.ask_stage import scaffold_markers
     from coordinator_core.roadmap.prep_gate import plan_frontmatter
 
-    claims = plan_frontmatter(plan.read_text(encoding="utf-8", errors="replace")).get("register_claims")
+    plan_text = plan.read_text(encoding="utf-8", errors="replace")
+    if scaffold_markers(plan_text):
+        return None, []
+    claims = plan_frontmatter(plan_text).get("register_claims")
     if not isinstance(claims, dict) or claims.get("sizing") != sizing_rel or not isinstance(claims.get("rows"), list):
         return None, []
     register = rr.read_register(sizing_text)
     claimed = {str(r) for r in claims["rows"]}
     missing = rr.unclaimed_ids(register.rows, claimed, exclude=ruled_out_ids(register.rows)) if register else []
     return (edge, missing) if missing else (None, [])
-
-
-def _arm_lacking_replan_leg(root: Optional[Path], sizing_rel: Optional[str]) -> Optional[str]:
-    """The sizing's arm name when it resolves to anything but M+ (no ledger re-plan leg); None for M+
-    or an arm that does not resolve."""
-    if root is None:
-        return None
-    import yaml
-
-    from coordinator_core.ops.dispatch_emit import sizing_fire
-
-    sizing_text = _sizing_plan(root, sizing_rel)[2]
-    try:
-        sizing = yaml.safe_load(sizing_text)
-        arm = sizing_fire.resolve_arm(sizing) if isinstance(sizing, dict) else sizing_fire.ARM_M_PLUS
-    except (yaml.YAMLError, sizing_fire.SizingFireRefused):
-        return None
-    return None if arm == sizing_fire.ARM_M_PLUS else arm
 
 
 def _refire(
@@ -1739,17 +1926,12 @@ def _refire(
     if plan_rel:
         state = "run halted" if halted else "run finished"
         rows = ", ".join(missing)
-        arm = _arm_lacking_replan_leg(root, sizing_rel)
-        if arm:
-            tail = (
-                f"arm {arm} has no re-plan leg, so the refire refuses "
-                "REGISTER-ROWS-UNCLAIMED. Resize the sizing to M+, then fire next.call."
-            )
-        else:
-            tail = "the refire's ledger re-plan leg adds rows serving them and claims them before staging. Fire next.call."
         return {
             "next": {"kind": "refire", "call": fire_command(sizing_rel), "replans": {"plan": plan_rel, "rows": missing}},
-            "note": f"{state}: {plan_rel} omits register row(s) {rows}; {tail}",
+            "note": (
+                f"{state}: {plan_rel} omits register row(s) {rows}; the refire's ledger re-plan leg adds rows "
+                "serving them and claims them before staging, on any arm. Fire next.call."
+            ),
         }
     return {
         "next": {"kind": "refire", "call": fire_command(sizing_rel)},

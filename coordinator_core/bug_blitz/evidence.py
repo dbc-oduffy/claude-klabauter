@@ -24,7 +24,11 @@ _DIR_LIST = "failing-tests.txt"
 _VITEST_RE = re.compile(
     r"^\s*(?:FAIL\s+)?(?:(?P<pkg>\S+)\s{2,})?(?P<file>\S+\.(?:test|spec)\.\w+)\s+>\s+(?P<name>.+?)\s*$"
 )
-_NODE_ID_RE = re.compile(r"^(?P<file>[^\s:]+\.py)::(?P<name>\S+)$")
+# A parametrize id may hold spaces (`test_x[This is BREADTH]`): the bracket runs to the `]` that
+# ends the token, so `FAILED <id> - <msg>` and a bare id both keep the whole id.
+_NODE_ID_RE = re.compile(
+    r"^(?:FAILED )?(?P<file>[^\s:]+\.py)::(?P<name>[^\s\[]+(?:\[.*?\](?=\s|$))?)(?: - (?P<msg>.*))?$"
+)
 _TARGET_SHAPE_RE = re.compile(r"^\S*(?:::\S*|\.py|\.(?:test|spec)\.\w+)$")
 _PYTEST_MSG_RE = re.compile(r"^FAILED \S+ - (?P<msg>.*)$")
 
@@ -113,14 +117,14 @@ def _parse_line(line: str) -> FailingTest | None:
     if m:
         return FailingTest(file=m["file"], name=m["name"], package=m["pkg"] or "")
     stripped = line.strip()
+    m = _NODE_ID_RE.match(stripped)
+    if m:
+        return FailingTest(file=m["file"], name=m["name"], message=m["msg"] or "")
     ids = parse_failed_ids(stripped)
     if ids:
         file, _, name = ids[0].partition("::")
         msg = _PYTEST_MSG_RE.match(stripped)
         return FailingTest(file=file, name=name, message=msg["msg"] if msg else "")
-    m = _NODE_ID_RE.match(stripped)
-    if m:
-        return FailingTest(file=m["file"], name=m["name"])
     return None
 
 

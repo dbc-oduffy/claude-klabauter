@@ -1,4 +1,4 @@
-"""The halt-record commit lands a review edit only when it is a declared write; every other review edit stays unlanded (halted-run, or peer-held when a peer run holds it)."""
+"""The halt-record commit lands no review edit: a declared write is withheld with its chunk (halt-record-only), and every review edit stays unlanded (halted-run, or peer-held when a peer run holds it)."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _review(monkeypatch, *paths: str) -> None:
     monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {p: "agent-1" for p in paths})
 
 
-def test_review_edit_inside_declared_writes_lands_in_halt_record_commit(repo, monkeypatch):
+def test_review_edit_inside_declared_writes_stays_with_its_chunk(repo, monkeypatch):
     _write_record(repo, RUN)
     (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
     _marker_script(repo, [("C1", ["done.py"])], {"C1": "DONE: C1\n"})
@@ -35,9 +35,10 @@ def test_review_edit_inside_declared_writes_lands_in_halt_record_commit(repo, mo
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert out["review_edits_unlanded"] == {}
-    assert "done.py" in _landed(repo, out, "--name-only")
-    assert "done.py" not in _status(repo)
+    assert out["review_edits_unlanded"] == {"done.py": "halted-run"}
+    assert out["withheld"]["done.py"] == "halt-record-only"
+    assert "done.py" not in _landed(repo, out, "--name-only")
+    assert "done.py" in _status(repo)
 
 
 def test_review_edit_outside_declared_writes_stays_in_tree_as_halted_run(repo, monkeypatch):
@@ -55,9 +56,9 @@ def test_review_edit_outside_declared_writes_stays_in_tree_as_halted_run(repo, m
     assert out["review_edits_unlanded"] == {review_file: "halted-run"}
     seed = _git(["rev-list", "--max-parents=0", "HEAD"], repo).strip()
     assert review_file not in _git(["log", f"{seed}..HEAD", "--name-only", "--format="], repo).split()
-    assert "done.py" in _landed(repo, out, "--name-only")
+    assert "done.py" not in _landed(repo, out, "--name-only")
     assert _status(repo)[review_file] == "??"
-    assert "done.py" not in _status(repo)
+    assert "done.py" in _status(repo)
 
 
 def test_deleted_review_edit_stays_unlanded_and_named(repo, monkeypatch):

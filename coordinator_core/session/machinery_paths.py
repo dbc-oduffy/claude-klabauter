@@ -177,6 +177,23 @@ def send_log_path(repo_root: str, session_id: str) -> str:
     return os.path.join(share_dir(repo_root, session_id), SEND_LOG_FILENAME)
 
 
+def tombstones_dir(repo_root: str) -> str:
+    """Directory holding every session's sweep tombstone file; outside both
+    share roots."""
+    return os.path.join(machinery_root(repo_root), "sweep-tombstones")
+
+
+def tombstone_path(repo_root: str, session_id: str) -> str:
+    """Per-session sweep tombstones; outside both share roots so a whole-dir
+    prune of `<share_root>/<sid>/` cannot take the tombstone with it.
+
+    Raises `ValueError` for an id that fails `safe_session_id`.
+    """
+    if not safe_session_id(session_id):
+        raise ValueError(f"unsafe session id: {session_id!r}")
+    return os.path.join(tombstones_dir(repo_root), session_id + ".jsonl")
+
+
 def review_trail_dir(repo_root: str) -> str:
     return os.path.join(machinery_root(repo_root), "review-trail")
 

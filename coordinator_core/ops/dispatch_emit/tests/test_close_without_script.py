@@ -20,6 +20,7 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.ops.ceremony import close_background
 from coordinator_core.ops.dispatch_emit import close_without_script as cws
 from coordinator_core.ops.dispatch_emit import run_close, terminal_commit
+from coordinator_core.ops.dispatch_emit import terminal_commit_closeout
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -116,7 +117,7 @@ def env(tmp_path, monkeypatch):
     noop.write_text("pass\n", encoding="utf-8")
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox))
     monkeypatch.setenv("COORDINATOR_SESSION_ID", bench.SESSION_ID)
-    monkeypatch.setattr(terminal_commit, "CLOSE_JOB_SCRIPT", str(noop))
+    monkeypatch.setattr(terminal_commit_closeout, "CLOSE_JOB_SCRIPT", str(noop))
     monkeypatch.setattr(claims, "list_claims_by_session_checked", lambda sid, cwd=None: ([("handoff", "b.md")], []))
     repo, _ = bench.build_fixture(parent)
     launches: list = []

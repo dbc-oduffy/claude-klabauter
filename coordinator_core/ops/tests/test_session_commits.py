@@ -270,3 +270,30 @@ def test_anchored_and_unanchored_trailer_greps_agree(tmp_path):
     ).split()
 
     assert anchored == unanchored == [sha]
+
+
+_OWN_URL = "Claude-Session: https://claude.ai/code/session_OWN1"
+_OTHER_URL = "Claude-Session: https://claude.ai/code/session_OTHER2"
+
+
+def test_own_claude_session_commit_selected_other_ignored(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    own = _commit(repo, "a.txt", "1\n", "own", _OWN_URL)
+    _commit(repo, "b.txt", "1\n", "other", _OTHER_URL)
+    tagged = _commit(repo, "c.txt", "1\n", "tagged", "Session-Id: sid-x")
+    monkeypatch.setattr(session_commits, "own_claude_session_token", lambda sid: "session_OWN1")
+
+    result = session_commits.resolve_session_commits(repo, "sid-x", sha_only=True)
+
+    assert [r["sha"] for r in result] == [own, tagged]
+
+
+def test_claude_session_commit_unselected_when_token_absent(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    _commit(repo, "a.txt", "1\n", "own", _OWN_URL)
+    tagged = _commit(repo, "c.txt", "1\n", "tagged", "Session-Id: sid-x")
+    monkeypatch.setattr(session_commits, "own_claude_session_token", lambda sid: None)
+
+    result = session_commits.resolve_session_commits(repo, "sid-x", sha_only=True)
+
+    assert [r["sha"] for r in result] == [tagged]

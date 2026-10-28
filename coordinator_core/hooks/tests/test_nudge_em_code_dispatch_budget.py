@@ -1,5 +1,6 @@
 """XS-lane and residue-window budget branches of `nudge_em_code_dispatch.op`. Repos are hand-built
-loose git objects; the guard is driven directly, not through the write-guard fan-in."""
+loose git objects; the guard is driven directly, not through the write-guard fan-in. A refusal
+lands as a logged advisory (the guard is off the deny floor), read by `_is_deny`."""
 
 from __future__ import annotations
 
@@ -83,11 +84,15 @@ def _apply(root: Path, rel: str, old: str, new: str) -> None:
 
 
 def _is_deny(result) -> bool:
-    return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
+    """A refusal verdict: these guards are off the deny floor, so it lands as a logged advisory."""
+    if not result:
+        return False
+    return result["hookSpecificOutput"].get("permissionDecision") == "deny" or result.get("guardLevel") == "log"
 
 
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    out = result["hookSpecificOutput"]
+    return out.get("permissionDecisionReason") or out["additionalContext"]
 
 
 def test_r21_replay(env):
@@ -299,44 +304,7 @@ def landed(env, monkeypatch):
     monkeypatch.setattr(xb, "touched_s_or_larger", lambda sid, repo_root: True)
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
-    _own(root)
     return root, sha
-
-
-def _own(root):
-    """The session's run withholds a.py and b.py, so the post-fire deny covers them."""
-    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
-
-    idx.add_run(root, "run-1", ["a.py", "b.py"])
-
-
-def test_landed_run_edit_is_denied_post_fire_and_opens_no_lane(landed):
-    root, _ = landed
-    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert _is_deny(result)
-    assert "already fired engine-ask" in _reason(result)
-    assert xb.read_lane(root, SID) is None
-
-
-def test_landed_over_budget_edit_gets_the_post_fire_deny_not_the_residue_text(landed):
-    root, _ = landed
-    big = "".join(f"x{i}\n" for i in range(40))
-    result = mod.op(_edit(root, "a.py", _lines(10), big))
-    assert _is_deny(result)
-    assert "already fired engine-ask" in _reason(result)
-    assert "Residue budget spent" not in _reason(result)
-    assert _is_deny(mod.op(_edit(root, "b.py", "l1\n", "v1 = f(1)\n")))
-
-
-def test_live_run_is_denied_post_fire_too(landed, monkeypatch):
-    root, _ = landed
-    from coordinator_core import warp_live
-
-    monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: "run-1")
-    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert _is_deny(result)
-    assert "already fired engine-ask" in _reason(result)
-    assert xb.read_lane(root, SID) is None
 
 
 def test_after_fire_read_failure_is_no_signal(landed, monkeypatch):
@@ -349,7 +317,7 @@ def test_after_fire_read_failure_is_no_signal(landed, monkeypatch):
     monkeypatch.setattr(fl, "session_workflow_run_ids", boom)
     assert mod._post_fire_deny(SID) is None
     result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert "already fired engine-ask" not in str(result)
+    assert "workflow.revise" not in str(result)
 
 
 def test_post_fire_deny_stands_down_without_a_session_or_a_fire(landed, monkeypatch):
@@ -374,46 +342,51 @@ def _declare_general_work_root(monkeypatch, value):
     )
 
 
+def _is_routed(result) -> bool:
+    """The edit was not exempted: the nudge answered it (advisory only, never a deny)."""
+    return bool(result) and result["hookSpecificOutput"].get("permissionDecision") != "deny"
+
+
 def _over_budget_edit(root):
     big = "".join(f"x{i}\n" for i in range(40))
     return mod.op(_edit(root, "a.py", _lines(10), big))
 
 
-def test_general_work_root_target_is_not_denied(landed, monkeypatch):
+def test_general_work_root_target_is_not_denied(env, monkeypatch):
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    root, _ = landed
+    root, _ = env
     _declare_general_work_root(monkeypatch, str(root.parent))
-    assert not _is_deny(_over_budget_edit(root))
+    assert _over_budget_edit(root) is None
     assert xb.read_lane(root, SID) is None
 
 
-def test_checkout_outside_general_work_root_still_denied(landed, tmp_path, monkeypatch):
+def test_checkout_outside_general_work_root_still_denied(env, tmp_path, monkeypatch):
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    root, _ = landed
+    root, _ = env
     other = tmp_path / "elsewhere"
     other.mkdir()
     _declare_general_work_root(monkeypatch, str(other))
-    assert _is_deny(_over_budget_edit(root))
+    assert _is_routed(_over_budget_edit(root))
 
 
-def test_unreadable_general_work_root_still_denied(landed, monkeypatch):
+def test_unreadable_general_work_root_still_denied(env, monkeypatch):
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    root, _ = landed
+    root, _ = env
     _declare_general_work_root(monkeypatch, None)
 
     def _boom(key):
         raise OSError("registry unreadable")
 
     monkeypatch.setattr(machine_resolver, "registry_get", _boom)
-    assert _is_deny(_over_budget_edit(root))
+    assert _is_routed(_over_budget_edit(root))
 
 
 @pytest.mark.parametrize("unset", [None, ""])
-def test_unset_general_work_root_still_denied(landed, monkeypatch, unset):
+def test_unset_general_work_root_still_denied(env, monkeypatch, unset):
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    root, _ = landed
+    root, _ = env
     _declare_general_work_root(monkeypatch, unset)
-    assert _is_deny(_over_budget_edit(root))
+    assert _is_routed(_over_budget_edit(root))
 
 
 def _general_work_session(tmp_path, monkeypatch, payload):
@@ -424,9 +397,9 @@ def _general_work_session(tmp_path, monkeypatch, payload):
     return payload
 
 
-def test_general_work_session_editing_foreign_checkout_is_denied_with_memo_pointer(landed, tmp_path, monkeypatch):
+def test_general_work_session_editing_foreign_checkout_is_denied_with_memo_pointer(env, tmp_path, monkeypatch):
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    root, _ = landed
+    root, _ = env
     big = "".join(f"x{i}\n" for i in range(40))
     payload = _general_work_session(tmp_path, monkeypatch, _edit(root, "a.py", _lines(10), big))
     result = mod.op(payload)
@@ -505,13 +478,13 @@ def test_unsized_write_to_existing_file_is_priced_against_base(unsized):
     assert "XS budget spent (projected)" in _reason(result)
 
 
-def test_non_general_work_session_is_not_given_the_memo_pointer(landed, tmp_path, monkeypatch):
+def test_non_general_work_session_is_not_given_the_memo_pointer(env, tmp_path, monkeypatch):
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    root, _ = landed
+    root, _ = env
     _declare_general_work_root(monkeypatch, str(tmp_path / "general-work"))
     result = _over_budget_edit(root)
-    assert _is_deny(result)
-    assert "cross-repo-memo draft" not in _reason(result)
+    assert _is_routed(result)
+    assert "cross-repo-memo draft" not in str(result)
 
 
 def _shell(root, rel, projected, unprojectable=None, **extra):
@@ -541,7 +514,9 @@ def test_shell_write_unprojectable_denied_in_lane_only(env):
     xb.open_xs_lane(root, SID, sha)
     result = _shell(root, "a.py", None, "interpolated body")
     assert _is_deny(result)
-    assert "Budget unmeasurable (interpolated body). Make the change as one plain Edit per file." in _reason(result)
+    reason = _reason(result)
+    assert "Budget unmeasurable (interpolated body). XS budget used 0/2 files, 0/30 lines; remaining 2 files, 30 lines." in reason
+    assert "one plain Edit" not in reason
 
 
 def test_shell_write_exemptions_return_none(env):
@@ -572,7 +547,9 @@ def test_measured_clause_is_absent_from_xs_and_residue_denies(env, monkeypatch):
     assert _is_deny(xs)
     assert "Measured from landed" not in _reason(xs)
     assert "XS budget spent (projected): 1/2 files, 52/30 lines. Size S or larger. " in _reason(xs)
-    assert measure_envelope(xs).prose_bytes <= MESSAGE_PROSE_CAP_BYTES
+    bare = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": _reason(xs).removeprefix("Advisory: ")}}
+    assert measure_envelope(bare).prose_bytes <= MESSAGE_PROSE_CAP_BYTES
 
 
 def test_golf_second_projected_deny_closes_hand_edits(env):
@@ -656,33 +633,7 @@ def landed_unmarked(env, monkeypatch):
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
     monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    _own(root)
     return root, sha
-
-
-def test_landed_edit_without_s_plus_touch_is_denied_post_fire(landed_unmarked):
-    root, sha = landed_unmarked
-    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert _is_deny(result) and "already fired engine-ask" in _reason(result)
-    assert xb.read_lane(root, SID) is None
-
-
-def test_landed_edit_is_denied_post_fire_despite_a_pre_existing_xs_lane(landed_unmarked):
-    root, sha = landed_unmarked
-    xb.open_xs_lane(root, SID, "f" * 40)
-    result = mod.op(_edit(root, "a.py", "l1\n", "v1 = f(1)\n"))
-    assert _is_deny(result) and "already fired engine-ask" in _reason(result)
-    assert xb.read_lane(root, SID)["kind"] == "xs"
-
-
-def test_landed_shell_write_is_denied_post_fire(landed_unmarked):
-    from coordinator_core.hooks import _em_post_fire
-
-    root, _ = landed_unmarked
-    assert _shell(root, "a.py", _big(42)) is None
-    assert xb.read_lane(root, SID) is None
-    result = _em_post_fire.deny_envelope()
-    assert _is_deny(result) and "workflow.revise" in _reason(result)
 
 
 def test_landed_shell_write_opens_no_residue_lane_and_keeps_the_xs_lane(landed_unmarked):
@@ -707,3 +658,24 @@ def test_shell_write_escape_is_consumed_once(env, monkeypatch):
     big = "".join(f"x{i}\n" for i in range(42))
     assert _shell(root, "a.py", big) is None
     assert _is_deny(_shell(root, "a.py", big))
+
+
+def test_refusal_after_accepted_edits_names_applied_files_and_revert(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    old, new = _insert("l1\n", 20, "p")
+    assert mod.op(_edit(root, "a.py", old, new)) is None
+    _apply(root, "a.py", old, new)
+    denied = mod.op(_edit(root, "b.py", *_insert("l1\n", 11, "q")))
+    assert _is_deny(denied)
+    reason = _reason(denied)
+    assert "Applied: a.py (20 lines). Revert: git checkout -- a.py." in reason
+    assert "b.py (" not in reason
+
+
+def test_refusal_with_nothing_accepted_has_no_applied_clause(env):
+    root, sha = env
+    xb.open_xs_lane(root, SID, sha)
+    denied = mod.op(_edit(root, "a.py", _lines(10), _big(42)))
+    assert _is_deny(denied)
+    assert "Applied:" not in _reason(denied)

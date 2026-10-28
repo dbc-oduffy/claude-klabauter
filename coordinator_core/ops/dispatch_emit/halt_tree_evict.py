@@ -47,11 +47,15 @@ def evict(
     record_dir: Path,
     paths: Sequence[str],
     head_blobs: Mapping[str, bytes | None],
+    run_id: str | None = None,
+    refused: dict | None = None,
 ) -> dict:
     """Copy each path's tree bytes into `record_dir`, write `evicted.json`, reset the tree path.
 
     `head_blobs` maps path to its HEAD bytes, or None when HEAD does not track it (the tree path is
     then removed). Returns the `evicted.json` mapping. Never touches a path outside `paths`.
+    With `run_id`, a path whose reset would drop a peer's unlanded hunk (`live_write_guard`) is left
+    untouched and recorded in `refused` as `{path: holder-naming message}`.
     """
     root, record_dir = Path(root), Path(record_dir)
     index = _load(record_dir)
@@ -61,6 +65,14 @@ def evict(
         if data is None:
             continue
         head = head_blobs.get(rel)
+        if run_id is not None:
+            from coordinator_core.ops.dispatch_emit import live_write_guard
+
+            refusal = live_write_guard.check_live_write(root, run_id, rel, head or b"")
+            if refusal:
+                if refused is not None:
+                    refused[rel] = refusal
+                continue
         sha = blob_sha(data)
         if rel in index and index[rel]["blob"] != sha:
             # Already evicted once: the tree holds HEAD bytes now, so differing bytes are not ours to drop.

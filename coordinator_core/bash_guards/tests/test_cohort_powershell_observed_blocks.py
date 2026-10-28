@@ -1,7 +1,7 @@
 """C8 of `docs/plans/2026-08-19-the-held-guard-cohort-becomes-dialect-safe.md`
 -- AC7, AC9: observed-block evidence for the four held-cohort guards
-(`block_stash_destruction`, `block_subagent_stash_creation`,
-`block_worktree_creation`, `block_subagent_destructive_action`) now that
+(`block_stash_destruction`, `block_worktree_creation`,
+`block_subagent_destructive_action`) now that
 C4-C7 have widened their `MATCHERS` onto the PowerShell leg.
 
 AC7. A green suite is NOT evidence for this AC: every guard's own test file
@@ -95,10 +95,6 @@ _PROBES: Dict[str, Callable[[], Dict[str, Any]]] = {
     "block_stash_destruction": lambda: _payload_dict(
         "git stash drop 'stash@{999}'"
     ),
-    "block_subagent_stash_creation": lambda: _payload_dict(
-        "git stash push -- nonexistent-inert-probe-path-xyz",
-        agent_id="deadbeef0123",
-    ),
     "block_worktree_creation": lambda: _payload_dict(
         "git worktree add docs some-branch"
     ),
@@ -113,9 +109,6 @@ _BENIGN: Dict[str, Callable[[], Dict[str, Any]]] = {
     # "list" is not in `_DENY_SUBCOMMANDS` -- allowed under both the
     # tokenized pass and the legacy scanner.
     "block_stash_destruction": lambda: _payload_dict("git stash list"),
-    "block_subagent_stash_creation": lambda: _payload_dict(
-        "git stash list", agent_id="deadbeef0123"
-    ),
     # "list" is in `_ALLOW_SUBCOMMANDS` explicitly (the cleanup-reachability
     # carve-out the module docstring names) -- allowed under both paths.
     "block_worktree_creation": lambda: _payload_dict("git worktree list"),

@@ -54,7 +54,9 @@ live population. Measured (``time.process_time``, ~1570 files, ~35MB):
 The asserted budget is 200ms flat (never the repo's 500ms brightline), the
 AC6 ceiling ("at or below 200ms"). If a future change pushes the live scan
 over 200ms, the fix is to cut the walk's cost further (fewer files touched twice, a cheaper prefilter) — a looser
-assertion is not a fix.
+assertion is not a fix. The live scan memoises per-file verdicts by (size, mtime_ns), so the
+live budget test measures the warm (stat-only) path; the cold full-read path is ungated. A rewrite
+that preserves size and mtime (``cp -p``, ``touch -r``) outside the racy window is served stale.
 
 The vocabulary (``_RAW_LITERALS`` / ``_RAW_OPEN_RE`` / ``_RAW_MODE_RE``
 below) is census row 2's ``RAW`` pattern, decomposed into a literal-substring
@@ -167,6 +169,8 @@ Named residuals (negative spec) — what this gate does NOT prove
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import pathlib
 import re
@@ -310,10 +314,20 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/ops/claude_home_census.py': ('outside-repo', 'falsifier fixture of sparse files under a caller-given scratch root, never the repo: _sparse'),
+    'coordinator_core/ops/dispatch_emit/in_run_widen.py': ('in-repo-non-state', 'widen record appended under the tracked run record dir state/warp/<run_id>/: record_widen'),
+    'coordinator_core/ops/retention_run.py': ('outside-repo', 'retention lock file under the Claude home dir, O_EXCL create and stale unlink: _acquire'),
+    'coordinator_core/write_guards/_memory_evict.py': ('outside-repo', 'evicts a body file, rewrites MEMORY.md and appends memory-evictions.jsonl in a Claude-home project memory dir: evict_oldest'),
     'coordinator_core/git/store_hygiene.py': ('git-internal', 'daily-tier claim file created exclusively under <git-common-dir>/coordinator/store-hygiene.claim: _claim'),
     'coordinator_core/install/runtime_ignore_apply.py': ('in-repo-non-state', 'runtime-ignore rule block appended to the repo .gitignore, never state/: _append_rules'),
     'coordinator_core/ops/dispatch_emit/ask_stage_receipt.py': ('in-repo-non-state', 'stage claim exclusive-create and stage-receipt.json under the tracked record dir state/warp/<run_id>/: claim, write'),
+    'coordinator_core/ops/dispatch_emit/ask_stage_blocks.py': ('in-repo-non-state', 'ask-stage block text written under the run scratch/record dir by _write'),
+    'coordinator_core/ops/dispatch_emit/terminal_commit_closeout.py': ('in-repo-non-state', 'mkdir of the sizing-ledger and run-record dirs; bytes go through atomic_append.append_line and replace_text'),
+    'coordinator_core/ops/dispatch_emit/terminal_commit_ledger.py': ('in-repo-non-state', 'verdicts section appended to the run note, committed with the run'),
+    'coordinator_core/ops/dispatch_emit/terminal_commit_stamp.py': ('in-repo-non-state', 'regenerated publish allowlist under coordinator/, committed with the run; move rollback via os.replace'),
+    'coordinator_core/ops/dispatch_emit/held_revisions.py': ('claims-explicitly', 'held-revision store jsonl appended under the run record dir, declared through declare_write: _append'),
     'coordinator_core/ops/dispatch_emit/run_credit.py': ('claims-explicitly', 'credit.jsonl appended under the run dir, declared through declare_write: record'),
+    'coordinator_core/ops/dispatch_emit/pipeline_run.py': ('claims-explicitly', 'revisions.md appended under the run scratch dir, declared through declare_write: append_revision'),
     'coordinator_core/ops/fleet/scratch_hygiene.py': ('ignored-target', 'sweep cursor tmp + os.replace under the gitignored scratch/ dir: _write_cursor'),
     'coordinator_core/usage/session_cost.py': ('outside-repo', 'per-session cost cache tmp + os.replace under <settings-home>/state/session-cost: _write_cache'),
     'coordinator_core/git/sshsig.py': ('outside-repo', 'request frames written to the ssh-agent socket, never a file: _agent_requests'),
@@ -321,6 +335,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/arrival_record.py': ('git-internal', 'subagent-arrivals.jsonl appended under <git-common-dir>/coordinator-sessions/<sid>: append_arrival'),
     'coordinator_core/ops/baton_pm_turns.py': ('git-internal', 'pm-turns log appended under <git-common-dir>/coordinator-sessions/<sid>: append_turn'),
     'coordinator_core/ops/dispatch_emit/landing_export.py': ('ignored-target', 'blob export and its staging dir under the gitignored <worktree_root>/scratch/: write_bytes, os.replace'),
+    'coordinator_core/ops/dispatch_emit/ask_brief.py': ('ignored-target', 'over-cap brief full text spilled to the gitignored scratch/em-brief-spill/<digest>.md: load_em_brief'),
     'coordinator_core/ops/dispatch_emit/research_emit.py': ('ignored-target', 'ask.md and brief.md under the caller-named run scratch dir (gitignored scratch/): write_ask, bind_context'),
     'coordinator_core/ops/dispatch_emit/measured_rev.py': ('in-repo-non-state', 'measured-rev.json under the tracked record dir state/warp/<run_id>/, beside manifest.json; git objects via write_object: write_text'),
     'coordinator_core/ops/dispatch_emit/resume_snapshot.py': ('in-repo-non-state', 'resume-snapshot.json in the gitignored run scratch dir scratch/warp/<run_id>/: write'),
@@ -328,13 +343,16 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/kept_work.py': ('claims-explicitly', 'kept.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/row_returns.py': ('claims-explicitly', 'returns.json under the run record dir, declared through declare_write: write'),
     'coordinator_core/ops/dispatch_emit/run_withhold.py':('claims-explicitly', 'withhold.jsonl appended under the run dir, declared through declare_write: record'),
+    'coordinator_core/ops/dispatch_emit/halt_tree_evict.py': ('claims-explicitly', 'evicted blobs and index under the run record dir, declared through declare_write; tree restored to HEAD bytes: write_bytes, write_text'),
+    'coordinator_core/ops/dispatch_emit/objective_calibrate.py': ('in-repo-non-state', 'objective.json, base file and loop log under the tracked record dir state/warp/<run_id>/, calibration checkouts under gitignored scratch/: _atomic_write, append'),
+    'coordinator_core/ops/dispatch_emit/objective_check.py': ('in-repo-non-state', 'loop log appended under the tracked record dir state/warp/<run_id>/: _append_line'),
+    'coordinator_core/ops/dispatch_emit/objective_write.py': ('in-repo-non-state', 'objective.json and base file under the tracked record dir state/warp/<run_id>/ via atomic_write_bytes: write'),
     'coordinator_core/ops/dispatch_emit/verdict_supersession.py': ('claims-explicitly', 'tests-reverify record created exclusively under state/, declared through declare_write'),
     'coordinator_core/ops/review_prep.py': ('claims-explicitly', 'prep-freeze sidecar under the session share dir, declared through declare_write: _write_sidecar'),
     'coordinator_core/ops/dispatch_emit/terminal_commit_params_channel.py': ('ignored-target', 'params.json under the gitignored run scratch dir (RUN_DIR_ROOT/<run_id>/): materialize'),
     'coordinator_core/roadmap/blitz_stage.py': ('in-repo-non-state', 'OVERVIEW.md frontmatter stamp in the roadmap run dir, committed by _commit_paths in the same call; state writes go through create_exclusive'),
     'coordinator_core/group_em/gem_home.py': ('outside-repo', 'group-em home dir under <settings-home>/group-em (resolve_home refuses any path inside a checkout): .gitignore lines, seeded CLAUDE.md and state/ in ensure_home, _ensure_ignored'),
     'coordinator_core/ops/dispatch_emit/process_artifact_policy.py': ('git-internal', 'run-artifact path lines appended to <git-common-dir>/info/exclude, never a tracked path: exclude_locally'),
-    'coordinator_core/ops/dispatch_emit/terminal_commit.py': ('in-repo-non-state', 'regenerated publish allowlist under coordinator/, committed with the run'),
     'coordinator_core/ops/plan_chain/contract.py': ('claims-explicitly', 'chain manifest under the caller-named trail dir, declared through declare_write'),
     'coordinator_core/ops/plan_chain/digest.py': ('claims-explicitly', 'final digest under the trail dir, declared through declare_write: write_final_digest'),
     'coordinator_core/ops/plan_chain/phase1_checks.py': ('ignored-target', 'completeness sidecar under .coordinator-local/plan-sidecars (gitignored)'),
@@ -353,9 +371,10 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/discover_working_repos.py': ('outside-repo', 'tmp-then-replace of <home>/.claude/working-repos.yaml: write_working_repos_yaml'),
     'coordinator_core/ops/dispatch_emit/reverify_delivery.py': ('claims-explicitly', 'exclusive-create delivery-verdict record declared through declare_write: record_delivery_verdict; emit_reverify writes only the operator-named --out script'),
     'coordinator_core/ops/dispatch_emit/requirements_ledger.py': ('in-repo-non-state', 'run.json, the revision inbox and the requirements view under the tracked record dir state/warp/<run_id>/: _write_run, _write_view, revise; PM rows go through requirement_register (tracked, not gitignored scratch)'),
+    'coordinator_core/ops/dispatch_emit/stage_receipts.py': ('in-repo-non-state', 'stage receipt under the tracked record dir state/warp/<run_id>/receipts: write_receipt, atomic tmp then replace'),
     'coordinator_core/ops/dispatch_emit/run_close.py': ('ignored-target', 'close-job record under .coordinator-local/close-jobs (gitignored): _write_atomic'),
     'coordinator_core/ops/ceremony/close_background.py': ('in-repo-non-state', 'no write: the vocabulary hit is dataclasses.replace; the legs write through their own seams'),
-    'coordinator_core/ops/dispatch_emit/retest_targeted.py': ('ignored-target', 'fresh test-verdict record and the launcher log beside it under the retest dir (landing_integrity.RETEST_DIR): the two path.write_text calls and the _run_argv log open'),
+    'coordinator_core/ops/dispatch_emit/retest_targeted.py': ('ignored-target', 'fresh test-verdict record and the launcher log beside it under the retest dir (landing_integrity.RETEST_DIR): the two path.write_text calls and the _run_argv log open; --isolated-export also builds the gitignored scratch/warp/<run>/export via landing_export.build_head_export and removes it on pass'),
     'coordinator_core/ops/dispatch_emit/launcher_staged_twin.py': ('ignored-target', 'staged launcher twin under the gitignored scratch/warp/<run_id>/, contained by contained_path; carries the PLAINTEXT single-op run token inlined as runToken, so it must stay gitignored: ensure_twin tmp write_bytes, os.replace'),
     'coordinator_core/ops/dispatch_emit/reply_sidecar.py': ('in-repo-non-state', 'content-addressed stage readers under scratch/stage-readers and reply pages under the run record dir state/warp/<run_id>/: _ensure_reader, write_reply'),
     'coordinator_core/ops/plan_premise_carry.py': ('ignored-target', 'premise-carry record under .coordinator-local/plan-sidecars (gitignored): _write_atomic'),
@@ -401,11 +420,13 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/archive_stamp.py': ('outside-repo', 'NamedTemporaryFile holding the batch commit message handed to commit_scoped, unlinked after: cs_resolve_memos'),
     'coordinator_core/ops/session/emit_effective_delivery.py': ('in-repo-non-state', 'generated effective-delivery manifest under the plugin content root, temp file then replace; no state/ target'),
     'coordinator_core/warm/http_hook_forwarder.py': ('outside-repo', 'dial-count file and degrade log under CLAUDE_HOME, machine-global'),
+    'coordinator_core/warm/idle.py': ('outside-repo', 'ladder-gone tombstone inside the ladder engine copy root: make_ladder_gone'),
     'coordinator_core/async_hook_status.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: record_failure'),
     'coordinator_core/authz/classification.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: <module-level>'),
     'coordinator_core/authz/token.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_tokens'),
     'coordinator_core/backlog_grind_assemble/grind_rows.py': ('claims-explicitly', 'claim token in _declare_under_repo_root: rows, run records and the ledger under state/queue-grind stay raw (temp file + os.replace, one appended line) because the claim must anchor on the verb\'s --repo-root via a nested recording scope; the seam claims on the ambient cwd, which a dispatched agent rarely shares with its target repo'),
     'coordinator_core/bash_guards/_alternative_liveness.py': ('outside-repo', 'raw-write site(s) near tempdir/home/settings-home construct: <module-level>, _trigger_destructive_git_revert, _trigger_destructive_git_revert_advisory, _trigger_host_subagent_policy_guard'),
+    'coordinator_core/bash_guards/agent_process_ownership.py': ('outside-repo', 'append-only per-session agent command ledger under settings_home() state: record_agent_command (os.open O_APPEND, 0o600); never raises'),
     'coordinator_core/bash_guards/_dialect.py': ('to-fix', 'raw-write site(s): _log_dialect_parser_unavailable; runtime observed=yes (n=24), sample=/tmp/pytest-of-root/pytest-716/home-quarantine21712/.coordinator-claude-settings/state/dialect-parser-unavailable.log'),
     'coordinator_core/bash_guards/_rewrite_support.py': ('outside-repo', 'best-effort interpreter-resolution cache (atomic tmp+os.replace) under state/cache with an OS-tempdir fallback: _bt_python3_invocation; fail-open, no cross-session claim semantics'),
     'coordinator_core/bash_guards/_heavy_lease_store.py': ('outside-repo', 'lease records under settings_home()/heavy-admission/leases, outside every repo: write_lease'),
@@ -489,6 +510,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/install/plugin_cache_sessions.py': ('outside-repo', 'per-session binding files under the claude config dir, never a repo path: write_binding, prune_dead_bindings'),
     'coordinator_core/install/sandbox_check.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _tier1_filesystem_shape, _tier1b_mirror_and_cold_tier, _tier1b_pointer_and_shim, _tier1c_publish_repo_parity, _write_claude_author_argv_stub'),
     'coordinator_core/locked_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: held_lock, locked_rmw, replace_with_retry'),
+    'coordinator_core/machine_profile.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: per-session advisory-event claim files under share_dir'),
     'coordinator_core/op_census/module_summary.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: save_index'),
     'coordinator_core/op_census/spawn_bearing_ops.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: save_spawn_index'),
     'coordinator_core/ops/app_session.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_handle'),
@@ -587,10 +609,9 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/release_tagging.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _publish_release'),
     'coordinator_core/ops/render_posture_overlay.py': ('claims-explicitly', 'claim token in run'),
     'coordinator_core/ops/render_template.py': ('claims-explicitly', 'claim token in _render_and_write_in_place, main'),
-    'coordinator_core/ops/review_mint/wave_bookkeeping.py': ('ignored-target', 'reviewer wave sidecars and the bookkeeping record under .coordinator-local/subagent-share (gitignored): stamp_plan_id, bookkeep_wave'),
+    'coordinator_core/ops/review_mint/wave_bookkeeping.py': ('ignored-target', 'reviewer wave sidecars, the bookkeeping record and the plan_id stamp land under .coordinator-local/subagent-share (gitignored) box-local run sidecars: stamp_plan_id, bookkeep_wave'),
     'coordinator_core/ops/review_freeze_diff.py': ('claims-explicitly', 'claim token in freeze_diff'),
     'coordinator_core/ops/review_reverify.py': ('ignored-target', 'move-aside os.replace of a removed review edit into the gitignored session share dir <slice>.pre-review/removed/ (kept_at); restores via atomic_write_bytes are declared through declare_write: review_reverify'),
-    'coordinator_core/ops/review_mint/wave_bookkeeping.py': ('ignored-target', 'bookkeeping record and plan_id stamp land under .coordinator-local/subagent-share (gitignored) box-local run sidecars'),
     'coordinator_core/ops/rewrite_spec_backlinks.py': ('claims-explicitly', 'claim token in rewrite_file'),
     'coordinator_core/ops/roadmap_link_stubs.py': ('to-fix', "raw-write site(s): _roadmap_id_lock; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),
     'coordinator_core/ops/run_shellcheck_sweep.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _lint_files'),
@@ -633,6 +654,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/publish/time_transform.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: rename_codename_basenames, rewrite_plugin_paths, run_fix'),
     'coordinator_core/registry_fallback_counter.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: record_registry_fallback'),
     'coordinator_core/review_trail/reviewed_set.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _append_lines'),
+    'coordinator_core/review_trail/sweep_tombstone.py': ('ignored-target', 'tombstone files under the gitignored .coordinator-local/sweep-tombstones/: record_swept (os.makedirs plus O_APPEND lines) and expire_tombstones (os.unlink)'),
     'coordinator_core/session/claims.py': ('git-internal', 'raw-write site(s) within the claim-directory bookkeeping (pid, session_id, claimed_at, stage files) under the coordinator-sessions hub -- session-internal, per this batch\'s row body: routing session/claims.py through the seam would recurse through the very claim machinery the seam feeds'),
     'coordinator_core/session/claude_md_grant.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_claude_md_write_grant'),
     'coordinator_core/session/context_usage_sidecar.py': ('git-internal', 'raw-write site within 3 lines of a coordinator-sessions/meta.json reference'),
@@ -753,23 +775,76 @@ def _is_raw_writer_by_definition(content: bytes) -> bool:
 
 _READ_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0)
 
+#: A file modified within this window of the memo's write is never memoised:
+#: a same-tick rewrite could keep (size, mtime_ns) and hide behind a stale verdict.
+_MEMO_RACY_NS = 2_000_000_000
+
+
+def _memo_digest() -> str:
+    """Identity of the classifier; any edit to this file (vocabulary or the
+    ``_is_raw_writer*`` logic) discards every memoised verdict."""
+    return hashlib.sha1(pathlib.Path(__file__).read_bytes()).hexdigest()
+
+
+def _memo_path(root: pathlib.Path) -> Optional[pathlib.Path]:
+    """The live-tree memo under the gitignored pytest cache; a synthetic root has none."""
+    if pathlib.Path(root).resolve() != _REPO_ROOT:
+        return None
+    return _REPO_ROOT / ".pytest_cache" / "d" / "scan-memo" / "raw-writes.json"
+
+
+def _load_memo(path: Optional[pathlib.Path], digest: str) -> Dict[str, list]:
+    if path is None:
+        return {}
+    try:
+        body = json.loads(path.read_bytes())
+        if body["digest"] == digest and isinstance(body["files"], dict):
+            return {
+                k: v for k, v in body["files"].items()
+                if isinstance(v, list) and len(v) == 3 and isinstance(v[2], bool)
+            }
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return {}
+
+
+def _save_memo(path: Optional[pathlib.Path], files: Dict[str, list], digest: str) -> None:
+    if path is None:
+        return
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps({"digest": digest, "files": files}), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
 
 def scan_raw_writers(root: pathlib.Path) -> List[str]:
     """Return sorted POSIX paths (rooted at ``coordinator_core/...``, matching
     the register's keying) of every non-test ``.py`` module under ``root /
     "coordinator_core"`` whose bytes match the raw-write vocabulary. ``root``
-    is the repo root (real ``_REPO_ROOT`` or a synthetic ``tmp_path`` holding
-    its own ``coordinator_core/`` subtree). Exposed (not private) so the AC6
+    is the repo root (real ``_REPO_ROOT``) or a synthetic ``tmp_path`` holding
+    its own ``coordinator_core/`` subtree. Exposed (not private) so the AC6
     proof tests can drive it against a synthetic tree.
 
-    The inner loop avoids ``pathlib`` per-file overhead (``relative_to``,
-    ``as_posix``) in favour of plain string joins, keeping per-file overhead
-    out of the budgeted walk."""
+    The live tree keeps a ``(size, mtime_ns) -> verdict`` memo under
+    ``.pytest_cache``: an unchanged file is stat-ed, never opened. A cold or
+    discarded memo costs the full read of every file; a synthetic root is
+    always read in full."""
     scan_root_str = os.path.join(str(root), _SCAN_ROOT)
     if not os.path.isdir(scan_root_str):
         return []
     root_str = str(root)
     prefix_len = len(root_str) + 1 if not root_str.endswith(os.sep) else len(root_str)
+    memo_path = _memo_path(root)
+    digest = _memo_digest() if memo_path is not None else ""
+    old = _load_memo(memo_path, digest)
+    fresh: Dict[str, list] = {}
+    horizon_ns = time.time_ns() - _MEMO_RACY_NS
     found: List[str] = []
     for dirpath, dirnames, filenames in os.walk(scan_root_str):
         dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
@@ -781,19 +856,32 @@ def scan_raw_writers(root: pathlib.Path) -> List[str]:
             ):
                 continue
             full = os.path.join(dirpath, filename)
+            rel = full[prefix_len:].replace(os.sep, "/")
             try:
-                fd = os.open(full, _READ_FLAGS)
+                st = os.stat(full)
             except OSError:
                 continue
-            try:
-                # One unbuffered read sized past EOF: no file-object setup.
-                content = os.read(fd, os.fstat(fd).st_size + 1)
-            except OSError:
-                continue
-            finally:
-                os.close(fd)
-            if _is_raw_writer(content):
-                found.append(full[prefix_len:].replace(os.sep, "/"))
+            hit = old.get(rel)
+            if hit is not None and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
+                verdict = hit[2]
+            else:
+                try:
+                    fd = os.open(full, _READ_FLAGS)
+                except OSError:
+                    continue
+                try:
+                    content = os.read(fd, st.st_size + 1)
+                except OSError:
+                    continue
+                finally:
+                    os.close(fd)
+                verdict = _is_raw_writer(content)
+            if memo_path is not None and st.st_mtime_ns < horizon_ns:
+                fresh[rel] = [st.st_size, st.st_mtime_ns, verdict]
+            if verdict:
+                found.append(rel)
+    if memo_path is not None and fresh != old:
+        _save_memo(memo_path, fresh, digest)
     return sorted(found)
 
 
@@ -814,7 +902,11 @@ def _evaluate(
     root: pathlib.Path,
     register: Dict[str, Tuple[str, str]],
     ceiling: FrozenSet[str],
+    head: Optional[Tuple[FrozenSet[str], FrozenSet[str]]] = None,
 ) -> List[str]:
+    """`head` is (paths tracked at HEAD, paths dirty vs HEAD). A register row whose
+    path is absent at HEAD, or dirty vs HEAD and no longer matching, is not a violation:
+    both the HEAD export and the shared tree stay green. None means strict."""
     violations: List[str] = []
     found = scan_raw_writers(root)
     found_set = set(found)
@@ -833,6 +925,8 @@ def _evaluate(
             violations.append(f"blank reason: {rel}")
 
     for rel in register:
+        if head is not None and (rel not in head[0] or rel in head[1]):
+            continue
         target = root / rel
         if not target.is_file():
             violations.append(f"stale entry (file gone): {rel}")
@@ -842,6 +936,8 @@ def _evaluate(
 
     for rel, (category, _reason) in register.items():
         if category != "claims-explicitly":
+            continue
+        if head is not None and (rel not in head[0] or rel in head[1]):
             continue
         target = root / rel
         if not target.is_file():
@@ -862,8 +958,30 @@ def _evaluate(
     return violations
 
 
+def _head_state(root: pathlib.Path) -> Optional[Tuple[FrozenSet[str], FrozenSet[str]]]:
+    import subprocess
+
+    def _git(*args: str) -> Optional[List[str]]:
+        try:
+            r = subprocess.run(
+                ["git", "-C", str(root), "--no-optional-locks", *args],
+                capture_output=True, text=True, timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return r.stdout.split("\n") if r.returncode == 0 else None
+
+    tracked = _git("ls-tree", "-r", "--name-only", "HEAD", "--", "coordinator_core")
+    dirty = _git("diff", "--name-only", "HEAD", "--", "coordinator_core")
+    if tracked is None or dirty is None:
+        return None
+    return frozenset(tracked), frozenset(dirty)
+
+
+@pytest.mark.spawns_process
 def test_the_live_gate_is_green():
-    violations = _evaluate(_REPO_ROOT, _DISPOSITIONS, _TO_FIX_CEILING)
+    violations = _evaluate(_REPO_ROOT, _DISPOSITIONS, _TO_FIX_CEILING, _head_state(_REPO_ROOT))
     assert violations == [], (
         "The disposition gate is RED. Every raw-writing module needs a rule "
         "or a _DISPOSITIONS entry (category, reason). See this file's module "
@@ -939,6 +1057,92 @@ def _write(root: pathlib.Path, rel: str, text: str) -> None:
     target = root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
+
+
+def _scan_with_memo(monkeypatch, root: pathlib.Path, memo: pathlib.Path):
+    """Drive scan_raw_writers on a synthetic root with a memo file; returns
+    (found, classifier_call_count, digest_call_count)."""
+    calls = {"classify": 0, "digest": 0}
+    real_classify = _is_raw_writer
+    real_digest = _memo_digest
+
+    def counting_classify(content):
+        calls["classify"] += 1
+        return real_classify(content)
+
+    def counting_digest():
+        calls["digest"] += 1
+        return real_digest()
+
+    monkeypatch.setattr(f"{__name__}._memo_path", lambda r: memo)
+    monkeypatch.setattr(f"{__name__}._is_raw_writer", counting_classify)
+    monkeypatch.setattr(f"{__name__}._memo_digest", counting_digest)
+    found = scan_raw_writers(root)
+    return found, calls["classify"], calls["digest"]
+
+
+def _age(path: pathlib.Path, seconds_ago: int) -> None:
+    t = time.time_ns() - seconds_ago * 1_000_000_000
+    os.utime(path, ns=(t, t))
+
+
+def test_memo_is_invalidated_by_a_same_size_rewrite_with_a_new_mtime(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    writer = "def f(p):\n    open(p, 'w').write('x')\n"
+    reader = "def f(p):\n    open(p, 'r').read( 'x')\n"
+    assert len(writer) == len(reader)
+    _write(tmp_path, "coordinator_core/m.py", writer)
+    target = tmp_path / "coordinator_core" / "m.py"
+    _age(target, 100)
+
+    found, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert found == ["coordinator_core/m.py"] and classified == 1 and memo.exists()
+
+    found, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert found == ["coordinator_core/m.py"] and classified == 0, "unchanged file must hit the memo"
+
+    target.write_text(reader, encoding="utf-8")
+    _age(target, 50)
+    found, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert found == [] and classified == 1, "same size + new mtime must re-read and change the verdict"
+
+
+def test_memo_is_discarded_when_the_classifier_digest_changes(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    _write(tmp_path, "coordinator_core/m.py", "def f(p):\n    open(p, 'w').write('x')\n")
+    _age(tmp_path / "coordinator_core" / "m.py", 100)
+
+    _scan_with_memo(monkeypatch, tmp_path, memo)
+    _, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert classified == 0
+
+    monkeypatch.setattr(f"{__name__}._memo_digest", lambda: "different-classifier")
+    monkeypatch.setattr(f"{__name__}._memo_path", lambda r: memo)
+    calls = []
+    real = _is_raw_writer
+    monkeypatch.setattr(
+        f"{__name__}._is_raw_writer", lambda c: calls.append(1) or real(c)
+    )
+    assert scan_raw_writers(tmp_path) == ["coordinator_core/m.py"]
+    assert len(calls) == 1, "a changed digest must force a rescan"
+
+
+def test_memo_digest_is_computed_once_per_scan(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    for name in ("a", "b", "c"):
+        _write(tmp_path, f"coordinator_core/{name}.py", "def f(p):\n    open(p, 'w').write('x')\n")
+        _age(tmp_path / "coordinator_core" / f"{name}.py", 100)
+    _, _, digests = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert digests == 1
+
+
+def test_a_file_modified_inside_the_racy_window_is_never_memoised(tmp_path, monkeypatch):
+    memo = tmp_path / "memo" / "raw-writes.json"
+    _write(tmp_path, "coordinator_core/m.py", "def f(p):\n    open(p, 'w').write('x')\n")
+    _, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert classified == 1
+    _, classified, _ = _scan_with_memo(monkeypatch, tmp_path, memo)
+    assert classified == 1, "a just-written file must be re-read, not served from the memo"
 
 
 def test_an_undispositioned_raw_writer_goes_red(tmp_path):
@@ -1087,6 +1291,16 @@ def test_a_conftest_is_never_scanned(tmp_path):
     assert scan_raw_writers(tmp_path) == []
 
 
+def test_a_register_row_absent_at_head_or_dirty_is_not_a_violation(tmp_path):
+    _write(tmp_path, "coordinator_core/migrated.py", "def x():\n    return 1\n")
+    register = {
+        "coordinator_core/migrated.py": ("in-repo-non-state", "no longer a raw writer"),
+        "coordinator_core/ghost.py": ("in-repo-non-state", "absent at HEAD"),
+    }
+    assert _evaluate(tmp_path, register, frozenset(), (frozenset({"coordinator_core/migrated.py"}), frozenset({"coordinator_core/migrated.py"}))) == []
+    clean = _evaluate(tmp_path, register, frozenset(), (frozenset({"coordinator_core/migrated.py"}), frozenset()))
+    assert any("stale entry (no raw token): coordinator_core/migrated.py" in v for v in clean)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
-

@@ -103,9 +103,6 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "block_approval_sentinel_creation": (
         lambda mod: f"New-Item {mod._TARGET_BASENAME}"
     ),
-    "block_disarm_marker_sentinel_creation": (
-        lambda mod: f"New-Item {mod._TARGET_BASENAME}"
-    ),
     # `Remove-Item <sentinel>`, per this guard's own PowerShell test class;
     # routed to `check` (the registered CONFINEMENT_DENY leg).
     # Unquoted target, matching the guard's own PowerShell test class
@@ -133,31 +130,9 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "guard_heavy_command_admission": lambda mod: "tsc --noEmit",
     "guard_deploy_dirty_tree": lambda mod: "firebase deploy",
-    # The two grant guards entered this test's population on 2026-08-19 with
-    # the same subagent-boundary MATCHERS widening. Each fixture is the
-    # `_MODULE_M_GRANT` constant from that guard's OWN test file, which its
-    # `TestPowerShellParity.test_subagent_grant_denies_via_powershell` already
-    # proves reaches a deny under the PowerShell tool name -- copied rather
-    # than invented so the fixture is known to land in the guard's detection
-    # domain (see this table's own header comment).
-    "block_subagent_grant_acquisition": (
-        lambda mod: (
-            'python3 -m coordinator_core.session.claude_md_grant grant pm "note"'
-        )
-    ),
-    "block_subagent_guard_grant": (
-        lambda mod: (
-            "python3 -m coordinator_core.session.em_guard_grant grant "
-            'bump-foreign-repo-write "reason"'
-        )
-    ),
-    "block_subagent_findings_reject": (
-        lambda mod: "python3 -m coordinator_core.ops.review_findings_ledger reject F-1"
-    ),
     "block_subagent_plan_body_bash_write": (
         lambda mod: 'Add-Content -Path docs/plans/test.md -Value "x"'
     ),
-    "block_subagent_stash_creation": lambda mod: 'git stash push -m "wip"',
     "block_worktree_creation": (
         lambda mod: "git worktree add ../wt-1 feature-branch"
     ),
@@ -206,9 +181,6 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     #
     # Same positional-target `New-Item <target>` form as the sentinel-
     # creation guards above, and for the same reason.
-    "block_fleet_delegation_creation": (
-        lambda mod: f"New-Item {mod._TARGET_BASENAME}"
-    ),
     "guard_repo_setup_claude_home_refusal": (
         lambda mod: (
             "python3 -m coordinator_core.install.scaffold_structure --root "
@@ -237,15 +209,11 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "p4_verb_fence": (
         lambda mod: "p4.exe -p ssl:host:1666 -c client submit"
     ),
-    "block_venv_creation": lambda mod: "python -m venv .venv",
     "block_editor_kill_by_name": lambda mod: "Stop-Process -Name UnrealEditor",
     "block_whole_filesystem_scan": lambda mod: "find / -name x",
-    "block_unreal_engine_resave": (
-        lambda mod: "UnrealEditor-Cmd.exe Proj.uproject -run=ResavePackages"
-    ),
     "block_perforce_submit": lambda mod: "p4.exe submit -d msg",
     "block_external_workspace_vcs_write": lambda mod: "git.exe commit -m msg",
-    "block_topic_branch": lambda mod: "git checkout -b wip-nonstandard-name",
+    "block_topic_branch": lambda mod: "git commit -m wip-nonstandard-name",
     "block_push_pr_non_owned_remote": lambda mod: "git.exe push https://github.com/x/r.git main",
     # Dev-install-only guard: the monkeypatch below supplies the sentinel and root.
     "guard_headless_claude_plugin_dir": lambda mod: "claude -p hi",
@@ -450,7 +418,18 @@ def _topic_branch_judges_a_non_scratch_repo(
         return
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (tmp_path / ".git" / "config").write_text('[remote "origin"]\n\turl = x\n', encoding="utf-8")
     monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def _guards_judged_before_the_log_clamp() -> Any:
+    """A guard that clamps its own deny to a log inside `check` returns None for every input; the
+    dialect property is about the verdict the guard reaches, so it is judged before the clamp."""
+    from coordinator_core.bash_guards._alternative_liveness import pre_clamp_levels
+
+    with pre_clamp_levels():
+        yield
 
 
 def _powershell_payload(short_name: str, cmd: str) -> Dict[str, Any]:

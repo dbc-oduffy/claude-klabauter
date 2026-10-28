@@ -89,7 +89,14 @@ from typing import Mapping
 
 import yaml
 
-from coordinator_core.distill._common import active_reference_guard, files_citing, read_fm_field, split_frontmatter
+from coordinator_core.distill._common import (
+    RipgrepUnavailableError,
+    active_reference_guard,
+    active_reference_guard_many,
+    files_citing,
+    read_fm_field,
+    split_frontmatter,
+)
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted
 from coordinator_core.wire_paths import rel_id
 
@@ -285,10 +292,21 @@ def check_status_actioned(frontmatter_text: str) -> GuardResult:
     return GuardResult("status-actioned", False, f"status={value!r}, expected 'actioned'")
 
 
-def check_active_reference(needle: str, repo_root: Path) -> GuardResult:
+def check_active_reference(
+    needle: str, repo_root: Path, citations: "CitationPrefetch | None" = None
+) -> GuardResult:
     """Guard 3: the candidate must NOT still be actively referenced under
-    docs/ tasks/ archive/. A hit (still referenced) BLOCKS the delete."""
-    still_referenced = active_reference_guard(needle, repo_root)
+    docs/ tasks/ archive/. A hit (still referenced) BLOCKS the delete. `citations` carries a
+    batch prefetch; rg absent counts as referenced (ambiguity blocks)."""
+    if citations is not None and citations.rg_unavailable:
+        still_referenced = True
+    elif citations is not None and needle in citations.active:
+        still_referenced = citations.active[needle]
+    else:
+        try:
+            still_referenced = active_reference_guard(needle, repo_root)
+        except RipgrepUnavailableError:
+            still_referenced = True
     if still_referenced:
         return GuardResult("active-reference", False, f"still referenced: {needle}")
     return GuardResult("active-reference", True, "no active references found")
@@ -707,7 +725,12 @@ actual "content survived somewhere readable" signal Gap 2 asks for; a tasks/ or
 archive/ mention is process scaffolding, not durable capture."""
 
 
-def check_harvest_provenance(frontmatter_text: str, path: Path, repo_root: Path) -> GuardResult:
+def check_harvest_provenance(
+    frontmatter_text: str,
+    path: Path,
+    repo_root: Path,
+    citations: "CitationPrefetch | None" = None,
+) -> GuardResult:
     """Guard 7: harvest-provenance — closes Gap 2 for `commitment` candidates
     (2026-07-23 code-review Finding 1).
 
@@ -763,25 +786,43 @@ def check_harvest_provenance(frontmatter_text: str, path: Path, repo_root: Path)
     # the proof it looks for. Leaving the exclusion on here makes Guard 7's own evidence
     # invisible to it — fail-closed, so no data loss, but the artifact becomes permanently
     # undeletable, which is the DR-111 self-pinning defect relocated rather than fixed.
-    cited = active_reference_guard(
-        needle,
-        repo_root,
-        scope=_HARVEST_PROVENANCE_SCOPE,
-        exclude_provenance_blocks=False,
-    )
-    if not cited and basename != needle:
-        # Basename fallback keeps the SAFE default (exclude_provenance_blocks=True,
-        # i.e. not passed here at all): a bare basename is not path-qualified, so a
-        # provenance block belonging to a DIFFERENT harvested artifact that merely
-        # shares this candidate's filename must not count as proof. A basename
-        # citation in prose (outside any provenance block) still counts — only the
-        # provenance-block reading of the basename needle is excluded. The full-path
-        # needle above is unaffected: a provenance block citing the candidate's own
-        # full repo-relative path IS durable-capture proof and must keep counting.
-        cited = active_reference_guard(
-            basename,
-            repo_root,
-            scope=_HARVEST_PROVENANCE_SCOPE,
+    # `citations` (batch prefetch) answers both readings below with the same semantics: the
+    # full-path reading is raw containment (`files_citing`), the basename reading is
+    # `active_reference_guard_many` at its default exclusion.
+    if citations is not None and citations.rg_unavailable:
+        return GuardResult(
+            "harvest-provenance", False, "harvest-provenance: ripgrep unavailable, citation unverifiable"
+        )
+    try:
+        if citations is not None and needle in citations.harvest:
+            cited = bool(citations.harvest[needle])
+        else:
+            cited = active_reference_guard(
+                needle,
+                repo_root,
+                scope=_HARVEST_PROVENANCE_SCOPE,
+                exclude_provenance_blocks=False,
+            )
+        if not cited and basename != needle:
+            # Basename fallback keeps the SAFE default (exclude_provenance_blocks=True,
+            # i.e. not passed here at all): a bare basename is not path-qualified, so a
+            # provenance block belonging to a DIFFERENT harvested artifact that merely
+            # shares this candidate's filename must not count as proof. A basename
+            # citation in prose (outside any provenance block) still counts — only the
+            # provenance-block reading of the basename needle is excluded. The full-path
+            # needle above is unaffected: a provenance block citing the candidate's own
+            # full repo-relative path IS durable-capture proof and must keep counting.
+            if citations is not None and basename in citations.basename_cited:
+                cited = citations.basename_cited[basename]
+            else:
+                cited = active_reference_guard(
+                    basename,
+                    repo_root,
+                    scope=_HARVEST_PROVENANCE_SCOPE,
+                )
+    except RipgrepUnavailableError:
+        return GuardResult(
+            "harvest-provenance", False, "harvest-provenance: ripgrep unavailable, citation unverifiable"
         )
     if cited:
         return GuardResult(
@@ -833,14 +874,27 @@ class CitationPrefetch:
 
     live: Mapping[str, list[str]]
     harvest: Mapping[str, list[str]]
+    active: Mapping[str, bool] = field(default_factory=dict)
+    basename_cited: Mapping[str, bool] = field(default_factory=dict)
+    rg_unavailable: bool = False
 
 
 def prefetch_citations(needles: list[str], repo_root: Path) -> CitationPrefetch:
-    """Two `rg` spawns for any number of candidates, in place of two per candidate."""
-    return CitationPrefetch(
-        live=files_citing(needles, repo_root, live_reference_scope(repo_root)),
-        harvest=files_citing(needles, repo_root, list(_HARVEST_PROVENANCE_SCOPE)),
-    )
+    """Four `rg` spawns for any number of candidates, in place of up to four per candidate.
+    rg absent yields a prefetch whose every guard blocks (ambiguity blocks)."""
+    distinct = list(dict.fromkeys(needles))
+    basenames = list(dict.fromkeys(n.rsplit("/", 1)[-1] for n in distinct))
+    try:
+        return CitationPrefetch(
+            live=files_citing(distinct, repo_root, live_reference_scope(repo_root)),
+            harvest=files_citing(distinct, repo_root, list(_HARVEST_PROVENANCE_SCOPE)),
+            active=active_reference_guard_many(distinct, repo_root),
+            basename_cited=active_reference_guard_many(
+                basenames, repo_root, scope=_HARVEST_PROVENANCE_SCOPE
+            ),
+        )
+    except RipgrepUnavailableError:
+        return CitationPrefetch(live={}, harvest={}, rg_unavailable=True)
 
 
 def check_plan_status(frontmatter_text: str) -> GuardResult:
@@ -854,6 +908,8 @@ def check_plan_status(frontmatter_text: str) -> GuardResult:
 def check_live_reference(needle: str, citations: CitationPrefetch) -> GuardResult:
     """Harvested classes: no file in `live_reference_scope` other than the candidate itself
     may cite its repo-relative path. A test that opens the path is such a citation."""
+    if citations.rg_unavailable:
+        return GuardResult("active-reference", False, "ripgrep unavailable, treated as referenced")
     citing = [f for f in citations.live.get(needle, []) if f != needle]
     if citing:
         return GuardResult("active-reference", False, f"still referenced by: {', '.join(citing[:3])}")
@@ -863,6 +919,8 @@ def check_live_reference(needle: str, citations: CitationPrefetch) -> GuardResul
 def check_harvest_citation(needle: str, citations: CitationPrefetch) -> GuardResult:
     """Harvested classes: a docs/wiki or docs/decisions file must cite the candidate's full
     repo-relative path. A distillation-log row is not proof the content reached a guide."""
+    if citations.rg_unavailable:
+        return GuardResult("harvest-provenance", False, "ripgrep unavailable, citation unverifiable")
     citing = citations.harvest.get(needle, [])
     if citing:
         return GuardResult("harvest-provenance", True, f"cited by: {citing[0]}")
@@ -948,7 +1006,14 @@ def evaluate_candidate_detailed(
 
     if artifact_class in ("completion", "plan"):
         # Neither class takes the memo guards (realized_by, commitment-closure, distill-fate).
-        citations = citations if citations is not None else prefetch_citations([needle], repo_root)
+        if citations is None:
+            try:
+                citations = CitationPrefetch(
+                    live=files_citing([needle], repo_root, live_reference_scope(repo_root)),
+                    harvest=files_citing([needle], repo_root, list(_HARVEST_PROVENANCE_SCOPE)),
+                )
+            except RipgrepUnavailableError:
+                citations = CitationPrefetch(live={}, harvest={}, rg_unavailable=True)
         harvested: list[GuardResult] = []
         needs_harvest = True
         if artifact_class == "plan":
@@ -966,11 +1031,11 @@ def evaluate_candidate_detailed(
         guard_results.append(check_status_actioned(frontmatter_text))
     guard_results.extend(
         [
-            check_active_reference(needle, repo_root),
+            check_active_reference(needle, repo_root, citations),
             check_commitment_closure(needle, repo_root),
             check_realized_by(frontmatter_text, repo_root, existence_map=existence_map),
             check_distill_fate(frontmatter_text, path, repo_root),
-            check_harvest_provenance(frontmatter_text, path, repo_root),
+            check_harvest_provenance(frontmatter_text, path, repo_root, citations),
         ]
     )
     return artifact_class, guard_results

@@ -14,12 +14,15 @@ LAUNCHER_CHILD_EMIT_PARAM = "launcher_child"
 # A launcher child's return when it reaches a stage fold: {handle, ...}.
 STAGE_PENDING_KEY = "stage_pending"
 
+# A launcher child's return when its sizing resolved M+: the dispatch.emit params of the {sizing} script the launcher emits and starts once.
+CHAIN_HANDOFF_KEY = "chain"
+
 # The one line the twin writer replaces with the verified manifest text.
 STAGED_INLINE_SLOT = "const _STAGED_INLINE = null;"
 
 # The inline payload's resume block tells a twin it is past stage and carries what the launcher's own legs settled.
 STAGED_RESUME_KEY = "resume"
-STAGED_RESUME_FIELDS = ("arm", "sizing_rel", "plan_rel")
+STAGED_RESUME_FIELDS = ("arm", "sizing_rel", "plan_rel", "tshirt")
 
 
 def staged_twin_rel(run_id: str, sha256: str) -> str:

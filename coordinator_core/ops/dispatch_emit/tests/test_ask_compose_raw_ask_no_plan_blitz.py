@@ -1,9 +1,10 @@
-"""A raw or intake-sized ask embeds no plan-blitz; an M+ sizing does, so the re-fire terminates."""
+"""A raw or intake-sized ask embeds no plan-blitz; its M+ leg chains into the {sizing} script; an M+ sizing embeds it."""
 
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 ARM_M_PLUS = ask_compose.ARM_M_PLUS
@@ -43,8 +44,19 @@ def test_m_plus_sizing_ask_embeds_plan_blitz(monkeypatch):
     assert _DEFINES_BLITZ in _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
 
 
-def test_raw_ask_m_plus_pick_halts_naming_the_sizing_refire():
+def test_raw_ask_m_plus_leg_emits_and_starts_the_sizing_script_instead_of_halting():
     script = _compose()
-    assert "the sizing resolved to M+, and this script does not embed the plan-blitz stage" in script
+    assert "await workflow({ scriptPath: _chainPath })" in script
+    assert "dispatch.emit" in script
+    assert _DEFINES_BLITZ not in script
+    # The refusal survives only as the emit/start failure text.
+    assert script.count("does not embed the plan-blitz stage") == 0
+    assert "the chained run did not start (" in script
     assert _REFIRE in script
-    assert script.count("does not embed the plan-blitz stage") == 1
+
+
+def test_launcher_child_m_plus_leg_returns_a_chain_hand_off_and_starts_no_workflow():
+    script = _compose(launcher_child=True)
+    assert script.count("does not embed the plan-blitz stage") == 0
+    assert f"return {{ {CHAIN_HANDOFF_KEY}: {{ ask: true, sizing_path: _sizingRel" in script
+    assert "workflow(" not in script

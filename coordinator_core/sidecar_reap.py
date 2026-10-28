@@ -228,11 +228,22 @@ def reap_stale_sidecars(
             print(f"{preserved_too_young} sidecar(s) would be retained (younger than {age_floor_days}-day age floor)", file=out)
         return 0
 
+    from coordinator_core.review_trail.sweep_tombstone import record_swept
+
+    def _tombstone(files: list) -> None:
+        by_session: dict = {}
+        for f in files:
+            by_session.setdefault(os.path.basename(os.path.dirname(f)), []).append(rel_by_file[f])
+        for sid, rels in by_session.items():
+            record_swept(repo_root, sid, rels, "sidecar_reap", time.time())
+
     for f in untracked_to_reap:
         try:
             os.remove(f)
         except OSError:
             pass
+        else:
+            _tombstone([f])
         print(f"reaped {f} (untracked, plain rm)", file=out)
 
     if tracked_to_reap:
@@ -246,6 +257,7 @@ def reap_stale_sidecars(
             if rm_res.returncode != 0:
                 err.write(rm_res.stderr)
                 return rm_res.returncode
+            _tombstone(tracked_to_reap)
 
             commit_msg = f"reap {len(tracked_to_reap)} stale subagent-share sidecar(s)"
             commit_res = run_git(

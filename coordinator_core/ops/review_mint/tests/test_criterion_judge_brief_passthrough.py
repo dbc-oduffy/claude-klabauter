@@ -44,3 +44,17 @@ def test_passthrough_keywords_render_as_compose_criterion_judge_renders_them():
     assert "row_evidence: state/evidence/example.yaml" in prompt
     assert "V9" in prompt and "R7" in prompt
     assert prompt != _head_prompt(review, **_BASE)
+
+
+def test_struck_rows_render_the_out_of_scope_rule_in_the_brief_and_the_call():
+    review = _judge_review()
+    struck = [{"id": "R1", "text": "the far-side jaw label"}]
+    prompt, _ = criterion_judge_brief(review, stage_schemas=_SCHEMAS, **_BASE, struck_rows=struck)
+    call = compose_criterion_judge(review, stage_schemas=_SCHEMAS, **_BASE, struck_rows=struck, falsifier=None)
+    assert "R1: the far-side jaw label" in prompt and "out_of_scope" in prompt
+    assert _prompt_literal(prompt) in call
+    plain, _ = criterion_judge_brief(review, stage_schemas=_SCHEMAS, **_BASE)
+    assert "Struck rows" not in plain
+    assert "Struck rows" not in criterion_judge_brief(
+        review, stage_schemas=_SCHEMAS, **_BASE, struck_rows=[]
+    )[0]

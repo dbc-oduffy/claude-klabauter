@@ -102,6 +102,21 @@ def test_ansi_is_stripped(tmp_path):
     assert res.tests == (FailingTest("a/test_x.py", "test_y"),)
 
 
+def test_parametrized_ids_with_spaces_parse_whole(tmp_path):
+    p = tmp_path / "ids.txt"
+    p.write_text(
+        "FAILED a/test_x.py::test_y[This is BREADTH] - AssertionError: no\n"
+        "a/test_x.py::test_y[two words]\n"
+        "FAILED a/test_x.py::test_y[This is BREADTH]\n"
+    )
+    res = evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+    assert [(t.name, t.message) for t in res.tests] == [
+        ("test_y[This is BREADTH]", "AssertionError: no"),
+        ("test_y[two words]", ""),
+        ("test_y[This is BREADTH]", ""),
+    ]
+
+
 def test_bare_node_id_list(tmp_path):
     p = tmp_path / "ids.txt"
     p.write_text("a/test_x.py::test_y\n\n")

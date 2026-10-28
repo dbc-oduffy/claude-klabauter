@@ -67,12 +67,12 @@ def test_the_gate_verdict_and_composed_script_dispatch_r3s_work_at_m_plus(repo, 
     assert ".remaining ?? []).length > 0" in script[owes : owes + 400]
     assert "else if (!_ledgerOwes) { _xsTail = true; }" in script
     leg = script.index("label: 'ledger-replan'")
-    prompt = script[leg - 4200 : leg]
-    assert "_gate.resume_ledger.blocking.join(', ')" in prompt
+    prompt = script[script.index("Ledger-resume re-plan leg.") : leg]
+    assert "(_gate.resume_ledger.blocking ?? []).join(', ')" in prompt
     assert "_gate.resume_ledger.remaining ?? {}" in prompt
     assert "label: 'ledger-restage'" not in script
     assert owes < leg < script.index("label: 'verify'")
-    assert "with only_rows set to the ids of exactly the rows you added" in prompt
+    assert "to the ids of exactly the rows you added" in prompt and "only_rows" in prompt
 
 
 def test_the_xs_baseline_is_gone_from_the_composed_script(monkeypatch):

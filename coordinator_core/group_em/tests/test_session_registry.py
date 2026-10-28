@@ -141,3 +141,17 @@ def test_liveness_annotation_pid_not_running(tmp_path):
     live, reason, state = sr.liveness_annotation({"session_id": "s1"}, tmp_path)
     assert (live, reason) == (False, "pid_not_running")
     assert "process not running" in state
+
+
+def test_parse_row_accepts_leading_object_before_stray_brace(tmp_path):
+    path = tmp_path / "1561.json"
+    path.write_text(json.dumps({"sessionId": "s-tail", "pid": 1561}) + "\n}", encoding="utf-8")
+    row = sr.parse_row(path)
+    assert row is not None
+    assert row.session_id == "s-tail" and row.pid == 1561
+
+
+def test_parse_row_malformed_text_with_tail_still_none(tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_text('{"sessionId": "x", }}', encoding="utf-8")
+    assert sr.parse_row(path) is None

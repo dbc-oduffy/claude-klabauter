@@ -86,3 +86,65 @@ def test_raw_ask_script_composes_under_the_runner_cap(_production_inputs):
     except ask_compose.AskComposeRefused:
         raise AssertionError(_breakdown(assets)) from None
     assert _bytes(script) <= _CAP
+
+
+_BRIEF_TEXT = "Frame: the plan"
+_BRIEF_DELTA_BYTES = 8192  # a short brief may add its own text and framing, never a stage's worth of prompt
+
+
+def _compose_shape(brief) -> str:
+    return ask_compose.compose_ask_script(
+        repo_root=_REPO_ROOT,
+        prompt="Fix: a short ask.",
+        sizing_rel=None,
+        run_id="run-1",
+        session_id=None,
+        script_path="x.mjs",
+        em_brief=brief,
+        **_assets(),
+    )
+
+
+@pytest.mark.skipif(not _PLUGIN_ROOT, reason="plugin root does not resolve; plan-blitz and roadmap-blitz are unreachable")
+def test_raw_ask_stage_set_does_not_depend_on_a_brief(_production_inputs):
+    from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief
+
+    bare = _compose_shape(None)
+    briefed = _compose_shape(EmBrief(text=_BRIEF_TEXT, source="inline", context=()))
+    assert "async function roadmapBlitz(" not in bare
+    assert "async function roadmapBlitz(" not in briefed
+    assert _bytes(briefed) - _bytes(bare) < _BRIEF_DELTA_BYTES
+
+
+def test_cap_refusal_names_the_largest_inlined_component(monkeypatch):
+    monkeypatch.setattr(emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 1000)
+    big = "  // " + "x" * 6000
+    with pytest.raises(ask_compose.AskComposeRefused) as exc:
+        ask_compose._finish_script([big, "  return {};"], "m.json", "d", ["P"])
+    text = str(exc.value)
+    assert "1000-byte cap" in text and "largest inlined component // xxx" in text and "(6005 bytes)" in text
+
+
+_RAW_BUDGET = 460800
+
+
+@pytest.mark.skipif(not _PLUGIN_ROOT, reason="plugin root does not resolve; plan-blitz and roadmap-blitz are unreachable")
+def test_briefed_relayed_asks_differ_only_by_the_context_bytes(_production_inputs):
+    from coordinator_core.ops.dispatch_emit import compose_size_probe as probe
+
+    m = probe.measure_paired(_REPO_ROOT)
+    assert len(probe.PAIRED_ASK.encode("utf-8")) > 1024
+    assert m["bare_total"] <= _RAW_BUDGET, f"bare relayed ask is {m['bare_total']} bytes (budget {_RAW_BUDGET})"
+    assert m["right"] <= _RAW_BUDGET
+    assert m["delta"] == m["context_bytes"], (
+        f"with-context minus bare is {m['delta']} bytes, context is {m['context_bytes']}; "
+        f"largest differing component {m['differing_components'][:1]}"
+    )
+
+
+def test_shape_delta_names_the_largest_differing_component():
+    from coordinator_core.ops.dispatch_emit import compose_size_probe as probe
+
+    m = probe.shape_delta("same\nsmall\ntail", "same\nsmall!\n" + "x" * 500 + "\ntail")
+    assert m["delta"] == 501 + 1 and m["differing_components"][0][1] > 500
+    assert probe.shape_delta("a\nb", "a\nb")["differing_components"] == []

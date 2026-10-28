@@ -156,6 +156,14 @@ def mint(
     ):
         if stale is not None:
             stale.unlink(missing_ok=True)
+    # A params file left by the prior mint carries its token; a no-prompt-block land_run would
+    # read it back and be refused as "spent, expired or not the one minted". Deferred: the
+    # channel module imports this one.
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as _chan
+
+    stale_params = _chan.params_path(repo_root, run_id)
+    if stale_params is not None:
+        stale_params.unlink(missing_ok=True)
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     return token
 

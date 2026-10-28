@@ -1,4 +1,4 @@
-"""A ledger-check halt's Lands-Chunks rows read coded at the halt sha, through both halt writers."""
+"""A halted record commit, ledger-check included, lands run artifacts only and stamps no chunk coded."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from coordinator_core.ops.dispatch_emit import emit, land_run_halt, sizing_fire, terminal_commit
+from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
@@ -71,15 +71,8 @@ def _params(**extra) -> dict:
     return {"script_path": "run.mjs", "run_id": RUN, HALTED_RECORD_PARAM: HALT, **extra}
 
 
-def _terminal(root: Path, params: dict) -> dict:
+def _call(root: Path, params: dict) -> dict:
     return terminal_commit._handler(params, repo_root=root / ".git")
-
-
-def _land_run(root: Path, params: dict) -> dict:
-    return land_run_halt.land(root, root, params)
-
-
-WRITERS = pytest.mark.parametrize("call", [_terminal, _land_run], ids=["halted_record_commit", "land_run_halt"])
 
 
 def _rows(root: Path) -> dict:
@@ -88,72 +81,42 @@ def _rows(root: Path) -> dict:
     return {r["id"]: r for r in yaml.safe_load(block)}
 
 
-@WRITERS
-def test_landed_chunk_reads_coded_at_the_halt_sha_in_a_plan_only_second_commit(repo, call):
+def test_ledger_halt_lands_no_product_and_stamps_no_row(repo):
     _chunks(repo, {"C1": ["a.py"]})
 
-    out = call(repo, _params(**PASSING))
+    out = _call(repo, _params(**PASSING))
 
     assert out["committed"] is True, out
-    halt_sha = out["sha"]
-    stamp = out["lands_chunks_stamp"]
-    assert stamp["rows_coded"] == {PLAN: ["C1"]}, stamp
-    assert "Lands-Chunks: C1" in _git(repo, "log", "-1", "--format=%B", halt_sha)
-    rows = _rows(repo)
-    assert rows["C1"]["disposition"] == "coded" and rows["C1"]["disposition_ref"] == halt_sha
-    assert rows["C2"]["disposition"] == "open"
-    assert _git(repo, "rev-parse", "HEAD") == stamp["coded_sha"] != halt_sha
-    assert _git(repo, "show", "--name-only", "--format=", "HEAD").split() == [PLAN]
-    assert halt_sha in _git(repo, "rev-list", "HEAD~1").split()
+    assert out["lands_chunks_stamp"] is None
+    assert "landed_chunks" not in out
+    assert out["withheld"]["a.py"] == "halt-record-only"
+    assert "Lands-Chunks" not in _git(repo, "log", "-1", "--format=%B", out["sha"])
+    assert _git(repo, "rev-parse", "HEAD") == out["sha"]
+    landed = _git(repo, "show", "--name-only", "--format=", out["sha"]).split()
+    assert "a.py" not in landed and "reports/C1.md" not in landed
+    assert all(p.startswith(RECORD_DIR_ROOT + "/") for p in landed), landed
+    assert "a.py" in _git(repo, "status", "--porcelain", "-uall")
+    assert _rows(repo)["C1"]["disposition"] == "open"
 
 
-@WRITERS
-def test_a_refire_still_resumes_at_the_ledger_after_the_stamp(repo, call):
-    _chunks(repo, {"C1": ["a.py"]})
-    out = call(repo, _params(**PASSING))
-    assert out["lands_chunks_stamp"]["rows_coded"] == {PLAN: ["C1"]}, out
-
-    state = emit.resume_landed_state(repo, PLAN)
-    rows = list(_rows(repo).values())
-
-    assert out["sha"] in state.landing_shas["C1"]
-    assert sizing_fire._terminal_coded(rows, state) is False
-
-
-@WRITERS
-def test_a_halt_with_no_landed_chunk_makes_no_second_commit(repo, call):
-    out = call(repo, _params())
+def test_a_halt_with_no_finished_chunk_stamps_nothing(repo):
+    out = _call(repo, _params())
 
     assert out["committed"] is True, out
-    assert "lands_chunks_stamp" not in out
+    assert out["lands_chunks_stamp"] is None
     assert _git(repo, "rev-parse", "HEAD") == out["sha"]
     assert _rows(repo)["C1"]["disposition"] == "open"
 
 
-@WRITERS
-def test_a_non_ledger_halt_stamps_nothing(repo, call):
+def test_a_non_ledger_halt_withholds_product_the_same_way(repo):
     _chunks(repo, {"C1": ["a.py"]})
     params = _params(**PASSING)
     params[HALTED_RECORD_PARAM] = {"halted": "refusal", "reason": "x", "plan": PLAN}
 
-    out = call(repo, params)
+    out = _call(repo, params)
 
     assert out["committed"] is True, out
-    assert "lands_chunks_stamp" not in out
+    assert out["lands_chunks_stamp"] is None
+    assert out["withheld"]["a.py"] == "halt-record-only"
+    assert "a.py" not in _git(repo, "show", "--name-only", "--format=", out["sha"]).split()
     assert _rows(repo)["C1"]["disposition"] == "open"
-
-
-@WRITERS
-def test_a_stamp_failure_is_named_and_the_halt_commit_stands(repo, call, monkeypatch):
-    def boom(*a, **k):
-        raise RuntimeError("stamp exploded")
-
-    monkeypatch.setattr(terminal_commit, "_stamp_coded_commit", boom)
-    _chunks(repo, {"C1": ["a.py"]})
-
-    out = call(repo, _params(**PASSING))
-
-    assert out["committed"] is True, out
-    assert "stamp exploded" in out["lands_chunks_stamp"]["coded_stamp_error"]
-    assert _rows(repo)["C1"]["disposition"] == "open"
-    assert out["sha"] in _git(repo, "rev-list", "HEAD").split()

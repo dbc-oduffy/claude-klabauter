@@ -207,6 +207,58 @@ _GATE_CLEARED_KEY = "cleared"
 
 _UNDECLARED_GATE_KEY = "awaiting_gate"
 
+#: Plan-row keys the pipeline reads, or deliberately carries as inert metadata.
+#: A key outside this set is warned at read; it is never consumed.
+KNOWN_ROW_KEYS = frozenset({
+    "id", "title", "surface", "change_kind", "body", "disposition", "disposition_ref",
+    "disposition_detail", "disposition_note", "writes", "writes_note", "writes_under",
+    "queue_scope", "traces_to_brief", "depends_on", "depends_on_plan", "register_rows",
+    "reads", "reads_at_head", "consumes", "external_gate", "external_reads_ungated",
+    "authorization", "performer", "deferred", "deferred_until", "agent_type", "agent_model",
+    "model", "effort", "acceptance", "ready", "needs_slot", "execution_mode", "memo_to",
+    "memo_kind", "delivered_via", "case_against", "kind", "pm_approved", "pm_approved_by",
+    "pm_disposition", "receipt", "blocked_on", "host", "appends", "falsifier_review_of",
+    "satisfies", "verification_runs", "done_when", "disjoint_parallel", "premise_close",
+})
+
+def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bool) -> Optional[dict]:
+    """The ``{chunk, verdict, ref}`` citation when ``raw``'s epistemic-premise gate closes it, else None.
+
+    A legacy-absent outcome (plan not opted in, no verdict) dispatches and logs its reason."""
+    from coordinator_core.ops.dispatch_emit.premise_gate import evaluate_premise_gate
+
+    outcome = evaluate_premise_gate(raw, rows_by_id, verdicts, opted_in)
+    if outcome.action == "dispatch" and outcome.cite:
+        _LOGGER.info(
+            "read_spine: row %r dispatches: premise %r has no recorded verdict (%s)",
+            raw.get("id"), outcome.cite.get("chunk"), outcome.cite.get("reason"),
+        )
+    return outcome.cite if outcome.action == "close_wont_do" else None
+
+
+#: Plan-row key spellings read as another key: ``model`` is ``agent_model``.
+ROW_KEY_ALIASES = MappingProxyType({"model": "agent_model"})
+
+#: A model tag is a short family name or a full ``claude-`` id.
+KNOWN_ROW_MODELS = frozenset({"opus", "sonnet", "haiku"})
+
+
+def _row_agent_model(raw: dict, row_id: str) -> Optional[str]:
+    """The row's model tag from ``agent_model`` or its alias ``model``; refuse an unknown or conflicting value."""
+    values = {k: raw.get(k) for k in ("agent_model", "model") if raw.get(k) is not None}
+    if len({repr(v) for v in values.values()}) > 1:
+        raise InvalidFieldTypeError(
+            f"row {row_id!r} carries conflicting model tags {values!r}; keep one of model / agent_model"
+        )
+    if not values:
+        return None
+    value = next(iter(values.values()))
+    if not isinstance(value, str) or not (value in KNOWN_ROW_MODELS or value.startswith("claude-")):
+        raise InvalidFieldTypeError(
+            f"row {row_id!r} model {value!r} is not one of {sorted(KNOWN_ROW_MODELS)} or a claude- id"
+        )
+    return value
+
 
 _TERMINAL_NON_CODED = NON_DISPATCHABLE_DISPOSITIONS - {"coded"}
 
@@ -691,7 +743,22 @@ class SpineReadError(ValueError):
     Covers every non-LOCATED outcome from ``load_rows`` (ABSENT, MALFORMED)
     — this module does not attempt to emit against a spine it could not
     locate or parse.
+
+    ``row_id`` / ``field`` read the offending row and field off the message
+    (``row 'X' declares <field>:`` / ``row 'X' <field>:``); None when absent.
     """
+
+    @property
+    def row_id(self) -> Optional[str]:
+        m = re.search(r"row ('[^']*'|\"[^\"]*\")", str(self))
+        return m.group(1)[1:-1] if m else None
+
+    @property
+    def field(self) -> Optional[str]:
+        m = re.search(r"\bdeclares ([a-z_]+):", str(self)) or re.search(r"row \S+ ([a-z_]+):", str(self))
+        if m:
+            return m.group(1)
+        return "reads_at_head/reads" if isinstance(self, ContradictoryReadDeclarationError) else None
 
 
 class MemoRowNoReceiverError(SpineReadError):
@@ -775,11 +842,20 @@ _PLAN_TASKS_SCHEMA = (
 )
 
 
-@functools.cache
-def change_kind_members() -> frozenset:
-    """The closed ``change_kind`` enum, read from plan-tasks.schema.json (never copied)."""
-    schema = json.loads(_PLAN_TASKS_SCHEMA.read_text(encoding="utf-8"))
+@functools.lru_cache(maxsize=4)
+def _members_at(schema_path: str, mtime_ns: int, size: int) -> frozenset:
+    schema = json.loads(Path(schema_path).read_text(encoding="utf-8"))
     return frozenset(schema["properties"]["change_kind"]["enum"])
+
+
+def change_kind_members() -> frozenset:
+    """The closed ``change_kind`` enum, read from plan-tasks.schema.json (never copied).
+
+    Memoised on the schema file's (mtime, size) so a long-lived engine sees an
+    enum edited after it loaded, as a fresh process does.
+    """
+    st = _PLAN_TASKS_SCHEMA.stat()
+    return _members_at(str(_PLAN_TASKS_SCHEMA), st.st_mtime_ns, st.st_size)
 
 
 class InvalidRowIdError(SpineReadError):
@@ -833,6 +909,7 @@ class EmitterRow(NamedTuple):
     second place the pattern could drift from the vendored schema's own
     ``pattern``. Both default to ``None``, and a spine declaring neither key
     carries both as ``None`` here exactly as before this field existed.
+    ``effort`` is read the same tolerant way and carried unjudged to ``WaveRow``.
 
     ``body`` is carried for exactly one reader: ``emit.py``'s
     ``_row_agent_type`` asks whether a row's verification has to RUN
@@ -879,6 +956,7 @@ class EmitterRow(NamedTuple):
     depends_on: list
     agent_type: Optional[str] = None
     agent_model: Optional[str] = None
+    effort: Optional[str] = None
     body: str = ""
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
@@ -886,6 +964,7 @@ class EmitterRow(NamedTuple):
     reads_at_head: tuple = ()
     appends: tuple = ()
     memo_send: Optional[Mapping] = None
+    disjoint_parallel: bool = False
 
 
 _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
@@ -1243,6 +1322,13 @@ def read_spine(
         _kind = raw.get("change_kind")
         if _kind is not None and _kind not in change_kind_members():
             bad_kinds.append(f"row {row_id!r} field change_kind: {_kind!r}")
+        _unknown = sorted(k for k in raw if k not in KNOWN_ROW_KEYS and k != _UNDECLARED_GATE_KEY)
+        if _unknown:
+            _LOGGER.warning(
+                "read_spine: row %r carries key(s) %s the pipeline does not read; they are ignored",
+                row_id,
+                _unknown,
+            )
         if _UNDECLARED_GATE_KEY in raw:
             raise UndeclaredGateKeyError(
                 f"row {row_id!r} declares {_UNDECLARED_GATE_KEY!r}, which "
@@ -1387,7 +1473,8 @@ def read_spine(
                 reads=reads,
                 depends_on=depends_on,
                 agent_type=raw.get("agent_type"),
-                agent_model=raw.get("agent_model"),
+                agent_model=_row_agent_model(raw, row_id),
+                effort=raw.get("effort"),
                 body=raw.get("body") or "",
                 writes_under=writes_under,
                 verification_runs=(
@@ -1403,6 +1490,7 @@ def read_spine(
                     else ()
                 ),
                 memo_send=memo_draft_fields(raw)[0] if memo_row_dispatchable(raw) else None,
+                disjoint_parallel=raw.get("disjoint_parallel") is True,
             )
         )
 
@@ -1441,6 +1529,7 @@ def read_spine(
         "plan frontmatter", plan_level_edges, plan_edge_root, plan_edge_cache
     )
     discharges: Optional[dict] = None
+    premise_state: Optional[tuple] = None
     source_memo_resolved: Optional[str] = None
     for raw in raw_rows:
         disposition = raw.get("disposition")
@@ -1511,6 +1600,29 @@ def read_spine(
             if own_plan_rel is not None and disposition in (None, "open")
             else None
         )
+        premise_close = None
+        if (
+            disposition not in NON_DISPATCHABLE_DISPOSITIONS
+            and own_landed_sha is None
+            and any(
+                isinstance(e, dict) and e.get("gate_kind") == "epistemic-premise"
+                for e in (raw.get("depends_on") if isinstance(raw.get("depends_on"), list) else ())
+            )
+        ):
+            if premise_state is None:
+                from coordinator_core.ops.dispatch_emit.premise_gate import plan_opted_in, read_premise_verdicts
+
+                verdicts = read_premise_verdicts(Path(plan_path))
+                by_id = {
+                    r.get("id"): (
+                        {**r, "disposition": "coded"}
+                        if own_plan_rel is not None and (own_plan_rel, r.get("id")) in landed_map
+                        else r
+                    )
+                    for r in raw_rows
+                }
+                premise_state = (verdicts, by_id, plan_opted_in(Path(plan_path)))
+            premise_close = _premise_close_for(raw, premise_state[1], premise_state[0], premise_state[2])
         plan_hold = None
         if not (
             disposition in NON_DISPATCHABLE_DISPOSITIONS
@@ -1549,6 +1661,12 @@ def read_spine(
                 )
             elif em_discharged is not None:
                 _reason = ("em-discharged", "EM discharge recorded %s" % em_discharged)
+            elif premise_close is not None:
+                _reason = (
+                    "premise-false",
+                    "premise %s recorded %s (ref %s): closes wont_do, no executor dispatched"
+                    % (premise_close["chunk"], premise_close["verdict"], premise_close.get("ref") or "none"),
+                )
             elif unbuilt_writes:
                 _reason = (
                     "em-performed",
@@ -1621,9 +1739,10 @@ def read_spine(
             elif plan_hold is not None:
                 _reason = ("depends_on_plan", plan_hold)
             if _reason is not None:
-                exclusions.append(
-                    {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
-                )
+                entry = {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
+                if _reason[0] == "premise-false":
+                    entry["premise_close"] = premise_close
+                exclusions.append(entry)
 
         if (
             disposition in NON_DISPATCHABLE_DISPOSITIONS
@@ -1632,6 +1751,8 @@ def read_spine(
             or em_discharged is not None
         ):
             satisfied_ids.add(raw.get("id"))
+        elif premise_close is not None:
+            blocked_ids.add(raw.get("id"))
         elif em_performed:
             # Not dispatched, and not done: an open EM row (a premise probe, a
             # memo not yet sent) holds its dependents until it is resolved.

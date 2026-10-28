@@ -165,3 +165,42 @@ def test_a_heavy_launcher_above_the_anchor_does_not_zero_the_count():
     heavy = [rows[0]] + rows[3:]
     assert [r.pid for r in heavy_roots(heavy, rows)] == [1]
     assert sorted(r.pid for r in heavy_roots(heavy, rows, anchor_pid=2)) == [1, 4]
+
+
+class _AlivePrims(_Prims):
+    def __init__(self, live):
+        super().__init__([])
+        self._live = set(live)
+
+    def alive(self, pid, ctime):
+        return pid in self._live
+
+
+def test_live_heavy_commands_drops_dead_roots_and_light_pollers():
+    from coordinator_core.bash_guards._session_census import live_heavy_commands
+
+    dead, poller, real = R(1, 0, 1, "python"), R(2, 0, 2, "python"), R(3, 0, 3, "python")
+    lines = {1: "python a.py", 2: "python scratch/pr_watch.py 5", 3: "python -m pytest"}
+    out = live_heavy_commands([dead, poller, real], _AlivePrims({2, 3}), lines.get)
+    assert out == [real]
+
+
+def test_light_script_match_is_python_only_and_unreadable_counts_heavy():
+    from coordinator_core.bash_guards._session_census import live_heavy_commands
+
+    node = R(1, 0, 1, "node")
+    py = R(2, 0, 2, "python")
+    out = live_heavy_commands([node, py], _AlivePrims({1, 2}), lambda pid: "x pr_watch.py" if pid == 1 else None)
+    assert out == [node, py]
+
+
+def test_command_line_reads_this_process():
+    import os
+    import sys
+
+    from coordinator_core.bash_guards._session_census import command_line
+
+    if sys.platform not in ("win32",) and not sys.platform.startswith("linux"):
+        return
+    line = command_line(os.getpid())
+    assert line and ("python" in line.lower() or "pytest" in line.lower())

@@ -1,4 +1,4 @@
-"""`--reverify-delivery` also runs for a delivery PASS whose criterion is not_met/indeterminate,
+"""`--reverify-delivery` also runs for a delivery PASS whose criterion is not_met (or legacy indeterminate),
 and refuses only when delivery PASSed and the criterion was met."""
 
 from __future__ import annotations
@@ -43,6 +43,21 @@ def test_delivery_pass_with_unsettled_criterion_is_allowed(tmp_path, monkeypatch
     assert result["claims"] == 0
     text = out.read_text(encoding="utf-8")
     assert "python3" in text and "criterion" in text
+
+
+def test_writer_statuses_are_binary_and_reject_indeterminate(tmp_path):
+    assert rd._CRITERION_STATUSES == ("met", "not_met")
+    with pytest.raises(rd.ReverifyRefused):
+        rd.record_criterion_rejudge(
+            repo_root=tmp_path, plan_id="pln-x", head_sha="a" * 40,
+            criterion={"status": "indeterminate", "observation": "o"},
+        )
+
+
+def test_legacy_indeterminate_reads_as_not_met():
+    assert rd._criterion_unsettled({"criterion": {"status": "indeterminate"}})
+    assert rd._read_criterion_status("indeterminate") == "not_met"
+    assert rd._read_criterion_status("met") == "met"
 
 
 def test_delivery_pass_with_met_criterion_is_refused(tmp_path):

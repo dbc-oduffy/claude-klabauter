@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import coordinator_core.ops.updatedocs_gates as udg
+import coordinator_core.ops.updatedocs_sweeps as uds
 
 
 def _seed_queues(repo_root: Path, names: list[str]) -> None:
@@ -54,7 +55,7 @@ def test_default_callee_batches_n_queue_files_into_one_in_process_call(tmp_path,
     )
     calls = _patch_in_process_callee(monkeypatch)
 
-    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
+    result = uds._gate_queue_prune_sweep(tmp_path, tmp_path, {})
 
     assert spawns == [], f"default-callee leg must spawn no subprocess; spawns={spawns}"
     assert len(calls) == 1, (
@@ -76,7 +77,7 @@ def test_override_cli_issues_one_spawn_per_queue_file(tmp_path, monkeypatch):
         monkeypatch, lambda argv, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
     )
 
-    result = udg._gate_queue_prune_sweep(
+    result = uds._gate_queue_prune_sweep(
         tmp_path, tmp_path, {"prune_cli": str(tmp_path / "bin" / "single-arg-prune.py")}
     )
 
@@ -99,7 +100,7 @@ def test_default_callee_names_the_failing_queue_in_batched_stderr(tmp_path, monk
         monkeypatch, code=1, stderr="ERROR: file not found: .../bug-backlog.md\n"
     )
 
-    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
+    result = uds._gate_queue_prune_sweep(tmp_path, tmp_path, {})
 
     assert result.severity == udg.Severity.BLOCKING
     assert any("bug-backlog.md" in line for line in result.detail["lines"]), (
@@ -118,7 +119,7 @@ def test_override_cli_names_the_failing_queue_by_its_own_isolated_call(tmp_path,
 
     _patch_run(monkeypatch, fake_run)
 
-    result = udg._gate_queue_prune_sweep(
+    result = uds._gate_queue_prune_sweep(
         tmp_path, tmp_path, {"prune_cli": str(tmp_path / "bin" / "single-arg-prune.py")}
     )
 
@@ -150,7 +151,7 @@ def test_oracle_fails_if_default_path_reintroduces_a_per_queue_spawn(tmp_path, m
 
     monkeypatch.setattr(udg.subprocess, "run", regressed_run)
 
-    udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
+    uds._gate_queue_prune_sweep(tmp_path, tmp_path, {})
 
     with pytest.raises(AssertionError):
         assert len(calls) == 1, (
@@ -169,7 +170,7 @@ def test_oracle_fails_if_override_path_collapses_to_one_spawn(tmp_path, monkeypa
 
     monkeypatch.setattr(udg.subprocess, "run", collapsing_run)
 
-    udg._gate_queue_prune_sweep(
+    uds._gate_queue_prune_sweep(
         tmp_path, tmp_path, {"prune_cli": str(tmp_path / "bin" / "single-arg-prune.py")}
     )
 

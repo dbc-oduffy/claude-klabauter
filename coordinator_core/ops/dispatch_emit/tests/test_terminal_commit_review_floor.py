@@ -1,5 +1,5 @@
-"""dispatch.land_run on an ask run: a run whose chunks declare a code path needs a reviewer verdict
-before the commit (any arm); a docs-only run lands with an empty wave; the commit names the verdict count."""
+"""dispatch.terminal_commit on an ask run: a code run with no reviewer verdict still lands and records a
+Review-Floor-Note trailer (advisory, never a refusal); the commit names the verdict count."""
 
 from __future__ import annotations
 
@@ -37,12 +37,10 @@ def _docs_only(repo) -> None:
     _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
 
 
-def test_a_code_run_with_an_empty_review_wave_is_refused_and_commits_nothing(repo):
-    head = _git(repo, "rev-parse", "HEAD")
+def test_a_code_run_with_an_empty_review_wave_lands_and_records_the_floor_note(repo):
     out = _call(repo, inline_review=EMPTY_WAVE)
-    assert out["committed"] is False and out["refused"] == "review-floor", out
-    assert out["code_paths"] == ["a.py"], out
-    assert _git(repo, "rev-parse", "HEAD") == head
+    assert out["committed"] is True and out.get("refused") is None, out
+    assert "Review-Floor-Note: review: 0 verdicts on a code-editing run" in _git(repo, "log", "-1", "--format=%B", out["sha"])
 
 
 def test_a_docs_only_run_with_an_empty_review_wave_lands_and_says_zero_verdicts(repo):
@@ -65,10 +63,11 @@ def test_a_non_xs_code_run_with_a_verdict_lands_unchanged(repo):
     assert "Ledger-Receipt: review: 1 verdicts" in _git(repo, "log", "-1", "--format=%B", out["sha"])
 
 
-def test_a_non_xs_code_run_with_an_empty_wave_is_refused(repo):
+def test_a_non_xs_code_run_with_an_empty_wave_lands_with_the_note(repo):
     _size_l(repo)
     out = _call(repo, inline_review={**_REVIEWED, "wave_reviews": []})
-    assert out["committed"] is False and out["refused"] == "review-floor", out
+    assert out["committed"] is True, out
+    assert "Review-Floor-Note:" in _git(repo, "log", "-1", "--format=%B", out["sha"])
 
 
 def _code_request() -> CommitRequest:
@@ -79,22 +78,22 @@ def test_terminal_floor_exempts_a_verify_only_run_only_on_disk_prep(tmp_path):
     from coordinator_core.ops.dispatch_emit import terminal_commit
 
     review = {**EMPTY_WAVE, "prep": {"product_files": 0}}
-    assert terminal_commit._review_floor_refusal(_code_request(), review, True, tmp_path) is None
-    refused = terminal_commit._review_floor_refusal(_code_request(), review, False, tmp_path)
-    assert refused["refused"] == "review-floor" and refused["code_paths"] == ["a.py"], refused
+    assert terminal_commit._review_floor_note(_code_request(), review, True, tmp_path) is None
+    note = terminal_commit._review_floor_note(_code_request(), review, False, tmp_path)
+    assert note is not None and "a.py" in note, note
     nonzero = {**EMPTY_WAVE, "prep": {"product_files": 2}}
-    assert terminal_commit._review_floor_refusal(_code_request(), nonzero, True, tmp_path)["refused"] == "review-floor"
+    assert terminal_commit._review_floor_note(_code_request(), nonzero, True, tmp_path) is not None
 
 
 def test_terminal_floor_needs_the_verdict_sidecar_to_exist_under_the_root(tmp_path):
     from coordinator_core.ops.dispatch_emit import terminal_commit
 
     review = {**EMPTY_WAVE, "wave_reviews": [{"verdict": "PASS", "sidecar_path": "rev.md"}]}
-    assert terminal_commit._review_floor_refusal(_code_request(), review, False, tmp_path)["refused"] == "review-floor"
+    assert terminal_commit._review_floor_note(_code_request(), review, False, tmp_path) is not None
     (tmp_path / "rev.md").write_text("# r\n", encoding="utf-8")
-    assert terminal_commit._review_floor_refusal(_code_request(), review, False, tmp_path) is None
+    assert terminal_commit._review_floor_note(_code_request(), review, False, tmp_path) is None
     bare = {**EMPTY_WAVE, "wave_reviews": [{"verdict": "x"}]}
-    assert terminal_commit._review_floor_refusal(_code_request(), bare, False, tmp_path)["refused"] == "review-floor"
+    assert terminal_commit._review_floor_note(_code_request(), bare, False, tmp_path) is not None
 
 
 def test_a_repo_relative_sidecar_resolves_against_the_repo_not_the_process_cwd(repo, tmp_path, monkeypatch):
@@ -106,7 +105,8 @@ def test_a_repo_relative_sidecar_resolves_against_the_repo_not_the_process_cwd(r
     assert "Ledger-Receipt: review: 1 verdicts" in _git(repo, "log", "-1", "--format=%B", out["sha"])
 
 
-def test_a_missing_sidecar_verdict_through_the_handler_is_refused_review_floor(repo, tmp_path):
+def test_a_missing_sidecar_verdict_through_the_handler_lands_with_the_note(repo, tmp_path):
     (repo.parent / "wave-review.md").unlink()
     out = _call(repo, inline_review=ONE_VERDICT)
-    assert out["committed"] is False and out["refused"] == "review-floor", out
+    assert out["committed"] is True and out.get("refused") is None, out
+    assert "Review-Floor-Note:" in _git(repo, "log", "-1", "--format=%B", out["sha"])

@@ -220,10 +220,12 @@ def write_em_guard_grant(
         raise ValueError(
             f"guard_name must be one of {sorted(_GRANTABLE_GUARDS)}, got {guard_name!r}"
         )
+    # This refusal is not in deny_registry.OP_REFUSAL_CLASS (ValueError is unscanned); the
+    # out-of-repo guards it mirrors no longer deny, so it is a candidate to convert to a write.
     if out_of_repo_write_blocked():
         raise ValueError(
             f"{guard_name} is not grantable on this box: out-of-repo writes are blocked "
-            "(coordinator.feature.out_of_repo_write_block). Write inside the session repo."
+            "(coordinator.feature.out_of_repo_write_block). Route: land the file inside the session repo."
         )
     if not reason or not reason.strip():
         raise ValueError("reason is required (must not be empty or whitespace-only)")

@@ -1,0 +1,7 @@
+reviews:
+- leg: coordinator:code-reviewer
+  plan_id: pln-authoring-constraints-handed-t-874ab8
+  findings_count: 3
+  max_severity: P2
+  applied: 2
+  recorded_at: '2026-10-25T23:34:23Z'

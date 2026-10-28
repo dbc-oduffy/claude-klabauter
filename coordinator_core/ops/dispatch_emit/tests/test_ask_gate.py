@@ -438,3 +438,28 @@ def test_xs_and_s_never_set_spine_plan(repo, tshirt, route):
     _put(repo, tshirt=tshirt, route=route, accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS)
     v = gate(repo, REL, writes=["a.py"] if tshirt == "XS" else ())
     assert v.halt is None and v.spine_plan is None
+
+
+_CENSUS_INTENT = "Classify the land_run results in 28 cells of L-XXL and write one report file."
+_RESEARCH = {"class": "corpus", "targets": [{"source": "repo", "ref": "x"}]}
+
+
+def test_bounded_single_write_research_sizing_routes_to_the_execute_arm(repo):
+    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS,
+         intent=_CENSUS_INTENT, research=_RESEARCH)
+    v = gate(repo, REL, writes=["runs/census.md"])
+    assert v.halt is None and v.arm == "xs"
+
+
+def test_unbounded_research_sizing_with_a_write_stays_refused(repo):
+    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS,
+         intent="Survey how other tools handle retries.", research=_RESEARCH)
+    v = gate(repo, REL, writes=["runs/census.md"])
+    assert v.halt["kind"] == "refusal"
+
+
+def test_bounded_research_sizing_with_two_writes_stays_refused(repo):
+    _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS,
+         intent=_CENSUS_INTENT, research=_RESEARCH)
+    v = gate(repo, REL, writes=["runs/a.md", "runs/b.md"])
+    assert v.halt["kind"] == "refusal"

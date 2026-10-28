@@ -28,7 +28,7 @@ def _clean_engine_root_env(monkeypatch):
 def test_engine_root_flag_sets_env_var_before_run(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_run(setup_only=False, check_only=False, allow_venv_fallback=False):
+    def _fake_run(setup_only=False, check_only=False):
         captured["engine_root_env"] = os.environ.get("COORDINATOR_ENGINE_ROOT")
         return 0
 
@@ -68,7 +68,7 @@ def test_engine_root_flag_nonexistent_path_errors_loudly(monkeypatch, tmp_path, 
 def test_no_engine_root_flag_leaves_env_untouched(monkeypatch):
     captured = {}
 
-    def _fake_run(setup_only=False, check_only=False, allow_venv_fallback=False):
+    def _fake_run(setup_only=False, check_only=False):
         captured["engine_root_env"] = os.environ.get("COORDINATOR_ENGINE_ROOT")
         return 0
 
@@ -148,7 +148,7 @@ def test_engine_root_flag_bootstrap_remedy_resolves_via_substrate(
 
     captured = {}
 
-    def _fake_run(setup_only=False, check_only=False, allow_venv_fallback=False):
+    def _fake_run(setup_only=False, check_only=False):
         captured["resolved"] = shim._resolve_claude_klabauter_root(ml_dir)
         return 0
 

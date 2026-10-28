@@ -13,7 +13,6 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core import coverage
 
-REFUSED_REVIEW_FLOOR = "review-floor"
 HALT_REVIEW_FLOOR = "review_floor"
 MANIFEST_KEY = "review_code_paths"
 
@@ -21,9 +20,10 @@ _REASON_PATHS_SHOWN = 5
 _HOOKS_CONFIG_NAMES = ("hooks.yaml", "hooks.yml")
 
 __all__ = [
-    "HALT_REVIEW_FLOOR", "MANIFEST_KEY", "REFUSED_REVIEW_FLOOR",
-    "code_paths", "floor_code_paths", "floor_reason", "is_code_path", "receipt",
-    "request_code_paths", "verdict_count",
+    "HALT_REVIEW_FLOOR", "MANIFEST_KEY",
+    "code_paths", "floor_code_paths", "floor_reason", "floor_trailer", "is_code_path", "receipt",
+    "request_code_paths", "review_owed_paths", "reviewable_paths", "slice_gap_paths", "slice_gap_reason",
+    "verdict_count",
 ]
 
 
@@ -58,9 +58,24 @@ def code_paths(paths: Iterable[str]) -> list[str]:
     return out
 
 
+def reviewable_paths(paths: Iterable[str]) -> tuple[str, ...]:
+    """The paths a reviewer can read a product diff for: bookkeeping prefixes
+    (`review_stamp.PRODUCT_FILE_EXCLUDED_PREFIXES`) and `scratch/` freeze no reviewable diff. The
+    stage route and the commit floor both classify through this, so they cannot disagree."""
+    from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
+
+    skip = (*PRODUCT_FILE_EXCLUDED_PREFIXES, "scratch/")
+    return tuple(p for p in paths if not p.replace("\\", "/").removeprefix("./").startswith(skip))
+
+
+def review_owed_paths(paths: Iterable[str]) -> list[str]:
+    """`code_paths` over the `reviewable_paths` of `paths`: the one review-owed set."""
+    return code_paths(reviewable_paths(p for p in paths if isinstance(p, str)))
+
+
 def request_code_paths(request: object) -> list[str]:
-    """The code subset of every chunk's declared `paths` and `prefixes` on a `CommitRequest`."""
-    return code_paths(p for c in request.chunks for p in (*c.paths, *c.prefixes) if p)  # type: ignore[attr-defined]
+    """The review-owed subset of every chunk's declared `paths` and `prefixes` on a `CommitRequest`."""
+    return review_owed_paths(p for c in request.chunks for p in (*c.paths, *c.prefixes) if p)  # type: ignore[attr-defined]
 
 
 def floor_code_paths(request: object, inline_review: object, prep_from_disk: bool) -> list[str]:
@@ -107,9 +122,28 @@ def receipt(n: int) -> str:
     return f"review: {n} verdicts"
 
 
+def floor_trailer(reason: str) -> str:
+    """The commit trailer recording a floor or slice-gap advisory; the landing is never refused for it."""
+    return f"Review-Floor-Note: {' '.join(reason.split())}"
+
+
 def floor_reason(code: Sequence[str], n: int) -> Optional[str]:
     """None when there is no code path or at least one verdict, else the floor's refusal sentence."""
     if not code or n > 0:
         return None
     shown = ", ".join(code[:_REASON_PATHS_SHOWN])
     return f"review: 0 verdicts on a code-editing run ({shown})"
+
+
+def slice_gap_paths(landing_paths: Iterable[str], review_slice: Iterable[str]) -> list[str]:
+    """Review-owed paths the run will land (own hunks in co-held files included) that its review
+    slice omits, in landing order. A path is covered only by an exact slice entry."""
+    covered = {p.replace("\\", "/").removeprefix("./") for p in review_slice if isinstance(p, str)}
+    return [p for p in review_owed_paths(landing_paths) if p not in covered]
+
+
+def slice_gap_reason(gap: Sequence[str]) -> Optional[str]:
+    """None when the slice covers every landing path, else the refusal sentence naming the gap."""
+    if not gap:
+        return None
+    return f"review: slice omits {len(gap)} landing path(s) ({', '.join(gap[:_REASON_PATHS_SHOWN])})"

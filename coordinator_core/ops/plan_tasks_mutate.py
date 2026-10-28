@@ -1346,6 +1346,74 @@ def _em_discharge(
     return _ok(True, f"em-discharge: recorded discharge of {row_id!r} in {sidecar.name}")
 
 
+def _premise_record(
+    plan_path: str, row_id: str, verdict: object, ref: object, worktree: Path, repo_root: Path
+) -> dict:
+    """Apply the premise-record verb: write ``premises.<row_id> = {verdict, ref, recorded_at}``
+    to the evidence sidecar, read back by ``premise_gate.read_premise_verdicts``.
+
+    Writes only the sidecar. A later record for the same row replaces the earlier one.
+    """
+    try:
+        path = _resolve_path(plan_path, worktree, extra_roots=(record_homes.home_dir("", "warp"),))
+    except _PathNotContained as exc:
+        return _err(f"premise-record: {exc}")
+    if not row_id:
+        return _err("premise-record: 'id' is required")
+    norm = verdict.strip().lower() if isinstance(verdict, str) else None
+    if norm not in ("yes", "no"):
+        return _err(f"premise-record: 'verdict' must be yes or no, got {verdict!r}")
+    if not isinstance(ref, str) or not ref.strip():
+        return _err("premise-record: 'ref' must be a non-empty string")
+    try:
+        plan_text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return _err(f"premise-record: plan not found: {plan_path}")
+    located = locate_fenced_block(plan_text)
+    spine_ids: set = set()
+    if located.status is LocateStatus.LOCATED:
+        try:
+            spine_ids = {
+                r.get("id") for r in yaml.safe_load(located.body) or [] if isinstance(r, dict)
+            }
+        except yaml.YAMLError:
+            spine_ids = set()
+    if row_id not in spine_ids:
+        return _err(f"premise-record: task id not found: {row_id!r}")
+
+    import datetime
+
+    from coordinator_core.repo_relative_text import relativize_text
+
+    entry = {
+        "verdict": norm,
+        "ref": relativize_text(ref.strip(), [(str(worktree), "")]),
+        "recorded_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+    def mutate(old_text: str) -> str:
+        try:
+            loaded = yaml.safe_load(old_text) if old_text.strip() else None
+        except yaml.YAMLError as exc:
+            raise MutateAbort(f"premise-record: sidecar is not valid YAML: {exc}") from exc
+        if loaded is None:
+            loaded = {}
+        if not isinstance(loaded, dict) or not isinstance(loaded.get("premises", {}), dict):
+            raise MutateAbort("premise-record: sidecar has an unexpected shape")
+        loaded.setdefault("premises", {})[row_id] = entry
+        return yaml.safe_dump(loaded, sort_keys=False, allow_unicode=True, width=4096)
+
+    sidecar = evidence_sidecar_path(path)
+    try:
+        locked_rmw(sidecar, mutate, repo_root=repo_root, missing_ok=True)
+    except LockTimeout as exc:
+        return _err(f"premise-record: timed out waiting for file lock on {sidecar.name}: {exc}")
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "premise-record: mutation aborted")
+
+    return _ok(True, f"premise-record: recorded {norm} for {row_id!r} in {sidecar.name}")
+
+
 def _gate_matches(entry: object, owner_repo: str) -> bool:
     return (
         isinstance(entry, dict)
@@ -2673,6 +2741,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                    the evidence sidecar; read back with `read_em_discharges`.
                    Refuses unknown, non-em, memo-send, operator and non-open
                    rows; a repeat is a no-op (applied false).
+        premise-record : id (str), verdict ('yes'|'no'), ref (str, non-empty) —
+                   writes `premises.<id>` {verdict, ref, recorded_at} to the
+                   evidence sidecar; a repeat replaces. Refuses unknown id and
+                   any other verdict.
         evidence-append : id (str), text (str, non-empty) — appends a
                    {recorded_at, text} entry for row `id` to the sidecar
                    `<plan-stem>.evidence.yaml` beside the plan. Never touches
@@ -2820,6 +2892,17 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             repo_root,
         )
 
+    if verb == "premise-record":
+        return await asyncio.to_thread(
+            _premise_record,
+            plan_path,
+            (params.get("id") or "").strip(),
+            params.get("verdict"),
+            params.get("ref"),
+            worktree,
+            repo_root,
+        )
+
     if verb == "clear-gate":
         return await asyncio.to_thread(
             _clear_gate,
@@ -2832,6 +2915,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     return _err(
-        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, depends-on, clear-gate, evidence-append, em-discharge; "
+        f"plan.tasks.mutate: unknown verb {verb!r} — supported: add-task, stamp, resolve, reopen, depends-on, clear-gate, evidence-append, em-discharge, premise-record; "
         + _MARK_CODED_SHAPE
     )

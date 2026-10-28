@@ -36,3 +36,21 @@ def test_timeout_envelope_says_warm_inside_warm_engine(monkeypatch):
 
     assert "ran warm" in msg
     assert "inside the warm engine" in msg
+
+
+def test_mutating_timeout_envelope_states_retry_is_not_safe(monkeypatch):
+    monkeypatch.setenv(op_latency.ROUTE_ENV, op_latency.WARM_SERVER)
+    error = _timeout_error_envelope("ceremony.commit_v2", 30.0, 1)["error"]
+
+    assert error["data"]["retry_safe"] is False
+    assert "Retry is NOT safe" in error["message"]
+    assert "COORDINATOR_DISPATCH_TIMEOUT_SECS" not in error["message"]
+
+
+def test_hung_past_ceiling_envelope_states_retry_is_not_safe():
+    from coordinator_core.ipc import _hung_past_ceiling_envelope
+
+    error = _hung_past_ceiling_envelope("ceremony.commit_v2", 30.0, 2.0, 2.5, 1)["error"]
+
+    assert error["data"]["retry_safe"] is False
+    assert "Retry is NOT safe" in error["message"]

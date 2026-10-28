@@ -21,6 +21,25 @@ def test_manifest_round_trip():
     assert c.StageManifest.from_json(json.loads(json.dumps(m.to_json()))) == m
 
 
+def test_manifest_row_always_serialises_route_source_and_rag_calls():
+    row = c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0)
+    out = row.to_json()
+    assert out["route_source"] == "default" and out["rag_calls"] is None
+    set_row = c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0, route_source="overlay", rag_calls=3)
+    back = c.ManifestRow.from_json(json.loads(json.dumps(set_row.to_json())))
+    assert back == set_row
+    legacy = {k: v for k, v in out.items() if k not in ("route_source", "rag_calls")}
+    assert c.ManifestRow.from_json(legacy).route_source == "default"
+    assert c.ManifestRow.from_json(legacy).rag_calls is None
+
+
+def test_manifest_row_refuses_unknown_route_source():
+    for ok in c.ROUTE_SOURCES:
+        c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0, route_source=ok)
+    with pytest.raises(ValueError):
+        c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0, route_source="guess")
+
+
 def test_owed_round_trip():
     owed = (c.OwedRow("C3", "em-performed", "EM runs it"), c.OwedRow("C4", "memo-send", "send memo"))
     m = _manifest()

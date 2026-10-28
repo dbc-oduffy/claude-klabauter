@@ -2880,6 +2880,23 @@ def _deny_reason(
     return "\n".join(lines)
 
 
+#: An EM fork runs with its parent EM's affordances; it is never confined.
+#: Trap: with no resolved back-pointer type, a caller-chosen name "fork" on a
+#: named dispatch is indistinguishable from a real fork and is exempt.
+_FORK_AGENT_TYPE = "fork"
+
+
+def _is_fork_identity(agent_type: str, subagent_type: str) -> bool:
+    """True for an EM fork. Decided before any roster read, so an unreadable
+    roster (fail-closed in ``is_confined_by_roster_absence``) cannot confine it.
+    The back-pointer type governs when present; ``agent_type`` is caller-chosen
+    free text on a named dispatch and counts only when no back-pointer type
+    resolved."""
+    if subagent_type:
+        return subagent_type == _FORK_AGENT_TYPE
+    return agent_type == _FORK_AGENT_TYPE
+
+
 def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     # 1. Tool-name guard — defense-in-depth (reference hook 62-67).
     # (2026-08-07, C6) Widened from a bare "!= Bash" literal to accept
@@ -2915,6 +2932,9 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
     # Empty canonical AGENT_ID -> no subagent or unrecognised shape -> allow
     # (fail-open, reference hook line 117).
     if not agent_id:
+        return None
+
+    if _is_fork_identity(agent_type, subagent_type):
         return None
 
     policy = load_policy(policy_path)

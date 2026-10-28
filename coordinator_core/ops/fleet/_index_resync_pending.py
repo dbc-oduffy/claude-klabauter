@@ -88,6 +88,53 @@ def list_pending(worktree_root: Path) -> List[PendingResync]:
     return out
 
 
+ADVISORY_DIRNAME = "coordinator-index-resync-advisory"
+
+
+def index_lock_present(worktree_root: Path) -> bool:
+    """True iff the clone's ``index.lock`` exists now; a peer is then plausibly mid-write."""
+    try:
+        return (_git_dir(worktree_root) / "index.lock").exists()
+    except (OSError, ValueError):
+        return False
+
+
+def record_advisory(
+    worktree_root: Path,
+    *,
+    candidate_id: str,
+    op_label: str,
+    reason: str,
+    recorded_at: str,
+) -> bool:
+    """Write one advisory file for a lock-contended resync; returns the lock-holder-live observation.
+
+    Advisory state lives beside the pending records under the git dir, is never committed,
+    and is keyed by (op_label, candidate_id) so a repeat overwrites. Not read by the drain;
+    the only reader is an operator inspecting the git dir, and nothing prunes it on a later
+    successful resync.
+    """
+    holder_live = index_lock_present(worktree_root)
+    try:
+        directory = _git_dir(worktree_root) / ADVISORY_DIRNAME
+        directory.mkdir(parents=True, exist_ok=True)
+        name = hashlib.sha1(f"{op_label}\0{candidate_id}".encode("utf-8")).hexdigest()[:16] + ".json"
+        payload = json.dumps(
+            {
+                "candidate_id": candidate_id,
+                "op_label": op_label,
+                "reason": reason,
+                "recorded_at": recorded_at,
+                "index_lock_present_at_record": holder_live,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        atomic_write_bytes(directory / name, payload)
+    except (OSError, ValueError) as exc:
+        _LOG.error("index-resync advisory record write failed: %s", exc)
+    return holder_live
+
+
 def discharge(worktree_root: Path, rec: PendingResync) -> None:
     """Remove the record's file; an already-missing file is fine."""
     try:

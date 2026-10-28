@@ -10,8 +10,11 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import fan_launcher as fl
+from coordinator_core.ops.dispatch_emit import terminal_commit_refusals
 from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
+    CHAIN_HANDOFF_KEY,
+    LAUNCHER_CHILD_EMIT_PARAM,
     STAGE_PENDING_KEY,
     staged_twin_rel,
 )
@@ -96,7 +99,7 @@ def test_every_start_passes_script_path_only(tmp_path):
     _, script = _write(tmp_path)
     assert script.count("workflow({ scriptPath: scriptPath })") == 1  # one start site, run for every child
     assert script.count("workflow(") == 1
-    assert not re.search(r"\bargs\s*:", script)
+    assert not re.search(r"workflow\([^)]*\bargs\s*:", script)
     assert "launcherChild" not in script and "stagedManifest" not in script
     assert STAGE_PENDING_KEY in script
 
@@ -123,7 +126,7 @@ def _refusal(script: str, child_id: str, reply: dict):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
-    m = re.search(r"function _emitRefusal\(child, e\) \{.*?\n\}\n", script, re.S)
+    m = re.search(r"function _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
     assert m
     prog = (
         "const WARP_PREFIX='/r/scratch/warp/';"
@@ -152,6 +155,17 @@ def test_genuine_run_id_mismatch_still_refused(tmp_path):
     assert _refusal(script, "ask-r1", ok_shape) == "emit reply run_id ask-other is not ask-r1"
     good = dict(ok_shape, run_id="ask-r1")
     assert _refusal(script, "ask-r1", good) is None
+
+
+def test_chain_hop_renders_one_hop_on_the_one_start_site(tmp_path):
+    _, script = _write(tmp_path)
+    assert f"result.{CHAIN_HANDOFF_KEY}" in script
+    assert f"{LAUNCHER_CHILD_EMIT_PARAM}: true" in script
+    assert "'chain-emit-' + child.run_id" in script
+    assert "TWIN_PREFIX + runId + TWIN_MIDDLE" in script
+    assert "the chained run returned a second hand-off" in script
+    assert "Workflow({name: " in script
+    assert script.count("workflow(") == 1
 
 
 def test_launcher_no_longer_reads_the_sidecar(tmp_path):
@@ -294,7 +308,7 @@ def test_a_two_child_xs_launcher_envelope_commits_each_child_past_the_review_gat
     out = _envelope(tmp_path, _xs_digest("ask-r1"), _xs_digest("ask-r2"))
     (tmp_path / ".git").mkdir()
     for run_id in ("ask-r1", "ask-r2"):
-        params = tc._params_from_task_output(str(out), run_id)
+        params = terminal_commit_refusals._params_from_task_output(str(out), run_id)
         assert params["script_path"] == f"scratch/warp/{run_id}.workflow.mjs"
         assert params["inline_review"]["integration_stem"] == f"{run_id}.review-wave-bookkeeping"
         assert params["inline_review"]["slices"] == 0
@@ -308,16 +322,16 @@ def test_launcher_envelope_refuses_an_unselected_or_unknown_run(tmp_path):
 
     out = _envelope(tmp_path, _xs_digest("ask-r1"), _xs_digest("ask-r2"))
     with pytest.raises(ValueError, match="pass params.run_id"):
-        tc._params_from_task_output(str(out))
+        terminal_commit_refusals._params_from_task_output(str(out))
     with pytest.raises(ValueError, match="no single run 'ask-zz'"):
-        tc._params_from_task_output(str(out), "ask-zz")
+        terminal_commit_refusals._params_from_task_output(str(out), "ask-zz")
 
 
 def test_a_non_xs_digest_with_null_inline_review_stays_unreviewed(tmp_path):
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
     out = _envelope(tmp_path, _xs_digest("ask-r1", arm="s"))
-    assert tc._params_from_task_output(str(out), "ask-r1")["inline_review"] is None, "only an XS digest gets the zero-slice review"
+    assert terminal_commit_refusals._params_from_task_output(str(out), "ask-r1")["inline_review"] is None, "only an XS digest gets the zero-slice review"
 
 
 def _halted_digest(run_id: str) -> dict:
@@ -334,7 +348,7 @@ def test_a_child_halted_at_commit_yields_its_own_commit_params(tmp_path):
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
     out = _envelope(tmp_path, _halted_digest("ask-r1"), _halted_digest("ask-r2"))
-    params = tc._params_from_task_output(str(out), "ask-r2")
+    params = terminal_commit_refusals._params_from_task_output(str(out), "ask-r2")
     assert params["script_path"] == "scratch/warp/ask-r2.workflow.mjs"
     assert params["incomplete_chunks"] == ["X1"]
     assert params["inline_review"]["integration_stem"] == "ask-r2.review-wave-bookkeeping"
@@ -349,7 +363,7 @@ def test_a_non_commit_halt_keeps_the_revise_params(tmp_path):
     d = _halted_digest("ask-r1")
     d["halted_by"] = {"halted": "review"}
     out = _envelope(tmp_path, d)
-    assert "script_path" not in tc._params_from_task_output(str(out), "ask-r1")
+    assert "script_path" not in terminal_commit_refusals._params_from_task_output(str(out), "ask-r1")
 
 
 @pytest.mark.spawns_process
@@ -359,6 +373,7 @@ def test_a_declared_directory_path_does_not_stop_the_commit(tmp_path, monkeypatc
 
     from coordinator_core.benchmarks import terminal_commit_full_path as driver
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+    from coordinator_core.ops.dispatch_emit import terminal_commit_refusals
 
     repo, script = driver.build_fixture(tmp_path)
     marker = repo / script

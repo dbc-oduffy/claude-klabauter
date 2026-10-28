@@ -121,6 +121,27 @@ def test_an_untracked_path_that_head_never_carried_is_refused(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
+def test_phantom_untracked_path_refusal_names_untracked_paths_not_deleted_paths(repo):
+    (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
+
+    with pytest.raises(gcommit.PhantomDeletionDeclared) as excinfo:
+        gcommit.commit_paths(repo, ["keep.txt"], "x", untracked_paths=["new.txt"])
+
+    assert "untracked_paths" in str(excinfo.value)
+    assert "not deleted_paths" not in str(excinfo.value)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_phantom_deleted_path_refusal_still_names_deleted_paths(repo):
+    with pytest.raises(gcommit.PhantomDeletionDeclared) as excinfo:
+        gcommit.commit_paths(repo, ["keep.txt"], "x", deleted_paths=["never.txt"])
+
+    assert "not deleted_paths" in str(excinfo.value)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_declaring_the_same_present_path_deleted_is_still_refused(repo):
     with pytest.raises(CommitRefused) as excinfo:
         gcommit.commit_paths(

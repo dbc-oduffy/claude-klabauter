@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core.ops.dispatch_emit import emit as _emit
+from coordinator_core.ops.dispatch_emit.compose_size import cap_refusal, component_sizes
 from coordinator_core.ops.dispatch_emit.fanout_cost import with_fanout
 from coordinator_core.ops.dispatch_emit.halt_refire import refire_next_action_js
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -256,10 +257,11 @@ def compose_roadmap_script(
         ac.composed_fanout(b),
     )
     script = f"{_emit._NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta}\n" + "\n".join(b) + "\n"
-    if len(script.encode("utf-8")) > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
-        raise ac.AskComposeRefused(
-            f"composed ask script is over the Workflow runner's {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte cap"
-        )
+    total = len(script.encode("utf-8"))
+    if total > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
+        sizes = component_sizes({"roadmap_blitz": rb_fn, "plan_blitz": plan_blitz_fn, "meta": meta})
+        sizes.append(("remainder", max(0, total - sum(n for _, n in sizes))))
+        raise ac.AskComposeRefused(cap_refusal(total, _emit._WORKFLOW_SCRIPT_BYTE_CAP, sizes))
     return script
 
 

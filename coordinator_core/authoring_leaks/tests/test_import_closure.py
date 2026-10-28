@@ -303,3 +303,40 @@ def test_publish_gate_reports_the_same_module_over_the_committed_tree(cc_repo, t
     _, violations = mod.find_import_closure_violations(tree)
     assert any("guard_messages" in entry for _, entry in violations)
     assert any("guard_messages" in f.detail for f in _detect(cc_repo, ["coordinator_core/guard.py"]))
+
+
+def test_owned_finding_is_suffixed_with_run_id_in_one_batched_call(repo, monkeypatch):
+    calls = []
+
+    def fake(root, paths, **kw):
+        calls.append(list(paths))
+        return {"pkg/c.py": "run-xyz"}
+
+    monkeypatch.setattr(import_closure.run_owner, "owning_runs", fake)
+    _write(repo, "pkg/c.py", "y = 1\n")
+    _write(repo, "pkg/d.py", "z = 1\n")
+    _write(repo, "pkg/a.py", "import pkg.c\nimport pkg.d\n")
+    out = _gate(repo, ["pkg/a.py"])
+    assert calls == [["pkg/c.py", "pkg/d.py"]]
+    joined = "\n".join(out.diagnostics)
+    assert "pkg/c.py is uncommitted in the worktree; owned by live run run-xyz" in joined
+    assert "pkg/d.py is uncommitted in the worktree" in joined
+    assert "pkg/d.py is uncommitted in the worktree; owned" not in joined
+
+
+def test_unowned_finding_is_unchanged(repo, monkeypatch):
+    monkeypatch.setattr(import_closure.run_owner, "owning_runs", lambda *a, **k: {})
+    _write(repo, "pkg/c.py", "y = 1\n")
+    _write(repo, "pkg/a.py", "import pkg.c\n")
+    out = _gate(repo, ["pkg/a.py"])
+    assert "pkg/c.py is uncommitted in the worktree" in out.diagnostics[0]
+    assert "owned by" not in out.diagnostics[0]
+
+
+def test_no_finding_never_calls_owning_runs(repo, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("owning_runs called")
+
+    monkeypatch.setattr(import_closure.run_owner, "owning_runs", boom)
+    _write(repo, "pkg/a.py", "from pkg.b import old_fn\n")
+    assert _gate(repo, ["pkg/a.py"]).passed

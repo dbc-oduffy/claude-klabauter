@@ -187,3 +187,49 @@ def test_tombstone_link_child_unlinked_not_followed(tmp_path):
     _prune(repo)
     assert not (tomb / "lnk").is_symlink()
     assert (target / "f.txt").exists()
+
+
+def _share(repo):
+    return repo / ".coordinator-local" / "subagent-share"
+
+
+def test_share_live_session_survives_dead_session_deleted_and_tombstoned(tmp_path, monkeypatch):
+    from coordinator_core.review_trail.sweep_tombstone import swept_sidecars
+    from coordinator_core.session import liveness
+
+    repo = _repo(tmp_path)
+    live = _unit(_share(repo), "live-peer", 8)
+    dead = _unit(_share(repo), "dead-peer", 8)
+    (dead / "review.md").write_text("r")
+    _age(dead / "review.md", 8)
+    _age(dead, 8)
+    pre = _unit(_share(repo), ".pre-review", 8)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid == "live-peer")
+    assert _prune(repo) == 2
+    assert live.exists() and not dead.exists() and not pre.exists()
+    recs = swept_sidecars(str(repo), "dead-peer")
+    assert [r["path"].endswith("review.md") for r in recs] == [True]
+    assert swept_sidecars(str(repo), ".pre-review") == ()
+
+
+def test_share_session_live_not_called_for_fresh_or_non_session(tmp_path, monkeypatch):
+    from coordinator_core.session import liveness
+
+    repo = _repo(tmp_path)
+    _unit(_share(repo), "fresh", 1)
+    _unit(_share(repo), ".pre-review", 8)
+    _unit(_share(repo), "x.lock", 8)
+    calls = []
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: calls.append(sid) or False)
+    _prune(repo)
+    assert calls == []
+
+
+def test_scratch_unchanged_by_liveness(tmp_path, monkeypatch):
+    from coordinator_core.session import liveness
+
+    repo = _repo(tmp_path)
+    old = _unit(repo / "scratch", "old", 10)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: True)
+    _prune(repo)
+    assert not old.exists()

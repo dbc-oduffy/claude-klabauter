@@ -264,6 +264,29 @@ def _legacy_call(root, shas, **extra):
     return op._handler({"run_id": RUN, "evidence_shas": shas, **extra}, root)
 
 
+def _commit_halt_record(root, record):
+    rel = (record / halted_run.HALTED_FILE).relative_to(root).as_posix()
+    _git(root, "add", "--", rel)
+    _git(root, "commit", "-q", "-m", "halt", date=PRE_HALT)
+
+
+def test_legacy_anchors_at_first_record_commit_when_stage_stamp_postdates_ship(legacy):
+    root, record, _ = legacy
+    _commit_halt_record(root, record)
+    s1 = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"}, date="2026-01-08T00:00:00Z")
+    reply = _legacy_call(root, [s1])
+    assert reply["ok"] is True and reply["evidence"] == {"a.txt": s1, "b.txt": s1}
+
+
+def test_legacy_first_record_anchor_still_refuses_untouched_path(legacy):
+    root, record, _ = legacy
+    _commit_halt_record(root, record)
+    s1 = _commit(root, {"a.txt": "a-later"}, date="2026-01-08T00:00:00Z")
+    reply = _legacy_call(root, [s1])
+    assert reply["ok"] is False and "b.txt" in reply["error"]
+    assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
+
+
 def test_legacy_record_closes_with_evidence_shas(legacy):
     root, record, _ = legacy
     s1 = _commit(root, {"a.txt": "a-later"})
@@ -359,6 +382,16 @@ def test_prints_only_record_with_evidence_shas_refuses_not_legacy(legacy):
     before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
     reply = _legacy_call(root, [s])
     assert reply["ok"] is False and "legacy" not in reply
+    _unchanged(root, record, before)
+
+
+def test_legacy_touched_then_reverted_path_refuses(legacy):
+    root, record, _ = legacy
+    _commit(root, {"a.txt": "a-later"})
+    s1 = _commit(root, {"a.txt": "a0", "b.txt": "b-later"})
+    before = (record / halted_run.HALTED_FILE).read_text(encoding="utf-8")
+    reply = _legacy_call(root, [s1])
+    assert reply["ok"] is False and "a.txt" in reply["error"] and "reverted" in reply["error"]
     _unchanged(root, record, before)
 
 
@@ -540,7 +573,7 @@ def test_per_path_legacy_scratch_log_plus_evidence_paths_closes(legacy):
     assert not _indexed(root)
 
 
-def test_per_path_legacy_without_scratch_spawns_no_cat_file(legacy, monkeypatch):
+def test_per_path_legacy_without_scratch_spawns_one_cat_file(legacy, monkeypatch):
     root, _, _ = legacy
     s = _commit(root, {"a.txt": "a-later", "b.txt": "b-later"})
     seen = []
@@ -554,7 +587,7 @@ def test_per_path_legacy_without_scratch_spawns_no_cat_file(legacy, monkeypatch)
     monkeypatch.setattr(subprocess, "Popen", _Counting)
     reply = _legacy_call(root, [s])
     monkeypatch.undo()
-    assert reply["ok"] is True and not any("cat-file" in a for a in seen)
+    assert reply["ok"] is True and sum("cat-file" in a for a in seen) == 1
 
 
 @pytest.mark.parametrize("sneaky", ["scratch/../src/x.py", "scratch//x.log", "scratch/./x.log"])

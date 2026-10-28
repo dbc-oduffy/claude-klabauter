@@ -428,6 +428,34 @@ class TestSessionCapLeg:
         host.rows = [launcher, claude, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
         assert "holds 2 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
 
+    def test_a_heavy_command_that_exited_after_the_snapshot_is_not_counted(self, host):
+        host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
+        host.exited = {300, 301}
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+
+    def test_dead_roots_are_not_named_in_the_cap_deny(self, host):
+        host.config = dict(CONFIG, **{KEY_SESSION_HEAVY_CAP: "2"})
+        host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40) + self._chain(320, 50)
+        host.exited = {300, 301}
+        text = _reason(_enveloped(guard.check)(_payload("pnpm build")))
+        assert "holds 2 heavy commands" in text and "300" not in text
+
+    def test_a_light_poller_script_is_not_counted(self, host, monkeypatch):
+        from coordinator_core.bash_guards import _session_census as census_mod
+
+        poller = [ProcRow(700, 150, 60, "python.exe"), ProcRow(701, 150, 61, "python.exe")]
+        host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + poller
+        monkeypatch.setattr(census_mod, "command_line", lambda pid: "python scratch/pr_watch.py 12")
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+
+    def test_a_python_command_that_is_not_a_light_script_still_counts(self, host, monkeypatch):
+        from coordinator_core.bash_guards import _session_census as census_mod
+
+        other = [ProcRow(700, 150, 60, "python.exe"), ProcRow(701, 150, 61, "python.exe")]
+        host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + other
+        monkeypatch.setattr(census_mod, "command_line", lambda pid: "python -m pytest tests/x.py")
+        assert "holds 3 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
+
     def test_background_shells_over_cap_deny_naming_the_pids(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
@@ -455,6 +483,17 @@ class TestSessionCapLeg:
     def test_background_light_command_under_cap_admits(self, host, tmp_path):
         assert _enveloped(guard.check)(_payload("sleep 600", background=True)) is None
         assert _lease_files(tmp_path) == []
+
+    def test_admitted_heavy_background_launch_ignores_open_light_shells(self, host):
+        host.rows = self._shell_rows(7)
+        assert _enveloped(guard.check)(_payload("pnpm build", background=True)) is None
+
+    def test_heavy_background_launch_at_the_heavy_cap_still_denies_with_shells_open(self, host):
+        host.rows = self._heavy_rows(2) + [
+            ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(7)
+        ]
+        text = _reason(_enveloped(guard.check)(_payload("pnpm build", background=True)))
+        assert "holds 2 heavy commands" in text
 
     def test_foreground_light_command_ignores_shell_count(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
@@ -1077,3 +1116,34 @@ class TestOrphanAttribution:
         self._open("build", 20)
         self._open("build", 21)
         assert _enveloped(guard.check)(_payload("pnpm build")) is None
+
+
+class TestBarePytestLeg:
+    """A subagent spawned by a workflow run may not run a bare multi-file pytest."""
+
+    CMD = "python -m pytest a.py b.py"  # two file targets: not the lone-file scoped form
+
+    def test_a_workflow_subagent_is_denied_with_the_remedy(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
+        out = _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123", agent_type="coordinator:executor"))
+        assert out is not None
+        assert "coordinator_core.testing.scoped_pytest" in _reason(out)
+        assert "bare-pytest leg" in _reason(out)
+
+    def test_an_unresolved_run_fails_closed(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: [guard._UNRESOLVED_RUN])
+        assert _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123")) is not None
+
+    def test_an_agent_tool_dispatch_is_not_denied_by_the_leg(self, host):
+        out = _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        assert out is None or "bare-pytest leg" not in _reason(out)
+
+    def test_the_main_session_is_not_denied_by_the_leg(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: [guard._UNRESOLVED_RUN])
+        out = _enveloped(guard.check)(_payload(self.CMD))
+        assert out is None or "bare-pytest leg" not in _reason(out)
+
+    def test_a_single_file_pytest_in_a_workflow_run_is_not_denied_by_the_leg(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
+        out = _enveloped(guard.check)(_payload("python -m pytest a.py", agent_id="deadbeef0123"))
+        assert out is None or "bare-pytest leg" not in _reason(out)

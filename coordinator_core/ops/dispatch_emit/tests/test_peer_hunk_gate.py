@@ -188,6 +188,30 @@ def test_live_sibling_with_missing_sizing_file_claims_nothing_and_does_not_raise
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
 
 
+def test_unreadable_peer_spine_holds_the_wanted_paths(repo):
+    run_id = _stamped("7cc61e")
+    _spine_sibling(repo, run_id)
+    (repo / "docs" / "plans" / "b.md").write_text(
+        "# B\n\n## Tasks\n\n```yaml plan-tasks\n- id: C0\n  writes: [unclosed\n```\n", encoding="utf-8"
+    )
+    run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    import yaml
+
+    with pytest.raises(yaml.YAMLError):
+        peer_hunk_gate._spine_writes(repo, run_id)
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH, "src/a.py"], [PATH]) == [(PATH, run_id)]
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], ["src/other.py"]) == []
+
+
+def test_malformed_peer_spine_block_holds_the_wanted_paths(repo):
+    run_id = _stamped("7cc61e")
+    _spine_sibling(repo, run_id)
+    block = "```yaml plan-tasks\n- id: C0\n  writes:\n    - other.py\n```\n"
+    (repo / "docs" / "plans" / "b.md").write_text(f"# B\n\n## Tasks\n\n{block}\n{block}", encoding="utf-8")
+    run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, run_id)]
+
+
 def test_unreadable_record_gives_no_holds(repo):
     run_id = _stamped("badbad")
     rdir = _run_dir(repo, run_id)
@@ -266,6 +290,29 @@ def test_marked_row_naming_another_file_is_not_held(repo):
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", "x", None)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, ["pkg/other.py"]) == []
+
+
+def test_a_claim_read_that_raises_holds_every_declared_wanted_path(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import sibling_claims
+
+    def boom(*_a, **_k):
+        raise RuntimeError("claims unreadable")
+
+    monkeypatch.setattr(sibling_claims, "sibling_run_claims", boom)
+    holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH, "src/a.py", "src/b.py"], [PATH, "src/a.py"])
+    assert holds == [
+        (PATH, peer_hunk_gate.UNREADABLE_PEER_CLAIMS),
+        ("src/a.py", peer_hunk_gate.UNREADABLE_PEER_CLAIMS),
+    ]
+    assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], ["src/other.py"]) == []
+
+
+def test_refusal_message_names_the_overlapping_run_and_header():
+    text = peer_hunk_gate.refusal_message(
+        [(PATH, "run-b")], OWN, None, {PATH: [("run-b", "@@ -60,1 +60,1 @@")]},
+    )
+    assert "run-b @@ -60,1 +60,1 @@" in text
+    assert "Overlap" not in peer_hunk_gate.refusal_message([(PATH, "run-b")], OWN)
 
 
 def test_constants_and_no_spawn(repo, monkeypatch):

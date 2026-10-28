@@ -64,9 +64,9 @@ def test_sibling_sizing_is_withheld_and_stays_dirty(repo, halted):
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert out["withheld"] == {SIBLING_SIZING: "sibling-claimed"}
+    assert out["withheld"] == {SIBLING_SIZING: "sibling-claimed", "a.py": "halt-record-only"}
     names = _landed(repo, out, "--name-only")
-    assert "a.py" in names and SIBLING_SIZING not in names and SIBLING_FILE not in names
+    assert "a.py" not in names and SIBLING_SIZING not in names and SIBLING_FILE not in names
     status = _git(["status", "--porcelain", "-uall"], repo)
     assert SIBLING_SIZING in status and SIBLING_FILE in status
     assert SIBLING_SIZING not in _git(["log", "-1", "--format=%B"], repo)
@@ -99,9 +99,9 @@ def test_halted_run_leaves_review_edits_unlanded_and_names_them(repo, monkeypatc
     assert out["committed"] is True, out
     assert out["review_edits_unlanded"] == {"a_review.py": "halted-run", SIBLING_FILE: "halted-run"}
     names = _landed(repo, out, "--name-only")
-    assert "a.py" in names and "a_review.py" not in names and SIBLING_FILE not in names
+    assert "a.py" not in names and "a_review.py" not in names and SIBLING_FILE not in names
     status = _git(["status", "--porcelain", "-uall"], repo)
-    assert "a_review.py" in status and SIBLING_FILE in status
+    assert "a.py" in status and "a_review.py" in status and SIBLING_FILE in status
     message = _git(["log", "-1", "--format=%B"], repo)
     assert "Review-Edit-Unlanded: a_review.py" in message
 
@@ -114,4 +114,5 @@ def test_own_declared_path_a_sibling_also_claims_still_lands(repo):
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert SIBLING_FILE in _landed(repo, out, "--name-only")
+    assert SIBLING_FILE not in _landed(repo, out, "--name-only")
+    assert out["withheld"][SIBLING_FILE] == "halt-record-only"

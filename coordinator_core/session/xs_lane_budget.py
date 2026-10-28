@@ -40,6 +40,11 @@ STATE_SPENT = "spent"
 
 _LANE_FILENAME = "xs-lane.json"
 
+# Optional record fields: `advised` (bool) latches a strict deny after the engine-ask step was named;
+# `unmeasured` ([repo-relative]) lists writes that could not be priced and make the lane over budget.
+ADVISED_KEY = "advised"
+UNMEASURED_KEY = "unmeasured"
+
 
 class Usage(NamedTuple):
     files: int
@@ -199,6 +204,29 @@ def add_path(repo_root, sid: str, rel_path: str) -> None:
         _write(repo_root, sid, rec)
 
 
+def latch_advised(repo_root, sid: str, unmeasured_path: Optional[str] = None) -> None:
+    """Latch the lane `advised`: the engine-ask step was named to the EM, so a strict guard denies
+    every further product write until engine-ask fires. With `unmeasured_path`, also record a write
+    that could not be priced; `measure()` then reads the lane as over budget, never as zero.
+    Absent or corrupt record: writes nothing."""
+    rec = read_lane(repo_root, sid)
+    if rec is None or rec.get("corrupt"):
+        return
+    rel = _norm_rel(repo_root, unmeasured_path) if unmeasured_path else None
+    changed = rec.get(ADVISED_KEY) is not True
+    rec[ADVISED_KEY] = True
+    if rel is not None and rel not in rec.get(UNMEASURED_KEY, []):
+        rec[UNMEASURED_KEY] = [*rec.get(UNMEASURED_KEY, []), rel]
+        changed = True
+    if changed:
+        _write(repo_root, sid, rec)
+
+
+def is_advised(rec: dict) -> bool:
+    """True once `latch_advised` ran on this lane record."""
+    return rec.get(ADVISED_KEY) is True
+
+
 def mark_spent(repo_root, sid: str) -> None:
     rec = read_lane(repo_root, sid)
     if rec is None or rec.get("corrupt") or rec.get("state") == STATE_SPENT:
@@ -335,7 +363,25 @@ def measure(repo_root, record: dict, triggering_path: str, projected_text: str) 
         if n:
             files += 1
             lines += n
-    return Usage(files, lines, files > BUDGET_FILES or lines > BUDGET_LINES)
+    return Usage(files, lines, files > BUDGET_FILES or lines > BUDGET_LINES or bool(record.get(UNMEASURED_KEY)))
+
+
+def applied_changes(repo_root, record: dict) -> list:
+    """[(rel, changed lines)] for each recorded path whose working text differs from its base blob,
+    read in-process from the lane ledger. Empty when the base is unreadable."""
+    rels = list(dict.fromkeys(_norm_rel(repo_root, p) for p in record.get("paths", [])))
+    if not rels:
+        return []
+    try:
+        bases = _base_texts(repo_root, record["base_sha"], rels)
+    except Exception:
+        return []
+    out = []
+    for rel in rels:
+        n = _changed_lines(bases[rel], _read_text(_abs(repo_root, rel)))
+        if n:
+            out.append((rel, n))
+    return out
 
 
 def touched_s_or_larger(sid: str, repo_root) -> bool:

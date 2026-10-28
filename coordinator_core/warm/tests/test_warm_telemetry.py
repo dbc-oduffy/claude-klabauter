@@ -471,3 +471,43 @@ def test_warm_rate_reachable_without_a_server_round_trip(tmp_path):
     status = telemetry.warm_rate(tmp_path)
     assert status["cold_count"] == 1
     assert status["warm_rate"] == pytest.approx(0.0)
+
+
+_BEST_EFFORT_WRITERS = [
+    lambda r: telemetry.record_client_cold_fallback(engine_root=r),
+    lambda r: telemetry.record_server_boot(
+        listener_secs=0.1, ready_secs=0.2, pid=1, engine_root=r),
+    lambda r: telemetry.record_election_lost(endpoint="e", engine_root=r),
+    lambda r: telemetry.record_worker_pool_depth(depth=1, pid=1, engine_root=r),
+    lambda r: telemetry.record_sweep([], [], [], engine_root=r),
+    lambda r: telemetry.record_client_boot_wait(
+        waited_secs=0.1, served=True, deadline_secs=1.0, engine_root=r),
+    lambda r: telemetry.record_degrade(kind=telemetry.KIND_HOOK_TIMEOUT, cause="c", engine_root=r),
+    lambda r: telemetry.record_publish_warm_attempt(stamped=True, engine_root=r),
+    lambda r: telemetry.ServerTelemetry().flush(engine_root=r),
+]
+
+
+@pytest.mark.parametrize("write", _BEST_EFFORT_WRITERS)
+def test_best_effort_writer_gives_up_within_its_deadline(
+    write, tmp_path, monkeypatch
+):
+    """Every hot-path counter passes a short lock deadline and drops the
+    record when the lock is not granted; with the lock free it still writes."""
+    seen = []
+
+    def _timeout_lock(target, *, timeout, **kwargs):
+        seen.append(timeout)
+        raise telemetry.locked_write.LockTimeout("held")
+
+    monkeypatch.setattr(telemetry.locked_write, "held_lock", _timeout_lock)
+    write(tmp_path)  # must return, not raise
+
+    assert seen == [telemetry.BEST_EFFORT_LOCK_TIMEOUT_SECS]
+    assert telemetry.BEST_EFFORT_LOCK_TIMEOUT_SECS <= 0.1
+    assert not list(tmp_path.rglob("*.jsonl"))
+
+
+def test_best_effort_writer_still_writes_when_lock_is_free(tmp_path):
+    telemetry.record_client_cold_fallback(engine_root=tmp_path)
+    assert telemetry.client_cold_count(tmp_path) == 1

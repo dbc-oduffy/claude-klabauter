@@ -24,6 +24,32 @@ class TestFireThenDischargeIsClean:
         assert ("discharge", nonce) in kinds
 
 
+class TestFireRecordsResolvedLevel:
+    def test_fire_carries_the_level_machine_profile_resolves(self, tmp_path, monkeypatch):
+        seen = []
+        monkeypatch.setattr(
+            "coordinator_core.machine_profile.resolved_level", lambda g, **k: seen.append(g) or "warn"
+        )
+        bd.record_fire(str(tmp_path), "sess-1", "guard-x", "reason")
+        records, _ = bd.read_ledger(str(tmp_path), session_id="sess-1")
+        fire = [r for r in records if r.get("kind") == "fire"][0]
+        assert fire["level"] == "warn" and seen == ["guard-x"]
+
+    def test_fire_level_is_unknown_when_resolution_raises(self, tmp_path, monkeypatch):
+        def boom(g, **k):
+            raise RuntimeError("no profile")
+
+        monkeypatch.setattr("coordinator_core.machine_profile.resolved_level", boom)
+        bd.record_fire(str(tmp_path), "sess-1", "guard-x", "reason")
+        records, _ = bd.read_ledger(str(tmp_path), session_id="sess-1")
+        assert records[0]["level"] == "unknown"
+
+    def test_fire_carries_floor_for_a_floor_guard(self, tmp_path):
+        bd.record_fire(str(tmp_path), "sess-1", "destructive-rm", "reason")
+        records, _ = bd.read_ledger(str(tmp_path), session_id="sess-1")
+        assert records[0]["level"] == "floor"
+
+
 class TestFireAloneDoesNotDischarge:
 
     def test_fire_only_ledger_has_no_discharge_record(self, tmp_path):

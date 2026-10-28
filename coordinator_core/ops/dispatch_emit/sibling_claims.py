@@ -7,7 +7,9 @@ run: its `run.json` `sizing_rel`, its `run-outcome.json` `inline_review.prep.sli
 its manifest's `review_declared_paths`. `filter_own` drops the claimed paths the committing run
 does not itself declare.
 
-Invariants: in-process file reads only (no spawn); an unreadable declaration contributes
+Invariants: in-process file reads only, bar one `git cat-file --batch` for all in-window halted runs' kept
+blobs (`halted_hold_release.prefetch_kept_at_head` in a `release_scope()`, so `release_reason` runs once per
+halted run); an unreadable declaration contributes
 nothing and nothing raises; a token past its TTL with no halt marker is not a claim; a released halted run
 (`halted_hold_release.release_reason`) claims nothing; a fresh-token run minted at or after
 `minted_before` is junior and claims nothing. Stdlib
@@ -55,6 +57,27 @@ def _read_json(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _in_window_run_ids(root: Path, own_run_id: Optional[str]) -> list:
+    """Run ids other than `own_run_id` in the record dir whose stamp is inside the token TTL (an unstamped
+    dir is excluded, as `_unlanded_run_ids` never lists a halted run without one), from one scan: the set
+    `halted_hold_release.prefetch_kept_at_head` batches blobs for. Never raises."""
+    from coordinator_core.ops.dispatch_emit import run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    now = time.time()
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as entries:
+            names = sorted(e.name for e in entries if e.is_dir())
+    except OSError:
+        return []
+    out = []
+    for run_id in names:
+        stamp = stopped_runs._stamp_epoch(run_id)
+        if run_id != own_run_id and stamp is not None and now - stamp <= run_token.TTL_SECONDS:
+            out.append(run_id)
+    return out
+
+
 def _unlanded_run_ids(
     root: Path, own_run_id: Optional[str], own_plan: Optional[str] = None, minted_before: Optional[tuple] = None,
 ) -> list:
@@ -65,7 +88,7 @@ def _unlanded_run_ids(
     whose successor landed or whose sizing is superseded, is not listed. A listed halted run may
     still claim nothing: `_held_extras` narrows it to what it withheld or left dirty."""
     from coordinator_core.ops import warp_run_deliverable
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token, stopped_runs
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     now = time.time()
@@ -81,7 +104,12 @@ def _unlanded_run_ids(
         stamp = stopped_runs._stamp_epoch(run_id)
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
             continue
-        if warp_run_deliverable._halted(root, run_id):
+        try:
+            marker = halted_run.read_strict_run(root / RECORD_DIR_ROOT / run_id)
+        except halted_run.UnreadableHaltRecord:
+            found.append(run_id)
+            continue
+        if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
             if stamp is not None and not halted_hold_release.release_reason(root, run_id, own_run_id, own_plan):
                 found.append(run_id)
             continue
@@ -205,17 +233,23 @@ def _own_dirty(root: Path, run_id: str, hot: set, dirty, attributable=None) -> s
 
 def _held_extras(
     root: Path, run_id: str, dirty=None, wanted: Optional[set] = None, attributable=None,
+    own_run_id: Optional[str] = None, own_plan: Optional[str] = None,
 ) -> set:
-    """`_extra_declared`, narrowed for a halted run to the paths its halt record withholds plus
-    the run's own sizing file when dirty (no hunk evidence needed), and those dirty now with hunks
-    attributable to the run and its own dirt (`dirty()`, read at most
-    once and only if a candidate in `wanted` remains -- an extra outside the candidates must not
-    cost the status spawn)."""
+    """`_extra_declared`, narrowed for a halted run to `halted_hold_release.held_paths` against
+    `own_run_id`/`own_plan` (empty once a release rule frees the run) plus the run's own sizing file
+    when dirty (no hunk evidence needed), and those dirty now with hunks attributable to the run and its
+    own dirt (`dirty()`, read at most once and only if a candidate in `wanted` remains -- an extra
+    outside the candidates must not cost the status spawn)."""
     from coordinator_core.ops import warp_run_deliverable
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
 
     extra = _extra_declared(root, run_id)
     if warp_run_deliverable._halted(root, run_id):
-        held = extra & warp_run_deliverable.halted_withheld_paths(root, run_id)
+        try:
+            held = extra & halted_hold_release.held_paths(root, run_id, own_run_id, own_plan)
+        except halted_run.UnreadableHaltRecord as exc:
+            logging.getLogger(__name__).warning("sibling %s holds every wanted path: %s", run_id, exc.reason)
+            return extra | (wanted or set())
         rest = extra - held
         if wanted is not None:
             rest &= wanted
@@ -258,7 +292,8 @@ def _dirty_reader(root: Path, wanted: set):
 
 
 def _declares(root: Path, run_id: str, path: str) -> bool:
-    """Whether `run_id`'s manifest or commit request declares `path` (exactly or under a prefix)."""
+    """Whether `run_id`'s manifest or commit request declares `path` (exactly or under a prefix).
+    Reads go through `_manifest_declared`, memoised per run inside the caller's `release_scope()`."""
     from coordinator_core.ops import warp_run_deliverable
 
     paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
@@ -295,10 +330,11 @@ def sibling_run_claims(
     try:
         from coordinator_core.git import git_state
         from coordinator_core.ops import warp_run_deliverable
-        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_hunk_attribution
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_hunk_attribution, halted_run
 
         attr = halted_hunk_attribution.reader(root, own_run_id, landing_plan=own_plan)
         with git_state.index_read_cache_scope(), halted_hold_release.blob_scope(root):
+            halted_hold_release.prefetch_kept_at_head(root, _in_window_run_ids(root, own_run_id))
             halted = warp_run_deliverable.halted_run_write_claims(
                 root, wanted, exclude_run=own_run_id, own_plan=own_plan,
             ) or {}
@@ -310,7 +346,7 @@ def sibling_run_claims(
                 claims.setdefault(path, run_ids[0])
             if unlanded is None:
                 unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
-            extras = {run_id: _held_extras(root, run_id, dirty, wanted, attr) for run_id in unlanded}
+            extras = {run_id: _held_extras(root, run_id, dirty, wanted, attr, own_run_id, own_plan) for run_id in unlanded}
             for path, sessions in sorted(live.items()):
                 owner = next((r for r in unlanded if _declares(root, r, path)), sessions[0])
                 claims.setdefault(path, owner)
@@ -332,7 +368,13 @@ def sibling_run_claims(
                             claims.setdefault(path, run_id)
                         freed = spine_all & own
                         if freed:
-                            withheld = warp_run_deliverable.halted_withheld_paths(root, run_id)
+                            try:
+                                withheld = warp_run_deliverable.halted_withheld_paths(root, run_id)
+                            except halted_run.UnreadableHaltRecord as exc:
+                                for path in sorted(freed):
+                                    claims.setdefault(path, run_id)
+                                logging.getLogger(__name__).warning("sibling %s holds %s", run_id, exc.reason)
+                                continue
                             for path in sorted((freed - withheld) & dirty()):
                                 logging.getLogger(__name__).warning(
                                     "spine-only halted sibling %s: dirty declared path %s freed for landing run %s",
@@ -360,16 +402,22 @@ def shared_dir_holds(
     own_dirs = {_norm(p).rpartition("/")[0] for p in own_paths if p}
     try:
         from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
 
         root = Path(worktree_root)
         held_dirs: set = set()
-        for run_id in _unlanded_run_ids(root, own_run_id, own_plan):
-            if warp_run_deliverable._halted(root, run_id):
-                declared = tuple(warp_run_deliverable.halted_withheld_paths(root, run_id))
-            else:
-                paths, _prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
-                declared = (*paths, *_extra_declared(root, run_id))
-            held_dirs.update(p.rpartition("/")[0] for p in declared if isinstance(p, str) and p)
+        with halted_hold_release.release_scope():
+            unlanded = _unlanded_run_ids(root, own_run_id, own_plan)
+            for run_id in unlanded:
+                if warp_run_deliverable._halted(root, run_id):
+                    try:
+                        declared = tuple(warp_run_deliverable.halted_withheld_paths(root, run_id))
+                    except halted_run.UnreadableHaltRecord:
+                        return wanted
+                else:
+                    paths, _prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+                    declared = (*paths, *_extra_declared(root, run_id))
+                held_dirs.update(p.rpartition("/")[0] for p in declared if isinstance(p, str) and p)
     except Exception:  # noqa: BLE001 -- contest unknown: hold nothing further
         return []
     shared = own_dirs & held_dirs

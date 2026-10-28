@@ -54,6 +54,16 @@ _CORPUS_PATH = Path(__file__).with_name("guard_message_corpus.py")
 
 
 @pytest.fixture(autouse=True)
+def _guards_judged_before_the_log_clamp():
+    """`expected_speaker` is authored against the verdict a guard builds; a guard that clamps its
+    own deny to a log inside `check` is measured before the clamp."""
+    from coordinator_core.bash_guards._alternative_liveness import pre_clamp_levels
+
+    with pre_clamp_levels():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _repo_registers_the_spawns_process_marker(tmp_path, monkeypatch):
     """The unmarked-spawning-test nudge speaks only in a repo whose `pyproject.toml` registers
     `spawns_process`; the corpus's firing row presumes such a repo, so resolution is pointed at one."""

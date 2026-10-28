@@ -511,10 +511,12 @@ def session_commit_count_attributed(worktree_root: Path, sid: str) -> dict:
       - `{"degraded": False, "value": <int commit count>}`
       - `{"degraded": True, "evidence": "<why the probe could not run>"}`
 
-    KNOWN UNDERCOUNT (the Staff Engineer F5, R-11/DR-319): `--grep=Session-Id:` only sees commits
-    carrying the trailer. A commit made via plumbing (`git commit-tree`, bypassing the
-    porcelain `commit` path) loses the trailer, so `value: 0` is ALSO reachable for a
-    session that committed real work. This producer has no signal to distinguish "no
+    KNOWN UNDERCOUNT (the Staff Engineer F5, R-11/DR-319): the count is exactly what
+    ``session.commits`` selects — commits carrying the ``Session-Id:`` trailer, plus
+    (via that primitive's cold ``git log``, no warm-only path) the caller's own
+    ``Claude-Session`` commits. A commit made via plumbing (`git commit-tree`, bypassing
+    the porcelain `commit` path) with neither trailer is still missed, so `value: 0` is
+    ALSO reachable for a session that committed real work. This producer has no signal to distinguish "no
     commits" from "commits, untagged" — a caller serving this fact declares that limit
     as part of the served fact rather than silently inheriting it.
 

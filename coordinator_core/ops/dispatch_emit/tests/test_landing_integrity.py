@@ -76,8 +76,23 @@ def test_detail_names_at_most_three_node_ids():
     assert finding.detail.count("::") == 3
 
 
-def test_baseline_present_with_nothing_caused_is_pre_existing_only():
-    assert li.failed_targeted_tests(_v("fail", [])) == ([], "pre-existing-only")
+def test_baseline_with_nothing_caused_and_no_failing_id_is_not_a_clear():
+    findings, check = li.failed_targeted_tests(_v("fail", []))
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def test_nothing_caused_clears_only_when_every_failing_id_is_evidenced():
+    ok = {"status": "fail", "baseline": {"caused": [], "foreign": ["t/a.py::x"], "evidence": ["t/a.py::x"]}}
+    assert li.failed_targeted_tests(ok) == ([], "pre-existing-only")
+    bad = {"status": "fail", "baseline": {"caused": [], "foreign": ["t/a.py::x", "t/b.py::y"],
+                                          "evidence": ["t/a.py::x"]}}
+    findings, check = li.failed_targeted_tests(bad)
+    assert check == "failed" and [f.path for f in findings] == ["t/b.py"]
+    unlabelled = {"status": "fail", "baseline": {"caused": [], "pre_existing": ["t/a.py::x"]}}
+    assert li.failed_targeted_tests(unlabelled)[1] == "failed"
+    unverified = {"status": "fail", "baseline": {"caused": [], "foreign": ["t/a.py::x"],
+                                                 "evidence": ["t/a.py::x"], "unverified": ["t/c.py::z"]}}
+    assert li.failed_targeted_tests(unverified)[1] == "failed"
 
 
 def test_error_without_baseline_is_one_unattributed_finding():
@@ -186,6 +201,12 @@ def test_fresh_pass_over_recorded_fail_is_pass_on_retest(tmp_path):
     assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "pass-on-retest")
 
 
+def test_head_drift_alone_leaves_a_fresh_pass_a_pass_on_retest(tmp_path):
+    root = _repo(tmp_path)
+    _write_fresh(root, head="b" * 40)
+    assert li.landing_test_gate(root, _RECORDED_FAIL, "r1") == ([], "pass-on-retest")
+
+
 @pytest.mark.parametrize("breakage", ["empty_covered_head", "covered", "run_id", "corrupt"])
 def test_invalid_fresh_verdict_falls_back_to_recorded(tmp_path, breakage):
     root = _repo(tmp_path)
@@ -240,7 +261,8 @@ def test_explicit_empty_failed_tests_after_a_passing_retest_clears_a_drifted_rec
     _write_fresh(root, status="pass")
     (root / "t.py").write_text("x = 2\n", encoding="utf-8")  # covered blob changed: record is stale
     params = {**_RECORDED_FAIL, "failed_tests": []}
-    assert li.landing_test_gate(root, params, "r1") == ([], "pre-existing-only")
+    findings, reason = li.landing_test_gate(root, params, "r1")
+    assert findings == [] and reason in ("pass-on-retest", "pre-existing-only")
 
 
 def test_empty_failed_tests_without_a_retest_record_still_refuses(tmp_path):
@@ -256,9 +278,9 @@ def test_failed_tests_param_outranks_an_errored_no_results_retest(tmp_path, monk
     path.write_text(json.dumps({**record, "reason": "launcher exited 2"}), encoding="utf-8")
     findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
     assert check == "failed" and "errored without running tests" in findings[0].detail
-    monkeypatch.setattr(li, "_changed_since_base", lambda *a, **k: [])
     params = {**_RECORDED_FAIL, "failed_tests": ["t.py::test_x"]}
-    assert li.landing_test_gate(root, params, "r1") == ([], "pre-existing-only")
+    findings, check = li.landing_test_gate(root, params, "r1")
+    assert check == "failed" and findings[0].path == "t.py"
 
 
 def test_refusal_names_a_drifted_retest_record_and_its_route(tmp_path):
@@ -280,38 +302,18 @@ def test_head_movement_alone_never_stales_a_covered_retest(tmp_path):
     assert li.fresh_targeted_verdict(root, "r1") is None
 
 
-def test_unchanged_failing_files_since_base_are_pre_existing(tmp_path, monkeypatch):
+def test_unchanged_failing_files_since_base_are_not_inferred_pre_existing(tmp_path):
     root = _repo(tmp_path)
-    seen = {}
-
-    def fake(worktree_root, base, paths):
-        seen["args"] = (base, list(paths))
-        return True
-
-    monkeypatch.setattr(li, "_unchanged_since_base", fake)
     params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["./t/test_x.py::test_a", "t/test_x.py::test_b"]}
-    assert li.landing_test_gate(root, params, None) == ([], "pre-existing-only")
-    assert seen["args"] == (B, ["t/test_x.py"])
-
-
-def test_changed_failing_files_since_base_still_refuse(tmp_path, monkeypatch):
-    root = _repo(tmp_path)
-    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: False)
-    params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["t/test_x.py::test_a"]}
     findings, check = li.landing_test_gate(root, params, None)
-    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+    assert check == "failed" and [f.path for f in findings] == ["t/test_x.py"]
+    assert "unevidenced red" in findings[0].detail
 
 
-def test_failed_tests_without_a_run_base_still_refuse(tmp_path, monkeypatch):
+def test_failed_tests_without_a_run_base_still_refuse(tmp_path):
     root = _repo(tmp_path)
-    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
     params = {**_RECORDED_FAIL, "failed_tests": ["t/test_x.py::test_a"]}
     assert li.landing_test_gate(root, params, None)[1] == "failed"
-
-
-def test_unchanged_since_base_real_tree_check(tmp_path):
-    root = _repo(tmp_path)
-    assert li._unchanged_since_base(root, B, ["t.py"]) is False
 
 
 @pytest.mark.parametrize("marker", [{"stale": True, "note": "no targeted set recorded"}, {"status": "stale"}])
@@ -371,44 +373,25 @@ def test_node_file_splits_vitest_style_ids():
 
 def test_digest_named_failure_reaches_the_gate_and_is_retested_by_remedy(tmp_path, monkeypatch):
     root = _repo(tmp_path)
-    seen = []
-    monkeypatch.setattr(li, "_unchanged_since_base", lambda r, b, paths: seen.append(list(paths)) or False)
     out = _digest(tmp_path, _NAMED)
     params = {**_RECORDED_FAIL, "run_base_sha": B, "task_output_path": out}
     findings, check = li.landing_test_gate(root, params, None)
     assert check == "failed"
     assert [f.path for f in findings] == ["src/lib/mcp/tool-manifest.test.ts", "a/test_y.py"]
     assert "--tests src/lib/mcp/tool-manifest.test.ts" in findings[0].detail
-    assert seen[0] == ["src/lib/mcp/tool-manifest.test.ts", "a/test_y.py"]
 
 
-def test_digest_named_failure_unchanged_since_base_is_pre_existing(tmp_path, monkeypatch):
+def test_every_failing_file_refuses_whatever_its_age(tmp_path):
     root = _repo(tmp_path)
-    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
-    params = {**_RECORDED_FAIL, "run_base_sha": B, "task_output_path": _digest(tmp_path, _NAMED)}
-    assert li.landing_test_gate(root, params, None) == ([], "pre-existing-only")
-
-
-def test_only_the_changed_failing_file_refuses(tmp_path, monkeypatch):
-    root = _repo(tmp_path)
-    monkeypatch.setattr(li, "_unchanged_since_base", lambda r, b, paths: paths == ["t/test_old.py"])
     params = {**_RECORDED_FAIL, "run_base_sha": B, "failed_tests": ["t/test_old.py::a", "t/test_new.py::b"]}
     findings, check = li.landing_test_gate(root, params, None)
-    assert check == "failed" and [f.path for f in findings] == ["t/test_new.py"]
-    assert "--tests t/test_new.py" in findings[0].detail
+    assert check == "failed" and [f.path for f in findings] == ["t/test_old.py", "t/test_new.py"]
+    assert "--tests t/test_new.py" in findings[1].detail
 
 
-def test_failed_tests_nested_under_params_is_honoured(tmp_path, monkeypatch):
+def test_failed_tests_nested_under_params_is_honoured(tmp_path):
     root = _repo(tmp_path)
-    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
     params = {**_RECORDED_FAIL, "run_base_sha": B, "params": {"failed_tests": ["t/test_x.py::a"]}}
-    assert li.landing_test_gate(root, params, None) == ([], "pre-existing-only")
-
-
-def test_failed_test_with_no_base_still_refuses(tmp_path, monkeypatch):
-    root = _repo(tmp_path)
-    monkeypatch.setattr(li, "_unchanged_since_base", lambda *a: True)
-    params = {**_RECORDED_FAIL, "failed_tests": ["t/test_x.py::a"]}
     findings, check = li.landing_test_gate(root, params, None)
     assert check == "failed" and findings[0].path == "t/test_x.py"
 
@@ -463,14 +446,15 @@ def test_zero_fail_no_baseline_names_its_cause_not_targeted_tests_failed():
     assert li.TARGETED_TESTS_FAILED not in {f.reason for f in findings}
 
 
-def test_zero_fail_with_status_before_fail_lands_as_pre_existing():
+def test_zero_fail_with_status_before_fail_refuses_without_evidence():
     verdict = {"status": "fail", "tests_failed": 0, "tests_run": 249, "status_before": "fail"}
-    assert li.landing_test_gate(Path("."), {"targeted_tests": verdict}, None) == ([], "pre-existing-only")
+    findings, check = li.landing_test_gate(Path("."), {"targeted_tests": verdict}, None)
+    assert check == li.ZERO_FAIL_CHECK and findings[0].reason == li.ZERO_FAIL_UNATTRIBUTED
 
 
-def test_status_before_rides_the_inline_review_mapping():
+def test_status_before_rides_the_inline_review_mapping_and_still_refuses():
     params = {"inline_review": {"tests": {"status": "fail", "failed": 0, "run": 9, "status_before": "fail"}}}
-    assert li.landing_test_gate(Path("."), params, None) == ([], "pre-existing-only")
+    assert li.landing_test_gate(Path("."), params, None)[1] == li.ZERO_FAIL_CHECK
 
 
 def test_caused_ids_still_refuse_even_with_status_before_fail():
@@ -594,3 +578,98 @@ def test_gate_receipt_names_run_deleted_targets_and_stays_no_verdict(tmp_path):
     out = terminal_commit._landing_integrity_gate(root, ["mod.py"], [], None, params, "r1")
     assert out["targeted_tests_check"] == "no-verdict"
     assert "test_gone.py" in out["targeted_tests_note"]
+
+
+_INV = "coordinator_core/tests/test_inv.py::test_inv"
+
+
+def _fail_retest(monkeypatch, baseline):
+    from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
+
+    monkeypatch.setattr(imp, "invariants_for_paths", lambda paths, root: [_INV])
+    monkeypatch.setattr(imp, "existing_invariants", lambda root, nodes: list(nodes))
+    monkeypatch.setattr(li, "fresh_targeted_verdict", lambda root, rid: {
+        "status": "fail", "tests": [_INV.split("::")[0]], "baseline": baseline,
+    })
+
+
+def test_invariant_red_on_head_is_credited_foreign_with_its_evidence(tmp_path, monkeypatch):
+    _fail_retest(monkeypatch, {"caused": [], "foreign": [_INV], "evidence": [_INV]})
+    foreign: dict = {}
+    assert li.invariant_findings(tmp_path, ["mod.py"], "r1", {}, foreign) == []
+    assert foreign == {_INV: [_INV]}
+    findings, check = li.landing_test_gate(tmp_path, {}, "r1", ["mod.py"])
+    assert findings.foreign_evidence == {_INV: [_INV]}
+
+
+def test_invariant_red_without_head_evidence_still_refuses(tmp_path, monkeypatch):
+    _fail_retest(monkeypatch, {"caused": [], "foreign": [_INV], "evidence": []})
+    foreign: dict = {}
+    found = li.invariant_findings(tmp_path, ["mod.py"], "r1", {}, foreign)
+    assert [f.reason for f in found] == [li.TARGETED_TESTS_FAILED] and foreign == {}
+
+
+def test_landing_invariant_nodes_is_the_set_invariant_findings_owes(tmp_path, monkeypatch):
+    _fail_retest(monkeypatch, {"caused": [], "foreign": [], "evidence": []})
+    assert li.landing_invariant_nodes(tmp_path, ["mod.py"], "r1") == [_INV]
+    assert [f.path for f in li.invariant_findings(tmp_path, ["mod.py"], "r1", {})] == [_INV.split("::")[0]]
+
+
+def test_run_landing_paths_drops_deleted_and_the_record(tmp_path):
+    rec = tmp_path / "state" / "rec.md"
+    got = li.run_landing_paths(tmp_path, ["a.py", "gone.py", "state/rec.md"], ["gone.py"], rec)
+    assert got == ["a.py"]
+    assert li.run_landing_paths(tmp_path, ["a.py", "gone.py"], []) == ["a.py", "gone.py"]
+
+
+def test_owed_invariant_branch_keeps_the_gate_findings_shape(tmp_path, monkeypatch):
+    owed = [li.Finding("test_inv.py", li.TARGETED_TESTS_FAILED, "invariant owed")]
+    monkeypatch.setattr(li, "invariant_findings", lambda *a, **k: owed)
+    findings, check = li.landing_test_gate(tmp_path, {}, None, ["mod.py"])
+    assert isinstance(findings, li.GateFindings)
+    assert findings.deleted_note == ""
+    assert check == "failed"
+    assert list(findings)[-1] == owed[0]
+
+
+def test_terminal_commit_gate_returns_owed_invariant_findings_without_raising(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit
+
+    owed = li.Finding("test_inv.py", li.TARGETED_TESTS_FAILED, "invariant owed")
+    monkeypatch.setattr(li, "invariant_findings", lambda *a, **k: [owed])
+    out = terminal_commit._landing_integrity_gate(tmp_path, ["mod.py"], [], None, {}, "r1")
+    assert out["targeted_tests_check"] == "failed"
+    assert "refused" not in out
+    assert {"path": "test_inv.py", "reason": li.TARGETED_TESTS_FAILED, "detail": "invariant owed"} in out["advisory"]
+
+
+_ALLOWLIST_NODE = (
+    "coordinator_core/session/tests/test_machinery_paths.py"
+    "::test_every_tracked_state_first_segment_is_on_the_allowlist"
+)
+_RUN = "warp-2026-10-27-x-aaaaaa-20261027T000000-bbbbbb"
+
+
+def _invariant_repo(tmp_path):
+    _w(tmp_path, _ALLOWLIST_NODE.split("::")[0], "")
+    _w(tmp_path, f"state/warp/{_RUN}/run.json", json.dumps({"sizing_rel": "state/sizings/s.yaml"}))
+    _w(tmp_path, "state/sizings/s.yaml", "plan: docs/plans/p.md\n")
+    return tmp_path
+
+
+def test_run_artifact_paths_select_no_repo_wide_invariant(tmp_path):
+    root = _invariant_repo(tmp_path)
+    own = [f"state/warp/{_RUN}/run.json", f"state/warp/{_RUN}/notes.jsonl", "state/sizings/s.yaml"]
+    assert li.landing_invariant_nodes(root, own, _RUN) == []
+
+
+def test_a_chunk_written_state_path_still_selects_the_allowlist_invariant(tmp_path):
+    root = _invariant_repo(tmp_path)
+    landed = [f"state/warp/{_RUN}/run.json", "state/sizings/other.yaml", f"state/warp/{_RUN}-sibling/x.json"]
+    assert li.landing_invariant_nodes(root, landed, _RUN) == [_ALLOWLIST_NODE]
+
+
+def test_a_run_json_sizing_rel_outside_state_sizings_exempts_nothing(tmp_path):
+    root = _invariant_repo(tmp_path)
+    _w(root, f"state/warp/{_RUN}/run.json", json.dumps({"sizing_rel": "state/other/x.yaml"}))
+    assert li.landing_invariant_nodes(root, ["state/other/x.yaml"], _RUN) == [_ALLOWLIST_NODE]

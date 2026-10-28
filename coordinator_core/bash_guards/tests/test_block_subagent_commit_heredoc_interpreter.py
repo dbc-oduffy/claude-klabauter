@@ -197,6 +197,76 @@ def test_heredoc_fed_to_non_python_interpreter_allows(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Import-only allows; call/reference/dynamic denies
+# ---------------------------------------------------------------------------
+
+
+def _heredoc(body):
+    return "python3 - <<'PYEOF'\n" + body + "\nPYEOF"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import coordinator_core.git.commit\nprint(coordinator_core.git.commit.__file__)",
+        "import coordinator_core.git.commit as gc\nprint(gc.__name__)",
+        "from coordinator_core.git import commit\nprint(commit.__doc__)",
+        "from coordinator_core.git import commit as c\nprint(dir(c))",
+        "from coordinator_core.git.commit import CommitRefused\nprint(CommitRefused)",
+        "from coordinator_core.git.commit import (\n    CommitRefused,\n)\nprint(CommitRefused)",
+    ],
+)
+def test_import_only_heredoc_allows(monkeypatch, body):
+    _allows(monkeypatch, _heredoc(body))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import coordinator_core.git.commit\ncoordinator_core.git.commit.commit_paths('s', ['a'])",
+        "import coordinator_core.git.commit as gc\ngc.stage_paths_in_process('r', ['a'])",
+        "from coordinator_core.git import commit as c\nc.commit_paths('s', ['a'])",
+        "from coordinator_core.git.commit import stage_paths_in_process\nstage_paths_in_process('r', ['a'])",
+        "from coordinator_core.git.commit import commit_paths as cp\ncp('s', ['a'])",
+        "from coordinator_core.git.commit import (\n    commit_paths,\n)\nf = commit_paths\nf('s', ['a'])",
+        "from coordinator_core.git.commit import *\ncommit_paths('s', ['a'])",
+        "import coordinator_core.git.commit as gc\ngetattr(gc, 'comm' + 'it_paths')('s', ['a'])",
+        "import coordinator_core.git.commit as gc\ngc.__getattribute__('comm' + 'it_paths')('s', ['a'])",
+        "import importlib\nm = importlib.import_module('coordinator_core.git.commit')\nm.x()\n"
+        "import coordinator_core.git.commit",
+    ],
+)
+def test_import_and_call_heredoc_denies(monkeypatch, body):
+    _denies(monkeypatch, _heredoc(body))
+
+
+def test_script_file_import_only_allows_and_call_denies(monkeypatch, tmp_path):
+    only = tmp_path / "only.py"
+    only.write_text("from coordinator_core.git import commit\nprint(commit.__file__)\n")
+    calls = tmp_path / "calls.py"
+    calls.write_text(
+        "from coordinator_core.git.commit import commit_paths\ncommit_paths('s', ['a'])\n"
+    )
+    only_arg = only.as_posix()
+    calls_arg = calls.as_posix()
+    _allows(monkeypatch, f"python3 {only_arg}")
+    _denies(monkeypatch, f"python3 {calls_arg}")
+
+
+def test_entry_point_set_matches_commit_module_public_functions():
+    import inspect
+
+    from coordinator_core.git import commit as mod
+
+    public = {
+        n
+        for n, f in inspect.getmembers(mod, inspect.isfunction)
+        if not n.startswith("_") and f.__module__ == mod.__name__
+    }
+    assert public == set(guard._GIT_COMMIT_ENTRY_POINTS)
+
+
+# ---------------------------------------------------------------------------
 # Regression: the sanctioned route still allows
 # ---------------------------------------------------------------------------
 

@@ -14,7 +14,7 @@ import fnmatch
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
@@ -45,6 +45,7 @@ class WorkClass:
     tools: tuple[str, ...] = ()
     triage_agent_type: Optional[str] = None
     required_tools: tuple[str, ...] = ()
+    stage_agents: Optional[dict[str, str]] = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class RouteTable:
     agent_tool_ranges: Optional[dict[str, tuple[str, ...]]] = None
     brief_lint: Optional[BriefLint] = None
     editor_python: Optional[EditorPython] = None
+    stage_agents: Optional[dict[str, str]] = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +146,22 @@ def _regexes(value: Any, path: Path, field: str) -> tuple["re.Pattern[str]", ...
     return tuple(out)
 
 
+STAGES = ("plan", "plan_review", "code_review")
+
+
+def _stage_agents(raw: Any, path: Path, field: str) -> Optional[dict[str, str]]:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RouteTableError(_where(path, f"{field} must be an object"))
+    unknown = [str(k) for k in raw if k not in STAGES]
+    if unknown:
+        raise RouteTableError(
+            _where(path, f"{field} has unknown key {', '.join(unknown)}; allowed: {', '.join(STAGES)}")
+        )
+    return {k: _text(v, path, f"{field}.{k}") for k, v in raw.items()}
+
+
 def _parse_class(raw: Any, path: Path, i: int) -> WorkClass:
     field = f"work_classes[{i}]"
     if not isinstance(raw, dict):
@@ -173,6 +191,7 @@ def _parse_class(raw: Any, path: Path, i: int) -> WorkClass:
         tools=tools,
         triage_agent_type=triage,
         required_tools=_names(raw.get("required_tools"), path, f"{field}.required_tools"),
+        stage_agents=_stage_agents(raw.get("stage_agents"), path, f"{field}.stage_agents"),
     )
 
 
@@ -231,6 +250,7 @@ def _parse_table(data: Any, path: Path) -> RouteTable:
         agent_tool_ranges=ranges,
         brief_lint=lint,
         editor_python=editor,
+        stage_agents=_stage_agents(data.get("stage_agents"), path, "stage_agents"),
     )
 
 
@@ -520,6 +540,78 @@ def route_rows(
             triage=triage,
         )
     return out, routes, notes
+
+
+LOCAL_MD_RELPATH = "coordinator.local.md"
+_REVIEW_ROUTING_RE = re.compile(r"^review_routing\s*:\s*(.*?)\s*$")
+_PLUGIN_AGENT_RE = re.compile(r"^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
+_REVIEW_ROUTED_STAGES = ("plan_review", "code_review")
+
+
+def read_review_routing(repo_root: "str | os.PathLike[str]") -> Optional[str]:
+    """`review_routing` from the frontmatter of `<repo>/coordinator.local.md`, or `None`.
+
+    `None` for an absent file, no frontmatter, an absent key or a blank value. Raises
+    `RouteTableError` when the value is not a `plugin:agent` string.
+    """
+    path = Path(repo_root) / LOCAL_MD_RELPATH
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        m = _REVIEW_ROUTING_RE.match(line)
+        if m is None:
+            continue
+        value = m.group(1)
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if not value or value == "null":
+            return None
+        if not _PLUGIN_AGENT_RE.match(value):
+            raise RouteTableError(_where(path, f"review_routing must be a plugin:agent string, got {value!r}"))
+        return value
+    return None
+
+
+def resolve_stage_agents(
+    repo_root: "str | os.PathLike[str]",
+    *,
+    ask_text: str,
+    writes: Sequence[str] = (),
+    defaults: dict[str, str],
+) -> dict[str, tuple[str, str]]:
+    """Per stage in `STAGES`: `(agent_type, source)` with source `work-class:<id>`, `table`,
+    `review_routing` or `default`.
+
+    Order: first work class carrying `stage_agents[stage]` that matches `writes` or `ask_text`, then
+    the table's `stage_agents[stage]`, then `review_routing` (plan_review and code_review only), then
+    `defaults[stage]`. Model resolution is the caller's (`_model_of`).
+    """
+    table = load_route_table(repo_root)
+    review = read_review_routing(repo_root)
+    out: dict[str, tuple[str, str]] = {}
+    for stage in STAGES:
+        resolved: Optional[tuple[str, str]] = None
+        if table is not None:
+            carriers = tuple(c for c in table.work_classes if c.stage_agents and stage in c.stage_agents)
+            if carriers:
+                cls = match_work_class(
+                    replace(table, work_classes=carriers), writes=writes, body=ask_text
+                )
+                if cls is not None:
+                    resolved = (cls.stage_agents[stage], f"work-class:{cls.id}")
+            if resolved is None and table.stage_agents and stage in table.stage_agents:
+                resolved = (table.stage_agents[stage], "table")
+        if resolved is None and review is not None and stage in _REVIEW_ROUTED_STAGES:
+            resolved = (review, "review_routing")
+        out[stage] = resolved or (defaults[stage], "default")
+    return out
 
 
 def _targets(

@@ -37,6 +37,15 @@ from coordinator_core.warm.entry_seam import try_warm_guard_dispatch
 _NO_VERIFY_CMD = "git commit --no-verify -m x -- foo.py"
 
 
+@pytest.fixture(autouse=True)
+def _floor_guard_level(monkeypatch):
+    """Pin every guard to the floor so a deny still reaches the env-forwarding boundary this
+    suite tests; under DR-475 an off-registry guard like no-verify only nudges."""
+    from coordinator_core import machine_profile
+
+    monkeypatch.setattr(machine_profile, "resolved_level", lambda _name, subagent=False: "floor")
+
+
 def _event(
     cmd: str,
     *,

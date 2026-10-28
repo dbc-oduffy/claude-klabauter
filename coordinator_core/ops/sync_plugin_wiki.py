@@ -21,11 +21,12 @@ Exit codes (verbatim from the bash oracle, plus a fail-closed addition marked Ti
         exists to catch, so this is reported as non-clean rather than silently
         excluded from the scan
     2 — usage error (unknown flag)
+    3 — a plugin-cited wiki page is absent from the bundled wiki
     5 — dev-side mirror of plugin-doctrine wiki detected; single-tree invariant broken
 
 Missing-bundled policy: if a plugin file references docs/wiki/<name>.md but <name>.md
-is absent from the bundled wiki, warn and continue (doc-link-checker's job, not this
-script's).
+is absent from the bundled wiki, warn per page and exit 3 (after the mirror and
+unreadable checks, which take precedence).
 
 PLUGIN_ROOT resolution: `CLAUDE_PLUGIN_ROOT` env var is rung 1 (matches the oracle's
 own rung 1); past that, resolution delegates to the shared native port of
@@ -119,14 +120,11 @@ message naming both paths, their mtimes, and a remediation instruction.
 Exit codes:
   0 — clean: no dev-side mirrors found for any plugin-cited wiki
   2 — usage error / unexpected
+  3 — a plugin-cited wiki page is absent from the bundled wiki
   5 — dev-side mirror of plugin-doctrine wiki detected; single-tree invariant broken
 
-Missing-bundled policy: if a plugin file references docs/wiki/<name>.md but
-<name>.md is absent from the bundled wiki, warn and continue. That is a
-doc-link issue (handled by the doc-link-checker), not a mirror issue.
-
 Flags:
-  --check-only  report status without exiting non-zero on warnings; exit 5 still fires on mirrors
+  --check-only  accepted, no-op; exits 3 and 5 still fire
   --quiet       suppress per-file output
   COORDINATOR_OVERRIDE_WIKI_MIRROR=1  suppress exit-5 and warn instead (rare-use; e.g., authoring
                 a dev-side wiki that genuinely should not exist in plugin tree)
@@ -331,9 +329,6 @@ def main(argv: List[str]) -> int:
         log("See docs/plans/2026-05-15-plugin-wiki-write-direction-trap.md § Phase 4.")
         return 5
 
-    if missing_bundled > 0:
-        log(f"Note: {missing_bundled} referenced wiki(s) missing from bundled tree. doc-link-checker handles broken links separately.")
-
     if unreadable_files:
         log(
             f"Plugin-bundled wiki: INCOMPLETE -- {len(unreadable_files)} file(s) "
@@ -341,6 +336,10 @@ def main(argv: List[str]) -> int:
             f"{missing_bundled} missing-bundled warnings among readable files)."
         )
         return 1
+
+    if missing_bundled > 0:
+        log(f"FAIL: {missing_bundled} cited wiki page(s) missing from the bundled tree (see WARN lines above).")
+        return 3
 
     log(f"Plugin-bundled wiki: clean ({validated} validated, {missing_bundled} missing-bundled warnings).")
     return 0

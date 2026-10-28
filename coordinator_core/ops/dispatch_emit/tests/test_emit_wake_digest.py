@@ -723,7 +723,7 @@ _JUDGE_CRITERION = {
     "sidecar": None,
     "completion_summary": "Three things shipped.",
     "lesson_candidates": [
-        {"title": "t", "body": "b", "change_kind": "wiki-append", "target_wiki": "docs/" "wiki/x.md"}
+        {"title": "t", "body": "b", "change_kind": "wiki-append", "target_wiki": "docs/wiki" + "/x.md"}
     ],
 }
 
@@ -774,3 +774,36 @@ def test_the_judge_fields_are_capped_by_the_schema():
     obj["criterion"]["completion_summary"] = None
     obj["criterion"]["lesson_candidates"] = [{}] * 6
     assert validate_digest(obj) != []
+
+
+def _js_baseline_clears(t: dict, manifest_ids: tuple = ()) -> bool:
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.wake_digest import _BASELINE_CLEARS_JS
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    prelude = f"const _isBaselineRed = (id) => {json.dumps(list(manifest_ids))}.includes(id); "
+    src = f"{prelude}console.log(JSON.stringify({_BASELINE_CLEARS_JS}({json.dumps(t)})));"
+    out = subprocess.run([node, "-e", src], capture_output=True, text=True, check=True, timeout=30)
+    return json.loads(out.stdout)
+
+
+def _js_rec(**baseline):
+    return {"status": "fail", "baseline_method": "export", "tests_failed": 1,
+            "baseline": {"caused": [], "unverified": [], **baseline}}
+
+
+@pytest.mark.spawns_process
+def test_js_baseline_clear_requires_evidence_for_foreign_ids():
+    assert _js_baseline_clears(_js_rec(foreign=["a"], evidence=["a"], base_log="/x/base.log")) is True
+    assert _js_baseline_clears(_js_rec(foreign=["a"], evidence=["a"])) is False
+    assert _js_baseline_clears(_js_rec(foreign=["a"])) is False
+    assert _js_baseline_clears(_js_rec(foreign=["a"], evidence=["z"])) is False
+
+
+@pytest.mark.spawns_process
+def test_js_baseline_clear_accepts_a_manifest_id_as_evidence():
+    assert _js_baseline_clears(_js_rec(pre_existing=["a"]), manifest_ids=("a",)) is True

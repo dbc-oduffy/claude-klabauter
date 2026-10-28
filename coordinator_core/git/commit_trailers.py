@@ -1049,6 +1049,41 @@ def read_trailer_value(
     return None
 
 
+_REMOTE_SESSION_ENV_RE = re.compile(r"^cse_([A-Za-z0-9]+)$")
+
+
+def own_claude_session_token(session_id: str) -> Optional[str]:
+    """The cold caller's own `session_<suffix>` Claude-Session token, or `None`.
+
+    Returned only when this is not a warm-served request, `session_id` is the
+    caller's own attributable session id and a UUID, and
+    `CLAUDE_CODE_REMOTE_SESSION_ID` fully matches `cse_<alnum>`.
+
+    Not a UUID resolver: the token is the web-session id, a different id space
+    from `Session-Id`. It never maps another session's token and never applies
+    warm. Retirement trigger: both helpers and every call-site `--grep` that ORs
+    them exist only while `prepare-commit-msg` is not installed wherever the
+    harness commits; once it is, delete them."""
+    if _session_core.in_warm_served_request():
+        return None
+    if not isinstance(session_id, str) or not _UUID_RE.fullmatch(session_id):
+        return None
+    if session_id != _session_core.attributable_session_id():
+        return None
+    match = _REMOTE_SESSION_ENV_RE.fullmatch(os.environ.get("CLAUDE_CODE_REMOTE_SESSION_ID", ""))
+    if match is None:
+        return None
+    return f"session_{match.group(1)}"
+
+
+def claude_session_grep_pattern(token: str) -> str:
+    """`git log --grep` pattern selecting commits whose `Claude-Session:` line
+    names `token` exactly (the trailing `$` keeps `session_01AB` from matching
+    `session_01ABC`). Pure formatter: `token` comes from
+    `own_claude_session_token`. Retires with it."""
+    return rf"^Claude-Session: https://claude\.ai/code/{token}$"
+
+
 def _host_trailer_config_files(repo_root: Union[str, Path]) -> List[Path]:
     """System, global, then the repo's common-dir config -- git's precedence order."""
     from coordinator_core.git.git_dir import resolve_git_common_dir

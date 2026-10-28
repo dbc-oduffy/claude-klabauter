@@ -1,42 +1,16 @@
-"""coordinator_core.bash_guards.block_topic_branch -- PreToolUse(Bash) hard
-deny: commit only to the session's day branch.
+"""coordinator_core.bash_guards.block_topic_branch -- PreToolUse(Bash) advisory:
+remote-backed `main` commits and held pushes.
 
-Denies a command that creates or pushes a branch which is neither `main` nor
-a day branch:
-  `git checkout -b|-B <ref>`, `git switch -c|-C|--create|--force-create <ref>`,
-  `git branch <new-ref> [<start>]`, `git push <remote> <ref>|<src>:<dst>`
-  (judged on the destination ref). `git -C <dir> ...` and other git global
-  options are walked past; the repo judged is the one `-C`, or an earlier
-  top-level `cd` in the same command, enters. A `git commit` while the judged
-  repo's HEAD is `main` and a remote is configured is denied via
-  `git.main_commit_policy`; the same override admits it. Listing,
-  `-d`/`-D`/`-m`/`-c` and any other
-  non-create `git branch` flag, tag pushes (a local tag, or one created earlier
-  in the same command), ref deletions, and a push with no refspec are never
-  denied.
+The guard is not in `deny_registry`, so `apply_guard_level` records its verdict to the
+advisory log and nothing reaches the caller; "denied" below names the verdict the guard
+computes, never an effect. A push to a non-owned remote is
+`block-push-pr-non-owned-remote`'s, not this guard's.
 
-Day branch, per `hooks.day_branch_assert` / `daily_branch`: the repo's
-`coordinator.dayBranch` designation (exact), else `work/<machine>/<date>`
-where `<machine>` is `machine_resolver.compute_machine()`. The date is NOT
-matched against today: the boot invariant adopts or inherits a prior day's
-branch, so any `work/<this-machine>/<YYYY-MM-DD[toDD]>[-N]` ref is a day
-branch. `git push <remote> HEAD` resolves HEAD from `.git/HEAD` (no spawn);
-an unresolvable HEAD or ref name allows.
-
-Creation inside a scratch clone (an ancestor dir named `scratch` whose parent holds a
-`.git`) is exempt; a push from it is still judged.
-
-A push of the checked-out `work/*` branch is allowed whatever its date span, and
-`git branch scratch/<name>` (a local-only ref) is allowed; pushing it is not.
-
-A push of a registered `publish.mirrors.<key>` repo's declared `track_ref`
-branch (the command publish.py prints) is allowed.
-
-A push to exactly `candidate-source` (`<sha>:refs/heads/candidate-source`) is allowed;
-creating that branch locally is not.
-
-A cloud session (`CLAUDE_CODE_REMOTE=true`) may use its harness-assigned
-`claude/...` branch.
+Verdict shapes: a `git commit` while the judged repo's HEAD is `main` and a remote is
+configured (`git.main_commit_policy`). `git -C <dir> ...` and other git global options
+are walked past; the repo judged is the one `-C`, or an earlier top-level `cd` in the
+same command, enters. A topic-branch create or push emits nothing: that advisory named
+no failure it prevented.
 
 Override: `COORDINATOR_OVERRIDE_TOPIC_BRANCH=<non-empty reason>`, as an inline
 env prefix on the git segment or on the `sh -c` wrapper that holds it; the hook environment never overrides.
@@ -62,13 +36,8 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._rewrite_support import _GIT_GLOBAL_OPT_WITH_ARG
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
-from coordinator_core.daily_branch import is_work_branch, read_configured_day_branch
-from coordinator_core.hooks.day_branch_assert import (
-    _CLOUD_SESSION_BRANCH_PREFIX,
-    is_cloud_session,
-)
 
-CLASS = "hard-deny"
+CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 43
 
@@ -76,32 +45,9 @@ OVERRIDE_KEY = "COORDINATOR_OVERRIDE_TOPIC_BRANCH"
 MAIN_COMMIT_OVERRIDE_KEY = "COORDINATOR_OVERRIDE_BRANCH"
 
 _PRE_FILTER_RE = re.compile(r"\bgit\b")
-_DAY_SHAPE_RE = re.compile(r"^work/([^/]+)/\d{4}-\d{2}-\d{2}(?:to\d{2})?(?:-\d+)?$")
-_CHECKOUT_CREATE_FLAGS = frozenset({"-b", "-B"})
-_SWITCH_CREATE_FLAGS = frozenset({"-c", "-C", "--create", "--force-create"})
-_BRANCH_CREATE_COMPATIBLE_FLAGS = frozenset({"-f", "--force", "-t", "--track", "--no-track"})
 _PUSH_OPT_WITH_ARG = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
 _HEADS_PREFIX = "refs/heads/"
-# `git branch scratch/...` makes a local safety ref; a push of it is still judged.
-_LOCAL_ONLY_PREFIX = "scratch/"
-# publish.py's commit-only round leaves the mirror's work on this branch.
-_PUBLISH_BRANCH = "candidate"
-# percolate source_preflight tells the operator to push a non-HEAD source here; exact name only.
-_CANDIDATE_SOURCE_BRANCH = "candidate-source"
-
-
-def _looks_unreadable(name: str) -> bool:
-    return (
-        not name.strip()
-        or name != name.strip()
-        or name.startswith(("$", "-"))
-        or "`" in name
-        or "$(" in name
-        or name.startswith("/")
-        or name.endswith("/")
-        or "//" in name
-    )
 
 
 def _git_argv(tokens: List[str]) -> Optional[tuple]:
@@ -122,20 +68,6 @@ def _git_argv(tokens: List[str]) -> Optional[tuple]:
     if i >= len(tokens):
         return None
     return tokens[i], tokens[i + 1:], c_dirs
-
-
-def _create_flag_target(args: List[str], create_flags: frozenset) -> Optional[str]:
-    for i, tok in enumerate(args):
-        if tok in create_flags:
-            return args[i + 1] if i + 1 < len(args) else None
-    return None
-
-
-def _branch_create_target(args: List[str]) -> Optional[str]:
-    if any(t.startswith("-") and t not in _BRANCH_CREATE_COMPATIBLE_FLAGS for t in args):
-        return None
-    positional = [t for t in args if not t.startswith("-")]
-    return positional[0] if positional else None
 
 
 _COMMAND_ENDS = frozenset({"|", "||", "&&", ";", "&"})
@@ -167,38 +99,6 @@ def _push_positional(args: List[str]) -> List[str]:
     return positional
 
 
-def _push_targets(args: List[str]) -> List[str]:
-    """Destination refs of a `git push`; empty when nothing is judgeable."""
-    if any(t in _PUSH_DELETE_FLAGS for t in args):
-        return []
-    positional = _push_positional(args)
-    targets: List[str] = []
-    if positional[1:2] == ["tag"]:
-        return targets
-    for spec in positional[1:]:
-        spec = spec.lstrip("+")
-        src, sep, dst = spec.partition(":")
-        if sep and not src:
-            continue
-        targets.append(dst if sep else spec)
-    return targets
-
-
-def _is_scratch_clone(git_root: Optional[str]) -> bool:
-    """True when an ancestor of `git_root` is a `scratch` dir whose parent holds a `.git`
-    entry, i.e. the clone sits under a repo's own scratch/."""
-    if not git_root:
-        return False
-    current = os.path.dirname(os.path.normpath(git_root))
-    while True:
-        parent = os.path.dirname(current)
-        if os.path.basename(current) == "scratch" and os.path.exists(os.path.join(parent, ".git")):
-            return True
-        if parent == current:
-            return False
-        current = parent
-
-
 def _head_branch(git_root: Optional[str]) -> Optional[str]:
     if not git_root:
         return None
@@ -211,100 +111,6 @@ def _head_branch(git_root: Optional[str]) -> Optional[str]:
         return None
     m = re.match(r"^ref:\s*refs/heads/(.+)$", text)
     return m.group(1) if m else None
-
-
-_TAG_OPT_WITH_ARG = frozenset({"-m", "-F", "-u", "--message", "--file", "--local-user", "--cleanup"})
-
-
-def _created_tag(tokens: List[str]) -> Optional[str]:
-    """The tag name a `git tag [opts] <name> [<commit>]` creates, else None."""
-    parsed = _git_argv(tokens)
-    if parsed is None or parsed[0] != "tag":
-        return None
-    args = parsed[1]
-    if any(a in ("-d", "-l", "-v", "--delete", "--list", "--verify") for a in args):
-        return None
-    i = 0
-    while i < len(args):
-        tok = args[i]
-        if tok in _COMMAND_ENDS:
-            return None
-        if tok in _TAG_OPT_WITH_ARG:
-            i += 2
-        elif tok.startswith("-"):
-            i += 1
-        else:
-            return tok
-    return None
-
-
-def _is_local_tag(git_root: Optional[str], name: str) -> bool:
-    """True when `name` is an existing local tag: loose ref or packed-refs line."""
-    if not git_root:
-        return False
-    try:
-        from coordinator_core.git.git_dir import resolve_git_common_dir
-
-        gd = str(resolve_git_common_dir(git_root))
-        if os.path.isfile(os.path.join(gd, "refs", "tags", *name.split("/"))):
-            return True
-        with open(os.path.join(gd, "packed-refs"), encoding="utf-8") as fh:
-            suffix = " refs/tags/" + name
-            return any(line.rstrip("\n").endswith(suffix) for line in fh)
-    except Exception:  # noqa: BLE001 -- unreadable tag state keeps the block
-        return False
-
-
-def _machine() -> str:
-    from coordinator_core.machine_resolver import compute_machine
-
-    return compute_machine()
-
-
-def _is_publish_push(sub: str, ref: str, git_root: Optional[str]) -> bool:
-    if sub != "push" or ref != _PUBLISH_BRANCH or not git_root:
-        return False
-    from coordinator_core.engine_root import is_published_engine_mirror
-
-    return is_published_engine_mirror(git_root)
-
-
-def _is_day_branch(name: str, configured: Optional[str], machine: str) -> bool:
-    if configured and name == configured:
-        return True
-    m = _DAY_SHAPE_RE.match(name)
-    return bool(m) and m.group(1) == machine
-
-
-def _is_publish_mirror_branch(git_root: Optional[str], ref: str) -> bool:
-    """True when `git_root` is a registered `publish.mirrors.<key>` repo and
-    `ref` is that mirror's declared `track_ref` branch (the command publish.py
-    prints). Registry TOML reads only; runs on the deny path alone."""
-    if not git_root:
-        return False
-    try:
-        from coordinator_core.machine_resolver import _flatten, _load_toml, registry_dir
-
-        merged: Dict[str, Any] = {}
-        for fname in ("registry.toml", "registry.local.toml"):
-            merged.update(_flatten(_load_toml(registry_dir() / fname)))
-        root = os.path.normcase(os.path.realpath(git_root))
-        prefix, suffix = "publish.mirrors.", ".path"
-        for key, value in merged.items():
-            if not (key.startswith(prefix) and key.endswith(suffix)) or not value:
-                continue
-            if os.path.normcase(os.path.realpath(str(value))) != root:
-                continue
-            track = merged.get(key[: -len(suffix)] + ".track_ref")
-            if not isinstance(track, str):
-                continue
-            if track.startswith("origin/"):
-                track = track[len("origin/"):]
-            if track and track == ref:
-                return True
-    except Exception:  # noqa: BLE001 -- an unreadable registry keeps the block
-        return False
-    return False
 
 
 def _inline_reason(raw_tokens: List[str], key: str = OVERRIDE_KEY) -> str:
@@ -452,6 +258,7 @@ def _main_commit(
     if not git_root:
         return None
     from coordinator_core.git.main_commit_policy import main_commit_refusal
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
 
     override = _inline_reason(raw_tokens) or inherited
     if _inline_reason(raw_tokens, MAIN_COMMIT_OVERRIDE_KEY) == "1":
@@ -460,10 +267,10 @@ def _main_commit(
     if refusal is None:
         return None
     return _record(
-        f"BLOCKED: {refusal}",
-        f"BLOCKED: {refusal}\n\nException: {OVERRIDE_KEY} with a non-empty reason, or {MAIN_COMMIT_OVERRIDE_KEY}=1, prefixed on the command.",
+        f"Commit on remote-backed main: {refusal}",
+        f"Commit on remote-backed main: {refusal} Alternative: commit to the day branch work/<machine>/<date>.",
+        AdaptableOffer(template="commit to the day branch work/<machine>/<date>", what_to_adapt="the machine and date"),
         _escalation("the commit you need on main"),
-        _override(),
     )
 
 
@@ -472,8 +279,8 @@ def _hold_reason(branch: Optional[str], note: str) -> Any:
 
     where = f"branch `{branch}`" if branch else "repo"
     return _record(
-        f"BLOCKED: push hold on {where}: {note}.",
-        f"BLOCKED: push hold on {where}: {note}. "
+        f"Push hold on {where}: {note}.",
+        f"Push hold on {where}: {note}. "
         "Alternative: `push-hold clear`, or push the hold's --allow-sha as an explicit "
         "`<sha>:refs/heads/<branch>` refspec.",
         ReadyCommand(text="push-hold clear"),
@@ -502,87 +309,6 @@ def _escalation(report_what: str) -> Any:
     return EscalationRoute(report_what=report_what, authorize_what="the Group EM granting an exception")
 
 
-def _override() -> Any:
-    from coordinator_core.guard_messages.alternative_record import Override
-
-    return Override(env_var=OVERRIDE_KEY, reason_shaped=True)
-
-
-def _offending_ref(
-    tokens: List[str],
-    cwd: Optional[str],
-    env: Optional[Dict[str, str]] = None,
-    new_tags: frozenset = frozenset(),
-) -> Optional[str]:
-    parsed = _git_argv(tokens)
-    if parsed is None:
-        return None
-    sub, args, c_dirs = parsed
-    if sub == "checkout":
-        refs = [_create_flag_target(args, _CHECKOUT_CREATE_FLAGS)]
-    elif sub == "switch":
-        refs = [_create_flag_target(args, _SWITCH_CREATE_FLAGS)]
-    elif sub == "branch":
-        refs = [_branch_create_target(args)]
-    elif sub == "push":
-        refs = _push_targets(args)
-    else:
-        return None
-
-    git_root = _git_root(cwd, c_dirs)
-    if sub != "push" and _is_scratch_clone(git_root):
-        return None
-    configured = read_configured_day_branch(git_root) if git_root else None
-    machine: Optional[str] = None
-    for ref in refs:
-        if ref is None or _looks_unreadable(ref):
-            continue
-        if ref == "HEAD" and sub == "push":
-            ref = _head_branch(git_root)
-            if ref is None:
-                continue
-        if ref.startswith(_HEADS_PREFIX):
-            ref = ref[len(_HEADS_PREFIX):]
-        elif ref.startswith("refs/"):
-            continue
-        if ref == "main":
-            continue
-        if sub == "branch" and ref.startswith(_LOCAL_ONLY_PREFIX):
-            continue
-        if sub == "push" and is_work_branch(ref) and ref ==_head_branch(git_root):
-            continue
-        if sub == "push" and (ref in new_tags or _is_local_tag(git_root, ref)):
-            continue
-        if _is_publish_push(sub, ref, git_root):
-            continue
-        if sub == "push" and ref == _CANDIDATE_SOURCE_BRANCH:
-            continue
-        if is_cloud_session(env) and ref.startswith(_CLOUD_SESSION_BRANCH_PREFIX):
-            continue
-        if machine is None:
-            machine = _machine()
-        if sub == "push" and _is_publish_mirror_branch(git_root, ref):
-            continue
-        if not _is_day_branch(ref, configured, machine):
-            return ref
-    return None
-
-
-def _deny_reason(ref: str) -> Any:
-    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
-
-    return _record(
-        f"BLOCKED: topic branch `{ref}`; the Group EM grants exceptions. "
-        "The whole command did not run.",
-        f"BLOCKED: topic branch `{ref}` -- commit to the day branch; "
-        "Group EM grants exceptions. The whole command did not run.\n"
-        f"Override: {OVERRIDE_KEY} with a reason, prefixed.",
-        AdaptableOffer(template="commit to the day branch work/<machine>/<date>", what_to_adapt="the machine and date"),
-        _escalation("the topic branch you need"),
-        _override(),
-    )
-
-
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -593,17 +319,12 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd = cmd.replace("\r", "")
     cwd = payload.get("cwd")
 
-    env = payload.get("env")
-    if not isinstance(env, dict):
-        env = None
-
     segments = resolve_command_positions(cmd, preserve_windows_backslashes=True)
     # The repo a git segment acts on is the one an earlier top-level `cd` entered, exactly as
     # `git -C` names it. Trap: the tokenizer flattens a subshell, so a `cd` inside `( ... )`
     # would leak past its `)`; a command with any subshell keeps the payload cwd.
     # Only an unquoted paren opens a subshell: a quoted `python -c "...f(x)"` body is an argument.
     follow_cd = not any(c in _QUOTED_RE.sub("", cmd) for c in "()")
-    new_tags: set = set()
     # An override prefixed on a wrapper (`sh -c '...'`) covers the git segments inside it.
     wrapper_reason: Dict[int, str] = {}
     for resolved in segments:
@@ -614,9 +335,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             del wrapper_reason[d]
         if own or inherited:
             wrapper_reason[depth] = own or inherited
-        created = _created_tag(resolved.tokens)
-        if created:
-            new_tags.add(created)
         if follow_cd and resolved.depth == 0 and resolved.tokens[:1] == ["cd"]:
             cwd = _cd_target(cwd, resolved.tokens[1:])
             continue
@@ -626,10 +344,4 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         main_commit = _main_commit(resolved.tokens, resolved.raw_tokens, cwd, inherited)
         if main_commit is not None:
             return main_commit
-        ref = _offending_ref(resolved.tokens, cwd, env, frozenset(new_tags))
-        if ref is None:
-            continue
-        if own or inherited:
-            continue
-        return _deny_reason(ref)
     return None

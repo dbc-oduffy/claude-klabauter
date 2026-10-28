@@ -107,10 +107,58 @@ def test_verdict_of(build_test: dict) -> Any:
     return verdict if verdict is not None else build_test.get("status")
 
 
+def _id_of(entry: object) -> object:
+    return entry.get("id") if isinstance(entry, dict) else entry
+
+
+def measured_evidence_ids(baseline: dict) -> set[str]:
+    """The node ids `retest_targeted._failed_node_ids` re-finds in the base-export log `baseline.base_log`
+    names (ids relative to `baseline.base_root`, default the log's directory); empty when no readable log is named."""
+    from pathlib import Path
+
+    # Trap: `base_log` is a path the record itself names; nothing here proves the engine wrote it.
+    log = baseline.get("base_log")
+    if not isinstance(log, str) or not log:
+        return set()
+    path = Path(log)
+    if not path.is_file():
+        return set()
+    # Trap: reaches a private helper across the completion_receipts/ops boundary; promote it if a third caller appears.
+    from coordinator_core.ops.dispatch_emit.retest_targeted import _failed_node_ids
+
+    root = baseline.get("base_root")
+    return set(_failed_node_ids(path, Path(root) if isinstance(root, str) and root else path.parent))
+
+
+def evidenced_clear_ids(baseline: object, *, measured: bool) -> set[str]:
+    """The `pre_existing` and `foreign` ids that also appear in `baseline.evidence`, the node ids a
+    baseline leg ran red pre-change on the same tests. An attributed id without evidence is not here.
+    `measured=True` trusts the list (an engine retest record wrote it); `measured=False` (a carried,
+    runner-written baseline) counts only the ids re-found in the base-export log it names: a list with no
+    measured log behind it clears nothing."""
+    if not isinstance(baseline, dict):
+        return set()
+    evidence = baseline.get("evidence")
+    if not isinstance(evidence, list):
+        return set()
+    seen = {i for i in map(_id_of, evidence) if isinstance(i, str)}
+    if not measured:
+        # Trap: landing_targeted_tests.failed_targeted_tests(measured=False) refuses every carried baseline instead.
+        seen &= measured_evidence_ids(baseline)
+    out: set[str] = set()
+    for key in ("pre_existing", "foreign"):
+        entries = baseline.get(key)
+        if isinstance(entries, list):
+            out.update(i for i in map(_id_of, entries) if isinstance(i, str) and i in seen)
+    return out
+
+
 def baseline_clears(build_test: dict) -> bool:
     """True for a `fail` whose every failure the runner re-ran in an export of the run base or of
-    the landing tree and attributed to `pre_existing` or `foreign`: nothing the run caused, nothing
-    unverified. Mirrors the digest's `wake_digest._BASELINE_CLEARS_JS`; keep the two in step."""
+    the landing tree, attributed to `pre_existing` or `foreign` with `baseline.evidence` of the
+    same id red pre-change that `measured_evidence_ids` re-finds in the named base-export log:
+    nothing the run caused, nothing unverified, nothing unevidenced.
+    Mirrors the digest's `wake_digest._BASELINE_CLEARS_JS`; keep the two in step."""
     if test_verdict_of(build_test) != "fail" or build_test.get("baseline_method") != "export":
         return False
     baseline = build_test.get("baseline")
@@ -121,11 +169,14 @@ def baseline_clears(build_test: dict) -> bool:
     failed = build_test.get("tests_failed", build_test.get("failed")) or 0
     if not (isinstance(pre_existing, list) and isinstance(foreign, list)):
         return False
-    cleared = len(pre_existing) + len(foreign)
+    attributed = {_id_of(e) if isinstance(_id_of(e), str) else None for e in [*pre_existing, *foreign]}
+    evidenced = evidenced_clear_ids(baseline, measured=False)
+    cleared = len(evidenced)
     return (
         not (baseline.get("caused") or [])
         and not (baseline.get("unverified") or [])
         and cleared > 0
+        and attributed <= evidenced
         and isinstance(failed, int)
         and cleared >= failed
     )

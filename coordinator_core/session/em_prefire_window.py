@@ -92,6 +92,9 @@ LIFECYCLE_BINS = (
     "workstream-complete-assemble",
 )
 _REPLY_PATH_RE = re.compile(r"[\w~./\\:-]*[\w-]\.(?:json|md|yaml|yml|txt)\b")
+_WRITTEN_PATH_RE = re.compile(r"[\w~./\\:-]*[\w-]\.(?:py|mjs|js|ts|sh|json|md|yaml|yml|txt)\b")
+WRITTEN_CAP = 32
+_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 _READERS = ("cat", "head", "tail", "jq", "wc", "python", "python3")
 _VALUE_FLAGS = ("--params-file", "--params", "--repo-root")
 _INVOKERS =("coordinator-invoke", "invoke")
@@ -99,6 +102,11 @@ _PYTHONS = re.compile(r"^python[0-9.]*(\.exe)?$")
 PUBLISH_GIT_VERBS = ("merge-tree", "commit-tree", "push", "fetch")
 PUBLISH_CLONE_GIT_VERBS = ("checkout", "switch", "reset", "clean")
 _PUBLISH_CLONE_RE = re.compile(r"(^|/)scratch/[^/\s]*-pub(/|$)")
+# `2>&1` and a closing `| tail -N`/`| head -N` only trim a segment's own output, so they do not
+# turn an exempt push or fetch into survey; any other pipe still counts.
+_OUTPUT_TAIL_RE = re.compile(
+    r"\s+2>&1(?=\s*(?:\||&&|;|\n|$))|\s*\|\s*(?:tail|head)(?:\s+-n)?\s+-?\d+\s*(?=&&|;|\n|$)"
+)
 _LITERAL_BINS = (
     "${COORDINATOR_SETTINGS_HOME:-${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings}/bin/",
     "${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/",
@@ -128,6 +136,8 @@ def fresh_state(offset: int = 0) -> dict:
         "landings": {},
         "asm": [],
         "named": [],
+        "written": [],
+        "task_key": "",
     }
 
 
@@ -379,17 +389,65 @@ def reply_paths(text: object) -> list:
     return out[:32]
 
 
-def named_read(name: object, tool_input: object, named: object) -> bool:
-    """True for a Read of, or one plain cat/head/tail/jq/wc/`python -c` over, only a file an assembler reply named.
+def _same_written(a: str, b: str) -> bool:
+    """Exact match after normalisation, or an absolute path ending in the other (relative) one."""
+    a, b = re.sub(r"^(\./)+", "", _norm(a)), re.sub(r"^(\./)+", "", _norm(b))
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    a_abs, b_abs = a.startswith("/") or ":" in a[:3], b.startswith("/") or ":" in b[:3]
+    rel = b if a_abs else a
+    return (a_abs != b_abs) and "/" in rel and (a.endswith("/" + b) if a_abs else b.endswith("/" + a))
 
-    Trap: a chained or substituted tail, a script file, or any other file-looking argument counts.
+
+def memo_tooling(command: object) -> bool:
+    """True when a Bash command's first token (after the harmless frame) is `cross-repo-memo`, whatever its tail."""
+    if not isinstance(command, str):
+        return False
+    first, _ = _first_command_token(_strip_harmless_frame(command))
+    base = _norm(first).rsplit("/", 1)[-1]
+    return (base[:-3] if base.endswith(".py") else base) == "cross-repo-memo"
+
+
+def comms_integrity_write(command: object) -> bool:
+    """True for one plain `gh issue|pr comment ...` or `git [-C dir] update-ref ...`: a comms or ref-pin write, not survey.
+
+    Trap: a chained or substituted tail could run a survey behind it, so it counts; so does any other gh/git verb.
     """
-    if not named or not isinstance(named, (list, tuple)):
+    if not isinstance(command, str):
+        return False
+    first, rest = _first_command_token(_strip_harmless_frame(command))
+    args = _plain_args(rest)
+    if args is None:
+        return False
+    base = _norm(first).rsplit("/", 1)[-1]
+    if base == "gh":
+        return args[:2] in (["issue", "comment"], ["pr", "comment"])
+    if base != "git":
+        return False
+    while args[:1] == ["-C"] and len(args) > 1:
+        args = args[2:]
+    return args[:1] == ["update-ref"]
+
+
+def named_read(name: object, tool_input: object, named: object, written: object = ()) -> bool:
+    """True for a Read of, or one plain cat/head/tail/jq/wc/`python -c` over, only a file an assembler reply named
+    or the session wrote this window; `python -m py_compile` is admitted over written files only.
+
+    Trap: a chained or substituted tail, a script file, or any other file-looking argument counts;
+    a written file is matched by exact path, not by suffix.
+    """
+    named = named if isinstance(named, (list, tuple)) else ()
+    written = written if isinstance(written, (list, tuple)) else ()
+    if not named and not written:
         return False
     inp = tool_input if isinstance(tool_input, dict) else {}
     if name == "Read":
         target = inp.get("file_path")
-        return isinstance(target, str) and any(_same_path(target, n) for n in named)
+        return isinstance(target, str) and (
+            any(_same_path(target, n) for n in named) or any(_same_written(target, w) for w in written)
+        )
     if name != "Bash" or not isinstance(inp.get("command"), str):
         return False
     first, rest = _first_command_token(inp["command"])
@@ -397,10 +455,21 @@ def named_read(name: object, tool_input: object, named: object) -> bool:
     base = _norm(first).rsplit("/", 1)[-1]
     if args is None or base not in _READERS:
         return False
-    if base.startswith("python") and "-c" not in args:
+    is_py = base.startswith("python")
+    py_compile = is_py and args[:2] == ["-m", "py_compile"]
+    if is_py and "-c" not in args and not py_compile:
         return False
-    hits = [p for a in args for p in _REPLY_PATH_RE.findall(a)]
-    return bool(hits) and all(any(_same_path(p, n) for n in named) for p in hits)
+    if named and not py_compile:
+        hits = [p for a in args for p in _REPLY_PATH_RE.findall(a)]
+        if hits and all(any(_same_path(p, n) for n in named) for p in hits):
+            return True
+    if not written:
+        return False
+    if is_py:
+        targets = args[2:] if py_compile else [p for a in args for p in _WRITTEN_PATH_RE.findall(a)]
+    else:
+        targets = [a for a in args if not a.startswith("-") and not a.isdigit()]
+    return bool(targets) and all(any(_same_written(t, w) for w in written) for t in targets)
 
 
 def _segment_exempt(seg: str, state: dict) -> bool:
@@ -412,10 +481,10 @@ def _segment_exempt(seg: str, state: dict) -> bool:
         return False
     toks = [_unquote(t) for t in seg.split()]
     if toks[0] == "cd":
+        # A cd anywhere is harmless on its own; only a publish-clone cd licenses checkout/reset.
         if len(toks) == 2 and _PUBLISH_CLONE_RE.search(_norm(toks[1])):
             state["clone"] = True
-            return True
-        return False
+        return len(toks) == 2
     base = _norm(toks[0]).rsplit("/", 1)[-1]
     if _PYTHONS.match(base):
         toks = toks[1:]
@@ -451,6 +520,7 @@ def publish_mechanics(command: object) -> bool:
     """
     if not isinstance(command, str) or not command.strip():
         return False
+    command = _OUTPUT_TAIL_RE.sub("", command)
     flat = _QUOTED_RE.sub("Q", command)
     if re.search(r"[|<>`]", flat):
         return False
@@ -486,6 +556,7 @@ def classify(
     settings_home: Optional[str],
     test_used: bool = False,
     named: object = (),
+    written: object = (),
 ) -> tuple[bool, bool]:
     """(pre_counted, all_counted) for one main-thread tool call.
 
@@ -496,11 +567,11 @@ def classify(
     if name not in COUNTED_TOOLS:
         return False, False
     inp = tool_input if isinstance(tool_input, dict) else {}
-    if named_read(name, inp, named):
+    if named_read(name, inp, named, written):
         return False, False
     if name == "Bash":
         cmd = inp.get("command")
-        if lifecycle_op(cmd):
+        if memo_tooling(cmd) or lifecycle_op(cmd) or comms_integrity_write(cmd):
             return False, False
         if publish_mechanics(cmd):
             return False, False
@@ -510,6 +581,8 @@ def classify(
         return pre, True
     target = inp.get("file_path") if name == "Read" else inp.get("path")
     if path_exempt(target, opening):
+        return False, False
+    if isinstance(target, str) and isinstance(written, (list, tuple)) and any(_same_written(target, w) for w in written):
         return False, False
     return True, True
 
@@ -655,7 +728,7 @@ def advance(
     call. An unreadable transcript returns the state unchanged.
     """
     st = dict(state)
-    for key in ("pre", "all", "asm", "named"):
+    for key in ("pre", "all", "asm", "named", "written"):
         st[key] = list(state.get(key) or [])
     st["landings"] = dict(state.get("landings") or {})
     try:
@@ -702,6 +775,7 @@ def advance(
                         test_used=False,
                         asm=[],
                         named=[],
+                        written=[],
                     )
                 else:
                     _fold_results(st, rec)
@@ -717,7 +791,8 @@ def advance(
     if isinstance(current_tool_use_id, str) and current_tool_use_id:
         name, inp = current_call if current_call else (None, None)
         pre, every = classify(
-            name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named")
+            name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named"),
+            st.get("written"),
         )
         if pre:
             _add(st["pre"], current_tool_use_id)
@@ -743,6 +818,23 @@ def _fold_results(st: dict, rec: dict) -> None:
             _add(st.setdefault("named", []), p)
 
 
+def _task_key(name: str, inp: object) -> str:
+    """Id (else subject) of the task a TaskUpdate / TodoWrite sets in_progress, else ''. TaskCreate never changes it."""
+    if not isinstance(inp, dict):
+        return ""
+    if name == "TaskUpdate":
+        items = [inp] if inp.get("status") == "in_progress" else []
+    else:
+        todos = inp.get("todos")
+        items = [t for t in todos if isinstance(t, dict) and t.get("status") == "in_progress"] if isinstance(todos, list) else []
+    for it in items[:1]:
+        for field in ("taskId", "id", "subject", "content"):
+            val = it.get(field)
+            if isinstance(val, (str, int)) and not isinstance(val, bool) and str(val):
+                return str(val)
+    return ""
+
+
 def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
     name = block.get("name")
     inp = block.get("input")
@@ -757,8 +849,19 @@ def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
         if _skill_disarms(inp):
             st["disarmed"] = True
         return
+    if name in _WRITE_TOOLS and isinstance(inp, dict):
+        target = inp.get("file_path") or inp.get("notebook_path")
+        if isinstance(target, str) and target and len(st.setdefault("written", [])) < WRITTEN_CAP:
+            _add(st["written"], _norm(target))
+        return
+    if name in ("TaskUpdate", "TodoWrite"):
+        key = _task_key(name, inp)
+        if key and key != st.get("task_key"):
+            st.update(pre=[], all=[], named=[], written=[], task_key=key)
+        return
     pre, every = classify(
-        name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named")
+        name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named"),
+        st.get("written"),
     )
     if name == "Bash" and isinstance(inp, dict):
         op = lifecycle_op(inp.get("command"))

@@ -19,6 +19,13 @@ LEDGER_FIX_PHASE = "ledger-fix"
 #: Never `verify`: the ask script composes exactly one `verify` leg.
 LEDGER_REVERIFY_LABEL = "ledger-reverify"
 
+REMNANT_LABEL = "remnant-complete"
+REMNANT_PHASE = "remnant-complete"
+#: Never `verify` nor `ledger-reverify`: the ask script composes exactly one `verify` leg.
+REMNANT_REVERIFY_LABEL = "remnant-reverify"
+#: One remnant leg plus one re-verify; a gap still open after it halts as before.
+REMNANT_ATTEMPT_CAP = 1
+
 RECOVERY_RECORD_FILE = "recovery.json"
 RECOVERY_WITHHELD_PARAM = "recovery_withheld"
 
@@ -183,6 +190,91 @@ def reopen_plan(items, manifest_rows, failed_tests, held_ids) -> dict:
     return {"reopen": reopen, "held": held, "unattributed": unattributed}
 
 
+def _text_list(v: Any) -> list[str]:
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v if str(x).strip()]
+    return [str(v)] if v is not None and str(v).strip() else []
+
+
+def _remnant_obj(v: Any) -> dict | None:
+    if not isinstance(v, Mapping) or not isinstance(v.get("remnant"), Mapping):
+        return None
+    r = v["remnant"]
+    return {"gap": str(r.get("gap") or ""), "paths": [_posix(p) for p in _text_list(r.get("paths"))], "checks": _text_list(r.get("checks"))}
+
+
+def remnant_items(items, unattributed, capped, criterion, delivery) -> list[dict]:
+    """The not_met work left after the ledger-fix loop, as `{kind, id, gap, paths, checks}` items.
+
+    `ledger` items: blocking rows (as `reopen_plan` reads them; withheld, owed and non-essential rows
+    never count) whose id is in `unattributed` or `capped`. A `criterion` item when the falsifier
+    verdict is `not_met`, built from its `remnant` object `{gap, paths, checks}` when present, else
+    from its `reason`. A `delivery` item when the verdict is `FAIL`. `[]` when all three are clear.
+    """
+    open_ids = {str(x) for x in unattributed or ()} | {str(x) for x in capped or ()}
+    out: list[dict] = []
+    for item in items or ():
+        if _blocking(item) and str(item.get("id")) in open_ids:
+            out.append({"kind": "ledger", "id": str(item.get("id")), "gap": " ".join(_text_list(item.get("remaining"))) or str(item.get("evidence") or ""),
+                        "paths": [], "checks": []})
+    if isinstance(criterion, Mapping) and criterion.get("status") == "not_met":
+        r = _remnant_obj(criterion) or {"gap": "", "paths": [], "checks": []}
+        out.append({"kind": "criterion", "id": "criterion", "gap": r["gap"] or str(criterion.get("reason") or ""), "paths": r["paths"], "checks": r["checks"]})
+    if isinstance(delivery, Mapping) and delivery.get("verdict") == "FAIL":
+        r = _remnant_obj(delivery) or {"gap": "", "paths": [], "checks": []}
+        out.append({"kind": "delivery", "id": "delivery", "gap": r["gap"] or str(delivery.get("reason") or delivery.get("summary") or ""),
+                    "paths": r["paths"], "checks": r["checks"]})
+    return out
+
+
+def remnant_prompt(items_var: str, footprint_var: str) -> str:
+    """Instruction tail for the remnant agent; both args are JS expressions spliced in.
+
+    The footprint is prose here; the engine fence is `remnant_breach` over the recorded
+    `recovery.json` `remnant` object, applied at landing by `land_run`.
+    """
+    return (
+        "The run's close checks found work still undone. Items (each gap is still true; make it false): ${"
+        + items_var + "}. " + HALT_GAP_RULE + " "
+        "The ONLY paths you may edit: ${" + footprint_var + "}. "
+        "Reproduce first with each item's checks. "
+        "Complete the work within the footprint and return DONE with every path written. "
+        "Return BLOCKED with the reason when it needs a path outside the footprint. "
+        "Commit nothing. Never edit a test to delete its assertion. "
+        "Save captures under `scratch/remnant-complete/<run-id>/`."
+    )
+
+
+def _in_footprint(path: str, footprint_entries: Iterable[str]) -> bool:
+    for f in footprint_entries:
+        if f.endswith("/"):
+            if path.startswith(f):
+                return True
+        elif path == f:
+            return True
+    return False
+
+
+def remnant_breach(remnant: Any) -> list[str]:
+    """Repo-relative paths a recorded remnant attempt wrote outside its recorded footprint.
+
+    `remnant` is the `recovery.json` `remnant` object: its `paths` (what the leg reported writing
+    outside the footprint) checked again against its `footprint` (entries ending `/` are
+    prefixes), so a record whose own status was edited to hide the breach still names it. Absolute,
+    drive-lettered and `..` paths are always a breach. Trap: this sees only paths the record
+    carries; a write the leg never reported is not attributable without a pre-leg baseline.
+    """
+    if not isinstance(remnant, Mapping):
+        return []
+    fp = [_posix(p) for p in _text_list(remnant.get("footprint"))]
+    out: list[str] = []
+    for p in (_posix(x) for x in _text_list(remnant.get("paths"))):
+        unsafe = p.startswith("/") or ".." in p.split("/") or re.match(r"^[A-Za-z]:", p) is not None
+        if (unsafe or not _in_footprint(p, fp)) and p not in out:
+            out.append(p)
+    return out
+
+
 def footprint(chunk_row: Mapping[str, Any], failed_tests: Iterable[str]) -> list[str]:
     """The chunk's declared `writes` plus the failing test files it owns, POSIX, de-duplicated."""
     out: list[str] = []
@@ -269,4 +361,27 @@ REOPEN_PLAN_JS = r"""function _reopenPlan(items, manifestRows, failedTests, held
     else if (!unattributed.includes(rid)) unattributed.push(rid);
   }
   return { reopen, held, unattributed };
+}"""
+
+REMNANT_ITEMS_JS = r"""function _remnantItems(items, unattributed, capped, criterion, delivery) {
+  const posix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const list = (v) => (Array.isArray(v) ? v : (v == null ? [] : [v])).map(String).filter((x) => x.trim());
+  const truthy = (v) => (Array.isArray(v) ? v.length > 0 : !!v);
+  const openIds = new Set([...(unattributed ?? []), ...(capped ?? [])].map(String));
+  const fromRemnant = (v) => (v && typeof v.remnant === 'object' && v.remnant) ? { gap: String(v.remnant.gap ?? ''), paths: list(v.remnant.paths).map(posix), checks: list(v.remnant.checks) } : { gap: '', paths: [], checks: [] };
+  const out = [];
+  for (const item of (items ?? [])) {
+    if (!item || item.status !== 'not_met' || item.essential === false || truthy(item.withheld_by) || truthy(item.owed_by)) continue;
+    if (!openIds.has(String(item.id))) continue;
+    out.push({ kind: 'ledger', id: String(item.id), gap: list(item.remaining).join(' ') || String(item.evidence ?? ''), paths: [], checks: [] });
+  }
+  if (criterion && criterion.status === 'not_met') {
+    const r = fromRemnant(criterion);
+    out.push({ kind: 'criterion', id: 'criterion', gap: r.gap || String(criterion.reason ?? ''), paths: r.paths, checks: r.checks });
+  }
+  if (delivery && delivery.verdict === 'FAIL') {
+    const r = fromRemnant(delivery);
+    out.push({ kind: 'delivery', id: 'delivery', gap: r.gap || String(delivery.reason ?? delivery.summary ?? ''), paths: r.paths, checks: r.checks });
+  }
+  return out;
 }"""

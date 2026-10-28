@@ -125,6 +125,15 @@ def _read_one(path: str) -> tuple:
     return records, skipped
 
 
+def _resolved_level(guard: str) -> str:
+    try:
+        from coordinator_core.machine_profile import resolved_level
+
+        return resolved_level(guard)
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
 def record_fire(repo_root: str, session_id: str, guard: str, reason: str) -> Optional[str]:
     nonce = uuid.uuid4().hex
     record = {
@@ -134,6 +143,7 @@ def record_fire(repo_root: str, session_id: str, guard: str, reason: str) -> Opt
         "session_id": session_id,
         "repo": repo_root,
         "reason": reason,
+        "level": _resolved_level(guard),
         "at": _now_iso(),
     }
     try:

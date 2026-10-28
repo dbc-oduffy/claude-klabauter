@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.hooks import block_workflow_foreign_emission as bwfe
 
 
@@ -222,6 +224,24 @@ def test_no_receipt_deny_names_pipeline_route_for_script_path(tmp_path):
             }
         )
     )
+
+
+@pytest.mark.parametrize("name", ["fire-0-1.mjs", "fire-3.mjs", "repair-fire-2.mjs"])
+def test_receiptless_wave_fire_is_not_called_hand_rolled(tmp_path, name):
+    script = tmp_path / name
+    script.write_text('agent({ prompt: "do it" });\n', encoding="utf-8")
+    result = bwfe._handler(
+        {
+            "tool_name": "Workflow",
+            "tool_input": {"scriptPath": str(script)},
+            "cwd": str(tmp_path),
+        }
+    )
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    reason = hso["permissionDecisionReason"]
+    assert "emit-wave-fire" in reason
+    assert "hand-rolled" not in reason
 
 
 def test_no_receipt_deny_names_pipeline_route_for_inline_script():

@@ -118,7 +118,10 @@ def _iter_py_files() -> Iterable[Path]:
         rel = Path(entry)
         if any(part in _EXCLUDED_DIR_NAMES for part in rel.parts):
             continue
-        yield _REPO_ROOT / rel
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            continue  # tracked but deleted in the working tree
+        yield path
 
 
 def _load_alias_pairs() -> list[tuple[str, str]]:

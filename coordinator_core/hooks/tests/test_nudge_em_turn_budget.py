@@ -76,6 +76,20 @@ def test_eleventh_prefire_turn_signals_once(env):
     assert nb.advisory_text(env.params()) == ""
 
 
+def test_prefire_advisory_arms_the_session_latch(env):
+    from coordinator_core.hooks._em_write_budget import advised_deny_envelope
+
+    (env.root / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (env.root / ".git" / "refs" / "heads").mkdir(parents=True)
+    (env.root / ".git" / "refs" / "heads" / "main").write_text("a" * 40 + "\n")
+    env.turns(10)
+    assert nb.advisory_text(env.params()) == ""
+    assert advised_deny_envelope(str(env.root), SID) is None
+    env.turns(1)
+    assert nb.advisory_text(env.params()) != ""
+    assert advised_deny_envelope(str(env.root), SID) is not None
+
+
 def test_fired_at_turn_three_never_prefire_signals(env, monkeypatch):
     env.turns(2)
     env.turns(1, fire=True)

@@ -26,8 +26,7 @@ def test_executor_row_running_vitest_is_refused_naming_test_runner(tmp_path):
     assert cls["status"] == "DEFECT"
     assert cls["kind"] == "executor-heavy-command-row"
     assert "C1" in cls["withheld"]
-    assert "agent_type: coordinator:test-runner" in cls["detail"]
-    assert "agent_type: coordinator:test-runner" in result["message"]
+    assert "C1-V" in cls["repair"] and "`performer: em`" in cls["repair"]
 
 
 def test_same_row_declaring_test_runner_passes(tmp_path):
@@ -77,34 +76,41 @@ def test_single_file_node_test_is_admitted(tmp_path):
 def test_writing_row_running_heavy_command_gets_the_split_remedy(tmp_path):
     result = _gate(tmp_path, _ROW)
     detail = result["classes"]["EXECUTOR_HEAVY"]["detail"]
-    assert "split it into" in detail
-    assert "authoring row" in detail and "coordinator:test-runner" in detail
-    assert "split it into" in result["message"]
+    assert "keeps its writes" in detail and "`<id>-V` verify row" in detail
+    assert "`<id>-V` verify row" in result["message"]
 
 
 def test_row_without_writes_keeps_the_declare_test_runner_remedy(tmp_path):
     spine = _ROW.replace("writes: [src/a.py]", "writes: []")
     detail = _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["detail"]
     assert "Fix: declare `agent_type: coordinator:test-runner` on the row." in detail
-    assert "split it into" not in detail
+    assert "`<id>-V` verify row" not in detail
 
 
-def test_no_writes_hit_is_a_mechanical_repair_naming_test_runner(tmp_path):
+def test_no_writes_hit_is_a_mechanical_repair_naming_the_row(tmp_path):
     cls = _gate(tmp_path, _ROW.replace("writes: [src/a.py]", "writes: []"))["classes"]["EXECUTOR_HEAVY"]
     assert cls["mechanical"] is True
-    assert "agent_type: coordinator:test-runner" in cls["repair"] and "C1" in cls["repair"]
+    assert "row C1: declare" in cls["repair"] and "`performer: em`" in cls["repair"]
 
 
-def test_writes_bearing_hit_stays_substantive(tmp_path):
+def test_writes_bearing_hit_is_a_mechanical_split_repair(tmp_path):
     cls = _gate(tmp_path, _ROW)["classes"]["EXECUTOR_HEAVY"]
-    assert cls["mechanical"] is False and cls["repair"] is None
+    assert cls["mechanical"] is True
+    assert "C1" in cls["repair"] and "C1-V" in cls["repair"]
 
 
-def test_mixed_hits_stay_substantive(tmp_path):
+def test_verify_row_id_skips_ids_already_in_the_spine(tmp_path):
+    taken = _ROW.replace("C1", "C1-V").replace("writes: [src/a.py]", "writes: []").replace("vitest run", "echo")
+    cls = _gate(tmp_path, _ROW + taken)["classes"]["EXECUTOR_HEAVY"]
+    assert "C1-V2" in cls["repair"] and "add row C1-V " not in cls["repair"]
+
+
+def test_mixed_hits_are_a_mechanical_repair_naming_both_rows(tmp_path):
     second = _ROW.replace("C1", "C2").replace("writes: [src/a.py]", "writes: []")
     cls = _gate(tmp_path, _ROW + second)["classes"]["EXECUTOR_HEAVY"]
     assert set(cls["withheld"]) == {"C1", "C2"}
-    assert cls["mechanical"] is False and cls["repair"] is None
+    assert cls["mechanical"] is True
+    assert "row C1:" in cls["repair"] and "row C2:" in cls["repair"] and "C1-V" in cls["repair"]
 
 
 def test_classification_root_is_the_plan_root_not_process_cwd(tmp_path, monkeypatch):

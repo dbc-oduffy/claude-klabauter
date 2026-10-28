@@ -418,3 +418,51 @@ def test_b9002c_replay_superseded_halted_run_is_not_unlanded_for_a_landing_on_an
     assert sibling_claims.sibling_run_claims(repo, own, ["p/a.py"]) == {}
     _sizing(repo, SIZING)
     assert sibling_claims._unlanded_run_ids(repo, own) == [old]
+
+
+def _corrupt(repo: Path, run_id: str) -> None:
+    """Replace the run's halt marker with non-JSON."""
+    (repo / "state" / "warp" / run_id / "halted.json").write_text("{not json", encoding="utf-8")
+
+
+def test_corrupt_marker_run_is_unlanded_and_claims_wanted_paths(repo):
+    run = _stamped("c0rr01")
+    _declare(repo, run, "p/a.py")
+    _corrupt(repo, run)
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == [run]
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py", "q/z.py"]) == {"p/a.py": run, "q/z.py": run}
+
+
+def test_corrupt_marker_holds_shared_dir_candidates(repo):
+    run = _stamped("c0rr02")
+    _declare(repo, run, "shared/b.py")
+    _corrupt(repo, run)
+    assert sibling_claims.shared_dir_holds(repo, OWN, ["shared/a.py"], ["shared/dirt.py"]) == ["shared/dirt.py"]
+
+
+def test_absent_marker_run_without_token_is_not_unlanded(repo):
+    run = _stamped("c0rr03")
+    _declare(repo, run, "p/a.py")
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == []
+    assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {}
+
+
+def test_one_claim_pass_parses_each_run_manifest_once_over_many_paths(repo, monkeypatch):
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    _sizing(repo, SIZING)
+    runs = [_aged(300 - i * 10, tag) for i, tag in enumerate(("aaaaaa", "bbbbbb", "cccccc"))]
+    for i, run_id in enumerate(runs):
+        _declare(repo, run_id, f"p/d{i}.py")
+        _bind(repo, run_id, "halted")
+    calls = []
+    real = wrd._manifest_declared_uncached
+    monkeypatch.setattr(wrd, "_manifest_declared_uncached", lambda r, root: calls.append(r) or real(r, root))
+    wanted = [f"p/d{i}.py" for i in range(3)] + [f"q/other{i}.py" for i in range(40)]
+    sibling_claims.sibling_run_claims(repo, OWN, wanted)
+    assert calls, "the spy must see the manifest reads"
+    assert sorted(calls) == sorted(set(calls)) and set(calls) <= set(runs)
+    calls.clear()
+    with_scope = sibling_claims.shared_dir_holds(repo, OWN, ["p/own.py"], wanted)
+    assert len(calls) == len(set(calls))
+    assert with_scope == []

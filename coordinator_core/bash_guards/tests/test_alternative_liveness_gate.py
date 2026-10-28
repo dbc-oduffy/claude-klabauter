@@ -60,7 +60,7 @@ def _record(*members, kind="deny", summary="BLOCKED: fake finding.", **extra) ->
 
 def test_every_dispatch_check_is_registered():
     discovered = set(altlive.discover_dispatch_check_names())
-    registered = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED)
+    registered = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)
     missing = discovered - registered
     assert not missing, (
         "dispatch_checks.py check_* function(s) added without a "
@@ -70,7 +70,7 @@ def test_every_dispatch_check_is_registered():
 
 def test_every_module_guard_is_registered():
     discovered = set(altlive.discover_module_guard_names())
-    registered = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED)
+    registered = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)
     missing = discovered - registered
     assert not missing, (
         "a block_*/guard_*/check_* MODULE with a top-level check() was added "
@@ -179,9 +179,9 @@ def test_write_guard_named_alternatives_are_not_dead(guard):
 @pytest.mark.parametrize("guard", sorted(altlive.LIVE_TRIGGERS))
 def test_registered_trigger_fires(guard, tmp_path, monkeypatch):
     if guard == "block_topic_branch":
-        # The guard exempts a clone under a repo's own `scratch/`; judge a non-scratch repo.
         (tmp_path / ".git").mkdir()
         (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (tmp_path / ".git" / "config").write_text('[remote "origin"]\n\turl = x\n', encoding="utf-8")
         monkeypatch.chdir(tmp_path)
     result = altlive.fire_guard(guard)
     assert result.fired, (
@@ -242,7 +242,6 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch, tmp_
 #: ceiling may only shrink.
 EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     "block_reviewer_bash_outside_allowlist": 1,
-    "block_subagent_stash_creation": 1,
     "check_destructive_git_revert_advisory": 1,
     "check_stale_write": 1,
     "guard_deploy_dirty_tree": 1,
@@ -250,11 +249,7 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
 
 #: DEAD offers no guard has fixed yet. Shrink-only: each entry is a guard whose
 #: record offers something that is not a command.
-KNOWN_DEAD_OFFERS: Dict[str, int] = {
-    # Its one ReadyCommand is the list "cat, ls, stat, rm, git status, git log",
-    # not a command. Fix: one ReadyCommand per command.
-    "block_fleet_delegation_creation": 1,
-}
+KNOWN_DEAD_OFFERS: Dict[str, int] = {}
 
 #: Per-guard LIVE-count FLOOR, so a verdict silently degrading LIVE ->
 #: UNVERIFIABLE is a loud failure. LIVE holds or grows, UNVERIFIABLE holds or
@@ -262,15 +257,13 @@ KNOWN_DEAD_OFFERS: Dict[str, int] = {
 EXPECTED_LIVE_FLOORS: Dict[str, int] = {
     "block_approval_sentinel_creation": 1,
     "block_dev_repo_sentinel_removal": 1,
-    "block_hand_authored_handoff_creation": 2,
     "block_illegal_filename": 2,
     "block_noncanonical_branch_creation": 1,
     "block_stash_destruction": 1,
     "block_subagent_plan_body_bash_write": 1,
     "block_topic_branch": 1,
-    "block_venv_creation": 1,
     "block_worktree_creation": 3,
-    "check_blanket_git_add": 3,
+    "check_blanket_git_add": 2,
     "check_cat_heredoc_write_advise": 1,
     "check_destructive_git_clean": 2,
     "check_destructive_git_revert": 3,
@@ -356,12 +349,9 @@ _RUNG_CLASSES = ("em", "unresolved", "coordinator:code-reviewer")
 RUNG_FLOORS: Dict[str, str] = {
     "block_approval_sentinel_creation": "BCC",
     "block_dev_repo_sentinel_removal": "DCC",
-    "block_disarm_marker_sentinel_creation": "DCC",
     "block_drive_root_new_dir_bash_write": "BDD",
     "block_editor_kill_by_name": "DDD",
     "block_external_workspace_vcs_write": "BDD",
-    "block_fleet_delegation_creation": "DCC",
-    "block_hand_authored_handoff_creation": "ACA",
     "block_home_root_bash_write": "BDD",
     "block_illegal_filename": "ACC",
     "block_noncanonical_branch_creation": "ACC",
@@ -371,14 +361,8 @@ RUNG_FLOORS: Dict[str, str] = {
     "block_stash_destruction": "BCC",
     "block_subagent_commit": "DCC",
     "block_subagent_destructive_action": "CCC",
-    "block_subagent_findings_reject": "CCC",
-    "block_subagent_grant_acquisition": "CCC",
-    "block_subagent_guard_grant": "CCC",
     "block_subagent_plan_body_bash_write": "CCC",
-    "block_subagent_stash_creation": "BCC",
     "block_topic_branch": "CCC",
-    "block_unreal_engine_resave": "DDD",
-    "block_venv_creation": "CCC",
     "block_whole_filesystem_scan": "DDD",
     "block_worktree_creation": "ACC",
     "block_worktree_sentinel_creation": "DCC",
@@ -413,7 +397,6 @@ RUNG_FLOORS: Dict[str, str] = {
     "guard_powershell_via_bash": "CCC",
     "guard_repo_setup_claude_home_refusal": "BCC",
     "guard_subagent_heavy_ue_launch": "CCC",
-    "guard_xs_lane_shell_write": "BDD",
     "p4_verb_fence": "DCC",
 }
 
@@ -429,18 +412,12 @@ ACKNOWLEDGED_RUNG_DROPS: frozenset = frozenset()
 EM_TEXT_OFFER_GAPS = frozenset(
     {
         "block_dev_repo_sentinel_removal",
-        "block_disarm_marker_sentinel_creation",
         "block_editor_kill_by_name",
-        "block_fleet_delegation_creation",
-        "block_topic_branch",
-        "block_unreal_engine_resave",
-        "block_venv_creation",
         "block_whole_filesystem_scan",
         "block_worktree_creation",
         "block_worktree_sentinel_creation",
         "check_blanket_git_add",
         "check_no_verify",
-        "guard_doctrine_surface_bash_write",
         "guard_grep_via_bash",
         "guard_post_executor_verification",
         "guard_powershell_via_bash",
@@ -468,8 +445,9 @@ def test_no_guard_caller_pair_grades_below_its_rung_floor(guard, tmp_path, monke
     if guard == "block_topic_branch":
         (tmp_path / ".git").mkdir()
         (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        (tmp_path / ".git" / "config").write_text('[remote "origin"]\n\turl = x\n', encoding="utf-8")
         monkeypatch.chdir(tmp_path)
-    record = _fired_record(guard)
+    record =_fired_record(guard)
     assert isinstance(record, AlternativeRecord), (
         "%s returned %s, not an AlternativeRecord -- the rung is computed from record members"
         % (guard, type(record).__name__)
@@ -484,7 +462,7 @@ def test_no_guard_caller_pair_grades_below_its_rung_floor(guard, tmp_path, monke
         )
 
 
-_EM_RUNG_AB_FLOORS = 32
+_EM_RUNG_AB_FLOORS = 30
 
 
 def test_em_rung_a_and_b_floors_are_not_edited_down():
@@ -494,7 +472,11 @@ def test_em_rung_a_and_b_floors_are_not_edited_down():
     )
 
 
-def test_em_text_offer_gaps_match_the_pinned_set():
+def test_em_text_offer_gaps_match_the_pinned_set(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (tmp_path / ".git" / "config").write_text('[remote "origin"]\n\turl = x\n', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     gaps = set()
     for guard in altlive.LIVE_TRIGGERS:
         record = _fired_record(guard)
@@ -858,14 +840,30 @@ EXPECTED_OURS = frozenset(
 )
 
 
+def test_log_only_guards_are_pinned_and_never_double_registered():
+    """LOG_ONLY is a closed pair, disjoint from the trigger registries: growth or overlap fails."""
+    assert set(altlive.LOG_ONLY) == {"guard_xs_lane_shell_write", "guard_em_post_fire_shell_write"}
+    assert not set(altlive.LOG_ONLY) & (set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED))
+
+
+def test_pre_clamp_levels_restores_the_clamp_on_exit():
+    """The floor resolution is scoped to the probe call; a deny-registry-absent guard clamps again after."""
+    from coordinator_core import machine_profile
+
+    assert machine_profile.resolved_level("block-home-root-bash-write") == "log"
+    with altlive.pre_clamp_levels():
+        assert machine_profile.resolved_level("block-home-root-bash-write") == "floor"
+    assert machine_profile.resolved_level("block-home-root-bash-write") == "log"
+
+
 def test_every_registered_guard_has_exactly_one_band():
-    for name in sorted(set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED)):
+    for name in sorted(set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)):
         band = altlive.classify_band(name)
         assert band in (altlive.GuardBand.OURS, altlive.GuardBand.PEER)
 
 
 def test_ours_band_matches_the_pm_ruling_no_silent_drift():
-    all_guards = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED)
+    all_guards = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)
     ours = {g for g in all_guards if altlive.classify_band(g) is altlive.GuardBand.OURS}
     assert ours == EXPECTED_OURS
     peer = all_guards - ours

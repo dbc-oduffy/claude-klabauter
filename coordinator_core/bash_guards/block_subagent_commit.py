@@ -1704,6 +1704,67 @@ _GIT_COMMIT_IMPORT_RE = re.compile(
 )
 
 
+#: Public callables of `coordinator_core/git/commit.py`; the index-mutating
+#: and blob-hashing ones count alongside `commit_paths`. A test pins this
+#: set against the module's public functions.
+_GIT_COMMIT_ENTRY_POINTS = frozenset(
+    {
+        "commit_paths",
+        "stage_paths_in_process",
+        "partition_declared_deletions",
+        "refresh_stat_in_process",
+        "checkin_sizes",
+        "checkin_form",
+        "checkin_blob_sha",
+        "hash_worktree_blobs_via_spawn",
+    }
+)
+
+_GIT_COMMIT_IMPORT_STMT_RE = re.compile(
+    r"\bfrom\s+coordinator_core\.git\.commit\s+import\s*"
+    r"(?:\(([^)]*)\)|([^\n;]*))"
+    r"|\bimport\s+coordinator_core\.git\.commit\b(?:\s+as\s+\w+)?"
+    r"|\bfrom\s+coordinator_core\.git\s+import\s+commit\b(?:\s+as\s+\w+)?"
+)
+
+#: A dynamic call shape the text scan cannot see through; with a commit
+#: import present these deny.
+_DYNAMIC_ACCESS_RE = re.compile(
+    r"\b(?:getattr|setattr|importlib|__import__|exec|eval|compile|vars|globals|"
+    r"locals|attrgetter|getmembers)\b|__dict__|__getattribute__|__globals__|sys\.modules"
+)
+
+_COMMIT_ENTRY_NAME_RE = re.compile(
+    r"\b(?:" + "|".join(sorted(_GIT_COMMIT_ENTRY_POINTS)) + r")\b"
+)
+
+
+def _text_imports_and_calls_commit_entry(text: str) -> bool:
+    """Python ``text`` imports `coordinator_core.git.commit` AND references a
+    commit entry point (any receiver, any alias) or reaches it dynamically.
+    A bare import or a use of non-entry members allows.
+    """
+    if not _GIT_COMMIT_IMPORT_RE.search(text):
+        return False
+    aliases: Set[str] = set()
+    for m in _GIT_COMMIT_IMPORT_STMT_RE.finditer(text):
+        names = m.group(1) if m.group(1) is not None else m.group(2)
+        for item in (names or "").split(","):
+            parts = item.split()
+            if not parts:
+                continue
+            if parts[0] == "*":
+                continue
+            if parts[0] in _GIT_COMMIT_ENTRY_POINTS and len(parts) == 3 and parts[1] == "as":
+                aliases.add(parts[2])
+    remainder = _GIT_COMMIT_IMPORT_STMT_RE.sub(" ", text)
+    if _DYNAMIC_ACCESS_RE.search(remainder):
+        return True
+    if _COMMIT_ENTRY_NAME_RE.search(remainder):
+        return True
+    return any(re.search(r"\b" + re.escape(a) + r"\b", remainder) for a in aliases)
+
+
 def _line_reaches_python_interpreter(line: str) -> bool:
     """Whether any whitespace- or ``|``-separated token on ``line``
     normalizes to a Python interpreter identity -- covers both
@@ -1793,7 +1854,7 @@ def _has_python_heredoc_or_stdin_git_commit_import(
         cmd
     )
     for body in bodies:
-        if _GIT_COMMIT_IMPORT_RE.search(body):
+        if _text_imports_and_calls_commit_entry(body):
             if legs is not None:
                 legs.add(_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT)
             return True
@@ -1858,7 +1919,7 @@ def _has_python_script_file_git_commit_import(
                 text = fh.read(_SCRIPT_FILE_READ_CAP_BYTES).decode("utf-8", "replace")
         except OSError:
             continue
-        if _GIT_COMMIT_IMPORT_RE.search(text):
+        if _text_imports_and_calls_commit_entry(text):
             if legs is not None:
                 legs.add(_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT)
             return True
@@ -6322,9 +6383,98 @@ def _git_commit_agent_pathspec_permitted(
     # absences it stands down on, the holder check that wins over both, and
     # why `include_orphans`/shape sentinels cannot reach it. Fail-closed by
     # construction: an unimportable stand-down keeps this deny.
+    if _orphans_corroborated_by_executor_report(reason, git_root, session_id):
+        return True, ""
     if _ownership_denial_stands_down(reason, git_root, session_id):
         return True, ""
     return False, reason
+
+
+_EXECUTOR_REPORT_MAX_BYTES = 512 * 1024
+_SESSION_DIR_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_AGENT_TYPE_LINE_RE = re.compile(r"^agent_type:\s*['\"]?([^\s'\"#]+)", re.MULTILINE)
+_DENIED_COUNT_RE = re.compile(r"denied paths \((\d+)\)")
+
+
+def _is_executor_agent_type(agent_type: str) -> bool:
+    return agent_type.rsplit(":", 1)[-1].endswith("executor")
+
+
+def _executor_report_texts(git_root: str, session_id: str) -> "List[str]":
+    """Bodies of the executor run-report sidecars for this dispatching session.
+
+    Carrier: `.coordinator-local/subagent-share/<session_id>/*.md` whose
+    frontmatter `agent_type` is an executor type. The committer's own sidecar
+    carries its own agent type and never qualifies. Plain reads, no spawns;
+    any unreadable or oversize file is skipped.
+    """
+    if not _SESSION_DIR_TOKEN_RE.match(session_id or ""):
+        return []
+    share = os.path.join(git_root, ".coordinator-local", "subagent-share", session_id)
+    try:
+        names = sorted(n for n in os.listdir(share) if n.endswith(".md"))
+    except OSError:
+        return []
+    texts: List[str] = []
+    for name in names:
+        full = os.path.join(share, name)
+        try:
+            if os.path.getsize(full) > _EXECUTOR_REPORT_MAX_BYTES:
+                continue
+            with open(full, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        if end == -1:
+            continue
+        match = _AGENT_TYPE_LINE_RE.search(text[:end])
+        if match and _is_executor_agent_type(match.group(1)):
+            texts.append(text)
+    return texts
+
+
+def _report_names_path(text: str, path: str) -> bool:
+    """Whole-path mention anywhere in the report; not scoped to a files-changed
+    section, so a negated mention also corroborates (bounded by the
+    orphans-only, no-holder rules in the caller)."""
+    pattern = r"(?<![\w./-])%s(?![\w/-]|\.\w)" % re.escape(path)
+    return re.search(pattern, text) is not None
+
+
+def _orphans_corroborated_by_executor_report(
+    reason: str, git_root: str, session_id: str
+) -> bool:
+    """True iff the ownership denial is orphans only and an executor report
+    names every one of them. Adoption is per path: a peer-claimed, clean,
+    indeterminate or uncorroborated path keeps the whole denial.
+    """
+    try:
+        from coordinator_core.ops.session.scope_report import (
+            _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED,
+            _CLASSIFICATION_ORPHAN,
+            deny_reason_names_a_holder,
+        )
+    except Exception:
+        return False
+    if not reason or deny_reason_names_a_holder(reason):
+        return False
+    count = _DENIED_COUNT_RE.search(reason)
+    if not count:
+        return False
+    orphans: List[str] = []
+    for lead in (_CLASSIFICATION_ORPHAN, _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED):
+        for path in _orphan_paths_from_reason(reason, lead):
+            if path not in orphans:
+                orphans.append(path)
+    if not orphans or len(orphans) != int(count.group(1)):
+        return False
+    texts = _executor_report_texts(git_root, session_id)
+    if not texts:
+        return False
+    return all(any(_report_names_path(t, p) for t in texts) for p in orphans)
 
 
 def _dirty_subset(git_root: str, paths: "Sequence[str]") -> "Optional[List[str]]":
@@ -6457,10 +6607,9 @@ _PYTHON_C_OPAQUE_SINK_DENY_REASON = (
 #: The deny message for `_PAYLOAD_LEG_PYTHON_HEREDOC_STDIN_IMPORT` (part 22)
 #: -- stays inside `_message_size.MESSAGE_PROSE_CAP_BYTES`.
 _PYTHON_HEREDOC_STDIN_IMPORT_DENY_REASON = (
-    "BLOCKED: a Python body (heredoc, stdin, or script file) imports "
-    "`coordinator_core.git.commit` -- that reaches the commit primitive the "
-    "same as a `-c` payload naming it would. Finish your edits and report "
-    "to the EM instead; the EM runs `git commit`."
+    "A Python body (heredoc, stdin, or script file) imports "
+    "`coordinator_core.git.commit`, the commit primitive. Commit route: "
+    "`coordinator-invoke ceremony.commit_v2` with explicit `paths`."
 )
 
 #: Sentinels `_git_commit_agent_may_commit` returns in its ``deny_reason``
@@ -6845,9 +6994,9 @@ def _deny_reason(
             )
         return _GIT_COMMIT_AGENT_DENY_REASON
     return (
-        "BLOCKED: subagents may not commit -- EM-only, enforced by caller "
-        "identity, no cooperative override. Finish your edits and report to "
-        "the EM instead: hand off changed files; the EM runs `git commit`."
+        "Subagent commit logged. Commit route: hand the changed files to "
+        "the EM, or `coordinator-invoke ceremony.commit_v2` with explicit "
+        "`paths`."
     )
 
 

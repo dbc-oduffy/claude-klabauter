@@ -103,7 +103,7 @@ def test_stop_leg_reports_undischarged_obligation_at_precision(tmp_path) -> None
     assert _handler({"payload": stop_payload}) == {}
 
 
-def test_stop_leg_blocks_at_default_posture(tmp_path) -> None:
+def test_stop_leg_advises_at_default_posture(tmp_path) -> None:
     from coordinator_core.hooks.watchdog_undischarged_next_move import _handler
 
     repo_root = _make_repo(tmp_path)
@@ -125,11 +125,11 @@ def test_stop_leg_blocks_at_default_posture(tmp_path) -> None:
         "transcript_path": str(tmp_path / "transcript.jsonl"),
     }
     result = _handler({"payload": stop_payload})
-    assert result["decision"] == "block"
-    assert "Invoke it now" in result["reason"]
+    assert "decision" not in result
+    assert "Invoke it now" in result["systemMessage"]
 
 
-def test_stop_leg_blocks_via_claude_home_from_payload_env(tmp_path) -> None:
+def test_stop_leg_advises_via_claude_home_from_payload_env(tmp_path) -> None:
     """No coordinator.local.md in the repo; the Stop payload's env carries
     CLAUDE_HOME pointing at an identity file reading "default". This pins that
     the watchdog passes the payload env through to the posture resolver."""
@@ -159,8 +159,8 @@ def test_stop_leg_blocks_via_claude_home_from_payload_env(tmp_path) -> None:
         "env": {"CLAUDE_HOME": str(claude_home)},
     }
     result = _handler({"payload": stop_payload})
-    assert result["decision"] == "block"
-    assert "Invoke it now" in result["reason"]
+    assert "decision" not in result
+    assert "Invoke it now" in result["systemMessage"]
 
 
 def test_discharge_closes_the_obligation_before_stop_fires(tmp_path) -> None:

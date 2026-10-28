@@ -79,3 +79,28 @@ def test_other_covered_file_change_reads_stale(repo):
 def test_other_runs_stage_change_reads_stale(repo):
     ask_contract.write_run_stage(repo, OTHER_RUN, "landed")
     assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
+
+
+def test_own_sizing_rewrite_stays_fresh_but_a_chunk_written_path_does_not(repo):
+    sizing = repo / "state" / "sizings" / "s.yaml"
+    sizing.parent.mkdir(parents=True)
+    sizing.write_text("status: open\n", encoding="utf-8")
+    run_json = repo / "state" / "warp" / RUN_ID / "run.json"
+    run_json.write_text(json.dumps({"sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8")
+    record_path = landing_retest.fresh_verdict_path(repo, RUN_ID)
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["covered"] = landing_retest.landing_fingerprint(repo, ["a.py", "state/sizings/s.yaml"])
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is not None
+    sizing.write_text("status: shipped\n", encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is not None
+    (repo / "a.py").write_text("X = 3\n", encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None
+
+
+def test_run_json_naming_a_non_sizing_path_gets_no_exemption(repo):
+    run_json = repo / "state" / "warp" / RUN_ID / "run.json"
+    run_json.write_text(json.dumps({"sizing_rel": "a.py"}), encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is not None
+    (repo / "a.py").write_text("X = 4\n", encoding="utf-8")
+    assert landing_retest.fresh_targeted_verdict(repo, RUN_ID) is None

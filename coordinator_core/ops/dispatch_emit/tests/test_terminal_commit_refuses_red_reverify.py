@@ -8,6 +8,8 @@ import json
 import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li, terminal_commit
+from coordinator_core.ops.dispatch_emit import landing_retest
+from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_landing_integrity import (  # noqa: F401
     _fire,
@@ -35,7 +37,7 @@ def _reverify(after, before="fail", failing=(NODE,)):
 
 def _review(reverify):
     return {**reviewed(),
-            "tests": {"status": "pass"}, li.REVERIFY_KEY: reverify}
+            "tests": {"status": "pass"}, landing_targeted_tests.REVERIFY_KEY: reverify}
 
 
 def test_red_reverify_on_a_landed_importer_is_refused_naming_the_test_file(repo):
@@ -44,7 +46,7 @@ def test_red_reverify_on_a_landed_importer_is_refused_naming_the_test_file(repo)
     out = _fire(repo, "mod.py", inline_review=_review(_reverify("fail")))
 
     assert out["committed"] is False
-    assert out["refused"] == li.REVIEW_REVERIFY_FAILED
+    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
     assert out["integrity"][0]["path"] == TEST_FILE
     assert out["reverify_check"] == "fail"
     assert _git(["rev-parse", "HEAD"], repo) == head
@@ -59,7 +61,7 @@ def test_red_reverify_from_a_subdirectory_suite_is_refused(repo):
     out = _fire(repo, "lab/mod.py", inline_review=_review(_reverify("fail")))
 
     assert out["committed"] is False
-    assert out["refused"] == li.REVIEW_REVERIFY_FAILED
+    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
@@ -93,11 +95,11 @@ def test_red_on_a_test_importing_nothing_landed_commits_off_landing(repo):
 
 def _gate_with_retest(repo, retest_tests):
     _land(repo)
-    path = li.fresh_verdict_path(repo, RUN)
+    path = landing_retest.fresh_verdict_path(repo, RUN)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "run_id": RUN, "head": _git(["rev-parse", "HEAD"], repo), "tests": retest_tests,
-        "covered": li.landing_fingerprint(repo, ["mod.py", TEST_FILE]), "status": "pass",
+        "covered": landing_retest.landing_fingerprint(repo, ["mod.py", TEST_FILE]), "status": "pass",
     }), encoding="utf-8")
     params = {
         "targeted_tests": {"status": "fail", "tests_failed": 1, "baseline": None},
@@ -116,10 +118,10 @@ def test_retest_that_ran_the_red_file_clears_the_refusal(repo):
 def test_retest_that_never_ran_the_red_file_does_not_clear_it(repo):
     out = _gate_with_retest(repo, ["tests/test_elsewhere.py::test_z"])
 
-    assert out["refused"] == li.REVIEW_REVERIFY_FAILED
+    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
 
 
 def test_retest_record_naming_no_files_does_not_clear_it(repo):
     out = _gate_with_retest(repo, [])
 
-    assert out["refused"] == li.REVIEW_REVERIFY_FAILED
+    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED

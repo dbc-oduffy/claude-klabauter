@@ -14,11 +14,13 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit import emission_receipt
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
+    CHAIN_HANDOFF_KEY,
     LAUNCHER_CHILD_EMIT_PARAM,
     STAGE_PENDING_KEY,
     staged_twin_rel,
 )
 from coordinator_core.session import claimed_write
+from coordinator_core.warp_fire import fire_command
 
 # Generator-provenance: writes only the caller-named launcher script and its receipt, under scratch/warp/.
 GENERATES = []
@@ -88,10 +90,14 @@ const TWIN_PREFIX = __TWIN_PREFIX__;
 const TWIN_MIDDLE = __TWIN_MIDDLE__;
 const TWIN_SUFFIX = __TWIN_SUFFIX__;
 
-function _emitRefusal(child, e) {
+function _emitRefusal(child, e, chained) {
   if (!e || typeof e !== 'object') return 'emit reply is not an object';
   if (typeof e.error === 'string' && e.error !== '') return 'emit failed: ' + e.error;
-  if (e.run_id !== child.run_id) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
+  if (chained) {
+    if (typeof e.run_id !== 'string' || e.run_id === '' || e.run_id === child.run_id) {
+      return 'chain emit reply run_id ' + String(e.run_id) + ' is not a fresh run id';
+    }
+  } else if (e.run_id !== child.run_id) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
   if (typeof e.path !== 'string' || e.path === '') return 'emit reply path is not a non-empty string';
   const p = e.path.replace(/\\/g, '/');
   if (p.split('/').indexOf('..') !== -1) return 'emit reply path contains ..';
@@ -104,29 +110,21 @@ function _emitRefusal(child, e) {
   return null;
 }
 
-async function _emitLeg(child) {
-  const params = JSON.stringify(child.emit_params).replace(/'/g, "'\\''");
+async function _emitLeg(child, emitParams, label) {
+  const params = JSON.stringify(emitParams).replace(/'/g, "'\\''");
   const reply = await agent(
     'Run `' + INVOKE + ' ' + EMIT_OP + " '" + params + "'` once, with the command word exactly as written, and "
     + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
     + "return the command's error text verbatim (its stderr or the denial message) in the error field, "
     + 'with path as an empty string and fire_args as {}; on success omit error.',
-    { label: 'emit-' + child.run_id, phase: 'emit', agentType: 'general-purpose', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
+    { label: label, phase: 'emit', agentType: 'general-purpose', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
   );
   return reply;
 }
 
-// Trap: a nested child receives no args and has no file read, so the stage round is a second nested start, not an in-place resume.
-async function _runChild(child) {
-  let emitted;
-  try {
-    emitted = await _emitLeg(child);
-  } catch (e) {
-    return { run_id: child.run_id, status: 'emit_refused', error: String(e && e.message ? e.message : e) };
-  }
-  const refusal = _emitRefusal(child, emitted);
-  if (refusal !== null) return { run_id: child.run_id, status: 'emit_refused', error: refusal };
-  let scriptPath = emitted.path.replace(/\\/g, '/');
+// Trap: a nested child receives no args and has no file read, so the stage round is a second nested start, not an in-place resume. runId is the run whose script is started: the twin path is built from it, so a chained hop resumes its own twin.
+async function _startLoop(child, runId, firstPath) {
+  let scriptPath = firstPath;
   let lastSha = null;
   for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
     let result;
@@ -149,10 +147,54 @@ async function _runChild(child) {
       return { run_id: child.run_id, status: 'failed', error: 'stage_pending repeated for a handle already supplied' };
     }
     lastSha = sha;
-    const twinRel = TWIN_PREFIX + child.run_id + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+    const twinRel = TWIN_PREFIX + runId + TWIN_MIDDLE + sha + TWIN_SUFFIX;
     scriptPath = REPO_ROOT + '/' + twinRel;
   }
   return { run_id: child.run_id, status: 'failed', error: 'stage rounds exhausted' };
+}
+
+function _handoffOf(result) {
+  const h = (result !== null && typeof result === 'object') ? result.__CHAIN_KEY__ : null;
+  return (h !== null && typeof h === 'object') ? h : null;
+}
+
+// Trap: one hop only. The chained run's own hand-off is refused, so a chain can never loop.
+async function _chainHop(child, handoff) {
+  const sizing = typeof handoff.sizing_path === 'string' && handoff.sizing_path !== '' ? handoff.sizing_path : child.sizing_rel;
+  const refire = __REFIRE_HEAD__ + JSON.stringify(sizing) + __REFIRE_TAIL__;
+  const fail = (why) => ({
+    run_id: child.run_id,
+    status: 'failed',
+    error: 'the sizing resolved to M+ and the chained run did not complete (' + why + '): resubmit ' + refire,
+  });
+  let emitted;
+  try {
+    emitted = await _emitLeg(child, { ...handoff, __LAUNCHER_PARAM__: true }, 'chain-emit-' + child.run_id);
+  } catch (e) {
+    return fail('emit threw: ' + String(e && e.message ? e.message : e));
+  }
+  const refusal = _emitRefusal(child, emitted, true);
+  if (refusal !== null) return fail(refusal);
+  const chained = await _startLoop(child, emitted.run_id, emitted.path.replace(/\\/g, '/'));
+  if (chained.status !== 'ok') return fail(chained.error);
+  if (_handoffOf(chained.result) !== null) return fail('the chained run returned a second hand-off');
+  const r = chained.result;
+  const tagged = (r !== null && typeof r === 'object') ? { ...r, chained_from: child.run_id } : { chained: r, chained_from: child.run_id, sizing: sizing };
+  return { run_id: child.run_id, status: 'ok', result: tagged };
+}
+
+async function _runChild(child) {
+  let emitted;
+  try {
+    emitted = await _emitLeg(child, child.emit_params, 'emit-' + child.run_id);
+  } catch (e) {
+    return { run_id: child.run_id, status: 'emit_refused', error: String(e && e.message ? e.message : e) };
+  }
+  const refusal = _emitRefusal(child, emitted, false);
+  if (refusal !== null) return { run_id: child.run_id, status: 'emit_refused', error: refusal };
+  const first = await _startLoop(child, child.run_id, emitted.path.replace(/\\/g, '/'));
+  const handoff = first.status === 'ok' ? _handoffOf(first.result) : null;
+  return handoff === null ? first : _chainHop(child, handoff);
 }
 
 const _settled = await parallel(CHILDREN.map((child) => () => _runChild(child)));
@@ -168,6 +210,7 @@ return { parent_id: PARENT_ID, runs: runs };
 def _render(root: Path, parent_id: str, children: Sequence[LaunchChild]) -> str:
     lit = lambda value: json.dumps(value, ensure_ascii=True)  # noqa: E731
     prefix, middle, suffix = _twin_affixes()
+    refire_head, refire_tail = fire_command(_RUN_SENTINEL).split(json.dumps(_RUN_SENTINEL))
     literals = [
         {
             "run_id": c.run_id,
@@ -184,6 +227,10 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild]) -> str:
         "__INVOKE__": lit(_INVOKE),
         "__EMIT_OP__": lit(_EMIT_OP),
         "__PENDING_KEY__": STAGE_PENDING_KEY,
+        "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
+        "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
+        "__REFIRE_HEAD__": lit(refire_head),
+        "__REFIRE_TAIL__": lit(refire_tail),
         "__TWIN_PREFIX__": lit(prefix),
         "__TWIN_MIDDLE__": lit(middle),
         "__TWIN_SUFFIX__": lit(suffix),

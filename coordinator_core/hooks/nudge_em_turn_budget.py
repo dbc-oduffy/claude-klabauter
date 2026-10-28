@@ -26,8 +26,7 @@ _KILL_SWITCH = "COORDINATOR_HOOK_NUDGE_EM_TURN_BUDGET_DISABLED"
 
 def pre_fire_text(turns: int, bar: int) -> str:
     return (
-        f"[em-turn-budget] {turns} turns before the first engine-ask, bar {bar} "
-        "(THE-EM-FIRES-ENGINE-ASK-WITHOUT-A-PREFIRE-SURVEY). " + fire_step()
+        f"[em-turn-budget] {turns} turns before the first engine-ask, bar {bar}. " + fire_step()
     )
 
 
@@ -68,6 +67,9 @@ def _advisory(params: dict) -> str:
         if phase == ers.PHASE_UNFIRED and not fired:
             if turns > etc.PRE_FIRE_TURNS_MAX and not state.get("pre_fire_signalled"):
                 state["pre_fire_signalled"] = True
+                from coordinator_core.hooks._em_write_budget import arm_advised
+
+                arm_advised(root, sid)
                 text = pre_fire_text(turns, etc.PRE_FIRE_TURNS_MAX)
         elif phase == ers.PHASE_IN_FLIGHT and phase.run_id:
             state["last_engine_run_id"] = phase.run_id

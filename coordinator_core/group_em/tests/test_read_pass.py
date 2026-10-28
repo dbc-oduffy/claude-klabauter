@@ -708,3 +708,16 @@ class TestShellIsAnExecutingStatus:
         }
         assert verdicts["shell"]["contradicted"] == verdicts["busy"]["contradicted"]
         assert verdicts["shell"]["candidate"] == verdicts["busy"]["candidate"]
+
+
+def test_live_peers_refuses_unreadable_reads_drops_sandboxes_and_excluded_ids():
+    agents = [
+        {"sessionId": "a", "cwd": "/r"},
+        {"sessionId": "b", "cwd": "/r"},
+        {"sessionId": "c", "cwd": "/x/w-0123456789ab"},
+    ]
+    with mock.patch.object(read_pass, "fetch_live_agents", return_value=agents) as fetch:
+        peers = read_pass.live_peers("/r", ["a", None])
+    assert [p["sessionId"] for p in peers] == ["b"]
+    assert fetch.call_args.kwargs["raise_on_failure"] is True
+    assert fetch.call_args.kwargs["raise_on_empty_snapshot"] is True

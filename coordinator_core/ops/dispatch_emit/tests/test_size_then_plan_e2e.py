@@ -30,9 +30,10 @@ _BLITZ_FN = (
 )
 
 _HARNESS = r"""
-const _seen = { phases: [], labels: [], prompts: {} };
+const _seen = { phases: [], labels: [], prompts: {}, workflows: [] };
 const phase = (name) => { _seen.phases.push(name); };
 const _stub = JSON.parse(process.env.STUB);
+const workflow = async (o) => { _seen.workflows.push(o.scriptPath); return _stub.__child; };
 const agent = async (prompt, opts) => {
   _seen.labels.push(opts.label);
   _seen.prompts[opts.label] = prompt;
@@ -67,7 +68,7 @@ def _script() -> str:
         run_id="run-1",
         session_id=None,
         wrap_stage=_wrap_stage,
-        plan_blitz_text="stub",
+        plan_blitz_text="x" * 279005,
         stop_after=STOP_AFTER_PLAN,
         **REVIEW_KW,
     )
@@ -164,22 +165,54 @@ def _replayed_decision(seen: dict, repo: Path, monkeypatch, mode: str, capsys, s
     return _assemble(repo, argv[1:], monkeypatch, mode, capsys)
 
 
+_CHILD = "REPO/scratch/warp/warp-child.workflow.mjs"
+
+
+def _chain_stub(scout, decision, verdict, emit, child=None):
+    stub = _stub(scout, decision, verdict)
+    stub["chain-emit"] = emit
+    stub["__child"] = child if child is not None else {"arm": "m_plus", "plan": PLAN_PATH}
+    return stub
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_m_plan_route_runs_scout_through_plan_in_one_script(tmp_path, monkeypatch, capsys):
-    scout, decision, verdict, _rel = _fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
+def test_m_pick_chains_into_the_sizing_script_without_a_refire_halt(tmp_path, monkeypatch, capsys):
+    scout, decision, verdict, rel = _fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
     assert verdict["halt"] is None, verdict
-    out = _run_script(_script(), _stub(scout, decision, verdict))
-    halted = out["result"]["halted_by"]
-    assert halted["halted"] == "parked" and halted["plan"] == PLAN_PATH
-    assert halted["next_action"] == parked_next_action(PLAN_PATH)
-    assert "planned" not in out["result"]
-    assert out["seen"]["labels"] == ["size", "blitz"]
+    script = _script()
+    assert "async function planBlitz(" not in script
+    stub = _chain_stub(scout, decision, verdict, {"path": _CHILD, "run_id": "run-2"})
+    out = _run_script(script, stub)
+    assert out["result"]["plan"] == PLAN_PATH and out["result"]["chained_from"] == "run-1"
+    assert "halted_by" not in out["result"]
+    assert out["seen"]["workflows"] == [_CHILD]
+    assert out["seen"]["labels"] == ["size", "chain-emit"]
     assert [p for p in out["seen"]["phases"] if p in ("size", "gate", "plan")] == ["size", "gate", "plan"]
-    assert not {"stage", "execute", "review"} & set(out["seen"]["phases"])
+    emit_prompt = out["seen"]["prompts"]["chain-emit"]
+    assert "dispatch.emit" in emit_prompt and rel in emit_prompt
     replayed = _replayed_decision(out["seen"], _make_repo(tmp_path / "replayed"), monkeypatch, "ceo", capsys, scout)
     assert replayed == {**decision, "write": replayed["write"]}
-    assert Path(replayed["write"]["path"]).name == Path(decision["write"]["path"]).name
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    "emit, why",
+    [
+        ({"path": "", "run_id": "", "error": "denied"}, "emit failed: denied"),
+        ({"path": "REPO/elsewhere/x.mjs", "run_id": "run-2"}, "emit path is not under"),
+        ({"path": "REPO/scratch/warp/../x.mjs", "run_id": "run-2"}, "emit path is not under"),
+    ],
+)
+def test_m_pick_halts_naming_the_sizing_refire_only_when_the_chain_cannot_start(tmp_path, monkeypatch, capsys, emit, why):
+    scout, decision, verdict, rel = _fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
+    out = _run_script(_script(), _chain_stub(scout, decision, verdict, emit))
+    halted = out["result"]["halted_by"]
+    assert halted["halted"] == "refusal" and halted["sizing"] == rel
+    assert why in halted["reason"] and rel in halted["reason"]
+    assert "chained_from" not in out["result"]
+    assert out["seen"]["workflows"] == []
 
 
 @pytest.mark.spawns_process

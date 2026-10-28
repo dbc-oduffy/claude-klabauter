@@ -141,7 +141,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from coordinator_core import timestamps
 from coordinator_core.session import peer_roster
@@ -235,6 +235,30 @@ def fetch_live_agents(
         }
         for row in rows
     ]
+
+
+def live_peers(
+    repo_root: str,
+    exclude_session_ids: Iterable[Optional[str]] = (),
+    box_wide: bool = False,
+) -> list[dict[str, Any]]:
+    """The live roster both `watch` and `idle_report` enumerate peers from.
+
+    Refuses an unreadable or empty snapshot (raises) so one bad read is never
+    a fleet of departed peers. Eval-sandbox children are dropped; each
+    `exclude_session_ids` entry is removed by exact session id.
+    """
+    agents = fetch_live_agents(
+        repo_root,
+        raise_on_failure=True,
+        raise_on_empty_snapshot=True,
+        **({"box_wide": True} if box_wide else {}),
+    )
+    peers = [a for a in agents if not is_eval_sandbox_peer(a)]
+    for session_id in exclude_session_ids:
+        if session_id is not None:
+            peers = enumerate_repo_peers(peers, session_id)
+    return peers
 
 
 _EVAL_SANDBOX_DIR_RE = re.compile(r"^w-[0-9a-f]{12}$")

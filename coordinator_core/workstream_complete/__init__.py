@@ -2883,9 +2883,30 @@ def _compute_review_receipt_gate(
         "(coordinator_core.reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS) and let it "
         f"finish before reaching status: {target_status!r}"
     )
+    from coordinator_core.review_trail.sweep_tombstone import swept_sidecars
+
+    def _no_receipt_gate() -> ReviewReceiptGate:
+        # A tombstone never credits (DR-421); it only changes the reason text.
+        # Age-bounded only: `since=` (session-reuse bound) is not passed here.
+        swept =swept_sidecars(str(root), sid)
+        if not swept:
+            return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
+        sweepers = ", ".join(sorted({str(r.get("sweeper", "?")) for r in swept}))
+        swept_at = max(str(r.get("swept_at", "?")) for r in swept)
+        paths = [str(r.get("path", "?")) for r in swept]
+        return ReviewReceiptGate(
+            applies=True,
+            blocks=True,
+            detail=(
+                f"review sidecar(s) for session {sid!r} were swept by {sweepers} "
+                f"at {swept_at}: {paths} — a swept review is not credited as "
+                "a run; re-dispatch a reviewer (CLOSE_RECEIPT_REVIEWERS)"
+            ),
+        )
+
     extant_sidecar_dirs = [d for d in sidecar_dirs if d.is_dir()]
     if not extant_sidecar_dirs:
-        return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
+        return _no_receipt_gate()
 
     # AC2b/reader-side parity: a receipt written under the legacy share root
     # (`<repo_root>/state/subagent-share`) must count identically to one
@@ -3012,7 +3033,7 @@ def _compute_review_receipt_gate(
             ),
         )
 
-    return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
+    return _no_receipt_gate()
 
 
 def build_review_receipt_block_stamp_judgment_point(gate: ReviewReceiptGate) -> dict[str, Any]:
@@ -3812,6 +3833,9 @@ def _build_preserved_judgment_points(
     governing_plan_source: str,
 ) -> list[dict[str, Any]]:
     points: list[dict[str, Any]] = []
+    root_vs_consumed = _root_vs_consumed_governing_plan(repo_root, gate)
+    if root_vs_consumed is not None:
+        points.append(_judgments.build_governing_plan_root_vs_consumed_judgment_point(*root_vs_consumed))
     completion_applies = directives_completion.completion_archive_predicate(repo_root)
     review_relevant = bool(decisions.get("review")) or canonicalize(gate.disposition) == PREDECESSOR_CONSUMED
     memo_dispositions_present = bool(decisions.get("memo_dispositions"))
@@ -4071,6 +4095,32 @@ def _governing_plan_field_from_consumed_handoff(repo_root: Path, gate: SessionSh
     parsed = parse_frontmatter(text)
     fm = parsed.get("frontmatter") or {}
     return fm.get("governing_plan")
+
+
+def _root_vs_consumed_governing_plan(
+    repo_root: Path, gate: SessionShapeGate
+) -> Optional[tuple[Optional[str], Optional[str]]]:
+    """`(root_field, head_field)` when the chain root and chain head handoffs carry different
+    `governing_plan:` values, else `None`. Reads at most the two already-named files."""
+    paths = gate.consumed_handoff_paths
+    if len(paths) < 2:
+        return None
+
+    def _field(raw: str) -> Optional[str]:
+        resolved = _resolve_handoff_path_str(repo_root, raw)
+        if resolved is None:
+            return None
+        try:
+            fm = parse_frontmatter(resolved.read_text(encoding="utf-8")).get("frontmatter") or {}
+        except (OSError, UnicodeDecodeError):
+            return None
+        value = fm.get("governing_plan")
+        return str(value).strip() or None if value is not None else None
+
+    root_field, head_field = _field(paths[0]), _field(paths[-1])
+    if root_field == head_field:
+        return None
+    return root_field, head_field
 
 
 def _deliverable_id_from_consumed_handoff(repo_root: Path, gate: SessionShapeGate) -> Optional[str]:

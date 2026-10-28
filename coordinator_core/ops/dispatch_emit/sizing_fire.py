@@ -492,10 +492,26 @@ def _kept_rows(root: Path, sizing_rel: str, open_ids: Sequence[str]) -> tuple[tu
     return (kept, run_id) if kept else ((), None)
 
 
+def _halt_carries_executed_rows(run_dir: Path, halted: Mapping) -> bool:
+    """True for a `ledger-check` marker, or a still-`halted` non-`refusal` marker whose run staged
+    rows (its `manifest.json` lists some): such a run executed rows its refire must resume, where a
+    refusal or plan-gate halt staged none."""
+    if halted.get("halted") == "ledger-check":
+        return True
+    if halted.get("halted") == "refusal" or halted.get("status") != "halted":
+        return False
+    try:
+        rows = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8")).get("rows")
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(rows, list) and bool(rows)
+
+
 def _xs_halt_spine(root: Path, sizing_rel: str) -> str | None:
-    """The record spine named by the newest `ledger-check` halt marker of a run bound to
-    `sizing_rel`, else None. Reads `halted.json` only from `ask-`/`warp-` run dirs stamped on or
-    after the sizing's date; no spawn. The spine must sit directly in a `RECORD_DIR_ROOT/<run>` dir."""
+    """The record spine named by the newest halt marker of a run bound to `sizing_rel` that is a
+    `ledger-check` halt or carries executed rows (`_halt_carries_executed_rows`), else None. Reads
+    `halted.json` (and `manifest.json` for non-ledger-check markers) only from `ask-`/`warp-` run
+    dirs stamped on or after the sizing's date; no git spawn. The spine must sit directly in a `RECORD_DIR_ROOT/<run>` dir."""
     import os
 
     from coordinator_core.ops.dispatch_emit.halted_run import _DATE_PREFIX, _STAMP
@@ -531,7 +547,7 @@ def _xs_halt_spine(root: Path, sizing_rel: str) -> str | None:
             halted = json.loads((base / name / "halted.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if not isinstance(halted, dict) or halted.get("halted") != "ledger-check":
+        if not isinstance(halted, dict) or not _halt_carries_executed_rows(base / name, halted):
             continue
         rel = halted.get("sizing_rel")
         if not isinstance(rel, str) or PurePosixPath(rel.replace("\\", "/")).as_posix() != sizing:

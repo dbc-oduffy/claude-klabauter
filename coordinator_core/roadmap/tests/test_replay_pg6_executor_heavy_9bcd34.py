@@ -66,7 +66,7 @@ def test_no_role_admits_both_remedy_names_em_and_never_test_runner(tmp_path, mon
     assert "performer: em" in cls["detail"]
     assert "9d7129" in cls["detail"]
     assert "agent_type: coordinator:test-runner" not in cls["detail"]
-    assert not cls.get("mechanical")
+    assert cls["mechanical"] is True
 
 
 def test_remedy_names_the_role_the_definitions_admit(tmp_path, monkeypatch):

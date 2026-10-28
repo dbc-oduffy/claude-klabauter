@@ -1,0 +1,108 @@
+{
+  "advisory_sites": 25,
+  "fires": 39,
+  "median_bytes": 179,
+  "sites": {
+    "agent:block-unenumerated-agent-type": {
+      "bytes": 190,
+      "fires": 1
+    },
+    "bash:block-approval-sentinel-creation": {
+      "bytes": 168,
+      "fires": 1
+    },
+    "bash:block-drive-root-new-dir-bash-write": {
+      "bytes": 145,
+      "fires": 1
+    },
+    "bash:cat-heredoc-write-advise": {
+      "bytes": 645,
+      "fires": 3
+    },
+    "bash:find-exec-rewrite": {
+      "bytes": 299,
+      "fires": 1
+    },
+    "bash:git-commit-safe-commit-advise": {
+      "bytes": 349,
+      "fires": 2
+    },
+    "bash:git-no-optional-locks": {
+      "bytes": 129,
+      "fires": 1
+    },
+    "bash:grep-via-bash-rewrite": {
+      "bytes": 185,
+      "fires": 1
+    },
+    "bash:inprocess-search": {
+      "bytes": 485,
+      "fires": 3
+    },
+    "bash:plumbing-and-loops": {
+      "bytes": 817,
+      "fires": 2
+    },
+    "bash:sed-range-read-advise": {
+      "bytes": 146,
+      "fires": 1
+    },
+    "hooks.block_ungranted_opus_subagent:check": {
+      "bytes": 350,
+      "fires": 2
+    },
+    "hooks.enforce_agent_dispatch_mode:_handler": {
+      "bytes": 154,
+      "fires": 1
+    },
+    "hooks.nudge_workflow_authoring_trampoline:_handler": {
+      "bytes": 201,
+      "fires": 1
+    },
+    "hooks.preuse_search_dispatch:_handler": {
+      "bytes": 535,
+      "fires": 5
+    },
+    "hooks.preuse_sendmessage_dispatch:_handler": {
+      "bytes": 76,
+      "fires": 1
+    },
+    "write:block_drive_root_new_dir_write": {
+      "bytes": 143,
+      "fires": 1
+    },
+    "write:block_hand_authored_handoff_creation": {
+      "bytes": 123,
+      "fires": 1
+    },
+    "write:block_sizing_object_schema_violation": {
+      "bytes": 410,
+      "fires": 1
+    },
+    "write:guard_doctrine_surface_edits": {
+      "bytes": 143,
+      "fires": 1
+    },
+    "write:nudge_new_sh_file_naked_python": {
+      "bytes": 260,
+      "fires": 2
+    },
+    "write:nudge_shell_shaped_spawn": {
+      "bytes": 283,
+      "fires": 1
+    },
+    "write:nudge_windows_subprocess_popup": {
+      "bytes": 410,
+      "fires": 1
+    },
+    "write:validate_frontmatter_schema_advisory": {
+      "bytes": 2172,
+      "fires": 3
+    },
+    "write:validate_frontmatter_schema_deny": {
+      "bytes": 228,
+      "fires": 1
+    }
+  },
+  "total_bytes": 9046
+}

@@ -137,11 +137,8 @@ docstring for the Opus/Fable persona-or-grant rule it enforces.
 COMPOSITION WITH `hand_dispatch_deny`. `check()` runs
 `hooks.hand_dispatch_deny.hand_dispatch_deny` before the roster leg: a deny is
 returned at once (no roster read), a warn-level advisory is merged onto the
-later legs' result. `hooks.unsized_writer_dispatch_deny` (a top-level executor-family or
-general-purpose dispatch in a session with no sizing or engine run) and
-`hooks.general_purpose_code_handoff_deny` (a top-level general-purpose dispatch handing over a
-code edit) run in the same slot, in that order. Both live here because
-this is the one PreToolUse(Agent) engine leg DoE already runs; no new registration is needed.
+later legs' result. The leg lives here because this is the one PreToolUse(Agent) engine leg DoE
+already runs; no new registration is needed.
 """
 
 from __future__ import annotations
@@ -1055,16 +1052,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     from coordinator_core.hooks.hand_dispatch_deny import hand_dispatch_deny
 
     scout = hand_dispatch_deny(payload, subagent_type)
-    if scout is None:
-        from coordinator_core.hooks.unsized_writer_dispatch_deny import unsized_writer_dispatch_deny
-
-        scout = unsized_writer_dispatch_deny(payload, subagent_type)
-    if scout is None:
-        from coordinator_core.hooks.general_purpose_code_handoff_deny import (
-            general_purpose_code_handoff_deny,
-        )
-
-        scout = general_purpose_code_handoff_deny(payload, subagent_type)
     if scout is None:
         return _gate_legs(payload, tool_input, subagent_type)
     if scout.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":

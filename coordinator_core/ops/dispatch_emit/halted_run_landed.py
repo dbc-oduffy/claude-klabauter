@@ -368,7 +368,9 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
 
     try:
         record_dir = ask_contract.record_dir(root, run_id)
-        withheld = sorted(halted_run.halted_withheld(record_dir))
+        withheld = sorted(halted_run.halted_withheld_strict(record_dir))
+    except halted_run.UnreadableHaltRecord as exc:
+        return f"{exc.reason}: halt marker unreadable; the run's withheld paths are unknown", {}, []
     except ValueError:
         return None, {}, []
     if not withheld:
@@ -516,7 +518,10 @@ def _record_solo(root: Path, run_id: str, shas: list, session_id: Optional[str] 
         record_dir = ask_contract.record_dir(root, run_id)
     except ValueError as exc:
         return _refuse(str(exc))
-    marker = halted_run._read(record_dir)
+    try:
+        marker = halted_run.read_strict_run(record_dir)
+    except halted_run.UnreadableHaltRecord as exc:
+        return _refuse(f"{exc.reason}: halt marker unreadable; {run_id} is not recorded landed")
     if marker is None:
         return _refuse(f"{run_id} has no sibling status or halt record; it never ran")
     status = marker.get("status")

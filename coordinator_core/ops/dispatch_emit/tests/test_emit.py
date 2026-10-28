@@ -405,7 +405,7 @@ def test_agent_model_is_escaped_not_interpolated_raw():
     assert "model: 'opus-model'" in script
 
 
-def test_row_agent_model_changing_a_pinned_type_is_refused():
+def test_row_agent_model_changing_a_pinned_type_is_dropped_for_the_pin():
     waves = [
         [
             _wave_row(
@@ -415,8 +415,12 @@ def test_row_agent_model_changing_a_pinned_type_is_refused():
             )
         ]
     ]
+    script = compose_script(waves, name="wf", description="pinned override", **REVIEW_KW)
+    assert "model: 'sonnet'" in script
+    assert "agent_model opus dropped" in script
+    bad = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"], agent_model="o p;")]]
     with pytest.raises(MalformedAgentOverrideError):
-        compose_script(waves, name="wf", description="pinned override", **REVIEW_KW)
+        compose_script(bad, name="wf", description="pinned override", **REVIEW_KW)
 
 
 def test_spine_text_agent_type_reaches_emitted_call(tmp_path):

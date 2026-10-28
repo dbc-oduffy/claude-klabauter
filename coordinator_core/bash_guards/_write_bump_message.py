@@ -200,7 +200,7 @@ import os
 from pathlib import Path, PurePath
 from typing import Any, Dict, Optional
 
-from coordinator_core.machine_profile import LEVEL_VERB as _LEVEL_VERB, apply_guard_level
+from coordinator_core.machine_profile import LEVEL_VERB as _LEVEL_VERB, apply_guard_level  # noqa: F401
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 
 #: The two POSITIVELY RESOLVED agent classes this module's contrast copy is
@@ -551,8 +551,8 @@ def render_em_message(
     message = (
         "Coordinator guard — instead: writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`) "
-        "is refused at guard level strict. `SendMessage` its live owner (none live: `cross-repo-memo`), warn "
-        f"with `{_LEVEL_VERB}`, or check `git ls-remote <remote>`."
+        "is a cross-repo write, logged as engine friction. `SendMessage` its live owner "
+        "(none live: `cross-repo-memo`), or check `git ls-remote <remote>`."
     )
     if _target_repo_is_outside_any_repo(target_repo):
         message += _OUTSIDE_REPO_SHAPE_NOT_EFFECT_CLAUSE
@@ -593,8 +593,8 @@ def render_subagent_message(
     # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
     message = (
         "Coordinator guard — instead: no PM here — report to the EM that "
-        f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
-        f"write in your sandbox `{sandbox_root}` instead. "
+        f"dispatched you what {_target_phrase(target_repo, raw_target)} (not `{session_repo}`) needs; "
+        f"your sandbox `{sandbox_root}` takes the in-repo write. "
         "Confirm state first: `git ls-remote <remote>`."
     )
     if _target_repo_is_outside_any_repo(target_repo):
@@ -781,7 +781,7 @@ def render_gem_refusal_message(target_repo: str) -> str:
     override key."""
     return (
         f"Coordinator guard — instead: Group EM git write into {_target_phrase(target_repo)} "
-        "is refused (`coordinator.feature.gem_cross_repo_commit` off). "
+        "is logged (`coordinator.feature.gem_cross_repo_commit` off). "
         "Timely: start a session in that repo (Cockpit, or headless `claude -p`) and ask its EM. "
         "Otherwise: send a cross-repo memo."
     )

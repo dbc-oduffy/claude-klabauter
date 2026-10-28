@@ -75,6 +75,19 @@ def test_known_key_does_not_warn(tmp_path, caplog):
     assert not any("does not read" in r.getMessage() for r in caplog.records)
 
 
+def test_disjoint_parallel_true_reaches_the_emitter_row_without_warning(tmp_path, caplog):
+    _plan(tmp_path, "  disjoint_parallel: true\n")
+    with caplog.at_level(logging.WARNING):
+        rows = read_spine(tmp_path / PLAN_REL)
+    assert rows[0].disjoint_parallel is True
+    assert not any("does not read" in r.getMessage() for r in caplog.records)
+
+
+def test_disjoint_parallel_absent_defaults_false(tmp_path):
+    _plan(tmp_path, "")
+    assert read_spine(tmp_path / PLAN_REL)[0].disjoint_parallel is False
+
+
 def test_exports_for_readiness_consumers():
     assert ROW_KEY_ALIASES["model"] == "agent_model"
     assert {"model", "agent_model", "effort"} <= KNOWN_ROW_KEYS

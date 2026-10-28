@@ -190,7 +190,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "check_claude_md_size": ["hard-deny", ["Write", "Edit", "MultiEdit"], 106],
 "guard_class_relay": null,
 "guard_concrete_path_citations": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 111],
-"guard_doctrine_surface_edits": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 127],
+"guard_doctrine_surface_edits": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 127],
 "guard_memory_store_cap": ["hard-deny", ["Write", "Edit", "MultiEdit"], 136],
 "guard_settings_json_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 131],
 "nudge_authoring_leak": ["advisory", ["Write", "Edit", "MultiEdit"], 226],

@@ -72,6 +72,7 @@ def part_closes(
     staged_row_ids: Optional[Collection[str]] = None,
     defer_reasons: Optional[Mapping[str, str]] = None,
     commit_paths: Optional[CommitPaths] = None,
+    ledger_met_rows: Collection[str] = (),
 ) -> Close:
     """`done` only when every part is closed; otherwise `partial` naming the open parts.
 
@@ -79,11 +80,12 @@ def part_closes(
     *plan_row_ids* missing from *staged_row_ids* (when given) with no entry in *defer_reasons* are open.
     *commit_paths* maps a commit to its file paths; when given, a part whose commit ships no tracked
     file is open. Without it the commit's content is not judged.
+    *ledger_met_rows* are row ids the passed requirements ledger judged met: closed without row evidence.
     """
     rows = list(rows)
     open_parts: list[str] = []
     for row in rows:
-        if _ruled_out(row):
+        if _ruled_out(row) or str(row.get("id", "")) in ledger_met_rows:
             continue
         part = part_from_row(row)
         closed = part.closed()
@@ -105,10 +107,23 @@ def part_closes(
     return Close(outcome=outcome, open_parts=tuple(open_parts))
 
 
-def close_from_sizing_text(sizing_text: Optional[str], **kwargs: Any) -> Close:
-    """`part_closes` over the register in *sizing_text*; no register reads as no parts (done)."""
+def ledger_met_ids(observation: Optional[str]) -> set[str]:
+    """Row ids named by a ``"ledger-met: R1, R2"`` observation; none for an absent one."""
+    head, sep, tail = (observation or "").partition(":")
+    if not sep or head.strip() != "ledger-met":
+        return set()
+    return {i.strip() for i in tail.split(",") if i.strip()}
+
+
+def close_from_sizing_text(sizing_text: Optional[str], ledger_met: Optional[str] = None, **kwargs: Any) -> Close:
+    """`part_closes` over the register in *sizing_text*; no register reads as no parts (done).
+
+    A row the *ledger_met* observation names is closed by the ledger verdict: the sizing's own row
+    status is not rewritten until after the close block is built.
+    """
     register = _rr.read_register(sizing_text) if sizing_text else None
-    return part_closes(register.rows if register is not None else [], **kwargs)
+    met = ledger_met_ids(ledger_met)
+    return part_closes(register.rows if register is not None else [], ledger_met_rows=met, **kwargs)
 
 
 def with_parts(block: Mapping[str, Any], close: Close) -> dict[str, Any]:

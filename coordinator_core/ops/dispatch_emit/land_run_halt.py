@@ -631,8 +631,10 @@ def _land(
     art_paths, art_deleted = list(extra.present), list(extra.deleted)
 
     from coordinator_core.ops.ceremony import commit_v2
+    from coordinator_core.ops.dispatch_emit import declared_hold_release
     from coordinator_core.ops.dispatch_emit.land_run import _withhold_reasons
 
+    declared_hold_release.release_absent(root, product + removed + art_paths + art_deleted, own_run_id=run_id)
     em_withheld = _withhold_reasons(root, artifacts, record_dir_rel)
     withheld.update({
         p: em_withheld[p] for p in (*product, *removed, *art_paths, *art_deleted) if p in em_withheld
@@ -661,6 +663,7 @@ def _land(
     art_deleted = [p for p in art_deleted if p not in withheld]
 
     integrity: list = []
+    claim_provenance: list = []
     targeted: Optional[dict] = None
     tfind: list = []
     tcheck = ""
@@ -691,22 +694,9 @@ def _land(
             root, live, [p for p in removed if p not in withheld])
         if run_base is not None and live:
             integrity += landing_integrity.since_base_findings(root, live, run_base, run_id=run_id, plan=plan)
+        integrity, claim_provenance = landing_integrity.split_claim_provenance(integrity)
         bad = {owner[f.path]: f.reason for f in reversed(integrity) if f.path in owner}
-        if any(f.path not in owner and f.reason == landing_integrity.IMPORT_CLOSURE_UNTRACKED for f in integrity):
-            # A detector failure names no path: fail closed over every chunk still landing.
-            for p in product + removed:
-                if p not in withheld and p in owner:
-                    bad.setdefault(owner[p], landing_integrity.IMPORT_CLOSURE_UNTRACKED)
         withheld.update({p: bad[owner[p]] for p in product + removed if p not in withheld and owner.get(p) in bad})
-        if tfind:
-            landing = {p for p in product + removed if p not in withheld}
-            landing_chunks = {owner[p] for p in landing if p in owner}
-            hit = {owner[f.path] for f in tfind if f.path in owner and owner[f.path] in landing_chunks}
-            everything = any(f.path not in owner or owner[f.path] not in landing_chunks for f in tfind)
-            withheld.update({
-                p: landing_integrity.TARGETED_TESTS_FAILED for p in landing
-                if p in owner and (everything or owner[p] in hit)
-            })
     product = [p for p in product if p not in withheld]
     removed = [p for p in removed if p not in withheld]
     unlanded_chunks = {owner[p] for p in withheld if p in owner}
@@ -732,6 +722,11 @@ def _land(
         own_differ, own_gone = _differs(root, written_entries, run_written)
         own_changed = own_differ | own_gone
     _withhold_run_dirt(withheld, run_written, own_changed, set(paths) | set(deleted))
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import plan_tree_eviction
+
+    eviction = plan_tree_eviction(
+        root, record_dir_rel, run_written, own_changed, [*run_written, *owner, *declared], withheld, paths, run_id,
+    )
 
     if not paths and not deleted:
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
@@ -757,8 +752,19 @@ def _land(
     from coordinator_core.ops.dispatch_emit.halted_record_commit import _record_kept
 
     kept_reply = _record_kept(
-        root, record_dir_rel, owner, withheld, halted, paths, params.get(CONSUMED_RETURNS_PARAM)
+        root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
+        halted, paths, params.get(CONSUMED_RETURNS_PARAM),
     )
+    if eviction is not None:
+        try:
+            eviction.apply()
+        except OSError as exc:
+            return _error(f"evicting unimportable run bytes failed: {exc}", **base)
+        kept_reply = {
+            **kept_reply,
+            "evicted": eviction.evicted,
+            **({"unimportable_unowned": eviction.unowned} if eviction.unowned else {}),
+        }
     left = dispatch_abandon.remaining()
     if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:
         return _error(
@@ -800,4 +806,8 @@ def _land(
         out["targeted_tests"] = targeted
     if integrity:
         out["integrity"] = [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in integrity]
+    if tfind:
+        out["advisory"] = landing_integrity.provenance_entries(tfind)
+    if claim_provenance:
+        out["provenance"] = landing_integrity.provenance_entries(claim_provenance)
     return {**out, "paths": paths + deleted, **base}

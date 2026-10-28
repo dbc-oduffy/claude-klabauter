@@ -8,7 +8,6 @@ from coordinator_core import machine_profile
 from coordinator_core.bash_guards import (
     block_drive_root_new_dir_bash_write as drive_root,
     block_external_workspace_vcs_write as external,
-    block_hand_authored_handoff_creation as handoff,
     block_home_root_bash_write as home_root,
     block_push_pr_non_owned_remote as push_pr,
     block_topic_branch as topic,
@@ -22,7 +21,6 @@ from coordinator_core.guard_messages.alternative_record import (
     Override,
 )
 from coordinator_core.guard_messages.render import render
-from coordinator_core.write_guards import block_hand_authored_handoff_creation as handoff_twin
 
 
 def _text(envelope: dict) -> str:
@@ -35,30 +33,6 @@ def _has_override(record: AlternativeRecord) -> bool:
 
 def _has_route(record: AlternativeRecord) -> bool:
     return any(isinstance(m, EscalationRoute) for m in record.members)
-
-
-def test_handoff_bash_twin_builds_a_record_from_the_write_twins_reason(tmp_path):
-    out = handoff.check(
-        {
-            "tool_name": "Bash",
-            "tool_input": {"command": "echo x > state/handoffs/new.md"},
-            "cwd": str(tmp_path),
-        }
-    )
-    assert isinstance(out, AlternativeRecord)
-    first_line = handoff_twin.DENY_REASON.splitlines()[0]
-    assert out.summary == first_line
-    em = _text(render(out, Audience.EM, override_note="NOTE"))
-    assert "coordinator-doc-new --type handoff" in em
-    assert em == _text(handoff_twin.deny_envelope({"tool_name": "Bash"}))
-
-
-def test_handoff_subagent_render_drops_the_override_and_keeps_a_route(tmp_path):
-    record = handoff._deny_record({"tool_name": "Bash"})
-    assert _has_override(record) and _has_route(record)
-    sub = _text(render(record, Audience.SUBAGENT, override_note="NOTE"))
-    assert "NOTE" not in sub and handoff_twin.OVERRIDE_ENV_VAR not in sub
-    assert "Report" in sub
 
 
 def test_topic_branch_override_is_a_member_not_prose():

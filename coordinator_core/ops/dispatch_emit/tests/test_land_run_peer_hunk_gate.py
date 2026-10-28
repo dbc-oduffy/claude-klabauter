@@ -9,9 +9,17 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import repo  # noqa: F401
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
+_prod_land = prod._land
+
+
+def _land(root, **extra) -> dict:
+    return _prod_land(root, **{"inline_review": reviewed(), **extra})
 
 PATH = "pkg/execute_review.py"
 SIBLING = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-7cc61e"
@@ -32,12 +40,16 @@ def _sibling_via_plan_spine(root, withheld: dict | None = None) -> None:
     )
 
 
+def _prov(out: dict, reason: str) -> list:
+    return [e for e in out.get("provenance") or [] if e["reason"] == reason]
+
+
 def _land_dirty(root) -> tuple:
     prod._author(root, PATH, "x = 1\n")
     prod._declare(root, PATH)
     prod._record_dir(root)
     head = prod._git(["rev-parse", "HEAD"], root).strip()
-    return prod._land(root), head
+    return _land(root), head
 
 
 def test_halted_sibling_declaring_the_path_only_in_its_plan_spine_and_withholding_nothing_lands(repo):
@@ -105,7 +117,7 @@ def _land_with_own_sizing(root, sizing: str) -> dict:
     prod._record_dir(root)
     run_json = root / "state" / "warp" / prod.RUN / "run.json"
     run_json.write_text(json.dumps({"run_id": prod.RUN, "sizing_rel": sizing}), encoding="utf-8")
-    return prod._land(root)
+    return _land(root)
 
 
 def test_halted_peer_with_superseded_sizing_lands(repo):
@@ -117,7 +129,7 @@ def test_halted_peer_with_superseded_sizing_lands(repo):
     assert out["committed"] is True, out
 
 
-def test_halted_peer_on_the_same_sizing_successor_lands_and_a_different_one_refuses(repo):
+def test_halted_peer_on_another_sizing_that_withheld_nothing_lands(repo):
     """The halted peer's manifest carries a write_baseline for PATH, as in
     state/warp/ask-20261024T044300-6137b0/manifest.json, so it holds PATH until a successor lands it."""
     _sizing(repo, SIZING)
@@ -125,14 +137,9 @@ def test_halted_peer_on_the_same_sizing_successor_lands_and_a_different_one_refu
     holder = _aged(60, "aaaaaa")
     _holder(repo, holder, "halted")
 
-    refused = _land_with_own_sizing(repo, OWN_SIZING)
-    assert refused.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, refused
-    assert f"Release run {holder}" in str(refused), refused
-    assert "sizing.supersede" in str(refused), refused
-    assert "dispatch.record_halted_run_landed" in str(refused), refused
-
-    out = _land_with_own_sizing(repo, SIZING)
+    out = _land_with_own_sizing(repo, OWN_SIZING)
     assert out["committed"] is True, out
+    assert out.get("refused") is None, out
 
 
 def test_plan_landing_lands_past_the_halted_peer_and_marks_it_landed(repo):
@@ -167,7 +174,7 @@ def test_plan_landing_in_two_commits_under_two_runs_releases_each_path_and_leave
     prod._author(repo, PATH, "x = 1\n")
     prod._declare(repo, PATH)
     prod._record_dir(repo)
-    first = prod._land(repo)
+    first = _land(repo)
     assert first["committed"] is True, first
     assert json.loads((rdir / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
@@ -176,41 +183,37 @@ def test_plan_landing_in_two_commits_under_two_runs_releases_each_path_and_leave
     prod._declare(repo, path2)
     prod._write(repo, f"{prod.RECORD_DIR_ROOT}/{other}/run.json", json.dumps({"run_id": other}))
     prod._write(repo, f"{prod.RECORD_DIR_ROOT}/{other}/ask.md", "ask\n")
-    second = prod._land(repo, run_id=other)
+    second = _land(repo, run_id=other)
     assert second.get("refused") is None, second
     assert second["committed"] is True, second
 
     assert json.loads((rdir / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
 
-def test_halted_peer_on_a_different_plan_holds_and_is_not_marked_landed(repo):
+def test_halted_peer_on_a_different_plan_is_provenance_and_is_not_marked_landed(repo):
     _sizing(repo, SIZING)
     # a halted peer holds only what it withheld or left dirty
     rdir = _holder(repo, _aged(60, "aaaaaa"), "halted", plan="docs/plans/other.md", withheld={PATH: "peer-held"})
 
     out, _head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    assert out["committed"] is True, out
+    assert _prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED), out
     assert json.loads((rdir / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
 
-def test_resumed_peer_with_a_landed_successor_does_not_block_but_an_unlanded_one_does(repo):
+def test_resumed_peer_with_an_unlanded_successor_lands_and_is_provenance(repo):
     _sizing(repo, SIZING)
     first, second = _aged(400, "aaaaaa"), _aged(200, "bbbbbb")
     _holder(repo, first, "resumed", token=True, manifest=False)
     _holder(repo, second, "halted", manifest=False, withheld={PATH: "peer-held"})
 
     held, _head = _land_dirty(repo)
-    assert held.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, held
-
-    (repo / "state" / "warp" / second / "halted.json").write_text(
-        json.dumps({"status": "landed", "sizing_rel": SIZING}), encoding="utf-8"
-    )
-    out = prod._land(repo)
-    assert out["committed"] is True, out
+    assert held["committed"] is True, held
+    assert second in str(_prov(held, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), held
 
 
-def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_still_refuses(repo):
+def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_lands(repo):
     """The 6137b0 shape (state/warp/ask-20261024T044300-6137b0/manifest.json): the manifest declares PATH
     with a write_baseline fingerprint the tree no longer matches, the halt record withheld nothing, PATH is dirty."""
     _sizing(repo, SIZING)
@@ -219,9 +222,8 @@ def test_halted_peer_whose_halt_record_omits_a_declared_dirty_path_still_refuses
 
     out, head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert holder in str(out), out
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    assert out["committed"] is True, out
+    assert PATH in prod._tree(repo)
     assert json.loads((rdir / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
 
@@ -244,19 +246,18 @@ def test_halted_peer_declaring_the_path_in_its_manifest_but_leaving_it_clean_cla
     assert sibling_claims.sibling_run_claims(repo, prod.RUN, [PATH]) == {}
 
 
-def test_live_peer_unlanded_still_refuses_even_on_a_superseded_sizing(repo):
+def test_live_peer_unlanded_on_a_superseded_sizing_lands_with_provenance(repo):
     _sizing(repo, SIZING, "superseded")
     live = _aged(60, "cccccc")
     _holder(repo, live, None, token=True, manifest=False)
 
-    out, head = _land_dirty(repo)
+    out, _head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert live in str(out), out
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    assert out["committed"] is True, out
+    assert live in str(_prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), out
 
 
-def test_two_live_holders_on_two_declared_paths_are_both_named_in_the_error(repo):
+def test_two_live_holders_on_two_declared_paths_are_both_named_in_the_provenance(repo):
     from coordinator_core.ops.dispatch_emit import run_token
 
     path2 = "pkg/other.py"
@@ -277,35 +278,76 @@ def test_two_live_holders_on_two_declared_paths_are_both_named_in_the_error(repo
     prod._declare(repo, PATH, path2)
     prod._record_dir(repo)
 
-    out = prod._land(repo)
+    out = _land(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    assert out["committed"] is True, out
+    text = str(_prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED))
     for needle in (*holders, *holders.values()):
-        assert needle in out["error"], out["error"]
+        assert needle in text, text
 
 
-def test_path_a_halted_sibling_declares_only_in_its_plan_spine_refuses_naming_it(repo):
+def test_path_a_halted_sibling_declares_only_in_its_plan_spine_lands_naming_it_in_provenance(repo):
     _sibling_via_plan_spine(repo, withheld={PATH: "peer-held"})
 
-    out, head = _land_dirty(repo)
+    out, _head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert SIBLING in str(out), out
-    assert out.get("committed") is not True
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
-    assert (repo / PATH).read_text(encoding="utf-8") == "x = 1\n"
+    assert out["committed"] is True, out
+    assert SIBLING in str(_prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), out
+    assert PATH not in prod._tree(repo)
 
 
-def test_halted_sibling_whose_halt_record_withholds_the_path_refuses_naming_it(repo):
+def test_halted_sibling_whose_halt_record_withholds_the_path_lands_naming_it_in_provenance(repo):
     _sibling_via_plan_spine(repo, withheld={PATH: "peer-held"})
 
-    out, head = _land_dirty(repo)
+    out, _head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert SIBLING in str(out), out
-    assert out.get("committed") is not True
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
-    assert (repo / PATH).read_text(encoding="utf-8") == "x = 1\n"
+    assert out["committed"] is True, out
+    assert SIBLING in str(_prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), out
+    assert PATH not in prod._tree(repo)
+
+
+def test_an_unbacked_shipped_claim_lands_and_is_recorded_as_provenance(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import shipped_claims
+
+    summary = {"unbacked": [{"path": PATH}]}
+    monkeypatch.setattr(
+        shipped_claims, "shipped_gate",
+        lambda *a, **k: (f"{shipped_claims.SHIPPED_CLAIM_REFUSED}: {PATH} claimed shipped, not landing", summary),
+    )
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import (
+        ASK_MANIFEST_MARKER, RECORD_DIR_ROOT, RUN_DIR_ROOT, StageManifest,
+    )
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+
+    prod._author(repo, PATH, "x = 1\n")
+    marker = f"{RUN_DIR_ROOT}/{prod.RUN}/commit-request.txt"
+    request = CommitRequest(chunks=(ChunkCommit(id="X1", title="x1", paths=(PATH,)),), plan_path=None)
+    prod._write(repo, marker, render_marker(request) + "\n")
+    manifest = StageManifest(run_dir=f"{RUN_DIR_ROOT}/{prod.RUN}", rows=(), review_declared_paths=(), marker_path=marker)
+    prod._write(repo, f"{RECORD_DIR_ROOT}/{prod.RUN}/manifest.json", json.dumps(manifest.to_json()))
+    prod._declare(repo, PATH)
+    prod._write(repo, prod.SCRIPT, f"{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/{prod.RUN}/manifest.json\n")
+
+    out = _land(repo)
+
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert [e["reason"] for e in out["provenance"]] == [shipped_claims.SHIPPED_CLAIM_REFUSED], out
+    assert out["shipped_claims"] == summary
+    assert PATH in prod._tree(repo)
+
+
+def test_a_destructive_or_secret_reason_still_refuses_through_the_same_split():
+    from coordinator_core.ops.dispatch_emit import landing_integrity as li
+
+    secret = li.Finding("a.py", "secret-in-diff", "token")
+    claim = li.Finding("b.py", peer_hunk_gate.PEER_HUNKS_CO_DECLARED, "peer")
+
+    refusing, provenance = li.split_claim_provenance([secret, claim])
+
+    assert refusing == [secret]
+    assert provenance == [claim]
 
 
 def test_same_path_with_the_sibling_gone_lands(repo):
@@ -315,7 +357,7 @@ def test_same_path_with_the_sibling_gone_lands(repo):
     assert PATH in prod._tree(repo)
 
 
-def test_unresolved_out_of_ask_finding_on_the_path_refuses(repo):
+def test_unresolved_out_of_ask_finding_on_the_path_lands_with_provenance(repo):
     share = repo / ".coordinator-local" / "subagent-share" / prod.SELF
     share.mkdir(parents=True)
     (share / f"{prod.RUN}.review-wave-bookkeeping.md").write_text(
@@ -333,10 +375,8 @@ def test_unresolved_out_of_ask_finding_on_the_path_refuses(repo):
 
     out, head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.OUT_OF_ASK_HUNKS, out
-    assert "rev-1" in str(out), out
-    assert out.get("committed") is not True
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    assert out["committed"] is True, out
+    assert "rev-1" in str(_prov(out, peer_hunk_gate.OUT_OF_ASK_HUNKS)), out
 
 
 def _halted_manifest_sibling(root, *, wrote: bool = True, baseline=LIVE_BASELINE) -> None:
@@ -363,15 +403,101 @@ def test_halted_peer_with_no_blob_and_no_baseline_claims_nothing_on_a_dirty_decl
 HELD = "pkg/held.py"
 
 
-def test_halted_peer_with_no_landing_commit_still_refuses_and_the_remedy_names_sizing_path(repo):
+def test_halted_peer_with_no_landing_commit_lands_and_stays_unreleased(repo):
     _sizing(repo, SIZING)
     holder = _aged(60, "aaaaaa")
     rdir = _holder(repo, holder, "halted", plan="docs/plans/other.md", withheld={HELD: "peer-held"})
 
     out, head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert holder in str(out), out
-    assert "sizing_path" in str(out), out
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    assert out["committed"] is True, out
+    assert PATH in prod._tree(repo)
     assert "released" not in json.loads((rdir / "halted.json").read_text(encoding="utf-8"))
+
+
+DELIVERY = "docs/delivery/shared.md"
+
+
+def _blob(root, text: str) -> str:
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    return subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=str(root), input=text, capture_output=True, text=True,
+        check=True, **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def test_a_sibling_appending_to_a_per_run_artifact_does_not_block_the_landing(repo, monkeypatch):
+    """Both runs append to docs/delivery/shared.md; this run lands only its own lines. The hold itself is
+    stubbed (the claim readers are covered by test_peer_hunk_gate); settle and the blob commit are real."""
+    monkeypatch.setattr(
+        peer_hunk_gate, "co_declared_peer_holds", lambda root, run, paths, *a, **k: [(DELIVERY, SIBLING)],
+    )
+    prod._write(repo, DELIVERY, "head\n")
+    prod._git(["add", "."], repo)
+    prod._git(["commit", "-q", "-m", "delivery"], repo)
+    mine = "mine1\nmine2\n"
+    theirs = "theirs1\n"
+    prod._write(repo, f"state/warp/{prod.RUN}/manifest.json", json.dumps({
+        "rows": [{"id": "C1", "writes": [DELIVERY]}], "write_baseline": {DELIVERY: _blob(repo, "head\n")},
+    }))
+    prod._write(repo, f"state/warp/{SIBLING}/manifest.json", json.dumps({
+        "rows": [{"id": "C1", "writes": [DELIVERY]}],
+        "write_baseline": {DELIVERY: _blob(repo, "head\n" + mine)},
+    }))
+    prod._author(repo, DELIVERY, "head\n" + mine + theirs)
+    prod._declare(repo, DELIVERY)
+    prod._record_dir(repo)
+
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    spawns = {"n": 0}
+    real_run, real_popen = subprocess.run, subprocess.Popen
+    real_settle, real_blob = co_declared_settle.settle, co_declared_settle.settled_blob
+
+    def _counted(fn):
+        def inner(*a, **k):
+            def run(*ra, **rk):
+                spawns["n"] += 1
+                return real_run(*ra, **rk)
+
+            def popen(*pa, **pk):
+                spawns["n"] += 1
+                return real_popen(*pa, **pk)
+
+            monkeypatch.setattr(subprocess, "run", run)
+            monkeypatch.setattr(subprocess, "Popen", popen)
+            try:
+                return fn(*a, **k)
+            finally:
+                monkeypatch.setattr(subprocess, "run", real_run)
+                monkeypatch.setattr(subprocess, "Popen", real_popen)
+        return inner
+
+    monkeypatch.setattr(co_declared_settle, "settle", _counted(real_settle))
+    monkeypatch.setattr(co_declared_settle, "settled_blob", _counted(real_blob))
+
+    out = _land(repo)
+
+    assert spawns["n"] == 0, "settle and the own-hunk blob are in-process: no git spawn"
+    assert out.get("committed") is True, out
+    assert prod._git(["show", "HEAD:" + DELIVERY], repo) == "head\n" + mine
+    assert (repo / DELIVERY).read_text(encoding="utf-8") == "head\n" + mine + theirs
+
+
+def test_a_non_artifact_path_the_sibling_holds_with_no_same_parent_record_lands_with_provenance(repo, monkeypatch):
+    monkeypatch.setattr(
+        peer_hunk_gate, "co_declared_peer_holds", lambda root, run, paths, *a, **k: [("docs/other.md", SIBLING)],
+    )
+
+    prod._author(repo, "docs/other.md", "x\n")
+    prod._declare(repo, "docs/other.md")
+    prod._record_dir(repo)
+    out = _land(repo)
+
+    assert out["committed"] is True, out
+    assert [e["path"] for e in _prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)] == ["docs/other.md"], out

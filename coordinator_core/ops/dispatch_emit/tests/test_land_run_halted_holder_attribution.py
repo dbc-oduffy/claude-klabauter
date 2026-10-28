@@ -1,4 +1,4 @@
-"""dispatch.land_run: a halted holder with no hunks in a declared path releases it; one with hunks refuses the landing."""
+"""dispatch.land_run: a halted holder with no hunks in a declared path claims nothing; one with hunks is recorded as provenance and the landing commits."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_peer_hunk_gate import (
     PATH,
     SIZING,
@@ -111,7 +112,7 @@ def _count_landing(monkeypatch, root: Path, **kw) -> tuple:
     count = _spawns(monkeypatch)
     holder_id = _landing(root, **kw)
     count["n"] = 0
-    out = prod._land(root)
+    out = prod._land(root, inline_review=reviewed())
     return out, count["n"], holder_id
 
 
@@ -129,21 +130,25 @@ def test_halted_holder_with_no_hunks_in_the_path_lands(repo, monkeypatch, tmp_pa
     assert n == control_n + STATUS_READ
 
 
-def test_halted_holder_with_hunks_in_the_path_refuses_the_landing(repo, monkeypatch, tmp_path):
+def _prov(out: dict, reason: str) -> list:
+    return [e for e in out.get("provenance") or [] if e["reason"] == reason]
+
+
+def test_halted_holder_with_hunks_in_the_path_is_recorded_as_provenance_and_the_landing_commits(repo, monkeypatch, tmp_path):
     out, n, holder = _count_landing(monkeypatch, repo, b_landing=_sha(B1), holder="aaaaaa", b_holder=B0)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert out.get("committed") is not True
-    assert holder in str(out), out
-    assert prod._message(repo).strip() == "base"
-    assert (repo / PATH).read_text(encoding="utf-8") == B2
+    assert out.get("refused") is None, out
+    assert out.get("committed") is True, out
+    assert holder in str(_prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), out
     assert json.loads((repo / "state" / "warp" / holder / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
     _, none_n, _ = _count_landing(monkeypatch, _fresh(tmp_path / "control"), b_landing=_sha(B1), holder=None, b_holder=B0)
     live_out, live_n, _ = _count_landing(
         monkeypatch, _fresh(tmp_path / "live"), b_landing=_sha(B1), holder="cccccc", b_holder=B0, live=True
     )
-    assert live_out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, live_out
+    assert live_out.get("refused") is None, live_out
+    assert live_out.get("committed") is True, live_out
+    assert "cccccc" in str(_prov(live_out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), live_out
     assert n == none_n + STATUS_READ
     assert n <= live_n + STATUS_READ
 
@@ -175,5 +180,7 @@ def test_unstarted_dependent_holds_nothing_where_it_wrote_nothing_and_holds_wher
         monkeypatch, _fresh(tmp_path / "ran"), b_landing=_sha(B1), holder="595ecd", b_holder=B0,
         halted="dependents_unstarted",
     )
-    assert ran.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, ran
-    assert holder in str(ran), ran
+    assert ran.get("refused") is None, ran
+    assert ran.get("committed") is True, ran
+    assert holder in str(_prov(ran, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), ran
+    assert not _prov(never_ran, peer_hunk_gate.PEER_HUNKS_CO_DECLARED), never_ran

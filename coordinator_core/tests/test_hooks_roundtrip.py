@@ -221,44 +221,61 @@ def test_foreground_dispatch_background_true_passes() -> None:
     )) == {}
 
 
-def test_foreground_dispatch_background_false_without_tool_input_denies() -> None:
-    """present-and-false + no forwardable tool_input → deny fallback (D8).
+def _calibrated(sid: str) -> str:
+    """Mark sid as bg-capable in-process so an absent-key dispatch is acted on."""
+    import coordinator_core.hooks.nudge_foreground_agent_dispatch as mod
+    mod._BG_CAPABLE_SESSIONS.add(sid)
+    return sid
+
+
+def test_foreground_dispatch_explicit_false_passes() -> None:
+    """present-and-false is the caller's choice (blocking ceremony step) → silent pass,
+    with or without tool_input, and calibration is still recorded."""
+    from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
+    for ti in (None, {}, {"prompt": "go", "run_in_background": False}):
+        params = {"tool_name": "Agent", "run_in_background": "false", "session_id": "test-explicit-false-01"}
+        if ti is not None:
+            params["tool_input"] = ti
+        assert _run(_handler(params)) == {}
+
+
+def test_foreground_dispatch_background_false_without_tool_input_advises() -> None:
+    """present-and-false + no forwardable tool_input → advisory fallback (D8, DR-475).
 
     Nothing to rewrite means no correct call to emit, so the gate degrades to the
     historical bounce-back rather than passing the foreground dispatch through.
     """
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
     result = _run(_handler(
-        {"tool_name": "Agent", "run_in_background": "false", "session_id": ""}
+        {"tool_name": "Agent", "session_id": _calibrated("test-deny-no-ti-01")}
     ))
-    _assert_deny(result, "PreToolUse")
-    assert "run_in_background: true" in _hso(result)["permissionDecisionReason"]
+    _assert_allow_advisory(result, "PreToolUse")
+    assert "run_in_background: true" in _hso(result)["additionalContext"]
 
 
-def test_foreground_dispatch_empty_tool_input_denies() -> None:
+def test_foreground_dispatch_empty_tool_input_advises() -> None:
     """An EMPTY tool_input dict is not a rewrite target — it would erase the real args."""
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
     result = _run(_handler(
-        {"tool_name": "Agent", "run_in_background": "false", "session_id": "", "tool_input": {}}
+        {"tool_name": "Agent", "session_id": _calibrated("test-deny-empty-ti-01"), "tool_input": {}}
     ))
-    _assert_deny(result, "PreToolUse")
+    _assert_allow_advisory(result, "PreToolUse")
 
 
 # non-empty tool_input missing `prompt` is not a safe
 # rewrite target (updatedInput REPLACES the whole argument object); must fall back to deny
 # rather than dispatch a subagent with no instructions.
-def test_foreground_dispatch_tool_input_missing_prompt_denies() -> None:
-    """Non-empty tool_input lacking `prompt` → deny fallback, not a corrupted rewrite."""
+def test_foreground_dispatch_tool_input_missing_prompt_advises() -> None:
+    """Non-empty tool_input lacking `prompt` → advisory fallback, not a corrupted rewrite."""
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
     result = _run(_handler(
         {
             "tool_name": "Agent",
-            "run_in_background": "false",
-            "session_id": "",
+            "session_id": _calibrated("test-deny-no-prompt-01"),
             "tool_input": {"description": "no prompt here", "subagent_type": "coordinator:enricher"},
         }
     ))
-    _assert_deny(result, "PreToolUse")
+    _assert_allow_advisory(result, "PreToolUse")
 
 
 def test_foreground_dispatch_reroutes_to_background() -> None:
@@ -266,13 +283,11 @@ def test_foreground_dispatch_reroutes_to_background() -> None:
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
     result = _run(_handler({
         "tool_name": "Agent",
-        "run_in_background": "false",
-        "session_id": "",
+        "session_id": _calibrated("test-reroute-bg-01"),
         "tool_input": {
             "description": "check prior art",
             "prompt": "go",
             "subagent_type": "coordinator:prior-art-checker",
-            "run_in_background": False,
         },
     }))
     hso = _hso(result)
@@ -300,8 +315,7 @@ def test_foreground_reroute_notice_fires_on_every_reroute(tmp_path) -> None:
     sid = "test-reroute-notice-every-01"
     params = {
         "tool_name": "Agent",
-        "run_in_background": "false",
-        "session_id": sid,
+        "session_id": _calibrated(sid),
         "tool_input": {"prompt": "go"},
     }
 
@@ -376,9 +390,7 @@ def test_present_and_false_calibrates_for_later_absent_call(tmp_path) -> None:
          "tool_input": {"prompt": "go"}},
         repo_root=str(git_root),
     ))
-    assert _hso(result1)["updatedInput"]["run_in_background"] is True, (
-        "present-and-false must reroute"
-    )
+    assert result1 == {}, "present-and-false passes (explicit choice honoured)"
     assert (git_root / "coordinator-sessions" / sid / ".harness-bg-capable").exists(), (
         "presence (even false) must write the durable calibration marker"
     )
@@ -439,7 +451,7 @@ def test_foreground_dispatch_absent_uncalibrated_passes() -> None:
     assert result == {}
 
 
-def test_foreground_dispatch_absent_calibrated_deny() -> None:
+def test_foreground_dispatch_absent_calibrated_advises() -> None:
     """run_in_background absent + session previously calibrated (in-memory) → deny.
 
     Simulates the sequence: first call has run_in_background="true" (calibrates the
@@ -466,12 +478,12 @@ def test_foreground_dispatch_absent_calibrated_deny() -> None:
         result2 = _run(_handler(
             {"tool_name": "Agent", "session_id": calibrated_sid}
         ))
-    _assert_deny(result2, "PreToolUse")
+    _assert_allow_advisory(result2, "PreToolUse")
 
     mod._BG_CAPABLE_SESSIONS.discard(calibrated_sid)
 
 
-def test_foreground_deny_message_carries_no_unlock_mechanism() -> None:
+def test_foreground_advisory_carries_no_unlock_mechanism() -> None:
     """docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md AC-2/AC-3.
 
     A subagent-audience deny (no `agent_id`/backpointer resolvable to a real EM) must
@@ -483,13 +495,12 @@ def test_foreground_deny_message_carries_no_unlock_mechanism() -> None:
     result = _run(_handler(
         {
             "tool_name": "Agent",
-            "run_in_background": "false",
-            "session_id": sid,
+            "session_id": _calibrated(sid),
             "agent_id": "subagent-abc123",
         }
     ))
-    _assert_deny(result, "PreToolUse")
-    _assert_no_unlock_mechanism(_hso(result)["permissionDecisionReason"], sid)
+    _assert_allow_advisory(result, "PreToolUse")
+    _assert_no_unlock_mechanism(_hso(result)["additionalContext"], sid)
 
 
 def test_foreground_reroute_notice_carries_no_unlock_mechanism() -> None:
@@ -502,8 +513,7 @@ def test_foreground_reroute_notice_carries_no_unlock_mechanism() -> None:
     sid = "test-no-unlock-reroute-01"
     result = _run(_handler({
         "tool_name": "Agent",
-        "run_in_background": "false",
-        "session_id": sid,
+        "session_id": _calibrated(sid),
         "tool_input": {"prompt": "go"},
         "agent_id": "subagent-abc123",
     }))

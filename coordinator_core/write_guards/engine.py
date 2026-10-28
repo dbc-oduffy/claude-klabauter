@@ -54,17 +54,41 @@ import pkgutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from coordinator_core.session.guard_unlock_sentinel import (
-    annotate_deny as _annotate_unlock,
-    consume as _consume_unlock,
-)
-from coordinator_core.bash_guards._helpers import (
-    resolve_override_keys_doc_display as _override_keys_doc_display,
-)
-from coordinator_core.guard_advisory_counter import (
-    record_advisory_fire as _record_advisory_fire,
-    record_deny_fire as _record_deny_fire,
-)
+
+# The deny/advisory bookkeeping dependencies pull tempfile, subprocess and threading
+# transitively; they load on first fire, not at import (import-budget ceiling).
+# Module-level names stay patchable seams.
+
+
+def _annotate_unlock(*args: Any, **kwargs: Any) -> Any:
+    from coordinator_core.session.guard_unlock_sentinel import annotate_deny
+
+    return annotate_deny(*args, **kwargs)
+
+
+def _consume_unlock(*args: Any, **kwargs: Any) -> Any:
+    from coordinator_core.session.guard_unlock_sentinel import consume
+
+    return consume(*args, **kwargs)
+
+
+def _override_keys_doc_display(*args: Any, **kwargs: Any) -> Any:
+    from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
+
+    return resolve_override_keys_doc_display(*args, **kwargs)
+
+
+def _record_advisory_fire(*args: Any, **kwargs: Any) -> Any:
+    from coordinator_core.guard_advisory_counter import record_advisory_fire
+
+    return record_advisory_fire(*args, **kwargs)
+
+
+def _record_deny_fire(*args: Any, **kwargs: Any) -> Any:
+    from coordinator_core.guard_advisory_counter import record_deny_fire
+
+    return record_deny_fire(*args, **kwargs)
+
 
 _PKG_NAME = __name__.rsplit(".", 1)[0]  # "coordinator_core.write_guards"
 _PKG_DIR = str(Path(__file__).resolve().parent)

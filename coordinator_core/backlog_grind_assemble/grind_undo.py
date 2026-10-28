@@ -110,9 +110,14 @@ def cmd_undo(rest: list[str]) -> int:
         if p in baseline:
             left[p] = "baseline"
     todo = [p for p in rels if p not in left]
-    for p, run_id in kept_work.held_paths(real_root, todo).items():
-        left[p] = f"kept-work-held:{run_id}"
-    todo = [p for p in todo if p not in left]
+    held = kept_work.held_paths(real_root, todo)
+    if held:
+        for p, run_id in held.items():
+            left[p] = f"kept-work-held:{run_id}"
+        row_hold = ",".join(sorted(set(held.values())))
+        for p in todo:
+            left.setdefault(p, f"row-held:{row_hold}")
+        return _report([], [], left)
 
     root_str = str(real_root)
     sid = core.resolve_session_id(root_str)

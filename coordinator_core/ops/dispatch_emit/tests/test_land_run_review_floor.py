@@ -137,16 +137,13 @@ def _message(root: Path) -> str:
     return _git(root, "log", "-1", "--format=%B", "HEAD")
 
 
-def test_a_code_run_with_an_empty_wave_is_refused_and_commits_nothing(repo):
+def test_a_code_run_with_an_empty_wave_lands_and_records_the_floor_note(repo):
     token = _stage(repo, CODE)
-    head = _git(repo, "rev-parse", "HEAD")
 
     out = _land(repo, token, CODE, verdicts=0)
 
-    assert out["committed"] is False and out["refused"] == "review-floor", out
-    assert out["code_paths"] == [CODE]
-    assert "review: 0 verdicts" in out["error"]
-    assert _git(repo, "rev-parse", "HEAD") == head
+    assert out.get("committed") is True and out.get("refused") is None, out
+    assert "Review-Floor-Note: review: 0 verdicts on a code-editing run" in _message(repo)
 
 
 def test_a_docs_only_run_with_an_empty_wave_lands_with_a_zero_receipt(repo):
@@ -167,15 +164,13 @@ def test_a_code_run_with_one_verdict_lands_with_a_one_verdict_receipt(repo):
     assert "Ledger-Receipt: review: 1 verdicts" in _message(repo)
 
 
-def test_a_verdict_without_an_existing_sidecar_file_refuses_review_floor(repo):
+def test_a_verdict_without_an_existing_sidecar_file_lands_with_the_floor_note(repo):
     token = _stage(repo, CODE)
-    head = _git(repo, "rev-parse", "HEAD")
 
     out = _land(repo, token, CODE, verdicts=1, with_sidecar=False)
 
-    assert out["committed"] is False and out["refused"] == "review-floor", out
-    assert "review: 0 verdicts" in out["error"]
-    assert _git(repo, "rev-parse", "HEAD") == head
+    assert out.get("committed") is True, out
+    assert "Review-Floor-Note: review: 0 verdicts" in _message(repo)
 
 
 def test_a_repo_relative_sidecar_is_counted_from_an_unrelated_cwd(repo, tmp_path, monkeypatch):
@@ -204,28 +199,22 @@ def test_a_declared_code_run_whose_disk_prep_reports_no_product_file_lands(repo,
     assert out.get("refused") != "review-floor", out
 
 
-def test_a_relayed_zero_product_prep_does_not_exempt_a_code_run(repo, monkeypatch):
-    token = _stage(repo, CODE)
+def test_a_relayed_zero_product_prep_does_not_exempt_a_code_run_from_the_note():
+    from coordinator_core.ops.dispatch_emit import review_floor
 
-    def _relay_only(root, session_id, run_id, request, inline_review):
-        inline_review["prep"] = {"run_base_sha": None, "product_files": 0, "foreign_claims": [], "slice_files": []}
-        return {}, None, False
-
-    monkeypatch.setattr(land_run, "_reconcile_prep", _relay_only)
-
-    out = _land(repo, token, CODE, verdicts=0)
-
-    assert out["committed"] is False and out["refused"] == "review-floor", out
+    request = CommitRequest(chunks=(ChunkCommit(id="X1", title="t", paths=(CODE,)),), deliverable_id=DLV, plan_path=PLAN)
+    review = {"prep": {"product_files": 0}, "wave_reviews": []}
+    assert review_floor.floor_code_paths(request, review, False) == [CODE]
+    assert review_floor.floor_code_paths(request, review, True) == []
 
 
-def test_the_ledger_gate_fails_a_met_item_on_a_code_run_with_no_verdict(repo):
+def test_the_ledger_gate_passes_a_met_item_on_a_code_run_with_no_verdict(repo):
     _stage(repo, CODE)
     run_dir = record_dir(repo, RUN)
-    refused = land_run._ledger_gate(
+    unreviewed = land_run._ledger_gate(
         repo, run_dir, VERDICT, None, (), {}, None, {"wave_reviews": []}, None, None, code_paths=[CODE],
     )[0]
-    assert refused is not None and refused["refused"] == "ledger-unmet"
-    assert "review: 0 verdicts" in refused["error"]
+    assert unreviewed is None
     _write(repo, "scratch/reviews/gate.md", "verdict: APPROVED\n")
     wave = {"wave_reviews": [{"verdict": "APPROVED", "sidecar_path": "scratch/reviews/gate.md"}]}
     ok = land_run._ledger_gate(
@@ -236,4 +225,4 @@ def test_the_ledger_gate_fails_a_met_item_on_a_code_run_with_no_verdict(repo):
         repo, run_dir, VERDICT, None, (), {}, None, {"wave_reviews": [{"verdict": "APPROVED"}]}, None, None,
         code_paths=[CODE],
     )[0]
-    assert bare is not None and bare["refused"] == "ledger-unmet"
+    assert bare is None

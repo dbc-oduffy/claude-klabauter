@@ -135,12 +135,11 @@ def test_plan_rows_serving_does_not_swallow_other_exceptions(tmp_path, monkeypat
         plan_rows_serving(p, ["R1"])
 
 
-def test_xs_arm_sha_free_note_with_owed_work_and_no_writes_refuses(tmp_path):
+def test_xs_arm_sha_free_note_with_owed_work_and_no_writes_replans_in_run(tmp_path):
     root = _repo(tmp_path)
     plan = remaining_leg_plan(_rem("do the thing"), ["finish"], [], ["R1"], [], SIZING, root, arm="xs")
-    assert plan["action"] == LEG_REFUSE
-    assert "re-plan leg adds" not in plan["reason"]
-    assert "arm xs" in plan["reason"]
+    assert plan["action"] == LEG_DISPATCH
+    assert "re-plan leg adds" in plan["reason"]
 
 
 def test_xs_arm_with_writes_still_dispatches(tmp_path):
@@ -154,6 +153,24 @@ def test_xs_arm_with_writes_still_dispatches(tmp_path):
 def test_product_path_outside_writes_refuses(tmp_path):
     root = _repo(tmp_path)
     plan = _plan(_rem("fix pkg/mod.py"), [], [], root)
+    assert plan["action"] == LEG_REFUSE
+    assert plan["unwritable"] == ["pkg/mod.py"]
+
+
+def test_inherited_named_path_dispatches_and_unnamed_stays_out(tmp_path):
+    root = _repo(tmp_path)
+    (root / "pkg/other.py").write_text("x")
+    plan = remaining_leg_plan(
+        _rem("fix pkg/mod.py"), [], [], ["R1"], [], SIZING, root, inherited=["./pkg/mod.py", "pkg/other.py"]
+    )
+    assert plan["action"] == LEG_DISPATCH
+    assert plan["writes"] == ["pkg/mod.py"]
+    assert plan["unwritable"] == []
+
+
+def test_named_path_absent_from_inherited_still_refuses(tmp_path):
+    root = _repo(tmp_path)
+    plan = remaining_leg_plan(_rem("fix pkg/mod.py"), [], [], ["R1"], [], SIZING, root, inherited=["pkg/other.py"])
     assert plan["action"] == LEG_REFUSE
     assert plan["unwritable"] == ["pkg/mod.py"]
 

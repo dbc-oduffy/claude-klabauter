@@ -235,11 +235,23 @@ def _skips_list_js(owner: str, schema_cap: int = 300) -> str:
 #: failing run whose export-measured baseline puts every failure in `pre_existing` or `foreign`
 #: (re-ran in an export of the run base or of the landing tree) passes.
 #: A heuristic baseline never clears -- its ids are all `unverified` by contract.
+#: A `caused`/`unverified` id the sandbox's `.baseline-reds.json` lists (`_isBaselineRed`, declared at
+#: script scope by `baseline_reds.manifest_js`) counts as cleared whatever the baseline method; the
+#: export-method requirement stays for the pre_existing/foreign buckets, and each such id must also be in
+#: `baseline.evidence` (or the manifest) with a `baseline.base_log` named behind it (the Python mirror re-reads the log): an attributed id with no baseline-leg evidence blocks the clear.
+#: No helper in scope: no clearing.
 _BASELINE_CLEARS_JS = (
-    "((t) => { const b = t && t.baseline; return !!(t.status === 'fail' && t.baseline_method === 'export' && b "
-    "&& (b.caused ?? []).length === 0 && (b.unverified ?? []).length === 0 "
-    "&& ((b.pre_existing ?? []).length + (b.foreign ?? []).length) > 0 "
-    "&& ((b.pre_existing ?? []).length + (b.foreign ?? []).length) >= (t.tests_failed ?? 0)); })"
+    "((t) => { const b = t && t.baseline; if (!(t.status === 'fail' && b)) return false; "
+    "const isB = typeof _isBaselineRed === 'function' ? _isBaselineRed : () => false; "
+    "const idOf = (e) => (e && typeof e === 'object') ? e.id : e; "
+    "const open = [...(b.caused ?? []), ...(b.unverified ?? [])]; "
+    "const rest = open.filter(e => !isB(idOf(e), null)).length; if (rest > 0) return false; "
+    "const m = open.length; const exp = t.baseline_method === 'export'; "
+    "const ev = new Set((Array.isArray(b.evidence) && typeof b.base_log === 'string' && b.base_log !== '' ? b.evidence : []).map(idOf)); "
+    "const att = exp ? [...(b.pre_existing ?? []), ...(b.foreign ?? [])].map(idOf) : []; "
+    "if (att.some(i => !(ev.has(i) || isB(i, null)))) return false; "
+    "const cleared = m + att.length; "
+    "return cleared > 0 && cleared >= (t.tests_failed ?? 0); })"
 )
 
 
@@ -438,7 +450,7 @@ def next_action_parts(
                 )
             )
             if "reverify" in review_vars:
-                from coordinator_core.ops.dispatch_emit.landing_integrity import REVERIFY_KEY
+                from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_KEY
                 from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
 
                 rv = review_vars["reverify"]

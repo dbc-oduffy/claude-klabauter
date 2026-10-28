@@ -197,6 +197,15 @@ def _budget_deny(text: str) -> dict | None:
     return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", text))
 
 
+def _post_fire_root(payload: dict) -> str:
+    try:
+        from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
+
+        return str(_repo_root(payload) or "")
+    except Exception:
+        return ""
+
+
 def shell_write_budget(
     payload: dict,
     session_id: str,
@@ -220,7 +229,7 @@ def shell_write_budget(
         return None
     if _take_escape(payload, session_id, file_path, "nudge-em-code-dispatch"):
         return None
-    if _em_post_fire.fired(session_id):
+    if _em_post_fire.fired(session_id, _post_fire_root(payload)):
         return None
 
     def _project() -> str:
@@ -228,7 +237,7 @@ def shell_write_budget(
             raise _Unprojectable(unprojectable or "write cannot be projected")
         return projected
 
-    handled, result = _budget_core(payload, session_id, file_path, _project)
+    handled, result = _budget_core(payload, session_id, file_path, _project, shell=True)
     return result if handled else None
 
 
@@ -240,6 +249,76 @@ class _Unprojectable(Exception):
     """Carries the caller's own reason; rendered without an exception-type prefix."""
 
 
+def _strict() -> bool:
+    from coordinator_core import machine_profile
+
+    try:
+        return machine_profile.guard_level("nudge-em-code-dispatch") == "strict"
+    except Exception:
+        return False
+
+
+def _latched_text() -> str:
+    return "XS hand edits closed until engine-ask fires. " + fire_step()
+
+
+def _latch(xlb, root, session_id: str, unmeasured_path: str | None = None) -> None:
+    """Latches the lane so a strict guard denies further writes until engine-ask fires; never changes the verdict."""
+    try:
+        xlb.latch_advised(root, session_id, unmeasured_path)
+    except Exception:
+        pass
+
+
+def arm_advised(root, session_id) -> None:
+    """Latches the session's lane after an engine-ask advisory was emitted; a lane-less session gets
+    an open XS lane at HEAD to carry the flag. Never raises, never changes the verdict."""
+    try:
+        if not root or not session_id:
+            return
+        from coordinator_core.git import git_state
+        from coordinator_core.session import xs_lane_budget as xlb
+
+        if xlb.read_lane(root, session_id) is None:
+            head = git_state.head_sha(root)
+            if head:
+                xlb.open_xs_lane(root, session_id, head)
+        xlb.latch_advised(root, session_id)
+    except Exception:
+        pass
+
+
+def advised_deny_envelope(root, session_id, paths: tuple = ()) -> dict | None:
+    """The PreToolUse deny when the lane is advised, engine-ask has not fired, and (given `paths`)
+    one is a product path under `root`; else None. Passes through `apply_guard_level`."""
+    try:
+        if not root or not session_id:
+            return None
+        from coordinator_core.session import xs_lane_budget as xlb
+
+        rec = xlb.read_lane(root, session_id)
+        if rec is None or rec.get("corrupt") or not xlb.is_advised(rec):
+            return None
+        if _em_post_fire.fired(session_id, root):
+            return None
+        if paths and not any(_em_post_fire.is_product_path(p, root, session_id) for p in paths):
+            return None
+        text = "Product writes closed until engine-ask fires. " + fire_step()
+        return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", text)) or None
+    except Exception:
+        return None
+
+
+def _charge_unmeasured(xlb, root, session_id: str, file_path: str) -> None:
+    """Charges the lane a full budget for a write that could not be priced; never changes the verdict."""
+    try:
+        xlb.record_deny(
+            root, session_id, xlb.Usage(xlb.BUDGET_FILES, xlb.BUDGET_LINES, True), [file_path]
+        )
+    except Exception:
+        pass
+
+
 def _discard_fresh(xlb, root, session_id: str) -> None:
     """Drops the XS lane this call opened so a refused write leaves none; never changes the verdict."""
     try:
@@ -248,9 +327,36 @@ def _discard_fresh(xlb, root, session_id: str) -> None:
         pass
 
 
-def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tuple[bool, dict | None]:
+def _trajectory(xlb, root, rec: dict, file_path: str) -> str:
+    """The lane's spent and remaining budget before this write; 'used unknown' when the base is unreadable."""
+    try:
+        u = xlb.measure(root, rec, file_path, xlb._read_text(xlb._abs(root, xlb._norm_rel(root, file_path))))
+    except Exception:
+        return f"XS budget used unknown of {xlb.BUDGET_FILES} files, {xlb.BUDGET_LINES} lines."
+    return (
+        f"XS budget used {u.files}/{xlb.BUDGET_FILES} files, {u.lines}/{xlb.BUDGET_LINES} lines; "
+        f"remaining {max(xlb.BUDGET_FILES - u.files, 0)} files, {max(xlb.BUDGET_LINES - u.lines, 0)} lines."
+    )
+
+
+def _applied_text(xlb, root, rec: dict) -> str:
+    """' Applied: <file> (<n> lines), ... Revert: git checkout -- <files>.' for earlier accepted edits; '' when none."""
+    try:
+        changes = xlb.applied_changes(root, rec)
+    except Exception:
+        return ""
+    if not changes:
+        return ""
+    listed = ", ".join(f"{rel} ({n} lines)" for rel, n in changes)
+    return f" Applied: {listed}. Revert: git checkout -- {' '.join(rel for rel, _ in changes)}."
+
+
+def _budget_core(
+    payload: dict, session_id: str, file_path: str, project, shell: bool = False
+) -> tuple[bool, dict | None]:
     """Lane open/residue/measure logic shared by the hook's `_budget_decision` and `shell_write_budget`;
-    `project()` returns the post-write text or raises."""
+    `project()` returns the post-write text or raises. `shell` marks a Bash write: at strict an
+    unmeasurable one latches the lane (see `xs_lane_budget.latch_advised`)."""
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
     from coordinator_core.session import xs_lane_budget as xlb
 
@@ -296,8 +402,11 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
         usage = xlb.measure(root, rec, file_path, project())
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
-        text = f"Budget unmeasurable ({reason}). Make the change as one plain Edit per file."
-        if opened_here:
+        text = f"Budget unmeasurable ({reason}). {_trajectory(xlb, root, rec, file_path)} Size S or larger. {fire_step()}"
+        if shell and _strict():
+            _latch(xlb, root, session_id, file_path)
+            _charge_unmeasured(xlb, root, session_id, file_path)
+        elif opened_here:
             _discard_fresh(xlb, root, session_id)
         return True, _budget_deny(text)
     if usage.over:
@@ -310,7 +419,9 @@ def _budget_core(payload: dict, session_id: str, file_path: str, project) -> tup
                 denies = 0
             if denies >= xlb.GOLF_DENY_LIMIT:
                 return True, _budget_deny(_closed_text(rec))
-        return True, _budget_deny(over_text(usage))
+        return True, _budget_deny(over_text(usage) + ("" if opened_here else _applied_text(xlb, root, rec)))
+    if _strict() and xlb.is_advised(rec):
+        return True, _budget_deny(_latched_text())
     try:
         xlb.add_path(root, session_id, file_path)
     except Exception:

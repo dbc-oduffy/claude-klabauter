@@ -66,10 +66,10 @@ and each is cheap to undo by accident:
        event anywhere in the engine -- the session-registry Monitor's
        `EXITED <name>` line exists in the Group-EM's context, not in state. A
        caller that saw one passes it; nothing is cached to fake having seen one.
-    2. Registry absence, as CORROBORATION, under a box-scoped conjunction: the
-       transcript sits under THIS repo's project directory (the only place this
-       module globs, so every row satisfies it by construction) AND the session
-       is absent from THIS box's registry, read successfully.
+    2. Registry absence, as CORROBORATION. Peers are ENUMERATED from the live
+       roster (`read_pass.live_peers`, the watch's own source), so a rostered
+       row is in the registry by construction and this leg fires only for a
+       `names` injection that omits a transcript-bearing session.
     3. The clocks contribute NOTHING. A stalled content clock establishes
        idleness, never death.
 
@@ -133,8 +133,9 @@ and each is cheap to undo by accident:
 - **Omission is impossible.** A peer that cannot be classified emits an
   `UNKNOWN` row carrying its reason. A classifier that silently drops rows
   makes a broken instrument and a quiet fleet emit identically. The one
-  deliberate exclusion is scope, not classification: transcripts older than
-  `STALE_FILE_MINUTES` / `STALE_CONTENT_MINUTES` are not this shift's fleet.
+  deliberate exclusion is scope: a session not on the live roster is not a peer.
+  A rostered peer whose transcript cannot be found is `UNKNOWN`
+  (`transcript-unreadable`), never `EXITED`.
 
 - **Failure must not read as quiet.** Exit 0 means a whole report, `peers=0`
   included. A non-zero exit means NO report -- nothing partial is printed, so
@@ -173,7 +174,6 @@ hunting for the name.
 from __future__ import annotations
 
 import datetime
-import glob
 import json
 import os
 import re
@@ -181,6 +181,7 @@ import sys
 import time
 from typing import Optional
 
+from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import repo_root_arg
 from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
@@ -194,8 +195,6 @@ TAIL_BYTES = 400_000
 #: the token cost straight back into the agent's context, which is the whole
 #: thing this instrument removes.
 LAST_SAID_CHARS = 300
-STALE_FILE_MINUTES = 1440.0
-STALE_CONTENT_MINUTES = 180.0
 RATE_LIMIT_STALENESS_MINUTES = 5.0
 
 _TIMESTAMP = re.compile(r'(?<!\\)"timestamp"\s*:\s*"([^"\\]+)"')
@@ -513,17 +512,6 @@ def rate_limited(raw_text: str, newest: Optional[float], now: float) -> bool:
     return resets_at > now and (newest - refused_at) / 60 <= RATE_LIMIT_STALENESS_MINUTES
 
 
-def registry_names() -> Optional[dict]:
-    try:
-        from coordinator_core.session import harness_registry
-        snapshot = harness_registry.snapshot()
-    except Exception:
-        return None
-    if not snapshot:
-        return None
-    return {sid: getattr(record, "name", None) for sid, record in snapshot.items()}
-
-
 def group_em_moved(repo_root: str, group_em_session_id: Optional[str]) -> bool:
     """Has the Group-EM moved off the session this report was armed for?
 
@@ -745,8 +733,8 @@ def _last_record_iso(raw_text: str) -> Optional[str]:
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _divergence(age_minutes: Optional[float], mtime_age_minutes: float) -> tuple:
-    if age_minutes is None:
+def _divergence(age_minutes: Optional[float], mtime_age_minutes: Optional[float]) -> tuple:
+    if age_minutes is None or mtime_age_minutes is None:
         return DIVERGENCE_NONE, None
     gap = abs(mtime_age_minutes - age_minutes)
     if gap <= DIVERGENCE_MINUTES:
@@ -757,19 +745,15 @@ def _divergence(age_minutes: Optional[float], mtime_age_minutes: float) -> tuple
 def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
               group_em_log: list, group_em_session_id: Optional[str],
               observed_exits: frozenset = frozenset(),
-              suppression_available: bool = True) -> Optional[dict]:
+              suppression_available: bool = True) -> dict:
     try:
         mtime_age = (now - os.path.getmtime(path)) / 60
     except OSError:
-        return None
-    if mtime_age > STALE_FILE_MINUTES:
-        return None
+        mtime_age = None
 
     raw_text, readable = _tail_text(path)
     newest = newest_timestamp(raw_text)
     age = None if newest is None else (now - newest) / 60
-    if age is not None and age > STALE_CONTENT_MINUTES:
-        return None
     clock_reason = None
     if age is None:
         clock_reason = (
@@ -821,7 +805,7 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
         "verdict": verdict,
         "reason": reason,
         "content-age": None if age is None else round(age, 1),
-        "mtime-age": round(mtime_age, 1),
+        "mtime-age": None if mtime_age is None else round(mtime_age, 1),
         # C11: absent from a SUCCESSFULLY-read registry, in the WATCH band
         # only (see `registry_absent` above). "absent" or None -- never a
         # confidence claim, matching every other closed-vocabulary field on
@@ -853,6 +837,17 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
     }
 
 
+def _transcript_path(agent: dict, directory: str, projects_dir: Optional[str]) -> str:
+    """A rostered peer's transcript: its own cwd's project dir, else `directory`."""
+    session_id = agent["sessionId"]
+    fallback = os.path.join(directory, "%s.jsonl" % session_id)
+    cwd = agent.get("cwd")
+    if projects_dir or not cwd:
+        return fallback
+    own = read_pass._transcript_path_for(session_id, cwd)
+    return own if os.path.exists(own) or not os.path.exists(fallback) else fallback
+
+
 def build_report(
     repo_root: str,
     group_em_session_id: Optional[str] = None,
@@ -862,14 +857,27 @@ def build_report(
     projects_dir: Optional[str] = None,
     names: Optional[dict] = None,
     registry_read: bool = True,
+    agents: Optional[list] = None,
     observed_exits: Optional[frozenset] = None,
 ) -> dict:
+    """The fleet report. Peers are the live roster (`read_pass.live_peers`), never a glob.
+
+    `agents`/`names` inject a roster; with neither, `registry_read=False` yields no
+    peers. A failed live read raises, so the CLI exits non-zero with no report.
+    """
     now = time.time() if now is None else now
     directory = projects_dir or projects_dir_for(repo_root)
-    if names is None and registry_read:
-        names = registry_names()
-
     moved = group_em_moved(repo_root, group_em_session_id)
+    # The roster is the enumeration AND the liveness map: `agents` (live
+    # `read_pass.live_peers` rows) wins, else `names` (sid -> name) is the
+    # injected roster. A failed live read raises -- no report, never a quiet one.
+    if agents is None and names is not None:
+        agents = [{"sessionId": sid, "name": name, "cwd": None} for sid, name in names.items()]
+    elif agents is None and registry_read and not moved:
+        agents = read_pass.live_peers(repo_root)
+    if agents is not None and names is None:
+        names = {a["sessionId"]: a.get("name") for a in agents}
+
     holder_live = holder_liveness(repo_root, group_em_session_id)
     observed_exits = frozenset(observed_exits or ())
     excluded = {sid.lower() for sid in (group_em_session_id, caller_session_id) if sid}
@@ -879,16 +887,15 @@ def build_report(
     # fleet this watcher no longer has standing over, and a row that is present
     # is a row something acts on. Still exit 0: a void tick, stated, is a whole
     # report.
-    for path in ([] if moved else sorted(glob.glob(os.path.join(directory, "*.jsonl")))):
-        session_id = os.path.basename(path)[:-6]
+    for agent in ([] if moved else sorted(agents or (), key=lambda a: a["sessionId"])):
+        session_id = agent["sessionId"]
         if any(session_id.lower().startswith(sid) for sid in excluded):
             continue
         if peer and not session_id.startswith(peer):
             continue
-        row = _peer_row(path, session_id, now, names, group_em_log, group_em_session_id,
-                        observed_exits, suppression_available)
-        if row is not None:
-            rows.append(row)
+        rows.append(_peer_row(
+            _transcript_path(agent, directory, projects_dir), session_id, now, names,
+            group_em_log, group_em_session_id, observed_exits, suppression_available))
 
     rows.sort(key=lambda row: -(row["content-age"] if row["content-age"] is not None else 1e9))
 

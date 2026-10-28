@@ -309,6 +309,13 @@ def test_run_timeout_returns_none_not_raise(tmp_path):
     assert proc is None
 
 
+def test_default_cli_timeout_is_tight_and_never_above_registry_bound():
+    from coordinator_core.external_tool_budget import bound_for
+
+    assert udg._DEFAULT_CLI_TIMEOUT_SECONDS <= 10.0
+    assert udg._DEFAULT_CLI_TIMEOUT_SECONDS <= bound_for(udg._CLI_SITE)
+
+
 def test_lens_orthogonality_unavailable_not_clean_on_timeout(tmp_path):
     cli = tmp_path / "verify-parallel-review-lens-orthogonality"
     cli.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(5)\n", encoding="utf-8")
@@ -323,90 +330,7 @@ def test_lens_orthogonality_unavailable_not_clean_on_timeout(tmp_path):
     assert result.verdict != udg.GateVerdict.CLEAN
 
 
-# ---------------------------------------------------------------------------
-# (l) 11i-queue-prune-sweep — YAML leg exit code MUST be consumed, not
-# discarded (P1 fix regression guard: the F9 fix's whole purpose was a
-# caller being able to branch on prune-closed-*.py's non-zero exit).
-# ---------------------------------------------------------------------------
-
-
-def test_queue_prune_sweep_yaml_leg_failure_is_blocking_not_clean(tmp_path):
-    (tmp_path / "state" / "improvement-queue").mkdir(parents=True)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _write_fake_cli(bin_dir / "prune-closed-improvements.py", 1, stderr="cannot lock ref 'HEAD'\n")
-    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
-    assert result.verdict == udg.GateVerdict.FINDING
-    assert result.severity == udg.Severity.BLOCKING
-    assert any("YAML prune FAILED" in line for line in result.detail["lines"])
-
-
-def test_queue_prune_sweep_yaml_leg_clean_exit_is_not_blocking(tmp_path):
-    (tmp_path / "state" / "improvement-queue").mkdir(parents=True)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    _write_fake_cli(bin_dir / "prune-closed-improvements.py", 0)
-    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
-    assert result.verdict == udg.GateVerdict.CLEAN
-
-
-# ---------------------------------------------------------------------------
-# (l2) 11i-queue-prune-sweep — the default-callee legacy-markdown leg batches
-# every existing queue into ONE spawn of prune-resolved-queue-entries.py
-# (amplification-gate fix: the callee's old one-positional arity was
-# self-imposed, not a real per-item constraint).
-# ---------------------------------------------------------------------------
-
-
-def test_queue_prune_sweep_default_route_prunes_every_queue_in_process(tmp_path, monkeypatch):
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
-    (tmp_path / "state" / "bug-backlog.md").write_text("## Open\n- b\n")
-
-    def _no_spawn(*args, **kwargs):
-        raise AssertionError(f"default route must not spawn: {args}")
-
-    monkeypatch.setattr(udg, "_run", _no_spawn)
-
-    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {})
-
-    assert result.verdict in (udg.GateVerdict.CLEAN, udg.GateVerdict.FINDING)
-    assert result.severity != udg.Severity.BLOCKING
-
-
-def test_queue_prune_sweep_override_cli_keeps_one_spawn_per_queue(tmp_path):
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
-    (tmp_path / "state" / "bug-backlog.md").write_text("## Open\n- b\n")
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    fake_cli = bin_dir / "single-arg-prune.py"
-    fake_cli.write_text(
-        "import sys\n"
-        "assert len(sys.argv) == 2, sys.argv\n"
-        "sys.exit(0)\n",
-        encoding="utf-8",
-    )
-
-    result = udg._gate_queue_prune_sweep(tmp_path, tmp_path, {"prune_cli": str(fake_cli)})
-
-    assert result.verdict == udg.GateVerdict.CLEAN
-
-
-def test_queue_prune_sweep_default_route_reports_which_queue_failed(tmp_path):
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "improvement-queue.md").write_text("## Open\n- a\n")
-    (tmp_path / "state" / "not-a-queue.md").write_text("## Open\n- b\n")
-
-    result = udg._gate_queue_prune_sweep(
-        tmp_path,
-        tmp_path,
-        {"queues": ["state/improvement-queue.md", "state/not-a-queue.md"]},
-    )
-
-    assert result.verdict == udg.GateVerdict.FINDING
-    assert result.severity == udg.Severity.BLOCKING
-    assert any("not-a-queue.md" in line for line in result.detail["lines"])
+# The 11i / 11j sweeps live in test_updatedocs_sweeps.py (updatedocs.sweeps).
 
 
 # ---------------------------------------------------------------------------
@@ -611,6 +535,49 @@ def test_directory_md_gate_honours_an_explicit_override(tmp_path):
     assert result.detail["directory_md"] == "engine/DIRECTORY.md"
 
 
+def test_directory_md_gate_with_date_but_no_count_is_a_hinted_finding_not_clean(tmp_path):
+    (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path)
+
+    assert result.verdict is udg.GateVerdict.FINDING
+    assert "no count assertion found" in result.summary
+    assert result.detail["format_hint"]
+
+
+def test_directory_md_gate_without_date_carries_the_date_hint(tmp_path):
+    (tmp_path / "DIRECTORY.md").write_text("# DIRECTORY\n\n1 `*.py` files\n", encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path)
+
+    assert result.verdict is udg.GateVerdict.FINDING
+    assert result.detail["date_format_hint"] == udg.DATE_FORMAT_HINT
+
+
+def test_directory_md_gate_bold_date_and_mismatched_count_is_a_finding(tmp_path):
+    for i in range(3):
+        (tmp_path / f"m{i}.py").write_text("", encoding="utf-8")
+    (tmp_path / "DIRECTORY.md").write_text(
+        "**Last refreshed:** 2026-10-12\n\n1,402 `*.py` files in lib\n", encoding="utf-8"
+    )
+
+    result = _run_directory_md_gate(tmp_path)
+
+    assert result.verdict is udg.GateVerdict.FINDING
+    assert result.detail["mismatched_counts"][0]["asserted"] == 1402
+    assert result.detail["mismatched_counts"][0]["actual"] == 3
+    assert "no readable" not in result.summary
+
+
+def test_directory_md_gate_matching_count_with_date_is_clean(tmp_path):
+    (tmp_path / "a.py").write_text("", encoding="utf-8")
+    (tmp_path / "DIRECTORY.md").write_text(
+        "Last updated: 2026-10-12\n1 `*.py` files\n", encoding="utf-8"
+    )
+
+    assert _run_directory_md_gate(tmp_path).verdict is udg.GateVerdict.CLEAN
+
+
 def test_directory_md_discovery_does_not_recurse(tmp_path):
     """Two levels down is not discovery — it is a walk this gate must not do."""
     deep = tmp_path / "a" / "b"
@@ -775,101 +742,13 @@ def test_windows_exec_argv_execs_a_pathext_binary_directly(tmp_path, monkeypatch
     assert udg._windows_exec_argv(forwarder, ["--repo-root", "x"]) == [str(forwarder), "--repo-root", "x"]
 
 
-def test_reap_sidecars_gate_runs_against_the_forwarder_instead_of_reporting_cli_not_found(tmp_path, monkeypatch):
-    """End-to-end for the four gates the platform-blind resolver silenced.
-
-    `_run` is stubbed because a fabricated `.exe` cannot be spawned; what this
-    asserts is that the gate reached a spawn at all, with the forwarder's path,
-    rather than short-circuiting to UNAVAILABLE on an exact-name miss.
-    """
-    monkeypatch.setattr(udg.sys, "platform", "win32")
-    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
-    bin_dir = tmp_path / "settings" / "bin"
-    bin_dir.mkdir(parents=True)
-    forwarder = bin_dir / "reap-stale-subagent-sidecars.exe"
-    forwarder.write_bytes(b"MZ")
-
-    spawned: dict[str, Path] = {}
-
-    def _fake_run(cli_path, args, **kwargs):
-        spawned["cli"] = cli_path
-        return subprocess.CompletedProcess([str(cli_path), *args], 0, "reaped 0 sidecars", "")
-
-    monkeypatch.setattr(udg, "_run", _fake_run)
-    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path / "settings", {"cli": str(forwarder)})
-
-    assert spawned["cli"] == forwarder
-    assert result.verdict is not udg.GateVerdict.UNAVAILABLE
-
-
 # ---------------------------------------------------------------------------
-# In-process default routes: the reap sweep and check-rag-state spawn nothing;
-# an explicit CLI override still spawns that path.
+# In-process default route: check-rag-state spawns nothing.
 # ---------------------------------------------------------------------------
 
 
 def _no_spawn(*args, **kwargs):
     raise AssertionError(f"default route must not spawn: {args}")
-
-
-def test_reap_gate_default_route_runs_in_process_and_reads_the_reap_count(tmp_path, monkeypatch):
-    import os
-    import time
-
-    monkeypatch.setattr(udg, "_run", _no_spawn)
-    share = tmp_path / ".coordinator-local" / "subagent-share" / "dead-session"
-    share.mkdir(parents=True)
-    old = share / "old.md"
-    old.write_text("---\nstatus: complete\n---\n", encoding="utf-8")
-    ancient = time.time() - 40 * 86400
-    os.utime(old, (ancient, ancient))
-    monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: False)
-
-    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {})
-
-    assert result.verdict == udg.GateVerdict.FINDING
-    assert result.detail == {"reaped": 1}
-    assert not old.exists()
-
-
-def test_reap_gate_default_route_keeps_a_blocked_sidecar_and_reports_clean(tmp_path, monkeypatch):
-    import os
-    import time
-
-    monkeypatch.setattr(udg, "_run", _no_spawn)
-    share = tmp_path / ".coordinator-local" / "subagent-share" / "dead-session"
-    share.mkdir(parents=True)
-    kept = share / "blocked.md"
-    kept.write_text("---\nstatus: blocked\n---\n", encoding="utf-8")
-    ancient = time.time() - 40 * 86400
-    os.utime(kept, (ancient, ancient))
-    monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: False)
-
-    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {})
-
-    assert result.verdict == udg.GateVerdict.CLEAN
-    assert kept.exists()
-
-
-def test_reap_gate_cli_override_still_spawns_that_path(tmp_path):
-    cli = tmp_path / "fake-reap.py"
-    _write_fake_cli(cli, 0, stdout="reaped 3 sidecars\n")
-    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {"cli": str(cli)})
-    assert result.verdict == udg.GateVerdict.FINDING
-    assert result.detail == {"reaped": 3}
-
-
-def test_reap_gate_default_route_crash_is_a_blocking_finding_not_clean(tmp_path, monkeypatch):
-    (tmp_path / ".coordinator-local" / "subagent-share" / "s").mkdir(parents=True)
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError("liveness exploded")
-
-    monkeypatch.setattr("coordinator_core.sidecar_reap.classify_sidecars", _boom)
-    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path, {})
-    assert result.verdict == udg.GateVerdict.FINDING
-    assert result.severity == udg.Severity.BLOCKING
-    assert "liveness exploded" in result.detail["stderr"]
 
 
 def test_repomap_gate_default_route_reads_check_rag_state_in_process(tmp_path, monkeypatch):

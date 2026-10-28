@@ -586,7 +586,12 @@ def _parse_one(path: Path) -> tuple[str, RegistryRecord] | None:
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError:
-        return None
+        # Trap: the harness rewrites in place without truncating, so a shorter
+        # rewrite leaves a junk tail (e.g. a stray `}`) after one valid object.
+        try:
+            data, _ = json.JSONDecoder().raw_decode(raw_text.lstrip())
+        except json.JSONDecodeError:
+            return None
 
     if not isinstance(data, dict):
         return None

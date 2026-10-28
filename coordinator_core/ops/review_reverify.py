@@ -5,7 +5,9 @@ review stage changed since ``review.prep`` froze them, and inverts the applied f
 Params: ``base`` (str), ``slice_prefix`` (str), optional ``session_id``, optional ``failing``
 (list of pytest node ids), optional ``sidecars`` (list of review sidecar paths), optional
 ``failing_before`` (list of node ids), optional ``failing_at_base`` (list of node ids), optional
-``probe`` (``"open"`` or ``"close"``). Keying scope: show_top.
+``probe`` (``"open"`` or ``"close"``), optional ``run_id`` and ``plan_path``: a probe open refuses a
+path another halted run withholds, and a revert keeps one (``land_run.foreign_halted_withheld``; an
+empty ``run_id`` owns nothing, so every halted run is foreign). Keying scope: show_top.
 
 Reads the write-once pre-review snapshot ``review.prep`` left at
 ``<share>/<slice_prefix>.pre-review/`` (``manifest.json`` plus one blob per sha256). By path
@@ -31,9 +33,17 @@ spans concurrent runs, so it is reported, never reverted or removed. In revert m
 the failing node ids whose test file is foreign.
 
 Revert mode (``failing`` given, no ``probe``): ``{"reverted", "unattributed", "pre_existing",
-"kept", "record", "error"}``. A failing node id's test file implicates itself when edited or created,
-and every edited ``.py`` module it imports, plus every edited or created path a string literal in it
-names. Trap: a tripwire naming several edited paths implicates all of them. An implicated edited
+"sibling_owned", "kept", "record", "error"}``. ``sibling_owned`` is the unattributed node ids whose
+caller-supplied ``cause_files`` (``{node id: [paths]}``) are all outside the run footprint (manifest
+plus created paths) and all withheld by a readable foreign halt record; an unreadable record, an
+in-footprint cause file, or no cause files leaves the node ``unattributed``. ``foreign_red``
+(``{node id: [culprit paths]}``) carries the remaining nodes whose every cause file is outside the
+footprint and dirty versus HEAD, whether or not a halt record holds it (unreadable record excepted): the
+failure is shared-tree contamination, evidence rather than a blocker. Absent ``cause_files``
+they are derived (``_derive_cause_files``); a bare file name resolving nowhere falls back to the sole
+dirty tracked path of that basename. A failing node id's
+test file implicates itself when edited or created, and every edited ``.py`` module it imports, plus
+every edited or created path a string literal in it names. Trap: a tripwire naming several edited paths implicates all of them. An implicated edited
 path is rewritten as its current bytes with each applied finding on it inverted (the ledger row's
 ``after`` replaced by its ``before``; ``action`` ``"reverted-findings"``, ``source`` ``"findings"``);
 every other byte, executor hunks included, is untouched. A finding that cannot be inverted, and an
@@ -60,8 +70,13 @@ re-ran, but not in ``failing_at_base``, implicates no review edit: its hunks are
 ``unattributed``. An id this record already lists in a ``reverted`` entry's ``tests`` and that is
 passed again in revert mode still fails after its revert: it is ``pre_existing``, never reverted
 twice. An id no closed probe re-ran is never honoured as ``failing_before``.
+Optional ``run_key`` names a run whose ``owned_red.jsonl`` ids join ``failing_at_base``: a failing id
+recorded there (and not in ``failing_at_base``) is reported in the ``owned_red`` bucket, never reverted or
+``unattributed``.
 
-Negative-spec: zero process spawns, no git verb, no test execution. A refusal (no manifest, a
+Negative-spec: no test execution and no git verb of its own; the only spawn is the ``git cat-file``
+inside ``land_run.foreign_halted_withheld`` (up to one per still-held halted run), reached on a probe
+open and a revert. A refusal (no manifest, a
 path escaping the worktree, an unreadable or corrupt blob) is returned as ``error`` with nothing
 written, never raised. Attribution is by ledger finding, never by snapshot diff: a write-once
 snapshot predates a refire's executor writes.
@@ -70,7 +85,9 @@ snapshot predates a refire's executor writes.
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
+import re
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +105,8 @@ from coordinator_core.git.index_write import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import review_reverify_probe as probe_io
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused
+from coordinator_core.ops.owned_red import read_owned_red
 from coordinator_core.ops.review_reverify_findings import applied_rows, invert
 from coordinator_core.ops.review_tripwires import TripwireScanUnavailable, literal_namers, names_in, tree_scanners, walked_created
 from coordinator_core.ops.reverify_callers import callers_of, removed_symbols
@@ -118,7 +137,8 @@ def _fail(message: str, revert: bool, probe: Optional[str] = None) -> dict:
         return {"restored": [], "rerun": [], "error": message}
     if revert:
         return {
-            "reverted": [], "unattributed": [], "pre_existing": [], "kept": [], "record": None, "error": message,
+            "reverted": [], "unattributed": [], "pre_existing": [], "owned_red": [], "kept": [],
+            "record": None, "error": message,
         }
     return {"edited": [], "created": [], "snapshot": None, "error": message}
 
@@ -480,7 +500,7 @@ def _load_record(record: Path) -> dict:
         data = None
     if not isinstance(data, dict):
         data = {}
-    for key in ("reverted", "unattributed", "pre_existing", "kept"):
+    for key in ("reverted", "unattributed", "pre_existing", "owned_red", "kept"):
         data.setdefault(key, [])
     return data
 
@@ -526,9 +546,115 @@ def _refs(refs) -> List[dict]:
     return [{"sidecar": r.sidecar, "id": r.id} for r in refs]
 
 
+_PATH_TOKEN = re.compile(r"(?:[A-Za-z]:)?[\w.\-/\\]+")
+
+
+def _head_readable(repo_root: Path) -> bool:
+    """False for an unborn or unreadable HEAD, where ``head_blobs`` would spawn."""
+    return git_state.head_sha(repo_root) is not None
+
+
+def _is_dirty(repo_root: Path, rels: List[str]) -> Set[str]:
+    """Existing files among ``rels`` whose bytes differ from HEAD's blob (or that HEAD lacks). Spawn-free;
+    an unreadable HEAD answers nothing dirty (fail closed). Trap: hashes raw bytes, so an autocrlf
+    checkout reads dirty; the halt-record check still gates the class."""
+    if not rels or not _head_readable(repo_root):
+        return set()
+    head = git_state.head_blobs(repo_root, rels)
+    out: Set[str] = set()
+    for rel in rels:
+        try:
+            data = (repo_root / rel).read_bytes()
+        except OSError:
+            continue
+        blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+        if rel not in head or head[rel][1] != blob:
+            out.add(rel)
+    return out
+
+
+def _sole_dirty_by_basename(root: Path, name: str) -> List[str]:
+    """The one tracked path named ``name`` that is dirty versus HEAD; empty when none or several are
+    (ambiguous stays a blocker) or the index is unreadable."""
+    try:
+        tracked = git_state.read_index_paths(root)
+    except (git_state.IndexParseError, OSError):
+        return []
+    same = sorted(p for p in tracked if p.rsplit("/", 1)[-1] == name)
+    dirty = sorted(_is_dirty(root, same)) if same else []
+    return dirty if len(dirty) == 1 else []
+
+
+def _derive_cause_files(
+    repo_root: Path, nodes: List[str], failing_output: Optional[Dict[str, str]],
+) -> Dict[str, List[str]]:
+    """``{node id: dirty repo paths}`` named by the node id and its failure output.
+
+    A token with a ``/`` resolves against the root; a bare file name (a parametrize id such as
+    ``[ladder_xxl.py]``) resolves against the test file's directory, the root, and the directory of
+    every slashed path the node names. Only existing files dirty versus HEAD are kept; a node naming
+    none is absent, so it stays a blocker.
+    """
+    root = repo_root.resolve()
+    out: Dict[str, List[str]] = {}
+    for node in nodes:
+        text = node + "\n" + str((failing_output or {}).get(node) or "")
+        tokens = {t.removeprefix("./").rstrip(".") for t in _PATH_TOKEN.findall(text)}
+        tokens = {t for t in tokens if "." in t.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]}
+        slashed = {_rel(t, root) for t in tokens if "/" in t or "\\" in t}
+        dirs = {_node_file(node).rpartition("/")[0], ""} | {s.rpartition("/")[0] for s in slashed}
+        rels = set(slashed)
+        for t in tokens - {s for s in tokens if "/" in s or "\\" in s}:
+            rels.update(f"{d}/{t}" if d else t for d in dirs)
+        rels = {r for r in rels if contained_path(root / r, [root]) is not None and (root / r).is_file()}
+        dirty = sorted(_is_dirty(root, sorted(rels)))
+        if not dirty:
+            for t in sorted(tokens - {s for s in tokens if "/" in s or "\\" in s}):
+                dirty.extend(_sole_dirty_by_basename(root, t))
+        if dirty:
+            out[node] = dirty
+    return out
+
+
+def _sibling_owned(
+    repo_root: Path, candidates: List[str], cause_files: Optional[Dict[str, List[str]]],
+    footprint: Set[str], run_id: str, plan_path: str,
+) -> List[str]:
+    """``(sibling_owned, foreign_red)``. ``sibling_owned``: unattributed nodes whose every caller-named
+    cause file lies outside ``footprint`` and is withheld by a readable foreign halt record.
+    ``foreign_red``: ``{node: [culprit paths]}`` for the rest whose every cause file lies outside
+    ``footprint`` and is dirty versus HEAD (so HEAD passes) and none is held by an unreadable record.
+    No cause files, an in-footprint one, or a clean one leaves the node blocking."""
+    if not cause_files:
+        return [], {}
+    causes: Dict[str, List[str]] = {}
+    for node in candidates:
+        raw = cause_files.get(node)
+        paths = sorted({_rel(p, repo_root) for p in raw if isinstance(p, str) and p.strip()}) if raw else []
+        if paths and not footprint.intersection(paths):
+            causes[node] = paths
+    if not causes:
+        return [], {}
+    from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
+
+    wanted = sorted({p for paths in causes.values() for p in paths})
+    held = foreign_halted_withheld(repo_root, run_id or None, plan_path or None, wanted)
+    owned = sorted(
+        node for node, paths in causes.items()
+        if all(held.get(p) and held[p] != UNREADABLE_HALT_RECORD for p in paths)
+    )
+    dirty = _is_dirty(repo_root, wanted)
+    foreign_red = {
+        node: paths for node, paths in sorted(causes.items())
+        if node not in owned
+        and all(p in dirty and held.get(p) != UNREADABLE_HALT_RECORD for p in paths)
+    }
+    return owned, foreign_red
+
+
 def _open_probe(
     repo_root: Path, snapshot_dir: Path, ids: List[str], implicated: Dict[str, List[str]],
-    created_set: Set[str], sidecars: List[str],
+    created_set: Set[str], sidecars: List[str], run_id: str = "", plan_path: str = "",
 ) -> dict:
     from coordinator_core.ops.dispatch_emit import kept_work
 
@@ -545,7 +671,15 @@ def _open_probe(
         n for n in ids
         if _node_file(n) not in created_set and any(n in implicated[rel] for rel in writes)
     ]
-    return probe_io.open_probe(repo_root, snapshot_dir, writes, rerun)
+    live_runs = None
+    if writes:
+        from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
+        from coordinator_core.ops.dispatch_emit.run_ownership import holders_from_held
+
+        # An empty run_id owns nothing, so every halted run's withheld path is foreign to it.
+        held = foreign_halted_withheld(repo_root, run_id or None, plan_path or None, sorted(writes))
+        live_runs = holders_from_held(held) or None
+    return probe_io.open_probe(repo_root, snapshot_dir, writes, rerun, run_id=run_id, live_runs=live_runs)
 
 
 def review_reverify(
@@ -559,6 +693,11 @@ def review_reverify(
     failing_before: Optional[List[str]] = None,
     failing_at_base: Optional[List[str]] = None,
     probe: Optional[str] = None,
+    run_id: str = "",
+    plan_path: str = "",
+    cause_files: Optional[Dict[str, List[str]]] = None,
+    failing_output: Optional[Dict[str, str]] = None,
+    run_key: str = "",
 ) -> dict:
     """List the review edits since the snapshot, or (``failing`` given) invert the findings those
     tests implicate; ``probe`` opens or closes the pre-review probe. See the module docstring."""
@@ -636,15 +775,22 @@ def review_reverify(
     already = {t for entry in prior["reverted"] if isinstance(entry, dict) for t in entry.get("tests", [])}
     if revert:
         vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
-        at_base = {str(i) for i in failing_at_base or []}
+        explicit_base = {str(i) for i in failing_at_base or []}
+        owned: Set[str] = set()
+        if run_key:
+            try:
+                owned = set(read_owned_red(repo_root, run_key))
+            except LedgerRefused as exc:
+                return _fail(f"run_key refused: {exc}", True)
+        at_base = explicit_base | owned
         recorded_pre = {str(n) for n in prior["pre_existing"]}
-        pre_existing = sorted(n for n in ids if n in at_base or n in already or n in recorded_pre)
-        not_base_red = sorted(
-            n for n in ids if n in vouched and n not in at_base and n not in already and n not in recorded_pre
-        )
-        skip = set(pre_existing) | set(not_base_red)
+        prior_red = already | recorded_pre
+        pre_existing = sorted(n for n in ids if n in explicit_base or n in prior_red)
+        owned_red = sorted(n for n in ids if n in owned and n not in explicit_base and n not in prior_red)
+        not_base_red = sorted(n for n in ids if n in vouched and n not in at_base and n not in prior_red)
+        skip = set(pre_existing) | set(owned_red) | set(not_base_red)
     else:
-        pre_existing, not_base_red, skip = [], [], set()
+        pre_existing, owned_red, not_base_red, skip = [], [], [], set()
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
     foreign_node = {n for n in ids if n not in skip and _node_file(n) in foreign_set}
     implication = _implication(repo_root, [n for n in ids if n not in skip and n not in foreign_node], edited, created)
@@ -661,7 +807,7 @@ def review_reverify(
             unattributed.append(node)
 
     if probe == "open":
-        return _open_probe(repo_root, snapshot_dir, list(implication), implicated, created_set, side)
+        return _open_probe(repo_root, snapshot_dir, list(implication), implicated, created_set, side, run_id, plan_path)
 
     plan: _Plan = {}
     refs_by_rel: Dict[str, list] = {}
@@ -705,9 +851,25 @@ def review_reverify(
             refs_by_rel[rel] = inv.reverted
 
     unattributed.extend(n for n in not_base_red if n not in unattributed)
+    candidates = [n for n in unattributed if n not in not_base_red]
+    if cause_files is None and candidates:
+        cause_files = _derive_cause_files(repo_root, candidates, failing_output)
+    sibling_owned, foreign_red = _sibling_owned(repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path)
+    if sibling_owned or foreign_red:
+        unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]
     refusal = _orphaned_importer(repo_root, plan, edited, created) or _dangling(repo_root, view, manifest, plan)
     if refusal:
         return _fail(refusal, True)
+
+    if plan:
+        from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
+
+        for rel in sorted(foreign_halted_withheld(repo_root, run_id or None, plan_path or None, sorted(plan))):
+            del plan[rel]
+            kept.append({
+                "path": rel, "tests": sorted(set(implicated[rel])),
+                "findings": [{"sidecar": None, "id": None, "reason": "peer-withheld"}],
+            })
 
     reverted: List[dict] = []
     for rel in sorted(plan):
@@ -752,6 +914,7 @@ def review_reverify(
         "reverted": [*prior["reverted"], *reverted],
         "unattributed": sorted(set(prior["unattributed"]) | set(unattributed)),
         "pre_existing": sorted(set(prior["pre_existing"]) | set(pre_existing)),
+        "owned_red": sorted(set(prior["owned_red"]) | set(owned_red)),
         "kept": [*prior["kept"], *kept],
     }
     atomic_write_bytes(record_path, (json.dumps(merged, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -760,6 +923,9 @@ def review_reverify(
         "reverted": reverted,
         "unattributed": unattributed,
         "pre_existing": pre_existing,
+        "owned_red": owned_red,
+        "sibling_owned": sibling_owned,
+        "foreign_red": foreign_red,
         "kept": kept,
         "foreign": foreign_ids,
         "index_residue": index_residue,
@@ -773,8 +939,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "review.reverify". Params: ``base`` (str), ``slice_prefix`` (str), optional
     ``session_id``, optional ``failing`` (list[str] node ids; presence selects revert mode),
     optional ``sidecars`` (list[str]), optional ``failing_before`` (list[str]), optional
-    ``failing_at_base`` (list[str]), optional ``probe`` (``"open"`` or ``"close"``). Keying scope:
-    show_top."""
+    ``failing_at_base`` (list[str]), optional ``probe`` (``"open"`` or ``"close"``), optional
+    ``run_id`` and ``plan_path`` (a probe open refuses a path another halted run withholds), optional
+    ``run_key`` (a run whose owned_red ids join ``failing_at_base``), optional
+    ``cause_files`` (``{node id: [paths]}``; the caller must supply it for a node to class
+    ``sibling_owned``), optional ``failing_output`` (``{node id: failure text}``; absent
+    ``cause_files``, the dirty repo paths named by the node id and its text are derived as cause files).
+    Keying scope: show_top."""
     probe = params.get("probe")
     shape = probe if probe in ("open", "close") else None
     revert = params.get("failing") is not None and shape is None
@@ -793,8 +964,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _fail("review.reverify failing_at_base must be a list of node ids", revert, shape)
     if sidecars is not None and not isinstance(sidecars, list):
         return _fail("review.reverify sidecars must be a list of paths", revert, shape)
+    cause_files = params.get("cause_files")
+    if cause_files is not None and not (
+        isinstance(cause_files, dict) and all(isinstance(v, list) for v in cause_files.values())
+    ):
+        return _fail("review.reverify cause_files must map node ids to lists of paths", revert, shape)
+    failing_output = params.get("failing_output")
+    if failing_output is not None and not isinstance(failing_output, dict):
+        return _fail("review.reverify failing_output must map node ids to failure text", revert, shape)
     return review_reverify(
         repo_root,
+        cause_files=cause_files,
+        failing_output={str(k): str(v) for k, v in failing_output.items()} if failing_output else None,
         base=str(params.get("base") or ""),
         slice_prefix=str(params.get("slice_prefix") or ""),
         session_id=str(params.get("session_id") or ""),
@@ -803,4 +984,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         failing_before=[str(i) for i in failing_before] if failing_before else None,
         failing_at_base=[str(i) for i in failing_at_base] if failing_at_base is not None else None,
         probe=shape,
+        run_id=str(params.get("run_id") or ""),
+        plan_path=str(params.get("plan_path") or ""),
+        run_key=str(params.get("run_key") or ""),
     )

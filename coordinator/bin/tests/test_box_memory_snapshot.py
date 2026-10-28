@@ -57,6 +57,7 @@ def _run(argv, **kw):
     kw.setdefault("cache_host_fn", _cache())
     kw.setdefault("proc_table_fn", lambda: TABLE)
     kw.setdefault("cmdline_fn", _cmdline)
+    kw.setdefault("floor_fn", lambda: 0)
     CMDLINE_CALLS.clear()
     return mod.main(argv, platform="win32", **kw)
 
@@ -108,6 +109,48 @@ def test_admit_peak_subtracts_reserved_both_sides(tmp_path, capsys):
     assert rc == 4 and "reserved=16.0GiB" in out and "available:" in out
     kw["alive_fn"] = lambda p: False
     assert _run(["--admit-peak", "25", "--admission-file", path], **kw) == 0
+
+
+def test_registered_command_reservation_holds_second(tmp_path, capsys):
+    path = str(tmp_path / "admission.jsonl")
+    kw = dict(rss_fn=lambda p: 1024.0, alive_fn=lambda p: True)
+    base = ["--admission-file", path, "--command-key", "k"]
+    assert _run(base + ["--admit-peak", "20", "--register-pid", "77"], **kw) == 0
+    capsys.readouterr()
+    # peak 20 fits avail 40, but 20 - 1 GiB RSS stays reserved: 40 - 19 = 21 < 1.25 * 20.
+    rc = _run(["--admission-file", path, "--admit-peak", "20"], **kw)
+    out = capsys.readouterr().out
+    assert rc == 4 and "reserved=19.0GiB" in out
+    # release frees it
+    assert _run(base + ["--release-pid", "77", "--admit-peak", "20"], **kw) == 0
+
+
+def test_dead_holder_reservation_freed(tmp_path):
+    path = str(tmp_path / "admission.jsonl")
+    base = ["--admission-file", path, "--command-key", "k"]
+    kw = dict(rss_fn=lambda p: 0.0)
+    assert _run(base + ["--admit-peak", "20", "--register-pid", "77"], alive_fn=lambda p: True, **kw) == 0
+    assert _run(["--admission-file", path, "--admit-peak", "20"], alive_fn=lambda p: True, **kw) == 4
+    assert _run(["--admission-file", path, "--admit-peak", "20"], alive_fn=lambda p: False, **kw) == 0
+
+
+def test_hold_when_peak_fits_but_not_floor_plus_peak(tmp_path, capsys):
+    # avail 40: peak 31 needs 38.75 by cushion (fits) but 10 + 31 = 41 with a 10 GiB floor (does not).
+    adm = ["--admit-peak", "31", "--admission-file", str(tmp_path / "a.jsonl")]
+    assert _run(adm, floor_fn=lambda: 10 * GIB) == 4
+    assert "available:" in capsys.readouterr().out
+    assert _run(adm, floor_fn=lambda: 0) == 0
+
+
+def test_recorded_peak_keeps_max_and_drives_admit(tmp_path, capsys):
+    path = str(tmp_path / "admission.jsonl")
+    base = ["--admission-file", path, "--command-key", "k"]
+    _run(base + ["--record-peak", "3"])
+    _run(base + ["--record-peak", "1"])
+    assert host.read_recorded_peak(path, "k") == 3.0
+    capsys.readouterr()
+    assert _run(base) == 0
+    assert "peak=3.0GiB" in capsys.readouterr().out
 
 
 def test_admit(capsys):

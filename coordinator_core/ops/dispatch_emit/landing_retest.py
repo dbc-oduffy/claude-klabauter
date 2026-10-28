@@ -71,11 +71,24 @@ def landing_fingerprint(worktree_root: Path, paths: Sequence[str]) -> dict[str, 
     return out
 
 
+def own_sizing_rel(root: Path, run_dir: Path) -> str:
+    """The run's own sizing path (posix, repo-relative) as its ``run.json``/``halted.json`` names it,
+    or ``""`` when absent or outside the sizings home. run.json sits in the exempt run dir, so a chunk
+    can write it: only a path under the sizings home is exempt."""
+    from coordinator_core.ops.dispatch_emit.run_write_set import _sizing_rel
+    from coordinator_core.session.record_homes import home_dir
+
+    sizing = (_sizing_rel(run_dir) or "").replace("\\", "/")
+    sizings_dir = Path(home_dir(str(root), "sizings")).relative_to(root).as_posix() + "/"
+    return sizing if sizing.startswith(sizings_dir) else ""
+
+
 def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping]:
     """The retest verdict for ``run_id``, only while it still describes the tree: the record's
-    ``run_id`` matches (``.workflow`` suffix ignored), no commit since the record's HEAD changed a ``covered`` path or a module in its import closure,
-    and every ``covered`` file hashes as recorded. None otherwise, including for an unreadable or
-    malformed file or an unreadable git tree.
+    ``run_id`` matches (``.workflow`` suffix ignored) and every judged ``covered`` file (landing paths
+    and import closure, as the writer recorded them) hashes as recorded, whatever HEAD is now. An
+    empty judged set proves nothing, so it is fresh only at the record's own HEAD. None otherwise,
+    including for an unreadable or malformed file or an unreadable git tree.
 
     A ``stale`` record (``stale: true`` or status ``"stale"``) and a ``running`` one measured
     nothing, so neither is ever a fresh verdict."""
@@ -108,8 +121,14 @@ def fresh_targeted_verdict(worktree_root: Path, run_id: str) -> Optional[Mapping
     own_dir = (Path(home_dir(str(worktree_root), "warp")) / bare_run_id(run_id)).relative_to(
         Path(worktree_root)
     ).as_posix() + "/"
-    judged = [p for p in covered if not str(p).replace("\\", "/").startswith(own_dir)]
-    if record["head"] != head and not _footprint_unchanged_between(worktree_root, record["head"], head, judged):
+    # The run's own sizing is shipped and stamped by the terminal commit after verify; the exclusion
+    # is that one path the record names, never a chunk-written one.
+    own_sizing = own_sizing_rel(Path(worktree_root), Path(worktree_root) / own_dir)
+    judged = [
+        p for p in covered
+        if not (norm := str(p).replace("\\", "/")).startswith(own_dir) and norm != own_sizing
+    ]
+    if not judged and record["head"] != head:
         return None
     if landing_fingerprint(worktree_root, judged) != {p: covered[p] for p in judged}:
         return None
@@ -156,7 +175,8 @@ def _imported_files(root: Path, rel: str) -> set[str]:
 
 
 def _import_closure(root: Path, paths: Sequence[str]) -> list[str]:
-    """``paths`` plus every repo ``.py`` file they import transitively, POSIX-normalised, capped."""
+    """``paths`` plus every repo ``.py`` file they import transitively, POSIX-normalised, capped.
+    The retest writer seeds ``covered`` from it."""
     seen: dict[str, None] = dict.fromkeys(str(p).replace("\\", "/") for p in paths)
     queue = [p for p in seen if p.endswith(".py")]
     while queue and len(seen) < _CLOSURE_FILE_CAP:
@@ -165,21 +185,6 @@ def _import_closure(root: Path, paths: Sequence[str]) -> list[str]:
                 seen[dep] = None
                 queue.append(dep)
     return list(seen)
-
-
-def _footprint_unchanged_between(worktree_root: Path, old_sha: str, new_sha: str, covered: Sequence[str]) -> bool:
-    """True only when no covered path, nor any module in their import closure, differs between the
-    two commits' trees. An empty ``covered`` proves nothing, so it is False. One batched in-process tree read; any read failure is False (stale).
-    The closure is read from the worktree: a module deleted by a peer commit, ``conftest.py`` and
-    ``importlib`` imports are outside the footprint."""
-    from coordinator_core.git import ref_cas_retry
-
-    paths = _import_closure(Path(worktree_root), covered)
-    if len(paths) >= _CLOSURE_FILE_CAP:
-        return False
-    if not paths:
-        return False
-    return ref_cas_retry.paths_unchanged_between(worktree_root, old_sha, new_sha, paths) is True
 
 
 def _ran_nothing(tests_run: object) -> bool:
@@ -263,40 +268,3 @@ def _failed_nodes(params: Mapping, verdict: Optional[Mapping]) -> list[str]:
         out += [str(n) for n in raw] if isinstance(raw, (list, tuple)) else [raw] if isinstance(raw, str) else []
     out += named_failures(params.get("task_output_path"))
     return list(dict.fromkeys(n.strip() for n in out if n.strip()))
-
-
-def _changed_since_base(worktree_root: Path, params: Mapping, run_id: Optional[str], files: list[str]) -> list[str]:
-    """The ``files`` not proven unchanged since the run base (all of them when no base is known)."""
-    base = run_base_for(worktree_root, run_id, params)
-    if not base:
-        return files
-    from coordinator_core.ops.dispatch_emit import landing_integrity
-
-    # Looked up on landing_integrity at call time, not bound from this module: tests patch the
-    # landing_integrity attribute, and a module-level reference here would bypass the patch.
-    unchanged = landing_integrity._unchanged_since_base
-    if unchanged(worktree_root, base, files):
-        return []
-    if len(files) == 1:
-        return files
-    return [f for f in files if not unchanged(worktree_root, base, [f])]
-
-
-def _unchanged_since_base(worktree_root: Path, base: str, paths: Sequence[str]) -> bool:
-    """True when every path is byte-identical in the worktree, HEAD and ``base``; in-process."""
-    from coordinator_core.git import ref_cas_retry
-    from coordinator_core.git.git_state import head_blobs, head_sha
-
-    head = head_sha(worktree_root)
-    if not head or ref_cas_retry.paths_unchanged_between(worktree_root, base, head, paths) is not True:
-        return False
-    blobs = head_blobs(worktree_root, paths)
-    for rel in paths:
-        entry = blobs.get(rel)
-        try:
-            data = (Path(worktree_root) / rel).read_bytes()
-        except OSError:
-            return entry is None
-        if entry is None or hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() != entry[1]:
-            return False
-    return True

@@ -7,7 +7,7 @@ from pathlib import Path
 from coordinator_core.ops.dispatch_emit.peer_claim_contract import CONTRACT, ROUTES
 
 _ROOT = Path(__file__).resolve().parents[4]
-_HEADING = "## Peer-held path at terminal commit: path-level, no hunk carry"
+_HEADING = "## Peer-held path at terminal commit"
 _FIELDS = (
     "peer_claim_contract",
     "peer_claims_by_session",

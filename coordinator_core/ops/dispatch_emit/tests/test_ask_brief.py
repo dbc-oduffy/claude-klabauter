@@ -38,9 +38,25 @@ def test_context_outside_repo_refused(tmp_path):
         load_em_brief(root, brief="x", brief_file=None, context=["../out.md"])
 
 
-def test_over_cap_refused(tmp_path):
-    with pytest.raises(EmBriefRefused, match="exceeds"):
-        load_em_brief(tmp_path, brief="a" * (EM_BRIEF_BYTE_CAP + 1), brief_file=None)
+def test_over_cap_spills_instead_of_refusing(tmp_path):
+    full = "a" * (EM_BRIEF_BYTE_CAP + 1)
+    b = load_em_brief(tmp_path, brief=full, brief_file=None)
+    assert len(b.text.encode("utf-8")) == EM_BRIEF_BYTE_CAP
+    assert len(b.advisories) == 1 and "over" in b.advisories[0]
+    spill = tmp_path / b.context[0]
+    assert spill.read_text(encoding="utf-8") == full
+    assert receipt_fields(b)["advisories"] == list(b.advisories)
+
+
+def test_over_cap_brief_file_is_its_own_spill(tmp_path):
+    (tmp_path / "big.md").write_text("b" * (EM_BRIEF_BYTE_CAP + 5))
+    b = load_em_brief(tmp_path, brief=None, brief_file="big.md")
+    assert b.context[0] == "big.md" and len(b.advisories) == 1
+
+
+def test_under_cap_has_no_advisory(tmp_path):
+    b = load_em_brief(tmp_path, brief="x", brief_file=None)
+    assert b.advisories == () and "advisories" not in receipt_fields(b)
 
 
 def test_brief_file_read_and_empty_refused(tmp_path):

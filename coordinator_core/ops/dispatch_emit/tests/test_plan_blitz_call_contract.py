@@ -75,6 +75,21 @@ def test_planblitz_call_carries_every_required_key(repo, capsys, resolvable, rou
     assert call.rindex("gateReportPath: REPO_ROOT + '/' + _sizingRel") > call.index("...{")
 
 
+def test_default_resolve_carries_parallel_review_chatty_does_not(monkeypatch, tmp_path):
+    roster = {"plan_review": {
+        "agents": [{"agentType": "a:x", "model": "m", "tiers": ["XXL"]}],
+        "revise": {"agentType": "a:r", "model": "m"},
+    }}
+    contract = tmp_path / "contract"
+    contract.mkdir()
+    (contract / "review-roster-fragment.json").write_text(json.dumps(roster), encoding="utf-8")
+    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: None)
+    default = plan_blitz_args.resolve(plugin_root=tmp_path, engine_root=None, sizing_abs="s")
+    chatty = plan_blitz_args.resolve(plugin_root=tmp_path, engine_root=None, sizing_abs="s", chatty_run_id="r")
+    assert default["parallelReview"]["tiers"] == {"a:x": ["XXL"]}
+    assert "parallelReview" not in chatty and "chattyReview" in chatty
+
+
 @pytest.mark.parametrize("route", _ROUTE_PARAMS)
 def test_unresolvable_sidecar_refuses_at_emit_on_every_route(repo, capsys, monkeypatch, route):  # noqa: F811
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: None)

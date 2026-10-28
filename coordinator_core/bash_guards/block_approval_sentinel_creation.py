@@ -1700,13 +1700,6 @@ def gate_disable_denial(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     cmd = (tool_input.get("command") if isinstance(tool_input, dict) else None) or ""
     if not _turns_gate_off(cmd.replace("\r", "")):
         return None
-    from coordinator_core.write_guards.guard_doctrine_surface_edits import (
-        pm_approval_fresh,
-    )
-
-    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
-    if pm_approval_fresh(cwd, payload):
-        return None
     from coordinator_core.guard_messages.alternative_record import AdaptableOffer
 
     record = sentinel_record(

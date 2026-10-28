@@ -98,6 +98,44 @@ def test_predicate_only_on_a_rag_absent_tree_invokes_no_op(gate, tmp_path, monke
     assert out["coverage"] is None
 
 
+def _detected(monkeypatch, registry_roots):
+    from coordinator_core.install import rag_fleet_registration as reg
+
+    install = reg.RagInstall(root=Path("/rag"), interpreter="py")
+    monkeypatch.setattr(reg, "detect_example_retrieval_repo", lambda: install)
+    monkeypatch.setattr(reg, "registered_roots", lambda rag: {reg._canon(r) for r in registry_roots})
+
+
+def test_unregistered_repo_with_rag_detected_carries_defect(gate, tmp_path, monkeypatch):
+    _detected(monkeypatch, [])
+
+    out = gate.run_gate({"repo_root": str(tmp_path), "claude_klabauter_root": str(tmp_path), "run_id": "r", "predicate_only": True})
+
+    pred = out["rag_predicate"]
+    assert pred["rag_registered"] is False
+    assert pred["defect"]["kind"] == "unregistered-repo"
+    assert "python scripts/setup.py" in pred["defect"]["fix"]
+
+
+def test_registered_repo_with_rag_detected_has_no_defect(gate, tmp_path, monkeypatch):
+    _detected(monkeypatch, [tmp_path])
+
+    pred = gate._rag_predicate(str(tmp_path))
+
+    assert pred["rag_registered"] is True
+    assert "defect" not in pred
+
+
+def test_rag_absent_on_box_leaves_predicate_unchanged(gate, tmp_path, monkeypatch):
+    from coordinator_core.install import rag_fleet_registration as reg
+
+    monkeypatch.setattr(reg, "detect_example_retrieval_repo", lambda: None)
+
+    pred = gate._rag_predicate(str(tmp_path))
+
+    assert set(pred) == {"rag_present", "checked_path", "reason"}
+
+
 def test_without_predicate_only_a_rag_absent_tree_still_runs_extraction(gate, tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(gate, "_invoke_op", lambda *a, **k: calls.append(a) or (1, None, "boom"))

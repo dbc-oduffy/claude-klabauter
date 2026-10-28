@@ -1,4 +1,6 @@
 """gate_v2._info: a baton whose own disposition is coded reports both gates open, nothing blocking."""
+import pytest
+
 from coordinator_core.roadmap import gate_v2
 from coordinator_core.roadmap.tests.test_gate_v2 import baton, by_id, plan, root  # noqa: F401
 
@@ -74,3 +76,23 @@ def test_blocker_with_executing_plan_opens_planning_and_closes_execution(root):
         "open": False,
         "blocking": [{"blocker": "running", "disposition": "plan-approved"}],
     }
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        {"deliverable_id": "d-x"},
+        {"governing_plan": "docs/plans/shipped.md"},
+        {"sizing_object": "state/sizings/s.yaml"},
+    ],
+)
+def test_baton_with_implemented_plan_is_never_a_blitz_candidate(root, link):
+    plan(root, "shipped", status="implemented", deliverable_id="d-x", sizing_object="state/sizings/s.yaml", title="s")
+    baton(root, "b", **link)
+    assert _row(root, "b")["candidate"] is False
+
+
+def test_baton_with_draft_plan_stays_a_blitz_candidate(root):
+    plan(root, "wip", status="draft", deliverable_id="d-x", title="w")
+    baton(root, "b", deliverable_id="d-x")
+    assert _row(root, "b")["candidate"] is True

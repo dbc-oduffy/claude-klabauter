@@ -77,12 +77,11 @@ silent-inherit hole this module exists to close. Mirrors
 `enforce_agent_model_pin`'s own fail-closed stance on pin-resolution
 failure, applied to the parent-model question instead of the pin question.
 
-GATED RUNGS 1 AND 3 ARE REWRITTEN, NOT DENIED (PM asks, 2026-09-22 for
-rung 3, 2026-10-13 for rung 1). A gated tier resolved from an explicit
-`model` param or by inheritance is rewritten to `model: "sonnet"` via
-`updatedInput` and proceeds, with one advisory line. A deny at the default
-guard level degraded to an advisory and the Opus dispatch ran anyway; a
-rewrite cannot degrade. Rung 2 -- a gated non-`opus` frontmatter pin -- is a
+RUNG 3 IS REWRITTEN, RUNG 1 IS DENIED. A gated tier resolved by inheritance
+is rewritten to `model: "sonnet"` via `updatedInput` and proceeds, with one
+advisory line. A gated tier from an explicit `model` param is denied: the
+caller asked for a model, and a rewrite shown only as hook context ran a
+judge silently on Sonnet. The refusal names the opus-pinned personas. Rung 2 -- a gated non-`opus` frontmatter pin -- is a
 human-authored declaration, so it hard-denies at every guard level rather
 than being quietly overridden.
 
@@ -349,6 +348,24 @@ def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
     )
 
 
+def _explicit_request_reason(
+    subagent_type: str, passed_model: str, pins: Dict[str, Any]
+) -> str:
+    """Refusal for an explicit gated `model` request; names opus-pinned personas, never the grant mechanism."""
+    personas = sorted(
+        name
+        for name, entry in pins.items()
+        if isinstance(entry, dict) and entry.get("model") == "opus"
+    )
+    routes = ", ".join(personas[:6]) if personas else "coordinator:staff-eng"
+    return (
+        f"AGENT DISPATCH BLOCKED: subagent_type={subagent_type!r} requested "
+        f"model {passed_model!r}; the request is not rewritten, and a PM grant "
+        f"is the only way to run it. Opus-pinned personas: {routes}. "
+        "Or pass model: \"sonnet\"/\"haiku\"."
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
@@ -440,13 +457,20 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not gated:
         return None
 
-    if passed_model is not None or effective_model is None:
-        source = "requested" if passed_model is not None else "inherited"
+    if passed_model is not None:
+        return _resolved_deny(
+            deny(
+                "PreToolUse",
+                _explicit_request_reason(subagent_type, passed_model, pins),
+            )
+        )
+
+    if effective_model is None:
         return rewrite_input(
             "PreToolUse",
             {**tool_input, "model": _INHERITED_REWRITE_MODEL},
             f"MODEL SWITCHED: {subagent_type!r} runs as {_INHERITED_REWRITE_MODEL}, not "
-            f"the {source} {resolved_model!r} -- {_INHERITED_REWRITE_MODEL} fits most "
+            f"the inherited {resolved_model!r} -- {_INHERITED_REWRITE_MODEL} fits most "
             f"agent work. For Opus-grade judgment, dispatch a named persona.",
         )
 

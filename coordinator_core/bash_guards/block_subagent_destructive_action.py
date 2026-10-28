@@ -57,7 +57,7 @@ env var in subagent context -- there is NO subagent-reachable escape hatch
 (contrast ``block_subagent_plan_body_bash_write.py``, which DOES honor
 ``COORDINATOR_OVERRIDE_SUBAGENT_PLAN_BODY``). The Python port MUST NOT add
 one. A sanctioned destructive op routes back through the EM main-loop, which
-is never blocked by this guard (no agent_id -> allow).
+is never blocked by this guard (no agent_id and no agent_type/subagent_type -> allow).
 
 FAIL POSTURE -- two independent rules from two different sibling families:
   - Fail OPEN (allow) on every unevaluable input (missing/malformed
@@ -76,9 +76,9 @@ Anti-scope (do NOT extend without a spec update):
     three named classes (docker destructive verbs, kill/pkill of a
     non-liveness-check shape, DB-client DROP/TRUNCATE) -- e.g. do NOT turn
     the docker or DB-client surfaces into a default-deny-with-allowlist like
-    v1's git/rm/chmod-chown, and do NOT attempt self-vs-non-self process
-    scoping for kill/pkill (the memo's own recommendation, taken here, is to
-    defer that distinction entirely rather than half-match it).
+    v1's git/rm/chmod-chown. `kill`/`Stop-Process -Id` allow only PIDs
+    `agent_process_ownership.pid_owned_by_agent` proves launched by the calling
+    agent; pkill/killall never allow.
 
 FAIL-OPEN OBSERVABILITY (2026-07-29 addition, PM-authorized, observability
 only -- see "FAIL-OPEN OBSERVABILITY" comment block above `_log_fail_open`
@@ -87,7 +87,8 @@ Coordinator-content-repo state/audits/2026-07-29-destructive-git-guard-inconsist
 a `git rm --cached` denied in one repo and silently allowed the identical
 shape in another, and `check()` returning `None` on ANY of the three
 fail-open branches above wrote nothing anywhere, so the incident could not
-be reproduced after the fact. Each of the three fail-open branches now
+be reproduced after the fact. Each fail-open branch (and the main-thread
+`no-agent-id-key` allow, under the label `main-thread-out-of-scope`) now
 appends an identity-resolution-tuple record to a settings-home-rooted,
 guard-specific log (`_fail_open_log_path`) whenever Layer 1 has ALREADY
 flagged the command as touching a dangerous surface -- ordinary benign
@@ -407,14 +408,12 @@ surface already denied:
     NAMED deny list, not a default-deny-with-allowlist surface like v1's
     git ladder (the memo's ask was to "distinguish", not to build a docker
     allowlist).
-  - `_evaluate_kill_surface` -- denies `kill`/`pkill` UNLESS the only flag
-    present is `-0` (the liveness-check shape: sends no signal, only tests
-    whether the target exists). The memo's own recommendation is taken
-    verbatim here: scoping "a process this subagent launched" vs "an
-    unrelated one sharing the box" needs a live process-tree fact this text
-    classifier has no access to, so rather than half-match that distinction,
-    every real signal (any flag other than bare `-0`, any target) is denied
-    outright -- deferred, not attempted.
+  - `_evaluate_kill_surface` -- denies `kill`/`pkill`/`killall` UNLESS the
+    only flag present is `-0` (the liveness-check shape: sends no signal)
+    or the command is `kill` of numeric PIDs that ALL pass
+    `pid_owned_by_agent` for the payload's raw `agent_id` (the ledger of
+    that agent's own Bash commands plus one process-table read). pkill and
+    killall are never allowed.
   - `_evaluate_dbclient_surface` -- for a FIXED set of DB-client binaries
     (`psql`/`mysql`/`mariadb`/`sqlite3`), inspects the statement text passed
     via `-c`/`--command`/`-e`/`--execute` (space- or `=`-attached) for a
@@ -439,12 +438,13 @@ behavior undocumented.
 from __future__ import annotations
 
 import contextvars
+import fnmatch
 import os
 import re
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.bash_guards._command_tokenizer import (
     _skip_wrapper_own_argv,
@@ -481,7 +481,7 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import (
 # resolves empty, and this guard FAILS OPEN where legacy bash DENIES. This module imports
 # the ALREADY-CORRECT canonical resolver (write_guards.block_subagent_plan_body_write._resolve_subagent_identity)
 # instead, per the same workaround that guard already uses -- see its own docstring.
-CLASS = "hard-deny"
+CLASS = "advisory"
 
 GENERATES = []
 MATCHERS = COMMAND_TOOL_NAMES
@@ -536,7 +536,7 @@ _RM_DENY_RE = re.compile(
 # `_evaluate_dbclient_surface`).
 _DOCKER_SURFACE_RE = re.compile(_BOUNDARY_PRE + r"docker" + _BOUNDARY_POST, re.MULTILINE)
 _KILL_SURFACE_RE = re.compile(
-    _BOUNDARY_PRE + r"(?:kill|pkill)" + _BOUNDARY_POST, re.MULTILINE
+    _BOUNDARY_PRE + r"(?:kill|pkill|killall)" + _BOUNDARY_POST, re.MULTILINE
 )
 _DBCLIENT_SURFACE_RE = re.compile(
     _BOUNDARY_PRE + r"(?:psql|mysql|mariadb|sqlite3)" + _BOUNDARY_POST, re.MULTILINE
@@ -1398,50 +1398,38 @@ def _evaluate_docker_surface(cmd_norm: str) -> Optional[str]:
 
 
 #: The ONLY flag this matcher treats as a no-signal liveness check
-#: (`kill -0 <pid>` tests existence, sends nothing) -- anything else,
-#: including a bare `kill <pid>` (default `-TERM`), is denied outright per
-#: the memo's own "defer entirely rather than half-match" recommendation.
+#: (`kill -0 <pid>` tests existence, sends nothing). Any other signal needs
+#: every target PID proven owned by the calling agent.
 _KILL_LIVENESS_ONLY_RE = re.compile(r"^-0$")
 
-
-def _pid_in_session_tree(pid: int) -> bool:
-    """True when `pid` is a live descendant of this session's `claude`
-    process (`CLAUDE_PID`, exported to every hook). psutil's `parents()`
-    validates each link by create time, so a recycled parent PID breaks the
-    chain and the answer is False. No spawn; psutil is imported only when a
-    subagent names an explicit PID. Session-scoped: a subagent's own launch
-    and a peer's are indistinguishable here."""
-    try:
-        claude_pid = int(os.environ.get("CLAUDE_PID", ""))
-    except ValueError:
-        return False
-    if pid <= 1 or claude_pid <= 1 or pid == claude_pid:
-        return False
-    try:
-        import psutil
-
-        return any(p.pid == claude_pid for p in psutil.Process(pid).parents())
-    except Exception:
-        return False
+#: (raw agent_id, session_id) of the payload under evaluation, for the
+#: PowerShell leg whose classifier signature carries no payload.
+_AGENT_CTX: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
+    "_subagent_agent_ctx", default=("", "")
+)
 
 
-def _all_pids_in_session_tree(values: List[str]) -> bool:
-    if not values:
+def _all_pids_owned_by_agent(values: List[str], agent_id: str, session_id: str) -> bool:
+    """True when `values` is non-empty, all numeric, and every PID is proven
+    launched by `agent_id` (ledger plus process-table read)."""
+    if not values or not agent_id:
         return False
     pids = []
     for value in values:
         if not value.isdigit():
             return False
         pids.append(int(value))
-    return all(_pid_in_session_tree(p) for p in pids)
+    from coordinator_core.bash_guards.agent_process_ownership import pid_owned_by_agent
+
+    return all(pid_owned_by_agent(p, agent_id, session_id) for p in pids)
 
 
 _KILL_SIGNAL_FLAG_RE = re.compile(r"^-(?:\d{1,2}|(?:SIG)?[A-Za-z]{2,8})$")
 
 
-def _kill_targets_session_pids(args: List[str]) -> bool:
+def _kill_targets_owned_pids(args: List[str], agent_id: str, session_id: str) -> bool:
     """`kill [-SIGNAL | -s SIGNAL | -n NUM] [--] <numeric pid>...` where every
-    pid is in the session tree. Anything else (job specs, `$!`, negative or
+    pid is owned by the agent. Anything else (job specs, `$!`, negative or
     zero pids, name-based `pkill`) is not provable."""
     pids: List[str] = []
     i = 0
@@ -1461,16 +1449,16 @@ def _kill_targets_session_pids(args: List[str]) -> bool:
             continue
         pids.append(tok)
         i += 1
-    return _all_pids_in_session_tree(pids)
+    return _all_pids_owned_by_agent(pids, agent_id, session_id)
 
 
 _PS_STOP_PROCESS_SAFE_SWITCHES = frozenset({"-force", "-passthru", "-whatif"})
 _PS_STOP_PROCESS_SAFE_VALUED = frozenset({"-erroraction", "-ea"})
 
 
-def _ps_stop_process_targets_session_pids(rest: List[str]) -> bool:
+def _ps_stop_process_targets_owned_pids(rest: List[str]) -> bool:
     """`Stop-Process -Id <n>[,<n>...]` (plus `-Force`/`-PassThru`/`-WhatIf`/
-    `-ErrorAction x`) where every pid is in the session tree. `-Name`,
+    `-ErrorAction x`) where every pid is owned by the agent in `_AGENT_CTX`. `-Name`,
     `-InputObject`, positional or pipeline-fed targets are not provable."""
     values: List[str] = []
     i = 0
@@ -1497,16 +1485,15 @@ def _ps_stop_process_targets_session_pids(rest: List[str]) -> bool:
                     break
         else:
             return False
-    return _all_pids_in_session_tree(values)
+    agent_id, session_id = _AGENT_CTX.get()
+    return _all_pids_owned_by_agent(values, agent_id, session_id)
 
 
-def _evaluate_kill_surface(cmd_norm: str) -> Optional[str]:
-    """Deny `kill`/`pkill` UNLESS the only flag token present is the bare
-    liveness-check `-0`. Scoping "a process this subagent itself launched"
-    vs "an unrelated one sharing the box" needs a live process-tree fact
-    this text classifier has no access to, so no attempt is made here --
-    every real-signal shape denies, not just ones a heuristic happens to
-    flag (module comment "DESTRUCTIVE-ACTION GUARD v2").
+def _evaluate_kill_surface(cmd_norm: str, agent_id: str = "", session_id: str = "") -> Optional[str]:
+    """Deny `kill`/`pkill`/`killall` UNLESS the only flag token present is
+    the bare liveness-check `-0`, or the segment is a `kill` whose numeric
+    PIDs are all proven launched by `agent_id` (`pid_owned_by_agent`).
+    pkill and killall match by name and are never allowed.
     """
     all_tokens = _tokenize_full_command(cmd_norm)
     if all_tokens is None:
@@ -1518,14 +1505,14 @@ def _evaluate_kill_surface(cmd_norm: str) -> Optional[str]:
         if not working:
             continue
         head_base = _normalize_executable_basename(working[0])
-        if head_base not in ("kill", "pkill"):
+        if head_base not in ("kill", "pkill", "killall"):
             continue
         flags = [tok for tok in working[1:] if tok.startswith("-") and tok != "--"]
         if flags == ["-0"] or (len(flags) == 1 and _KILL_LIVENESS_ONLY_RE.match(flags[0])):
             continue
-        if head_base == "kill" and _kill_targets_session_pids(working[1:]):
+        if head_base == "kill" and _kill_targets_owned_pids(working[1:], agent_id, session_id):
             continue
-        return f"{head_base} (process signal -- scoping deferred, see memo D2)"
+        return f"{head_base} (process signal -- target not proven launched by this agent)"
     return None
 
 
@@ -2299,6 +2286,8 @@ _SCRATCH_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar
 )
 _SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge|init)\b")
 _REPOINTS_GIT_RE = re.compile(r"(?:^|[\s;&|(])cd\s|\s-C\s|--git-dir|--work-tree")
+#: A single leading `cd <absolute dir> &&`, the one re-point whose landing directory is knowable.
+_LEADING_CD_RE = re.compile(r"""\s*cd\s+["']?([^\s"';&|]+)["']?\s*&&\s*""")
 #: `git clone` options that take a separate argument; `--template`/`--separate-git-dir`/
 #: `-u`/`--upload-pack`/`--config` can install hooks or run a program and are refused.
 _CLONE_OPTS_WITH_ARG = frozenset({"-b", "--branch", "-o", "--origin", "--depth", "-j", "--jobs", "--filter", "--reference"})
@@ -2312,14 +2301,51 @@ def _repo_root_of(start: Path) -> Optional[Path]:
     return None
 
 
+_REPOINT_TARGET_RE = re.compile(r"""(?:^|[\s;&|(])(?:cd|git\s+-C|-C)\s+("[^"]*"|'[^']*'|[^\s;&|)]+)""")
+_REPOINT_OTHER_RE = re.compile(r"--git-dir|--work-tree")
+
+
+def _same_repo_repoint(cmd: str, here: Path, root: Path) -> Optional[Path]:
+    """The one directory every `cd`/`-C` in `cmd` lands on, when it lies inside the repo `root`;
+    None when any target is dynamic, escapes the repo, or the targets differ."""
+    if _REPOINT_OTHER_RE.search(cmd):
+        return None
+    landed = set()
+    for m in _REPOINT_TARGET_RE.finditer(cmd):
+        target = m.group(1).strip("\"'").replace("\\", "/")
+        if not target or target.startswith("-") or any(c in target for c in "$`~*?"):
+            return None
+        path = Path(target)
+        try:
+            landed.add((path if path.is_absolute() else here / path).resolve())
+        except OSError:
+            return None
+    if len(landed) != 1:
+        return None
+    (dest,) = landed
+    if dest != root and root not in dest.parents:
+        return None
+    return dest if _repo_root_of(dest) == root else None
+
+
 def _scratch_ctx_for(cmd: str, cwd: Optional[str]) -> Optional[tuple]:
     """`(cwd, main_root, in_scratch_clone)`, read off the filesystem (no spawn)."""
-    if not cwd or not _SCRATCH_VERB_RE.search(cmd) or _REPOINTS_GIT_RE.search(cmd):
+    if not cwd or not _SCRATCH_VERB_RE.search(cmd):
         return None
+    if _REPOINTS_GIT_RE.search(cmd):
+        lead = _LEADING_CD_RE.match(cmd)
+        rest = cmd[lead.end():] if lead else ""
+        if not lead or _REPOINTS_GIT_RE.search(rest) or not os.path.isabs(lead.group(1)):
+            return None
+        cwd = lead.group(1)
     here = Path(cwd).resolve()
     root = _repo_root_of(here)
     if root is None:
         return None
+    if _REPOINTS_GIT_RE.search(cmd):
+        here = _same_repo_repoint(cmd, here, root)
+        if here is None:
+            return None
     for ancestor in root.parents:
         if ancestor.name == "scratch" and (ancestor.parent / ".git").exists():
             return (here, ancestor.parent, True)
@@ -2374,9 +2400,16 @@ def _with_backslashes_restored(remaining: List[str]) -> List[str]:
     return remaining
 
 
-def _clone_into_scratch(remaining: List[str]) -> bool:
-    if _SCRATCH_CTX.get() is None:
+def _clone_dest_in_session_scratchpad(dest_name: str) -> bool:
+    """`dest_name` lies under this session's scratchpad (absolute, or cwd-relative when the command
+    does not `cd`)."""
+    sp = _SP_CTX.get()
+    if sp is None or (sp[2] and not os.path.isabs(dest_name)):
         return False
+    return _scratchpad_target(dest_name) is not None
+
+
+def _clone_into_scratch(remaining: List[str]) -> bool:
     remaining = _with_backslashes_restored(remaining)
     positionals: List[str] = []
     skip = False
@@ -2398,7 +2431,7 @@ def _clone_into_scratch(remaining: List[str]) -> bool:
         dest_name = positionals[1]
     else:
         return False
-    return _dest_in_scratch(dest_name)
+    return _dest_in_scratch(dest_name) or _clone_dest_in_session_scratchpad(dest_name)
 
 
 #: `git init` options that take a separate argument. `--template` copies hooks from a caller-
@@ -2712,6 +2745,71 @@ def _cd_precedes_delete(flat: str) -> bool:
     return False
 
 
+def _any_cd_segment(flat: str) -> bool:
+    tokens = _tokenize_full_command(flat)
+    for seg in _segments_from_tokens(tokens or []):
+        words = list(seg[0] if isinstance(seg, tuple) else seg)
+        while words and _ASSIGN_TOKEN_RE.match(words[0]):
+            words.pop(0)
+        if words and _normalize_executable_basename(words[0]) in _CD_HEADS:
+            return True
+    return False
+
+
+def _own_pathspec_revert(seg: str, subcmd: str, remaining: Optional[List[str]]) -> bool:
+    """True for `<marker> git checkout -- <file>...` / `git restore [--] <file>...` on files the marked
+    row declares and where no peer run holds an unlanded hunk.
+
+    The operands are plain repo files: no option, ref, glob, directory, repoint or `cd`. A file whose
+    HEAD blob cannot be read, or whose reverted bytes would drop a peer's hunk
+    (`live_write_guard.check_live_write`), is refused. Zero spawns.
+    """
+    from coordinator_core.bash_guards import _declared_delete_license as lic
+    from coordinator_core.ops.dispatch_emit import live_write_guard
+
+    ctx = _DECL_CTX.get()
+    remaining = list(remaining or ())
+    if ctx is None or not ctx.get("cwd"):
+        return False
+    if subcmd == "checkout":
+        if not remaining or remaining[0] != "--":
+            return False
+        operands = remaining[1:]
+    else:
+        operands = remaining[1:] if remaining[:1] == ["--"] else remaining
+    if not operands or any(o.startswith("-") for o in operands):
+        return False
+    try:
+        tokens = shlex.split(seg)
+    except ValueError:
+        return False
+    idx = len(tokens) - len(remaining) - 1
+    if idx < 0 or tokens[idx] != subcmd:
+        return False
+    if any(t.startswith(_GIT_GLOBAL_REPOINT_PREFIXES) for t in tokens[:idx] if t.startswith("-")):
+        return False
+    cwd = ctx["cwd"]
+    root = _repo_root_of(Path(cwd))
+    if root is None or _any_cd_segment(ctx["cmd"]):
+        return False
+    rels: List[str] = []
+    for op in operands:
+        rel = lic.normalize_operand(op, cwd, root)
+        if rel is None or (root / rel).is_dir():
+            return False
+        rels.append(rel)
+    if _git_rm_verdict_marker(seg, ctx, root, rels) is not None:
+        return False
+    marker = lic.parse_marker(seg)
+    for rel in rels:
+        head = live_write_guard._head_lines(root, rel)
+        if head is None:
+            return False
+        if live_write_guard.check_live_write(root, marker.run_id, rel, b"".join(head)):
+            return False
+    return True
+
+
 def _rm_tracked_verdict(rm_segments: List[tuple], cwd: Optional[str]) -> Optional[str]:
     """None unless a direct `rm` segment names a tracked repo file its own marker does not declare.
 
@@ -2811,6 +2909,11 @@ def _evaluate_git_segment_anchored(
         if second in _REMOTE_MUTATING_SUBCOMMANDS:
             return f"git remote {second}"
         return "unrecognized git remote subcommand (default-deny)"
+
+    if _DECLARED_DELETE_CHANNEL_LIVE and subcmd in ("checkout", "restore") and _own_pathspec_revert(
+        seg, subcmd, remaining
+    ):
+        return None
 
     if subcmd == "checkout":
         if _CHECKOUT_DASHDASH_RE.search(seg) or _CHECKOUT_PATHSPEC_RE.search(seg):
@@ -2960,10 +3063,11 @@ def _evaluate_git_segment_anchored(
             return None
         ctx = _SCRATCH_CTX.get()
         if ctx is not None:
-            return f"git clone (only into {(ctx[1] / 'scratch').as_posix()}/)"
+            return f"git clone (only into {(ctx[1] / 'scratch').as_posix()}/ or the session scratchpad)"
         return (
-            "git clone (only into a repo's scratch/; no repo resolved from the cwd -- "
-            "run from inside the repo checkout, keep non-repo scratch files in the session scratchpad)"
+            "git clone (only into a repo's scratch/ or the session scratchpad; no repo resolved -- "
+            "clone to an absolute path under the session scratchpad, or run it from the repo "
+            "checkout with no cd/-C beyond one leading `cd <abs dir> &&`)"
         )
     if subcmd == "init":
         if _init_into_scratch(list(remaining or ())) or _scratchpad_fixture_init(list(remaining or ())):
@@ -3185,7 +3289,11 @@ def _evaluate_tokenized(cmd_text: str, depth: int = 0) -> _TokenSurfaces:
 
         if norm_head == "rm":
             result.is_rm = True
-            if _RM_DENY_RE.search(seg_norm_text) and result.deny_kind is None:
+            if (
+                _RM_DENY_RE.search(seg_norm_text)
+                and result.deny_kind is None
+                and not _rm_only_regenerable(seg_norm_text)
+            ):
                 result.deny_kind = "rm -r/-f (recursive or force)"
             after_dashdash = False
             operands: List[str] = []
@@ -3755,6 +3863,67 @@ _SCRATCH_DELETE_ROUTE_LINE = (
     "    `coordinator-invoke scratch.delete`.\n"
 )
 
+_TRASH_ROUTE_LINE = (
+    "  - A chunk's declared delete anywhere in the repo goes through\n"
+    "    `coordinator-invoke run.paths_trash` (params run_id, chunk_id, paths).\n"
+)
+
+#: Regenerable build/cache directories, as trailing path components: a recursive rm of one loses
+#: nothing a rebuild does not restore.
+_REGENERABLE_DIRS: Tuple[Tuple[str, ...], ...] = (
+    (".next",),
+    (".atlas-builds",),
+    (".ddct", "pglite-pre-*"),
+    ("raw_sources", "image-hashes-cache"),
+    ("__pycache__",),
+    (".pytest_cache",),
+)
+_RM_SEGMENT_SPLIT = frozenset({";", "&&", "||", "|", "&", "\n"})
+
+
+def _operand_is_regenerable(operand: str) -> bool:
+    if any(c in operand for c in "*?[]$`~") or operand.startswith("-"):
+        return False
+    parts = [p for p in operand.replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        return False
+    for pattern in _REGENERABLE_DIRS:
+        width = len(pattern)
+        for i in range(len(parts) - width + 1):
+            if all(fnmatch.fnmatchcase(parts[i + j], pattern[j]) for j in range(width)):
+                return True
+    return False
+
+
+def _rm_only_regenerable(cmd: str) -> bool:
+    """True when every `rm` in `cmd` is a plain segment whose operands are all regenerable
+    build/cache dirs, and no other segment hides an `rm` (xargs, a `-c` payload)."""
+    try:
+        lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|")
+        lex.whitespace_split = True
+        tokens = list(lex)
+    except ValueError:
+        return False
+    segments: List[List[str]] = [[]]
+    for tok in tokens:
+        if tok in _RM_SEGMENT_SPLIT or set(tok) <= set(";&|"):
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+    seen_rm = False
+    for seg in segments:
+        if not seg:
+            continue
+        if seg[0] != "rm":
+            if any(re.search(r"(^|[\s/])rm(\s|$)", t) for t in seg):
+                return False
+            continue
+        seen_rm = True
+        operands = [t for t in seg[1:] if t != "--" and not t.startswith("-")]
+        if not operands or not all(_operand_is_regenerable(o) for o in operands):
+            return False
+    return seen_rm
+
 
 def _build_reason(
     deny_kind: str, agent_id: str, effective_type: str, cmd_safe: str, cmd: str = ""
@@ -3804,8 +3973,8 @@ def _build_reason(
             "    indirection.\n"
             "  - Building a command from stdin? Compute the argument list yourself\n"
             "    and run the target command directly instead of piping into xargs.\n"
-            "  - Needed the wrapper for a legitimately destructive op? Surface it to\n"
-            "    the EM — this guard does not block the main loop.\n\n"
+            "  - Needed the wrapper for a destructive op? Name the op in your report\n"
+            "    and run its engine route.\n\n"
             "There is NO subagent-honored override for this guard — evading it via a\n"
             "further layer of indirection is doctrine-forbidden fight-the-hook\n"
             "behavior, not a workaround (coordinator/CLAUDE.md § Self-Improvement Loop)."
@@ -3899,9 +4068,9 @@ def _build_reason(
             f"  Command:  {cmd_safe}\n\n"
             "Safe forward paths:\n"
             "  - Recovered a stash's content already (via `git show stash@{N}:<path>`)\n"
-            "    and just want the now-useless entry gone? Surface it to the EM —\n"
-            "    this guard does not block the main loop, which can drop it after\n"
-            "    confirming no sibling session still needs it.\n"
+            "    and just want the now-useless entry gone? Leave it and name the entry in\n"
+            "    your report: a stash entry costs nothing, and a sibling session may\n"
+            "    still need the one at that position.\n"
             "  - Never needed the stash in the first place? Use the no-stash\n"
             "    pre-existing-failure recipe instead (see the `stash pop/apply`\n"
             "    deny message, or executor doctrine § Pre-Existing-Failure\n"
@@ -3923,8 +4092,8 @@ def _build_reason(
             "    pathspec is required, and must name only files you authored).\n"
             "  - Just need a file's pre-edit content? Skip stash entirely:\n"
             "    `git show HEAD:<path>` into your scratchpad instead.\n"
-            "  - Need a full-tree stash for a legitimate reason? Surface it to\n"
-            "    the EM — this guard does not block the main loop.\n\n"
+            "  - Need a full-tree stash? Copy the files you need into your scratchpad\n"
+            "    instead; a stash on a shared tree captures sibling sessions' work.\n\n"
             "This is the caller-context lock realizing docs/plans/2026-07-13-subagent-\n"
             "destructive-action-em-lock.md: a subagent cannot reason about the shared\n"
             "branch's blast radius. Confirmed live (2026-07-26): an executor stashed\n"
@@ -3944,24 +4113,21 @@ def _build_reason(
             f"  Command:  {cmd_safe}\n\n"
             "Use instead:\n"
             "    machine-local get/has/keys/path/dir\n\n"
-            "Need to write a key? Surface it to the EM -- the main-loop is never\n"
-            "blocked by this guard. There is NO subagent-honored override -- but note\n"
-            "this is a speed bump at the shell surface, not a capability boundary: a\n"
-            "subagent that can run Python can still write the registry directly,\n"
-            "unseen by this guard. Fix forward, or surface a genuine need to the EM."
+            "Need to write a key? Name the key and value in your report; the\n"
+            "registry is shared by every session on the box. This is a note at the\n"
+            "shell surface, not a capability boundary: an interpreter reaches the\n"
+            "registry too, unseen by this guard."
         )
-    if deny_kind.startswith(("kill ", "pkill ")) or "stop-process" in deny_kind.lower() or (
+    if deny_kind.startswith(("kill ", "pkill ", "killall ")) or "stop-process" in deny_kind.lower() or (
         deny_kind.startswith("PowerShell ") and "process termination" in deny_kind
     ):
         return (
-            "BLOCKED: this process is not provably a descendant of this session.\n\n"
+            "BLOCKED: this process is not provably launched by this agent.\n\n"
             f"  Subagent: {agent_id} ({effective_type})\n"
             f"  Denied:   {deny_kind}\n"
             f"  Command:  {cmd_safe}\n\n"
-            "Stopping it belongs to your main session (your dispatcher). Report the PID\n"
-            "there. Never ask a peer session or the Group EM to stop it: relaying a\n"
-            "denied action is permission laundering.\n"
-            "Allowed: `kill`/`Stop-Process -Id <pid>` of numeric PIDs under this session."
+            "Use instead: `kill <pid>` / `Stop-Process -Id <pid>` of a PID you launched\n"
+            "(numeric; pkill and killall are never allowed)."
         )
     if deny_kind.startswith(_GIT_RM_DENY_PREFIX):
         return (
@@ -4017,11 +4183,11 @@ def _build_reason(
             "this guard. Fix forward, or surface a genuine need to the EM."
         )
     return (
-        "BLOCKED: destructive git/rm/chmod-chown -R at the shell surface --\n"
-        "not a capability boundary; an interpreter reaches git.\n\n"
+        "BLOCKED: git/rm/chmod -R at the shell surface, not a capability\n"
+        "boundary (an interpreter reaches git).\n"
         f"  Denied:   {deny_kind}\n"
         f"  Command:  {cmd_safe}\n\n"
-        "Fix forward, or surface it to the EM."
+        "Route: the engine op for this change."
         + _commit_route_line(deny_kind)
     )
 
@@ -4034,6 +4200,8 @@ def _build_record(
     rung-B `mv` replacement (a ready command when the operands parse, else an
     adaptable template)."""
     summary = _build_reason(deny_kind, agent_id, effective_type, cmd_safe, cmd)
+    if deny_kind == "rm -r/-f (recursive or force)":
+        summary += "\n\nInstead of the rm:\n" + _TRASH_ROUTE_LINE.rstrip("\n")
     ready = adapt = None
     if deny_kind == "git mv (index-mutating rename)":
         ready = _git_mv_corrected_command(cmd)
@@ -4073,7 +4241,8 @@ def _build_record(
 # path (branch `no-agent-id-key` logs with git_root left unresolved rather
 # than paying a spawn to fill it in, since that branch fires for the
 # EM's own top-level Bash calls too and this module structurally never
-# adds identity-resolution cost there).
+# adds identity-resolution cost there). That branch is a main-thread allow,
+# not a fail-open: it logs under `_MAIN_THREAD_OUT_OF_SCOPE`.
 # ---------------------------------------------------------------------------
 _FAIL_OPEN_LOG_RELPATH = ("state", "destructive-guard-fail-open.log")
 _NOT_ATTEMPTED = "<not-attempted>"
@@ -4153,6 +4322,7 @@ def _log_fail_open(
     agent_type: str = "",
     subagent_type_present: bool = False,
     subagent_type: str = "",
+    label: str = "FAIL-OPEN",
 ) -> None:
     """Best-effort append a fail-open identity-resolution record to the
     settings-home fail-open log (see `_fail_open_log_path`).
@@ -4163,8 +4333,10 @@ def _log_fail_open(
     branch never tried to resolve one), the PRIMARY (`agent_type`) and
     SECONDARY (`subagent_type`) identity legs -- each distinguishing
     "absent from the payload"/"never computed" from "computed and empty"
-    via its own `*_present` flag -- which of the three fail-open branches
-    fired, and a safely-truncated command.
+    via its own `*_present` flag -- which branch fired, and a
+    safely-truncated command. `label` is the record's
+    leading token: `FAIL-OPEN` by default, `_MAIN_THREAD_OUT_OF_SCOPE` for
+    the main-thread allow (an allow, not a fail-open).
 
     A `session_id` matching `_is_synthetic_corpus_session` is dropped before
     any rotation check or write -- this package's own test corpus must never
@@ -4198,13 +4370,23 @@ def _log_fail_open(
             "cmd": _sanitize_command(cmd),
         }
         parts = " ".join(f"{k}={v!r}" for k, v in fields.items())
-        line = f"[{timestamp}] FAIL-OPEN {parts}\n"
+        line = f"[{timestamp}] {label} {parts}\n"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         from coordinator_core.session.claimed_write import append_claimed_line  # noqa: PLC0415 -- deferred: guard hot path
 
         append_claimed_line(log_path, line.encode("utf-8"))
     except Exception:  # noqa: BLE001 -- observability must never raise into check()
         pass
+
+
+_MAIN_THREAD_OUT_OF_SCOPE = "main-thread-out-of-scope"
+
+
+def _payload_names_a_subagent(payload: Dict[str, Any]) -> bool:
+    """True when a payload with no `agent_id` key still carries a non-empty
+    `agent_type` or `subagent_type`: such a payload is a subagent and must be
+    classified, never treated as the main thread."""
+    return bool(payload.get("agent_type") or payload.get("subagent_type"))
 
 
 def _sanitize_command(cmd: str) -> str:
@@ -4367,7 +4549,7 @@ def _evaluate_legacy_powershell_verbs(text):
         elif head in _PS_ICACLS_VERBS:
             return "PowerShell icacls (permission modification)"
         elif head in _PS_STOP_PROCESS_VERBS:
-            if _ps_stop_process_targets_session_pids(rest):
+            if _ps_stop_process_targets_owned_pids(rest):
                 continue
             return "PowerShell stop-process (process termination)"
     return None
@@ -4426,7 +4608,7 @@ def _evaluate_powershell_destructive(cmd_norm: str) -> Optional[str]:
             return f"PowerShell {head} (permission modification)"
 
         if head in _PS_STOP_PROCESS_VERBS:
-            if pipe_before or not _ps_stop_process_targets_session_pids(rest):
+            if pipe_before or not _ps_stop_process_targets_owned_pids(rest):
                 return f"PowerShell {head} (process termination)"
 
     return None
@@ -4563,6 +4745,20 @@ def _evaluate_powershell_git_destructive(cmd_norm: str) -> Optional[str]:
     return None
 
 
+def _record_agent_launch(payload: Dict[str, Any], cmd: str) -> None:
+    """Ledger the command of every subagent payload (raw `agent_id`) before any
+    surface gate can exit; never raises."""
+    raw_agent_id = payload.get("agent_id")
+    if not raw_agent_id:
+        return
+    try:
+        from coordinator_core.bash_guards.agent_process_ownership import record_agent_command
+
+        record_agent_command(payload.get("session_id") or "", raw_agent_id, cmd)
+    except Exception:
+        return
+
+
 def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """PowerShell-dialect leg of `check()` -- identity resolution mirrors the
     Bash leg's DUAL OR-resolver (module docstring "IDENTITY AXIS") exactly,
@@ -4581,19 +4777,25 @@ def _check_powershell(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     cmd_norm = cmd.replace("\r", "")
 
-    deny_kind = _evaluate_powershell_git_destructive(cmd_norm)
-    if deny_kind is None:
-        deny_kind = _evaluate_powershell_destructive(cmd_norm)
+    _record_agent_launch(payload, cmd)
+    ctx_token = _AGENT_CTX.set((payload.get("agent_id") or "", payload.get("session_id") or ""))
+    try:
+        deny_kind = _evaluate_powershell_git_destructive(cmd_norm)
+        if deny_kind is None:
+            deny_kind = _evaluate_powershell_destructive(cmd_norm)
+    finally:
+        _AGENT_CTX.reset(ctx_token)
     if deny_kind is None:
         return None
 
-    if "agent_id" not in payload:
+    if "agent_id" not in payload and not _payload_names_a_subagent(payload):
         _log_fail_open(
             "no-agent-id-key",
             payload,
             cmd,
             agent_type_present="agent_type" in payload,
             agent_type=payload.get("agent_type") or "",
+            label=_MAIN_THREAD_OUT_OF_SCOPE,
         )
         return None
 
@@ -4690,6 +4892,8 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     cmd_norm = cmd.replace("\r", "")
 
+    _record_agent_launch(payload, cmd)
+
     cmd_norm = _strip_heredoc_bodies(cmd_norm)
 
     # 2026-07-28 fix (SPACED-WINDOWS-PATH ARGV0 HOLE, see the module comment
@@ -4744,13 +4948,14 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ):
         return None
 
-    if "agent_id" not in payload:
+    if "agent_id" not in payload and not _payload_names_a_subagent(payload):
         _log_fail_open(
             "no-agent-id-key",
             payload,
             cmd,
             agent_type_present="agent_type" in payload,
             agent_type=payload.get("agent_type") or "",
+            label=_MAIN_THREAD_OUT_OF_SCOPE,
         )
         return None
 
@@ -4835,7 +5040,7 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             deny_kind = tok_surfaces.deny_kind
 
         if not deny and is_rm_surface:
-            if _RM_DENY_RE.search(cmd_norm):
+            if _RM_DENY_RE.search(cmd_norm) and not _rm_only_regenerable(cmd_norm):
                 deny = True
                 deny_kind = "rm -r/-f (recursive or force)"
 
@@ -4874,7 +5079,7 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 deny_kind = verdict
 
         if not deny and is_kill_surface:
-            verdict = _evaluate_kill_surface(cmd_norm)
+            verdict = _evaluate_kill_surface(cmd_norm, raw_agent_id, session_id)
             if verdict is not None:
                 deny = True
                 deny_kind = verdict

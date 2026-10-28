@@ -57,6 +57,21 @@ from coordinator_core.guard_messages.testing import envelope_of
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
+
+@pytest.fixture(autouse=True)
+def _verdict_visible(request, monkeypatch):
+    """The guard is demoted (absent from `deny_registry`), so `apply_guard_level` drops its
+    verdict. These tests judge the verdict logic itself; `test_demoted_*` runs unpatched."""
+    if request.node.name.startswith("test_demoted_"):
+        return
+    from coordinator_core import machine_profile
+
+    monkeypatch.setattr(
+        machine_profile,
+        "FLOOR_GUARDS",
+        machine_profile.FLOOR_GUARDS | {"bump-foreign-repo-write"},
+    )
+
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -2350,31 +2365,26 @@ def _consumer(monkeypatch):
     machine_profile.reset_cache()
 
 
-def test_consumer_level_warns_once_per_session_instead_of_denying(repos, monkeypatch):
+def test_demoted_verdict_is_advisory_allow_at_every_guard_level(repos, monkeypatch):
+    from coordinator_core import deny_registry, machine_profile
+
+    assert "bump-foreign-repo-write" not in deny_registry.GUARD_DENY_CLASS
     _set_anchor(monkeypatch, repos, "sess-warn-1")
-    _consumer(monkeypatch)
     cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
-
-    first = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-1", str(repos["anchor"]), {})
-    hso = first["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "allow"
-    assert "full context" in hso["additionalContext"]
-    assert "machine-local set coordinator.guard_level" in hso["additionalContext"]
-    assert "DR-298" not in hso["additionalContext"]
-    again = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-1", str(repos["anchor"]), {})
-    assert again is None
+    for level in ("warn", "off", "strict"):
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+        machine_profile.reset_cache()
+        out = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-1", str(repos["anchor"]), {})
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow", level
+        assert out["guardLevel"] == "log", level
 
 
-def test_off_level_is_silent_and_strict_override_denies(repos, monkeypatch):
-    _set_anchor(monkeypatch, repos, "sess-warn-2")
-    _consumer(monkeypatch)
-    cmd = f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x"
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "off")
-    assert _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-2", str(repos["anchor"]), {}) is None
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
-    denied = _enveloped(guard.check_bump_foreign_repo_write)(cmd, "sess-warn-2", str(repos["anchor"]), {})
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "DR-298" not in denied["hookSpecificOutput"]["permissionDecisionReason"]
+def test_demoted_cross_repo_verdict_text_is_fact_plus_route(tmp_path):
+    from coordinator_core.bash_guards import _write_bump_message as msg
+
+    reason = msg.render_em_message("coordinator-content-repo", "claude-klabauter", tmp_path, "sess")
+    assert "cross-repo-memo" in reason and "SendMessage" in reason
+    assert "refused" not in reason and "guard level" not in reason and "BLOCKED" not in reason
 
 
 def test_settings_home_inside_a_git_tracked_home_is_not_foreign(tmp_path, monkeypatch):

@@ -4,7 +4,9 @@ A composed ask script inlines the same sentences in many `agent(...)` prompts; t
 caps the script at a fixed byte size. `hoist_repeated_fragments` rewrites each single- or double-quoted
 string literal so a sentence-sized chunk that repeats across literals becomes a `_PFn` const reference,
 then collapses recurring runs of constant operands into `_PFCn` consts.
-The rewrite is concatenation-only, so every run-time string is unchanged.
+The rewrite is concatenation-only, so every run-time string is unchanged. Further passes share the
+`_PFn` namespace: adjacent `A + B` terms that repeat merge into one const, and a repeated JSON object or
+array literal (a stage schema) becomes one const.
 
 Trap: template literals, comments and regex literals are skipped, never hoisted into; the scanner
 decides regex-vs-division from the previous significant character.
@@ -12,7 +14,9 @@ decides regex-vs-division from the previous significant character.
 
 from __future__ import annotations
 
+import json
 import re
+from bisect import bisect_right
 from collections import Counter
 
 #: Module switch: False leaves the script untouched (the baseline the equality pin compares against).
@@ -23,11 +27,20 @@ MIN_CHUNK = 40
 _PREV_OPENERS = set("(,=:[!&|?{};+-*%<>~^")
 _ESC_UNIT = re.compile(r"\\.|[^\\]", re.S)
 _REF_NAME = "_PF{}"
+#: Shortest JSON object/array literal worth a const.
+MIN_JSON = 40
+_JSON_OPEN = re.compile(r'[\[{]"')
 
 
 def _scan_literals(src: str) -> list[tuple[int, int]]:
     """Spans (start, end-exclusive, quotes included) of single- and double-quoted literals outside templates, comments and regexes."""
+    return _scan(src)[0]
+
+
+def _scan(src: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """(single- and double-quoted literal spans, spans of templates, comments and regexes) of ``src``."""
     spans: list[tuple[int, int]] = []
+    dead: list[tuple[int, int]] = []
     n = len(src)
 
     def code(i: int, in_template_expr: bool) -> int:
@@ -43,15 +56,19 @@ def _scan_literals(src: str) -> list[tuple[int, int]]:
                     spans.append((i, j + 1))
                 i, prev = j + 1, c
             elif c == "`":
+                start = i
                 i = template(i + 1)
+                dead.append((start, i))
                 prev = "`"
             elif c == "/":
                 nxt = src[i + 1] if i + 1 < n else ""
                 if nxt == "/":
                     k = src.find("\n", i)
+                    dead.append((i, n if k < 0 else k))
                     i = n if k < 0 else k
                 elif nxt == "*":
                     k = src.find("*/", i + 2)
+                    dead.append((i, n if k < 0 else k + 2))
                     i = n if k < 0 else k + 2
                 elif prev == "" or prev in _PREV_OPENERS or src[max(0, i - 8) : i].rstrip().endswith(("return", "typeof")):
                     j, in_cls = i + 1, False
@@ -63,6 +80,7 @@ def _scan_literals(src: str) -> list[tuple[int, int]]:
                         elif src[j] == "]":
                             in_cls = False
                         j += 1
+                    dead.append((i, j + 1))
                     i, prev = j + 1, "/"
                 else:
                     i, prev = i + 1, "/"
@@ -94,7 +112,7 @@ def _scan_literals(src: str) -> list[tuple[int, int]]:
         return i
 
     code(0, False)
-    return spans
+    return spans, dead
 
 
 def _chunks(content: str) -> list[str]:
@@ -263,8 +281,6 @@ def hoist_repeated_fragments(script: str, *, anchor: str) -> str:
         # Saving: (cnt-1) copies gone minus a ~10-byte reference per use and the const line.
         if (cnt - 1) * len(chunk) - cnt * (len(ref) + 6) - len(ref) - 16 > 0:
             names[chunk] = ref
-    if not names:
-        return script
     out: list[str] = []
     last = 0
     for (s, e), chunks in zip(spans, per_literal):
@@ -292,12 +308,168 @@ def hoist_repeated_fragments(script: str, *, anchor: str) -> str:
     out.append(script[last:])
     body, composite_defs = _hoist_constant_runs("".join(out))
     defs = "".join(f"const {ref} = '{chunk}';\n" for chunk, ref in names.items()) + "".join(composite_defs)
-    at = body.index(anchor)
-    eol = body.index("\n", at) + 1
-    return body[:eol] + defs + body[eol:]
+    body, run_defs, count = _hoist_runs(body, len(names))
+    defs += run_defs
+    script = body
+    if defs:
+        eol = body.index("\n", body.index(anchor)) + 1
+        script = body[:eol] + defs + body[eol:]
+    return _hoist_json_values(script, anchor=anchor, first=count)
 
 
-_DEF_RE = re.compile(r"^const (_PF\d+) = '((?:\\.|[^\\'])*)';\n", re.M)
+def _json_end(src: str, i: int) -> int | None:
+    """End (exclusive) of the balanced double-quoted-JSON bracket group opening at ``i``, or None for anything else."""
+    depth, j, n = 0, i, len(src)
+    while j < n:
+        c = src[j]
+        if c == '"':
+            j += 1
+            while j < n and src[j] != '"':
+                j += 2 if src[j] == "\\" else 1
+        elif c in "{[":
+            depth += 1
+        elif c in "}]":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        elif c in "'`\n":
+            return None
+        j += 1
+    return None
+
+
+def _json_candidates(script: str) -> dict[str, list[int]]:
+    """Source text -> start offsets of each JSON object/array literal of at least MIN_JSON bytes in code position."""
+    lits, dead = _scan(script)
+    skip = sorted(lits + dead)
+    starts = [s for s, _ in skip]
+    out: dict[str, list[int]] = {}
+    for m in _JSON_OPEN.finditer(script):
+        i = m.start()
+        k = bisect_right(starts, i) - 1
+        if k >= 0 and skip[k][0] <= i < skip[k][1]:
+            continue
+        j = _json_end(script, i)
+        if j is None or j - i < MIN_JSON:
+            continue
+        text = script[i:j]
+        try:
+            json.loads(text)
+        except ValueError:
+            continue
+        out.setdefault(text, []).append(i)
+    return out
+
+
+def _hoist_json_values(script: str, *, anchor: str, first: int) -> str:
+    """Replace each repeated JSON literal (schemas) with a `_PFn` const reference, largest first, until none pays.
+
+    Trap: a reference shares one object across its uses; nothing the script composes mutates a schema.
+    """
+    n = first
+    while True:
+        cands = _json_candidates(script)
+        edits: list[tuple[int, int, str]] = []
+        defs: list[str] = []
+        for text in sorted((t for t, p in cands.items() if len(p) > 1), key=len, reverse=True):
+            pos = [p for p in cands[text] if not any(a <= p < b for a, b, _ in edits)]
+            name = _REF_NAME.format(n + len(defs))
+            if len(pos) < 2 or (len(pos) - 1) * len(text) - (len(pos) + 1) * len(name) - 14 <= 0:
+                continue
+            defs.append(f"const {name} = {text};\n")
+            edits.extend((p, p + len(text), name) for p in pos)
+        if not defs:
+            return script
+        n += len(defs)
+        for s, e, name in sorted(edits, reverse=True):
+            script = script[:s] + name + script[e:]
+        eol = script.index("\n", script.index(anchor)) + 1
+        script = script[:eol] + "".join(defs) + script[eol:]
+
+
+_TOKEN_RE = re.compile(r"\b_PF\d+\b")
+_RUN_PREV = set("(,=:?[{&|;+}>")
+
+
+def _hoist_runs(body: str, first: int) -> tuple[str, str, int]:
+    """Merge adjacent ``A + B`` string terms that repeat into `const _PFn = A + B;` lines (pair merging, repeated).
+
+    Terms are `_PFn` references and single-quoted literals outside templates, comments and regexes;
+    only terms joined by exactly ` + ` form a run. Names count up from ``first``. Returns the rewritten
+    body, the const lines and the next free name index.
+
+    Trap: each merge recounts every pair, so cost grows with const count x term count; the composed-script
+    size-budget test runs this on every shape but asserts bytes, not time.
+    """
+    lits, dead = _scan(body)
+    inside = [False] * (len(body) + 1)
+    for s, e in lits + dead:
+        for k in range(s, e):
+            inside[k] = True
+    toks = [(s, e) for s, e in lits] + [m.span() for m in _TOKEN_RE.finditer(body) if not inside[m.start()]]
+    toks.sort()
+    runs: list[list[tuple[int, int]]] = []
+    for t in toks:
+        if runs and body[runs[-1][-1][1] : t[0]] == " + ":
+            runs[-1].append(t)
+        else:
+            runs.append([t])
+    seqs: list[list[str]] = []
+    spans: list[tuple[int, int]] = []
+    for run in runs:
+        head = body[: run[0][0]].rstrip()
+        tail = body[run[-1][1] : run[-1][1] + 3].lstrip()
+        if len(run) < 2 or (head and head[-1] not in _RUN_PREV) or tail[:1] in (".", "[", "(", "*", "/", "%") or tail[:2] == "?.":
+            continue
+        seqs.append([body[a:b] for a, b in run])
+        spans.append((run[0][0], run[-1][1]))
+    defs: list[str] = []
+    while True:
+        where: dict[tuple[str, str], list[tuple[int, int]]] = {}
+        for si, seq in enumerate(seqs):
+            for k in range(len(seq) - 1):
+                where.setdefault((seq[k], seq[k + 1]), []).append((si, k))
+        best, gain = None, 0
+        for (a, b), occ in where.items():
+            if len(occ) < 2:
+                continue
+            ext = [a, b]
+            while a != b and all(k + len(ext) < len(seqs[si]) for si, k in occ):
+                nxt = {seqs[si][k + len(ext)] for si, k in occ}
+                if len(nxt) != 1:
+                    break
+                ext.append(nxt.pop())
+            cnt = len(occ)
+            width = sum(map(len, ext)) + 3 * (len(ext) - 1)
+            g = cnt * (width - 6) - (width + 22)
+            if g > gain:
+                best, gain = tuple(ext), g
+        if best is None:
+            break
+        name = _REF_NAME.format(first + len(defs))
+        defs.append(f"const {name} = {' + '.join(best)};\n")
+        for seq in seqs:
+            k = 0
+            while k <= len(seq) - len(best):
+                if tuple(seq[k : k + len(best)]) == best:
+                    seq[k : k + len(best)] = [name]
+                else:
+                    k += 1
+    if not defs:
+        return body, "", first
+    out: list[str] = []
+    last = 0
+    for (s, e), seq in zip(spans, seqs):
+        out.append(body[last:s])
+        out.append(" + ".join(seq))
+        last = e
+    out.append(body[last:])
+    return "".join(out), "".join(defs), first + len(defs)
+
+
+#: One const line of any hoist kind: a literal chunk, a `+` run of references and literals, or a JSON literal.
+_DEF_RE = re.compile(r"^const (_PF\d+) = ([^\n]*);\n", re.M)
+_REF = re.compile(r"\b_PF\d+\b")
 _OPERAND = r"(?:_PFC?\d+|'(?:\\.|[^\\'])*')"
 _COMPOSITE_RE = re.compile(rf"^const (_PFC\d+) = ({_OPERAND}(?: \+ {_OPERAND})*);\n", re.M)
 
@@ -309,8 +481,8 @@ def resolve_fragment_refs(script: str) -> str:
     body = _DEF_RE.sub("", _COMPOSITE_RE.sub("", script))
     for ref in sorted(composites, key=lambda r: int(r[4:]), reverse=True):
         body = re.sub(rf"\b{ref}\b", lambda _m, r=ref: composites[r], body)
-    for ref in sorted(defs, key=len, reverse=True):
-        body = re.sub(rf"\b{ref}\b", lambda _m, r=ref: "'" + defs[r] + "'", body)
+    while _REF.search(body):
+        body = _REF.sub(lambda m: defs[m.group()], body)
     return fold_literals(body)
 
 
@@ -318,7 +490,9 @@ def fold_literals(script: str) -> str:
     """Merge `'a' + 'b'` into `'ab'` over scanned literals, normalising each to single quotes, then unwrap `('x').m`."""
     out: list[str] = []
     last = 0
-    spans = _scan_literals(script)
+    # A double-quoted key or value inside a code-position JSON literal is JSON, not a JS string to normalise.
+    json_spans = [(i, i + len(t)) for t, starts in _json_candidates(script).items() for i in starts]
+    spans = [(a, b) for a, b in _scan_literals(script) if not any(x <= a < y for x, y in json_spans)]
     k = 0
     while k < len(spans):
         s, e = spans[k]

@@ -1,7 +1,7 @@
 """Pins the L plan-threshold raise (research row 'Plan threshold (principle)').
 
-Reverted: L routes plan again (#77); spec-dispatch at L needs the mechanically-uniform
-flag.
+Revert = set "L" back to "plan" in sizing_route_table._BASE_ROUTE_BY_TSHIRT and
+flip L_ROUTE below.
 """
 
 from coordinator_core import sizing_assemble as sa

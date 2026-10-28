@@ -153,6 +153,31 @@ class TestAssertNoArchivedTwin:
         with pytest.raises(HandoffArchivedTwinError):
             assert_no_archived_twin(target, tmp_path, handoff_id=None)
 
+    def test_stalled_scan_fails_closed_within_deadline(self, tmp_path, monkeypatch):
+        import time
+
+        from coordinator_core import handoff_creation_guard as hcg
+
+        _seed_archived(tmp_path, "2026-07/a.md", handoff_id="hnd-x-1")
+        real = hcg.run_bounded
+        monkeypatch.setattr(hcg, "run_bounded", lambda k, f, **kw: real(k, f, **{**kw, "deadline": 0.05}))
+        release = []
+
+        def slow(_path):
+            while not release:
+                time.sleep(0.01)
+            return None
+
+        monkeypatch.setattr(hcg, "_read_frontmatter_block", slow)
+        target = tmp_path / "state" / "handoffs" / "new.md"
+        start = time.monotonic()
+        try:
+            with pytest.raises(hcg.HandoffTwinScanStalled):
+                assert_no_archived_twin(target, tmp_path, handoff_id="hnd-x-1")
+        finally:
+            release.append(1)
+        assert time.monotonic() - start < 0.25
+
     def test_no_escape_parameter(self):
         sig = inspect.signature(assert_no_archived_twin)
         for forbidden in ("force", "escape", "override", "skip"):

@@ -93,17 +93,37 @@ def _run_cwd(cmd, cwd):
     return check({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(cwd)})
 
 
-def _reason(out):
-    return out["hookSpecificOutput"]["permissionDecisionReason"]
+def _raw(cmd, cwd):
+    return _check({"tool_name": "Bash", "tool_input": {"command": cmd, "timeout": 5}, "cwd": str(cwd)})
+
+
+def _rewritten(cmd, cwd):
+    out = _raw(cmd, cwd)
+    assert out is not None and out.verdict_kind == "rewrite", cmd
+    return out.updated_input["command"]
 
 
 @pytest.mark.parametrize("heavy", ["scratch", "data", "toolchains", "node_modules"])
-def test_heavy_tree_denies_recursive_grep_at_repo_root(tmp_path, heavy):
+def test_heavy_tree_recursive_grep_at_repo_root_is_rewritten_never_denied(tmp_path, heavy):
     root = _repo(tmp_path, heavy)
     for cmd in ("grep -rn foo .", "grep -r foo", f"cd {root.as_posix()} && grep -R foo .", f"grep -r foo {root.as_posix()}"):
-        out = _run_cwd(cmd, root)
-        assert out and out["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
-        assert heavy in _reason(out) and "--exclude-dir=" in _reason(out)
+        out = _raw(cmd, root)
+        assert out.verdict_kind == "rewrite", cmd
+        assert f"--exclude-dir={heavy} " in out.updated_input["command"], cmd
+        assert out.updated_input["timeout"] == 5
+        assert _run_cwd(cmd, root)["hookSpecificOutput"].get("permissionDecision") != "deny"
+
+
+def test_heavy_tree_rewrite_is_idempotent_and_whole_drive_scan_still_denies(tmp_path):
+    root = _repo(tmp_path)
+    again = _rewritten("grep -rn foo .", root)
+    assert _raw(again, root) is None
+    assert _run_cwd("grep -rn foo ~", root)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_heavy_tree_unrewritable_command_is_admitted_without_context(tmp_path):
+    root = _repo(tmp_path)
+    assert _raw("grep -rn foo . ; grep -rn bar .", root) is None
 
 
 def test_heavy_tree_allows_covered_scoped_or_non_repo(tmp_path):
@@ -124,16 +144,16 @@ def test_heavy_tree_allows_covered_scoped_or_non_repo(tmp_path):
     assert _run_cwd("grep -rn foo .", bare) is None
 
 
-def test_heavy_tree_partial_cover_still_denies_naming_only_the_uncovered(tmp_path):
+def test_heavy_tree_partial_cover_rewrites_adding_only_the_uncovered(tmp_path):
     root = _repo(tmp_path)
     (root / "data").mkdir()
-    out = _run_cwd("grep -rn --exclude-dir=scratch foo .", root)
-    assert out and "data" in _reason(out) and "walks scratch" not in _reason(out)
+    new = _rewritten("grep -rn --exclude-dir=scratch foo .", root)
+    assert new.startswith("grep --exclude-dir=data ") and new.count("--exclude-dir=scratch") == 1
 
 
 def test_heavy_tree_git_file_counts_as_repo_root(tmp_path):
     root = _repo(tmp_path, git_file=True)
-    assert _run_cwd("grep -rn foo .", root)
+    assert _rewritten("grep -rn foo .", root)
 
 
 def test_heavy_tree_msys_and_drive_spellings_of_the_root(tmp_path):
@@ -143,7 +163,7 @@ def test_heavy_tree_msys_and_drive_spellings_of_the_root(tmp_path):
     if len(posix) > 2 and posix[1] == ":":
         spellings.append("/" + posix[0].lower() + posix[2:])
     for sp in spellings:
-        assert _run_cwd(f"grep -r foo {sp}", tmp_path), sp
+        assert _rewritten(f"grep -r foo {sp}", tmp_path), sp
 
 
 def test_heavy_tree_unknown_cwd_allows_relative_target():
@@ -161,13 +181,12 @@ def test_heavy_tree_unreadable_root_allows(tmp_path, monkeypatch):
     assert _run_cwd("grep -rn foo .", root) is None
 
 
-def test_heavy_tree_deny_names_at_most_three_children(tmp_path):
+def test_heavy_tree_rewrite_excludes_every_uncovered_child(tmp_path):
     root = _repo(tmp_path)
     for n in ("data", "toolchains", "Saved", "Intermediate"):
         (root / n).mkdir()
-    reason = _reason(_run_cwd("grep -r foo .", root))
-    assert "walks Intermediate, Saved, data" in reason and "toolchains," not in reason.split("and outlives")[0]
-    assert "--exclude-dir={" in reason
+    new = _rewritten("grep -r foo .", root)
+    assert "--exclude-dir={Intermediate,Saved,data,scratch,toolchains}" in new
 
 
 def test_deny_is_a_floor_and_survives_a_warn_level():

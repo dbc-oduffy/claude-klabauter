@@ -57,6 +57,12 @@ pytestmark = [
 
 _SUBAGENT_TYPE = "coordinator:executor"
 
+_GENERIC_REASON = (
+    "Subagent commit logged. Commit route: hand the changed files to "
+    "the EM, or `coordinator-invoke ceremony.commit_v2` with explicit "
+    "`paths`."
+)
+
 
 def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
     p = {
@@ -1094,8 +1100,7 @@ def test_plain_commit_deny_message_is_still_the_generic_one(monkeypatch):
     command that did not reach a match through the reconstruction.
     """
     reason = _reason(monkeypatch, 'git commit -m "msg"')
-    assert "subagents may not commit" in reason
-    assert "report to the EM" in reason
+    assert reason == _GENERIC_REASON
     assert reason != guard._PYTHON_C_PAYLOAD_DENY_REASON
 
 
@@ -1800,11 +1805,7 @@ def test_ac15_backpointer_leg_alone_insufficient_denies(monkeypatch):
     # "denied, generic subagent" from "denied, git-commit-agent route"
     # via message content, even though the verdict is deny either way.
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert reason == (
-        "BLOCKED: subagents may not commit -- EM-only, enforced by caller "
-        "identity, no cooperative override. Finish your edits and report to "
-        "the EM instead: hand off changed files; the EM runs `git commit`."
-    )
+    assert reason == _GENERIC_REASON
     assert "scoped-git-commit" not in reason
 
 
@@ -2159,11 +2160,7 @@ def test_ac16_deny_message_unchanged_for_other_types(monkeypatch):
     _subagent(monkeypatch)
     result = _enveloped(guard.check)(_payload("git commit -m x", agent_type=_SUBAGENT_TYPE))
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert reason == (
-        "BLOCKED: subagents may not commit -- EM-only, enforced by caller "
-        "identity, no cooperative override. Finish your edits and report to "
-        "the EM instead: hand off changed files; the EM runs `git commit`."
-    )
+    assert reason == _GENERIC_REASON
 
 
 def test_ac16_deny_message_within_prose_cap_budget():
@@ -3396,7 +3393,7 @@ def test_ownership_leg_summary_keeps_the_cause_when_the_path_is_long():
 @pytest.mark.parametrize("shape", ["python3 {f}", "python3 -u {f} x", "python3 < {f}", "cd {d} && python3 {n}"])
 def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
     script = tmp_path / "land.py"
-    script.write_text("from coordinator_core.git." "commit import commit_paths\n")
+    script.write_text("from coordinator_core.git." "commit import commit_paths\ncommit_paths('s', ['a'])\n")
     cmd = shape.format(f=script.as_posix(), d=tmp_path.as_posix(), n=script.name)
     result = _enveloped(guard.check)(_payload(cmd))
     assert result is not None
@@ -3481,3 +3478,21 @@ def test_repo_relativize_pathspec_unwraps_literal_around_an_absolute_element():
     assert guard._repo_relativize_pathspec(
         [":(literal)" + _FAKE_REPO_ROOT + "/src/foo.py"], _FAKE_REPO_ROOT
     ) == (["src/foo.py"], False)
+
+
+def test_dispatch_logs_a_subagent_commit_and_returns_no_denial_text(monkeypatch):
+    import json
+
+    from coordinator_core import guard_advisory_counter as counter
+    from coordinator_core.bash_guards import dispatch
+
+    logged: list = []
+    monkeypatch.setattr(counter, "record_advisory_fire", lambda name, sid, cwd=None: logged.append(name))
+    _subagent(monkeypatch)
+    raw = json.dumps(_payload("git commit -m x", agent_type=_SUBAGENT_TYPE))
+    out = dispatch.evaluate_payload_json(raw)
+    hso = (out or {}).get("hookSpecificOutput", {})
+    assert hso.get("permissionDecision") != "deny"
+    assert _GENERIC_REASON not in (hso.get("additionalContext") or "")
+    assert not hso.get("permissionDecisionReason")
+    assert logged.count("block-subagent-commit") == 1

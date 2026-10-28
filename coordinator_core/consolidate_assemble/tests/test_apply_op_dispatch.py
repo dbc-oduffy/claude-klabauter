@@ -1,12 +1,12 @@
 """
 coordinator_core.consolidate_assemble.tests.test_apply_op_dispatch — C6
 coverage proving the plan's discriminator on consolidate_assemble's
-eight-entry table.
+dispatch table.
 
-Purpose: measured this chunk, none of consolidate's eight `_CLI_DISPATCH`
-entries (`delete-only`, `cherry-pick-and-delete`, `merge-and-delete`,
-`cherry-pick-only`, `merge-only`, `worktree-remove`, `worktree-prune`,
-`fetch-prune`) resolve to a registered op, so all eight stay `cli`-named and `ASSEMBLER_DISPATCHABLE` gains no
+Purpose: measured this chunk, none of consolidate's `_CLI_DISPATCH`
+entries (`delete-only`, `merge-and-delete`, `merge-only`, `merge-ours`,
+`worktree-remove`, `worktree-prune`,
+`fetch-prune`) resolve to a registered op, so all stay `cli`-named and `ASSEMBLER_DISPATCHABLE` gains no
 `"consolidate_assemble"` entry from this chunk — see the decision comment
 above `_CLI_DISPATCH` in `consolidate_assemble/apply.py`.
 
@@ -32,10 +32,9 @@ from coordinator_core.consolidate_assemble import apply as ca_apply
 
 _CONSOLIDATE_CLI_VERBS = (
     "delete-only",
-    "cherry-pick-and-delete",
     "merge-and-delete",
-    "cherry-pick-only",
     "merge-only",
+    "merge-ours",
     "worktree-remove",
     "worktree-prune",
     "fetch-prune",

@@ -2741,13 +2741,13 @@ def check_git_commit_safe_commit_advise(
                 "index — a peer's un-staged edits would be swept under "
                 "your subject too.\n\n"
                 "Use instead:\n"
-                "  git add -- <paths> && git commit -m %s -- <paths>"
+                "  ceremony.commit_v2 with paths=[<your files>] and the subject %s"
                 % (subject_operand,),
                 "this 'git commit' sweeps every modified tracked "
                 "file from the worktree ('-a'/'--all'), not just the "
                 "index — a peer's un-staged edits would be swept under "
                 "your subject too.",
-                (_offer("git add -- <paths> && git commit -m %s -- <paths>" % subject_operand, "the paths"),),
+                (_offer("ceremony.commit_v2 with paths=[<your files>] and the subject %s" % subject_operand, "the paths"),),
             ))
         # Fail-open legibility (`_record_probe_fail_open`): reaching here
         # after a failed index probe is NOT the same verdict as reaching here

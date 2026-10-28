@@ -61,6 +61,7 @@ def test_every_engine_owned_fold_site_returns_the_stage_reply_under_the_stage_re
     schema_of = ask_compose.STAGE_REPLY_SCHEMA
     assert set(schema_of["properties"]) == {
         "manifest_handle", "error", "owed_em_ids", "owed_plan", "parked", "plan_path",
+        "already_staged", "stage_in_flight",
     }
     for schema in (ask_compose._GATE_STAGED_SCHEMA, ask_compose._REWORD_SCHEMA, ask_compose._REVISE_STAGED_SCHEMA,
                    ask_compose._SPINE_REVIEW_STAGED_SCHEMA, ask_compose._REPLAN_STAGED_SCHEMA,

@@ -32,21 +32,21 @@ DENY_PREFIX = "[em-prefire-survey]"
 
 def prefire_deny_text(n: int, budget: int) -> str:
     return (
-        f"{DENY_PREFIX} {n} exploratory calls since the last turn with no engine-ask fire, "
-        f"budget {budget} (THE-EM-FIRES-ENGINE-ASK-WITHOUT-A-PREFIRE-SURVEY). "
+        f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (retries too). "
         + fire_step()
         + " A reworded or cd-prefixed retry of a survey call is denied too: fire the engine-ask now,"
-        " with what you already know in em_context. Exempt after a landing:"
+        " with what you already know in em_context. Not survey, never counted: reads and syntax"
+        " checks of files you wrote with Write/Edit since the last task or user turn, and"
+        " cross-repo-memo sends. Exempt after a landing:"
         " coordinator-invoke workflow.revise --params-file <file>."
     )
 
 
 def postlanding_deny_text(n: int, budget: int) -> str:
     return (
-        f"{DENY_PREFIX} {n} exploratory calls since the landing, budget {budget} "
-        "(THE-EM-FIRES-ENGINE-ASK-WITHOUT-A-PREFIRE-SURVEY). Spot-check one run, then send the gap "
-        "through workflow.revise (exempt form: coordinator-invoke workflow.revise --params-file <file>), or fire a follow-up engine-ask whose em_context quotes the "
-        "receipt's gap line."
+        f"{DENY_PREFIX} {n} exploratory calls since the landing, budget {budget} (verify). "
+        "Send the gap: coordinator-invoke workflow.revise --params-file <file> (exempt), "
+        "or fire a follow-up engine-ask quoting its gap line."
     )
 
 
@@ -151,7 +151,12 @@ def _decide(payload: dict) -> Optional[str]:
         transcript, prior, current_id, settings_home=home, current_call=(tool_name, tool_input)
     )
     pre_now, all_now = epw.classify(
-        tool_name, tool_input, state.get("opening") or "", home, named=state.get("named")
+        tool_name,
+        tool_input,
+        state.get("opening") or "",
+        home,
+        named=state.get("named"),
+        written=state.get("written"),
     )
     if state != prior:
         epw.save_state(path, state)
@@ -170,6 +175,9 @@ def _decide(payload: dict) -> Optional[str]:
     if phase == ers.PHASE_UNFIRED:
         if not over or state.get("fire_seen") or state.get("fired") or state.get("disarmed"):
             return None
+        from coordinator_core.hooks._em_write_budget import arm_advised
+
+        arm_advised(root, sid)
         return prefire_deny_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX)
     if phase in (ers.PHASE_LANDED_GREEN, ers.PHASE_HALTED) and phase.run_id:
         landings = dict(state.get("landings") or {})

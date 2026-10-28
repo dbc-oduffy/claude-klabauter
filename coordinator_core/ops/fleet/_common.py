@@ -1351,6 +1351,27 @@ def _persist_index_resync_failure(
     level, so a module-level import here would be circular.
     """
     try:
+        from coordinator_core.git_lock_retry import is_lock_contention
+
+        if is_lock_contention(reason):
+            from datetime import datetime, timezone
+
+            from coordinator_core.ops.fleet._index_resync_pending import record_advisory
+
+            holder_live = record_advisory(
+                worktree_root,
+                candidate_id=candidate_id,
+                op_label=op_label,
+                reason=reason,
+                recorded_at=datetime.now(timezone.utc).isoformat(),
+            )
+            _LOG.warning(
+                "%s: index resync for %r hit lock contention (index.lock present now: %s);"
+                " recorded as advisory state, no bug row",
+                op_label, candidate_id, holder_live,
+            )
+            return
+
         from coordinator_core.ops.queue_append import append_queue_entry
 
         if _bump_open_resync_failure_row(

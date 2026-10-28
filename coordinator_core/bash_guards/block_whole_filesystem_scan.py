@@ -6,13 +6,14 @@ Denied when the search root is `/`, a drive root (`C:`, `C:/`, `C:` plus a backs
   - `find <root> ...` (any start path before the first expression);
   - `rg`, `fd` with a positional path that is a root;
   - `grep -r` / `-R` / `--recursive` with a root operand.
-  - `grep -r` / `-R` whose target (`.` when none) is a repo root (holds `.git`) with a direct
-    child in HEAVY_TREE_NAMES (scratch, data, toolchains, node_modules, ...) not covered by an
-    `--exclude-dir` glob; one os.scandir, no walk. An unknown cwd with a relative target allows.
 A root that appears only inside a pattern or option value (`-path /x/y`,
 `-name`, the pattern operand) is not a search root and is allowed.
 
-No override; the heavy-tree case is floor too.
+`grep -r` / `-R` whose target (`.` when none) is a repo root (holds `.git`) with a direct
+child in HEAVY_TREE_NAMES (scratch, data, toolchains, node_modules, ...) not covered by an
+`--exclude-dir` glob is not a whole-drive scan: the call is rewritten to add the exclusion
+(admitted unchanged, logged, when it cannot be rewritten safely); one os.scandir, no walk.
+An unknown cwd with a relative target allows.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ _ROOT_RE = re.compile(
 HEAVY_TREE_NAMES = (DEFAULT_PRUNE_DIRS - {".git", ".hg", ".svn"}) | {
     "scratch", "scratch-hold", "data", "toolchains", "Intermediate", "Saved", "DerivedDataCache",
 }
+_ADMIT = object()
 _PRE_FILTER_RE =re.compile(r"\b(?:find|rg|grep|egrep|fgrep|fd|fdfind)\b")
 
 _RG_VALUE_OPTS = frozenset({
@@ -220,15 +222,19 @@ def _heavy_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> An
         if not uncovered:
             continue
         flag = "--exclude-dir=" + (uncovered[0] if len(uncovered) == 1 else "{" + ",".join(uncovered) + "}")
-        scoped = " ".join([toks[0], flag] + [shlex.quote(t) for t in toks[1:]])
-        from coordinator_core.guard_messages.alternative_record import AdaptableOffer, ReadyCommand
+        head_re = re.compile(r"(?<![\w./-])" + re.escape(toks[0]) + r"(?![\w.-])")
+        if len(head_re.findall(cmd_text)) != 1:
+            return _ADMIT
+        from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
 
-        return _record(
-            f"BLOCKED: `grep -r` at repo root {target} walks {', '.join(uncovered[:3])} "
-            "and outlives a Bash timeout.",
-            f" Scope it: `{scoped}` or a source subdirectory.",
-            ReadyCommand(text=scoped),
-            AdaptableOffer(template="grep a source subdirectory", what_to_adapt="the search root"),
+        scoped = head_re.sub(lambda m: f"{m.group(0)} {flag}", cmd_text, count=1)
+        return AlternativeRecord(
+            verdict_kind="rewrite",
+            guard_name="block-whole-filesystem-scan",
+            summary=f"`grep -r` at repo root {target} now skips {', '.join(uncovered[:3])}.",
+            em_text=f"`grep -r` at repo root now skips {', '.join(uncovered[:3])} ({flag}).",
+            members=(ReadyCommand(text=scoped),),
+            updated_input={"command": scoped},
         )
     return None
 
@@ -266,9 +272,34 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not cmd:
         return None
     try:
-        return _offence(cmd, payload.get("cwd") or None)
+        out = _offence(cmd, payload.get("cwd") or None)
     except Exception:
         return None
+    if out is _ADMIT:
+        _log_admit(payload)
+        return None
+    if getattr(out, "verdict_kind", "") == "rewrite":
+        import dataclasses
+
+        return dataclasses.replace(
+            out, updated_input={**tool_input, "command": out.updated_input["command"]}
+        )
+    return out
+
+
+def _log_admit(payload: Dict[str, Any]) -> None:
+    """Record an admitted repo-root grep it could not rewrite; telemetry only, never context."""
+    try:
+        from coordinator_core.guard_advisory_counter import record_advisory_fire
+
+        cwd = payload.get("cwd")
+        record_advisory_fire(
+            "block-whole-filesystem-scan",
+            str(payload.get("session_id") or ""),
+            cwd if isinstance(cwd, str) else None,
+        )
+    except Exception:  # noqa: BLE001 -- telemetry must never turn a guard into a crash
+        return
 
 
 def _record(summary: str, tail: str, *members: Any) -> Any:

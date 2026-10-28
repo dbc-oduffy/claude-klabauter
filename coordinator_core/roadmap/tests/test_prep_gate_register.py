@@ -8,6 +8,7 @@ deferred/waived row carries no ruling.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from coordinator_core.roadmap import prep_gate as pg
@@ -37,7 +38,11 @@ def _register_text(*rows: tuple[str, str, bool]) -> str:
     return "\n".join(out) + "\n"
 
 
-def _plan(root: Path, claims: str, sizing_object: str = "") -> Path:
+def _plan(root: Path, claims: str, sizing_object: str = "", cites: str | None = None) -> Path:
+    if cites is None:
+        m = re.search(r"rows: \[([^\]]*)\]", claims)
+        cites = f"[{m.group(1)}]" if m else "[]"
+    spine = _SPINE + (f"  register_rows: {cites}\n" if cites != "[]" else "")
     plans = root / "docs" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
     fm = [
@@ -55,7 +60,7 @@ def _plan(root: Path, claims: str, sizing_object: str = "") -> Path:
         fm.append(f"sizing_object: {sizing_object}")
     if claims:
         fm.append(claims)
-    body = ["", "# Fixture", "", "## Tasks", "", "```yaml plan-tasks", _SPINE.strip(), "```", ""]
+    body = ["", "# Fixture", "", "## Tasks", "", "```yaml plan-tasks", spine.strip("\n"), "```", ""]
     path = plans / "2026-10-09-fixture.md"
     path.write_text("---\n" + "\n".join(fm) + "\n---\n" + "\n".join(body), encoding="utf-8")
     return path
@@ -246,5 +251,61 @@ def test_no_pins_is_legacy_pass(tmp_path):
 
 
 def test_register_in_class_order_and_authoring_lines():
-    assert pg.CLASS_ORDER[-1] == "REGISTER"
+    assert pg.CLASS_ORDER[-2] == "REGISTER"
     assert any("sizing-assemble --register" in ln for ln in pg._authoring_fix_lines({"REGISTER"}))
+
+
+def _cited(root: Path, cites: str) -> dict:
+    _sizing(root, _register_text(("R1", "open", False), ("R2", "open", False)))
+    plan = _plan(root, _claims("[R1, R2]"), cites=cites)
+    return _gate(root, plan)["classes"]["REGISTER"]
+
+
+def test_row_citing_no_claimed_row_refused(tmp_path):
+    reg = _cited(tmp_path, "[R9]")
+    assert reg["kind"] == "register-citations" and "C1" in reg["detail"]
+
+
+def test_row_with_no_register_rows_refused(tmp_path):
+    reg = _cited(tmp_path, "[]")
+    assert reg["kind"] == "register-citations" and "C1" in reg["detail"]
+
+
+def test_claimed_row_cited_by_no_row_refused(tmp_path):
+    reg = _cited(tmp_path, "[R1]")
+    assert reg["kind"] == "register-citations" and "R2" in reg["detail"]
+    assert "C1" not in reg["detail"]
+
+
+def test_every_claimed_row_cited_passes(tmp_path):
+    assert _cited(tmp_path, "[R1, R2]")["status"] == "PASS"
+
+
+def test_deferred_row_citation_does_not_count(tmp_path):
+    _sizing(tmp_path, _register_text(("R1", "open", False), ("R2", "open", False)))
+    plan = _plan(tmp_path, _claims("[R1, R2]"), cites="[R1]")
+    text = plan.read_text(encoding="utf-8").replace("disposition: open", "disposition: deferred")
+    text = text.replace("```\n", "- id: C2\n  title: t\n  body: b\n  change_kind: code-edit\n"
+                        "  surface: coordinator_core/roadmap/prep_gate.py\n"
+                        "  writes: [coordinator_core/roadmap/prep_gate.py]\n  queue_scope: project\n"
+                        "  disposition: open\n  register_rows: [R2]\n```\n", 1)
+    plan.write_text(text, encoding="utf-8")
+    reg = _gate(tmp_path, plan)["classes"]["REGISTER"]
+    assert reg["kind"] == "register-citations" and "R1" in reg["detail"]
+
+
+def test_register_citations_defect_is_mechanical_with_repair_naming_rows(tmp_path):
+    reg = _cited(tmp_path, "[]")
+    assert reg["mechanical"] is True
+    assert "register_rows" in reg["repair"] and "C1" in reg["repair"]
+
+
+def test_orphan_claimed_id_repair_names_it(tmp_path):
+    reg = _cited(tmp_path, "[R1]")
+    assert reg["mechanical"] is True and "R2" in reg["repair"]
+
+
+def test_unruled_register_row_stays_non_mechanical(tmp_path):
+    _sizing(tmp_path, _register_text(("R1", "open", False), ("R2", "deferred", False)))
+    reg = _gate(tmp_path, _plan(tmp_path, _claims()))["classes"]["REGISTER"]
+    assert reg["kind"] == "register-row-unruled" and reg["mechanical"] is False

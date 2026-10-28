@@ -926,6 +926,37 @@ def build_no_governing_plan_judgment_point() -> dict[str, Any]:
     )
 
 
+def build_governing_plan_root_vs_consumed_judgment_point(
+    root_plan: str | None, consumed_plan: str | None
+) -> dict[str, Any]:
+    """Offered when a spinoff chain's root and consumed (head) handoffs name different
+    governing plans. No recommendation: which plan this close belongs to is the EM's call.
+    Takes the two plan fields, so it is outside `JUDGMENT_POINT_BUILDERS` (zero-arg roster)."""
+    return build_judgment_point(
+        None,
+        id="governing-plan-root-vs-consumed",
+        question=(
+            "The chain root handoff and the consumed (head) handoff name different governing "
+            "plans. Does this close belong to the consumed handoff's plan?"
+        ),
+        dispositions=[
+            build_disposition("consumed-plan-governs", resolves=[]),
+            build_disposition("root-plan-governs-rerun-with-plan", resolves=[]),
+        ],
+        evidence=(
+            f"chain root governing_plan: {root_plan or 'none'}; consumed handoff "
+            f"governing_plan: {consumed_plan or 'none'}. The close resolved the consumed "
+            "handoff's plan; to close against the root's, re-run brief with "
+            "decisions.governing_plan_slug / decisions.governing_plan_path"
+        ),
+        reason=(
+            "which plan a spinoff close belongs to is known only to the EM; the root's plan "
+            "may be a live peer's"
+        ),
+        revalidate_at_dispatch=False,
+    )
+
+
 def build_stranded_run_superseding_review_judgment_point(
     record_resolves_ids: list[str] | None = None,
 ) -> dict[str, Any]:

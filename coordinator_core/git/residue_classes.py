@@ -29,7 +29,7 @@ _TREE_ROOTS = (
     _home_rel("mise-inventory"),
     _home_rel("mise-workflows"),
     _home_rel("lessons"),
-    "state/apm-rulings",
+    _home_rel("apm-rulings"),
     "archive/releases",
 )
 ENGINE_RESIDUE_ROOTS = _TREE_ROOTS + (_PLANS_ROOT,)

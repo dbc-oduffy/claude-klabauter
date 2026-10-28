@@ -61,6 +61,22 @@ class TestSlugFromTitleWordBoundary(unittest.TestCase):
         self.assertEqual(len(slug), 40)
 
 
+class TestVeryLongTitleDefaultBasename(unittest.TestCase):
+    def test_very_long_title_default_basename_within_name_max(self):
+        for title in ("word " * 400, "a" * 600):
+            slug = _MOD._slug_from_title(title)
+            basename = f"2026-10-27-{slug}.md"
+            self.assertLessEqual(len(basename.encode("utf-8")), 255, basename)
+            self.assertTrue(slug)
+
+    def test_symbol_only_title_stays_empty(self):
+        self.assertEqual(_MOD._slug_from_title("---"), "")
+
+    def test_non_ascii_letters_never_reach_the_id_slug(self):
+        self.assertEqual(_MOD._slug_from_title("Café plan"), "caf-plan")
+        self.assertEqual(_MOD._slug_from_title("é" * 500), "")
+
+
 class TestMintArtifactIdBoundary(unittest.TestCase):
     def test_30_char_cut_on_separator_does_not_double_dash(self):
         slug = _MOD._slug_from_title(_BOUNDARY_TITLE)

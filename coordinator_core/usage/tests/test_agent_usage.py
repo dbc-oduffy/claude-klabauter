@@ -126,9 +126,25 @@ def test_tool_calls_peak_context_and_same_file_reads(tmp_path):
     assert row["max_same_file_reads"] == 2
 
 
+def test_rag_calls_counts_only_example_retrieval_repo_tools(tmp_path):
+    lines = [
+        _tool_msg("m1", "r1", [_tu("t1", "mcp__project-rag__project_symbol"), _tu("t2", "Read", "/a")],
+                  _u(1, 1, 0, 0)),
+        _tool_msg("m2", "r2", [_tu("t3", "mcp__project-rag__project_referencers"),
+                               _tu("t4", "mcp__other__example_retrieval_repo__x")], _u(1, 1, 0, 0)),
+    ]
+    (tmp_path / "agent-a.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("a", "a")])
+    row = scan_run(str(tmp_path))["agents"][0]
+    assert row["rag_calls"] == 2
+    assert row["tool_calls"] == 4
+
+
 def test_missing_transcript_zeroes_new_fields(tmp_path):
     _journal(tmp_path, [("ghost", "g")])
     row = scan_run(str(tmp_path))["agents"][0]
+    assert row["rag_calls"] == 0
     assert (row["tool_calls"], row["peak_context"], row["max_same_file_reads"]) == (0, 0, 0)
 
 

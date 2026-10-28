@@ -302,7 +302,7 @@ def empty_working_set(pid: int) -> None:
 _ADMISSION_TAIL_BYTES = 1 << 20
 
 
-def admission_file() -> "Path":
+def admission_file() -> Path:
     """Default admission channel: ``<settings-home>/state/group-em/box/admission.jsonl``."""
     import os
     from pathlib import Path
@@ -377,6 +377,74 @@ def reserved_bytes(path, rss_fn=tree_rss_mb, alive_fn=pid_alive) -> int:
     return int(total_mb * 1024 * 1024)
 
 
+def guard_floor_bytes() -> int:
+    """The suite guard's free-RAM floor in bytes, read from its own config key; 0 when unreadable."""
+    try:
+        from coordinator_core import machine_resolver
+        from coordinator_core.bash_guards._heavy_admission_contract import KEY_FREE_RAM_FLOOR_MB
+
+        return max(0, int(machine_resolver.merged_flat_registry()[KEY_FREE_RAM_FLOOR_MB])) * 1048576
+    except Exception:
+        return 0
+
+
+def peaks_file(admission_path) -> Path:
+    """Recorded-peak store, a sibling of the admission channel."""
+    return Path(admission_path).with_name("command-peaks.json")
+
+
+def read_recorded_peak(admission_path, key: str) -> float | None:
+    """Largest peak in GiB recorded for ``key``, or None."""
+    import json
+
+    try:
+        value = json.loads(Path(peaks_file(admission_path)).read_text(encoding="utf-8")).get(key)
+    except (OSError, ValueError, AttributeError):
+        return None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0 else None
+
+
+def record_peak(admission_path, key: str, peak_gib: float) -> float:
+    """Keep the larger of the stored and given peak for ``key``; returns the stored value."""
+    import json
+
+    path = peaks_file(admission_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data = data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        data = {}
+    stored = max(peak_gib, float(data.get(key) or 0))
+    data[key] = stored
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return stored
+
+
+def register_command(admission_path, key: str, pid: int, peak_gib: float) -> None:
+    """Append a START line so the admitted command's headroom is reserved until END or pid death."""
+    _append_admission(admission_path, {
+        "phase": "START", "session_id": "box-memory-snapshot", "run": f"{key}:{pid}",
+        "pids": [pid], "declared_peak_mb": peak_gib * 1024,
+    })
+
+
+def release_command(admission_path, key: str, pid: int) -> None:
+    """Append the END line that frees a registered command's reservation."""
+    _append_admission(admission_path, {
+        "phase": "END", "session_id": "box-memory-snapshot", "run": f"{key}:{pid}", "pids": [],
+    })
+
+
+def _append_admission(admission_path, line: dict) -> None:
+    import json
+
+    path = Path(admission_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
 @dataclass(frozen=True)
 class AdmitVerdict:
     """Admission decision with both clauses exposed."""
@@ -393,9 +461,10 @@ def admit(
     cushion_pct: float = 25.0,
     cushion_cap: int = 8 * GIB,
     commit_limit: int | None = None,
+    floor: int = 0,
 ) -> AdmitVerdict:
-    """Pure admission check for a declared peak against a memory snapshot."""
-    need_avail = peak + min(peak * cushion_pct / 100, cushion_cap)
+    """Pure admission check; need is max(peak + cushion, floor + peak) against ``status.avail_phys``."""
+    need_avail = max(peak + min(peak * cushion_pct / 100, cushion_cap), floor + peak)
     avail_ok = need_avail <= status.avail_phys
     commit_ok = status.commit_used + peak <= (status.commit_limit if commit_limit is None else commit_limit)
     return AdmitVerdict(

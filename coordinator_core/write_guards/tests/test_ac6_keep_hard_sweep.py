@@ -116,8 +116,6 @@ _WRITE_KEEP_HARD = {
 _BASH_KEEP_HARD_NO_DIFF = {
     "block_subagent_commit.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
     "block_stash_destruction.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
-    "block_subagent_stash_creation.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
-    "block_disarm_marker_sentinel_creation.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
     "block_approval_sentinel_creation.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
     "block_worktree_sentinel_creation.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
     "block_reviewer_bash_outside_allowlist.py": (GuardBand.CONFINEMENT_DENY, True, AdvisoryValue.NOT_COST_ARGUED),
@@ -133,8 +131,6 @@ _BASH_KEEP_HARD_CLASS_STABLE_ONLY = {
 _ENTRY_NAME_BY_MODULE = {
     "block_subagent_commit.py": "block-subagent-commit",
     "block_stash_destruction.py": "block-stash-destruction",
-    "block_subagent_stash_creation.py": "block-subagent-stash-creation",
-    "block_disarm_marker_sentinel_creation.py": "block-disarm-marker-sentinel-creation",
     "block_approval_sentinel_creation.py": "block-approval-sentinel-creation",
     "block_worktree_sentinel_creation.py": "block-worktree-sentinel-creation",
     "block_reviewer_bash_outside_allowlist.py": "block-reviewer-bash-outside-allowlist",

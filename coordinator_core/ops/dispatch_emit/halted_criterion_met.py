@@ -34,7 +34,7 @@ def _norm(path: str) -> str:
 def _holders(root: Path, run_ids: Iterable[str]) -> dict:
     """``{run_id: (deliverable_id, withheld, since)}`` for every holder with a stamp; others hold."""
     from coordinator_core.ops import warp_run_deliverable as wrd
-    from coordinator_core.ops.dispatch_emit import stopped_runs
+    from coordinator_core.ops.dispatch_emit import halted_run, stopped_runs
 
     out = {}
     for run_id in run_ids:
@@ -42,7 +42,10 @@ def _holders(root: Path, run_ids: Iterable[str]) -> dict:
         if since is None:
             continue
         deliverable = wrd.sizing_scalar(root, wrd.record_sizing_rel(root, run_id), "deliverable_id")
-        withheld = {_norm(p) for p in wrd.halted_withheld_paths(root, run_id)}
+        try:
+            withheld = {_norm(p) for p in wrd.halted_withheld_paths(root, run_id)}
+        except halted_run.UnreadableHaltRecord:
+            continue
         out[run_id] = (deliverable, withheld, since)
     return out
 

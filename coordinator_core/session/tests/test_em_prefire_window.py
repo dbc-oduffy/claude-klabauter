@@ -161,6 +161,8 @@ def test_publish_mechanics_exempt_and_survey_git_counts():
         "git -C scratch/claude-klabauter-pub checkout abc",
         "t=$(git merge-tree --write-tree a b)",
         "python3 coordinator/bin/percolate-round.py claude-klabauter --source-ref a",
+        "cd /e/example-game-workbench-repo && git push origin work/machine-a/x 2>&1 | tail -5",
+        "git fetch origin 2>&1 | head -n 3",
     ]
     bad = [
         "git log --oneline",
@@ -168,6 +170,9 @@ def test_publish_mechanics_exempt_and_survey_git_counts():
         "git checkout abc",
         "git fetch origin | cat",
         "git push origin x && cat secrets",
+        "git push origin x | tail -5 && cat secrets",
+        "git log 2>&1 | tail -5",
+        "cd",
         "cd /tmp/other && git checkout abc",
         "git status",
     ]
@@ -420,3 +425,127 @@ def test_missing_or_bad_manifest_fails_open_but_records_still_count(tmp_path):
     assert t("Bash", {"command": "ls state/warp/" + RUN})
     assert epw.run_footprint(tmp_path, "") is None
     assert epw.run_footprint(tmp_path, "../x") is None
+
+
+def _w(tid, path, name="Write"):
+    return tool_use(tid, name, {"file_path": path})
+
+
+def test_self_written_scratch_reads_and_syntax_checks_are_free(tmp_path):
+    st = run(
+        tmp_path,
+        [
+            user(),
+            _w("w", "/r/scratch/chk/a.py"),
+            tool_use("a", "Read", {"file_path": "/r/scratch/chk/a.py"}),
+            tool_use("b", "Bash", {"command": "python3 -m py_compile /r/scratch/chk/a.py"}),
+            tool_use("c", "Bash", {"command": "cat /r/scratch/chk/a.py"}),
+            tool_use("d", "Bash", {"command": "wc -l /r/scratch/chk/a.py"}),
+            tool_use("e", "Grep", {"pattern": "x", "path": "/r/scratch/chk/a.py"}),
+        ],
+    )
+    assert st["written"] == ["/r/scratch/chk/a.py"] and st["pre"] == []
+
+
+def test_self_written_backslash_and_edit_tools(tmp_path):
+    st = run(
+        tmp_path,
+        [user(), _w("w", "C:\\r\\scratch\\n.py", "Edit"), tool_use("a", "Read", {"file_path": "C:/r/scratch/n.py"})],
+    )
+    assert st["pre"] == []
+
+
+def test_self_written_does_not_exempt_other_or_mixed_paths(tmp_path):
+    st = run(
+        tmp_path,
+        [
+            user(),
+            _w("w", "/r/scratch/chk/a.py"),
+            tool_use("a", "Read", {"file_path": "scratch/base-HEAD/coordinator_core/x.py"}),
+            tool_use("b", "Bash", {"command": "cat /r/scratch/chk/a.py coordinator_core/x.py"}),
+            tool_use("c", "Bash", {"command": "python3 -m py_compile coordinator_core/x.py"}),
+            tool_use("d", "Bash", {"command": "cat /r/scratch/chk/a.py; grep -r q ."}),
+            tool_use("e", "Read", {"file_path": "/r/coordinator_core/a.py"}),
+        ],
+    )
+    assert st["pre"] == ["a", "b", "c", "d", "e"]
+
+
+def test_self_written_cleared_on_new_user_turn_and_py_compile_not_for_named(tmp_path):
+    st = run(tmp_path, [user(), _w("w", "/r/scratch/a.py"), user("next"), tool_use("a", "Read", {"file_path": "/r/scratch/a.py"})])
+    assert st["written"] == [] and st["pre"] == ["a"]
+    assert epw.named_read("Bash", {"command": "python3 -m py_compile plan.md"}, ["plan.md"]) is False
+
+
+def test_memo_tooling_is_exempt_whatever_the_tail(tmp_path):
+    cmds = [
+        "cross-repo-memo send --to x --body y",
+        "$HOME/.coordinator-claude-settings/bin/cross-repo-memo list; echo done",
+        "cd /r && cross-repo-memo send --body \"$(cat m.md)\" | head -5",
+    ]
+    st = run(tmp_path, [user()] + [tool_use(f"m{i}", "Bash", {"command": c}) for i, c in enumerate(cmds)])
+    assert st["pre"] == [] and st["all"] == []
+    st = run(tmp_path, [user(), tool_use("g", "Bash", {"command": "grep -r cross-repo-memo ."})])
+    assert st["pre"] == ["g"]
+
+
+def test_memo_gh_comment_update_ref_and_ledger_append_are_not_counted(tmp_path):
+    cmds = [
+        'cross-repo-memo send --to coordinator-content-repo-em --body "x"',
+        'gh issue comment 12 --body "done; see x"',
+        "gh pr comment 7 --body-file notes.md",
+        "git update-ref refs/preserve/pin-1 abc123",
+        "git -C /r update-ref refs/preserve/pin-2 abc123",
+        "coordinator-invoke handoff.append_session_ledger --params-file p.json",
+    ]
+    st = run(tmp_path, [user()] + [tool_use(f"c{i}", "Bash", {"command": c}) for i, c in enumerate(cmds)])
+    assert st["pre"] == [] and st["all"] == []
+
+
+def test_comms_integrity_exemption_still_refuses_chains_and_other_verbs(tmp_path):
+    cmds = [
+        "gh issue view 12",
+        "gh pr comment 7 --body x && grep -r foo .",
+        "git update-ref -d refs/x | grep y",
+        "git log --oneline",
+        "grep update-ref README.md",
+    ]
+    st = run(tmp_path, [user()] + [tool_use(f"c{i}", "Bash", {"command": c}) for i, c in enumerate(cmds)])
+    assert st["pre"] == [f"c{i}" for i in range(len(cmds))]
+    st = run(tmp_path, [user(), tool_use("r", "Read", {"file_path": "/r/src/a.py"})])
+    assert st["pre"] == ["r"]
+
+
+def test_task_reset_on_changed_in_progress_task_only(tmp_path):
+    def upd(tid, task, status="in_progress"):
+        return tool_use(tid, "TaskUpdate", {"taskId": task, "status": status})
+
+    st = run(
+        tmp_path,
+        [
+            user(),
+            upd("u1", "1"),
+            tool_use("a", "Read", {"file_path": "x.py"}),
+            _w("w", "/r/scratch/z.py"),
+            upd("u1b", "1"),
+            tool_use("b", "Read", {"file_path": "y.py"}),
+            tool_use("c1", "TaskCreate", {"subject": "t2"}),
+            tool_use("c", "Read", {"file_path": "z.py"}),
+        ],
+    )
+    assert st["pre"] == ["a", "b", "c"] and st["task_key"] == "1"
+    st = run(tmp_path, [user(), upd("u1", "1"), tool_use("a", "Read", {"file_path": "x.py"}), upd("u2", "2"), tool_use("b", "Read", {"file_path": "y.py"})])
+    assert st["pre"] == ["b"] and st["task_key"] == "2" and st["written"] == []
+    st = run(tmp_path, [user(), upd("u1", "1"), tool_use("a", "Read", {"file_path": "x.py"}), upd("u2", "2", "pending")])
+    assert st["pre"] == ["a"]
+    todo = {"todos": [{"content": "second", "status": "in_progress"}, {"content": "first", "status": "pending"}]}
+    st = run(tmp_path, [user(), tool_use("a", "Read", {"file_path": "x.py"}), tool_use("t", "TodoWrite", todo), tool_use("b", "Read", {"file_path": "y.py"})])
+    assert st["pre"] == ["b"] and st["task_key"] == "second"
+
+
+def test_written_list_is_capped_and_paths_past_the_cap_are_charged(tmp_path):
+    over = epw.WRITTEN_CAP + 1
+    events = [user()] + [_w(f"w{i}", f"/r/scratch/f{i}.py") for i in range(over)]
+    events.append(tool_use("last", "Read", {"file_path": f"/r/scratch/f{over - 1}.py"}))
+    st = run(tmp_path, events)
+    assert len(st["written"]) == epw.WRITTEN_CAP and st["pre"] == ["last"]

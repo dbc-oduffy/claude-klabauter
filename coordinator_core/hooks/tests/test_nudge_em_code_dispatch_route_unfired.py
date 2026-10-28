@@ -1,6 +1,6 @@
 """The unfired-S+ deny of `nudge_em_code_dispatch`: a session sized S or larger whose engine run
-has not fired is denied a product hand edit at strict, advised at warn, across the Edit and
-shell legs. Repos are hand-built loose git objects; the guard is driven directly."""
+has not fired is refused a product hand edit at strict (a logged advisory, the guard being off the
+deny floor), advised at warn, across the Edit and shell legs. Repos are hand-built loose git objects; the guard is driven directly."""
 
 from __future__ import annotations
 
@@ -88,11 +88,15 @@ def _shell(root: Path, rel: str = "a.py"):
 
 
 def _is_deny(result) -> bool:
-    return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
+    """A refusal verdict: these guards are off the deny floor, so it lands as a logged advisory."""
+    if not result:
+        return False
+    return result["hookSpecificOutput"].get("permissionDecision") == "deny" or result.get("guardLevel") == "log"
 
 
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    out = result["hookSpecificOutput"]
+    return out.get("permissionDecisionReason") or out["additionalContext"]
 
 
 def _ctx(result) -> str:
@@ -118,7 +122,7 @@ def test_warn_unfired_s_plus_advises_without_deny(env, monkeypatch):
     root, _ = env
     monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
     result = mod.op(_edit(root))
-    assert result is not None and not _is_deny(result)
+    assert result is not None and result["hookSpecificOutput"].get("permissionDecision") != "deny"
     assert mod._ROUTE_UNFIRED_DENY in _ctx(result)
 
 
@@ -134,36 +138,6 @@ def test_autonomous_still_denies_unfired_s_plus(env, monkeypatch):
     result = mod.op(_edit(root))
     assert _is_deny(result)
     assert mod._ROUTE_UNFIRED_DENY in _reason(result)
-
-
-def _own(root: Path) -> None:
-    """The session's run withholds a.py, so the post-fire deny covers it."""
-    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
-
-    idx.add_run(root, "run-1", ["a.py"])
-
-
-def test_live_run_gets_the_post_fire_deny_not_the_unfired_text(env, monkeypatch):
-    root, _ = env
-    monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
-    monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: "ask-x")
-    _own(root)
-    result = mod.op(_edit(root))
-    assert _is_deny(result)
-    assert "already fired engine-ask" in _reason(result)
-    assert mod._ROUTE_UNFIRED_DENY not in _reason(result)
-
-
-def test_landed_run_gets_the_post_fire_deny_not_the_unfired_text(env, monkeypatch):
-    root, _ = env
-    monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
-    monkeypatch.setattr(leaf, "_COORDINATOR_PATH_MARKERS", [])
-    _own(root)
-    result = mod.op(_edit(root))
-    assert _is_deny(result)
-    assert "already fired engine-ask" in _reason(result)
-    assert mod._ROUTE_UNFIRED_DENY not in _reason(result)
-    assert xb.read_lane(root, SID) is None
 
 
 def test_unsized_xs_edit_in_budget_is_admitted(env, monkeypatch):

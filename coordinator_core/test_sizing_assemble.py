@@ -904,10 +904,10 @@ def test_absent_appetite_sets_post_size_prompt_pending_at_xl():
     assert "post_size_prompt_pending" in decision["detents"]
 
 
-@pytest.mark.parametrize("tshirt,route", [("M", "plan"), ("L", "plan")])
-def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt, route):
+@pytest.mark.parametrize("tshirt", ["M", "L"])
+def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt):
     decision = sa.route(estimate={"tshirt": tshirt})
-    assert decision["route"] == route
+    assert decision["route"] == "plan"
     assert "post_size_prompt_pending" not in decision["detents"]
     assert "?" not in decision["next_move"]
     assert "coordinator:engine-ask" in decision["next_move"]
@@ -1274,7 +1274,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # Moved 1.43.0 -> 1.44.0: claude-klabauter-first optional `design_route`; DoE landed the same bytes at 91f02d8ae1.
     # Moved 1.44.0 -> 1.45.0: claude-klabauter-first `xxl_infra_check_owed` detent; DoE copy pending.
     # Moved 1.45.0 -> 1.46.0: optional `tie_break`; 1.46.0 -> 1.47.0: `fan_out` joins `xl_exit`.
-    assert schema["x-schema-version"] == "1.47.0"
+    # Moved 1.47.0 -> 1.48.0: optional `provenance`; 1.48.0 -> 1.49.0: optional `writes` (DoE 8e14712c0c).
+    assert schema["x-schema-version"] == "1.49.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1292,8 +1293,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # the key would mean reverting `9f4c0c17b`, which coordinator-content-repo-em has stated
     # they will not do (memo
     # 2026-08-13-coordinator-content-repo-em-bump-class-deliberately-absent.md).
-    # Re-introduced at 1.45.0 by the claude-klabauter-first enum-value-additive bump.
-    assert schema["x-bump-class"] == "enum-value-additive"
+    # Re-introduced at 1.45.0 by the claude-klabauter-first enum-value-additive bump; 1.49.0 is additive.
+    assert schema["x-bump-class"] == "additive"
 
 
 def test_completion_entry_schema_version_and_bump_class():

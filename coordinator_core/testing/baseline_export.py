@@ -139,6 +139,16 @@ def render_result_line(sha: str, export: str, why: str | None, runner_exit: int 
     )
 
 
+def export_env(root: PurePath | str, base: dict[str, str] | None = None) -> dict[str, str]:
+    """Environment for a process running inside the export `root`: git discovery cannot climb to an
+    enclosing repository (ceiling = root's parent) and no inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR."""
+    env = dict(os.environ if base is None else base)
+    for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+        env.pop(key, None)
+    env["GIT_CEILING_DIRECTORIES"] = os.fspath(Path(root).parent)
+    return env
+
+
 def _git_popen(args: list[str], cwd: str | os.PathLike[str], **kw):
     """The only door to git, a `run_git_stream` context manager; tests count spawns here."""
     from coordinator_core.git.run import run_git_stream
@@ -293,10 +303,11 @@ class _Group:
         self.proc: subprocess.Popen | None = None
         self._job = None
 
-    def spawn(self, argv: tuple[str, ...], cwd: Path) -> subprocess.Popen:
+    def spawn(self, argv: tuple[str, ...], cwd: Path, root: Path) -> subprocess.Popen:
         if not _IS_NT:
             self.proc = subprocess.Popen(
-                list(argv), cwd=cwd, start_new_session=True, **no_console_passthrough_kwargs()
+                list(argv), cwd=cwd, start_new_session=True, env=export_env(root),
+                **no_console_passthrough_kwargs(),
             )
             return self.proc
         from coordinator_core.diagnostics import contained_run as cr
@@ -310,7 +321,7 @@ class _Group:
         try:
             passthrough = no_console_passthrough_kwargs()
             passthrough["creationflags"] = flags
-            self.proc = subprocess.Popen(list(argv), cwd=cwd, **passthrough)
+            self.proc = subprocess.Popen(list(argv), cwd=cwd, env=export_env(root), **passthrough)
         except OSError:
             self.close_job()
             raise
@@ -494,7 +505,7 @@ def main(argv: list[str]) -> int:
             run_cwd = counterpart_cwd(toplevel, cwd, root)
             try:
                 with _signals_blocked(sigs):
-                    proc = group.spawn(inv.runner, run_cwd)
+                    proc = group.spawn(inv.runner, run_cwd, root)
             except OSError as exc:
                 why = f"runner spawn failed: {inv.runner[0]}: {exc}"
             else:

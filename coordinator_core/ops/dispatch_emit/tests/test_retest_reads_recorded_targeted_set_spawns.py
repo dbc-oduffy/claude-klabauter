@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import retest_targeted
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -48,5 +49,5 @@ def test_retest_with_no_tests_targets_the_recorded_set_and_writes_no_stale(tmp_p
     )
     assert rc == 0
     assert any("test_a.py" in str(a) for a in seen)
-    record = json.loads(li.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
-    assert record["status"] == li.RETEST_RUNNING and record["tests"] == ["test_a.py"]
+    record = json.loads(landing_retest.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
+    assert record["status"] == landing_retest.RETEST_RUNNING and record["tests"] == ["test_a.py"]

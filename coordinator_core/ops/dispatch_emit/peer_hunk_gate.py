@@ -11,8 +11,9 @@ Invariants: in-process file reads only (no spawn), except the
 `released` on its marker before its hold is dropped; an error keeps every hold); a halted holder
 whose owner session is not live and whose withheld paths carry no hunk of its own is released first
 (`RELEASE_PHANTOM`, sharing the one status read; no extra spawn); an unreadable
-record contributes nothing and nothing raises; two halted runs withholding one path against each
-other hold nothing (the path lands whole, carrying both); a halted run that
+record contributes nothing and nothing raises; two halted runs (both halted, both withholding the
+path) against each other hold nothing (the path lands whole, carrying both), while a live landing
+run is held by a halted holder; a halted run that
 `halted_hold_release.release_reason` frees holds nothing; a junior fresh-token sibling claims
 nothing against a senior committer; a clean landing path is not contention (callers pass only the
 paths the commit carries). Stdlib
@@ -29,6 +30,7 @@ _LOG = logging.getLogger(__name__)
 
 PEER_HUNKS_CO_DECLARED = "peer-hunks-co-declared"
 OUT_OF_ASK_HUNKS = "out-of-ask-hunks"
+UNREADABLE_PEER_CLAIMS = "unreadable-peer-claims"
 
 _RESOLVED = frozenset({"applied", "em-rejected", "em_rejected"})
 
@@ -41,7 +43,9 @@ def _norm(path: object) -> str:
 
 
 def _spine_writes(root: Path, run_id: str) -> set:
-    """`writes` of every row in the plan spine the run's sizing names; empty when unreadable."""
+    """`writes` of every row in the plan spine the run's sizing names. Empty when the run records no
+    sizing, or its sizing or plan file is absent, or the plan has no spine block; raises when a
+    present file or spine cannot be read or parsed (the caller holds)."""
     import yaml
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
@@ -53,17 +57,19 @@ def _spine_writes(root: Path, run_id: str) -> set:
         return out
     try:
         sizing = yaml.safe_load((root / sizing_rel).read_text(encoding="utf-8")) or {}
-    except OSError:
+    except FileNotFoundError:
         return out
     plan_rel = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
     if not plan_rel:
         return out
     try:
         located = locate_fenced_block((root / plan_rel).read_text(encoding="utf-8"))
-    except OSError:
+    except FileNotFoundError:
+        return out
+    if located.status is LocateStatus.ABSENT:
         return out
     if located.status is not LocateStatus.LOCATED:
-        return out
+        raise ValueError(f"plan spine of run {run_id} is malformed")
     rows = yaml.safe_load(located.body) or []
     for row in rows if isinstance(rows, list) else []:
         writes = row.get("writes") if isinstance(row, dict) else None
@@ -87,9 +93,10 @@ def co_declared_peer_holds(
     its halt record withholds plus the manifest or plan-spine paths it declares that are dirty now;
     a live sibling with no stage manifest is also read through its plan spine's `writes`. A
     fresh-token sibling minted at or after `minted_before=(minted_at, run_id)` is junior and
-    claims nothing. Sorted by path. Never raises. Side effect: a halted holder that is phantom (owner
-    gone, no own hunk) or whose criterion is met at HEAD gets `released` written to its halt marker
-    and is dropped from the result."""
+    claims nothing. Sorted by path. Never raises; a claim read that fails holds every declared wanted
+    path under `UNREADABLE_PEER_CLAIMS`. Side effect: a halted holder that is phantom (owner gone, no
+    own hunk) or whose criterion is met at HEAD gets `released` written to its halt marker and is
+    dropped from the result."""
     root = Path(worktree_root)
     wanted = sorted({_norm(p) for p in landing_paths if p} - {""})
     own = {_norm(p) for p in own_declared if p}
@@ -114,7 +121,9 @@ def co_declared_peer_holds(
                     continue
                 try:
                     spine = _spine_writes(root, run_id)
-                except Exception:  # noqa: BLE001 -- this sibling's spine unknown: claims nothing
+                except Exception:  # noqa: BLE001 -- this sibling's spine unknown: it holds every wanted path
+                    for path in wanted:
+                        claims.setdefault(path, run_id)
                     continue
                 for path in wanted:
                     if path in spine:
@@ -127,14 +136,14 @@ def co_declared_peer_holds(
                             holders[path].append(run_id)
             pairs = [
                 (p, r) for p in wanted if p in holders and p in own
-                for r in sorted(holders[p]) if not _mutual_halted_hold(root, own_run_id, r, p)
+                for r in sorted(holders[p]) if not _mutual_halted_hold(root, own_run_id, r, p, own_plan)
             ]
             holds = pairs
             if not holds:
                 return holds
             return _release_criterion_met(root, holds, landing_run_id=own_run_id, landing_plan=own_plan)
-    except Exception:  # noqa: BLE001 -- contest unknown: hold nothing
-        return []
+    except Exception:  # noqa: BLE001 -- a contest that cannot be computed holds every declared wanted path
+        return [(p, UNREADABLE_PEER_CLAIMS) for p in wanted if p in own]
 
 
 def _also_claims(root: Path, run_id: str, path: str) -> bool:
@@ -222,20 +231,25 @@ def _holds_baselined_path(root: Path, run_id: str, holds: list, withheld: set) -
     return any(_norm(p) not in withheld and _norm(p) in baseline for p, s in holds if s == run_id)
 
 
-def _mutual_halted_hold(root: Path, own_run_id: Optional[str], holder: str, path: str) -> bool:
-    """True when `holder` is halted, withholds `path`, and its own claim view names `own_run_id` as the
-    path's first claimant: two halted runs holding one path against each other. Landing the path whole
-    carries both runs' hunks (the shared-tree blob), so neither run is superseded; the holder's
-    `dispatch.record_halted_run_landed` follows the landing."""
+def _mutual_halted_hold(
+    root: Path, own_run_id: Optional[str], holder: str, path: str, own_plan: Optional[str] = None,
+) -> bool:
+    """True when both `holder` and `own_run_id` are halted and withhold `path`, and the holder's own
+    claim view names `own_run_id` as the path's first claimant: two halted runs holding one path
+    against each other. Landing the path whole carries both runs' hunks (the shared-tree blob), so
+    neither run is superseded; the holder's `dispatch.record_halted_run_landed` follows the landing.
+    A live landing run is never mutual: the holder's hunk is foreign to it."""
     if not own_run_id or holder == own_run_id:
         return False
     from coordinator_core.ops import warp_run_deliverable
-    from coordinator_core.ops.dispatch_emit import halted_run, sibling_claims
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, sibling_claims
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
-    if not warp_run_deliverable._halted(root, holder):
+    if not warp_run_deliverable._halted(root, holder) or not warp_run_deliverable._halted(root, own_run_id):
         return False
-    if path not in {_norm(w) for w in halted_run.halted_withheld(record_dir(root, holder))}:
+    if path not in {_norm(w) for w in halted_run.halted_withheld(record_dir(root, own_run_id))}:
+        return False
+    if path not in {_norm(w) for w in halted_hold_release.held_paths(root, holder, own_run_id, own_plan)}:
         return False
     mirror = sibling_claims.sibling_run_claims(root, holder, [path])
     return mirror.get(path) == own_run_id
@@ -308,10 +322,13 @@ def out_of_ask_holds(
     return sorted(holds)
 
 
-def refusal_message(holds: Iterable[tuple], run_id: str, root: Optional[Path] = None) -> str:
+def refusal_message(
+    holds: Iterable[tuple], run_id: str, root: Optional[Path] = None, overlaps: Optional[dict] = None,
+) -> str:
     """The refusal text for `(path, sibling_run_id)` holds: names every sibling run, and the
     withhold and peer-commits routes (`peer_claim_contract.refusal` wording). With `root`, each
-    halted holder also gets its `halted_hold_release.release_calls`; the text is otherwise unchanged."""
+    halted holder also gets its `halted_hold_release.release_calls`. `overlaps` (`split_own_hunks`)
+    adds, per path, each foreign hunk sharing lines with this run's hunk and its owning run."""
     from coordinator_core.ops.dispatch_emit import peer_claim_contract
 
     pairs = list(holds)
@@ -319,20 +336,20 @@ def refusal_message(holds: Iterable[tuple], run_id: str, root: Optional[Path] = 
         [(p, f"run {s}") for p, s in pairs], run_id,
     )
     text = f"{PEER_HUNKS_CO_DECLARED}: {message}"
+    for path in sorted(overlaps or {}):
+        named = ", ".join(f"run {r} {h}" for r, h in overlaps[path])
+        text += f" Overlap on {path}: your hunk shares lines with {named}."
     if root is None:
         return text
     try:
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import halted_hold_release
 
-        from coordinator_core.ops.dispatch_emit import halted_run
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-
         for holder in sorted({s for _p, s in pairs}):
             if warp_run_deliverable._halted(Path(root), holder):
                 calls = "; ".join(halted_hold_release.release_calls(Path(root), holder))
                 text += f" Release run {holder}: {calls}."
-                withheld = halted_run.halted_withheld(record_dir(Path(root), holder))
+                withheld = halted_hold_release.held_paths(Path(root), holder, run_id)
                 mutual = sorted({p for p, s in pairs if s == holder and _norm(p) in {_norm(w) for w in withheld}})
                 if mutual:
                     text += (
@@ -343,4 +360,17 @@ def refusal_message(holds: Iterable[tuple], run_id: str, root: Optional[Path] = 
                     )
     except Exception:  # noqa: BLE001 -- release wording unknown: the base refusal stands
         return text
+    try:
+        from coordinator_core.ops.dispatch_emit import foreign_hunks
+
+        for path, holder, headers, attributed in foreign_hunks.foreign_hunks(Path(root), pairs):
+            more = max(getattr(headers, "total", len(headers)) - len(headers), 0)
+            tail = f" (+{more} more)" if more else ""
+            label = (
+                f"Foreign hunks in run {holder}'s kept blob: {path}" if attributed
+                else f"Uncommitted hunks on {path} (held by run {holder}; may include your own):"
+            )
+            text += f" {label} {' '.join(headers)}{tail}."
+    except Exception:  # noqa: BLE001 -- hunk naming unknown: the base refusal stands
+        pass
     return text

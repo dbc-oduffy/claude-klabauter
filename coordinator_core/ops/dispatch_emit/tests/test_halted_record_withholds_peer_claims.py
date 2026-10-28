@@ -80,12 +80,11 @@ def test_peer_held_declared_path_is_withheld_and_not_landed_chunk(repo, oracle):
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert out["withheld"] == {"other.py": "peer-held"}
+    assert out["withheld"] == {"other.py": "peer-held", "done.py": "halt-record-only"}
     assert out["peer_held_by"] == [{"session": "peer-sid", "paths": ["other.py"]}]
     assert "other.py" not in oracle.params[0]["paths"]
     assert "other.py" not in _landed(repo, out, "--name-only")
-    message = _message(repo)
-    assert "Lands-Chunks: C1" in message and "C2" not in message.split("Lands-Chunks:")[1]
+    assert "Lands-Chunks" not in _message(repo)
 
 
 def test_peer_held_run_artifact_is_withheld(repo, oracle):
@@ -145,19 +144,20 @@ def test_per_path_indeterminate_withholds_only_that_path(repo, oracle):
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert out["withheld"] == {"other.py": "peer-claim-indeterminate"}
-    assert "done.py" in _landed(repo, out, "--name-only")
-    assert "Lands-Chunks: C1" in _message(repo)
+    assert out["withheld"] == {"other.py": "peer-claim-indeterminate", "done.py": "halt-record-only"}
+    assert "done.py" not in _landed(repo, out, "--name-only")
+    assert "Lands-Chunks" not in _message(repo)
 
 
-def test_no_hold_lands_everything_declared(repo, oracle):
+def test_no_hold_still_lands_no_product(repo, oracle):
     _two_chunks(repo)
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert "withheld" not in out and "peer_held_by" not in out
-    assert set(oracle.params[0]["paths"]) >= {"done.py", "other.py"}
-    assert "Lands-Chunks: C1, C2" in _message(repo)
+    assert out["withheld"] == {"done.py": "halt-record-only", "other.py": "halt-record-only"}
+    assert "peer_held_by" not in out
+    assert not set(oracle.params[0]["paths"]) & {"done.py", "other.py"}
+    assert "Lands-Chunks" not in _message(repo)
 
 
 def test_one_claim_lookup_per_halt_commit(repo, oracle):

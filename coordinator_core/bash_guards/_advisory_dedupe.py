@@ -319,6 +319,44 @@ def silence_repeat_advisory(envelope: Optional[Dict[str, Any]]) -> Dict[str, Any
         return envelope if isinstance(envelope, dict) else {}
 
 
+def gate_once_per_session(
+    guard_name: str, envelope: Optional[Dict[str, Any]], payload: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Once-per-session gate for one guard's OWN envelope (non-Bash PreToolUse
+    dispatchers): the first (guard, shape) firing passes through and records a
+    marker; a repeat returns ``silence_repeat_advisory(envelope)``.
+
+    Call per guard, before envelopes are merged -- gating a merged envelope
+    would silence ungated sites riding in it. Pass-through unchanged on a deny,
+    a missing session id, an envelope with no ``additionalContext``, or any
+    error (fail open). Never raises.
+    """
+    try:
+        if not isinstance(envelope, dict) or not isinstance(payload, dict):
+            return envelope
+        hso = envelope.get("hookSpecificOutput")
+        if not isinstance(hso, dict) or hso.get("permissionDecision") == "deny":
+            return envelope
+        session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            return envelope
+        shape_key = advisory_dedupe_key(guard_name, envelope)
+        if shape_key is None:
+            return envelope
+        cwd = payload.get("cwd")
+        gitdir = resolve_gitdir(cwd if isinstance(cwd, str) and cwd else None)
+        if gitdir is None:
+            from coordinator_core.temp_layout import fleet_temp_root
+
+            gitdir = fleet_temp_root() / "coordinator-gitless-advisory-dedupe"
+        if already_advised(gitdir, session_id, shape_key):
+            return silence_repeat_advisory(envelope)
+        mark_advised(gitdir, session_id, shape_key)
+        return envelope
+    except Exception:  # noqa: BLE001 -- fail open
+        return envelope
+
+
 #: `session_id` charset gate -- `session_id`
 #: is used directly as a path COMPONENT (`_session_dedupe_dir`), then
 #: `mkdir(parents=True)`/`touch()`'d into. `_write_bump_marker.py`'s

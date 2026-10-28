@@ -23,6 +23,7 @@ from .ask_contract import (
     RESUME_LEDGER_UNSERVED_FIELD,
     UNCLAIMED_ROWS_HALT_KIND,
 )
+from .run_truth_contract import MutationReply
 
 _BLOCKING_FIELD = "blocking"
 _LEG_ACTION_FIELD = "action"
@@ -74,3 +75,19 @@ def identical_rehalt_reason(
         f"refire would re-halt identically: {ids} still blocking and nothing changed since halt {halt_sha}. "
         "`workflow.revise` a note naming the work, or land it."
     )
+
+
+def identical_rehalt_refusal(
+    resume_ledger: Mapping | None,
+    manifest_rows: Sequence,
+    owed: Sequence,
+    gated: Sequence,
+    derived: Sequence[str],
+    leg: Mapping | None,
+    target: str | None = None,
+) -> MutationReply | None:
+    """A refused MutationReply (nothing applied) when the refire can only re-halt identically, else None."""
+    reason = identical_rehalt_reason(resume_ledger, manifest_rows, owed, gated, derived, leg)
+    if reason is None:
+        return None
+    return MutationReply(applied=(), refused=(reason,), target=target)

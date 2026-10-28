@@ -742,3 +742,57 @@ def test_a_served_reply_costs_exactly_one_peer_log_spawn(repo, monkeypatch):
     monkeypatch.setattr(rp, "freeze_diff", lambda *a, **k: pytest.fail("froze"))
     assert _prep(repo, base) == first
     assert len(calls) == 1
+
+
+def test_range_mode_untracked_and_uncommitted_paths_get_a_head_fallback_slice(repo):
+    base = _base(repo)
+    _write(repo, ["a/new.py"], 3)
+    result = rp.review_prep(
+        repo, base=base, paths=["a/new.py"], slice_prefix="prep-fb", plan_path="docs/plans/p.md",
+        session_id=SESSION, head=base,
+    )
+    assert result["error"] is None
+    assert [f for s in result["slices"] for f in s["files"]] == ["a/new.py"]
+    assert result["excluded"] == []
+    assert "+v = 1" in Path(result["whole_diff_path"]).read_text(encoding="utf-8")
+
+
+def test_a_declared_path_with_no_delta_is_named_excluded(repo):
+    _write(repo, ["a/mine.py"], 3)
+    result = _call(repo, ["a/mine.py", "seed.py"])
+    assert [f for s in result["slices"] for f in s["files"]] == ["a/mine.py"]
+    assert result["excluded"] == [{"path": "seed.py", "reason": "no-delta"}]
+    fm = _sidecar_fm(repo, result)
+    assert fm["excluded"] == result["excluded"]
+
+
+def test_an_outside_repo_path_is_named_excluded_and_zero_paths_still_reply(repo):
+    result = _call(repo, ["../x.py"])
+    assert result["slices"] == [] and result["error"] is None
+    assert result["excluded"] == [{"path": "../x.py", "reason": "outside-repo"}]
+
+
+def _peer_holder() -> dict:
+    from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun  # noqa: PLC0415
+
+    return {"peer": LiveRun(plan="other.md", superseded_by="", successor_landed=False,
+                            withheld=frozenset({"a/theirs.py"}), claims=frozenset())}
+
+
+def test_review_prep_keeps_a_path_a_halted_peer_withholds(repo):
+    _write(repo, ["a/mine.py", "a/theirs.py"], 3)
+    result = _call(repo, ["a/mine.py", "a/theirs.py"], run_id="me", live_runs=_peer_holder())
+    assert result["error"] is None
+    assert [f for s in result["slices"] for f in s["files"]] == ["a/mine.py", "a/theirs.py"]
+    assert result["peer_held"] == ["a/theirs.py"]
+    assert result["excluded"] == []
+
+
+@pytest.mark.parametrize("ranged", [False, True], ids=["worktree", "range"])
+def test_a_run_whose_only_path_is_peer_withheld_gets_one_slice(repo, ranged):
+    _write(repo, ["a/theirs.py"], 3)
+    mode = {"head": _base(repo)} if ranged else {}
+    result = _call(repo, ["a/theirs.py"], run_id="me", live_runs=_peer_holder(), **mode)
+    assert result["error"] is None
+    assert [f for s in result["slices"] for f in s["files"]] == ["a/theirs.py"]
+    assert result["peer_held"] == ["a/theirs.py"]

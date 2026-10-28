@@ -52,8 +52,6 @@ from coordinator_core.bash_guards.dispatch_checks import (
     check_git_commit_safe_commit_advise,
 )
 from coordinator_core.bash_guards import block_subagent_commit
-from coordinator_core.bash_guards import block_subagent_grant_acquisition
-from coordinator_core.bash_guards import block_subagent_guard_grant
 from coordinator_core.bash_guards import block_noncanonical_branch_creation
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
@@ -242,75 +240,6 @@ class TestBlockSubagentCommitConverted:
         bash_result = _enveloped(block_subagent_commit.check)(self._payload(cmd, "Bash"))
         ps_result = _enveloped(block_subagent_commit.check)(self._payload(cmd, "PowerShell"))
         assert bash_result == ps_result
-
-
-class TestBlockSubagentGrantAcquisitionConverted:
-    """RED-FIRST: `_evaluate` is built over `_tokenize_full_command`,
-    Bash-shaped -- a `Start-Process python -ArgumentList '-m',
-    'coordinator_core.session.claude_md_grant','grant',...` invocation
-    evaded the acquisition gate even though the base `python -m ...` argv
-    is byte-identical across dialects."""
-
-    def _payload(self, cmd, tool_name):
-        return {
-            "tool_name": tool_name,
-            "tool_input": {"command": cmd},
-            "agent_id": "some-subagent-id",
-        }
-
-    def test_start_process_powershell_grant_denies(self) -> None:
-        cmd = (
-            'Start-Process python -ArgumentList "-m",'
-            '"coordinator_core.session.claude_md_grant","grant","pm","note"'
-        )
-        result = _enveloped(block_subagent_grant_acquisition.check)(self._payload(cmd, "PowerShell"))
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
-        cmd = "python -m coordinator_core.session.claude_md_grant grant pm note"
-        result = _enveloped(block_subagent_grant_acquisition.check)(self._payload(cmd, "Bash"))
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_unparseable_powershell_does_not_deny(self) -> None:
-        cmd = "Start-Process python -ArgumentList '-m', @'\nunterminated"
-        result = _enveloped(block_subagent_grant_acquisition.check)(self._payload(cmd, "PowerShell"))
-        assert result is None or (
-            result["hookSpecificOutput"]["permissionDecision"] != "deny"
-        )
-
-
-class TestBlockSubagentGuardGrantConverted:
-
-    def _payload(self, cmd, tool_name):
-        return {
-            "tool_name": tool_name,
-            "tool_input": {"command": cmd},
-            "agent_id": "some-subagent-id",
-        }
-
-    def test_start_process_powershell_grant_denies(self) -> None:
-        cmd = (
-            'Start-Process python -ArgumentList "-m",'
-            '"coordinator_core.session.em_guard_grant","grant","em","note"'
-        )
-        result = _enveloped(block_subagent_guard_grant.check)(self._payload(cmd, "PowerShell"))
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_bash_verdict_parity_same_command_without_start_process(self) -> None:
-        cmd = "python -m coordinator_core.session.em_guard_grant grant em note"
-        result = _enveloped(block_subagent_guard_grant.check)(self._payload(cmd, "Bash"))
-        assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    def test_unparseable_powershell_does_not_deny(self) -> None:
-        cmd = "Start-Process python -ArgumentList '-m', @'\nunterminated"
-        result = _enveloped(block_subagent_guard_grant.check)(self._payload(cmd, "PowerShell"))
-        assert result is None or (
-            result["hookSpecificOutput"]["permissionDecision"] != "deny"
-        )
 
 
 class TestBlockNoncanonicalBranchCreationConverted:

@@ -161,6 +161,64 @@ def test_peer_dirty_file_red_in_worktree_is_green_in_export(repo):
     assert run(Path(res.path)) == 0
 
 
+def _head_export(root, paths, name="hout"):
+    return le.build_head_export(root, root / "scratch" / name, paths)
+
+
+def test_head_export_overlays_write_set_over_head_bytes(repo):
+    root, _, _ = repo
+    (root / "pkg" / "peer.py").write_bytes(b"PEER DIRT\n")
+    (root / "pkg" / "own.py").write_bytes(b"own v2 worktree\r\n")
+    res = _head_export(root, ["pkg/own.py"])
+    out = Path(res.path)
+    assert (out / "pkg" / "own.py").read_bytes() == b"own v2 worktree\r\n"
+    assert (out / "pkg" / "peer.py").read_bytes() == b"peer v2 committed\n"
+    assert (out / "new.txt").read_bytes() == b"new at head\n"
+    assert not (out / "old.txt").exists()
+    assert res.overlaid == ("pkg/own.py",)
+    assert res.head_sha == _git(root, "rev-parse", "HEAD")
+    assert not (root / "scratch" / "hout.base").exists()
+
+
+def test_head_export_removes_tracked_write_set_path_absent_live(repo):
+    root, _, _ = repo
+    (root / "pkg" / "gone.py").unlink()
+    res = _head_export(root, ["pkg/gone.py"])
+    assert not (Path(res.path) / "pkg" / "gone.py").exists()
+    assert res.removed == ("pkg/gone.py",)
+
+
+def test_head_export_escaping_path_raises_and_keeps_existing_export(repo, tmp_path):
+    root, _, _ = repo
+    first = _head_export(root, ["pkg/own.py"])
+    for bad in ("../x.py", str(tmp_path / "other.py")):
+        with pytest.raises(le.LandingExportError):
+            _head_export(root, [bad])
+    assert (Path(first.path) / "pkg" / "own.py").is_file()
+    with pytest.raises(le.LandingExportError):
+        le.build_head_export(root, tmp_path / "elsewhere", ["pkg/own.py"])
+
+
+def test_head_export_replaces_stale_out_dir(repo):
+    root, _, _ = repo
+    out = root / "scratch" / "hout"
+    out.mkdir(parents=True)
+    (out / "stale.txt").write_bytes(b"stale\n")
+    res = _head_export(root, ["pkg/own.py"])
+    assert not (Path(res.path) / "stale.txt").exists()
+    assert (Path(res.path) / "pkg" / "peer.py").is_file()
+    again = _head_export(root, ["pkg/own.py"])
+    assert again.path == res.path
+
+
+def test_run_export_root_shape_and_unsafe_run_id(repo):
+    root, _, _ = repo
+    assert le.run_export_root(root, "run-1") == root.resolve() / "scratch" / "warp" / "run-1" / "export"
+    for bad in ("", "..", "a/b", "../x"):
+        with pytest.raises(le.LandingExportError):
+            le.run_export_root(root, bad)
+
+
 def test_cli_prints_one_json_line_and_refuses_with_exit_2(repo, monkeypatch, capsys):
     root, base_sha, base = repo
     monkeypatch.chdir(root)
@@ -169,3 +227,34 @@ def test_cli_prints_one_json_line_and_refuses_with_exit_2(repo, monkeypatch, cap
     assert json.loads(line)["overlaid"] == ["pkg/own.py"]
     assert le.main(["/elsewhere", "pkg/own.py", "--base-export", str(base), "--base-sha", base_sha]) == 2
     assert "refused" in capsys.readouterr().out
+
+
+def test_head_export_sweeps_stale_export_that_causes_disk_shortfall_then_builds(repo, monkeypatch):
+    import shutil
+    from collections import namedtuple
+
+    root, _, _ = repo
+    stale = root / "scratch" / "warp" / "stale-run" / "export"
+    stale.mkdir(parents=True)
+    (stale / "blob").write_bytes(b"x")
+    usage = namedtuple("usage", "total used free")
+    real = shutil.disk_usage
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda p: usage(0, 0, 0 if stale.exists() else real(p).free)
+    )
+    out = Path(_head_export(root, ["pkg/own.py"]).path)
+    assert not stale.exists()
+    assert (out / "pkg" / "own.py").is_file()
+
+
+def test_head_export_over_cap_refused_before_staging(repo, monkeypatch):
+    root, _, _ = repo
+    monkeypatch.setenv("COORDINATOR_EXPORT_CAP_BYTES", "1")
+    with pytest.raises(le.LandingExportError, match="export refused"):
+        _head_export(root, ["pkg/own.py"])
+    assert not (root / "scratch" / "hout.base").exists()
+    assert not (root / "scratch" / "hout").exists()
+    with pytest.raises(le.LandingExportError, match="COORDINATOR_EXPORT_CAP_BYTES"):
+        _head_export(root, ["pkg/own.py"])
+    monkeypatch.setenv("COORDINATOR_EXPORT_CAP_BYTES", str(1 << 40))
+    assert (Path(_head_export(root, ["pkg/own.py"]).path) / "pkg" / "own.py").is_file()

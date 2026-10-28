@@ -23,7 +23,7 @@ import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from coordinator_core.authoring_leaks import HeadView, LeakFinding, added_lines, normalize_path
+from coordinator_core.authoring_leaks import HeadView, LeakFinding, added_lines, normalize_path, run_owner
 from coordinator_core.authoring_leaks.module_attrs import AttrRef, attribute_refs, module_aliases
 from coordinator_core.pyimports import ImportRecord, collect_imports, module_name_for_file, resolve_relative_module
 
@@ -457,4 +457,28 @@ def detect(
         finding = _check_attr(closure, rel, ref)
         if finding is not None:
             findings.append(finding)
-    return findings
+    return _annotate_owners(root, findings)
+
+
+_UNCOMMITTED_TARGET = re.compile(r"; (\S+) is uncommitted in the worktree$")
+
+
+def _annotate_owners(root: Path, findings: List[LeakFinding]) -> List[LeakFinding]:
+    """Suffix `; owned by live run <id>` on findings whose uncommitted target another live run claims."""
+    targets: Dict[int, str] = {}
+    for i, f in enumerate(findings):
+        m = _UNCOMMITTED_TARGET.search(f.detail)
+        if m:
+            targets[i] = m.group(1)
+    if not targets:
+        return findings
+    owners = run_owner.owning_runs(root, sorted(set(targets.values())))
+    if not owners:
+        return findings
+    out = list(findings)
+    for i, target in targets.items():
+        run_id = owners.get(target)
+        if run_id:
+            f = out[i]
+            out[i] = LeakFinding(f.path, f.line, f.kind, f"{f.detail}; owned by live run {run_id}")
+    return out

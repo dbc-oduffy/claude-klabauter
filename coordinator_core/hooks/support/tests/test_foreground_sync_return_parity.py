@@ -64,13 +64,13 @@ def calibrated(tmp_path, monkeypatch):
 @pytest.mark.parametrize("prefix", ["", "coordinator:"])
 def test_member_foreground_passes_through(calibrated, member, prefix):
     ti = {"prompt": "x", "subagent_type": prefix + member}
-    assert fds.compute_foreground_reroute(False, SID, ti, "/ignored") is None
+    assert fds.compute_foreground_reroute(None, SID, ti, "/ignored") is None
 
 
 @pytest.mark.parametrize("stype", ["executor", "code-reviewer", "coordinator:executor"])
 def test_non_member_still_reroutes(calibrated, stype):
     ti = {"prompt": "x", "subagent_type": stype}
-    result = fds.compute_foreground_reroute(False, SID, ti, "/ignored")
+    result = fds.compute_foreground_reroute(None, SID, ti, "/ignored")
     assert result is not None and result[0] == "reroute" and result[1] is True
 
 

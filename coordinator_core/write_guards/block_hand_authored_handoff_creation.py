@@ -15,9 +15,7 @@ Scope:
     write with ``open()`` inside the engine, which never reaches PreToolUse;
     the body fill that follows is an Edit of an existing path. Provenance is
     therefore structural, exactly as for the sidecar sibling.
-  - Bash redirect / ``tee`` creation is the twin
-    ``bash_guards.block_hand_authored_handoff_creation``; this module owns the
-    path predicate and the deny text both share.
+  - Bash redirect / ``tee`` creation is not covered: the Bash twin was deleted.
 
 Never fails closed on an unexpected error.
 """

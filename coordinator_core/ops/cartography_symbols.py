@@ -146,6 +146,7 @@ from coordinator_core.ipc import CallerFacingValidationError, register_op
 from coordinator_core.cartography._guard import path_guard
 from coordinator_core.cartography.symbols import build_symbols
 from coordinator_core.ops._path_guard import safe_id
+from coordinator_core.ops import foreign_symbols
 from coordinator_core.ops.foreign_symbols import (
     build_foreign_symbols,
     claimed_extensions,
@@ -270,12 +271,20 @@ def write_symbols_artifact(target_root: Path, run_id: str, artifact: Dict[str, A
 _LOUD_COVERAGE_STATES = frozenset({"missing_grammar", "partial_coverage"})
 
 _SYMBOL_EXTRACT_REMEDY = (
-    "install the optional extra to enable non-Python symbol extraction: "
-    'python -m pip install -e ".[symbols]" from the claude-klabauter repo root '
-    "(requires read access to the extra's source repo; the extra resolves "
-    "a git-ref pin, and the underlying distribution is example-retrieval-repo-symbol-extract, "
-    "import name symbol_extract)"
+    "to enable non-Python symbol extraction, cd into the example-retrieval-repo checkout's "
+    "packaging/symbol-extract and run: python3 -m pip install '.[tree-sitter]' "
+    "(distribution example-retrieval-repo-symbol-extract; requires read access to example-retrieval-repo; "
+    "verify with: python3 -c 'import symbol_extract')"
 )
+
+
+def _symbol_extract_preflight() -> Optional[str]:
+    """Return an `unavailable` detail when `symbol_extract` is not importable, else None."""
+    try:
+        foreign_symbols._import_symbol_extract()
+    except ImportError as exc:
+        return f"symbol_extract not installed: {exc}"
+    return None
 
 
 class CoverageFaultError(ValueError):
@@ -375,7 +384,11 @@ def _cartography_symbols(params: dict, repo_root: Optional[Path] = None) -> dict
     completeness: Optional[Dict[str, Any]] = None
 
     if other_files:
-        foreign_result = build_foreign_symbols(guarded_root, other_files)
+        absent = _symbol_extract_preflight()
+        if absent is not None:
+            foreign_result = {"unavailable": absent}
+        else:
+            foreign_result = build_foreign_symbols(guarded_root, other_files)
 
         census: Dict[str, int] = {}
         for f in other_files:

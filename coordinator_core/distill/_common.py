@@ -234,18 +234,16 @@ def _text_excluding_provenance_blocks(text: str) -> str:
     return split.preamble + stripped_fm + split.body_with_leading_newline
 
 
-_FALLBACK_IGNORE_DIRS = frozenset({
-    ".git",
-    "__pycache__",
-    "node_modules",
-    ".venv",
-    "venv",
-    ".mypy_cache",
-    ".pytest_cache",
-})
-"""Directory names skipped by the rg-absent fallback walk in `active_reference_guard`,
-approximating rg's default VCS/build-dir ignore behavior. Deliberately a simple name
-check, not `.gitignore` parsing — see Finding 5, code-reviewer 2026-07-28."""
+class RipgrepUnavailableError(RuntimeError):
+    """`rg` is not on PATH. The reference guards have no in-process fallback (a corpus walk
+    reads every file); a delete path must treat this as "referenced" (ambiguity blocks)."""
+
+
+def _require_rg(caller: str) -> None:
+    if shutil.which("rg") is None:
+        raise RipgrepUnavailableError(
+            f"{caller}: ripgrep (rg) not on PATH; reference check refused, treat as referenced"
+        )
 
 
 def active_reference_guard(
@@ -290,96 +288,51 @@ def active_reference_guard(
     ]
     if not existing_scope:
         return False
-    if shutil.which("rg") is not None:
-        from coordinator_core.win_portability import leaf_spawn_creationflags
+    _require_rg("active_reference_guard")
+    from coordinator_core.win_portability import leaf_spawn_creationflags
 
-        result = subprocess.run(
-            ["rg", "--fixed-strings", "--files-with-matches", needle, *existing_scope],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            **leaf_spawn_creationflags(),
-        )
-        # rg exit codes: 0 = match(es) found, 1 = no match, 2 = error.
-        if result.returncode == 2:
-            raise RuntimeError(
-                f"active_reference_guard: ripgrep failed (exit 2): {result.stderr.strip()}"
-            )
-        if result.returncode == 1:
-            return False
-        matched_paths = result.stdout.splitlines()
-    else:
-        # ripgrep is an external CLI with no install-time provisioning and no
-        # bundled Windows binary — a dev box (or a minimal container) without
-        # it on PATH must not hard-crash a read-only reference guard. Fall
-        # back to an equivalent in-process fixed-string files-with-matches
-        # walk over the same scope dirs, approximating `rg`'s default
-        # behavior in two respects:
-        #   - rg skips files it detects as binary by default rather than
-        #     treating "can't search this file" as "found a match here", so
-        #     a file that fails to UTF-8-decode is SKIPPED here too (Review:
-        #     code-reviewer — a prior version appended undecodable files to
-        #     matched_paths unconditionally, which made ANY binary/non-UTF8
-        #     file anywhere in scope force `active_reference_guard` to return
-        #     True for every needle, independent of content).
-        #   - rg respects .gitignore and skips well-known VCS/build dirs by
-        #     default; the fallback approximates this with a simple
-        #     directory-name skip (no .gitignore parsing).
-        # A genuinely unreadable file (OSError, not merely non-text) still
-        # keeps the conservative "ambiguity blocks" posture below, since that
-        # is a different failure mode from "this file is binary."
-        matched_paths = []
-        for scope_dir in existing_scope:
-            for dirpath, dirnames, filenames in os.walk(scope_dir):
-                dirnames[:] = [d for d in dirnames if d not in _FALLBACK_IGNORE_DIRS]
-                for filename in filenames:
-                    candidate = Path(dirpath) / filename
-                    try:
-                        text = candidate.read_text(encoding="utf-8")
-                    except UnicodeDecodeError:
-                        # Binary/non-UTF-8 file: rg would skip it by default.
-                        continue
-                    except OSError:
-                        # Genuinely unreadable (permissions, race, etc.) —
-                        # ambiguity blocks, keep the conservative append.
-                        matched_paths.append(str(candidate))
-                        continue
-                    if needle in text:
-                        matched_paths.append(str(candidate))
-    return _needle_referenced_in(
-        needle, matched_paths, exclude_provenance_blocks=exclude_provenance_blocks
+    result = subprocess.run(
+        ["rg", "--fixed-strings", "--files-with-matches", needle, *existing_scope],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        **leaf_spawn_creationflags(),
     )
-
-
-def _needle_referenced_in(
-    needle: str,
-    matched_paths: list[str],
-    *,
-    exclude_provenance_blocks: bool = True,
-) -> bool:
-    """Shared post-processing for `active_reference_guard` / `active_reference_guard_many`:
-    given the set of files a fixed-string search already flagged as containing `needle`
-    somewhere, read each one to decide whether the citation is a live reference (True) or
-    lives only inside a recognized provenance-marker tombstone block (excluded, does not
-    count). Same ambiguity-blocks posture as `active_reference_guard`'s docstring: a file
-    this cannot read is treated as a reference, never silently skipped.
-
-    `exclude_provenance_blocks=False` short-circuits to "the search already found it" — the
-    caller wants the tombstone to count. See `active_reference_guard`'s docstring for why
-    that is a second reading rather than a weaker one."""
+    # rg exit codes: 0 = match(es) found, 1 = no match, 2 = error.
+    if result.returncode == 2:
+        raise RuntimeError(
+            f"active_reference_guard: ripgrep failed (exit 2): {result.stderr.strip()}"
+        )
+    if result.returncode == 1:
+        return False
+    matched_paths = result.stdout.splitlines()
     if not exclude_provenance_blocks:
         return bool(matched_paths)
+    return referenced_needles([needle], matched_paths)[needle]
+
+
+def referenced_needles(needles: list[str], matched_paths: list[str]) -> dict[str, bool]:
+    """`{needle: is_live_reference}` from ONE read of each file in `matched_paths` (the files
+    a fixed-string search flagged): provenance blocks are stripped once per file and every
+    still-undecided needle is tested against it. A needle is True when it occurs outside a
+    recognized provenance-marker block; a file that cannot be read makes every needle True
+    (ambiguity blocks). Read-only."""
+    result = {needle: False for needle in needles}
+    pending = set(result)
     for matched_path in matched_paths:
         if not matched_path:
             continue
         try:
             file_text = Path(matched_path).read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            # Cannot verify this citation is provenance-only -> ambiguity blocks.
-            return True
-        if needle in _text_excluding_provenance_blocks(file_text):
-            return True
-    return False
+            return {needle: True for needle in result}
+        live_text = _text_excluding_provenance_blocks(file_text)
+        for needle in [n for n in pending if n in live_text]:
+            result[needle] = True
+            pending.discard(needle)
+        if not pending:
+            break
+    return result
 
 
 def active_reference_guard_many(
@@ -392,7 +345,7 @@ def active_reference_guard_many(
     needle in `needles`, using ONE `rg` invocation for the whole set (`rg -f <patternfile>`,
     unioning every needle's pattern into a single fixed-strings search) instead of one `rg`
     call per needle. Needle -> file attribution moves into the per-file read this guard
-    already performs per matched file (`_needle_referenced_in`) — the union of files any
+    already performs per matched file (`referenced_needles`) — the union of files any
     needle matched is read once each, then checked against every needle, exactly the same
     ambiguity-blocks-if-unreadable and provenance-block-exclusion semantics as
     `active_reference_guard`.
@@ -417,58 +370,36 @@ def active_reference_guard_many(
     if not existing_scope:
         return {needle: False for needle in distinct_needles}
 
-    if shutil.which("rg") is not None:
-        from coordinator_core.win_portability import leaf_spawn_creationflags
+    _require_rg("active_reference_guard_many")
+    from coordinator_core.win_portability import leaf_spawn_creationflags
 
-        pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True, dir=managed_tempdir(repo_root))
-        try:
-            with os.fdopen(pattern_fd, "w", encoding="utf-8", newline="\n") as pattern_file:
-                pattern_file.write("\n".join(distinct_needles) + "\n")
-            result = subprocess.run(
-                [
-                    "rg",
-                    "--fixed-strings",
-                    "--files-with-matches",
-                    "-f",
-                    pattern_path,
-                    *existing_scope,
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                **leaf_spawn_creationflags(),
-            )
-        finally:
-            os.unlink(pattern_path)
-        # rg exit codes: 0 = match(es) found, 1 = no match, 2 = error.
-        if result.returncode == 2:
-            raise RuntimeError(
-                f"active_reference_guard_many: ripgrep failed (exit 2): {result.stderr.strip()}"
-            )
-        matched_paths = [] if result.returncode == 1 else result.stdout.splitlines()
-    else:
-        # No process to batch — same in-process fallback walk as
-        # `active_reference_guard`, run once and checked against every needle.
-        matched_paths = []
-        for scope_dir in existing_scope:
-            for dirpath, dirnames, filenames in os.walk(scope_dir):
-                dirnames[:] = [d for d in dirnames if d not in _FALLBACK_IGNORE_DIRS]
-                for filename in filenames:
-                    candidate = Path(dirpath) / filename
-                    try:
-                        text = candidate.read_text(encoding="utf-8")
-                    except UnicodeDecodeError:
-                        continue
-                    except OSError:
-                        matched_paths.append(str(candidate))
-                        continue
-                    if any(needle in text for needle in distinct_needles):
-                        matched_paths.append(str(candidate))
-
-    return {
-        needle: _needle_referenced_in(needle, matched_paths)
-        for needle in distinct_needles
-    }
+    pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True, dir=managed_tempdir(repo_root))
+    try:
+        with os.fdopen(pattern_fd, "w", encoding="utf-8", newline="\n") as pattern_file:
+            pattern_file.write("\n".join(distinct_needles) + "\n")
+        result = subprocess.run(
+            [
+                "rg",
+                "--fixed-strings",
+                "--files-with-matches",
+                "-f",
+                pattern_path,
+                *existing_scope,
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            **leaf_spawn_creationflags(),
+        )
+    finally:
+        os.unlink(pattern_path)
+    # rg exit codes: 0 = match(es) found, 1 = no match, 2 = error.
+    if result.returncode == 2:
+        raise RuntimeError(
+            f"active_reference_guard_many: ripgrep failed (exit 2): {result.stderr.strip()}"
+        )
+    matched_paths = [] if result.returncode == 1 else result.stdout.splitlines()
+    return referenced_needles(distinct_needles, matched_paths)
 
 
 def files_citing(needles: list[str], repo_root: Path, paths: list[str]) -> dict[str, list[str]]:
@@ -482,35 +413,25 @@ def files_citing(needles: list[str], repo_root: Path, paths: list[str]) -> dict[
     if not distinct or not existing:
         return hits
 
-    if shutil.which("rg") is not None:
-        from coordinator_core.win_portability import leaf_spawn_creationflags
+    _require_rg("files_citing")
+    from coordinator_core.win_portability import leaf_spawn_creationflags
 
-        pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True, dir=managed_tempdir(repo_root))
-        try:
-            with os.fdopen(pattern_fd, "w", encoding="utf-8", newline="\n") as pattern_file:
-                pattern_file.write("\n".join(distinct) + "\n")
-            result = subprocess.run(
-                ["rg", "--fixed-strings", "--files-with-matches", "-f", pattern_path, *existing],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                **leaf_spawn_creationflags(),
-            )
-        finally:
-            os.unlink(pattern_path)
-        if result.returncode == 2:
-            raise RuntimeError(f"files_citing: ripgrep failed (exit 2): {result.stderr.strip()}")
-        matched = [] if result.returncode == 1 else result.stdout.splitlines()
-    else:
-        matched = []
-        for rel in existing:
-            top = repo_root / rel
-            if top.is_file():
-                matched.append(str(top))
-                continue
-            for dirpath, dirnames, filenames in os.walk(top):
-                dirnames[:] = [d for d in dirnames if d not in _FALLBACK_IGNORE_DIRS]
-                matched.extend(str(Path(dirpath) / name) for name in filenames)
+    pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True, dir=managed_tempdir(repo_root))
+    try:
+        with os.fdopen(pattern_fd, "w", encoding="utf-8", newline="\n") as pattern_file:
+            pattern_file.write("\n".join(distinct) + "\n")
+        result = subprocess.run(
+            ["rg", "--fixed-strings", "--files-with-matches", "-f", pattern_path, *existing],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            **leaf_spawn_creationflags(),
+        )
+    finally:
+        os.unlink(pattern_path)
+    if result.returncode == 2:
+        raise RuntimeError(f"files_citing: ripgrep failed (exit 2): {result.stderr.strip()}")
+    matched = [] if result.returncode == 1 else result.stdout.splitlines()
 
     root = repo_root.resolve()
     for raw in matched:

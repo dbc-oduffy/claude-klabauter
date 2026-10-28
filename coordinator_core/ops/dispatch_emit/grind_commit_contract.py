@@ -174,7 +174,7 @@ HISTORICAL_RECORD_PREFIXES = (
     "docs/decisions/",
 )
 
-_SHARED_WRITE_ROOTS = (_home_prefix("sizings"), _home_prefix("handoffs"), "state/apm-rulings/")
+_SHARED_WRITE_ROOTS = (_home_prefix("sizings"), _home_prefix("handoffs"), _home_prefix("apm-rulings"))
 
 
 def _dir_root(path: str) -> str:

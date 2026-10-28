@@ -134,8 +134,13 @@ def _decision(body: dict) -> str:
     return (body.get("hookSpecificOutput") or {}).get("permissionDecision", "")
 
 
+def _nudged(body: dict) -> bool:
+    hso = body.get("hookSpecificOutput") or {}
+    return "[em-prefire-survey]" in str(hso.get("additionalContext", "")) and "permissionDecision" not in hso
+
+
 def _reason(body: dict) -> str:
-    text = body["hookSpecificOutput"]["permissionDecisionReason"]
+    text = body["hookSpecificOutput"]["additionalContext"]
     marker = "[coordinator] "
     return text[len(marker):] if text.startswith(marker) else text
 
@@ -145,7 +150,7 @@ def test_ninth_call_denies_through_the_door_with_fire_step(door, monkeypatch, ca
     door.history(8, name)
     rc, body = door.run(monkeypatch, capsys, name)
     assert rc == 0
-    assert _decision(body) == "deny"
+    assert _nudged(body)
     assert _reason(body).startswith("[em-prefire-survey]")
     assert warp_fire.fire_step() in _reason(body)
 
@@ -176,7 +181,7 @@ def test_open_xs_lane_does_not_exempt(door, monkeypatch, capsys):
     door.history(8, "Read")
     assert xs_lane_budget.open_xs_lane(door.repo, SID, "abc")
     rc, body = door.run(monkeypatch, capsys, "Read")
-    assert rc == 0 and _decision(body) == "deny"
+    assert rc == 0 and _nudged(body)
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
@@ -191,7 +196,7 @@ def test_cell_session_ninth_call_denies_with_role_marker(cell_door, monkeypatch,
     cell_door.history(8, name)
     rc, body = cell_door.run(monkeypatch, capsys, name)
     assert rc == 0
-    assert _decision(body) == "deny"
+    assert _nudged(body)
     assert _reason(body).startswith("[em-prefire-survey]")
 
 

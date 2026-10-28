@@ -82,7 +82,7 @@ from functools import partial
 from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.main_commit_policy import main_commit_refusal
-from coordinator_core.git.git_objects import _read_object
+from coordinator_core.git.git_objects import _OBJECT_CACHE, _read_object
 from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.authoring_leaks import leak_gate
 from coordinator_core.ipc import register_op
@@ -399,6 +399,19 @@ def _peer_claim_warnings(
     return warnings
 
 
+def _landed_text(read_source: Callable[[str], Optional[bytes]]) -> Callable[[str], Optional[str]]:
+    """Decoded landed bytes for `read_source`; None when absent or not UTF-8 (a detector then sees the path as absent, not as the worktree copy)."""
+    def read(rel: str) -> Optional[str]:
+        data = read_source(rel)
+        if data is None:
+            return None
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    return read
+
+
 def _pre_commit_gates(
     worktree_root: Path,
     paths: list,
@@ -518,7 +531,9 @@ def _pre_commit_gates(
         ("carry_gate", carry_gate),
         ("residue_gate", residue_gate),
         ("op_scope_coverage_gate", partial(op_scope_coverage_gate, read_source=read_source)),
-        ("leak_gate", leak_gate),
+        ("leak_gate", partial(leak_gate, landed_text=(
+            _landed_text(read_source) if prefer_staged or deliberate_stage else None
+        ))),
         ("registration_quad_gate", partial(registration_quad_gate, read_source=read_source)),
         ("claude_md_budget_gate", partial(claude_md_budget_gate, read_source=read_source)),
         ("machine_path_leak_gate", partial(machine_path_leak_gate, read_source=read_source)),
@@ -630,6 +645,29 @@ _RETIRED_CARRY_PARAMS = {
 }
 
 
+#: Every params key this op reads; any other key refuses `unknown-param` so a dropped key never
+#: degrades to worktree bytes. `repo` is listed so its own refusal message fires.
+_KNOWN_PARAMS = frozenset(
+    {
+        "repo", "repo_root", "paths", "deleted_paths", "untracked_paths", "message",
+        "prefer_staged", "prefer_deliberate_stage", "allow_empty", "finish_merge", "session_id",
+        "declared_reverts", "expected_blobs", "expected_content_sha256", "supplied_blobs",
+        "skip_missing", "gone_tracked_as_deleted", "on_main_reason", "force_ignored",
+        "drop_ignored", "ignored_untracked", "full_reply", *_RETIRED_CARRY_PARAMS,
+    }
+)
+
+
+def _read_stored_object(common_dir: Path, sha: str):
+    """`_read_object` that never trusts a cached miss: the object cache stores absence, and a
+    blob written after an earlier refusal (a retry in the warm engine) must be seen."""
+    found = _read_object(common_dir, sha)
+    if found is None:
+        _OBJECT_CACHE.pop((str(common_dir), sha.lower()), None)
+        found = _read_object(common_dir, sha)
+    return found
+
+
 def _error(message: str, **extra: object) -> dict:
     """Build the structured-error result envelope for this op.
 
@@ -730,6 +768,7 @@ def _land(
     declared_reverts: list,
     expected_blobs: Optional[dict] = None,
     expected_content_sha256: Optional[dict] = None,
+    supplied_blobs: Optional[dict] = None,
     allow_empty: bool = False,
     finish_merge: bool = False,
 ) -> _Landing:
@@ -751,6 +790,7 @@ def _land(
             declared_reverts=declared_reverts,
             expected_blobs=expected_blobs or None,
             expected_content_sha256=expected_content_sha256 or None,
+            supplied_blobs=supplied_blobs or None,
         )
 
     try:
@@ -995,10 +1035,23 @@ def _parse_params(params: dict, repo_root: Optional[Path]):
     "blob_drift": [{"path", "basis", "expected", "actual"}, ...]}; `actual` is null when the
     committed bytes are not worktree bytes read here. A mixed process/product call gives each
     half only the keys in its own paths. Absent, the reply is unchanged.
+    supplied_blobs ({path: git blob sha}, optional, in-process callers) -- committed in place of the
+    worktree bytes for each path, forwarded to `commit_paths`; split per half like the expectations.
+
+    supplied_blobs ({path: git blob sha}, optional) -- the blob to commit for each path in place of
+    its worktree bytes; the worktree is left byte-identical. Each sha must already be a stored blob,
+    else the call refuses {"refused": "supplied-blob-missing"} before any write.
 
     Keying scope: common_dir -- repo_root arg is the .git common dir; the
     caller's worktree is main_worktree_root(repo_root).
     """
+    unknown = sorted(set(params) - _KNOWN_PARAMS)
+    if unknown:
+        return _error(
+            f"unknown params: {', '.join(unknown)}",
+            refused="unknown-param",
+        )
+
     if "repo" in params:
         return _error(
             "params.repo is not a parameter of this op. The target repo is keyed "
@@ -1077,7 +1130,7 @@ def _parse_params(params: dict, repo_root: Optional[Path]):
         return _error("params.declared_reverts must be a list of strings")
 
     expectations: dict = {}
-    for name in ("expected_blobs", "expected_content_sha256"):
+    for name in ("expected_blobs", "expected_content_sha256", "supplied_blobs"):
         raw = params.get(name)
         if raw is None:
             expectations[name] = {}
@@ -1087,6 +1140,19 @@ def _parse_params(params: dict, repo_root: Optional[Path]):
         ):
             return _error(f"params.{name} must be an object of string path to string sha")
         expectations[name] = {k.replace("\\", "/"): v for k, v in raw.items()}
+    # A supplied blob is landed as-is and never re-hashed from the worktree, so it must already
+    # be a stored blob; an absent object refuses rather than falling back to the worktree bytes.
+    for path, sha in expectations["supplied_blobs"].items():
+        stored = (
+            _read_stored_object(repo_root, sha)
+            if len(sha) in (40, 64) and all(c in "0123456789abcdef" for c in sha)
+            else None
+        )
+        if stored is None or stored[0] != "blob":
+            return _error(
+                f"params.supplied_blobs[{path}] is not a stored blob object: {sha}",
+                refused="supplied-blob-missing",
+            )
 
     # A list copied from CRLF output carries a trailing CR no path can end in.
     raw_paths = [p.rstrip("\r") for p in raw_paths]
@@ -1094,6 +1160,18 @@ def _parse_params(params: dict, repo_root: Optional[Path]):
     raw_untracked = [p.rstrip("\r") for p in raw_untracked]
     raw_prefer_staged = [p.rstrip("\r") for p in raw_prefer_staged]
     raw_declared_reverts = [p.rstrip("\r") for p in raw_declared_reverts]
+
+    # A supplied blob for a path no list commits would be dropped silently.
+    named = {
+        p.replace("\\", "/")
+        for p in (*raw_paths, *raw_deleted, *raw_untracked, *raw_prefer_staged)
+    }
+    stray = sorted(k.rstrip("\r") for k in expectations["supplied_blobs"] if k.rstrip("\r") not in named)
+    if stray:
+        return _error(
+            f"unknown params: supplied_blobs[{', '.join(stray)}] names no committed path",
+            refused="unknown-param",
+        )
 
     raw_skip_missing = params.get("skip_missing", False)
     if not isinstance(raw_skip_missing, bool):

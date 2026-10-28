@@ -262,6 +262,21 @@ def _repo_root(repo_arg: Optional[str], payload: dict) -> Optional[Path]:
     return Path(top) if top else None
 
 
+def _anchor_disagreement(payload: Mapping[str, Any]) -> Optional[tuple[str, str]]:
+    """`(anchor, launch)` paths when the session's anchor repo and launch repo differ, else None."""
+    from coordinator_core.bash_guards._write_bump_applicability import launch_anchor_disagreement
+
+    session_id = payload.get("session_id")
+    if not (isinstance(session_id, str) and session_id):
+        return None
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else None
+    env = payload.get("env") if isinstance(payload.get("env"), dict) else None
+    if env and env.get("CLAUDE_PROJECT_DIR"):
+        env = {**os.environ, **env}
+    return launch_anchor_disagreement(session_id, cwd, env)
+
+
 def _cross_repo_refusal(run_root: Path, own: Optional[Path], research_route: bool, approved: bool) -> Optional[str]:
     """Deny text when the run root is another checkout and no research sizing, approval or remote venue admits it; else None."""
     from coordinator_core.ops.dispatch_emit.cross_repo_ask_refusal import cross_repo_run_refusal
@@ -774,6 +789,13 @@ def evaluate(
     if asks is not None:
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
+
+    disagree = None if (repo_arg and Path(repo_arg).is_absolute()) else _anchor_disagreement(payload)
+    if disagree:
+        return _refuse(
+            f"Session anchor {disagree[0]} and launch repo {disagree[1]} are different repos; "
+            "the run would resolve to the anchor. Pass an absolute `repo` to choose one."
+        )
 
     root = _repo_root(repo_arg, payload)
     if root is None:

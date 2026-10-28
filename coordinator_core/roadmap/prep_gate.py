@@ -134,11 +134,13 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import yaml
 
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.roadmap import census
 from coordinator_core.roadmap.post_stamp_clause import (
     post_stamp_body_refusal,
@@ -179,7 +181,7 @@ ENGINE_ERROR = "ENGINE-ERROR"
 CLASS_ORDER = (
     "SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "CI_RETIRED", "EXECUTOR_COMMIT",
     "EXECUTOR_HEAVY", "TEST_RUNNER_OUT_OF_ROLE", "GITIGNORED_WRITES", "CAPABILITIES",
-    "SCHEMA", "REGISTER",
+    "SCHEMA", "REGISTER", "DONE_CLAUSE",
 )
 
 #: ``classes["CAPABILITIES"]["kind"]`` for an absent ``capabilities`` key; the
@@ -395,6 +397,17 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         "writes, remove the full-suite or timing command from it, and add a new `performer: em` "
         "verify row carrying that command with `depends_on` the writing row — {detail}",
     ),
+    "register-citations": (
+        True,
+        "set `register_rows` on each named spine row to the claimed ids its own "
+        "`traces_to_brief`/body already cites; give an orphan claimed id to the row whose "
+        "trace quotes that row's source_text — {detail}",
+    ),
+    "done-clause-unmapped": (
+        True,
+        "append the clause verbatim to the named row's `acceptance:` beside its existing "
+        "command — {detail}",
+    ),
     "census-unscreenable": (
         True,
         "rewrite each named census entry's command into the allowed form (" + census.ALLOWED_FORM + "): "
@@ -497,6 +510,28 @@ def _spine(
             "spine-absent",
             "no ```yaml plan-tasks block — a plan with no spine declares no scope to schedule",
         )
+    from coordinator_core.ops.dispatch_emit.spine_read import (
+        _UNDECLARED_GATE_KEY,
+        KNOWN_ROW_KEYS,
+    )
+
+    # A key the reader neither consumes nor aliases (`ROW_KEY_ALIASES` spellings sit in
+    # KNOWN_ROW_KEYS and read as their canonical key, so they pass) is dropped silently at stage.
+    # `awaiting_gate` is exempt: read_spine refuses it with its own remedy (use external_gate).
+    unknown = [
+        f"{row.get('id', '?')}: {key}"
+        for row in load_rows_memo(text).rows
+        if isinstance(row, dict)
+        for key in row
+        if key not in KNOWN_ROW_KEYS and key != _UNDECLARED_GATE_KEY
+        and key is not True and key != "on"  # YAML 1.1 reads an unquoted `on:` as boolean True
+    ]
+    if unknown:
+        return _defect(
+            "unknown-row-key",
+            "plan-row key(s) the spine reader does not consume: " + "; ".join(unknown[:8])
+            + " (rename to a known key or drop it)",
+        )
     excluded: list = []
     try:
         rows = read_spine(plan_path, exclusions=excluded, plan_edge_cache=plan_edge_cache)
@@ -587,15 +622,22 @@ def _new_dr_number_pinned(rows: List[Any], repo_root: Optional[Path]) -> Optiona
     if repo_root is None:
         return None
     decisions = Path(repo_root) / "docs" / "decisions"
-    try:
-        existing = {
+
+    def _list_existing() -> set:
+        return {
             m.group(1)
             for entry in decisions.iterdir()
             for m in [_NEW_DR_WRITE_RE.match(f"docs/decisions/{entry.name}")]
             if m
         }
+
+    try:
+        existing = run_bounded(f"dr-iterdir:{decisions}", _list_existing, default=None)
     except OSError:
-        existing = set()
+        existing = None
+    if existing is None:
+        sys.stderr.write(f"prep_gate: DR number check skipped, {decisions} unreadable within deadline\n")
+        return None
     pinned = [
         f"{row.id} ({value})"
         for row in rows
@@ -1401,13 +1443,82 @@ EXECUTOR_HEAVY_FIX = (
 )
 EXECUTOR_HEAVY_SPLIT_FIX = (
     "Fix: a row that writes files cannot be re-typed (test-runner has no Write tool); "
-    "split it into a `coordinator:executor` authoring row plus a "
-    "`agent_type: coordinator:test-runner` verify row."
+    "it keeps its writes and loses the command, and a new `<id>-V` verify row depends on it "
+    "and carries the command, typed `coordinator:test-runner` or `performer: em` as the repair names."
 )
 _EXECUTOR_HEAVY_CATALOGUE_FIX = (
     f"{EXECUTOR_HEAVY_FIX} A row that also writes files: "
-    "split it into an executor authoring row plus a `coordinator:test-runner` verify row."
+    "it keeps its writes and loses the command, and a new `<id>-V` verify row carries the command."
 )
+
+
+def _agent_definitions_dir() -> Optional[Path]:
+    """DoE's ``coordinator/agents`` directory, or None when no doctrine asset resolves."""
+    from coordinator_core.hooks.block_workflow_unmodeled_agent import _agents_dir
+
+    return _agents_dir()
+
+
+def _roles_admitting_build_and_measure() -> List[str]:
+    """Roles whose DoE definition frontmatter declares ``admits: [build, measure]``.
+
+    Read from the agent definitions on every call; never a list kept here. Empty when
+    no definition declares both, or the definitions directory does not resolve.
+    """
+    agents = _agent_definitions_dir()
+    if agents is None or not agents.is_dir():
+        return []
+    roles: List[str] = []
+    for path in sorted(agents.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        parts = text.split("---", 2)
+        if not text.startswith("---") or len(parts) < 3:
+            continue
+        try:
+            front = yaml.safe_load(parts[1])
+        except yaml.YAMLError:
+            continue
+        admits = front.get("admits") if isinstance(front, dict) else None
+        if isinstance(admits, str):
+            admits = [admits]
+        if isinstance(admits, list) and {"build", "measure"} <= {
+            str(a).strip().lower() for a in admits
+        }:
+            roles.append(f"coordinator:{path.stem}")
+    return roles
+
+
+def build_measure_remedy() -> str:
+    """The remedy for a build or measure command: a role that admits both, else the EM leg.
+
+    The role is the one ``_roles_admitting_build_and_measure`` finds. With none, the row is
+    ``performer: em``, which the in-wave repair applies mechanically.
+    """
+    roles = _roles_admitting_build_and_measure()
+    if roles:
+        return (
+            f"Fix: build and measure steps go to one role whose definition admits both: "
+            f"declare `agent_type: {roles[0]}` on the row."
+        )
+    return (
+        "Fix: no agent definition declares `admits: [build, measure]`, so neither "
+        "coordinator:executor nor coordinator:test-runner may run it; declare "
+        "`performer: em` on the row. Coordinator-content-repo-em owes that role (memo, coordinated with "
+        "doe run 9d7129)."
+    )
+
+
+_BUILD_MEASURE_CLASSES = frozenset({"build", "ue", "reindex"})
+
+
+def _is_build_class(cls: Any) -> bool:
+    heavy = getattr(cls, "heavy_class", None)
+    return getattr(heavy, "value", None) in _BUILD_MEASURE_CLASSES and not getattr(
+        cls, "noemit_tsc", False
+    )
 
 
 def _routes_to_executor(row: Dict[str, Any]) -> bool:
@@ -1422,6 +1533,50 @@ def _routes_to_executor(row: Dict[str, Any]) -> bool:
         isinstance(writes, list) and writes and any(
             isinstance(p, str) and _is_immutable_body_path(p) for p in writes
         )
+    )
+
+
+def _verify_row_id(row_id: str, taken: set) -> str:
+    """``<id>-V``, else ``<id>-V2``, ``-V3``… the first not in ``taken``; the pick is added to it."""
+    candidate = f"{row_id}-V"
+    n = 1
+    while candidate in taken:
+        n += 1
+        candidate = f"{row_id}-V{n}"
+    taken.add(candidate)
+    return candidate
+
+
+def _executor_heavy_repair(
+    row: Dict[str, Any],
+    cls: Any,
+    repo_root: Path,
+    span: str = "",
+    taken_ids: Optional[set] = None,
+) -> str:
+    """One row edit that clears this hit and re-gates PASS on EXECUTOR_HEAVY and TEST_RUNNER_OUT_OF_ROLE.
+
+    Target type: a build-class command takes the ``build_measure_remedy`` target (a role admitting
+    build and measure, else ``performer: em``); any other takes ``coordinator:test-runner`` unless
+    that role refuses the span, then ``performer: em``. A row that writes files keeps its writes
+    and loses the command; a new verify row ``<id>-V`` depends on it and carries the command.
+    ``taken_ids`` is the spine's id set; the verify id is added to it.
+    """
+    row_id = str(row.get("id") or "<row with no id>")
+    if _is_build_class(cls):
+        roles = _roles_admitting_build_and_measure()
+        target = f"`agent_type: {roles[0]}`" if roles else "`performer: em`"
+    elif _span_out_of_role_for_test_runner(span, repo_root):
+        target = "`performer: em`"
+    else:
+        target = "`agent_type: coordinator:test-runner`"
+    writes = row.get("writes")
+    if not (isinstance(writes, list) and writes):
+        return f"row {row_id}: declare {target} (command `{span}`)"
+    verify_id = _verify_row_id(row_id, taken_ids if taken_ids is not None else set())
+    return (
+        f"row {row_id}: keep its writes, remove the command `{span}`, then "
+        f"add row {verify_id} with `depends_on: {row_id}`, running `{span}`, declaring {target}"
     )
 
 
@@ -1441,6 +1596,8 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
     hits: List[str] = []
     ids: List[str] = []
     fixes: set = set()
+    repairs: List[str] = []
+    taken_ids = {str(r["id"]) for r in rows if isinstance(r, dict) and r.get("id")}
     for row in rows:
         if not isinstance(row, dict) or _row_is_unschedulable(row):
             continue
@@ -1461,11 +1618,15 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
                 ids.append(row_id)
                 hits.append(f"{row_id} (`{span[:60]}`)")
                 writes = row.get("writes")
-                fixes.add(
-                    EXECUTOR_HEAVY_SPLIT_FIX
-                    if isinstance(writes, list) and writes
-                    else EXECUTOR_HEAVY_FIX
-                )
+                if _is_build_class(cls):
+                    fixes.add(build_measure_remedy())
+                else:
+                    fixes.add(
+                        EXECUTOR_HEAVY_SPLIT_FIX
+                        if isinstance(writes, list) and writes
+                        else EXECUTOR_HEAVY_FIX
+                    )
+                repairs.append(_executor_heavy_repair(row, cls, repo_root, span, taken_ids))
                 break
     if not hits:
         return _pass("no executor row runs a heavy command")
@@ -1475,12 +1636,8 @@ def _executor_heavy(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, An
         f"{' '.join(sorted(fixes, reverse=True))}",
         withheld=sorted(set(ids)),
     )
-    # Mechanical only when every hit row is a pure retype; one writes-bearing hit needs a split.
-    if fixes == {EXECUTOR_HEAVY_FIX}:
-        result["mechanical"] = True
-        result["repair"] = (
-            f"declare `agent_type: coordinator:test-runner` on each named row — {', '.join(hits)[:260]}"
-        )
+    result["mechanical"] = True
+    result["repair"] = "; ".join(repairs)
     return result
 
 
@@ -1512,6 +1669,21 @@ def _is_path_scoped_pnpm_test(span: str) -> bool:
     return any(not a.startswith("-") for a in argv[2:])
 
 
+def _span_out_of_role_for_test_runner(span: str, repo_root: Path) -> bool:
+    """True when ``span`` is an act ``coordinator:test-runner`` refuses: a full or broad suite, or a build.
+
+    Shared by ``_test_runner_out_of_role`` and ``_executor_heavy_repair`` so the repair target
+    can never be a row the out-of-role gate refuses.
+    """
+    from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
+
+    span = span.strip()
+    if not span or _is_path_scoped_pnpm_test(span):
+        return False
+    cls = classify(span, None, str(repo_root), _BROAD_SUITE_WORKER_CAP)
+    return cls is not None and (cls.heavy_class is HeavyClass.TEST_TIER or _is_build_class(cls))
+
+
 def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dict[str, Any]:
     """Refuse a row declaring ``coordinator:test-runner`` whose act test-runner cannot perform.
 
@@ -1521,7 +1693,6 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
     pass. Memo-send rows are skipped: the send is the send op's own commit, and the executor's
     brief is fixed. Pure over the parsed row; ``repo_root`` is the gated plan's tree, never process cwd.
     """
-    from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
     from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, _is_operator_row
 
@@ -1549,10 +1720,7 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
                 span = span.strip()
                 if _is_path_scoped_pnpm_test(span):
                     continue
-                cls = (
-                    classify(span, None, str(repo_root), _BROAD_SUITE_WORKER_CAP) if span else None
-                )
-                if cls is not None and cls.heavy_class is HeavyClass.TEST_TIER:
+                if _span_out_of_role_for_test_runner(span, repo_root):
                     act = f"`{span[:60]}`"
                     break
         if act is None:
@@ -1565,7 +1733,7 @@ def _test_runner_out_of_role(rows: List[Dict[str, Any]], repo_root: Path) -> Dic
     return _defect(
         "test-runner-out-of-role-row",
         f"test-runner rows doing work it refuses: {', '.join(hits)[:260]} — "
-        f"{TEST_RUNNER_OUT_OF_ROLE_FIX}",
+        f"{TEST_RUNNER_OUT_OF_ROLE_FIX} {build_measure_remedy()}",
         withheld=sorted(set(ids)),
     )
 
@@ -2379,17 +2547,57 @@ _REGISTER_FIX = (
 )
 
 
-def _read_sizing_register(repo_root: Path, sizing: str) -> Optional[bytes]:
+def _read_sizing_register(
+    repo_root: Path, sizing: str, cache: Optional[Dict[str, Optional[bytes]]] = None
+) -> Optional[bytes]:
+    """The sizing's bytes; ``cache`` (keyed by ``sizing``) lets REGISTER and DONE_CLAUSE share one read."""
+    if cache is not None and sizing in cache:
+        return cache[sizing]
     try:
         root = repo_root.resolve()
         candidate = (root / sizing).resolve()
         candidate.relative_to(root)
-        return candidate.read_bytes()
+        data: Optional[bytes] = candidate.read_bytes()
     except (OSError, ValueError):
+        data = None
+    if cache is not None:
+        cache[sizing] = data
+    return data
+
+
+def _cited_register_ids(row: Any) -> set:
+    cited = row.get("register_rows") if isinstance(row, dict) else None
+    if isinstance(cited, str):
+        cited = [cited]
+    return {str(c) for c in cited} if isinstance(cited, list) else set()
+
+
+def _register_citations(rows: Sequence[Any], claimed: set) -> Optional[Dict[str, Any]]:
+    """A non-deferred spine row must cite a claimed id; every claimed id must be cited by one."""
+    live = [r for r in rows if isinstance(r, dict) and r.get("disposition") != "deferred"]
+    if not live:
         return None
+    uncited = [str(r.get("id")) for r in live if not (_cited_register_ids(r) & claimed)]
+    seen: set = set()
+    for r in live:
+        seen |= _cited_register_ids(r)
+    orphans = sorted(claimed - seen)
+    parts = []
+    if uncited:
+        parts.append(f"spine row(s) citing no claimed register row: {', '.join(uncited)}")
+    if orphans:
+        parts.append(f"claimed register row(s) cited by no non-deferred spine row: {', '.join(orphans)}")
+    if not parts:
+        return None
+    return _defect("register-citations", "; ".join(parts) + "; set `register_rows` on each row")
 
 
-def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
+def _register(
+    fm: Dict[str, Any],
+    repo_root: Optional[Path],
+    spine_rows: Optional[Sequence[Any]] = None,
+    sizing_cache: Optional[Dict[str, Optional[bytes]]] = None,
+) -> Dict[str, Any]:
     """REGISTER: `register_claims` resolves against, and covers, the sizing's register."""
     from coordinator_core.ops import requirement_register as rr
 
@@ -2398,7 +2606,7 @@ def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
     if "register_claims" not in fm:
         if cited is None or repo_root is None:
             return _pass("not applicable: no register_claims")
-        cited_data = _read_sizing_register(repo_root, cited)
+        cited_data = _read_sizing_register(repo_root, cited, sizing_cache)
         if cited_data is not None and rr.has_register_key(cited_data):
             cited_register = rr.read_register(cited_data.decode("utf-8", errors="replace"))
             if cited_register is not None:
@@ -2420,7 +2628,7 @@ def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
         or not rows
     ):
         return _pass("not checked: register_claims malformed — SCHEMA reports it")
-    data = _read_sizing_register(repo_root, sizing)
+    data = _read_sizing_register(repo_root, sizing, sizing_cache)
     if data is None:
         return _defect(
             "register-sizing-missing",
@@ -2471,7 +2679,122 @@ def _register(fm: Dict[str, Any], repo_root: Optional[Path]) -> Dict[str, Any]:
                 "register-rows-unclaimed",
                 f"register_claims.rows omit {len(missing)} row(s) of {sizing}: {', '.join(missing)}",
             )
+    if spine_rows:
+        defect = _register_citations(spine_rows, {str(r) for r in rows})
+        if defect is not None:
+            return defect
     return _pass(f"{len(rows)} claimed row(s) resolve in {sizing}")
+
+
+_TEST_MARKER = "Test: "
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _done_clauses(sizing_doc: Any) -> List[str]:
+    """PM done-clauses of a parsed sizing: ``acceptance_rows[].check`` plus the ``Test: `` clauses
+    of open/partial register rows. De-duplicated, in first-seen order."""
+    if not isinstance(sizing_doc, dict):
+        return []
+    found: List[str] = []
+    acceptance = sizing_doc.get("acceptance_rows")
+    for item in acceptance if isinstance(acceptance, list) else []:
+        check = item.get("check") if isinstance(item, dict) else None
+        if isinstance(check, str) and check.strip():
+            found.append(check.strip())
+    register = sizing_doc.get("requirement_register")
+    rows = register.get("rows") if isinstance(register, dict) else None
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get("status") not in ("open", "partial"):
+            continue
+        text = row.get("source_text")
+        if not isinstance(text, str) or _TEST_MARKER not in text:
+            continue
+        tail = text.rsplit(_TEST_MARKER, 1)[1].split(". ", 1)[0]
+        for piece in tail.split("; "):
+            clause = piece.strip().rstrip(".").strip()
+            if clause:
+                found.append(clause)
+    return list(dict.fromkeys(found))
+
+
+def _clause_slug(clause: str) -> str:
+    return _NON_ALNUM_RE.sub("_", clause.lower()).strip("_")
+
+
+def _row_acceptance_counts(row: Dict[str, Any]) -> bool:
+    """A coded row shipped, so its acceptance still carries the clause; every other
+    unschedulable row never runs."""
+    if row.get("deferred") is True or bool(row.get("deferred_until")):
+        return False
+    disposition = str(row.get("disposition") or "").strip()
+    return disposition == "coded" or disposition not in _UNSCHEDULABLE_DISPOSITIONS
+
+
+def _done_clause(
+    fm: Dict[str, Any],
+    repo_root: Optional[Path],
+    spine_rows: Optional[Sequence[Any]] = None,
+    sizing_cache: Optional[Dict[str, Optional[bytes]]] = None,
+) -> Dict[str, Any]:
+    """DONE_CLAUSE: every sizing done-clause appears in some live spine row's ``acceptance``."""
+    sizing = fm.get("sizing_object")
+    if not isinstance(sizing, str) or repo_root is None:
+        return _pass("not applicable: no sizing_object")
+    data = _read_sizing_register(repo_root, sizing, sizing_cache)
+    if data is None:
+        return _pass(f"not applicable: {sizing} unreadable")
+    if b"acceptance_rows" not in data and _TEST_MARKER.encode() not in data:
+        return _pass("not applicable: sizing carries no done-clause")
+    try:
+        from coordinator_core.ops import requirement_register as rr
+
+        clauses = _done_clauses(rr._load(data.decode("utf-8", errors="replace")))
+    except Exception:  # noqa: BLE001 - tolerant reader: an unparseable sizing yields no clause
+        clauses = []
+    if not clauses:
+        return _pass("not applicable: sizing carries no done-clause")
+    commands = [
+        row["acceptance"]
+        for row in spine_rows or ()
+        if isinstance(row, dict)
+        and isinstance(row.get("acceptance"), str)
+        and _row_acceptance_counts(row)
+    ]
+    unmapped = [
+        c for c in clauses
+        if not any(c in cmd or _clause_slug(c) in cmd for cmd in commands)
+    ]
+    if unmapped:
+        quoted = "; ".join(f'"{c}"' for c in unmapped)
+        return _defect(
+            "done-clause-unmapped",
+            f"{len(unmapped)} done-clause(s) of {sizing} carried by no row's `acceptance:`: {quoted}; "
+            "add an `acceptance:` command carrying it verbatim to the row that proves it",
+        )
+    return _pass(f"{len(clauses)} done-clause(s) of {sizing} carried by row acceptance")
+
+
+def _apply_constraint_waivers(fm: Dict[str, Any], classes: Dict[str, Any]) -> None:
+    """Honour the plan's ``constraint_waived``: a DEFECT whose kind is a waived, waivable
+    constraint id becomes a PASS naming the waiver. A malformed, reasonless, unknown or
+    non-waivable entry is a defect, reported on SCHEMA. A plan without the field is untouched."""
+    from coordinator_core.roadmap.authoring_constraints import WAIVER_FIELD, read_waivers
+
+    if WAIVER_FIELD not in fm:
+        return
+    reading = read_waivers(fm)
+    for key, value in list(classes.items()):
+        if value.get("status") == "DEFECT" and value.get("kind") in reading.waived:
+            cid = value["kind"]
+            classes[key] = _pass(f"waived: {cid} ({reading.waived[cid]})")
+    if not reading.problems:
+        return
+    detail = "; ".join(f"{p['kind']}: {p['detail']}" for p in reading.problems)
+    schema = classes.get("SCHEMA")
+    if schema is not None and schema.get("status") == "PASS":
+        classes["SCHEMA"] = _defect("constraint-waiver-invalid", f"{WAIVER_FIELD} — {detail}")
+    elif schema is not None and schema.get("status") == "DEFECT":
+        schema["detail"] = f"{schema['detail']}; {WAIVER_FIELD} — {detail}"
 
 
 def evaluate_plan(
@@ -2505,6 +2828,7 @@ def evaluate_plan(
 
         edge_root = repo_root if repo_root is not None else _repo_root_of(plan_path)
         plan_edge_cache: dict = {}
+        sizing_cache: Dict[str, Optional[bytes]] = {}
         prime_exit = _prime_exit(fm, repo_root, text)
         prime_exit["warnings"] = _em_owned_exit_warnings(plan_path, text, fm, plan_edge_cache)
         classes = {
@@ -2530,7 +2854,8 @@ def evaluate_plan(
             "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
             "CAPABILITIES": _capabilities(fm),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
-            "REGISTER": _register(fm, repo_root),
+            "REGISTER": _register(fm, repo_root, raw_spine_rows(text), sizing_cache),
+            "DONE_CLAUSE": _done_clause(fm, repo_root, raw_spine_rows(text), sizing_cache),
         }
     except Exception as exc:  # noqa: BLE001 - defense in depth, see ENGINE_ERROR
         # A predicate raising anything OTHER than its own documented exception
@@ -2547,6 +2872,7 @@ def evaluate_plan(
                 "mechanical": False, "repair": None,
             }
         }
+    _apply_constraint_waivers(fm, classes)
     if any(v["status"] == "ERROR" for v in classes.values()):
         verdict = ENGINE_ERROR
     elif any(v["status"] == "REFUSE" for v in classes.values()):
@@ -2669,9 +2995,9 @@ def _authoring_fix_lines(failing_classes: "Sequence[str] | set") -> List[str]:
     if "EXECUTOR_COMMIT" in failing_classes:
         lines.append(f"  fix: {EXECUTOR_COMMIT_FIX}")
     if "EXECUTOR_HEAVY" in failing_classes:
-        lines.append(f"  fix: {_EXECUTOR_HEAVY_CATALOGUE_FIX}")
+        lines.append(f"  fix: {_EXECUTOR_HEAVY_CATALOGUE_FIX} Build or measure command: {build_measure_remedy()}")
     if "TEST_RUNNER_OUT_OF_ROLE" in failing_classes:
-        lines.append(f"  fix: {TEST_RUNNER_OUT_OF_ROLE_FIX}")
+        lines.append(f"  fix: {TEST_RUNNER_OUT_OF_ROLE_FIX} {build_measure_remedy()}")
     if "GITIGNORED_WRITES" in failing_classes:
         lines.append(f"  fix: {GITIGNORED_WRITES_FIX}")
     if "CAPABILITIES" in failing_classes:

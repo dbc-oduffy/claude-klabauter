@@ -44,16 +44,21 @@ Negative-spec:
       carrying unique commits — that call is Step 4 evidence-gated judgment
       (`consolidate-git/SKILL.md` § Step 3 self-check); this module only
       ever emits the EVIDENCE (the commit list + `git show --stat` output)
-      on the judgment point, never a pre-baked disposition.
-    - Do NOT touch a branch/worktree whose tip-commit author is not
-      `my_email` — such entries are reported in `gates.branches`/
-      `gates.worktrees` with `category: "others"` and never appear in
-      `directives[]` or `judgment_points[]`. The one exception is a
-      `cloud-session` branch (see `CLOUD_SESSION_EMAIL`), which carries no
-      operator identity and is surfaced behind a judgment point only —
-      never an unconditional directive, even at zero unique commits —
-      unless its tip's `Operator:` trailer equals `my_email`, which makes
-      it `mine-stale`.
+      on the judgment point. The `superseded` disposition resolves a
+      `merge-ours` directive only when the operator supplied the superseding
+      sha (`brief(superseded=...)`) and it is an ancestor of HEAD.
+    - Every branch of any owner (`category: "others"` included), local and
+      remote, is an absorb candidate: tip authorship never filters. Only the
+      current branch, main and backup refs are report-only. Absorb is always a
+      true merge (`merge-only`/`merge-and-delete`), never a cherry-pick. A
+      `cloud-session` branch (see `CLOUD_SESSION_EMAIL`) is surfaced behind a
+      judgment point only — never an unconditional delete, even at zero unique
+      commits — unless its tip's `Operator:` trailer equals `my_email`, which
+      makes it `mine-stale`.
+    - Remotes: only `origin` is enumerated; a branch that exists solely on
+      another remote is not seen. `refs/preserve/*` is never listed or touched.
+    - The `skip` disposition resolves no delete directive: a delete that drops
+      unabsorbed commits is not offered.
     - Do NOT re-introduce a per-commit OR per-branch `git show` — the
       inspection gather is one spawn total, across every stale branch's
       shas, not `unique_commits × ~100ms` or `stale_branches × ~100ms`
@@ -88,8 +93,6 @@ EXIT_OK = 0
 EXIT_BUSINESS_FAILURE = 1
 EXIT_USAGE = 2
 EXIT_TRANSPORT_FAIL = 3
-
-_CHERRY_PICK_MAX_COMMITS = 3
 
 #: A stale branch whose tip is younger than this is never deleted by the brief's
 #: directives: a delete cannot be declined at apply, so the floor lives where the
@@ -138,7 +141,7 @@ def list_branches_from(rows: list[tuple[str, ...]]) -> list[dict[str, Any]]:
         if refname.startswith("refs/heads/"):
             entry = branches.setdefault(short, {"name": short, "is_local": False, "is_remote": False})
             entry["is_local"] = True
-        elif refname.startswith("refs/remotes/"):
+        elif refname.startswith("refs/remotes/origin/"):
             if refname.rsplit("/", 1)[-1] == "HEAD":
                 continue
             name = short.partition("/")[2]
@@ -178,6 +181,8 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
         if len(parts) < 2:
             continue
         refname, short = parts[0], parts[1]
+        if refname.startswith("refs/preserve/"):
+            continue
         email = parts[2] if len(parts) > 2 else ""
         operator = parts[3].split(",", 1)[0].strip() if len(parts) > 3 else ""
         tip_time = parts[4].strip() if len(parts) > 4 else ""
@@ -287,6 +292,12 @@ def branch_reachable(run_git: RunGit, repo_root: Path, ref: str, target: str) ->
     return proc.returncode == 0
 
 
+def _is_ancestor_of_head(run_git: RunGit, repo_root: Path, sha: str) -> bool:
+    if not sha or sha.startswith("-"):
+        return False
+    return run_git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_root).returncode == 0
+
+
 def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[str]:
     proc = run_git(["branch", "--merged", target], repo_root)
     names: set[str] = set()
@@ -363,9 +374,35 @@ def _drop_batch_separator(block: str) -> str:
     return block[:-1] if block.endswith("\n\n") else block
 
 
-def _cherry_pick_or_merge_cli(commit_count: int, keep: bool = False) -> str:
-    verb = "cherry-pick" if commit_count <= _CHERRY_PICK_MAX_COMMITS else "merge"
-    return f"{verb}-only" if keep else f"{verb}-and-delete"
+_ABSORB_CLIS = ("merge-only", "merge-and-delete", "merge-ours")
+
+
+def _test_gate_entry(
+    directives: list[dict[str, Any]],
+    worktree_entries: list[dict[str, Any]],
+    repo_root: Path,
+    run_git: RunGit,
+) -> Optional[dict[str, Any]]:
+    """The terminal gate between the absorbs and /merge-to-main, or None when
+    nothing is absorbed. It lives in `gates`, not `directives[]`: the EM runs it
+    and apply never spawns pytest, so no apply handler may exist for it. The
+    pre-absorb HEAD comes from the worktree listing already read; a rev-parse
+    is spent only when that listing lacks the primary worktree."""
+    depends_on = [d["id"] for d in directives if d.get("cli") in _ABSORB_CLIS]
+    if not depends_on:
+        return None
+    root = repo_root.resolve()
+    pre_head = next((w.get("head") for w in worktree_entries if Path(w["path"]).resolve() == root), None)
+    if not pre_head:
+        pre_head = run_git(["rev-parse", "HEAD"], repo_root).stdout.strip() or "HEAD"
+    return {
+        "id": "d-test-gate",
+        "depends_on": depends_on,
+        "pre_absorb_head": pre_head,
+        "changed_files_command": ["git", "diff", "--name-only", f"{pre_head}..HEAD"],
+        "test_command": "pytest <the test files covering changed_files>",
+        "scope": "targeted tests only, never a broad suite; red blocks /merge-to-main",
+    }
 
 
 def brief(
@@ -373,8 +410,15 @@ def brief(
     my_email: Optional[str] = None,
     run_git: Optional[RunGit] = None,
     now: Optional[float] = None,
+    superseded: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
+    """`superseded` maps branch name to the operator-supplied superseding sha;
+    each accepted entry yields a `merge-ours` directive behind the branch's
+    `superseded` disposition. A sha that is not an ancestor of HEAD is refused
+    (listed in `gates.superseded_refused`, no directive)."""
     run_git = run_git or default_run_git
+    superseded = superseded or {}
+    superseded_refused: list[dict[str, str]] = []
     now = time.time() if now is None else now
     repo_root = repo_root or Path.cwd()
 
@@ -403,7 +447,7 @@ def brief(
         author = all_tip_authors[ref] if ref in all_tip_authors else tip_author(run_git, repo_root, ref)
         operator = all_tip_operators.get(ref, "")
         category = categorize_branch(name, current, main_branch, author, my_email, operator)
-        if category not in ("mine-stale", "cloud-session"):
+        if category not in ("mine-stale", "cloud-session", "others"):
             branches_report.append({**entry, "tip_author": author, "operator": operator, "category": category})
             continue
 
@@ -438,7 +482,7 @@ def brief(
         entry, name, commits, shas = stale["entry"], stale["name"], stale["commits"], stale["shas"]
         ref = entry["ref"]
 
-        delete_directive_id = f"d-delete-{name}"
+        delete_directive_id = f"d-delete-{name}"  # zero-commit branches only
         recent = stale["recent"]
         if not commits and recent:
             continue
@@ -474,7 +518,7 @@ def brief(
         inspections = [{"sha": sha, "stat": global_stats.get(sha, "")} for sha in shas]
         jp_id = f"j-absorb-{name}"
         absorb_directive_id = f"d-absorb-{name}"
-        absorb_cli = _cherry_pick_or_merge_cli(len(commits), keep=recent)
+        absorb_cli = "merge-only" if recent else "merge-and-delete"
         directives.append(
             {
                 "id": absorb_directive_id,
@@ -484,27 +528,40 @@ def brief(
                 "already_satisfied": False,
             }
         )
-        if not recent:
-            directives.append(
-                {
-                    "id": delete_directive_id,
-                    "cli": "delete-only",
-                    "args": [name] + (["origin"] if entry["is_remote"] else []),
-                    "depends_on": jp_id,
-                    "already_satisfied": False,
-                }
-            )
+        supersede_directive_id = f"d-supersede-{name}"
+        supersede_sha = superseded.get(name)
+        supersede_resolves: list[str] = []
+        supersede_guidance = f"re-run brief with --superseded {name}=<superseding-sha> to emit the merge-ours"
+        if supersede_sha is not None:
+            if not _is_ancestor_of_head(run_git, repo_root, supersede_sha):
+                superseded_refused.append(
+                    {"branch": name, "sha": supersede_sha, "reason": "superseding sha is not an ancestor of HEAD"}
+                )
+                supersede_guidance = f"superseding sha {supersede_sha!r} is not an ancestor of HEAD; refused"
+            else:
+                directives.append(
+                    {
+                        "id": supersede_directive_id,
+                        "cli": "merge-ours",
+                        "args": [name, ref, supersede_sha],
+                        "depends_on": jp_id,
+                        "already_satisfied": False,
+                    }
+                )
+                supersede_resolves = [supersede_directive_id]
+                supersede_guidance = f"merge -s ours naming {supersede_sha}; the branch is kept"
         judgment_points.append(
             build_judgment_point(
                 None,
                 id=jp_id,
                 question=(
-                    f"Branch {name!r} has {len(commits)} unique commit(s) — absorb or skip?"
+                    f"Branch {name!r} has {len(commits)} unique commit(s) — absorb, supersede or skip?"
                     + (" (tip is recent: absorb keeps the branch)" if recent else "")
                 ),
                 dispositions=[
                     build_disposition("absorb", resolves=[absorb_directive_id]),
-                    build_disposition("skip", resolves=[] if recent else [delete_directive_id]),
+                    build_disposition("superseded", resolves=supersede_resolves, guidance=supersede_guidance),
+                    build_disposition("skip", resolves=[]),
                 ],
                 evidence={"commits": commits, "inspections": inspections},
                 reason="insufficient-evidence",
@@ -531,10 +588,6 @@ def brief(
             if branch_name in branch_names_set and branch_name in all_tip_authors
             else tip_author(run_git, repo_root, branch_name if branch_name in branch_names_set else wt_path)
         )
-        if author != my_email:
-            worktrees_report.append({**wt, "tip_author": author, "category": "others"})
-            continue
-
         reachable = branch_name in merged_into_target
         dirty_probe = worktree_is_dirty(run_git, wt_path)
         dirty = dirty_probe["degraded"] or dirty_probe["value"]
@@ -607,9 +660,11 @@ def brief(
             {"id": "d-worktree-prune", "cli": "worktree-prune", "args": [], "depends_on": None, "already_satisfied": False}
         )
     if directives:
-        directives.append(
-            {"id": "d-fetch-prune", "cli": "fetch-prune", "args": [], "depends_on": None, "already_satisfied": False}
+        directives.insert(
+            0, {"id": "d-fetch-prune", "cli": "fetch-prune", "args": [], "depends_on": None, "already_satisfied": False}
         )
+
+    test_gate = _test_gate_entry(directives, worktree_entries, repo_root, run_git)
 
     behind_main = None
     if main_branch is not None and current != main_branch:
@@ -655,7 +710,13 @@ def brief(
     return build_envelope(
         artifact={"path": str(repo_root), "classification": "repo", "frontmatter": {}, "resolution": None},
         preflight={"current_branch": current, "main_branch": main_branch, "my_email": my_email},
-        gates={"branches": branches_report, "worktrees": worktrees_report, "behind_main": behind_main},
+        gates={
+            "branches": branches_report,
+            "worktrees": worktrees_report,
+            "behind_main": behind_main,
+            **({"test_gate": test_gate} if test_gate else {}),
+            **({"superseded_refused": superseded_refused} if superseded_refused else {}),
+        },
         directives=directives,
         judgment_points=judgment_points,
         decisions={},
@@ -690,8 +751,18 @@ def main(argv: list[str]) -> int:
         print(f"consolidate-assemble: unknown subcommand {subcmd!r}", file=sys.stderr)
         return EXIT_USAGE
 
+    superseded: dict[str, str] = {}
+    args = list(rest)
+    while args:
+        flag = args.pop(0)
+        name, sep, sha = (args.pop(0) if args else "").partition("=")
+        if flag != "--superseded" or not sep or not name or not sha:
+            print("consolidate-assemble: brief takes --superseded <branch>=<sha>", file=sys.stderr)
+            return EXIT_USAGE
+        superseded[name] = sha
+
     try:
-        decision_object = brief()
+        decision_object = brief(superseded=superseded) if superseded else brief()
     except Exception as exc:  # noqa: BLE001 - transport-failure backstop
         print(f"consolidate-assemble: transport failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL

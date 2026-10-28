@@ -425,18 +425,31 @@ Negative-spec (hard-won):
 
 from __future__ import annotations
 
+import _thread
 import contextvars
 import importlib
 import os
 import sys as _sys
-import threading
-import types as _types
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+
+# pathlib, typing, types and threading stay off the import path: this module's cold-start module
+# count is ceilinged in benchmarks/import-budget-manifest.json. Path is imported function-locally;
+# `ipc.Path` still resolves through `__getattr__` for callers that read it.
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from pathlib import Path
+    from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from coordinator_core.lifecycle import (
     git_common_dir,
 )
+
+
+def __getattr__(name: str):
+    if name == "Path":
+        from pathlib import Path
+
+        return Path
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 _logger = None
@@ -637,7 +650,18 @@ def is_unstamped_dispatch_allowed() -> bool:
     return _unstamped_dispatch_allowed
 
 
-_DISPATCH_ENGINE_ROOT = Path(__file__).resolve().parent.parent
+_DISPATCH_ENGINE_ROOT = None
+
+
+def _dispatch_engine_root():
+    """This process's engine root as a Path; resolved on first use so pathlib stays off import."""
+    global _DISPATCH_ENGINE_ROOT
+    if _DISPATCH_ENGINE_ROOT is None:
+        from pathlib import Path
+
+        _DISPATCH_ENGINE_ROOT = Path(__file__).resolve().parent.parent
+    return _DISPATCH_ENGINE_ROOT
+
 
 #: Repo-relative parts to this process's own engine build stamp -- mirrors
 #: `warm.skew.ENGINE_STAMP_FILENAME` / `_engine_stamp_path` byte-for-byte in
@@ -694,7 +718,7 @@ def _is_dispatch_engine_stamped() -> bool:
     """
     global _engine_stamped_verdict
     if _engine_stamped_verdict is None:
-        stamp_path = _DISPATCH_ENGINE_ROOT.joinpath(*_ENGINE_STAMP_RELATIVE_PARTS)
+        stamp_path = _dispatch_engine_root().joinpath(*_ENGINE_STAMP_RELATIVE_PARTS)
         try:
             _engine_stamped_verdict = len(stamp_path.read_bytes()) > 0
         except OSError:
@@ -718,7 +742,7 @@ def _unstamped_dispatch_refusal(request_id) -> dict:
         "error": {
             "code": UNSTAMPED_ENGINE_ROOT_ERROR,
             "message": (
-                f"dispatch refused: engine root {_DISPATCH_ENGINE_ROOT} has no build stamp -- "
+                f"dispatch refused: engine root {_dispatch_engine_root()} has no build stamp -- "
                 "not a published engine. Dispatch via coordinator-invoke, or "
                 "pass --allow-unstamped-dispatch for deliberate manual testing."
             ),
@@ -1071,6 +1095,8 @@ def _report_ceremony_overrun(method: str, cpu_secs: float, repo_root: Any) -> No
         return
     import time as _t
 
+    from pathlib import Path
+
     try:
         record_op_process_time(
             op=method,
@@ -1309,7 +1335,7 @@ from coordinator_core.op_scopes import (  # noqa: E402,F401
 
 from coordinator_core import op_budget_suspension  # noqa: E402
 
-OP_TIMEOUT_OVERRIDES = _types.MappingProxyType(dict(_OP_TIMEOUT_OVERRIDES))
+OP_TIMEOUT_OVERRIDES = type(type.__dict__)(dict(_OP_TIMEOUT_OVERRIDES))
 
 
 _NEVER_DENY_ON_MISSING_KEY_OPS = frozenset({
@@ -1405,6 +1431,8 @@ def resolve_op_repo_key_with_file_path_fallback(
     Raises ValueError (same as resolve_op_repo_key) if neither origin nor
     file_path resolves to a repo.
     """
+    from pathlib import Path
+
     try:
         return resolve_op_repo_key(method, request_repo)
     except ValueError as exc:
@@ -1442,6 +1470,8 @@ def resolve_request_repo(msg: dict) -> Optional[Path]:
     then the process cwd. Local/cold sessions are unaffected: this branch
     only runs when the envelope field itself is absent.
     """
+    from pathlib import Path
+
     raw = msg.get(_ORIGIN_WORKTREE_FIELD)
     if not raw or not isinstance(raw, str):
         if os.environ.get("CLAUDE_CODE_REMOTE") == "true":
@@ -1474,6 +1504,8 @@ def resolve_caller_cwd(msg: dict) -> Optional[Path]:
 
     Spec backlink: docs/plans/2026-08-20-a-refusal-cannot-exit-zero.md § C7
     """
+    from pathlib import Path
+
     raw = msg.get(_CALLER_CWD_FIELD)
     if not raw or not isinstance(raw, str):
         return None
@@ -1885,6 +1917,8 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
         # so they also share one record-sink target and one lock, keyed on
         # the SAME `touch-record.jsonl` seam `scope.touch`/`touch_record`
         # use, not the retired `touched.txt` dialect.
+        from pathlib import Path
+
         locked = False
         touched_path: Optional[Path] = None
         anchor_repo_root = resolved_paths[0][0]
@@ -2212,7 +2246,7 @@ class LateCompletion:
     """
 
     def __init__(self, sink=None):
-        self._lock = threading.Lock()
+        self._lock = _thread.allocate_lock()
         self._sink = sink
         self._timed_out = False
         self._id = None
@@ -2749,9 +2783,10 @@ def _hung_past_ceiling_envelope(
             "message": (
                 f"cold-run dispatch hung: op {method!r} was still running after "
                 f"{round(waited, 3)}s (ceiling {ceiling}s); it may have completed -- "
-                f"reconcile before any retry"
+                f"reconcile before any retry. Retry is NOT safe."
             ),
             "data": {
+                "retry_safe": False,
                 "diagnosis": {
                     "case": "hung_past_ceiling",
                     "op": method,
@@ -2849,6 +2884,7 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
                     f"abandoned, not stopped -- reconcile before any retry)"
                 ),
                 "data": {
+                    "retry_safe": False,
                     "diagnosis": {
                         "case": "no_reply",
                         "op": method,
@@ -3242,7 +3278,7 @@ class _DispatchRecord:
 
 
 _ACTIVE_DISPATCHES: "List[_DispatchRecord]" = []
-_ACTIVE_DISPATCH_LOCK = threading.Lock()
+_ACTIVE_DISPATCH_LOCK = _thread.allocate_lock()
 
 _ANCESTOR_RECORDS: "contextvars.ContextVar[tuple]" = contextvars.ContextVar(
     "coordinator_core.ipc.ancestor_dispatch_records", default=()

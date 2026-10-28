@@ -28,6 +28,12 @@ scoped to two halves:
      commit, one test-runner phase) -- real wall time (minutes) and real
      tokens, not free, hence opt-in only.
 
+Classification: the live-fire test is a live-session cadence test. A
+targeted run that outlasts its timeout is a live-session cadence stall (a
+real ``claude -p`` session driving several agents), not an engine
+process-time defect. It skips unless ``COORDINATOR_E2E_LIVE_FIRE=1``, so a
+node-id run never spawns claude; the emit-only sibling is fast tier.
+
 Runs against a throwaway ``tmp_path`` git repo, NEVER this tree -- this
 repo's branch is frozen under a git-history incident and nothing may
 commit into it (this chunk's brief). The synthetic spine's ``writes:``
@@ -103,10 +109,16 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.workflow_fire import fire
+
+pytestmark = [pytest.mark.spawns_process]
+
+_LIVE_FIRE_OPT_IN_ENV = "COORDINATOR_E2E_LIVE_FIRE"
+_live_fire_opt_in = pytest.mark.skipif(
+    os.environ.get(_LIVE_FIRE_OPT_IN_ENV) != "1",
+    reason=f"live claude session; set {_LIVE_FIRE_OPT_IN_ENV}=1 to run",
+)
 
 #: Bounded wall-clock budget for polling a live fire to a terminal state.
 #: Generous -- the fired session drives four real dispatched-agent phases
@@ -272,6 +284,7 @@ def test_emit_synthetic_spine_is_top_level_and_has_a_commit_phase(tmp_path):
     assert "phase('Execute')" in script or 'phase("Execute"' in script
 
 
+@_live_fire_opt_in
 @pytest.mark.cadence
 @pytest.mark.real_home
 def test_fired_workflow_lands_a_real_commit_in_the_scratch_repo(tmp_path):

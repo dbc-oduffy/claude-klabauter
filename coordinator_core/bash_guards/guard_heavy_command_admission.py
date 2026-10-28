@@ -19,8 +19,8 @@ Legs, in order, each denying once (no hold, sleep or retry):
                session denies; the holder is admitted; an absent, expired or malformed record admits
   ram-floor    available RAM minus the reserve of every still-unattributed lease stays at or
                above the machine-local floor; scoped test runs skip it
-  session-cap  the session's live heavy and background-shell descendants stay under the
-               machine-local caps
+  session-cap  the session's live heavy descendants (heavy launch) or background-shell
+               descendants (non-heavy background launch) stay under the machine-local caps
 
 A light, foreground command stops after classification and imports nothing else. Every
 threshold is machine-local config (heavy_admission.*) seeded by setup; an absent or malformed
@@ -48,6 +48,7 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     KEY_SESSION_HEAVY_CAP,
     KEY_VITEST_MAX_WORKERS,
     KEY_WORKER_RSS_CEILING_MB,
+    LEG_BARE_PYTEST,
     LEG_BOX_HOLD,
     LEG_IDENTITY,
     LEG_RAM_FLOOR,
@@ -407,6 +408,17 @@ def _read_box_hold():
     return box_hold.read_hold()
 
 
+def _bare_pytest_deny() -> Any:
+    from coordinator_core.bash_guards._heavy_command_class import SCOPED_PYTEST_REMEDY
+
+    return _deny_text(
+        LEG_BARE_PYTEST,
+        "a bare pytest in a workflow run leaves orphans when its shell is reaped",
+        _retry(SCOPED_PYTEST_REMEDY, "the --allow paths and the test targets"),
+        legacy="Run %s" % SCOPED_PYTEST_REMEDY,
+    )
+
+
 def _box_hold_leg(payload: Mapping[str, Any]) -> Any:
     hold = _read_box_hold()
     if hold is None or hold.set_by_session == payload.get("session_id"):
@@ -500,6 +512,9 @@ def _cap_leg(
     The one process-table snapshot is appended to `snapshot_out` for the worker-RSS advisory."""
     from coordinator_core.bash_guards import _session_census as census_mod
 
+    # A heavy launch is gated by the heavy-command cap and the memory admit; the shell count
+    # applies only to a non-heavy background launch.
+    background = background and not heavy
     heavy_cap = _positive_int(config, KEY_SESSION_HEAVY_CAP)
     bg_cap = _positive_int(config, KEY_SESSION_BACKGROUND_CAP)
     if (heavy and heavy_cap is None) or (background and bg_cap is None):
@@ -576,6 +591,8 @@ def _cap_leg(
             launch,
         )
     commands = census_mod.heavy_roots(census.heavy, rows, anchor.pid) if heavy else ()
+    if heavy and len(commands) >= heavy_cap:
+        commands = census_mod.live_heavy_commands(commands, primitives)
     if heavy and len(commands) >= heavy_cap:
         pids = ", ".join(str(r.pid) for r in commands)
         return (
@@ -731,6 +748,9 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Any:
         if census is not None:
             _flag_runaway_workers(config, payload, command, cls, anchor, census, snapshot[0] if snapshot else ())
         return envelope
+
+    if cls.bare_pytest and payload.get("agent_id") and _workflow_runs_of(payload):
+        return denied(LEG_BARE_PYTEST, _bare_pytest_deny())
 
     if heavy and not _bypassed(LEG_IDENTITY, payload, command):
         envelope = _identity_leg(payload, command, heavy_name, cls)

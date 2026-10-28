@@ -386,12 +386,14 @@ def remaining_leg_plan(
     arm: Optional[str] = None,
     spelling: Optional[Spelling] = None,
     exclude: Sequence[str] = (),
+    inherited: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Return `{action, writes, unwritable, em_owed, reason}` for the ledger-remaining leg.
 
     `writes` = writes of the manifest `rows` whose `register_rows` intersect `blocking` (a row
     with none serves no blocking row), plus the named remaining paths the run's commit can land
-    (doc writes or the sizing); `em_owed` = named CLAUDE.md-class paths the EM edits inline (never
+    (doc writes or the sizing) and the named remaining paths in `inherited` (the run's own write
+    set; only named paths join, never the whole set); `em_owed` = named CLAUDE.md-class paths the EM edits inline (never
     in `writes` or `unwritable`); `unwritable` = other named paths nothing can land.
     `plan_writes` (see `plan_rows_serving`) joins `writes` after the manifest writes. The reply's
     `writes` is the footprint: `writes` plus the writes of staged rows serving only ruled-out register
@@ -413,8 +415,18 @@ def remaining_leg_plan(
     if spelling is not None and plan_writes:
         respelled = spelling(plan_writes)
         plan_writes = [respelled.get(w) or w for w in plan_writes]
+    inherited = [str(w).replace("\\", "/").removeprefix("./") for w in inherited]
+    if spelling is not None and inherited:
+        respelled = spelling(inherited)
+        inherited = [respelled.get(w) or w for w in inherited]
+    inherited_set = set(inherited)
     writes: list[str] = []
-    for p in [*manifest_writes, *plan_writes, *(n for n in named if n in allowed)]:
+    for p in [
+        *manifest_writes,
+        *plan_writes,
+        *(n for n in named if n in allowed),
+        *(n for n in named if n in inherited_set),
+    ]:
         if p not in writes:
             writes.append(p)
     carried = [w.replace("\\", "/").removeprefix("./") for w in _ruled_out_rows_writes(rows, sizing_rel, repo_root)]

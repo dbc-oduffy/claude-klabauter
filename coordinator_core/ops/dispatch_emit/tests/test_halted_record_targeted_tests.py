@@ -1,4 +1,4 @@
-"""A ledger-check halt withholds the chunks a carried run-caused test failure implicates."""
+"""A ledger-check halt lands no chunk product; its reply still reports the carried test verdict and its advisories."""
 
 from __future__ import annotations
 
@@ -35,36 +35,36 @@ def _verdict(status="fail", baseline=None, **extra):
     return {"targeted_tests": {"status": status, "tests_failed": 10, "baseline": baseline}, **extra}
 
 
-def test_caused_failure_in_chunk_test_file_withholds_that_chunk_only(repo):
+def test_caused_failure_in_chunk_test_file_is_reported_as_an_advisory(repo):
     _setup(repo)
     caused = [f"{TESTS}::test_a", f"{TESTS}::test_b"]
 
     out = _call(repo, LEDGER, **_verdict(baseline={"caused": caused, "pre_existing": [], "unverified": []}))
 
     assert out["committed"] is True, out
-    assert out["withheld"] == {"c1.py": "targeted-tests-failed", TESTS: "targeted-tests-failed"}
-    assert out["landed_chunks"] == ["C2"]
+    assert set(out["withheld"].values()) == {"halt-record-only"}
+    assert "landed_chunks" not in out
     assert out["targeted_tests"]["check"] == "failed"
     assert out["targeted_tests"]["findings"][0]["path"] == TESTS
+    assert [(a["path"], a["reason"]) for a in out["advisory"]] == [(TESTS, "targeted-tests-failed")]
     names = _landed(repo, out, "--name-only")
-    assert "good.py" in names and "c1.py" not in names and TESTS not in names
+    assert not {"good.py", "c1.py", TESTS} & set(names)
 
 
-def test_unattributed_failure_makes_product_record_only(repo):
+def test_unattributed_failure_is_reported_as_an_advisory(repo):
     _setup(repo)
 
     out = _call(repo, LEDGER, **_verdict(baseline=None))
 
     assert out["committed"] is True, out
-    assert set(out["withheld"]) == {"c1.py", TESTS, "good.py"}
-    assert set(out["withheld"].values()) == {"targeted-tests-failed"}
+    assert set(out["withheld"].values()) == {"halt-record-only"}
     assert "landed_chunks" not in out
+    assert {a["reason"] for a in out["advisory"]} == {"targeted-tests-failed"}
     names = _landed(repo, out, "--name-only")
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
     assert "good.py" not in names and "c1.py" not in names
 
 
-def test_failure_in_unowned_file_withholds_every_chunk(repo):
+def test_failure_in_unowned_file_is_reported_as_an_advisory(repo):
     _setup(repo)
 
     out = _call(
@@ -72,18 +72,52 @@ def test_failure_in_unowned_file_withholds_every_chunk(repo):
         **_verdict(baseline={"caused": ["elsewhere/test_x.py::test_y"], "pre_existing": [], "unverified": []}),
     )
 
-    assert set(out["withheld"]) == {"c1.py", TESTS, "good.py"}
+    assert set(out["withheld"].values()) == {"halt-record-only"}
     assert "landed_chunks" not in out
+    assert out["advisory"][0]["path"] == "elsewhere/test_x.py"
 
 
-def test_pre_existing_only_lands_chunks(repo):
+def _write_measured_retest(root, baseline: dict) -> None:
+    """The engine-written fresh retest record: the only place `baseline.evidence` is measured."""
+    import json
+
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit import landing_retest as lr
+
+    paths = ["c1.py", TESTS, "good.py"]
+    record = {
+        "run_id": RUN, "head": head_sha(root), "status": "fail", "tests": [TESTS],
+        "tests_run": 10, "tests_failed": 1, "baseline_method": "export", "baseline": baseline,
+        "covered": lr.landing_fingerprint(root, paths),
+    }
+    path = lr.fresh_verdict_path(root, RUN)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_pre_existing_only_check_still_reported(repo):
+    _setup(repo)
+    baseline = {
+        "caused": [], "pre_existing": [f"{TESTS}::test_a"], "evidence": [f"{TESTS}::test_a"], "unverified": [],
+    }
+    _write_measured_retest(repo, baseline)
+
+    out = _call(repo, LEDGER, **_verdict(baseline=baseline))
+
+    assert "landed_chunks" not in out
+    assert set(out["withheld"].values()) == {"halt-record-only"}
+    assert out["targeted_tests"] == {"check": "pre-existing-only", "findings": []}
+
+
+def test_pre_existing_without_baseline_evidence_is_reported_as_an_advisory(repo):
     _setup(repo)
 
     out = _call(repo, LEDGER, **_verdict(baseline={"caused": [], "pre_existing": [f"{TESTS}::test_a"], "unverified": []}))
 
-    assert out["landed_chunks"] == ["C1", "C2"]
-    assert "withheld" not in out
-    assert out["targeted_tests"] == {"check": "pre-existing-only", "findings": []}
+    assert set(out["withheld"].values()) == {"halt-record-only"}
+    assert "landed_chunks" not in out
+    assert out["targeted_tests"]["check"] == "failed"
+    assert out["advisory"][0]["reason"] == "targeted-tests-failed"
 
 
 def test_no_verdict_withholds_chunks_as_record_only_and_says_so(repo):
@@ -118,6 +152,7 @@ def _run_deleted_target(root) -> dict:
     import json
 
     from coordinator_core.ops.dispatch_emit import landing_integrity
+    from coordinator_core.ops.dispatch_emit import landing_retest
 
     (root / "test_gone.py").write_text("def test_g():\n    pass\n", encoding="utf-8")
     _git(["add", "test_gone.py"], root)
@@ -127,7 +162,7 @@ def _run_deleted_target(root) -> dict:
     _git(["commit", "-q", "-m", "delete"], root)
     record = {"run_id": RUN, "head": _git(["rev-parse", "HEAD"], root).strip(), "status": "no-tests", "tests": [],
               "tests_run": 0, "dropped": ["test_gone.py"], "covered": {}}
-    path = landing_integrity.fresh_verdict_path(root, RUN)
+    path = landing_retest.fresh_verdict_path(root, RUN)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record), encoding="utf-8")
     return {"run_base_sha": base}
@@ -160,3 +195,14 @@ def test_non_ledger_check_halt_is_unchanged(repo):
     assert set(out["withheld"].values()) == {"halt-record-only"}
     assert "targeted_tests" not in out
     assert "Lands-Chunks" not in _git(["log", "-1", "--format=%B"], repo)
+
+
+def test_split_test_advisory_demotes_test_evidence_and_keeps_other_findings():
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import Finding, split_test_advisory
+
+    red = Finding("t.py", "targeted-tests-failed", "x")
+    other = Finding("a.py", "some-unlisted-reason", "y")
+
+    kept, advisory = split_test_advisory([red, other])
+
+    assert kept == [other] and advisory == [red]

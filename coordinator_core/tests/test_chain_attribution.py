@@ -224,6 +224,82 @@ def test_grep_git_failure_returns_empty(repo_root):
     assert attributed == []
 
 
+_CS_SID = "abcd1234-0000-0000-0000-0000000000c5"
+
+
+def _cs(suffix: str) -> str:
+    return f"Claude-Session: https://claude.ai/code/session_{suffix}"
+
+
+def test_grep_argv_has_claude_session_pattern_only_when_token_resolves(monkeypatch):
+    seen = []
+
+    def _capture(args, cwd):
+        seen.append(list(args))
+        return 0, "", ""
+
+    monkeypatch.setattr(chain_attribution, "own_claude_session_token", lambda sid: None)
+    chain_attribution.bulk_grep_attributed_shas("a..b", _CS_SID, ".", _capture)
+    monkeypatch.setattr(chain_attribution, "own_claude_session_token", lambda sid: "session_OWN")
+    chain_attribution.bulk_grep_attributed_shas("a..b", _CS_SID, ".", _capture)
+
+    without, with_token = seen
+    assert [a for a in without if a.startswith("--grep=")] == [f"--grep=^Session-Id: {_CS_SID}$"]
+    assert [a for a in with_token if a.startswith("--grep=")] == [
+        f"--grep=^Session-Id: {_CS_SID}$",
+        r"--grep=^Claude-Session: https://claude\.ai/code/session_OWN$",
+    ]
+
+
+def test_grep_malformed_session_id_never_consults_token(monkeypatch):
+    def _boom(sid):
+        raise AssertionError("token consulted before _UUID_RE short-circuit")
+
+    monkeypatch.setattr(chain_attribution, "own_claude_session_token", _boom)
+    assert chain_attribution.bulk_grep_attributed_shas("a..b", ".*", ".", _run) == []
+
+
+def test_cold_own_session_selects_own_claude_session_commit_only(repo_root, monkeypatch):
+    init_sha = _init_repo(repo_root)
+    own_sha = _commit(repo_root, f"own hook-less\n\n{_cs('OWNsuffix')}", files={"a.txt": "a\n"})
+    other_sha = _commit(repo_root, f"other hook-less\n\n{_cs('OTHERsuffix')}", files={"b.txt": "b\n"})
+    window = chain_attribution.bulk_commit_attribution_map(f"{init_sha}..HEAD", str(repo_root), _run)
+
+    monkeypatch.setattr(chain_attribution, "own_claude_session_token", lambda sid: "session_OWNsuffix")
+    attributed = chain_attribution.bulk_grep_attributed_shas(f"{init_sha}..HEAD", _CS_SID, str(repo_root), _run)
+    assert own_sha in attributed
+    assert other_sha not in attributed
+
+    foreign = chain_attribution.foreign_shas_from_window(window.keys(), _CS_SID, window, frozenset(attributed))
+    assert own_sha not in foreign
+    assert other_sha in foreign
+
+    monkeypatch.setattr(chain_attribution, "own_claude_session_token", lambda sid: None)
+    assert chain_attribution.bulk_grep_attributed_shas(f"{init_sha}..HEAD", _CS_SID, str(repo_root), _run) == []
+
+
+def test_other_session_id_plus_own_claude_session_stays_foreign(repo_root, monkeypatch):
+    init_sha = _init_repo(repo_root)
+    mixed_sha = _commit(
+        repo_root,
+        f"mixed\n\nSession-Id: abcd1234-0000-0000-0000-0000000000ff\n{_cs('OWNsuffix')}",
+        files={"a.txt": "a\n"},
+    )
+    window = chain_attribution.bulk_commit_attribution_map(f"{init_sha}..HEAD", str(repo_root), _run)
+    monkeypatch.setattr(chain_attribution, "own_claude_session_token", lambda sid: "session_OWNsuffix")
+    attributed = chain_attribution.bulk_grep_attributed_shas(f"{init_sha}..HEAD", _CS_SID, str(repo_root), _run)
+    assert mixed_sha in attributed
+    foreign = chain_attribution.foreign_shas_from_window(window.keys(), _CS_SID, window, frozenset(attributed))
+    assert mixed_sha in foreign
+
+
+def test_window_with_only_claude_session_commit_needs_grep_signal(repo_root):
+    init_sha = _init_repo(repo_root)
+    _commit(repo_root, f"hook-less\n\n{_cs('OWNsuffix')}", files={"a.txt": "a\n"})
+    window = chain_attribution.bulk_commit_attribution_map(f"{init_sha}..HEAD", str(repo_root), _run)
+    assert chain_attribution.window_needs_grep_signal(window) is True
+
+
 def test_foreign_shas_from_window_pure_no_git():
     window = {
         "own-trailer": chain_attribution.CommitAttribution("own-trailer", "sid-mine", False),

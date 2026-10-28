@@ -476,6 +476,68 @@ def test_session_scoped_grep_is_not_end_anchored(monkeypatch):
         )
 
 
+_OWN_SID = "11111111-2222-4333-8444-555555555555"
+
+
+def _claude_session_commit(repo: Path, name: str, suffix: str) -> str:
+    (repo / name).write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", name)
+    _git(
+        repo, "commit", "-q", "-m",
+        f"web commit\n\nClaude-Session: https://claude.ai/code/session_{suffix}",
+    )
+    return _git(repo, "rev-parse", "HEAD").strip()
+
+
+def test_session_scoped_counts_own_claude_session_only_commit(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _claude_session_commit(repo, "own.py", "OWNsuffix")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        review_brightline_gate, "own_claude_session_token", lambda sid: "session_OWNsuffix"
+    )
+    _session_scoped(f"{base}..HEAD", _OWN_SID)
+    out = capsys.readouterr().out
+    assert "filtered_to=1" in out and "VERDICT=indeterminate" in out
+    assert review_brightline_gate._resolve_session_floor(_OWN_SID) is not None
+
+
+def test_session_scoped_ignores_other_claude_session_and_absent_token(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _claude_session_commit(repo, "other.py", "OTHERsuffix")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        review_brightline_gate, "own_claude_session_token", lambda sid: "session_OWNsuffix"
+    )
+    _session_scoped(f"{base}..HEAD", _OWN_SID)
+    assert "filtered_to=0" in capsys.readouterr().out
+    assert review_brightline_gate._resolve_session_floor(_OWN_SID) is None
+    monkeypatch.setattr(review_brightline_gate, "own_claude_session_token", lambda sid: None)
+    assert review_brightline_gate._own_session_grep_args(_OWN_SID) == [
+        f"--grep=^Session-Id: {_OWN_SID}"
+    ]
+
+
+def test_claude_session_only_commit_stays_untrailered(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    sha = _claude_session_commit(repo, "own.py", "OWNsuffix")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(
+        review_brightline_gate, "own_claude_session_token", lambda sid: "session_OWNsuffix"
+    )
+    assert review_brightline_gate._untrailered_shas_in_range(f"{base}..HEAD") == [sha]
+    assert review_brightline_gate._count_untrailered_commits(f"{base}..HEAD") == 1
+
+
 def test_session_id_filters_to_matching_commits_only(tmp_path, capsys, monkeypatch):
     repo = tmp_path / "repo"
     _init_repo(repo)

@@ -1,4 +1,4 @@
-"""review_floor: the code subset, verdict count, receipt text and floor reason."""
+"""review_floor: the code subset, verdict count, receipt text, floor reason and trailer."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from coordinator_core.ops.dispatch_emit import review_floor as rf
 
 
 def test_code_paths_keeps_only_code_in_input_order():
-    assert rf.code_paths(["coordinator_core/x.py", "state/a.yaml", "docs/" "wiki/a.md"]) == ["coordinator_core/x.py"]
+    assert rf.code_paths(["coordinator_core/x.py", "state/a.yaml", "docs" + "/wiki/a.md"]) == ["coordinator_core/x.py"]
 
 
 def test_code_paths_dedupes_and_strips_trailing_slash():
@@ -59,7 +59,7 @@ def test_carve_in_counts_executable_config_as_code(path):
     assert rf.code_paths([path]) == [path]
 
 
-@pytest.mark.parametrize("path", ["docs/" "wiki/x.md", "state/x.yaml", "docs/plans/skills/x.md", "docs/" "wiki/skills/x.md", "docs/reference/commands/x.md", "README.md"])
+@pytest.mark.parametrize("path", ["docs" + "/wiki/x.md", "state/x.yaml", "docs/plans/skills/x.md", "docs" + "/wiki/skills/x.md", "docs/reference/commands/x.md", "README.md"])
 def test_carve_in_leaves_docs_and_bookkeeping_non_code(path):
     assert rf.is_code_path(path) is False
 
@@ -144,6 +144,14 @@ def test_floor_reason_fires_only_for_code_with_no_verdict():
     assert rf.floor_reason([], 0) is None
 
 
+def test_floor_trailer_is_one_line():
+    assert rf.floor_trailer("review: 0 verdicts\n on x") == "Review-Floor-Note: review: 0 verdicts on x"
+
+
 def test_constants():
-    assert (rf.REFUSED_REVIEW_FLOOR, rf.HALT_REVIEW_FLOOR, rf.MANIFEST_KEY) == (
-        "review-floor", "review_floor", "review_code_paths")
+    assert (rf.HALT_REVIEW_FLOOR, rf.MANIFEST_KEY) == ("review_floor", "review_code_paths")
+
+
+def test_review_owed_paths_drop_scratch_and_bookkeeping_but_keep_product_code():
+    assert rf.review_owed_paths(["scratch/p.py", "state/x.py", "a.py"]) == ["a.py"]
+    assert rf.code_paths(["scratch/p.py"]) == ["scratch/p.py"]

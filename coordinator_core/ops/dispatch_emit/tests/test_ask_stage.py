@@ -9,7 +9,8 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import emit, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, StageManifest
-from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, _handler, stage
+from coordinator_core.ops.dispatch_emit.ask_stage import _handler, stage
+from coordinator_core.ops.dispatch_emit.ask_stage_blocks import AskStageError
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves

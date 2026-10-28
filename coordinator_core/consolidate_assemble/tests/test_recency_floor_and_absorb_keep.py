@@ -79,15 +79,15 @@ def test_recent_zero_commit_branch_gets_no_delete() -> None:
 def test_recent_branch_with_commits_absorbs_without_deleting() -> None:
     obj = _brief(FRESH, "abc123 one\n")
     clis = _clis(obj)
-    assert "cherry-pick-only" in clis
+    assert "merge-only" in clis
     assert not {"delete-only", "cherry-pick-and-delete", "merge-and-delete"} & set(clis)
     jp = next(j for j in obj["judgment_points"] if j["id"] == "j-absorb-work/stale")
     by_value = {d["value"]: d["resolves"] for d in jp["dispositions"]}
-    assert by_value == {"absorb": ["d-absorb-work/stale"], "skip": []}
+    assert by_value == {"absorb": ["d-absorb-work/stale"], "superseded": [], "skip": []}
 
 
 def test_recent_branch_with_many_commits_uses_merge_only() -> None:
-    commits = "".join(f"a{i} c\n" for i in range(ca._CHERRY_PICK_MAX_COMMITS + 1))
+    commits = "".join(f"a{i} c\n" for i in range(5))
     assert "merge-only" in _clis(_brief(FRESH, commits))
 
 
@@ -95,8 +95,10 @@ def test_unknown_tip_time_applies_no_floor() -> None:
     assert ca.tip_times_from([("refs/heads/x", "x", "e", "", "")]) == {}
 
 
-def test_old_branch_with_commits_keeps_the_delete_verbs() -> None:
-    assert "cherry-pick-and-delete" in _clis(_brief(OLD, "abc123 one\n"))
+def test_old_branch_with_commits_merges_and_deletes() -> None:
+    clis = _clis(_brief(OLD, "abc123 one\n"))
+    assert "merge-and-delete" in clis
+    assert "cherry-pick-and-delete" not in clis
 
 
 def _git(root: Path, *args: str) -> str:
@@ -125,9 +127,8 @@ def repo(tmp_path: Path) -> Path:
 
 
 @pytest.mark.spawns_process
-@pytest.mark.parametrize("verb", ["cherry-pick-only", "merge-only"])
-def test_absorb_only_verbs_land_the_work_and_keep_the_branch(repo: Path, verb: str) -> None:
-    apply_mod._CLI_DISPATCH[verb](["work/sibling", "work/sibling"], repo)
+def test_absorb_only_verb_lands_the_work_and_keeps_the_branch(repo: Path) -> None:
+    apply_mod._CLI_DISPATCH["merge-only"](["work/sibling", "work/sibling"], repo)
     assert (repo / "b.txt").exists()
     assert "work/sibling" in _git(repo, "branch", "--list", "work/sibling")
 

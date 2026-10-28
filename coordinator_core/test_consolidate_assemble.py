@@ -210,8 +210,12 @@ class TestBrief:
         assert len(absorb_jps) == 1
         assert absorb_jps[0]["recommendation"] is None
         cherry_pick_directives = [d for d in do["directives"] if d["id"] == "d-absorb-stale"]
-        assert cherry_pick_directives[0]["cli"] == "cherry-pick-and-delete"
+        assert cherry_pick_directives[0]["cli"] == "merge-and-delete"
         assert cherry_pick_directives[0]["depends_on"] == "j-absorb-stale"
+        assert not any(d["cli"] == "delete-only" for d in do["directives"])
+        skip = next(d for d in absorb_jps[0]["dispositions"] if d["value"] == "skip")
+        assert skip["resolves"] == []
+        assert do["directives"][0]["cli"] == "fetch-prune"
 
     def test_inspection_gather_is_one_show_spawn_for_all_branches(self, monkeypatch, tmp_path):
         """PINS: one `git show --stat` spawn TOTAL for the whole `brief()`
@@ -393,17 +397,24 @@ class TestBrief:
 
         assert consolidate_assemble.inspect_commits(run_git, tmp_path, []) == {}
 
-    def test_others_branch_never_appears_in_directives(self, monkeypatch, tmp_path):
+    def test_others_branch_with_commits_is_an_absorb_directive(self, monkeypatch, tmp_path):
         run_git = self._stub(
             monkeypatch,
-            branch_lines="* current\n  main\n  someone-elses\n",
+            branch_lines="* current\n  main\n  someone-elses\n  remotes/origin/box2\n",
             worktree_stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n",
+            unique_commits=["abc123 a commit"],
             tip_author="other@x",
         )
         do = consolidate_assemble.brief(repo_root=tmp_path, run_git=run_git)
-        assert not any("someone-elses" in str(d) for d in do["directives"])
-        branch_report = next(b for b in do["gates"]["branches"] if b["name"] == "someone-elses")
-        assert branch_report["category"] == "others"
+        for name in ("someone-elses", "box2"):
+            d = next(d for d in do["directives"] if d["id"] == f"d-absorb-{name}")
+            assert d["cli"] == "merge-and-delete"
+            branch_report = next(b for b in do["gates"]["branches"] if b["name"] == name)
+            assert branch_report["category"] == "others"
+
+    def test_preserve_refs_are_never_listed(self):
+        run_git = _git(stdout="refs/preserve/x\tpreserve/x\ta@x\t\t1\n" + _refs("work/a"))
+        assert [r[0] for r in consolidate_assemble.ref_rows(run_git, Path("/repo"))] == ["refs/heads/work/a"]
 
     def test_cloud_session_branch_with_commits_is_gated_by_absorb_judgment(self, monkeypatch, tmp_path):
         run_git = self._stub(
@@ -575,6 +586,12 @@ class TestApplyDispatchTable:
         assert "d-fetch-prune" in report["landed"]
 
 
+def _no_live_holder(monkeypatch):
+    from coordinator_core.consolidate_assemble import live_holders as lh
+
+    monkeypatch.setattr(lh, "live_holders", lambda run_git, root, names: {n: [] for n in names})
+
+
 class TestDeleteBranchLocalLeg:
 
     def _recorder(self, local_exists: bool):
@@ -593,6 +610,7 @@ class TestDeleteBranchLocalLeg:
     def test_remote_only_branch_skips_local_delete(self, monkeypatch, tmp_path):
         calls, run_git = self._recorder(local_exists=False)
         monkeypatch.setattr(consolidate_apply, "_run_git", run_git)
+        _no_live_holder(monkeypatch)
 
         detail = consolidate_apply._delete_branch("remote-only", True, tmp_path)
 
@@ -604,6 +622,7 @@ class TestDeleteBranchLocalLeg:
     def test_local_branch_still_deletes_locally(self, monkeypatch, tmp_path):
         calls, run_git = self._recorder(local_exists=True)
         monkeypatch.setattr(consolidate_apply, "_run_git", run_git)
+        _no_live_holder(monkeypatch)
 
         detail = consolidate_apply._delete_branch("has-local", False, tmp_path)
 

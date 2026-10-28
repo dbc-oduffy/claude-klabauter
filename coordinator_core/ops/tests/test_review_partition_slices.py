@@ -196,6 +196,101 @@ def test_empty_path_bases_matches_none_byte_for_byte(repo):
         assert Path(sa["diff_path"]).read_bytes() == Path(sb["diff_path"]).read_bytes()
 
 
+def test_head_fallback_freezes_withheld_tracked_edit_and_untracked_file(repo):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    (repo / "seed.py").write_text("x = 1\n" + "y = 2\n" * 5, encoding="utf-8")
+    _write(repo, ["new/dir/fresh.py"], 5)
+    result = partition_slices(
+        repo, base, ["seed.py", "new/dir/fresh.py"], "fb", head=base,
+        head_fallback=["seed.py", "new/dir/fresh.py"],
+    )
+    assert result["error"] is None
+    assert result["fallback_paths"] == ["new/dir/fresh.py", "seed.py"]
+    assert sorted(p for s in result["slices"] for p in s["paths"]) == ["new/dir/fresh.py", "seed.py"]
+    for s in result["slices"]:
+        assert Path(s["diff_path"]).read_text(encoding="utf-8").startswith("diff --git")
+
+
+def test_head_fallback_skips_paths_with_a_range_delta_and_empty_is_unchanged(repo):
+    base, _peer, terminal, declared = _peer_then_own(repo)
+    plain = partition_slices(repo, base, declared, "fa", head=terminal)
+    fb = partition_slices(repo, base, declared, "fb2", head=terminal, head_fallback=declared)
+    assert fb["fallback_paths"] == [] and plain["fallback_paths"] == []
+    assert [s["paths"] for s in fb["slices"]] == [s["paths"] for s in plain["slices"]]
+    assert fb["loc"] == plain["loc"]
+
+
+def test_ranged_own_path_with_uncommitted_bytes_freezes_base_to_worktree(repo):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
+    _write(repo, rels, 30)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "checkpoint")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    dirty = rels[0]
+    with (repo / dirty).open("a", encoding="utf-8") as fh:
+        fh.write("uncommitted_hunk = 1\n")
+    result = partition_slices(repo, base, rels, "wt", head=head, head_fallback=rels)
+    assert result["error"] is None
+    assert result["worktree_paths"] == [dirty]
+    diffs = {p: Path(s["diff_path"]).read_text(encoding="utf-8") for s in result["slices"] for p in s["paths"]}
+    assert "+uncommitted_hunk = 1" in diffs[dirty]
+    clean = partition_slices(repo, base, rels[1:], "wt2", head=head, head_fallback=rels[1:])
+    assert clean["worktree_paths"] == []
+    assert all("uncommitted_hunk" not in Path(s["diff_path"]).read_text(encoding="utf-8") for s in clean["slices"])
+
+
+def test_head_fallback_path_without_delta_yields_no_slice(repo):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    result = partition_slices(repo, base, ["seed.py"], "nd", head=base, head_fallback=["seed.py"])
+    assert result["error"] is None and result["slices"] == [] and result["fallback_paths"] == []
+
+
+_STAGE = {
+    "agents": [{
+        "agentType": "coordinator:code-reviewer",
+        "merge": {"rule": "shared-paths", "min_shared_pct": 50, "result": "one-reviewer-multi-slice"},
+    }],
+    "lens_fold": {
+        "when_rostered": "coordinator:overengineering-reviewer", "fold": "coordinator:code-reviewer",
+        "as": "lens-section", "verdict": "per-lens",
+    },
+}
+
+
+def _roster_repo(repo):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    rels = ["a/b/x.py", "a/c/y.py", "q/r/z.py", "top.py"]
+    _write(repo, rels, 1000)
+    return base, rels
+
+
+def test_roster_merge_groups_slices_sharing_paths_and_lens_fold_follows_rostered(repo):
+    base, rels = _roster_repo(repo)
+    plain = partition_slices(repo, base, rels, "rm")
+    assert "reviewer_groups" not in plain and "lens_folds" not in plain
+    result = partition_slices(
+        repo, base, rels, "rm", roster=_STAGE, rostered=["coordinator:overengineering-reviewer"],
+    )
+    assert result["error"] is None and result["slices"] == plain["slices"]
+    ids = {p: s["slice_id"] for s in result["slices"] for p in s["paths"]}
+    groups = [sorted(g) for g in result["reviewer_groups"]]
+    assert sorted([ids["a/b/x.py"], ids["a/c/y.py"]]) in groups
+    assert [ids["q/r/z.py"]] in groups and [ids["top.py"]] in groups
+    assert result["lens_folds"] == [{
+        "folded": "coordinator:overengineering-reviewer", "into": "coordinator:code-reviewer",
+        "as": "lens-section", "verdict": "per-lens",
+    }]
+
+
+def test_roster_lens_fold_absent_when_reviewer_not_rostered_and_high_threshold_keeps_slices_apart(repo):
+    base, rels = _roster_repo(repo)
+    stage = {**_STAGE, "agents": [{"merge": {"rule": "shared-paths", "min_shared_pct": 100}}]}
+    result = partition_slices(repo, base, rels, "rn", roster=stage, rostered=[])
+    assert "lens_folds" not in result
+    assert all(len(g) == 1 for g in result["reviewer_groups"])
+
+
 def test_op_is_registered_with_a_handler_and_complete_registration():
     from coordinator_core.ipc import get_op_handler  # noqa: PLC0415
     import coordinator_core.ops  # noqa: F401, PLC0415

@@ -362,3 +362,29 @@ def test_discard_fresh_xs_lane_absent_and_corrupt_are_false(repo):
     p.write_text("{not json")
     assert xb.discard_fresh_xs_lane(root, "c") is False
     assert p.exists()
+
+
+def test_latch_advised_records_flag_and_unmeasured_path_and_unmeasured_reads_over(repo):
+    root, sha = repo
+    assert xb.open_xs_lane(root, "s", sha)
+    rec = xb.read_lane(root, "s")
+    assert not xb.is_advised(rec)
+    assert not xb.measure(root, rec, "a.py", (root / "a.py").read_text()).over
+    xb.latch_advised(root, "s", "pkg/x.py")
+    xb.latch_advised(root, "s", "pkg/x.py")
+    rec = xb.read_lane(root, "s")
+    assert xb.is_advised(rec) and rec["unmeasured"] == ["pkg/x.py"]
+    usage = xb.measure(root, rec, "a.py", (root / "a.py").read_text())
+    assert usage.over and (usage.files, usage.lines) == (0, 0)
+
+
+def test_latch_advised_absent_and_corrupt_write_nothing(repo):
+    root, _ = repo
+    xb.latch_advised(root, "none")
+    assert xb.read_lane(root, "none") is None
+    path = xb.lane_path(root, "bad")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json")
+    xb.latch_advised(root, "bad", "x.py")
+    assert path.read_text() == "{not json"
+    assert xb.read_lane(root, "bad")["corrupt"]

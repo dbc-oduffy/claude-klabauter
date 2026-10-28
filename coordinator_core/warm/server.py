@@ -2446,6 +2446,9 @@ class _ServerContext:
         # the shape every test that constructs a context directly gets,
         # keeping the idle watchdog's behaviour unchanged for them.
         self.boot_token = boot_token
+        self._ladder_gone = (
+            idle.make_ladder_gone(Path(engine_root)) if engine_root is not None else None
+        )
         self.spawn_epoch = spawn_epoch
         self.listener_at = listener_at
         self.in_flight = InFlightCounter()
@@ -2799,9 +2802,13 @@ class _ServerContext:
         retires the server otherwise.
         """
         stale = self._token_is_stale()
+        gone = self._ladder_gone is not None and self._ladder_gone()
+        if gone:
+            idle.write_ladder_gone_tombstone(Path(self.engine_root))
         if idle.should_demote(
             served_count=self.telemetry.served_count,
             token_stale=lambda: stale,
+            ladder_gone=lambda: gone,
         ):
             # Which arm fired decides the recorded reason, and the two are
             # not interchangeable in the telemetry record -- see
@@ -2817,6 +2824,7 @@ class _ServerContext:
         idle.demote_if_idle(
             served_count=self.telemetry.served_count,
             token_stale=lambda: stale,
+            ladder_gone=lambda: gone,
             close_listener=self.close_listener,
             in_flight_count=self.drain_outstanding,
             ctx_shutdown=self._ctx_shutdown,
@@ -3317,6 +3325,9 @@ def _run_guarded() -> int:
     this one with a different endpoint under it.
     """
     repo_root = _engine_clone_root()
+    if idle.ladder_gone_tombstoned(Path(repo_root)):
+        print(f"[warm-server] ladder gone for {repo_root}; not starting", file=sys.stderr)
+        return 0
     if breadcrumb.publish_marker_held(breadcrumb.svc_dir(repo_root)):
         print(
             f"[warm-server] publish in progress for {repo_root}; not starting",

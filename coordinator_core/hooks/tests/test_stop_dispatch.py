@@ -141,8 +141,8 @@ def test_aggregate_stop_dispatch_folds_guard_terminal_review_block(tmp_path) -> 
     payload = {"cwd": repo_root, "session_id": session_id}
 
     result = asyncio.run(_handler({"payload": payload}))
-    assert result["decision"] == "block"
-    assert "review" in result["reason"].lower()
+    assert "decision" not in result
+    assert "unreviewed code commit" in result["systemMessage"]
 
 
 def test_stop_em_report_altitude_wrapper_suppresses_on_subagent_stop() -> None:
@@ -303,12 +303,13 @@ def test_replayed_stop_payload_fires_blocker_at_most_once(tmp_path, monkeypatch)
     monkeypatch.setattr(gmb, "resolve_posture", lambda _r: "default", raising=True)
     payload = _blocker_payload(tmp_path)
 
-    denies = 0
+    fired = 0
     for _ in range(2):
         _mod, result = _aggregate(dict(payload))
-        if result.get("decision") == "block":
-            denies += 1
-    assert denies == 1
+        assert "decision" not in result
+        if "PM-handoff" in result.get("systemMessage", ""):
+            fired += 1
+    assert fired == 1
 
 
 def test_park_spool_runs_after_receiver_state_sensor(monkeypatch) -> None:

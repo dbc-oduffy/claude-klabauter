@@ -15,7 +15,7 @@ def _peer_script(tmp_path, session_id):
     return target
 
 
-@pytest.mark.parametrize("live", [False])
+@pytest.mark.parametrize("live", [False, True])
 def test_halted_run_script_is_admitted_whether_emitter_is_live_or_dead(tmp_path, monkeypatch, live):
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda _sid: live)
     target = _peer_script(tmp_path, "peer")

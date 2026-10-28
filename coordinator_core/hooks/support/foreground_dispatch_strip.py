@@ -278,9 +278,11 @@ def compute_foreground_reroute(
     if bg_true:
         return None
 
-    if not has_bg:
-        if not _is_bg_capable(git_dir, sid):
-            return None
+    if has_bg:
+        return None
+
+    if not _is_bg_capable(git_dir, sid):
+        return None
 
     if isinstance(tool_input, dict):
         raw_subagent_type = tool_input.get("subagent_type")

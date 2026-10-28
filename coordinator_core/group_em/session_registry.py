@@ -58,9 +58,18 @@ def registry_dir() -> Path:
 
 def parse_row(path: Path) -> Optional[RegistryRow]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
     except (OSError, ValueError):
         return None
+    try:
+        data = json.loads(text)
+    except ValueError:
+        # Trap: the harness rewrites in place without truncating, so a shorter
+        # rewrite leaves a junk tail (e.g. a stray `}`) after one valid object.
+        try:
+            data, _ = json.JSONDecoder().raw_decode(text.lstrip())
+        except ValueError:
+            return None
     if not isinstance(data, dict):
         return None
     session_id = data.get("sessionId") or data.get("session_id")

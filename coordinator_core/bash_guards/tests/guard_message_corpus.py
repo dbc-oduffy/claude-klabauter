@@ -1304,22 +1304,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
     # `CONFINEMENT_GUARDS`'s next regeneration, not a silent scope-creep here.
     #
     CorpusRow(
-        "block-disarm-marker-sentinel-creation",
-        "block-disarm-marker-sentinel-creation-control",
-        "git status",
-        False,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
-        "block-disarm-marker-sentinel-creation",
-        "block-disarm-marker-sentinel-creation-indirection",
-        "printf x | xargs touch",
-        True,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
         "block-stash-destruction",
         "block-stash-destruction-control",
         "git status",
@@ -1368,88 +1352,12 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
-        "block-unreal-engine-resave",
-        "block-unreal-engine-resave-control",
-        "UnrealEditor-Cmd G.uproject -run=ResavePackages -projectonly",
-        False,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
         "block-editor-kill-by-name",
         "block-editor-kill-by-name-control",
         "taskkill /F /PID 12345",
         False,
         _DENY,
         False,
-    ),
-    CorpusRow(
-        "block-subagent-stash-creation",
-        "block-subagent-stash-creation-control",
-        "git status",
-        False,
-        _DENY,
-        False,
-    ),
-    # AC10 coverage-gap closer (C7, docs/plans/2026-08-13-em-exercisable-
-    # in-band-grant-route.md): `block-subagent-guard-grant` (chunk C3) is a
-    # genuinely fireable CONFINEMENT_DENY guard with no corpus row until
-    # this dispatch -- unlike its modelled sibling
-    # `block-subagent-grant-acquisition` (still a named
-    # `REGISTER_COVERAGE_EXEMPTIONS` gap, not touched here), this guard
-    # wants a real fire+control pair, not an exemption. Custom setup (not
-    # `_from_factory*`) because this guard is not one of
-    # `CONFINEMENT_GUARDS`'s 16 `_setup_<name>` factories.
-    CorpusRow(
-        "block-subagent-guard-grant",
-        "block-subagent-guard-grant-fire",
-        'python3 -m coordinator_core.session.em_guard_grant grant "test reason"',
-        True,
-        _DENY,
-        False,
-        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
-    ),
-    CorpusRow(
-        "block-subagent-guard-grant",
-        "block-subagent-guard-grant-control",
-        "python3 -m coordinator_core.session.em_guard_grant read",
-        False,
-        _DENY,
-        False,
-        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
-    ),
-    # AC2 coverage-gap closer, 2026-08-17. The comment above called
-    # `block-subagent-grant-acquisition` a "still a named
-    # REGISTER_COVERAGE_EXEMPTIONS gap, not touched here"; it is reachable from
-    # `_build_guard_chain`, so AC2 counted it as an uncovered guard and this
-    # module's own `test_ac2_every_reachable_guard_has_a_corpus_row` failed on
-    # it. That failure was INVISIBLE to every directory-scoped run — see this
-    # module's header note on `python_files` — which is why the gap outlived
-    # the sibling row that closed the identical shape for
-    # `block-subagent-guard-grant` above.
-    #
-    # A real fire+control pair rather than an exemption: it is genuinely
-    # fireable, verified live here and already proven by the identical row in
-    # `test_confinement_deny_band_shape._EXTRA_FIRING_ROWS`. Identity-gated on
-    # the raw presence of `agent_id`, per its own module docstring's
-    # "IDENTITY-GATE POSTURE" section.
-    CorpusRow(
-        "block-subagent-findings-reject",
-        "block-subagent-findings-reject-fire",
-        "python3 -m coordinator_core.ops.review_findings_ledger reject F1 reason",
-        True,
-        _DENY,
-        False,
-        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
-    ),
-    CorpusRow(
-        "block-subagent-findings-reject",
-        "block-subagent-findings-reject-control",
-        "python3 -m coordinator_core.ops.review_findings_ledger verify",
-        False,
-        _DENY,
-        False,
-        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
     ),
     CorpusRow(
         "guard-post-executor-verification",
@@ -1459,24 +1367,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=lambda scratch_dir, mp: _post_executor_setup(scratch_dir, runs_so_far=0),
-    ),
-    CorpusRow(
-        "block-subagent-grant-acquisition",
-        "block-subagent-grant-acquisition-fire",
-        'python3 -m coordinator_core.session.claude_md_grant grant pm "test reason"',
-        True,
-        _DENY,
-        False,
-        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
-    ),
-    CorpusRow(
-        "block-subagent-grant-acquisition",
-        "block-subagent-grant-acquisition-control",
-        "python3 -m coordinator_core.session.claude_md_grant read",
-        False,
-        _DENY,
-        False,
-        setup=lambda scratch_dir, mp: dict(_EXECUTOR_IDENTITY),
     ),
     CorpusRow(
         "guard-doctrine-surface-bash-write",
@@ -1603,46 +1493,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=_subagent_heavy_ue_launch_setup,
     ),
     CorpusRow(
-        "block-fleet-delegation-creation",
-        "block-fleet-delegation-creation-fire",
-        "touch fleet-delegation.json",
-        True,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
-        "block-fleet-delegation-creation",
-        "block-fleet-delegation-creation-control",
-        "touch normal_file.txt",
-        False,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
-        "block-fleet-delegation-creation",
-        "block-fleet-delegation-creation-indirection",
-        "printf x | xargs touch",
-        True,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
-        "block-hand-authored-handoff-creation",
-        "block-hand-authored-handoff-creation-fire",
-        "echo x > state/handoffs/hand-authored.md",
-        True,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
-        "block-hand-authored-handoff-creation",
-        "block-hand-authored-handoff-creation-control",
-        "echo x > normal_file.txt",
-        False,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
         "block-home-root-bash-write",
         "block-home-root-bash-write-fire",
         "echo x > ~/stray.txt",
@@ -1704,14 +1554,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
-        "block-topic-branch",
-        "block-topic-branch-fire",
-        "git checkout -b fix/foo",
-        True,
-        _DENY,
-        False,
-    ),
-    CorpusRow(
         "block-perforce-submit",
         "block-perforce-submit-fire",
         "p4 submit -d x",
@@ -1737,14 +1579,6 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=_push_pr_non_owned_remote_setup,
-    ),
-    CorpusRow(
-        "block-unreal-engine-resave",
-        "block-unreal-engine-resave-fire",
-        "UnrealEditor.exe G.uproject -run=resavepackages -unattended",
-        True,
-        _DENY,
-        False,
     ),
     CorpusRow(
         "block-editor-kill-by-name",
@@ -1973,22 +1807,6 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         setup=_headless_plugin_dir_dev_install_setup,
     ),
     CorpusRow(
-        "block-venv-creation",
-        "block-venv-creation-fire",
-        "python -m venv .venv",
-        True,
-        _REWRITE,
-        False,
-    ),
-    CorpusRow(
-        "block-venv-creation",
-        "block-venv-creation-control",
-        "git status",
-        False,
-        _REWRITE,
-        False,
-    ),
-    CorpusRow(
         # Advisory leg (indirection) of `block-dev-repo-sentinel-removal`; the
         # deny leg's row is in `CONFINEMENT_ROWS`.
         "block-dev-repo-sentinel-removal-advisory",
@@ -2108,7 +1926,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         "block-em-post-fire-product-write",
         "block-em-post-fire-product-write-fire",
         "echo x > pkg/step_ledger.py",
-        True,
+        False,
         _REWRITE,
         False,
         setup=_em_post_fire_shell_write_setup,
@@ -2125,7 +1943,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         "xs-lane-shell-write",
         "xs-lane-shell-write-fire",
         "python3 - <<'PY'\nopen('pkg/step_ledger.py', 'w').write('x = 1\\n')\nPY",
-        True,
+        False,
         _REWRITE,
         False,
         setup=_xs_lane_shell_write_setup,
@@ -3086,9 +2904,17 @@ def _wg_concrete_path_citations_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) 
 
 
 def _wg_doctrine_surface_edits_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    from coordinator_core.write_guards import guard_doctrine_surface_edits as guard_mod
+
+    target = scratch_dir / "CLAUDE.md"
+    target.write_text("old rule\n", encoding="utf-8")
+    mp.setattr(guard_mod, "_git_root", lambda: str(scratch_dir))
+    mp.setattr(guard_mod, "_content_root", lambda: None)
+    mp.setattr(guard_mod, "gem_admitted", lambda *a, **k: False)
+    mp.setattr(guard_mod, "_write_repo_identity_advisory_log", lambda *a, **k: None)
     return {
         "tool_name": "Write",
-        "tool_input": {"file_path": ".coordinator-doctrine-edit-approved"},
+        "tool_input": {"file_path": str(target), "content": "new rule\n"},
     }
 
 
@@ -4533,9 +4359,13 @@ def _fire_nudge_hand_written_plan_control() -> Optional[Dict[str, Any]]:
 # present-and-false rewrites into a backgrounded dispatch via rewrite_input(),
 # whose attached `context` is the AC9-fixed AUTO-REROUTED advisory text.
 def _fire_nudge_foreground_agent_dispatch() -> Optional[Dict[str, Any]]:
+    # Primes the handler's per-session state with an explicit background dispatch before the fire payload.
+    _hook_nudge_foreground_agent_dispatch._handler(
+        {"tool_name": "Agent", "run_in_background": "true", "session_id": "sess-c12-nfad-fire"},
+        repo_root=None,
+    )
     payload = {
         "tool_name": "Agent",
-        "run_in_background": "false",
         "session_id": "sess-c12-nfad-fire",
         "tool_input": {"prompt": "do the thing"},
     }
@@ -4558,9 +4388,12 @@ def _fire_nudge_foreground_agent_dispatch_control() -> Optional[Dict[str, Any]]:
 # identical present-and-false payload, taking the deny fallback branch instead, so
 # the corpus's banned-vocabulary sweep also scans _DENY_MSG_TEMPLATE at least once.
 def _fire_nudge_foreground_agent_dispatch_deny() -> Optional[Dict[str, Any]]:
+    _hook_nudge_foreground_agent_dispatch._handler(
+        {"tool_name": "Agent", "run_in_background": "true", "session_id": "sess-c12-nfad-deny"},
+        repo_root=None,
+    )
     payload = {
         "tool_name": "Agent",
-        "run_in_background": "false",
         "session_id": "sess-c12-nfad-deny",
         "tool_input": {},
     }

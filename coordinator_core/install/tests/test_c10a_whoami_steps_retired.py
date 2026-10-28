@@ -7,13 +7,11 @@ Spec: docs/plans/2026-09-26-inbox-blitz-claude-klabauter-fixes-doe-thread.md (IB
 C10a-1 (relocate `coordinator-whoami/` from a legacy install-base dir or the plugin's
 `whoami/` source into the settings home, then replace the legacy dir with a compat
 pointer), C10a-2 (register the `coordinator.whoami_src` machine-local key), and
-C10a-3 (venv rebuild, break-glass only). `coordinator_whoami` ships no package source
+C10a-3 (venv rebuild, since deleted). `coordinator_whoami` ships no package source
 on any current box (state/cross-repo/archive/2026-09-12-coordinator-content-repo-em-installer-
 still-registers-retired-whoami-src.md), so C10a-1/2 only ever populated or advertised
 a stale/empty seam. This module asserts they no longer run: no relocation copy, no
-legacy-dir replacement, no `coordinator.whoami_src` registry write — while C10a-3
-(gated by `allow_venv_fallback`) is unaffected, since it already probes
-`plugin_root / "whoami"` directly, independent of C10a-1's copy.
+legacy-dir replacement, no `coordinator.whoami_src` registry write.
 """
 from __future__ import annotations
 
@@ -120,36 +118,18 @@ def test_c10a_steps_check_only_reports_no_whoami_relocation(tmp_path, capsys):
     assert "relocate coordinator-whoami" not in out
 
 
-def test_c10a_steps_venv_rebuild_still_reachable_without_relocation(tmp_path, monkeypatch):
-    """C10a-3 (venv rebuild) must remain reachable via `allow_venv_fallback`
-    even though C10a-1 no longer populates the settings-home whoami
-    destination — `has_viable_whoami` still resolves via
-    `plugin_root / "whoami"` directly."""
+def test_c10a_steps_has_no_venv_rebuild_leg(tmp_path):
+    """C10a-3 (venv rebuild) is deleted: `_c10a_steps` takes no
+    `allow_venv_fallback` and never builds a venv."""
     install_base, settings_home_path, plugin_root, bin_dst = _make_dirs(tmp_path)
 
-    plugin_whoami = plugin_root / "whoami"
-    plugin_whoami.mkdir(parents=True)
-    (plugin_whoami / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
-
-    from coordinator_core.install import substrate as substrate_mod
-
-    def _fake_ensure_coordinator_venv(*_args, **kwargs):
-        return "would-rebuild" if kwargs.get("check_only") else "rebuilt"
-
-    monkeypatch.setattr(
-        "coordinator_core.install.ensure_venv.ensure_coordinator_venv",
-        _fake_ensure_coordinator_venv,
-    )
-    monkeypatch.setattr(
-        "coordinator_core.install.ensure_venv._venv_healthy", lambda _venv_py: True,
-    )
-
-    rc = _c10a_steps(
-        str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False,
-        allow_venv_fallback=True,
-    )
-
-    assert rc == 0
+    with pytest.raises(TypeError):
+        _c10a_steps(
+            str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False,
+            allow_venv_fallback=True,
+        )
+    assert _c10a_steps(str(install_base), settings_home_path, plugin_root, bin_dst, check_only=False) == 0
+    assert not (settings_home_path / ".coordinator-venv").exists()
 
 
 def test_c10a_steps_removes_the_retired_settings_home_copy(tmp_path, monkeypatch):

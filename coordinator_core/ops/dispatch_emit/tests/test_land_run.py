@@ -178,11 +178,12 @@ def test_halted_record_stages_a_review_edit_no_run_holds(repo, monkeypatch):
     assert landed, out
 
 
-def test_a_co_declared_hold_on_an_inherited_path_still_refuses(product_repo, monkeypatch):
-    """terminal_commit holds a co-declared peer path whether or not it is inherited; land_run agrees."""
+def test_a_co_declared_hold_on_an_inherited_path_is_recorded_as_provenance_and_lands(product_repo, monkeypatch):
+    """A co-declared peer path is provenance whether or not it is inherited; the landing commits."""
     from coordinator_core.ops.dispatch_emit import peer_hunk_gate
     from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
     from coordinator_core.ops.dispatch_emit.tests import test_land_run_refire_inherits_withheld_scope as refire
+    from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
     from coordinator_core.session import touch_record
 
     monkeypatch.setattr(land_run, "_ledger_gate", lambda *a, **k: (None, None, []))
@@ -195,7 +196,8 @@ def test_a_co_declared_hold_on_an_inherited_path_still_refuses(product_repo, mon
     prod._write(root, f"{foreign_dir}/manifest.json", '{"rows": [{"id": "F1", "writes": ["%s"]}]}' % refire.INHERITED)
     prod._write(root, f"{foreign_dir}/run.json", '{"sizing_rel": "state/sizings/other.yaml"}')
 
-    out = prod._land(root, resume_ledger=refire._resume())
+    out = prod._land(root, resume_ledger=refire._resume(), inline_review=reviewed())
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert refire.INHERITED not in prod._tree(root)
+    assert out.get("refused") is None, out
+    assert out.get("committed") is True, out
+    assert [e for e in out.get("provenance") or [] if e["reason"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED], out

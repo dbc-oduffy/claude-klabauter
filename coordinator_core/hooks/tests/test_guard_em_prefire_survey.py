@@ -84,7 +84,7 @@ def env(tmp_path, monkeypatch):
 
 
 def reason(res) -> str:
-    text = res["hookSpecificOutput"]["permissionDecisionReason"]
+    text = res["hookSpecificOutput"]["additionalContext"]
     marker = "[coordinator] "
     return text[len(marker):] if text.startswith(marker) else text
 
@@ -170,12 +170,25 @@ def test_ninth_read_denies_with_fire_step(env):
     env.write(user())
     env.survey(8)
     res = g.evaluate(env.payload())
-    assert res is not None and res["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert res is not None and "permissionDecision" not in res["hookSpecificOutput"]
     assert reason(res).startswith("[em-prefire-survey] 9 exploratory calls")
     assert warp_fire.fire_step() in reason(res)
     assert "cd-prefixed retry" in reason(res) and "em_context" in reason(res)
 
 
+def test_prefire_deny_arms_the_session_latch_and_under_budget_does_not(env):
+    from coordinator_core.hooks._em_write_budget import advised_deny_envelope
+
+    (env.repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (env.repo / ".git" / "refs" / "heads").mkdir(parents=True)
+    (env.repo / ".git" / "refs" / "heads" / "main").write_text("a" * 40 + "\n")
+    env.write(user())
+    env.survey(7)
+    assert g.evaluate(env.payload()) is None
+    assert advised_deny_envelope(str(env.repo), SID) is None
+    env.survey(1, start=7)
+    assert g.evaluate(env.payload(tid="c8")) is not None
+    assert advised_deny_envelope(str(env.repo), SID) is not None
 STAMP = "[G-EM fifa-ingest a73557ab] ingest the feed"
 
 
@@ -512,14 +525,29 @@ def test_new_user_turn_after_landing_never_reopens_prefire(env, monkeypatch):
     assert g.evaluate(env.payload()) is None
 
 
-def test_deny_passes_through_guard_level(env, monkeypatch):
-    seen = []
-    monkeypatch.setattr(g, "apply_guard_level", lambda name, envelope: seen.append(name) or None)
+def test_survey_is_guide_never_deny_and_off_the_floor(env):
     env.write(user())
     env.survey(10)
-    assert g.evaluate(env.payload()) is None
-    assert seen == ["guard-em-prefire-survey"]
+    res = g.evaluate(env.payload())
+    assert res is not None and "permissionDecision" not in res["hookSpecificOutput"]
     assert "guard-em-prefire-survey" not in machine_profile.FLOOR_GUARDS
+
+
+def test_after_engine_ask_fire_verify_calls_are_never_denied(env, monkeypatch):
+    """git log, a plain Read, a read-only pytest re-run, workflow.revise that also wrote its params
+    file, and a commit-tree/update-ref landing correction: none is ever a deny."""
+    monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(ers.PHASE_LANDED_GREEN, "run1"))
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    calls = [
+        ("Bash", {"command": "git log --oneline -5"}),
+        ("Read", {"file_path": "x.py"}),
+        ("Bash", {"command": "python -m pytest scratch/flake_a.py -q"}),
+        ("Bash", {"command": "echo '{}' > scratch/p.json && coordinator-invoke workflow.revise --params-file scratch/p.json"}),
+        ("Bash", {"command": "git commit-tree HEAD^{tree} -p HEAD -m fix && git update-ref refs/heads/x HEAD"}),
+    ] * 4
+    for i, (name, inp) in enumerate(calls):
+        res = g.evaluate(env.payload(tid=f"v{i}", name=name, inp=inp))
+        assert res is None or "permissionDecision" not in res["hookSpecificOutput"]
 
 
 def test_handler_returns_empty_without_deny(env):
@@ -674,3 +702,52 @@ def test_missing_manifest_still_charges_the_run_sizing(env, monkeypatch):
     for i in range(3):
         assert _step(env, f"v{i}", "Read", sizing) is None
     assert _step(env, "v3", "Read", sizing) is not None
+
+
+def test_deny_route_names_the_non_survey_exemptions():
+    text = g.prefire_deny_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
+    assert "files you wrote with Write/Edit" in text and "user turn" in text and "cross-repo-memo" in text
+
+
+def test_self_written_scratch_read_is_not_charged_through_evaluate(env):
+    path = "scratch/mine.py"
+    env.write(user(), use("w", "Write", {"file_path": path, "content": "x"}))
+    env.survey(8)
+    assert g.evaluate(env.payload(tid="rw", inp={"file_path": path})) is None
+    assert g.evaluate(env.payload(tid="rp", inp={"file_path": "product/x.py"})) is not None
+
+
+def test_product_survey_ninth_read_is_still_denied(env):
+    env.write(user(), use("w", "Write", {"file_path": "scratch/mine.py", "content": "x"}))
+    env.survey(8)
+    res = g.evaluate(env.payload(tid="cur", inp={"file_path": "coordinator_core/ipc.py"}))
+    assert res is not None and "permissionDecision" not in res["hookSpecificOutput"]
+
+
+def test_memo_send_naming_landed_run_is_not_charged_after_landing(env, monkeypatch):
+    env.write(user(), use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
+    _landed(monkeypatch)
+    memo = {"command": "cross-repo-memo send --body run-1 landed"}
+    for i in range(g.POSTLANDING_VERIFY_CALLS_MAX + 2):
+        assert _step(env, f"m{i}", "Bash", memo) is None
+    for t in ("p1", "p2", "p3"):
+        assert _step(env, t) is None
+    assert g.evaluate(env.payload(tid="p4")) is not None
+
+
+def test_budget_resets_on_a_new_user_turn_through_evaluate(env):
+    env.write(user())
+    env.survey(8)
+    assert g.evaluate(env.payload(tid="over")) is not None
+    env.write(user("next task"))
+    env.survey(7, start=20)
+    assert g.evaluate(env.payload(tid="after")) is None
+
+
+def test_budget_resets_on_a_new_in_progress_task_through_evaluate(env):
+    env.write(user())
+    env.survey(8)
+    assert g.evaluate(env.payload(tid="over")) is not None
+    env.write(use("t", "TaskUpdate", {"taskId": "2", "status": "in_progress"}))
+    env.survey(7, start=20)
+    assert g.evaluate(env.payload(tid="after")) is None

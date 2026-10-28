@@ -63,7 +63,7 @@ def _advisory_entry(name, envelope):
     )
 
 
-def _deny_entry(name="fake-hard-deny-guard"):
+def _deny_entry(name="destructive-rm"):
     return GuardEntry(
         name,
         lambda: dict(_DENY_ENVELOPE),
@@ -709,3 +709,49 @@ class TestTheRewriteBlockDoesNotReKeyTheShape:
         }
 
         assert _advisory_dedupe.advisory_dedupe_key("g", envelope) is not None
+
+
+class TestGateOncePerSession:
+    @staticmethod
+    def _repo(tmp_path):
+        (tmp_path / ".git").mkdir()
+        return str(tmp_path)
+
+    @staticmethod
+    def _payload(cwd, session_id="sess-gate"):
+        return {"session_id": session_id, "cwd": cwd}
+
+    def test_second_identical_advisory_is_silent_first_passes(self, tmp_path):
+        cwd = self._repo(tmp_path)
+        gate = _advisory_dedupe.gate_once_per_session
+        first = gate("g", dict(_ADVISORY_ENVELOPE), self._payload(cwd))
+        second = gate("g", dict(_ADVISORY_ENVELOPE), self._payload(cwd))
+
+        assert first == _ADVISORY_ENVELOPE
+        assert "additionalContext" not in second.get("hookSpecificOutput", {})
+
+    def test_other_session_and_other_shape_still_fire(self, tmp_path):
+        cwd = self._repo(tmp_path)
+        gate = _advisory_dedupe.gate_once_per_session
+        gate("g", dict(_ADVISORY_ENVELOPE), self._payload(cwd))
+
+        assert gate("g", dict(_ADVISORY_ENVELOPE), self._payload(cwd, "sess-other")) == _ADVISORY_ENVELOPE
+        assert gate("g", dict(_ADVISORY_ENVELOPE_OTHER_SHAPE), self._payload(cwd)) == _ADVISORY_ENVELOPE_OTHER_SHAPE
+
+    def test_deny_and_missing_session_pass_through_every_time(self, tmp_path):
+        cwd = self._repo(tmp_path)
+        gate = _advisory_dedupe.gate_once_per_session
+        for _ in range(2):
+            assert gate("g", _DENY_ENVELOPE, self._payload(cwd)) == _DENY_ENVELOPE
+            assert gate("g", _ADVISORY_ENVELOPE, {"cwd": cwd}) == _ADVISORY_ENVELOPE
+
+    def test_write_dispatcher_second_identical_payload_is_silent(self, tmp_path, monkeypatch):
+        from coordinator_core.hooks import preuse_write_dispatch
+
+        monkeypatch.setattr(preuse_write_dispatch, "evaluate", lambda params, skipped_out=None: dict(_ADVISORY_ENVELOPE))
+        params = {"tool_name": "Write", "session_id": "sess-w", "cwd": self._repo(tmp_path)}
+        first = preuse_write_dispatch._handler(dict(params))
+        second = preuse_write_dispatch._handler(dict(params))
+
+        assert first == _ADVISORY_ENVELOPE
+        assert "additionalContext" not in second.get("hookSpecificOutput", {})

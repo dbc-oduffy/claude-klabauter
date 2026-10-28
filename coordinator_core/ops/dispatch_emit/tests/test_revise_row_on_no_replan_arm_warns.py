@@ -1,4 +1,4 @@
-"""workflow.revise adding a verbatim row to a live run whose arm has no re-plan leg warns and names the resize route."""
+"""workflow.revise adding a verbatim row to a live run on an S or XS arm is accepted: no refusal, no resize route."""
 
 from __future__ import annotations
 
@@ -33,13 +33,13 @@ def _live(repo, run_id, tshirt, monkeypatch):  # noqa: F811
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S"])
-def test_no_replan_arm_warns_and_names_the_resize_route(repo, monkeypatch, tshirt):  # noqa: F811
+def test_no_replan_arm_revise_is_accepted_with_no_resize_route(repo, monkeypatch, tshirt):  # noqa: F811
     _live(repo, "rw1", tshirt, monkeypatch)
     out = rl._handler({"run_id": "rw1", "verbatim": "also refuse undeclared writes"}, repo_root=repo)
     assert out["ok"] is True and out["run_live"] is True
-    assert "sizing.supersede" in out["warning"] and "route_preference plan" in out["warning"]
-    assert out["resize"]["supersede"] == "sizing.supersede"
-    assert out["refused"] and "no re-plan leg" in out["refused"][0]["reason"]
+    assert "resize" not in out and "sizing.supersede" not in out.get("warning", "")
+    assert "no re-plan leg" not in out.get("warning", "")
+    assert out["refused"] == []
 
 
 def test_m_plus_arm_gets_no_resize_warning(repo, monkeypatch):  # noqa: F811
