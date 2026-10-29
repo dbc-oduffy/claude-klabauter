@@ -3213,6 +3213,8 @@ def compose_ask_script(
     b.append(runner_js)
     b.append(f"  const {_emit._REPO_ROOT_VAR} = REPO_ROOT;")
     b.append(f"  let {_emit._RUN_BASE_VAR} = {_lit(run_base_sha)};")
+    # Top level, not in the execute block: the top-level _alreadyDeliveredClose reads it.
+    b.append("  let _deliveryNotes = '';")
     b.append(_emit._checkpoint_commit_js(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
         runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN,
@@ -4597,7 +4599,6 @@ def compose_ask_script(
         "sizing: _sizingRel, plan: _planRel, run_id: _runId }; }"
     )
     b.append("  }")
-    b.append("  let _deliveryNotes = '';")
     b.append("  if (!_halted && (!_resumeLedger || _ledgerExec)) {")
     b.append(f"  phase({_lit(_emit._EXECUTE_PHASE_TITLE)});")
     b.append("  const _rows = {};")

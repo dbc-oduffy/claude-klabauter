@@ -2255,8 +2255,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "a489a5b395b8571d461970965db121f06424a455",
-    "coordinator_core/_engine_stamp": "d11bf3826913fc78a99475ac0ce520caf8df2506",
+    "coordinator_core/_engine_published_at": "89f9d1fc2daca836dc4ab20999a6899fd57f1e3b",
+    "coordinator_core/_engine_stamp": "9c4ec806cd157897305f4565b8e9f449d5084117",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4951,7 +4951,7 @@
     "coordinator_core/ops/dispatch_emit/agent_route.py": "89f4aaecceee46c7864527cc3746141060c0aa44",
     "coordinator_core/ops/dispatch_emit/agent_sidecar.py": "0716c951f5c45355aeb1a3339c0b1b8a9b9b6f5f",
     "coordinator_core/ops/dispatch_emit/ask_brief.py": "57e5264a599353e83ded3a26638d5e84d23c68e3",
-    "coordinator_core/ops/dispatch_emit/ask_compose.py": "68fba0e3ccdb71949c264b45947a0a4e30722a55",
+    "coordinator_core/ops/dispatch_emit/ask_compose.py": "465ee4d80b71f2159ab0701eb7514ee7381bf43a",
     "coordinator_core/ops/dispatch_emit/ask_contract.py": "36abb1650c2f92299a552305567420ae19858e04",
     "coordinator_core/ops/dispatch_emit/ask_exclusions.py": "e21a6d24a6ad1e46d85f8c16e3fb635f20530d2a",
     "coordinator_core/ops/dispatch_emit/ask_fanout.py": "66f11e1c1920c691c98e7038b553adebb0fbd549",
@@ -5286,7 +5286,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_agent_body_dedupe.py": "7e0b9b45e5d88e9f96460127d885f3c3ebd77c2a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_all_landed_ledger.py": "0117abd0e0f5069ddf992548dce3f6cffee762b4",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_all_ruled_out_passes_ledger_check.py": "633b1bf0059980b8c0fc3647da2eda84b11ebea1",
-    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_already_delivered_closes_landed.py": "f9a79233bd86c587b084ce606bb57caa226d8ded",
+    "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_already_delivered_closes_landed.py": "dfad3146bf0cb1ba1bb4eca74ad8c7356b7f4b5a",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_anchor_premises.py": "7573daf56bb666f9451d80301df715295815c117",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_apm_accept.py": "0adfb0fc49c64f86e34485ae2e67f9d6bcd8a627",
     "coordinator_core/ops/dispatch_emit/tests/test_ask_compose_bound_sizing_path.py": "3770e95c3eea2713cd70535312b041fc506dcadf",
@@ -10285,5 +10285,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "dfcc6b014b5a712f758c95b819e34188c9f76365"
+  "source_head": "fb9fbaa485ecd101ecc98bb0fff39c19bead188c"
 }

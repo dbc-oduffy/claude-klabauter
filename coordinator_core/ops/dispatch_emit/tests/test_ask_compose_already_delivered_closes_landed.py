@@ -60,6 +60,15 @@ def test_landed_close_skips_the_review_floor_halt_and_the_terminal_commit():
     assert "already_delivered: _alreadyDelivered," in script
 
 
+def test_delivery_notes_is_declared_at_top_level_beside_the_run_base():
+    """The hook is a top-level function: a `let _deliveryNotes` inside the execute block is out of its
+    scope and the hook throws ReferenceError (rag-56's 6cc5b7 crash). The node harness below declares
+    its own, so only this pins the emitted declaration."""
+    script = _script()
+    assert script.count("let _deliveryNotes") == 1
+    assert "let _runBase = '';\nlet _deliveryNotes = '';\n" in script.replace("\n  ", "\n")
+
+
 def test_default_script_validates_with_zero_errors():
     assert [f for f in run_checks(_script()) if f.severity is Severity.ERROR] == []
 
