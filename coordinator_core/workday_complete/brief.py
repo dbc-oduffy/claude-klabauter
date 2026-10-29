@@ -112,6 +112,7 @@ from coordinator_core.cadence.period_mode import (
     period_flag_error,
     resolve_period_mode,
 )
+from coordinator_core.ceremony_common.apply_halt import chosen_disposition
 from coordinator_core.ceremony_common.tail import build_ceremony_close_tail
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
@@ -393,6 +394,7 @@ def _build_directives(
     scope_summary: Optional[str] = None,
     backfill_cap_live: bool = True,
     catch_up: bool = False,
+    no_push: bool = False,
 ) -> list[dict[str, Any]]:
     """Tier-1 (mechanical, no open question) directive entries — one per
     collapsed workday-complete.md step: 1/1.5/2.5/2.6/2.65/3/3.5-PhaseA0/4a/6/
@@ -494,7 +496,12 @@ def _build_directives(
 
     `catch_up` drops every `CONCLUDING_DIRECTIVES["workday-complete"]` id from the list: the
     in-progress day stays open, so nothing concluding is emitted, and none is self-skipping.
+
+    `no_push` appends `--no-push` to the three directives whose leaf pushes
+    (`d_step3_consolidate`, `d_step3_5_backfill_phase_b`, `d_step9_changelog`); before any
+    `--` separator on step9.
     """
+    push_off = ["--no-push"] if no_push else []
     directives = [
         _directive(
             "d_step1_validate",
@@ -509,7 +516,14 @@ def _build_directives(
         _directive(
             "d_step2_5_dirty_tree_scan",
             cli="workday-complete-step2_5-dirty-tree",
-            args=[],
+            args=(
+                ["--settled"]
+                if chosen_disposition(
+                    (decisions or {}).get("jp_step2_5_dirty_tree_ambiguous")
+                )
+                == "adopt_commit"
+                else []
+            ),
         ),
         _directive(
             "d_step2_67_handoff_housekeeping",
@@ -519,7 +533,7 @@ def _build_directives(
         _directive(
             "d_step3_consolidate",
             cli="workday-complete-step3-consolidate",
-            args=[],
+            args=list(push_off),
             depends_on=(
                 "jp_step2_5_dirty_tree_ambiguous"
                 if dirty_tree_verdict.get("ambiguous")
@@ -563,7 +577,8 @@ def _build_directives(
                 else ["backfill-dispatch-rows", "--allow-empty"]
             )
             + (["--only-mode"] if for_date and only_mode else [])
-            + ([f"--scope-summary={scope_summary}"] if for_date and scope_summary else []),
+            + ([f"--scope-summary={scope_summary}"] if for_date and scope_summary else [])
+            + push_off,
             depends_on="jp_step3_5_backfill_cap" if backfill_cap_live else None,
             stdin_from="d_step3_5_backfill_scan",
         ),
@@ -596,6 +611,7 @@ def _build_directives(
             cli="workday-complete-close",
             args=["step9-dispatch"]
             + (["--only-mode"] if only_mode else [])
+            + push_off
             + (["--", scope_summary] if scope_summary else []),
         ),
         _directive(
@@ -975,6 +991,7 @@ def brief(
     catch_up: bool = False,
     conclude: bool = False,
     now_local: Optional[datetime] = None,
+    no_push: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """Compute the workday-complete decision object. Read-only — never
     mutates disk/git state itself; every mutation is a named `directives[]`
@@ -1078,6 +1095,7 @@ def brief(
             scope_summary=scope_summary,
             backfill_cap_live=_backfill_cap_live(backfill_scan_result),
             catch_up=in_catch_up,
+            no_push=no_push,
         )
         judgment_points = _build_judgment_points(
             open_day_goals,
@@ -1143,6 +1161,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--scope-summary", dest="scope_summary", default=None)
     parser.add_argument(CATCH_UP_FLAG, dest="catch_up", action="store_true")
     parser.add_argument(CONCLUDE_FLAG, dest="conclude", action="store_true")
+    parser.add_argument("--no-push", dest="no_push", action="store_true")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -1153,6 +1172,7 @@ def main(argv: list[str]) -> int:
         for_date=args.for_date,
         only_mode=args.only_mode,
         scope_summary=args.scope_summary,
+        no_push=args.no_push,
         **period_flags,
     )
     print(json.dumps(envelope, indent=2, sort_keys=True))

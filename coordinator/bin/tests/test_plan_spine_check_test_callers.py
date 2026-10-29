@@ -31,7 +31,7 @@ def _plan(tmp_path: Path, rows: str) -> Path:
     (tmp_path / ".git").mkdir(exist_ok=True)
     path = tmp_path / "plan.md"
     path.write_text(
-        "---\ntitle: t\n---\n\n# A plan\n\n## Tasks\n\n```yaml plan-tasks\n" + rows + "\n```\n",
+        "---\ntitle: t\nanchor_premises: []\n---\n\n# A plan\n\n## Tasks\n\n```yaml plan-tasks\n" + rows + "\n```\n",
         encoding="utf-8",
     )
     return path

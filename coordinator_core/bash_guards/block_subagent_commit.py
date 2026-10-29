@@ -7089,6 +7089,25 @@ def _params_from_existing_file(typed_path: str) -> "Tuple[Optional[Dict[str, Any
 def _prompt_sourced_params_admit(
     typed_path: str, git_root: str, transcript_path: Any
 ) -> Optional[str]:
+    """`_prompt_sourced_params_admit_leg`, leaving the refusal leg beside the params file.
+
+    The deny is demoted to allow at log level and its text dropped, so the op's "never written"
+    error reads the note (`terminal_commit_params_channel.missing_file_diagnosis`). An admit
+    clears a note a prior refusal left.
+    """
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    leg = _prompt_sourced_params_admit_leg(typed_path, git_root, transcript_path)
+    if leg is None:
+        chan.clear_refusal(typed_path)
+    else:
+        chan.note_refusal(typed_path, leg)
+    return leg
+
+
+def _prompt_sourced_params_admit_leg(
+    typed_path: str, git_root: str, transcript_path: Any
+) -> Optional[str]:
     """Admit `--params-file <path>` from the spawn's own prompt, writing the file itself.
 
     Trap: params come only from the spawn prompt's block, never from the typed text and never

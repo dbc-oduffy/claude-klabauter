@@ -609,6 +609,12 @@ def effective_agent_model(agent_type: str, agent_model: Optional[str]) -> tuple[
 #: commit/preflight/test phases are unchanged.
 _EXECUTOR_STALL_MS = 360000
 
+#: Declared effort per mechanical leg class (leg_register ratchet: every leg declares one).
+_EXECUTOR_EFFORT = "medium"
+_TEST_RUNNER_EFFORT = "low"
+_CHATTY_EFFORT = "low"
+_SPEC_REVIEW_EFFORT = "medium"
+
 
 def _model_opt(agent_type: str, agent_model: Optional[str] = None) -> str:
     """Compose the ACTIVE ``model:`` opts entry for one ``agentType`` (AC11).
@@ -3263,6 +3269,7 @@ def _agent_call_over(
         f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
         f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
         f"{dropped_note}{_model_opt(row_agent_type, model_override)}, "
+        f"effort: {_js_string_literal(_EXECUTOR_EFFORT)}, "
         f"stallMs: {_EXECUTOR_STALL_MS} "
         "})"
     )
@@ -4673,7 +4680,7 @@ def _run_row_helper_js(
             "        { "
             f"label: 'verify:' + id, phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
             f"agentType: {verify_agent_type}, {_model_opt(_TEST_AGENT_TYPE)}, "
-            "schema: _ROW_VERIFY_SCHEMA }\n"
+            f"effort: {_js_string_literal(_TEST_RUNNER_EFFORT)}, schema: _ROW_VERIFY_SCHEMA }}\n"
             "      ));\n"
             "    }\n"
         )
@@ -5329,7 +5336,7 @@ def _seam_leg_js(
         "      fix = await agent(",
         f"        {js(head)} + 'You repair the seam test failure of wave ' + n + '. ' + {fix_tail} + {sidecar_js},",
         f"        {{ label: {fix_label} + n, phase: {phase}, agentType: {exec_type}, "
-        f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, schema: _SEAM_FIX_SCHEMA }}",
+        f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, effort: {_js_string_literal(_EXECUTOR_EFFORT)}, schema: _SEAM_FIX_SCHEMA }}",
         "      );",
         "    } catch (e) {",
         "      return { ok: false, why: 'agent call threw: ' + _seamText(e && e.message ? e.message : e) };",
@@ -5461,7 +5468,7 @@ def _owed_gates_green_js(
         "' before the wave ' + n + ' checkpoint: ' + scope.join(', ') + '. ' + "
         f"{_js_string_literal(_test_runner_clause(repo_root))} + {sidecar},\n"
         f"        {{ label: 'verify:wave-' + n, phase: {phase}, agentType: {agent_type}, "
-        f"{_model_opt(_TEST_AGENT_TYPE)}, schema: _ROW_VERIFY_SCHEMA }}\n"
+        f"{_model_opt(_TEST_AGENT_TYPE)}, effort: {_js_string_literal(_TEST_RUNNER_EFFORT)}, schema: _ROW_VERIFY_SCHEMA }}\n"
         "      );\n"
         "    } catch (e) {\n"
         "      r = null;\n"
@@ -5730,6 +5737,7 @@ def _spec_thunk_js(
             f"agentType: {_js_string_literal(_degrade_agent_type(spec.agent_type, agent_type_host))}"
         )
     opts.append(_model_opt(spec.agent_type or "", spec.model))
+    opts.append(f"effort: {_js_string_literal(_SPEC_REVIEW_EFFORT)}")
     opts.append(f"schema: {_PRE_SCHEMAS_VAR}[{_js_string_literal(spec.schema)}]")
     prompt = _resolve_markers_plus(spec.prompt)
     cache_tail = _verdict_cache_instruction(spec, repo_root)
@@ -6467,6 +6475,7 @@ def compose_script(
                 f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
                 f"agentType: {_js_string_literal(_degrade_agent_type(overseer_type, agent_type_host))}, "
                 f"{_model_opt(overseer_type)}, "
+                f"effort: {_js_string_literal(_CHATTY_EFFORT)}, "
                 f"stallMs: {_EXECUTOR_STALL_MS} "
                 "});"
             )
@@ -6629,6 +6638,7 @@ def compose_script(
                 f"phase: {_js_string_literal(_EXECUTE_PHASE_TITLE)}, "
                 f"agentType: {_js_string_literal(_degrade_agent_type(_EXECUTOR_AGENT_TYPE, agent_type_host))}, "
                 f"{_model_opt(_EXECUTOR_AGENT_TYPE)}, "
+                f"effort: {_js_string_literal(_CHATTY_EFFORT)}, "
                 f"stallMs: {_EXECUTOR_STALL_MS}"
             )
             body_blocks.append(

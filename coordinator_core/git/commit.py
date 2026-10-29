@@ -100,7 +100,7 @@ from coordinator_core.git.git_objects import (
     object_batch,
     write_object,
 )
-from coordinator_core.git.git_state import IndexParseError, read_index, head_blobs,head_sha, head_tree_sha, read_commit, read_tree_spine
+from coordinator_core.git.git_state import IndexParseError, head_blobs, head_sha, head_tree_sha, read_commit, read_index, read_tree_spine
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
 from coordinator_core.git import checkpoint_guard

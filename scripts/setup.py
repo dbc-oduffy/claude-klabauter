@@ -4700,6 +4700,22 @@ def install_general_work_ensure(repo_root: Path, claude_klabauter_root_resolved:
         print(f"[ADVISORY] general-work root {outcome.status}: {outcome.detail}", file=sys.stderr)
 
 
+def _print_spotlight_advice(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
+    """Advisory on darwin when Spotlight still indexes the repos root; never fatal."""
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core.ops.doctor import spotlight_advice
+
+        advice = spotlight_advice(repo_root.parent)  # doctor derives the same root: engine root's parent
+    except Exception as exc:  # noqa: BLE001 -- advisory leg must never break the install
+        print(f"[ADVISORY] spotlight check skipped ({exc})", file=sys.stderr)
+        return
+    if advice:
+        print()
+        print(f"[ADVISORY] {advice}")
+
+
 def main(argv: list[str]) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -4838,6 +4854,9 @@ def main(argv: list[str]) -> int:
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
         install_record_receipt(claude_klabauter_root_resolved)
         install_write_hook_plane_verdict(repo_root, claude_klabauter_root_resolved, args)
+
+    if not args.register_only:
+        _print_spotlight_advice(repo_root, claude_klabauter_root_resolved)
 
     print()
     if probe_hard_failure:

@@ -127,6 +127,10 @@ Finding 2 (A3b) — it never reuses these business codes for that purpose:
     2 — clear-wins handled; source-tree or ambiguous paths remain (needs
         PM attention — printed as `NEEDS-PM` on stdout).
 
+`--settled`: an `adopt_commit` decision already covers the AMBIGUOUS paths, so
+a NEEDS-PM caused by ambiguous paths alone exits 0; source-tree or peer-claimed
+paths still exit 2.
+
 `--dry-run`: prints what would be done; makes no commits, no `.gitignore`
 edits, no `git rm --cached`. Read-only git lookups (status/diff/ls-files)
 still run so the dry-run preview reflects the real classification.
@@ -940,9 +944,12 @@ def adopt_ambiguous(repo_root: object) -> Tuple[int, str]:
 
 def main(argv: List[str]) -> int:
     dry_run = False
+    settled = False
     for arg in argv:
         if arg == "--dry-run":
             dry_run = True
+        elif arg == "--settled":
+            settled = True
         else:
             print(f"ERROR: unknown argument: {arg}", file=sys.stderr)
             return 1
@@ -985,6 +992,11 @@ def main(argv: List[str]) -> int:
 
     if classification.needs_pm:
         print(f"[{_PROG}] NEEDS-PM")
+        # `--settled`: an adopt_commit decision covers AMBIGUOUS paths only;
+        # source-tree and peer-claimed paths still stop.
+        if settled and not (counters.source or counters.claim_peer):
+            print(f"[{_PROG}] settled by adopt_commit: ambiguous paths left to the adopt step")
+            return 0
         return 2
 
     print(f"[{_PROG}] OK")

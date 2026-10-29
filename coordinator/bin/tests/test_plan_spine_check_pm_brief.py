@@ -26,7 +26,7 @@ def _plan(tmp_path: Path, rows: str, *, pm_brief: str | None = None) -> Path:
     path = tmp_path / "plan.md"
     brief_block = f"\n## PM brief\n\n{pm_brief}\n" if pm_brief is not None else ""
     path.write_text(
-        "---\ntitle: t\n---\n\n# A plan\n" + brief_block
+        "---\ntitle: t\nanchor_premises: []\n---\n\n# A plan\n" + brief_block
         + "\n## Tasks\n\n```yaml plan-tasks\n" + rows + "\n```\n",
         encoding="utf-8",
     )
@@ -34,7 +34,8 @@ def _plan(tmp_path: Path, rows: str, *, pm_brief: str | None = None) -> Path:
 
 
 _VALID_ROW = (
-    '- id: C1\n  title: "do the thing"\n  change_kind: doc-edit\n  surface: "docs/a.md"'
+    '- id: C1\n  title: "do the thing"\n  change_kind: doc-edit\n  surface: "docs/a.md"\n  body: "state the work"\n'
+    '  writes: ["docs/a.md"]'
 )
 _PM_BRIEF_TEXT = "make --utterance mandatory and injected, since the brief never reaches an executor"
 

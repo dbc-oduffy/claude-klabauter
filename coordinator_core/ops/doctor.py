@@ -1139,7 +1139,53 @@ def _check_install_drift() -> Layer:
     return Layer(name, "broken" if findings else "ok", findings)
 
 
-def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
+def spotlight_advice(
+    repos_root: Path, *, platform: Optional[str] = None, run=None
+) -> Optional[str]:
+    """Advice text when macOS Spotlight still indexes `repos_root`, else None.
+
+    One `mdfind` probe on darwin only; any other host spawns nothing. A hit for CLAUDE.md under the
+    root means it is indexed. Advise-only: the exclusion list is root-owned behind SIP.
+    """
+    if (sys.platform if platform is None else platform) != "darwin":
+        return None
+    import subprocess
+
+    runner = subprocess.run if run is None else run
+    try:
+        proc = runner(
+            ["mdfind", "-onlyin", str(repos_root), "-name", "CLAUDE.md"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return None
+    return (
+        f"Spotlight still indexes {repos_root}; agent sessions churn thousands of files there and "
+        "mds_stores/mdworker reindex them all. Exclude it: System Settings > Spotlight > "
+        "Search Privacy > add that folder."
+    )
+
+
+def _check_spotlight_exclusion() -> Layer:
+    name = "Spotlight excludes the repos root (macOS)"
+    if sys.platform != "darwin":
+        return Layer(name, "ok", [])  # root resolution can spawn `machine-local`; skip off darwin
+    from coordinator_core.engine_root import coordinator_engine_root
+
+    try:
+        repos_root = Path(coordinator_engine_root()).parent
+    except RuntimeError:
+        return Layer(name, "ok", [])
+    advice = spotlight_advice(repos_root)
+    return Layer(name, "ok", [Finding("info", advice)] if advice else [])
+
+
+def run_doctor(
+    fix: bool = False, kept_blobs_root: Optional[Path] = None
+) -> tuple[DoctorReport, List[str]]:
+    """`kept_blobs_root`: repo whose state/warp kept blobs are swept (git spawns); None sweeps nothing."""
     report = DoctorReport()
     report.layers.append(_check_sibling_resolution())
     report.layers.append(_check_hook_registration())
@@ -1149,12 +1195,15 @@ def run_doctor(fix: bool = False) -> tuple[DoctorReport, List[str]]:
     report.layers.append(_check_shim_freshness())
     report.layers.append(_check_hook_interpreter_resolvability())
     report.layers.append(_check_install_drift())
+    report.layers.append(_check_spotlight_exclusion())
     from coordinator_core.ops.doctor_boot_banners import boot_banner_layers
 
     report.layers.extend(boot_banner_layers(_config_dir()))
-    from coordinator_core.ops.doctor_kept_blobs import kept_blobs_layer
+    from coordinator_core.ops.doctor_kept_blobs import LAYER_NAME, kept_blobs_layer
 
-    report.layers.append(kept_blobs_layer(Path(__file__).resolve().parents[2]))
+    report.layers.append(
+        kept_blobs_layer(Path(kept_blobs_root)) if kept_blobs_root else Layer(LAYER_NAME, "ok", [])
+    )
 
     fix_report: List[str] = []
     if fix:
@@ -1206,7 +1255,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     fix = "--fix" in argv
 
-    report, fix_report = run_doctor(fix=fix)
+    root = None
+    if "--kept-blobs-root" in argv:
+        i = argv.index("--kept-blobs-root")
+        root = Path(argv[i + 1]) if i + 1 < len(argv) else None
+    report, fix_report = run_doctor(fix=fix, kept_blobs_root=root)
     print(render_report(report, fix_report))
 
     return 1 if not report.all_ok else 0

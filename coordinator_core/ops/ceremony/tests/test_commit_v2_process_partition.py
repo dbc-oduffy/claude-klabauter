@@ -133,6 +133,7 @@ def test_process_commit_failure_keeps_product_commit_and_names_unlanded(tmp_path
     assert result["committed"] is False
     assert "synthetic process refusal" in result["error"]
     assert result["unlanded_paths"] == ["state/notes/n.md"]
+    assert f"{len(result['unlanded_paths'])} process path(s) did not land" in result["error"]
     assert _head(repo) == result["landed_sha"]
     assert _files(repo, result["landed_sha"]) == ["src/app.py"]
 

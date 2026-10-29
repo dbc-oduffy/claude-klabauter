@@ -148,7 +148,8 @@ def test_backslash_params_reach_terminal_commit_through_the_commit_stage(commit_
     assert reached == params
 
 
-def test_altered_run_token_is_denied_and_writes_no_file(commit_stage):
+def test_altered_run_token_writes_no_file_and_only_logs(commit_stage):
+    """A refused params leg never denies (only irreversible classes may); it writes no params file."""
     from coordinator_core.bash_guards import dispatch
 
     root, token = commit_stage
@@ -158,7 +159,8 @@ def test_altered_run_token_is_denied_and_writes_no_file(commit_stage):
 
     out = dispatch.evaluate_payload_json(_bash_payload(_typed_command(prompt), root, transcript))
     assert isinstance(out, dict), out
-    assert out["hookSpecificOutput"]["permissionDecision"] == "deny", out
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow", out
+    assert out.get("guardLevel") == "log", out
     assert not params_path(root, _RUN_ID).exists()
 
 

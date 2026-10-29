@@ -55,6 +55,7 @@ def test_usage_json_written_and_total_returned(tmp_path, monkeypatch):
     body = json.loads((root / RECORD_DIR_ROOT / RUN / "usage.json").read_text(encoding="utf-8"))
     assert body["as_of"] == "terminal-commit"
     assert body["unsettled"] == ["c1"]
+    assert "by_role" in body
     assert {a["agent_id"] for a in body["agents"]} == {"w1", "c1"}
     total = body["run_total"]
     assert total["total_tokens"] == 1500 and total["usd"] > 0

@@ -129,7 +129,7 @@ def claude_home() -> Path:
 
 
 def claude_temp_root() -> Path:
-    """`<tempdir>/claude` -- Windows Temp, `$TMPDIR` on mac."""
+    """The `claude` dir under tempfile.gettempdir(): Windows Temp, TMPDIR on mac."""
     return Path(tempfile.gettempdir()) / "claude"
 
 

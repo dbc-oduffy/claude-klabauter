@@ -620,6 +620,7 @@ def apply(
     only_mode: bool = False,
     catch_up: bool = False,
     conclude: bool = False,
+    no_push: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """`apply()` — recomputes the brief in-process (never trusts a
     caller-supplied decision object) and executes every execution-ready
@@ -658,6 +659,7 @@ def apply(
             decisions=decisions,
             for_date=for_date,
             only_mode=only_mode,
+            **({"no_push": True} if no_push else {}),
             **_period_kwargs(catch_up, conclude),
         )
         if brief_exit_code != 0:
@@ -756,6 +758,7 @@ def _run(argv: list[str]) -> tuple[int, dict[str, Any]]:
     only_mode = False
     catch_up = False
     conclude = False
+    no_push = False
     conflict = detect_conflicting_payload_channels(argv)
     if conflict is not None:
         return _refuse(conflict)
@@ -782,6 +785,9 @@ def _run(argv: list[str]) -> tuple[int, dict[str, Any]]:
         elif tok == CATCH_UP_FLAG:
             catch_up = True
             i += 1
+        elif tok == "--no-push":
+            no_push = True
+            i += 1
         elif tok == CONCLUDE_FLAG:
             conclude = True
             i += 1
@@ -798,6 +804,7 @@ def _run(argv: list[str]) -> tuple[int, dict[str, Any]]:
         decisions=decisions,
         for_date=for_date,
         only_mode=only_mode,
+        **({"no_push": True} if no_push else {}),
         **_period_kwargs(catch_up, conclude),
     )
     print(json.dumps(report, indent=2, sort_keys=True))

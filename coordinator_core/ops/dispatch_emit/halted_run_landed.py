@@ -12,13 +12,17 @@ worktree; a marker-less run writes nothing and replies the not-applicable close)
 Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
-``halted`` (or already ``landed`` at the same sha) and ``sha`` must be HEAD or an ancestor of HEAD,
+``halted`` (or already ``landed`` at the same sha; or ``running`` with no live run token, a launcher
+gone before its close) and ``sha`` must be HEAD or an ancestor of HEAD,
 merge-reached included. A solo run's marker may also read ``resumed`` when no live run's
 ledger names it as ``resumed_from``. The write and the release of ``after`` successors are
 ``run_close.sibling_release``'s; this op never writes the sibling status file itself. A solo run has
 no sibling status: its halt marker (``halted_run``) is read and rewritten to ``landed`` instead, and
 the reply names that tracked path as ``recorded``; a sibling run's still-``halted`` marker is flipped
-the same way. The op never commits: commit existence is an in-process object read, and ancestry and
+the same way. The records the flip writes (``halted.json``, ``run-stage.json``, under ``state/``) are
+committed in the same op as one scoped commit naming the run; the reply carries ``records_commit`` (its
+sha), or ``records_commit_error`` when the commit refused (the landed write stands). No write, no
+commit. Commit existence is an in-process object read, and ancestry and
 abbreviation resolution are at most two batched git spawns; the close legs (``CLOSE_LEGS``) are
 queued in a close-job record paid by one detached launch (``_launch``), never inline. The record is written only when the marker names a ``plan`` and no
 close-job record exists yet.
@@ -176,8 +180,39 @@ def _queue_close(root: Path, run_id: str, sha: str, marker: Optional[dict], sess
     return {"close": close, "blocking_rows": withheld}
 
 
+def _commit_records(root: Path, run_id: str, record_dir: Path, sha: str) -> dict:
+    """Commit the landed flip's record files (halted.json, run-stage.json) in one scoped commit naming *run_id*.
+
+    Returns ``{"records_commit": sha}``; ``{}`` when nothing changed or the record dir is untracked
+    scratch; ``{"records_commit_error": ...}`` on a refusal, which never fails the landed write.
+    """
+    from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
+
+    try:
+        rels = [
+            (record_dir / name).relative_to(root).as_posix()
+            for name in (halted_run.HALTED_FILE, RUN_STAGE_FILE)
+            if (record_dir / name).is_file()
+        ]
+    except ValueError:
+        return {}
+    if not rels or not rels[0].startswith("state/"):
+        return {}
+    try:
+        outcome = commit_paths(
+            root, rels, f"dispatch.record_halted_run_landed: {run_id} landed at {sha[:12]}",
+        )
+    except NothingToCommit:
+        return {}
+    except (CommitRefused, OSError) as exc:
+        return {"records_commit_error": f"{type(exc).__name__}: {exc}"}
+    return {"records_commit": outcome.sha}
+
+
 def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) -> dict:
-    """Flip a still-``halted`` or ``resumed`` marker to landed, then queue the close unless a job record exists."""
+    """Flip a still-``halted`` or ``resumed`` marker to landed and commit its records, then queue the close unless a job record exists."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, run_close
 
     out: dict = {}
@@ -189,6 +224,7 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) 
     if marker is not None and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
         if halted_run.mark_landed(record_dir, sha):
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
+            out.update(_commit_records(root, run_id, record_dir, sha))
     if marker is None:
         return {**out, "close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
     if run_close.resolve_close_job_stem(root, run_id) is not None:
@@ -231,6 +267,23 @@ def _terminal(cand: Path) -> bool:
     except (OSError, ValueError):
         return False
     return isinstance(stage, dict) and stage.get("stage") in ("halted", "landed")
+
+
+def _launcher_gone(root: Path, run_id: str) -> bool:
+    """True when no launcher can still be driving *run_id*: its token is not live, or its run dir records a terminal stage.
+
+    Trap: a halted or abandoned run keeps an unclaimed in-TTL token (nothing redeems it), so the
+    token alone reads such a run as live; the run dir's own terminal record settles it.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, run_token
+
+    if not run_token.is_live(root, run_id):
+        return True
+    try:
+        record_dir = ask_contract.record_dir(root, run_id)
+    except ValueError:
+        return False
+    return _terminal(record_dir) and not halted_run._is_shell(record_dir)
 
 
 _REPO_QUALIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]+:(?=[^/\\])")
@@ -809,6 +862,7 @@ def _record_solo(
     recorded = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
     return {
         "ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, "recorded": recorded,
+        **_commit_records(root, run_id, record_dir, sha),
         **_queue_close(root, run_id, sha, marker, session_id),
     }
 
@@ -855,7 +909,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 **_close_landed(root, run_id, landed, session_id),
             }
         return _refuse(f"{run_id} already landed at {prior.get('sha')}; nothing to record")
-    if status != contract.STATUS_HALTED and not (in_run and status == contract.STATUS_RUNNING):
+    admitted = status == contract.STATUS_HALTED or (
+        status == contract.STATUS_RUNNING and (in_run or _launcher_gone(Path(root), run_id))
+    )
+    if not admitted:
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
     sha, problem, echo = _verify(root, run_id, shas, met_by)

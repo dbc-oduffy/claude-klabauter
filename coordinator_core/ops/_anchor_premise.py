@@ -33,8 +33,12 @@ def _unchecked(label: str, reason: str) -> str:
     return f"anchor-premise-unchecked: {label} ({reason})"
 
 
-def parse_anchors(fm: dict, repo_root: Optional[Path]) -> tuple[list[dict], list[str]]:
-    """(well-formed anchors, defect findings) for the plan frontmatter ``fm``."""
+def parse_anchors(
+    fm: dict, repo_root: Optional[Path], spine_rows: Optional[list] = None
+) -> tuple[list[dict], list[str]]:
+    """(well-formed anchors, defect findings) for the plan frontmatter ``fm``. When the plan's
+    ``spine_rows`` are passed, an anchor naming no ref whose checked file a row writes is refused."""
+    writes = _spine_writes(spine_rows)
     if FIELD not in fm:
         return [], [
             "anchor-premises-undeclared (declare each load-bearing premise as "
@@ -86,6 +90,16 @@ def parse_anchors(fm: dict, repo_root: Optional[Path]) -> tuple[list[dict], list
         if refusal:
             findings.append(
                 _unchecked(label, f"{refusal}; allowed form: {census.ALLOWED_FORM}")
+            )
+            continue
+        written = _self_falsified(entry, writes, fm)
+        if written:
+            findings.append(
+                _unchecked(
+                    label,
+                    f"self-falsified: {written} is written by a plan row, so the plan's own run "
+                    "breaks this premise; name `baseline_ref <sha>` in the claim",
+                )
             )
             continue
         anchors.append({**entry, "id": label})
@@ -218,26 +232,23 @@ def _own_context(plan_text: str, repo_root: Path) -> Optional[tuple[str, dict]]:
     return (ref.strip(), own) if own else None
 
 
-def _reanchor(anchor: dict, plan_text: str, repo_root: Path) -> Optional[str]:
-    """The observed text when a working-tree-broken anchor holds at the plan's baseline_ref and
-    every file it checks was written by the plan's own run (post-conversion drift); else None.
-    One git read per checked file, only on the broke path."""
-    from coordinator_core.git.run import run_git
+def _checked_paths(anchor: dict) -> Optional[list[str]]:
+    """The files an anchor's check reads, or None when the in-process evaluator cannot parse it."""
     from coordinator_core.ops import _anchor_check
-    from coordinator_core.ops.dispatch_emit import halted_withheld_index as index
 
-    ctx = _own_context(plan_text, repo_root)
-    if ctx is None:
-        return None
-    ref, own = ctx
     command = str((anchor.get("check") or {}).get("command") or "")
     try:
-        paths = sorted({stage[2] for stage in _anchor_check._parse_stages(command)})
+        return sorted({stage[2] for stage in _anchor_check._parse_stages(command)})
     except _anchor_check._NotEvaluable:
         return None
-    if not paths or any(index._norm(p) not in own for p in paths):
-        return None
+
+
+def _evaluate_at_ref(anchor: dict, ref: str, paths: list[str], repo_root: Path):
+    """``anchor_lane.evaluate`` over the checked ``paths`` as they stand at ``ref`` (one git show
+    per file, into a tempdir); None when a path cannot be read at the ref."""
     import tempfile
+
+    from coordinator_core.git.run import run_git
 
     with tempfile.TemporaryDirectory(prefix="anchor-baseline-") as tmp:
         for rel in paths:
@@ -247,10 +258,93 @@ def _reanchor(anchor: dict, plan_text: str, repo_root: Path) -> Optional[str]:
             target = Path(tmp) / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(done.stdout_bytes)
-        result = anchor_lane.evaluate(anchor, Path(tmp))
-    if result.outcome != "held":
+        return anchor_lane.evaluate(anchor, Path(tmp))
+
+
+def _reanchor(anchor: dict, plan_text: str, repo_root: Path) -> Optional[str]:
+    """The observed text when a working-tree-broken anchor holds at the plan's baseline_ref and
+    every file it checks was written by the plan's own run (post-conversion drift); else None.
+    One git read per checked file, only on the broke path."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as index
+
+    ctx = _own_context(plan_text, repo_root)
+    if ctx is None:
+        return None
+    ref, own = ctx
+    paths = _checked_paths(anchor)
+    if not paths or any(index._norm(p) not in own for p in paths):
+        return None
+    result = _evaluate_at_ref(anchor, ref, paths, repo_root)
+    if result is None or result.outcome != "held":
         return None
     return f"{REANCHORED} {ref[:12]}: {result.observed or ''}".rstrip()
+
+
+_CLAIM_REF = re.compile(r"\bbaseline_ref\b[\s:=`'\"]*([0-9a-fA-F]{7,40})\b")
+_BARE_CLAIM_REF = re.compile(r"\bbaseline_ref\b")
+
+
+def _falsifier_ref(fm: dict) -> Optional[str]:
+    pec = fm.get("prime_exit_criterion")
+    falsifier = pec.get("falsifier") if isinstance(pec, dict) else None
+    ref = falsifier.get("baseline_ref") if isinstance(falsifier, dict) else None
+    return ref.strip() if _text(ref) else None
+
+
+def claimed_ref(claim: Any, fm: dict) -> Optional[str]:
+    """The ref an anchor claim describes: the sha after ``baseline_ref`` in the claim, else the
+    plan's falsifier ``baseline_ref`` when the claim says ``baseline_ref`` without one, else None."""
+    if not isinstance(claim, str):
+        return None
+    match = _CLAIM_REF.search(claim)
+    if match:
+        return match.group(1)
+    return _falsifier_ref(fm) if _BARE_CLAIM_REF.search(claim) else None
+
+
+def _plan_fm(plan_text: str) -> dict:
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter
+
+    try:
+        return plan_frontmatter(plan_text)
+    except Exception:
+        return {}
+
+
+def _evaluate(anchor: dict, fm: dict, repo_root: Path):
+    """The engine check for ``anchor``: at the ref its claim names when that ref is readable,
+    else at HEAD. An unreadable ref (typo, unfetched sha) falls back to HEAD silently."""
+    ref = claimed_ref(anchor.get("claim"), fm)
+    paths = _checked_paths(anchor) if ref else None
+    if ref and paths:
+        result = _evaluate_at_ref(anchor, ref, paths, repo_root)
+        if result is not None:
+            return result
+    return anchor_lane.evaluate(anchor, repo_root)
+
+
+def _spine_writes(spine_rows: Any) -> set[str]:
+    """Normalised paths any spine row declares in ``writes``."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as index
+
+    out: set[str] = set()
+    for row in spine_rows if isinstance(spine_rows, list) else []:
+        writes = row.get("writes") if isinstance(row, dict) else None
+        if isinstance(writes, list):
+            out.update(index._norm(w) for w in writes if isinstance(w, str))
+    return out
+
+
+def _self_falsified(anchor: dict, writes: set[str], fm: dict) -> Optional[str]:
+    """The checked path a spine row writes when ``anchor`` names no ref, else None."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as index
+
+    if not writes or claimed_ref(anchor.get("claim"), fm):
+        return None
+    for path in _checked_paths(anchor) or []:
+        if index._norm(path) in writes:
+            return path
+    return None
 
 
 def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dict]:
@@ -263,16 +357,17 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
     opening ``REANCHORED`` (source stays "engine-check": the reply schema enumerates sources)."""
     live = frozenset(line_hashes(plan_text))
     known = frozenset(a["id"] for a in anchors)
+    fm = _plan_fm(plan_text) if repo_root is not None else {}
     out: list[dict] = []
     for anchor in anchors:
         verdict, source = _verdict_for(anchor["id"], rows or [], carry_rows or [], live, known)
         observed = ""
         if verdict not in (None, "RESOLVES") and repo_root is not None:
-            result = anchor_lane.evaluate(anchor, repo_root)
+            result = _evaluate(anchor, fm, repo_root)
             if result.outcome == "held":
                 verdict, source, observed = "RESOLVES", "engine-check", result.observed or ""
         if verdict is None and repo_root is not None:
-            result = anchor_lane.evaluate(anchor, repo_root)
+            result = _evaluate(anchor, fm, repo_root)
             observed = result.observed or ""
             engine = _ENGINE_VERDICT.get(result.outcome)
             if engine is not None:

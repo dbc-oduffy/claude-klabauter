@@ -65,6 +65,7 @@ sizing_object`, untouched).
 from __future__ import annotations
 
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -81,6 +82,9 @@ from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
 _PLAN_FLAG_SPEC: tuple[Flag, ...] = (
     Flag("--title", "title", required=False),
 )
+
+
+_LEADING_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:-|$)")
 
 
 def _slug(text: str) -> str:
@@ -122,6 +126,7 @@ def _plan_scaffold_directive(sizing_object_path: Optional[Path]) -> dict[str, An
         else None
     )
     slug = _slug(intent) if intent else "untitled"
+    slug = _LEADING_DATE.sub("", slug) or "untitled"
     resolved: dict[str, Any] = {
         "title": intent,
         "out": f"docs/plans/{today}-{slug}.md",

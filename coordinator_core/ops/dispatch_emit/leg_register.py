@@ -34,6 +34,9 @@ class LegClass(str, Enum):
 
 REFUSED_CLASSES = frozenset({LegClass.OP_WRAPPER, LegClass.VERDICT_READER})
 
+EXPENSIVE_MODELS = frozenset({"opus"})
+EXPENSIVE_EFFORTS = frozenset({"high", "xhigh", "max"})
+
 
 @dataclass(frozen=True)
 class LegDecl:
@@ -45,10 +48,13 @@ class LegDecl:
     reason: str
     delivered_elsewhere: Optional[str] = None
     runtime_floor: Optional[str] = None
+    tier_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.reason.strip():
             raise ValueError(f"leg {self.workflow}/{self.label}: reason is required")
+        if self.tier_reason is not None and not self.tier_reason.strip():
+            raise ValueError(f"leg {self.workflow}/{self.label}: tier_reason, when present, must not be blank")
         if self.runtime_floor is not None and self.cls is not LegClass.OP_WRAPPER:
             raise ValueError(f"leg {self.workflow}/{self.label}: runtime_floor is admitted only on an op-wrapper")
 
@@ -60,6 +66,7 @@ class EmittedLeg:
     agent_type: Optional[str]
     model: Optional[str]
     prompt: Optional[str] = None
+    effort: Optional[str] = None
 
 
 RELAY_MARKERS: tuple[str, ...] = (
@@ -85,8 +92,8 @@ RUNTIME_FLOOR_RULING = Path(
 ).as_posix()
 
 
-def _earns(workflow: str, label: str, reason: str) -> LegDecl:
-    return LegDecl(workflow, label, LegClass.EARNS_ITS_COST, reason)
+def _earns(workflow: str, label: str, reason: str, tier_reason: Optional[str] = None) -> LegDecl:
+    return LegDecl(workflow, label, LegClass.EARNS_ITS_COST, reason, tier_reason=tier_reason)
 
 
 def _floor(workflow: str, label: str, reason: str) -> LegDecl:
@@ -94,25 +101,39 @@ def _floor(workflow: str, label: str, reason: str) -> LegDecl:
 
 
 _COMMIT_FLOOR = "the commit guard admits only coordinator:git-commit-agent, so it cannot fold into a preceding agent"
+_TIER_CONTESTED_RULING = "rules on a contested judgment (accept or reject) that carries the run"
+_TIER_AUTHORS_PLAN = "authors or rewrites a plan, whose quality the whole run inherits"
 _REVIEW_ROLES = (
-    ("review:coordinator:code-reviewer", "reads the diff and rules on it"),
-    ("review:coordinator:integrator", "applies the accepted review fixes"),
+    ("review:coordinator:code-reviewer", "reads the diff and rules on it", _TIER_CONTESTED_RULING),
+    (
+        "review:coordinator:integrator", "applies the accepted review fixes",
+        "applies fixes per a recorded ruling; opus is the roster's DoE-pinned type, a pin drop is owed in DoE, not here",
+    ),
 )
 
 
 def _review_legs(workflow: str, *, prep: Optional[LegDecl] = None) -> tuple[LegDecl, ...]:
     """The review roles every workflow composes; `prep` is absent where the wave runs `review.prep` itself."""
-    return (*((prep,) if prep else ()), *(_earns(workflow, label, reason) for label, reason in _REVIEW_ROLES))
+    return (
+        *((prep,) if prep else ()),
+        *(_earns(workflow, label, reason, tier) for label, reason, tier in _REVIEW_ROLES),
+    )
 
 
 REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "size", "scouts the ask and judges its size and route"),
     _earns("ask", "size-reword", "rewords a refused exit criterion; absorbed the gate op and sizing-assemble that ran after it"),
-    _earns("ask", "accept", "the APM rules on the exit criterion"),
-    _earns("ask", "xl-exit", "the APM picks the XL exit; absorbed the split fanout op"),
-    _earns("ask", "plan", "authors the plan"),
-    _earns("ask", "plan-review", "reviews the plan"),
-    _earns("ask", "plan-revise", "revises the plan against its review; spawned only when a pull's review found the plan unsaveable (PIVOT, ABORT, premise-failure REJECTED)"),
+    _earns("ask", "accept", "the APM rules on the exit criterion", _TIER_CONTESTED_RULING),
+    _earns("ask", "xl-exit", "the APM picks the XL exit; absorbed the split fanout op", _TIER_CONTESTED_RULING),
+    _earns("ask", "plan", "authors the plan", _TIER_AUTHORS_PLAN),
+    _earns("ask", "plan-review", "reviews the plan", _TIER_CONTESTED_RULING),
+    _earns(
+        "ask", "plan-revise",
+        "revises the plan against its review; spawned only when a pull's review found the plan unsaveable (PIVOT, ABORT, premise-failure REJECTED)",
+        _TIER_AUTHORS_PLAN,
+    ),
+    _floor("ask", "plan-prep-gate", "runs the plan prep gate op once and relays its verdict; no agent precedes it"),
+    _earns("ask", "plan-prep-repair", "edits the refused plan in place against the gate's findings", _TIER_AUTHORS_PLAN),
     _earns("ask", "plan-patch", "applies a pulled plan's mechanical readiness repairs in place when its review did not find it unsaveable; no re-plan, no second blitz"),
     _earns("ask", "work:", "executes one row"),
     _earns("ask", "verify:", "runs a row's or a wave's scoped tests and reports"),
@@ -125,7 +146,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "size-retry", "re-runs the scout when its first pass did not assemble the sizing"),
     _earns("ask", "apply-rulings", "applies the EM's J<n> rulings to a pulled plan in place; spawned only when the gate's pending_rulings is non-empty"),
     _earns("ask", "pull-split", "slices a pulled plan into smaller batons when its blocking findings exceed one baton"),
-    _earns("ask", "ledger-replan", "re-plans the rows a resumed ledger still owes"),
+    _earns("ask", "ledger-replan", "re-plans the rows a resumed ledger still owes", _TIER_AUTHORS_PLAN),
     _earns("ask", "ledger-remaining", "executes the rows a resumed ledger still owes"),
     _earns("ask", "ledger-fix:", "fixes one reopened chunk behind a not_met ledger row inside its footprint; the chunks run in parallel"),
     _earns("ask", "ledger-reverify", "re-judges only the reopened rows and re-runs only the reopened chunks' scoped tests"),
@@ -135,6 +156,8 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "remnant-complete", "completes the not_met remnant (unattributed or capped ledger rows, a not_met criterion, a delivery FAIL) inside its footprint; the judge stays read-only"),
     _earns("ask", "remnant-reverify", "re-runs the scoped tests and re-rules the ledger, criterion and delivery once after the remnant leg"),
     _earns("ask", "remnant-record", "records the remnant attempt under recovery.json's `remnant` key once the re-verify settled"),
+    _earns("ask", "ledger-late", "re-plans the rows a late-rows read found still owed", _TIER_AUTHORS_PLAN),
+    _earns("ask", "retest-invariant", "re-runs the invariant's scoped test command and reports its status"),
     _floor(
         "ask", "blitz-stage-read",
         "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "
@@ -145,6 +168,10 @@ REGISTER: tuple[LegDecl, ...] = (
         "stages the existing plan an XS sizing's plan edge names and returns the stage op's reply (a manifest "
         "handle), only when the gate's resume_plan is set; no judgment agent follows the gate before it",
     ),
+    _floor("ask", "already-delivered-close", "runs the halted-route close op for an already-delivered ask and returns its reply; no agent precedes it"),
+    _floor("ask", "sizing-probe", "runs `test -f` on the sizing file and returns present true or false"),
+    _floor("ask", "late-rows-read", "runs the late-rows op once and returns its array; the re-plan judgment is the ledger-late leg"),
+    _floor("ask", "chain-emit", "runs dispatch.emit for the M+ chain and returns its path and run_id"),
     _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),
@@ -168,7 +195,7 @@ REGISTER: tuple[LegDecl, ...] = (
     ),
     _earns("emit", "test:terminal", "runs the plan's scoped tests once, after every wave, and reports"),
     _earns("emit", "review:coordinator:test-runner", "freezes the diff, runs tests and reports"),
-    _earns("emit", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild"),
+    _earns("emit", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild", _TIER_CONTESTED_RULING),
     _earns("emit", "review:coordinator:exit-criterion-judge", "rules whether the plan's exit criterion is met"),
     _earns("emit", "review:general-purpose", "reviews the diff as a general reviewer"),
     _floor("emit", "commit:wave-", _COMMIT_FLOOR),
@@ -192,10 +219,10 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("reverify", "review:coordinator:test-runner", "re-runs the plan's scoped tests where no judge is rostered"),
     _earns("ask", "review:coordinator:test-runner", "re-runs the scoped tests over review-applied edits"),
     _earns("grind", "review:coordinator:test-runner", "re-runs the scoped tests over review-applied edits"),
-    _earns("reverify", "review:coordinator:criterion-judge", "rules the plan's criterion against the register"),
+    _earns("reverify", "review:coordinator:criterion-judge", "rules the plan's criterion against the register", _TIER_CONTESTED_RULING),
     *_review_legs("review", prep=_earns("review", "review:coordinator:review-prep", "multi-step review prep")),
-    _earns("review", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild"),
-    _earns("review", "review:coordinator:staff-eng", "reviews the diff as staff engineer"),
+    _earns("review", "review:coordinator:overengineering-reviewer", "reads the diff for overbuild", _TIER_CONTESTED_RULING),
+    _earns("review", "review:coordinator:staff-eng", "reviews the diff as staff engineer", _TIER_CONTESTED_RULING),
     _earns("review", "review:coordinator:test-runner", "freezes the diff, runs tests and reports"),
     _earns("review", "review:general-purpose", "reviews the diff as a general reviewer"),
 )
@@ -397,6 +424,7 @@ def emitted_legs(script: str) -> list[EmittedLeg]:
                 phase=_string_option(s_args, r_args, "phase"),
                 agent_type=_string_option(s_args, r_args, "agentType"),
                 model=_string_option(s_args, r_args, "model"),
+                effort=_string_option(s_args, r_args, "effort"),
                 prompt=_literal_prefix(r_args[1:]),
             )
         )

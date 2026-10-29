@@ -249,7 +249,7 @@ def front_door(flags: Mapping[str, Any] | None = None) -> tuple[StepSpec, ...]:
     scope = _scope_summary(flags)
     if scope:
         brief_args.append(f"--scope-summary={scope}")
-    for flag in (CATCH_UP_FLAG, CONCLUDE_FLAG):
+    for flag in (CATCH_UP_FLAG, CONCLUDE_FLAG, "--no-push"):
         if _flag(flags, flag.removeprefix("--")):
             brief_args.append(flag)
     return (
@@ -744,6 +744,6 @@ SPEC = CeremonySpec(
     costs=COSTS,
     chain=None,
     launch_flags=frozenset(
-        {"--for-date", "--only", "--scope-summary", "--summary", CATCH_UP_FLAG, CONCLUDE_FLAG}
+        {"--for-date", "--only", "--scope-summary", "--summary", CATCH_UP_FLAG, CONCLUDE_FLAG, "--no-push"}
     ),
 )

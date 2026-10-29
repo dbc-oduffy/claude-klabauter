@@ -100,6 +100,10 @@ def test_second_call_same_sha_is_idempotent(repo):
 def test_non_halted_status_refuses(repo, status):
     root, first, _ = repo
     _seed(root, {"A": {"status": status}})
+    if status == "running":
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        run_token.mint(root, "A", "scratch/x.py")
     out = _call(root, run_id="A", sha=first)
     assert not out["ok"] and "not halted" in out["error"]
     assert _status(root, "A")["status"] == status
@@ -133,6 +137,7 @@ def test_solo_halted_run_records_landed_marker(repo):
     root, first, _ = repo
     marker = _solo(root)
     out = _call(root, run_id=SOLO, sha=first[:10])
+    assert len(out.pop("records_commit")) == 40
     assert out == {
         "ok": True, "run_id": SOLO, "sha": first, "written": True, "shas": [first], "covers": {},
         "recorded": f"state/warp/{SOLO}/halted.json",

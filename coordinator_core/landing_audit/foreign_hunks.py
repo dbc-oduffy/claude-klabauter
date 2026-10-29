@@ -20,10 +20,10 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.run_ownership import _covers
 
@@ -70,13 +70,14 @@ def _parse_diff(lines: list[str]) -> dict[str, list[tuple[int, int]]]:
 
 def landings(repo: Path, since: str) -> list[Landing]:
     """Engine landings since `since`, newest first, from one `git log -p -U0` spawn."""
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    out = subprocess.run(
-        ["git", "-c", "core.quotepath=off", "log", f"--since={since}", "-p", "-U0", "--no-renames",
+    res = run_git(
+        ["-c", "core.quotepath=off", "log", f"--since={since}", "-p", "-U0", "--no-renames",
          f"--format={_SENT}%H%n%s%n%b{_END}"],
-        cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=True, creationflags=flags,
-    ).stdout
+        cwd=str(repo),
+    )
+    if not res.ok:
+        raise RuntimeError(f"git log failed in {repo}: rc={res.returncode} {res.stderr.strip()}")
+    out = res.stdout
     result: list[Landing] = []
     for chunk in out.split(_SENT)[1:]:
         head, _, diff = chunk.partition(_END)

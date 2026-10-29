@@ -2,7 +2,7 @@
 
 import json
 
-from coordinator_core.usage.agent_usage import scan_run
+from coordinator_core.usage.agent_usage import role_of, scan_run
 
 OPUS = "claude-opus-5-5-20260101"
 HAIKU = "claude-haiku-5-5-20260101"
@@ -54,6 +54,20 @@ def test_opus_44k_costs_more_than_three_haiku_185k(tmp_path):
     assert res["by_model"][OPUS]["agents"] == 1 and res["by_model"][HAIKU]["agents"] == 3
     assert by_id["o1"]["input_tokens"] == 10_000
     assert by_id["o1"]["cache_read_input_tokens"] == 30_000
+
+
+def test_by_role_groups_family_labels_and_empty_is_unknown(tmp_path):
+    for aid in ("a", "b", "c", "d"):
+        _agent(tmp_path, aid, [("m1", "r1", OPUS, _u(1_000, 100, 0, 0))])
+    _journal(tmp_path, [("a", "work:C1"), ("b", "work:C2"), ("c", "verify:C1"), ("d", "opus")])
+
+    res = scan_run(str(tmp_path))
+    roles = res["by_role"]
+    assert set(roles) == {"work", "verify", "opus"}
+    assert role_of("") == "unknown" and role_of(None) == "unknown" and role_of(":x") == "unknown"
+    assert roles["work"]["agents"] == 2 and roles["verify"]["agents"] == 1
+    assert roles["work"]["total_tokens"] == 2 * 1_100
+    assert sum(r["total_tokens"] for r in roles.values()) == res["run_total"]["total_tokens"]
 
 
 def test_split_streamed_message_counts_once_last_row_wins(tmp_path):

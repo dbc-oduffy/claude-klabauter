@@ -171,8 +171,16 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
     return row
 
 
+def role_of(label: Any) -> str:
+    """Leg role of an agent label: the prefix before the first ':' (work:, verify:, review:), else the label; empty is UNKNOWN."""
+    if not isinstance(label, str) or not label:
+        return UNKNOWN
+    head = label.split(":", 1)[0]
+    return head or UNKNOWN
+
+
 def scan_run(run_dir: str) -> dict[str, Any]:
-    """{agents, by_model, run_total} for the `started` agents of run_dir/journal.jsonl.
+    """{agents, by_model, by_role, run_total} for the `started` agents of run_dir/journal.jsonl.
 
     usd sums priced messages only; unpriced tokens are counted in tokens and in
     unpriced_tokens, never priced as 0.
@@ -180,12 +188,16 @@ def scan_run(run_dir: str) -> dict[str, Any]:
     agents = [_agent_row(run_dir, aid, label)
               for aid, label in started_agents(os.path.join(run_dir, "journal.jsonl"))]
     by_model: dict[str, dict[str, Any]] = {}
+    by_role: dict[str, dict[str, Any]] = {}
     total: dict[str, Any] = {**_zero(), "unpriced_tokens": 0}
     for a in agents:
         tokens = {f: a[f] for f in TOKEN_FIELDS}
         bucket = by_model.setdefault(a["model"] or UNKNOWN, {**_zero(), "agents": 0})
         bucket["agents"] += 1
         _add(bucket, tokens, a["usd"])
+        rbucket = by_role.setdefault(role_of(a["label"]), {**_zero(), "agents": 0})
+        rbucket["agents"] += 1
+        _add(rbucket, tokens, a["usd"])
         _add(total, tokens, a["usd"])
         total["unpriced_tokens"] += a["unpriced_tokens"]
-    return {"agents": agents, "by_model": by_model, "run_total": total}
+    return {"agents": agents, "by_model": by_model, "by_role": by_role, "run_total": total}

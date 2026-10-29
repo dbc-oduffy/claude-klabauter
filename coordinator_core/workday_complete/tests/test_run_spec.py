@@ -333,6 +333,7 @@ def test_spec_declares_the_workday_start_template_and_a_closed_flag_set():
         "--summary",
         "--catch-up",
         "--conclude",
+        "--no-push",
     }
     assert spec.template == "workflows/workday-start.mjs"
     assert spec.spec_points({}, {}, []) == []

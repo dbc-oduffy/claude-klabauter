@@ -77,6 +77,8 @@ def _read_criterion_status(status: object) -> object:
     """Reader view of a recorded criterion status: a legacy `indeterminate` reads as `not_met`, never a pass."""
     return "not_met" if status == _LEGACY_INDETERMINATE else status
 _TESTS_PHASE = "Tests re-run"
+#: Effort of the tests leg when a degraded host runs it as general-purpose (the roster model is dropped there).
+_DEGRADED_TESTS_EFFORT = "low"
 _TESTS_STATUSES = ("pass", "fail", "error")
 _VERIFY_PHASE = "Verify"
 
@@ -603,7 +605,11 @@ def compose_reverify_script(
                 _TESTS_PHASE,
                 schema=True,
                 as_arrow=False,
-                agent_opts=_agent_opts_for(review.prep),
+                agent_opts=(
+                    _agent_opts_for(review.prep)
+                    if tests_type == review.prep.agent_type
+                    else {tests_type: {"effort": review.prep.effort or _DEGRADED_TESTS_EFFORT}}
+                ),
                 schema_literal=stage_schema_literal("test_result"),
             ),
             plan_path,

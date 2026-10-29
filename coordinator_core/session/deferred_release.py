@@ -13,8 +13,9 @@ import hashlib
 import json
 import logging
 import os
-import subprocess
 from typing import Iterable, List, Optional
+
+from coordinator_core.git.run import run_git
 
 _LOG = logging.getLogger(__name__)
 
@@ -72,14 +73,10 @@ def _matching_paths(cwd: str, sha: str, paths: List[str]) -> Optional[List[str]]
     for p in safe:
         lines.append(f"{sha}:{p}")
         lines.append(f"HEAD:{p}")
-    proc = subprocess.run(
-        ["git", "cat-file", "--batch-check"],
+    proc = run_git(
+        ["cat-file", "--batch-check"],
         cwd=cwd,
-        input="\n".join(lines) + "\n",
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        input=("\n".join(lines) + "\n").encode("utf-8"),
     )
     out = proc.stdout.splitlines()
     if proc.returncode != 0 or len(out) != len(lines):

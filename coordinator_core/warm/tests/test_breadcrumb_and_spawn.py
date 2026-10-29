@@ -335,11 +335,12 @@ def test_ask_server_to_stop_false_on_missing_pipe(monkeypatch: pytest.MonkeyPatc
     assert stop_mod._ask_server_to_stop(r"\\.\pipe\fake") is False
 
 
-def test_ask_server_to_stop_true_when_write_succeeds() -> None:
+def test_ask_server_to_stop_acknowledged_only_by_a_reply_not_a_dropped_connection() -> None:
     class _FakePipe:
-        def __init__(self) -> None:
+        def __init__(self, reply: bytes = b"") -> None:
             self.written = []
             self.closed = False
+            self.reply = reply
 
         def write(self, data: bytes) -> None:
             self.written.append(data)
@@ -348,21 +349,26 @@ def test_ask_server_to_stop_true_when_write_succeeds() -> None:
             pass
 
         def readline(self):
-            return b""  # dropped connection -- expected shape of an exiting server
+            return self.reply
 
         def close(self) -> None:
             self.closed = True
 
-    fake = _FakePipe()
     import pytest as _pytest
 
     mp = _pytest.MonkeyPatch()
     try:
-        mp.setattr(stop_mod, "_open_pipe", lambda pipe: fake)
+        answered = _FakePipe(b'{"jsonrpc": "2.0", "id": "warm-engine-stop", "result": {}}\n')
+        mp.setattr(stop_mod, "_open_pipe", lambda pipe: answered)
         assert stop_mod._ask_server_to_stop(r"\\.\pipe\fake") is True
-        assert fake.closed is True
-        sent = json.loads(fake.written[0].decode("utf-8"))
+        assert answered.closed is True
+        sent = json.loads(answered.written[0].decode("utf-8"))
         assert sent["_engine_token"] == stop_mod._STOP_REQUEST_TOKEN
+
+        dropped = _FakePipe(b"")  # EOF: no acknowledgement, caller signals directly
+        mp.setattr(stop_mod, "_open_pipe", lambda pipe: dropped)
+        assert stop_mod._ask_server_to_stop(r"\\.\pipe\fake") is False
+        assert dropped.closed is True
     finally:
         mp.undo()
 

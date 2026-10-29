@@ -812,8 +812,8 @@ def test_run_doctor_appends_the_boot_banner_layers_after_the_eight_existing(monk
     sentinel = [doctor.Layer("boot-a", "ok", []), doctor.Layer("boot-b", "ok", [])]
     monkeypatch.setattr(banners, "boot_banner_layers", lambda config_dir: sentinel)
     report, _ = doctor.run_doctor()
-    assert len(report.layers) == 10
-    assert report.layers[-2:] == sentinel
+    assert report.layers[-3:-1] == sentinel
+    assert report.layers[-1].name == "Kept blobs are in the object store"
 
 
 def test_armed_kill_switch_stays_ok_and_reports_the_boot_banners_full_detail(tmp_path: Path, monkeypatch):

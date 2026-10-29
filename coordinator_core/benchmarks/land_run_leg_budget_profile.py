@@ -51,6 +51,7 @@ if str(_REPO) not in sys.path:
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 from coordinator_core.benchmarks.land_run_slow_disk_profile import (  # noqa: E402
     DEFAULT_CHAIN,
     DEFAULT_TRACKED,
@@ -372,8 +373,10 @@ def real_record_params(source_root: Path, run_id: str) -> dict:
 
 
 def seed_real_record(source_root: Path, clone: Path, run_id: str) -> None:
-    """Copy the run's `state/warp` and `scratch/warp` record from `source_root` into `clone`."""
-    for rel in (f"state/warp/{run_id}", f"scratch/warp/{run_id}"):
+    """Copy the run's `state/warp` and `scratch/warp` record, plus the halt-withheld index and its built sentinel."""
+    from coordinator_core.ops.dispatch_emit.halted_withheld_index import INDEX_DIR
+
+    for rel in (f"state/warp/{run_id}", f"scratch/warp/{run_id}", INDEX_DIR):
         if (source_root / rel).is_dir():
             shutil.copytree(source_root / rel, clone / rel, dirs_exist_ok=True)
     for name in (f"{run_id}.workflow.mjs", f"{run_id}.workflow.mjs.emitted.json"):
@@ -395,8 +398,8 @@ def run_real_record(run_id: str, source_root: Path, attribute: bool) -> list:
     with ExitStack() as stack:
         clone = stack.enter_context(fresh_git_clone(source_root, prefix="lrrr", label="land_run real-record"))
         for key, value in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
-            subprocess.run(["git", "config", key, value], cwd=str(clone), check=True, capture_output=True,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if not run_git(["config", key, value], cwd=str(clone)).ok:
+                raise RuntimeError(f"git config {key} failed in {clone}")
         seed_real_record(source_root, clone, run_id)
         session_core.init(SELF, cwd=str(clone))
 

@@ -206,6 +206,35 @@ class TestPlanScaffoldParity:
         assert isinstance(directive["already_satisfied"], bool)
 
 
+class TestLeadingDateSlug:
+    def _out(self, tmp_path, monkeypatch, intent):
+        content_root = _make_residue_dir(tmp_path)
+        _patch_content_root(monkeypatch, content_root)
+        monkeypatch.setattr(residue_mod, "show_toplevel", lambda: str(tmp_path))
+        sizing_path = _write_sizing_object(tmp_path, intent=intent)
+        result = plan_assemble.brief(sizing_object_path=sizing_path)
+        directive = _directive(result["directives"], "d-scaffold-plan")
+        return _parser.parse_args(directive["args"]).out
+
+    def test_leading_date_in_intent_yields_single_prefix(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import date
+
+        today = date.today().isoformat()
+        out = self._out(tmp_path, monkeypatch, "2026-10-27 My Plan")
+        assert out == f"docs/plans/{today}-my-plan.md"
+
+    def test_non_date_intent_keeps_digits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import date
+
+        today = date.today().isoformat()
+        out = self._out(tmp_path, monkeypatch, "2026 roadmap")
+        assert out == f"docs/plans/{today}-2026-roadmap.md"
+
+
 class TestSpecDispatchRouteScaffoldsNothing:
     def test_spec_dispatch_route_emits_no_plan_directive(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

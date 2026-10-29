@@ -182,11 +182,11 @@ def test_full_window_60_paths_under_500ms_process_time(fx):
 def test_21_paths_1000_commits_cost_is_two_spawns_and_no_object_reads(fx, monkeypatch):
     """The cost pin: a count, not a clock. Two git spawns and zero object reads."""
     argvs = []
-    real_run = rollback_check.subprocess.run
+    real_run = rollback_check.run_git
 
-    def run_spy(argv, *a, **kw):
-        argvs.append(list(argv))
-        return real_run(argv, *a, **kw)
+    def run_spy(args, *a, **kw):
+        argvs.append(list(args))
+        return real_run(args, *a, **kw)
 
     reads = []
     real_read = rollback_check.read_object
@@ -195,7 +195,7 @@ def test_21_paths_1000_commits_cost_is_two_spawns_and_no_object_reads(fx, monkey
         reads.append(a)
         return real_read(*a, **kw)
 
-    monkeypatch.setattr(rollback_check.subprocess, "run", run_spy)
+    monkeypatch.setattr(rollback_check, "run_git", run_spy)
     monkeypatch.setattr(rollback_check, "read_object", read_spy)
     candidates = {p: hashlib.sha1(p.encode()).hexdigest() for p in fx.paths[:21]}
     assert len(candidates) == 21

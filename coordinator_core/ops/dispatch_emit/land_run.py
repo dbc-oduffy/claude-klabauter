@@ -3891,7 +3891,13 @@ def _stamp_usage(root: Path, run_id: str) -> None:
     target = root / RECORD_DIR_ROOT / run_id / _USAGE_FILE
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        replace_text(target, json.dumps({"as_of": "terminal-commit", "unsettled": []}, indent=2, sort_keys=True) + "\n")
+        try:
+            body = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            body = None
+        body = dict(body) if isinstance(body, dict) else {"unsettled": []}
+        body["as_of"] = "terminal-commit"
+        replace_text(target, json.dumps(body, indent=2, sort_keys=True) + "\n")
     except OSError:
         return
 

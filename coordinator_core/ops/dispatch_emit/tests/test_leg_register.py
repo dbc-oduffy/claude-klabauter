@@ -82,3 +82,14 @@ def test_reason_required_and_refused_classes():
         lr.LegDecl("wf", "s", lr.LegClass.DUPLICATE, "  ")
     assert lr.REFUSED_CLASSES == {lr.LegClass.OP_WRAPPER, lr.LegClass.VERDICT_READER}
     assert len(lr.LegClass) == 5
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t\n"])
+def test_blank_tier_reason_is_refused(blank):
+    with pytest.raises(ValueError, match="tier_reason"):
+        lr.LegDecl("ask", "x", lr.LegClass.EARNS_ITS_COST, "why", tier_reason=blank)
+
+
+def test_absent_or_present_tier_reason_is_accepted():
+    lr.LegDecl("ask", "x", lr.LegClass.EARNS_ITS_COST, "why")
+    lr.LegDecl("ask", "x", lr.LegClass.EARNS_ITS_COST, "why", tier_reason="rules on a judgment")

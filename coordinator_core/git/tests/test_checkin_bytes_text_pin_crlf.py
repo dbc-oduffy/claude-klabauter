@@ -14,7 +14,7 @@ from coordinator_core.git.commit import FilterUnsupported, _checkin_bytes
 
 pytestmark = pytest.mark.spawns_process
 
-_NO_WINDOW =getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _CORPUS = {
     "crlf": b"a\r\nb\r\nc\r\n",
@@ -126,7 +126,7 @@ def test_unproven_shapes_still_refuse(tmp_path, attrs, rel):
 
 def test_unreadable_index_blob_refuses(tmp_path):
     root = _repo(tmp_path, "* text=auto eol=lf\n")
-    sha =_git(root, "hash-object", "-w", "--no-filters", "--stdin", stdin=b"x\r\n").decode().strip()
+    sha = _git(root, "hash-object", "-w", "--no-filters", "--stdin", stdin=b"x\r\n").decode().strip()
     _git(root, "update-index", "--add", "--cacheinfo", f"100644,{sha},f.txt")
     obj = root / ".git" / "objects" / sha[:2] / sha[2:]
     obj.chmod(0o666)
@@ -139,5 +139,4 @@ def test_resolve_text_pin_tracks_text_and_eol_separately(tmp_path):
     root = _repo(tmp_path, "* text=auto\n*.x eol=lf\n")
     assert checkin_attrs.resolve_text_pin(root, "f.x") == checkin_attrs.TextPin("auto", "lf")
     assert checkin_attrs.resolve_text_pin(root, "f.y") == checkin_attrs.TextPin("auto", None)
-    assert checkin_attrs.resolve_text_pin(root, "f.x") is not None
     assert checkin_attrs.checkin_disposition(root, "f.x") == checkin_attrs.TEXT

@@ -52,13 +52,24 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
         ("grind", "review-fix-commit"),
         ("grind", "verify-op"),
         ("grind", "ledger-sweep:drain"),
+        ("ask", "already-delivered-close"),
+        ("ask", "sizing-probe"),
+        ("ask", "late-rows-read"),
+        ("ask", "chain-emit"),
+        ("ask", "plan-prep-gate"),
     }
 )
-_RUNTIME_FLOOR_MAX = 11
+_RUNTIME_FLOOR_MAX = 16
 
 #: Judgment legs that sit on the mechanical haiku type; every other such leg is refused.
 _JUDGMENT_ON_MECHANICAL_TYPE: frozenset[Key] = frozenset({("grind", "triage")})
 _MECHANICAL_TYPE, _MECHANICAL_MODEL = "general-purpose", "haiku"
+
+
+def _declared(workflow: str, label: str) -> lr.LegDecl:
+    decl = lr.lookup(workflow, label)
+    assert decl is not None, f"undeclared leg ({workflow}, {label}): add a LegDecl"
+    return decl
 
 
 def _key(workflow: str, label: str) -> Key:
@@ -371,7 +382,7 @@ def test_the_ask_tail_composes_one_verify_leg_and_none_of_the_legs_it_absorbed(t
             assert labels.count("verify") == 1
     retired = {("ask", label) for label in _RETIRED_ASK_LEGS} | {("review-mechanical-prep", "review:coordinator:review-prep")}
     assert not retired & {(d.workflow, d.label) for d in lr.REGISTER}
-    assert lr.lookup("ask", "verify").cls is lr.LegClass.EARNS_ITS_COST
+    assert _declared("ask", "verify").cls is lr.LegClass.EARNS_ITS_COST
 
 
 def test_phase_titles_show_concurrency_truthfully(tmp_path):
@@ -400,8 +411,7 @@ def test_every_refused_class_leg_is_on_the_floor():
         "or put one with no preceding agent on _RUNTIME_FLOOR"
     )
     for key in _RUNTIME_FLOOR:
-        decl = lr.lookup(*key)
-        assert decl is not None and decl.cls in lr.REFUSED_CLASSES, f"{key} is on the floor but not a refused-class leg"
+        assert _declared(*key).cls in lr.REFUSED_CLASSES, f"{key} is on the floor but not a refused-class leg"
 
 
 def test_an_op_wrapper_entry_outside_the_floor_is_refused():
@@ -411,6 +421,16 @@ def test_an_op_wrapper_entry_outside_the_floor_is_refused():
     assert _refused_outside_floor([*lr.REGISTER, stray, reader]) == [("ask", "stray-op"), ("ask", "stray-read")]
 
 
+def test_an_undeclared_leg_fails_by_name():
+    try:
+        _declared("ask", "no-such-leg")
+    except AssertionError as err:
+        assert "undeclared leg (ask, no-such-leg): add a LegDecl" in str(err)
+    else:
+        raise AssertionError("an undeclared leg was looked up without failing")
+    assert _declared("ask", "gate").label == "gate"
+
+
 def test_the_floor_only_shrinks():
     assert len(_RUNTIME_FLOOR) <= _RUNTIME_FLOOR_MAX
 
@@ -418,7 +438,7 @@ def test_the_floor_only_shrinks():
 def test_every_floor_member_cites_the_ruling_and_emits_haiku(tmp_path):
     emitted = _emitted(tmp_path, golden=False)
     for key in sorted(_RUNTIME_FLOOR):
-        assert lr.lookup(*key).runtime_floor == lr.RUNTIME_FLOOR_RULING, f"{key} does not cite the floor ruling"
+        assert _declared(*key).runtime_floor == lr.RUNTIME_FLOOR_RULING, f"{key} does not cite the floor ruling"
         legs = emitted[key]
         assert {leg.model for leg in legs} == {"haiku"}, f"{key} is on the floor but does not emit haiku"
 
@@ -430,7 +450,7 @@ def test_only_floor_legs_carry_a_runtime_floor():
 
 def test_earns_its_cost_is_refused_on_a_mechanical_leg(tmp_path):
     for key, legs in _emitted(tmp_path).items():
-        if lr.lookup(*key).cls is lr.LegClass.EARNS_ITS_COST:
+        if _declared(*key).cls is lr.LegClass.EARNS_ITS_COST:
             for leg in legs:
                 assert _earns_its_cost_refusal(key, leg) is None
 
@@ -441,3 +461,41 @@ def test_the_refusal_still_refuses_what_the_exemption_does_not_cover():
     assert _earns_its_cost_refusal(("grind", "triage"), mechanical) is None
     assert _earns_its_cost_refusal(("grind", "verify-op"), lr.EmittedLeg("x", "p", OP_RUNNER_AGENT_TYPE, "haiku"))
     assert _earns_its_cost_refusal(("grind", "fix"), lr.EmittedLeg("x", "p", _MECHANICAL_TYPE, "sonnet")) is None
+
+
+def _tier_refusal(key: Key, leg: lr.EmittedLeg, register: Iterable[lr.LegDecl] = lr.REGISTER) -> Optional[str]:
+    model = leg.model or emit._AGENT_MODELS.get(leg.agent_type)
+    if model not in lr.EXPENSIVE_MODELS and leg.effort not in lr.EXPENSIVE_EFFORTS:
+        return None
+    decl = next((d for d in register if (d.workflow, d.label) == key), None)
+    if decl is None or decl.cls is not lr.LegClass.EARNS_ITS_COST or not decl.tier_reason:
+        return f"{key} runs model={model!r} effort={leg.effort!r} without an EARNS_ITS_COST decl carrying a tier_reason"
+    return None
+
+
+def test_tier_justification_every_expensive_leg_names_its_class(tmp_path):
+    offenders = [
+        msg
+        for key, legs in _emitted(tmp_path).items()
+        for leg in legs
+        if (msg := _tier_refusal(key, leg))
+    ]
+    assert not offenders, "\n".join(sorted(set(offenders)))
+
+
+def test_tier_justification_every_leg_declares_an_effort(tmp_path):
+    missing = sorted({key for key, legs in _emitted(tmp_path).items() for leg in legs if not leg.effort})
+    assert not missing, f"leg(s) {missing} declare no effort"
+
+
+def test_tier_justification_refuses_an_unjustified_opus_leg():
+    script = "const r = await agent('judge it', { label: 'stray-judge', agentType: 'general-purpose', model: 'opus', effort: 'low' });"
+    (leg,) = lr.emitted_legs(script)
+    key = ("ask", "stray-judge")
+    bare = lr.LegDecl(*key, lr.LegClass.EARNS_ITS_COST, "judges")
+    refusal = _tier_refusal(key, leg, [bare])
+    assert refusal and "ask" in refusal and "stray-judge" in refusal
+    justified = lr.LegDecl(*key, lr.LegClass.EARNS_ITS_COST, "judges", tier_reason="rules on a contested judgment")
+    assert _tier_refusal(key, leg, [justified]) is None
+    cheap = lr.EmittedLeg("stray-judge", None, "general-purpose", "sonnet", effort="medium")
+    assert _tier_refusal(key, cheap, [bare]) is None

@@ -174,8 +174,8 @@ def test_every_wave_call_carries_its_roster_model_effort_and_schema():
     # plugin registration may lag a reload) -- the roster model/effort still
     # carry through under the substituted agentType.
     assert "agentType: 'general-purpose', model: 'sonnet', effort: 'low'" in wave_block
-    # signal-resolved persona carries neither model nor effort
-    assert "agentType: 'coordinator:staff-eng', schema:" in wave_block
+    # signal-resolved persona resolves its own model; the leg ratchet still needs a declared effort
+    assert "agentType: 'coordinator:staff-eng', effort: 'medium', schema:" in wave_block
     assert json.dumps(_STAGE_SCHEMAS["whole-diff-review-result"], sort_keys=True) in wave_block
     assert json.dumps(_STAGE_SCHEMAS["delivery-verdict-result"], sort_keys=True) in wave_block
     assert json.dumps(_STAGE_SCHEMAS["slice-review-result"], sort_keys=True) in wave_block

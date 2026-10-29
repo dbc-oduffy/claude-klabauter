@@ -891,7 +891,8 @@ def _land(
             "index with `git update-index --index-version 2`."
         ), None)
     except (CommitRefused, FilterUnsupported) as exc:
-        return _Landing(None, None, [], _error(str(exc)), None)
+        cause = getattr(exc, "cause", "")
+        return _Landing(None, None, [], _error(str(exc), **({"cause": cause} if cause else {})), None)
     return _Landing(outcome, None, [], None, None)
 
 
@@ -1539,7 +1540,14 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         elif mixed and landing.error.get("nothing_to_commit"):
             last_error = landing.error
         elif landed_halves:
-            unlanded = ", ".join((list(h_paths) + list(h_deleted))[:5])
+            unlanded_all = list(h_paths) + list(h_deleted) + list(h_untracked)
+            unlanded = ", ".join(unlanded_all[:5])
+            cause = landing.error.get("cause", "")
+            follow_up = (
+                "Retry the same call to land them."
+                if cause == "timed out"
+                else (f"Fix the cause ({cause}) before retrying." if cause else "Fix the cause above before retrying.")
+            )
             for done_paths, done_message, _o, done_sha, _p in landed_halves:
                 with ledger.phase("record_ledger"):
                     _record_ledger(worktree_root, done_paths, done_sha, done_message)
@@ -1547,9 +1555,9 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                     _release_committed_claims_step(worktree_root, done_paths, done_sha)
             return _error(
                 f"{landing.error['error']} The product commit {landed_halves[0][3]} landed; "
-                f"these process paths did not: {unlanded}. Retry the same call to land them.",
+                f"{len(unlanded_all)} process path(s) did not land (first: {unlanded}). {follow_up}",
                 landed_sha=landed_halves[0][3],
-                unlanded_paths=list(h_paths) + list(h_deleted) + list(h_untracked),
+                unlanded_paths=unlanded_all,
                 **{k: landing.error[k] for k in ("refused", "blob_drift") if k in landing.error},
             )
         else:

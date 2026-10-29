@@ -2577,7 +2577,8 @@ def _reviewer_row_js(anchor: str, label_prefix: str, run_id: str) -> list[str]:
     )
     reviewer = (
         f"agent({prompt}, {{ label: {label_prefix} + r.id, phase: {_lit(_emit._EXECUTE_PHASE_TITLE)}, "
-        f"agentType: r.agent_type, model: r.model, schema: {_emit.stage_schema_literal('falsifier_integrity_result')} }})"
+        f"agentType: r.agent_type, model: r.model, effort: {_lit(_emit._SPEC_REVIEW_EFFORT)}, "
+        f"schema: {_emit.stage_schema_literal('falsifier_integrity_result')} }})"
     )
     return [
         f"      if (r.agent_type === {_lit(REVIEWER_AGENT_TYPE)}) _rows[r.id] = _runRow(r.id, "
@@ -5927,10 +5928,11 @@ _RETEST_FILES_JS = (
 
 def _invariant_retest_call(*, head: str, anchor: str, run_id: str) -> str:
     """The `retest-invariant` agent call: runs the refused landing's `remedy_step` retest (start, then poll
-    to a terminal verdict) so the commit stage can re-invoke the landing. Reads `_rs` and
+    to a terminal verdict) so the commit stage can re-invoke the landing. The retest is `--isolated-export`:
+    it judges HEAD plus the run's landing paths, never a peer run's dirty files in the shared tree. Reads `_rs` and
     `_nextAction.params.task_output_path` from the emitted scope."""
     start = (
-        "'python -m coordinator_core.ops.dispatch_emit.retest_targeted --from-task-output ' "
+        "'python -m coordinator_core.ops.dispatch_emit.retest_targeted --isolated-export --from-task-output ' "
         f"+ _nextAction.params.task_output_path + {_RETEST_FILES_JS}"
     )
     prompt = _cat(

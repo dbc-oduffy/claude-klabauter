@@ -91,3 +91,27 @@ def test_seed_real_record_copies_the_record_and_script(tmp_path):
     assert (dst / f"state/warp/{run_id}/manifest.json").is_file()
     assert (dst / f"scratch/warp/{run_id}/terminal-commit-params.json").is_file()
     assert (dst / f"scratch/warp/{run_id}.workflow.mjs").read_text() == "// s"
+
+
+def test_seed_real_record_copies_halt_withheld_index_and_sentinel(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
+
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    index = src / hwi.INDEX_DIR
+    index.mkdir(parents=True)
+    (index / "other-run.json").write_text("{}")
+    (index / hwi.SENTINEL).write_text("")
+    dst.mkdir()
+    prof.seed_real_record(src, dst, "ask-20260101T000000-abcdef")
+    assert (dst / hwi.INDEX_DIR / "other-run.json").is_file()
+    assert (dst / hwi.INDEX_DIR / hwi.SENTINEL).is_file()
+
+
+def test_seed_real_record_without_an_index_copies_none(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
+
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    prof.seed_real_record(src, dst, "ask-20260101T000000-abcdef")
+    assert not (dst / hwi.INDEX_DIR).exists()

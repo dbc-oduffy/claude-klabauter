@@ -20,7 +20,6 @@ import contextlib
 import cProfile
 import io
 import pstats
-import subprocess
 import sys
 import tempfile
 import time
@@ -33,7 +32,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 #: The brightline process-time bar for the hook emit (CLAUDE.md § The brightline).
 BAR_MS = 500.0
@@ -90,10 +89,11 @@ def _plan_text() -> str:
 
 
 def _git(root: Path, *args: str, stdin: bytes | None = None) -> None:
-    subprocess.run(
-        ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t.example", *args],
-        input=stdin, check=True, capture_output=True, **no_console_creationflags(),
+    res = run_git(
+        ["-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t.example", *args], input=stdin,
     )
+    if not res.ok:
+        raise RuntimeError(f"git {' '.join(args[:2])} failed (rc={res.returncode}): {res.stderr.strip()}")
 
 
 def build_fixture(root: Path, commits: int = DEFAULT_COMMITS) -> None:
@@ -127,10 +127,7 @@ def _halt_with_record(repo: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run, halt_resume_build
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
-    head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True,
-        **no_console_creationflags(),
-    ).stdout.strip()
+    head = run_git(["-C", str(repo), "rev-parse", "HEAD"]).stdout.strip()
     real = halted_run._RESUME_SPAWNER
     halted_run._RESUME_SPAWNER = lambda *a: None
     try:
@@ -173,10 +170,7 @@ def seed_resume_fixture(repo: Path) -> str:
 
 
 def _tracked(repo: Path, rel: str) -> bool:
-    return subprocess.run(
-        ["git", "-C", str(repo), "ls-files", "--error-unmatch", "--", rel],
-        capture_output=True, **no_console_creationflags(),
-    ).returncode == 0
+    return run_git(["-C", str(repo), "ls-files", "--error-unmatch", "--", rel]).ok
 
 
 def _seed_plan_and_sizing(repo: Path) -> None:

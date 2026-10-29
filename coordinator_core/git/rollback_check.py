@@ -89,16 +89,14 @@ this does NOT resolve" section.)
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_objects import read_object
 from coordinator_core.git.git_state import _parse_tree_entries
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
-_GIT_TIMEOUT_S = 5
 #: Pathspec characters per `git log` argv; Windows caps a command line near 32k.
 _ARGV_CHAR_BUDGET = 8000
 
@@ -326,19 +324,8 @@ def _values_along(
 
 
 def _git(common_dir: Path, args: List[str]) -> Optional[str]:
-    try:
-        r = subprocess.run(
-            ["git", "--git-dir", str(common_dir), "--literal-pathspecs", *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="surrogateescape",
-            timeout=_GIT_TIMEOUT_S,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return r.stdout if r.returncode == 0 else None
+    r = run_git(["--git-dir", str(common_dir), "--literal-pathspecs", *args], binary=True)
+    return r.stdout_bytes.decode("utf-8", "surrogateescape") if r.ok else None
 
 
 def _git_series(

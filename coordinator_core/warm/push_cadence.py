@@ -120,6 +120,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -426,6 +427,24 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
         pass
 
 
+_REF_LOCK_PATH_RE = re.compile(r"Unable to create '([^']+\.lock)'")
+
+
+def _reap_named_ref_lock(root: Path, failures: Iterable[str]) -> bool:
+    """True when a failure names a local `<path>.lock` and the reaper removed it.
+
+    Only the lock path git named is offered to `reap_ref_lock`, which owns the
+    age and stability judgement; a fresh lock stays and no retry follows.
+    """
+    from coordinator_core.ops.reap_stale_locks import reap_ref_lock
+
+    for text in failures:
+        m = _REF_LOCK_PATH_RE.search(text or "")
+        if m and reap_ref_lock(root, m.group(1)):
+            return True
+    return False
+
+
 # No `drain_pending_push` call in this module; see its docstring's DOES NOT
 # DRAIN section for why.
 def _sweep_one(repo_root: Union[str, Path]) -> str:
@@ -453,14 +472,19 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
     if not _acquire_sweep_lock(root):
         return "skipped"
     try:
-        try:
-            outcome = push_outstanding(
+        def _push():
+            return push_outstanding(
                 root,
                 budget_secs=resolve_push_ceiling(
                     root, default_secs=CADENCE_PUSH_RETRY_BUDGET_SECS
                 ),
                 use_streamed_push=True,
             )
+
+        try:
+            outcome = _push()
+            if outcome.failed and _reap_named_ref_lock(root, outcome.failed):
+                outcome = _push()
         except Exception:  # noqa: BLE001 -- a sweep push must never raise
             return "failed"
         if outcome.failed or outcome.unconfirmed:

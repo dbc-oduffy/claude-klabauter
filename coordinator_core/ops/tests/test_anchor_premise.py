@@ -402,3 +402,62 @@ def test_split_screen_refused_separates_unevaluable_from_malformed():
     kept, refused = split_screen_refused(findings)
     assert [i for i, _ in refused] == ["AP1", "AP2"]
     assert kept == findings[2:]
+
+
+def _named_ref_anchor(sha, claim=None):
+    return {
+        "id": "AP1",
+        "claim": claim or f"at baseline_ref {sha} mod.py has no 'refuse'",
+        "check": {"command": "grep -c refuse mod.py", "expect": "0"},
+    }
+
+
+@pytest.mark.spawns_process
+def test_claim_naming_baseline_ref_is_checked_at_that_ref(tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    (tmp_path / "mod.py").write_text("refuse\nrefuse\n")
+    on_ref = {**_named_ref_anchor(sha), "check": {"command": "grep -c refuse mod.py", "expect": "1"}}
+    (v,) = ap.anchor_verdicts([on_ref], [], [], "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
+    no_ref = {**on_ref, "claim": "mod.py has one refuse"}
+    (v,) = ap.anchor_verdicts([no_ref], [], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+    wrong_on_ref = {**on_ref, "check": {"command": "grep -c refuse mod.py", "expect": "2"}}
+    (v,) = ap.anchor_verdicts([wrong_on_ref], [], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+
+
+@pytest.mark.spawns_process
+def test_bare_baseline_ref_claim_uses_the_falsifier_ref(tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    plan = f"---\nprime_exit_criterion:\n  falsifier:\n    baseline_ref: {sha}\n---\n# p\n"
+    anchor = {
+        "id": "AP1",
+        "claim": "at baseline_ref mod.py holds refuse once",
+        "check": {"command": "grep -c refuse mod.py", "expect": "1"},
+    }
+    (v,) = ap.anchor_verdicts([anchor], [], [], plan, tmp_path)
+    assert v["verdict"] == "RESOLVES"
+    (v,) = ap.anchor_verdicts([anchor], [], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+
+
+def test_self_falsifying_premise_without_a_ref_is_refused_at_authoring():
+    from coordinator_core.ops import _anchor_premise as ap
+
+    entry = {"id": "AP1", "claim": "mod.py has no refuse", "check": {"command": "grep -c refuse mod.py", "expect": "0"}}
+    rows = [{"id": "C1", "writes": ["./mod.py"]}]
+    anchors, f = parse_anchors({FIELD: [entry]}, None, rows)
+    assert anchors == [] and f[0].startswith("anchor-premise-unchecked: AP1") and "self-falsified" in f[0]
+    assert ap.split_screen_refused(f)[0] == f
+    named = {**entry, "claim": "at baseline_ref abc1234 mod.py has no refuse"}
+    anchors, f = parse_anchors({FIELD: [named]}, None, rows)
+    assert [a["id"] for a in anchors] == ["AP1"] and f == []
+    anchors, f = parse_anchors({FIELD: [entry]}, None, [{"id": "C1", "writes": ["other.py"]}])
+    assert [a["id"] for a in anchors] == ["AP1"] and f == []
+    anchors, f = parse_anchors({FIELD: [entry]}, None)
+    assert [a["id"] for a in anchors] == ["AP1"] and f == []

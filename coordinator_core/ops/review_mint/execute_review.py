@@ -175,6 +175,8 @@ def _agent_opts_for(agent: ReviewAgent, *, emitted_agent_type: str = None) -> Di
         entry["model"] = agent.model
     if agent.effort is not None:
         entry["effort"] = agent.effort
+    elif agent.accepts_signals is not None:
+        entry["effort"] = _SIGNAL_PERSONA_EFFORT
     key = emitted_agent_type if emitted_agent_type is not None else agent.agent_type
     return {key: entry} if entry else {}
 
@@ -546,7 +548,8 @@ _PREP_GUARDS_JS = (
     # A composer that hoists `_alreadyDeliveredClose` may close the run landed here; the hook sets its
     # own state and a refusal reason. Absent the hook (the plan route) the halt below is unchanged.
     "  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly)) { "
-    "if (!(typeof _alreadyDeliveredClose === 'function' && await _alreadyDeliveredClose())) "
+    "if (!(typeof _metBySinceHaltSkip === 'function' && _metBySinceHaltSkip()) && "
+    "!(typeof _alreadyDeliveredClose === 'function' && await _alreadyDeliveredClose())) "
     f"return {{ halted: {_js_string_literal(NO_SLICES_HALT)} + ' (prep verdict: ' + "
     f"String(_reviewPrep?.verdict ?? 'none') + ')' + "
     "(Array.isArray(_reviewPrep?.excluded) && _reviewPrep.excluded.length "
@@ -750,6 +753,10 @@ def _wave_schema_literal(schema_literal: str) -> str:
 
 REVERIFY_PHASE = "Review re-verify"
 _REVERIFY_AGENT_TYPE = "coordinator:test-runner"
+#: Declared effort (leg_register ratchet): the re-verify leg lists, runs and reports; a signal-resolved
+#: persona carries no roster effort, so the emitted call declares this one.
+_REVERIFY_EFFORT = "low"
+_SIGNAL_PERSONA_EFFORT = "medium"
 
 _REVERIFY_SCHEMA = {
     "type": "object",
@@ -1059,11 +1066,11 @@ def _reverify_phase(
         f"plan_path: {plan_path}\n"
         f"run_base_sha: {run_base_sha}"
     ).strip()
-    agent_opts = None
+    agent_opts = {agent_type: {"effort": _REVERIFY_EFFORT}}
     if agent_type == _REVERIFY_AGENT_TYPE:
         from coordinator_core.ops.dispatch_emit.emit import resolve_agent_model
 
-        agent_opts = {agent_type: {"model": resolve_agent_model(agent_type)}}
+        agent_opts[agent_type]["model"] = resolve_agent_model(agent_type)
     call = _agent_call_literal(
         agent_type,
         prompt,

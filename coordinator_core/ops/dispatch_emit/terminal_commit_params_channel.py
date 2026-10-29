@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
 PARAMS_FILE_NAME = "terminal-commit-params.json"
+REFUSAL_FILE_NAME = "terminal-commit-params.refused"
 BLOCK_OPEN = "-----BEGIN TERMINAL-COMMIT PARAMS-----"
 BLOCK_CLOSE = "-----END TERMINAL-COMMIT PARAMS-----"
 RELAY_HEADER = "[Workflow harness — user request]"
@@ -45,11 +46,8 @@ def params_path(repo_root: object, run_id: object) -> Optional[Path]:
     return Path(str(repo_root)) / RUN_DIR_ROOT / run_id / PARAMS_FILE_NAME
 
 
-def missing_file_diagnosis(path: str) -> Optional[str]:
-    """Message naming the params file's writer when `path` is a run's canonical params path.
-
-    Pure: one path parse, no filesystem call. None for any other path.
-    """
+def _canonical_run_id(path: str) -> Optional[str]:
+    """The run id when `path` has the canonical `<RUN_DIR_ROOT>/<run_id>/<PARAMS_FILE_NAME>` tail."""
     parts = PurePath(path).parts
     root = PurePath(RUN_DIR_ROOT).parts
     if len(parts) < len(root) + 2 or parts[-1] != PARAMS_FILE_NAME:
@@ -57,13 +55,56 @@ def missing_file_diagnosis(path: str) -> Optional[str]:
     if parts[-2 - len(root) : -2] != root:
         return None
     run_id = parts[-2]
-    if not run_token._RUN_ID_RE.match(run_id):
+    return run_id if run_token._RUN_ID_RE.match(run_id) else None
+
+
+def note_refusal(params_path: str, leg: str) -> None:
+    """Record the guard's refusal leg beside a canonical params path; best effort, never raises.
+
+    The hook's refusal text is dropped when the deny is demoted to allow, so the op's
+    "never written" error would otherwise name no cause.
+    """
+    if _canonical_run_id(params_path) is None:
+        return
+    try:
+        Path(params_path).with_name(REFUSAL_FILE_NAME).write_text(leg, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_refusal(params_path: str) -> None:
+    """Remove the refusal note beside a canonical params path; best effort, never raises."""
+    if _canonical_run_id(params_path) is None:
+        return
+    try:
+        Path(params_path).with_name(REFUSAL_FILE_NAME).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def missing_file_diagnosis(path: str) -> Optional[str]:
+    """Message naming the params file's writer when `path` is a run's canonical params path.
+
+    One path parse plus one best-effort read of the refusal note `note_refusal` left beside
+    it. None for any other path.
+    """
+    run_id = _canonical_run_id(path)
+    if run_id is None:
         return None
+    try:
+        leg = Path(path).with_name(REFUSAL_FILE_NAME).read_text(encoding="utf-8").strip()[:200]
+    except OSError:
+        leg = ""
+    cause = (
+        f"The guard last refused this run's params with {leg}."
+        if leg
+        else "That leg did not run or refused this command."
+    )
     return (
         f"terminal_commit params file for run {run_id} was never written. Its writer is the "
         "commit stage's `block_subagent_commit` run-token leg, which writes it from the spawn "
-        "prompt's params block on the git-commit-agent's Bash call; that leg did not run or "
-        "refused this command. Not dispatched; nothing committed."
+        f"prompt's params block on the git-commit-agent's Bash call. {cause} "
+        "Not dispatched; nothing committed."
     )
 
 

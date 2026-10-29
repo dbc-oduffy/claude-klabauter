@@ -13,13 +13,13 @@ import builtins
 import os
 import shutil
 import statistics
-import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Sequence
 
+from coordinator_core.git.run import run_git
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope, touch_record
 
@@ -63,8 +63,8 @@ def _claim(sink: Path, sid: str, agent: Optional[str], path: str) -> None:
 def seed(root: Path, peers: int, agents: int, own_agents: int = 5, claims_per_peer: int = 4) -> str:
     """Seed `root`'s sessions dir; returns the sessions dir. The own session claims `COMMIT_PATHS`
     in its own sink and in `own_agents` back-pointed agent sinks; the other agent sinks belong to peers."""
-    subprocess.run(["git", "init", "-q", str(root)], check=True,
-                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if not run_git(["init", "-q", str(root)]).ok:
+        raise RuntimeError(f"git init failed in {root}")
     base = Path(session_core.sessions_dir(str(root)))
     base.mkdir(parents=True, exist_ok=True)
     sink_name = scope._TOUCH_RECORD_FILENAME

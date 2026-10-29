@@ -321,3 +321,67 @@ def test_a_deviation_from_the_emitted_argv_is_denied(repo, suffix):
     token = run_token.mint(repo, _RUN, _SCRIPT)
     tp = _transcript(repo, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token})
     assert _check(_emitted_argv(repo) + suffix, tp) is not None
+
+
+def _refused_note(repo):
+    return chan.params_path(repo, _RUN).with_name(chan.REFUSAL_FILE_NAME)
+
+
+def _land_run_argv(repo) -> str:
+    return _emitted_argv(repo).replace("dispatch.terminal_commit", "dispatch.land_run") + f" --repo {repo.as_posix()}"
+
+
+def test_a_token_refusal_leaves_a_note_the_missing_file_diagnosis_names(repo):
+    # 272860: the refusal was demoted to allow and its text dropped, so the op could only say
+    # "never written" with no cause.
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32, "halted_by": {"reason": "x"}}
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    assert _check(_land_run_argv(repo), _transcript(repo, params)) is not None
+    assert not path.exists()
+    assert _refused_note(repo).read_text(encoding="utf-8") == guard._LEG_PARAMS_TOKEN
+    assert guard._LEG_PARAMS_TOKEN in chan.missing_file_diagnosis(str(path))
+
+
+def test_a_halt_commit_whose_live_token_was_consumed_mid_run_is_refused_and_noted(repo):
+    # 272860 (2026-10-29): both spawn prompts carried a well-formed params block and the typed
+    # path was canonical; the only refusal left was the token leg, because a peer
+    # (`warp_live._record_live` ended-evidence consume) had spent the live record while the
+    # run was still working.
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "halted_by": {"reason": "x"}}
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    tp = _transcript(repo, params)
+    run_token.consume(repo, _RUN)
+    assert _check(_land_run_argv(repo), tp) is not None
+    assert not path.exists()
+    assert _refused_note(repo).read_text(encoding="utf-8") == guard._LEG_PARAMS_TOKEN
+    run_token.mint(repo, _RUN, _SCRIPT)
+    assert _check(_land_run_argv(repo), tp) is not None
+
+
+def test_an_admit_clears_the_note_a_prior_refusal_left(repo):
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    bad = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32}
+    assert _check(_land_run_argv(repo), _transcript(repo, bad)) is not None
+    assert _refused_note(repo).exists()
+    good = {**bad, "run_token": run_token.mint(repo, _RUN, _SCRIPT), "halted_by": {"reason": "x"}}
+    assert _check(_land_run_argv(repo), _transcript(repo, good)) is None
+    assert not _refused_note(repo).exists()
+    assert json.loads(path.read_text(encoding="utf-8")) == good
+
+
+def test_a_refusal_off_the_canonical_path_leaves_no_note(repo):
+    other = repo / "elsewhere" / "terminal-commit-params.json"
+    other.parent.mkdir()
+    tp = _transcript(repo, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32})
+    argv = f"coordinator-invoke dispatch.land_run --params-file {other.as_posix()}"
+    assert _check(argv, tp) is not None
+    assert not (other.parent / chan.REFUSAL_FILE_NAME).exists()
+
+
+def test_the_diagnosis_without_a_note_keeps_the_generic_cause(repo):
+    text = chan.missing_file_diagnosis(str(chan.params_path(repo, _RUN)))
+    assert "never written" in text and "did not run or refused" in text

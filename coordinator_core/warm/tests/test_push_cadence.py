@@ -513,3 +513,73 @@ def test_sweep_does_not_run_on_consumer_profile(tmp_path, monkeypatch):
     monkeypatch.setattr(push_cadence, "push_outstanding", lambda root, **kw: calls.append(root))
     push_cadence._sweep_one(repo)
     assert calls == []
+
+
+_LOCK_ERR = (
+    "error: cannot lock ref 'refs/remotes/origin/work/x/day': Unable to create "
+    "'/r/.git/refs/remotes/origin/work/x/day.lock': File exists."
+)
+
+
+def _ref_lock_sweep(tmp_path, monkeypatch, *, reaped):
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/day")
+    monkeypatch.setattr(push_cadence, "log_failure", lambda *a, **kw: None)
+
+    class _Fail:
+        failed = [_LOCK_ERR]
+        unconfirmed = []
+        acted = []
+        attempts = 1
+
+    class _Ok:
+        failed = []
+        unconfirmed = []
+        acted = ["push"]
+        attempts = 1
+
+    pushes = []
+
+    def _push(root, **kw):
+        pushes.append(1)
+        return _Fail() if len(pushes) == 1 or not reaped else _Ok()
+
+    reap_calls = []
+    monkeypatch.setattr(push_cadence, "push_outstanding", _push)
+    import coordinator_core.ops.reap_stale_locks as rsl
+
+    monkeypatch.setattr(
+        rsl, "reap_ref_lock", lambda root, p: reap_calls.append(p) or reaped
+    )
+    return push_cadence._sweep_one(repo), pushes, reap_calls
+
+
+def test_ref_lock_failure_reaps_named_lock_and_retries_once(tmp_path, monkeypatch):
+    result, pushes, reap_calls = _ref_lock_sweep(tmp_path, monkeypatch, reaped=True)
+    assert result == "pushed"
+    assert len(pushes) == 2
+    assert reap_calls == ["/r/.git/refs/remotes/origin/work/x/day.lock"]
+
+
+def test_ref_lock_failure_left_alone_when_reaper_refuses(tmp_path, monkeypatch):
+    result, pushes, _ = _ref_lock_sweep(tmp_path, monkeypatch, reaped=False)
+    assert result == "failed"
+    assert len(pushes) == 1
+
+
+def test_non_lock_failure_never_calls_the_reaper(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+
+    class _Fail:
+        failed = ["git push: non-fast-forward"]
+        unconfirmed = []
+        attempts = 1
+
+    pushes = []
+    monkeypatch.setattr(push_cadence, "push_outstanding", lambda r, **kw: pushes.append(1) or _Fail())
+    monkeypatch.setattr(push_cadence, "log_failure", lambda *a, **kw: None)
+    import coordinator_core.ops.reap_stale_locks as rsl
+
+    monkeypatch.setattr(rsl, "reap_ref_lock", lambda *a: pytest.fail("reaper called"))
+    assert push_cadence._sweep_one(repo) == "failed"
+    assert len(pushes) == 1
