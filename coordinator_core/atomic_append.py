@@ -105,6 +105,9 @@ def _open_append_fd_windows(path: str) -> int:
     return msvcrt.open_osfhandle(int(handle), os.O_APPEND)
 
 
+#: Scheduler yields a fresh sink gets when the stall window is spent, so a healthy sink is not dropped before its writer thread runs.
+_FRESH_SINK_YIELDS = 5
+
 #: Retained lines a stalled sink's writer may hold; past it a retained line drops like any other.
 _RETAIN_MAX = 256
 
@@ -152,7 +155,15 @@ def append_line(sink: "Path | str", encoded: bytes, retain: bool = False) -> Non
                 name=f"atomic-append-writer:{sink_str}",
             ).start()
         w.put(job)
-    if job.done.wait(APPEND_DEADLINE_SECS):
+        budget = APPEND_DEADLINE_SECS
+        if _stalled:
+            budget = max(0.0, APPEND_DEADLINE_SECS - (time.monotonic() - min(_stalled.values())))
+    if budget <= 0.0:
+        for _ in range(_FRESH_SINK_YIELDS):
+            if job.done.is_set():
+                break
+            time.sleep(0)
+    if job.done.wait(budget):
         if job.error is not None:
             raise job.error
         return

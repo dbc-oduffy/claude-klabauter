@@ -17,6 +17,8 @@ import re
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
+from coordinator_core.ops.dispatch_emit import land_deadline
+
 from coordinator_core.ops.dispatch_emit.landing_dropped_targets import (  # noqa: F401
     _blob_elsewhere,
     _classify_dropped,
@@ -110,6 +112,7 @@ def unparseable_py(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:
     for rel in paths:
         if not rel.endswith(".py"):
             continue
+        land_deadline.check("landing_integrity.unparseable_py")
         try:
             source = (Path(worktree_root) / rel).read_bytes()
         except OSError:
@@ -499,6 +502,7 @@ def import_closure_findings(
     A detector exception is one finding naming it (fail closed). Zero spawns."""
     from coordinator_core.authoring_leaks import HeadView, import_closure
 
+    land_deadline.check("landing_integrity.import_closure_findings")
     gate = [*paths, *deleted]
     deleted_set = set(deleted)
     text = landed_text
@@ -524,4 +528,5 @@ def since_base_findings(
     ``plan`` lets the run's own re-fire checkpoints read as own."""
     from coordinator_core.git import since_base_overlap
 
+    land_deadline.check("landing_integrity.since_base_findings")
     return list(since_base_overlap.find_overlaps(worktree_root, paths, base_sha, run_id=run_id, plan=plan))

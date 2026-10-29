@@ -26,6 +26,8 @@ import logging
 from pathlib import Path
 from typing import Iterable, Optional
 
+from coordinator_core.ops.dispatch_emit import land_deadline
+
 _LOG = logging.getLogger(__name__)
 
 PEER_HUNKS_CO_DECLARED = "peer-hunks-co-declared"
@@ -102,6 +104,7 @@ def co_declared_peer_holds(
     own = {_norm(p) for p in own_declared if p}
     if not wanted or not own:
         return []
+    land_deadline.check("peer_hunk_gate.co_declared_peer_holds")
     try:
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import halted_hold_release, sibling_claims
@@ -114,6 +117,7 @@ def co_declared_peer_holds(
                 unlanded=unlanded,
             ))
             for run_id in unlanded:
+                land_deadline.check("peer_hunk_gate.sibling_spine")
                 if warp_run_deliverable._halted(root, run_id):
                     continue
                 paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
@@ -309,6 +313,7 @@ def out_of_ask_holds(
         names = [p.rpartition("/")[2] for p in paths]
         holds = set()
         for stem in (s for s in stems if isinstance(s, str) and s):
+            land_deadline.check("peer_hunk_gate.out_of_ask_holds")
             try:
                 text = (share / f"{stem}.md").read_text(encoding="utf-8")
             except OSError:

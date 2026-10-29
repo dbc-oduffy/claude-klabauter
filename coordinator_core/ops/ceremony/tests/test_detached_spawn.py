@@ -252,6 +252,29 @@ def test_hook_scoped_boot_wait_is_scrubbed_from_the_child(
     assert parent_value == "0"
 
 
+def test_pytest_markers_are_scrubbed_from_the_child(
+    repo_root: str, existing_script: str
+) -> None:
+    """A warm server spawned from inside a test inherited PYTEST_VERSION and the
+    real-settings-home tripwire, then failed every live hook on the box (2026-10-29)."""
+    with mock.patch.dict(
+        detached_spawn.os.environ,
+        {
+            "PYTEST_VERSION": "9",
+            "_COORDINATOR_TEST_FORBID_REAL_SETTINGS_HOME": "/real/home",
+            "COORDINATOR_PYTEST_ALLOW_UNSTAMPED_DISPATCH": "1",
+            "SOME_UNRELATED_VAR": "keep-me",
+        },
+        clear=False,
+    ), mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
+        detached_spawn.spawn_detached(repo_root, existing_script)
+        parent_value = detached_spawn.os.environ["PYTEST_VERSION"]
+
+    env = mock_popen.call_args[1]["env"]
+    assert not [k for k in env if k.startswith(("PYTEST_", "_COORDINATOR_TEST_", "COORDINATOR_PYTEST_"))]
+    assert env["SOME_UNRELATED_VAR"] == "keep-me"
+    assert parent_value == "9"
+
 def test_divergent_live_tree_override_is_pinned_to_repo_root(
     repo_root: str, existing_script: str, tmp_path_factory: pytest.TempPathFactory
 ) -> None:

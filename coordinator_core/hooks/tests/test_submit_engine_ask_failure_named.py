@@ -59,6 +59,45 @@ def test_non_submission_still_passes_through_the_handler(tmp_path):
     assert env.get("hookSpecificOutput", {}).get("permissionDecision") != "deny"
 
 
+def _submit_root(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir(exist_ok=True)
+
+
+def test_emit_reply_with_no_run_and_no_words_is_denied_naming_the_cause(tmp_path):
+    _submit_root(tmp_path)
+    for reply in ({}, {"ok": True}, None):
+        env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r, reply=reply: reply)
+        reason = _hso(env)["permissionDecisionReason"]
+        assert _hso(env)["permissionDecision"] == "deny"
+        cause = reason.split("emitted no run:")[1].split("\nInstead")[0].strip()
+        assert cause and cause != "None", reply
+
+
+def test_emit_timeout_with_empty_message_names_its_class(tmp_path):
+    _submit_root(tmp_path)
+
+    def emit(_p, _r):
+        raise TimeoutError()
+
+    env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=emit)
+    assert _hso(env)["permissionDecision"] == "deny"
+    assert "refused the submission: TimeoutError" in _hso(env)["permissionDecisionReason"]
+
+
+def test_emit_reply_with_findings_still_names_them(tmp_path):
+    _submit_root(tmp_path)
+    env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r: {"ok": False, "findings": "bad sizing"})
+    assert "bad sizing" in _hso(env)["permissionDecisionReason"]
+
+
+def test_handler_never_returns_empty_for_a_submission(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "evaluate", lambda _p: {})
+    monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: None)
+    env = mod._handler(_params(tmp_path, {"ask": "x"}))
+    assert _hso(env)["permissionDecision"] == "deny"
+    assert _hso(env)["permissionDecisionReason"].strip()
+
+
 def test_retire_failure_is_named_in_the_rewrite_and_does_not_block(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     sizing = "state/sizings/x.yaml"

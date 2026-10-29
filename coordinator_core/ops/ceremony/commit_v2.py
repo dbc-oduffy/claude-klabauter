@@ -275,22 +275,31 @@ def _guard_class_relay_step(
     return {"transitions": transitions, "skips": skips}
 
 
-def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> None:
+def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> Optional[str]:
     """Runs AFTER `commit_paths` has already landed the commit -- like
     `_guard_class_relay_step`, this step cannot refuse, delay, or fail it
-    (NEGATIVE SPEC).
+    (NEGATIVE SPEC). Past the land_run deadline it skips the release and returns the note naming
+    the leg: the claims stay held until reaped, the landed commit is still reported landed.
 
     `sid` comes from `session_core.resolve_session_id`, which can resolve to the SPAWNING
     session inside the resident warm server rather than the true caller.
     """
     if not released:
-        return
+        return None
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    if land_deadline.expired():
+        return (
+            "land-deadline: leg commit_v2._release_committed_claims_step skipped past the land_run "
+            "budget; the committed paths' claims stay held until reaped"
+        )
     session_scope.release_committed_claims_or_retain(
         worktree_root,
         released,
         session_core.resolve_session_id(str(worktree_root)),
         "commit_v2",
     )
+    return None
 
 
 #: Body line naming a live peer's write-claimed path this commit carried, so history carries
@@ -1553,9 +1562,11 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
 
     # Post-commit, same negative spec. Release set includes outcome.no_delta members.
     with ledger.phase("release_committed_claims"):
-        _release_committed_claims_step(
+        release_note = _release_committed_claims_step(
             worktree_root, list(raw_paths) + raw_removed
         )
+    if release_note is not None:
+        warnings.append(release_note)
 
     for done_paths, done_message, _o, done_sha, _p in landed_halves:
         with ledger.phase("record_ledger"):

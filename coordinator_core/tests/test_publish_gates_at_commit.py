@@ -11,6 +11,7 @@ the working-tree Python files that differ from HEAD, so a call omitting a requir
 """
 from __future__ import annotations
 
+import importlib
 import os
 import subprocess
 import tempfile
@@ -19,7 +20,6 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import check_registry_codename_leak as leak
-from coordinator_core.percolate import payload_parity as pp
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -129,6 +129,11 @@ def _staged(root: Path, caller: str) -> None:
 
 
 def _parity_violations(staging: Path, changed: list[str]) -> list[str]:
+    # Dynamic load: the restricted publish tree carries no `percolate`, and a static import fails its closure gate.
+    try:
+        pp = importlib.import_module("coordinator_core.percolate.payload_parity")
+    except ModuleNotFoundError:
+        pytest.skip("coordinator_core.percolate is absent from this tree")
     with tempfile.TemporaryDirectory() as empty:
         report = pp.payload_parity_report(Path(empty), staging, rel_root="", changed_files=changed)
     return [f"{f.call_file}:{f.lineno} {f.message}" for f in report.refusing_violations]

@@ -2005,7 +2005,7 @@ def _reset_index_paths(repo: Union[str, Path], paths: Sequence[str]) -> bool:
 
 
 #: Pause after each lock-busy post-ref splice attempt; one more attempt than entries.
-_SPLICE_LOCK_BACKOFF_SECS = (0.02, 0.04, 0.08, 0.16, 0.32)
+_SPLICE_LOCK_BACKOFF_SECS = (0.02, 0.04, 0.08, 0.16)
 
 _HEX_RE = re.compile(r"[0-9a-f]+")
 

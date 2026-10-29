@@ -922,6 +922,66 @@ def _write_blocked_leg(claim: Path, op_ident: int, cpu_delta: float, elapsed: fl
         pass
 
 
+#: Durable stall records under `<svc_dir>/stall-dumps/`; neither prune and no
+#: claim release touches them, so they outlive the worker and the claim.
+_STALL_DUMPS_DIRNAME = "stall-dumps"
+STALL_DUMP_KEEP = 20
+
+#: Set by `_worker_process_init`; None leaves only the per-pid stderr log.
+_WORKER_STALL_DIR: Optional[Path] = None
+
+
+def _stall_record_for(stall_dir, pid: Optional[int], key: str) -> Optional[Path]:
+    """The durable record of worker `pid` for claim `key`, or None."""
+    if not stall_dir or pid is None:
+        return None
+    try:
+        return next(iter(sorted(Path(stall_dir).glob(f"*-{pid}-{key}.txt"))), None)
+    except OSError:
+        return None
+
+
+def _write_stall_record(stall_dir, claim: Optional[Path]) -> None:
+    """One file per stall: sink line, blocked leg json, every thread's stack
+    (temp + `os.replace`), then keep the newest `STALL_DUMP_KEEP`. Never raises."""
+    try:
+        import tempfile
+
+        sinks = "unavailable"
+        try:
+            from coordinator_core import atomic_append
+
+            sinks = str(atomic_append.in_flight_sinks())
+        except Exception:  # noqa: BLE001
+            pass
+        leg = ""
+        if claim is not None:
+            try:
+                leg = _leg_path(claim).read_text(encoding="utf-8").strip()
+            except OSError:
+                pass
+        with tempfile.TemporaryFile(mode="w+b") as raw:
+            faulthandler.dump_traceback(file=raw, all_threads=True)
+            raw.seek(0)
+            threads = raw.read().decode("utf-8", errors="replace")
+        stall_dir = Path(stall_dir)
+        stall_dir.mkdir(parents=True, exist_ok=True)
+        key = claim.name if claim is not None else "nokey"
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
+        tmp = final.with_name(final.name + ".tmp")
+        tmp.write_text(
+            f"sinks: {sinks}\nleg: {leg}\n--- threads ---\n{threads}",
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(tmp, final)
+        for old in sorted(stall_dir.glob("*.txt"), reverse=True)[STALL_DUMP_KEEP:]:
+            old.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+        pass
+
+
 def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable[[], None]:
     """Dump every thread's stack to the worker stderr log once `stall_secs`
     pass, and (with a `claim`) write the op thread's blocked leg beside it; the
@@ -937,7 +997,8 @@ def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable
     -32004.
     """
     stderr = _WORKER_STDERR_FILE
-    if (stderr is None and claim is None) or stall_secs <= 0:
+    stall_dir = _WORKER_STALL_DIR
+    if (stderr is None and claim is None and stall_dir is None) or stall_secs <= 0:
         return lambda: None
     done = threading.Event()
     op_ident = threading.get_ident()
@@ -951,6 +1012,8 @@ def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable
             _write_blocked_leg(
                 claim, op_ident, time.process_time() - cpu0, time.monotonic() - t0
             )
+        if stall_dir is not None:
+            _write_stall_record(stall_dir, claim)
         if stderr is None:
             return
         try:
@@ -1176,10 +1239,11 @@ def _pool_saturated_envelope(msg: dict, holders: list, stall_dump) -> dict:
     }
 
 
-def _running_phase_diagnosis(claim: Optional[Path], stderr_dir) -> dict:
-    """`phase: running` plus the holding worker's stderr log, read from the pid
-    its claim file records. Falls back to the log directory when the claim
-    carries no pid yet. Never raises."""
+def _running_phase_diagnosis(claim: Optional[Path], stderr_dir, stall_dir=None) -> dict:
+    """`phase: running` plus the holding worker's durable stall record when one
+    exists, else its stderr log, read from the pid its claim file records.
+    Falls back to the log directory when the claim carries no pid yet. Never
+    raises."""
     diagnosis: dict = {"phase": "running"}
     pid = None
     try:
@@ -1187,17 +1251,27 @@ def _running_phase_diagnosis(claim: Optional[Path], stderr_dir) -> dict:
             pid = int(claim.read_text(encoding="ascii").strip())
     except (OSError, ValueError):
         pid = None
-    if stderr_dir:
+    record = _stall_record_for(stall_dir, pid, claim.name) if claim is not None else None
+    if record is not None:
+        diagnosis["stall_dump"] = str(record)
+    elif stderr_dir:
         diagnosis["stall_dump"] = str(
             _worker_stderr_log(stderr_dir, pid) if pid is not None else stderr_dir
         )
+    leg = None
     try:
         if claim is not None:
             leg = json.loads(_leg_path(claim).read_text(encoding="utf-8"))
-            if isinstance(leg, dict) and leg.get("leg"):
-                diagnosis["blocked_leg"] = leg
     except (OSError, ValueError):
-        pass
+        leg = None
+    if leg is None and record is not None:
+        try:
+            line = record.read_text(encoding="utf-8").split("\n", 2)[1]
+            leg = json.loads(line.partition("leg: ")[2])
+        except (OSError, ValueError, IndexError):
+            leg = None
+    if isinstance(leg, dict) and leg.get("leg"):
+        diagnosis["blocked_leg"] = leg
     return diagnosis
 
 
@@ -1763,8 +1837,9 @@ def _repair_settings_home_to_pristine() -> None:
         os.environ["COORDINATOR_SETTINGS_HOME"] = str(_worker_pristine_settings_home)
 
 
-def _worker_process_init(stderr_dir=None) -> None:
-    global _worker_pristine_settings_home
+def _worker_process_init(stderr_dir=None, stall_dir=None) -> None:
+    global _worker_pristine_settings_home, _WORKER_STALL_DIR
+    _WORKER_STALL_DIR = Path(stall_dir) if stall_dir else None
     _worker_pristine_settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
 
     from coordinator_core.warm import polite_io
@@ -2618,12 +2693,13 @@ class _ServerContext:
                     stderr_dir = breadcrumb.svc_dir(self.engine_root) / _WORKER_STDERR_DIRNAME
                     _prune_worker_stderr_logs(stderr_dir)
                     self._worker_stderr_dir = stderr_dir
+                    self._stall_dir = breadcrumb.svc_dir(self.engine_root) / _STALL_DUMPS_DIRNAME
                     self._claim_dir = breadcrumb.svc_dir(self.engine_root) / _CLAIMS_DIRNAME
                     _prune_dispatch_claims(self._claim_dir)
                     self._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
                         max_workers=DISPATCH_PROCESS_POOL_SIZE,
                         initializer=_worker_process_init,
-                        initargs=(str(stderr_dir),),
+                        initargs=(str(stderr_dir), str(self._stall_dir)),
                     )
         return self._dispatch_pool
 
@@ -2732,7 +2808,11 @@ class _ServerContext:
                 data = (envelope.get("error") or {}).get("data")
                 if isinstance(data, dict) and isinstance(data.get("diagnosis"), dict):
                     data["diagnosis"].update(
-                        _running_phase_diagnosis(claim, getattr(self, "_worker_stderr_dir", None))
+                        _running_phase_diagnosis(
+                            claim,
+                            getattr(self, "_worker_stderr_dir", None),
+                            getattr(self, "_stall_dir", None),
+                        )
                     )
                     _record_pool_timeout(msg, _t_submit, data["diagnosis"])
                 return _with_reconcile_route(envelope, dispatch_key)

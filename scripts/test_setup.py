@@ -3970,18 +3970,23 @@ def test_klabauter_install_without_claude_klabauter_checkout_skips_claude_klabau
 def test_symbols_hint_prints_example_retrieval_repo_line_when_symbol_extract_absent(
     setup_mod, monkeypatch, tmp_path, capsys
 ):
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: None)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0"\n\n'
+        "[project.optional-dependencies]\n"
+        'symbols = ["example-retrieval-repo-symbol-extract[tree-sitter]"]\n',
+        encoding="utf-8",
+    )
     setup_mod.print_symbols_extra_hint(tmp_path)
     out = capsys.readouterr().out
-    assert "packaging/symbol-extract" in out
-    assert "pip install" in out and "tree-sitter" in out
-    assert "import symbol_extract" in out
-    assert "[symbols]" not in out
+    assert "project-rag" in out
+    assert "pip install" in out and "[symbols]" in out
 
 
-def test_symbols_hint_silent_when_symbol_extract_importable(
+def test_symbols_hint_silent_when_symbols_extra_absent(
     setup_mod, monkeypatch, tmp_path, capsys
 ):
-    monkeypatch.setattr(importlib.util, "find_spec", lambda name, *a, **k: object())
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0"\n', encoding="utf-8"
+    )
     setup_mod.print_symbols_extra_hint(tmp_path)
     assert capsys.readouterr().out == ""

@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from contextlib import ExitStack, contextmanager
@@ -88,6 +89,8 @@ class Row:
     spawn_sites: dict = field(default_factory=dict)
     sync_sites: dict = field(default_factory=dict)
     top_functions: list = field(default_factory=list)
+    longest_wait_ms: float = 0.0
+    longest_wait_leg: str = ""
 
     @property
     def under_bar(self) -> bool:
@@ -429,6 +432,201 @@ def run_axes(
     return rows
 
 
+IDLE_CONDITIONS = ("concurrent-landings", "held-index-lock", "stalled-sink")
+IDLE_AXIS = "land_run.idle-wait"
+CONCURRENT_LANDINGS = 3
+
+
+def _leg_label(frame) -> str:
+    """`coordinator_core/<rel>.py::func:line` of `frame` (warm/server.py `_frame_label`)."""
+    try:
+        from coordinator_core.warm.server import _frame_label
+
+        return _frame_label(frame)
+    except Exception:
+        parts = Path(frame.f_code.co_filename).parts
+        rel = "/".join(parts[len(parts) - 1 - parts[::-1].index("coordinator_core"):]) if "coordinator_core" in parts else (parts[-1] if parts else "?")
+        return f"{rel}::{frame.f_code.co_name}:{frame.f_lineno}"
+
+
+class WaitMeter:
+    """Waits summed at the seams, each tagged with the coordinator_core leg that took it.
+
+    The leg is read from the waiting thread's own frame chain at the moment of the wait
+    (`sys._current_frames()` shape), skipping the seam's plumbing and this benchmark.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.events: list = []
+
+    def leg(self, skip: tuple = ()) -> str:
+        frame = sys._current_frames().get(threading.get_ident())
+        while frame is not None:
+            name = frame.f_code.co_filename.replace("\\", "/")
+            if "coordinator_core/" in name and "benchmarks/" not in name and not name.endswith(skip):
+                return _leg_label(frame)
+            frame = frame.f_back
+        return "?"
+
+    def add(self, seam: str, wait_ms: float, leg: str) -> None:
+        with self._lock:
+            self.events.append((seam, wait_ms, leg))
+
+    @property
+    def total_ms(self) -> float:
+        return round(sum(ms for _s, ms, _l in self.events), 3)
+
+    @property
+    def by_seam(self) -> dict:
+        out: dict = {}
+        for seam, ms, _leg in self.events:
+            out[seam] = round(out.get(seam, 0.0) + ms, 3)
+        return out
+
+    @property
+    def longest(self) -> tuple:
+        """(wait_ms, leg) of the single longest wait, or (0.0, "")."""
+        if not self.events:
+            return 0.0, ""
+        _s, ms, leg = max(self.events, key=lambda e: e[1])
+        return round(ms, 3), leg
+
+
+class _VirtualTime:
+    """`commit.time` stand-in: `sleep` charges the pause to the meter and returns at once."""
+
+    def __init__(self, meter: WaitMeter) -> None:
+        self._meter = meter
+
+    def sleep(self, secs: float) -> None:
+        self._meter.add("index_splice_backoff", secs * 1000.0, self._meter.leg())
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+
+@contextmanager
+def idle_wait_seams(meter: WaitMeter, *, stall_sinks: bool):
+    """Seams for the three idle-wait waits: the atomic_append job wait (every `_Job.done.wait`),
+    the index splice backoff (virtual: nothing sleeps), and the terminal_commit claim poll (the
+    wall time inside `_redeem_or_answer`, an upper bound on its poll). `stall_sinks` also blocks
+    every sink's `_write_once` until the context closes."""
+    from coordinator_core import atomic_append
+    from coordinator_core.git import commit
+    from coordinator_core.ops.dispatch_emit import terminal_commit
+
+    class _TimedEvent(threading.Event):
+        def wait(self, timeout=None):
+            leg = meter.leg(skip=("atomic_append.py",))
+            t0 = time.perf_counter()
+            try:
+                return super().wait(timeout)
+            finally:
+                meter.add("atomic_append_job_wait", (time.perf_counter() - t0) * 1000.0, leg)
+
+    class _TimedJob(atomic_append._Job):
+        __slots__ = ()
+
+        def __init__(self, encoded: bytes) -> None:
+            super().__init__(encoded)
+            self.done = _TimedEvent()
+
+    release = threading.Event()
+    real_job, real_write, real_time = atomic_append._Job, atomic_append._write_once, commit.time
+    real_redeem = terminal_commit._redeem_or_answer
+
+    def blocked(sink_str, encoded):
+        release.wait(30.0)
+
+    def redeem(*a, **k):
+        leg = meter.leg()
+        t0 = time.perf_counter()
+        try:
+            return real_redeem(*a, **k)
+        finally:
+            meter.add("claim_poll", (time.perf_counter() - t0) * 1000.0, leg)
+
+    atomic_append._Job = _TimedJob
+    commit.time = _VirtualTime(meter)
+    terminal_commit._redeem_or_answer = redeem
+    if stall_sinks:
+        atomic_append._write_once = blocked
+    try:
+        yield
+    finally:
+        release.set()
+        atomic_append._Job, atomic_append._write_once = real_job, real_write
+        commit.time, terminal_commit._redeem_or_answer = real_time, real_redeem
+        deadline = time.monotonic() + 1.0
+        while atomic_append.in_flight_sinks() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        with atomic_append._registry_lock:
+            atomic_append._stalled.clear()
+
+
+def run_idle_wait(workdir: Path, tracked: int, chain: int, attribute: bool) -> list:
+    """One `Row` per idle-wait condition: process time, seam-summed `injected_wait_ms`, and the
+    longest-wait leg, over the default `dispatch.land_run` path. The bar is per op, so a condition
+    that runs several landings reports process time per landing."""
+    declare_benchmark_origin()
+    _bind_session()
+    rows: list = []
+    for condition in IDLE_CONDITIONS:
+        meter = WaitMeter()
+        outcomes: list = []
+        with ExitStack() as stack:
+            count = CONCURRENT_LANDINGS if condition == "concurrent-landings" else 1
+            fixtures = [
+                build_land_fixture(workdir / condition / f"c{i}", mode="clean", tracked=tracked, chain=chain, stack=stack)
+                for i in range(count)
+            ]
+            lock = fixtures[0][0] / ".git" / "index.lock"
+
+            def land(root: Path, base: str) -> None:
+                try:
+                    outcomes.append(_outcome(_call_land(root, base)))
+                except Exception as exc:
+                    outcomes.append(f"raised:{type(exc).__name__}")
+
+            def call() -> None:
+                if condition == "concurrent-landings":
+                    threads = [threading.Thread(target=land, args=fx) for fx in fixtures]
+                    for t in threads:
+                        t.start()
+                    for t in threads:
+                        t.join()
+                    return
+                if condition == "held-index-lock":
+                    lock.touch()
+                try:
+                    land(*fixtures[0])
+                finally:
+                    lock.unlink(missing_ok=True)
+
+            with idle_wait_seams(meter, stall_sinks=condition == "stalled-sink"):
+                row = measure(IDLE_AXIS, condition, call, None, attribute=attribute)
+        if count > 1:
+            row.process_time_ms = round(row.process_time_ms / count, 3)
+        row.injected_wait_ms = meter.total_ms
+        row.sync_points = {seam: round(ms, 3) for seam, ms in meter.by_seam.items()}
+        row.longest_wait_ms, row.longest_wait_leg = meter.longest
+        row.outcome = ";".join(outcomes)
+        rows.append(row)
+    return rows
+
+
+def render_idle_wait(rows: list) -> str:
+    out = [f"{'condition':20} {'process_ms':>10} {'wait_ms':>9} {'bar':>5}  longest-wait leg  (ms)  seams  outcome"]
+    for r in rows:
+        seams = ",".join(f"{k}={v:.1f}" for k, v in sorted(r.sync_points.items())) or "-"
+        out.append(
+            f"{r.condition:20} {r.process_time_ms:10.1f} {r.injected_wait_ms:9.1f} {'ok' if r.under_bar else 'OVER':>5}  "
+            f"{r.longest_wait_leg or '-'}  ({r.longest_wait_ms:.1f})  {seams}  {r.outcome}"
+        )
+    return "\n".join(out)
+
+
 def render(rows: list) -> str:
     out = [f"{'axis':38} {'condition':10} {'proc_ms':>9} {'spawns':>6} {'file_ops':>8} {'pack_opens':>10} {'wait_ms':>9} {'bar':>5}  sync-points  outcome"]
     for r in rows:
@@ -449,16 +647,25 @@ def main(argv: list) -> int:
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--attribute", action="store_true", help="per-leg cProfile and spawn call sites")
     ap.add_argument("--dir", default=None)
+    ap.add_argument(
+        "--conditions", choices=("slow-disk", "idle-wait"), default="slow-disk",
+        help="idle-wait: land_run under concurrent landings, a held index.lock and stalled sinks",
+    )
     args = ap.parse_args(argv)
     workdir = Path(tempfile.mkdtemp(prefix="lrsd-", dir=args.dir))
     try:
-        rows = run_axes(
-            workdir, args.delay_s, args.op_latency_ms / 1000.0, args.tracked, args.chain, args.attribute
-        )
+        if args.conditions == "idle-wait":
+            rows = run_idle_wait(workdir, args.tracked, args.chain, args.attribute)
+        else:
+            rows = run_axes(
+                workdir, args.delay_s, args.op_latency_ms / 1000.0, args.tracked, args.chain, args.attribute
+            )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     if args.json:
         print(json.dumps([asdict(r) for r in rows], indent=1))
+    elif args.conditions == "idle-wait":
+        print(render_idle_wait(rows))
     else:
         print(render(rows))
         if args.attribute:

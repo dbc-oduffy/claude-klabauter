@@ -381,6 +381,19 @@ def _is_foreign_executor_commit(message: str, plan_path: str) -> bool:
     return False
 
 
+def _tree_entry(common_dir: Path, tree_sha: str, name: str, absent):
+    """``(mode, sha)`` of the ``name`` entry of one tree, ``absent`` when it has none, None if unreadable."""
+    from coordinator_core.git.git_objects import read_object
+
+    obj = read_object(common_dir, tree_sha)
+    if obj is None or obj[0] != "tree":
+        return None
+    # Whole entries are consumed up to the wanted one, so a name inside another entry or a sha never matches.
+    pattern = rb"(?:\d+ [^\0]*\0.{20})*?(\d+) " + re.escape(name.encode("utf-8", "surrogateescape")) + rb"\0(.{20})"
+    m = re.match(pattern, obj[1], re.S)
+    return absent if m is None else (int(m.group(1), 8), m.group(2).hex())
+
+
 def outside_landings(
     worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list, *,
     include_start: bool = False, after_creation: bool = False, skip_foreign_runs: bool = False,
@@ -396,7 +409,7 @@ def outside_landings(
     """
     from coordinator_core.git.commit_walk import commit_meta as _commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.rollback_check import ABSENT, _TREE_MODE, _tree_lookup
+    from coordinator_core.git.rollback_check import ABSENT, _TREE_MODE
 
     wanted = [c for c in chunks if c.paths]
     if not wanted or not plan_path:
@@ -413,8 +426,7 @@ def outside_landings(
     def _step(cdir, tree, name):
         key = (tree, name)
         if key not in steps:
-            found = _tree_lookup(cdir, tree, {name})
-            steps[key] = None if found is None else found.get(name, ABSENT)
+            steps[key] = _tree_entry(cdir, tree, name, ABSENT)
         return steps[key]
 
     def _blob_at_commit(cdir, csha, path):

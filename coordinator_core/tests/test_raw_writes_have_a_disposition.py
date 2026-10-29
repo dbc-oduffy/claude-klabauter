@@ -314,6 +314,9 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/index_distribution/newer_index_marker.py': ('in-repo-non-state', 'newer-index marker json via tmp + os.replace under the repo index-distribution dir, never state/: write_marker'),
+    'coordinator_core/ops/_anchor_premise.py': ('outside-repo', 'baseline blobs from git show written into a tempfile.TemporaryDirectory, discarded on exit: the anchor-baseline evaluator'),
+    'coordinator_core/publish/dry_refire_gate.py': ('outside-repo', 'built-in sample sizing, plan and halted run written into the caller-given throwaway root, never the repo: write_sample'),
     'coordinator_core/ops/claude_home_census.py': ('outside-repo', 'falsifier fixture of sparse files under a caller-given scratch root, never the repo: _sparse'),
     'coordinator_core/ops/dispatch_emit/in_run_widen.py': ('in-repo-non-state', 'widen record appended under the tracked run record dir state/warp/<run_id>/: record_widen'),
     'coordinator_core/ops/retention_run.py': ('outside-repo', 'retention lock file under the Claude home dir, O_EXCL create and stale unlink: _acquire'),

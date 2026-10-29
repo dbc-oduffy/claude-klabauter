@@ -76,7 +76,7 @@ from coordinator_core.ops.dispatch_emit.refire_inherited_scope import (
     inherited_scope,
     withheld_of as _withheld_of,
 )
-from coordinator_core.ops.dispatch_emit import review_floor
+from coordinator_core.ops.dispatch_emit import land_deadline, review_floor
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 _PARAM_FIELDS = (
@@ -229,6 +229,14 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
     from coordinator_core.lifecycle import main_worktree_root
 
     root = main_worktree_root(repo_root)
+    try:
+        with land_deadline.scope():
+            return _dispatch_mode(mode, root, repo_root, params)
+    except land_deadline.LandDeadlineExceeded as exc:
+        return land_deadline.halt_reply(exc)
+
+
+def _dispatch_mode(mode: str, root: Path, repo_root: Path, params: dict) -> dict:
     if mode != "product":
         import importlib
 
@@ -2588,6 +2596,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     except OSError as exc:
         return _error(f"cannot read params.script_path {script_path!r}: {exc}")
 
+    land_deadline.check("land_run.script_read")
     from coordinator_core.ops.dispatch_emit.commit_request import MARKER_PREFIX
 
     manifest = manifest_abs = ask_run_dir = request = None
@@ -3207,12 +3216,17 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     )
     deleted_notes: list = []
     settled_stage: dict = {}
-    findings = _integrity(
-        root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
-        own_declared=declared, session_id=session_id, minted_before=own_seniority,
-        deleted_notes=deleted_notes, released_holders=frozenset(auto_landed_holders or ()),
-        settled=settled_stage,
-    )
+    try:
+        land_deadline.check("land_run.integrity")
+        findings = _integrity(
+            root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
+            own_declared=declared, session_id=session_id, minted_before=own_seniority,
+            deleted_notes=deleted_notes, released_holders=frozenset(auto_landed_holders or ()),
+            settled=settled_stage,
+        )
+    except land_deadline.LandDeadlineExceeded:
+        _remove(root, receipt_paths)
+        raise
     if foreign_held:
         from coordinator_core.ops.dispatch_emit import landing_integrity as li, peer_hunk_gate
 
@@ -3452,6 +3466,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         except own_hunk_stage.OwnHunkRefused as exc:
             _remove(root, receipt_paths)
             return _error(f"own-hunk staging refused: {exc}", refused="own-hunk-stage-refused")
+
+    try:
+        land_deadline.check("land_run.commit")
+    except land_deadline.LandDeadlineExceeded:
+        _remove(root, receipt_paths)
+        raise
 
     def _attempt():
         try:
@@ -3927,6 +3947,7 @@ def _integrity(
 
     owned = merge_landing.run_owned_merge(root, run_id)
     findings = li.unparseable_py(root, live)
+    land_deadline.check("land_run._integrity.import_closure")
     # The merge commit carries every merge path, so an import of a merge-carried module is landed,
     # not uncommitted.
     if owned is not None:
@@ -3946,6 +3967,7 @@ def _integrity(
         findings.append(li.Finding(
             "", li.IMPORT_CLOSURE_UNTRACKED, f"residue import scan failed: {type(exc).__name__}: {exc}",
         ))
+    land_deadline.check("land_run._integrity.since_base")
     base = li.run_base_for(root, run_id, params)
     # The merge owner skips the since-base scan for the merge's own paths only: a resolution that
     # takes the other side drops this side's lines by design. A path the merge does not move is
@@ -3956,6 +3978,7 @@ def _integrity(
             moved = {*owned.present, *owned.deleted}
             scan = [p for p in live if p not in moved]
         findings += li.since_base_findings(root, scan, base, run_id=run_id, plan=plan)
+    land_deadline.check("land_run._integrity.peer_hunk_gate")
     from coordinator_core.ops.dispatch_emit import merge_ancestry_release, peer_hunk_gate
 
     from coordinator_core.ops.dispatch_emit import co_declared_settle
@@ -3976,6 +3999,7 @@ def _integrity(
         ))
     for path, stem, line in peer_hunk_gate.out_of_ask_holds(root, session_id or "", run_id, live):
         findings.append(li.Finding(path, peer_hunk_gate.OUT_OF_ASK_HUNKS, f"{stem}: {line}"))
+    land_deadline.check("land_run._integrity.landing_test_gate")
     tested, _check = li.landing_test_gate(root, params, run_id, live)
     if deleted_notes is not None and tested.deleted_note:
         deleted_notes.append(tested.deleted_note)

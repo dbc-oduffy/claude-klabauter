@@ -127,3 +127,21 @@ def test_nested_paths_resolve_without_parsing_whole_trees(tmp_path, monkeypatch)
         repo, terminal, _REL, [_chunk("C1", "a/b/c.py"), _chunk("C2", "a/missing/x.py", "a/b/c.py")]
     )
     assert got == {"C1": [deep]}
+
+
+def test_tree_entry_matches_whole_entries_only(tmp_path):
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import _tree_entry
+
+    repo = _repo(tmp_path)
+    _commit(repo, {"a docs": "1", "docs": "2", "x1 docs": "3", "m": "4"}, "names that embed another name")
+    cdir = resolve_git_common_dir(repo)
+    tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    absent = object()  # sentinel: the entry is not in the tree
+    for name in ("docs", "a docs", "x1 docs", "m"):
+        want = _git(repo, "rev-parse", f"HEAD:{name}")
+        got = _tree_entry(cdir, tree, name, absent)
+        assert got == (0o100644, want), name
+    assert _tree_entry(cdir, tree, "ocs", absent) is absent
+    assert _tree_entry(cdir, tree, " docs", absent) is absent
+    assert _tree_entry(cdir, "0" * 40, "docs", absent) is None

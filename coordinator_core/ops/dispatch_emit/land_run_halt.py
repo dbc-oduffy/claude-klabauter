@@ -20,7 +20,7 @@ from typing import Optional, Sequence
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit import process_artifact_policy, run_artifacts
+from coordinator_core.ops.dispatch_emit import land_deadline, process_artifact_policy, run_artifacts
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_DEPENDENTS_UNSTARTED,
     HALT_PLAN_FIELD,
@@ -634,6 +634,7 @@ def _land(
     from coordinator_core.ops.dispatch_emit import declared_hold_release
     from coordinator_core.ops.dispatch_emit.land_run import _withhold_reasons
 
+    land_deadline.check("land_run_halt._land.claims")
     declared_hold_release.release_absent(root, product + removed + art_paths + art_deleted, own_run_id=run_id)
     em_withheld = _withhold_reasons(root, artifacts, record_dir_rel)
     withheld.update({
@@ -662,6 +663,7 @@ def _land(
     art_paths = [p for p in art_paths if p not in withheld]
     art_deleted = [p for p in art_deleted if p not in withheld]
 
+    land_deadline.check("land_run_halt._land.integrity")
     integrity: list = []
     claim_provenance: list = []
     targeted: Optional[dict] = None
@@ -736,6 +738,7 @@ def _land(
             **({"targeted_tests": targeted} if targeted is not None else {}), **baton_reply, **base,
         }
 
+    land_deadline.check("land_run_halt._land.commit")
     message = halted_record_message(run_id, halted)
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
 

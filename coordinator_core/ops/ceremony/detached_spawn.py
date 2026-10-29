@@ -193,6 +193,9 @@ def _canonical(path: str) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
+_TEST_ENV_PREFIXES = ("PYTEST_", "_COORDINATOR_TEST_", "COORDINATOR_PYTEST_")
+
+
 def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     """Build the detached child's environment: `PYTHONPATH` with `repo_root` PREPENDED
     ahead of anything already there, everything else inherited from this process's own
@@ -249,6 +252,10 @@ def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     """
     env = dict(os.environ)
     env.pop("COORDINATOR_WARM_BOOT_WAIT_SECS", None)
+    # A detached child outlives the pytest that spawned it; inherited test markers make a
+    # box-wide warm server classify every live hook as a test (RealSettingsHomeLeakError).
+    for var in [k for k in env if k.startswith(_TEST_ENV_PREFIXES)]:
+        del env[var]
     for var in _LIVE_TREE_ENV_VARS:
         inherited = env.get(var)
         if inherited and _canonical(inherited) != _canonical(repo_root):

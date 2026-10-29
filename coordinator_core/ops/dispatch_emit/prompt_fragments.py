@@ -18,6 +18,7 @@ import json
 import re
 from bisect import bisect_right, insort
 from collections import Counter
+from itertools import accumulate
 
 #: Module switch: False leaves the script untouched (the baseline the equality pin compares against).
 HOIST_ENABLED = True
@@ -205,30 +206,47 @@ def _constant_chains(body: str, ids: dict[str, int]) -> list[list[_Tok]]:
 
 def _best_composite(chains: list[list[_Tok]], ref: str) -> tuple[tuple[int, ...], list[tuple[int, int]]] | None:
     """The repeated ≥3-operand window with the largest positive byte saving, with its non-overlapping (chain, index) sites."""
+    idents = [[t.ident for t in ch] for ch in chains]
+    prefix = [list(accumulate((len(t.text) for t in ch), initial=0)) for ch in chains]
     tri: Counter = Counter()
-    for ch in chains:
-        for i in range(len(ch) - 2):
-            tri[(ch[i].ident, ch[i + 1].ident, ch[i + 2].ident)] += 1
-    sites: dict[tuple[int, ...], list[tuple[int, int]]] = {}
-    for ci, ch in enumerate(chains):
-        n = len(ch)
+    for ids in idents:
+        tri.update(zip(ids, ids[1:], ids[2:]))
+    # A window is keyed by an interned id grown one operand at a time: extending it is O(1), not a slice.
+    intern: dict[tuple[int, int], int] = {}
+    sites: dict[int, list[tuple[int, int]]] = {}
+    widths: dict[int, int] = {}
+    for ci, ids in enumerate(idents):
+        n = len(ids)
         for i in range(n - 2):
-            if tri[(ch[i].ident, ch[i + 1].ident, ch[i + 2].ident)] < 2:
+            if tri[(ids[i], ids[i + 1], ids[i + 2])] < 2:
                 continue
+            k = intern.setdefault((-1, ids[i]), len(intern))
+            k = intern.setdefault((k, ids[i + 1]), len(intern))
             j = i + 3
+            k = intern.setdefault((k, ids[i + 2]), len(intern))
             while True:
-                sites.setdefault(tuple(t.ident for t in ch[i:j]), []).append((ci, i))
-                if j < n and tri[(ch[j - 2].ident, ch[j - 1].ident, ch[j].ident)] >= 2:
+                where = sites.get(k)
+                if where is None:
+                    sites[k] = where = []
+                    widths[k] = j - i
+                where.append((ci, i))
+                if j < n and tri[(ids[j - 2], ids[j - 1], ids[j])] >= 2:
+                    step = (k, ids[j])
+                    k = intern.get(step)
+                    if k is None:
+                        k = intern[step] = len(intern)
                     j += 1
                 else:
                     break
     best = None
     best_gain = 0
-    for key, where in sites.items():
-        width = len(key)
+    for k, where in sites.items():
+        if len(where) < 2:
+            continue
+        width = widths[k]
         kept: list[tuple[int, int]] = []
         last: dict[int, int] = {}
-        for ci, i in sorted(where):
+        for ci, i in where:
             if i >= last.get(ci, -1):
                 kept.append((ci, i))
                 last[ci] = i + width
@@ -236,10 +254,11 @@ def _best_composite(chains: list[list[_Tok]], ref: str) -> tuple[tuple[int, ...]
         if cnt < 2:
             continue
         ci0, i0 = kept[0]
-        text_len = sum(len(t.text) for t in chains[ci0][i0 : i0 + width]) + 3 * (width - 1)
+        pre = prefix[ci0]
+        text_len = pre[i0 + width] - pre[i0] + 3 * (width - 1)
         gain = cnt * text_len - cnt * len(ref) - (text_len + len(ref) + 11)
         if gain > best_gain:
-            best, best_gain = (key, kept), gain
+            best, best_gain = (tuple(idents[ci0][i0 : i0 + width]), kept), gain
     return best
 
 

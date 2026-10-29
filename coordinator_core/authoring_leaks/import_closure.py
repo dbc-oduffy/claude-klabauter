@@ -47,6 +47,9 @@ def _module_files(module: str) -> List[str]:
 
 
 def _read_text(path: Path) -> Optional[str]:
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    land_deadline.check("authoring_leaks.import_closure._read_text")
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
