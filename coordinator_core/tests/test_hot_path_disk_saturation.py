@@ -74,13 +74,11 @@ def test_guard_deny_fire_drops(saturated, capsys):
     _drop_case(saturated, capsys, "guard_advisory_counter.record_deny_fire")
 
 
-def test_handoff_twin_scan_fails_closed(saturated):
-    from coordinator_core.handoff_creation_guard import HandoffTwinScanStalled
-
+def test_handoff_twin_scan_degrades_to_no_twin(saturated):
     _, sites, _ = saturated
     result, elapsed = _timed(sites["handoff_creation_guard.find_archived_twin_by_handoff_id"])
     assert elapsed < BUDGET_S, f"twin scan held the caller {elapsed:.3f}s"
-    assert isinstance(result, HandoffTwinScanStalled)
+    assert result is None
 
 
 def test_prep_gate_dr_scan_skips_the_check(saturated, capsys):

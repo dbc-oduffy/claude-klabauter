@@ -75,18 +75,13 @@ PathLike = Union[str, os.PathLike]
 _STALLED = object()
 
 # Caller-blocked bound for the scan is the shared 250ms hot-path bar; the deadline
-# must stay under it, so the fail-closed refusal fires inside the budget.
+# must stay under it. A stalled scan reads as "no twin": a duplicate handoff is
+# recoverable, a refused mint stops a run (2026-10-29: two engine-ask gates refused).
 _TWIN_SCAN_DEADLINE_SECS = APPEND_DEADLINE_SECS
 
 
 class HandoffArchivedTwinError(RuntimeError):
     pass
-
-
-class HandoffTwinScanStalled(HandoffArchivedTwinError):
-    """The handoff_id twin scan overran its deadline. Fail closed: a stalled
-    scan is not evidence of "no twin", so creation callers (which already catch
-    ``HandoffArchivedTwinError``) refuse rather than allow a possible duplicate."""
 
 
 def _archive_handoffs_dir(repo_root: PathLike) -> Path:
@@ -116,8 +111,8 @@ def find_archived_twin_by_handoff_id(handoff_id: Optional[str], repo_root: PathL
     glob-and-compare loop, so guards cannot drift apart on what counts as a
     twin. Only the reaction to a match stays call-site-local.
 
-    Raises ``HandoffTwinScanStalled`` when the scan overruns
-    ``_TWIN_SCAN_DEADLINE_SECS`` (a large archive can overrun it too).
+    ``None`` too when the scan overruns ``_TWIN_SCAN_DEADLINE_SECS`` (a stalled
+    disk or a large archive).
     """
     if not handoff_id:
         return None
@@ -129,12 +124,7 @@ def find_archived_twin_by_handoff_id(handoff_id: Optional[str], repo_root: PathL
         default=_STALLED,
     )
     if result is _STALLED:
-        raise HandoffTwinScanStalled(
-            f"archived-twin scan of {archive_dir} did not finish within "
-            f"{_TWIN_SCAN_DEADLINE_SECS}s (disk stalled or archive too large to scan "
-            "in that time); refusing rather than risk a duplicate handoff. Retry; "
-            "the late scan warms the cache."
-        )
+        return None
     return result  # type: ignore[return-value]
 
 

@@ -541,6 +541,8 @@ def cache_trim_hint(bin_dir: Path) -> str:
 
 TRIM_COOLDOWN_S = 600.0
 CACHE_CAUSE_GIB = 8.0
+#: The heavy-command admission floor: under it, a cache-bound box trims without waiting for critical.
+LOW_AVAIL_GIB = 8.0
 
 
 def cache_gib(bin_dir: Path) -> Optional[float]:
@@ -687,8 +689,23 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                     paused.clear()
                     _write_frozen(pidfile, paused, start_times_fn)
                     gave_up = False
+            avail = avail_fn() if avail_fn is not None else None
+            # The critical floor (avail_pct) sits far under the 8 GiB heavy-admission floor; between the
+            # two a cache-bound box starves admissions while the critical branch above never trims.
+            if (avail is not None and avail < LOW_AVAIL_GIB and sys.platform == "win32"
+                    and (last_trim is None or clock() - last_trim >= TRIM_COOLDOWN_S)):
+                cache = (cache_gib_fn or (lambda: cache_gib(bin_dir)))()
+                if cache is not None and cache >= CACHE_CAUSE_GIB:
+                    last_trim = clock()
+                    emit(f"GOVERNOR LOW available={avail:.1f} cache={cache:.1f}")
+                    try:
+                        tail = (trim_fn or (lambda: fire_cache_trim(bin_dir)))()
+                    except Exception:  # a trim failure falls back to the hint
+                        tail = None
+                    emit(cache_trim_hint(bin_dir) if tail is None
+                         else f"GOVERNOR CACHE-TRIM fired {tail}".rstrip())
             if avail_fn is not None:
-                line, low_gib = headroom_line(avail_fn(), low_gib, pause_recovery and not paused)
+                line, low_gib = headroom_line(avail, low_gib, pause_recovery and not paused)
                 if line:
                     pause_recovery = False
                     emit(line)

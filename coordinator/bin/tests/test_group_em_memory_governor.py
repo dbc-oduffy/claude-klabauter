@@ -784,3 +784,32 @@ def test_open_log_or_exit_refuses_an_unwritable_log(tmp_path, capsys):
         gov.open_log_or_exit(tmp_path)
     assert exc.value.code == 2
     assert "cannot write --log" in capsys.readouterr().err
+
+
+def _low_stream(avails, tmp_path, monkeypatch, cache, clock=None):
+    monkeypatch.setattr(gov.sys, "platform", "win32")
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "trimmed")
+    it = iter(avails)
+    lines = []
+    gov.run(_args(resume_after=1), emit=lines.append, sample=lambda: False, procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=len(avails), bin_dir=tmp_path,
+            avail_fn=lambda: next(it), cache_gib_fn=lambda: cache, **({"clock": clock} if clock else {}))
+    return lines, calls
+
+
+def test_under_the_admission_floor_a_cache_bound_box_trims_without_a_critical_sample(tmp_path, monkeypatch):
+    """group-em-7d 2026-10-29: 7.4 GiB available, 48 GiB cache, governor silent and no trim."""
+    lines, calls = _low_stream([7.4, 7.3], tmp_path, monkeypatch, cache=48.0, clock=_tick(10))
+    assert calls == [1]
+    assert "GOVERNOR LOW available=7.4 cache=48.0" in lines
+
+
+def test_under_the_floor_with_a_small_cache_fires_nothing(tmp_path, monkeypatch):
+    lines, calls = _low_stream([7.4], tmp_path, monkeypatch, cache=2.0)
+    assert calls == [] and not [x for x in lines if "LOW" in x]
+
+
+def test_above_the_floor_fires_nothing(tmp_path, monkeypatch):
+    lines, calls = _low_stream([9.0, 30.0], tmp_path, monkeypatch, cache=48.0)
+    assert calls == []
