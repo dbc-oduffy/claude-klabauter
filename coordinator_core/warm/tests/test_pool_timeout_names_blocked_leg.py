@@ -111,7 +111,7 @@ def test_a_default_mutating_op_past_its_deadline_names_its_blocked_leg(rig, monk
     leg = diagnosis["blocked_leg"]
     assert leg["leg"].endswith("test_pool_timeout_names_blocked_leg.py::_the_blocking_leg")
     assert leg["kind"] == "wait"
-    assert 1 <= len(leg["frames"]) <= 8
+    assert 1 <= len(leg["frames"]) <= server._LEG_MAX_FRAMES
     assert any("_the_blocking_leg" in f for f in leg["frames"])
 
     (row,) = rows

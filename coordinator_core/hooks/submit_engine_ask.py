@@ -901,27 +901,27 @@ def evaluate(
                 return deny("PreToolUse", why)
             reserved_run_id = marker[1]
 
-    if sizing_rel:
-        from coordinator_core.ops.dispatch_emit import run_token
+    clash = None
+    with warp_live.listing_scope():
+        if sizing_rel:
+            from coordinator_core.ops.dispatch_emit import run_token
 
-        with warp_live.listing_scope():
             stale = warp_live.unlaunched_run_for_sizing(root, sizing_rel, session_id)
             if stale:
                 run_token.consume(root, stale)
             live = warp_live.live_run_for_sizing(
                 root, sizing_rel, session_id=session_id, transcript_path=transcript
             )
-        if live:
-            return deny(
-                "PreToolUse",
-                f"Run {live} is already working {sizing_rel}; its completion is your one wake. "
-                "End the turn.",
-            )
-
-    if asks is None and reserved_run_id is None:
-        clash = _live_write_overlap_deny(root, payload["tool_input"], sizing_doc)
-        if clash:
-            return deny("PreToolUse", clash)
+            if live:
+                return deny(
+                    "PreToolUse",
+                    f"Run {live} is already working {sizing_rel}; its completion is your one wake. "
+                    "End the turn.",
+                )
+        if asks is None and reserved_run_id is None:
+            clash = _live_write_overlap_deny(root, payload["tool_input"], sizing_doc)
+    if clash:
+        return deny("PreToolUse", clash)
 
     retire_note = ""
     if sizing_rel and reserved_run_id is None:

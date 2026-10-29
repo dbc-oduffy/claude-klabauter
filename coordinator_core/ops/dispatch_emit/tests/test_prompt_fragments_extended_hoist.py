@@ -86,3 +86,27 @@ def test_hoist_disabled_leaves_script_byte_identical(monkeypatch):
     monkeypatch.setattr(pf, "HOIST_ENABLED", False)
     src = _run_script()
     assert _hoist(src) == src
+
+
+def _many_uses(n: int) -> str:
+    sentence = "Every shared sentence here is long enough to be hoisted into a const. "
+    schema = '{"properties": {"alpha": {"type": "string"}, "beta": {"type": "number"}}, "type": "object"}'
+    lines = [f"const s{i} = {schema};\nconst a{i} = 'k{i} ' + '{sentence}' + x{i};" for i in range(n)]
+    return "// anchor\n" + "\n".join(lines) + "\n"
+
+
+def test_hoist_cost_grows_linearly_with_script_size(monkeypatch):
+    import time
+
+    def best(n: int) -> float:
+        src = _many_uses(n)
+        runs = []
+        for _ in range(3):
+            t = time.process_time()
+            out = _hoist(src)
+            runs.append(time.process_time() - t)
+        assert pf.resolve_fragment_refs(out) == pf.fold_literals(src)
+        return min(runs)
+
+    small, large = best(300), best(1200)
+    assert large < max(small, 0.02) * 10, f"4x the script cost {large / max(small, 1e-6):.1f}x ({small:.3f}s -> {large:.3f}s)"

@@ -394,19 +394,49 @@ def outside_landings(
     parent's. A chunk is present only when every entry of ``paths`` has a landing commit.
     ``skip_foreign_runs`` also steps over another plan's checkpoint and a halt-record commit naming another plan.
     """
-    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.commit_walk import commit_meta as _commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit as _resolve_blob
+    from coordinator_core.git.rollback_check import ABSENT, _TREE_MODE, _tree_lookup
 
     wanted = [c for c in chunks if c.paths]
     if not wanted or not plan_path:
         return {}
     blobs: dict = {}  # (sha, path) -> blob; scoped to this call so it never outlives the walk
+    steps: dict = {}  # (tree, name) -> entry; one raw-byte scan per tree entry, not a full tree parse
+    metas: dict = {}  # sha -> commit meta; each commit object is read once per call
+
+    def commit_meta(cdir, csha):
+        if csha not in metas:
+            metas[csha] = _commit_meta(cdir, csha)
+        return metas[csha]
+
+    def _step(cdir, tree, name):
+        key = (tree, name)
+        if key not in steps:
+            found = _tree_lookup(cdir, tree, {name})
+            steps[key] = None if found is None else found.get(name, ABSENT)
+        return steps[key]
 
     def _blob_at_commit(cdir, csha, path):
         key = (csha, path)
         if key not in blobs:
-            blobs[key] = _resolve_blob(cdir, csha, path)
+            meta_ = commit_meta(cdir, csha)
+            cur = (meta_ or {}).get("tree")
+            parts = path.split("/")
+            result = None
+            for i, part in enumerate(parts):
+                if not cur:
+                    break
+                entry = _step(cdir, cur, part)
+                if entry is None:
+                    break
+                if entry is ABSENT or (i < len(parts) - 1 and entry[0] != _TREE_MODE):
+                    result = ABSENT
+                    break
+                if i == len(parts) - 1:
+                    result = entry[1]
+                cur = entry[1]
+            blobs[key] = result
         return blobs[key]
 
     common_dir = resolve_git_common_dir(worktree_root)

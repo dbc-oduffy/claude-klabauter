@@ -641,14 +641,16 @@ def _cap_leg(
     return None, anchor, census, launch
 
 
-def _shell_cap_warning(text: str) -> Dict[str, Any]:
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": text,
-        }
-    }
+def _shell_cap_warning(text: str) -> Any:
+    """An advisory record: the dispatcher crash-denies a raw dict from an unpinned guard."""
+    from coordinator_core.guard_messages.alternative_record import AlternativeRecord
+
+    return AlternativeRecord(
+        verdict_kind="advisory",
+        guard_name=GUARD_NAME,
+        summary=text,
+        members=(_retry("TaskStop on an idle background shell", "which shell to stop"),),
+    )
 
 
 def _fold_claimed(census, rows, anchor, chain):

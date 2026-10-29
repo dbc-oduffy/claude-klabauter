@@ -10,7 +10,8 @@ The fixture is a small synthetic history: an UNDER-bar result here does not show
 12.0s symptom is gone; only a run against a production-sized history does.
 
 Run: `python -m coordinator_core.benchmarks.submit_hook_resume_emit [--commits N] [--top T]
-[--profile-out PATH] [--enforce-bar]`. Scratch lives in a managed temp dir this script removes.
+[--profile-out PATH] [--enforce-bar] [--repo ROOT [--sizing REL]]`. `--repo` replays
+`submit_engine_ask.evaluate` on a halted sizing in a real tree (the proof the fixture cannot give). Scratch lives in a managed temp dir this script removes.
 """
 
 from __future__ import annotations
@@ -191,6 +192,114 @@ def measure(commits: int = DEFAULT_COMMITS, top: int = 20) -> dict:
         rmtree_or_raise(scratch, label="resume-emit-bench")
 
 
+def halted_sizings(repo: Path, limit: int = 60) -> list[str]:
+    """Distinct `sizing_rel`s of halted run records under `repo`'s `state/warp`, newest marker first."""
+    import json
+    import os
+
+    base = repo / "state" / "warp"
+    stamped: list[tuple[float, str]] = []
+    try:
+        entries = [e.path for e in os.scandir(base) if e.is_dir()]
+    except OSError:
+        return []
+    for path in entries:
+        marker = os.path.join(path, "halted.json")
+        try:
+            stamped.append((os.stat(marker).st_mtime, marker))
+        except OSError:
+            continue
+    found: list[str] = []
+    for _, marker in sorted(stamped, reverse=True):
+        try:
+            data = json.loads(Path(marker).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rel = data.get("sizing_rel") if isinstance(data, dict) and data.get("status") == "halted" else None
+        if isinstance(rel, str) and rel not in found:
+            found.append(rel)
+            if len(found) >= limit:
+                break
+    return found
+
+
+def _emitted(out: dict) -> bool:
+    """True when the hook allowed the submission and wrote a workflow script (the resume taking the run)."""
+    hso = out.get("hookSpecificOutput") or {}
+    return hso.get("permissionDecision") == "allow" and str(
+        hso.get("permissionDecisionReason") or ""
+    ).startswith("Engine submission: emitted")
+
+
+def replay(repo: Path, sizing_rel: str | None = None, top: int = 20) -> dict:
+    """Drive `submit_engine_ask.evaluate` (launch stubbed) on a halted sizing in the real tree `repo`.
+
+    Reports cold and warm process ms, git spawns of one warm call, the hook's decision and whether
+    the launch stub was reached or a script was emitted (`reaches_launch`, the resume taking the
+    halted run). NOT read-only: every emitting call writes a workflow script and run record into
+    `repo`, and candidates are tried newest first until one emits, so point it at a scratch clone."""
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    repo = Path(repo).resolve()
+    candidates = [sizing_rel] if sizing_rel else halted_sizings(repo)
+    if not candidates:
+        raise SystemExit(f"no halted run record under {repo / 'state' / 'warp'}; pass --sizing")
+    launched: list = []
+    payload: dict = {}
+
+    def call() -> dict:
+        launched.clear()
+        return hook.evaluate(payload, launch=lambda *a, **k: launched.append((a, k)))
+
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.chdir(repo)
+        cold_ms = None
+        tried = 0
+        for sizing_rel in candidates:
+            tried += 1
+            payload.clear()
+            payload.update({
+                "hook_event_name": "PreToolUse", "tool_name": "Workflow", "session_id": _SESSION_ID,
+                "cwd": str(repo), "tool_use_id": "replay-resume-emit",
+                "tool_input": {"name": "coordinator:engine-ask", "args": {"sizing": sizing_rel}},
+            })
+            t0 = time.process_time()
+            first = call()
+            if cold_ms is None:
+                cold_ms = (time.process_time() - t0) * 1000.0
+            if launched or _emitted(first):
+                break
+        with _count_spawns_attributed(mp) as spawns:
+            out = call()
+        spawn_argv = [s.argv for s in spawns]
+        reached = bool(launched) or _emitted(out)
+        profiler = cProfile.Profile()
+        profiler.runcall(call)
+        try:
+            warm_ms = in_process_time_ms(call)["process_time_ms"]
+        except ValueError:
+            warm_ms = None
+        text = _top(pstats.Stats(profiler, stream=io.StringIO()), top)
+    finally:
+        mp.undo()
+    decision = (out.get("hookSpecificOutput") or {}).get("permissionDecision")
+    return {
+        "repo": str(repo),
+        "sizing": sizing_rel,
+        "cold_process_ms": round(cold_ms, 1),
+        "warm_process_ms": warm_ms,
+        "git_spawns": len(spawn_argv),
+        "git_spawn_argv": spawn_argv,
+        "candidates_tried": tried,
+        "decision": decision,
+        "reaches_launch": reached,
+        "resumes_halted_run": reached and decision != "deny",
+        "reason": (out.get("hookSpecificOutput") or {}).get("permissionDecisionReason"),
+        "top": text,
+    }
+
+
 def _scratch_parent() -> str:
     from coordinator_core.temp_layout import managed_tempdir
 
@@ -204,8 +313,10 @@ def main() -> int:
     ap.add_argument("--top", type=int, default=20)
     ap.add_argument("--profile-out", default=None, help="write the cProfile top-N here")
     ap.add_argument("--enforce-bar", action="store_true", help=f"exit 2 when warm process ms >= {BAR_MS:.0f}")
+    ap.add_argument("--repo", default=None, help="replay evaluate on a halted sizing in this real tree")
+    ap.add_argument("--sizing", default=None, help="with --repo: the sizing (default: newest halted run's)")
     args = ap.parse_args()
-    result = measure(args.commits, args.top)
+    result = replay(Path(args.repo), args.sizing, args.top) if args.repo else measure(args.commits, args.top)
     top = result.pop("top")
     for key, value in result.items():
         print(f"{key}: {value}")

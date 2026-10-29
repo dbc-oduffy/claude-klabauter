@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops import warp_run_deliverable
-from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit import review_edit_source, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
     CommitRequest,
@@ -200,7 +200,25 @@ def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
     checks: list = []
     real_held = run_token.held_records
     real_claims = warp_run_deliverable.live_run_write_claims
-    monkeypatch.setattr(run_token, "held_records", lambda r: listings.append(1) or real_held(r))
+    real_sole = review_edit_source.sole_run_attested_writes
+    in_sole: list = []
+
+    def held(r):
+        listings.append(1)
+        if in_sole:
+            sole.append(1)
+        return real_held(r)
+
+    def sole_run(*a, **k):
+        in_sole.append(1)
+        try:
+            return real_sole(*a, **k)
+        finally:
+            in_sole.pop()
+
+    sole: list = []
+    monkeypatch.setattr(run_token, "held_records", held)
+    monkeypatch.setattr(review_edit_source, "sole_run_attested_writes", sole_run)
     monkeypatch.setattr(
         warp_run_deliverable, "live_run_write_claims",
         lambda *a, **k: checks.append(1) or real_claims(*a, **k),
@@ -208,4 +226,7 @@ def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
     out = _run_a(repo)
     assert out["committed"] is True, out
     assert checks
-    assert len(listings) == len(checks)
+    # 3f98cefad2 added one listing that is not a claim check: the sole-run review-writes attribution
+    # (`review_edit_source.sole_run_attested_writes`). Every claim check still lists the store once.
+    assert len(sole) == 1
+    assert len(listings) - len(sole) == len(checks)

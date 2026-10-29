@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import re
-from bisect import bisect_right
+from bisect import bisect_right, insort
 from collections import Counter
 
 #: Module switch: False leaves the script untouched (the baseline the equality pin compares against).
@@ -155,6 +155,8 @@ def _single_quoted_content(src: str, s: int, e: int) -> str:
 _OPERAND_START_OK = set("(,=:[{;?+")
 _OPERAND_END_BAD = set(".[(*/%`")
 _COMPOSITE_ROUNDS = 200
+_FAR = 1 << 62
+_COMPOSITE_REF = re.compile(r"\b_PFC\d+\b")
 
 
 class _Tok:
@@ -190,7 +192,10 @@ def _constant_chains(body: str, ids: dict[str, int]) -> list[list[_Tok]]:
             or before.endswith("return")
             or before.endswith("=>")
         )
-        after = body[ch[-1].end :].lstrip()
+        k = ch[-1].end
+        while k < len(body) and body[k].isspace():
+            k += 1
+        after = body[k : k + 2]
         ok_end = not after or (after[0] not in _OPERAND_END_BAD and not after.startswith(("?.", "**")))
         ch = ch[(0 if ok_start else 1) : len(ch) - (0 if ok_end else 1)]
         if len(ch) >= 3:
@@ -266,13 +271,12 @@ def _hoist_constant_runs(body: str) -> tuple[str, list[str]]:
         last = e
     out.append(body[last:])
     body = "".join(out)
+    in_body = set(_COMPOSITE_REF.findall(body))
+    in_defs = [set(_COMPOSITE_REF.findall(expr)) for _, expr in defs]
     live = [True] * len(defs)
     for k in range(len(defs) - 1, -1, -1):
         ref = defs[k][0]
-        used = re.search(rf"\b{ref}\b", body) or any(
-            live[m] and re.search(rf"\b{ref}\b", defs[m][1]) for m in range(k + 1, len(defs))
-        )
-        live[k] = bool(used)
+        live[k] = ref in in_body or any(live[m] and ref in in_defs[m] for m in range(k + 1, len(defs)))
     return body, [f"const {ref} = {expr};\n" for (ref, expr), keep in zip(defs, live) if keep]
 
 
@@ -384,19 +388,32 @@ def _hoist_json_values(script: str, *, anchor: str, first: int) -> str:
     while True:
         cands = _json_candidates(script)
         edits: list[tuple[int, int, str]] = []
+        taken: list[tuple[int, int]] = []
         defs: list[str] = []
         for text in sorted((t for t, p in cands.items() if len(p) > 1), key=len, reverse=True):
-            pos = [p for p in cands[text] if not any(a <= p < b for a, b, _ in edits)]
+            pos = []
+            for p in cands[text]:
+                k = bisect_right(taken, (p, _FAR)) - 1
+                if k < 0 or taken[k][1] <= p:
+                    pos.append(p)
             name = _REF_NAME.format(n + len(defs))
             if len(pos) < 2 or (len(pos) - 1) * len(text) - (len(pos) + 1) * len(name) - 14 <= 0:
                 continue
             defs.append(f"const {name} = {text};\n")
             edits.extend((p, p + len(text), name) for p in pos)
+            for p in pos:
+                insort(taken, (p, p + len(text)))
         if not defs:
             return script
         n += len(defs)
-        for s, e, name in sorted(edits, reverse=True):
-            script = script[:s] + name + script[e:]
+        pieces: list[str] = []
+        last = 0
+        for s, e, name in sorted(edits):
+            pieces.append(script[last:s])
+            pieces.append(name)
+            last = e
+        pieces.append(script[last:])
+        script = "".join(pieces)
         eol = script.index("\n", script.index(anchor)) + 1
         script = script[:eol] + "".join(defs) + script[eol:]
 

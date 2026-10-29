@@ -107,17 +107,81 @@ def test_already_running_is_silent(tmp_path, spawned):
     assert sir.refresh(tmp_path, 1, env={}) is None
 
 
-def _fake_run(rc, stderr):
-    def run(cmd, **kw):
-        assert kw["stderr"] == subprocess.PIPE
-        return subprocess.CompletedProcess(cmd, rc, stdout=None, stderr=stderr)
+class WaitPopen:
+    """Popen stand-in: writes `stderr` to the passed file, then `wait` times out `hangs` times."""
 
-    return run
+    def __init__(self, rc, emitted, hangs=0, **kw):
+        assert kw["stderr"] not in (subprocess.PIPE, None)
+        kw["stderr"].write(emitted)
+        kw["stderr"].flush()
+        self.rc, self.hangs, self.pid = rc, hangs, 4242
+
+    def wait(self, timeout=None):
+        if self.hangs and timeout is not None:
+            self.hangs -= 1
+            raise subprocess.TimeoutExpired("ensure", timeout)
+        return self.rc
+
+
+def _fake_popen(rc, stderr, hangs=0):
+    return lambda cmd, **kw: WaitPopen(rc, stderr, hangs, **kw)
+
+
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        self.now += sir.POLL_INTERVAL_S
+        return self.now
+
+
+def _record(tmp_path):
+    return json.loads((tmp_path / ".structural-index" / "refresh-last.json").read_text(encoding="utf-8"))
+
+
+def test_wedged_tree_is_killed_and_recorded(tmp_path, monkeypatch):
+    killed = []
+    monkeypatch.setattr(sir.subprocess, "Popen", _fake_popen(0, "boot\n", hangs=10**6))
+    monkeypatch.setattr(sir, "_tree_sample", lambda pid: (5.0, False))
+    monkeypatch.setattr(sir, "_monotonic", Clock())
+    monkeypatch.setattr(sir, "_kill_tree", killed.append)
+    assert sir.run_and_record(Path("/rag"), tmp_path) == sir.NO_PROGRESS_EXIT
+    assert killed == [4242]
+    rec = _record(tmp_path)
+    assert rec["exit_code"] == sir.NO_PROGRESS_EXIT
+    assert "no CPU progress" in rec["stderr_tail"][-1]
+    assert rec["stderr_tail"][0] == "boot"
+
+
+def test_rising_cpu_is_never_killed(tmp_path, monkeypatch):
+    cpu = iter(float(i) for i in range(1, 1000))
+    monkeypatch.setattr(sir.subprocess, "Popen", _fake_popen(0, "", hangs=200))
+    monkeypatch.setattr(sir, "_tree_sample", lambda pid: (next(cpu), False))
+    monkeypatch.setattr(sir, "_monotonic", Clock())
+    monkeypatch.setattr(sir, "_kill_tree", lambda pid: pytest.fail("killed a progressing tree"))
+    assert sir.run_and_record(Path("/rag"), tmp_path) == 0
+    assert _record(tmp_path)["exit_code"] == 0
+
+
+def test_suspended_tree_is_never_killed(tmp_path, monkeypatch):
+    monkeypatch.setattr(sir.subprocess, "Popen", _fake_popen(0, "", hangs=200))
+    monkeypatch.setattr(sir, "_tree_sample", lambda pid: (5.0, True))
+    monkeypatch.setattr(sir, "_monotonic", Clock())
+    monkeypatch.setattr(sir, "_kill_tree", lambda pid: pytest.fail("killed a suspended tree"))
+    assert sir.run_and_record(Path("/rag"), tmp_path) == 0
+
+
+def test_without_psutil_waits_unbounded(tmp_path, monkeypatch):
+    monkeypatch.setattr(sir.subprocess, "Popen", _fake_popen(0, "", hangs=3))
+    monkeypatch.setattr(sir, "_tree_sample", lambda pid: None)
+    monkeypatch.setattr(sir, "_kill_tree", lambda pid: pytest.fail("killed without a sampler"))
+    assert sir.run_and_record(Path("/rag"), tmp_path) == 0
 
 
 def test_run_and_record_writes_failure_record(tmp_path, monkeypatch):
     err = "\n".join(f"line{i}" for i in range(8)) + "\nsqlite3.OperationalError: database is locked\n"
-    monkeypatch.setattr(sir.subprocess, "run", _fake_run(1, err))
+    monkeypatch.setattr(sir.subprocess, "Popen", _fake_popen(1, err))
     assert sir.run_and_record(Path("/rag"), tmp_path) == 1
     rec = json.loads((tmp_path / ".structural-index" / "refresh-last.json").read_text(encoding="utf-8"))
     assert rec["exit_code"] == 1
@@ -127,7 +191,7 @@ def test_run_and_record_writes_failure_record(tmp_path, monkeypatch):
 
 
 def test_run_and_record_success_and_spawn_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr(sir.subprocess, "run", _fake_run(0, ""))
+    monkeypatch.setattr(sir.subprocess, "Popen", _fake_popen(0, ""))
     sir.run_and_record(Path("/rag"), tmp_path)
     path = tmp_path / ".structural-index" / "refresh-last.json"
     assert json.loads(path.read_text(encoding="utf-8"))["exit_code"] == 0
@@ -135,7 +199,7 @@ def test_run_and_record_success_and_spawn_failure(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise OSError("no exe")
 
-    monkeypatch.setattr(sir.subprocess, "run", boom)
+    monkeypatch.setattr(sir.subprocess, "Popen", boom)
     assert sir.run_and_record(Path("/rag"), tmp_path) == -1
     assert "no exe" in json.loads(path.read_text(encoding="utf-8"))["stderr_tail"][-1]
 

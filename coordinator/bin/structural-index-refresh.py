@@ -18,6 +18,9 @@ Every run's outcome (started_at, finished_at, exit_code, stderr_tail) lands in
 A launch refused for memory (`post_close_admission.admit`) instead writes a record with
 `exit_code` null and a `deferred` reason, and spawns nothing.
 
+The wrapper kills an `ensure` tree that accrues no CPU (and has no suspended member) for
+NO_PROGRESS_WINDOW_S, recording exit code NO_PROGRESS_EXIT; a progressing tree is never killed.
+
 `--flag-only` (`flag_staleness`) reads the recorded status, prints a staleness line, and spawns nothing.
 
 Usage: structural-index-refresh.py [--root DIR] [--timeout SECONDS] [--flag-only]
@@ -32,6 +35,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -65,6 +69,11 @@ ENSURE_SCRIPT = Path(f"{_INDEX_REPO}_scripts") / "structural_index_refresh.py"
 DEFAULT_TIMEOUT = 30.0
 RECORD_NAME = "refresh-last.json"
 STDERR_TAIL_LINES = 5
+POLL_INTERVAL_S = 30.0
+NO_PROGRESS_WINDOW_S = 600.0
+# Recorded exit code of an ensure tree killed for accruing no CPU; distinct from ALREADY_RUNNING (3).
+NO_PROGRESS_EXIT = 124
+_monotonic = time.monotonic
 
 
 def resolve_index_repo() -> Optional[Path]:
@@ -101,24 +110,106 @@ def run_and_record(rag: Path, root: Path) -> int:
     stamp = "%Y-%m-%dT%H:%M:%SZ"
     started = time.strftime(stamp, time.gmtime())
     cmd = [_python(), str(rag / ENSURE_SCRIPT), "ensure", "--root", str(root)]
+    killed = False
     try:
-        proc = subprocess.run(
-            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            text=True, errors="replace", cwd=str(root),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        rc, err = proc.returncode, proc.stderr or ""
+        # stderr goes to a file: an undrained PIPE would deadlock the poll loop once it fills.
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errf:
+            proc = subprocess.Popen(
+                cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=errf,
+                text=True, errors="replace", cwd=str(root),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            rc, killed = _wait_with_progress_ceiling(proc)
+            errf.seek(0)
+            err = errf.read()
     except Exception as exc:
         rc, err = -1, f"{type(exc).__name__}: {exc}"
-    lines = [ln for ln in err.splitlines() if ln.strip()]
+    lines = [ln for ln in err.splitlines() if ln.strip()][-STDERR_TAIL_LINES:]
+    if killed:
+        lines = lines[-(STDERR_TAIL_LINES - 1):] + [
+            f"structural-index: ensure tree killed after {NO_PROGRESS_WINDOW_S:g}s with no CPU progress"
+        ]
     record = {
         "started_at": started,
         "finished_at": time.strftime(stamp, time.gmtime()),
         "exit_code": rc,
-        "stderr_tail": lines[-STDERR_TAIL_LINES:],
+        "stderr_tail": lines,
     }
     _write_record(root, record)
     return rc
+
+
+def _tree_sample(pid: int) -> "Optional[tuple[float, bool]]":
+    """``(cpu_seconds, any_member_suspended)`` summed over `pid` and its descendants.
+
+    None when psutil is absent (caller waits unbounded). A vanished member contributes nothing.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        members = [psutil.Process(pid)]
+        members += members[0].children(recursive=True)
+    except psutil.Error:
+        return 0.0, False
+    total, suspended = 0.0, False
+    for member in members:
+        try:
+            times = member.cpu_times()
+            total += times.user + times.system
+            suspended = suspended or member.status() == psutil.STATUS_STOPPED
+        except psutil.Error:
+            continue
+    return total, suspended
+
+
+def _kill_tree(pid: int) -> None:
+    """The publish sequencer's `_kill_tree`, loaded by path; a lone-root kill when it cannot load."""
+    try:
+        import importlib.util
+
+        src = Path(__file__).resolve().with_name("publish-repo-bundle-at-ceremony.py")
+        spec = importlib.util.spec_from_file_location("publish_repo_bundle_at_ceremony", src)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod._kill_tree(pid)
+    except Exception:
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+
+
+def _wait_with_progress_ceiling(proc: "subprocess.Popen") -> "tuple[int, bool]":
+    """Wait for `proc`; kill its tree after NO_PROGRESS_WINDOW_S without CPU progress.
+
+    Returns ``(exit_code, killed)``. Progress is rising tree CPU time or any suspended/stopped
+    member (the memory governor suspends by design). No wall-clock ceiling: a tree that keeps
+    accruing CPU is never killed.
+    """
+    last_cpu: Optional[float] = None
+    idle_since = _monotonic()
+    while True:
+        try:
+            return proc.wait(timeout=POLL_INTERVAL_S), False
+        except subprocess.TimeoutExpired:
+            pass
+        sample = _tree_sample(proc.pid)
+        if sample is None:
+            return proc.wait(), False
+        cpu, suspended = sample
+        now = _monotonic()
+        if suspended or last_cpu is None or cpu > last_cpu:
+            idle_since = now
+        last_cpu = cpu
+        if now - idle_since >= NO_PROGRESS_WINDOW_S:
+            _kill_tree(proc.pid)
+            try:
+                proc.wait(timeout=POLL_INTERVAL_S)
+            except subprocess.TimeoutExpired:
+                pass
+            return NO_PROGRESS_EXIT, True
 
 
 # example-retrieval-repo's per-repo lock: a concurrent `ensure` exits 3. Benign -- the other run records its own outcome.

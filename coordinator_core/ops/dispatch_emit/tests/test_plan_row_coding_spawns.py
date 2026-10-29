@@ -108,3 +108,22 @@ def test_rows_landed_outside_executor_counts_head_but_not_the_plan_creation_comm
         {"id": "C3"},
     ]
     assert rows_landed_outside_executor(tmp_path, _REL, rows) == {"C2": head}
+
+
+def test_nested_paths_resolve_without_parsing_whole_trees(tmp_path, monkeypatch):
+    from coordinator_core.git import rollback_check
+
+    repo = _repo(tmp_path)
+    deep = _commit(repo, {"a/b/c.py": "1", "a/other.py": "1"}, "deep")
+    _commit(repo, {"a/b/sibling.py": "1"}, "sibling")
+    terminal = _commit(repo, {"unrelated": "2"}, "terminal")
+
+    def _no_full_parse(*_a, **_k):
+        raise AssertionError("whole-tree parse")
+
+    monkeypatch.setattr(rollback_check, "_parse_tree_entries", _no_full_parse)
+    rollback_check._TREE_CACHE.clear()
+    got = outside_landings(
+        repo, terminal, _REL, [_chunk("C1", "a/b/c.py"), _chunk("C2", "a/missing/x.py", "a/b/c.py")]
+    )
+    assert got == {"C1": [deep]}

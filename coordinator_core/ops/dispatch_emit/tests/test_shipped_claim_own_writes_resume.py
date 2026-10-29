@@ -154,8 +154,15 @@ def test_land_run_still_refuses_paths_a_live_foreign_run_holds(repo, gate_map, s
 
     out = prod._land(repo)
 
-    assert out.get("refused") == SHIPPED_CLAIM_REFUSED, (out, gate_map.get("map"))
+    # 05218a081d moved `shipped-claim-unbacked` from LANDING_REFUSAL_KINDS to PROVENANCE_KINDS: the gate
+    # records it and no longer refuses. The foreign hold is kept by `_peer_held`, which keeps the paths
+    # out of the commit and names them in `peer_held_left`.
     assert set(_own_reasons(gate_map).values()) == {"peer-held"}, gate_map["map"]
+    assert not set(OWN) & set(prod._tree(repo)), (out, prod._tree(repo))
+    assert {e["path"] for e in out["peer_held_left"]} == set(OWN), out
+    assert set(OWN) <= prod._dirty(repo), prod._dirty(repo)
+    assert len(out["shipped_claims"]["unbacked"]) == len(OWN), out["shipped_claims"]
+    assert {e["reason"] for e in out["provenance"]} == {SHIPPED_CLAIM_REFUSED}, out.get("provenance")
 
 
 def test_land_run_still_refuses_a_path_the_em_withheld(repo, gate_map):  # noqa: F811
@@ -163,8 +170,13 @@ def test_land_run_still_refuses_a_path_the_em_withheld(repo, gate_map):  # noqa:
 
     out = prod._land(repo, withhold_paths=[{"path": OWN[0], "reason": "em ruled it out"}])
 
-    assert out.get("refused") == SHIPPED_CLAIM_REFUSED, (out, gate_map.get("map"))
+    # 05218a081d: `shipped-claim-unbacked` is provenance, no longer a refusal; the EM's withhold is
+    # kept by leaving the path out of the commit.
     assert OWN[0] in gate_map["map"] and gate_map["map"][OWN[0]] != HALT
+    assert OWN[0] not in prod._tree(repo), (out, prod._tree(repo))
+    assert OWN[0] in prod._dirty(repo)
+    assert any(OWN[0] in a for a in out["shipped_claims"]["unbacked"]), out["shipped_claims"]
+    assert {e["reason"] for e in out["provenance"]} == {SHIPPED_CLAIM_REFUSED}, out.get("provenance")
 
 
 def _terminal_params() -> dict:

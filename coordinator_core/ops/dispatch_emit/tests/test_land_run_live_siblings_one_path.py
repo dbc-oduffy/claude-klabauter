@@ -26,6 +26,7 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SELF = "5e1f0000-0000-4000-8000-0000000000c3"
+SENIOR_SESSION = "5e1f0000-0000-4000-8000-0000000000c4"  # a landing session is never its own holder (test_replay_preg4_halted_claims_successor_lands)
 SENIOR = "ask-20261024T100000-aaaaaa"
 JUNIOR = "ask-20261024T100001-bbbbbb"
 SOLO = "ask-20261024T100002-cccccc"
@@ -99,6 +100,9 @@ def repo(tmp_path, monkeypatch):
         "coordinator_core.session.claims.list_claims_by_session_checked", lambda sid, cwd=None: ([], [])
     )
     monkeypatch.setattr(land_run, "_launch_close_job", lambda *a, **k: True)
+    # SENIOR_SESSION has no session dir, and SELF's meta carries the running harness's stable_pid (the
+    # registry shows it serving another session when the suite runs inside Claude Code): both read dead.
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
     CLOSED.clear()
     real_close = land_run._close_job
 
@@ -110,8 +114,8 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _declare_run(root: Path, run_id: str, paths: tuple) -> str:
-    """A live ledger-bearing ask run declaring ``paths`` in one chunk; returns its minted run token."""
+def _declare_run(root: Path, run_id: str, paths: tuple, session: str = SELF) -> str:
+    """A live ledger-bearing ask run of ``session`` declaring ``paths`` in one chunk; returns its minted run token."""
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=paths),), deliverable_id=DLV, plan_path=PLAN)
     _write(root, f"{RUN_DIR_ROOT}/{run_id}/commit-request.txt", render_marker(request) + "\n")
     manifest = StageManifest(
@@ -122,7 +126,7 @@ def _declare_run(root: Path, run_id: str, paths: tuple) -> str:
     _write(root, f"{run_id}.mjs", f"// emitted\n{ASK_MANIFEST_MARKER}{RUN_DIR_ROOT}/{run_id}/manifest.json\n")
     rl.start(root, run_id, all_of_pm_ask=False)
     rl.bind(root, run_id, SIZING)
-    return run_token.mint(root, run_id, f"{run_id}.mjs", session_id=SELF)
+    return run_token.mint(root, run_id, f"{run_id}.mjs", session_id=session)
 
 
 def _land(root: Path, run_id: str, token: str, **extra) -> dict:
@@ -148,7 +152,7 @@ def _dirty(root: Path) -> set:
 @pytest.fixture
 def siblings(repo):
     """SENIOR then JUNIOR, minted in that order, both declaring F; JUNIOR also T. F carries both hunks."""
-    senior_token = _declare_run(repo, SENIOR, (F,))
+    senior_token = _declare_run(repo, SENIOR, (F,), session=SENIOR_SESSION)
     time.sleep(0.05)
     junior_token = _declare_run(repo, JUNIOR, (F, T))
     _author(repo, F, BOTH_HUNKS)
@@ -164,8 +168,8 @@ def test_the_junior_is_refused_while_the_senior_holds_the_shared_path(siblings):
 
     assert out.get("refused") == shared_path_landing.SHARED_PATH_SIBLING_HELD, out
     assert out.get("committed") is not True
-    assert F in out["error"] and f"held by {SELF}" in out["error"], out
-    assert out["peer_held_left"] == [{"path": F, "sessions": [SELF]}], out
+    assert F in out["error"] and f"held by {SENIOR}" in out["error"], out
+    assert out["peer_held_left"] == [{"path": F, "sessions": [SENIOR_SESSION]}], out
     assert _head(repo) == head
     assert T in _dirty(repo) and F in _dirty(repo)
     assert run_token.admits(repo, JUNIOR, junior_token, f"{JUNIOR}.mjs")

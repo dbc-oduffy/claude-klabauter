@@ -39,12 +39,13 @@ def live_footprints(root: Path, *, exclude_run_id: Optional[str]) -> dict[str, O
     root = Path(root)
     dirs = warp_live._launch_dirs(None)
     out: dict[str, Optional[frozenset[str]]] = {}
-    for record in warp_live._token_records(root):
-        run_id = record["run_id"]
-        if run_id == exclude_run_id or run_id in out:
-            continue
-        if warp_live._record_live(root, record, None, None, dirs):
-            out[run_id] = _footprint(root, run_id)
+    with warp_live.listing_scope():
+        for record in warp_live._token_records(root):
+            run_id = record["run_id"]
+            if run_id == exclude_run_id or run_id in out:
+                continue
+            if warp_live._record_live(root, record, None, None, dirs):
+                out[run_id] = _footprint(root, run_id)
     return out
 
 

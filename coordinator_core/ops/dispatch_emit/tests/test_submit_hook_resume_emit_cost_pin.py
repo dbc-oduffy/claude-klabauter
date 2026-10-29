@@ -59,6 +59,24 @@ def test_a_production_sized_history_bounds_the_commit_walk_at_the_window(product
     assert production_sized["commit_meta_calls"] <= WALK_WINDOW + 1, production_sized["commit_meta_calls"]
 
 
+def test_the_repo_replay_drives_evaluate_on_a_halted_sizing_in_a_real_tree(tmp_path):
+    """`--repo` mode: the halted sizing is found in the tree and `evaluate` is driven, launch stubbed."""
+    bench.build_fixture(tmp_path, 8)
+    assert bench.halted_sizings(tmp_path) == [bench.SIZING_REL]
+    result = bench.replay(tmp_path, None, top=3)
+    assert result["sizing"] == bench.SIZING_REL
+    assert result["candidates_tried"] == 1
+    assert result["warm_process_ms"] is not None
+    assert result["decision"] in ("deny", None)
+    assert result["resumes_halted_run"] == (result["reaches_launch"] and result["decision"] != "deny")
+
+
+def test_the_repo_replay_finds_no_halted_run_in_an_empty_tree(tmp_path):
+    assert bench.halted_sizings(tmp_path) == []
+    with pytest.raises(SystemExit):
+        bench.replay(tmp_path)
+
+
 def test_the_submit_hook_is_a_resident_engine_op_on_the_warm_blocking_transport():
     """The hook the benchmark measures is reached as a registered engine op over PreToolUse (no interpreter start)."""
     import coordinator_core.hooks.submit_engine_ask  # noqa: F401 -- registers the op

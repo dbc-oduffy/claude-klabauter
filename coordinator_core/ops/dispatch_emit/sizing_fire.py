@@ -281,7 +281,8 @@ def resumable_plan(
     (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`,
     except an inbound-memo-close row, which the halted manifest never stages and so is exempt.
     `ResumePlan.not_run_reasons` names the evidence for each spine row the gate does not stage, from
-    sets already computed here (no new read or spawn).
+    sets already computed here (no new read or spawn). The halt pointer (`_own_pointer`) is read once
+    here and handed to `_ledger_halt_for` and `_all_landed_halt`.
     """
     from coordinator_core.frontmatter.body_blocks import LocateStatus
     from coordinator_core.ops.dispatch_emit.spine_read import (
@@ -352,21 +353,21 @@ def resumable_plan(
             reasons.update({i: f"landed outside the executor at {outside[i]}" for i in open_ids if i in outside})
             open_ids = [i for i in open_ids if i not in outside]
     ledger_reasons = tuple(sorted((i, r) for i, r in reasons.items() if i not in pending))
-    halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state, record)
+    pointer = _own_pointer(root, plan_rel, sizing_rel)
+    halt = _ledger_halt_for(root, plan_rel, sizing_rel, rows, open_ids, state, record, pointer=pointer)
     if halt is not None:
         held = _held_rows(named, pending, credited, state)
         return ResumePlan(
             plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held, not_run_reasons=ledger_reasons
         )
     if not open_ids:
-        halt = _all_landed_halt(root, plan_rel, sizing, sizing_rel, state)
+        halt = _all_landed_halt(root, plan_rel, sizing, sizing_rel, state, pointer=pointer)
         if halt is not None:
             held = _held_rows(named, pending, credited, state)
             return ResumePlan(
                 plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held,
                 not_run_reasons=ledger_reasons,
             )
-        pointer = _own_pointer(root, plan_rel, sizing_rel)
         run = pointer.run_id if pointer is not None else (state.ledger_run if state is not None else None)
         verify = LedgerHalt(run or ALL_LANDED_NO_RUN, plan_rel, sizing_rel, (), halted=ALL_LANDED_HALT_KIND)
         return ResumePlan(plan_rel, (), ledger=verify, held=_held_rows(named, pending, credited, state), not_run_reasons=ledger_reasons)
@@ -602,7 +603,7 @@ def _drop_em_discharged(plan: Path, plan_text: str, rows: Sequence, open_ids: li
 
 
 def _all_landed_halt(
-    root: Path, plan_rel: str, sizing: Mapping, sizing_rel: str, state=None
+    root: Path, plan_rel: str, sizing: Mapping, sizing_rel: str, state=None, pointer: object = _UNREAD
 ) -> LedgerHalt | None:
     """The synthesised `ALL_LANDED_HALT_KIND` halt for a plan with no open row, else None (nothing
     left to judge). It resumes when the sizing's register holds a rulable row, or the newest recorded
@@ -614,7 +615,8 @@ def _all_landed_halt(
     register = sizing.get("requirement_register")
     rows = register.get("rows") if isinstance(register, Mapping) else None
     rulable = rulable_ids(rows) if isinstance(rows, list) else ()
-    pointer = _own_pointer(root, plan_rel, sizing_rel)
+    if pointer is _UNREAD:
+        pointer = _own_pointer(root, plan_rel, sizing_rel)
     run = pointer.run_id if pointer is not None else (state.ledger_run if state is not None else None)
     if not rulable and not _outcome_not_met(read_run_outcome(root, run) if run else None):
         return None
@@ -653,7 +655,7 @@ def _own_pointer(root: Path, plan_rel: str, sizing_rel: str) -> LedgerHalt | Non
 
 def _ledger_halt_for(
     root: Path, plan_rel: str, sizing_rel: str, rows: Sequence, open_ids: Sequence[str], state=None,
-    record: object = _UNREAD,
+    record: object = _UNREAD, pointer: object = _UNREAD,
 ) -> LedgerHalt | None:
     """The ledger halt a refire resumes at, else None. None when a row is `coded` (the terminal
     commit landed). A commit-halt pointer resumes only with no open id, so an open row takes the
@@ -671,7 +673,8 @@ def _ledger_halt_for(
         state = resume_landed_state(root, plan_rel)
     if _terminal_coded(rows, state):
         return None
-    pointer = _own_pointer(root, plan_rel, sizing_rel)
+    if pointer is _UNREAD:
+        pointer = _own_pointer(root, plan_rel, sizing_rel)
     if pointer is not None and pointer.halted == COMMIT_HALT_KIND and open_ids:
         return None
     if state is None:

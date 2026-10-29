@@ -279,20 +279,21 @@ def _strip_heredoc_bodies(cmd: str) -> str:
         pos = m.end() + end.start()
 
 
-def _warn(name: str) -> Dict[str, Any]:
+def _warn(name: str) -> Any:
     """Advisory for an uncertain parse: allow plus a suggestion, never a deny."""
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord
+
     text = (
         "Advisory: the command text names a new top-level entry '%s' on a drive root or home, but the "
         "write is inside an interpreter body, so it is not certain. If it creates it, write under "
         "<repo>/scratch/ instead." % name
     )
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "additionalContext": text,
-        }
-    }
+    return AlternativeRecord(
+        verdict_kind="advisory",
+        guard_name="block-drive-root-new-dir-bash-write",
+        summary=text,
+        members=(AdaptableOffer(template="write under <repo>/scratch/", what_to_adapt="<repo>"),),
+    )
 
 
 def _deny(name: str) -> Any:

@@ -52,6 +52,23 @@ def test_unstaged_run_is_none_and_exclude_drops_own_run(repo):
     assert live_run_writes.live_footprints(repo, exclude_run_id="r2") == {"r1": None}
 
 
+def test_one_call_lists_each_launch_dir_at_most_once(repo, monkeypatch):
+    for i in range(4):
+        run_token.mint(repo, f"r{i}", SCRIPT, session_id=f"s{i}")
+    listed: list[str] = []
+    real = warp_live.os.listdir
+
+    def spy(path="."):
+        listed.append(str(path))
+        return real(path)
+
+    monkeypatch.setattr(warp_live.os, "listdir", spy)
+    live_run_writes.live_footprints(repo, exclude_run_id=None)
+    launch_dirs = set(warp_live._launch_dirs(None))
+    mine = [p for p in listed if p in launch_dirs]
+    assert len(mine) == len(set(mine))
+
+
 def test_ended_run_is_absent(repo, monkeypatch):
     run_token.mint(repo, "r1", SCRIPT, session_id=None)
     real = warp_live.time.time()

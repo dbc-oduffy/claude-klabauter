@@ -916,7 +916,7 @@ def _write_blocked_leg(claim: Path, op_ident: int, cpu_delta: float, elapsed: fl
         }
         leg_file = _leg_path(claim)
         tmp = leg_file.with_name(leg_file.name + ".tmp")
-        tmp.write_text(json.dumps(record), encoding="utf-8")
+        tmp.write_text(json.dumps(record), encoding="utf-8", newline="\n")
         os.replace(tmp, leg_file)
     except Exception:  # noqa: BLE001 -- diagnostics never stop an op
         pass

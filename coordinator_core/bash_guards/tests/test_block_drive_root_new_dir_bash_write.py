@@ -158,7 +158,7 @@ def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch):
 
 
 def _warned(result):
-    out = result["hookSpecificOutput"]
+    out = envelope_of(result)["hookSpecificOutput"]
     assert out["permissionDecision"] == "allow"
     assert "<repo>/scratch/" in out["additionalContext"]
     return True

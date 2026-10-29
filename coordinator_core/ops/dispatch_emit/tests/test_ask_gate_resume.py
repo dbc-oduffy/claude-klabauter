@@ -57,6 +57,26 @@ def test_refire_gate_computes_the_resume_plan_once(repo, monkeypatch):  # noqa: 
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("rows", [[("A1", "coded"), ("A2", "open")], [("A1", "coded")]])
+def test_resumable_plan_reads_the_halt_pointer_once(repo, monkeypatch, rows):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    _put(repo, tshirt="S", route="spec-dispatch")
+    _plan(repo, rows=rows)
+    reads = []
+    real = sizing_fire._own_pointer
+
+    def counted(*a, **k):
+        reads.append(a)
+        return real(*a, **k)
+
+    monkeypatch.setattr(sizing_fire, "_own_pointer", counted)
+    from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
+
+    resumable_plan(load_sizing(repo, REL), REL, repo, "s")
+    assert len(reads) == 1
+
+
 def test_fully_landed_plan_resumes_to_verify_not_refuses(repo):  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, disposition="coded")

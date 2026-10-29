@@ -852,13 +852,15 @@ def _read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
 
 
 def _read_local_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
+    """Loose first: one stat settles a loose object, whereas a pack miss parses
+    every `.idx` (~140ms cold on a 3400-pack repo)."""
+    result = _read_loose_object(common_dir, sha)
+    if result is not None:
+        return result
     try:
-        result = _read_pack_object_by_sha(common_dir, sha)
+        return _read_pack_object_by_sha(common_dir, sha)
     except (_GitReadModelError, zlib.error, struct.error):
-        result = None
-    if result is None:
-        result = _read_loose_object(common_dir, sha)
-    return result
+        return None
 
 
 def _alternate_common_dirs(common_dir: Path) -> list[Path]:

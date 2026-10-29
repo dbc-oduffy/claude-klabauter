@@ -157,6 +157,30 @@ def test_read_object_reads_packed_commit_after_gc(tmp_path: Path) -> None:
     assert kind == "commit"
 
 
+def test_loose_object_read_parses_no_pack_index_and_packed_still_reads(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.git import git_objects
+
+    _init_repo(tmp_path)
+    common_dir = resolve_git_dir(tmp_path)
+    packed_sha = _git("rev-parse", "HEAD", cwd=tmp_path).stdout.strip()
+    _git("gc", cwd=tmp_path)
+    (tmp_path / "f2.txt").write_text("two")
+    _git("add", "f2.txt", cwd=tmp_path)
+    _git("commit", "-q", "-m", "loose", cwd=tmp_path)
+    loose_sha = _git("rev-parse", "HEAD", cwd=tmp_path).stdout.strip()
+    assert _read_loose_object(common_dir, loose_sha) is not None
+
+    git_objects._OBJECT_CACHE.clear()
+    parsed: list[Path] = []
+    real = git_objects._parse_pack_index
+    monkeypatch.setattr(git_objects, "_parse_pack_index", lambda p: (parsed.append(p), real(p))[1])
+
+    assert _read_object(common_dir, loose_sha)[0] == "commit"
+    assert parsed == []
+    assert _read_object(common_dir, packed_sha)[0] == "commit"
+    assert parsed
+
+
 def test_cas_ref_moves_ref_and_git_agrees(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     common_dir = resolve_git_dir(tmp_path)
