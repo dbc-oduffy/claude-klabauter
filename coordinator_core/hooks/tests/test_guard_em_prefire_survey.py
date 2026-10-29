@@ -84,7 +84,7 @@ def env(tmp_path, monkeypatch):
 
 
 def reason(res) -> str:
-    text = res["hookSpecificOutput"]["additionalContext"]
+    text = res["hookSpecificOutput"]["additionalContext"].removeprefix("Advisory: ")
     marker = "[coordinator] "
     return text[len(marker):] if text.startswith(marker) else text
 
@@ -705,7 +705,7 @@ def test_missing_manifest_still_charges_the_run_sizing(env, monkeypatch):
 
 
 def test_deny_route_names_the_non_survey_exemptions():
-    text = g.prefire_deny_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
+    text = g.prefire_advisory_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
     assert "files you wrote with Write/Edit" in text and "user turn" in text and "cross-repo-memo" in text
 
 

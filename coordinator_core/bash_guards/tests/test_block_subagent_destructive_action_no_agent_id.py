@@ -72,6 +72,39 @@ def test_main_thread_pid_kill_not_denied(tool, tmp_path, monkeypatch):
     assert envelope_of(guard.check(_payload(tool, cmd))) is None
 
 
+EM_KILL_COMMANDS = [
+    ("Bash", "kill 12345"),
+    ("Bash", "kill -TERM 12345"),
+    ("Bash", "kill -KILL 12345 12346"),
+    ("Bash", "kill -9 1"),
+    ("Bash", "sudo kill -9 12345"),
+    ("Bash", "pkill -9 -P 1"),
+    ("Bash", "taskkill /PID 12345 /F"),
+    ("Bash", "taskkill //PID 12345 //F"),
+    ("PowerShell", "Stop-Process -Id 12345 -Force"),
+    ("PowerShell", "Stop-Process -Id 12345,12346"),
+    ("PowerShell", "taskkill /PID 12345 /F"),
+    ("PowerShell", "kill 12345"),
+]
+
+
+@pytest.mark.parametrize("tool,command", EM_KILL_COMMANDS)
+def test_em_numeric_kill_verbs_never_denied(tool, command, tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
+    assert envelope_of(guard.check(_payload(tool, command))) is None
+
+
+@pytest.mark.parametrize("tool,command", [
+    ("Bash", "kill 12345"),
+    ("PowerShell", "Stop-Process -Id 12345 -Force"),
+])
+def test_em_orphan_kill_never_denied_even_when_ownership_unprovable(tool, command, tmp_path, monkeypatch):
+    """An orphan reparented to ppid 1 has no ledger entry; the EM kill is still allowed."""
+    monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
+    monkeypatch.setattr(guard, "_all_pids_owned_by_agent", lambda *a, **k: False)
+    assert envelope_of(guard.check(_payload(tool, command))) is None
+
+
 def test_subagent_kill_denial_names_em_route(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
     result = envelope_of(guard.check(_payload("Bash", "kill 12345", agent_type="coordinator:executor")))

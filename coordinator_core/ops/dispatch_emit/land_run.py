@@ -1082,8 +1082,13 @@ def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optiona
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import run_ownership, sibling_claims
 
+        from coordinator_core.ops.dispatch_emit import halted_hold_release
+
         _read_markers_strict(root, run_id)
-        unlanded = list(sibling_claims._unlanded_run_ids(root, run_id, plan_rel))
+        # One batched cat-file for every halted run's kept blobs: unscoped, release_reason spawns git per run.
+        with halted_hold_release.blob_scope(root):
+            halted_hold_release.prefetch_kept_blobs(root, sibling_claims.halted_records(root, run_id))
+            unlanded = list(sibling_claims._unlanded_run_ids(root, run_id, plan_rel))
         live = {
             rid: run_ownership.LiveRun(withheld=frozenset(warp_run_deliverable.halted_withheld_paths(root, rid)))
             for rid in unlanded

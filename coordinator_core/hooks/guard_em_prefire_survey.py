@@ -14,7 +14,7 @@ import os
 import re
 from typing import Optional
 
-from coordinator_core._hook_envelope import allow_advisory, deny, no_advisory, payload_of
+from coordinator_core._hook_envelope import context_only, deny, no_advisory, payload_of
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
@@ -179,7 +179,7 @@ def _decide(payload: dict) -> Optional[str]:
         from coordinator_core.hooks._em_write_budget import arm_advised
 
         arm_advised(root, sid)
-        return prefire_deny_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX)
+        return _ADVISORY_MARK + prefire_advisory_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX)
     if phase in (ers.PHASE_LANDED_GREEN, ers.PHASE_HALTED) and phase.run_id:
         landings = dict(state.get("landings") or {})
         rec = landings.get(phase.run_id)
@@ -216,7 +216,7 @@ def _evaluate_payload(payload: dict) -> Optional[dict]:
         if not text:
             return None
         if text.startswith(_ADVISORY_MARK):
-            return allow_advisory("PreToolUse", text[len(_ADVISORY_MARK):])
+            return context_only("PreToolUse", text[len(_ADVISORY_MARK):])
         return apply_guard_level(GUARD_NAME, deny("PreToolUse", text)) or None
     except Exception:
         return None
