@@ -580,8 +580,13 @@ def record_op_latency(
     restored: Optional[int] = None,
     adopted: Optional[int] = None,
     remint: Optional[bool] = None,
+    blocked_leg: Optional[str] = None,
 ) -> None:
     """Append one JSON line recording a single op invocation's wall-clock cost.
+
+    ``blocked_leg`` (`<relpath>::<func>` of the op thread's innermost
+    coordinator_core frame at the stall snapshot) is written only when given:
+    a pool-deadline `timeout` row names where the op was stuck.
 
     Record shape:
         {"op": str, "t_start": float epoch, "elapsed_ms": float,
@@ -669,6 +674,8 @@ def record_op_latency(
         "adopted": adopted,
         "remint": remint,
     }
+    if blocked_leg is not None:
+        entry["blocked_leg"] = blocked_leg
     _write_entry(entry, repo_root)
 
 

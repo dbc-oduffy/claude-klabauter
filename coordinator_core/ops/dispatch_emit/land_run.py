@@ -3536,6 +3536,17 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             return _error(f"{type(exc).__name__}: {exc}", refused="commit")
 
     sha = outcome.sha
+    review_gap: list = []
+    if manifest is not None and manifest.review_code_paths:
+        try:
+            gap_changed, gap_ignored, _gap_head = _dirty_among(root, manifest.review_code_paths)
+            review_gap = sorted(gap_changed - gap_ignored)
+        except Exception:  # noqa: BLE001 -- the commit stands; an unreadable store reports no gap
+            review_gap = []
+    if review_gap:
+        ledger_met = None
+        credited_ids = []
+        withheld_product = sorted({*withheld_product, *review_gap})
     merge_artifacts_reply: Optional[dict] = None
     if merge_plan is not None:
         merge_owner.clear(root)
@@ -3614,7 +3625,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["halted_auto_landed"] = {"holders": auto_landed_holders, **halted_auto_landed}
     criterion = inline_review.get("criterion")
     if isinstance(criterion, dict) and criterion.get("status"):
-        reply["criterion_status"] = "not_met" if unlanded_rows else criterion["status"]
+        reply["criterion_status"] = "not_met" if unlanded_rows or review_gap else criterion["status"]
     if objective_gate is not None:
         reply["objective_gate"] = {k: objective_gate[k] for k in ("outcome", "exit_reason", "unmet_axes", "summary")}
     reasons = _incomplete_reasons(
@@ -3709,7 +3720,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "presets": presets, "plan_rel": request.plan_path, "session_id": session_id, "sha": sha,
             "review_receipt": review_record, "run_base_sha": run_base if isinstance(run_base, str) and _SHA40.fullmatch(run_base) else None,
             "criterion": (
-                {**criterion, "status": "not_met"} if isinstance(criterion, dict) and unlanded_rows
+                {**criterion, "status": "not_met"} if isinstance(criterion, dict) and (unlanded_rows or review_gap)
                 else criterion if isinstance(criterion, dict) else None
             ),
             "falsifier_broken": _falsifier_broken_tells(params.get("falsifier_broken"), request.plan_path),

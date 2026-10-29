@@ -14,6 +14,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.premise_gate import PREMISE_RECORD_BRIEF_LINE
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.plan_tasks_mutate import _handler as mutate_handler
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo
 
@@ -93,6 +94,16 @@ def _rows(plan: Path) -> dict:
     return {r["id"]: r for r in yaml.safe_load(body)}
 
 
+def _assert_withheld_by_premise(plan: Path, verdict: str) -> None:
+    """Stage withholds C2 citing the recorded verdict and leaves the row open; the wont_do stamp is close-out's."""
+    excluded: list = []
+    read_spine(plan, exclusions=excluded)
+    c2 = {e["id"]: e for e in excluded}["C2"]
+    assert c2["reason"] == "premise-false"
+    assert c2["premise_close"]["chunk"] == "C1" and c2["premise_close"]["verdict"] == verdict
+    assert "disposition" not in _rows(plan)["C2"]
+
+
 @pytest.mark.parametrize("record", ["no"])  # an absent verdict dispatches (premise_gate.VERDICT_ABSENT)
 def test_premise_no_closes_c2_wont_do_and_spawns_neither_c2_nor_d3(tmp_path, record):
     repo, plan = _plan(tmp_path)
@@ -100,10 +111,7 @@ def test_premise_no_closes_c2_wont_do_and_spawns_neither_c2_nor_d3(tmp_path, rec
         _record(repo, plan, record)
     spawned = _spawned(_stage(repo))
     assert "C2" not in spawned and "D3" not in spawned
-    c2 = _rows(plan)["C2"]
-    assert c2["disposition"] == "wont_do"
-    assert c2["premise_close"]["chunk"] == "C1"
-    assert c2["premise_close"]["verdict"] == (record or "absent")
+    _assert_withheld_by_premise(plan, record)
 
 
 def test_premise_yes_dispatches_c2_and_d3(tmp_path):
@@ -133,7 +141,7 @@ def test_premise_recorded_after_a_first_stage_closes_c2_at_the_next_stage(tmp_pa
     _record(repo, plan, "no")
     second = _spawned(_stage(repo, "r2"))
     assert "C2" not in second and "D3" not in second
-    assert _rows(plan)["C2"]["disposition"] == "wont_do"
+    _assert_withheld_by_premise(plan, "no")
 
 
 def test_the_brief_composed_for_the_premise_row_carries_the_record_line(tmp_path):

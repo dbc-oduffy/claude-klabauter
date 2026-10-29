@@ -579,11 +579,11 @@ def test_all_clean_request_is_nothing_to_commit_without_error(repo):
     assert "error" not in out or out["committed"] is False
 
 
-# One git process: the status snapshot terminal_commit hands commit_v2, which then
-# writes the commit in-process with no check-ignore or ls-tree read of its own. A
-# second means a new spawn joined the hot path.
-_EXPECTED_SPAWNS = 0
-_GATED_SPAWNS = 1
+# The rollback gate's window-boundary rev-parse (rollback_check._git_series, f36f41d9d1) is the
+# one spawn on the ungated path; a short-history repo then falls back in-process, so no log
+# follows. A gated repo adds the status snapshot. Any further spawn joined the hot path.
+_EXPECTED_SPAWNS = 1
+_GATED_SPAWNS = 2
 
 
 def _forty_path_request(repo, gated: bool):
@@ -645,7 +645,7 @@ def test_process_time_and_spawns_on_a_40_path_request(repo):
 
 def test_a_gated_repo_still_spawns_the_status_snapshot_once(repo):
     spawn_count = _forty_path_request(repo, gated=True)
-    assert spawn_count == _GATED_SPAWNS, f"expected {_GATED_SPAWNS} spawn, saw {spawn_count}"
+    assert spawn_count == _GATED_SPAWNS, f"expected {_GATED_SPAWNS} spawns, saw {spawn_count}"
 
 
 _PLAN = """---

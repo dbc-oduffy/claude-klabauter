@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
+from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, record_dir
 from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_marker
@@ -359,6 +360,42 @@ def live_record_dir_owners(
     return {p: sorted(s) for p, s in owners.items()}
 
 
+def _run_json(root: Path, run_id: str) -> dict:
+    """A run's `run.json` from its record dir, else from `RUN_DIR_ROOT/<run_id>`: an in-flight run's
+    record dir can already exist under `state/warp` (a usage record) while its `run.json` is still in scratch."""
+    for base in (RECORD_DIR_ROOT, RUN_DIR_ROOT):
+        data = _read_json(Path(root) / base / run_id / "run.json")
+        if data:
+            return data
+    return {}
+
+
+def _lineage_sizing(root: Path, run_id: str) -> str:
+    value = _run_json(root, run_id).get("sizing_rel")
+    return _norm(value) if isinstance(value, str) else ""
+
+
+def _own_lineage(root: Path, run_id: Optional[str]) -> tuple:
+    """`(sizing_rel, resumed_from predecessor run ids)` of `run_id`; `("", frozenset())` when the run has no
+    sizing, so no predecessor can match. The chain walk is cycle-safe and capped at `CARRIED_HOP_CAP`."""
+    if run_id is None or not safe_id(run_id):
+        return "", frozenset()
+    sizing = _lineage_sizing(root, run_id)
+    if not sizing:
+        return "", frozenset()
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    chain: list = []
+    cur = run_id
+    for _ in range(rl.CARRIED_HOP_CAP):
+        prev = _run_json(root, cur).get(rl.RESUMED_FROM_FIELD)
+        if not (isinstance(prev, str) and safe_id(prev)) or prev == run_id or prev in chain:
+            break
+        chain.append(prev)
+        cur = prev
+    return sizing, frozenset(chain)
+
+
 def _live_claim_scan(
     repo_root: Path,
     paths: Iterable[str],
@@ -375,12 +412,15 @@ def _live_claim_scan(
     claims: dict = {}
     if not wanted:
         return claims
+    own_sizing, predecessors = _own_lineage(root, exclude_run)
     for record in run_token.held_records(root):
         sid = record.get("session_id")
         run_id = record["run_id"]
         if exclude_run is not None and run_id == exclude_run:
             continue
         if not _live_peer_run(root, record, exclude_session, cwd, minted_before):
+            continue
+        if run_id in predecessors and _lineage_sizing(root, run_id) == own_sizing:
             continue
         if resumed_run_released(root, run_id, exclude_run):
             continue
@@ -411,7 +451,9 @@ def live_run_write_claims(
 
     A peer run is a held token (`run_token.held_records`, listed once) that is fresh, whose
     non-empty `session_id` differs from `exclude_session` and is `touch_record.session_live`.
-    `exclude_run` skips that run id before any other test. `minted_before=(minted_at, run_id)`
+    `exclude_run` skips that run id before any other test, and each run in its `resumed_from` chain
+    whose record names the same non-empty `sizing_rel` (a predecessor fire; a concurrent sibling of the
+    same sizing still holds, and touch claims are not read here). `minted_before=(minted_at, run_id)`
     keeps only strictly senior runs. A path matches a declared path or sits under a declared
     prefix, unless the run recorded it with `workflow.revise withhold_paths`. Returns None (contest unknown) when a live peer's declaration is unparseable and
     yields no usable paths; {} when nothing is declared."""

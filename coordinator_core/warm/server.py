@@ -867,16 +867,65 @@ def _pool_dispatch_worker(
     claim = _claim_path(claim_dir, dispatch_key)
     if claim is not None and not _take_claim(claim, os.getpid()):
         return {_NOT_DISPATCHED_MARKER: True}
-    disarm = _arm_stall_dump(stall_secs)
+    disarm = _arm_stall_dump(stall_secs, claim)
     try:
         return _pool_dispatch_worker_body(msg, caller)
     finally:
         disarm()
 
 
-def _arm_stall_dump(stall_secs: float) -> Callable[[], None]:
+_LEG_SUFFIX = ".leg"
+_LEG_MAX_FRAMES = 8
+
+
+def _leg_path(claim: Path) -> Path:
+    return claim.with_name(claim.name + _LEG_SUFFIX)
+
+
+def _frame_label(frame) -> str:
+    """`coordinator_core/<rel>.py::func:line`, or the bare file name outside the package."""
+    parts = Path(frame.f_code.co_filename).parts
+    if "coordinator_core" in parts:
+        idx = len(parts) - 1 - parts[::-1].index("coordinator_core")
+        rel = "/".join(parts[idx:])
+    else:
+        rel = parts[-1] if parts else "?"
+    return f"{rel}::{frame.f_code.co_name}:{frame.f_lineno}"
+
+
+def _write_blocked_leg(claim: Path, op_ident: int, cpu_delta: float, elapsed: float) -> None:
+    """Snapshot the op thread's stack to `<claim>.leg` (temp + `os.replace`: the
+    accept process reads it, a torn read is impossible). Never raises."""
+    try:
+        frame = sys._current_frames().get(op_ident)
+        if frame is None:
+            return
+        chain = []
+        while frame is not None:
+            chain.append(frame)
+            frame = frame.f_back
+        innermost = next(
+            (f for f in chain if "coordinator_core" in Path(f.f_code.co_filename).parts), chain[0]
+        )
+        label = _frame_label(innermost)
+        leg = label.rsplit(":", 1)[0]
+        record = {
+            "leg": leg,
+            "kind": "compute" if elapsed > 0 and cpu_delta >= 0.5 * elapsed else "wait",
+            "frames": [_frame_label(f) for f in chain[:_LEG_MAX_FRAMES]],
+        }
+        leg_file = _leg_path(claim)
+        tmp = leg_file.with_name(leg_file.name + ".tmp")
+        tmp.write_text(json.dumps(record), encoding="utf-8")
+        os.replace(tmp, leg_file)
+    except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+        pass
+
+
+def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable[[], None]:
     """Dump every thread's stack to the worker stderr log once `stall_secs`
-    pass; the returned callable disarms it. Never raises.
+    pass, and (with a `claim`) write the op thread's blocked leg beside it; the
+    returned callable disarms it. Never raises.
 
     A Python timer thread calls `faulthandler.dump_traceback`, which holds the
     GIL. `faulthandler.dump_traceback_later` walks the op thread's live frames
@@ -888,12 +937,21 @@ def _arm_stall_dump(stall_secs: float) -> Callable[[], None]:
     -32004.
     """
     stderr = _WORKER_STDERR_FILE
-    if stderr is None or stall_secs <= 0:
+    if (stderr is None and claim is None) or stall_secs <= 0:
         return lambda: None
     done = threading.Event()
+    op_ident = threading.get_ident()
+    cpu0 = time.process_time()
+    t0 = time.monotonic()
 
     def _watch() -> None:
         if done.wait(stall_secs):
+            return
+        if claim is not None:
+            _write_blocked_leg(
+                claim, op_ident, time.process_time() - cpu0, time.monotonic() - t0
+            )
+        if stderr is None:
             return
         try:
             try:
@@ -1133,6 +1191,13 @@ def _running_phase_diagnosis(claim: Optional[Path], stderr_dir) -> dict:
         diagnosis["stall_dump"] = str(
             _worker_stderr_log(stderr_dir, pid) if pid is not None else stderr_dir
         )
+    try:
+        if claim is not None:
+            leg = json.loads(_leg_path(claim).read_text(encoding="utf-8"))
+            if isinstance(leg, dict) and leg.get("leg"):
+                diagnosis["blocked_leg"] = leg
+    except (OSError, ValueError):
+        pass
     return diagnosis
 
 
@@ -1176,9 +1241,32 @@ def _stamp_pool_future(
 def _release_claim(claim: Optional[Path]) -> None:
     if claim is None:
         return
+    leg = _leg_path(claim)
+    for path in (claim, leg, leg.with_name(leg.name + ".tmp")):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _record_pool_timeout(msg: dict, t_start: float, diagnosis: dict) -> None:
+    """Op-latency `timeout` row for a running-phase -32004, carrying the blocked
+    leg. Never raises."""
     try:
-        claim.unlink(missing_ok=True)
-    except OSError:
+        from coordinator_core.ipc import resolve_caller_cwd, resolve_request_repo
+
+        leg = diagnosis.get("blocked_leg")
+        op_latency.record_op_latency(
+            op=msg.get("method") if isinstance(msg.get("method"), str) else "<unknown>",
+            t_start=t_start,
+            elapsed_ms=(time.time() - t_start) * 1000.0,
+            outcome="timeout",
+            repo_root=resolve_request_repo(msg) or resolve_caller_cwd(msg),
+            error_code=WARM_DISPATCH_INDETERMINATE,
+            error_kind="pool deadline: op still running",
+            blocked_leg=leg.get("leg") if isinstance(leg, dict) else None,
+        )
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -2586,6 +2674,7 @@ class _ServerContext:
                     msg, holders, getattr(self, "_worker_stderr_dir", None)
                 )
             claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
+            _t_submit = time.time()
             if claim is None:
                 future = pool.submit(_pool_dispatch_worker, msg, caller)
             else:
@@ -2645,6 +2734,7 @@ class _ServerContext:
                     data["diagnosis"].update(
                         _running_phase_diagnosis(claim, getattr(self, "_worker_stderr_dir", None))
                     )
+                    _record_pool_timeout(msg, _t_submit, data["diagnosis"])
                 return _with_reconcile_route(envelope, dispatch_key)
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --

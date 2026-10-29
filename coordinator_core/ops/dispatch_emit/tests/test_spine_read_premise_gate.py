@@ -57,10 +57,11 @@ def test_premise_no_closes_row_and_blocks_its_dependents(tmp_path):
     assert "D3" in ex
 
 
-def test_premise_absent_closes_in_an_opted_in_plan(tmp_path):
+def test_premise_absent_dispatches_in_an_opted_in_plan(tmp_path):
+    """8dd7f7e20b: a premise row finished without a verdict no longer closes its dependents."""
     dispatched, ex = _ids(_plan(tmp_path))
-    assert "C2" not in dispatched
-    assert ex["C2"]["premise_close"]["verdict"] == "absent"
+    assert "C2" in dispatched
+    assert "C2" not in ex
 
 
 def test_premise_yes_dispatches(tmp_path):
@@ -75,10 +76,10 @@ def test_legacy_plan_with_absent_verdict_still_dispatches(tmp_path):
     assert "C2" not in ex
 
 
-def test_legacy_plan_with_premises_key_is_opted_in(tmp_path):
+def test_legacy_plan_with_premises_key_still_dispatches_on_an_absent_verdict(tmp_path):
     dispatched, ex = _ids(_plan(tmp_path, created="2026-09-01", premises_key=True))
-    assert "C2" not in dispatched
-    assert ex["C2"]["reason"] == "premise-false"
+    assert "C2" in dispatched
+    assert "C2" not in ex
 
 
 def test_open_premise_row_still_waits(tmp_path):
@@ -110,13 +111,14 @@ def test_stage_briefs_premise_row_with_record_line(tmp_path):
     assert PREMISE_RECORD_BRIEF_LINE not in briefs["C2"]
 
 
-def test_stage_stamps_false_premise_row_wont_do_and_stages_no_executor_for_it(tmp_path):
+def test_stage_withholds_a_false_premise_row_and_stages_no_executor_for_it(tmp_path):
+    """Stage withholds C2 and leaves it open; the wont_do stamp is close-out's (fbb351)."""
     plan = _plan(tmp_path, verdict="no")
     briefs = _stage(tmp_path, plan)
     assert "C2" not in briefs and "D3" not in briefs
     body = plan.read_text(encoding="utf-8").split("```yaml plan-tasks\n", 1)[1].split("```", 1)[0]
     rows = {r["id"]: r for r in yaml.safe_load(body)}
-    assert rows["C2"]["disposition"] == "wont_do" and rows["C2"]["premise_close"]["chunk"] == "C1"
+    assert "disposition" not in rows["C2"]
 
 
 def test_stamp_premise_closes_marks_wont_do_with_citation_and_is_idempotent(tmp_path):

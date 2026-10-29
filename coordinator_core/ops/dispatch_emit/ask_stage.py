@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     rulable_ids,
 )
 from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError, RouteTableError, route_rows
+from coordinator_core.ops.dispatch_emit.premise_gate import EPISTEMIC_PREMISE, PREMISE_RECORD_BRIEF_LINE
 from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     CrossRepoWriteError,
     check_cross_repo_writes,
@@ -420,6 +421,18 @@ def _persisted_return_line(root: Path, kept_run: str, dep: str) -> str:
         f'Row {dep} is kept from run {kept_run}; its return is persisted at {where} under key "{dep}". '
         "Read it there; do not re-obtain it.\n"
     )
+
+
+def _premise_row_ids(raw_by_id: dict) -> frozenset:
+    """Rows another row names in an epistemic-premise `depends_on` edge. Their briefs carry the record
+    line: a premise row that finishes without a verdict leaves its dependents unjudged (run 6467a3)."""
+    ids = set()
+    for raw in raw_by_id.values():
+        edges = raw.get("depends_on") if isinstance(raw, dict) else None
+        for edge in edges if isinstance(edges, list) else []:
+            if isinstance(edge, dict) and edge.get("gate_kind") == EPISTEMIC_PREMISE and edge.get("chunk"):
+                ids.add(edge["chunk"])
+    return frozenset(ids)
 
 
 def _kept_brief(kept_run: str) -> str:
@@ -918,14 +931,17 @@ def _kept_review_paths(
     return tuple(sorted(holding))
 
 
+CLAIM_LOCK_WAIT_SECS = 0.08  # inside the 500ms budget; expiry replies PLAN-LOCK-BUSY
+
+
 def _claim_register_rows(root: Path, plan_path: Path) -> None:
     """Claim into `plan_path`'s `register_claims.rows` every row of the register it names that they omit.
     A plan with no readable claims or register is left as it is."""
-    from coordinator_core.locked_write import MutateAbort, locked_rmw
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
     from coordinator_core.ops import requirement_register as rr
 
     split = split_frontmatter(plan_path.read_text(encoding="utf-8"))
-    sizing_rel, _ = rr.plan_claims(split.fm_text) if split is not None else (None, frozenset())
+    sizing_rel, _ =rr.plan_claims(split.fm_text) if split is not None else (None, frozenset())
     sizing = contained_path(root / sizing_rel, [root]) if sizing_rel else None
     register = None
     if sizing is not None:
@@ -936,7 +952,14 @@ def _claim_register_rows(root: Path, plan_path: Path) -> None:
     if register is None:
         return
 
-    crlf = b"\r\n" in plan_path.read_bytes()
+    raw = plan_path.read_bytes()
+    crlf = b"\r\n" in raw
+    try:
+        unchanged = rr.claim_rows_plan_text(raw.decode("utf-8").replace("\r\n", "\n"), register)[0] == raw.decode("utf-8").replace("\r\n", "\n")
+    except (ValueError, UnicodeDecodeError):
+        unchanged = False
+    if unchanged:
+        return
 
     def mutate(old: str) -> str:
         try:
@@ -946,9 +969,14 @@ def _claim_register_rows(root: Path, plan_path: Path) -> None:
         return new.replace("\n", "\r\n") if crlf else new
 
     try:
-        locked_rmw(plan_path, mutate, repo_root=root)
+        locked_rmw(plan_path, mutate, repo_root=root, timeout=CLAIM_LOCK_WAIT_SECS)
     except MutateAbort:
         return
+    except LockTimeout as exc:
+        raise AskStageError(
+            f"PLAN-LOCK-BUSY: _claim_register_rows waited {CLAIM_LOCK_WAIT_SECS}s for the lock on "
+            f"{_rel(root, plan_path)}; another writer holds it. Re-fire dispatch.ask_stage."
+        ) from exc
 
 
 def _missing_register_rows(
@@ -1175,6 +1203,7 @@ def stage(
     wave_test_targets = _wave_test_scopes(waves, root)
 
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
+    premise_ids = _premise_row_ids(raw_by_id)
     manifest_rows: list[ManifestRow] = []
     chunks: list[ChunkCommit] = []
     declared: list[str] = []
@@ -1215,6 +1244,8 @@ def stage(
                     text = text.rstrip() + "\n\n" + delete_clause + "\n"
                 if prior:
                     text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
+                if row.id in premise_ids:
+                    text = text.rstrip() + "\n\n" + PREMISE_RECORD_BRIEF_LINE + "\n"
                 for dep in after.get(row.id, ()):
                     if dep in kept_ids:
                         line = _persisted_return_line(root, resume_snap.kept_run, dep)
