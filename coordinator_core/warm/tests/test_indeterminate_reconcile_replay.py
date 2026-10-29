@@ -122,13 +122,20 @@ def test_door_poll_of_an_unknown_post_boot_key_is_not_received_with_engine_pid()
 def test_door_poll_of_a_finished_key_without_a_retained_result_prints_status(_fresh_store):
     key = dispatch_ack.mint_key()
     _fresh_store.admit(key, "invoke.from_argv")
-    _fresh_store.stamp(key, dispatch_ack.OUTCOME_RESULT, result={"x": "y" * (2 * 1024 * 1024)})
+    _fresh_store.stamp(
+        key,
+        dispatch_ack.OUTCOME_RESULT,
+        result={"committed": True, "exit_code": 0, "log": "y" * (2 * 1024 * 1024)},
+    )
 
     (reply,) = _serve(_poll_frame(key), _no_dispatch)
 
     status = json.loads(reply["result"]["stdout"])
     assert status["state"] == dispatch_ack.STATE_FINISHED
-    assert status["result_retained"] is False
+    assert status["result_dropped"] == "over-cap"
+    assert status["result_digest"]["committed"] is True
+    assert status["result_digest"]["exit_code"] == 0
+    assert "result_retained" not in status
     assert reply["result"]["exit_code"] == 0
 
 

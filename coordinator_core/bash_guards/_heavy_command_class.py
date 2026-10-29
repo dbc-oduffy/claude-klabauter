@@ -617,7 +617,6 @@ def admit_before_spawn(
         recorded = host.read_recorded_peak(adm_path, key)
         peak_gib = max(peak_gib, recorded or 0.0)
         status = host.read_memory_status()
-        floor = host.guard_floor_bytes()
         # TRAP: with a pid to register, the reservation read and the START write share one lock,
         # or two callers both read zero reservations and both admit.
         with (host.admission_lock(adm_path) if register_pid is not None else contextlib.nullcontext()):
@@ -627,7 +626,7 @@ def admit_before_spawn(
                 avail_phys=max(0, status.avail_phys - reserved),
                 commit_used=status.commit_used + reserved,
             )
-            verdict = host.admit(int(peak_gib * host.GIB), status, floor=floor)
+            verdict = host.admit(int(peak_gib * host.GIB), status)
             if verdict.admit and register_pid is not None:
                 register_spawn(key, peak_gib, register_pid, host)
     except Exception as exc:

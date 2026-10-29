@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
+from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit import leg_register as lr
 from coordinator_core.ops.dispatch_emit.ask_contract import FANOUT_RECORD_PARAM
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose as _compose_raw
@@ -14,11 +17,17 @@ _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title
 _CUT = ("waves", "execute", "workstream-complete")
 
 
+def _compose_in_run(**over):
+    """The in-run roadmap leg rides only a script that embeds plan-blitz, i.e. an M+ re-fire."""
+    with mock.patch.object(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS):
+        return _compose_raw(**over)
+
+
 def _scripts(repo):
     _put(repo)
     return {
         "standalone": _compose_standalone(repo),
-        "in-run": _compose_raw(roadmap_blitz_text=_RB_TEXT, in_run_commit=True),
+        "in-run": _compose_in_run(roadmap_blitz_text=_RB_TEXT, in_run_commit=True),
     }
 
 
@@ -76,7 +85,7 @@ def _scripts_with_path(repo):
     _put(repo)
     return {
         "standalone": _compose_standalone(repo, script_path=_SCRIPT_PATH),
-        "in-run": _compose_raw(roadmap_blitz_text=_RB_TEXT, in_run_commit=True, script_path=_SCRIPT_PATH),
+        "in-run": _compose_in_run(roadmap_blitz_text=_RB_TEXT, in_run_commit=True, script_path=_SCRIPT_PATH),
     }
 
 

@@ -146,9 +146,8 @@ fact (which model this dispatch resolves to, and why no exemption
 applies), one terse alternative (pass `model: "sonnet"` or `"haiku"`, or
 dispatch `coordinator:executor` for implementation work). Never spells out
 the grant's env-var name, path, or any other artifact of the bypass
-mechanism (B6) -- it states only that a PM grant is the thing that would
-change the outcome, which is the fact the reader needs to know a human
-operator (not the reader) can act on, not the mechanism itself.
+mechanism (B6) -- it names the terse alternative only (`model:` or
+`coordinator:executor`), never a human act as the remedy.
 
 INPUT TRUST. `subagent_type`/`model` read from `tool_input` ONLY; the
 parent model is read from `payload["transcript_path"]`, a harness-supplied
@@ -343,7 +342,7 @@ def _fork_execution_reason(parent_model: str, phrase: str) -> str:
 def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
     return (
         f"AGENT DISPATCH BLOCKED: subagent_type={subagent_type!r} resolves to "
-        f"{resolved_model!r} ({note}, no persona pin, no PM grant). "
+        f"{resolved_model!r} ({note}, no persona pin). "
         "Pass model: \"sonnet\"/\"haiku\", or dispatch coordinator:executor."
     )
 

@@ -271,7 +271,6 @@ def test_deny_texts_name_the_exempt_form():
 
     form = "coordinator-invoke workflow.revise --params-file <file>"
     assert form in g.postlanding_deny_text(5, 3)
-    assert form in g.prefire_deny_text(5, 3)
 
 
 def test_relayed_workflow_revise_classifies_exempt_in_every_shape():

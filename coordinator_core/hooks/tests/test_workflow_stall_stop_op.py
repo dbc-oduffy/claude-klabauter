@@ -86,7 +86,7 @@ def test_op_passes_with_no_stale_run(tdir):
 
 
 def test_fan_in_calls_the_same_function():
-    assert sd._FOLDED_LEGS[-1][0] == "workflow_stall_resume"
+    assert dict(sd._FOLDED_LEGS)["workflow_stall_resume"]
     assert _REGISTRY[OP] is sd._workflow_stall_stop_op
 
 
@@ -101,6 +101,7 @@ def test_stop_dispatch_composes_exactly_these_legs_in_order():
         "nudge_harness_directive_dispatch",
         "nudge_unrouted_sizing",
         "workflow_stall_resume",
+        "pm_directive_unmapped",
     )
     assert sd.PRODUCER_LEG_NAMES == ("receiver_state_sensor", "group_em_park_spool")
 

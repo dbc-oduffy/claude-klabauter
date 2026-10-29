@@ -57,7 +57,7 @@ def world(tmp_path, monkeypatch):
     def run_member_agents(*_a, **_k):
         """Every agent in the patched write record also wrote under this run's slice prefix."""
         by_agent: dict = {}
-        for path, agent in review_edits.review_writes().items():
+        for path, agent in review_edits.review_writes(tmp_path, None, None).items():
             by_agent.setdefault(agent, {f".coordinator-local/x/{PREFIX}/note.md"}).add(path)
         return by_agent
 

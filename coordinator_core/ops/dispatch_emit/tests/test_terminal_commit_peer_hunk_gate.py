@@ -20,7 +20,6 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 SELF = "5e1f0000-0000-4000-8000-0000000000c3"
 PATH = "pkg/execute_review.py"
 SIBLING = "run-sibling"
-from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 
 
 def _git(args, cwd: Path) -> str:
@@ -206,3 +205,4 @@ def test_an_unresolved_out_of_ask_finding_on_the_path_lands_and_is_provenance(re
     assert out["committed"] is True, out
     (entry,) = _provenance(out, peer_hunk_gate.OUT_OF_ASK_HUNKS)
     assert "rev-1" in entry["detail"]
+

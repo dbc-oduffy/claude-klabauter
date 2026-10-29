@@ -554,6 +554,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session_baton_mint", 'registers "session_baton.mint"'),
     ("coordinator_core.ops.session_baton_promote", 'registers "session_baton.promote"'),
     ("coordinator_core.ops.baton_pm_turns", 'registers "baton.pm_turn_append", "baton.pm_turns"'),
+    ("coordinator_core.ops.pm_directive_map", 'registers "baton.pm_directive_unmapped", "baton.pm_directive_dispose", "hooks.sessionend_pm_directive_check"'),
     ("coordinator_core.ops.self_persist_findings", 'registers "findings.self_persist_fallback"'),
     ("coordinator_core.ops.workday_stitch_sidecar_summary", 'registers "workday.stitch_sidecar_into_summary"'),
     ("coordinator_core.ops.write_identity_file", 'registers "install.write_identity_file"'),

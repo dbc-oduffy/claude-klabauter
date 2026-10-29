@@ -103,7 +103,17 @@ def test_force_added_file_under_ignored_directory_is_never_reported(repo):
     assert small is not None and f"{BULK}/forced.txt" not in small
 
     big = terminal_commit._ignored_among_left(repo, [f"{BULK}/forced.txt", *_bulk(40)], None)
-    assert big is None or f"{BULK}/forced.txt" not in big
+    assert big is None
+
+
+def test_collapse_threshold_is_exclusive_at_the_minimum(repo, spy):
+    terminal_commit._ignored_among_left(repo, _bulk(terminal_commit._COLLAPSE_MIN), None)
+    at_min = _stdin_lines(spy)
+    spy.clear()
+    terminal_commit._ignored_among_left(repo, _bulk(terminal_commit._COLLAPSE_MIN + 1), None)
+
+    assert at_min == terminal_commit._COLLAPSE_MIN
+    assert _stdin_lines(spy) == 1
 
 
 def test_collapsed_directory_git_does_not_report_refuses_to_answer(repo):

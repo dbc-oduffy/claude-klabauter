@@ -456,13 +456,14 @@ class TestSessionCapLeg:
         monkeypatch.setattr(census_mod, "command_line", lambda pid: "python -m pytest tests/x.py")
         assert "holds 3 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
 
-    def test_background_shells_over_cap_deny_naming_the_pids(self, host):
+    def test_background_shells_over_cap_warn_naming_the_pids(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
         ]
         out = _enveloped(guard.check)(_payload("sleep 600", background=True))
-        text = _reason(out)
-        assert "session-cap" in text and "background" in text and "400" in text
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow" and "updatedInput" not in hso
+        assert "background" in hso["additionalContext"] and "400" in hso["additionalContext"]
 
     def _shell_rows(self, n):
         return [CLAUDE, TOOL, CALLER] + [
@@ -477,8 +478,8 @@ class TestSessionCapLeg:
     def test_only_live_shells_are_named_when_some_exited(self, host):
         host.rows = self._shell_rows(5)
         host.exited = {403}
-        text = _reason(_enveloped(guard.check)(_payload("sleep 600", background=True)))
-        assert "holds 4 background shells" in text and "403" not in text and "400" in text
+        text = _enveloped(guard.check)(_payload("sleep 600", background=True))["hookSpecificOutput"]["additionalContext"]
+        assert "holds 4 live background shells" in text and "403" not in text and "400" in text
 
     def test_background_light_command_under_cap_admits(self, host, tmp_path):
         assert _enveloped(guard.check)(_payload("sleep 600", background=True)) is None
@@ -660,10 +661,6 @@ class TestDenyTextRegister:
             ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(3)
         ]
         out.append(_enveloped(guard.check)(_payload("pnpm build")))
-        host.rows = [CLAUDE, TOOL, CALLER] + [
-            ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(3)
-        ]
-        out.append(_enveloped(guard.check)(_payload("sleep 9", background=True)))
         host.rows = None
         out.append(_enveloped(guard.check)(_payload("pnpm build")))
         return [_reason(o) for o in out]
@@ -673,7 +670,7 @@ class TestDenyTextRegister:
         lint_message = pytest.importorskip("coordinator_core.message_register.register").lint_message
 
         reasons = self._reasons(host)
-        assert len(reasons) == 7 and all(reasons)
+        assert len(reasons) == 6 and all(reasons)
         findings = [f for text in reasons for f in lint_message(text, site=GUARD_NAME)]
         assert findings == []
 

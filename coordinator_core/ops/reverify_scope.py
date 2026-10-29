@@ -6,11 +6,11 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Set
 
 from coordinator_core.diff_scoped_tests import _TEST_FILE_RE, _read_testpaths, _under_testpaths
+from coordinator_core.git.run import run_git
 
 # Private helper imported cross-module: no public import-closure primitive exists.
 from coordinator_core.ops.review_reverify import _imported_edited
@@ -21,16 +21,9 @@ def _changed_paths(repo_root: Path, base: str, head: str) -> List[str]:
     """Posix paths changed between ``base`` and ``head``, deletions excluded (one git spawn)."""
     if not base:
         raise ValueError("select_tests: base is unknown (None or empty)")
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=d", base, head],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except OSError as exc:
-        raise ValueError(f"select_tests: git diff spawn failed: {exc}") from exc
+    proc = run_git(["diff", "--name-only", "--diff-filter=d", base, head], cwd=str(repo_root))
+    if proc.returncode == 127:
+        raise ValueError(f"select_tests: git diff spawn failed: {proc.stderr.strip()}")
     if proc.returncode != 0:
         raise ValueError(f"select_tests: git diff {base}..{head} failed: {proc.stderr.strip()}")
     return sorted({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()})

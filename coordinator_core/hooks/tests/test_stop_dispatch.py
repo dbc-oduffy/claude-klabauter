@@ -194,6 +194,7 @@ def _silence_all_legs(monkeypatch, mod):
         "_nudge_harness_directive_dispatch_handler",
         "_nudge_unrouted_sizing_handler",
         "_workflow_stall_stop_handler",
+        "_pm_directive_unmapped_handler",
     ):
         monkeypatch.setattr(mod, name, lambda _p: mod_no_advisory(), raising=True)
 
@@ -373,4 +374,111 @@ def test_subagent_stop_is_silent_for_stalled_workflow(monkeypatch, tmp_path) -> 
 
 def test_settled_workflow_adds_nothing(monkeypatch, tmp_path) -> None:
     result = _stall_aggregate(monkeypatch, tmp_path, "")
+    assert result == mod_no_advisory()
+
+
+# --- unmapped PM directive Stop leg ----------------------------------------------
+
+_PM_SID = "sid-turn20"
+
+
+def _pm_session(monkeypatch, tmp_path):
+    import shutil
+    from pathlib import Path
+
+    from coordinator_core.ops import baton_pm_turns as PT
+    from coordinator_core.session_baton import store
+
+    fixture = Path(__file__).resolve().parent / "fixtures" / "pm_turns_two_directives.jsonl"
+    sdir = tmp_path / "coordinator-sessions" / _PM_SID
+    sdir.mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir",
+                        lambda s, cwd=None: tmp_path / "coordinator-sessions" / s)
+    shutil.copy(fixture, sdir / PT.PM_TURNS_FILENAME)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+def _pm_aggregate(monkeypatch, tmp_path, **payload_extra):
+    mod = importlib.import_module(_MODULE)
+    real = mod._pm_directive_unmapped_handler
+    _silence_all_legs(monkeypatch, mod)
+    monkeypatch.setattr(mod, "_pm_directive_unmapped_handler", real, raising=True)
+    for name in ("_guard_manufactured_blocker_handler", "_guard_terminal_review_handler"):
+        monkeypatch.setattr(mod, name, lambda _p: mod_no_advisory(), raising=True)
+    payload = {"cwd": _make_repo(tmp_path), "session_id": _PM_SID, "transcript_path": "",
+               **payload_extra}
+    return _aggregate(payload)[1]
+
+
+def test_stop_leg_is_registered_last_in_the_fold() -> None:
+    mod = importlib.import_module(_MODULE)
+    assert mod._FOLDED_LEGS[-1][0] == "pm_directive_unmapped"
+    assert len(mod._FOLDED_LEGS) == 10
+
+
+def test_unmapped_turn_20_directives_are_an_advisory_line_each(monkeypatch, tmp_path) -> None:
+    _pm_session(monkeypatch, tmp_path)
+    result = _pm_aggregate(monkeypatch, tmp_path)
+    assert result.get("decision") != "block"
+    text = result["systemMessage"]
+    assert text.count("UNMAPPED PM directive (turn 20)") == 2
+
+
+def test_mapped_directives_add_nothing(monkeypatch, tmp_path) -> None:
+    import json
+
+    home = _pm_session(monkeypatch, tmp_path)
+    tasks = home / ".claude" / "tasks" / _PM_SID
+    tasks.mkdir(parents=True)
+    (tasks / "1.json").write_text(json.dumps({"subject": "Handle PM turn 20 asks"}),
+                                  encoding="utf-8")
+    assert _pm_aggregate(monkeypatch, tmp_path) == mod_no_advisory()
+
+
+def test_subagent_stop_is_silent_for_unmapped_directives(monkeypatch, tmp_path) -> None:
+    _pm_session(monkeypatch, tmp_path)
+    assert _pm_aggregate(monkeypatch, tmp_path, agent_id="a1") == mod_no_advisory()
+
+
+def test_chained_stop_still_only_advises(monkeypatch, tmp_path) -> None:
+    _pm_session(monkeypatch, tmp_path)
+    result = _pm_aggregate(monkeypatch, tmp_path, stop_hook_active=True)
+    assert result.get("decision") != "block"
+    assert "UNMAPPED PM directive" in result["systemMessage"]
+
+
+def test_stop_advisory_is_capped_in_lines_and_width(monkeypatch) -> None:
+    mod = importlib.import_module(_MODULE)
+    entries = [{"turn": i, "index": 0, "text": "x" * 1000} for i in range(30)]
+    pdm = importlib.import_module("coordinator_core.ops.pm_directive_map")
+    monkeypatch.setattr(pdm, "unmapped_directives", lambda *_a, **_k: entries, raising=True)
+    result = mod._pm_directive_unmapped_handler({"payload": {"session_id": "s"}})
+    text = str(result)
+    assert text.count("UNMAPPED PM directive") == pdm.DIRECTIVE_LINES_MAX
+    assert "x" * (pdm.DIRECTIVE_LINE_CAP + 1) not in text
+    assert f"+{30 - pdm.DIRECTIVE_LINES_MAX} more unmapped PM directives (baton.pm_directive_unmapped)" in text
+
+
+def test_stop_leg_import_failure_gives_no_advisory(monkeypatch) -> None:
+    import sys
+
+    mod = importlib.import_module(_MODULE)
+    monkeypatch.setitem(sys.modules, "coordinator_core.ops.pm_directive_map", None)
+    result = mod._pm_directive_unmapped_handler({"payload": {"session_id": "s"}})
+    assert result == mod_no_advisory()
+
+
+def test_stop_leg_call_failure_gives_no_advisory(monkeypatch) -> None:
+    mod = importlib.import_module(_MODULE)
+    pdm = importlib.import_module("coordinator_core.ops.pm_directive_map")
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pdm, "unmapped_directives", _boom, raising=True)
+    result = mod._pm_directive_unmapped_handler({"payload": {"session_id": "s"}})
     assert result == mod_no_advisory()

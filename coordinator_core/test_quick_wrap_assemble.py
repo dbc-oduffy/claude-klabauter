@@ -1342,7 +1342,7 @@ def test_pre_terminal_but_unlanded_statuses_owe_nothing():
     """
     for status in (
         "draft", "reviewed", "approved", "blocked", "executing",
-        "closed_partial", "deferred", "abandoned", "superseded",
+        "closed_partial", "closed", "deferred", "abandoned", "superseded",
     ):
         assert qwa._terminal_write_owed({"present": True, "status": status}) is False, status
 
@@ -1379,6 +1379,7 @@ def test_every_status_in_the_schema_enum_is_classified():
     known = {
         "draft", "reviewed", "approved", "blocked", "executing", "landed",
         "implemented", "closed_partial", "deferred", "abandoned", "superseded",
+        "closed",
     }
     enum = set(schema["properties"]["status"]["enum"])
     assert enum == known, (

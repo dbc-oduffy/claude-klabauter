@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.git.run import run_git
+
 DEFAULT_OP = "updatedocs.gates"
 SIDECAR_AGE_DAYS = 60  # above sidecar_reap.DEFAULT_AGE_FLOOR_DAYS (14)
 DEAD_SESSION = "00000000-0000-4000-8000-000000000000"
@@ -46,10 +48,9 @@ _CHILD_FLAG = "--child"
 
 
 def _git(repo: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", *args], cwd=str(repo), check=True, capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    result = run_git(list(args), cwd=str(repo))
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed rc={result.returncode}: {result.stderr.strip()}")
 
 
 def ensure_fixture(parent: Path) -> Path:

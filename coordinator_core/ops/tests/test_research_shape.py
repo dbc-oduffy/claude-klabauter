@@ -118,6 +118,35 @@ def test_deep_runs_a_seeded_repo_before_the_team():
     assert r["pipelines"].index("repo") < r["pipelines"].index("unblock")
 
 
+def test_primary_repo_orders_repo_first_and_preflight_before_notebooklm():
+    r = shape({"value_class": "corpus", "sources": ["web", "notebooklm", "repo"], "primary": "repo"})
+    assert r["pipelines"] == ["repo", "web", "nlm-preflight", "notebooklm"]
+    assert r["primary"] == "repo"
+
+
+def test_primary_repo_stays_its_own_pipeline_at_deep():
+    r = shape({"value_class": "deep", "sources": ["web", "repo"], "primary": "repo"})
+    assert r["pipelines"] == ["repo", "unblock"] or r["pipelines"][0] == "repo"
+    assert r["pipelines"][-1] == "unblock"
+
+
+def test_primary_absent_is_unchanged():
+    block = {"value_class": "corpus", "sources": ["web", "notebooklm", "repo"]}
+    r = shape(block)
+    assert "primary" not in r
+    assert r["pipelines"] == ["nlm-preflight", "web", "notebooklm", "repo"]
+
+
+def test_primary_repo_without_repo_source_refused():
+    with pytest.raises(ValueError):
+        shape({"value_class": "corpus", "sources": ["web"], "primary": "repo"})
+
+
+def test_unknown_primary_refused():
+    with pytest.raises(ValueError):
+        shape({"value_class": "corpus", "sources": ["web", "repo"], "primary": "web"})
+
+
 def test_unknown_seed_kind_raises():
     with pytest.raises(ValueError):
         shape({"value_class": "corpus", "seeds": [_seed("podcast")]})

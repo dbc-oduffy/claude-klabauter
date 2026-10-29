@@ -682,14 +682,14 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
         override_doc_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(override_doc_src, override_doc_dst)
 
-    routes_src = Path(__file__).resolve().parent.parent / "docs" / "reference" / "guard-routes"
-    if routes_src.is_dir():
-        routes_dst = (
-            quarantine / ".coordinator-claude-settings" / "coordinator-claude" / "docs" / "wiki" / "guard-routes"
+    # Per-test fixture: seed only the index, the one file `routes_index_reachable` probes.
+    routes_index_src = Path(__file__).resolve().parent.parent / "docs" / "reference" / "guard-routes" / "README.md"
+    if routes_index_src.is_file():
+        routes_index_dst = (
+            quarantine / ".coordinator-claude-settings" / "coordinator-claude" / "docs" / "wiki" / "guard-routes" / "README.md"
         )
-        routes_dst.mkdir(parents=True, exist_ok=True)
-        for page in routes_src.glob("*.md"):
-            shutil.copyfile(page, routes_dst / page.name)
+        routes_index_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(routes_index_src, routes_index_dst)
 
     return quarantine
 

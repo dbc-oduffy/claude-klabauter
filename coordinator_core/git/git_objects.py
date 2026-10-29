@@ -43,6 +43,7 @@ import os
 import struct
 import threading
 import time
+import weakref
 import zlib
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -586,6 +587,43 @@ def _read_pack_bytes(pack_path: Path) -> bytes | mmap.mmap:
             return b""
 
 
+_PACK_MAPS_NAMESPACE = "pack-maps"
+
+
+def _close_pack_maps(maps: dict) -> None:
+    for m in maps.values():
+        close = getattr(m, "close", None)
+        if close is not None:
+            try:
+                close()
+            except (BufferError, ValueError):
+                pass
+    maps.clear()
+
+
+class _ScopedPackMaps:
+    """Open pack maps for one `call_io_scope` block. The scope has no exit hook, so the
+    maps are closed when the scope drops this holder (finalizer); never hold it longer,
+    Windows refuses to delete a mapped pack."""
+
+    def __init__(self) -> None:
+        self.maps: dict = {}
+        weakref.finalize(self, _close_pack_maps, self.maps)
+
+
+def _pack_bytes_for_read(pack_path: Path) -> bytes | mmap.mmap:
+    """Pack bytes, opened once per `call_io_scope` block; outside one, opened per read."""
+    if not call_io_scope.scope_open():
+        return _read_pack_bytes(pack_path)
+    holder = call_io_scope.memo(_PACK_MAPS_NAMESPACE, "", _ScopedPackMaps)
+    key = str(pack_path)
+    cached = holder.maps.get(key)
+    if cached is None:
+        cached = _read_pack_bytes(pack_path)
+        holder.maps[key] = cached
+    return cached
+
+
 def _delta_read_size(data: bytes, pos: int) -> tuple[int, int]:
     result = 0
     shift = 0
@@ -746,7 +784,7 @@ def _search_packs_for_sha(
         if offset is None:
             continue
         try:
-            pack_bytes = _read_pack_bytes(pack_path)
+            pack_bytes = _pack_bytes_for_read(pack_path)
         except OSError:
             continue
         _LAST_HIT_PACK[key] = i
@@ -803,14 +841,59 @@ def _read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
     cached = _object_cache_get(key)
     if cached is not _CACHE_MISS:
         return cached
+    result = _read_local_object(common_dir, sha)
+    if result is None:
+        for alt_common in _alternate_common_dirs(common_dir):
+            result = _read_local_object(alt_common, sha)
+            if result is not None:
+                break
+    _object_cache_put(key, result)
+    return result
+
+
+def _read_local_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
     try:
         result = _read_pack_object_by_sha(common_dir, sha)
     except (_GitReadModelError, zlib.error, struct.error):
         result = None
     if result is None:
         result = _read_loose_object(common_dir, sha)
-    _object_cache_put(key, result)
     return result
+
+
+def _alternate_common_dirs(common_dir: Path) -> list[Path]:
+    """Common dirs of every object dir reachable through `objects/info/alternates`,
+    transitively. Entries may use mixed separators or be relative to the objects dir;
+    a visited set breaks cycles. An alternate whose dir is not named `objects` is skipped
+    (the readers address `<common>/objects`)."""
+    start = os.path.normcase(os.path.abspath(common_dir / "objects"))
+    seen = {start}
+    out: list[Path] = []
+    queue = [Path(common_dir / "objects")]
+    while queue:
+        objects_dir = queue.pop(0)
+        try:
+            raw = call_io_scope.read_bytes(objects_dir / "info" / "alternates")
+        except OSError:
+            continue
+        if not raw:
+            continue
+        for line in raw.decode("utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if os.sep == "\\":
+                line = line.replace("/", "\\")
+            norm = os.path.normpath(os.path.join(str(objects_dir), line))
+            marker = os.path.normcase(norm)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            alt = Path(norm)
+            queue.append(alt)
+            if alt.name == "objects":
+                out.append(alt.parent)
+    return out
 
 
 def _read_ref_raw(ref_path: Path) -> Optional[str]:

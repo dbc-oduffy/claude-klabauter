@@ -59,6 +59,19 @@ def test_absolute_scratch_under_repo_root_names_the_route(tmp_path):
     assert ROUTE not in _reason(f"{RM} -rf {tmp_path}/other/scratch/x")
 
 
+def test_partly_quoted_operand_with_space_in_repo_root_names_the_route(tmp_path):
+    repo = tmp_path / "My Repo"
+    (repo / ".git").mkdir(parents=True)
+    assert ROUTE in _reason(f'{RM} -rf "{repo}"/scratch/x')
+    assert ROUTE in _reason(f'{RM} -rf "{repo}/scratch/x"')
+
+
+def test_backslash_windows_operand_names_the_route(tmp_path):
+    (tmp_path / ".git").mkdir()
+    backslashed = str(tmp_path).replace("/", "\\") + "\\scratch\\x"
+    assert ROUTE in _reason(f"{RM} -rf {backslashed}")
+
+
 def test_verdict_still_denies_through_check(tmp_path):
     result = guard.check(
         {

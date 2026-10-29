@@ -74,11 +74,9 @@ def test_empty_duplicate_and_unsluggable_questions_are_refused(tmp_path):
         re_.write_ask(tmp_path, SCRATCH, "  ")
 
 
-def test_halt_legs_joins_preflight_to_notebooklm_only_when_both_are_present():
-    assert re_.halt_legs(["nlm-preflight", "web", "notebooklm"]) == {"nlm-preflight": "notebooklm"}
+def test_halt_legs_gives_the_preflight_no_leg_of_its_own():
+    assert re_.halt_legs(["nlm-preflight", "web", "notebooklm"]) == {}
     assert re_.halt_legs(["web", "repo"]) == {}
-    assert re_.halt_legs(["nlm-preflight"]) == {}
-    assert re_.halt_legs(["notebooklm"]) == {}
 
 
 def test_slug_is_filename_safe_and_capped():

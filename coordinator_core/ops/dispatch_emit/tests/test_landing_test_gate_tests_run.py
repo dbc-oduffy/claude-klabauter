@@ -9,7 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "run-tr"
 FAIL_PARAMS = {"targeted_tests": {"status": "fail", "baseline": None}}

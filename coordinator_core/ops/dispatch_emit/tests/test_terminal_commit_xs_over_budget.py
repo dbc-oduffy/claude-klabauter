@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
+from coordinator_core.ops.dispatch_emit import terminal_commit_refusals as refusals
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -79,19 +80,32 @@ def test_untracked_only_over_budget_diff_is_refused_without_a_commit(root):
     head = _git(root, "rev-parse", "HEAD")
     names = _new_files(root, 3, 14)
     reply, token = _call(root, names)
-    assert reply["refused"] == "xs-over-budget"
-    assert reply["measured"] == {"files": 3, "lines": 42}
-    assert "3 files, 42 lines" in reply["next_action"]
-    assert not reply.get("committed")
-    assert _git(root, "rev-parse", "HEAD") == head
-    assert run_token.admits(root / ".git", RUN_ID, token, SCRIPT), "a refusal must release the run token"
+    assert reply.get("refused") != "xs-over-budget", reply
+    assert reply.get("committed") is True, reply
+    assert _git(root, "rev-parse", "HEAD") != head
 
 
-def test_tracked_edit_over_the_line_budget_is_refused(root):
+def _marker(root, paths, base=None):
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="X1", title="t", paths=tuple(paths)),), plan_path=None, version=1
+    )
+    params = {"run_base_sha": base or _git(root, "rev-parse", "HEAD"), "arm": "xs"}
+    return tc._xs_over_budget_refusal(root, params, RUN_ID, request)
+
+
+def test_untracked_only_over_budget_diff_yields_the_s_resize_marker(root):
+    marker = _marker(root, _new_files(root, 3, 14))
+    assert marker["resize_arm"] == "S"
+    assert marker["measured"] == {"files": 3, "lines": 42}
+    assert "3 files, 42 lines" in marker["next_action"]
+    assert "refused" not in marker
+
+
+def test_tracked_edit_over_the_line_budget_yields_the_resize_marker(root):
     (root / "tracked.txt").write_text("t\n" + "y\n" * 40, encoding="utf-8")
-    reply, _ = _call(root, ["tracked.txt"])
-    assert reply["refused"] == "xs-over-budget"
-    assert reply["measured"]["files"] == 1 and reply["measured"]["lines"] == 40
+    marker = _marker(root, ["tracked.txt"])
+    assert marker["resize_arm"] == "S"
+    assert marker["measured"] == {"files": 1, "lines": 40}
 
 
 def test_an_in_budget_diff_is_not_refused_by_the_budget(root):
@@ -110,9 +124,8 @@ def test_a_tracked_unchanged_declared_path_counts_zero(root):
 def test_a_binary_untracked_file_counts_one_file_zero_lines(root):
     (root / "blob.bin").write_bytes(b"\0" * 5000)
     names = _new_files(root, 2, 5)
-    reply, _ = _call(root, ["blob.bin", *names])
-    assert reply["refused"] == "xs-over-budget"
-    assert reply["measured"] == {"files": 3, "lines": 10}
+    marker = _marker(root, ["blob.bin", *names])
+    assert marker["measured"] == {"files": 3, "lines": 10}
 
 
 def test_an_unresolvable_base_fails_closed(root):
@@ -122,10 +135,8 @@ def test_an_unresolvable_base_fails_closed(root):
     assert "unmeasurable" in reply["error"]
 
 
-def test_an_xs_run_with_a_review_shape_is_still_gated(root):
-    names = _new_files(root, 3, 14)
-    reply, _ = _call(root, names, slices=1)
-    assert reply["refused"] == "xs-over-budget"
+def test_an_xs_run_with_a_review_shape_still_yields_the_marker(root):
+    assert _marker(root, _new_files(root, 3, 14))["resize_arm"] == "S"
 
 
 def test_a_non_xs_arm_over_budget_skips_the_check(root):
@@ -179,15 +190,14 @@ def test_peer_commits_of_other_paths_are_not_priced(root):
     assert reply.get("refused") != "xs-over-budget", reply
 
 
-def test_own_oversized_diff_still_refuses_beside_peer_commits(root):
+def test_own_oversized_diff_still_resizes_beside_peer_commits(root):
     base = _git(root, "rev-parse", "HEAD")
     (root / "peer.py").write_text("p = 1\n" * 20, encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "peer work")
     (root / "tracked.txt").write_text("t\n" + "o\n" * 40, encoding="utf-8")
-    reply, _ = _call(root, ["tracked.txt"], base=base)
-    assert reply["refused"] == "xs-over-budget"
-    assert reply["measured"] == {"files": 1, "lines": 40}
+    marker = _marker(root, ["tracked.txt"], base=base)
+    assert marker["measured"] == {"files": 1, "lines": 40}
 
 
 def test_own_edit_on_top_of_a_peer_commit_is_priced_from_the_peer_commit(root):
@@ -195,6 +205,43 @@ def test_own_edit_on_top_of_a_peer_commit_is_priced_from_the_peer_commit(root):
     (root / "tracked.txt").write_text("t\n" + "p\n" * 60, encoding="utf-8")
     _git(root, "commit", "-q", "-am", "peer work\n\nSession-Id: peer-session")
     (root / "tracked.txt").write_text("t\n" + "p\n" * 60 + "o\n" * 35, encoding="utf-8")
-    reply, _ = _call(root, ["tracked.txt"], base=base)
-    assert reply["refused"] == "xs-over-budget"
-    assert reply["measured"] == {"files": 1, "lines": 35}
+    marker = _marker(root, ["tracked.txt"], base=base)
+    assert marker["measured"] == {"files": 1, "lines": 35}
+
+
+def _over_marker(root):
+    marker = _marker(root, _new_files(root, 3, 14))
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="X1", title="t", paths=("new_0.py",)), ), plan_path=None, version=1
+    )
+    return marker, request
+
+
+def test_resize_without_a_cited_sizing_is_reported_as_not_amended(root):
+    marker, request = _over_marker(root)
+    assert "Resized" in marker["next_action"]
+    assert tc._apply_xs_resize(root, request, marker) is False
+    assert "Resized" not in marker["next_action"]
+    assert "was not amended" in marker["next_action"]
+
+
+def test_resize_amends_the_cited_sizing_and_keeps_the_resized_wording(root, monkeypatch):
+    from coordinator_core.ops import sizing_resize
+
+    calls = []
+    monkeypatch.setattr(refusals, "_cited_sizing", lambda r, p: "state/sizings/x.yaml")
+    monkeypatch.setattr(sizing_resize, "_handler", lambda params, repo_root=None: calls.append(params) or {"exit_code": 0})
+    marker, request = _over_marker(root)
+    assert tc._apply_xs_resize(root, request, marker) is True
+    assert calls and calls[0]["tshirt"] == "S" and calls[0]["sizing"] == "state/sizings/x.yaml"
+    assert "Resized" in marker["next_action"]
+
+
+def test_a_refused_resize_is_reported_as_not_amended(root, monkeypatch):
+    from coordinator_core.ops import sizing_resize
+
+    monkeypatch.setattr(refusals, "_cited_sizing", lambda r, p: "state/sizings/x.yaml")
+    monkeypatch.setattr(sizing_resize, "_handler", lambda params, repo_root=None: {"exit_code": 1, "error": "no"})
+    marker, request = _over_marker(root)
+    assert tc._apply_xs_resize(root, request, marker) is False
+    assert "was not amended" in marker["next_action"]

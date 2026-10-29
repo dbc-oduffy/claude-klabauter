@@ -15,6 +15,7 @@ from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards._write_bump_marker import marker_basename, resolve_gitdir
 from coordinator_core.bash_guards._write_bump_message import render_gem_refusal_message
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
+    _commit_advisory_off,  # noqa: F401 -- autouse fixture reused
     _posix,
     _reset_git_root_cache,  # noqa: F401 -- autouse fixture reused
     _set_anchor,
@@ -60,6 +61,33 @@ def test_scoped_commit_allowed_when_on_or_unset(repos, monkeypatch, value):
     assert _run(repos, _scoped(repos)) is None
     gitdir = resolve_gitdir(str(repos["foreign"]))
     assert not (gitdir / marker_basename(GEM_SID)).exists()
+
+
+@pytest.mark.parametrize(
+    "sub",
+    [
+        "add --pathspec-from-file %s",
+        "commit --pathspec-from-file=%s -m x",
+        "commit --pathspec-from-file %s -m x",
+    ],
+)
+def test_live_gem_pathspec_from_file_is_allowed_on_and_refused_off(
+    repos, monkeypatch, tmp_path, sub  # noqa: F811
+):
+    listing = tmp_path / "paths.txt"
+    listing.write_text("f.txt\n", encoding="utf-8")
+    cmd = "git -C %s %s" % (_posix(repos["foreign"]), sub % _posix(listing))
+    _set_anchor(monkeypatch, repos, GEM_SID)
+    _live(monkeypatch)
+    _setting(monkeypatch, "on")
+    assert _run(repos, cmd) is None
+    _setting(monkeypatch, "off")
+    # Advisory verbs back on: the refusal must survive the advisory branch.
+    monkeypatch.setattr(guard, "_CROSS_REPO_ADVISORY_VERBS", frozenset({"git commit", "git add"}))
+    result = _run(repos, cmd)
+    assert result is not None
+    label = guard._show_toplevel(str(repos["foreign"])) or str(repos["foreign"])
+    assert render_gem_refusal_message(label).split("\n")[0][:40] in str(result)
 
 
 @pytest.mark.parametrize("sub", ["push", "add -A", "commit -a -m x"])

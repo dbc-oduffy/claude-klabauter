@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core.bash_guards import _audience, dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.guard_routes import keys
 from coordinator_core.guard_messages.alternative_record import (
     AlternativeRecord,
     EscalationRoute,
@@ -56,9 +57,18 @@ def _reason(envelope) -> str:
 
 
 def test_em_payload_renders_the_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(keys, "routes_index_reachable", lambda: False)
     reason = _reason(_fire(monkeypatch, tmp_path, _record()))
     assert "synthetic deny." in reason
     assert _OVERRIDE_POINTER in reason
+
+
+def test_em_payload_with_reachable_routes_index_carries_the_route_not_the_override(monkeypatch, tmp_path):
+    monkeypatch.setattr(keys, "routes_index_reachable", lambda: True)
+    reason = _reason(_fire(monkeypatch, tmp_path, _record()))
+    assert "synthetic deny." in reason
+    assert "Route key gr:fake-record-guard" in reason
+    assert _OVERRIDE_POINTER not in reason
 
 
 @pytest.mark.parametrize("unresolved", [False, True])

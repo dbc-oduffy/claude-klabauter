@@ -303,11 +303,12 @@ class TestDenyMessageDiscipline:
         reason = _reason(out)
         assert SENTINEL not in reason
 
-    def test_deny_reason_names_pathspec_from_file_as_scoped_list_add(self):
+    def test_deny_reason_names_commit_v2_and_not_pathspec_from_file(self):
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = _reason(out)
-        assert "git add --pathspec-from-file" in reason
+        assert "ceremony.commit_v2 --params-file" in reason
+        assert "--pathspec-from-file" not in reason
         assert SENTINEL not in reason
 
     def test_deny_reason_does_not_echo_the_command(self):
@@ -324,14 +325,14 @@ class TestReasonClassSpecificMessages:
     def test_direct_deny_message_unchanged(self):
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         reason = _reason(out)
-        assert "creates/modifies the PM-approval sentinel" in reason
-        assert "Ask the PM to create it" in reason
+        assert "creates/modifies the doctrine-edit approval sentinel" in reason
+        assert "PM" not in reason
         assert SENTINEL not in reason
 
     def test_indirection_deny_does_not_assert_creation(self):
         out = _enveloped(guard.check)(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
-        assert "creates/modifies the PM-approval sentinel" not in reason
+        assert "creates/modifies the doctrine-edit approval sentinel" not in reason
         assert "unreadable" in reason
         assert "approval-sentinel guard" in reason
         assert SENTINEL not in reason
@@ -415,7 +416,7 @@ class TestReasonClassSpecificMessages:
         out = _enveloped(guard.check)(_payload('bash -c "touch %s"' % SENTINEL))
         reason = _reason(out)
         assert SENTINEL not in reason
-        assert "creates/modifies the PM-approval sentinel" in reason
+        assert "creates/modifies the doctrine-edit approval sentinel" in reason
 
 
 class TestIndirectionWrapperShapesDeny:

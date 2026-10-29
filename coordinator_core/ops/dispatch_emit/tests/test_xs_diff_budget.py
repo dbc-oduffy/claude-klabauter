@@ -41,7 +41,11 @@ def test_resize_next_action():
     s = m.resize_next_action({"files": 15, "lines": 621, "budget_files": 2, "budget_lines": 30}, "s.yaml")
     assert s == (
         "XS run diff is 15 files, 621 lines; XS budget is 2 files, 30 lines. "
-        "Resize s.yaml to S or larger and refire."
+        "Resized s.yaml to S in-run; the S-arm gates apply."
     )
+    unamended = m.resize_next_action(
+        {"files": 15, "lines": 621, "budget_files": 2, "budget_lines": 30}, "s.yaml", resized=False
+    )
+    assert "Resized" not in unamended and "s.yaml was not amended" in unamended
     assert v is not None
     assert "the sizing" in m.resize_next_action(v, None)

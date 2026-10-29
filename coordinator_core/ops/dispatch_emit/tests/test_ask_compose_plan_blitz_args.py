@@ -5,8 +5,12 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 # The bare token also sits in the scout reply schema (unconditional); only this plan-author clause is gated on args.

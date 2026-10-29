@@ -32,6 +32,11 @@ def test_blitz_shape_five_nodes_four_ids_one_declined():
     assert out[0].to_json()["nodeid"] == "a/test_x.py::t1"
 
 
+def test_file_level_target_nodeid_is_the_bare_file():
+    out = account_targets((_t("a/test_x.py", ""), _t("a/test_y.py", "t1")), ["x-row", "y-row"], ["x-row", "y-row"], [], [])
+    assert [a.to_json()["nodeid"] for a in out] == ["a/test_x.py", "a/test_y.py::t1"]
+
+
 def test_length_mismatch_drops_all_and_does_not_raise():
     tests = (_t("a.py", "t1"), _t("b.py", "t2"))
     out = account_targets(tests, ["only"], ["only"], [], [])

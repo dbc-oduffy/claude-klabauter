@@ -6,11 +6,10 @@ under an agent shell, which leaves the preflight with `plugin_root=unresolved`.
 `resolve_plugin_content_root` never shells out: it walks the same ladder in
 process, then falls back to the clone root and finally to this engine's own
 checkout. It is a plain function plus a `python -m` entry that always prints a
-newline-terminated path; it registers no JSON-RPC op.
+newline-terminated path, and registers the warm op `install.content_root_resolve`.
 
-Consumer: the deep-research `nlm-preflight` stage, which must invoke
-`python -m coordinator_core.ops.content_root_resolve` in place of the shim
-(the prompt-template edit is DoE-owned).
+Consumer: the deep-research `nlm-preflight` stage, which calls the op through
+coordinator-invoke in place of the shim (the prompt-template edit is DoE-owned).
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from coordinator_core._content_root_primitive import content_root_for
+from coordinator_core.ipc import register_op
 
 
 def _from_content_ladder() -> Optional[str]:
@@ -73,6 +73,16 @@ def resolve_plugin_content_root() -> Tuple[Optional[str], str]:
         if candidate and os.path.isdir(candidate):
             return candidate, name
     return None, "unresolved"
+
+
+@register_op("install.content_root_resolve")
+async def _content_root_resolve(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "install.content_root_resolve" handler. Params: {} (none; `repo_root` unused,
+    an own-machine probe). Returns {"path": str|None, "rung": str}; `path` is None only when no rung
+    resolved, never an error."""
+    del params, repo_root
+    path, rung = resolve_plugin_content_root()
+    return {"path": path, "rung": rung}
 
 
 def main(argv: Optional[List[str]] = None) -> int:

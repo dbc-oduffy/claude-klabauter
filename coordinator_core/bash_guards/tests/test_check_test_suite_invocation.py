@@ -854,6 +854,20 @@ def test_literal_pytest_paths_are_not_refused_as_opaque(repo, command):
     assert _enveloped(guard.check)(_payload(command, repo)) is None
 
 
+@pytest.mark.parametrize("command", [
+    "git ls-files | xargs grep -l pytest",
+    "xargs -n 1 echo pytest",
+    "xargs --max-args 1 echo pytest",
+])
+def test_xargs_that_does_not_launch_pytest_is_not_opaque(command):
+    assert guard._opaque_pytest_path_source(guard._segment_argvs(command)) is None
+
+
+def test_xargs_long_value_flag_does_not_hide_a_pytest_launch():
+    argvs = guard._segment_argvs("xargs --max-args 1 pytest -q")
+    assert guard._opaque_pytest_path_source(argvs) == "xargs"
+
+
 def test_literal_bound_non_scope_denies_without_the_variable_note(repo):
     """A variable bound to a testpaths root resolves to that literal word, so
     the deny is about breadth, not about a variable the guard could not see."""

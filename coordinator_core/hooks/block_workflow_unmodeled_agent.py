@@ -16,24 +16,13 @@ Every un-modeled `agent()` then silently inherits Opus, running every
 worker at ~4x cost with zero visible signal in the script or the tool
 output.
 
-Behavior (unchanged from source — see that module's own extensive
-docstring for the full string/comment-aware JS scanner rationale, the
-ternary-undefined fix, and the documented residual parser limitations,
-none of which changed in this port):
-  - AGENT_N `agent(` call sites; MODELED_N the subset carrying their own
-    direct `model:` key.
-  - AGENT_N >= 1 AND MODELED_N == 0: each call site's own `agentType:`
-    (if any) is resolved against its agent definition
-    (`<agents-dir>/<name>.md`, `coordinator:` namespace stripped) and rung
-    on that definition's own frontmatter `model:`. If every call site
-    resolves this way (whether to sonnet or opus): silent allow, UNLESS a
-    resolved-opus call site's agentType is not on the published review
-    roster, in which case DENY. If any call site's agentType is absent,
-    non-literal, or names no resolvable definition: DENY, leading with the
-    fix.
-  - AGENT_N >= 1 AND 0 < MODELED_N < AGENT_N: WARN via additionalContext
-    advisory only, never a deny.
-  - Otherwise: silent allow.
+Behavior: the handler never denies. `rewrite_agent_models` pins to model 'sonnet' every
+`agent()` call that is unmodeled (no `model:` and no non-opus agentType pin) or effectively Opus
+(literal `model: 'opus'`, or an unmodeled call whose definition pins opus) unless its agentType
+is rostered or in `_OPUS_ALLOWLIST_EXTRA`. The handler returns `rewrite_input` with the full
+rewritten script (a `scriptPath` launch becomes an inline `script`) and an advisory naming each
+reroute; no change needed returns `no_advisory()`. Non-literal `model:` expressions are left
+alone. The string/comment-aware scanner is unchanged.
 
 ADAPTATION, THREE PATH-RESOLUTION SITES (the class this package's own
 `__init__.py` docstring calls out — every other symbol below is a verbatim
@@ -71,8 +60,7 @@ Fail-open guards (all `no_advisory()`), in order, unchanged from source:
 explicit override (env or sentinel); `tool_name != "Workflow"`; subagent/
 nested call (`agent_id` present); no script text extractable (inline
 `script`, or a readable file at `scriptPath`; a `name:`-only launch is out
-of scope); no `transcript_path`, or the file at it is missing; session
-model undetected or not Opus-tier; `agent_n < 1`.
+of scope); nothing to reroute.
 
 Spec backlink: cross-repo/inbox/2026-07-13-example-store-repo-em-workflow-
 sonnet-default-guard.md (coordinator-content-repo);
@@ -87,11 +75,10 @@ import re
 from pathlib import Path
 from typing import Mapping, Optional
 
-from coordinator_core._hook_envelope import context_only, deny, no_advisory, payload_of
+from coordinator_core._hook_envelope import no_advisory, payload_of, rewrite_input
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
-from coordinator_core.machine_profile import apply_guard_level
 
 GUARD_NAME = "block-workflow-unmodeled-agent"
 
@@ -492,23 +479,6 @@ def _resolve_call_site_tier(agent_type: Optional[str]) -> Optional[str]:
     return m.group(1).strip().lower()
 
 
-_MODEL_LINE_RE = re.compile(r'"model"\s*:\s*"(claude-[^"]*)"')
-
-
-def _detect_opus(transcript_path: str) -> bool:
-    if not transcript_path or not os.path.isfile(transcript_path):
-        return False
-    try:
-        with open(transcript_path, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                m = _MODEL_LINE_RE.search(line)
-                if m:
-                    return "opus" in m.group(1).lower()
-    except Exception:
-        return False
-    return False
-
-
 _OVERRIDE_SENTINEL_NAME = ".coordinator-override-workflow-model-guard"
 
 
@@ -532,34 +502,158 @@ def _env_value(env: object, key: str) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
-def _compose_zero_modeled_deny_reason(agent_n: int, env: object = None) -> str:
-    message = compose(
-        f"{agent_n} agent() call(s), no model: -- inherits Opus (~4x cost). "
-        "Add model: 'sonnet', or override.",
-        anchor=_WIKI_ANCHOR,
+# The named Opus personas that are not on the review roster: the ask keeps Opus for "the named
+# reviewers and other allowlisted", and these are the named ones the roster does not list.
+_OPUS_ALLOWLIST_EXTRA = frozenset(
+    {
+        "coordinator:apm",
+        "coordinator:overengineering-reviewer",
+        "coordinator:vp-product",
+        "coordinator:subtractive-adjudicator",
+        "coordinator:blitz-em",
+    }
+)
+
+_SONNET = "'sonnet'"
+
+
+def _opus_allowlist() -> "frozenset[str]":
+    return _rostered_agent_types() | _OPUS_ALLOWLIST_EXTRA
+
+
+def _literal_after_key(buf: str, mask: "bytearray", j: int, key_len: int, n: int):
+    """(value_start, value_end, literal_or_None) for the value following a key at `j`."""
+    raw = _extract_model_value(buf, mask, j + key_len, n)
+    start = j + key_len + (len(raw) - len(raw.lstrip()))
+    end = j + key_len + len(raw.rstrip())
+    return start, end, _extract_string_literal(raw), raw.strip()
+
+
+def _key_here(buf: str, mask: "bytearray", j: int, key: str) -> bool:
+    return (
+        buf[j:j + len(key)] == key
+        and not any(mask[j:j + len(key)])
+        and not (j > 0 and not mask[j - 1] and buf[j - 1] in _IDENTIFIER_CHARS)
     )
-    return render(message, env=env)
 
 
-def _compose_unrostered_opus_deny_reason(
-    agent_types: "list[Optional[str]]", env: object = None
-) -> str:
-    named = ", ".join(sorted({a for a in agent_types if a})[:3]) or "an agentType"
+def _scan_agent_call_options(buf: str, mask: "bytearray") -> "list[dict]":
+    """One record per `agent(` call: close paren, depth-1 options-object `{` (or None),
+    whether a second argument exists, and the direct model/agentType/label values."""
+    n = len(buf)
+    records: "list[dict]" = []
+    i = 0
+    while i < n:
+        pos = buf.find("agent(", i)
+        if pos == -1:
+            break
+        if mask[pos] or (pos > 0 and buf[pos - 1] in _IDENTIFIER_CHARS):
+            i = pos + 1
+            continue
+        depth = 0
+        brace = 0
+        past_prompt = False
+        rec = {
+            "options_open": None, "other_second_arg": False, "model": None,
+            "agent_type": None, "label": None, "close": -1,
+        }
+        j = pos + 5
+        while j < n:
+            if mask[j]:
+                j += 1
+                continue
+            ch = buf[j]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    rec["close"] = j
+                    break
+            elif ch == "{":
+                if depth == 1:
+                    if brace == 0 and past_prompt and rec["options_open"] is None:
+                        rec["options_open"] = j
+                    brace += 1
+            elif ch == "}":
+                if depth == 1:
+                    brace -= 1
+            elif ch == "," and depth == 1 and brace == 0:
+                past_prompt = True
+            elif ch in " \t\r\n":
+                pass
+            elif past_prompt and depth == 1 and brace == 0 and rec["options_open"] is None:
+                rec["other_second_arg"] = True
+            elif depth == 1 and brace == 1 and rec["options_open"] is not None:
+                for key in ("model:", "agentType:", "label:"):
+                    if _key_here(buf, mask, j, key):
+                        start, end, lit, text = _literal_after_key(buf, mask, j, len(key), n)
+                        if key == "model:":
+                            rec["model"] = (start, end, lit, text)
+                        elif key == "agentType:":
+                            rec["agent_type"] = lit
+                        else:
+                            rec["label"] = lit
+                        break
+            j += 1
+        if rec["close"] == -1:
+            break
+        records.append(rec)
+        i = rec["close"] + 1
+    return records
+
+
+def rewrite_agent_models(script: str) -> "tuple[str, list[str]]":
+    """Pin every effectively-Opus or unmodeled `agent()` call to model 'sonnet'.
+
+    The effective model is the call's own literal `model:`, else its agentType definition's
+    frontmatter model, else sonnet. Opus survives only for an allowlisted agentType. Non-literal
+    model expressions are left alone. Returns the new script and one reroute string per change."""
+    string_mask, comment_mask = _scan_masks(script)
+    mask = bytearray(a | b for a, b in zip(string_mask, comment_mask))
+    allow = _opus_allowlist()
+    edits: "list[tuple[int, int, str]]" = []
+    reroutes: "list[str]" = []
+    for idx, rec in enumerate(_scan_agent_call_options(script, mask), start=1):
+        agent_type = rec["agent_type"]
+        name = rec["label"] or agent_type or f"agent #{idx}"
+        model = rec["model"]
+        if model is not None:
+            start, end, lit, text = model
+            if lit is not None and lit.strip().lower() == "opus" and agent_type not in allow:
+                edits.append((start, end, _SONNET))
+                reroutes.append(f"{name} opus->sonnet")
+            elif lit is None and text in ("undefined", "null"):
+                edits.append((start, end, _SONNET))
+                reroutes.append(f"{name} unmodeled->sonnet")
+            continue
+        if rec["other_second_arg"]:
+            continue
+        tier = _resolve_call_site_tier(agent_type)
+        if tier is not None and (tier != "opus" or agent_type in allow):
+            continue
+        what = "opus->sonnet" if tier == "opus" else "unmodeled->sonnet"
+        if rec["options_open"] is not None:
+            at = rec["options_open"] + 1
+            edits.append((at, at, f" model: {_SONNET}, "))
+        else:
+            close = rec["close"]
+            k = close
+            while k > 0 and (script[k - 1].isspace() or comment_mask[k - 1]):
+                k -= 1
+            trailing_comma = k > 0 and script[k - 1] == "," and not mask[k - 1]
+            edits.append((close, close, f" {{ model: {_SONNET} }}" if trailing_comma else f", {{ model: {_SONNET} }}"))
+        reroutes.append(f"{name} {what}")
+    for start, end, text in sorted(edits, key=lambda e: e[0], reverse=True):
+        script = script[:start] + text + script[end:]
+    return script, reroutes
+
+
+def _compose_reroute_advisory(reroutes: "list[str]", env: object = None) -> str:
+    shown = ", ".join(reroutes[:4]) + (f" (+{len(reroutes) - 4} more)" if len(reroutes) > 4 else "")
     message = compose(
-        f"{named} resolves to Opus and is not on the review roster -- Opus in "
-        "a workflow is for review (~4x cost). Use a rostered reviewer, or "
-        "model: 'sonnet'.",
-        anchor=_WIKI_ANCHOR,
-    )
-    return render(message, env=env)
-
-
-def _compose_partial_modeled_context(
-    agent_n: int, modeled_n: int, env: object = None
-) -> str:
-    message = compose(
-        f"{agent_n} agent() calls, only {modeled_n} set model: -- rest may "
-        "inherit Opus (~4x cost) unless intended, with PM approval.",
+        f"{len(reroutes)} agent() call(s) rerouted to sonnet: {shown}. "
+        "Opus is for rostered reviewers.",
         anchor=_WIKI_ANCHOR,
     )
     return render(message, env=env)
@@ -600,50 +694,10 @@ def _handler(params: dict, repo_root=None) -> dict:
         if not script:
             return no_advisory()
 
-    transcript_path = params.get("transcript_path", "") or ""
-    if not transcript_path or not os.path.isfile(transcript_path):
+    new_script, reroutes = rewrite_agent_models(script)
+    if not reroutes:
         return no_advisory()
 
-    if not _detect_opus(transcript_path):
-        return no_advisory()
-
-    stripped = _strip_comments(script)
-    agent_n, modeled_n, agent_types = _count_agent_modeled_with_types(stripped)
-
-    if agent_n < 1:
-        return no_advisory()
-
-    if modeled_n == 0:
-        tiers = [_resolve_call_site_tier(agent_type) for agent_type in agent_types]
-        if all(tier is not None for tier in tiers):
-            if all(
-                tier != "opus" or agent_type in _rostered_agent_types()
-                for tier, agent_type in zip(tiers, agent_types)
-            ):
-                return no_advisory()
-            reason = _compose_unrostered_opus_deny_reason(
-                [
-                    agent_type
-                    for tier, agent_type in zip(tiers, agent_types)
-                    if tier == "opus" and agent_type not in _rostered_agent_types()
-                ],
-                env,
-            )
-            return (
-                apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
-                or no_advisory()
-            )
-        reason = _compose_zero_modeled_deny_reason(agent_n, env)
-        return (
-            apply_guard_level(GUARD_NAME, deny("PreToolUse", reason))
-            or no_advisory()
-        )
-
-    if modeled_n < agent_n:
-        calls = _walk_agent_calls(stripped, _string_mask(stripped))
-        if all(has_model or inherits_an_accepted_pin(t) for has_model, t in calls):
-            return no_advisory()
-        msg = _compose_partial_modeled_context(agent_n, modeled_n, env)
-        return context_only("PreToolUse", msg)
-
-    return no_advisory()
+    new_input = {k: v for k, v in tool_input.items() if k != "scriptPath"}
+    new_input["script"] = new_script
+    return rewrite_input("PreToolUse", new_input, _compose_reroute_advisory(reroutes, env))

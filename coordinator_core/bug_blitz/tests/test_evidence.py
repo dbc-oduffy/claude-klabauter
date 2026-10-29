@@ -132,19 +132,31 @@ def test_list_mixing_node_ids_and_bare_path_refuses_naming_each_verbatim(tmp_pat
     with pytest.raises(evidence.UnparsedTargets) as exc:
         evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
     msg = str(exc.value)
-    for line in ("coordinator/tests/test_x.py", "not a test", "b/test_z.py"):
-        assert f"  {line}" in msg
+    assert "  not a test" in msg
+    for line in ("coordinator/tests/test_x.py", "b/test_z.py", "a/test_x.py::test_y"):
+        assert f"  {line}" not in msg
     assert "file::test" in msg
-    assert "a/test_x.py::test_y" not in msg
 
 
-def test_refusal_lists_every_target_not_a_sample(tmp_path):
+def test_bare_files_with_comments_and_blanks_are_file_level_targets(tmp_path):
+    p = tmp_path / "failing-tests.txt"
+    p.write_text("# reds\n\nt/test_a.py\n   \n  # indented comment\nt/test_b.py\nweb/x.test.ts\na/test_x.py::test_y\n")
+    res = evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+    assert res.tests == (
+        FailingTest("t/test_a.py", ""),
+        FailingTest("t/test_b.py", ""),
+        FailingTest("web/x.test.ts", ""),
+        FailingTest("a/test_x.py", "test_y"),
+    )
+
+
+def test_many_bare_files_parse_without_refusal(tmp_path):
     p = tmp_path / "ids.txt"
     bare = [f"t/test_{i}.py" for i in range(12)]
-    p.write_text("\n".join(["a/test_x.py::test_y", *bare]))
-    with pytest.raises(evidence.UnparsedTargets) as exc:
-        evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
-    assert all(f"  {b}" in str(exc.value) for b in bare)
+    p.write_text("\n".join(bare))
+    res = evidence.parse_targets(TargetSpec(kind="file", path=str(p)))
+    assert [t.file for t in res.tests] == bare
+    assert all(t.name == "" for t in res.tests)
 
 
 def test_log_chatter_stays_usable_but_a_bare_test_path_refuses(tmp_path):

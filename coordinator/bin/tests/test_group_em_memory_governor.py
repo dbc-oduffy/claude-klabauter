@@ -66,9 +66,9 @@ PROCS = [
 ]
 
 
-def test_youngest_heavy_unprotected_is_chosen():
-    # 41 and 40 are younger but sit inside a deploy; 50 is under the RSS floor.
-    assert gov.choose_victim(PROCS, set(), self_pid=999).pid == 60
+def test_largest_freeable_tree_is_chosen():
+    # 41 and 40 sit inside a deploy; 50 is under the RSS floor; 20 frees 2000MB, the most.
+    assert gov.choose_victim(PROCS, set(), self_pid=999).pid == 20
 
 
 def test_repo_name_containing_claude_is_not_protected():
@@ -81,7 +81,7 @@ def test_harness_language_server_and_deploy_are_protected():
 
 
 def test_already_paused_is_skipped():
-    assert gov.choose_victim(PROCS, {60}, self_pid=999).pid == 30
+    assert gov.choose_victim(PROCS, {20}, self_pid=999).pid == 30
 
 
 def test_descendants_include_workers():
@@ -94,9 +94,9 @@ def test_pause_on_critical_then_resume_after_calm():
     gov.run(_args(), emit=lines.append, sample=lambda: next(verdicts), procs_fn=lambda: PROCS,
             signal_fn=lambda pids, stop: calls.append((tuple(pids), stop)),
             sleep=lambda s: None, max_ticks=4)
-    assert lines[0].startswith("GOVERNOR PAUSED pid=60")
-    assert lines[1] == "GOVERNOR RESUMED pid=60"
-    assert calls == [((60,), True), ((60,), False)]
+    assert lines[0].startswith("GOVERNOR PAUSED pid=20")
+    assert lines[1] == "GOVERNOR RESUMED pid=20"
+    assert calls == [((20,), True), ((20,), False)]
     assert len(lines) == 2
 
 
@@ -113,7 +113,7 @@ def test_escalates_then_gives_up_once():
             signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=12)
     assert [line.split()[1] for line in lines] == [
         "PAUSED", "PAUSED", "STILL-CRITICAL", "RESUMED-ON-EXIT"]
-    assert "pid=60" in lines[0] and "pid=30" in lines[1]
+    assert "pid=20" in lines[0] and "pid=30" in lines[1]
 
 
 def test_exit_resumes_anything_still_paused():
@@ -132,7 +132,7 @@ def test_exit_resumes_anything_still_paused():
                 sleep=lambda s: None)
     except SystemExit:
         pass
-    assert calls == [((60,), True), ((60,), False)]
+    assert calls == [((20,), True), ((20,), False)]
 
 
 def test_runaway_flagged_once_per_pid_without_signalling():
@@ -231,7 +231,7 @@ def test_noticed_tree_over_floor_is_still_paused(tmp_path):
 
 def test_noticed_harness_process_stays_protected(tmp_path):
     path = _channel(tmp_path, '{"phase":"START","pids":[11]}')
-    assert _crit(PROCS, path)[1][0][0] == (60,)
+    assert _crit(PROCS, path)[1][0][0] == (20,)
 
 
 # Freezing a store owner mid-write stalls or half-applies every client's write (example-stats-repo pid 70608).
@@ -393,7 +393,7 @@ def test_pids_are_in_pidfile_before_freeze_and_cleared_on_resume(tmp_path):
 
     gov.run(_args(), emit=lambda line: None, sample=lambda: next(verdicts), procs_fn=lambda: PROCS,
             signal_fn=signal_fn, sleep=lambda s: None, max_ticks=3, pidfile=pidfile)
-    assert seen[0] == (True, [60])  # recorded before the freeze signal
+    assert seen[0] == (True, [20])  # recorded before the freeze signal
     assert seen[1][0] is False
     assert not pidfile.exists()
 
@@ -691,3 +691,47 @@ def test_place_engine_on_path_is_false_when_the_engine_is_unresolvable(monkeypat
     fake.ensure_engine_on_path = lambda _f: None
     monkeypatch.setitem(sys.modules, "cc_invoke", fake)
     assert gov._place_engine_on_path() is False
+
+
+HELPER_CMDS = [
+    "node /x/pyright/langserver.index.js --stdio",
+    "pyright-langserver.exe --stdio",
+    "node /x/typescript-language-server/lib/cli.mjs --stdio",
+    "node /x/mcp-server-filesystem/dist/index.js",
+    "npx -y some-pkg mcp",
+]
+
+
+@pytest.mark.parametrize("cmd", HELPER_CMDS)
+def test_language_servers_and_mcp_children_are_never_candidates_noticed_or_not(cmd):
+    p = P(7, 1, 1, 900, cmd)
+    assert not gov.is_candidate(p, self_pid=999)
+    assert not gov.is_candidate(p, self_pid=999, noticed=frozenset({7}))
+
+
+def test_small_pyright_is_not_paused_while_big_python_trees_run(tmp_path):
+    procs = [
+        P(29548, 1, 5, 27, "pyright-langserver.exe --stdio"),
+        P(29549, 29548, 5, 10, "node helper.js"),
+        P(31820, 1, 900, 3300, "python /x/job.py"),
+        P(11172, 1, 800, 1700, "python -m pytest /x/t.py"),
+    ]
+    path = _channel(tmp_path, '{"phase":"START","pids":[29548,31820,11172]}')
+    lines, calls = _crit(procs, path)
+    assert calls[0][0] == (31820,) and "pid=31820" in lines[0]
+    assert all(29548 not in c[0] for c in calls)
+
+
+def test_tree_below_shortfall_is_not_paused_and_larger_one_is():
+    procs = [P(1000, 1, 5, 400, "node vitest run"), P(2000, 1, 9, 3000, "node vitest run b")]
+    assert gov.choose_victim(procs, set(), 999, shortfall_mb=500).pid == 2000
+    assert gov.choose_victim(procs[:1], set(), 999, shortfall_mb=500) is None
+    assert gov.choose_victim(procs[:1], set(), 999, shortfall_mb=0).pid == 1000
+
+
+def test_run_pauses_nothing_when_no_tree_covers_the_shortfall():
+    procs = [P(1000, 1, 5, 400, "node vitest run")]
+    lines = []
+    gov.run(_args(), emit=lines.append, sample=lambda: True, procs_fn=lambda: procs,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=1, shortfall_fn=lambda: 4000.0)
+    assert all("PAUSED" not in line for line in lines)

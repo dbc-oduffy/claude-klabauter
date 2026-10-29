@@ -60,8 +60,11 @@ def test_bounded_js_escapes_label():
     assert '\\"q\\"' in pet.bounded_js("x", 1, 'a "q"')
 
 
-def test_group_slice_prefix():
-    assert pet.group_slice_prefix("k", 2) == "k.g2"
+def test_group_slice_prefix_names_the_range_it_freezes():
+    a, b = "a" * 40, "b" * 40
+    assert pet.group_slice_prefix("k", 0, a) == f"k.g0-{'a' * 12}"
+    assert pet.group_slice_prefix("k", 0, a) == pet.group_slice_prefix("k", 0, a)
+    assert pet.group_slice_prefix("k", 0, a) != pet.group_slice_prefix("k", 0, b)
 
 
 def test_budget_exceeds_invocation_budget_when_importable():

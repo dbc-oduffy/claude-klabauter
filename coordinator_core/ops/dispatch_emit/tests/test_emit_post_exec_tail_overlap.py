@@ -159,7 +159,7 @@ def test_reverify_names_a_call_per_group_prefix_and_the_main_prefix_and_reverts_
     block = block[block.index("Re-verify the edits") :]
     key = "9d860631-p"
     for i in range(3):
-        assert f'"slice_prefix":"{group_slice_prefix(key, i)}"' in block
+        assert f'"slice_prefix":"{group_slice_prefix(key, i, "a" * 40)}"' in block
     assert "for EVERY prefix" in block and "<all failing node ids>" in block
     assert "owns" not in block and "unattributed only when every prefix reports it so" in block
     assert block.count("review.reverify") >= 4

@@ -18,35 +18,25 @@ closing it is worth having. What it does NOT buy: it is not a barrier
 against an agent that deliberately constructs an evasion -- dynamic string
 assembly, a glob near-miss, a runtime-computed basename -- see "KNOWN OPEN
 GAP" below for the specific shapes known to defeat it. The boundary's real
-strength does not live here alone: the sibling DoE-side read gate requires
-the sentinel to be a REGULAR FILE (a forged directory is dead regardless of
-what reaches the filesystem, see "KNOWN OPEN GAP"), the Write/Edit tool-call
-surface is separately guarded by `_sentinel_write_guard` (a different code
-path, not a text classifier over Bash strings), and the actual creation of a
-genuine approval is an act only the human PM performs out-of-band -- those
-hold regardless of whatever this classifier misses.
+strength does not live here alone: the Write/Edit tool-call surface is
+separately guarded by `_sentinel_write_guard` (a different code path, not a
+text classifier over Bash strings), and the doctrine-edit write guard no
+longer reads the sentinel, so a forged one unlocks nothing -- those hold
+regardless of whatever this classifier misses.
 
-DEFAULT-ON. The doctrine-edit approval gate is on every profile; this guard
+DEFAULT-ON. The doctrine-edit gate is on every profile; this guard
 allows only after `machine-local set coordinator.feature.doctrine_edit_gate off`.
 
-WHY THIS EXISTS. A sibling DoE-side hook denies edits to always-loaded
-doctrine surfaces (global CLAUDE.md and friends) unless a git-dir sentinel
-file named `.coordinator-doctrine-edit-approved` exists, is under 30
-minutes old, and was touched after the previous PM turn began, i.e. for the
-current one (it disarms itself).
-The PM creates that sentinel themselves, by hand, as the approval act. If ANY
-agent could create the sentinel via Bash -- `touch`,
-a redirect, `cp` from a stashed copy, `python3 -c` -- the approval boundary
-would be significantly weakened: an EM (or any dispatched subagent) could
-reflexively forge its own approval and edit doctrine unsupervised. This
-guard closes every shape of that it can see lexically -- not every
-conceivable shape, see "KNOWN OPEN GAP" -- and denies CREATION only;
-removing the sentinel is always safe (it re-locks the boundary, it never
-grants anything) and stays allowed.
+WHY THIS EXISTS. The doctrine-edit sentinel file
+`.coordinator-doctrine-edit-approved` no longer gates any edit; this guard
+keeps the file un-creatable so a legacy reader or a stale forged copy never
+regains meaning. It closes every shape of creation it can see lexically --
+not every conceivable shape, see "KNOWN OPEN GAP" -- and denies CREATION
+only; removing the sentinel is always safe and stays allowed.
 
 NOT IDENTITY-GATED -- fires for every caller, EM included, same posture as
 `check_raw_pid_liveness.py` and `block_worktree_creation.py`: the anti-
-pattern (self-forging PM approval) is wrong regardless of who types it. An
+pattern (self-forging approval) is wrong regardless of who types it. An
 EM-only gate would defeat the guard's own purpose, since the EM is exactly
 who this sentinel exists to constrain.
 
@@ -175,6 +165,7 @@ import os
 import re
 import shlex
 
+from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._sentinel_creation_guard import (
     REASON_DIRECT,
     REASON_INDIRECTION,
@@ -214,13 +205,12 @@ from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 GUARD_NAME = "block-approval-sentinel-creation"
 
 _RISK_DIRECT = (
-    "this command creates/modifies the PM-approval sentinel for doctrine "
-    "edits, the PM's sign-off on always-loaded doctrine; an agent doing so "
-    "approves its own edit."
+    "this command creates/modifies the doctrine-edit approval sentinel; "
+    "an agent doing so approves its own edit."
 )
 _RISK_INDIRECTION = (
     "payload behind an interpreter or stdin the guard could not read, so the "
-    "PM-approval sentinel may be created unseen. Use instead: the plain command, unwrapped."
+    "doctrine-edit approval sentinel may be created unseen. Use instead: the plain command, unwrapped."
 )
 
 CLASS = "hard-deny"
@@ -1563,13 +1553,12 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         for sub in sorted(_ApprovalSentinelDetector._SAFE_GIT_SUBCOMMANDS)
     )
     return (
-        "BLOCKED: creates/modifies the PM-approval sentinel for doctrine "
-        "edits. Ask the PM to create it.\n\n"
+        "BLOCKED: creates/modifies the doctrine-edit approval sentinel. "
+        "Doctrine edits need no sentinel.\n\n"
         "Use instead:\n"
         "  %s\n"
         "  %s\n"
-        "Scoped add from a list file: `git add --pathspec-from-file=<list>`; "
-        "NUL-separated: `git add --pathspec-from-file=<list> --pathspec-file-nul`." % (safe_argv0, safe_git)
+        "To commit: `%s`." % (safe_argv0, safe_git, COMMIT_ROUTE)
     )
 
 
@@ -1613,8 +1602,7 @@ _READ_HEADS = frozenset(
 )
 _RISK_GATE_OFF = (
     "this command turns off the doctrine-edit approval gate or lowers the "
-    "guard level, the PM's sign-off on always-loaded doctrine; an agent "
-    "doing so voids it."
+    "guard level; an agent doing so voids the doctrine-edit check."
 )
 _LEVEL_SET_RE = re.compile(
     r"(?:coordinator\.)?guard_level(?:\.([\w-]+))?[\s='\",:()\]]+([A-Za-z0-9]+)", re.IGNORECASE
@@ -1691,9 +1679,8 @@ def _turns_gate_off(cmd: str) -> bool:
 
 def gate_disable_denial(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Deny a command that sets `doctrine_edit_gate` off, lowers
-    `guard_level`, or writes a settings `env` that does either, unless a fresh
-    PM approval sentinel exists. Raising, reading, or an unrelated command
-    never denies."""
+    `guard_level`, or writes a settings `env` that does either. Raising,
+    reading, or an unrelated command never denies."""
     if (payload.get("tool_name") or "") not in MATCHERS:
         return None
     tool_input = payload.get("tool_input") or {}
@@ -1706,13 +1693,13 @@ def gate_disable_denial(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         GUARD_NAME,
         "deny",
         "BLOCKED: this turns off the doctrine-edit approval gate or lowers "
-        "the guard level. Ask the PM to change it.",
+        "the guard level. Run the command without the setting change.",
         AdaptableOffer(
             template="the same command without the gate or guard-level write",
             what_to_adapt="the command (drop the setting change)",
         ),
         report_what="the setting you need changed",
-        authorize_what="the PM's approval of the change",
+        authorize_what="the setting change",
     )
     return leveled_record(
         GUARD_NAME, record, apply_guard_level, _RISK_GATE_OFF[0].upper() + _RISK_GATE_OFF[1:]
@@ -1764,8 +1751,8 @@ def check_ungated(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             )
     else:
         offer = AdaptableOffer(
-            template="git add --pathspec-from-file=<list>",
-            what_to_adapt="<list> (a file of paths; add --pathspec-file-nul for NUL-separated)",
+            template=COMMIT_ROUTE,
+            what_to_adapt="<f> (the params file under scratch/)",
         )
     record = sentinel_record(
         GUARD_NAME,
@@ -1773,7 +1760,7 @@ def check_ungated(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _deny_reason(cmd, reason_kind, reason_class),
         offer,
         report_what="the file you need written",
-        authorize_what="the PM-approval sentinel",
+        authorize_what="the sentinel write",
     )
     risk = _RISK_INDIRECTION if reason_class == REASON_INDIRECTION else _RISK_DIRECT
     return leveled_record(GUARD_NAME, record, apply_guard_level, risk[0].upper() + risk[1:])

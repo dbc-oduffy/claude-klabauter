@@ -362,6 +362,34 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
 
 _RED_BAND_PCT = 95.0
 
+# Env that steers the hook child's engine resolution, window and per-session
+# state; none may arrive from whatever the parent pytest process holds.
+_HOOK_STEERING_ENV = (
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    "REPO_CLAUDE_KLABAUTER",
+    "COORDINATOR_ENGINE_ROOT",
+    "CLAUDE_PROJECT_DIR",
+    "CLAUDE_HOME",
+    "CLAUDE_CONFIG_DIR",
+    "COORDINATOR_SVC_ROOT",
+    "RUNTIME_TRIPWIRE_OPUS_MIN",
+    "RUNTIME_TRIPWIRE_SONNET_MIN",
+    "RUNTIME_TRIPWIRE_HAIKU_MIN",
+    "COORDINATOR_RUNTIME_TRIPWIRE",
+)
+
+
+def _hermetic_hook_env(home: Path, hook_tmp: Path) -> dict[str, str]:
+    """The hook child's environment: the parent's, minus every steering var,
+    with settings home and the platform temp dir (where the hook keeps its
+    throttle/bark-once and sentinel files) pinned under tmp_path so no state
+    outside it can reach, or be reached by, the child."""
+    env = {k: v for k, v in os.environ.items() if k not in _HOOK_STEERING_ENV}
+    env[_HOME_ENV] = str(home)
+    for var in ("TMPDIR", "TEMP", "TMP"):
+        env[var] = str(hook_tmp)
+    return env
+
 
 def test_leg2_real_hook_subprocess_emits_red_band_advisory(tmp_path, real_home, engine_check):
     """Execute the converted turn-boundary hook entry point AS A SUBPROCESS
@@ -394,6 +422,8 @@ def test_leg2_real_hook_subprocess_emits_red_band_advisory(tmp_path, real_home, 
     context_dir.mkdir(parents=True)
     workdir = tmp_path / "hook-cwd"
     workdir.mkdir()
+    hook_tmp = tmp_path / "hook-tmp"
+    hook_tmp.mkdir()
 
     def _write_usage(session_id: str, used_pct: float) -> None:
         stem = "".join(c for c in session_id if c.isalnum() or c in "-_")
@@ -413,9 +443,7 @@ def test_leg2_real_hook_subprocess_emits_red_band_advisory(tmp_path, real_home, 
             "tool_name": "Read",
             "transcript_path": "/does/not/matter/transcript.jsonl",
         })
-        env = dict(os.environ)
-        env[_HOME_ENV] = str(home)
-        env.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
+        env = _hermetic_hook_env(home, hook_tmp)
         result = subprocess.run(
             [sys.executable, str(script)],
             input=payload,

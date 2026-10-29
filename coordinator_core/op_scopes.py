@@ -70,6 +70,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.postuse_advisory_dispatch":       "none",
     "hooks.nudge_autonomous_askuserquestion": "none",
     "hooks.sessionend_archive_session": "none",
+    "hooks.sessionend_pm_directive_check": "none",
     # hooks.watchdog_undischarged_next_move — repo_root handler arg is unused
     # (always None): the handler resolves its OWN repo root from
     # params["payload"]["cwd"] (coordinator_core.git.repo_root.show_toplevel,
@@ -511,6 +512,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "baton.close_commit":                    "common_dir",
     "baton.pm_turn_append":                  "common_dir",
     "baton.pm_turns":                        "common_dir",
+    "baton.pm_directive_unmapped":           "common_dir",
+    "baton.pm_directive_dispose":            "common_dir",
     "session.reap":                          "common_dir",
     "session.audit_unreapable":               "common_dir",
     # session.boot_sweep — GRAVESTONED 2026-08-27, K-059. No scope row, because
@@ -703,6 +706,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: cross-repo/inbox/2026-08-10-coordinator-content-repo-em-chunk-commits-forwarder-relative-path.md
     "ceremony.chunk_commits":                  "none",
     "install.detect_python3_appx_stub":        "none",
+    "install.content_root_resolve":            "none",
     "lessons.filter_undated_universal":        "none",
     "lessons.reject_orphan_strip_entries":     "common_dir",
     "release.write_index":                     "common_dir",

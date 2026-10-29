@@ -64,17 +64,18 @@ def test_a_blitz_ready_reply_with_neither_key_still_halts_as_not_whole(monkeypat
     assert out["result"]["halted_by"]["reason"] == "stage manifest relay is not whole: manifest_handle"
 
 
-def _emit_time_script(*, in_run_commit: bool = False) -> str:
+def _emit_time_script(*, in_run_commit: bool = False, sizing_rel: str | None = None) -> str:
     return compose_ask_script(
-        repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
+        repo_root="REPO", prompt=None if sizing_rel else "add a thing", sizing_rel=sizing_rel, run_id="run-1", session_id=None,
         wrap_stage=e2e._wrap_stage, plan_blitz_text="stub", stop_after=STOP_AFTER_PLAN,
         in_run_commit=in_run_commit, **REVIEW_KW,
     )
 
 
-def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(tmp_path, monkeypatch, capsys):
-    scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
-    out = e2e._run_script(_emit_time_script(), e2e._stub(scout, decision, verdict))
+def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(tmp_path, monkeypatch, capsys, m_plus_known_arm):
+    scout, decision, verdict, rel = e2e._fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
+    stub = {**e2e._stub(scout, decision, verdict), "gate": verdict}
+    out = e2e._run_script(_emit_time_script(sizing_rel=rel), stub)
     halt = out["result"]["halted_by"]
     assert halt["halted"] == HALT_PARKED and halt["reason"] == "parked after plan: stop_after=plan"
     assert halt["plan"] == e2e.PLAN_PATH and halt["run_id"] == "run-1"

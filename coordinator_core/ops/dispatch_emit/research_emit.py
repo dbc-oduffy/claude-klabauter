@@ -472,9 +472,7 @@ _SCOUT_SCHEMA = {
 
 
 def halt_legs(pipelines: Sequence[str]) -> dict[str, str]:
-    """Leg map for the chained script: the preflight shares notebooklm's leg, so its halt skips notebooklm and nothing else."""
-    if rc.PREFLIGHT_PIPELINE in pipelines and "notebooklm" in pipelines:
-        return {rc.PREFLIGHT_PIPELINE: "notebooklm"}
+    """Leg map for the chained script: empty, every segment its own leg. The preflight is present only for a named notebooklm source, so its halt ends the whole run (pipeline_compose), not a leg."""
     return {}
 
 
@@ -573,12 +571,13 @@ def bind_seed_briefs(
 
 def bind_repo_targets(
     root: Path, scratch_rel: str, members_brief: str, targets: Sequence[Mapping[str, str]],
-    seeds: Sequence[Mapping[str, str]] = (),
+    seeds: Sequence[Mapping[str, str]] = (), primary: bool = False,
 ) -> tuple[list[tuple[str, str]], str]:
     """Per-ref repo segment (key, brief_rel) pairs and the compare brief path.
 
     Refs are the repo targets, then the repo seeds. Without seeds, under two repo targets gives
     ([], ""). With a repo seed every ref gets a segment; the compare brief is "" under two refs.
+    With `primary`, a lone ref also gets a keyed segment.
 
     Key i (1-based, ref order) is `repo-<i>-<slug of the ref's last path component>`, cut to
     MAX_SLUG_LEN. Writes `<scratch>/<key>/brief.md` per ref and `<scratch>/repo-compare/brief.md`.
@@ -588,7 +587,7 @@ def bind_repo_targets(
     """
     refs = [t.get("ref", "") for t in targets if t.get("source") == REPO_PIPELINE]
     seed_urls = [s["url"] for s in seeds if rc.SEED_KIND_SOURCE.get(s.get("kind")) == REPO_PIPELINE]
-    if len(refs) < 2 and not seed_urls:
+    if len(refs) < (1 if primary else 2) and not seed_urls:
         return [], ""
     seed_from = len(refs)
     refs = refs + seed_urls
@@ -643,6 +642,35 @@ def bind_repo_targets(
     return segments, compare_rel
 
 
+def bind_gap_briefs(
+    root: Path, scratch_rel: str, base_brief: str, pipelines: Sequence[str], repo_synthesis_rels: Sequence[str],
+) -> dict[str, str]:
+    """`{pipeline: brief_rel}` for each non-repo, non-preflight pipeline that runs after the repo segments.
+
+    Writes `<scratch>/<pipeline>-after-repo/brief.md`: it embeds `base_brief`, lists each repo synthesis
+    path, tells the segment to scope its survey to those syntheses' `## Open Questions`, and ranks
+    code claims above web claims. Repo, repo-compare and preflight pipelines get none.
+    """
+    skip = {REPO_PIPELINE, REPO_COMPARE_PIPELINE, rc.PREFLIGHT_PIPELINE}
+    base = scratch_rel.rstrip("/")
+    rows = "".join(f"- `{rel}`\n" for rel in repo_synthesis_rels)
+    out: dict[str, str] = {}
+    for pipeline in pipelines:
+        if pipeline in skip or pipeline in out:
+            continue
+        rel = f"{base}/{pipeline}-after-repo/{BRIEF_FILE}"
+        _write_brief(root, rel, (
+            f"The brief is `{base_brief}`; read it first.\n\n"
+            f"## Repo syntheses\n\n{rows}\n"
+            "Read each synthesis's `## Open Questions` section first and scope your survey to those "
+            "open questions, not to the whole ask again.\n\n"
+            "Rank code claims above web claims: where a web or NotebookLM claim contradicts a repo "
+            "synthesis, the repo claim stands and the conflict is named.\n"
+        ))
+        out[pipeline] = rel
+    return out
+
+
 def _deep_roster(sources: Sequence[str]) -> list[dict[str, str]]:
     roster = [{"slug": role, "agent_type": rc.UNBLOCK_ROLE_AGENT_TYPE} for role in rc.UNBLOCK_ROLES]
     for source in sources or ("web",):
@@ -672,6 +700,7 @@ def segments_for(
     repo_segments: Sequence[tuple[str, str]] = (),
     compare_brief: str = "",
     seed_briefs: Mapping[str, str] | None = None,
+    gap_briefs: Mapping[str, str] | None = None,
 ) -> list[tuple[str, PipelineInputs]]:
     """One `(pipeline, PipelineInputs)` per manifest in `shape["pipelines"]`, in order.
 
@@ -685,9 +714,10 @@ def segments_for(
     the caller, which sees which lists each loaded manifest declares. With `repo_segments`, the
     `repo` pipeline expands to one keyed segment per `(key, brief_rel)` entry, followed by one
     `repo-compare` segment bound to `compare_brief`, omitted when that is "". A pipeline named in
-    `seed_briefs` binds that brief in place of `brief_rel`.
+    `seed_briefs` binds that brief in place of `brief_rel`; one in `gap_briefs` binds that brief
+    over both.
     """
-    seed_briefs = seed_briefs or {}
+    seed_briefs = {**(seed_briefs or {}), **(gap_briefs or {})}
     shaped_flags = shape.get("flags") or {}
     segments: list[tuple[str, PipelineInputs]] = []
     for pipeline in shape["pipelines"]:

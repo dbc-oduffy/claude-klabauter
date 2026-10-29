@@ -62,11 +62,26 @@ def verdict(rows: Iterable[tuple[int, int, str]]) -> Optional[dict]:
     }
 
 
-def resize_next_action(v: dict, sizing_rel: Optional[str]) -> str:
-    """One fact plus the alternative: the measured size against the budget, then the resize."""
+RESIZE_ARM: Final[str] = "S"
+
+
+def resize_next_action(v: dict, sizing_rel: Optional[str], resized: bool = True) -> str:
+    """The in-run resize report: the measured size against the XS budget, then the S-arm gates.
+    ``resized`` False states the sizing was not amended, so the record still reads XS."""
     target = sizing_rel or "the sizing"
-    return (
+    head = (
         f"XS run diff is {v['files']} files, {v['lines']} lines; XS budget is "
         f"{v['budget_files']} files, {v['budget_lines']} lines. "
-        f"Resize {target} to S or larger and refire."
     )
+    if resized:
+        return head + f"Resized {target} to {RESIZE_ARM} in-run; the {RESIZE_ARM}-arm gates apply."
+    return head + f"{target} was not amended; resize it to {RESIZE_ARM} or larger. The {RESIZE_ARM}-arm gates apply."
+
+
+def resize_marker(v: dict) -> dict:
+    """The over-budget outcome the caller applies by resizing to S, not a refusal."""
+    return {
+        "resize_arm": RESIZE_ARM,
+        "measured": {"files": v["files"], "lines": v["lines"]},
+        "budget": {"files": v["budget_files"], "lines": v["budget_lines"]},
+    }

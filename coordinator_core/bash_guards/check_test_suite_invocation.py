@@ -2928,10 +2928,8 @@ def _deny_reason_grant(
     parameter for a one-clause difference is worth the second small
     function body.
 
-    Trimmed and then re-budgeted (2026-08-04, C3): the tie branch's new
-    lede (a Tier-U authorization grant request, or run only what you
-    touched; since replaced by an advisory lede) rendered 66 words, 14
-    over the then-52-word ceiling
+    Trimmed and then re-budgeted (2026-08-04, C3): the tie branch's lede
+    rendered 66 words, 14 over the then-52-word ceiling
     (``tests/test_deny_text_reachable_override.py``). Both halves of that
     overshoot were resolved the way this docstring's ordered rule requires,
     prose first and the number last.
@@ -3166,6 +3164,23 @@ _PYTEST_COLLECT_ONLY_FLAGS = frozenset({"--collect-only", "--co"})
 _OPAQUE_PATH_CHARS = ("$", "`")
 
 
+#: Short flags that always take a separate value; GNU ``-e/-i/-l`` take only an attached optional
+#: value, so listing them would swallow the launched command (``xargs -i pytest``).
+_XARGS_VALUE_FLAGS = frozenset(
+    "-a -E -I -L -n -P -s -d -J -R -S "
+    "--arg-file --delimiter --max-args --max-procs --max-chars --max-lines".split()
+)
+
+
+def _xargs_launched_argv(argv: Sequence[str]) -> Sequence[str]:
+    """The command ``xargs`` launches: argv past xargs's own options (so ``xargs grep pytest`` is
+    a grep, not a pytest launch)."""
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        i += 2 if argv[i] in _XARGS_VALUE_FLAGS else 1
+    return argv[i:]
+
+
 def _opaque_pytest_path_source(segments_argv: Sequence[Sequence[str]]) -> Optional[str]:
     """The first pytest path source this guard cannot count, else None.
 
@@ -3176,11 +3191,13 @@ def _opaque_pytest_path_source(segments_argv: Sequence[Sequence[str]]) -> Option
     for argv in segments_argv:
         if not argv:
             continue
-        if _base(argv[0]) == "xargs" and any(
-            _base(argv[i]) in _PYTEST_HEADS or _pytest_module_args(argv[i:]) is not None
-            for i in range(1, len(argv))
-        ):
-            return "xargs"
+        if _base(argv[0]) == "xargs":
+            launched = _xargs_launched_argv(argv)
+            if launched and (
+                _base(launched[0]) in _PYTEST_HEADS or _pytest_module_args(launched) is not None
+            ):
+                return "xargs"
+            continue
         if _base(argv[0]) in _PYTEST_HEADS:
             args: Sequence[str] = argv[1:]
         else:
@@ -3694,16 +3711,6 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         configured = _configured_test_cmds(repo_root)
         detected = _matches_configured_cmd(segments_argv, configured)
 
-    # R9 (DR-088 amendment, 2026-07-28) -- sited above the ``detected is
-    # None`` return below, because a Tier-T command is by definition not
-    # suite-shaped and so never reaches the identity leg at all; that
-    # ordering is correct for what the identity leg does and simply does not
-    # reach this case. It runs only when the command is NOT suite-shaped, so
-    # this leg is strictly ADDITIVE: it can only deny commands that were
-    # previously allowed, never restate a deny another leg already owns with
-    # a better diagnosis (a suite-shaped subagent command is an identity
-    # problem, not a precision one, and should say so). See
-    # ``_pytest_directory_args``.
     if detected is None:
         opaque = _opaque_pytest_path_source(segments_argv)
         if opaque is not None:
@@ -3714,6 +3721,16 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 _SCOPED_RUN_OFFER, "the test path", "an uncountable test run",
             )
 
+    # R9 (DR-088 amendment, 2026-07-28) -- sited above the ``detected is
+    # None`` return below, because a Tier-T command is by definition not
+    # suite-shaped and so never reaches the identity leg at all; that
+    # ordering is correct for what the identity leg does and simply does not
+    # reach this case. It runs only when the command is NOT suite-shaped, so
+    # this leg is strictly ADDITIVE: it can only deny commands that were
+    # previously allowed, never restate a deny another leg already owns with
+    # a better diagnosis (a suite-shaped subagent command is an identity
+    # problem, not a precision one, and should say so). See
+    # ``_pytest_directory_args``.
     if is_subagent and detected is None:
         if _is_node_id_baseline_rerun(cmd, dialect):
             return None

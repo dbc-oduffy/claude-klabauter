@@ -32,6 +32,31 @@ def _write_one(tmp_path: Path, monkeypatch, **kwargs) -> Path:
     return _counts_path(tmp_path, payload["session_id"])
 
 
+def test_stalled_mkdir_drops_the_record_within_the_deadline(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    release = threading.Event()
+    real = Path.mkdir
+
+    def _stall(self, *a, **k):
+        if "stall-sid" in str(self):
+            release.wait(10)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "mkdir", _stall)
+    monkeypatch.setattr(fbc, "resolve_git_root_cheap", lambda cwd=None: str(tmp_path))
+    try:
+        t0 = time.perf_counter()
+        fbc.record_registry_fallback(
+            method="x.y", stage=fbc.STAGE_SAFE_FALLBACK, session_id="stall-sid", mapped=False
+        )
+        assert time.perf_counter() - t0 < 0.5
+        assert not _counts_path(tmp_path, "stall-sid").exists()
+    finally:
+        release.set()
+
+
 def test_records_the_op_stage_and_mapped_flag(tmp_path, monkeypatch):
     path = _write_one(tmp_path, monkeypatch, method="ceremony.thing", mapped=True)
     record = json.loads(path.read_text(encoding="utf-8").strip())

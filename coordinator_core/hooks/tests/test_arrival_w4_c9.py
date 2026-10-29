@@ -351,93 +351,47 @@ def test_bdsi_denies_imperative_suite_command_through_the_wrapped_envelope():
     assert hso["permissionDecision"] == "deny"
 
 
-def test_bwua_no_advisory_without_transcript():
+def test_bwua_reroutes_unmodeled_agent_without_a_transcript():
     result = bwua._handler(
-        {"tool_name": "Workflow", "tool_input": {"script": "agent('x')"}}
-    )
-    assert result == {}
-
-
-def test_bwua_no_advisory_on_non_opus_transcript(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text('{"model":"claude-sonnet-4"}\n', encoding="utf-8")
-    result = bwua._handler(
-        {
-            "tool_name": "Workflow",
-            "tool_input": {"script": "agent('x')"},
-            "transcript_path": str(transcript),
-        }
-    )
-    assert result == {}
-
-
-def test_bwua_denies_unmodeled_agent_under_opus(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
-    result = bwua._handler(
-        {
-            "tool_name": "Workflow",
-            "tool_input": {"script": "agent('do the thing')"},
-            "transcript_path": str(transcript),
-        }
-    )
-    hso = result["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "agent() call" in hso["permissionDecisionReason"]
-
-
-def test_bwua_allows_fully_modeled_script_under_opus(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
-    result = bwua._handler(
-        {
-            "tool_name": "Workflow",
-            "tool_input": {"script": "agent('x', {model: 'sonnet'})"},
-            "transcript_path": str(transcript),
-        }
-    )
-    assert result == {}
-
-
-def test_bwua_partial_modeled_warns_via_additional_context(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
-    script = "agent('a', {model: 'sonnet'}); agent('b');"
-    result = bwua._handler(
-        {
-            "tool_name": "Workflow",
-            "tool_input": {"script": script},
-            "transcript_path": str(transcript),
-        }
+        {"tool_name": "Workflow", "tool_input": {"script": "agent('do the thing')"}}
     )
     hso = result["hookSpecificOutput"]
     assert "permissionDecision" not in hso
-    assert "additionalContext" in hso
-    assert "2 agent() calls" in hso["additionalContext"]
+    assert "model: 'sonnet'" in hso["updatedInput"]["script"]
+    assert "rerouted to sonnet" in hso["additionalContext"]
 
 
-def test_bwua_partial_modeled_is_silent_when_the_rest_inherit_a_pinned_definition(tmp_path, monkeypatch):
+def test_bwua_allows_fully_modeled_script():
+    result = bwua._handler(
+        {"tool_name": "Workflow", "tool_input": {"script": "agent('x', {model: 'sonnet'})"}}
+    )
+    assert result == {}
+
+
+def test_bwua_partial_modeled_reroutes_only_the_unmodeled_call():
+    script = "agent('a', {model: 'sonnet'}); agent('b');"
+    hso = bwua._handler(
+        {"tool_name": "Workflow", "tool_input": {"script": script}}
+    )["hookSpecificOutput"]
+    assert hso["updatedInput"]["script"] == "agent('a', {model: 'sonnet'}); agent('b', { model: 'sonnet' });"
+    assert "1 agent() call(s)" in hso["additionalContext"]
+
+
+def test_bwua_pinned_definition_call_is_left_alone(tmp_path, monkeypatch):
     agents = tmp_path / "agents"
     agents.mkdir()
     (agents / "repo-scout.md").write_text("---\nname: repo-scout\nmodel: haiku\n---\nbody\n", encoding="utf-8")
     monkeypatch.setattr(bwua, "_agents_dir", lambda: agents)
-    transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
     script = "agent('a', {model: 'sonnet'}); agent('b', {agentType: 'coordinator:repo-scout'});"
-    result = bwua._handler(
-        {"tool_name": "Workflow", "tool_input": {"script": script}, "transcript_path": str(transcript)}
-    )
+    result = bwua._handler({"tool_name": "Workflow", "tool_input": {"script": script}})
     assert result == {}
 
 
-def test_bwua_env_override_suppresses(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
+def test_bwua_env_override_suppresses():
     result = bwua._handler(
         {
             "tool_name": "Workflow",
             "tool_input": {"script": "agent('x')"},
-            "transcript_path": str(transcript),
             "env": {"COORDINATOR_OVERRIDE_WORKFLOW_MODEL_GUARD": "1"},
         }
     )

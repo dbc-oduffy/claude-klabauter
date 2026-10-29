@@ -117,7 +117,17 @@ A `finished/result` stamp may carry the handler's JSON-serialisable `result`. Th
 most recent `RESULT_RETAIN_COUNT = 64` of them, up to `RESULT_RETAIN_BYTES = 4 MiB` in total, in an
 LRU separate from the 4000-key state ring. A single result over `RESULT_RETAIN_BYTES // 4` or one
 that is not JSON-serialisable is not kept. Evicting a result never changes the key's state: the
-key is still `finished`. `status()` then reports `result_retained: false`.
+key is still `finished`. `status()` then reports `result_digest` and `result_dropped`.
+
+Every `finished/result` stamp also records a bounded **outcome digest** on the key's own record
+(the 4000-key state ring, not the LRU): the reply's top-level bool/int/float/null values and strings
+up to `RESULT_DIGEST_STR_CHARS = 200`, at most `RESULT_DIGEST_KEYS = 32` of them, with other keys
+named under `omitted`; for an `invoke.from_argv` door reply whose `stdout` parses as a JSON object,
+that object's top-level scalars sit under `stdout`. A non-dict reply digests to `{"type": <name>}`.
+The serialised digest never exceeds `RESULT_DIGEST_BYTES = 2048`, so the digests hold at most
+4000 x 2048 B (about 8 MiB) resident. The digest is built without serialising the whole reply, so
+a non-serialisable reply still digests. `result_dropped` names why the full reply is gone:
+`over-cap`, `not-serialisable`, or `evicted` (LRU count/bytes).
 
 ## 4. Poll states and the outcome → state mapping
 
@@ -219,7 +229,8 @@ Every answer carries:
 | `overdue` | `state == executing`, past the executing bound | `true`. A wait, not a failure; a late `result` or `error` supersedes (§ 3). |
 | `outcome` | `state == finished` | `result` or `error`, plus the error code for `error` (§ 3). Names the sibling contract's evidence class for the method; makes no claim of its own about the mutation. |
 | `result` | `state == finished`, outcome `result`, and the result was retained (§ 3a) | The handler's original reply. For an `invoke.from_argv` dispatch, a door-form poll replays its `{stdout, stderr, exit_code}`. |
-| `result_retained` | `state == finished`, a result was stamped but not kept | `false`. The op landed; its reply is gone. |
+| `result_digest` | `state == finished`, a result was stamped but not kept | The bounded outcome digest (§ 3a): what the op reported, e.g. `committed`, `sha`, `exit_code`. |
+| `result_dropped` | with `result_digest` | `over-cap`, `not-serialisable`, or `evicted`: why the full reply is gone (§ 3a). |
 | `engine_boot_ns` | always | This engine's `boot_ns`, letting a caller detect a restart it hasn't otherwise noticed. |
 | `engine_pid` | always | This engine's pid. |
 

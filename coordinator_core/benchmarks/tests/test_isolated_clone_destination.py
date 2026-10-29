@@ -92,6 +92,8 @@ def _rooted_sleeper(root: Path):
     )
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_reap_signals_descendant_holder(tmp_path: Path) -> None:
     """A rooted process in our own tree is signalled and reported reaped."""
     from coordinator_core.benchmarks.isolated_clone import reap_processes_under
@@ -107,6 +109,8 @@ def test_reap_signals_descendant_holder(tmp_path: Path) -> None:
             proc.kill()
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_reap_reports_foreign_holder_without_signalling(tmp_path: Path, monkeypatch) -> None:
     """A rooted process outside our tree is returned on `.foreign` and left alive."""
     import psutil
@@ -125,6 +129,8 @@ def test_reap_reports_foreign_holder_without_signalling(tmp_path: Path, monkeypa
         proc.wait(timeout=10)
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_reap_stale_clones_never_raises_on_foreign_holder(tmp_path: Path, monkeypatch) -> None:
     import os
     import psutil
@@ -140,6 +146,7 @@ def test_reap_stale_clones_never_raises_on_foreign_holder(tmp_path: Path, monkey
         monkeypatch.setattr(psutil.Process, "children", lambda self, recursive=False: [])
         _reap_stale_clones(tmp_path)
         assert proc.poll() is None
+        assert stale.exists()
     finally:
         proc.kill()
         proc.wait(timeout=10)

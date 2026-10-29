@@ -264,8 +264,9 @@ def _peer_adjusted_rows(
 def _xs_over_budget_refusal(
     worktree_root: Path, params: dict, run_id: str, request: CommitRequest
 ) -> Optional[dict]:
-    """The ``xs-over-budget`` refusal when an XS-arm run's own diff against its run base
-    exceeds the XS budget (or cannot be measured), else None. Any other arm pays nothing.
+    """The S-arm resize marker (``resize_arm``) when an XS-arm run's own diff against its run base
+    exceeds the XS budget, the ``xs-over-budget`` refusal when it cannot be measured, else None.
+    Any other arm pays nothing.
 
     The measure is the chunks' declared paths and prefixes only (the pathspec on both git
     spawns), less bookkeeping paths, the plan and cited sizing, paths a live peer holds, and
@@ -312,13 +313,44 @@ def _xs_over_budget_refusal(
     v = xs_diff_budget.verdict(rows)
     if v is None:
         return None
-    message = xs_diff_budget.resize_next_action(v, sizing)
-    return _error(
-        message,
-        refused=xs_diff_budget.REFUSED_XS_OVER_BUDGET,
-        measured={"files": v["files"], "lines": v["lines"]},
-        next_action=message,
-    )
+    marker = xs_diff_budget.resize_marker(v)
+    marker["next_action"] = xs_diff_budget.resize_next_action(v, sizing)
+    return marker
+
+
+def _apply_xs_resize(worktree_root: Path, request: CommitRequest, marker: dict) -> bool:
+    """Amend the cited sizing to the marker's arm through ``sizing.resize``; True when amended. A
+    missing sizing or a refused resize leaves the record as is (the run continues on the S-arm gates
+    regardless) and rewords ``marker['next_action']`` to say so."""
+    from coordinator_core.ops.dispatch_emit import xs_diff_budget
+
+    sizing = _cited_sizing(worktree_root, request.plan_path)
+    done = bool(sizing) and _resize_sizing(worktree_root, sizing, marker)
+    if not done:
+        m, b = marker["measured"], marker["budget"]
+        marker["next_action"] = xs_diff_budget.resize_next_action(
+            {"files": m["files"], "lines": m["lines"], "budget_files": b["files"], "budget_lines": b["lines"]},
+            sizing, resized=False,
+        )
+    return done
+
+
+def _resize_sizing(worktree_root: Path, sizing: str, marker: dict) -> bool:
+    from coordinator_core.ops import sizing_resize
+
+    m = marker["measured"]
+    try:
+        reply = sizing_resize._handler(
+            {
+                "sizing": sizing,
+                "tshirt": marker["resize_arm"],
+                "basis": f"XS run diff measured {m['files']} files, {m['lines']} lines at terminal commit",
+            },
+            repo_root=worktree_root,
+        )
+    except Exception:  # noqa: BLE001 -- the resize record is best-effort; the commit proceeds
+        return False
+    return not (isinstance(reply, dict) and reply.get("exit_code"))
 
 
 _TEST_PATH = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$|[^/]*\.(test|spec)\.[jt]sx?$)")
@@ -440,7 +472,8 @@ def _land_merge_artifacts(
 
 def _retest_covers_targeted_set(li, params: dict, fresh: Optional[dict]) -> bool:
     """True when ``fresh`` (a valid retest record) ran every file of the run's recorded targeted
-    set, less the files the record lists under ``dropped``. No fresh record: False."""
+    set, less the files the record lists under ``dropped``. No fresh record, or one that ran no
+    test: False (a retest that ran nothing supersedes nothing)."""
     if fresh is None:
         return False
     from coordinator_core.ops.dispatch_emit import retest_targeted
@@ -450,7 +483,7 @@ def _retest_covers_targeted_set(li, params: dict, fresh: Optional[dict]) -> bool
     }
     dropped = {li._node_file(str(t)) for t in (fresh.get("dropped") or [])}
     ran = {li._node_file(t) for t in (fresh.get("tests") or []) if isinstance(t, str)}
-    return (required - dropped) <= ran
+    return bool(ran) and (required - dropped) <= ran
 
 
 def _claim_provenance(findings: list) -> tuple[list, list]:

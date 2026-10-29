@@ -68,6 +68,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-subagent-commit",
     "check-test-suite-invocation",
     "guard-heavy-command-admission",
+    "guard-disk-fill",
     "guard-post-executor-verification",
     "guard-repo-setup-claude-home-refusal",
     "guard-host-subagent-bash-ban",

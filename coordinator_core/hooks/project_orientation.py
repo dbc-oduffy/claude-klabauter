@@ -554,6 +554,22 @@ def _install_currency_banner(out: List[str], env: Mapping[str, Any]) -> None:
         out.append(f"── {p19_line} ──\n")
 
 
+def _newer_index_banner(out: List[str], env: Mapping[str, Any], repo_root: Optional[str]) -> None:
+    """Notice from the box-local newer-index marker alone: one file read, no spawn, no network."""
+    if not repo_root:
+        return
+    from coordinator_core.index_distribution import newer_index_marker as nim
+
+    marker = nim.read_marker(repo_root)
+    if not nim.is_fresh(marker, time.time()):
+        out.append("── Newer index: stale-unknown (marker missing or older than a day) — /workday-start refreshes it ──\n")
+        return
+    if nim.newer_available(marker):
+        out.append(
+            f"── Newer {marker.get('kind')} index available — fetch with: structural-index-refresh --root {repo_root} ──\n"
+        )
+
+
 def _corpus_currency_banner(out: List[str], env: Mapping[str, Any]) -> None:
     if _env_get(env, "COORDINATOR_CURRENCY_STATUS_OFF"):
         return
@@ -987,6 +1003,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         lambda o: _local_install_surface_banner(o, env, session_repo_root),
         lambda o: _install_currency_banner(o, env),
         lambda o: _corpus_currency_banner(o, env),
+        lambda o: _newer_index_banner(o, env, session_repo_root),
         lambda o: _tier_currency_banner(o, env, session_repo_root),
         lambda o: _scratch_size_banner(o, session_repo_root),
     )

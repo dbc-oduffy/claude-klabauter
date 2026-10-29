@@ -543,12 +543,17 @@ _PREP_GUARDS_JS = (
     # run reviewed by the whole-diff tail alone. Declared paths are
     # non-empty here: the plan route always declares them, and the queue
     # route skips the wave before prep when no row committed.
+    # A composer that hoists `_alreadyDeliveredClose` may close the run landed here; the hook sets its
+    # own state and a refusal reason. Absent the hook (the plan route) the halt below is unchanged.
     "  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly)) { "
+    "if (!(typeof _alreadyDeliveredClose === 'function' && await _alreadyDeliveredClose())) "
     f"return {{ halted: {_js_string_literal(NO_SLICES_HALT)} + ' (prep verdict: ' + "
     f"String(_reviewPrep?.verdict ?? 'none') + ')' + "
     "(Array.isArray(_reviewPrep?.excluded) && _reviewPrep.excluded.length "
     "? '; excluded: ' + _reviewPrep.excluded.map(e => e.path + ': ' + e.reason).join(', ') : ''), "
-    f"reason: {_js_string_literal(_NO_SLICES_REFUSAL)}, "
+    f"reason: {_js_string_literal(_NO_SLICES_REFUSAL)} + "
+    "((typeof _alreadyDeliveredRefusal === 'string' && _alreadyDeliveredRefusal) "
+    "? ' Already-delivered claim refused: ' + _alreadyDeliveredRefusal : ''), "
     "prep: _reviewPrep ?? null, wave: null, integration: null }; }"
 )
 
@@ -1488,7 +1493,9 @@ def compose_execute_review(
             "  const _reviewGroups = [];",
         ]
         for pos, group in enumerate(active_groups):
-            prefix = group_slice_prefix(sidecar_key, group.index)
+            prefix = group_slice_prefix(
+                sidecar_key, group.index, slice_identity_sha if slice_identity_sha is not None else run_base_sha
+            )
             group_prefixes.append(prefix)
             paths_literal = json.dumps(list(group.paths))
             group_items: List[str] = []

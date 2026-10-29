@@ -52,6 +52,8 @@ STEP_EXPIRED_GATES = "w_step1_expired_plan_gates"
 STEP_NUDGE = "w_step6_competitor_nudge"
 STEP_HOOK = "w_step9_ceremony_hook"
 STEP_CHAIN = "w_step10_chain_workday_start"
+STEP_STRUCTURAL_INDEX = "w_step8_structural_index_refresh"
+_STRUCTURAL_INDEX_TARGET = "coordinator_core.workday_start.manifest:structural_index_refresh_admitted"
 GATE_STEP = "priorities-gate"
 
 LAUNCH_STAGES: tuple[str, ...] = ("header", "orient", "hygiene", "summary", "scan")
@@ -282,6 +284,8 @@ def _residue() -> tuple[StepSpec, ...]:
         _recheck(),
         _cli(STEP_NUDGE, "check-competitor-positioning-nudge", (), stage="summary", detail="Step 6: positioning nudge."),
         _cli(STEP_COVERAGE, "goal-coverage-scan", ("--format", "text"), stage="scan", detail="Step 7: goal coverage."),
+        _inproc(STEP_STRUCTURAL_INDEX, _STRUCTURAL_INDEX_TARGET, stage="scan",
+                detail="Structural index refresh, launched only after the memory admit; a HOLD skips it."),
     )
 
 

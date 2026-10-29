@@ -95,7 +95,7 @@ def test_constants():
 
 
 def test_deny_texts_name_the_constant_their_window_enforces():
-    pre = g.prefire_deny_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
+    pre = g.prefire_advisory_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
     post = g.postlanding_deny_text(4, g.POSTLANDING_VERIFY_CALLS_MAX)
     assert f"budget {g.PREFIRE_EXPLORATORY_CALLS_MAX} (" in pre and "since the last turn" in pre
     assert f"budget {g.POSTLANDING_VERIFY_CALLS_MAX} (" in post and "since the landing" in post
@@ -166,7 +166,7 @@ def test_holder_checks_skipped_for_a_different_session(env, monkeypatch):
     assert calls == []
 
 
-def test_ninth_read_denies_with_fire_step(env):
+def test_ninth_read_advises_with_fire_step_and_is_allowed(env):
     env.write(user())
     env.survey(8)
     res = g.evaluate(env.payload())
@@ -598,7 +598,7 @@ def test_unrelated_read_after_apply_still_counts_and_denies(env):
     assert g.evaluate(env.payload(tid="o1", inp=other)) is None
     env.write(use("o1", "Read", other))
     res = g.evaluate(env.payload(tid="o2", inp={"file_path": "/r/scratch/third.json"}))
-    assert res is not None and reason(res).startswith("[em-prefire-survey] 9 exploratory calls")
+    assert res is not None and "[em-prefire-survey] 9 exploratory calls" in res["hookSpecificOutput"]["additionalContext"]
 
 
 PUBLISH_SEQUENCE = [

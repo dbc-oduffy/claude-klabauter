@@ -36,8 +36,7 @@ incantation, for the same reason ``block-worktree-tool.py`` withholds it: a
 deny message that prints its own bypass reads to an eager agent as a
 sanctioned next step, not a boundary. The message leads with the sanctioned
 alternative (design-as-offers) -- scoped-parallel dispatch into the same
-tree -- then names PM permission as the path to genuine branch-level
-isolation.
+tree -- then reports branch-level isolation as a need to surface.
 
 Removal stays allowed -- this guard only matches
 Write/Edit/MultiEdit/NotebookEdit -- there is no file-deletion tool in that
@@ -85,7 +84,7 @@ _SENTINEL_NAME = ".coordinator-override-worktree-guard"
 _DENY_REASON = (
     "[worktree guard] BLOCKED: overrides can't be self-granted.\n"
     "Instead: dispatch scoped, disjoint-path edits in this tree.\n"
-    "Need branch isolation? Ask the EM for PM permission."
+    "Need branch isolation? Report it; the shared tree is the rule."
 )
 
 

@@ -130,6 +130,10 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
         reply = _reconcile_landing(worktree_root, run_id, token, script_path, halted, reply)
     if siblings is not None:
         reply["siblings"] = siblings
+    if not reply.get("error"):
+        from coordinator_core.ops.dispatch_emit import run_push
+
+        reply["push"] = run_push.nudge_push(worktree_root, repo_root)
     return reply
 
 
@@ -218,6 +222,67 @@ def _baton_cascade(worktree_root: Path, repo_root: Path, run_id: str) -> dict:
     from coordinator_core.ops.dispatch_emit.run_baton_cascade import fire_for_batons
 
     return {"run_baton_cascade": fire_for_batons(worktree_root, repo_root, [rel], None)}
+
+
+def _reland_late_writes(
+    worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict,
+    sizing_rel: Optional[str], session_id: Optional[str], withheld: dict, process_withheld: dict,
+) -> Optional[tuple]:
+    """After the halt commit, land run-artifact candidates written during the op (file pathspecs only).
+
+    Returns (artifacts, still_changed, relanded) from a fresh snapshot, or None when it cannot be
+    taken. Peer-held and not-claimed paths stay withheld (``run_artifacts.landable``); a failed
+    second commit leaves the paths changed, so ``residue`` reports them.
+    """
+    from coordinator_core.ops.dispatch_emit.terminal_commit import _worktree_snapshot
+    from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
+
+    raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
+    fresh = within_handoffs_home(worktree_root, run_artifacts.candidate_paths(
+        worktree_root, run_id,
+        sizing_rel=sizing_rel,
+        plan_rel=halted.get(HALT_PLAN_FIELD) if isinstance(halted.get(HALT_PLAN_FIELD), str) else None,
+        doc_paths=[d for d in raw_docs if isinstance(d, str)] if isinstance(raw_docs, list) else (),
+    ))
+    snap = _worktree_snapshot(worktree_root, list(fresh.paths()), [record_dir_rel, RECORD_DIR_ROOT], [])
+    if snap is None:
+        return None
+    fresh = fresh.with_superseded(
+        run_artifacts.superseded_runs(
+            worktree_root, run_id, sizing_rel, snap.changed, live_run_ids=_live_run_ids(repo_root)
+        ),
+        RECORD_DIR_ROOT,
+    )
+    fresh, more = process_artifact_policy.withhold_process_artifacts(worktree_root, fresh)
+    blocked = {**withheld, **process_withheld, **more}
+    land = run_artifacts.landable(worktree_root, fresh, snap.changed, snap.ignored, session_id=session_id)
+    withheld.update({p: r for p, r in land.withheld.items() if p not in withheld})
+    present = [p for p in land.present if p not in blocked and not halt_product_gates.is_scratch(p)]
+    gone = [p for p in land.deleted if p not in blocked and not halt_product_gates.is_scratch(p)]
+    relanded: list = []
+    if present or gone:
+        left = dispatch_abandon.remaining()
+        if left is None or left - dispatch_abandon.REPLY_MARGIN_SECS > 0:
+            commit_params: dict = {
+                "paths": present + gone,
+                "message": f"halted: re-land late run-artifact writes of {run_id}",
+                "carry_stopped_runs": False,
+                "ignored_untracked": snap.ignored_among(present + gone),
+            }
+            if gone:
+                commit_params["deleted_paths"] = gone
+                commit_params["declared_reverts"] = gone
+            if session_id is not None:
+                commit_params["session_id"] = session_id
+            try:
+                second = reentrant_dispatch("ceremony.commit_v2", commit_params, repo_root=repo_root)
+            except OpUnavailableError:
+                second = None
+            if isinstance(second, dict) and not second.get("error") and not second.get("refused"):
+                relanded = present + gone
+    again = _worktree_snapshot(worktree_root, list(fresh.paths()), [record_dir_rel, RECORD_DIR_ROOT], [])
+    still = set(again.changed) if again is not None else set(snap.changed) - set(relanded)
+    return fresh, still, relanded
 
 
 def _land(
@@ -627,9 +692,17 @@ def _land(
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         extra.update(_baton_cascade(worktree_root, repo_root, run_id))
-        left = run_artifacts.residue(
-            artifacts, set(snapshot.changed) - set(paths) - set(deleted), paths + deleted, withheld
+        late = _reland_late_writes(
+            worktree_root, repo_root, params, run_id, record_dir_rel, halted, sizing_rel,
+            session_id, withheld, process_withheld,
         )
+        if late is not None:
+            artifacts, still_changed, relanded = late
+            reply["relanded"] = relanded
+            paths = paths + relanded
+        else:
+            still_changed = set(snapshot.changed) - set(paths) - set(deleted)
+        left = run_artifacts.residue(artifacts, still_changed, paths + deleted, withheld)
         if left:
             extra["run_artifact_residue"] = left
     # A halt record stamps no chunk coded; the key stays so callers reading it never KeyError.

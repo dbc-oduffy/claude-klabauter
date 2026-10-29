@@ -112,9 +112,9 @@ class TestDeriveProseSummary:
         assert derive_prose_summary(body) == "no terminal punctuation on this line"
 
     def test_truncates_long_summary(self):
-        long_sentence = ("x" * 150) + "."
+        long_sentence = ("x" * (_SUMMARY_MAX_CHARS + 30)) + "."
         result = derive_prose_summary(long_sentence + "\n")
-        assert len(result) == 120
+        assert len(result) == _SUMMARY_MAX_CHARS
         assert result.endswith("…")
 
     def test_all_blank_or_structural_body_yields_empty(self):
@@ -288,14 +288,14 @@ class TestActRewritesDraft:
         on an over-cap explicit summary — the body-derived summary is written
         in its place, an advisory names the actual length and the cap, and
         the author's original text is echoed back verbatim. Never truncated:
-        no prefix of the 163-char original appears in the emitted summary
+        no prefix of the over-cap original appears in the emitted summary
         (the former `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is gone)."""
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
         target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
 
         body = "Derived summary sentence lands here. More body follows.\n"
-        long_summary = "S" * 163
+        long_summary = "S" * (_SUMMARY_MAX_CHARS + 43)
         result = _run(_memo_compose(
             {
                 "dry_run": False, "topic": "some-topic", "body": body,

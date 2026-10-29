@@ -94,9 +94,9 @@ def locate_run_dir(
     for wf in wf_dirs:
         unsettled = _unsettled_agent_ids(wf / "journal.jsonl")
         for agent_id in sorted(unsettled):
-            meta_name = f"agent-{agent_id}.meta.json"
-            if Path(agent_id).name != agent_id:
+            if not isinstance(agent_id, str) or Path(agent_id).name != agent_id:
                 continue
+            meta_name = f"agent-{agent_id}.meta.json"
             try:
                 meta = json.loads((wf / meta_name).read_text(encoding="utf-8"))
             except (OSError, ValueError):

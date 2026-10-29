@@ -1674,6 +1674,9 @@ def _worker_process_init(stderr_dir=None) -> None:
     global _worker_pristine_settings_home
     _worker_pristine_settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
 
+    from coordinator_core.warm import polite_io
+
+    polite_io.lower_own_priority()
     _bind_null_std_streams()
     _bind_worker_stderr_log(stderr_dir)
     threading.Thread(

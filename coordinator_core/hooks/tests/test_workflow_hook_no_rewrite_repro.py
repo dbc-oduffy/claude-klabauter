@@ -5,8 +5,8 @@ asserts the contract: the call is rewritten or denied by name, never passed thro
 the pass-through at base is `xfail(strict=True)` naming the suspect, so the fix that lands flips it to a failure that
 demands the marker's removal. Cases the harness alone can settle are named xfails carrying the evidence that settles them.
 
-The dispatcher and its hook-run launcher are located through `CLAUDE_PLUGIN_ROOT` (else the sibling coordinator-content-repo checkout);
-door-bound cases skip where either is absent. The engine is a stamped copy run cold, as the halted-refire sibling does.
+The dispatcher and its hook-run launcher are located through `CLAUDE_PLUGIN_ROOT`;
+door-bound cases skip where it is unset or either is absent. The engine is a stamped copy run cold, as the halted-refire sibling does.
 """
 
 from __future__ import annotations
@@ -26,10 +26,8 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-_ENGINE_SOURCE = Path(__file__).resolve().parents[3]
-_PLUGIN_ROOT = Path(
-    os.environ.get("CLAUDE_PLUGIN_ROOT") or _ENGINE_SOURCE.parent / "coordinator-content-repo" / "coordinator"
-)
+# No sibling-checkout fallback: test_no_hardcoded_paths forbids climbing out of the repo to coordinator-content-repo.
+_PLUGIN_ROOT = Path(os.environ.get("CLAUDE_PLUGIN_ROOT") or "__unset_plugin_root__")
 _HOOKS_JSON = _PLUGIN_ROOT / "hooks" / "hooks.json"
 _DISPATCHER = _PLUGIN_ROOT / "hooks" / "scripts" / "preuse-workflow-dispatch.py"
 _BOOT = _PLUGIN_ROOT / "hooks" / "scripts" / "_hook_boot.py"

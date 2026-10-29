@@ -82,7 +82,7 @@ from coordinator_core.write_guards import (
 )
 from coordinator_core.write_guards import _sentinel_write_guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as vfs_deny
-from coordinator_core.hooks import nudge_em_code_dispatch as nudge_hook
+from coordinator_core.hooks import _em_write_budget
 
 
 @pytest.fixture()
@@ -265,7 +265,7 @@ def test_norm_is_stable_under_windows_path_semantics(_windows_os_path):
     assert a.lower().endswith("claude.md")
 
 
-def test_doctrine_guard_denies_windows_shaped_home_claude_md(_windows_os_path, monkeypatch):
+def test_doctrine_guard_advises_on_windows_shaped_home_claude_md(_windows_os_path, monkeypatch):
     windows_home_claude_md = guard_doctrine_surface_edits._norm(
         "C:\\Users\\me\\.claude\\CLAUDE.md"
     )
@@ -285,33 +285,8 @@ def test_doctrine_guard_denies_windows_shaped_home_claude_md(_windows_os_path, m
     result = guard_doctrine_surface_edits.check(payload)
     assert result is not None
     out = result["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    # Deny message discipline (2026-08-13, C4a, INVERTED -- plan
-    # docs/plans/2026-08-13-guard-messages-stop-handing-agents-the-keys.md;
-    # docs/wiki/guard-messaging.md § Register B6): the prior 2026-07-30
-    # reversal asserted the sentinel filename WAS printed, reasoning that
-    # naming it was safe once creation was denied on both surfaces -- B6
-    # supersedes that reasoning: showing a confined reader the key while
-    # forbidding its use is itself the disclosure that makes a well-meaning
-    # subagent's rationalisation through the gate available, independent of
-    # whether creation is also blocked. No unresolved-audience payload is
-    # passed here (`check()`'s payload carries no `session_id`), so this
-    # fires the unresolved-audience leg, which degrades to terse -- never
-    # the mechanism, per B6's unresolved-audience degradation rule.
-    assert ".coordinator-doctrine-edit-approved" not in out["permissionDecisionReason"]
-
-
-# abs-path-ok: Windows drive-letter pointer fixtures are the subject under test
-@pytest.mark.parametrize("pointer", ["C:/real/repo/.git/worktrees/wt", "C:\\real\\repo\\.git"])
-def test_git_dir_keeps_a_drive_letter_pointer_as_is(tmp_path, pointer):
-    (tmp_path / ".git").write_text(f"gitdir: {pointer}\n", encoding="utf-8")
-    assert guard_doctrine_surface_edits._git_dir(str(tmp_path)) == pointer
-
-
-def test_git_dir_joins_a_relative_pointer_to_the_root(tmp_path):
-    (tmp_path / ".git").write_text("gitdir: ../real\n", encoding="utf-8")
-    resolved = guard_doctrine_surface_edits._git_dir(str(tmp_path))
-    assert resolved.endswith("real") and resolved != "../real"
+    assert "permissionDecision" not in out
+    assert "always-loaded doctrine" in out["additionalContext"]
 
 
 def test_doctrine_guard_allows_unrelated_windows_shaped_path(_windows_os_path, monkeypatch):
@@ -335,7 +310,7 @@ def test_doctrine_guard_allows_unrelated_windows_shaped_path(_windows_os_path, m
 
 
 def test_derive_executor_info_windows_shaped_coordinator_path(_windows_os_path):
-    executor_type, ambiguous = nudge_hook._derive_executor_info(
+    executor_type, ambiguous = _em_write_budget._derive_executor_info(
         "C:\\Users\\me\\coordinator-content-repo\\coordinator\\hooks\\scripts\\foo.py"
     )
     assert executor_type == "coordinator-executor"

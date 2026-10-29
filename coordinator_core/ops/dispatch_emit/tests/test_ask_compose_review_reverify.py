@@ -59,6 +59,15 @@ def test_return_carries_reverify_under_review():
     assert "reverify: _reviewReverify, receipt:" in _compose()
 
 
+def test_staged_review_reverify_body_leaves_the_script_and_lands_in_the_sink():
+    sink: dict[str, str] = {}
+    script = _compose(staged_out=sink)
+    assert "prompts/review-reverify.md in full" in script
+    assert "review.reverify" in sink["review-reverify"]
+    assert "Re-verify the edits this run" not in script
+    assert "Re-verify the edits this run" in _compose()
+
+
 def test_both_commit_params_blocks_carry_targeted_tests_verbatim():
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     assert script.count(_TARGETED_TESTS) == 2

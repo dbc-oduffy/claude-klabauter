@@ -195,7 +195,7 @@ def test_probe_browser_checks_required_revision_dir(monkeypatch, tmp_path):
     (tmp_path / "chromium_headless_shell-1228").mkdir()
     missing = b.probe_browser()
     assert missing.ok is False
-    assert missing.install_hint == f"{sys.executable} -m playwright install chromium"
+    assert missing.install_hint == f'"{sys.executable}" -m playwright install chromium'
     (tmp_path / "chromium_headless_shell-1248").mkdir()
     assert b.probe_browser().ok is True
 

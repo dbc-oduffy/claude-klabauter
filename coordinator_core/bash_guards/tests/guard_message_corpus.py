@@ -1081,6 +1081,30 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         setup=_heavy_tree_repo_root_setup,
     ),
     CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-engine-tree-fire",
+        "grep -rn IGroomTranslator /opt/UE_5.8/Engine/Plugins",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-scratch-root-fire",
+        "grep -rl 45ac1e scratch",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "block-whole-filesystem-scan",
+        "block-whole-filesystem-scan-scratch-run-dir-control",
+        "grep -rl 45ac1e scratch/run-1",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-worktree-creation",
         "block-worktree-creation-fire",
         "git worktree add ../wt-1 feature-branch",
@@ -1491,6 +1515,22 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=_subagent_heavy_ue_launch_setup,
+    ),
+    CorpusRow(
+        "guard-disk-fill",
+        "guard-disk-fill-fire",
+        "truncate -s 900T disk-fill-probe.img",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "guard-disk-fill",
+        "guard-disk-fill-control",
+        "echo x > disk-fill-probe.txt",
+        False,
+        _DENY,
+        False,
     ),
     CorpusRow(
         "block-home-root-bash-write",
@@ -4460,7 +4500,7 @@ def _fire_nudge_em_turn_budget_post_landing() -> Optional[Dict[str, Any]]:
 def _fire_em_prefire_survey_pre_fire() -> Optional[Dict[str, Any]]:
     from coordinator_core.hooks import guard_em_prefire_survey as g
 
-    return _hook_envelope_from_message({"message": g.prefire_deny_text(9, 8)})
+    return _hook_envelope_from_message({"message": g.prefire_advisory_text(9, 8)})
 
 
 def _fire_em_prefire_survey_post_landing() -> Optional[Dict[str, Any]]:
@@ -5248,33 +5288,23 @@ def _fire_guard_editor_python_direct_control() -> Optional[Dict[str, Any]]:
 
 
 def _fire_block_workflow_unmodeled_agent() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-bwua-", dir=_neutral_scratch_parent()) as scratch:
-        scratch_dir = Path(scratch)
-        transcript = scratch_dir / "t.jsonl"
-        transcript.write_text(_json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-1"}}) + "\n")
-        payload = {
-            "tool_name": "Workflow",
-            "tool_input": {"script": 'await agent("do the thing")'},
-            "transcript_path": str(transcript),
-        }
-        return _to_envelope_or_none(
-            _run_maybe_async(_hook_block_workflow_unmodeled_agent._handler(payload))
-        )
+    payload = {
+        "tool_name": "Workflow",
+        "tool_input": {"script": 'await agent("do the thing")'},
+    }
+    return _to_envelope_or_none(
+        _run_maybe_async(_hook_block_workflow_unmodeled_agent._handler(payload))
+    )
 
 
 def _fire_block_workflow_unmodeled_agent_control() -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-bwua-ctrl-", dir=_neutral_scratch_parent()) as scratch:
-        scratch_dir = Path(scratch)
-        transcript = scratch_dir / "t.jsonl"
-        transcript.write_text(_json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-1"}}) + "\n")
-        payload = {
-            "tool_name": "Workflow",
-            "tool_input": {"script": 'await agent("do the thing", {model: "sonnet"})'},
-            "transcript_path": str(transcript),
-        }
-        return _to_envelope_or_none(
-            _run_maybe_async(_hook_block_workflow_unmodeled_agent._handler(payload))
-        )
+    payload = {
+        "tool_name": "Workflow",
+        "tool_input": {"script": 'await agent("do the thing", {model: "sonnet"})'},
+    }
+    return _to_envelope_or_none(
+        _run_maybe_async(_hook_block_workflow_unmodeled_agent._handler(payload))
+    )
 
 
 def _fire_block_worktree_tool() -> Optional[Dict[str, Any]]:
@@ -6670,7 +6700,7 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("nudge_em_turn_budget", "fire-pre-fire", True, _fire_nudge_em_turn_budget_pre_fire),
     HookRow("nudge_em_turn_budget", "fire-post-landing", True, _fire_nudge_em_turn_budget_post_landing),
     HookRow("nudge_em_turn_budget", "quiet-subagent", False, _fire_nudge_em_turn_budget_quiet),
-    HookRow("guard_em_prefire_survey", "deny-pre-fire", True, _fire_em_prefire_survey_pre_fire),
+    HookRow("guard_em_prefire_survey", "advisory-pre-fire", True, _fire_em_prefire_survey_pre_fire),
     HookRow("guard_em_prefire_survey", "deny-post-landing", True, _fire_em_prefire_survey_post_landing),
     HookRow("guard_em_prefire_survey", "allow-within-budget", False, _fire_em_prefire_survey_within_budget),
     HookRow("submit_engine_ask", "fire-scout-while-run-live", True, _fire_submit_engine_ask_scout_live),
@@ -6824,7 +6854,7 @@ HOOK_ROWS: List[HookRow] = [
         False,
         _fire_guard_editor_python_direct_bash_heredoc_control,
     ),
-    HookRow("block_workflow_unmodeled_agent", "fire-zero-modeled", True, _fire_block_workflow_unmodeled_agent),
+    HookRow("block_workflow_unmodeled_agent", "fire-unmodeled-rewrite", True, _fire_block_workflow_unmodeled_agent),
     HookRow(
         "block_workflow_unmodeled_agent",
         "control-modeled",

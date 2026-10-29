@@ -33,7 +33,7 @@ class TargetAccount:
 
 
 def _nodeid(test: FailingTest) -> str:
-    return f"{test.file}::{test.name}"
+    return f"{test.file}::{test.name}" if test.name else test.file
 
 
 def _declined_reasons(declined: list[Mapping]) -> dict[str, str]:

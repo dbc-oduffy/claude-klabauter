@@ -96,7 +96,6 @@ CLOSE_COMMIT_CAS_RETRIES = 3
 _HANDOFF_SWEEP_CAP = 150
 _SIZINGS_SWEEP_NOTE = "sweep-terminal-sizings not run: 638ms cold, over the 500ms bar"
 _CEREMONY_NAME = "run-close"
-_ENSURE_WAIT_SECS = 5.0
 
 # close_review imports this name; the scrubber itself lives in run_close.
 _scrub = run_close.scrub_detail
@@ -1114,8 +1113,9 @@ def _launch_close_review(ctx: JobContext) -> bool:
 
 
 def _post_close(ctx: JobContext) -> LegResult:
-    """Fire the structural-index and scip launchers and the detached ``close.review`` job, then
-    run ``baton-chain-closure`` for the claimed batons and record its outcome."""
+    """Flag structural-index staleness (never refresh), fire the scip launcher and the
+    detached ``close.review`` job, then run ``baton-chain-closure`` for the claimed
+    batons and record its outcome."""
     from coordinator_core.ops.ceremony import post_close_admission as admission
 
     launched: list[str] = []
@@ -1123,8 +1123,12 @@ def _post_close(ctx: JobContext) -> LegResult:
     problems: list[str] = []
     avail_mb, trusted = admission.read_available()
     admitted_mb = 0
+    flag_note = ""
+    try:
+        flag_note = _bin_script("structural-index-refresh").flag_staleness(ctx.root) or ""
+    except Exception as exc:  # a flag read never stops the launchers
+        problems.append(f"structural-index-flag {type(exc).__name__}")
     for label, call in (
-        ("structural-index", lambda: _bin_script("structural-index-refresh").refresh(ctx.root, _ENSURE_WAIT_SECS)),
         ("scip-rebuild", lambda: _bin_script("scip-rebuild-at-ceremony").run(_CEREMONY_NAME, ctx.root)),
     ):
         verdict = admission.admit(label, avail_mb, trusted, admitted_mb)
@@ -1149,6 +1153,8 @@ def _post_close(ctx: JobContext) -> LegResult:
     chain_note = _chain_closure_note(ctx, problems)
     reap_note = _reap_note(ctx, problems)
     detail = f"launched: {', '.join(launched) or 'none'}"
+    if flag_note:
+        detail += f"; {flag_note}"
     if deferred:
         detail += f"; deferred: {', '.join(deferred)}"
     detail += f"; {chain_note}; {reap_note}"

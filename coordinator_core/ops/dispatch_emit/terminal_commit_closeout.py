@@ -420,6 +420,7 @@ def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) ->
     if not session_id:
         return {"usage_total": None, "usage_reason": "no session_id"}
     try:
+        from coordinator_core.ops.dispatch_emit.work_label import parse_work_label
         from coordinator_core.usage import agent_usage, run_locate
 
         session_dir = run_locate.session_dir_for(session_id)
@@ -427,8 +428,17 @@ def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) ->
         if wf is None:
             return {"usage_total": None, "usage_reason": "run dir not located"}
         scan = agent_usage.scan_run(str(wf))
+        # Scan labels are `work:<row id>[#cont<n>]`, not bare row ids: parse back to the row id and
+        # sum continuations. manifest.json stays untouched (its sha256 is pinned by manifest_handle).
+        rows: dict = {}
+        for agent in scan["agents"]:
+            row_id = parse_work_label(agent.get("label") or "")
+            if row_id is not None:
+                entry = rows.setdefault(row_id, {"rag_calls": 0})
+                entry["rag_calls"] += int(agent.get("rag_calls") or 0)
         body = {
             **scan,
+            "rows": rows,
             "as_of": "terminal-commit",
             "unsettled": sorted(run_locate._unsettled_agent_ids(wf / "journal.jsonl")),
         }

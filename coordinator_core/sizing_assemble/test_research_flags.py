@@ -213,6 +213,29 @@ def test_amend_research_changes_one_field_and_keeps_the_rest(repo: Path, capsys)
     assert sa.main(["--amend-research", rel, "--research-class", "nope"]) == sa.EXIT_BUSINESS_FAIL
 
 
+def test_research_primary_repo_is_written_kept_on_amend_and_validated(repo: Path) -> None:
+    code, doc = _run(
+        repo, "--research-class", "corpus", "--research-target", "repo=a/b", "--research-primary", "repo"
+    )
+    assert code == sa.EXIT_OK
+    assert doc["research"]["primary"] == "repo"
+    assert validate_frontmatter(doc, _SCHEMA) == []
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
+    doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
+    assert doc["research"]["primary"] == "repo"
+
+
+def test_research_primary_refuses_bad_value_and_missing_repo_input(repo: Path) -> None:
+    code, _ = _run(repo, "--research-class", "corpus", "--research-source", "repo", "--research-primary", "web")
+    assert code == sa.EXIT_USAGE
+    code, _ = _run(repo, "--research-class", "corpus", "--research-source", "web", "--research-primary", "repo")
+    assert code == sa.EXIT_USAGE
+    code, doc = _run(repo, "--research-class", "corpus", "--research-source", "repo", "--research-primary", "repo")
+    assert code == sa.EXIT_OK
+    assert doc["research"]["primary"] == "repo"
+
+
 def test_research_questions_are_written_and_amended(repo: Path) -> None:
     code, doc = _run(repo, "--research-class", "corpus", "--research-question", "What is X?", "--research-question", "Why Y?")
     assert code == sa.EXIT_OK

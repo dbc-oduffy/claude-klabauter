@@ -146,7 +146,7 @@ def _reason(body: dict) -> str:
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_ninth_call_denies_through_the_door_with_fire_step(door, monkeypatch, capsys, name):
+def test_ninth_call_advises_through_the_door_with_fire_step_and_is_allowed(door, monkeypatch, capsys, name):
     door.history(8, name)
     rc, body = door.run(monkeypatch, capsys, name)
     assert rc == 0
@@ -192,7 +192,7 @@ def test_markerless_session_is_never_denied(markerless_door, monkeypatch, capsys
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_cell_session_ninth_call_denies_with_role_marker(cell_door, monkeypatch, capsys, name):
+def test_cell_session_ninth_call_advises_with_role_marker(cell_door, monkeypatch, capsys, name):
     cell_door.history(8, name)
     rc, body = cell_door.run(monkeypatch, capsys, name)
     assert rc == 0

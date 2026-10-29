@@ -14,14 +14,9 @@ asymmetry is load-bearing and must NOT collapse in the port").
 Posture: ADVISORY-ONLY — this arm NEVER blocks. It scans the Bash command
 string for ``mv``/``git mv`` destination targets, shell-redirection targets,
 and ``--out``/``-o`` flag values, and on a match APPLIES the safe name it
-already computes -- returning an ``updatedInput`` rewrite of the command
-string, not a request that the agent adopt it (C2,
-``docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md``
-AC5; the guard was already computing the safe suggestion in its message and
-never using it). Falls back to the prior ``allow`` + ``additionalContext``
-envelope only when no locatable rewrite exists (empty safe suggestion, or the
-extracted candidate text no longer appears verbatim in the command). Neither
-path ever ``deny``s. This is explicitly a best-effort static scan, NOT the
+already computes. It never rewrites the command: every hit returns an ``allow`` + ``additionalContext``
+advisory carrying the safe name, and never ``deny``s. ``coordinator-invoke`` op
+params are masked before extraction (data, never write targets). This is explicitly a best-effort static scan, NOT the
 enforcement net — the commit/merge backstop is. Four false-positive
 incidents motivated the advisory-only posture on this arm specifically.
 
@@ -200,6 +195,40 @@ def _strip_heredocs(cmd: str) -> str:
                 in_hd = True
         out.append(line)
     return "\n".join(out)
+
+
+_INVOKE_RE = re.compile(r"(?<![\w\-])coordinator-invoke(?:\.exe)?(?![\w-])")
+
+
+def _mask_invoke_params(cmd: str) -> str:
+    """Blank everything after a ``coordinator-invoke`` word up to the next unquoted
+    ``|;&>`` or newline: op params (JSON, paths) are data, never write targets."""
+    out: List[str] = []
+    i, n = 0, len(cmd)
+    while i < n:
+        m = _INVOKE_RE.search(cmd, i)
+        if not m:
+            out.append(cmd[i:])
+            break
+        out.append(cmd[i : m.end()])
+        j = m.end()
+        quote: Optional[str] = None
+        while j < n:
+            ch = cmd[j]
+            if ch == "\\" and quote != "'" and j + 1 < n:
+                j += 2
+                continue
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in "'\"":
+                quote = ch
+            elif ch in "|;&>\n":
+                break
+            j += 1
+        out.append(" ")
+        i = j
+    return "".join(out)
 
 
 def _tokenize_quote_aware(cmd: str) -> List[str]:
@@ -491,22 +520,7 @@ def _advisory_ctx(reason: str) -> str:
     return f"ADVISORY (non-blocking): {reason}"
 
 
-def _rewrite_body(raw_name: str, safe_name: str, illegal_char_hint: str) -> str:
-    return (
-        f"'{raw_name}' has '{illegal_char_hint}' -- illegal on Windows, blocks "
-        f"`git checkout`. Auto-corrected to '{safe_name}'. "
-    )
-
-
-def _rewrite_ctx(
-    raw_name: str, safe_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
-) -> str:
-    return _rewrite_body(raw_name, safe_name, illegal_char_hint) + operator_override_note(
-        _OVERRIDE_ENV, payload=payload
-    )
-
-
-def _record(verdict_kind: str, summary: str, em_text: str, ready: str, updated_input=None) -> Any:
+def _record(verdict_kind: str, summary: str, em_text: str, ready: str) -> Any:
     """Typed record for one firing. ``em_text`` is the legacy EM text, stamp included;
     ``summary`` is the same text without the override pointer, for non-EM audiences."""
     from coordinator_core.guard_messages.alternative_record import (
@@ -528,7 +542,6 @@ def _record(verdict_kind: str, summary: str, em_text: str, ready: str, updated_i
             ),
             Override(_OVERRIDE_ENV),
         ),
-        updated_input=updated_input,
         em_text=em_text,
         rewrite_allow=False,
     )
@@ -570,6 +583,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd = cmd.replace("\\\n", " ")
 
         cmd = _strip_heredocs(cmd)
+        cmd = _mask_invoke_params(cmd)
 
         # Strip double- then single-quoted spans to build CMD_FOR_SCAN. Order
         # matters: double-quoted spans first, so an apostrophe inside a
@@ -590,47 +604,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if result is None:
                 continue
             basename, hint = result
-            safe_suggestion = _safe_suggestion(basename)
-            if safe_suggestion and basename in raw_candidate and cmd.count(raw_candidate) == 1:
-                new_candidate = raw_candidate.replace(basename, safe_suggestion, 1)
-                new_cmd = cmd.replace(raw_candidate, new_candidate, 1)
-                updated_input = dict(tool_input)
-                updated_input["command"] = new_cmd
-                ctx = _rewrite_ctx(basename, safe_suggestion, hint, payload=payload)
-                return _record(
-                    "rewrite",
-                    _rewrite_body(basename, safe_suggestion, hint),
-                    _stamp(ctx),
-                    new_cmd,
-                    updated_input,
-                )
-
             reason = _make_deny_msg(basename, hint, payload=payload)
             ctx = _advisory_ctx(reason)
-
-            # C2 (docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md):
-            # `_make_deny_msg` already computes the sanitized suggestion for the
-            # human-readable reason text; reuse the SAME `_safe_suggestion` call to
-            # rewrite the offending candidate in place, so the fix lands without the
-            # agent having to re-issue the call by hand. Substitution is scoped to the
-            # raw candidate substring within the ORIGINAL (unprocessed) command text —
-            # never `cmd`, which has been heredoc-stripped/continuation-joined and is
-            # not a faithful copy of what the caller actually sent.
-            safe_basename = _safe_suggestion(basename)
-            if basename and safe_basename and basename != safe_basename:
-                original_cmd = tool_input.get("command") or ""
-                new_candidate = raw_candidate.replace(basename, safe_basename, 1)
-                if original_cmd.count(raw_candidate) == 1 and new_candidate != raw_candidate:
-                    new_cmd = original_cmd.replace(raw_candidate, new_candidate, 1)
-                    updated_input = dict(tool_input)
-                    updated_input["command"] = new_cmd
-                    return _record(
-                        "rewrite",
-                        _advisory_ctx(_deny_body(basename, hint)),
-                        _stamp(ctx),
-                        new_cmd,
-                        updated_input,
-                    )
 
             return _record(
                 "advisory",

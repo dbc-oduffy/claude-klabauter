@@ -2319,6 +2319,10 @@ def _build_guard_chain(
         check as _check_heavy_command_admission,
         MATCHERS as _matchers_heavy_command_admission,
     )
+    from coordinator_core.bash_guards.guard_disk_fill import (
+        check as _check_disk_fill,
+        MATCHERS as _matchers_disk_fill,
+    )
     from coordinator_core.bash_guards.check_raw_pid_liveness import (
         check as _check_raw_pid_liveness,
         MATCHERS as _matchers_raw_pid_liveness,
@@ -2868,6 +2872,18 @@ def _build_guard_chain(
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_heavy_command_admission),
         ),
+        # guard-disk-fill -- a bulk write or copy whose declared or estimated output would
+        # leave the target volume under disk_budget's volume floor. Fail-open, spawn-free;
+        # strict but lowerable by machine_profile.GUARD_DEFAULT_LEVEL (not a floor guard).
+        GuardEntry(
+            "guard-disk-fill",
+            lambda: _check_disk_fill(payload),
+            False,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_disk_fill),
+        ),
+        # block-subagent-grant-acquisition -- see module docstring entry 5i.
         # guard-post-executor-verification -- main-EM-only: after the session has
         # dispatched a coordinator:executor, a second pytest run routes through
         # coordinator:test-runner. Hard-deny, spawn-free, escape = dispatch sentinel.

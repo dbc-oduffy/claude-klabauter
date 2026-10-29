@@ -61,7 +61,7 @@ def test_terminal_sweeps_are_last_in_the_main_pass_then_post_close(tmp_path: Pat
 
     assert [d["id"] for d in post_close] == ["d-structural-index-refresh", "d-ceremony-reindex"]
     assert directives[-2:] == post_close
-    assert post_close[0]["args"] == ["--root", str(tmp_path), "--timeout", "0"]
+    assert post_close[0]["args"] == ["--root", str(tmp_path), "--flag-only"]
     assert post_close[1]["args"] == [
         "--ceremony", "workstream-complete", "--repo-root", str(tmp_path),
     ]

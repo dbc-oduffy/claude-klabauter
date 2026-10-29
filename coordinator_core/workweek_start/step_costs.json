@@ -14,6 +14,7 @@
     "w_step8_emit_goal_event": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
     "w_step8_commit_priorities": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "remote", "basis": "code-read"},
     "w_step8_commit_archive_reset": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "remote", "basis": "code-read"},
+    "w_step8_structural_index_refresh": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
     "w_step9_ceremony_hook": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
     "w_step9_5_git_maintenance_weekly": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "unmeasured", "basis": "code-read"},
     "w_step10_chain_workday_start": {"process_ms_min": null, "process_ms_median": null, "spawns": null, "samples": 0, "cost_class": "launch", "basis": "code-read"}

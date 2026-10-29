@@ -479,3 +479,8 @@ def test_receipt_has_decided_priorities_and_no_narration():
     assert "expired plan gates: plan-x gate expired" in text
     assert "goal with no in-flight work: Idle goal" in text
     assert "### Parked for you" not in text and "Next up" not in text
+
+
+def test_structural_index_step_runs_in_proc_behind_the_admit():
+    step = next(s for s in rs._residue() if s.id == rs.STEP_STRUCTURAL_INDEX)
+    assert step.target.endswith("workday_start.manifest:structural_index_refresh_admitted")

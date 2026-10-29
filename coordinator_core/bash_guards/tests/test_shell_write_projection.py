@@ -60,7 +60,7 @@ def test_cd_resolves_against_sub(tmp_path):
 
 
 def _paths(cmd, root, cwd=None):
-    return [os.path.relpath(w.abs_path, root) for w in shell_writes(cmd, cwd or root, root, with_git=True)]
+    return [os.path.relpath(w.abs_path, root).replace(os.sep, "/") for w in shell_writes(cmd, cwd or root, root, with_git=True)]
 
 
 def test_git_targets_are_opt_in(tmp_path):
@@ -108,3 +108,9 @@ def test_sed_i_has_no_body(tmp_path):
     (tmp_path / "pkg" / "m.py").write_text("a\n")
     w = shell_writes("sed -i 's/a/b/' pkg/m.py", root, root)
     assert len(w) == 1 and w[0].body is None
+
+
+def test_git_targets_cross_the_boundary_with_forward_slashes(tmp_path):
+    root = _root(tmp_path)
+    for w in shell_writes("git add pkg/a.py sub/b.py", root, root, with_git=True):
+        assert os.sep == "/" or os.sep not in w.abs_path

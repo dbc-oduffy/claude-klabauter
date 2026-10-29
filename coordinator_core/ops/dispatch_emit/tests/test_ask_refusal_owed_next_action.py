@@ -45,7 +45,7 @@ def test_helper_renders_each_next_action_shape():
     assert f"_halted.halted === {ask_compose._lit('refusal')}) return 'Refire: ' + " + ask_compose._refire_js("state/sizings/x.yaml") in helper
 
 
-def test_pull_rulings_fall_back_to_blocking_findings():
+def test_pull_rulings_fall_back_to_blocking_findings(m_plus_known_arm):
     script = _script()
     assert "_revised.rulings.length ? _revised.rulings" in script
     assert "_pulledEntry.blocking" in script

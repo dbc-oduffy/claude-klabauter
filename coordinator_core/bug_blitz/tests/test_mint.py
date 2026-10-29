@@ -46,6 +46,13 @@ def test_one_row_per_file_with_fields(tmp_path):
     assert "more" not in a["body"]
 
 
+def test_file_level_target_renders_as_bare_file_never_trailing_colons(tmp_path):
+    mint_tf_rows(tmp_path, "r1", (FailingTest(file="a/test_x.py", name=""),), target_ref="redset.txt")
+    body = next(iter(_rows(tmp_path).values()))["body"]
+    assert "- a/test_x.py" in body
+    assert "::" not in body
+
+
 def test_evidence_is_repo_relative_for_absolute_target_under_root(tmp_path):
     target = tmp_path / "scratch" / "redset.txt"
     mint_tf_rows(tmp_path, "r1", _tests(), target_ref=str(target))

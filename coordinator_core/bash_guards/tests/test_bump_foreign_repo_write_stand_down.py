@@ -28,6 +28,7 @@ import pytest
 from coordinator_core import environment
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
+    _commit_advisory_off,  # noqa: F401 -- autouse fixture reused
     _posix,
     _set_anchor,
     repos,  # noqa: F401 -- reused fixture: anchor repo + foreign sibling repo.
@@ -196,7 +197,10 @@ def test_guard_stands_down_end_to_end_on_a_host_with_no_fleet(
     )
 
     assert result is None
-    assert "STOOD DOWN" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "STOOD DOWN" in err
+    assert "PM assent" not in err
+    assert "G-EM" in err
     logs = list(repos["anchor"].rglob("overrides.log"))
     assert logs and any(
         "STAND-DOWN-FOREIGN-REPO-WRITE" in p.read_text(encoding="utf-8") for p in logs

@@ -18,7 +18,7 @@ separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the 
 lazy-emit launcher (`fan_launcher.write_launcher`) that emits and starts each, with one ready run it fires
 that run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload
-cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, or the venue is remote), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`, and ignored on a `sizing` submission; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
+cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, the venue is remote, or an explicit absolute `repo` names a registered checkout), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`, and ignored on a `sizing` submission; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
 words, which the engine verifies against the session's recorded turns (refused when contradicted, flagged
 when no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected
 root passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm
@@ -282,6 +282,15 @@ def _cross_repo_refusal(run_root: Path, own: Optional[Path], research_route: boo
     from coordinator_core.ops.dispatch_emit.cross_repo_ask_refusal import cross_repo_run_refusal
 
     return cross_repo_run_refusal(run_root, own, research_route=research_route, approved=approved)
+
+
+def _names_registered_sibling(repo_arg: Optional[str], root: Path) -> bool:
+    """True when an explicit absolute `repo` resolved to a checkout in the machine's repo registry."""
+    if not (repo_arg and Path(repo_arg).is_absolute()):
+        return False
+    from coordinator_core.bash_guards._write_bump_applicability import target_is_registered_repo
+
+    return target_is_registered_repo(str(root))
 
 
 def _context_home(root: Path, paths: list[str]) -> Path:
@@ -814,7 +823,11 @@ def evaluate(
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
 
-    approved = is_remote_venue() or (isinstance(call_args, dict) and call_args.get("cross_repo_approved") is True)
+    approved = (
+        is_remote_venue()
+        or (isinstance(call_args, dict) and call_args.get("cross_repo_approved") is True)
+        or _names_registered_sibling(repo_arg, root)
+    )
     if own is not None:
         cross = _cross_repo_refusal(root, own, False, approved)
         if cross:

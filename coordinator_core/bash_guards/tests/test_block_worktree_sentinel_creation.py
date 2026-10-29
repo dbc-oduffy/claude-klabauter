@@ -248,8 +248,7 @@ class TestDenyMessageDiscipline:
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         reason = _reason(out)
         assert "scoped" in reason.lower()
-        assert "EM" in reason
-        assert "PM" in reason
+        assert "PM" not in reason
 
 
 class TestReasonClassSpecificMessages:

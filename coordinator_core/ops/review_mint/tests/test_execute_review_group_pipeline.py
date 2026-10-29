@@ -59,8 +59,8 @@ def test_groups_phase_leads_and_each_group_awaits_only_its_quiescence_rows():
 def test_group_prep_is_worktree_mode_with_group_paths_and_prefix():
     block = _by_title(_compose(review_groups=_GROUPS))[REVIEW_GROUPS_PHASE]
     assert '"worktree":true' in block
-    assert f'"slice_prefix":"{group_slice_prefix("k", 0)}"' in block
-    assert f'"slice_prefix":"{group_slice_prefix("k", 1)}"' in block
+    assert f'"slice_prefix":"{group_slice_prefix("k", 0, "a" * 40)}"' in block
+    assert f'"slice_prefix":"{group_slice_prefix("k", 1, "a" * 40)}"' in block
     assert '"paths":["a/one.py", "a/two.py"]' in block
     assert '"paths":["b/three.py"]' in block
     assert "<every declared path>" not in block
@@ -92,8 +92,8 @@ def test_prep_awaits_groups_halts_on_group_error_and_merges_group_slices():
 def test_reverify_names_one_list_call_per_prefix_and_the_union():
     reverify = _by_title(_compose(review_groups=_GROUPS))["Review re-verify"]
     main = prep_slice_id_for("docs/plans/example.md", "a" * 40, "k")
-    for prefix in (group_slice_prefix("k", 0), group_slice_prefix("k", 1), main):
-        assert f'review.reverify \\\'{{"base":"{"a" * 40}","slice_prefix":"{prefix}"}}' in reverify
+    for prefix in (group_slice_prefix("k", 0, "a" * 40), group_slice_prefix("k", 1, "a" * 40), main):
+        assert f'review.reverify \\\'{{"base":"{"a" * 40}","slice_prefix":"{prefix}","run_key":"k"}}' in reverify
     assert "union of their `edited` and `created` lists" in reverify
     assert "_groupReviews[0]" in reverify and "_groupReviews[1]" in reverify and "_wholeWave" in reverify
 
@@ -111,9 +111,9 @@ def test_revert_runs_for_every_prefix_with_the_same_failing_set_and_no_ownership
     assert step4.count("<all failing node ids>") == 1
     probe = _step(reverify, 3)
     assert "once for every prefix" in probe and "<all failing node ids>" in probe
-    assert re.search(r"union of the `reverted`, `pre_existing` and `kept` lists", step4)
+    assert re.search(r"union of the `reverted`, `pre_existing`, `kept` and `owned_red` lists", step4)
     assert "unattributed only when every prefix reports it so" in step4
-    for prefix in (group_slice_prefix("k", 0), group_slice_prefix("k", 1), main):
+    for prefix in (group_slice_prefix("k", 0, "a" * 40), group_slice_prefix("k", 1, "a" * 40), main):
         assert prefix in reverify
 
 
@@ -145,7 +145,21 @@ def test_groups_without_paths_are_skipped_and_prefix_keeps_the_group_index():
     phases = _compose(review_groups=groups)
     block = _by_title(phases)[REVIEW_GROUPS_PHASE]
     assert "_reviewGroups[1]" not in block
-    assert '"slice_prefix":"k.g1"' in block and '"slice_prefix":"k.g0"' not in block
+    assert '"slice_prefix":"k.g1-' in block and '"slice_prefix":"k.g0' not in block
+
+
+def _group_prefixes(**extra):
+    block = _by_title(_compose(review_groups=_GROUPS, **extra))[REVIEW_GROUPS_PHASE]
+    return set(re.findall(r'"slice_prefix":"(k\.g\d[^"]*)"', block))
+
+
+def test_a_re_emit_over_a_different_range_gets_fresh_group_slice_ids_and_the_same_range_reuses_them():
+    first = _group_prefixes()
+    assert first and all(p not in ("k.g0", "k.g1") for p in first)
+    assert _group_prefixes() == first
+    assert _group_prefixes(run_base_sha="b" * 40).isdisjoint(first)
+    marked = _group_prefixes(run_base_sha="<fire-time marker>", slice_identity_sha="a" * 40)
+    assert marked == first
 
 
 def test_all_groups_empty_degrades_to_the_plain_output():
@@ -174,7 +188,9 @@ def _node():
 
 def _run_node(script: str) -> str:
     return subprocess.run(
-        [_node(), "-e", script],
+        # stdin, not `-e`: the composed blocks overflow the Windows command-line limit (WinError 206).
+        [_node(), "-"],
+        input=script,
         capture_output=True,
         text=True,
         check=True,

@@ -30,6 +30,8 @@ _NODE_ID_RE = re.compile(
     r"^(?:FAILED )?(?P<file>[^\s:]+\.py)::(?P<name>[^\s\[]+(?:\[.*?\](?=\s|$))?)(?: - (?P<msg>.*))?$"
 )
 _TARGET_SHAPE_RE = re.compile(r"^\S*(?:::\S*|\.py|\.(?:test|spec)\.\w+)$")
+# A lone test-file path in a list source is a file-level target (empty test name): the grind runs the whole file.
+_BARE_FILE_RE = re.compile(r"^[^\s:]+(?:\.py|\.(?:test|spec)\.\w+)$")
 _PYTEST_MSG_RE = re.compile(r"^FAILED \S+ - (?P<msg>.*)$")
 
 
@@ -139,7 +141,7 @@ def _assemble(tests: list[FailingTest], unparsed: list[str], *, noisy: bool = Fa
     Invariant: an unparsed line is never counted and dropped. A list source (`noisy=False`) refuses
     on every unparsed line. A log (`noisy=True`) carries pytest/vitest chatter, so only target-shaped
     lines refuse. Refusing needs no process: expanding a bare file to node ids would need a pytest
-    collection spawn, which the 500ms bar forbids.
+    collection spawn, which the 500ms bar forbids; a bare file is a file-level target instead.
     """
     refused = [u for u in unparsed if not noisy or _looks_like_target(u)]
     if refused:
@@ -165,9 +167,12 @@ def _parse_text(text: str, *, noisy: bool) -> ParseResult:
     tests: list[FailingTest] = []
     unparsed: list[str] = []
     for line in strip_ansi(text).splitlines():
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped or (not noisy and stripped.startswith("#")):
             continue
         found = _parse_line(line)
+        if not found and not noisy and _BARE_FILE_RE.match(stripped):
+            found = FailingTest(file=stripped, name="")
         if found:
             tests.append(found)
         else:

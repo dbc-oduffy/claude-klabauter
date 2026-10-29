@@ -10,8 +10,17 @@ from __future__ import annotations
 import asyncio
 import threading
 
+import pytest
+
 import coordinator_core.ipc as ipc
 from coordinator_core import dispatch_abandon
+
+
+@pytest.fixture(autouse=True)
+def _warm_route(monkeypatch):
+    """Probe ops are unregistered in the classification table, so `_cold_mutating_op` fails
+    closed to True and binds no deadline. These tests exercise the bound-deadline path."""
+    monkeypatch.setattr(ipc, "_cold_mutating_op", lambda method: False)
 
 
 def _dispatch(method: str, mid: int = 1) -> dict:
@@ -39,6 +48,23 @@ def test_sync_handler_sees_a_deadline_within_the_narrowed_budget(monkeypatch):
     assert "result" in reply
     assert seen["remaining"] is not None
     assert 0.0 < seen["remaining"] <= 5.0
+
+
+def test_cold_mutating_sync_handler_sees_no_deadline(monkeypatch):
+    seen = {}
+
+    def _probe(params, repo_root=None):
+        seen["remaining"] = dispatch_abandon.remaining()
+        return {}
+
+    monkeypatch.setitem(ipc._REGISTRY, "test.deadline_cold", _probe)
+    monkeypatch.setattr(ipc, "_timeout_for", lambda method, msg=None: 5.0)
+    monkeypatch.setattr(ipc, "_cold_mutating_op", lambda method: True)
+
+    reply = _dispatch("test.deadline_cold")
+
+    assert "result" in reply
+    assert seen["remaining"] is None
 
 
 def test_coroutine_handler_sees_a_deadline(monkeypatch):

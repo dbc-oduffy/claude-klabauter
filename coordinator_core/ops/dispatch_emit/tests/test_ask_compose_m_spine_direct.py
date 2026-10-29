@@ -18,6 +18,8 @@ from coordinator_core.ops.dispatch_emit.ask_compose import (
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
+pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
+
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 

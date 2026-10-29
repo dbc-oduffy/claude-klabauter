@@ -58,6 +58,8 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import (
     propose_groups,
     with_fanout,
 )
+from coordinator_core.ops import _research_contract as _rc
+from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
 from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER, finished_rel, revisions_rel
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -426,16 +428,27 @@ def _level_lines(
         for stage_id in level:
             lines += _halt_lines(
                 stages[stage_id], scope, manifest.pipeline, inputs, indent, tag, segment, segment_name(manifest, inputs),
+                escalate=_escalate_options(stages[stage_id], manifest, agent_type_host),
             )
         lines.append("")
     return lines
 
 
+def _escalate_options(stage: Stage, manifest: Manifest, agent_type_host: str | None) -> str | None:
+    """Agent options of the escalate call a preflight halt makes, else None."""
+    if manifest.pipeline != _rc.PREFLIGHT_PIPELINE:
+        return None
+    return _agent_options(replace(stage, schema=None, effort=None), manifest, stage.agent_type, agent_type_host)
+
+
 def _halt_lines(
     stage: Stage, scope: str, pipeline: str, inputs: PipelineInputs, indent: str, tag: str,
-    segment: tuple[str, str] | None = None, name: str | None = None,
+    segment: tuple[str, str] | None = None, name: str | None = None, escalate: str | None = None,
 ) -> list[str]:
     """The early exits of a stage's halts, each ending the run (or, given `segment`, its leg) before the next stage.
+
+    Given `escalate` (agent options; the preflight's), a halt first appends an escalate line to the
+    run's EM mailbox and then ends the whole run, not just its leg: a source the PM named is required.
 
     `name` is the segment's name in `segment_halts` (default: the pipeline); the `halted` literal
     always carries the pipeline.
@@ -454,6 +467,36 @@ def _halt_lines(
     halted = _js_string_literal(f"{pipeline}.{stage.id}")
 
     def block(condition: str, remedy: str) -> list[str]:
+        if escalate is not None:
+            # The mailbox line is written by a model call (best-effort, failure swallowed): the
+            # emitted script has no file primitive.
+            mail = f"{inputs.scratch_dir.rstrip('/')}/mail/{EM_MAILBOX}"
+            who = _js_string_literal(f"{pipeline}.{stage.id}")
+            instruction = _js_string_literal(
+                "Append exactly this one JSON line (and nothing else) to the file named below, creating the file "
+                f"and its directory if absent, then reply done. File: {mail} Line: "
+            )
+            record = (
+                f"JSON.stringify({{ from: {who}, escalate: true, text: {who} + "
+                "' halted the run before any spend (a required source is unavailable): ' + remedy.join('; ') })"
+            )
+            lines = [
+                f"{indent}if ({condition}) {{",
+                f"{indent}  {push}",
+                f"{indent}  const remedy = {remedy};",
+                f"{indent}  await agent({instruction} + {record}, {{ label: 'escalate', {escalate} }}).catch(() => null);",
+            ]
+            if segment is not None:
+                lines.append(
+                    f"{indent}  segment_halts.push({{ segment: {_js_string_literal(name or pipeline)}, "
+                    f"leg: {_js_string_literal(segment[1])}, halted: {halted}, decision_required: remedy }});"
+                )
+            tail = ", segment_halts" if segment is not None else ""
+            lines += [
+                f"{indent}  return {{ halted: {halted}, decision_required: remedy, results{tail} }};",
+                f"{indent}}}",
+            ]
+            return lines
         if segment is not None:
             label, leg = segment
             return [

@@ -344,6 +344,13 @@ def _verb_writes(cmd: str, cwd: str, root: str) -> List[str]:
     return paths
 
 
+def _posix(path: str) -> str:
+    """`os.path.normpath` emits backslashes on Windows; git/verb targets cross the projection
+    boundary with '/' so every consumer sees one separator for them. Trap: literal-redirect targets
+    in `shell_writes` still carry the native separator, so the two kinds differ on Windows."""
+    return path.replace(os.sep, "/") if os.sep != "/" else path
+
+
 def shell_writes(cmd: str, cwd: str, root: str, with_git: bool = False) -> List[ShellWrite]:
     """Every in-repo write target of `cmd`, deduplicated, in encounter order. `with_git` adds the
     pathspecs of `git checkout --/restore/apply`; the pre-fire XS budget leaves it off,
@@ -375,14 +382,19 @@ def shell_writes(cmd: str, cwd: str, root: str, with_git: bool = False) -> List[
                 out[resolved] = ShellWrite(resolved, lit[1], body_for[raw])
             else:
                 out[resolved] = ShellWrite(resolved, None, False)
+        seen = {_posix(k) for k in out}
         if with_git and "git" in cmd:
             for p in _git_writes(cmd, cwd, root):
-                if _rel_if_inside(p, root) is not None and p not in out:
-                    out[p] = ShellWrite(p, None, False)
+                q = _posix(p)
+                if _rel_if_inside(p, root) is not None and q not in seen:
+                    seen.add(q)
+                    out[q] = ShellWrite(q, None, False)
         if with_git and any(v in cmd for v in _VERB_HINTS):
             for p in _verb_writes(cmd, cwd, root):
-                if _rel_if_inside(p, root) is not None and p not in out:
-                    out[p] = ShellWrite(p, None, False)
+                q = _posix(p)
+                if _rel_if_inside(p, root) is not None and q not in seen:
+                    seen.add(q)
+                    out[q] = ShellWrite(q, None, False)
         return list(out.values())
     except Exception:  # noqa: BLE001 -- best-effort, never raise into a guard
         return []

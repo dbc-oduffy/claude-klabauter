@@ -176,6 +176,46 @@ def _owned_via_row(ps: Any, target: Any, row: dict) -> bool:
     return False
 
 
+def _path_tokens(command: str) -> List[str]:
+    """Scratch-path tokens of a ledgered command.
+
+    Only `scratch/` paths: a repo-root token would match every orphan working in the repo,
+    including detached engine children such as the post-commit index refresh.
+    """
+    tokens = command.replace('"', " ").replace("'", " ").replace("\\", "/").split()
+    return [t for t in tokens if "scratch/" in t and len(t.split("scratch/", 1)[1]) >= 3]
+
+
+def _is_orphan(proc: Any, ps: Any) -> bool:
+    try:
+        parent = proc.parent()
+    except (ps.Error, OSError):
+        return True
+    return parent is None or parent.pid <= 1
+
+
+def _orphan_owned_via_row(ps: Any, target: Any, row: dict) -> bool:
+    """An orphan (parent dead or pid 1) created after the row whose argv or cwd carries the row's command text or a path from it."""
+    if not _is_orphan(target, ps):
+        return False
+    if _live_shells(ps, row["cmd"], float(row["t"]), target.pid):
+        return False
+    try:
+        if target.create_time() < float(row["t"]) - _CLOCK_SLACK_S:
+            return False
+        cmdline = target.cmdline()
+    except (ps.Error, OSError):
+        return False
+    if _carries_command_text(cmdline, row["cmd"]):
+        return True
+    haystack = _joined(cmdline)
+    try:
+        haystack += " " + str(target.cwd()).replace("\\", "/")
+    except Exception:
+        pass
+    return any(tok in haystack for tok in _path_tokens(row["cmd"]))
+
+
 def pid_owned_by_agent(pid: int, agent_id: str, session_id: str) -> bool:
     """True only when `pid` is provably a descendant of a Bash command this agent launched."""
     if not isinstance(pid, int) or pid <= 1 or not agent_id:
@@ -199,7 +239,7 @@ def pid_owned_by_agent(pid: int, agent_id: str, session_id: str) -> bool:
             continue
         seen.add(key)
         try:
-            if _owned_via_row(ps, target, row):
+            if _owned_via_row(ps, target, row) or _orphan_owned_via_row(ps, target, row):
                 return True
         except Exception:
             continue

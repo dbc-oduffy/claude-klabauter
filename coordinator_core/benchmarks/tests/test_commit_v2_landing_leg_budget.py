@@ -4,7 +4,8 @@ under the 500ms brightline (DR-344) with a bounded spawn count.
 
 The leg is the product commit, the own-left-behind follow-on and the coded stamp. Process time is
 the sum of one bracket per commit_v2 dispatch plus the follow-on's ignore answer (own CPU plus
-descendants); per-call and whole-handler figures are diagnostics and nothing asserts on them. Wall clock is never read. Assertions (1)-(3) are pending_fix on bug row 29d78c496834.
+descendants); per-call and whole-handler figures are diagnostics and nothing asserts on them.
+Wall clock is never read.
 """
 
 from __future__ import annotations
@@ -24,8 +25,6 @@ LEG_BAR_MS = 500.0
 # One batched `git check-ignore --stdin` answering the ignore question for the follow-on's
 # candidate set; the product commit, the follow-on landing and the coded stamp are native (zero spawns).
 LEG_SPAWN_BOUND = 1
-
-_PENDING = pytest.mark.pending_fix(reason="bug row 29d78c496834: commit_v2 landing leg classifies the whole claim set")
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +67,6 @@ def test_the_driver_reads_no_os_times():
                 and isinstance(n.value, ast.Name) and n.value.id == "os"]
 
 
-@_PENDING
 def test_no_call_is_handed_a_gitignored_or_machine_local_path_and_the_follow_on_lands_the_landable(leg):
     repo, report = leg
     handed = report.handed_paths
@@ -79,14 +77,12 @@ def test_no_call_is_handed_a_gitignored_or_machine_local_path_and_the_follow_on_
     assert sorted(follow_on.get("paths", [])) == sorted(LANDABLE_PATHS), follow_on
 
 
-@_PENDING
 def test_the_leg_sums_under_the_brightline(leg):
     _, report = leg
     detail = [(len(c.paths), c.process_time_ms, c.spawns) for c in report.calls]
     assert report.process_time_ms < LEG_BAR_MS, f"{report.process_time_ms}ms over {detail}"
 
 
-@_PENDING
 def test_the_leg_spawns_stay_within_the_bound(leg):
     _, report = leg
     detail = [(len(c.paths), c.process_time_ms, c.spawns) for c in report.calls]

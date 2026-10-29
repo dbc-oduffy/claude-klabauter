@@ -166,3 +166,33 @@ class TestC2InProcessConvergence:
         repo_root = Path(".").resolve()
         ma_apply._dispatch_merge_recovery_and_tag_cut(["cut-tag", "v1.2.3"], repo_root)
         assert captured["args"] == ["cut-tag", "v1.2.3", "--repo-root", str(repo_root)]
+
+
+class TestNodeCeremonyGateCarriesAnExplicitBound:
+    def _stub_runner(self, monkeypatch, tmp_path, run):
+        runner = tmp_path / "gate.test.js"
+        runner.write_text("", encoding="utf-8")
+        import coordinator_core.subagent_sandbox.provision_report as pr
+
+        monkeypatch.setattr(pr, "resolve_plugin_root", lambda: str(tmp_path))
+        monkeypatch.setattr(ma_apply, "node_ceremony_gate_entrypoint", lambda root: runner)
+        monkeypatch.setattr(ma_apply.subprocess, "run", run)
+
+    def test_node_suite_is_launched_with_the_bound(self, monkeypatch, tmp_path) -> None:
+        seen = {}
+
+        def _run(argv, **kwargs):
+            seen.update(kwargs)
+            return ma_apply.subprocess.CompletedProcess(argv, 0, "ok", "")
+
+        self._stub_runner(monkeypatch, tmp_path, _run)
+        ma_apply._dispatch_node_ceremony_gate([], tmp_path)
+        assert seen["timeout"] == ma_apply.NODE_CEREMONY_GATE_TIMEOUT_SECS
+
+    def test_hung_node_suite_raises_instead_of_blocking(self, monkeypatch, tmp_path) -> None:
+        def _run(argv, **kwargs):
+            raise ma_apply.subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+        self._stub_runner(monkeypatch, tmp_path, _run)
+        with pytest.raises(RuntimeError, match="hung"):
+            ma_apply._dispatch_node_ceremony_gate([], tmp_path)

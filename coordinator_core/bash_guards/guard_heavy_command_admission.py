@@ -507,8 +507,11 @@ def _cap_leg(
     background: bool,
     typecheck: bool = False,
     snapshot_out: Optional[List[Any]] = None,
+    warn_out: Optional[List[str]] = None,
 ):
     """Returns (deny_record_or_None, anchor_or_None, census_or_None, launch_ctime).
+    The background-shell cap never denies: it appends an advisory to `warn_out`. Only live shells
+    that are direct children of this session's anchor are counted.
     The one process-table snapshot is appended to `snapshot_out` for the worker-RSS advisory."""
     from coordinator_core.bash_guards import _session_census as census_mod
 
@@ -613,20 +616,23 @@ def _cap_leg(
         if background and len(census.shells) >= bg_cap
         else ()
     )
-    if background and len(live_shells) >= bg_cap:
+    if background and len(live_shells) >= bg_cap and warn_out is not None:
         pids = ", ".join(str(r.pid) for r in live_shells)
-        return (
-            _deny_text(
-                LEG_SESSION_CAP,
-                "session holds %d background shells (cap %d): pids %s" % (len(live_shells), bg_cap, pids),
-                _retry("stop an idle shell first", "the shell to stop"),
-                legacy="Stop an idle shell first",
-            ),
-            anchor,
-            census,
-            launch,
+        warn_out.append(
+            "Advisory: this session holds %d live background shells (cap %d): pids %s. "
+            "Stop an idle shell if the box feels loaded." % (len(live_shells), bg_cap, pids)
         )
     return None, anchor, census, launch
+
+
+def _shell_cap_warning(text: str) -> Dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": text,
+        }
+    }
 
 
 def _fold_claimed(census, rows, anchor, chain):
@@ -775,10 +781,12 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Any:
 
     anchor = census = None
     launch = 0
+    warnings: List[str] = []
     if not _bypassed(LEG_SESSION_CAP, payload, command):
         envelope, anchor, census, launch = _cap_leg(
             config, payload, primitives, heavy=heavy, background=cls.background,
             typecheck=cls.heavy_class is HeavyClass.TYPECHECK, snapshot_out=snapshot,
+            warn_out=warnings,
         )
         if envelope is not None:
             return denied(LEG_SESSION_CAP, envelope, anchor, census)
@@ -787,4 +795,7 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Any:
         _flag_runaway_workers(config, payload, command, cls, anchor, census, snapshot[0])
     if heavy and anchor is not None:
         _write_lease(heavy_name, anchor, launch)
+    if warnings:
+        _append_log(_record(payload, command, cls, "session-cap-warn", warnings[0], anchor, census))
+        return _shell_cap_warning(warnings[0])
     return None

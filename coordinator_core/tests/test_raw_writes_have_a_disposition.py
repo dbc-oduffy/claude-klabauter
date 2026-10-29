@@ -684,6 +684,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/warm/election.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _acquire_election_lock'),
     'coordinator_core/warm/front_door.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: flush, write_discovery'),
     'coordinator_core/warm/front_door_routing.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_routing_table'),
+    'coordinator_core/warm/polite_io.py': ('in-repo-non-state', 'os.open(O_RDONLY) in open_bulk is a read-only bulk open; no file is written'),
     'coordinator_core/warm/push_cadence.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _try_create_sweep_lock'),
     'coordinator_core/warm/server.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: <module-level>, _bind_null_std_streams, _wrap_handle'),
     'coordinator_core/warm/skew.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: write_currency_cache, write_engine_stamp'),
@@ -715,6 +716,9 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/write_guards/block_subagent_plan_body_write.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_block_log'),
     'coordinator_core/write_guards/guard_concrete_path_citations.py': ('git-internal', 'raw-write site within 3 lines of a coordinator-sessions/meta.json reference'),
     'coordinator_core/write_guards/guard_doctrine_surface_edits.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_repo_identity_advisory_log'),
+    'coordinator_core/advisory_census.py': ('outside-repo', 'sandbox git dir, content root and roster written under a caller-given scratch root, never the repo: _make_sandbox, _provision_content_root, _provision_roster'),
+    'coordinator_core/ops/dispatch_emit/land_remainder_verify.py': ('ignored-target', 'land-remainder-verdict.json under the gitignored run scratch dir scratch/warp/<run_id>/: _write_verdict'),
+    'coordinator_core/ops/pm_directive_map.py': ('outside-repo', 'disposition and unmapped sidecars beside pm_turns.jsonl in the per-session baton directory, never the repo: append_disposition, the unmapped-file write'),
 }
 
 _TO_FIX_CEILING: FrozenSet[str] = frozenset({

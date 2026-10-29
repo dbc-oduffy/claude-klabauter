@@ -1,10 +1,10 @@
 """
 coordinator_core.hooks.guard_em_prefire_survey -- GUARD-EM-PREFIRE-SURVEY.
 
-Purpose: deny an EM's exploratory reads and searches made to fill em_context before its first
-engine-ask fire, and its spot-check sprawl after a green landing. ``evaluate(params)`` returns a
-deny envelope or None. Fail-open: any failure, a missing input or a disarm returns None, never a
-deny. Main thread only; a subagent is never counted.
+Purpose: warn on an EM's exploratory reads and searches made to fill em_context before its first
+engine-ask fire (advisory, never a deny), and deny its spot-check sprawl after a green landing.
+``evaluate(params)`` returns a deny or advisory envelope or None. Fail-open: any failure, a missing
+input or a disarm returns None, never a deny. Main thread only; a subagent is never counted.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import os
 import re
 from typing import Optional
 
-from coordinator_core._hook_envelope import deny, no_advisory, payload_of
+from coordinator_core._hook_envelope import allow_advisory, deny, no_advisory, payload_of
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
@@ -28,9 +28,10 @@ _KILL_SWITCH = "COORDINATOR_HOOK_EM_PREFIRE_SURVEY_DISABLED"
 ARMING = "role-marker"  # arms on the em-role-asserted marker; "strict-only" also requires COORDINATOR_STRICT_DISPATCH == "1"; only tests select it
 GUARD_NAME = "guard-em-prefire-survey"
 DENY_PREFIX = "[em-prefire-survey]"
+_ADVISORY_MARK = "\x00advisory\x00"  # _decide's text carries it when the leg warns instead of denying
 
 
-def prefire_deny_text(n: int, budget: int) -> str:
+def prefire_advisory_text(n: int, budget: int) -> str:
     return (
         f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (retries too). "
         + fire_step()
@@ -214,6 +215,8 @@ def _evaluate_payload(payload: dict) -> Optional[dict]:
         text = _decide(payload)
         if not text:
             return None
+        if text.startswith(_ADVISORY_MARK):
+            return allow_advisory("PreToolUse", text[len(_ADVISORY_MARK):])
         return apply_guard_level(GUARD_NAME, deny("PreToolUse", text)) or None
     except Exception:
         return None

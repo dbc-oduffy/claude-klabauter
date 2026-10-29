@@ -75,6 +75,7 @@ HEAVY = re.compile(
 )
 PROTECTED_HARD = re.compile(
     r"(?:^|/)claude(?:\.exe)?(?:\s|$)|tsserver|language-server|firebase"
+    r"|lang(?:uage)?[-_]?server|pyright|(?:^|[^a-z])mcp(?:[^a-z]|$)"
     r"|deploy-from-snapshot|deploy:"
     r"|scratch/deploy-|group-em-memory-governor|(?:^|[/\\])conhost(?:\.exe)?(?:\s|$)"
     # Store and database owners: freezing one mid-write stalls or half-applies every client's write.
@@ -111,16 +112,20 @@ def is_candidate(p: Proc, self_pid: int, noticed: frozenset = frozenset(),
 
 
 def choose_victim(procs: list[Proc], paused: set[int], self_pid: int,
-                  noticed: frozenset = frozenset(), tree: frozenset = frozenset()) -> Optional[Proc]:
-    """Youngest heavy-or-noticed, unprotected, not-yet-paused command: the likeliest cause of the spike.
+                  noticed: frozenset = frozenset(), tree: frozenset = frozenset(),
+                  shortfall_mb: float = 0.0) -> Optional[Proc]:
+    """The candidate whose tree frees the most RSS when paused; ties go to the youngest.
 
     A worker whose parent is itself a candidate is never chosen alone; its parent's tree covers it.
+    A tree freeing less than `shortfall_mb` (or MIN_RSS_MB) cannot relieve the pressure and is skipped.
     """
     heavy = {p.pid for p in procs if is_candidate(p, self_pid, noticed, tree)}
     rss = {p.pid: p.rss_mb for p in procs}
-    pool = [p for p in procs if p.pid in heavy and p.pid not in paused and p.ppid not in heavy
-            and sum(rss.get(t, 0.0) for t in descendants(p.pid, procs)) >= MIN_RSS_MB]
-    return min(pool, key=lambda p: p.age_s) if pool else None
+    floor = max(MIN_RSS_MB, shortfall_mb)
+    freed = {p.pid: sum(rss.get(t, 0.0) for t in descendants(p.pid, procs))
+             for p in procs if p.pid in heavy and p.pid not in paused and p.ppid not in heavy}
+    pool = [p for p in procs if freed.get(p.pid, 0.0) >= floor]
+    return min(pool, key=lambda p: (-freed[p.pid], p.age_s)) if pool else None
 
 
 def noticed_tree(noticed: frozenset, procs: list[Proc]) -> frozenset:
@@ -222,6 +227,19 @@ def list_procs() -> list[Proc]:
         if len(f) == 5:
             out.append(Proc(int(f[0]), int(f[1]), _etime_seconds(f[2]), int(f[3]) / 1024, f[4]))
     return out
+
+
+def shortfall_mb(avail_pct: float) -> float:
+    """MB of available memory missing below the `avail_pct` floor; 0 when unreadable or not short."""
+    try:
+        from coordinator_core.telemetry import host_sampler
+
+        avail, total = host_sampler.avail_mb()
+    except Exception:
+        return 0.0
+    if avail is None or not total:
+        return 0.0
+    return max(0.0, total * avail_pct / 100 - avail)
 
 
 def critical(psi_full: float, avail_pct: float) -> bool:
@@ -545,7 +563,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         avail_fn: Optional[Callable[[], Optional[float]]] = None,
         retention_fn: Optional[Callable[[], object]] = None,
         scratch_fn: Optional[Callable[[], "dict[str, int]"]] = None,
-        trim_fn: Optional[Callable[[], Optional[str]]] = None) -> None:
+        trim_fn: Optional[Callable[[], Optional[str]]] = None,
+        shortfall_fn: Optional[Callable[[], float]] = None) -> None:
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
     start_times_fn = process_start_times if start_time_fn is None else (
         lambda pids: {p: start_time_fn(p) for p in pids})
@@ -604,7 +623,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                     procs = procs_fn()
                     noticed = notice_fn(notice_path, procs)
                     ntree = noticed_tree(noticed, procs)
-                    victim = choose_victim(procs, {p.pid for p, _ in paused}, self_pid, noticed, ntree)
+                    victim = choose_victim(procs, {p.pid for p, _ in paused}, self_pid, noticed, ntree,
+                                           shortfall_fn() if shortfall_fn else 0.0)
                     if victim:
                         prot = protected_pids(procs, ntree)
                         # A pid with no readable start time cannot be recorded, so it is never frozen:
@@ -724,7 +744,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         if sig is not None:
             signal.signal(sig, lambda *_: sys.exit(0))
     run(args, notice_path=resolve_notice_path(), pidfile=default_pidfile(), avail_fn=avail_gib,
-        retention_fn=spawn_retention_if_due, scratch_fn=scratch_over_budget)
+        retention_fn=spawn_retention_if_due, scratch_fn=scratch_over_budget,
+        shortfall_fn=lambda: shortfall_mb(args.avail_pct))
 
 
 if __name__ == "__main__":

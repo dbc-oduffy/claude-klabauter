@@ -772,6 +772,16 @@ def _memo_draft_steps(
     return out_owed, steps
 
 
+def _route_source(row_id: str, routes: Mapping, raw_by_id: Mapping[str, Mapping]) -> str:
+    """`route-table` for a class-routed row, `overlay` when the raw plan row names an agent_type, else `default`.
+
+    Reads the raw row: `route_rows` rewrites the parsed row's agent_type, so it cannot show explicitness.
+    """
+    if row_id in routes:
+        return "route-table"
+    return "overlay" if (raw_by_id.get(row_id) or {}).get("agent_type") else "default"
+
+
 def _staged_dependencies(raw: Mapping, staged: Sequence[ManifestRow]) -> tuple[tuple[str, ...], int]:
     """The ids `raw.depends_on` names among `staged`, and the wave one past the latest of them (0 for none)."""
     waves = {r.id: r.wave for r in staged}
@@ -1215,6 +1225,7 @@ def stage(
                     wave=wave_no,
                     deps=after.get(row.id, ()),
                     route=routes[row.id].to_json() if row.id in routes else None,
+                    route_source=_route_source(row.id, routes, raw_by_id),
                     register_rows=tuple(str(r) for r in (raw_by_id.get(row.id) or {}).get("register_rows") or ()),
                     kept_from=kept_from,
                     adopts_stranded=_adopts_stranded(raw_by_id.get(row.id)),

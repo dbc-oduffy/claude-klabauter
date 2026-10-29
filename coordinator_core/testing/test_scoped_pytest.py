@@ -99,6 +99,24 @@ def test_admitted_run_registers_and_returns_pytest_exit_code(tmp_path, monkeypat
     assert sp.main(["--allow", "test_bad.py", "--", "-q", "test_bad.py"], host=host) == 1
 
 
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("body,rc", [("assert False, 'MARKER_FAIL'", 1), ("assert True", 0)])
+def test_child_pytest_output_reaches_redirected_files(tmp_path, body, rc):
+    (tmp_path / "test_x.py").write_text("def test_x():\n    %s\n" % body)
+    out, err = tmp_path / "out.txt", tmp_path / "err.txt"
+    with open(out, "wb") as fo, open(err, "wb") as fe:
+        proc = subprocess.run(
+            [sys.executable, "-m", "coordinator_core.testing.scoped_pytest",
+             "--allow", "test_x.py", "--", "test_x.py", "-q"],
+            cwd=tmp_path, stdout=fo, stderr=fe, timeout=120,
+            env={**os.environ, "PYTHONPATH": str(_REPO)},
+        )
+    text = out.read_text(errors="replace") + err.read_text(errors="replace")
+    assert "1 " in text and ("passed" in text or "failed" in text), text
+    assert ("MARKER_FAIL" in text) == (rc == 1)
+    assert proc.returncode == rc
+
+
 def test_ancestor_chain_records_watch_parent_clock():
     chain = sp.ancestor_chain()
     assert chain and chain[0][0] == os.getppid()

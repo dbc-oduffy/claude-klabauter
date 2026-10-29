@@ -92,6 +92,25 @@ def test_every_composed_agent_call_is_modeled(em_brief):
     assert agent_n > 0 and modeled_n == agent_n
 
 
+def test_every_objective_leg_agent_call_is_modeled():
+    from coordinator_core.hooks.block_workflow_unmodeled_agent import _count_agent_modeled_with_types
+
+    js = ask_compose._objective_js(
+        head="HEAD", anchor="ANCHOR", session_tail="", run_id="run-1",
+        objective_rel="state/warp/run-1/objective.json",
+        settings={**ask_compose.objective_defaults(), "kind": "behaviour"}, credited_js="[]",
+    )
+    agent_n, modeled_n, _ = _count_agent_modeled_with_types(js)
+    assert agent_n > 0 and modeled_n == agent_n
+
+
+def test_retest_invariant_call_carries_the_test_runner_pin():
+    from coordinator_core.ops.dispatch_emit import emit as _emit
+
+    call = ask_compose._invariant_retest_call(head="H", anchor="A", run_id="run-1")
+    assert _emit._model_opt(_emit._TEST_AGENT_TYPE) in call
+
+
 def test_no_in_run_commit_leaves_the_commit_to_the_em():
     script = _compose()
     assert "phase('commit')" not in script and "label: 'docs'" not in script

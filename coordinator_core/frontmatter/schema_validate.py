@@ -3327,7 +3327,7 @@ def _cf_queue_disposition_shape(
                 f"{fm.get('pm_approved')!r})"
             ),
             'hint': (
-                'a queue deferral is a grant the PM issues, not a status an '
+                'a queue deferral is a grant a non-authoring session or the APM issues, not a status an '
                 'EM types — pm_approved must be the literal boolean true.'
             ),
         }
@@ -3764,7 +3764,7 @@ _GROUPING_DIGEST_RE = re.compile(r'^sha256:[0-9a-f]{64}$')
 # could fill in itself (the retired `_PM_APPROVAL_OFFER` did, and defeated
 # the gate).
 _GROUPING_APPROVAL_HINT = (
-    'Ask the PM (or the APM, a G-EM or Uhura under DR-399) to approve this '
+    'Ask the APM (or Uhura under DR-399) to approve this '
     'grouping. Which work gets cut is not the authoring agent\'s call. '
     'Present the cut-set (the rows in this grouping and why each one is '
     'being closed); the approver signs it with plan.signoff, naming a '
@@ -4075,7 +4075,7 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
                     f'row {row_id!r} is disposition {disposition!r}, which puts '
                     f'it in the {grouping!r} grouping, but that grouping reads '
                     f'status {status!r} — closing a row is a scope decision and '
-                    f'needs the PM\'s recorded assent before it can stand'
+                    f'needs a recorded approver signoff before it can stand'
                 ),
                 'hint': _GROUPING_APPROVAL_HINT,
             }
@@ -4116,7 +4116,7 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
                     'This digest covers ONLY the (row id, disposition) pairs '
                     'in this grouping, so a mismatch is always substantive: '
                     'rows were added, removed, or re-dispositioned since the '
-                    'PM approved it. There is no reformat or reordering that '
+                    'approver signed it. There is no reformat or reordering that '
                     'could have caused this, and therefore nothing to '
                     're-stamp past. ' + _GROUPING_APPROVAL_HINT
                 ),

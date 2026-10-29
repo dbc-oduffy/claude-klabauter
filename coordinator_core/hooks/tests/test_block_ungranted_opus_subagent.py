@@ -376,6 +376,13 @@ def test_grant_env_off_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert envelope is not None
 
 
+def test_deny_reason_names_no_pm_remedy() -> None:
+    reason = mod._deny_reason("general-purpose", "opus", "inherits")
+    assert "PM" not in reason
+    assert "grant" not in reason
+    assert "coordinator:executor" in reason
+
+
 def test_non_agent_tool_name_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_pins(monkeypatch, {})
     payload = {"tool_name": "Bash", "tool_input": {"subagent_type": "general-purpose"}}

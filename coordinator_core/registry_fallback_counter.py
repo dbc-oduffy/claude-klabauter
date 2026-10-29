@@ -57,6 +57,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.subagent_sandbox import resolve_git_root_cheap
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
@@ -108,12 +109,18 @@ def record_registry_fallback(
     if not git_root:
         return
     path = Path(_share_dir(git_root, session_id)) / _FALLBACK_COUNTS_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
-    record = {
-        "op": method,
-        "stage": stage,
-        "mapped": mapped,
-        "at": datetime.now(timezone.utc).isoformat(),
-    }
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    line = json.dumps(
+        {
+            "op": method,
+            "stage": stage,
+            "mapped": mapped,
+            "at": datetime.now(timezone.utc).isoformat(),
+        }
+    ) + "\n"
+
+    def _write() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+
+    run_bounded(str(path), _write, default=None)

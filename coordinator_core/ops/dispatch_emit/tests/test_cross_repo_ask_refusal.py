@@ -26,8 +26,9 @@ def test_refuses_names_both_roots_and_route(roots):
     a, b = roots
     text = _call(a, b)
     assert text and str(a) in text and str(b) in text
-    assert "Fire it from a session rooted in" in text
+    assert "a session rooted in" in text
     assert "cross_repo_approved: true" in text
+    assert "by hand" not in text.lower()
 
 
 def test_admit_no_session_root(roots):

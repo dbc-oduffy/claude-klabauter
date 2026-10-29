@@ -131,6 +131,35 @@ _NO_STDIN_ASSEMBLY = (
 )
 
 
+_ADMIT_PEAK_SEED_GIB = 4
+_ADMIT_RETRIES = 60
+_ADMIT_PAUSE_S = 30
+_ADMIT_KEY = "reverify-pytest"
+#: Slot wait bound for the `admit` CLI: under the 600 s ceiling of an agent's shell tool call.
+_ADMIT_SLOT_WAIT_S = 540.0
+
+_SLOT_ADMIT_CMD = (
+    "python -m coordinator_core.ops.dispatch_emit.reverify_delivery admit "
+    f"--run {_ADMIT_KEY} --peak-gib <that batch's declared peak GiB>"
+)
+
+#: Per-batch memory admission: HOLD (exit 4) delays that one batch only, never the run or other work.
+_ADMIT_GATE = (
+    "Before each pytest batch, gate it on box memory: run "
+    f"`python coordinator/bin/box-memory-snapshot.py --command-key {_ADMIT_KEY} "
+    f"--admit-peak <largest peak GiB seen so far, {_ADMIT_PEAK_SEED_GIB} for the first batch> "
+    "--register-pid <this shell's pid>`. Exit 0 (ADMIT): continue to the slot request. Exit 4 (HOLD): wait "
+    f"{_ADMIT_PAUSE_S} seconds and re-run the same admit, up to {_ADMIT_RETRIES} times; a HOLD "
+    "never skips, fails or stops the batch, the run or any other work. Any other exit: do not start "
+    "the batch; report it in `summary`. A batch whose peak is over 2 GiB then needs the Group EM's slot: run "
+    f"`{_SLOT_ADMIT_CMD}` with a 600000 ms tool timeout; exit 0 starts the batch, exit 3 leaves it unrun (return status `error` naming "
+    "the denial). If every retry holds, leave the batch unrun and return status "
+    "`error` naming the HOLD. After each batch run "
+    f"`python coordinator/bin/box-memory-snapshot.py --command-key {_ADMIT_KEY} "
+    "--release-pid <this shell's pid> --record-peak <that batch's peak GiB>`, so the next admit uses it. "
+)
+
+
 def _batched_paths(tests: List[str]) -> str:
     """The selected paths, comma-joined for one batch, else numbered batches of `_BATCH_SIZE`."""
     if len(tests) <= _BATCH_SIZE:
@@ -164,6 +193,7 @@ def _scope_clause(tests: Optional[List[str]], error: str, base: str, unmapped: O
         + _batched_paths(tests)
         + ". "
         + _NO_STDIN_ASSEMBLY
+        + (_ADMIT_GATE if len(tests) > 1 else "")
         + unmapped_clause
         + f"Re-run each red at the run base {base} in an export of it and list in `baseline.pre_existing` "
         "only ids measured red there; a red not re-run or whose export failed is `unverified`, never "
@@ -1481,9 +1511,21 @@ def _json_arg(raw: str) -> dict:
     return value
 
 
+def admit_slot(run: str, peak_gib: float, session_id: str = "", host: Any = None, **wait_kw: Any) -> dict:
+    """Admit a reverify pytest batch declared at `peak_gib` through `admit_before_spawn`: a memory
+    HOLD over the slot threshold waits for the Group EM's grant. Returns `{"admitted", "reason"}`."""
+    from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn
+
+    admission = admit_before_spawn(run, peak_gib, host=host, wait_kw=wait_kw, session_id=session_id)
+    return {"admitted": admission.admitted, "reason": admission.reason}
+
+
 def main(argv: "Optional[list[str]]" = None) -> int:
     parser = argparse.ArgumentParser(prog="reverify-delivery")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    adm = sub.add_parser("admit", help="request a Group EM memory slot for one pytest batch; exit 3 if denied")
+    adm.add_argument("--run", required=True)
+    adm.add_argument("--peak-gib", type=float, required=True)
     rec = sub.add_parser("record", help="write the superseding delivery-verdict from the Workflow result")
     rec.add_argument("--run-record", default=None, help="required except for a judge-only rejudge result")
     rec.add_argument("--result-json", default=None, help="the Workflow's returned JSON, or a path to it")
@@ -1499,6 +1541,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     rec.add_argument("--repo-root", default=None)
     rec.add_argument("--session-id", default="")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.cmd == "admit":
+        result = admit_slot(args.run, args.peak_gib, timeout_s=_ADMIT_SLOT_WAIT_S)
+        print(f"{'ADMITTED' if result['admitted'] else 'DENIED'} reason={result['reason']}")
+        return 0 if result["admitted"] else 3
     try:
         if args.judge_json is not None:
             if args.result_json is not None or args.run_record or args.ident is None:

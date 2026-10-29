@@ -55,7 +55,7 @@ def test_clone_nested_outside_scratch_stays_foreign(repos, monkeypatch):  # noqa
     clone = _clone_into(repos["foreign"] / "vendor", "other-clone", repos["foreign"])
     nested = _anchored_in(monkeypatch, repos, clone)
 
-    result = _run(nested, f"git -C {_posix(repos['foreign'])} commit --allow-empty -m x")
+    result = _run(nested, f"git -C {_posix(repos['foreign'])} tag t1")
 
     assert result is not None
 
@@ -65,9 +65,23 @@ def test_unrelated_repo_stays_foreign_for_scratch_clone_session(repos, monkeypat
     nested = _anchored_in(monkeypatch, repos, clone)
     other = _init_repo(tmp_path, "other")
 
-    result = _run(nested, f"git -C {_posix(other)} commit --allow-empty -m x")
+    result = _run(nested, f"git -C {_posix(other)} tag t1")
 
     assert result is not None
+
+
+def test_cross_repo_commit_is_allowed_with_a_warning(repos, monkeypatch, capsys):  # noqa: F811
+    _set_anchor(monkeypatch, repos, SID)
+    foreign = _posix(repos["foreign"])
+
+    assert _run(repos, f"git -C {foreign} commit --allow-empty -m x") is None
+    warned = capsys.readouterr().err
+    assert "advisory" in warned and "foreign" in warned
+
+    assert _run(repos, f"git -C {foreign} add -A") is None
+    assert "advisory" in capsys.readouterr().err
+
+    assert _run(repos, f"git -C {foreign} tag t1") is not None
 
 
 def test_anchor_repo_beside_scratch_is_not_enclosed(repos, monkeypatch):  # noqa: F811

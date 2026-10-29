@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _clean_bump_env,  # noqa: F401 -- autoused fixture
+    _commit_advisory_off,  # noqa: F401 -- autoused fixture
     _posix,
     _reset_git_root_cache,  # noqa: F401 -- autoused fixture
     _set_anchor,

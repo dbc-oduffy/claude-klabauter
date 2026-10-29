@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests
+from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
 
 LANDED = "pkg/mod.py"
 TEST = "pkg/tests/test_mod.py"
@@ -86,14 +87,14 @@ def test_mixed_pre_existing_and_caused_names_only_the_caused_id(tmp_path):
 def test_foreign_only_red_over_a_landing_path_gives_none(tmp_path):
     _tree(tmp_path)
     ids = [f"{TEST}::a", f"{TEST}::b"]
-    p = _params(status_after="fail", failing=ids, **{li.FOREIGN_FIELD: ids})
+    p = _params(status_after="fail", failing=ids, **{FOREIGN_FIELD: ids})
     assert li.reverify_red_findings(tmp_path, p, [LANDED]) == []
 
 
 def test_mixed_foreign_and_owned_names_only_the_owned_id(tmp_path):
     _tree(tmp_path)
     p = _params(status_after="fail", failing=[f"{TEST}::theirs", f"{TEST}::mine"],
-                **{li.FOREIGN_FIELD: [f"{TEST}::theirs"]})
+                **{FOREIGN_FIELD: [f"{TEST}::theirs"]})
     found = li.reverify_red_findings(tmp_path, p, [LANDED])
     assert len(found) == 1
     assert f"{TEST}::mine" in found[0].detail and f"{TEST}::theirs" not in found[0].detail
@@ -154,3 +155,34 @@ def test_reverted_tests_and_landed_test_file_itself_are_implicated(tmp_path):
     _tree(tmp_path, "import os\n")
     p = _params(status_after="fail", reverted=[{"tests": [f"{TEST}::t"]}])
     assert len(landing_targeted_tests.reverify_red_findings(tmp_path, p, [TEST])) == 1
+
+
+_INV = "coordinator_core/tests/test_inv.py::test_inv"
+_BASE_RED = "coordinator_core/tests/test_other.py::test_other"
+
+
+def _fresh_fail(monkeypatch, baseline):
+    from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
+
+    monkeypatch.setattr(imp, "invariants_for_paths", lambda paths, root: [_INV])
+    monkeypatch.setattr(imp, "existing_invariants", lambda root, nodes: list(nodes))
+    monkeypatch.setattr(li, "fresh_targeted_verdict", lambda root, rid: {
+        "status": "fail", "tests": [_INV.split("::")[0]], "baseline": baseline,
+    })
+
+
+def test_owed_invariant_passing_beside_only_base_red_node_is_credited(tmp_path, monkeypatch):
+    _fresh_fail(monkeypatch, {"caused": [], "pre_existing": [_BASE_RED], "evidence": [_BASE_RED]})
+    assert li.invariant_findings(tmp_path, ["mod.py"], "r1", {}) == []
+
+
+def test_owed_invariant_beside_caused_red_node_refuses_naming_the_failing_node(tmp_path, monkeypatch):
+    _fresh_fail(monkeypatch, {"caused": [_BASE_RED], "evidence": []})
+    monkeypatch.setattr(landing_targeted_tests, "retests_spent", lambda params: True)
+    found = li.invariant_findings(tmp_path, ["mod.py"], "r1", {})
+    assert len(found) == 1 and _BASE_RED in found[0].detail
+
+
+def test_owed_invariant_beside_unevidenced_red_node_still_refuses(tmp_path, monkeypatch):
+    _fresh_fail(monkeypatch, {"caused": [], "pre_existing": [_BASE_RED], "evidence": []})
+    assert len(li.invariant_findings(tmp_path, ["mod.py"], "r1", {})) == 1

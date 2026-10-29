@@ -65,6 +65,7 @@ import os
 from pathlib import Path
 from typing import Optional, Union
 
+from coordinator_core.atomic_append import APPEND_DEADLINE_SECS
 from coordinator_core.bounded_io import run_bounded
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 
@@ -73,9 +74,9 @@ PathLike = Union[str, os.PathLike]
 
 _STALLED = object()
 
-# The scan is O(archive) (~1.7k records) and gates creation, not a counter append:
-# the 0.2s append deadline would refuse a healthy cold archive. 0.5s is the brightline bar.
-_TWIN_SCAN_DEADLINE_SECS = 0.5
+# Caller-blocked bound for the scan is the shared 250ms hot-path bar; the deadline
+# must stay under it, so the fail-closed refusal fires inside the budget.
+_TWIN_SCAN_DEADLINE_SECS = APPEND_DEADLINE_SECS
 
 
 class HandoffArchivedTwinError(RuntimeError):

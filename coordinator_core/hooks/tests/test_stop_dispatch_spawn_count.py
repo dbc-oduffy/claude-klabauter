@@ -48,3 +48,15 @@ def test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log(tmp_path
     assert len(spawns) == _budget()["terminal_review_session_walk"], [s.argv for s in spawns]
     assert [s.origin for s in spawns] == ["run_git"] * len(spawns)
     assert all("log" in s.argv for s in spawns), [s.argv for s in spawns]
+
+
+def test_unmapped_directive_leg_adds_no_spawn(tmp_path, monkeypatch):
+    entries = [{"turn": 20, "index": i, "text": f"fix thing {i}"} for i in range(3)]
+    from coordinator_core.ops import pm_directive_map
+    monkeypatch.setattr(pm_directive_map, "unmapped_directives", lambda *_a, **_k: entries)
+    payload = {"session_id": "sess-pm-leg", "cwd": str(tmp_path)}
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        result = stop_dispatch._pm_directive_unmapped_handler({"payload": payload})
+
+    assert "UNMAPPED PM directive (turn 20)" in str(result)
+    assert spawns == [], [s.argv for s in spawns]

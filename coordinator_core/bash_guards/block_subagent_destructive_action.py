@@ -4127,7 +4127,8 @@ def _build_reason(
             f"  Denied:   {deny_kind}\n"
             f"  Command:  {cmd_safe}\n\n"
             "Use instead: `kill <pid>` / `Stop-Process -Id <pid>` of a PID you launched\n"
-            "(numeric; pkill and killall are never allowed)."
+            "(numeric; pkill and killall are never allowed). A runaway you cannot prove\n"
+            "(e.g. orphaned after a crash): name its PID in your report; the EM runs the kill."
         )
     if deny_kind.startswith(_GIT_RM_DENY_PREFIX):
         return (

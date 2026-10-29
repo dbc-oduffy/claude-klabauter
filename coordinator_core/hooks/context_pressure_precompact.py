@@ -101,16 +101,16 @@ GENERATES: list = []
 _TOTAL_LINE_CAP = 100
 
 
-def _extract_ids(raw: str) -> Tuple[str, str, str]:
-    """`(session_id, transcript_path, custom_instructions)`, each `""` when absent."""
+def _extract_ids(raw: str) -> Tuple[str, str, str, str]:
+    """`(session_id, transcript_path, custom_instructions, cwd)`, each `""` when absent."""
     try:
         data = json.loads(raw)
     except Exception:
-        return "", "", ""
+        return "", "", "", ""
     if not isinstance(data, dict):
-        return "", "", ""
+        return "", "", "", ""
     return tuple(str(data.get(k) or "") for k in
-                 ("session_id", "transcript_path", "custom_instructions"))
+                 ("session_id", "transcript_path", "custom_instructions", "cwd"))
 
 
 def _write_sentinel(tmpdir: str, session_id: str, transcript_path: str) -> None:
@@ -323,6 +323,20 @@ def _one_line(text: str, cap: int) -> str:
     return flat if len(flat) <= cap else flat[: cap - 1] + "…"
 
 
+def _unmapped_directive_lines(session_id: str, cwd: str) -> List[str]:
+    """One `- UNMAPPED PM directive (turn N): text` line per directive with no task,
+    plan row or disposition. `[]` on any failure: flagging never blocks compaction."""
+    try:
+        from coordinator_core.ops import pm_directive_map
+
+        entries = pm_directive_map.unmapped_directives(session_id, cwd)
+        return [f"- UNMAPPED PM directive (turn {e['turn']}): "
+                f"{_one_line(str(e['text']), pm_directive_map.DIRECTIVE_LINE_CAP)}"
+                for e in entries[:pm_directive_map.DIRECTIVE_LINES_MAX]]
+    except Exception:
+        return []
+
+
 def build_steering(session_id: str, cwd: str, typed: str = "") -> str:
     """The summarizer instructions for this compaction. Never raises: any
     journal read failure degrades to the static rules alone."""
@@ -342,8 +356,13 @@ def build_steering(session_id: str, cwd: str, typed: str = "") -> str:
             count = 0
         lines.append(
             f"- PM verbatims ({count} turns) are saved at {turns} — cite that path "
-            "and the turn numbers; do not restate or paraphrase them."
+            "and the turn numbers; do not restate or paraphrase settled turns."
         )
+        unmapped = _unmapped_directive_lines(session_id, cwd)
+        if unmapped:
+            lines.extend(unmapped)
+            lines.append("- Keep each UNMAPPED PM directive above verbatim, with its turn "
+                         "number, as its own line in forward state until it has a task.")
     if baton is not None:
         lines.append(f"- Session work journal: {baton} — point to it, do not copy it.")
         try:
@@ -361,13 +380,17 @@ def build_steering(session_id: str, cwd: str, typed: str = "") -> str:
     return text if len(text) <= _STEERING_CHAR_CAP else text[: _STEERING_CHAR_CAP - 1] + "…"
 
 
-def _write_state_snapshot(tmpdir: str, session_id: str) -> None:
+def _write_state_snapshot(tmpdir: str, session_id: str, cwd: Optional[str] = None) -> None:
     try:
         from coordinator_core.git import repo_root as _repo_root_seam
 
-        cwd = os.getcwd()
+        cwd = cwd or os.getcwd()
         lines: List[str] = []
         lines.extend(_build_tasks_section(session_id))
+        open_directives = _unmapped_directive_lines(session_id, cwd)
+        if open_directives:
+            lines.append("## Open PM directives")
+            lines.extend(open_directives)
         lines.extend(_build_git_section(cwd))
 
         git_root = _repo_root_seam.show_toplevel(cwd) or ""
@@ -404,7 +427,7 @@ def run(raw_stdin: str) -> str:
     `exit 0` shape.
     """
     try:
-        session_id, transcript_path, typed = _extract_ids(raw_stdin)
+        session_id, transcript_path, typed, cwd = _extract_ids(raw_stdin)
 
         if not session_id or not _SESSION_ID_RE.fullmatch(session_id):
             return _STEERING_RULES
@@ -412,8 +435,9 @@ def run(raw_stdin: str) -> str:
         tmpdir = str(managed_tempdir())
 
         _write_sentinel(tmpdir, session_id, transcript_path)
-        steering = build_steering(session_id, os.getcwd(), typed)
-        _write_state_snapshot(tmpdir, session_id)
+        cwd = cwd or os.getcwd()
+        steering = build_steering(session_id, cwd, typed)
+        _write_state_snapshot(tmpdir, session_id, cwd)
         return steering
     except Exception:
         return _STEERING_RULES
@@ -424,6 +448,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     params = payload_of(params)
     session_id = field(params, "session_id")
     transcript_path = field(params, "transcript_path")
-    raw = json.dumps({"session_id": session_id, "transcript_path": transcript_path})
+    raw = json.dumps({"session_id": session_id, "transcript_path": transcript_path,
+                      "cwd": field(params, "cwd")})
     run(raw)
     return no_advisory()

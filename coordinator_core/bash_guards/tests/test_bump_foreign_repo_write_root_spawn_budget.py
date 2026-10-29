@@ -52,6 +52,7 @@ from coordinator_core.subagent_sandbox import engine
 
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _clean_bump_env,  # noqa: F401 -- fixture, autoused by name in this package.
+    _commit_advisory_off,  # noqa: F401 -- autouse fixture reused
     _git,
     _init_repo,
     _posix,

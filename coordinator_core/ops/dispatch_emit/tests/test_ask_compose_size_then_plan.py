@@ -234,7 +234,7 @@ def test_scout_prompt_names_the_pm_turn_log_and_the_em_brief():
     assert "EM brief" in scout
 
 
-def test_pulled_plan_is_revised_once_and_regated_before_the_halt():
+def test_pulled_plan_is_revised_once_and_regated_before_the_halt(m_plus_known_arm):
     script = _compose()
     pulled = script.index("_pulledEntry = ")
     halt = script.index("plan-blitz reported no ready plan")

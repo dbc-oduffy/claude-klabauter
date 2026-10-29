@@ -119,3 +119,7 @@ def test_prefilter_is_a_superset_of_every_pattern():
         assert PATTERNS[name].search(line), name
         assert commit_gates._ANY_ATTRIBUTION_PATTERN.search(line), name
     assert not commit_gates._ANY_ATTRIBUTION_PATTERN.search("v = 1\n")
+    # Samples above cover only some patterns; every PATTERNS entry must be inside the alternation.
+    alternation = commit_gates._AnyAttributionPattern._compiled.pattern
+    for name, p in PATTERNS.items():
+        assert p.pattern in alternation, name

@@ -36,13 +36,10 @@ def _set(monkeypatch, name, level):
     monkeypatch.setenv(name, level)
 
 
-def _unmodeled_payload(tmp_path):
-    transcript = tmp_path / "transcript.jsonl"
-    transcript.write_text('{"model":"claude-opus-4"}\n', encoding="utf-8")
+def _unmodeled_payload():
     return {
         "tool_name": "Workflow",
         "tool_input": {"script": "agent('do the thing')"},
-        "transcript_path": str(transcript),
     }
 
 
@@ -57,15 +54,17 @@ def _hso(envelope):
     return envelope.get("hookSpecificOutput") or {}
 
 
-def test_unmodeled_default_is_allow_with_context(tmp_path, monkeypatch):
-    hso = _hso(bwua._handler(_unmodeled_payload(tmp_path)))
-    assert hso["permissionDecision"] == "allow"
-    assert "coordinator.guard_level.block-workflow-unmodeled-agent off" in hso["additionalContext"]
+def test_unmodeled_default_rewrites_without_a_decision():
+    hso = _hso(bwua._handler(_unmodeled_payload()))
+    assert "permissionDecision" not in hso
+    assert "model: 'sonnet'" in hso["updatedInput"]["script"]
 
 
-def test_unmodeled_global_strict_denies(tmp_path, monkeypatch):
+def test_unmodeled_global_strict_still_never_denies(monkeypatch):
     _set(monkeypatch, _GLOBAL, "strict")
-    assert _hso(bwua._handler(_unmodeled_payload(tmp_path)))["permissionDecision"] == "deny"
+    hso = _hso(bwua._handler(_unmodeled_payload()))
+    assert hso.get("permissionDecision") != "deny"
+    assert "updatedInput" in hso
 
 
 def test_agent_leg_default_allows_through_fanin():
@@ -78,16 +77,15 @@ def test_agent_leg_global_strict_denies_through_fanin(monkeypatch):
     assert _hso(pad._handler(_agent_payload()))["permissionDecision"] == "deny"
 
 
-def test_per_guard_strict_hardens_one_leg_only(tmp_path, monkeypatch):
+def test_per_guard_strict_hardens_one_leg_only(monkeypatch):
     _set(monkeypatch, _GLOBAL, "warn")
     _set(monkeypatch, _per_guard(UNENUMERATED), "strict")
     assert _hso(pad._handler(_agent_payload()))["permissionDecision"] == "deny"
-    hso = _hso(bwua._handler(_unmodeled_payload(tmp_path)))
-    assert hso["permissionDecision"] == "allow"
+    assert _hso(bwua._handler(_unmodeled_payload())).get("permissionDecision") != "deny"
 
 
-def test_per_guard_strict_on_workflow_leg_leaves_agent_leg_warning(tmp_path, monkeypatch):
+def test_per_guard_strict_on_workflow_leg_never_denies_and_leaves_agent_leg_warning(monkeypatch):
     _set(monkeypatch, _GLOBAL, "warn")
     _set(monkeypatch, _per_guard(bwua.GUARD_NAME), "strict")
-    assert _hso(bwua._handler(_unmodeled_payload(tmp_path)))["permissionDecision"] == "deny"
+    assert _hso(bwua._handler(_unmodeled_payload())).get("permissionDecision") != "deny"
     assert _hso(pad._handler(_agent_payload())).get("permissionDecision") != "deny"

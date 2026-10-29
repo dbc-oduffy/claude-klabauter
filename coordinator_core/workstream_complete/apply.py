@@ -293,6 +293,7 @@ from coordinator_core.workstream_complete import judgments as _judgments
 from coordinator_core.ops.dispatch_emit.run_close import DISCHARGED_BY_KEY, close_job_path
 from coordinator_core.contract.apply_base import assert_dispatchable
 from coordinator_core.contract.apply_base import judgment_points_by_id as _judgment_points_by_id
+from coordinator_core.contract.apply_base import normalize_decisions
 
 if TYPE_CHECKING:
     from coordinator_core.composition_budget import CompositionBudget
@@ -770,7 +771,7 @@ def _first_blocking_judgment_point_id(
         if judgment_point is None:
             continue
         decision = decisions.get(dep)
-        chosen_value = decision.get("disposition") if isinstance(decision, dict) else None
+        chosen_value = _decided_disposition(dep, decision)
         if not chosen_value or not _disposition_resolves_directive(judgment_point, chosen_value, directive["id"]):
             return dep
     return None
@@ -888,16 +889,34 @@ def _emit_progress(message: str) -> None:
     sys.stderr.flush()
 
 
+def _decided_disposition(key: str, entry: Any) -> Optional[str]:
+    """The disposition of one decisions entry (`value` is its equivalent; a
+    bare string is the disposition), `None` when the entry is absent. An
+    entry of unrecognized shape raises ValueError, naming the key and accepted
+    shapes; callers run inside apply, so the raise aborts the run rather than
+    returning a structured transport-fail report. Unlike
+    `ceremony_common.apply_halt.chosen_disposition`, which returns `None` for
+    both a bare string and an unrecognized entry, this accepts the bare string."""
+    if entry is None:
+        return None
+    normalized, malformed = normalize_decisions({key: entry})
+    if malformed:
+        raise ValueError(
+            f"wsc-apply: decisions[{key!r}] has an unrecognized shape ({entry!r}); "
+            f'accepted: "<disposition>", {{"disposition": <v>}}, {{"value": <v>}}'
+        )
+    return normalized[key].get("disposition")
+
+
 def _decided_nature(decisions: dict[str, Any]) -> Optional[str]:
     """`decisions["nature"]`, else the `completion-nature-classification`
     judgment's disposition."""
     nature = decisions.get("nature")
     if nature:
         return str(nature)
-    judgment = decisions.get("completion-nature-classification")
-    if isinstance(judgment, dict):
-        return judgment.get("disposition")
-    return None
+    return _decided_disposition(
+        "completion-nature-classification", decisions.get("completion-nature-classification")
+    )
 
 
 def _entry_title_collision(entry: Path, decided_title: Any, placeholder: str) -> Optional[str]:

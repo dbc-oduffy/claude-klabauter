@@ -301,6 +301,20 @@ def landing_invariant_nodes(
     return list(imp.existing_invariants(worktree_root, imp.invariants_for_paths(landed_paths, worktree_root)))
 
 
+def _red_nodes(fresh: Optional[Mapping], foreign: set[str]) -> tuple[set[str], bool]:
+    """``(red, only_base_red)``: the node ids a fresh ``fail`` verdict's baseline names failing, and
+    whether every one is evidenced red at the run base with nothing caused. Empty/False off a fail
+    verdict with a baseline."""
+    if not (fresh and fresh.get("status") == "fail" and isinstance(fresh.get("baseline"), Mapping)):
+        return set(), False
+    base = fresh["baseline"]
+    red = {
+        str(i.get("id") if isinstance(i, Mapping) else i)
+        for key in ("caused", "pre_existing", "foreign", "unverified") for i in (base.get(key) or [])
+    }
+    return red, bool(red) and not base.get("caused") and red <= foreign
+
+
 def invariant_findings(
     worktree_root: Path, landed_paths: Sequence[str], run_id: Optional[str], params: Mapping,
     foreign_out: Optional[dict] = None,
@@ -323,9 +337,12 @@ def invariant_findings(
         # Trap: trusted only because fresh_targeted_verdict returned an engine-written record that
         # matches this tree's fingerprint; a carried record must pass measured=False.
         foreign = evidenced_clear_ids(fresh["baseline"], measured=True)
+    red, only_base_red = _red_nodes(fresh, foreign)
     out = []
     for node in owed:
         if node in ran or node.split("::")[0] in ran:
+            continue
+        if only_base_red and node not in red:
             continue
         if node in foreign:
             if foreign_out is not None:
@@ -333,8 +350,11 @@ def invariant_findings(
             continue
         from coordinator_core.ops.dispatch_emit.landing_targeted_tests import retests_spent
 
+        actual = sorted(red - {node}) if node not in red else []
         detail = (
-            f"repo-wide invariant {node} failed its in-run retest" if retests_spent(params)
+            f"repo-wide invariant {node} did not fail; the in-run retest failed on "
+            f"{', '.join(actual[:3])}" if retests_spent(params) and actual
+            else f"repo-wide invariant {node} failed its in-run retest" if retests_spent(params)
             else f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
             f"retest ran it; re-run: {retest_remedy(params, [node])}"
         )

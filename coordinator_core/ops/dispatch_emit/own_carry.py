@@ -42,7 +42,6 @@ def own_carry_params(
     """
     from coordinator_core.git.machine_local_paths import machine_local_paths
 
-
     if not isinstance(product_sha, str) or not _SHA40.fullmatch(product_sha):
         raise ValueError(f"product_sha must be 40 hex chars: {product_sha!r}")
     if not session_id:

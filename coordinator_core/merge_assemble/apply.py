@@ -93,6 +93,9 @@ _BIN_DIR = resolve_cli_script_root()
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# Hung-backstop for the external node suite (apply is served cold, off the 30s warm ceiling).
+NODE_CEREMONY_GATE_TIMEOUT_SECS = 300.0
+
 
 def _dispatch_result(cli: str, proc: subprocess.CompletedProcess) -> dict[str, Any]:
     if proc.returncode != 0:
@@ -174,13 +177,19 @@ def _dispatch_node_ceremony_gate(args: list[str], repo_root: Path) -> dict[str, 
             "message": message,
         }
     test_path = resolved
-    proc = subprocess.run(
-        ["node", "--test", str(test_path)],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-        creationflags=_NO_WINDOW,
-    )
+    try:
+        proc = subprocess.run(
+            ["node", "--test", str(test_path)],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            creationflags=_NO_WINDOW,
+            timeout=NODE_CEREMONY_GATE_TIMEOUT_SECS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"node-ceremony-gate: no exit within {NODE_CEREMONY_GATE_TIMEOUT_SECS:.0f}s (hung); killed"
+        ) from exc
     return _dispatch_result("node-ceremony-gate", proc)
 
 

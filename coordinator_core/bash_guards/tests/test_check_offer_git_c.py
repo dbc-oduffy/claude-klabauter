@@ -20,12 +20,17 @@ def _reason(out):
     return out["hookSpecificOutput"]
 
 
-def _deny_reason(out) -> str:
-    hso = _reason(out)
-    assert hso["permissionDecision"] == "deny", (
-        "expected deny, got %r" % hso.get("permissionDecision")
+def _assert_warn(hso) -> None:
+    assert hso["permissionDecision"] == "allow" and "updatedInput" not in hso, (
+        "expected a warn (allow + context, no rewrite), got %r" % hso
     )
-    return hso["permissionDecisionReason"]
+    assert hso["additionalContext"]
+
+
+def _warn_context(out) -> str:
+    hso = _reason(out)
+    _assert_warn(hso)
+    return hso["additionalContext"]
 
 
 def _rewritten_command(out) -> str:
@@ -73,12 +78,12 @@ class TestEnvPrefixEvasionNowDenies:
 
     def test_single_env_assignment_before_cd_denies(self):
         out = _enveloped(guard.check_offer_git_c)("FOO=1 cd /repo && git log -1")
-        reason = _deny_reason(out)
+        reason = _warn_context(out)
         assert "git -C /repo log -1" in reason
 
     def test_multiple_env_assignments_before_cd_denies(self):
         out = _enveloped(guard.check_offer_git_c)("FOO=1 BAR=2 cd /repo && git log -1")
-        reason = _deny_reason(out)
+        reason = _warn_context(out)
         assert "git -C /repo log -1" in reason
 
 
@@ -88,11 +93,11 @@ class TestWrapperWordEvasionNowDenies:
 
     def test_env_wrapper_word_before_cd_denies(self):
         out = _enveloped(guard.check_offer_git_c)("env cd /repo && git log -1")
-        _deny_reason(out)
+        _warn_context(out)
 
     def test_sudo_wrapper_word_before_cd_denies(self):
         out = _enveloped(guard.check_offer_git_c)("sudo cd /repo && git log -1")
-        _deny_reason(out)
+        _warn_context(out)
 
 
 class TestGitSidePrefixAutoRewritesCarryingThePrefix:
@@ -132,7 +137,7 @@ class TestNicePrefixOnCdSegmentStillDenies:
 
     def test_nice_before_cd_still_denies_not_promoted(self):
         out = _enveloped(guard.check_offer_git_c)("nice -19 cd /repo && git log -1")
-        reason = _deny_reason(out)
+        reason = _warn_context(out)
         assert "git -C /repo log -1" in reason
 
 
@@ -181,8 +186,8 @@ class TestQuotedSemicolonHoleClosed:
     def test_quoted_semicolon_with_real_follower_denies_not_bails(self):
         out = _enveloped(guard.check_offer_git_c)('cd /repo && git commit -m "a; b"; echo done')
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
-        assert 'git -C /repo commit -m "a; b"' in hso["permissionDecisionReason"]
+        _assert_warn(hso)
+        assert 'git -C /repo commit -m "a; b"' in hso["additionalContext"]
 
 
 class TestOverrideStillSuppresses:
@@ -245,16 +250,16 @@ class TestNonGitFollowerStaysRungBWithSafeOffer:
     def test_non_git_follower_denies_not_rewrites(self):
         out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status && ls subdir/")
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
+        _assert_warn(hso)
 
     def test_non_git_follower_offer_anchors_the_git_segment(self):
         out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status && ls subdir/")
-        reason = _deny_reason(out)
+        reason = _warn_context(out)
         assert "git -C /tmp/repo status && ls subdir/" in reason
 
     def test_non_git_follower_offer_flags_the_unanchored_segment(self):
         out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo && git status && ls subdir/")
-        reason = _deny_reason(out)
+        reason = _warn_context(out)
         assert "'ls subdir/'" in reason
         assert "Not anchored" in reason
         assert "/tmp/repo" in reason
@@ -264,8 +269,8 @@ class TestNonGitFollowerStaysRungBWithSafeOffer:
             "cd /tmp/repo && git status && ls subdir/ && git log -1"
         )
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
-        reason = hso["permissionDecisionReason"]
+        _assert_warn(hso)
+        reason = hso["additionalContext"]
         assert (
             "git -C /tmp/repo status && ls subdir/ && git -C /tmp/repo log -1"
             in reason
@@ -297,7 +302,7 @@ class TestAttachedRepoRootWithNonGitFollowerAllows:
             "cd %s && git status && ls subdir/" % scratch, cwd=str(origin)
         )
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
+        _assert_warn(hso)
 
     def test_no_cwd_supplied_still_denies_even_for_real_repo_target(self, tmp_path):
         # No payload `cwd` corroborating signal -- must not fire on the
@@ -308,7 +313,7 @@ class TestAttachedRepoRootWithNonGitFollowerAllows:
             "cd %s && git status && ls subdir/" % repo
         )
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
+        _assert_warn(hso)
 
 
 class TestFollowerAnchoringRespectsExistingBailOuts:
@@ -318,7 +323,7 @@ class TestFollowerAnchoringRespectsExistingBailOuts:
             "FOO=1 cd /tmp/repo && git status && git log -1"
         )
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
+        _assert_warn(hso)
 
     def test_env_prefix_before_first_git_with_all_git_followers_now_auto_rewrites(self):
         out = _enveloped(guard.check_offer_git_c)(
@@ -333,15 +338,15 @@ class TestFollowerAnchoringRespectsExistingBailOuts:
             "cd /tmp/repo && git status && FOO=1 git log -1"
         )
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
-        assert "'FOO=1 git log -1'" in hso["permissionDecisionReason"]
+        _assert_warn(hso)
+        assert "'FOO=1 git log -1'" in hso["additionalContext"]
 
     def test_multiline_all_git_followers_bails_no_auto_rewrite(self):
         out = _enveloped(guard.check_offer_git_c)(
             "cd /tmp/repo && git status && git log -1\n"
         )
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
+        _assert_warn(hso)
 
     def test_override_env_suppresses_all_git_followers_form(self, monkeypatch):
         monkeypatch.setenv("COORDINATOR_ALLOW_CD_PREFIX", "1")
@@ -400,7 +405,7 @@ class TestPowerShellIdiomDialectNeutral:
     def test_semicolon_chained_non_git_follower_still_denies(self):
         out = _enveloped(guard.check_offer_git_c)("cd /tmp/repo; git status; ls subdir/")
         hso = _reason(out)
-        assert hso["permissionDecision"] == "deny"
+        _assert_warn(hso)
 
 
 class TestSharedHelperPinsBothCallers:
@@ -449,7 +454,7 @@ class TestFollowerShellSyntaxNotQuoted:
             "cd %s && git status; which pnpm >/dev/null 2>&1" % scratch,
             cwd=str(tmp_path / "elsewhere"),
         )
-        reason = _reason(out)["permissionDecisionReason"]
+        reason = _reason(out)["additionalContext"]
         assert "'>/dev/null'" not in reason
         assert "'2>&1'" not in reason
         assert ">/dev/null 2>&1" in reason
@@ -461,8 +466,19 @@ def test_heredoc_follower_kept_verbatim(tmp_path):
     cmd = "cd %s && git status && python3 - <<'X'\nprint('a b')\nX" % scratch
     out = _enveloped(guard.check_offer_git_c)(cmd, cwd=str(tmp_path / "elsewhere"))
     if out is not None:
-        reason = _reason(out)["permissionDecisionReason"]
+        reason = _reason(out)["additionalContext"]
         assert "'<<X'" not in reason and "\"print('a b')\"" not in reason
+
+
+def test_read_only_cd_git_pipeline_warns_with_suggestion_never_denies():
+    out = envelope_of(
+        guard.check_offer_git_c(
+            "cd /r && git log -1; sed -n 1,5p f ; ls d | grep x"
+        )
+    )
+    hso = _reason(out)
+    _assert_warn(hso)
+    assert "git -C /r log -1" in hso["additionalContext"]
 
 
 def test_rewrite_and_deny_are_records_carrying_a_subagent_route():
@@ -476,7 +492,7 @@ def test_rewrite_and_deny_are_records_carrying_a_subagent_route():
 
     rewrite = guard.check_offer_git_c("cd /repo && git log -1")
     deny = guard.check_offer_git_c("cd /repo && git status && ls rel/path")
-    for record, kind in ((rewrite, "rewrite"), (deny, "deny")):
+    for record, kind in ((rewrite, "rewrite"), (deny, "advisory")):
         assert isinstance(record, AlternativeRecord) and record.verdict_kind == kind
         assert any(isinstance(m, Override) for m in record.members)
         assert any(isinstance(m, EscalationRoute) for m in record.members)

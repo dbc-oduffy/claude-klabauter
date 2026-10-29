@@ -70,6 +70,57 @@ def test_every_class_found(graph):
     assert a.record_dirs == (f"state/warp/{RUN}",)
 
 
+def test_record_dir_walk_is_recursive(graph):
+    rec = f"state/warp/{RUN}"
+    _w(graph, f"{rec}/prompts/a.md")
+    _w(graph, f"{rec}/prompts/deep/b.md")
+    a = ra.candidate_paths(graph, RUN)
+    assert f"{rec}/prompts/a.md" in a.by_class["record-dir"]
+    assert f"{rec}/prompts/deep/b.md" in a.by_class["record-dir"]
+
+
+ASK = "ask-20261016T110000-dddddd"
+
+
+def _halted_ask(root: Path) -> None:
+    _w(root, f"state/warp/{ASK}/halted.json", json.dumps({"status": "halted", "sizing_rel": SIZING}))
+    _w(root, f"state/warp/{ASK}/prompts/x.md")
+    _w(root, f"state/warp/{ASK}/withheld-prints.json", "{}")
+
+
+def test_ask_dir_resolved_from_halted_ask_run(graph):
+    _halted_ask(graph)
+    a = ra.candidate_paths(graph, RUN)
+    got = a.by_class["ask-dir"]
+    assert f"state/warp/{ASK}/prompts/x.md" in got
+    assert f"state/warp/{ASK}/withheld-prints.json" in got
+    assert a.class_of(f"state/warp/{ASK}/prompts/x.md") == "ask-dir"
+    assert a.notes == ()
+
+
+def test_ask_dir_from_run_json_ask_field(graph):
+    other = "ask-20261016T115900-abcdef"
+    _w(graph, f"state/warp/{other}/prompts/y.md")
+    _w(graph, f"state/warp/{RUN}/run.json", json.dumps({"sizing_rel": SIZING, "ask": other}))
+    a = ra.candidate_paths(graph, RUN)
+    assert a.by_class["ask-dir"] == (f"state/warp/{other}/prompts/y.md",)
+
+
+def test_no_ask_dir_resolved_is_reported_not_guessed(graph):
+    a = ra.candidate_paths(graph, RUN)
+    assert "ask-dir" not in a.by_class
+    assert a.notes and a.notes[0].startswith("ask-dir:")
+
+
+def test_superseded_record_lands_whole(graph):
+    _w(graph, f"state/warp/{OLD}/run.json", json.dumps({"sizing_rel": SIZING}))
+    _w(graph, f"state/warp/{OLD}/prompts/p.md")
+    a = ra.candidate_paths(graph, RUN).with_superseded([OLD], "state/warp")
+    assert f"state/warp/{OLD}/prompts/p.md" in a.by_class["superseded-record"]
+    got = ra.superseded_runs(graph, RUN, SIZING, [f"state/warp/{OLD}/prompts/p.md"])
+    assert got == (OLD,)
+
+
 def _four_slice_parent(root: Path, rec_run: str) -> list[str]:
     slices = [f"state/sizings/2026-10-16-x-slice-{n}.yaml" for n in range(1, 5)]
     rows = [{"run_id": f"ask-20261016T12000{n}-{n:06d}", "slice_sizing": s} for n, s in enumerate(slices, 1)]

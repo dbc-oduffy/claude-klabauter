@@ -44,7 +44,7 @@ import sys
 import tempfile
 import time
 import traceback
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -55,6 +55,7 @@ if str(_REPO) not in sys.path:
 from coordinator_core import locked_write  # noqa: E402
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
+from coordinator_core.benchmarks.isolated_clone import fresh_git_clone  # noqa: E402
 
 BAR_MS = 500.0
 DEFAULT_DELAY_S = 12.0
@@ -80,6 +81,8 @@ class Row:
     process_time_ms: float = 0.0
     spawns: int = 0
     injected_wait_ms: float = 0.0
+    file_ops: int = 0
+    pack_opens: int = 0
     sync_points: dict = field(default_factory=dict)
     outcome: str = ""
     spawn_sites: dict = field(default_factory=dict)
@@ -108,6 +111,12 @@ class Injector:
         self.lock_wait_s = 0.0
         self.counts: dict = {}
         self.sites: dict = {}
+        self.pack_opens = 0
+
+    @property
+    def file_ops(self) -> int:
+        """Opens, fsyncs and replaces seen in-process (lock acquires excluded)."""
+        return sum(n for kind, n in self.counts.items() if kind != "lock")
 
     @property
     def waited_s(self) -> float:
@@ -141,6 +150,8 @@ class Injector:
         def opened(file, mode="r", *a, **k):
             writing = isinstance(mode, str) and any(c in mode for c in "wax+")
             me._count("open-write" if writing else "open-read")
+            if str(file).endswith(".pack"):
+                me.pack_opens += 1
             return real_open(file, mode, *a, **k)
 
         def fsync(fd):
@@ -220,8 +231,9 @@ LAND_AXES = {
 }
 
 
-def build_land_fixture(parent: Path, *, mode: str, tracked: int, chain: int) -> tuple:
-    """A repo whose run base (the seed) is followed by one commit adding OWN_LINES to PATH_P, `chain`
+def build_land_fixture(parent: Path, *, mode: str, tracked: int, chain: int, stack: ExitStack) -> tuple:
+    """The repo is built in `parent/<mode>` and the returned root is a fresh `--shared` clone of it
+    (objects reached through `objects/info/alternates`), torn down when `stack` closes. A repo whose run base (the seed) is followed by one commit adding OWN_LINES to PATH_P, `chain`
     foreign commits, then a worktree edit of PATH_P. `own` stamps the first commit as the run's own
     checkpoint (plan, Not-Landed, an off-chain base) and the worktree drops its lines; `foreign`
     leaves it unstamped and drops them; `clean` stamps it and keeps its lines (a landing that
@@ -233,14 +245,15 @@ def build_land_fixture(parent: Path, *, mode: str, tracked: int, chain: int) -> 
     from coordinator_core.session import scope as session_scope
     from coordinator_core.session import touch_record
 
-    root = parent / mode
-    root.mkdir(parents=True)
-    _git(["init", "-q", "-b", "main"], root)
+    source = parent / mode
+    source.mkdir(parents=True)
+    _git(["init", "-q", "-b", "main"], source)
+    _git(["fast-import", "--quiet"], source, stdin=_stream(tracked, chain, own))
+    _git(["checkout", "-q", "-f", "main"], source)
+    root = stack.enter_context(fresh_git_clone(source, prefix=f"lr-{mode}", label=f"land_run {mode}"))
     for key, value in (("user.email", "t@example.com"), ("user.name", "t"),
                        ("core.autocrlf", "false"), ("commit.gpgsign", "false")):
         _git(["config", key, value], root)
-    _git(["fast-import", "--quiet"], root, stdin=_stream(tracked, chain, own))
-    _git(["checkout", "-q", "-f", "main"], root)
     base = _git(["rev-parse", f"main~{chain + 1}"], root).strip()
 
     session_core.init(SELF, cwd=str(root))
@@ -321,6 +334,8 @@ def measure(axis: str, condition: str, call, injector: Injector | None, *, attri
         subprocess.Popen.__init__ = real_init
     if injector:
         row.injected_wait_ms = round(injector.waited_s * 1000.0, 3)
+        row.file_ops = injector.file_ops
+        row.pack_opens = injector.pack_opens
         row.sync_points = dict(injector.counts)
         row.sync_sites = dict(sorted(injector.sites.items(), key=lambda kv: -kv[1]))
     row.spawn_sites = dict(sorted(sites.items(), key=lambda kv: -kv[1]))
@@ -399,8 +414,11 @@ def run_axes(
 
     for mode, axis in LAND_AXES.items():
         for condition in ("baseline", "slow-disk"):
-            root, base = build_land_fixture(workdir / condition, mode=mode, tracked=tracked, chain=chain)
-            rows.append(measure(axis, condition, lambda: _call_land(root, base), fresh(condition), attribute=attribute))
+            with ExitStack() as stack:
+                root, base = build_land_fixture(
+                    workdir / condition, mode=mode, tracked=tracked, chain=chain, stack=stack
+                )
+                rows.append(measure(axis, condition, lambda: _call_land(root, base), fresh(condition), attribute=attribute))
     engine_root = workdir / "engine"
     engine_root.mkdir(parents=True, exist_ok=True)
     for condition in ("baseline", "slow-disk"):
@@ -412,12 +430,12 @@ def run_axes(
 
 
 def render(rows: list) -> str:
-    out = [f"{'axis':38} {'condition':10} {'proc_ms':>9} {'spawns':>6} {'wait_ms':>9} {'bar':>5}  sync-points  outcome"]
+    out = [f"{'axis':38} {'condition':10} {'proc_ms':>9} {'spawns':>6} {'file_ops':>8} {'pack_opens':>10} {'wait_ms':>9} {'bar':>5}  sync-points  outcome"]
     for r in rows:
         points = ",".join(f"{k}={v}" for k, v in sorted(r.sync_points.items())) or "-"
         out.append(
             f"{r.axis:38} {r.condition:10} {r.process_time_ms:9.1f} {r.spawns:6d} "
-            f"{r.injected_wait_ms:9.1f} {'ok' if r.under_bar else 'OVER':>5}  {points}  {r.outcome}"
+            f"{r.file_ops:8d} {r.pack_opens:10d} {r.injected_wait_ms:9.1f} {'ok' if r.under_bar else 'OVER':>5}  {points}  {r.outcome}"
         )
     return "\n".join(out)
 

@@ -17,9 +17,9 @@ from pathlib import Path
 from typing import Optional
 
 DENY_TEXT = (
-    "engine-ask: run root {run_root} is not this session's repo {session_root}; "
-    "a run there writes into a peer repo. Fire it from a session rooted in "
-    "{run_root}, or add `cross_repo_approved: true` once the PM has assented."
+    "engine-ask: run root {run_root} is not this session's repo {session_root}. "
+    "Instead: `repo` naming a registered repo, `cross_repo_approved: true` once the PM "
+    "has assented, or a session rooted in {run_root}."
 )
 
 

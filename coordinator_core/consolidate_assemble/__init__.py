@@ -350,13 +350,16 @@ def unique_commits_by_ref(
 def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[str, str]:
     if not shas:
         return {}
-    proc = run_git(["show", "--stat", *shas], repo_root)
+    stdout = "".join(
+        run_git(["show", "--stat", *batch], repo_root).stdout
+        for batch in _argv_batches(shas)
+    )
 
     blocks: dict[str, str] = {}
     pending: Optional[str] = None
     lines: list[str] = []
     remaining = list(shas)
-    for line in proc.stdout.splitlines(keepends=True):
+    for line in stdout.splitlines(keepends=True):
         if remaining and line.startswith("commit ") and line[len("commit "):].startswith(remaining[0]):
             if pending is not None:
                 blocks[pending] = _drop_batch_separator("".join(lines))
@@ -368,6 +371,23 @@ def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[s
     if pending is not None:
         blocks[pending] = "".join(lines)
     return blocks
+
+
+_ARGV_CHAR_BUDGET = 16000  # CreateProcess caps the command line at 32767 chars
+
+
+def _argv_batches(items: list[str]) -> list[list[str]]:
+    """Split `items` into order-preserving chunks whose joined length stays under the argv budget."""
+    batches: list[list[str]] = [[]]
+    used = 0
+    for item in items:
+        cost = len(item) + 1
+        if batches[-1] and used + cost > _ARGV_CHAR_BUDGET:
+            batches.append([])
+            used = 0
+        batches[-1].append(item)
+        used += cost
+    return batches
 
 
 def _drop_batch_separator(block: str) -> str:

@@ -285,6 +285,7 @@ from coordinator_core.coverage import (  # 2026-08-12: numstat rename-row resolu
 )
 from coordinator_core.ops.review_brightline_gate import _PLANNING_LOC_WEIGHT  # review finding P2: same de-weight, same constant
 
+from coordinator_core.contract.apply_base import normalize_decisions
 from coordinator_core.contract.decision_object.envelope import build_envelope, emit
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
@@ -1223,13 +1224,15 @@ def _session_shape_disposition_from_decisions(decisions: Mapping[str, Any]) -> O
     deciding whether to retry. (Formerly honoured by `wsc-tail`, removed in
     the ceremony.wsc_tail kill, 2026-08-23.)
 
-    Reads `decisions["jp-session-shape"]["disposition"]` only — the same key
-    `build_decisions_template` pre-keys for this judgment point — and
+    Reads `decisions["jp-session-shape"]` (the key `build_decisions_template`
+    pre-keys for this judgment point) through `normalize_decisions`, so a bare
+    string and `{"value": v}` read as `{"disposition": v}`, and
     canonicalizes it through `wsc_disposition.canonicalize` (both spellings
-    permanently recognised, see that module). Returns `None` on anything
-    absent, non-`dict`, non-`str`, empty, or unrecognised, so a malformed or
+    permanently recognised, see that module). Returns `None` on an absent
+    entry, a non-`str` or empty disposition, or an unrecognised one, so a
     legacy-typo'd value never corrupts the emitted gate: the detector's own
-    verdict is kept unchanged in that case.
+    verdict is kept unchanged in that case. An entry of unrecognized shape
+    (no `disposition`/`value`, not a string) raises ValueError.
 
     Deliberately does NOT attach a `resolves` set to the judgment point's
     own dispositions (see this chunk's dispatch brief) — `d-coverage-gate`,
@@ -1242,9 +1245,15 @@ def _session_shape_disposition_from_decisions(decisions: Mapping[str, Any]) -> O
     2026-08-23.)
     """
     entry = decisions.get(_JP_SESSION_SHAPE_ID)
-    if not isinstance(entry, dict):
+    if entry is None:
         return None
-    value = entry.get("disposition")
+    normalized, malformed = normalize_decisions({_JP_SESSION_SHAPE_ID: entry})
+    if malformed:
+        raise ValueError(
+            f"workstream_complete: decisions[{_JP_SESSION_SHAPE_ID!r}] has an unrecognized "
+            f'shape ({entry!r}); accepted: "<disposition>", {{"disposition": <v>}}, {{"value": <v>}}'
+        )
+    value = normalized[_JP_SESSION_SHAPE_ID].get("disposition")
     if not isinstance(value, str) or not value:
         return None
     try:

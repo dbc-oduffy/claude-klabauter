@@ -44,7 +44,8 @@ def routes_index_reachable() -> bool:
     """True if the routes index resolves to a file on this host; any error is False.
 
     Probes under ``COORDINATOR_SETTINGS_HOME`` when set, else the expanded display
-    folder. The rendered display stays the literal ``~/`` form either way.
+    folder. The rendered display stays the literal ``~/`` form either way, so
+    under an override the printed folder and the probed folder differ.
     """
     try:
         override = os.environ.get("COORDINATOR_SETTINGS_HOME")

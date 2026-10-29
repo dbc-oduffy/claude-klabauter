@@ -58,8 +58,8 @@ Deny message deliberately never names the sentinel file or prints a
 workaround -- an eager agent reading its own bypass in a deny message
 treats it as sanctioned (precedent: `block-worktree-tool.py`'s own deny
 message discipline). Leads with the sanctioned alternative (scoped-parallel
-dispatch into the same tree), then names PM permission as the path to
-genuine branch-level isolation.
+dispatch into the same tree), then reports branch-level isolation as a
+need to surface.
 
 Spec: git-worktree-ban sentinel un-creatable-by-agent guard (coordinator-content-repo
 dispatch, 2026-07-28) -- companion to the sibling DoE-side hooks that read
@@ -102,7 +102,7 @@ _TARGET_BASENAME = ".coordinator-override-worktree-guard"
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
 
 _RISK_DIRECT = (
-    "creates the worktree-ban override file, which only the PM may create. "
+    "creates the worktree-ban override file; an agent cannot self-grant it. "
     "Use instead: scoped-parallel edits."
 )
 _RISK_INDIRECTION = (
@@ -227,7 +227,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (
         "BLOCKED: creates/modifies a worktree-ban override file. Use "
-        "scoped-parallel edits instead; isolation needs EM+PM.\n\n"
+        "scoped-parallel edits instead.\n\n"
         "Lower it: `%s`." % LEVEL_VERB
     )
 

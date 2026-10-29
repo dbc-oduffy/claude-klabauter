@@ -84,6 +84,8 @@ def bounded_js(call_expr: str, budget_s: int, label: str) -> str:
     )
 
 
-def group_slice_prefix(sidecar_key: str, index: int) -> str:
-    """The one spelling of a group's review.prep slice prefix and its reverify calls."""
-    return f"{sidecar_key}.g{index}"
+def group_slice_prefix(sidecar_key: str, index: int, base: str) -> str:
+    """The one spelling of a group's review.prep slice prefix and its reverify calls. `base` is
+    the diff base the frozen diff holds (first 12 chars), so a re-emit over another base never
+    reuses an earlier frozen diff; the same base spells the same prefix."""
+    return f"{sidecar_key}.g{index}-{base[:12]}"

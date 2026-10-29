@@ -6,6 +6,11 @@ Denied when the search root is `/`, a drive root (`C:`, `C:/`, `C:` plus a backs
   - `find <root> ...` (any start path before the first expression);
   - `rg`, `fd` with a positional path that is a root;
   - `grep -r` / `-R` / `--recursive` with a root operand.
+  - `grep -r` / `-R` whose target (`.` when none) is a repo root (holds `.git`) with a direct
+    child in HEAVY_TREE_NAMES (scratch, data, toolchains, node_modules, ...) not covered by an
+    `--exclude-dir` glob; one os.scandir, no walk. An unknown cwd with a relative target allows.
+  - recursive `grep`/`rg`, `find -exec` or `du` over a UE install root (`UE_5.x`), its
+    Engine/Plugins or Engine/Source subtree, or a `scratch/` root; one run dir under scratch allows.
 A root that appears only inside a pattern or option value (`-path /x/y`,
 `-name`, the pattern operand) is not a search root and is allowed.
 
@@ -43,7 +48,7 @@ HEAVY_TREE_NAMES = (DEFAULT_PRUNE_DIRS - {".git", ".hg", ".svn"}) | {
     "scratch", "scratch-hold", "data", "toolchains", "Intermediate", "Saved", "DerivedDataCache",
 }
 _ADMIT = object()
-_PRE_FILTER_RE =re.compile(r"\b(?:find|rg|grep|egrep|fgrep|fd|fdfind)\b")
+_PRE_FILTER_RE = re.compile(r"\b(?:find|rg|grep|egrep|fgrep|fd|fdfind|du)\b")
 
 _RG_VALUE_OPTS = frozenset({
     "-e", "-f", "-g", "-t", "-T", "-A", "-B", "-C", "-m", "-j", "-d", "-r", "-E",
@@ -239,6 +244,73 @@ def _heavy_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> An
     return None
 
 
+_UE_ROOT_SEG_RE = re.compile(r"^ue_\d+(?:\.\d+)*$")
+_DU_VALUE_OPTS = frozenset({"-d", "-B", "-t", "--max-depth", "--block-size", "--threshold", "--exclude", "-X", "--exclude-from", "--files0-from"})
+
+
+def _huge_tree_kind(path: str) -> Optional[str]:
+    """`engine` for a UE install root or its Engine/Plugins/Source subtree, `scratch` for a scratch/ root, else None."""
+    segs = [s for s in path.replace("\\", "/").lower().split("/") if s and s != "."]
+    if segs and segs[-1] in ("scratch", "scratch-hold"):
+        return "scratch"
+    for i, s in enumerate(segs):
+        if _UE_ROOT_SEG_RE.match(s):
+            rest = segs[i + 1:]
+            if not rest or rest == ["engine"] or rest[:2] in (["engine", "plugins"], ["engine", "source"]):
+                return "engine"
+    if segs and segs[-1] == "epic games":
+        return "engine"
+    return None
+
+
+def _huge_scan_targets(head: str, args: List[str]) -> Optional[List[str]]:
+    """Search paths of a recursive grep/rg, a `find -exec`, or a `du`; None for any other command."""
+    rec = _recursive_grep_targets(head, args)
+    if rec is not None:
+        return rec
+    if token_matches_binary(head, "rg"):
+        pos, seen = _positionals(args, _RG_VALUE_OPTS)
+        paths = pos if any(o in _PATTERN_FROM_OPT["rg"] for o in seen) else pos[1:]
+        return paths or ["."]
+    if token_matches_binary(head, "find"):
+        if not any(a in ("-exec", "-execdir", "-ok", "-okdir") for a in args):
+            return None
+        return _find_roots(args) or ["."]
+    if token_matches_binary(head, "du"):
+        pos, _ = _positionals(args, _DU_VALUE_OPTS)
+        return pos or ["."]
+    return None
+
+
+def _huge_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Any:
+    targets = _huge_scan_targets(toks[0], toks[1:])
+    if targets is None:
+        return None
+    from coordinator_core.bash_guards._write_bump_sink_shapes import resolve_relative
+    from coordinator_core.bash_guards.block_drive_root_new_dir_bash_write import _effective_cwd
+    from coordinator_core.guard_messages.alternative_record import AdaptableOffer
+
+    eff = _effective_cwd(cmd_text, cwd)
+    for target in targets:
+        path = target
+        if eff and not (target.startswith(("/", "\\", "~")) or re.match(r"^[A-Za-z]:", target)):
+            path = resolve_relative(eff, target) or target
+        kind = _huge_tree_kind(path)
+        if kind == "engine":
+            return _record(
+                f"BLOCKED: `{toks[0]}` over {target} walks the UE engine tree and floods the file cache.",
+                " Use project_engine_type_hierarchy, project_cpp_symbol or project_engine_document_symbols.",
+                AdaptableOffer(template="example-retrieval-repo engine tool for the symbol", what_to_adapt="the symbol"),
+            )
+        if kind == "scratch":
+            return _record(
+                f"BLOCKED: `{toks[0]}` over scratch root {target} reads every run's output and floods the file cache.",
+                " Scope it to one run dir, e.g. scratch/<run>.",
+                AdaptableOffer(template="scan one scratch run dir", what_to_adapt="the run dir"),
+            )
+    return None
+
+
 def _offence(text: str, cwd: Optional[str] = None) -> Any:
     """The deny record for the first offending segment, or None."""
     if not _PRE_FILTER_RE.search(text):
@@ -261,6 +333,9 @@ def _offence(text: str, cwd: Optional[str] = None) -> Any:
         heavy = _heavy_tree_reason(toks, cwd, clean)
         if heavy:
             return heavy
+        huge = _huge_tree_reason(toks, cwd, clean)
+        if huge:
+            return huge
     return None
 
 

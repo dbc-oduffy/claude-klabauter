@@ -230,7 +230,7 @@ def stamp_disposal_manifest(
             "refusing re-stamp: manifest body sha has DRIFTED since it was "
             f"stamped (stamped sha={existing['disposal_authorized_sha']!r}, "
             f"current computed sha={computed_sha!r}) — the manifest content "
-            "changed after PM approval; re-assemble and get a fresh PM stamp, "
+            "changed after it was stamped; re-assemble and re-stamp, "
             "never re-stamp over drifted content"
         )
     raise DisposalStampError(

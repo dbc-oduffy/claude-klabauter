@@ -1,5 +1,5 @@
 """
-coordinator_core.hooks.stop_dispatch — Stop-event fan-in, eleven legs.
+coordinator_core.hooks.stop_dispatch — Stop-event fan-in, ten folded legs plus two producers (legs numbered below).
 
 Purpose: warm-engine composition for coordinator-content-repo's `stop-dispatch.py`, the
 single `Stop` hooks.json registration that currently pays one interpreter
@@ -88,6 +88,11 @@ per leg:
      (`postuse_advisory_dispatch.workflow_stall_resume_text`); a chained Stop
      (`stop_hook_active`) downgrades to an advisory so a session that cannot
      resume is never looped. Silent on a subagent stop (payload `agent_id`).
+
+  13. `pm_directive_unmapped` — COMPOSED, advisory only, never a deny
+     (`_pm_directive_unmapped_handler`): one line per PM directive of this
+     session with no task, plan row or disposition
+     (`ops.pm_directive_map.unmapped_directives`). Silent on a subagent stop.
 
 AGGREGATION CONTRACT: mirrors `stop-dispatch.py`'s own CONCATENATE-ALL
 (never first-fires-wins) — every foldable leg above (all but the producers #8, #10) runs
@@ -213,6 +218,34 @@ def _workflow_stall_stop_op(params: dict, repo_root=None) -> dict:
     envelope, an advisory envelope (chained Stop), or no_advisory()."""
     params = payload_of(params)
     return _workflow_stall_stop_handler(params, repo_root)
+
+
+def _pm_directive_unmapped_handler(params: dict, repo_root=None) -> dict:
+    """Advisory listing each PM directive of this session with no task, plan row or
+    disposition, one line per directive with its turn. Never denies; silent on a
+    subagent stop and on any failure."""
+    payload = payload_of(params)
+    if payload.get("agent_id"):
+        return no_advisory()
+    session_id = payload.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return no_advisory()
+    raw_cwd = payload.get("cwd")
+    try:
+        from coordinator_core.ops import pm_directive_map as _pdm
+        entries = _pdm.unmapped_directives(
+            session_id, raw_cwd if isinstance(raw_cwd, str) and raw_cwd else None)
+    except Exception:
+        return no_advisory()
+    if not entries:
+        return no_advisory()
+    cap, maxn = _pdm.DIRECTIVE_LINE_CAP, _pdm.DIRECTIVE_LINES_MAX
+    lines = ["Unmapped PM directives (no task, plan row or disposition) -- map or dispose each:"]
+    lines += [f"- UNMAPPED PM directive (turn {e['turn']}): {str(e['text'])[:cap]}"
+              for e in entries[:maxn]]
+    if len(entries) > maxn:
+        lines.append(f"- +{len(entries) - maxn} more unmapped PM directives (baton.pm_directive_unmapped)")
+    return post_advisory("\n".join(lines))
 
 
 _DRIVE_GUARD = "guard-drive-root-new-dir"
@@ -384,6 +417,7 @@ _FOLDED_LEGS = (
     ("nudge_harness_directive_dispatch", lambda p: _nudge_harness_directive_dispatch_handler(p)),
     ("nudge_unrouted_sizing", lambda p: _nudge_unrouted_sizing_handler(p)),
     ("workflow_stall_resume", lambda p: _workflow_stall_stop_handler(p)),
+    ("pm_directive_unmapped", lambda p: _pm_directive_unmapped_handler(p)),
 )
 PRODUCER_LEG_NAMES = ("receiver_state_sensor", "group_em_park_spool")
 
@@ -424,7 +458,7 @@ def _extract_advisory(result) -> "tuple[bool, Optional[str]]":
 
 @register_op("hooks.stop_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """Stop fan-in: compose the eleven legs and aggregate CONCATENATE-ALL, per
+    """Stop fan-in: compose the ten legs and aggregate CONCATENATE-ALL, per
     module docstring.
 
     `repo_root` (the framework-supplied handler argument) is unused — every

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from types import SimpleNamespace
 
+from coordinator_core.git import commit
 from coordinator_core.ops.dispatch_emit import land_run, requirements_ledger
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 
@@ -23,8 +23,8 @@ def _gate(root, monkeypatch, run_dir):
 
 
 def _blob(root, rel):
-    data = (root / rel).read_bytes()
-    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+    # The gate hashes via commit.checkin_blob_sha; raw-byte hashing disagrees under autocrlf=true.
+    return commit.checkin_blob_sha(root, rel)
 
 
 def _setup(tmp_path, blob_of):

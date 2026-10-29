@@ -36,6 +36,7 @@ ARTIFACT_CLASSES = (
     "superseded-record",
     "docs-stage",
     "mise-inventory",
+    "ask-dir",
 )
 DOC_PATHS_PARAM = "doc_paths"
 
@@ -73,6 +74,7 @@ class RunArtifacts:
     by_class: Mapping[str, tuple[str, ...]]
     record_dirs: tuple[str, ...] = ()
     root: Optional[Path] = None
+    notes: tuple[str, ...] = ()
 
     def paths(self) -> tuple[str, ...]:
         """Every candidate path, de-duplicated and sorted."""
@@ -98,12 +100,13 @@ class RunArtifacts:
                 continue
             dirs.append(rel_dir)
             if self.root is not None:
-                by_class.setdefault("superseded-record", []).extend(_top_level_files(self.root, rel_dir))
+                by_class.setdefault("superseded-record", []).extend(_tree_files(self.root, rel_dir))
         return RunArtifacts(
             run_id=self.run_id,
             by_class={k: tuple(sorted(set(v))) for k, v in by_class.items()},
             record_dirs=tuple(dirs),
             root=self.root,
+            notes=self.notes,
         )
 
 
@@ -150,15 +153,25 @@ def _read_json(root: Path, rel: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
-def _top_level_files(root: Path, dir_rel: str) -> list[str]:
+def _tree_files(root: Path, dir_rel: str) -> list[str]:
+    """Every file under ``dir_rel``, recursive, sorted; ``scratch/`` paths and symlinked dirs
+    are skipped. A missing dir yields ``[]``."""
     out: list[str] = []
-    try:
-        with os.scandir(root / dir_rel) as it:
-            for entry in it:
-                if entry.is_file():
-                    out.append(f"{dir_rel}/{entry.name}")
-    except OSError:
-        return []
+    stack = [dir_rel]
+    while stack:
+        cur = stack.pop()
+        try:
+            with os.scandir(root / cur) as it:
+                for entry in it:
+                    rel = f"{cur}/{entry.name}"
+                    if _is_scratch(rel):
+                        continue
+                    if entry.is_file():
+                        out.append(rel)
+                    elif entry.is_dir(follow_symlinks=False):
+                        stack.append(rel)
+        except OSError:
+            continue
     return sorted(out)
 
 
@@ -209,12 +222,24 @@ def candidate_paths(
         return RunArtifacts(run_id=str(run_id), by_class={}, record_dirs=(), root=root)
 
     record_dir = f"{_RECORD_ROOT}/{run_id}"
-    for rel in _top_level_files(root, record_dir):
+    for rel in _tree_files(root, record_dir):
         add("record-dir", rel)
 
     run_json = _read_json(root, f"{record_dir}/{_RUN_FILE}") or {}
     sizing = _norm_rel(sizing_rel) or _norm_rel(run_json.get("sizing_rel"))
     add("sizing", sizing)
+
+    notes: list[str] = []
+    ask_id = run_json.get("ask") if _safe_run_id(run_json.get("ask")) else None
+    if ask_id is None and sizing:
+        from coordinator_core.ops.dispatch_emit.halted_run import halted_ask_run_for
+
+        ask_id = halted_ask_run_for(root, sizing)
+    if ask_id and ask_id != run_id and _safe_run_id(ask_id):
+        for rel in _tree_files(root, f"{_RECORD_ROOT}/{ask_id}"):
+            add("ask-dir", rel)
+    elif ask_id is None:
+        notes.append("ask-dir: no ask dir resolved (run.json has no ask field and no halted ask run names the sizing)")
     sizing_text = _read_text(root, sizing)
     add("baton", _scalar(sizing_text, "baton"))
     plan = _norm_rel(plan_rel) or _norm_rel(_scalar(sizing_text, "plan"))
@@ -259,6 +284,7 @@ def candidate_paths(
         by_class={k: tuple(sorted(v)) for k, v in classes.items()},
         record_dirs=(record_dir,),
         root=root,
+        notes=tuple(notes),
     )
 
 
@@ -354,7 +380,7 @@ def superseded_runs(
         if not rel.startswith(prefix):
             continue
         name, _, rest = rel[len(prefix):].partition("/")
-        if name and rest and "/" not in rest and name != run_id:
+        if name and rest and name != run_id:
             names.add(name)
     root = Path(worktree_root)
     out: list[str] = []

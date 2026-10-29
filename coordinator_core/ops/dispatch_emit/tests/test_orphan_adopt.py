@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -115,7 +116,7 @@ def _stage(root, run=ORPHAN, *, plan=True, receipt=False):
         from coordinator_core.ops.dispatch_emit import ask_stage_receipt as r
 
         (d / "manifest.json").write_bytes(b"{}")
-        r.write(d, "dg", {"path": "m", "bytes": 2, "sha256": __import__("hashlib").sha256(b"{}").hexdigest()})
+        r.write(d, "dg", {"path": "m", "bytes": 2, "sha256": hashlib.sha256(b"{}").hexdigest()})
     return d
 
 

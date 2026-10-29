@@ -77,6 +77,7 @@ const fs = require('fs');
 const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta/m, 'const meta');
 const mode = process.argv[3];
 const labels = [];
+const prompts = {};
 const answer = (label, prompt) => {
   const nlm = /NotebookLM/.test(prompt) && !/signed in/.test(prompt);
   if (label === 'check') return { ready: mode !== 'preflight-down', remedy: mode === 'preflight-down' ? ['sign in'] : [] };
@@ -88,12 +89,13 @@ const answer = (label, prompt) => {
 const agent = async (prompt, opts) => {
   const label = (opts && opts.label) || '';
   labels.push(label);
+  prompts[label] = prompt;
   return answer(label, prompt);
 };
 const parallel = async (fns) => Promise.all(fns.map((f) => (typeof f === 'function' ? f() : f)));
 const run = new Function('agent', 'parallel', 'phase', 'log', 'return (async () => {' + src + '\n})();');
 run(agent, parallel, () => {}, () => {}).then((ret) => {
-  console.log(JSON.stringify({ ret, labels }));
+  console.log(JSON.stringify({ ret, labels, prompts }));
 }, (e) => { console.error(String((e && e.stack) || e)); process.exit(1); });
 """
 
@@ -163,7 +165,7 @@ def test_a_source_gate_halt_runs_web_and_repo_and_names_the_halted_segments(emit
     assert halts["notebooklm"]["halted"] == "notebooklm.source-gate"
     assert halts["notebooklm"]["decision_required"] == ["r"]
     assert "workers:1" not in got["labels"]
-    assert ret["next_action"]["params"]["halted_segments"] == ["nlm-preflight", "notebooklm"]
+    assert ret["next_action"]["params"]["halted_segments"] == ["notebooklm"]
 
 
 def test_close_after_a_source_gate_halt_commits_deliverable_and_names_the_halted_segments(emitted, close_repo, tmp_path):
@@ -171,19 +173,34 @@ def test_close_after_a_source_gate_halt_commits_deliverable_and_names_the_halted
     params = _drive(script, "source-gate-halt", tmp_path)["ret"]["next_action"]["params"]
     out = _close(close_repo, params)
     assert out["committed"] is True and out["deliverable"] is True, out
-    assert out["halted_segments"] == ["nlm-preflight", "notebooklm"]
+    assert out["halted_segments"] == ["notebooklm"]
 
 
-def test_a_preflight_halt_skips_notebooklm_while_web_and_repo_run(emitted, tmp_path):
+def test_a_preflight_halt_ends_the_whole_run_before_any_other_segment_spends(emitted, tmp_path):
     script, _ = emitted
     got = _drive(script, "preflight-down", tmp_path)
     ret = got["ret"]
-    assert {"web", "repo"} <= set(_pipelines(ret))
-    halts = {h["segment"]: h for h in ret["segment_halts"]}
-    assert halts["nlm-preflight"]["halted"] == "nlm-preflight.check"
-    assert halts["notebooklm"] == {"segment": "notebooklm", "leg": "notebooklm", "skipped": True}
-    assert "scout" not in got["labels"]
-    assert ret["next_action"]["params"]["halted_segments"] == ["nlm-preflight", "notebooklm"]
+    assert ret["halted"] == "nlm-preflight.check"
+    assert ret["decision_required"] == ["sign in"]
+    assert "next_action" not in ret
+    assert _pipelines(ret) == ["nlm-preflight"]
+    assert got["labels"] == ["check", "escalate"]
+
+
+def test_a_preflight_halt_appends_an_escalate_line_to_the_em_mailbox(emitted, tmp_path):
+    script, _ = emitted
+    got = _drive(script, "preflight-down", tmp_path)
+    prompt = got["prompts"]["escalate"]
+    assert "/mail/_em.jsonl" in prompt
+    line = json.loads(prompt.split("Line: ", 1)[1])
+    assert line["escalate"] is True
+    assert line["from"] == "nlm-preflight.check"
+    assert "sign in" in line["text"]
+
+
+def test_a_clean_run_makes_no_escalate_call(emitted, tmp_path):
+    script, _ = emitted
+    assert "escalate" not in _drive(script, "clean", tmp_path)["labels"]
 
 
 def test_a_run_with_no_halt_returns_the_emit_replys_static_next_action(emitted, tmp_path):

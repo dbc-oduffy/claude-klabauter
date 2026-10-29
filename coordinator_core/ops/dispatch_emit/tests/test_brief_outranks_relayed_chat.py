@@ -122,7 +122,7 @@ def test_both_row_heads_carry_the_live_pm_direction_clause_after_the_precedence_
 def test_an_unanswered_brief_is_incomplete_and_named():
     block = _run_row_helper_js()
     assert "_unansweredBriefs.push(id)" in block
-    assert block.index("_incompleteChunks.push(id);\n      _unansweredBriefs") > 0
+    assert re.search(r"_incompleteChunks\.push\(id\);\s*if \(!_tv\) _unansweredBriefs\.push\(id\)", block)
 
 
 def test_the_script_declares_reports_and_halts_on_unanswered_briefs():

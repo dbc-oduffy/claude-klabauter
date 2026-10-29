@@ -23,6 +23,32 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
 from coordinator_core.session.machinery_paths import share_dir
 
+
+def test_stalled_deny_counter_write_drops_within_the_deadline(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from coordinator_core import guard_advisory_counter as gac
+
+    release = threading.Event()
+    real = Path.mkdir
+
+    def _stall(self, *a, **k):
+        if "stall-deny-sid" in str(self):
+            release.wait(10)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "mkdir", _stall)
+    monkeypatch.setattr(gac, "resolve_git_root_cheap", lambda cwd=None: str(tmp_path))
+    try:
+        t0 = time.perf_counter()
+        gac.record_deny_fire("g", "stall-deny-sid", False)
+        assert time.perf_counter() - t0 < 0.5
+        assert not (Path(share_dir(str(tmp_path), "stall-deny-sid")) / gac._DENY_COUNTS_FILENAME).exists()
+    finally:
+        release.set()
+
+
 _DENY_RECORD = AlternativeRecord(
     "deny",
     "hard-deny for testing",

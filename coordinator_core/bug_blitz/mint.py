@@ -57,7 +57,7 @@ def _group_by_file(tests: tuple[FailingTest, ...]) -> dict[str, list[FailingTest
 def _body(file: str, group: list[FailingTest]) -> str:
     lines = ["Failing tests and first message line:"]
     for test in group:
-        text = f"- {file}::{test.name}"
+        text = f"- {file}::{test.name}" if test.name else f"- {file}"
         first = _first_line(test.message)
         if first:
             text += f" :: {first}"

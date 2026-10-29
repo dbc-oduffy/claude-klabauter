@@ -30,7 +30,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, repo  # 
 from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.usefixtures("m_plus_known_arm")]
 
 SIZING = "state/sizings/2026-10-22-65af6a-2-orphan-spines-kept-forever.yaml"
 WRITES_HEAD = "Your writes are exactly these declared paths: "

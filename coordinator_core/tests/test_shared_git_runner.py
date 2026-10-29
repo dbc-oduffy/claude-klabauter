@@ -857,6 +857,11 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/baton_assemble/apply.py",
         "coordinator_core/benchmarks/close_background_full_path.py",
         "coordinator_core/benchmarks/close_review_full_path.py",
+        # Fixture-setup spawns that exceed run_git's process-time bound (59k-file add, 5k-file
+        # commit, fast-import stream); setup is outside every gated bracket.
+        "coordinator_core/benchmarks/commit_v2_landing_leg_shape.py",
+        "coordinator_core/benchmarks/distill_disposal_large_corpus.py",
+        "coordinator_core/benchmarks/land_run_slow_disk_profile.py",
         "coordinator_core/benchmarks/harness.py",
         "coordinator_core/benchmarks/interleave.py",
         "coordinator_core/benchmarks/op_fixtures.py",
@@ -1076,7 +1081,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 189
+_PINNED_RUNNER_CEILING = 192
 _PINNED_DIAL_CEILING = 71
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN

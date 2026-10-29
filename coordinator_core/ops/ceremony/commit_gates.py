@@ -59,6 +59,7 @@ Negative-spec (hard-won, preserved from the bash originals):
 from __future__ import annotations
 
 import ast
+import functools
 import os
 import re
 import sys
@@ -724,19 +725,20 @@ def _head_text(
 class _AnyAttributionPattern:
     """Lazy `search` over the alternation, so importing this module compiles nothing."""
 
-    _compiled: Optional["re.Pattern[str]"] = None
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _compiled() -> "re.Pattern[str]":
+        from coordinator_core.attribution.patterns import PATTERNS
+
+        return re.compile(
+            "|".join(
+                f"(?i:{p.pattern})" if p.flags & re.IGNORECASE else f"(?:{p.pattern})"
+                for p in PATTERNS.values()
+            )
+        )
 
     def search(self, text: str):
-        if self._compiled is None:
-            from coordinator_core.attribution.patterns import PATTERNS
-
-            type(self)._compiled = re.compile(
-                "|".join(
-                    f"(?i:{p.pattern})" if p.flags & re.IGNORECASE else f"(?:{p.pattern})"
-                    for p in PATTERNS.values()
-                )
-            )
-        return self._compiled.search(text)
+        return self._compiled().search(text)
 
 
 _ANY_ATTRIBUTION_PATTERN = _AnyAttributionPattern()

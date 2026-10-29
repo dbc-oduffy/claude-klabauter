@@ -22,6 +22,18 @@ DEFAULT_CAPACITY = 4000
 RESULT_RETAIN_COUNT = 64
 RESULT_RETAIN_BYTES = 4 * 1024 * 1024
 
+#: Bounds on the per-record outcome digest kept beside the result LRU: at most
+#: DEFAULT_CAPACITY records x RESULT_DIGEST_BYTES resident (about 8 MiB).
+RESULT_DIGEST_BYTES = 2048
+RESULT_DIGEST_KEYS = 32
+RESULT_DIGEST_STR_CHARS = 200
+#: Door-form stdout larger than this is not parsed; the digest says "stdout_unparsed".
+RESULT_STDOUT_PARSE_BYTES = 1 << 20
+
+DROPPED_OVER_CAP = "over-cap"
+DROPPED_NOT_SERIALISABLE = "not-serialisable"
+DROPPED_EVICTED = "evicted"
+
 _ADMITTED = "admitted"
 _STAMPED = "stamped"
 _TOMBSTONED = "tombstoned"
@@ -78,6 +90,67 @@ def mint_ns_of(key: str) -> Optional[int]:
         return int(tail)
     except (ValueError, TypeError):
         return None
+
+
+def _scalars(obj: dict) -> dict:
+    """Top-level bool/int/float/None and short-string values of `obj`, at most
+    RESULT_DIGEST_KEYS of them; every other key is named under "omitted"."""
+    out: dict = {}
+    omitted: list = []
+    for k, v in obj.items():
+        name = str(k)
+        if v is None or isinstance(v, (bool, int, float)) or (
+            isinstance(v, str) and len(v) <= RESULT_DIGEST_STR_CHARS
+        ):
+            if len(out) < RESULT_DIGEST_KEYS:
+                out[name] = v
+                continue
+        if len(omitted) < RESULT_DIGEST_KEYS:
+            omitted.append(name[:RESULT_DIGEST_STR_CHARS])
+    if omitted:
+        out["omitted"] = omitted
+    return out
+
+
+def _digest_size(digest: dict) -> int:
+    return len(json.dumps(digest, separators=(",", ":")).encode("utf-8"))
+
+
+def _outcome_digest(result: Any) -> dict:
+    """What a landed op reported, in at most RESULT_DIGEST_BYTES.
+
+    Reads one dict level, plus one JSON-parsed level of a string `stdout` (the
+    `invoke.from_argv` door form). Never serialises the whole result, so a
+    non-serialisable reply still digests. Runs outside the store lock.
+    """
+    if not isinstance(result, dict):
+        return {"type": type(result).__name__}
+    digest = _scalars(result)
+    stdout = result.get("stdout")
+    if isinstance(stdout, str) and stdout.lstrip().startswith("{"):
+        if len(stdout) > RESULT_STDOUT_PARSE_BYTES:
+            parsed = None
+            digest["stdout_unparsed"] = True
+        else:
+            try:
+                parsed = json.loads(stdout)
+            except (ValueError, RecursionError):
+                parsed = None
+        if isinstance(parsed, dict):
+            digest["stdout"] = _scalars(parsed)
+    try:
+        if _digest_size(digest) <= RESULT_DIGEST_BYTES:
+            return digest
+    except (TypeError, ValueError):
+        pass
+    digest.pop("stdout", None)
+    digest.pop("omitted", None)
+    for name in reversed(list(digest)):
+        if _digest_size(digest) <= RESULT_DIGEST_BYTES - 20:  # room for "truncated"
+            break
+        del digest[name]
+    digest["truncated"] = True
+    return digest
 
 
 class AckStore:
@@ -139,7 +212,12 @@ class AckStore:
     ) -> None:
         """Terminal stamp. `result` is kept only for a `result` outcome, only if
         JSON-serialisable and within the per-entry cap; it never affects state."""
-        size = self._measure(result) if outcome == OUTCOME_RESULT and result is not None else None
+        size: Optional[int] = None
+        dropped: Optional[str] = None
+        digest: Optional[dict] = None
+        if outcome == OUTCOME_RESULT and result is not None:
+            size, dropped = self._measure(result)
+            digest = _outcome_digest(result)
         with self._lock:
             record = self._records.get(key)
             if record is None:
@@ -155,8 +233,11 @@ class AckStore:
             record["error_code"] = error_code
             if outcome == OUTCOME_RESULT and result is not None:
                 record["result_offered"] = True
+                record["result_digest"] = digest
                 if size is not None:
                     self._retain_result(key, result, size)
+                else:
+                    record["result_dropped"] = dropped
             self._changed.notify_all()
 
     def wait(self, key: str, timeout_secs: float) -> dict:
@@ -176,13 +257,15 @@ class AckStore:
         return self.status(key)
 
     @staticmethod
-    def _measure(result: Any) -> Optional[int]:
-        """Serialised size when retainable, else None. Runs outside the lock."""
+    def _measure(result: Any) -> "tuple[Optional[int], Optional[str]]":
+        """`(size, None)` when retainable, else `(None, drop cause)`. Runs outside the lock."""
         try:
             size = len(json.dumps(result, separators=(",", ":")).encode("utf-8"))
-        except (TypeError, ValueError):
-            return None
-        return size if size <= RESULT_RETAIN_BYTES // 4 else None
+        except (TypeError, ValueError, RecursionError):
+            return None, DROPPED_NOT_SERIALISABLE
+        if size <= RESULT_RETAIN_BYTES // 4:
+            return size, None
+        return None, DROPPED_OVER_CAP
 
     def _retain_result(self, key: str, result: Any, size: int) -> None:
         self._results[key] = (result, size)
@@ -190,8 +273,11 @@ class AckStore:
         while self._results and (
             len(self._results) > RESULT_RETAIN_COUNT or self._results_bytes > RESULT_RETAIN_BYTES
         ):
-            _, (_, old_size) = self._results.popitem(last=False)
+            old_key, (_, old_size) = self._results.popitem(last=False)
             self._results_bytes -= old_size
+            old_record = self._records.get(old_key)
+            if old_record is not None:
+                old_record["result_dropped"] = DROPPED_EVICTED
 
     def status(self, key: str) -> dict:
         mint_ns = mint_ns_of(key)
@@ -241,7 +327,8 @@ class AckStore:
                     if kept is not None:
                         payload["result"] = kept[0]
                     else:
-                        payload["result_retained"] = False
+                        payload["result_digest"] = record.get("result_digest") or {}
+                        payload["result_dropped"] = record.get("result_dropped", DROPPED_EVICTED)
                 return payload
             if outcome in _UNKNOWABLE_OUTCOMES:
                 # No named reason in § 6 covers a stamped abandoned/worker-lost

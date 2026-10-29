@@ -3,7 +3,8 @@
 A leading `cd` turns a git invocation into a compound command, which trips a
 permission prompt that renders as a non-returning stall. This module detects
 that shape and either auto-rewrites it (when every follower segment is
-provably equivalent under `-C`) or denies with a suggested rewrite otherwise.
+provably equivalent under `-C`) or warns with a suggested rewrite otherwise;
+the command is never denied.
 """
 
 from __future__ import annotations
@@ -22,8 +23,8 @@ from coordinator_core.bash_guards.dispatch_checks import (
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._rewrite_support import (
     _allow_rewrite_record,
+    _advisory_record,
     _crlf_strip,
-    _deny_record,
     _override,
 )
 from coordinator_core.bash_guards._command_tokenizer import (
@@ -448,7 +449,7 @@ def check_offer_git_c(
             what_to_adapt="the git subcommand, with the 'cd' dropped",
         )
     )
-    return _deny_record(
+    return _advisory_record(
         _GUARD,
         (
             "Use 'git -C <path>' instead of a 'cd <path> && git ...' prefix.\n\n"

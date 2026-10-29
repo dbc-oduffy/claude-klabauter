@@ -1,22 +1,18 @@
-"""The doctrine-edit approval gate is default-on: off only when
+"""The doctrine-edit gate is default-on: off only when
 ``coordinator.feature.doctrine_edit_gate`` is explicitly ``off``."""
 
 from __future__ import annotations
 
-import json
+import os
 
 import pytest
 
 from coordinator_core import machine_profile as mp
 from coordinator_core.guard_messages.testing import envelope_of
-from coordinator_core.bash_guards import (
-    block_approval_sentinel_creation,
-    guard_doctrine_surface_bash_write,
-)
+from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
 from coordinator_core.write_guards import guard_doctrine_surface_edits
 
 GATE_ENV = "MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE"
-SENTINEL = ".coordinator-doctrine-edit-approved"
 
 
 @pytest.fixture()
@@ -24,7 +20,7 @@ def author_box(tmp_path, monkeypatch):
     reg = tmp_path / "reg"
     reg.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
-    for key in list(__import__("os").environ):
+    for key in list(os.environ):
         if key.startswith("MACHINE_LOCAL_COORDINATOR_"):
             monkeypatch.delenv(key)
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "author")
@@ -33,19 +29,14 @@ def author_box(tmp_path, monkeypatch):
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(
+        guard_doctrine_surface_edits,
+        "compute_repo_identity_gate",
+        lambda *a, **k: {"verdict": "UNRESOLVED", "message": ""},
+    )
     mp.reset_cache()
     yield home
     mp.reset_cache()
-
-
-def _write_transcript(path, text):
-    """A one-turn genuine-PM-turn JSONL transcript."""
-    entry = {
-        "type": "user",
-        "timestamp": "2026-10-13T10:00:00Z",
-        "message": {"role": "user", "content": text},
-    }
-    path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
 
 
 def _set_gate(monkeypatch, value):
@@ -63,14 +54,6 @@ def _edit_payload(home):
     }
 
 
-def _sentinel_write_payload(home):
-    return {"tool_name": "Write", "tool_input": {"file_path": str(home / SENTINEL)}}
-
-
-def _touch_payload():
-    return {"tool_name": "Bash", "tool_input": {"command": "touch " + SENTINEL}}
-
-
 def _bash_write_payload():
     return {"tool_name": "Bash", "tool_input": {"command": "cat x > CLAUDE.md"}}
 
@@ -80,36 +63,20 @@ def _is_deny(result):
     return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 
+def _is_advisory(result):
+    return (
+        result is not None
+        and "permissionDecision" not in result["hookSpecificOutput"]
+        and "advisory" in result["hookSpecificOutput"]["additionalContext"]
+    )
+
+
 @pytest.mark.parametrize("profile", ["author", "consumer"])
 def test_defaults_on_with_no_config(author_box, monkeypatch, profile):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", profile)
     mp.reset_cache()
     assert mp.feature_enabled("doctrine_edit_gate") is True
-    assert _is_deny(block_approval_sentinel_creation.check(_touch_payload()))
-
-
-def test_forged_sentinel_write_is_refused_with_no_config(author_box, monkeypatch):
-    _set_gate(monkeypatch, None)
-    assert _is_deny(guard_doctrine_surface_edits.check(_sentinel_write_payload(author_box)))
-    assert _is_deny(block_approval_sentinel_creation.check(_touch_payload()))
-
-
-def test_genuine_pm_sentinel_still_passes(author_box, monkeypatch, tmp_path):
-    _set_gate(monkeypatch, None)
-    repo = tmp_path / "repo"
-    (repo / ".git").mkdir(parents=True)
-    monkeypatch.setattr(guard_doctrine_surface_edits, "_git_root", lambda: str(repo))
-    monkeypatch.setattr(guard_doctrine_surface_edits, "read_content_root", lambda: "")
-    transcript = tmp_path / "t.jsonl"
-    _write_transcript(transcript, "go ahead")
-    payload = {
-        "tool_name": "Edit",
-        "tool_input": {"file_path": str(repo / "CLAUDE.md")},
-        "transcript_path": str(transcript),
-    }
-    assert _is_deny(guard_doctrine_surface_edits.check(payload))
-    (repo / ".git" / SENTINEL).write_text("", encoding="utf-8")  # the PM's out-of-band act
-    assert guard_doctrine_surface_edits.check(payload) is None
+    assert _is_advisory(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
 
 
 def test_defaults_on_an_author_profile(author_box):
@@ -126,28 +93,18 @@ def test_explicit_on_enables_and_off_disables(author_box, monkeypatch):
     assert mp.feature_enabled("doctrine_edit_gate") is False
 
 
-def test_every_enforcement_point_allows_when_off(author_box, monkeypatch):
+def test_every_enforcement_point_is_quiet_when_off(author_box, monkeypatch):
     _set_gate(monkeypatch, "off")
-    home = author_box
-    assert guard_doctrine_surface_edits.check(_edit_payload(home)) is None
-    assert guard_doctrine_surface_edits.check(_sentinel_write_payload(home)) is None
-    assert block_approval_sentinel_creation.check(_touch_payload()) is None
+    assert guard_doctrine_surface_edits.check(_edit_payload(author_box)) is None
     assert not _is_deny(
         guard_doctrine_surface_bash_write.check(_bash_write_payload(), ["CLAUDE.md"])
     )
 
 
-def test_every_enforcement_point_denies_when_on(author_box, monkeypatch):
+def test_enforcement_points_when_on(author_box, monkeypatch):
     _set_gate(monkeypatch, "on")
-    home = author_box
-    assert _is_deny(guard_doctrine_surface_edits.check(_edit_payload(home)))
-    assert _is_deny(guard_doctrine_surface_edits.check(_sentinel_write_payload(home)))
-    assert _is_deny(block_approval_sentinel_creation.check(_touch_payload()))
+    assert _is_advisory(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
+    assert not _is_deny(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
     assert _is_deny(
         guard_doctrine_surface_bash_write.check(_bash_write_payload(), ["CLAUDE.md"])
     )
-
-
-def test_liveness_probe_trigger_fires_while_gate_is_off(author_box, monkeypatch):
-    _set_gate(monkeypatch, None)
-    assert _is_deny(block_approval_sentinel_creation.check_ungated(_touch_payload()))

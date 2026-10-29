@@ -135,10 +135,23 @@ def derive_prose_summary(body: str) -> str:
     for stripped in _prose_lines(body):
         m = _SENTENCE_END_RE.match(stripped)
         candidate = m.group(1) if m else stripped
-        if len(candidate) <= _SUMMARY_MAX_CHARS:
+        if summary_measure(candidate) <= _SUMMARY_MAX_CHARS:
             return candidate
-        return candidate[: _SUMMARY_MAX_CHARS - 1] + "…"
+        cut = _SUMMARY_MAX_CHARS - 1
+        while cut > 0 and summary_measure(candidate[:cut] + "…") > _SUMMARY_MAX_CHARS:
+            cut -= 1
+        return candidate[:cut] + "…"
     return ""
+
+
+def summary_measure(summary: str) -> int:
+    """Length of `summary` as memo.send reads it back from a draft.
+
+    The frontmatter reader does not unescape ``\\"`` / ``\\\\``, so each quote
+    or backslash counts twice. Every cap check and the derivation truncation
+    use this one measure.
+    """
+    return len(summary) + summary.count("\\") + summary.count('"')
 
 
 def is_placeholder_summary(value: str | None) -> bool:
@@ -170,10 +183,15 @@ def validate_explicit_summary(mode: str, summary: str | None) -> str | None:
     result (refuse at draft/send, advise at compose) — this
     function only measures and formats.
     """
-    if summary is None or len(summary) <= _SUMMARY_MAX_CHARS:
+    if summary is None:
+        return None
+    # draft/compose see the author's raw text; send/send_backstop see the
+    # already-escaped read-back, whose plain length is the measure.
+    measured = summary_measure(summary) if mode in ("draft", "compose") else len(summary)
+    if measured <= _SUMMARY_MAX_CHARS:
         return None
     op_prefix, suffix = _VALIDATION_MESSAGES[mode]
     return (
-        f"{op_prefix}: summary is {len(summary)} chars, cap is "
+        f"{op_prefix}: summary is {measured} chars, cap is "
         f"{_SUMMARY_MAX_CHARS} — {suffix}"
     )

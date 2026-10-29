@@ -14,6 +14,14 @@ from coordinator_core.session import harness_registry as hr
 _HAS_TZSET = hasattr(time, "tzset")
 
 
+@pytest.fixture
+def one_hour_east_local_mktime(monkeypatch):
+    # Stand-in for a local zone one hour east of UTC: the buggy local-time
+    # reading then differs from the correct UTC epoch whatever the box's TZ,
+    # including Windows where tzset cannot pin a zone.
+    monkeypatch.setattr(time, "mktime", lambda struct: calendar.timegm(struct) - 3600)
+
+
 @pytest.fixture(autouse=True)
 def _pin_non_utc_timezone():
     if not _HAS_TZSET:
@@ -64,7 +72,7 @@ class TestFiletimeConversion:
         assert hr._proc_start_to_epoch("not-a-number") is None
         assert hr._proc_start_to_epoch(None) is None
 
-    def test_ctime_string_in_band_parses(self):
+    def test_ctime_string_in_band_parses(self, one_hour_east_local_mktime):
         epoch = int(time.time()) - 60
         ctime_str = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch))
         result = hr._proc_start_to_epoch(ctime_str)
@@ -73,7 +81,7 @@ class TestFiletimeConversion:
         buggy = time.mktime(time.strptime(ctime_str, "%a %b %d %H:%M:%S %Y"))
         assert result != pytest.approx(buggy, abs=1.0)
 
-    def test_iso8601_naive_string_parses(self):
+    def test_iso8601_naive_string_parses(self, one_hour_east_local_mktime):
         # A naive ISO-8601 procStart is treated as UTC, not local time.
         epoch = int(time.time()) - 60
         iso_str = datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None).isoformat()

@@ -54,6 +54,12 @@ def shape(research: Mapping) -> dict[str, Any]:
             sources.append(s)
     sources += [s for s in seeded if s not in sources]
     depth = _choice(research, "depth", rc.DEPTHS, "standard")
+    primary = research.get(rc.PRIMARY_KEY)
+    if primary is not None:
+        if primary not in rc.PRIMARIES:
+            raise ValueError(f"research.primary={primary!r} is not one of {list(rc.PRIMARIES)}")
+        if primary not in sources:
+            raise ValueError(f"research.primary={primary!r} needs {primary!r} in the effective sources")
 
     tier = rc.TIER_TABLE[value_class][appetite]
     reason = f"{value_class} at {appetite} appetite -> {tier}"
@@ -70,12 +76,18 @@ def shape(research: Mapping) -> dict[str, Any]:
     elif tier == "deep":
         # A named source with no deep specialist runs its own corpus ahead of the team, or deep
         # would drop it while the preflight still runs (named sources are honoured above scouts).
-        pipelines = [s for s in sources if s not in rc.SOURCE_SPECIALIST or s in seeded] + [
-            rc.DEEP_PIPELINE
-        ]
+        pipelines = [
+            s
+            for s in sources
+            if s not in rc.SOURCE_SPECIALIST or s in seeded or s == primary
+        ] + [rc.DEEP_PIPELINE]
     else:
         pipelines = list(sources)
-    if "notebooklm" in sources:
+    if primary is not None:
+        pipelines = [primary] + [p for p in pipelines if p != primary]
+        if "notebooklm" in sources:
+            pipelines.insert(pipelines.index("notebooklm"), rc.PREFLIGHT_PIPELINE)
+    elif "notebooklm" in sources:
         pipelines.insert(0, rc.PREFLIGHT_PIPELINE)
     flags: dict[str, dict[str, str]] = {}
     if "repo" in pipelines and depth != "standard":
@@ -83,7 +95,10 @@ def shape(research: Mapping) -> dict[str, Any]:
     jobs = [f"{p}: {rc.PIPELINE_JOBS[p]}" for p in pipelines if p in rc.PIPELINE_JOBS]
     if jobs:
         reason += "; runs " + "; ".join(jobs)
-    return {"tier": tier, "reason": reason, "pipelines": pipelines, "flags": flags}
+    result: dict[str, Any] = {"tier": tier, "reason": reason, "pipelines": pipelines, "flags": flags}
+    if primary is not None:
+        result[rc.PRIMARY_KEY] = primary
+    return result
 
 
 @register_op("research.shape")

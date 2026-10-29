@@ -1,0 +1,21 @@
+{"turn": 0, "ts": "2026-10-27T10:00:00Z", "prompt": "ok"}
+{"turn": 1, "ts": "2026-10-27T10:01:00Z", "prompt": "thanks, that looks good"}
+{"turn": 2, "ts": "2026-10-27T10:02:00Z", "prompt": "yes"}
+{"turn": 3, "ts": "2026-10-27T10:03:00Z", "prompt": "sounds right"}
+{"turn": 4, "ts": "2026-10-27T10:04:00Z", "prompt": "interesting"}
+{"turn": 5, "ts": "2026-10-27T10:05:00Z", "prompt": "got it"}
+{"turn": 6, "ts": "2026-10-27T10:06:00Z", "prompt": "the build is green"}
+{"turn": 7, "ts": "2026-10-27T10:07:00Z", "prompt": "fine"}
+{"turn": 8, "ts": "2026-10-27T10:08:00Z", "prompt": "ok"}
+{"turn": 9, "ts": "2026-10-27T10:09:00Z", "prompt": "thanks, that looks good"}
+{"turn": 10, "ts": "2026-10-27T10:10:00Z", "prompt": "yes"}
+{"turn": 11, "ts": "2026-10-27T10:11:00Z", "prompt": "sounds right"}
+{"turn": 12, "ts": "2026-10-27T10:12:00Z", "prompt": "interesting"}
+{"turn": 13, "ts": "2026-10-27T10:13:00Z", "prompt": "got it"}
+{"turn": 14, "ts": "2026-10-27T10:14:00Z", "prompt": "the build is green"}
+{"turn": 15, "ts": "2026-10-27T10:15:00Z", "prompt": "fine"}
+{"turn": 16, "ts": "2026-10-27T10:16:00Z", "prompt": "ok"}
+{"turn": 17, "ts": "2026-10-27T10:17:00Z", "prompt": "thanks, that looks good"}
+{"turn": 18, "ts": "2026-10-27T10:18:00Z", "prompt": "yes"}
+{"turn": 19, "ts": "2026-10-27T10:19:00Z", "prompt": "sounds right"}
+{"turn": 20, "ts": "2026-10-27T10:20:00Z", "prompt": "Please make sure the compaction summary keeps every open PM directive verbatim. Also add a check that flags each directive with no task row. Thanks for the update."}

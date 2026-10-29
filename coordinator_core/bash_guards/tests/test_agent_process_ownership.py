@@ -141,7 +141,7 @@ def test_target_older_than_shell_denied(home, table):
 def test_reused_shell_pid_older_than_record_denied(home, table):
     _record(5000.0)
     _shell(table, created=1000.0)
-    table.add(200, 1, 5001.0, ["python", "scratch/x/rescore.py", "--fast"], 100)
+    table.add(200, 100, 5001.0, ["python", "scratch/x/rescore.py", "--fast"], 100)
     assert apo.pid_owned_by_agent(200, AGENT, SESSION) is False
 
 
@@ -205,3 +205,41 @@ def test_live_sleep_own_vs_new_session(home, monkeypatch):
         for p in (shell, foreign):
             p.kill()
             p.wait()
+
+
+def test_orphan_after_dead_shell_with_command_text_allowed(home, table):
+    _record(1000.0)
+    table.add(500, 9999, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 777)
+    assert apo.pid_owned_by_agent(500, AGENT, SESSION) is True
+
+
+def test_orphan_with_cwd_under_ledgered_path_allowed(home, table):
+    apo.record_agent_command(SESSION, AGENT, "cd scratch/spike-run && ./editor &")
+    table.add(510, 1, time.time() + 5, ["CrashReportClient", "-x"], 777)
+    table.procs[510].cwd = lambda: "E:/r/scratch/spike-run/out"
+    assert apo.pid_owned_by_agent(510, AGENT, SESSION) is True
+
+
+def test_orphan_under_repo_root_token_denied(home, table):
+    apo.record_agent_command(SESSION, AGENT, "cd E:/r/repo-root && ./editor &")  # abs-path-ok: synthetic fixture path, never touched
+    table.add(515, 1, time.time() + 5, ["python", "-c", "refresh()"], 777)
+    table.procs[515].cwd = lambda: "E:\\r\\repo-root"  # abs-path-ok: synthetic fixture path, never touched
+    assert apo.pid_owned_by_agent(515, AGENT, SESSION) is False
+
+
+def test_unrelated_orphan_denied(home, table):
+    _record(1000.0)
+    table.add(520, 1, 1001.0, ["vim", "notes.txt"], 777)
+    assert apo.pid_owned_by_agent(520, AGENT, SESSION) is False
+
+
+def test_orphan_older_than_row_denied(home, table):
+    _record(1000.0)
+    table.add(530, 1, 500.0, ["python", "scratch/x/rescore.py", "--fast"], 777)
+    assert apo.pid_owned_by_agent(530, AGENT, SESSION) is False
+
+
+def test_orphan_sibling_agent_denied(home, table):
+    _record(1000.0)
+    table.add(540, 1, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 777)
+    assert apo.pid_owned_by_agent(540, "agent-b", SESSION) is False

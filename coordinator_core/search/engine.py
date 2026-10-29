@@ -61,6 +61,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence, Tuple
 
 from coordinator_core.search.regex_translate import translate as _translate_pattern
+from coordinator_core.warm.polite_io import ReadRateLimiter, open_bulk
 
 #: Hot-path caps. This module runs inside the PreToolUse hook, which gates EVERY Bash
 #: call -- unbounded work here does not merely slow one command, it wedges the session.
@@ -88,6 +89,13 @@ from coordinator_core.search.regex_translate import translate as _translate_patt
 #: [everyday] load"), not a preserved fraction of the old 2.5s wall-clock number.
 MAX_PROCESS_SECONDS = 0.5
 MAX_FILES_SCANNED = 20000
+#: Bytes one search may read; past it the answer truncates as `byte-cap`. Bounds the
+#: page-cache churn a bulk scan causes on a memory-starved box.
+MAX_BYTES_SCANNED = 256 * 1024 * 1024
+#: Reads under this size never wait on the limiter; the limiter throttles bulk reads only.
+_READ_RATE_THRESHOLD = 1024 * 1024
+_READ_RATE_BYTES_PER_SEC = 128 * 1024 * 1024
+_READ_LIMITER = ReadRateLimiter(_READ_RATE_BYTES_PER_SEC, _READ_RATE_THRESHOLD)
 MAX_MATCH_LINES = 2000
 MAX_RENDER_BYTES = 48_000
 
@@ -178,9 +186,10 @@ class Source:
 class GrepSource(Source):
 
     spec: SearchSpec
+    throttle: bool = False
 
     def execute(self, cwd: str, stop_after: Optional[int]) -> SourceOutcome:
-        result = run(self.spec, cwd=cwd, stop_after=stop_after)
+        result = run(self.spec, cwd=cwd, stop_after=stop_after, throttle=self.throttle)
         note = (
             "[searched in-process: %d file(s), %.0fms, no subprocess spawned]"
             % (result.files_scanned, result.elapsed_ms)
@@ -480,7 +489,7 @@ def _stage_grep_filter(args: Sequence[str]) -> Stage:
 
     # coordinator-content-repo#85 row 10: `needs_complete_input=True`, not False. A downstream
     # filter grep is order/selection-sensitive over the UPSTREAM search's raw
-    # match set -- if the upstream truncated at a cap (match-cap/file-cap) before
+    # match set -- if the upstream truncated at a cap (match-cap/file-cap/byte-cap) before
     # this filter ran, matches that would have passed the filter may already be
     # gone, and the caller has no way to tell a genuinely-filtered result from a
     # truncated-then-filtered one. That is exactly the class `needs_complete_input`
@@ -611,7 +620,11 @@ def resolve_plain_path_operand(operand: str, cwd: str) -> str:
     return base
 
 
-def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> SearchResult:
+def run(
+    spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None, throttle: bool = False
+) -> SearchResult:
+    """`throttle` charges `_READ_LIMITER` per file read; only a background bulk scan sets
+    it -- the hook path must never wait."""
     rx = compile_spec(spec)
     targets = _expand_targets(spec.targets, cwd)
     prune = DEFAULT_PRUNE_DIRS | set(spec.exclude_dir)
@@ -651,6 +664,7 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
     default_prune_hit = False
     last_group: Optional[Tuple[str, int]] = None
     started = time.process_time()
+    bytes_scanned = [0]
 
     def budget_exhausted() -> bool:
         nonlocal truncated, cap_hit
@@ -659,6 +673,9 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
             return True
         if files_scanned > MAX_FILES_SCANNED:
             truncated, cap_hit = True, "file-cap"
+            return True
+        if bytes_scanned[0] > MAX_BYTES_SCANNED:
+            truncated, cap_hit = True, "byte-cap"
             return True
         if time.process_time() - started > MAX_PROCESS_SECONDS:
             raise Unanswerable("search exceeded the %.1fs process-time budget" % MAX_PROCESS_SECONDS)
@@ -674,7 +691,7 @@ def run(spec: SearchSpec, cwd: str = ".", stop_after: Optional[int] = None) -> S
         if budget_exhausted():
             return False
         files_scanned += 1
-        text = _read_text(path)
+        text = _read_text(path, bytes_scanned, throttle)
         if text is None:
             return True
         lines = text.splitlines()
@@ -811,8 +828,16 @@ def _render_line(path: str, lineno: int, line: str, spec: SearchSpec,
     return prefix + line
 
 
-def _read_text(path: str) -> Optional[str]:
+def _read_text(
+    path: str, bytes_read: Optional[List[int]] = None, throttle: bool = False
+) -> Optional[str]:
     """Read a file as text, None if binary, or raise Unanswerable if unreadable.
+
+    Opens via `polite_io.open_bulk` (sequential-scan hint, no mmap); `bytes_read[0]`, when
+    given, accumulates the bytes for the caller's `MAX_BYTES_SCANNED` budget. The shared
+    `ReadRateLimiter` is charged (and may sleep) only when `throttle` is true: the hook
+    path leaves it false, because a hook must never wait (500ms brightline); only a bulk
+    background scan opts in.
 
     Binary detection mirrors grep's own NUL-byte heuristic rather than guessing at
     encodings -- grep prints `Binary file X matches` and does not dump content, so
@@ -830,11 +855,15 @@ def _read_text(path: str) -> Optional[str]:
     and the caller pays one bash spawn for a complete answer.
     """
     try:
-        with open(path, "rb") as handle:
+        with open_bulk(path) as handle:
             head = handle.read(8192)
             if b"\x00" in head:
                 return None
             rest = handle.read()
     except OSError as exc:
         raise Unanswerable("cannot read %r: %s" % (path, exc))
+    if throttle:
+        _READ_LIMITER.acquire(len(head) + len(rest))
+    if bytes_read is not None:
+        bytes_read[0] += len(head) + len(rest)
     return (head + rest).decode("utf-8", errors="replace")

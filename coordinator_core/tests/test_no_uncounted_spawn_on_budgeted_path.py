@@ -564,6 +564,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/completion_receipts/approve.py",
         ("_approve_op",),
     ),
+    # Enrolled 2026-10-28: empty reachable spawn set (env/path probes only).
+    "install.content_root_resolve": (
+        "coordinator_core/ops/content_root_resolve.py",
+        ("_content_root_resolve",),
+    ),
     "hooks.sessionstart_async_dispatch": (
         "coordinator_core/hooks/sessionstart_async_dispatch.py",
         ("_handler",),
@@ -632,6 +637,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "hooks.sessionend_archive_session": (
         "coordinator_core/hooks/sessionend_archive_session.py",
         ("_handler",),
+    ),
+    "hooks.sessionend_pm_directive_check": (
+        "coordinator_core/ops/pm_directive_map.py",
+        ("_sessionend_pm_directive_check",),
     ),
     "hooks.watchdog_undischarged_next_move": (
         "coordinator_core/hooks/watchdog_undischarged_next_move.py",
@@ -1525,6 +1534,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "baton.pm_turns": (
         "coordinator_core/ops/baton_pm_turns.py",
         ("_pm_turns",),
+    ),
+    "baton.pm_directive_unmapped": (
+        "coordinator_core/ops/pm_directive_map.py",
+        ("_pm_directive_unmapped",),
+    ),
+    "baton.pm_directive_dispose": (
+        "coordinator_core/ops/pm_directive_map.py",
+        ("_pm_directive_dispose",),
     ),
     "changelog.upsert_reviewed": (
         "coordinator_core/ops/changelog_ops.py",

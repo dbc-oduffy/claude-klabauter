@@ -37,6 +37,9 @@ def blitz_text():
 
 def _emit_m_ask(repo, capsys, blitz_text, monkeypatch):
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: blitz_text)
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS)
+    # Hoisting is off in these tests, so the real plan-blitz script is over the cap here; size is pinned by test_ask_script_byte_headroom.
+    monkeypatch.setattr(ask_compose._emit, "_WORKFLOW_SCRIPT_BYTE_CAP", 4 * ask_compose._emit._WORKFLOW_SCRIPT_BYTE_CAP)
     (repo / "docs").mkdir(exist_ok=True)
     (repo / "docs" / "ctx.md").write_text("context", encoding="utf-8")
     rc = cli.main(

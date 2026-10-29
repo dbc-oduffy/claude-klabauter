@@ -93,12 +93,25 @@ from typing import Optional
 #: `resolve_git_root_cheap`'s own docstring for why a verdict-affecting caller
 #: must never make this substitution.
 from coordinator_core.subagent_sandbox import resolve_git_root_cheap
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 _COUNTS_FILENAME = "advisory-fire-counts.jsonl"
 _DENY_COUNTS_FILENAME = "deny-fire-counts.jsonl"
 
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
+
+
+def _append_bounded(path: Path, record: dict) -> None:
+    """mkdir + append one JSON line, dropped if the sink stalls past the deadline."""
+    line = json.dumps(record) + "\n"
+
+    def _write() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+
+    run_bounded(str(path), _write, default=None)
 
 
 def record_advisory_fire(guard_name: str, session_id: str, cwd: Optional[str] = None) -> None:
@@ -122,10 +135,8 @@ def record_advisory_fire(guard_name: str, session_id: str, cwd: Optional[str] = 
     if not git_root:
         return
     path = Path(_share_dir(git_root, session_id)) / _COUNTS_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
     record = {"guard": guard_name, "at": datetime.now(timezone.utc).isoformat()}
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    _append_bounded(path, record)
 
 
 def record_deny_fire(
@@ -160,12 +171,10 @@ def record_deny_fire(
     if not git_root:
         return
     path = Path(_share_dir(git_root, session_id)) / _DENY_COUNTS_FILENAME
-    path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "guard": guard_name,
         "session": session_id,
         "at": datetime.now(timezone.utc).isoformat(),
         "cleared": bool(cleared),
     }
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    _append_bounded(path, record)

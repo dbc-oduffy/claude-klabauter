@@ -173,6 +173,7 @@ def test_a_gitignored_plan_stays_out(repo):
 def test_a_candidate_left_dirty_is_run_artifact_residue(repo, monkeypatch):
     _stage_graph(repo)
     monkeypatch.setattr(run_artifacts, "landable", lambda *a, **k: run_artifacts.Landable())
+    monkeypatch.setattr(terminal_commit, "_reland_late_artifacts", lambda *a, **k: [])
 
     out = _fire(repo)
 
@@ -265,3 +266,95 @@ def test_an_undone_chunks_path_is_not_own_declared_for_sibling_filtering(repo, m
     assert "op.py" not in _git(["show", "--name-only", "--format=", "HEAD"], repo)
     assert seen_own, "sibling_run_claims was never consulted"
     assert all("op.py" not in own for own in seen_own), seen_own
+
+
+ASK = "ask-20261016T110000-dddddd"
+
+
+def _stage_ask_dir(root: Path) -> None:
+    _stage_graph(root)
+    _write(
+        root, f"{RECORD_DIR_ROOT}/{RUN}/run.json",
+        json.dumps({"sizing_rel": SIZING, "ask": ASK}),
+    )
+    _write(root, f"{RECORD_DIR_ROOT}/{ASK}/prompts/x.md", "prompt\n")
+    _write(root, f"{RECORD_DIR_ROOT}/{ASK}/withheld-prints.json", "{}\n")
+
+
+def _warp_dirty(root: Path) -> set:
+    return {
+        line[3:] for line in _git(["status", "--porcelain", "-uall", "--", RECORD_DIR_ROOT], root).splitlines()
+        if not line[3:].endswith("commit-request.txt")
+    }
+
+
+def test_a_terminal_run_leaves_no_ask_dir_file_dirty_and_reports_push(repo):
+    _stage_ask_dir(repo)
+
+    out = _fire(repo)
+
+    assert out["committed"] is True, out
+    assert "run_artifact_residue" not in out
+    assert _warp_dirty(repo) == set()
+    assert out["push"]["status"] in {"nudged", "not_pushed"}
+    assert out["push"]["reason"]
+
+
+def test_a_file_written_after_the_landing_is_relanded_in_the_same_op(repo, monkeypatch):
+    _stage_ask_dir(repo)
+    late = f"{RECORD_DIR_ROOT}/{ASK}/prompts/late.md"
+    real = terminal_commit._commit_residue
+
+    def _residue(*a, **k):
+        _write(repo, late, "late\n")
+        return real(*a, **k)
+
+    monkeypatch.setattr(terminal_commit, "_commit_residue", _residue)
+
+    out = _fire(repo)
+
+    assert out["committed"] is True, out
+    assert late in out["late_reland"]["paths"], out
+    assert late in out["run_artifacts"]["landed"]
+    assert "run_artifact_residue" not in out
+    assert _warp_dirty(repo) == set()
+
+
+def test_a_late_file_a_live_peer_holds_is_not_swept(repo, monkeypatch):
+    from coordinator_core.session import scope
+
+    _stage_ask_dir(repo)
+    late = f"{RECORD_DIR_ROOT}/{ASK}/prompts/late.md"
+    real = terminal_commit._commit_residue
+
+    def _residue(*a, **k):
+        _write(repo, late, "late\n")
+        return real(*a, **k)
+
+    monkeypatch.setattr(terminal_commit, "_commit_residue", _residue)
+    monkeypatch.setattr(
+        scope, "contested_by_live_peers",
+        lambda paths, sid, cwd=None: {late: ["peer"]} if late in paths else {},
+    )
+
+    out = _fire(repo, session_id=SESSION)
+
+    assert out["committed"] is True, out
+    assert late in _dirty(repo)
+    assert late not in (out.get("late_reland") or {}).get("paths", [])
+
+
+def test_the_push_nudge_is_called_after_a_landed_commit(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_push
+
+    _stage_graph(repo)
+    calls: list = []
+    monkeypatch.setattr(
+        run_push, "nudge_push",
+        lambda w, r: calls.append((w, r)) or {"status": "not_pushed", "reason": "stub"},
+    )
+
+    out = _fire(repo)
+
+    assert out["push"] == {"status": "not_pushed", "reason": "stub"}
+    assert len(calls) == 1

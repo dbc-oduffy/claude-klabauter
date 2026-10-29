@@ -1,5 +1,6 @@
 """coordinator_core.bash_guards.guard_subagent_heavy_ue_launch -- PreToolUse
-(Bash|PowerShell) hard-deny: a dispatched agent never launches an Unreal build or editor.
+(Bash|PowerShell) hard-deny: a dispatched agent never launches an Unreal build or editor, an
+Electron app or dev server, or (Windows) a 3+ `&` background-shell fan-out.
 
 Port of: coordinator-content-repo coordinator/hooks/scripts/guard-subagent-heavy-ue-launch.py (169088ceb).
 UBT, RunUAT, build-plugin.ps1 and UnrealEditor runs are Group EM slot legs (tripwire
@@ -23,6 +24,8 @@ holds the slot and is never guarded. Fails open on a malformed payload or any ex
 
 from __future__ import annotations
 
+import re
+import sys
 from typing import Any, Callable, Dict, List, Optional
 
 from coordinator_core.bash_guards._command_tokenizer import _strip_heredocs
@@ -247,6 +250,132 @@ def launches_heavy(cmd: str, depth: int = 0) -> bool:
     return False
 
 
+_PM_BASES = frozenset({"npm", "pnpm", "yarn", "bun", "npx", "pnpx", "bunx"})
+_PM_VALUE_FLAGS = frozenset({"--filter", "-f", "--dir", "-c", "--prefix", "-w", "--workspace", "-p", "--package"})
+_PM_WORDS = frozenset({"run", "run-script", "exec", "dlx", "x"})
+_DEV_PREFILTER = ("electron", "dev")
+_BG_MAX = 2
+
+_DEV_REASON = (
+    "BLOCKED: an Electron app or dev server is a Group EM slot leg; a subagent runs the scoped "
+    "single-file test instead (python -m coordinator_core.testing.scoped_pytest --allow ... -- ...)."
+)
+_BG_REASON = (
+    "BLOCKED: a background-shell fan-out (%d+ `&` launches, or one `&` inside a loop) is a Group EM slot leg; "
+    "run the work sequentially or as one scoped single-file test."
+) % (_BG_MAX + 1)
+
+
+def _segment_launches_dev(tokens: List[str]) -> bool:
+    i = 0
+    while i < len(tokens) and (tokens[i].lower() in _PASS_THROUGH or _is_env_assign(tokens[i])):
+        i += 1
+    if i >= len(tokens):
+        return False
+    base, rest = _base(tokens[i]), tokens[i + 1:]
+    if base == "electron":
+        return True
+    if base not in _PM_BASES:
+        return False
+    words: List[str] = []
+    skip = False
+    for tok in rest:
+        if skip:
+            skip = False
+        elif tok.startswith("-"):
+            skip = "=" not in tok and tok.lower() in _PM_VALUE_FLAGS
+        else:
+            words.append(tok.lower())
+    while words and words[0] in _PM_WORDS:
+        words = words[1:]
+    if not words:
+        return False
+    head = _base(words[0])
+    return head == "electron" or head == "dev" or head.startswith(("dev:", "electron:"))
+
+
+def launches_dev_or_electron(cmd: str, depth: int = 0) -> bool:
+    """True when `cmd` runs `electron`, `npx electron`, or a package-manager `dev`/`dev:*`/`electron:*`
+    script. Other dev servers (`npx vite`, `npm start`) are not matched."""
+    if depth == 0:
+        low = cmd.lower()
+        if not any(s in low for s in _DEV_PREFILTER):
+            return False
+        cmd = _strip_heredocs(cmd)
+    for tokens in _segments(cmd):
+        if _segment_launches_dev(tokens):
+            return True
+        if depth < _MAX_DEPTH:
+            for j, tok in enumerate(tokens):
+                if tok.lower() in ("-c", "/c", "/k", "-command") and j > 0 and _base(tokens[0]) in (
+                    _PLAIN_INTERPRETERS | _PWSH_NAMES
+                ) and j + 1 < len(tokens):
+                    if launches_dev_or_electron(" ".join(tokens[j + 1:]), depth + 1):
+                        return True
+    return False
+
+
+def background_launches(cmd: str) -> int:
+    """Count of unquoted trailing `&` operators (a command sent to the background) in `cmd`."""
+    if "&" not in cmd:
+        return 0
+    cmd = _strip_heredocs(cmd)
+    count, quote, prev = 0, "", ""
+    n = len(cmd)
+    for i, ch in enumerate(cmd):
+        if quote:
+            if ch == quote:
+                quote = ""
+            continue
+        if ch in "\"'":
+            quote = ch
+        elif ch == "&":
+            nxt = cmd[i + 1] if i + 1 < n else ""
+            if prev not in ("&", ">", "<", "") and nxt not in ("&", ">") and prev not in (";", "|", "("):
+                count += 1
+        if ch not in " \t\r":
+            prev = ch
+        if ch == "\n":
+            prev = ""
+    return count
+
+
+_LOOP_RE = re.compile(r"(?:^|[;&|({\n])\s*(?:for|while|until)\s.*?\bdo\b(.*)", re.S)
+
+
+def _mask_quotes(cmd: str) -> str:
+    out: List[str] = []
+    quote = ""
+    for ch in cmd:
+        if quote:
+            out.append(ch if ch == quote else " ")
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def loop_background_fanout(cmd: str) -> bool:
+    """True when an unquoted `&` backgrounds work inside a `for|while|until ... do` body: one
+    textual `&` that fans out once per iteration."""
+    if "&" not in cmd:
+        return False
+    match = _LOOP_RE.search(_mask_quotes(_strip_heredocs(cmd)))
+    if match is None:
+        return False
+    body = re.split(r"\bdone\b", match.group(1), maxsplit=1)[0]
+    return background_launches(body) >= 1
+
+
+def _storm_guard_applies() -> bool:
+    """The background-fan-out deny is Windows-only: process creation there is the box cost."""
+    return sys.platform == "win32"
+
+
 def check(
     payload: Dict[str, Any],
     resolve_wiki_citation: Optional[Callable[[str], str]] = None,
@@ -264,9 +393,14 @@ def check(
         cmd = tool_input.get("command") if isinstance(tool_input, dict) else None
         if not isinstance(cmd, str) or not cmd.strip():
             return None
-        if not launches_heavy(cmd):
+        if launches_heavy(cmd):
+            reason = _REASON if any(s in cmd.lower() for s in _PREFILTER) else _PY_REASON
+        elif launches_dev_or_electron(cmd):
+            reason = _DEV_REASON
+        elif _storm_guard_applies() and (background_launches(cmd) > _BG_MAX or loop_background_fanout(cmd)):
+            reason = _BG_REASON
+        else:
             return None
-        reason = _REASON if any(s in cmd.lower() for s in _PREFILTER) else _PY_REASON
     except Exception:
         return None
     from coordinator_core.bash_guards._rewrite_support import _deny_record, _em_stamped

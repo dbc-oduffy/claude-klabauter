@@ -12,6 +12,8 @@ import datetime as _dt
 import functools
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -52,6 +54,7 @@ def _inproc(id_: str, target: str, args: list[str], detail: str) -> dict[str, An
 
 
 CATCH_UP_STEP = "catchup-gap-detect"
+STRUCTURAL_INDEX_STEP = "index-structural-index-refresh"
 CATCH_UP_WINDOW_DAYS = 14
 SYNTHESIZED_BACKFILL_MARKER = "(synthesized backfill)"
 
@@ -134,6 +137,112 @@ def catchup_gap_detect(repo_root: Path) -> tuple[int, str]:
     if not gaps:
         return 0, ""
     return 0, f"- Catch-up: {len(gaps)} past day(s) with commits and no concluded wrap: {', '.join(gaps)}"
+
+
+ADMIT_HOLD_EXIT = 4
+_ADMIT_TIMEOUT_SECS = 30
+_REFRESH_TIMEOUT_SECS = 60
+
+
+def _bin_script(name: str) -> Path:
+    return Path(__file__).resolve().parents[2] / "coordinator" / "bin" / f"{name}.py"
+
+
+def _run_windowless(argv: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, errors="replace",
+        timeout=timeout, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+def structural_index_refresh_admitted(repo_root: Path) -> tuple[int, str]:
+    """Launch the detached structural-index refresh only after `box-memory-snapshot --admit-peak` admits.
+
+    Exit 4 (HOLD) or any admit failure skips the launch and says so; the refresh never runs unadmitted.
+    The refresh CLI starts the detached wrapper and returns at once (`--timeout 0`).
+    """
+    from coordinator_core.ops.ceremony import post_close_admission
+
+    peak_gib = post_close_admission.DECLARED_PEAK_MB["structural-index"] / 1024
+    try:
+        admit = _run_windowless(
+            [sys.executable, str(_bin_script("box-memory-snapshot")), "--admit-peak", f"{peak_gib:g}"],
+            _ADMIT_TIMEOUT_SECS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 0, f"structural-index: refresh skipped (admit unavailable: {type(exc).__name__})"
+    if admit.returncode == ADMIT_HOLD_EXIT:
+        return 0, "structural-index: refresh held (insufficient memory); index may be stale"
+    if admit.returncode != 0:
+        return 0, f"structural-index: refresh skipped (admit exited {admit.returncode})"
+    try:
+        done = _run_windowless(
+            [sys.executable, str(_bin_script("structural-index-refresh")), "--root", str(repo_root), "--timeout", "0"],
+            _REFRESH_TIMEOUT_SECS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 0, f"structural-index: refresh skipped ({type(exc).__name__})"
+    return 0, done.stdout.strip()
+
+
+NEWER_INDEX_STEP = "index-newer-index-check"
+NEWER_INDEX_RELEASE_REPO_ENV = "COORDINATOR_INDEX_RELEASE_REPO"
+NEWER_INDEX_RELEASE_TAG = "example-retrieval-repo-index"
+LOCAL_INDEX_REV_RELPATH = ".structural-index/refresh-last.json"
+_NEWER_INDEX_PROBE_TIMEOUT_SECS = 20
+
+
+def _local_index_rev(repo_root: Path) -> str | None:
+    """`finished_at` of `.structural-index/refresh-last.json` (the last refresh attempt, which a deferral or failure also stamps); None when unreadable."""
+    try:
+        data = json.loads((Path(repo_root) / LOCAL_INDEX_REV_RELPATH).read_text(encoding="utf-8"))
+        rev = data.get("finished_at")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return rev if isinstance(rev, str) and rev else None
+
+
+def newer_index_check(repo_root: Path) -> tuple[int, str]:
+    """Refresh the newer-index marker once per TTL with one `gh release view` probe; always exit 0.
+
+    The release repo comes from `$COORDINATOR_INDEX_RELEASE_REPO` (unset: skipped, marker untouched).
+    A fresh marker spawns nothing. The local rev is `_local_index_rev` (ISO UTC, so string order is
+    time order); a null local rev writes `local_rev: null` and counts as newer. A probe failure
+    (no gh, offline, timeout, bad JSON) leaves the old marker.
+    """
+    import time
+
+    from coordinator_core.index_distribution import newer_index_marker as nim
+
+    now = time.time()
+    if nim.is_fresh(nim.read_marker(repo_root), now):
+        return 0, ""
+    repo = os.environ.get(NEWER_INDEX_RELEASE_REPO_ENV, "").strip()
+    if not repo:
+        return 0, f"newer-index: check skipped ({NEWER_INDEX_RELEASE_REPO_ENV} unset)"
+    try:
+        probe = _run_windowless(
+            ["gh", "release", "view", NEWER_INDEX_RELEASE_TAG, "-R", repo, "--json", "tagName,publishedAt"],
+            _NEWER_INDEX_PROBE_TIMEOUT_SECS,
+        )
+        if probe.returncode != 0:
+            return 0, f"newer-index: check skipped (gh exited {probe.returncode})"
+        data = json.loads(probe.stdout)
+        tag, published = data["tagName"], data["publishedAt"]
+        if not isinstance(tag, str) or not isinstance(published, str):
+            raise ValueError("release fields")
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
+        return 0, f"newer-index: check skipped ({type(exc).__name__})"
+    local = _local_index_rev(repo_root)
+    newer = local is None or published > local
+    try:
+        nim.write_marker(repo_root, {
+            "kind": "structural", "checked_at": now, "newer_available": newer,
+            "local_rev": local, "remote_rev": published, "detail": f"{tag} published {published}",
+        })
+    except (OSError, ValueError) as exc:
+        return 0, f"newer-index: marker not written ({type(exc).__name__})"
+    return 0, f"newer-index: a newer structural index is available ({published})" if newer else ""
 
 
 def touch_weekly_marker(repo_root: Path) -> tuple[int, str]:
@@ -264,6 +373,10 @@ STEP_TABLE: tuple[dict[str, Any], ...] = (
     _cli("cache-orientation-cache", "regenerate-orientation-cache", ["--invoker", "workday-start"],
          "Step 5.5: regenerate state/orientation_cache.md."),
     _cli("cache-copy-currency-refresh", "copy-currency-refresh", [], "Step 5.65."),
+    _inproc(STRUCTURAL_INDEX_STEP, f"{__name__}:structural_index_refresh_admitted", [],
+            "Structural index refresh, launched only after the memory admit; a HOLD skips it."),
+    _inproc(NEWER_INDEX_STEP, f"{__name__}:newer_index_check", [],
+            "Refresh the local newer-index marker on a TTL; one best-effort release probe."),
     _cli("hook-ceremony-hook-output", "coordinator-ceremony-hook", ["workday-start"],
          "Step 5.6: the workday_start_post_command output."),
 )
@@ -338,6 +451,8 @@ RUN_FIELDS: Mapping[str, Mapping[str, Any]] = {
     "marker-weekly-touch": {"stage": "marker", "heading": _OBS, "gate": "weekly"},
     "cache-orientation-cache": {"stage": "orientation-cache", "heading": _OBS, "gate": "tasks-dir"},
     "cache-copy-currency-refresh": {"stage": "copies-cache", "heading": _OBS},
+    STRUCTURAL_INDEX_STEP: {"stage": "structural-index", "heading": _OBS},
+    NEWER_INDEX_STEP: {"stage": "structural-index", "heading": _OBS},
     "hook-ceremony-hook-output": {"stage": "ceremony-hook", "heading": _OBS},
 }
 

@@ -266,3 +266,103 @@ def test_append_reflog_uses_git_format_and_lf_only(tmp_path: Path) -> None:
     line = raw.decode("utf-8")
     assert line.startswith(f"{old_sha} {new_sha} {who}\t")
     assert line.endswith("manual entry\n")
+
+
+def _packed_repo(path: Path) -> tuple[Path, list[str]]:
+    _init_repo(path)
+    (path / "b.md").write_text("b\n", encoding="utf-8")
+    _git("add", "-A", cwd=path)
+    _git("commit", "-qm", "two", cwd=path)
+    _git("gc", "-q", cwd=path)
+    shas = _git("rev-list", "--objects", "--all", cwd=path).stdout.split()
+    shas = [s for s in shas if len(s) == 40]
+    return resolve_git_dir(path), shas
+
+
+def test_n_reads_open_one_pack_once_per_scope(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.git import call_io_scope, git_objects
+
+    common_dir, shas = _packed_repo(tmp_path)
+    git_objects._OBJECT_CACHE.clear()
+    opened: list = []
+    real = git_objects._read_pack_bytes
+    monkeypatch.setattr(git_objects, "_read_pack_bytes", lambda p: (opened.append(p), real(p))[1])
+
+    with call_io_scope.call_io_scope():
+        for sha in shas:
+            assert _read_object(common_dir, sha) is not None
+    assert len(shas) >= 3
+    assert len(opened) == 1
+
+    git_objects._OBJECT_CACHE.clear()
+    opened.clear()
+    for sha in shas:
+        assert _read_object(common_dir, sha) is not None
+    assert len(opened) == len(shas)
+
+
+def test_pack_file_deletable_after_scope_exits(tmp_path: Path) -> None:
+    from coordinator_core.git import call_io_scope, git_objects
+
+    common_dir, shas = _packed_repo(tmp_path)
+    git_objects._OBJECT_CACHE.clear()
+    with call_io_scope.call_io_scope():
+        assert _read_object(common_dir, shas[0]) is not None
+    for pack in (common_dir / "objects" / "pack").glob("*.pack"):
+        os.chmod(pack, 0o666)
+        pack.unlink()
+        assert not pack.exists()
+
+
+def _alternate_repo(tmp_path: Path) -> tuple[Path, Path, str]:
+    donor = tmp_path / "donor"
+    _init_repo(donor)
+    sha = _git("rev-parse", "HEAD", cwd=donor).stdout.strip()
+    _git("gc", "-q", cwd=donor)
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    _git("init", "-q", cwd=consumer)
+    return donor / ".git", resolve_git_dir(consumer), sha
+
+
+def _set_alternates(consumer_git: Path, text: str) -> None:
+    info = consumer_git / "objects" / "info"
+    info.mkdir(parents=True, exist_ok=True)
+    (info / "alternates").write_text(text, encoding="utf-8")
+
+
+def test_alternates_mixed_separators(tmp_path: Path) -> None:
+    from coordinator_core.git import git_objects
+
+    donor_git, consumer_git, sha = _alternate_repo(tmp_path)
+    git_objects._OBJECT_CACHE.clear()
+    objects = str(donor_git / "objects")
+    mixed = objects.replace(os.sep, "/", 1) if os.sep == "\\" else objects
+    _set_alternates(consumer_git, "# note\n\n" + mixed + "\n")
+    result = _read_object(consumer_git, sha)
+    assert result is not None and result[0] == "commit"
+
+
+def test_alternates_relative_entry(tmp_path: Path) -> None:
+    from coordinator_core.git import git_objects
+
+    donor_git, consumer_git, sha = _alternate_repo(tmp_path)
+    git_objects._OBJECT_CACHE.clear()
+    rel = os.path.relpath(donor_git / "objects", consumer_git / "objects")
+    _set_alternates(consumer_git, rel + "\n")
+    result = _read_object(consumer_git, sha)
+    assert result is not None and result[0] == "commit"
+
+
+def test_alternates_cycle_terminates_and_misses(tmp_path: Path) -> None:
+    from coordinator_core.git import git_objects
+
+    donor_git, consumer_git, _sha = _alternate_repo(tmp_path)
+    git_objects._OBJECT_CACHE.clear()
+    _set_alternates(consumer_git, str(donor_git / "objects") + "\n" + str(consumer_git / "objects") + "\n")
+    (donor_git / "objects" / "info").mkdir(parents=True, exist_ok=True)
+    (donor_git / "objects" / "info" / "alternates").write_text(
+        str(consumer_git / "objects") + "\n", encoding="utf-8"
+    )
+    assert _read_object(consumer_git, "0" * 40) is None
+    assert git_objects._alternate_common_dirs(consumer_git) == [donor_git]

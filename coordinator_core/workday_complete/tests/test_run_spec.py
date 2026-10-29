@@ -336,3 +336,8 @@ def test_spec_declares_the_workday_start_template_and_a_closed_flag_set():
     }
     assert spec.template == "workflows/workday-start.mjs"
     assert spec.spec_points({}, {}, []) == []
+
+
+def test_structural_index_step_is_flag_only():
+    step = next(s for s in run_spec.residue({}) if s.id == "structural_index_refresh")
+    assert list(step.args) == ["--flag-only"]

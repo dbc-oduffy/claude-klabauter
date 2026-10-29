@@ -201,7 +201,11 @@ def test_result_lru_evicts_the_oldest_result_but_keeps_its_state():
     first = store.status(keys[0])
     assert first["state"] == dispatch_ack.STATE_FINISHED
     assert "result" not in first
-    assert first["result_retained"] is False
+    assert first["result_dropped"] == "evicted"
+    assert first["result_digest"] == {"n": 0}
+    assert "result_retained" not in first
+    kept = store.status(keys[1])
+    assert "result_digest" not in kept and "result_dropped" not in kept
     assert store.status(keys[1])["result"] == {"n": 1}
     assert store.status(keys[-1])["result"] == {"n": dispatch_ack.RESULT_RETAIN_COUNT}
 
@@ -214,7 +218,9 @@ def test_oversize_result_is_not_retained():
     store.stamp(key, dispatch_ack.OUTCOME_RESULT, result=big)
     status = store.status(key)
     assert status["state"] == dispatch_ack.STATE_FINISHED
-    assert status["result_retained"] is False
+    assert status["result_dropped"] == "over-cap"
+    assert status["result_digest"] == {"type": "str"}
+    assert "result_retained" not in status
     assert "result" not in status
 
 
@@ -225,7 +231,38 @@ def test_non_serialisable_result_is_not_retained():
     store.stamp(key, dispatch_ack.OUTCOME_RESULT, result={"o": object()})
     status = store.status(key)
     assert status["state"] == dispatch_ack.STATE_FINISHED
-    assert status["result_retained"] is False
+    assert status["result_dropped"] == "not-serialisable"
+    assert status["result_digest"] == {"omitted": ["o"]}
+    assert "result_retained" not in status
+
+
+def test_oversize_land_run_shaped_reply_digests_its_outcome():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "invoke.from_argv")
+    store.stamp(
+        key,
+        dispatch_ack.OUTCOME_RESULT,
+        result={"committed": True, "sha": "abc123", "log": "x" * (dispatch_ack.RESULT_RETAIN_BYTES // 4 + 1)},
+    )
+    status = store.status(key)
+    assert status["result_dropped"] == "over-cap"
+    assert status["result_digest"] == {"committed": True, "sha": "abc123", "omitted": ["log"]}
+
+
+def test_door_form_stdout_object_digests_under_stdout():
+    digest = dispatch_ack._outcome_digest(
+        {"stdout": '{"committed": false, "sha": null, "nested": {"a": 1}}', "stderr": "", "exit_code": 3}
+    )
+    assert digest["exit_code"] == 3
+    assert digest["stdout"] == {"committed": False, "sha": None, "omitted": ["nested"]}
+
+
+def test_digest_never_exceeds_its_byte_bound():
+    result = {f"k{i}": "v" * dispatch_ack.RESULT_DIGEST_STR_CHARS for i in range(100)}
+    digest = dispatch_ack._outcome_digest(result)
+    assert len(dispatch_ack.json.dumps(digest, separators=(",", ":")).encode("utf-8")) <= dispatch_ack.RESULT_DIGEST_BYTES
+    assert digest["truncated"] is True
 
 
 def test_total_result_bytes_are_capped():
@@ -352,3 +389,18 @@ def test_every_other_restamp_is_still_a_no_op():
     store.stamp(done, dispatch_ack.OUTCOME_ABANDONED)
     assert store.status(done)["result"] == {"v": 1}
     assert store.status(done)["outcome"] == dispatch_ack.OUTCOME_RESULT
+
+
+def test_digest_key_cap_bounds_small_scalar_keys():
+    digest = dispatch_ack._outcome_digest({f"k{i}": i for i in range(dispatch_ack.RESULT_DIGEST_KEYS + 10)})
+    scalars = [k for k in digest if k != "omitted"]
+    assert len(scalars) == dispatch_ack.RESULT_DIGEST_KEYS
+    assert len(digest["omitted"]) == 10
+
+
+def test_oversize_stdout_is_not_parsed_and_says_so():
+    big = '{"a": "' + "x" * dispatch_ack.RESULT_STDOUT_PARSE_BYTES + '"}'
+    digest = dispatch_ack._outcome_digest({"exit_code": 0, "stdout": big})
+    assert digest["stdout_unparsed"] is True and "stdout" not in digest
+    ok = dispatch_ack._outcome_digest({"exit_code": 0, "stdout": '{"a": 1}'})
+    assert ok["stdout"] == {"a": 1} and "stdout_unparsed" not in ok

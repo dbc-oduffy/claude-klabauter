@@ -205,6 +205,7 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from coordinator_core.contract.apply_base import normalize_decisions
 from coordinator_core.contract.decision_object.envelope import build_envelope
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
@@ -3284,6 +3285,23 @@ def resolve_lineage(
 # ---------------------------------------------------------------------------
 
 
+def _decision_entry(decisions: Optional[dict[str, Any]], key: str) -> Optional[dict[str, Any]]:
+    """The decisions entry for `key` in `{"disposition": v, ...}` form (a
+    `{"value": v}` or bare-string entry is widened through
+    `apply_base.normalize_decisions`), or `None` when absent. An entry of
+    unrecognized shape raises, naming the key and the accepted shapes."""
+    entry = (decisions or {}).get(key)
+    if entry is None:
+        return None
+    normalized, malformed = normalize_decisions({key: entry})
+    if malformed:
+        raise ValueError(
+            f"baton_assemble: decisions[{key!r}] has an unrecognized shape ({entry!r}); "
+            f'accepted: "<disposition>", {{"disposition": <v>}}, {{"value": <v>}}'
+        )
+    return normalized[key]
+
+
 def _repo_relative_posix(value: str, root: Optional[Path]) -> str:
     """Render `value` as a repo-relative forward-slash path for a frontmatter
     path field.
@@ -4402,9 +4420,9 @@ def _build_directives(
                 # the mint completes.
                 _pred_deployment_state = _resolved_predecessor_deployment_state(_pred_path, root)
                 if _pred_deployment_state == "closed":
-                    _decline_decision = (decisions or {}).get(f"{_d6_id}-closed-predecessor-decline")
+                    _decline_decision = _decision_entry(decisions, f"{_d6_id}-closed-predecessor-decline")
                     _force_supersede_closed = (
-                        isinstance(_decline_decision, dict)
+                        _decline_decision is not None
                         and _decline_decision.get("disposition") == "force-supersede"
                     )
                     if not _force_supersede_closed:
@@ -5346,9 +5364,9 @@ def brief(
     # so a divergent rung can actually be waived) and the post-return
     # null-out further down (which still only nulls `lineage["predecessor"]`
     # / `["predecessor_id"]` for `_build_directives`'s benefit).
-    _continuation_decision = decisions.get("j-continuation-vs-fork")
+    _continuation_decision = _decision_entry(decisions, "j-continuation-vs-fork")
     _excise_predecessor = (
-        isinstance(_continuation_decision, dict)
+        _continuation_decision is not None
         and _continuation_decision.get("disposition") == "excise"
     )
     _excise_decision_note: Optional[str] = None
@@ -5385,9 +5403,9 @@ def brief(
     # would raise. No auto-pick is introduced -- an absent or unresolved
     # decision leaves `_excise_rung` alone and the raise below converts to
     # a judgment point instead, per DR-207 DD#1.
-    _divergence_decision = decisions.get("j-divergent-deliverable-id")
+    _divergence_decision = _decision_entry(decisions, "j-divergent-deliverable-id")
     _divergence_disposition: Optional[str] = None
-    if isinstance(_divergence_decision, dict):
+    if _divergence_decision is not None:
         _divergence_disposition = _divergence_decision.get("disposition")
     if _divergence_disposition in ("keep-plan", "keep-predecessor"):
         if kind != "handoff":
@@ -5585,9 +5603,9 @@ def brief(
     # values. Sibling keys on a decision are tolerated by
     # `validate_decisions_shape` by design, so this needs no shape change
     # there.
-    _spinoff_association = decisions.get("j-spinoff-plan-sizing")
+    _spinoff_association = _decision_entry(decisions, "j-spinoff-plan-sizing")
     if (
-        isinstance(_spinoff_association, dict)
+        _spinoff_association is not None
         and _spinoff_association.get("disposition") == "associate"
     ):
         if kind != "spinoff":

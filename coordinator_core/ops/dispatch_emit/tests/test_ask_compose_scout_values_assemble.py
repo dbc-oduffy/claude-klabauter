@@ -38,10 +38,10 @@ def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]
 
 
-def _compose() -> str:
+def _compose(**over) -> str:
     return compose_ask_script(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
-        wrap_stage=_stub_wrap, plan_blitz_text="stub", **REVIEW_KW,
+        wrap_stage=_stub_wrap, plan_blitz_text="stub", **REVIEW_KW, **over,
     )
 
 
@@ -115,6 +115,15 @@ def test_a_non_zero_exit_with_values_fires_no_retry(tmp_path):
     out = _drive(first, [], tmp_path)
     assert [c["label"] for c in out["calls"]] == ["size"]
     assert "sizing-assemble failed (exit 2)" in out["halted"]["reason"]
+
+
+def test_staged_scout_body_moves_to_the_sink_and_the_retry_keeps_its_dynamic_command():
+    sink: dict[str, str] = {}
+    staged = _compose(staged_out=sink)
+    assert staged.count("run-1/prompts/scout.md in full") == 2  # the size leg and the size-retry leg
+    assert "sizing-assemble" in sink["scout"]
+    assert "--tshirt " in staged and "_scoutHasValues(_scoutedFirst)" in staged
+    assert "sizing-assemble" in _compose()
 
 
 def test_the_size_retry_call_site_stays_single():

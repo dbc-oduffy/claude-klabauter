@@ -32,6 +32,9 @@ import pytest
 
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
+from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
+    _commit_advisory_off,  # noqa: F401 -- autouse fixture reused
+)
 from coordinator_core.session.core import session_dir
 from coordinator_core.win_portability import no_console_creationflags
 

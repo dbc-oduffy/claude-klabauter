@@ -784,6 +784,11 @@ def _find_is_find_segment(seg: str) -> bool:
     return bool(re.match(r"^(/\S*/)?find(\s|$)", s))
 
 
+#: A single-digit `-maxdepth N` (0-9) bounds the walk, so a root-anchored find that
+#: carries one warns instead of denying; `-maxdepth 999` is no bound and still denies.
+_FIND_MAXDEPTH_RE = re.compile(r"(?:^|\s)-maxdepth\s+['\"]?\d['\"]?(?=\s|$)")
+
+
 def check_runaway_find(
     cmd: str,
     session_id: str = "",
@@ -798,6 +803,7 @@ def check_runaway_find(
         return None
 
     find_override = _override("COORDINATOR_ALLOW_FIND_ROOT", payload=payload)
+    bounded_advisory: Optional[Dict[str, Any]] = None
 
     for seg in _split_segments(cmd):
         if not seg.strip():
@@ -836,6 +842,20 @@ def check_runaway_find(
         if anchor_tok:
             if find_override:
                 continue
+            if _FIND_MAXDEPTH_RE.search(seg):
+                bounded_advisory = bounded_advisory or _alt_record(
+                    "advisory", "runaway-find",
+                    "Advisory: 'find' anchored at '%s' is depth-bounded, but a root "
+                    "anchor still walks a whole drive to that depth." % anchor_tok,
+                    (_offer("find . -maxdepth 3 -name '<pattern>'", "the pattern"),),
+                    em_text=(
+                        "Advisory: 'find' anchored at '%s' is depth-bounded, but a root "
+                        "anchor still walks a whole drive to that depth.\n\n"
+                        "Prefer:\n"
+                        "  find . -maxdepth 3 -name '<pattern>'" % anchor_tok
+                    ),
+                )
+                continue
             return _alt_record(
                 "deny", "runaway-find",
                 "BLOCKED: 'find' anchored at '%s' scans the whole disk — "
@@ -857,6 +877,7 @@ def check_runaway_find(
     #: this function's own parameter and is forwarded explicitly (C14c).
     for unwrapped_cmd in _shell_c_unwrap_payloads(cmd):
         result = check_runaway_find(unwrapped_cmd, session_id, payload=payload)
-        if result is not None:
+        if result is not None and getattr(result, "verdict_kind", "") != "advisory":
             return result
-    return None
+        bounded_advisory = bounded_advisory or result
+    return bounded_advisory

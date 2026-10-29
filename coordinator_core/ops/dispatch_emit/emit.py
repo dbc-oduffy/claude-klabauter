@@ -1570,8 +1570,9 @@ def _sidecar_run_key(plan_path: Optional[str]) -> str:
 
 
 def _review_run_key(session_id: Optional[str], plan_path: Optional[str], script_path: Optional[str]) -> Optional[str]:
-    """The review run key: session prefix plus the plan stem, so two plans emitted in one session
-    mint disjoint group slice ids (``<key>.g<N>``). Filename-safe; never a path or host name."""
+    """The review run key: session prefix, plan stem and the emitted script's stem (unique per emit),
+    so two plans, or two emits of one plan, in one session mint disjoint group slice ids
+    (``<key>.g<N>``). Filename-safe; never a path or host name."""
     session = (session_id or "")[:8]
     stem = re.sub(r"[^A-Za-z0-9_.-]", "-", _sidecar_run_key(plan_path)) if plan_path else ""
     emit_id = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(script_path.replace("\\", "/")).stem) if script_path else ""

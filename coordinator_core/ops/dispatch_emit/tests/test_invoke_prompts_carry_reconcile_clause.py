@@ -50,7 +50,7 @@ def _assert_clause_everywhere(script: str, *, marker: str = _INVOKE_PATH) -> int
 
 
 def test_clause_text_names_the_engine_contract_fields():
-    for token in ("-32004", "reconcile_command", "not_received", "finished", "exactly once"):
+    for token in ("-32004", "reconcile_command", "not_received", "finished", "exactly once", "executing"):
         assert token in _INDETERMINATE_RECONCILE_CLAUSE
 
 

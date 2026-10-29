@@ -42,6 +42,7 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-stash-destruction": BOX_DEGRADING,
     "block-worktree-creation": BOX_DEGRADING,
     "block-whole-filesystem-scan": BOX_DEGRADING,
+    "guard-disk-fill": BOX_DEGRADING,
     "guard-heavy-command-admission": BOX_DEGRADING,
     "block-external-workspace-vcs-write": BOX_DEGRADING,
     "block-editor-kill-by-name": BOX_DEGRADING,

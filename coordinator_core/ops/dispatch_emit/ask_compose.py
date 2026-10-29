@@ -24,7 +24,14 @@ from coordinator_core.ops.dispatch_emit import agent_body_dedupe as _agent_body_
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit import run_notes as _run_notes
 from coordinator_core.ops.dispatch_emit.ask_staged_prompts import Stager, stage as _stage_prompt, stage_literal_runs
-from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY, STAGE_PENDING_KEY, STAGED_INLINE_SLOT, STAGED_RESUME_KEY
+from coordinator_core.ops.dispatch_emit.fan_launcher import _twin_affixes
+from coordinator_core.ops.dispatch_emit.nested_run_contract import (
+    CHAIN_HANDOFF_KEY,
+    LAUNCHER_CHILD_EMIT_PARAM,
+    STAGE_PENDING_KEY,
+    STAGED_INLINE_SLOT,
+    STAGED_RESUME_KEY,
+)
 from coordinator_core.ops.dispatch_emit.reply_sidecar import (
     READ_STAGE_SIDECAR_JS,
     STAGE_REPLY_SCHEMA,
@@ -343,7 +350,6 @@ def _agent(
     run_id: str = _UNKEYED_RUN,
     agent_model: Optional[str] = None,
     effort: Optional[str] = None,
-    inherit_model: bool = False,
     stage_as: Optional[str] = None,
     stager: Optional[Stager] = None,
 ) -> str:
@@ -354,11 +360,11 @@ def _agent(
 
     Trap: a composer call site that omits ``run_id`` files its sidecar under ``_UNKEYED_RUN``;
     ``test_ask_prompts_name_sidecar_dir`` pins that no composed ask script does.
-    ``inherit_model`` emits no `model:`/`effort:` option: a typed plugin agent's definition supplies both,
-    and an explicit model on a typed call is denied.
+    Every call carries ``_emit._model_opt(agent_type, agent_model)``: the type's pinned model, or the
+    routed ``agent_model`` for an unpinned type.
     """
-    effort_opt = f"effort: {_lit(effort)}, " if effort and not inherit_model else ""
-    model_opt = "" if inherit_model else f"{_emit._model_opt(agent_type, agent_model)}, "
+    effort_opt = f"effort: {_lit(effort)}, " if effort else ""
+    model_opt = f"{_emit._model_opt(agent_type, agent_model)}, "
     clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, label)))
     if "coordinator-invoke" in prompt_expr:
         if LAND_RUN_OP in prompt_expr:
@@ -2434,7 +2440,44 @@ def _single_exit_review(blocks: list[str]) -> str:
     prep = prep.replace(_REVIEW_SLICES_GUARD, "  if (!_halted && (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))) {", 1)
     prep = prep.replace(f"return {{ halted: '{NO_SLICES_HALT}'", f"_halted = {{ halted: '{NO_SLICES_HALT}'", 1)
     rest = "\n\n".join(blocks[1:])
-    return prep + ("\n\n  if (!_halted) {\n" + rest + "\n  }" if rest else "")
+    return prep + ("\n\n  if (!_halted && !_alreadyDelivered) {\n" + rest + "\n  }" if rest else "")
+
+
+#: The executor's own DONE line, as the delivery notes carry it (`<row>: DONE (... already delivered at HEAD by commit <sha>)`).
+_ALREADY_DELIVERED_RE = r"/\bDONE[^|]{0,120}?already delivered[^|]{0,80}?\bcommit\s+([0-9a-f]{4,40})\b/i"
+_ALREADY_DELIVERED_SCHEMA = _obj(["ok"], {"ok": {"type": ["boolean", "null"]}, "error": {"type": ["string", "null"]}, "close": {}})
+
+
+def _already_delivered_fn(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
+    """`async function _alreadyDeliveredClose()`: the no-slices guard's hook, true when the run closed landed.
+
+    The executor's claim is read from `_deliveryNotes` (no spawn); only a named sha costs one mechanical
+    agent running `dispatch.record_halted_run_landed {in_run: true}`, whose ancestry and clean-write-set
+    checks are the proof. A refusal leaves the reason in `_alreadyDeliveredRefusal` for the halt.
+    """
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        f"Run exactly this one command and return its JSON reply: `{_INVOKE} {_HALTED_ROUTE_OP} '",
+        "js:JSON.stringify({ run_id: _runId, sha: _sha, in_run: true })",
+        f"'{_repo_flag(repo_root)}`. Return ok, error and close verbatim (null where absent). Run nothing else.",
+    )
+    call = _agent(
+        prompt, label="already-delivered-close", phase="review", agent_type=_MECHANICAL_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=_ALREADY_DELIVERED_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+    )
+    return (
+        "  async function _alreadyDeliveredClose() {\n"
+        f"    const _m = {_ALREADY_DELIVERED_RE}.exec(_deliveryNotes);\n"
+        "    if (!_m) return false;\n"
+        "    const _sha = _m[1].toLowerCase();\n"
+        "    let _r = null;\n"
+        f"    try {{ _r = await {call}; }} catch (e) {{ _alreadyDeliveredRefusal = 'the close agent failed: ' + "
+        "String((e && e.message) ?? e).slice(0, 200); return false; }\n"
+        "    if (_r && _r.ok === true) { _alreadyDelivered = { sha: _sha, close: _r.close ?? null }; return true; }\n"
+        "    _alreadyDeliveredRefusal = String((_r && _r.error) ?? 'the close agent returned no reply').slice(0, 300);\n"
+        "    return false;\n"
+        "  }"
+    )
 
 
 def _row_sidecar_js(run_id: str, label_prefix: str) -> str:
@@ -2707,7 +2750,7 @@ def _objective_js(
     )
     check_call = _agent(
         check_prompt, label="objective-check:wave-", phase=phase, agent_type=_emit._TEST_AGENT_TYPE,
-        schema=reply_schema, run_id=run_id, inherit_model=True,
+        schema=reply_schema, run_id=run_id,
     ).replace("label: 'objective-check:wave-',", "label: 'objective-check:wave-' + n,", 1)
 
     calibrate_prompt = _cat(
@@ -2722,7 +2765,7 @@ def _objective_js(
             "problems": {"type": "array", "items": {"type": "object"}}, "calibration": {"type": "object"},
             "error": {"type": ["string", "null"]},
         }),
-        run_id=run_id, inherit_model=True,
+        run_id=run_id,
     )
     rewrite_prompt = _cat(
         f"{head}\n\n{anchor}\n\n{ledger_obj}Falsifier rewrite leg. The wave-0 calibration found a falsifier that cannot tell "
@@ -2734,7 +2777,7 @@ def _objective_js(
     )
     rewrite_call = _agent(
         rewrite_prompt, label="objective-falsifier-rewrite", phase=phase, agent_type=OBJECTIVE_FALSIFIER_AGENT,
-        schema=_obj(["rewritten"], {"rewritten": {"type": "boolean"}}), run_id=run_id, inherit_model=True,
+        schema=_obj(["rewritten"], {"rewritten": {"type": "boolean"}}), run_id=run_id,
     )
     judge_prompt = _cat(
         f"{head}\n\n{anchor}\n\n{ledger_obj}Objective gate. The falsifier ruled not_met. Input ",
@@ -2747,12 +2790,12 @@ def _objective_js(
         f"{session_tail}",
     )
     judge_call = _agent(
-        judge_prompt, label="objective-judge", phase=phase, agent_type=OBJECTIVE_JUDGE_AGENT,
+        judge_prompt, label="objective-judge", phase=phase, agent_type=OBJECTIVE_JUDGE_AGENT, agent_model="sonnet",
         schema=_obj(["delta_plan_path", "rows"], {
             "delta_plan_path": _STR, "rows": {"type": "array", "items": {"type": "object"}}, "reason": _STR,
             "cost_usd": {"type": "number"}, "tokens": {"type": "number"},
         }),
-        run_id=run_id, inherit_model=True,
+        run_id=run_id,
     ).replace("label: 'objective-judge',", "label: 'objective-judge:' + iteration,", 1)
     research_prompt = _cat(
         f"{head}\n\n{anchor}\n\n{ledger_obj}Rethink research. ",
@@ -2761,9 +2804,9 @@ def _objective_js(
         f"{objective_rel}. Return `findings_path`.{session_tail}",
     )
     research_call = _agent(
-        research_prompt, label="objective-research", phase=phase, agent_type=OBJECTIVE_RESEARCH_AGENT,
+        research_prompt, label="objective-research", phase=phase, agent_type=OBJECTIVE_RESEARCH_AGENT, agent_model="haiku",
         schema=_obj(["findings_path"], {"findings_path": _STR, "cost_usd": {"type": "number"}, "tokens": {"type": "number"}}),
-        run_id=run_id, inherit_model=True,
+        run_id=run_id,
     ).replace("label: 'objective-research',", "label: 'objective-research:' + iteration,", 1)
     rethink_prompt = _cat(
         f"{head}\n\n{anchor}\n\n{ledger_obj}Rethink plan. Findings: ",
@@ -2779,7 +2822,7 @@ def _objective_js(
             "approach_path": {"type": ["string", "null"]}, "rows": {"type": "array", "items": {"type": "object"}},
             "cost_usd": {"type": "number"}, "tokens": {"type": "number"},
         }),
-        run_id=run_id, inherit_model=True,
+        run_id=run_id,
     ).replace("label: 'objective-rethink',", "label: 'objective-rethink:' + iteration,", 1)
     row_prompt = _cat(
         f"{head}\n\n{anchor}\n\n{ledger_obj}Objective row ",
@@ -2790,7 +2833,7 @@ def _objective_js(
     row_call = _agent(
         row_prompt, label="objective-row:", phase=phase, agent_type=_emit._EXECUTOR_AGENT_TYPE,
         schema=_obj(["status"], {"status": _STR, "summary": _STR, "cost_usd": {"type": "number"}, "tokens": {"type": "number"}}),
-        run_id=run_id, inherit_model=True,
+        run_id=run_id,
     ).replace("label: 'objective-row:',", "label: 'objective-row:' + String(row.id),", 1)
 
     return (
@@ -3130,6 +3173,9 @@ def compose_ask_script(
     b.append("  let _docs = null;")
     b.append("  let _commit = null;")
     b.append("  let _haltCommit = null;")
+    b.append("  let _alreadyDelivered = null;")
+    b.append("  let _alreadyDeliveredRefusal = '';")
+    b.append(_already_delivered_fn(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id))
     if in_run_commit:
         b.append(f"  {TERMINAL_COMMIT_CLI_HELPER_JS}")
         b.append(f"  {PARAMS_BLOCK_JS}")
@@ -4704,6 +4750,7 @@ def compose_ask_script(
     # inline_review already accepts, so the run still reaches commit without a fabricated verdict.
     b.append(f"  if (!_halted && !_codeReviewOwed && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ _reviewWave = []; }}")
     b.append(f"  if (!_halted && !_codeReviewOwed && (_gate.arm === {_lit(ARM_XS)} || _xsTail)) {{ {INTEGRATION_NOT_RUN_VAR} = true; }}")
+    b.append(f"  if (!_halted && _alreadyDelivered) {{ _reviewWave = []; {INTEGRATION_NOT_RUN_VAR} = true; }}")
     b.append(
         "  if (!_halted && _noReviewPaths && !_xsTail && _gate.arm !== "
         f"{_lit(ARM_XS)}) {{ log('execute_review skipped: no row declares a path, nothing to review'); "
@@ -4724,7 +4771,7 @@ def compose_ask_script(
     b.append(_review_blocked_halt_js(sizing_rel))
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
-        "  if (!_halted && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) { _halted = { halted: "
+        "  if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) { _halted = { halted: "
         f"{_lit(HALT_REVIEW_FLOOR)}, reason: 'review: 0 verdicts on a code-editing run (' + "
         f"_manifest.{_REVIEW_CODE_KEY}.slice(0, 5).join(', ') + ')', run_id: _runId, "
         "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
@@ -5081,6 +5128,11 @@ def compose_ask_script(
         f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
         f": (_halted?.next_action?.kind === 'repin_register' ? _halted.next_action : {stopped_na});"
     )
+    # Landed in-run: nothing is left to commit, so the terminal commit would only refuse as no-change.
+    b.append(
+        "  if (_alreadyDelivered && _closeable) { _nextAction = { kind: 'none', op: null, "
+        "params: { already_delivered: _alreadyDelivered } }; }"
+    )
     b.append("  let _reviseAndRefire = _closeable ? null : _mkRevise();")
     b.append(
         f"  if (_recoveryWithheld.length && _nextAction && _nextAction.params) "
@@ -5175,7 +5227,7 @@ def compose_ask_script(
             "fanout: _commit?.fanout ?? null, "
             if rb_fn else ""
         )
-        + "ledger: _ledger, docs: _docs, commit: _commit, next_action: _nextAction, revise_and_refire: _reviseAndRefire, "
+        + "already_delivered: _alreadyDelivered, ledger: _ledger, docs: _docs, commit: _commit, next_action: _nextAction, revise_and_refire: _reviseAndRefire, "
         + (
             "get terminal_commit_cli() { return this.next_action.kind === 'terminal_commit' "
             "? _terminalCommitCli(this.next_action.params) : null; }, };"
@@ -5214,8 +5266,23 @@ _CHAIN_EMIT_SCHEMA = _obj(["path", "run_id"], {"path": _STR, "run_id": _STR, "er
 # dispatch.emit params for the `{sizing}` script an M+ arm chains into; shared by the bare chain and the launcher hand-off.
 _CHAIN_EMIT_PARAMS_JS = (
     "{ ask: true, sizing_path: _sizingRel, session_id: _SESSION_ID, "
-    "target_root: REPO_ROOT, ...(_crossRepoApproved ? { cross_repo_approved: true } : {}) }"
+    f"target_root: REPO_ROOT, {LAUNCHER_CHILD_EMIT_PARAM}: true, ...(_crossRepoApproved ? {{ cross_repo_approved: true }} : {{}}) }}"
 )
+
+
+def _chain_stage_loop_js() -> str:
+    """JS lines run after the chained child returns: while it answers `stage_pending`, start its staged twin from
+    this top-level script (one nesting level); the child itself holds no workflow() reader."""
+    prefix, middle, suffix = _twin_affixes()
+    return "\n".join([
+        f"      for (let _rd = 0; _why === null && _chained !== null && typeof _chained === 'object' && _chained.{STAGE_PENDING_KEY}; _rd++) {{",
+        f"        const _sh = _chained.{STAGE_PENDING_KEY}.handle && _chained.{STAGE_PENDING_KEY}.handle.sha256;",
+        "        if (_rd >= 2 || typeof _sh !== 'string' || !/^[0-9a-f]{64}$/.test(_sh)) { _why = 'stage_pending was not resumable'; break; }",
+        f"        const _tp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/' + {_lit(prefix)} + _chainRunId + {_lit(middle)} + _sh + {_lit(suffix)};",
+        "        try { _chained = await workflow({ scriptPath: _tp }); }",
+        "        catch (e) { _why = 'stage resume threw: ' + String(e && e.message ? e.message : e); }",
+        "      }",
+    ])
 
 
 def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str) -> str:
@@ -5247,7 +5314,7 @@ def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str) -> 
     lines = [
         f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{",
         "    phase('plan');",
-        "    let _why = null; let _chainPath = null;",
+        "    let _why = null; let _chainPath = null; let _chainRunId = '';",
         "    try {",
         f"      const _ce = await {emit_call};",
         "      const _cp = typeof _ce?.path === 'string' ? _ce.path.split(String.fromCharCode(92)).join('/') : '';",
@@ -5255,12 +5322,14 @@ def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str) -> 
         "      if (typeof _ce?.error === 'string' && _ce.error !== '') { _why = 'emit failed: ' + _ce.error; }",
         "      else if (_cp.split('/').indexOf('..') !== -1 || _cp.slice(0, _warp.length).toLowerCase() !== _warp.toLowerCase()) "
         "{ _why = 'emit path is not under ' + _warp; }",
-        "      else { _chainPath = _cp; }",
+        "      else if (typeof _ce?.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_ce.run_id)) { _why = 'emit reply run_id is not a run id'; }",
+        "      else { _chainPath = _cp; _chainRunId = _ce.run_id; }",
         "    } catch (e) { _why = 'emit threw: ' + String(e && e.message ? e.message : e); }",
         "    if (_chainPath) {",
         "      let _chained;",
         "      try { _chained = await workflow({ scriptPath: _chainPath }); }",
         "      catch (e) { _why = 'start threw: ' + String(e && e.message ? e.message : e); }",
+        _chain_stage_loop_js(),
         "      if (_why === null) { return (_chained !== null && typeof _chained === 'object') "
         "? { ..._chained, chained_from: _runId } : { chained: _chained, chained_from: _runId, sizing: _sizingRel }; }",
         "    }",
@@ -5606,7 +5675,7 @@ def _invariant_retest_call(*, head: str, anchor: str, run_id: str) -> str:
     )
     return _agent(
         prompt, label="retest-invariant", phase="commit", agent_type=_emit._TEST_AGENT_TYPE,
-        schema=_RETEST_SCHEMA, run_id=run_id, inherit_model=True,
+        schema=_RETEST_SCHEMA, run_id=run_id,
     )
 
 

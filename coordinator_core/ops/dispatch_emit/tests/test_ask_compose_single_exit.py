@@ -190,3 +190,9 @@ def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch, 
     assert bool(result["halted"] and result["halted"].startswith(NO_SLICES_HALT)) is halts
     if not halts:
         assert result["n"] == 2
+
+
+def test_single_exit_gates_the_later_review_blocks_on_an_already_delivered_close(monkeypatch):
+    script = _m_plus_script(monkeypatch)
+    assert "if (!_halted && !_alreadyDelivered) {" in script
+    assert "await _alreadyDeliveredClose()" in script

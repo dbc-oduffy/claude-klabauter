@@ -7,6 +7,8 @@ import pytest
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 from coordinator_core.ops.requirement_register import PIN_DRIFT_REMEDY, REGISTER_PIN_DRIFT_KIND, REPIN_OP
 
 

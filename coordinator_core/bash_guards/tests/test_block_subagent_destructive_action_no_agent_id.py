@@ -63,3 +63,17 @@ def test_other_fail_open_sites_keep_their_label(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     guard._log_fail_open("kind-unresolved-unparseable-agent-id", {"session_id": "s1"}, "rm -rf /")
     assert " FAIL-OPEN " in log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+def test_main_thread_pid_kill_not_denied(tool, tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
+    cmd = "kill -9 12345" if tool == "Bash" else "Stop-Process -Id 12345 -Force"
+    assert envelope_of(guard.check(_payload(tool, cmd))) is None
+
+
+def test_subagent_kill_denial_names_em_route(tmp_path, monkeypatch):
+    monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
+    result = envelope_of(guard.check(_payload("Bash", "kill 12345", agent_type="coordinator:executor")))
+    assert result is not None
+    assert "EM runs the kill" in str(result)

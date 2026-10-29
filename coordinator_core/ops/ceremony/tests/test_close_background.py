@@ -145,8 +145,12 @@ def test_memo_in_neither_place_is_failed_by_name(tmp_path):
 def _chain_stub(calls, verdicts=None, raises=None):
     class Stub:
         @staticmethod
+        def flag_staleness(root):
+            calls.append("flag")
+
+        @staticmethod
         def refresh(root, timeout):
-            calls.append("structural")
+            calls.append("refresh")
 
         @staticmethod
         def run(ceremony, root):
@@ -220,7 +224,7 @@ def test_post_close_raising_reaper_fails_the_leg_after_launchers_ran(tmp_path, m
     monkeypatch.setattr(abandoned_runs, "_handler", boom)
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
     result = cb._post_close(_ctx(tmp_path))
-    assert calls[:2] == ["structural", "scip"]
+    assert calls[:2] == ["flag", "scip"]
     assert result.status == "failed" and "reap RuntimeError" in result.detail
 
 
@@ -239,7 +243,7 @@ def test_post_close_runs_chain_closure_and_names_a_closed_chain(tmp_path, monkey
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: stub)
     result = cb._post_close(_ctx(tmp_path, batons=BATONS))
-    assert calls == ["structural", "scip", ("chain", list(BATONS))]
+    assert calls == ["flag", "scip", ("chain", list(BATONS))]
     assert result.status == "ran"
     assert "2 baton(s), 1 chain(s) closed: dlv-x" in result.detail
 
@@ -267,14 +271,14 @@ def test_post_close_names_a_raising_chain_closure_and_still_runs_launchers(tmp_p
     stub = _chain_stub(calls, raises=RuntimeError("boom"))
     monkeypatch.setattr(cb, "_bin_script", lambda name: stub)
     result = cb._post_close(_ctx(tmp_path, batons=BATONS))
-    assert calls[:2] == ["structural", "scip"]
+    assert calls[:2] == ["flag", "scip"]
     assert result.status == "failed" and "baton-chain-closure RuntimeError" in result.detail
 
 
 def test_post_close_survives_a_failing_launcher(tmp_path, monkeypatch):
     class Stub:
         @staticmethod
-        def refresh(root, timeout):
+        def flag_staleness(root):
             raise OSError("no")
 
         @staticmethod
@@ -283,7 +287,7 @@ def test_post_close_survives_a_failing_launcher(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cb, "_bin_script", lambda name: Stub)
     result = cb._post_close(_ctx(tmp_path))
-    assert "structural-index OSError" in result.detail and "scip-rebuild" in result.detail
+    assert "structural-index-flag OSError" in result.detail and "scip-rebuild" in result.detail
 
 
 def _reading(monkeypatch, avail, trusted=True):
@@ -292,56 +296,45 @@ def _reading(monkeypatch, avail, trusted=True):
     monkeypatch.setattr(pca, "read_available", lambda: (avail, trusted))
 
 
-def test_low_reading_defers_both_launchers_and_the_leg_stays_ran(tmp_path, monkeypatch, _admission):
+def test_low_reading_defers_scip_and_the_leg_stays_ran(tmp_path, monkeypatch, _admission):
     calls = []
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
-    _reading(monkeypatch, 4608)
+    _reading(monkeypatch, 1024)
     result = cb._post_close(_ctx(tmp_path))
-    assert calls == []
+    assert calls == ["flag"]
     assert result.status == "ran"
-    assert "deferred: structural-index" in result.detail and "scip-rebuild" in result.detail
+    assert "deferred: scip-rebuild" in result.detail
     assert _admission == []
 
 
-def test_reading_admitting_only_the_first_defers_the_second(tmp_path, monkeypatch, _admission):
-    calls = []
-    _queue(tmp_path, legs=("post-close",))
-    monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
-    _reading(monkeypatch, 2048 + 8192)
-    result = cb._post_close(_ctx(tmp_path))
-    assert calls == ["structural"]
-    assert _admission == ["structural-index"]
-    assert "launched: structural-index; deferred: scip-rebuild" in result.detail
-
-
-def test_untrusted_reading_defers_both_as_unreadable(tmp_path, monkeypatch, _admission):
+def test_untrusted_reading_defers_scip_as_unreadable(tmp_path, monkeypatch, _admission):
     calls = []
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
     _reading(monkeypatch, 65536, trusted=False)
     result = cb._post_close(_ctx(tmp_path))
-    assert calls == [] and _admission == []
-    assert result.detail.count("memory unreadable") == 2
+    assert calls == ["flag"] and _admission == []
+    assert result.detail.count("memory unreadable") == 1
 
 
-def test_ample_reading_launches_both_with_one_notice_each(tmp_path, monkeypatch, _admission):
+def test_ample_reading_launches_scip_and_only_flags_structural_index(tmp_path, monkeypatch, _admission):
     calls = []
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
     result = cb._post_close(_ctx(tmp_path))
-    assert calls == ["structural", "scip"]
-    assert _admission == ["structural-index", "scip-rebuild"]
+    assert calls == ["flag", "scip"] and "refresh" not in calls
+    assert _admission == ["scip-rebuild"]
     assert "deferred" not in result.detail
 
 
 def test_deferral_survives_detail_truncation_behind_a_long_chain_list(tmp_path, monkeypatch):
     names = [_verdict(f"dlv-{'x' * 30}-{i}", True) for i in range(8)]
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([], names))
-    _reading(monkeypatch, 4608)
+    _reading(monkeypatch, 1024)
     result = cb._post_close(_ctx(tmp_path, batons=BATONS))
     assert len(result.detail) == run_close.DETAIL_CAP
-    assert "deferred: structural-index" in result.detail
+    assert "deferred: scip-rebuild" in result.detail
 
 
 def test_op_is_registered_mutating_fire_and_forget_common_dir():

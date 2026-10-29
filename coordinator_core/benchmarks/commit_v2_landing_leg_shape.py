@@ -36,8 +36,8 @@ from coordinator_core.git.run import run_git
 SELF = "11e5f000-0000-4000-8000-0000000000c1"
 CLAIMED_IGNORED = 7000
 LANDABLE_LEFT = 2
-# Extra tracked files in the seed commit, in a nested tree; C5 sets it from the spike's tracked-file axis.
-TRACKED_FILES = 0
+# Extra tracked files in the seed commit, in a nested tree: the S1 clone's tracked-file count.
+TRACKED_FILES = 59368
 # Windows process_time resolution: the error of one bracket's own-CPU reading.
 TICK_MS = 15.625
 SHARE_DIR = ".coordinator-local/subagent-share/claimed"
@@ -112,6 +112,17 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _git_bulk(repo: Path, *args: str) -> None:
+    """Fixture setup for the TRACKED_FILES-sized seed: `run_git` bounds a call at its process-time
+    budget, which a 59k-file `git add` exceeds; setup is outside every gated bracket."""
+    result = subprocess.run(
+        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed rc={result.returncode}: {result.stderr.strip()}")
+
+
 def _write(repo: Path, rel: str, text: str = "x\n") -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -146,8 +157,8 @@ def build_fixture(parent: Path) -> Path:
     _write(repo, PLAN_PATH, _PLAN)
     for i in range(TRACKED_FILES):
         _write(repo, f"tracked/d{i % 50:02d}/s{i % 7}/f{i:06d}.txt", f"{i}\n")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-q", "-m", "seed")
+    _git_bulk(repo, "add", ".")
+    _git_bulk(repo, "commit", "-q", "-m", "seed")
 
     session_core.init(SELF, cwd=str(repo))
     _write(repo, PRODUCT_PATH, "worktree\n")
@@ -189,8 +200,8 @@ def run_leg(repo: Path) -> LegReport:
         return real_init(self, *a, **k)
 
     def bracketed(call):
-        """Run `call()` inside a fresh own-CPU plus descendants bracket; returns (result, ms, spawns)
-        with the bracket added to the leg figure."""
+        """Run `call()` inside a fresh own-CPU plus descendants bracket; returns the result;
+        the bracket's (ms, spawns) land in `bracketed.last` and its ms is added to the leg figure."""
         before_spawns = spawned[0]
         child = _ChildMeter()
         child.start()

@@ -38,6 +38,6 @@ def test_a_caller_widened_referencer_test_is_declared_but_the_seam_never_runs_it
     declared = script.split("declared: [", 1)[1].split("]", 1)[0]
     assert "'tests/test_ref.py'" in declared
     out = _run_script(tmp_path, script, CLEAN_REPLY)
-    listed = json.loads(out["seamParams"][0].split("Tests: ", 1)[1].split(". Step 3", 1)[0])
+    listed = json.loads(out["seamParams"][0].split("Tests: ", 1)[1].split(". Step 2", 1)[0])
     assert "tests/test_a.py" in listed
     assert "tests/test_ref.py" not in listed

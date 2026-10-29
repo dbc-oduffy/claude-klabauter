@@ -985,13 +985,17 @@ def _validate_scope(name: str, value: Optional[int]) -> None:
 
 
 def _apply_scope_floor(
-    tshirt: str, scope_files: Optional[int], scope_lines: Optional[int]
+    tshirt: str,
+    scope_files: Optional[int],
+    scope_lines: Optional[int],
+    mechanically_uniform: bool = False,
 ) -> Optional[str]:
     """The L floor a full delivery's scope implies, or None when the rung stands. Raises only,
     never lowers; the higher of the files and lines floors wins (both map to L today). Pure over
     its arguments: no I/O, never reads scout_evidence. The thresholds sit between the M rung's
-    naked median (410 lines) and the L task's (7 files / 1643 lines, n=3)."""
-    if TSHIRT_WEIGHT[tshirt] >= TSHIRT_WEIGHT["L"]:
+    naked median (410 lines) and the L task's (7 files / 1643 lines, n=3). A mechanically-uniform
+    scope (reason validated by the caller) is breadth, not depth: the count never floors it."""
+    if mechanically_uniform or TSHIRT_WEIGHT[tshirt] >= TSHIRT_WEIGHT["L"]:
         return None
     if (scope_files is not None and scope_files >= SCOPE_L_FLOOR_FILES) or (
         scope_lines is not None and scope_lines >= SCOPE_L_FLOOR_LINES
@@ -1055,7 +1059,10 @@ def route(
     Args:
         scope_files / scope_lines: files / added lines of a FULL delivery of the task (prior or
             naked deliveries, never the minimal fix). At or above the L thresholds the resolved
-            tshirt is raised to L, never lowered; None leaves the size untouched.
+            tshirt is raised to L, never lowered; None leaves the size untouched. Skipped when
+            `mechanically_uniform` is set: breadth of identical work is not depth.
+        research: a research-class sizing never opens a hand-edit lane, so it
+            skips the S -> XS tie-break and stays S.
         appetite: one of small|medium|large (Shape-Up budget enum), or
             `None` (the default). Appetite is never collected before a size
             is delivered — `None` means no budget has been stated yet, not a
@@ -1187,7 +1194,9 @@ def route(
     )
 
     probe_resized = resize_changed
-    floor_tshirt = _apply_scope_floor(resized_tshirt, scope_files, scope_lines)
+    floor_tshirt = _apply_scope_floor(
+        resized_tshirt, scope_files, scope_lines, mechanically_uniform
+    )
     if floor_tshirt is not None:
         floor_note = (
             f"scope floor: {resized_tshirt} -> {floor_tshirt} "
@@ -2252,6 +2261,7 @@ def build_research_block(
     question_mode: Optional[str] = None,
     question_targets: Optional[list[str]] = None,
     seeds: Optional[list[str]] = None,
+    primary: Optional[str] = None,
 ) -> tuple[Optional[dict[str, Any]], list[str]]:
     """The sizing-object `research:` block from the --research-* flag values, with
     one refusal string per bad value. `(None, [])` when no research flag was given.
@@ -2263,7 +2273,7 @@ def build_research_block(
     seeds = list(seeds or ())
     if not (
         value_class or appetite or sources or depth or targets or questions or destination
-        or question_mode or question_targets or seeds
+        or question_mode or question_targets or seeds or primary
     ):
         return None, []
     from coordinator_core.ops import _research_contract as rc
@@ -2283,6 +2293,8 @@ def build_research_block(
             ordered_sources.append(src)
     if depth is not None and depth not in rc.DEPTHS:
         errors.append(f"--research-depth must be one of {rc.DEPTHS}, got {depth!r}")
+    if primary is not None and primary not in rc.PRIMARIES:
+        errors.append(f"--research-primary must be one of {rc.PRIMARIES}, got {primary!r}")
     parsed_targets: list[dict[str, str]] = []
     for raw in targets:
         source, sep, ref = raw.partition("=")
@@ -2356,6 +2368,12 @@ def build_research_block(
             parsed_question_targets.append(entry)
     if question_targets and not questions:
         errors.append("--research-question-target needs --research-question")
+    if primary == "repo" and not (
+        "repo" in ordered_sources
+        or any(t["source"] == "repo" for t in parsed_targets)
+        or any(rc.SEED_KIND_SOURCE.get(s["kind"]) == "repo" for s in parsed_seeds)
+    ):
+        errors.append("--research-primary repo needs a repo source, --research-target repo=<ref>, or a repo seed")
     if errors:
         return None, errors
     block: dict[str, Any] = {"value_class": value_class}
@@ -2365,6 +2383,8 @@ def build_research_block(
         block["sources"] = ordered_sources
     if depth is not None:
         block["depth"] = depth
+    if primary is not None:
+        block["primary"] = primary
     if parsed_targets:
         block["targets"] = parsed_targets
     if parsed_seeds:
@@ -2424,6 +2444,7 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
             "appetite": given.get("appetite", prior.get("appetite")),
             "sources": given.get("sources", prior.get("sources") or []),
             "depth": given.get("depth", prior.get("depth")),
+            "primary": given.get("primary", prior.get("primary")),
             "targets": given.get(
                 "targets", [f"{t['source']}={t['ref']}" for t in prior.get("targets") or []]
             ),
@@ -2460,6 +2481,7 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
             merged["value_class"], merged["appetite"], list(merged["sources"]), merged["depth"],
             list(merged["targets"]), list(merged["questions"]), merged["destination"],
             merged["question_mode"], list(merged["question_targets"]), list(merged["seeds"]),
+            merged["primary"],
         )
         if errors:
             raise MutateAbort("; ".join(errors))
@@ -2594,6 +2616,7 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-appetite small|medium|large (research budget; distinct from --appetite)]\n"
         "    [--research-source web|repo|structured|notebooklm ...]\n"
         "    [--research-depth standard|deeper|deepest]\n"
+        "    [--research-primary repo (repo segments run first and outrank web; needs a repo source/target/seed)]\n"
         "    [--research-target <source>=<ref> ...]  (a repo ref may be a registered research key)\n"
         "    [--research-seed <video|doc|repo|paper>=<url> ... (a URL to study; routed to its kind's pipeline)]\n"
         "    [--research-question <text> ...]\n"
@@ -2819,6 +2842,7 @@ def main(argv: list[str]) -> int:
     research_appetite = None
     research_sources: list[str] = []
     research_depth = None
+    research_primary = None
     research_targets: list[str] = []
     research_seeds: list[str] = []
     clear_research_seeds = False
@@ -2988,6 +3012,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-depth" and i + 1 < len(argv):
             research_depth = argv[i + 1]
+            i += 2
+        elif tok == "--research-primary" and i + 1 < len(argv):
+            research_primary = argv[i + 1]
             i += 2
         elif tok == "--research-target" and i + 1 < len(argv):
             research_targets.append(argv[i + 1])
@@ -3226,6 +3253,7 @@ def main(argv: list[str]) -> int:
                 ("question_mode", research_question_mode),
                 ("question_targets", research_question_targets),
                 ("seeds", research_seeds), ("clear_seeds", clear_research_seeds),
+                ("primary", research_primary),
             )
             if v
         }
@@ -3250,7 +3278,7 @@ def main(argv: list[str]) -> int:
     research_block, research_errors = build_research_block(
         research_class, research_appetite, research_sources, research_depth, research_targets,
         research_questions, research_destination, research_question_mode, research_question_targets,
-        research_seeds,
+        research_seeds, research_primary,
     )
     if research_errors:
         for message in research_errors:

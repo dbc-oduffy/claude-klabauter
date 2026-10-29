@@ -283,8 +283,8 @@ def residue(flags: Mapping[str, Any] | None = None) -> tuple[StepSpec, ...]:
             detail="The register stall check.",
         ),
         _step(
-            "structural_index_refresh", "structural-index-refresh", [], best_effort=True,
-            detail="Step 4b: the structural index; non-blocking.",
+            "structural_index_refresh", "structural-index-refresh", ["--flag-only"], best_effort=True,
+            detail="Step 4b: the structural index staleness flag; never spawns a refresh.",
         ),
     ]
     if not _only(flags):

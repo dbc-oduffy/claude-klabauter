@@ -5,20 +5,19 @@ file-write tool, for any caller class.
 Purpose: docs/plans/2026-08-28-the-ask-the-pm-step-gets-an-artifact-to-
 check.md, chunk C3. The ask-the-PM routing decision (C1/C2) reads a live,
 unexpired grant from ``<settings_home()>/fleet-delegation.json`` to decide
-whether an "ask the PM" step routes to a designated peer session or to the
-human. That resolver's own call signature admits no input by which a peer
-could assert the relay (the plan's Exit criterion) — but that guarantee
-only holds if the grant file itself cannot be hand-authored through a
-write tool. Nothing upstream of this module gated a plain ``Write``/
-``Edit``/``MultiEdit``/``NotebookEdit`` against that path; this module
-closes that surface.
+whether a routing step goes to a designated peer session. That resolver's
+own call signature admits no input by which a peer could assert the relay
+(the plan's Exit criterion) — but that guarantee only holds if the grant
+file itself cannot be hand-authored through a write tool. Nothing upstream
+of this module gated a plain ``Write``/``Edit``/``MultiEdit``/
+``NotebookEdit`` against that path; this module closes that surface.
 
 Deliberately UNCONDITIONAL — no ``agent_id`` gate, no ``subagent_type``
 narrowing, no escape-hatch env var. The EM is not exempted: unlike
 ``block_subagent_grant_record_write`` (whose allow leg (1) is "no
 ``agent_id`` -> EM-inline write -> allow", because the EM IS the
 legitimate acquirer of that grant), the fleet-delegation grant here has no
-legitimate write-tool acquirer at all — it is produced by a human-run CLI,
+legitimate write-tool acquirer at all — it is produced by the grant CLI,
 never by an agent process of any kind. Modeled instead on
 ``block_worktree_sentinel_write.py``'s shape: one fixed target, no
 identity gate, deny is unconditional for every caller class, exactly as
@@ -50,7 +49,7 @@ logic and never shells out on the PreToolUse hot path.
 
 Message register per docs/wiki/guard-messaging.md § Register: one fact,
 stated once, plus the terse sanctioned alternative
-(``coordinator-delegation grant ...``, run by the human) — no
+(``coordinator-delegation grant ...``) — no
 self-legitimacy (B1), no repeated claim (B2), no reassurance wrapper (B3),
 no apology (B4), and no bypass key (B6) — there is no override for this
 guard to name. Also no sentence asserting the file "cannot be forged":
@@ -118,8 +117,8 @@ _GRANT_FILENAME = "fleet-delegation.json"
 
 _DENY_REASON = (
     "BLOCKED: the fleet-delegation grant file is not hand-authorable.\n"
-    "Alternative: run `coordinator-delegation grant ...` (human-run) to "
-    "issue a grant instead."
+    "Alternative: run `coordinator-delegation grant ...` to issue a grant "
+    "instead."
 )
 
 

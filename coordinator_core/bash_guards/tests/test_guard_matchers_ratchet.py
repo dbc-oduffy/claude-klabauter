@@ -172,6 +172,7 @@ EXPECTED: Dict[str, _Expected] = {
     "guard-host-subagent-bash-spawn-shapes": _Expected(("Bash", "PowerShell")),
     "guard-subagent-heavy-ue-launch": _Expected(("Bash", "PowerShell")),
     "guard-heavy-command-admission": _Expected(("Bash", "PowerShell")),
+    "guard-disk-fill": _Expected(("Bash", "PowerShell")),
     # p4-verb-fence: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`) and
     # dialect-reading -- resolves its dialect via `_dialect.dialect_from_
     # tool_name`/`resolve_segments_for_dialect` (per docs/reference/guard-
@@ -484,7 +485,8 @@ def test_discovery_found_the_expected_scope():
     `block_home_root_bash_write` (merge 49df735aad), and 42 -> 43 with
     `guard_move_from_inside_cwd`, and 43 -> 44 with
     `block_push_pr_non_owned_remote`, and 44 -> 45 with
-    `block_drive_root_new_dir_bash_write`."""
+    `block_drive_root_new_dir_bash_write`, and 46 -> 47 with
+    `guard_disk_fill`."""
     stems = _scoped_module_stems()
     assert len(stems) == 37, sorted(stems)
     assert "block_stash_destruction" in stems
@@ -513,7 +515,7 @@ def test_every_registered_guard_is_classified():
     `block_drive_root_new_dir_bash_write`; 74 -> 75 with
     `block-external-workspace-vcs-write`; 75 -> 76 with `xs-lane-shell-write`; 76 -> 78 with
     `block-em-post-fire-product-write` and `block-em-halted-withheld-commit`; 78 -> 77 retiring
-    `block-em-halted-withheld-commit`."""
+    `block-em-halted-withheld-commit`; 77 -> 78 with `guard-disk-fill`."""
     actual = _actual_matchers()
     assert len(actual) == 68, sorted(actual)
     assert set(actual) == set(EXPECTED)

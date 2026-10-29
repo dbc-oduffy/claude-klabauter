@@ -106,7 +106,6 @@ _WRITE_KEEP_HARD = {
     "block_home_dir_memo_delivery.py": ("hard-deny", 125),
     "block_goals_log_hand_write.py": ("hard-deny", 65),
     "guard_settings_json_write.py": ("hard-deny", 131),
-    "guard_doctrine_surface_edits.py": ("hard-deny", 127),
     "block_worktree_sentinel_write.py": ("hard-deny", 129),
 }
 

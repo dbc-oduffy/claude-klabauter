@@ -75,11 +75,45 @@ def test_the_nine_killed_ids_are_in_no_table_and_no_cost_row() -> None:
     assert not [r["id"] for r in manifest.STEP_TABLE if r["id"].startswith("gap-")]
 
 
-def test_the_structural_index_refresh_step_is_killed_in_manifest_and_costs() -> None:
+def test_the_structural_index_refresh_step_is_the_admitted_inproc_step() -> None:
     sid = "index-structural-index-refresh"
-    assert sid not in {r["id"] for r in manifest.STEP_TABLE}
-    assert sid not in manifest.RUN_FIELDS and sid not in _costs()
+    by_id = {r["id"]: r for r in manifest.STEP_TABLE}
+    assert by_id[sid]["inproc"].endswith(":structural_index_refresh_admitted")
+    assert manifest.RUN_FIELDS[sid]["stage"] == "structural-index" and sid in _costs()
     assert "structural-index-refresh" not in {r["cli"] for r in manifest.STEP_TABLE if "cli" in r}
+
+
+def _fake_run(monkeypatch: pytest.MonkeyPatch, admit_rc: int) -> list[list[str]]:
+    import subprocess
+
+    calls: list[list[str]] = []
+
+    def run(argv, **kw):
+        calls.append([Path(a).name if i == 1 else a for i, a in enumerate(argv)])
+        assert kw["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        rc = admit_rc if "box-memory-snapshot.py" in argv[1] else 0
+        return subprocess.CompletedProcess(argv, rc, stdout="structural-index: cold build started\n", stderr="")
+
+    monkeypatch.setattr(manifest.subprocess, "run", run)
+    return calls
+
+
+def test_refresh_launches_only_after_the_admit_admits(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    calls = _fake_run(monkeypatch, 0)
+    code, out = manifest.structural_index_refresh_admitted(tmp_path)
+    assert (code, out) == (0, "structural-index: cold build started")
+    assert [c[1] for c in calls] == ["box-memory-snapshot.py", "structural-index-refresh.py"]
+    assert "--admit-peak" in calls[0] and "--timeout" in calls[1]
+
+
+@pytest.mark.parametrize("rc", [manifest.ADMIT_HOLD_EXIT, 1, 6])
+def test_refresh_is_skipped_when_the_admit_holds_or_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rc: int
+) -> None:
+    calls = _fake_run(monkeypatch, rc)
+    code, out = manifest.structural_index_refresh_admitted(tmp_path)
+    assert code == 0 and out.startswith("structural-index: refresh ")
+    assert [c[1] for c in calls] == ["box-memory-snapshot.py"]
 
 
 def test_every_non_inproc_manifest_step_has_a_cost_row() -> None:
@@ -301,3 +335,108 @@ def test_unknown_gate_raises(tmp_path: Path) -> None:
         manifest._gate_reason(
             "nope", repo_root=tmp_path, today=TODAY, freshness=None, step0_changed_paths=()
         )
+
+
+def _gh_run(monkeypatch: pytest.MonkeyPatch, *, rc: int = 0, stdout: str = "", exc: Exception | None = None) -> list[list[str]]:
+    import subprocess
+
+    calls: list[list[str]] = []
+
+    def run(argv, **kw):
+        calls.append(list(argv))
+        assert kw["timeout"] == manifest._NEWER_INDEX_PROBE_TIMEOUT_SECS
+        if exc:
+            raise exc
+        return subprocess.CompletedProcess(argv, rc, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(manifest.subprocess, "run", run)
+    return calls
+
+
+_RELEASE = json.dumps({"tagName": "example-retrieval-repo-index", "publishedAt": "2026-10-28T20:00:00Z"})
+
+
+def test_newer_index_step_follows_the_structural_step_in_the_default_manifest() -> None:
+    ids = [r["id"] for r in manifest.STEP_TABLE]
+    assert ids.index(manifest.NEWER_INDEX_STEP) == ids.index(manifest.STRUCTURAL_INDEX_STEP) + 1
+    by_id = {r["id"]: r for r in manifest.STEP_TABLE}
+    assert by_id[manifest.NEWER_INDEX_STEP]["inproc"].endswith(":newer_index_check")
+
+
+def test_newer_index_check_spawns_nothing_on_a_fresh_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core.index_distribution import newer_index_marker as nim
+
+    nim.write_marker(tmp_path, {"kind": "structural", "checked_at": time.time(), "newer_available": False})
+    monkeypatch.setenv(manifest.NEWER_INDEX_RELEASE_REPO_ENV, "o/r")
+    calls = _gh_run(monkeypatch, stdout=_RELEASE)
+    assert manifest.newer_index_check(tmp_path) == (0, "")
+    assert calls == []
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_newer_index_check_probes_once_and_rewrites_a_missing_or_stale_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stale: bool
+) -> None:
+    from coordinator_core.index_distribution import newer_index_marker as nim
+
+    if stale:
+        nim.write_marker(tmp_path, {"kind": "structural", "checked_at": time.time() - 3 * nim.TTL_SECONDS})
+    (tmp_path / ".structural-index").mkdir()
+    (tmp_path / manifest.LOCAL_INDEX_REV_RELPATH).write_text('{"finished_at": "2026-10-28T18:13:45Z"}', encoding="utf-8")
+    monkeypatch.setenv(manifest.NEWER_INDEX_RELEASE_REPO_ENV, "o/r")
+    calls = _gh_run(monkeypatch, stdout=_RELEASE)
+    code, out = manifest.newer_index_check(tmp_path)
+    assert code == 0 and "newer structural index" in out
+    assert len(calls) == 1 and calls[0][:4] == ["gh", "release", "view", manifest.NEWER_INDEX_RELEASE_TAG]
+    assert "o/r" in calls[0]
+    marker = nim.read_marker(tmp_path)
+    assert marker["newer_available"] is True and marker["local_rev"] == "2026-10-28T18:13:45Z"
+    assert nim.is_fresh(marker, time.time())
+
+
+def test_newer_index_check_records_not_newer_when_local_is_current(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from coordinator_core.index_distribution import newer_index_marker as nim
+
+    (tmp_path / ".structural-index").mkdir()
+    (tmp_path / manifest.LOCAL_INDEX_REV_RELPATH).write_text('{"finished_at": "2026-10-29T00:00:00Z"}', encoding="utf-8")
+    monkeypatch.setenv(manifest.NEWER_INDEX_RELEASE_REPO_ENV, "o/r")
+    _gh_run(monkeypatch, stdout=_RELEASE)
+    assert manifest.newer_index_check(tmp_path) == (0, "")
+    assert nim.read_marker(tmp_path)["newer_available"] is False
+
+
+def test_newer_index_check_unreadable_local_rev_writes_null_and_does_not_raise(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from coordinator_core.index_distribution import newer_index_marker as nim
+
+    monkeypatch.setenv(manifest.NEWER_INDEX_RELEASE_REPO_ENV, "o/r")
+    _gh_run(monkeypatch, stdout=_RELEASE)
+    manifest.newer_index_check(tmp_path)
+    assert nim.read_marker(tmp_path)["local_rev"] is None
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [{"exc": FileNotFoundError()}, {"exc": __import__("subprocess").TimeoutExpired("gh", 1)},
+     {"rc": 1}, {"stdout": "not json"}],
+)
+def test_newer_index_check_probe_failure_exits_zero_and_keeps_the_old_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kw: dict
+) -> None:
+    from coordinator_core.index_distribution import newer_index_marker as nim
+
+    old = {"kind": "structural", "checked_at": time.time() - 3 * nim.TTL_SECONDS, "newer_available": False}
+    nim.write_marker(tmp_path, old)
+    monkeypatch.setenv(manifest.NEWER_INDEX_RELEASE_REPO_ENV, "o/r")
+    _gh_run(monkeypatch, **kw)
+    code, out = manifest.newer_index_check(tmp_path)
+    assert code == 0 and out.startswith("newer-index: check skipped")
+    assert nim.read_marker(tmp_path) == old
+
+
+def test_newer_index_check_without_a_configured_repo_spawns_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv(manifest.NEWER_INDEX_RELEASE_REPO_ENV, raising=False)
+    calls = _gh_run(monkeypatch, stdout=_RELEASE)
+    code, out = manifest.newer_index_check(tmp_path)
+    assert code == 0 and "unset" in out and calls == []

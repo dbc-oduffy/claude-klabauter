@@ -39,6 +39,24 @@ def test_main_prints_newline_terminated_path(monkeypatch, tmp_path, capsys):
     assert capsys.readouterr().out == str(tmp_path) + "\n"
 
 
+def test_registered_warm_op_returns_path_and_rung(monkeypatch, tmp_path):
+    import asyncio
+
+    from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+    assert OP_MODULE_MAP["install.content_root_resolve"] == "coordinator_core.ops.content_root_resolve"
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path))
+    out = asyncio.run(crr._content_root_resolve({}, None))
+    assert out == {"path": str(tmp_path), "rung": "content-ladder"}
+
+
+def test_registered_warm_op_reports_none_when_unresolved(monkeypatch):
+    import asyncio
+
+    _patch_rungs(monkeypatch, lambda: None, lambda: None, lambda: None)
+    assert asyncio.run(crr._content_root_resolve({}, None)) == {"path": None, "rung": "unresolved"}
+
+
 def test_main_refuses_when_unresolved(monkeypatch, capsys):
     _patch_rungs(monkeypatch, lambda: None, lambda: None, lambda: None)
     assert crr.main([]) == 1

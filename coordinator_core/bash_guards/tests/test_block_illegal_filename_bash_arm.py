@@ -312,22 +312,33 @@ def test_redir_escape_quote_target_matrix(cmd, expected_fires):
     assert _fires(cmd) is expected_fires
 
 
-def test_illegal_redirect_target_returns_updated_input_with_sanitized_name():
-    out = _enveloped(m.check)(_payload('echo x > bad?name.txt'))
+@pytest.mark.parametrize(
+    "cmd",
+    ['echo x > bad?name.txt', 'mv a.txt b?.txt', 'echo x > "bad?name.txt"', "mv a 'b<c'"],
+)
+def test_a_hit_warns_and_never_rewrites_or_denies(cmd):
+    out = _enveloped(m.check)(_payload(cmd))
     assert out is not None
     hso = out.get("hookSpecificOutput", {})
-    assert "permissionDecision" not in hso
-    updated = hso.get("updatedInput")
-    assert updated is not None
-    assert updated["command"] == 'echo x > bad-name.txt'
+    assert "updatedInput" not in hso
+    assert hso.get("permissionDecision") == "allow"
+    assert "Use instead" in hso["additionalContext"]
 
 
-def test_updated_input_preserves_other_tool_input_keys():
-    payload = _payload('echo x > bad?name.txt')
-    payload["tool_input"]["description"] = "keep me"
-    out = _enveloped(m.check)(payload)
-    updated = out["hookSpecificOutput"]["updatedInput"]
-    assert updated["description"] == "keep me"
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        """coordinator-invoke plan.readiness_verdict '{"premise":"<evidence dir>"}'""",
+        """coordinator-invoke.exe x '{"p":"state/sizings/a:b?.yaml"}'""",
+        """coordinator-invoke x "{\\"p\\": \\"a>b?.txt\\"}" """,
+    ],
+)
+def test_coordinator_invoke_op_params_are_never_candidates(cmd):
+    assert m.check(_payload(cmd)) is None
+
+
+def test_a_real_redirect_after_an_invoke_still_warns():
+    assert _fires("coordinator-invoke x '{\"a\":1}' > bad?name.txt")
 
 
 def test_updated_input_still_carries_advisory_context():
@@ -351,23 +362,11 @@ def test_updated_input_still_never_denies():
     assert hso.get("permissionDecision") != "deny"
 
 
-def test_mv_dest_illegal_name_returns_updated_input():
-    out = _enveloped(m.check)(_payload('mv a.txt b?.txt'))
-    hso = out["hookSpecificOutput"]
-    assert hso["updatedInput"]["command"] == 'mv a.txt b-.txt'
-
-
-def test_quoted_redirect_target_updated_input_preserves_quoting():
-    out = _enveloped(m.check)(_payload('echo x > "bad?name.txt"'))
-    hso = out["hookSpecificOutput"]
-    assert hso["updatedInput"]["command"] == 'echo x > "bad-name.txt"'
-
-
-def test_rewrite_context_does_not_ask_agent_to_act():
+def test_warn_context_names_the_safe_name():
     out = _enveloped(m.check)(_payload('echo x > "bad?name.txt"'))
     ctx = out["hookSpecificOutput"].get("additionalContext", "")
-    assert "Use instead" not in ctx
-    assert "Auto-corrected" in ctx
+    assert "Use instead" in ctx
+    assert "bad-name.txt" in ctx
 
 
 @pytest.mark.parametrize(
@@ -406,7 +405,8 @@ def test_a_string_comparison_against_an_iso_timestamp_is_never_rewritten():
 
 
 def test_an_arithmetic_comparison_does_not_hide_a_real_redirect_after_it():
-    assert _rewritten("(( a > b )) && echo x > out:1.txt") == "(( a > b )) && echo x > out-1.txt"
+    assert _fires("(( a > b )) && echo x > out:1.txt")
+    assert _rewritten("(( a > b )) && echo x > out:1.txt") is None
 
 
 def test_a_candidate_repeated_elsewhere_in_the_command_is_advised_not_rewritten():

@@ -341,6 +341,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import (  # noq
     _run_arm,
     _peer_adjusted_rows,
     _xs_over_budget_refusal,
+    _apply_xs_resize,
     _TEST_PATH,
     _NOT_RUN_TEXT,
     REFUSED_TESTS_NOT_RUN,
@@ -446,6 +447,7 @@ _PARAM_FIELDS = (
     Field("run_token", "nonempty_str"),
     Field("ledger_verdict", "dict"),
     Field(RECOVERY_WITHHELD_PARAM, "str_list"),
+    Field("widened", "list"),
     Field(TERMINAL_RESUME_LEDGER_PARAM, "dict"),
     Field("doc_paths", "str_list"),
     Field("allow_empty", "bool"),
@@ -731,6 +733,60 @@ def _land_own_left_behind(
         reply[own_carry.REPLY_KEY] = {"error": str(err or f"unexpected commit_v2 reply: {out!r}")}
 
 
+_RELAND_CLASSES = frozenset({
+    "record-dir", "ask-dir", "evidence-sidecar", "seam-sidecar", "baton", "slice-sizing",
+    "superseded-record", "delivery-note",
+})
+
+
+def _reland_late_artifacts(
+    reply: dict, worktree_root: Path, repo_root: Optional[Path], artifacts, fresh,
+    skip: set, session_id: Optional[str], sha: str,
+) -> list:
+    """Land the run-dir and ask-dir files written after the landing's snapshot, in one follow-on
+    ``ceremony.commit_v2`` over file pathspecs, and return the paths landed. ``fresh`` is the
+    candidate set re-read after the commit. ``skip`` (landed, withheld or foreign paths) is never
+    swept; a live peer's claim is never swept. A refusal is recorded under ``late_reland`` and never
+    un-lands the commit."""
+    classes = {p: (fresh.class_of(p) or artifacts.class_of(p)) for p in {*fresh.paths(), *artifacts.paths()}}
+    cands = sorted(p for p, cls in classes.items() if cls in _RELAND_CLASSES and p not in skip)
+    if not cands:
+        return []
+    dirty = _changed_paths(worktree_root, cands)
+    if dirty is None:
+        reply["late_reland"] = {"error": "git status could not answer"}
+        return []
+    paths = sorted(p for p in dirty if (worktree_root / p).is_file())
+    if paths and session_id:
+        from coordinator_core.session import scope as session_scope
+
+        contested = session_scope.contested_by_live_peers(paths, session_id, cwd=str(worktree_root))
+        if contested is None:
+            return []
+        paths = [p for p in paths if not contested.get(p)]
+    ignored = set(_ignored_among_left(worktree_root, paths, None) or ()) if paths else set()
+    paths = [p for p in paths if p not in ignored]
+    if not paths:
+        return []
+    params: dict = {
+        "paths": paths, "carry_stopped_runs": False,
+        "message": f"run artifacts written after the landing\n\nRun-Artifacts-Late-Of: {sha}\n",
+    }
+    if session_id:
+        params["session_id"] = session_id
+    try:
+        out = reentrant_dispatch("ceremony.commit_v2", params, repo_root=repo_root)
+    except Exception as exc:  # noqa: BLE001 -- never un-land the landed commit
+        reply["late_reland"] = {"error": f"{type(exc).__name__}: {exc}"}
+        return []
+    if isinstance(out, dict) and out.get("committed") and out.get("sha"):
+        reply["late_reland"] = {"sha": str(out["sha"]), "paths": paths}
+        return paths
+    err = out.get("error") if isinstance(out, dict) else None
+    reply["late_reland"] = {"error": str(err or f"unexpected commit_v2 reply: {out!r}")}
+    return []
+
+
 def _cap_commit_reply(reply: dict) -> dict:
     """``reply`` bounded by ``commit_v2.cap_reply``, applied once every consumer of the full
     ``full_reply`` lists has read them."""
@@ -965,6 +1021,59 @@ def _commit_siblings(
     return out
 
 
+_INDEX_REFRESH_OPT_OUT_ENV = "COORDINATOR_INDEX_REFRESH_ON_COMMIT"
+_INDEX_REFRESH_CODE = (
+    "import sys; from pathlib import Path; "
+    "from coordinator_core.workday_start.manifest import structural_index_refresh_admitted; "
+    "structural_index_refresh_admitted(Path(sys.argv[1]))"
+)
+
+
+def _spawn_index_refresh(repo_root: str) -> bool:
+    """One detached `python -c` child running the memory-admitted structural refresh.
+
+    `detached_spawn.spawn_detached` only launches script files, so this reuses its
+    interpreter, env and detach-flag helpers for the `-c` form. Never raises.
+    """
+    import subprocess
+
+    from coordinator_core.ops.ceremony import detached_spawn as ds
+
+    try:
+        python_exe = ds._resolve_python_exe()
+        if not python_exe:
+            return False
+        kwargs: dict = (
+            {"start_new_session": True} if hasattr(os, "fork")
+            else {"creationflags": ds._windows_detached_flags()}
+        )
+        subprocess.Popen(
+            [python_exe, "-c", _INDEX_REFRESH_CODE, repo_root],
+            cwd=repo_root, env=ds._child_env(repo_root, None),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            close_fds=True, **kwargs,
+        )
+    except Exception:  # noqa: BLE001 -- best-effort; never alters the commit verdict
+        return False
+    return True
+
+
+def _fire_index_refresh(repo_root: Optional[Path]) -> None:
+    """After a landed terminal commit, spend one detached spawn on the admit-gated refresh.
+
+    Skipped under pytest and when `COORDINATOR_INDEX_REFRESH_ON_COMMIT=0`, so tests that
+    commit in temp repos launch no real child.
+    """
+    if os.environ.get(_INDEX_REFRESH_OPT_OUT_ENV) == "0" or "PYTEST_CURRENT_TEST" in os.environ:
+        return
+    try:
+        from coordinator_core.lifecycle import main_worktree_root
+
+        _spawn_index_refresh(str(main_worktree_root(repo_root)))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @register_op("dispatch.terminal_commit")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
@@ -1123,7 +1232,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     from coordinator_core.git.call_io_scope import call_io_scope
 
     with call_io_scope():
-        return _handler_body(params, repo_root)
+        reply = _handler_body(params, repo_root)
+    if isinstance(reply, dict) and reply.get("committed") and reply.get("sha"):
+        _fire_index_refresh(repo_root)
+    return reply
 
 
 def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
@@ -1324,6 +1436,39 @@ def _is_no_script_call(params: object) -> bool:
     )
 
 
+# Another live call owns the claim and runs its own stamp leg; a stamp here would race it.
+_REFUSAL_STAMP_SKIPPED_CODES = frozenset({"run-token-in-flight", "run-token"})
+
+
+def _refusal_names_plan(reply: dict, plan_path: str) -> bool:
+    """True when a peer-claim/blob-drift refusal lists ``plan_path``; committing it would override the refusal (DR-462)."""
+    if reply.get("refused") not in ("peer-claim", "blob-drift"):
+        return False
+    claims = reply.get("peer_claims")
+    named = {c.get("path") for c in claims if isinstance(c, dict)} if isinstance(claims, list) else set()
+    return plan_path in named or plan_path in _drift_paths(reply.get("blob_drift"))
+
+
+def _stamp_on_refusal(params: dict, repo_root: Optional[Path], reply: dict) -> dict:
+    """Refusal stamp fields for a refused reply, ``{}`` when skipped or the stamp itself fails."""
+    plan_path = params.get("plan_path") if isinstance(params, dict) else None
+    if repo_root is None or not isinstance(plan_path, str) or not plan_path:
+        return {}
+    if reply.get("refused") in _REFUSAL_STAMP_SKIPPED_CODES or _refusal_names_plan(reply, plan_path):
+        return {}
+    from coordinator_core.git.commit_trailers import _UUID_RE
+    from coordinator_core.lifecycle import main_worktree_root
+    from coordinator_core.ops.dispatch_emit.refusal_coded_stamp import stamp_landed_rows_on_refusal
+
+    session_id = params.get("session_id")
+    if session_id is not None and (not isinstance(session_id, str) or not _UUID_RE.fullmatch(session_id)):
+        session_id = None
+    try:
+        return stamp_landed_rows_on_refusal(main_worktree_root(repo_root), repo_root, params, reply, session_id)
+    except Exception as exc:
+        return {"refusal_coded_stamp_error": f"{type(exc).__name__}: {exc}"}
+
+
 def _terminal_commit(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
     withheld: Optional[dict] = None, blockers: Optional[dict] = None,
@@ -1344,6 +1489,8 @@ def _terminal_commit(
         _settle_token(token_state, landed=bool(token_state.get("landed")))
         raise
     _settle_token(token_state, landed=bool(token_state.get("landed")))
+    if reply.get("refused") and not reply.get("committed"):
+        reply.update(_stamp_on_refusal(params, repo_root, reply))
     close = token_state.pop("since_halt_close", None)
     if close is None:
         return reply
@@ -1576,6 +1723,9 @@ def _terminal_commit_inner(
                 withheld.update({g.id: g.reason for g in manifest.gated})
                 withheld.update({o.id: f"owed: {o.detail}" for o in manifest.owed})
             ask_run_dir = manifest_abs.parent
+            from coordinator_core.ops.dispatch_emit.in_run_widen import record_widens
+
+            record_widens(ask_run_dir, params.get("widened"))
             request_abs = contained_path(worktree_root / manifest.marker_path, [run_root])
             if request_abs is None:
                 return _error(
@@ -1696,7 +1846,9 @@ def _terminal_commit_inner(
         worktree_root, params, _run_id_of(params, ask_run_dir, script_path_raw), request
     )
     if over_budget is not None:
-        return over_budget
+        if "resize_arm" not in over_budget:
+            return over_budget
+        _apply_xs_resize(worktree_root, request, over_budget)
     ledger = None
     open_rows: list = []
     if ask_run_dir is not None:
@@ -2807,6 +2959,10 @@ def _terminal_commit_inner(
         own_declared.update(
             p for p in (*all_paths, *deleted_paths) if p == record_dir_rel or p.startswith(record_dir_rel.rstrip("/") + "/")
         )
+    from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
+
+    widened = list(widened_paths(ask_run_dir)) if ask_run_dir is not None else []
+    own_declared.update(widened)
     all_paths, sibling_withheld = _sc.filter_own(
         all_paths, claims_over([*all_paths, *deleted_paths]), own_declared,
     )
@@ -3046,12 +3202,16 @@ def _terminal_commit_inner(
                     worktree_root, _run_id_of(params, ask_run_dir, script_path_raw)
                 )
             )
+        integrity_extra.pop("supplied_blobs", None)
         if sibling_withheld:
             integrity_extra["sibling_withheld"] = dict(sibling_withheld)
         return _error(
             f"landing refused {first['reason']}: {first['path']} ({first['detail']}){remedy}",
             **integrity_extra,
         )
+
+    if integrity_extra.get("supplied_blobs"):
+        commit_params["supplied_blobs"] = integrity_extra.pop("supplied_blobs")
 
     landed_now = set(all_paths)
     unlanded = [p for p in obliged_changed if p not in landed_now]
@@ -3136,6 +3296,7 @@ def _terminal_commit_inner(
             worktree_root, ask_note_text, landing_paths=all_paths,
             deleted_paths=deleted_paths, withheld_paths=shipped_withheld,
             own_paths=declared_writes, row_of=stranded_rows, owners=_claim_owners, run_id=sibling_run_id,
+            widened=widened,
         )
         if shipped_refused is not None:
             _unstamp_landed()
@@ -3669,12 +3830,26 @@ def _terminal_commit_inner(
                 | set(reply.get("archived") or ())
             )
             withheld_art = {**(dict(art_landable.withheld) if art_landable is not None else {}), **wh_map}
+            if not foreign_repo:
+                fresh_art = run_artifacts.candidate_paths(
+                    worktree_root, art_run_id, sizing_rel=cited_sizing, plan_rel=request.plan_path,
+                    doc_paths=params.get(run_artifacts.DOC_PATHS_PARAM) or (),
+                )
+                late_foreign = set(claims_over([*fresh_art.paths(), *artifacts.paths()])) | set(left_out_map)
+                landed_now |= set(_reland_late_artifacts(
+                    reply, worktree_root, repo_root, artifacts, fresh_art,
+                    landed_now | set(withheld_art) | late_foreign | set(never_commit_dropped),
+                    session_id, str(reply["sha"]),
+                ))
             art_residue = run_artifacts.residue(
                 artifacts, snapshot.changed if snapshot is not None else (), landed_now, withheld_art,
                 foreign=set(claims_over(artifacts.paths())) | set(left_out_map),
             )
             reply["run_artifacts"] = {
-                "landed": sorted(p for p in artifacts.paths() if p in landed_now),
+                "landed": sorted(
+                    {p for p in artifacts.paths() if p in landed_now}
+                    | set((reply.get("late_reland") or {}).get("paths") or ())
+                ),
                 "withheld": dict(sorted(withheld_art.items())),
             }
             if art_residue:
@@ -3758,6 +3933,10 @@ def _terminal_commit_inner(
     reply["prefix_files"] = prefix_files
     reply.update(_declared_reconcile(ask_run_dir, all_paths))
     reply.update(usage_reply)
+    if reply.get("committed"):
+        from coordinator_core.ops.dispatch_emit import run_push
+
+        reply["push"] = run_push.nudge_push(worktree_root, worktree_root)
     if reply.get("committed") or reply.get("nothing_to_commit"):
         _with_siblings(reply)
     elif sibling_paths:

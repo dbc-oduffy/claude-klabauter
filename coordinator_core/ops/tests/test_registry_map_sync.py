@@ -249,3 +249,40 @@ def test_unmapped_op_dispatch_falls_back_to_whole_package_import():
         f"subprocess failed (stdout={result.stdout!r}, stderr={result.stderr!r})"
     )
     assert "UNMAPPED_OP_FALLBACK_OK" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# (c) tracked-at-HEAD ratchet -- every map target ships in a clean checkout
+# ---------------------------------------------------------------------------
+
+
+def _untracked_targets(targets, tracked_paths):
+    """Return the sorted target modules with no .py file or package __init__.py in tracked_paths."""
+    missing = []
+    for module in sorted(set(targets)):
+        rel = module.replace(".", "/")
+        if f"{rel}.py" not in tracked_paths and f"{rel}/__init__.py" not in tracked_paths:
+            missing.append(module)
+    return missing
+
+
+def test_untracked_target_detector_flags_missing_and_accepts_tracked():
+    tracked = {"pkg/a.py", "pkg/b/__init__.py"}
+    assert _untracked_targets(["pkg.a", "pkg.b"], tracked) == []
+    assert _untracked_targets(["pkg.a", "pkg.c"], tracked) == ["pkg.c"]
+
+
+def test_every_registry_map_target_module_is_tracked_at_head():
+    repo_root = Path(__file__).resolve().parents[3]
+    result = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", "HEAD", "--", "coordinator_core"],
+        capture_output=True,
+        text=True,
+        **no_console_creationflags(),
+    )
+    assert result.returncode == 0, f"git ls-tree failed: {result.stderr!r}"
+    tracked = set(result.stdout.splitlines())
+    missing = _untracked_targets(OP_MODULE_MAP.values(), tracked)
+    assert not missing, (
+        f"OP_MODULE_MAP targets not tracked at HEAD (a clean checkout lacks them): {missing}"
+    )

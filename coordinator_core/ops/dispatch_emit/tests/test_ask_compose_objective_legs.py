@@ -45,12 +45,12 @@ def test_calibration_runs_before_the_first_execute_row_and_halts_the_rows_on_fai
     assert ask_compose.OBJECTIVE_FALSIFIER_AGENT in script
 
 
-def test_no_objective_leg_passes_an_explicit_model_or_effort(script):
+def test_every_objective_leg_passes_a_model_and_no_effort(script):
     for label in ("objective-check:wave-", "objective-calibrate", "objective-falsifier-rewrite", "objective-judge",
                   "objective-research", "objective-rethink", "objective-row:"):
         at = script.index(f"label: '{label}")
         opts = script[at: script.index("schema:", at)]
-        assert "model:" not in opts and "effort:" not in opts, label
+        assert "model:" in opts and "effort:" not in opts, label
 
 
 def test_the_wave_check_rides_the_checkpoint_gate_once_and_is_never_its_own_wave(script):

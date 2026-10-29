@@ -116,6 +116,33 @@ def test_absent_state_starts_at_zero_and_round_trips(tmp_path):
     assert etc.load_state(sp, t) == s
 
 
+def test_save_state_returns_within_deadline_under_stalled_write(tmp_path, monkeypatch):
+    import threading
+    from pathlib import Path
+
+    release = threading.Event()
+    real = Path.write_text
+
+    def _stall(self, *a, **k):
+        if self.name.startswith("stalled-em-turns"):
+            release.wait(10)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", _stall)
+    sp = tmp_path / "stalled-em-turns.json"
+    try:
+        t0 = time.perf_counter()
+        etc.save_state(sp, etc.fresh_state())
+        etc.save_state(sp, etc.fresh_state())
+        assert time.perf_counter() - t0 < 0.5
+        assert not sp.exists()
+    finally:
+        release.set()
+    ok = tmp_path / "ok-em-turns.json"
+    etc.save_state(ok, etc.fresh_state())
+    assert ok.exists()
+
+
 def test_bars_are_the_ledger_values():
     assert etc.PRE_FIRE_TURNS_MAX == 10
     assert etc.POST_LANDING_TURNS_MAX == 5

@@ -30,7 +30,7 @@ def test_s_arm_stages_resume_plan_and_authors_only_without_one():
     assert s_arm.count("agent(") == 1
 
 
-def test_m_plus_baton_revises_the_resumed_plan():
+def test_m_plus_baton_revises_the_resumed_plan(m_plus_known_arm):
     script = _compose()
     assert "planPath: _gate.resume_plan ?? _spineFallback ?? null" in script
     assert "planPath: null" not in script

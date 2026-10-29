@@ -162,7 +162,7 @@ def test_without_the_evidence_sidecar_the_gate_returns_the_row_resume_the_real_r
     assert out["resume_plan"] == PLAN_REL and out["resume_rows"] == list(_EM_ROWS)
 
 
-def test_an_all_done_refire_reaches_verify_then_commit_with_no_executor(repo):  # noqa: F811
+def test_an_all_done_refire_reaches_verify_then_commit_with_no_executor(repo, m_plus_known_arm):  # noqa: F811
     _example_game_repo_shape(repo)
     out = _run_composed(repo, _MET)
     labels = [c["label"] for c in out["calls"]]
@@ -175,7 +175,7 @@ def test_an_all_done_refire_reaches_verify_then_commit_with_no_executor(repo):  
 
 
 def test_a_not_met_judge_lands_a_ledger_check_halt_and_the_next_gate_resumes_it_not_the_already_ran_refusal(
-    repo  # noqa: F811
+    repo, m_plus_known_arm  # noqa: F811
 ):
     _example_game_repo_shape(repo)
     out = _run_composed(repo, _UNMET)

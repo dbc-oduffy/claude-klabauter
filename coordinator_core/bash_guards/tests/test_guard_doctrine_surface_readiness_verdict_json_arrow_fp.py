@@ -23,9 +23,19 @@ ALLOWED = [
     f"cd E:/example-retrieval-repo && {EXE} plan.readiness_verdict '{JSON_Q}'",
     f"{EXE} plan.readiness_verdict '{JSON_Q}'",
     f"coordinator-invoke plan.readiness_verdict '{JSON_Q}'",
+    f"{EXE} sizing.record_pm_resolution '{JSON_Q}'",
+    f"cd E:/example-retrieval-repo && coordinator-invoke plan.other_op '{JSON_Q}' 2>&1",
+    f"cat <<'EOF'\nsee {S} -> then > done\nEOF",
+    f"cat <<'EOF' | wc -l\nsee CLAUDE.md for details > ok\nEOF",
+    f'echo "see {S} and CLAUDE.md here"',
+    f'echo "see {S}" > scratch/a.txt',
+    f"{EXE} plan.other_op '{{\"p\":\"CLAUDE.md -> x\"}}'",
 ]
 
 DENIED = [
+    f"{EXE} plan.other_op '{JSON_Q}' > {S}",
+    f"{EXE} plan.other_op '{{\"p\":\"CLAUDE.md\"}}' > CLAUDE.md",
+    "cat > CLAUDE.md <<'EOF'\nbody\nEOF",
     f"{EXE} plan.readiness_verdict '{JSON_Q}' > {S}",
     f"{EXE} plan.readiness_verdict '{JSON_Q}' | tee {S}",
     f"cat > {S} <<'EOF'\nbody\nEOF",

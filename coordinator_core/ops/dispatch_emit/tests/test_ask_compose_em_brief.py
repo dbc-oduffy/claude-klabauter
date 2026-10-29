@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
+pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
+
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _BRIEF = EmBrief(text="Frame: it's \\ the plan\nline2", source="inline", context=("docs/ctx.md",))
 

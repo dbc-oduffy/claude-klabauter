@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core import warp_fire
+from coordinator_core.bounded_io import run_bounded
 
 # experiments calibration-ladder/step_ledger_model.py EM_PRE_FIRE_TURNS_MAX at ec3b3e4945e0 (ledger rule O2).
 PRE_FIRE_TURNS_MAX = 10
@@ -87,10 +88,18 @@ def load_state(path, transcript_path) -> dict:
 
 def save_state(path, state: dict) -> None:
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(state), encoding="utf-8")
-    os.replace(tmp, p)
+    payload = json.dumps(state)
+
+    def _write() -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
+        tmp.write_text(payload, encoding="utf-8")
+        os.replace(tmp, p)
+
+    # Best-effort counter: a stalled disk drops the save rather than hold the op.
+    # Trap: the overrun worker completes late, so a stale state can overwrite a
+    # newer one saved after the stalled key recovers.
+    run_bounded(str(p), _write, default=None)
 
 
 def _is_engine_ask_fire(content) -> bool:

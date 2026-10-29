@@ -326,6 +326,7 @@
   "guard-subagent-heavy-ue-launch": "bash_guards/guard_subagent_heavy_ue_launch.py",
   "check-test-suite-invocation": "bash_guards/check_test_suite_invocation.py",
   "guard-heavy-command-admission": "bash_guards/guard_heavy_command_admission.py",
+  "guard-disk-fill": "bash_guards/guard_disk_fill.py",
   "guard-post-executor-verification": "bash_guards/guard_post_executor_verification.py",
   "guard-repo-setup-claude-home-refusal": "bash_guards/guard_repo_setup_claude_home_refusal.py",
   "guard-doctrine-surface-bash-write": "bash_guards/guard_doctrine_surface_bash_write.py",

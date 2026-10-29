@@ -203,3 +203,97 @@ def test_light_python_modules_do_not_launch_heavy(command):
     from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import launches_heavy
 
     assert not launches_heavy(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npx electron .",
+        "cd app && pnpm dev",
+        "pnpm --filter desktop dev",
+        "npm run dev",
+        "yarn dev:electron",
+        "pnpm exec electron .",
+        "./node_modules/.bin/electron .",
+        "bash -c 'pnpm dev'",
+    ],
+)
+def test_denies_a_subagent_electron_or_dev_server(command):
+    reason = _reason(check(_payload(command)))
+    assert "scoped_pytest" in reason and "Group EM slot" in reason
+
+
+def test_denies_a_background_shell_storm_on_windows(monkeypatch):
+    monkeypatch.setattr("coordinator_core.bash_guards.guard_subagent_heavy_ue_launch._storm_guard_applies", lambda: True)
+    reason = _reason(check(_payload("sleep 1 & sleep 2 & sleep 3 & wait")))
+    assert "background-shell fan-out" in reason
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for i in 1 2 3; do work $i & done; wait",
+        "while read x; do ./job $x & done < list",
+        "(for f in a b; do job $f & done)",
+    ],
+)
+def test_denies_a_loop_background_fanout_on_windows(monkeypatch, command):
+    monkeypatch.setattr("coordinator_core.bash_guards.guard_subagent_heavy_ue_launch.sys.platform", "win32")
+    assert "background-shell fan-out" in _reason(check(_payload(command)))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "for i in 1 2 3; do work $i; done",
+        "for i in 1 2; do work $i && other; done",
+        "for i in 1 2; do echo 'a & b'; done",
+        "work & wait",
+        "for i in 1 2; do work $i; done; other &",
+    ],
+)
+def test_allows_a_loop_without_background_on_windows(monkeypatch, command):
+    monkeypatch.setattr("coordinator_core.bash_guards.guard_subagent_heavy_ue_launch.sys.platform", "win32")
+    assert check(_payload(command)) is None
+
+
+def test_allows_a_loop_background_fanout_on_posix(monkeypatch):
+    monkeypatch.setattr("coordinator_core.bash_guards.guard_subagent_heavy_ue_launch.sys.platform", "linux")
+    assert check(_payload("for i in 1 2 3; do work $i & done")) is None
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin"])
+def test_allows_a_background_shell_storm_on_posix(monkeypatch, platform):
+    monkeypatch.setattr("coordinator_core.bash_guards.guard_subagent_heavy_ue_launch.sys.platform", platform)
+    assert check(_payload("sleep 1 & sleep 2 & sleep 3 & wait")) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npx electron .",
+        "pnpm dev",
+        "sleep 1 & sleep 2 & sleep 3 & wait",
+    ],
+)
+def test_the_main_loop_may_run_them(command):
+    assert check(_payload(command, agent_id=None)) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest coordinator_core/foo/tests/test_a.py",
+        "python -m coordinator_core.testing.scoped_pytest --allow x -- a.py",
+        "pnpm typecheck",
+        "pnpm add electron",
+        "echo npx electron",
+        "grep -n 'pnpm dev' README.md",
+        "make build && echo ok",
+        "sleep 1 & sleep 2 & wait",
+        "a && b 2>&1 | tee out; c >/dev/null 2>&1",
+        "echo 'a & b & c & d'",
+    ],
+)
+def test_allows_scoped_tests_and_mentions(command):
+    assert check(_payload(command)) is None

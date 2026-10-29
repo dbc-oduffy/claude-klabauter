@@ -1289,6 +1289,34 @@ def _shape_or_refuse(research: dict) -> dict:
         raise PipelineEmitRefused([str(exc)]) from exc
 
 
+_CODE_RANK_LINE = (
+    "Rank code claims above web claims: where a web or NotebookLM claim contradicts a repo "
+    "synthesis, the repo claim stands and the conflict is named.\n"
+)
+
+
+def _append_code_rank_line(root: Path, scratch_rel: str, members_brief: str) -> str:
+    """Make the brief the research synthesis reads carry the code-over-web ranking line; returns its path.
+
+    A scratch-owned brief (the ask file or `<scratch>/brief.md`) gains the line in place; a sizing is never
+    edited, so `<scratch>/brief.md` points at it and carries the line.
+    """
+    base = scratch_rel.rstrip("/")
+    if not members_brief.startswith(f"{base}/"):
+        rel = f"{base}/brief.md"
+        target = root / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            f"The brief is `{members_brief}`; read it first.\n\n{_CODE_RANK_LINE}", encoding="utf-8", newline="\n"
+        )
+        return rel
+    target = root / members_brief
+    text = target.read_text(encoding="utf-8")
+    if _CODE_RANK_LINE.strip() not in text:
+        target.write_text(text.rstrip("\n") + "\n\n" + _CODE_RANK_LINE, encoding="utf-8", newline="\n")
+    return members_brief
+
+
 def _research_route_setup(
     params: dict,
     repo_root: Optional[Path],
@@ -1404,6 +1432,8 @@ def _research_route_setup(
     members_brief = research_emit.bind_context(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
+    if shape.get("primary") == research_emit.REPO_PIPELINE:
+        members_brief = _append_code_rank_line(root, scratch_rel, members_brief)
     content_root = _pipeline_content_root()
     targets = [t for t in research.get("targets") or () if isinstance(t, dict)]
     repo_segments: list[tuple[str, str]] = []
@@ -1418,14 +1448,29 @@ def _research_route_setup(
             f"sizing {sizing_rel or '(research route)'}: the repo pipeline has no resolved repo target; "
             "record one with sizing-assemble --research-target repo=<path or registered key> (list: research.targets) or a repo seed"
         ])
-    if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs >= (1 if repo_seeds else 2):
+    primary_repo = shape.get("primary") == research_emit.REPO_PIPELINE
+    if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs >= (1 if repo_seeds or primary_repo else 2):
         compare_name = research_emit.REPO_COMPARE_PIPELINE + MANIFEST_SUFFIX
         if repo_refs < 2 or any(p.is_file() for p in (content_root / PIPELINES_DIR).rglob(compare_name)):
             repo_segments, compare_brief = research_emit.bind_repo_targets(
-                root, scratch_rel, members_brief, targets, seeds
+                root, scratch_rel, members_brief, targets, seeds, primary=primary_repo
             )
         else:
             multi_repo = "unavailable: no repo-compare manifest in the content root"
+    gap_briefs: dict[str, str] = {}
+    if primary_repo and repo_segments:
+        if manifests is None:
+            repo_manifest = load_manifest(content_root, research_emit.REPO_PIPELINE)
+        else:
+            repo_manifest = manifests.get(research_emit.REPO_PIPELINE) or manifests.setdefault(
+                research_emit.REPO_PIPELINE, load_manifest(content_root, research_emit.REPO_PIPELINE)
+            )
+        synthesis = research_emit.synthesis_output(repo_manifest)
+        if synthesis:
+            gap_briefs = research_emit.bind_gap_briefs(
+                root, scratch_rel, members_brief, shape["pipelines"],
+                [f"{scratch_rel.rstrip('/')}/{key}/{synthesis}" for key, _ in repo_segments],
+            )
     pairs = research_emit.segments_for(
         shape,
         brief_rel=members_brief,
@@ -1437,6 +1482,7 @@ def _research_route_setup(
         repo_segments=repo_segments,
         compare_brief=compare_brief,
         seed_briefs=seed_briefs,
+        gap_briefs=gap_briefs,
     )
     given_flags = {str(k): str(v) for k, v in (params.get("flags") or {}).items()}
     segments = []

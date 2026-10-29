@@ -68,20 +68,46 @@ def _install_stall(sandbox: str, gate: "dict[str, threading.Event]"):
     return undo
 
 
-def _build_sites(sandbox: Path):
+ARCHIVE_RECORDS = 1757
+SIBLING_RUN_ID = "probe-run"
+
+
+def build_archive(sandbox: Path, records: int = ARCHIVE_RECORDS) -> None:
+    """Fill ``archive/handoffs`` with ``records`` frontmatter-headed handoffs, none matching ``hid``."""
+    archive = sandbox / "archive" / "handoffs"
+    nested = archive / "2026-10"
+    nested.mkdir(parents=True, exist_ok=True)
+    body = "# handoff\n" + "filler line\n" * 40
+    for i in range(records):
+        folder = archive if i % 2 else nested
+        (folder / f"h{i}.md").write_text(
+            f"---\nhandoff_id: other-{i}\nstatus: archived\n---\n{body}", encoding="utf-8"
+        )
+
+
+def _build_sites(sandbox: Path, setattr_=setattr):
+    """Return the seven ``(name, call)`` sites rooted at ``sandbox``.
+
+    ``setattr_`` patches the counters' root resolver; a pytest caller passes ``monkeypatch.setattr``
+    so the patch is undone.
+    """
     from coordinator_core import guard_advisory_counter as gac
     from coordinator_core import handoff_creation_guard as hcg
     from coordinator_core import registry_fallback_counter as rfc
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit import run_close
     from coordinator_core.roadmap import prep_gate
     from coordinator_core.session import em_turn_count
 
-    (sandbox / "archive" / "handoffs").mkdir(parents=True)
-    (sandbox / "archive" / "handoffs" / "a.md").write_text("---\nhandoff_id: other\n---\n", encoding="utf-8")
+    build_archive(sandbox)
     (sandbox / "docs" / "decisions").mkdir(parents=True)
     (sandbox / "docs" / "decisions" / "DR-001-x.md").write_text("x", encoding="utf-8")
+    status = sandbox / contract.status_rel(SIBLING_RUN_ID)
+    status.parent.mkdir(parents=True)
+    status.write_text('{"status": "running"}\n', encoding="utf-8")
     root = str(sandbox)
     for mod in (gac, rfc):
-        mod.resolve_git_root_cheap = lambda cwd=None, _r=root: _r
+        setattr_(mod, "resolve_git_root_cheap", lambda cwd=None, _r=root: _r)
 
     return [
         ("em_turn_count.save_state", lambda: em_turn_count.save_state(sandbox / "s" / "state.json", {"n": 1})),
@@ -90,6 +116,7 @@ def _build_sites(sandbox: Path):
         ("guard_advisory_counter.record_deny_fire", lambda: gac.record_deny_fire("g", "sid", False, root)),
         ("handoff_creation_guard.find_archived_twin_by_handoff_id", lambda: hcg.find_archived_twin_by_handoff_id("hid", root)),
         ("prep_gate._new_dr_number_pinned", lambda: prep_gate._new_dr_number_pinned([], sandbox)),
+        ("run_close.sibling_release", lambda: run_close.sibling_release(sandbox, SIBLING_RUN_ID, None)),
     ]
 
 

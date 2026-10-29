@@ -9,7 +9,7 @@ Negative-spec: applies no tier logic (research_shape does); authors no manifest 
 
 from __future__ import annotations
 
-from typing import Final, TypedDict
+from typing import Final, NotRequired, TypedDict
 
 VALUE_CLASSES: Final = ("scouts", "corpus", "deep", "spike")
 APPETITES: Final = ("small", "medium", "large")
@@ -108,6 +108,9 @@ PROBE_VERBS_KEY: Final = "verbs"
 # Keys of the sizing object's research block.
 QUESTION_MODE_KEY: Final = "question_mode"
 QUESTION_TARGETS_KEY: Final = "question_targets"
+# research.primary names the source whose segments run first and whose findings outrank the rest.
+PRIMARY_KEY: Final = "primary"
+PRIMARIES: Final = ("repo",)
 
 
 def seed_sources(seeds) -> list[str]:
@@ -146,3 +149,4 @@ class ShapeResult(TypedDict):
     reason: str
     pipelines: list[str]
     flags: dict[str, dict[str, str]]
+    primary: NotRequired[str]

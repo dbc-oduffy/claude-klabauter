@@ -103,3 +103,15 @@ def test_the_emitted_commit_stage_runs_the_remedy_step_and_reinvokes_the_landing
     assert "retest-invariant" in js and "retest_targeted" in js and "--poll" in js
     assert js.index("retest-invariant") < js.rindex("_commit = await")
     assert "retest_attempts" in ask_compose._commit_stage_call(head="h", anchor="a", repo_root="/r", run_id=RUN)
+
+
+def test_every_commit_stage_agent_names_its_model():
+    """An agent() with no model: inherits the session's (Opus, ~4x). The published retest-invariant
+    call shipped that way; every emitted call names its model."""
+    lines: list = []
+    ask_compose._append_docs_and_commit(
+        lines, head="h", anchor="a", repo_root="/r", run_id=RUN, manifest_rel="m.json"
+    )
+    js = "\n".join(lines)
+    opts = [seg.split("})", 1)[0] for seg in js.split("agentType: ")[1:]]
+    assert opts and all("model: '" in o for o in opts), [o[:120] for o in opts if "model: '" not in o]

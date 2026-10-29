@@ -2,7 +2,11 @@
 
 Params: ``run_id`` (string, required: the halted run), ``sha`` (string: one commit sha), ``shas``
 (list of strings: further commit shas, unioned with ``sha``; at least one of the two is required),
-``session_id`` (string, optional uuid: the calling session, used to find the run's review sidecar).
+``session_id`` (string, optional uuid: the calling session, used to find the run's review sidecar),
+``in_run`` (bool, optional: close the calling run itself as already delivered; admits a ``running``
+sibling status or a solo run with no halt marker, and refuses unless every manifest
+``review_declared_paths`` entry has no delta between the manifest ``head_sha`` and HEAD and the
+worktree; a marker-less run writes nothing and replies the not-applicable close).
 Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
@@ -510,8 +514,52 @@ def _shas_param(params: dict) -> tuple[list, Optional[str]]:
     return list(dict.fromkeys(shas)), None
 
 
-def _record_solo(root: Path, run_id: str, shas: list, session_id: Optional[str] = None) -> dict:
-    """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``."""
+def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
+    """None when every ``review_declared_paths`` entry of the run manifest has no delta between the manifest's ``head_sha`` and HEAD and the worktree; else the refusal.
+
+    An unreadable manifest, a missing ``head_sha`` or an empty write set refuses: nothing proves the run delivered nothing.
+    """
+    import json as _json
+
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import _parse_tree_entries
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    try:
+        doc = _json.loads((ask_contract.record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return f"{run_id} has no readable run manifest; in_run cannot prove the write set is clean"
+    base = doc.get("head_sha") if isinstance(doc, dict) else None
+    raw = doc.get("review_declared_paths") if isinstance(doc, dict) else None
+    paths = [p.replace("\\", "/") for p in raw if isinstance(p, str) and p] if isinstance(raw, list) else []
+    if not isinstance(base, str) or not _FULL_SHA.fullmatch(base) or not paths:
+        return f"{run_id} manifest names no head_sha or no review_declared_paths; in_run cannot prove the write set is clean"
+    common = resolve_git_common_dir(root)
+    dirs: dict = {}
+
+    def _dir(tree_sha: str):
+        if tree_sha not in dirs:
+            got = read_object(common, tree_sha)
+            dirs[tree_sha] = _parse_tree_entries(got[1]) if got and got[0] == "tree" else None
+        return dirs[tree_sha]
+
+    clean = _clean_at_head(root, common, _dir, paths, base)
+    dirty = [p for p in paths if p not in clean]
+    if dirty:
+        more = f" (+{len(dirty) - 1} more)" if len(dirty) > 1 else ""
+        return f"{run_id} write set is not clean at HEAD: {dirty[0]}{more} differs from the run base; the work is not already delivered"
+    return None
+
+
+def _record_solo(
+    root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
+) -> dict:
+    """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``.
+
+    ``in_run`` admits a marker-less run: it verifies the sha and the clean write set, writes nothing and
+    replies ``_close_landed``'s not-applicable close.
+    """
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
     try:
@@ -522,6 +570,12 @@ def _record_solo(root: Path, run_id: str, shas: list, session_id: Optional[str] 
         marker = halted_run.read_strict_run(record_dir)
     except halted_run.UnreadableHaltRecord as exc:
         return _refuse(f"{exc.reason}: halt marker unreadable; {run_id} is not recorded landed")
+    if marker is None and in_run:
+        sha, problem, echo = _verify(root, run_id, shas)
+        problem = problem or _in_run_unclean(root, run_id)
+        if problem:
+            return _refuse(problem)
+        return {"ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, **_close_landed(root, run_id, sha, session_id)}
     if marker is None:
         return _refuse(f"{run_id} has no sibling status or halt record; it never ran")
     status = marker.get("status")
@@ -567,6 +621,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     shas, problem = _shas_param(params)
     if problem:
         return _refuse(problem)
+    in_run = params.get("in_run")
+    if in_run is not None and not isinstance(in_run, bool):
+        return _refuse(f"{OP_NAME} requires in_run to be a boolean")
 
     sid = params.get("session_id")
     session_id = sid if isinstance(sid, str) and _UUID.fullmatch(sid) else None
@@ -575,7 +632,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         prior = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _record_solo(root, run_id, shas, session_id)
+        return _record_solo(root, run_id, shas, session_id, bool(in_run))
     except (OSError, ValueError):
         return _refuse(f"{run_id} sibling status is unreadable")
     status = prior.get("status") if isinstance(prior, dict) else None
@@ -587,12 +644,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 **_close_landed(root, run_id, landed, session_id),
             }
         return _refuse(f"{run_id} already landed at {prior.get('sha')}; nothing to record")
-    if status != contract.STATUS_HALTED:
+    if status != contract.STATUS_HALTED and not (in_run and status == contract.STATUS_RUNNING):
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
     sha, problem, echo = _verify(root, run_id, shas)
     if problem:
         return _refuse(problem)
+    if in_run:
+        problem = _in_run_unclean(root, run_id)
+        if problem:
+            return _refuse(problem)
     reply = run_close.sibling_release(root, run_id, sha)
     out: dict = {"ok": True, "run_id": run_id, "sha": sha, "written": True, **echo}
     if reply is not None:

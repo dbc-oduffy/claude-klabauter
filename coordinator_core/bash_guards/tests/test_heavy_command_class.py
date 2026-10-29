@@ -413,8 +413,8 @@ def _fake_host(avail_gib, recorded=None, reserved_gib=0, boom=False):
             raise OSError("unreadable")
         return status
 
-    def admit(peak, st, floor=0):
-        need = max(peak * 1.25, floor + peak)
+    def admit(peak, st):
+        need = peak * 1.25
         return types.SimpleNamespace(
             admit=need <= st.avail_phys and st.commit_used + peak <= st.commit_limit, need_avail=need
         )
@@ -425,7 +425,6 @@ def _fake_host(avail_gib, recorded=None, reserved_gib=0, boom=False):
         read_recorded_peak=lambda path, key: recorded,
         read_memory_status=read_status,
         reserved_bytes=lambda path: int(reserved_gib * _GIB),
-        guard_floor_bytes=lambda: 0,
         admit=admit,
         admission_lock=lambda path: contextlib.nullcontext(),
         register_command=lambda path, key, pid, peak: log.append((key, pid, peak)),
@@ -710,7 +709,9 @@ def test_the_ratchet_refuses_a_bypass_shape():
     assert _SPAWN.search("subprocess.Popen(argv)") and _SCIP.search('argv = [exe, "scip-rebuild"]')
 
 
-@pytest.mark.parametrize("cmd", ["python -m pytest a.py b.py", "pytest", "pytest -n 4 a.py"])
+@pytest.mark.parametrize(
+    "cmd", ["python -m pytest a.py b.py", "pytest", "pytest -n 4 a.py", "pytest tests/", "pytest -- tests"]
+)
 def test_bare_pytest_is_marked(cmd):
     """Any direct pytest other than exactly one file target, xdist included."""
     assert classify(cmd, CWD).bare_pytest is True

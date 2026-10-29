@@ -142,6 +142,7 @@ from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist
 from coordinator_core.bash_guards import block_subagent_commit
 from coordinator_core.bash_guards import guard_post_executor_verification
+from coordinator_core.bash_guards import guard_em_post_fire_shell_write
 from coordinator_core.bash_guards import block_subagent_destructive_action
 from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
@@ -416,7 +417,11 @@ def _scratch_git_repo():
         _run(["git", "commit", "-q", "-m", "init"], cwd=tmp)
         yield tmp
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        # `ignore_errors` strips a Windows scratch repo's writable files but leaves its read-only
+        # git objects, so the directory survives and the vanished-repo rebase never applies.
+        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+        rmtree_or_raise(Path(tmp), label="altlive-scratch-repo")
 
 
 def _make_backpointer(git_root: str, agent_id: str, subagent_type: str, em_sid: str = "altliveemsess") -> None:
@@ -514,6 +519,15 @@ def _trigger_destructive_git_revert_advisory() -> Optional[Dict[str, Any]]:
         return _dc.check_destructive_git_revert_advisory("git -C %s checkout -f" % repo, "altlive-probe")
 
 
+def _trigger_check_git_commit_safe_commit_advise() -> Optional[Dict[str, Any]]:
+    """A scopeless commit in a fresh scratch repo: the guard probes the index, so firing it in the
+    working tree grades whatever a peer has staged at that moment."""
+    with _scratch_git_repo() as repo:
+        return _dc.check_git_commit_safe_commit_advise(
+            'git -C %s commit -m "fix the thing"' % repo, "altlive-probe"
+        )
+
+
 def _trigger_check_git_commit_safe_commit_advise_amend() -> Optional[Dict[str, Any]]:
     """Key-specific trigger for `check_git_commit_safe_commit_advise`'s
     `COORDINATOR_ALLOW_GIT_COMMIT_AMEND` override key -- see
@@ -563,6 +577,36 @@ def _trigger_block_noncanonical_branch_creation() -> Optional[Dict[str, Any]]:
         )
     finally:
         block_noncanonical_branch_creation._is_hazard_repo = orig_hazard
+
+
+def _trigger_guard_em_post_fire_shell_write() -> Optional[Dict[str, Any]]:
+    """A redirect to a never-written file at the engine repo root, with the session reported as
+    having fired a Workflow run and the path as a product path it owns (swapped on `_em_post_fire`
+    for the call, then restored): a checkout under the temp dir is otherwise exempt as scratch."""
+    from coordinator_core.hooks import _em_post_fire, nudge_unrouted_sizing
+
+    repo = os.path.dirname(os.path.dirname(os.path.dirname(_pkg.__file__)))
+    orig = (
+        _em_post_fire.fired,
+        _em_post_fire.owns_path,
+        _em_post_fire.is_product_path,
+        nudge_unrouted_sizing._repo_root,
+    )
+    _em_post_fire.fired = lambda session_id: True
+    _em_post_fire.owns_path = lambda abs_path, root, session_id: True
+    _em_post_fire.is_product_path = lambda abs_path, root, session_id: True
+    nudge_unrouted_sizing._repo_root = lambda payload: repo
+    try:
+        return guard_em_post_fire_shell_write.check(
+            "echo x > altlive_probe.py", "altlive-probe", repo, {"cwd": repo}
+        )
+    finally:
+        (
+            _em_post_fire.fired,
+            _em_post_fire.owns_path,
+            _em_post_fire.is_product_path,
+            nudge_unrouted_sizing._repo_root,
+        ) = orig
 
 
 def _trigger_guard_post_executor_verification() -> Optional[Dict[str, Any]]:
@@ -735,9 +779,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         None,
         os.path.dirname(_pkg.__file__),
     ),
-    "check_git_commit_safe_commit_advise": lambda: _dc.check_git_commit_safe_commit_advise(
-        'git commit -m "fix the thing"', "altlive-probe"
-    ),
+    "check_git_commit_safe_commit_advise": _trigger_check_git_commit_safe_commit_advise,
     "check_multiprobe_banner_rewrite": lambda: _dc.check_multiprobe_banner_rewrite(
         'echo "=== SESSION FACTS ==="; pwd; whoami; git status --short', "altlive-probe"
     ),
@@ -858,6 +900,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_noncanonical_branch_creation": _trigger_block_noncanonical_branch_creation,
     "guard_post_executor_verification": _trigger_guard_post_executor_verification,
+    "guard_em_post_fire_shell_write": _trigger_guard_em_post_fire_shell_write,
 }
 
 
@@ -1774,7 +1817,9 @@ def probe_command(alt: Alternative) -> Verdict:
         vanished = [r for r in _SCRATCH_REPOS_MADE if not os.path.exists(r)]
         rebased = safe_argv
         for repo in vanished:
-            rebased = [t.replace(repo, tmp) for t in rebased]
+            # The guards print these paths with either separator (`git -C "C:/..."`).
+            for spelling in {repo, repo.replace("\\", "/")}:
+                rebased = [t.replace(spelling, tmp) for t in rebased]
         if rebased != safe_argv:
             try:
                 _run(["git", "init", "-q"], cwd=tmp)
@@ -1786,7 +1831,10 @@ def probe_command(alt: Alternative) -> Verdict:
         except (OSError, subprocess.TimeoutExpired) as exc:
             return Verdict(VerdictStatus.DEAD, "invocation failed: %s" % exc)
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+        # Trap: a CloneTeardownLeak raised here replaces the Verdict this probe returns.
+        rmtree_or_raise(Path(tmp), label="altlive-cmd-probe")
 
     stderr_lower = proc.stderr.lower()
     dead_markers = ("command not found", "no such file or directory", "unrecognized option",

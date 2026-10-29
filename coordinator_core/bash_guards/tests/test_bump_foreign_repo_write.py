@@ -105,6 +105,13 @@ def _reset_git_root_cache():
     _sandbox_engine.reset_resolve_git_root_cache()
 
 
+@pytest.fixture(autouse=True)
+def _commit_advisory_off(monkeypatch):
+    """Bump-machinery tests probe the deny path with `git commit`; cross-repo
+    commits otherwise warn (pinned in test_bump_foreign_repo_write_nested_scratch_clone)."""
+    monkeypatch.setattr(guard, "_CROSS_REPO_ADVISORY_VERBS", frozenset())
+
+
 @pytest.fixture()
 def repos(tmp_path):
     anchor = _init_repo(tmp_path, "anchor")

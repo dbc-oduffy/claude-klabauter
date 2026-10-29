@@ -610,8 +610,8 @@ def _memo_offer_message() -> str:
         "  cross-repo-memo send <slug>\n\n"
         "The CLI writes one dirty file into the receiver's cross-repo/inbox/ "
         "directory (status: open), leaves it uncommitted so it surfaces in "
-        "their git status, and prints the path for you to hand the PM for "
-        "relay. Hand-rolling bypasses schema validation, delivery "
+        "their git status, and prints the path for you to hand the "
+        "receiver's session. Hand-rolling bypasses schema validation, delivery "
         "guarantees, and discoverability."
     )
 
@@ -1295,7 +1295,7 @@ def _queue_deferral_grant_message(reason: str) -> str:
     # evaluator found — never unrelated fields from `schema_message`'s own
     # (advisory-only) finding on the same payload, per eng-director finding 3.
     return (
-        f"A queue deferral is a grant the PM issues, not a status an agent "
+        f"A queue deferral is a grant a non-authoring session or the APM issues, not a status an agent "
         f"types: {reason}. Acquire the grant, then re-write."
     )
 
@@ -1469,7 +1469,8 @@ def _evaluate_queue_deferral_grant(
     session_id = ((payload or {}).get("session_id") or "").strip()
     if session_id and str(deferred_by).strip() == session_id:
         return _queue_deferral_grant_message(
-            "deferred_by names the authoring session itself, not a PM grantor"
+            "deferred_by names the authoring session itself; the grantor must be "
+            "a non-authoring session or the APM"
         )
 
     return None

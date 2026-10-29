@@ -74,7 +74,10 @@ def _superseder(repo_root: Path, run_id: str, sizing_rel: str) -> Optional[str]:
                     if not later or (found is not None and name <= found):
                         continue
                     run = _read_json_object(Path(entry.path) / "run.json") if name.startswith("ask-") else None
-                    if name.startswith("ask-") and (run or {}).get("sizing_rel") != sizing_rel:
+                    if name.startswith("ask-") and (
+                        PurePosixPath(str((run or {}).get("sizing_rel") or "").replace("\\", "/")).as_posix()
+                        != PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
+                    ):
                         continue
                     marker = _read_marker(Path(entry.path))
                     if marker and marker.get("halted") == ORPHAN_PENDING:
@@ -194,9 +197,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
     if params.get("dry_run") is True:
         return {**reply, "dry_run": True}
-    adopt_run_stage_at(run_dir, session_id)
+    # Marker first: a failure between the two writes leaves a halted run the refire resumes, never an
+    # adopted-but-unhalted one that the verdict reads as "self" and no session can re-adopt.
     write_halt_marker(
         run_dir, halted=halted, sizing_rel=sizing_rel, plan_rel=plan_rel,
         reason=f"orphaned: session {verdict['recorded_session']} is gone", next_action=next_action,
     )
+    adopt_run_stage_at(run_dir, session_id)
     return reply

@@ -264,3 +264,61 @@ def test_run_returns_journal_steering(tmp_path, monkeypatch):
 
     assert str(sdir / "pm_turns.jsonl") in text
     assert (managed_tempdir() / f"compaction-occurred-{SESSION}").is_file()
+
+
+_TURN20_FIXTURE = Path(__file__).parent / "fixtures" / "pm_turns_two_directives.jsonl"
+
+
+def _turn20_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    repo, sdir = _session_repo(tmp_path, SESSION)
+    (sdir / "pm_turns.jsonl").write_bytes(_TURN20_FIXTURE.read_bytes())
+    return repo, sdir
+
+
+def test_steering_lists_each_unmapped_directive_with_its_turn(tmp_path, monkeypatch):
+    repo, _ = _turn20_session(tmp_path, monkeypatch)
+
+    text = cpp.build_steering(SESSION, str(repo))
+
+    flagged = [ln for ln in text.splitlines() if ln.startswith("- UNMAPPED PM directive (turn 20):")]
+    assert len(flagged) == 2
+    assert any("UNMAPPED PM directive" in ln for ln in text.splitlines())
+
+
+def test_steering_omits_directive_with_disposition(tmp_path, monkeypatch):
+    repo, sdir = _turn20_session(tmp_path, monkeypatch)
+    from coordinator_core.ops import pm_directive_map
+
+    pm_directive_map.append_disposition(SESSION, 20, 0, "declined", cwd=str(repo))
+
+    text = cpp.build_steering(SESSION, str(repo))
+
+    assert text.count("- UNMAPPED PM directive (turn 20):") == 1
+
+
+def test_steering_degrades_when_mapping_fails(tmp_path, monkeypatch):
+    repo, _ = _turn20_session(tmp_path, monkeypatch)
+    from coordinator_core.ops import pm_directive_map
+
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(pm_directive_map, "unmapped_directives", boom)
+
+    text = cpp.build_steering(SESSION, str(repo))
+
+    assert "UNMAPPED" not in text and "are saved at" in text
+
+
+def test_snapshot_carries_open_directives_using_payload_cwd(tmp_path, monkeypatch):
+    repo, _ = _turn20_session(tmp_path, monkeypatch)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    cpp.run(json.dumps({"session_id": SESSION, "cwd": str(repo)}))
+
+    snap = (managed_tempdir() / f"compaction-state-{SESSION}.md").read_text(encoding="utf-8")
+    assert "## Open PM directives" in snap
+    assert snap.count("- UNMAPPED PM directive (turn 20):") == 2

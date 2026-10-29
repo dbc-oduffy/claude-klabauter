@@ -9,8 +9,9 @@ the `time.process_time` bracket of split + commit in the measuring process; `spa
 SHAPE. Per run: one fresh clone, one tracked 4000-line file (every eighth line blank, as in source,
 so the matcher sees repeated lines and a changed middle spanning the file) that two runs both
 dirtied (run A at line 5 before run B's stage, run B at line 3995), signing off. The measured call
-lands B's hunk only, after one warm-up `commit_paths` (the profile's second-commit-in-process shape:
-store hygiene is stubbed out: it fires a detached daemon that is not the leg and would outlive the clone). `_RUNS_PER_ARM` runs; the median is asserted because a commit consumes its clone.
+lands B's hunk only, after one warm-up `commit_paths` (the profile's second-commit-in-process shape).
+Store hygiene is stubbed out: it fires a detached daemon that is not the leg and would outlive the
+clone. `_RUNS_PER_ARM` runs; the median is asserted because a commit consumes its clone.
 """
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ from pathlib import Path
 import shutil
 
 clone = Path(sys.argv[1])
+# The clone is HEAD; the module under test may not be committed yet, so overlay the source tree's copy.
 _MODULE = Path("coordinator_core/ops/dispatch_emit/hunk_stage.py")
 shutil.copyfile(Path(sys.argv[2]) / _MODULE, clone / _MODULE)
 sys.path.insert(0, str(clone))

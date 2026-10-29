@@ -503,9 +503,7 @@ def annotate_deny(
         The in-band grant ROUTE stays EM-class-only and is rendered by
         `render_em_message`, not here.
 
-    12. (2026-10-27, PM verbatim turn 10, sizing state/sizings/2026-10-27-em-
-        only-guard-route-wiki-39240f.yaml) An EM-only route returns at deny
-        time: when `payload` resolves a positive EM audience
+    12. An EM-only route returns at deny time: when `payload` resolves a positive EM audience
         (`identity.resolves_em_audience`) and the guard-routes index is
         reachable on this host, the line is followed by
         `guard_routes.keys.route_line(<guard_name, hyphenated>)` -- a lookup key and a
@@ -541,6 +539,8 @@ def annotate_deny(
             from coordinator_core.guard_routes.keys import route_line, routes_index_reachable
             from coordinator_core.session.identity import resolves_em_audience
 
+            # Gate mirrored by dispatch._deny_route_line_will_render (it drops the
+            # override note exactly when this line renders): change both together.
             if (
                 payload is not None
                 and resolves_em_audience(payload, git_root)

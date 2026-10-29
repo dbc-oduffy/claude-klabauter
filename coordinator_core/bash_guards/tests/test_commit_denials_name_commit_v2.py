@@ -143,3 +143,15 @@ def test_commit_guard_scope_denial_offers_the_route():
     text = repr(record)
     assert COMMIT_ROUTE.split(" (")[0] in text
     assert "coordinator-safe-commit" not in text
+
+
+def test_approval_sentinel_denial_names_the_route_only():
+    from coordinator_core.bash_guards import block_approval_sentinel_creation as sentinel
+    from coordinator_core.bash_guards.tests.test_block_approval_sentinel_creation import (
+        SENTINEL,
+        _enveloped,
+        _payload,
+    )
+
+    out = _enveloped(sentinel.check)(_payload("touch %s" % SENTINEL))
+    _assert_names_route_only(_reason(out))

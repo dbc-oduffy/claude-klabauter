@@ -73,7 +73,7 @@ def _denied(out: dict) -> str:
 def _assert_refused_before_any_write(own, other, args, emit, fanout, **kw):
     before = _listing(own, other)
     reason = _denied(mod.evaluate(_payload(own, args, **kw), emit=emit, fanout=fanout))
-    assert str(other) in reason and "Fire it from a session rooted in" in reason
+    assert str(other) in reason and "a session rooted in" in reason and "cross_repo_approved" in reason
     assert emit.calls == [] and fanout.calls == []
     assert _listing(own, other) == before
 
@@ -123,8 +123,41 @@ def test_a_research_sizing_in_a_foreign_repo_is_admitted(repos):
     emit = _Recorder()
     out = mod.evaluate(_payload(own, {"sizing": SIZING_REL, "repo": str(other)}), emit=emit)
     hso = out.get("hookSpecificOutput") or {}
-    assert "Fire it from a session rooted in" not in str(hso.get("permissionDecisionReason", ""))
+    assert "a session rooted in" not in str(hso.get("permissionDecisionReason", ""))
     assert emit.calls and emit.calls[0][1].resolve() == other.resolve()
+
+
+def test_an_explicit_repo_naming_a_registered_sibling_is_admitted(repos, monkeypatch):
+    own, other = repos
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_registered_repo",
+        lambda target, env=None: Path(target).resolve() == other.resolve(),
+    )
+    emit = _Recorder()
+    mod.evaluate(_payload(own, {"ask": "a", "repo": str(other)}), emit=emit)
+    assert emit.calls and emit.calls[0][1].resolve() == other.resolve()
+
+
+def test_an_unregistered_explicit_repo_is_still_refused(repos, monkeypatch):
+    own, other = repos
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_registered_repo",
+        lambda target, env=None: False,
+    )
+    _assert_refused_before_any_write(own, other, {"ask": "a", "repo": str(other)}, _Recorder(), _Recorder())
+
+
+def test_a_registered_repo_reached_without_repo_arg_is_still_refused(repos, monkeypatch):
+    own, other = repos
+    monkeypatch.setattr(
+        "coordinator_core.bash_guards._write_bump_applicability.target_is_registered_repo",
+        lambda target, env=None: True,
+    )
+    monkeypatch.setattr(mod, "_context_home", lambda root, paths: other)
+    (other / "note.md").write_text("n\n", encoding="utf-8")
+    _assert_refused_before_any_write(
+        own, other, {"ask": "a", "context": [str(other / "note.md")]}, _Recorder(), _Recorder()
+    )
 
 
 def test_the_sessions_own_repo_is_admitted(repos):

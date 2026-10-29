@@ -95,6 +95,13 @@ class TestBaseCases:
         target = _target_path(monkeypatch, tmp_path)
         _deny(target, agent_id="", tool_name="Write", cwd=str(tmp_path))
 
+    def test_deny_message_names_no_pm_remedy(self, monkeypatch, tmp_path):
+        target = _target_path(monkeypatch, tmp_path)
+        result = _deny(target, agent_id="", tool_name="Write", cwd=str(tmp_path))
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "PM" not in reason and "human" not in reason.lower()
+        assert "coordinator-delegation grant" in reason
+
     def test_subagent_write_denied(self, monkeypatch, tmp_path):
         target = _target_path(monkeypatch, tmp_path)
         _deny(

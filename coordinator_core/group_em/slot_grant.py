@@ -125,9 +125,7 @@ def issue_slot_grant(
     return IssueResult(True, "issued", record)
 
 
-def revoke_slot_grant(
-    grantee: str, run: str, *, directory: Optional[Path] = None, now: Optional[float] = None
-) -> IssueResult:
+def revoke_slot_grant(grantee: str, run: str, *, directory: Optional[Path] = None) -> IssueResult:
     """Remove the calling session's own grant of ``run`` to ``grantee``; idempotent."""
     sid = core.resolve_session_id()
     if not _safe_sid(sid):

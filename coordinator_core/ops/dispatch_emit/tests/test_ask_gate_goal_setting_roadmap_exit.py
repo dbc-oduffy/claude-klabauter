@@ -19,6 +19,19 @@ def test_goal_setting_with_roadmap_exit_resolves_to_the_roadmap_arm():
     assert resolve_arm(sizing) == ARM_ROADMAP
 
 
+def test_goal_setting_with_a_landed_goal_is_not_a_room(repo):  # noqa: F811
+    _put(repo, tshirt="XXL", route="goal-setting", mode="ceo", xl_exit=None, goal_id="goal-dense-head")
+    v = gate(repo, REL)
+    assert not (v.halt and v.halt["kind"] == "room")
+    assert effective_route({"route": "goal-setting", "goal_id": "goal-dense-head"}) == "roadmap"
+
+
+def test_goal_setting_with_a_blank_goal_id_still_halts_as_room(repo):  # noqa: F811
+    _put(repo, tshirt="XXL", route="goal-setting", mode="ceo", xl_exit=None, goal_id="  ")
+    v = gate(repo, REL)
+    assert v.halt["kind"] == "room" and v.halt["route"] == "goal-setting"
+
+
 def test_goal_setting_without_an_exit_still_halts_as_room(repo):  # noqa: F811
     _put(repo, tshirt="XXL", route="goal-setting", mode="ceo", xl_exit=None)
     v = gate(repo, REL)

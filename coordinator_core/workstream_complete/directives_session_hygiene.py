@@ -512,7 +512,7 @@ _CEREMONY_REINDEX_CLI = "scip-rebuild-at-ceremony"
 
 def build_post_close_directives(root: Path) -> list[dict[str, Any]]:
     """The index steps the close owes AFTER its own commit, in dispatch
-    order: the structural index refresh, then the SCIP rebuild.
+    order: the structural index staleness flag, then the SCIP rebuild.
     (`directives_completion.build_baton_chain_closure_directive` is the third
     held-back directive; it is built with the completion step.)
 
@@ -530,9 +530,8 @@ def build_post_close_directives(root: Path) -> list[dict[str, Any]]:
         {
             "id": "d-structural-index-refresh",
             "cli": _STRUCTURAL_INDEX_REFRESH_CLI,
-            # The CLI's own default waits 30s on the refresh; a close does not
-            # wait at all, and the refresh carries on in the background.
-            "args": ["--root", str(root), "--timeout", "0"],
+            # Flag-only: a close never launches a re-embedding.
+            "args": ["--root", str(root), "--flag-only"],
             "depends_on": None,
             "already_satisfied": False,
             "best_effort": True,

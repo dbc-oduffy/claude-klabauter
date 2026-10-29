@@ -14,7 +14,7 @@ from coordinator_core.testing.watch_parent import process_create_time, watch_par
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_NO_WINDOW =getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _INTERVAL = 0.05
 
 

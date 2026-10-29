@@ -153,6 +153,10 @@ def classify_haystack(haystack: str) -> str:
         return WITHHOLD
     if haystack.endswith(_AGENT_FACING_SUFFIXES):
         return WITHHOLD
+    # Dispatch briefs (`briefs["C1"]`) are text handed to an executor agent: agent-facing by prefix,
+    # as `captured[` is not-withhold by prefix. Inline, not a module constant: a constant here is a register candidate.
+    if haystack.startswith("briefs["):
+        return WITHHOLD
 
     return UNCLASSIFIED
 
@@ -180,7 +184,7 @@ def classify_haystack(haystack: str) -> str:
 # about the knob's FAMILY on that path, never about one specific source line.
 # `test_probe_line_insertion_above_a_waiver_does_not_unwaive_it` below pins this.
 #
-# Two reason categories, not one string reused for both:
+# Three reason categories, not one string reused for all:
 #
 # 1. OVERRIDE-WITHHOLDING family — declined for the registry on its own merits
 #    (state/sizings/2026-09-04-an-unregistered-withhold-fails-the-suite.yaml, `em_analysis`):
@@ -194,6 +198,10 @@ def classify_haystack(haystack: str) -> str:
 #    ONE path today (`percolate.destination-lock-refusal`) — this path is not in scope for
 #    the registry, which is a different standing than an unregistered withhold on a covered
 #    path. Settled by EM decision 2026-09-04; not registered, not provisional.
+# 3. Row-scoping assertion — `COORDINATOR_DISPATCH_ROW` in
+#    `test_ask_stage_declared_delete_clause.py`. The marker is shown to executor rows when the
+#    channel is live; the test's `not in briefs[...]` asserts which rows get it, not a withhold.
+#    Not registered, by PM-delegated (apm) ruling.
 _WAIVERS: Dict[Tuple[str, str], str] = {
     ("coordinator/bin/tests/test_coordinator_safe_commit_pathspec_ownership_gate.py", "COORDINATOR_OVERRIDE_SCOPE"):
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
@@ -225,6 +233,8 @@ _WAIVERS: Dict[Tuple[str, str], str] = {
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
     ("coordinator_core/write_guards/tests/test_validate_frontmatter_schema_advisory.py", "COORDINATOR_SCHEMA_STRICT"):
         "withhold on a path the registry does not cover (registry covers percolate.destination-lock-refusal only)",
+    ("coordinator_core/ops/dispatch_emit/tests/test_ask_stage_declared_delete_clause.py", "COORDINATOR_DISPATCH_ROW"):
+        "declared-delete marker shown to executor rows when the channel is live; absence asserts row scoping, not a withhold",
 }
 
 
@@ -440,7 +450,7 @@ def test_probe_unrecognised_haystack_is_reported_not_ignored(tmp_path):
 
 @pytest.mark.parametrize(
     "haystack",
-    ["err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "str", "flag_note", "c1_ctx"],
+    ["err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "str", "flag_note", "c1_ctx", 'briefs["C1"]'],
 )
 def test_classifier_recognises_agent_facing_haystacks(haystack):
     assert classify_haystack(haystack) == WITHHOLD

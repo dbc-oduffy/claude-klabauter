@@ -99,6 +99,7 @@ from coordinator_core.ceremony_common.apply_halt import (
     budget_check_post_mutation,
     budget_check_pre_mutation,
     build_ceremony_halt_exit_codes,
+    chosen_disposition,
     directive_progress,
     exit_code_label,
 )
@@ -323,7 +324,9 @@ def _closed_by_resolved_jp(
     dependency that is no judgment point, keeps the directive `blocked`."""
     gating = [d for d in _normalize_depends_on(directive.get("depends_on")) if d in jp_by_id]
     return bool(gating) and all(
-        isinstance(decisions.get(d), dict) and decisions[d].get("disposition") for d in gating
+        chosen_disposition(decisions.get(d))
+        or (isinstance(decisions.get(d), str) and decisions[d])
+        for d in gating
     )
 
 

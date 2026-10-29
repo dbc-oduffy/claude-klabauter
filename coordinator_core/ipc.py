@@ -2241,8 +2241,9 @@ class LateCompletion:
     A warm-served mutating op that outlives its budget has already had its
     timeout envelope returned; the handler thread runs on. `complete` runs on
     that thread as it exits, so the outcome survives the closed event loop.
-    `sink`, when set, is called (once, off the handler thread's exit) with the
-    late envelope only if the timeout envelope was already returned.
+    `sink`, when set, is called exactly once with the late envelope, from whichever
+    of `complete` (handler thread) or `mark_timed_out` (event-loop thread) runs
+    second, and only if the timeout envelope was already returned.
     """
 
     def __init__(self, sink=None):

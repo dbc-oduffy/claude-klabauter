@@ -1,26 +1,12 @@
-"""merge3/classify: verdicts, and parity with `git merge-file -p` on conflict presence and HEAD-unchanged."""
+"""merge3/classify verdicts. Parity with `git merge-file -p` (spawns git) lives in test_kept_blob_classify_spawns."""
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime, timezone
 
-import pytest
-
 from coordinator_core.ops.kept_blob_classify import classify, merge3
-from coordinator_core.ops.tests._kept_blob_fixture import commit_at, git_repo
 
-_NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 BASE = b"a\nb\nc\nd\ne\nf\ng\n"
 T = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-
-def _git_merge(tmp_path, base, kept, head):
-    for n, d in (("head", head), ("base", base), ("kept", kept)):
-        (tmp_path / n).write_bytes(d)
-    r = subprocess.run(
-        ["git", "merge-file", "-p", str(tmp_path / "head"), str(tmp_path / "base"), str(tmp_path / "kept")],
-        capture_output=True, creationflags=_NOWIN)
-    return r.stdout, r.returncode
 
 
 CASES = {
@@ -35,19 +21,6 @@ CASES = {
     "empty-base": (b"", b"x\ny\n", b"x\ny\nz\n"),
     "no-trailing-newline": (BASE, b"a\nb\nc\nd\ne\nf\nG", b"A\nb\nc\nd\ne\nf\ng\n"),
 }
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-@pytest.mark.parametrize("name", sorted(CASES))
-def test_merge3_parity_with_git(tmp_path, name):
-    base, kept, head = CASES[name]
-    ours, n = merge3(base, kept, head)
-    theirs, rc = _git_merge(tmp_path, base, kept, head)
-    assert (n > 0) == (rc > 0), name
-    if n == 0:
-        assert ours == theirs
-    assert (ours == head) == (theirs == head)
 
 
 def test_conflict_emits_both_sides_between_markers():
@@ -105,17 +78,3 @@ def test_crlf_does_not_mask_a_real_difference():
 def test_not_landed_when_path_absent_at_head():
     v = classify(BASE, b"x\n", None, [])
     assert (v.verdict, v.why) == ("NOT-LANDED", "path absent at HEAD")
-
-
-@pytest.mark.spawns_process
-@pytest.mark.cadence
-def test_classify_agrees_with_git_on_real_repo_history(tmp_path):
-    repo = git_repo(tmp_path)
-    commit_at(repo, "f.txt", BASE, "2026-01-01T00:00:00Z")
-    kept = b"a\nB\nc\nd\ne\nf\ng\n"
-    c2, _ = commit_at(repo, "f.txt", kept, "2026-01-02T00:00:00Z")
-    head = b"a\nB\nc\nd\ne\nF\ng\n"
-    commit_at(repo, "f.txt", head, "2026-01-03T00:00:00Z")
-    v = classify(BASE, kept, head, [(c2, T, kept), ("later", T, head)])
-    _, rc = _git_merge(tmp_path, BASE, kept, head)
-    assert rc == 0 and v.verdict == "SUPERSEDED" and v.commit == c2

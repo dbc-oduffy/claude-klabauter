@@ -15,7 +15,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import shlex
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -63,11 +62,11 @@ _OVERFLOW_JS = """() => {
 
 
 def _install_hint_package() -> str:
-    return f"{shlex.quote(sys.executable)} -m pip install 'playwright>=1.64'"
+    return f'"{sys.executable}" -m pip install "playwright>=1.64"'
 
 
 def _install_hint_browser() -> str:
-    return f"{shlex.quote(sys.executable)} -m playwright install chromium"
+    return f'"{sys.executable}" -m playwright install chromium'
 
 
 def probe_import() -> BrowserAvailability:

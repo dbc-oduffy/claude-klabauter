@@ -312,6 +312,77 @@ def _baton_belongs_to_sizing(repo_root: Path, sizing: dict, sizing_rel: str, bat
     return fold(owner) == fold(sizing_rel)
 
 
+def _newest_run_binding(repo_root: Path, sizing_rel: str, skip: Optional[str]) -> Optional[str]:
+    """The newest `warp-<stem>-*` / `ask-*` run id binding `sizing_rel`, other than `skip` and any
+    `orphan_pending` fire; None when there is none. One scandir per record root; `ask-*` dirs are
+    read only when stamped on or after the sizing filename's date."""
+    from pathlib import PurePosixPath
+
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import orphan_adopt as oa
+    from coordinator_core.ops.dispatch_emit.ask_contract import _read_json_object
+
+    norm = PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
+    stem = PurePosixPath(norm).stem
+    dated = re.match(r"(\d{4})-(\d{2})-(\d{2})", stem)
+    floor = "".join(dated.groups()) if dated else None
+    prefix = f"warp-{stem}-"
+    best: Optional[tuple[str, str, Path]] = None
+    for rel in oa._ROOTS:
+        try:
+            with os.scandir(repo_root / rel) as it:
+                for entry in it:
+                    name = entry.name
+                    if name == skip or not entry.is_dir() or not safe_id(name):
+                        continue
+                    if name.startswith(prefix):
+                        stamp = name[len(prefix):]
+                    elif name.startswith("ask-") and floor is not None:
+                        stamp = name[4:]
+                        if stamp[:8] < floor:
+                            continue
+                    else:
+                        continue
+                    if len(stamp) != 22 or (best is not None and stamp <= best[0]):
+                        continue
+                    if not name.startswith(prefix) and (
+                        (_read_json_object(Path(entry.path) / "run.json") or {}).get("sizing_rel") != norm
+                    ):
+                        continue
+                    marker = oa._read_marker(Path(entry.path))
+                    if marker and marker.get("halted") == oa.ORPHAN_PENDING:
+                        continue
+                    best = (stamp, name, Path(entry.path))
+        except OSError:
+            continue
+    return best[1] if best else None
+
+
+def _orphan_pending_halt(repo_root: Path, sizing_rel: str, run_id: Optional[str]) -> Optional[GateVerdict]:
+    """The `orphan_pending` halt naming the adopt call when the newest run binding the sizing is an
+    orphan (dead emitter, nothing halted, nothing newer); else None."""
+    from coordinator_core.ops.dispatch_emit import halt_refire
+    from coordinator_core.ops.dispatch_emit import orphan_adopt as oa
+    from coordinator_core.session.core import resolve_session_id
+
+    newest = _newest_run_binding(repo_root, sizing_rel, run_id)
+    if newest is None:
+        return None
+    verdict = oa.orphan_verdict(repo_root, newest, resolve_session_id() or "")
+    if not verdict["orphaned"]:
+        return None
+    reason = (
+        f"run {newest} was orphaned by dead session {verdict['recorded_session']} at stage {verdict['stage']}: "
+        "adopt it to resume from its first unreceipted stage instead of re-running the sizing"
+    )
+    return _halt(
+        oa.ORPHAN_PENDING, reason, orphan_run=newest,
+        next_action=halt_refire.exit_next_action(
+            reason=reason, route=halt_refire.ROUTE_ADOPT, call=oa.adopt_call(newest, repo_root)
+        ),
+    )
+
+
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
@@ -326,6 +397,10 @@ def _arm_verdict(
         arm = resolve_arm(sizing)
     except SizingFireRefused as exc:
         return _halt(HALT_REFUSAL, "; ".join(exc.fields))
+
+    pending_orphan = _orphan_pending_halt(repo_root, sizing_rel, run_id)
+    if pending_orphan is not None:
+        return pending_orphan
 
     if arm == ARM_XS and not writes:
         # The printed re-land line carries no `writes`: the halted run's manifest recorded them.

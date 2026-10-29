@@ -154,7 +154,32 @@ def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch):
         "python -c \"import os; os.makedirs('/e/zz-probe-gone')\"",
         "python -c \"import shutil; shutil.rmtree('/e/old'); os.makedirs('/e/zz-probe-gone')\"",
     ):
-        assert _denied(check(_payload(cmd, "Bash", cwd))), cmd
+        assert _warned(guard.check(_payload(cmd, "Bash", cwd))), cmd
+
+
+def _warned(result):
+    out = result["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
+    assert "<repo>/scratch/" in out["additionalContext"]
+    return True
+
+
+def test_heredoc_prose_and_interpreter_body_warn_never_deny(world, monkeypatch):
+    monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
+    monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
+    monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
+    cwd = "Z:/work"  # abs-path-ok: fake drive letter, never touched on disk
+    py = "python - <<'EOF'\nprint('see /x/ for details')\nEOF"
+    assert _warned(guard.check(_payload(py, "Bash", cwd)))
+    prose = "cat <<'EOF'\nmkdir /zz-prose-dir\nEOF"
+    assert guard.check(_payload(prose, "Bash", cwd)) is None
+    assert _denied(_enveloped(guard.check)(_payload("mkdir /zz-new-top", "Bash", cwd)))
+
+
+def test_heredoc_strip_keeps_redirect_target(world):
+    root, _, work = world
+    cmd = f"cat > {root.as_posix()}/new/f <<'EOF'\nbody\nEOF"
+    assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work)))
 
 
 def test_shell_variable_assignment_to_msys_path_is_not_a_write(world, monkeypatch):

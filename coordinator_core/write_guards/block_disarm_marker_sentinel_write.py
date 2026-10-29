@@ -45,7 +45,7 @@ and `block_worktree_sentinel_write.py`'s: a deny message that prints its own
 bypass reads to an eager agent as a sanctioned next step, not a boundary.
 Names the two legitimate paths instead: the operator creating the marker
 themselves via the `!`-prefixed prompt (bypasses every PreToolUse hook,
-this one included), or escalating to the EM/PM.
+this one included), or reporting the need.
 
 Removal stays allowed -- this guard only matches
 Write/Edit/MultiEdit/NotebookEdit -- there is no file-deletion tool in that
@@ -106,8 +106,7 @@ _SENTINEL_NAME = MARKER_BASENAME
 _DENY_REASON = (
     "[disarm-marker guard] BLOCKED: this file disarms the guard suite; no "
     "self-grant.\n"
-    "Only the operator can create it. If warranted, say so, let EM/PM "
-    "decide.\n"
+    "If a disarm is warranted, say so in your report.\n"
     "Read/remove stays allowed -- removal re-arms."
 )
 

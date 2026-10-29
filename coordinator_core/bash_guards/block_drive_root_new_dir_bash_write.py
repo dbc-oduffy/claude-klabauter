@@ -259,6 +259,42 @@ def _interpreter_new_entry(cmd: str, cwd: Optional[str], env: Optional[Mapping[s
     return None
 
 
+_HEREDOC_RE = re.compile(r"(?<!<)<<-?[ \t]*(?:'([^'\n]+)'|\"([^\"\n]+)\"|\\?([A-Za-z_][\w]*))[^\n]*\n")
+
+
+def _strip_heredoc_bodies(cmd: str) -> str:
+    """`cmd` with each heredoc body removed: body text is prose or script, never a shell target."""
+    out: List[str] = []
+    pos = 0
+    while True:
+        m = _HEREDOC_RE.search(cmd, pos)
+        if not m:
+            out.append(cmd[pos:])
+            return "".join(out)
+        tag = m.group(1) or m.group(2) or m.group(3)
+        out.append(cmd[pos : m.end()])
+        end = re.search(r"^[ \t]*" + re.escape(tag) + r"[ \t]*$", cmd[m.end() :], re.MULTILINE)
+        if not end:
+            return "".join(out)
+        pos = m.end() + end.start()
+
+
+def _warn(name: str) -> Dict[str, Any]:
+    """Advisory for an uncertain parse: allow plus a suggestion, never a deny."""
+    text = (
+        "Advisory: the command text names a new top-level entry '%s' on a drive root or home, but the "
+        "write is inside an interpreter body, so it is not certain. If it creates it, write under "
+        "<repo>/scratch/ instead." % name
+    )
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": text,
+        }
+    }
+
+
 def _deny(name: str) -> Any:
     """The deny record; a non-strict guard level returns the leveled envelope instead."""
     from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord, Audience
@@ -293,7 +329,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         cmd = cmd.replace("\r", "")
         name = _interpreter_new_entry(cmd, cwd, env)
         if name:
-            return _deny(name)
+            return _warn(name)
+        cmd = _strip_heredoc_bodies(cmd)
         if not _can_create_new(cmd, cwd, dialect, env):
             return None
         name = _new_entry(cmd, cwd, dialect, env)

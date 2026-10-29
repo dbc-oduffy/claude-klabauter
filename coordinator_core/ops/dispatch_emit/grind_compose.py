@@ -935,7 +935,7 @@ def run_admission(
             _handback_row(
                 row,
                 "needs-judgment",
-                "fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): "
+                "fix touched files outside repo_root (ownership is the check; the G-EM decides a cross-repo commit; left uncommitted): "
                 + ", ".join(escaped),
             )
             return
@@ -2256,7 +2256,7 @@ def compose_grind_script(
         "    await _handBackRow(rowId, 'widen-exhausted', 'second NEEDS_WIDER_SCOPE'); return;\n"
         "  }\n"
         "  const _escaped = _outOfRootPaths((result.touched_files || []).concat(result.created_files || []));\n"
-        "  if (_escaped.length) { await _handBackRow(rowId, 'needs-judgment', 'fix touched files outside repo_root (a cross-repo commit needs per-run PM assent; left uncommitted): ' + _escaped.join(', ')); return; }\n"
+        "  if (_escaped.length) { await _handBackRow(rowId, 'needs-judgment', 'fix touched files outside repo_root (ownership is the check; the G-EM decides a cross-repo commit; left uncommitted): ' + _escaped.join(', ')); return; }\n"
         "  const _written = (result.touched_files || []).concat(result.created_files || []);\n"
         "  const _historical = _historicalPaths(_written);\n"
         "  if (_historical.length) {\n"

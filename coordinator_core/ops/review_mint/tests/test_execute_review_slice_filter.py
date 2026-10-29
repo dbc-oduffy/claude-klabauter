@@ -54,3 +54,9 @@ def test_unfiltered_in_wave_prompt_and_count_are_untouched():
     text = _joined(_compose(True))
     assert "review_slice_ids" not in text
     assert "Infinity" not in text
+
+
+def test_no_slices_guard_consults_the_hook_only_when_a_composer_hoisted_it():
+    guard = _joined(_compose(False)).split(NO_SLICES_HALT)[0].rsplit("\n", 1)[-1]
+    assert "typeof _alreadyDeliveredClose === 'function' && await _alreadyDeliveredClose()" in guard
+    assert "_alreadyDelivered =" not in guard  # the hook owns its state; the plan route has no hook

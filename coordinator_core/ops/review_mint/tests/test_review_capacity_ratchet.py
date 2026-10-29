@@ -55,12 +55,12 @@ _ALLOWED_MAX_ROWS = (4, 6)
 
 
 def _reviewer_max_rows(fragment: dict) -> int:
-    reviewer = next(a for a in _wave_agents(fragment) if a["agentType"] == _CODE_REVIEWER)
+    reviewer = next(a for a in _wave_agents(fragment) if a.get("agentType") == _CODE_REVIEWER)
     return reviewer["executor_rows_per_reviewer"]["max"]
 
 
 def test_fragment_pins_three_to_four_or_six_rows_per_reviewer(fragment):
-    reviewer = next(a for a in _wave_agents(fragment) if a["agentType"] == _CODE_REVIEWER)
+    reviewer = next(a for a in _wave_agents(fragment) if a.get("agentType") == _CODE_REVIEWER)
     ratio = reviewer["executor_rows_per_reviewer"]
     assert ratio["min"] == 3
     assert ratio["max"] in _ALLOWED_MAX_ROWS
@@ -81,7 +81,7 @@ def _has_integration_stage(fragment: dict) -> bool:
 def test_fragment_places_kira_in_integration_stage_at_min_tshirt_l(fragment):
     if not _has_integration_stage(fragment):
         pytest.skip("live roster predates the integration stage (schema v5)")
-    kira = next(a for a in _integration_agents(fragment) if a["agentType"] == _KIRA)
+    kira = next(a for a in _integration_agents(fragment) if a.get("agentType") == _KIRA)
     assert kira.get("min_tshirt") == "L"
     assert all(a.get("agentType") != _KIRA for a in _wave_agents(fragment))
 
@@ -139,7 +139,7 @@ def test_dropping_rows_per_reviewer_fails_the_ratchet(fragment):
 def test_unlisted_max_rows_fails_the_ratchet(fragment, max_rows):
     mutated = copy.deepcopy(fragment)
     for agent in _wave_agents(mutated):
-        if agent["agentType"] == _CODE_REVIEWER:
+        if agent.get("agentType") == _CODE_REVIEWER:
             agent["executor_rows_per_reviewer"]["max"] = max_rows
     with pytest.raises(AssertionError):
         test_fragment_pins_three_to_four_or_six_rows_per_reviewer(mutated)
@@ -149,7 +149,7 @@ def test_unlisted_max_rows_fails_the_ratchet(fragment, max_rows):
 def test_four_and_six_max_rows_pass_the_ratchet_and_reviewers_stay_parallel(fragment, max_rows):
     mutated = copy.deepcopy(fragment)
     for agent in _wave_agents(mutated):
-        if agent["agentType"] == _CODE_REVIEWER:
+        if agent.get("agentType") == _CODE_REVIEWER:
             agent["executor_rows_per_reviewer"]["max"] = max_rows
     test_fragment_pins_three_to_four_or_six_rows_per_reviewer(mutated)
     wave = _compose_wave(mutated, executor_rows=12)
@@ -163,7 +163,7 @@ def test_missing_or_different_kira_floor_fails_the_ratchet(fragment, floor):
         pytest.skip("live roster predates the integration stage (schema v5)")
     mutated = copy.deepcopy(fragment)
     for agent in _integration_agents(mutated):
-        if agent["agentType"] != _KIRA:
+        if agent.get("agentType") != _KIRA:
             continue
         if floor is None:
             agent.pop("min_tshirt", None)

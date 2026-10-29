@@ -1604,6 +1604,10 @@ def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Git verbs whose cross-repo use warns instead of denying (PM: x-repo commits warn, never block).
+_CROSS_REPO_ADVISORY_VERBS = frozenset({"git commit", "git add"})
+
+
 def _evaluate_foreign_repo_candidate(
     target_dir: str,
     session_id: str,
@@ -1976,6 +1980,17 @@ def _evaluate_foreign_repo_candidate(
             "session's overrides.log.\n"
             "  If this host DOES carry a fleet, say so with "
             "COORDINATOR_CAP_FLEET_PRESENT=1 and the bump enforces again."
+        )
+        return None
+    if (
+        not gem_refusal
+        and destination_class == DESTINATION_FOREIGN
+        and write_verb_label in _CROSS_REPO_ADVISORY_VERBS
+    ):
+        _stand_down_notice(
+            "cross-repo %s into %s (session repo %s): allowed, advisory only.\n"
+            "  Prefer a cross-repo memo when the owner should decide."
+            % (write_verb_label, target_repo_label, session_repo_label)
         )
         return None
     return _levelled_deny(
