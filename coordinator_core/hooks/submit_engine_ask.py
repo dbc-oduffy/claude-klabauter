@@ -695,17 +695,28 @@ def _record_skipped_overlap_check(root: Path) -> None:
         pass
 
 
-def _live_write_overlap_deny(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any]) -> Optional[str]:
+def _live_write_overlap_deny(
+    root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any], sizing_rel: Optional[str] = None
+) -> Optional[str]:
     """Deny text when a single ask's declared writes overlap a live run's staged footprint; else None.
 
-    Reads the live-run index once; a missing or stalled index denies nothing."""
+    Reads the live-run index once; a missing or stalled index denies nothing. The halted run a refire of
+    `sizing_rel` resumes is that refire's own footprint, never a clash."""
     writes = _declared_writes(root, tool_input, sizing_doc)
     if not writes:
         return None
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     try:
-        index = _bounded_call(("index", str(root)), lambda: live_run_index.read(root, _READ_DEADLINE_MS))
+        own = None
+        if sizing_rel:
+            from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+            own = _bounded_call(("halted", str(root), sizing_rel), lambda: halted_run_to_resume(root, sizing_rel))
+        own = own if isinstance(own, str) else None
+        index = _bounded_call(
+            ("index", str(root)), lambda: live_run_index.read(root, _READ_DEADLINE_MS, exclude_run_id=own)
+        )
     except OSError:
         return None
     if not isinstance(index, dict):
@@ -1305,7 +1316,7 @@ def _evaluate(
                     "End the turn.",
                 )
         if asks is None and reserved_run_id is None:
-            clash = _live_write_overlap_deny(root, payload["tool_input"], sizing_doc)
+            clash = _live_write_overlap_deny(root, payload["tool_input"], sizing_doc, sizing_rel)
     if clash:
         return deny("PreToolUse", clash)
 

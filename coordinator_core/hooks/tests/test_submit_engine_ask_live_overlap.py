@@ -114,3 +114,16 @@ def test_absent_index_records_no_friction_row(tmp_path):
     (tmp_path / ".git").mkdir()
     assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {}) is None
     assert not (tmp_path / mod.FRICTION_LOG_REL).exists()
+
+
+def test_a_refire_is_never_denied_by_the_halted_run_it_resumes(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    _live(tmp_path, {"ask-halted": {"pkg/mod.py"}, "run-other": {"pkg/mod.py"}})
+    monkeypatch.setattr(
+        "coordinator_core.ops.dispatch_emit.halted_run.halted_run_to_resume", lambda root, rel: "ask-halted"
+    )
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    why = mod._live_write_overlap_deny(tmp_path, tool_input, {}, "state/sizings/s.yaml")
+    assert why and "run-other" in why and "ask-halted" not in why
+    _live(tmp_path, {"run-other": {"x.py"}})
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {}, "state/sizings/s.yaml") is None

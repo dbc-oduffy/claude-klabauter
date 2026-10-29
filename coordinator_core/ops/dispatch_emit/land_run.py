@@ -3557,12 +3557,23 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     sha = outcome.sha
     review_gap: list = []
-    if manifest is not None and manifest.review_code_paths:
+    declared_left: dict = {}
+    review_code = list(manifest.review_code_paths) if manifest is not None else []
+    gap_literals = list(dict.fromkeys([*review_code, *sorted(declared_writes)]))
+    if gap_literals:
         try:
-            gap_changed, gap_ignored, _gap_head = _dirty_among(root, manifest.review_code_paths)
-            review_gap = sorted(gap_changed - gap_ignored)
+            gap_changed, gap_ignored, _gap_head = _dirty_among(root, gap_literals)
+            gap_dirty = gap_changed - gap_ignored
+            review_gap = sorted(p for p in gap_dirty if p in set(review_code))
+            declared_left = {
+                p: "declared write left dirty after the commit, neither landed nor withheld"
+                for p in sorted(gap_dirty)
+                if p in declared_writes and p not in set(review_code) and p not in named_out
+            }
         except Exception:  # noqa: BLE001 -- the commit stands; an unreadable store reports no gap
             review_gap = []
+            declared_left = {}
+    review_gap = sorted({*review_gap, *declared_left})
     if review_gap:
         ledger_met = None
         credited_ids = []
@@ -3625,6 +3636,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             f"ledger rows not reported met: commit omits changed file(s) {withheld_product}"[:_UNDONE_CAP]
         )
     reply.update(recovery_reply)
+    if declared_left:
+        reply["withheld"] = {**(reply.get("withheld") or {}), **declared_left}
     reply[contract.REPLY_CREDITED_CHUNKS] = sorted(set(credited_ids) & (set(regraded) | {c.id for c in credited_absent}))
     if recorded_changed:
         landed_now = set(paths)
