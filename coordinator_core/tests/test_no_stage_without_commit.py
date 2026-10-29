@@ -13,6 +13,8 @@ BLIND SPOT -- READ BEFORE TRUSTING A GREEN. This is a literal-argv, module-granu
     site built that way is missed; a commit built that way is not recognised as a commit.
   - In-process staging is invisible: `git.commit.stage_paths_in_process` (dulwich-style
     index writes with no git argv) is not detected. A future caller would pass this gate.
+  - An argv not led by a literal "git" element (e.g. `["env", ..., "git", "add"]`) is not
+    seen; a token tuple that merely contains "git"/"mv"/"rm" is deliberately not a staging site.
   - Pairing is coarse: "the module has a commit somewhere" does not show the commit covers
     the staged paths or runs in the same op.
   - Only `coordinator_core/` and `coordinator/bin/` Python is walked; test trees are skipped.
@@ -60,6 +62,12 @@ def _strs(node: ast.AST) -> list[str]:
     ]
 
 
+def _led_by_git(node: ast.AST) -> bool:
+    """True when the list/tuple's first element is the literal "git" (an argv, not a token set)."""
+    elts = getattr(node, "elts", [])
+    return bool(elts) and isinstance(elts[0], ast.Constant) and elts[0].value == "git"
+
+
 def _callee_name(call: ast.Call) -> str:
     f = call.func
     if isinstance(f, ast.Name):
@@ -79,7 +87,7 @@ def analyse_source(source: str) -> tuple[list[int], bool]:
             strs = _strs(node)
             if "commit" in strs:
                 has_commit = True
-            elif "git" in strs and any(v in strs for v in _STAGING_VERBS):
+            elif _led_by_git(node) and any(v in strs for v in _STAGING_VERBS):
                 stages.append(node.lineno)
         elif isinstance(node, ast.Call) and _callee_name(node) == "commit_paths":
             has_commit = True
@@ -171,3 +179,13 @@ def test_detector_passes_stage_with_commit_paths_call() -> None:
 def test_detector_blind_to_runtime_built_verb() -> None:
     stages, _ = analyse_source('verb = "add"\nrun(["git", verb, p])\n')
     assert stages == []
+
+
+def test_detector_ignores_token_tuple_containing_git_and_verbs() -> None:
+    stages, _ = analyse_source('_PREFILTER_TOKENS = (">", "tee", "git", "mv", "rm")\n')
+    assert stages == []
+
+
+def test_detector_flags_argv_assigned_before_call() -> None:
+    stages, _ = analyse_source('argv = ["git", "add", p]\nrun(argv)\n')
+    assert stages == [1]

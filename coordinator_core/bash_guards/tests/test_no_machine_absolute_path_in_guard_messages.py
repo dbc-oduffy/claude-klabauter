@@ -481,11 +481,11 @@ def test_span_under_relocated_tmpdir_with_inner_tmp_segment_is_one_exempt_token(
     )
     span = str(relocated / "s" / "f.md")
     assert set(_find_absolute_paths("x %s y" % span)) == {span}
-    assert _is_exempt(span, row_input="", grant_cli_text="")
+    assert _is_exempt(span, row_input="")
 
     outside = "/a/private/tmp/elsewhere/f.md"
     assert set(_find_absolute_paths("x %s y" % outside)) == {outside}
-    assert not _is_exempt(outside, row_input="", grant_cli_text="")
+    assert not _is_exempt(outside, row_input="")
 
 
 def test_windows_drive_rooted_relocated_root_is_one_token():

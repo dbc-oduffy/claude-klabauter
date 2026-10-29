@@ -1281,6 +1281,9 @@ def _resolve_upstream_local(root: Path, branch: str) -> Optional[_UpstreamInfo]:
 
 _HEADS_PREFIX_LOCAL = "refs/heads/"
 
+#: Remote branch names a non-protected local branch is never pushed onto, whatever its upstream says.
+_PROTECTED_REMOTE_BRANCHES = frozenset({"main", "master"})
+
 
 def _ref_sha_local(root: Path, ref: str) -> Optional[str]:
     """Resolve *ref* (e.g. `"refs/remotes/origin/main"`) to its sha with no
@@ -1497,6 +1500,18 @@ def push_with_retry(
     # "unknown" sentinel `PushOutcome.pushed_range`/`pushed_count` document.
     pre_push_upstream_sha: Optional[str] = None
     upstream_info = _resolve_upstream_local(root, branch)
+    if (
+        upstream_info is not None
+        and branch not in _PROTECTED_REMOTE_BRANCHES
+        and upstream_info.branch_ref[len(_HEADS_PREFIX_LOCAL):] in _PROTECTED_REMOTE_BRANCHES
+    ):
+        # A work branch tracking origin/main must never publish onto main: push to its own
+        # same-named remote branch instead.
+        upstream_info = _UpstreamInfo(
+            f"{upstream_info.remote_name}/{branch}",
+            upstream_info.remote_name,
+            f"refs/remotes/{upstream_info.remote_name}/{branch}",
+        )
     if upstream_info is not None:
         pre_push_upstream_sha = _ref_sha_local(root, upstream_info.ref_path)
 

@@ -119,7 +119,7 @@ def test_emit_leg_contract(tmp_path):
     assert "WARP_PREFIX" in script and "scratch/warp/" in script
 
 
-def _refusal(script: str, child_id: str, reply: dict):
+def _refusal(script: str, child_id: str, reply: dict, sizing_rel: str = ""):
     import shutil
     import subprocess
 
@@ -131,7 +131,7 @@ def _refusal(script: str, child_id: str, reply: dict):
     prog = (
         "const WARP_PREFIX='/r/scratch/warp/';"
         + m.group(0)
-        + f"console.log(JSON.stringify(_emitRefusal({{run_id:{json.dumps(child_id)}}}, {json.dumps(reply)})));"
+        + f"console.log(JSON.stringify(_emitRefusal({{run_id:{json.dumps(child_id)},sizing_rel:{json.dumps(sizing_rel)}}},{json.dumps(reply)})));"
     )
     out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -169,6 +169,21 @@ def test_own_redirect_run_id_accepted_foreign_still_refused(tmp_path):
     assert _refusal(script, "ask-r1", foreign) == "emit reply run_id warp-other is not ask-r1"
     other_child = dict(reply, **{OUTPUT_PATH_REDIRECT_KEY: dict(redirect, halted_run="ask-r2")})
     assert _refusal(script, "ask-r1", other_child) == "emit reply run_id warp-new is not ask-r1"
+
+
+@pytest.mark.spawns_process
+def test_stale_record_recomposed_refire_id_accepted_foreign_still_refused(tmp_path):
+    _, script = _write(tmp_path)
+    sizing = "state/sizings/2026-10-29-recomposed-refire-id-multi-ask-launcher-cec55b.yaml"
+    stem = "2026-10-29-recomposed-refire-id-multi-ask-launcher-cec55b"
+    reply = {"path": "/r/scratch/warp/x/s.js", "run_id": f"warp-{stem}-20261029T155740-428c62", "fire_args": {}}
+    assert _refusal(script, "ask-20261029T132341-9572ec", reply, sizing) is None
+    foreign = dict(reply, run_id="warp-2026-10-29-other-sizing-20261029T155740-428c62")
+    assert _refusal(script, "ask-20261029T132341-9572ec", foreign, sizing) == (
+        f"emit reply run_id {foreign['run_id']} is not ask-20261029T132341-9572ec"
+    )
+    malformed = dict(reply, run_id=f"warp-{stem}-x")
+    assert _refusal(script, "ask-20261029T132341-9572ec", malformed, sizing).startswith("emit reply run_id")
 
 
 @pytest.mark.spawns_process

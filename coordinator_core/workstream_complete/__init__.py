@@ -2777,6 +2777,7 @@ def _compute_review_receipt_gate(
     target_status: str,
     claimed_at: Optional[str],
     plan_path: Optional[Path],
+    close_commits: tuple[tuple[str, int], ...] = (),
 ) -> ReviewReceiptGate:
     """The SOLE call site (AC7 leg ii) deciding whether `target_status` may
     be reached without a review receipt. No boolean/optional parameter here
@@ -2791,7 +2792,9 @@ def _compute_review_receipt_gate(
     block satisfies (a) `agent_type` (namespace-stripped) names a
     `reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS` member, (b) `session_id` equals
     `sid`, (c) `stamped_at` resolves neither strictly before `claimed_at`
-    (when both parse) nor strictly after now, and (d) `review_trail.
+    (when both parse) nor strictly after now, (d) `stamped_at` is not earlier
+    than the newest of `close_commits` (`(sha, committer_epoch)` pairs of the
+    close's own non-merge commits; empty = no known commit, vacuous), and (e) `review_trail.
     receipt_credit._receipt_counts` (C3's completion-writer-aware content
     predicate, computed once via `_compute_session_summary` over every extant
     share-root directory — never `sidecar_dirs[0]` alone) is True for this
@@ -2936,6 +2939,7 @@ def _compute_review_receipt_gate(
     # share-root-neutral: the first hit across every `extant_sidecar_dirs`
     # entry in sorted-candidate order, never `sidecar_dirs[0]` specifically.
     dispatched_never_completed_path: Optional[str] = None
+    stale_uncovered: list[str] = []
 
     # Sort within each root, then
     # concatenate, matching this fix's own rationale comment above (legacy
@@ -3003,6 +3007,14 @@ def _compute_review_receipt_gate(
             continue
         if stamped_at is not None and stamped_at > now:
             continue
+        if stamped_at is not None and close_commits:
+            uncovered = [
+                sha for sha, epoch in close_commits if epoch > stamped_at.timestamp()
+            ]
+            if uncovered:
+                if len(uncovered) > len(stale_uncovered):
+                    stale_uncovered = uncovered
+                continue
 
         if reviewer_hit is None:
             reviewer_hit = candidate.as_posix()
@@ -3039,6 +3051,17 @@ def _compute_review_receipt_gate(
                 f"review receipt for session {sid!r} at "
                 f"{dispatched_never_completed_path} was dispatched, never "
                 "completed — wait for it to finish or re-dispatch"
+            ),
+        )
+
+    if stale_uncovered:
+        return ReviewReceiptGate(
+            applies=True,
+            blocks=True,
+            detail=(
+                f"review receipt(s) for session {sid!r} were stamped before the "
+                f"close's newest commit; uncovered commits: {stale_uncovered} — "
+                "re-dispatch a reviewer (CLOSE_RECEIPT_REVIEWERS) over them"
             ),
         )
 
@@ -5523,6 +5546,11 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         "implemented",
         review_receipt_claim_window_start,
         plan_path=governing_plan.path if governing_plan else None,
+        close_commits=(
+            tuple((c.sha, c.committer_epoch) for c in history.own if not c.is_merge)
+            if history is not None and history.resolved
+            else ()
+        ),
     )
     if review_receipt_gate.blocks and any(
         d["id"] == "d-stamp-plan-implemented" for d in directives

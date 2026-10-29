@@ -57,6 +57,7 @@ from coordinator_core import locked_write  # noqa: E402
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import fresh_git_clone  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 
 BAR_MS = 500.0
 DEFAULT_DELAY_S = 12.0
@@ -181,10 +182,10 @@ class Injector:
 
 
 def _git(args, cwd: Path, stdin: bytes | None = None) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=str(cwd), capture_output=True, input=stdin, check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout.decode("utf-8", "replace")
+    result = run_git(list(args), cwd=str(cwd), input=stdin)
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed rc={result.returncode}: {result.stderr.strip()}")
+    return result.stdout
 
 
 def _write(root: Path, rel: str, text: str) -> None:

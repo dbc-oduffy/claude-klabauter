@@ -222,7 +222,7 @@ def test_admit_and_register_subtracts_live_reservation(tmp_path):
     adm = tmp_path / "admission.jsonl"
     host.register_command(adm, "other", 5, 4.0)
     status = host.MemoryStatus(10 * host.GIB, 64 * host.GIB, 0, 100 * host.GIB)
-    kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True)
+    kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True, image_fn=lambda p: "python.exe")
     # 10 - 4 reserved = 6 available; 4.8 needs 6.0 and admits, 4.9 needs 6.125 and holds.
     verdict, reserved = host.admit_and_register(adm, "k", 6, 4.8, status, **kw)
     assert reserved == 4 * host.GIB and verdict.admit
@@ -243,13 +243,15 @@ def test_peak_store_keeps_largest(tmp_path):
 def test_register_and_release_drive_reserved(tmp_path):
     adm = tmp_path / "admission.jsonl"
     host.register_command(adm, "k", 5, 4.0)
-    kw = dict(rss_fn=lambda p: 1024.0, alive_fn=lambda p: True)
+    kw = dict(rss_fn=lambda p: 1024.0, alive_fn=lambda p: True, image_fn=lambda p: "python.exe")
     assert host.reserved_bytes(adm, **kw) == 3 * host.GIB
     host.release_command(adm, "k", 5)
     assert host.reserved_bytes(adm, **kw) == 0
 
 
 def _kw(**extra):
+    extra.setdefault("image_fn", lambda p: "python.exe")
+    extra.setdefault("now_fn", lambda: 1000.0)
     return dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True, **extra)
 
 
@@ -291,10 +293,47 @@ def test_legacy_start_with_ts_keeps_only_while_create_time_not_after_ts(tmp_path
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 1001.1, **_kw()) == 0
 
 
-def test_legacy_start_without_ts_or_create_time_reserves_while_pid_live(tmp_path):
+def test_legacy_start_without_ts_or_create_time_never_reserves(tmp_path):
     adm = _ledger(tmp_path, _start("a"))
-    assert host.reserved_bytes(adm, create_time_fn=lambda p: 5e9, **_kw()) == 4 * host.GIB
-    assert host.reserved_bytes(adm, rss_fn=lambda p: 0.0, alive_fn=lambda p: False) == 0
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 5e9, **_kw()) == 0
+
+
+def test_unstamped_start_reserves_only_within_bounded_age(tmp_path):
+    adm = _ledger(tmp_path, _start("a", ts=1000.0))
+    ok = host.reserved_bytes(adm, create_time_fn=lambda p: 900.0, **_kw(now_fn=lambda: 1000.0 + 3600))
+    stale = host.reserved_bytes(adm, create_time_fn=lambda p: 900.0, **_kw(now_fn=lambda: 1000.0 + 7 * 3600))
+    assert ok == 4 * host.GIB and stale == 0
+
+
+def test_image_not_the_declared_command_does_not_hold(tmp_path):
+    adm = _ledger(tmp_path, _start("test-runner-pytest:5", ts=1000.0))
+    ct = lambda p: 900.0
+    assert host.reserved_bytes(adm, create_time_fn=ct, **_kw(image_fn=lambda p: "conhost.exe")) == 0
+    assert host.reserved_bytes(adm, create_time_fn=ct, **_kw(image_fn=lambda p: "head.exe")) == 0
+    assert host.reserved_bytes(adm, create_time_fn=ct, **_kw(image_fn=lambda p: None)) == 0
+    assert host.reserved_bytes(adm, create_time_fn=ct, **_kw(image_fn=lambda p: "python.exe")) == 4 * host.GIB
+
+
+def test_forty_recycled_pid_legacy_starts_reserve_zero(tmp_path):
+    rows = [
+        {"phase": "START", "session_id": "box-memory-snapshot", "run": f"test-runner-pytest:{1000 + i}",
+         "pids": [1000 + i], "declared_peak_mb": 1024}
+        for i in range(40)
+    ]
+    adm = _ledger(tmp_path, *rows)
+    images = {1000 + i: ("conhost.exe" if i % 2 else "head.exe") for i in range(40)}
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 5e9, **_kw(image_fn=images.get)) == 0
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 5e9, **_kw(image_fn=lambda p: "python.exe")) == 0
+
+
+def test_top_holders_names_session_run_pid_image_largest_first(tmp_path):
+    adm = _ledger(
+        tmp_path,
+        _start("small", pid=1, create_time=10.0, declared_peak_mb=1024),
+        _start("big", pid=2, create_time=10.0, declared_peak_mb=8192),
+    )
+    rows = host.top_holders(adm, limit=1, create_time_fn=lambda p: 10.0, **_kw(image_fn=lambda p: "python.exe"))
+    assert rows == [{"session_id": "s", "run": "big", "pid": 2, "image": "python.exe", "bytes": 8 * host.GIB}]
 
 
 def test_compaction_drops_dead_and_recycled_and_closed_and_backfills_legacy(tmp_path):
@@ -311,26 +350,29 @@ def test_compaction_drops_dead_and_recycled_and_closed_and_backfills_legacy(tmp_
         _start("legacy-ts", pid=6, ts=500.0),
         _start("legacy-ts-recycled", pid=7, ts=500.0),
         _start("legacy-bare", pid=8),
+        _start("legacy-ts-stale", pid=9, ts=-30000.0),
     )
     with open(adm, "a", encoding="utf-8") as fh:
         fh.write("not json\n")
-    times = {2: 99.0, 3: 10.0, 4: 10.0, 6: 400.0, 7: 600.0, 8: 250.0}
-    removed = host.compact_admission(
-        adm, alive_fn=lambda p: p != 1, create_time_fn=lambda p: times.get(p)
-    )
+    times = {2: 99.0, 3: 10.0, 4: 10.0, 6: 400.0, 7: 600.0, 8: 250.0, 9: -40000.0}
+    liveness = dict(create_time_fn=lambda p: times.get(p), image_fn=lambda p: "python.exe", now_fn=lambda: 1000.0)
+    removed = host.compact_admission(adm, alive_fn=lambda p: p != 1, **liveness)
     kept = [l for l in adm.read_text(encoding="utf-8").splitlines()]
     runs = [json.loads(l)["run"] for l in kept if l.startswith("{")]
-    assert runs == ["stamped", "legacy-ts", "legacy-bare"] and "not json" in kept
-    assert removed == 5
+    assert runs == ["stamped", "legacy-ts"] and "not json" in kept
+    assert removed == 7
     by_run = {json.loads(l)["run"]: json.loads(l) for l in kept if l.startswith("{")}
-    assert by_run["legacy-ts"]["create_time"] == 400.0 and by_run["legacy-bare"]["create_time"] == 250.0
+    assert by_run["legacy-ts"]["create_time"] == 400.0
     assert by_run["stamped"]["create_time"] == 10.0
-    assert host.compact_admission(adm, alive_fn=lambda p: True, create_time_fn=lambda p: times.get(p)) == 0
+    assert host.compact_admission(adm, alive_fn=lambda p: True, **liveness) == 0
 
 
 def test_after_compaction_backfilled_legacy_row_is_recycle_safe(tmp_path):
-    adm = _ledger(tmp_path, _start("legacy", pid=8))
-    host.compact_admission(adm, alive_fn=lambda p: True, create_time_fn=lambda p: 250.0)
+    adm = _ledger(tmp_path, _start("legacy", pid=8, ts=300.0))
+    host.compact_admission(
+        adm, alive_fn=lambda p: True, create_time_fn=lambda p: 250.0,
+        image_fn=lambda p: "python.exe", now_fn=lambda: 400.0,
+    )
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 250.0, **_kw()) == 4 * host.GIB
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 9999.0, **_kw()) == 0
 
@@ -356,7 +398,7 @@ def test_concurrent_admits_serialize_check_and_reserve(tmp_path):
         barrier.wait()
         verdict, _ = host.admit_and_register(
             adm, "k", pid, 4.0, status, cushion_pct=0.0,
-            rss_fn=lambda p: 0.0, alive_fn=lambda p: True,
+            rss_fn=lambda p: 0.0, alive_fn=lambda p: True, image_fn=lambda p: "python.exe",
         )
         results.append(verdict.admit)
 

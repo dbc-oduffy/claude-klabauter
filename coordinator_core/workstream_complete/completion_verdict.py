@@ -59,6 +59,8 @@ table.
 
 from typing import Any, Mapping, NamedTuple
 
+from coordinator_core.contract.apply_base import normalize_decisions
+
 
 class GateReading(NamedTuple):
 
@@ -161,6 +163,32 @@ def landed_reconciliation(payload: Mapping[str, Any]) -> GateReading:
         )
 
     return GateReading(status=status, residue_items=residue, reason=None)
+
+
+NO_GOVERNING_PLAN_POINT = "no-governing-plan"
+NO_PLAN_GOVERNED = "no-plan-governed"
+PLAN_ONLY_GATES: tuple[str, ...] = ("open_spine_row_worklist", "landed_reconciliation")
+
+
+def no_plan_governed(decisions: Mapping[str, Any] | None) -> bool:
+    """True only when the EM answered `no-governing-plan` with `no-plan-governed`
+    (any shape `normalize_decisions` accepts). Absent or malformed -> False."""
+    entry = (decisions or {}).get(NO_GOVERNING_PLAN_POINT)
+    if entry is None:
+        return False
+    normalized, malformed = normalize_decisions({NO_GOVERNING_PLAN_POINT: entry})
+    if malformed:
+        return False
+    return normalized[NO_GOVERNING_PLAN_POINT].get("disposition") == NO_PLAN_GOVERNED
+
+
+def plan_only_not_applicable(gate: str) -> GateReading:
+    """Reading for a plan-only gate on a close the EM declared plan-less."""
+    return GateReading(
+        status="not-applicable",
+        residue_items=(),
+        reason=f"{gate}: close answered {NO_GOVERNING_PLAN_POINT}={NO_PLAN_GOVERNED}.",
+    )
 
 
 def _completeness_item_field(item: Any, field: str) -> str:

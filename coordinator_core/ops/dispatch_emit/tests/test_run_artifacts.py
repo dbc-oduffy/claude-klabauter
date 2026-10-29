@@ -72,11 +72,11 @@ def test_every_class_found(graph):
 
 def test_record_dir_walk_is_recursive(graph):
     rec = f"state/warp/{RUN}"
-    _w(graph, f"{rec}/prompts/a.md")
-    _w(graph, f"{rec}/prompts/deep/b.md")
+    _w(graph, f"{rec}/briefs/a.md")
+    _w(graph, f"{rec}/briefs/deep/b.md")
     a = ra.candidate_paths(graph, RUN)
-    assert f"{rec}/prompts/a.md" in a.by_class["record-dir"]
-    assert f"{rec}/prompts/deep/b.md" in a.by_class["record-dir"]
+    assert f"{rec}/briefs/a.md" in a.by_class["record-dir"]
+    assert f"{rec}/briefs/deep/b.md" in a.by_class["record-dir"]
 
 
 ASK = "ask-20261016T110000-dddddd"
@@ -84,7 +84,7 @@ ASK = "ask-20261016T110000-dddddd"
 
 def _halted_ask(root: Path) -> None:
     _w(root, f"state/warp/{ASK}/halted.json", json.dumps({"status": "halted", "sizing_rel": SIZING}))
-    _w(root, f"state/warp/{ASK}/prompts/x.md")
+    _w(root, f"state/warp/{ASK}/briefs/x.md")
     _w(root, f"state/warp/{ASK}/withheld-prints.json", "{}")
 
 
@@ -92,18 +92,18 @@ def test_ask_dir_resolved_from_halted_ask_run(graph):
     _halted_ask(graph)
     a = ra.candidate_paths(graph, RUN)
     got = a.by_class["ask-dir"]
-    assert f"state/warp/{ASK}/prompts/x.md" in got
+    assert f"state/warp/{ASK}/briefs/x.md" in got
     assert f"state/warp/{ASK}/withheld-prints.json" in got
-    assert a.class_of(f"state/warp/{ASK}/prompts/x.md") == "ask-dir"
+    assert a.class_of(f"state/warp/{ASK}/briefs/x.md") == "ask-dir"
     assert a.notes == ()
 
 
 def test_ask_dir_from_run_json_ask_field(graph):
     other = "ask-20261016T115900-abcdef"
-    _w(graph, f"state/warp/{other}/prompts/y.md")
+    _w(graph, f"state/warp/{other}/briefs/y.md")
     _w(graph, f"state/warp/{RUN}/run.json", json.dumps({"sizing_rel": SIZING, "ask": other}))
     a = ra.candidate_paths(graph, RUN)
-    assert a.by_class["ask-dir"] == (f"state/warp/{other}/prompts/y.md",)
+    assert a.by_class["ask-dir"] == (f"state/warp/{other}/briefs/y.md",)
 
 
 def test_no_ask_dir_resolved_is_reported_not_guessed(graph):
@@ -114,10 +114,10 @@ def test_no_ask_dir_resolved_is_reported_not_guessed(graph):
 
 def test_superseded_record_lands_whole(graph):
     _w(graph, f"state/warp/{OLD}/run.json", json.dumps({"sizing_rel": SIZING}))
-    _w(graph, f"state/warp/{OLD}/prompts/p.md")
+    _w(graph, f"state/warp/{OLD}/briefs/p.md")
     a = ra.candidate_paths(graph, RUN).with_superseded([OLD], "state/warp")
-    assert f"state/warp/{OLD}/prompts/p.md" in a.by_class["superseded-record"]
-    got = ra.superseded_runs(graph, RUN, SIZING, [f"state/warp/{OLD}/prompts/p.md"])
+    assert f"state/warp/{OLD}/briefs/p.md" in a.by_class["superseded-record"]
+    got = ra.superseded_runs(graph, RUN, SIZING, [f"state/warp/{OLD}/briefs/p.md"])
     assert got == (OLD,)
 
 
@@ -289,3 +289,15 @@ def test_record_dir_walk_skips_emitted_workflow_scripts_and_receipts(tmp_path):
     for name in ("halted.json", "resume-script.workflow.mjs", "resume-script.workflow.mjs.emitted.json"):
         (rd / name).write_text("x", encoding="utf-8")
     assert _tree_files(tmp_path, "state/warp/r1") == ["state/warp/r1/halted.json"]
+
+
+def test_record_dir_walk_skips_prompts_dir_but_keeps_siblings(tmp_path):
+    from coordinator_core.ops.dispatch_emit.run_artifacts import _tree_files
+
+    rd = tmp_path / "state" / "warp" / "r1"
+    (rd / "prompts").mkdir(parents=True)
+    (rd / "other").mkdir()
+    (rd / "prompts" / "review-1.md").write_text("x", encoding="utf-8")
+    (rd / "other" / "keep.md").write_text("x", encoding="utf-8")
+    (rd / "halted.json").write_text("x", encoding="utf-8")
+    assert _tree_files(tmp_path, "state/warp/r1") == ["state/warp/r1/halted.json", "state/warp/r1/other/keep.md"]

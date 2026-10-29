@@ -94,3 +94,28 @@ def test_cli_forwards_through(monkeypatch, argv, tmp_path):
     )
     assert changelog_ops.main(argv) == 0
     assert seen["through"] == "2026-03-03"
+
+
+def test_archived_day_is_not_regenerated(repo):
+    git_dir, wc = repo
+    arch = wc.parent.parent / "archive" / "week-changelogs" / "2026-03-02"
+    arch.mkdir(parents=True)
+    (arch / "2026-03-03-h.md").write_text("x", encoding="utf-8")
+    result = changelog_ops.backfill_gaps(repo_root=git_dir, host="h", today_override="2026-03-04")
+    assert _dates(result) == ["03-02", "03-04"]
+    assert "2026-03-03" in result["skipped"]
+
+
+def test_unset_anchor_starts_at_earliest_live_dated_file(repo):
+    git_dir, wc = repo
+    (wc / "HEADER.md").write_text("no anchor\n", encoding="utf-8")
+    (wc / "2026-03-03.md").write_text("x", encoding="utf-8")
+    result = changelog_ops.backfill_gaps(repo_root=git_dir, host="h", today_override="2026-03-05")
+    assert _dates(result) == ["03-04", "03-05"]
+
+
+def test_unset_anchor_without_dated_files_is_a_noop(repo):
+    git_dir, wc = repo
+    (wc / "HEADER.md").unlink()
+    result = changelog_ops.backfill_gaps(repo_root=git_dir, host="h", today_override="2026-03-05")
+    assert result["backfilled"] == []

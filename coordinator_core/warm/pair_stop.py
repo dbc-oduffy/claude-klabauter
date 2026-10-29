@@ -28,6 +28,10 @@ _ROLE_SCRIPTS = {
     ROLE_SERVER: ("coordinator_core", "warm", "server.py"),
 }
 
+# Bound on the re-sweep loop: a server that appears mid-stop (a duplicate, a late respawn) is taken
+# in a later pass, not missed by a single one.
+_RESWEEP_DEADLINE_SECS = 15.0
+
 _ASK_READ_DEADLINE_SECS = 2.0
 _TERMINATE_GRACE_SECS = 5.0
 _TERMINATE_POLL_INTERVAL_SECS = 0.1
@@ -56,13 +60,17 @@ class PairProcess:
 class PairStopResult:
     stopped: tuple[PairProcess, ...]
     survivors: tuple[PairProcess, ...]
+    failures: tuple[tuple[int, str], ...] = ()
 
     def ok(self) -> bool:
         return not self.survivors
 
     def render_survivors(self) -> str:
+        why = dict(self.failures)
         return "\n".join(
-            f"pid={p.pid} role={p.role} cmd={p.cmdline}" for p in self.survivors
+            f"pid={p.pid} role={p.role} why={why.get(p.pid, 'respawned or still present after sweep')}"
+            f" cmd={p.cmdline}"
+            for p in self.survivors
         )
 
 
@@ -208,8 +216,8 @@ def _wait_for_pid_gone(
         time.sleep(poll_interval)
 
 
-def _terminate_pid(pid: int, *, psutil_module=None) -> bool:
-    """terminate(), then kill() after the grace window. True iff confirmed gone.
+def _terminate_with_reason(pid: int, *, psutil_module=None) -> Optional[str]:
+    """terminate(), then kill() after the grace window. None iff confirmed gone, else why not.
     Signals only a pid the caller already identified."""
     psutil = psutil_module
     if psutil is None:
@@ -218,34 +226,38 @@ def _terminate_pid(pid: int, *, psutil_module=None) -> bool:
     try:
         proc = psutil.Process(pid)
     except psutil.NoSuchProcess:
-        return True
+        return None
 
     try:
         proc.terminate()
     except psutil.NoSuchProcess:
-        return True
+        return None
     except psutil.AccessDenied:
-        return False
+        return "terminate denied (access denied)"
 
     deadline = time.monotonic() + _TERMINATE_GRACE_SECS
     while time.monotonic() < deadline:
         if not proc.is_running():
-            return True
+            return None
         time.sleep(_TERMINATE_POLL_INTERVAL_SECS)
 
     try:
         proc.kill()
     except psutil.NoSuchProcess:
-        return True
+        return None
     except psutil.AccessDenied:
-        return False
+        return "kill denied (access denied)"
 
     deadline = time.monotonic() + _TERMINATE_GRACE_SECS
     while time.monotonic() < deadline:
         if not proc.is_running():
-            return True
+            return None
         time.sleep(_TERMINATE_POLL_INTERVAL_SECS)
-    return not proc.is_running()
+    return None if not proc.is_running() else "still running after terminate and kill"
+
+
+def _terminate_pid(pid: int, *, psutil_module=None) -> bool:
+    return _terminate_with_reason(pid, psutil_module=psutil_module) is None
 
 
 def _pool_children(
@@ -357,17 +369,34 @@ def stop_warm_pair(
         if not gone:
             _terminate_pid(pid, psutil_module=psutil_module)
 
-    for p in find_pair_processes(engine_root, psutil_module=psutil_module):
-        seen.setdefault(p.pid, p)
-        if p.role == ROLE_SERVER:
-            server_pids.add(p.pid)
-            _terminate_pid(p.pid, psutil_module=psutil_module)
-
-    for child in _pool_children(server_pids, psutil_module=psutil_module):
-        seen.setdefault(child.pid, child)
-        child_pids.add(child.pid)
-    for cpid in sorted(child_pids):
-        _terminate_pid(cpid, psutil_module=psutil_module)
+    failures: dict[int, str] = {}
+    order = {ROLE_SUPERVISOR: 0, ROLE_FRONT_DOOR: 1, ROLE_SERVER: 2, ROLE_POOL_CHILD: 3}
+    deadline = time.monotonic() + _RESWEEP_DEADLINE_SECS
+    while True:
+        swept = find_pair_processes(engine_root, psutil_module=psutil_module)
+        server_pids.update(p.pid for p in swept if p.role == ROLE_SERVER)
+        swept += _pool_children(server_pids, psutil_module=psutil_module)
+        for p in swept:
+            seen.setdefault(p.pid, p)
+        targets = {p.pid: p.role for p in swept}
+        for cpid in child_pids:
+            targets.setdefault(cpid, ROLE_POOL_CHILD)
+        child_pids.clear()
+        fresh = sorted(
+            (pid for pid in targets if pid not in failures),
+            key=lambda pid: (order.get(targets[pid], 9), pid),
+        )
+        if not fresh:
+            break
+        for pid in fresh:
+            reason = _terminate_with_reason(pid, psutil_module=psutil_module)
+            if reason is None:
+                # Confirmed gone; a pid still enumerated afterwards is a stale entry, not a new server.
+                failures.setdefault(pid, "respawned or still present after sweep")
+            else:
+                failures[pid] = reason
+        if time.monotonic() >= deadline:
+            break
 
     survivors = tuple(
         find_pair_processes(engine_root, psutil_module=psutil_module)
@@ -376,7 +405,11 @@ def stop_warm_pair(
     survivor_pids = {p.pid for p in survivors}
     stopped = tuple(p for pid, p in seen.items() if pid not in survivor_pids)
 
-    result = PairStopResult(stopped=stopped, survivors=survivors)
+    result = PairStopResult(
+        stopped=stopped,
+        survivors=survivors,
+        failures=tuple(sorted((pid, why) for pid, why in failures.items() if pid in survivor_pids)),
+    )
     if result.ok():
         breadcrumb.unlink_breadcrumb(engine_root)
         supervisor.unlink_discovery(engine_root)

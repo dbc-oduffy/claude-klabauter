@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.machine_profile as mp
-from coordinator_core import warp_live
+from coordinator_core import warp_fire, warp_live
 from coordinator_core.hooks import _em_write_budget as leaf
 from coordinator_core.hooks import flag_em_poll_in_flight as fl
 from coordinator_core.hooks import nudge_em_code_dispatch as mod
@@ -108,7 +108,7 @@ def test_strict_edit_unfired_s_plus_is_denied_with_fire_step(env):
     result = mod.op(_edit(root))
     assert _is_deny(result)
     assert mod._ROUTE_UNFIRED_DENY in _reason(result)
-    assert mod.fire_step(mod._SESSION_SIZING) in _reason(result)
+    assert warp_fire.fire_command(mod._SESSION_SIZING) in _reason(result)
 
 
 def test_strict_shell_write_unfired_s_plus_is_denied(env):
@@ -153,8 +153,20 @@ def test_plan_routed_unfired_edit_gets_plan_route_advisory_not_the_deny(env, mon
     _patch_both(monkeypatch, "_session_sizing_state", lambda payload, sid: (True, True))
     result = mod.op(_edit(root))
     assert result is not None and not _is_deny(result)
-    assert mod._PLAN_ROUTE_ADVISORY in _ctx(result)
+    assert warp_fire.fire_step(mod._SESSION_SIZING) in _ctx(result)
     assert mod._ROUTE_UNFIRED_DENY not in _ctx(result)
+
+
+def test_plan_route_advisory_repeat_is_one_terse_counted_line_and_still_fires(env, monkeypatch):
+    root, _ = env
+    _patch_both(monkeypatch, "_session_sizing_state", lambda payload, sid: (True, True))
+    first = _ctx(mod.op(_edit(root)))
+    assert "Next step, the only one" in first
+    second_result = mod.op(_edit(root))
+    assert second_result is not None
+    second = _ctx(second_result)
+    assert "[engine-ask nag #2]" in second
+    assert "Next step, the only one" not in second and "[em-code-dispatch nudge]" not in second
 
 
 def test_escape_sentinel_admits_unfired_s_plus_edit(env, monkeypatch):

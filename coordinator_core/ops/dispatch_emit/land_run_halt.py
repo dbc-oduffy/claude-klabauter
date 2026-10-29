@@ -524,6 +524,24 @@ def _run_owned_merge_reply(root: Path, run_id: str, halted: dict, base: dict) ->
     }
 
 
+def _run_left_nothing(root: Path, run_id: str, paths: list) -> set:
+    """Paths whose tree bytes equal the run's own write baseline: the run left no hunk there, so
+    the dirt is a peer's and is neither landed nor withheld. A path outside the baseline, or an
+    unreadable baseline, is never idle."""
+    if not paths:
+        return set()
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+    from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
+
+    try:
+        baseline = hha._baseline(root, run_id)
+        if baseline is None:
+            return set()
+        return {p for p in paths if p in baseline and fingerprint(root, p) == baseline[p]}
+    except Exception:  # noqa: BLE001 -- unknown is not unchanged
+        return set()
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -618,6 +636,9 @@ def _land(
 
     product = [p for p in declared if p in differ]
     removed = [p for p in declared if p in gone]
+    idle = _run_left_nothing(root, run_id, product + removed)
+    product = [p for p in product if p not in idle]
+    removed = [p for p in removed if p not in idle]
     withheld: dict = dict(process_withheld)
     handled = set(paths) | set(deleted) | set(declared)
     own_record = {p for p in artifacts.paths() if artifacts.class_of(p) == "record-dir"}

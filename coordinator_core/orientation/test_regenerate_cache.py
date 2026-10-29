@@ -1536,6 +1536,18 @@ def test_auto_push_health_timeout_class_maps_to_its_own_action(tmp_path):
     assert result.rstrip().endswith(mod._ACTION_MAP["timeout"])
 
 
+def test_auto_push_health_ref_lock_class_names_the_stale_lock_and_fix(tmp_path):
+    repo = _make_repo_with_upstream(tmp_path, branch="work/reflock")
+    recent = _datetime.now(_timezone.utc) - _time_delta_seconds(30)
+    _write_failure_log_line(repo, "work/reflock", "ref-lock", recent, route="cadence-sweep")
+
+    result = mod.emit_auto_push_health(repo)
+
+    assert "last failure: ref-lock;" in result
+    assert ".git/refs" in result and "remove it" in result
+    assert result.rstrip().endswith(mod._ACTION_MAP["ref-lock"])
+
+
 def _time_delta_seconds(seconds: float):
     from datetime import timedelta
 

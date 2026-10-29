@@ -68,8 +68,12 @@ EXCLUDED_MODULES = {
     "coordinator_core/git/merge_state.py":
         "merge-finish predicates (read_merge_state/merge_refusal/clear_merge_state), spawn-free; "
         "0 comment, 18 docstring, 0 marker lines measured 2026-10-23; not a narration holder.",
+    "coordinator_core/git/kept_pin.py":
+        "in-process kept-blob pinning under refs/preserve/kept/, spawn-free; 0 comment, 16 docstring, "
+        "0 marker lines measured 2026-10-28; not a narration holder.",
     "coordinator_core/git/merge_owner.py":
-        "gitdir-private merge-owner record (file reads/writes, no git spawn) used by merge landing, not the commit path.",
+        "gitdir-private merge-owner record, file reads only, spawn-free; 0 comment, 10 docstring, "
+        "0 marker lines measured 2026-10-28; not a narration holder.",
     "coordinator_core/git/commit_context.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/correction_note.py":

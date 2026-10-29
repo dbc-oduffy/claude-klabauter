@@ -103,6 +103,28 @@ def test_withhold_jsonl_path_included_without_halted_artifacts(tmp_path, monkeyp
     assert "pkg/j.py" in got and "pkg/w.py" not in got
 
 
+def test_peer_declaration_keeps_path_own_checkpoint_landed_touch_claim_still_drops(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
+
+    _record(tmp_path, declared=["pkg/d.py", "pkg/e.py"])
+    _claims(monkeypatch, {"pkg/e.py": ["other"]})
+    monkeypatch.setattr(
+        warp_run_deliverable, "live_run_write_claims",
+        lambda *a, **kw: {"pkg/d.py": ["peer"], "pkg/f.py": ["peer"]})
+    seen = {}
+
+    def landed(root, plan_rel, run_base, paths):
+        seen["plan_rel"] = plan_rel
+        return frozenset(p for p in paths if p == "pkg/d.py")
+
+    monkeypatch.setattr(own_checkpoint_paths, "checkpoint_landed_paths", landed)
+    got = rws.run_write_set(tmp_path, RUN, "me")
+    assert seen["plan_rel"] == "docs/plans/p.md"
+    assert "pkg/d.py" in got  # peer declaration, own checkpoint landed it
+    assert "pkg/f.py" not in got  # peer declaration, not landed by this run
+    assert "pkg/e.py" not in got  # live touch claim drops even a landed path
+
+
 def test_missing_manifest_is_empty(tmp_path, monkeypatch):
     _claims(monkeypatch, {})
     assert rws.run_write_set(tmp_path, RUN, "me") == ()

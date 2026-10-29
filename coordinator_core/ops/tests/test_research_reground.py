@@ -269,6 +269,12 @@ def test_brief_states_the_ruling_vocabulary(repo, scratch):
     assert "it is dismissed, never invented." in brief
 
 
+def test_brief_requires_reopening_sources_before_downgrade(repo, scratch):
+    _reground(repo)
+    brief = (scratch / "reground-1.md").read_text(encoding="utf-8")
+    assert rg.REOPEN_NOTE in brief
+
+
 def test_carry_unchanged_digests_is_a_noop_with_zero_fresh(repo, scratch):
     _graded(repo, scratch)
     first = _reground(repo)

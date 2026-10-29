@@ -1069,6 +1069,30 @@ _PARAM_FIELDS = (
 )
 
 
+# Keys the handler and its in-process callers read beyond the typed `_PARAM_FIELDS`.
+_UNTYPED_PARAM_KEYS = frozenset({
+    "ask", "appetite", "name", "description", "force", "research", "subjects", "topic_slug",
+    "scout_mode", "scout_questions", "lanes", "lane_count", "hot_files", "resume_missing",
+    "cloud_spawn", "cross_repo_approved", "reserved_run_id", "chatty", "max_rows", "skip_landed",
+    "landed_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
+    "_caller_cwd",
+})
+
+
+def _unknown_param_refusal(params: Any) -> Optional[dict]:
+    """`{"error": ...}` naming the first top-level key outside the accepted set, else None."""
+    if not isinstance(params, dict):
+        return None
+    accepted = {f.name for f in _PARAM_FIELDS} | _UNTYPED_PARAM_KEYS
+    for key in params:
+        if key not in accepted:
+            return {
+                "error": f"dispatch.emit params.{key} is not accepted; to abandon a run pass "
+                f"{{\"abandon_run\": \"<run_id>\"}}; accepted: {', '.join(sorted(accepted))}"
+            }
+    return None
+
+
 _STAGE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
@@ -1872,24 +1896,72 @@ class _EmitWrites:
                 pass
 
 
+_CALLER_CWD_KEY = "_caller_cwd"
+_CALLER_RELATIVE_KEYS = ("plan_path", "plan", "inventory_path", "sizing_path", "output_path", "out_path")
+
+
+def _caller_root(params: dict, repo_root: Optional[Path]) -> Optional[Path]:
+    """The caller's repo: the request root, `target_root`, else the `.git` ancestor of the
+    caller's stamped cwd. Never the engine process cwd."""
+    given = repo_root or params.get("target_root")
+    if given:
+        return Path(given)
+    cwd = params.get(_CALLER_CWD_KEY)
+    if isinstance(cwd, str) and cwd:
+        start = Path(cwd)
+        for candidate in (start, *start.parents):
+            if (candidate / ".git").exists():
+                return candidate
+    return None
+
+
+def _anchor_relative_paths(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """`params` with each relative path param joined to the caller's cwd (else the request's
+    `repo_root`), so a warm engine never resolves it against its own. Unchanged when neither is known."""
+    cwd = params.get(_CALLER_CWD_KEY)
+    if not isinstance(cwd, str) or not cwd:
+        if repo_root is None:
+            return params
+        cwd = str(repo_root)
+    base = Path(cwd)
+    return {
+        k: (str(base / v) if k in _CALLER_RELATIVE_KEYS and isinstance(v, str) and v and not Path(v).is_absolute() else v)
+        for k, v in params.items()
+    }
+
+
 def _abandon_run(params: dict, repo_root: Optional[Path]) -> dict:
-    """Close a recomposed refire run that nothing started: it carries `resumed_from` and a minted-only
-    stage. A run that progressed, or any other run, is left untouched (`abandoned: False`)."""
+    """Close a run nothing is driving: a recomposed refire shell (`resumed_from` + minted-only stage),
+    or a stalled run whose unclaimed run token names the caller's session. Closing a run also
+    releases its token. Any other run is left untouched (`abandoned: False`)."""
     from coordinator_core.ops.dispatch_emit import halted_run as _hr
     from coordinator_core.ops.dispatch_emit import requirements_ledger as _rl
+    from coordinator_core.ops.dispatch_emit import run_token as _rt
 
     run_id = params["abandon_run"]
-    given = repo_root or params.get("target_root")
-    if not given:
-        raise ValueError("dispatch.emit abandon_run requires repo_root or target_root")
-    rdir = record_dir(Path(given), run_id)
+    root = _caller_root(params, repo_root)
+    if root is None:
+        raise ValueError("dispatch.emit abandon_run requires repo_root, target_root or a caller cwd")
+    rdir = record_dir(root, run_id)
     run = _rl.read_run(rdir) or {}
-    live = isinstance(run.get(_rl.RESUMED_FROM_FIELD), str) and _hr._is_shell(rdir)
+    shell = isinstance(run.get(_rl.RESUMED_FROM_FIELD), str) and _hr._is_shell(rdir)
+    session = _receipt_session_id(params)
+    owned = bool(session) and any(
+        r.get("run_id") == run_id and r.get("session_id") == session for r in _rt.live_records(root)
+    )
+    live = shell or (owned and rdir.is_dir() and (_hr.read_strict_run(rdir) or {}).get("status") != _hr.STATUS_CLOSED)
     if live:
         _hr._write(rdir, {
             "status": _hr.STATUS_CLOSED,
-            "closed": {"reason": "refire-start-failed", "at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")},
+            "closed": {
+                "reason": "refire-start-failed" if shell else "stalled-run-abandoned",
+                "at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            },
         })
+        _rt.discard(root, run_id)
+        from coordinator_core.ops.dispatch_emit import run_close as _rc
+
+        _rc.close_builds_held_after(root, run_id, "research-run-abandoned")
     return {"path": "", "run_id": run_id, "fire_args": {}, "abandoned": live}
 
 
@@ -1901,8 +1973,12 @@ def _dispatch_emit(
     only_review_plans: Optional[frozenset] = None,
     _research_ready: Optional[tuple] = None,
 ) -> dict:
+    unknown = _unknown_param_refusal(params)
+    if unknown is not None:
+        return unknown
     if params.get("abandon_run"):
         return _abandon_run(params, repo_root)
+    params = _anchor_relative_paths(params, repo_root)
     writes = _EmitWrites()
     try:
         return _dispatch_emit_body(

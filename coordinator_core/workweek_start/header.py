@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import shutil
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from coordinator_core.atomic_replace import atomic_write_bytes
@@ -181,19 +181,67 @@ def _daily_week_starts(week_dir: Path, anchor: date) -> dict[Path, date]:
     return out
 
 
+def _archived_week_starts(root: Path) -> set[date]:
+    archive = root / ARCHIVE_DIR
+    if not archive.is_dir():
+        return set()
+    return {
+        date.fromisoformat(p.name)
+        for p in archive.iterdir()
+        if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name)
+    }
+
+
+def _daily_days(week_dir: Path) -> list[date]:
+    out: list[date] = []
+    for f in sorted(week_dir.glob("*.md")):
+        if not _DAILY_FILE_RE.match(f.name) or f.name.endswith(_PENDING_RELEASE_SUFFIX):
+            continue
+        try:
+            out.append(date.fromisoformat(f.name[:10]))
+        except ValueError:
+            continue
+    return out
+
+
 def missed_weeks(repo_root: Path, today: date | str) -> tuple[str, ...]:
-    """Week starts, oldest first, that `reset_week` would archive; () when HEADER is unset or unreadable."""
+    """Completed week starts, oldest first, still holding dated files or ahead of HEADER's week.
+
+    With a dated HEADER anchor: the header week and every week of dated files that
+    `reset_week` would archive, plus weeks of dated files before the anchor that have no
+    archive/week-changelogs/<start>/. With an unset or unreadable HEADER: every completed week of
+    dated files with no archive dir, on the newest archived week's chain, else the Monday chain
+    of the oldest dated file.
+    """
     root = Path(repo_root)
     try:
         anchor = _header_anchor(_read_lines(_header_path(root)))
     except OSError:
-        return ()
-    if anchor is None:
-        return ()
-    current = week_window(_as_date(today), anchor)[0]
-    starts = {s for s in _daily_week_starts(root / WEEK_DIR, anchor).values() if s < current}
-    if week_window(anchor, anchor)[0] < current:
-        starts.add(week_window(anchor, anchor)[0])
+        anchor = None
+    days = _daily_days(root / WEEK_DIR)
+    archived = _archived_week_starts(root)
+    chain = anchor
+    if chain is None:
+        if archived:
+            chain = max(archived)
+        elif days:
+            oldest = min(days)
+            chain = oldest - timedelta(days=oldest.weekday())
+        else:
+            return ()
+    current = week_window(_as_date(today), chain)[0]
+    header_week = week_window(anchor, anchor)[0] if anchor is not None else None
+    starts: set[date] = set()
+    for day in days:
+        start = week_window(day, chain)[0]
+        if start >= current:
+            continue
+        if header_week is None or start < header_week:
+            if start in archived:
+                continue
+        starts.add(start)
+    if header_week is not None and header_week < current:
+        starts.add(header_week)
     return tuple(s.isoformat() for s in sorted(starts))
 
 

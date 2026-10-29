@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit.ask_compose import ARM_M_PLUS, compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
@@ -30,7 +31,8 @@ def test_s_arm_stages_resume_plan_and_authors_only_without_one():
     assert s_arm.count("agent(") == 1
 
 
-def test_m_plus_baton_revises_the_resumed_plan(m_plus_known_arm):
+def test_m_plus_baton_revises_the_resumed_plan(m_plus_known_arm, monkeypatch):
+    monkeypatch.setattr(ask_compose, "_intake_sizing", lambda *_: None)
     script = _compose()
     assert "planPath: _gate.resume_plan ?? _spineFallback ?? null" in script
     assert "planPath: null" not in script

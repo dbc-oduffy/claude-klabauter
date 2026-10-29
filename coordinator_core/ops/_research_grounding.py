@@ -42,9 +42,15 @@ RULING_NOTE = (
     "If your ruling says the digest does not contradict itself or no contradiction exists, it is "
     "dismissed, never invented.\n"
 )
+REOPEN_NOTE = (
+    "Re-open every cited source before grading a claim ungrounded or contradicted. A downgrade "
+    "must rest on what the re-opened source says; \"not re-opened\" is not a reason and is refused.\n"
+)
 # The first-generation grader is DoE's template, which the engine cannot version: a report with
-# no recorded version is always stale.
-GRADER_VERSION = hashlib.sha256(RULING_NOTE.encode("utf-8")).hexdigest()[:12]
+# no recorded version is always stale. Both brief notes feed the version so a changed grading
+# instruction stales the grades made under the old one.
+GRADER_VERSION = hashlib.sha256((REOPEN_NOTE + RULING_NOTE).encode("utf-8")).hexdigest()[:12]
+_NOT_REOPENED_RE = re.compile(r"not[\s-]+re-?opened", re.IGNORECASE)
 
 _VERDICT_RE = re.compile(r"^-\s+\*\*(" + "|".join(CLAIM_VERDICTS + RULINGS) + r")\*\*", re.IGNORECASE)
 _SECTION_RE = re.compile(r"^##\s+(\S+)\s*$")
@@ -359,7 +365,10 @@ def grounding_problems(text: str, digest_names: list[str]) -> list[str]:
         if v in CLAIM_VERDICTS:
             claims += 1
         if v in BLOCKING:
-            problems.append(f"{v}: {line.rstrip()[:_LINE_MAX]}")
+            if v in CLAIM_VERDICTS and _NOT_REOPENED_RE.search(line):
+                problems.append(f"{v} without re-opening its source (re-open each cited source, then regrade): {line.rstrip()[:_LINE_MAX]}")
+            else:
+                problems.append(f"{v}: {line.rstrip()[:_LINE_MAX]}")
     for name in digest_names:
         if name not in sections:
             problems.append(f"no grounding section for {name}")

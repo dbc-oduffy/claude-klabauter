@@ -91,7 +91,7 @@ from coordinator_core.hooks.dispatch_escape import (
 )
 from coordinator_core.session import general_work_scope
 from coordinator_core.session.mode_resolution import resolve_mode
-from coordinator_core.warp_fire import fire_step
+from coordinator_core.warp_fire import NAG_REPEAT_PREFIX, nag_text
 
 GENERATES: list = []
 
@@ -382,14 +382,20 @@ def _is_scratch_py(file_path: str) -> bool:
     return "scratch" in os.path.abspath(file_path).replace("\\", "/").split("/")[:-1]
 
 
-_UNSIZED_ADVISORY = (
-    "[em-code-dispatch nudge] No sizing this session. " + fire_step()
-)
+def _nag_line(prefix: str, session_id: str, sizing_rel=None) -> str:
+    """Full prefixed nag on the session's first engine-ask nag; a repeat is the one terse counted line."""
+    nag = nag_text(session_id, sizing_rel)
+    return nag if nag.startswith(NAG_REPEAT_PREFIX) else prefix + nag
 
-_PLAN_ROUTE_ADVISORY = (
-    "[em-code-dispatch nudge] This session's sizing routed to a plan. "
-    + fire_step(_SESSION_SIZING)
-)
+
+def _unsized_advisory(session_id: str) -> str:
+    return _nag_line("[em-code-dispatch nudge] No sizing this session. ", session_id)
+
+
+def _plan_route_advisory(session_id: str) -> str:
+    return _nag_line(
+        "[em-code-dispatch nudge] This session's sizing routed to a plan. ", session_id, _SESSION_SIZING
+    )
 
 
 _SIZE_STAGE_DENY = (
@@ -578,7 +584,7 @@ def op(payload: dict) -> dict | None:
         return None
     if not has_sizing:
         # Author box (strict): denied until the session sizes. Consumer (warn): advisory.
-        return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _UNSIZED_ADVISORY))
+        return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", _unsized_advisory(session_id)))
     if plan_pending:
-        return context_only("PreToolUse", _PLAN_ROUTE_ADVISORY)
+        return context_only("PreToolUse", _plan_route_advisory(session_id))
     return context_only("PreToolUse", _SIZED_ADVISORY)

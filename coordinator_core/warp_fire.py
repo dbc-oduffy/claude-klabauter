@@ -12,6 +12,8 @@ so no guard leaves the next dispatch to the EM's judgment. Leaf module: no impor
 from __future__ import annotations
 
 import json
+import tempfile
+from pathlib import Path
 from typing import Optional
 
 #: Routes a single warp run carries end to end (the ask script's XS, S and M+ arms).
@@ -42,3 +44,40 @@ def fire_command(sizing_rel: Optional[str] = None) -> str:
 def fire_step(sizing_rel: Optional[str] = None) -> str:
     """One sentence: make the submit call, once."""
     return f"Next step, the only one: call `{fire_command(sizing_rel)}`, once."
+
+
+NAG_REPEAT_PREFIX = "[engine-ask nag"
+
+
+def _counter_dir() -> Path:
+    return Path(tempfile.gettempdir()) / "coordinator-engine-ask-nag"
+
+
+def _bump(session_id: str, state_dir: Optional[Path]) -> int:
+    """Increment and return this session's nag count; a storage failure counts as the first."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id) or "none"
+    try:
+        d = state_dir if state_dir is not None else _counter_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / f"{safe}.count"
+        try:
+            n = int(f.read_text(encoding="ascii").strip() or "0")
+        except (OSError, ValueError):
+            n = 0
+        n += 1
+        f.write_text(str(n), encoding="ascii")
+        return n
+    except OSError:
+        return 1
+
+
+def nag_text(
+    session_id: str,
+    sizing_rel: Optional[str] = None,
+    state_dir: Optional[Path] = None,
+) -> str:
+    """The session's nag: full `fire_step` first, then a one-line `[engine-ask nag #N]`. Never empty."""
+    n = _bump(session_id or "", state_dir)
+    if n <= 1:
+        return fire_step(sizing_rel)
+    return f"{NAG_REPEAT_PREFIX} #{n}] call `{fire_command(sizing_rel)}`, once."

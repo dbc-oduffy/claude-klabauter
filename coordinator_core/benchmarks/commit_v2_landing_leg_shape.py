@@ -261,10 +261,8 @@ def ignored_among(repo: Path, paths: list) -> list:
     """`paths` that git ignores in `repo`."""
     if not paths:
         return []
-    result = subprocess.run(
-        ["git", "check-ignore", "--stdin", "-z"], cwd=str(repo), input="\0".join(paths) + "\0",
-        capture_output=True, text=True, check=False,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    result = run_git(
+        ["check-ignore", "--stdin", "-z"], cwd=str(repo), input=("\0".join(paths) + "\0").encode("utf-8"),
     )
     return [p for p in result.stdout.split("\0") if p]
 

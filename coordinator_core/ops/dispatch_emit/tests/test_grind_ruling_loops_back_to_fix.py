@@ -1,12 +1,13 @@
 """
 coordinator_core.ops.dispatch_emit.tests.test_grind_ruling_loops_back_to_fix
 
-Purpose: pins that a PM-bound hand-back raised inside the grind loop is adjudicated once per row, and an
-actionable ruling re-enters fix in the same run (admission model and emitted JS twin), while a pm-only,
-gated, unavailable or repeat hand-back stays handed back with its adjudication.
+Purpose: pins that PM-bound hand-backs raised inside the grind loop are adjudicated by ONE post-loop call
+(admission model and emitted JS twin): no mid-run ruling, no re-fix, every bound entry carries its
+adjudication, and a missing, gated or pm-only verdict fails closed to pmOnly.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import grind_compose as gc
@@ -15,7 +16,7 @@ from coordinator_core.ops.dispatch_emit import grind_profile as gp
 from .test_grind_compose import _compose
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
-_RULING = "apm (PM-delegated) apply the one-line allow-list entry"
+_RULING = "apply the one-line allow-list entry"
 
 
 def _routing():
@@ -40,146 +41,127 @@ class _Budget:
         return None
 
 
-_TRADEOFF_TRIAGE = {
-    "row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S",
-    "has_tradeoff": True, "tradeoff": "a corner", "ruling_on_tradeoff": "no-ruling",
-}
-_ACTIONABLE = {"verdict": "ruled", "pmOnly": False, "ruling": _RULING, "externalAction": "", "actionable": True}
+def _triage(row):
+    return {
+        "row": row, "verdict": "confirmed-bug", "tshirt_size": "S",
+        "has_tradeoff": True, "tradeoff": "a corner", "ruling_on_tradeoff": "no-ruling",
+    }
 
 
-def _run(adjudication, fixes, *, undo="undone"):
+def _ruled(row, **over):
+    return {"row": row, "verdict": "ruled", "ruling": _RULING, "externalAction": "", "actionable": True, **over}
+
+
+def _run(reply, rows=("r0",), *, call_sink=None):
     budget = _Budget()
-    fix_replies = list(fixes)
 
     def agent(kind, unit_id):
         budget.spend(gc.STAGE_OUTPUT_TOKENS.get(kind, 10))
+        if call_sink is not None:
+            call_sink.append((kind, unit_id))
         if kind == "triage":
-            return [_TRADEOFF_TRIAGE]
+            return [_triage(r) for r in rows]
         if kind == "adjudicate":
-            return adjudication
-        if kind == "fix":
-            return fix_replies.pop(0)
-        if kind == "verify":
-            return {"outcome": "pass", "undo": {"outcome": undo}}
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
         if kind == "commit":
-            return {"committed": True, "sha": "x", "rows": [{"row_id": "r0", "outcome": "settled", "sha": "x"}]}
+            return {"committed": True, "sha": "x", "rows": []}
         return {"outcome": "recorded", "swept": True}
 
     return gc.run_admission(
-        [("b0", ["r0"])], _routing(), "triage",
-        reserve=gc.batch_reserve(1), budget=budget, agent=agent,
+        [("b0", list(rows))], _routing(), "triage",
+        reserve=gc.batch_reserve(len(rows)), budget=budget, agent=agent,
     )
 
 
-def test_actionable_ruling_re_enters_fix_and_commits_with_no_hand_back():
-    result = _run(_ACTIONABLE, [{"outcome": "done"}])
-    assert result["handed_back"] == []
-    assert [s["outcome"] for s in result["settled"]] == ["committed"]
-    assert result["spend"]["agent_calls_by_stage_kind"]["adjudicate"] == 1
-    assert result["spend"]["agent_calls_by_stage_kind"]["fix"] == 1
-
-
-def test_pm_only_verdict_stays_handed_back_once_with_its_adjudication():
-    verdict = {**_ACTIONABLE, "verdict": "pm-only", "pmOnly": True, "actionable": False}
-    result = _run(verdict, [])
+def test_actionable_ruling_does_not_re_enter_fix_and_rides_the_hand_back():
+    result = _run({"rulings": [_ruled("r0")]})
     assert [h["type"] for h in result["handed_back"]] == ["needs-judgment"]
-    assert result["handed_back"][0]["adjudication"]["pmOnly"] is True
+    adjudication = result["handed_back"][0]["adjudication"]
+    assert adjudication["actionable"] is True and adjudication["ruling"] == _RULING
     assert result["settled"] == []
     assert "fix" not in result["spend"]["agent_calls_by_stage_kind"]
 
 
-def test_gated_external_action_stays_handed_back_even_when_marked_actionable():
-    result = _run({**_ACTIONABLE, "externalAction": "merge to main"}, [])
-    assert [h["type"] for h in result["handed_back"]] == ["needs-judgment"]
+def test_several_hand_backs_make_exactly_one_adjudicate_call_after_the_loop():
+    rows = ("r0", "r1", "r2")
+    sink: list = []
+    result = _run({"rulings": [_ruled(r) for r in rows]}, rows, call_sink=sink)
+    kinds = [k for k, _ in sink]
+    assert kinds.count("adjudicate") == 1
+    assert result["spend"]["agent_calls_by_stage_kind"]["adjudicate"] == 1
+    assert kinds.index("triage") < kinds.index("adjudicate") < kinds.index("ledger-sweep")
+    assert all("adjudication" in h for h in result["handed_back"]) and len(result["handed_back"]) == 3
+
+
+def test_a_row_missing_from_the_reply_fails_closed_to_pm_only():
+    result = _run({"rulings": [_ruled("r0")]}, ("r0", "r1"))
+    by_row = {h["row"]: h["adjudication"] for h in result["handed_back"]}
+    assert by_row["r0"]["pmOnly"] is False
+    assert by_row["r1"]["pmOnly"] is True and by_row["r1"]["verdict"] == "unavailable"
+
+
+def test_pm_only_verdict_stays_handed_back_with_its_adjudication():
+    result = _run({"rulings": [_ruled("r0", verdict="pm-only", actionable=False)]})
+    assert result["handed_back"][0]["adjudication"]["pmOnly"] is True
     assert result["handed_back"][0]["adjudication"]["actionable"] is False
 
 
-def test_refix_that_hands_back_again_is_adjudicated_exactly_once():
-    late_tradeoff = {
-        "outcome": "done", "has_tradeoff": True, "tradeoff": "another corner", "ruling_on_tradeoff": "silent",
-    }
-    result = _run(_ACTIONABLE, [late_tradeoff])
-    assert result["spend"]["agent_calls_by_stage_kind"]["adjudicate"] == 1
-    assert [h["type"] for h in result["handed_back"]] == ["needs-judgment"]
-    assert result["handed_back"][0]["adjudication"]["actionable"] is True
-    assert result["settled"] == []
+def test_spin_out_verdict_is_never_actionable():
+    result = _run({"rulings": [_ruled("r0", verdict="spin-out")]})
+    adjudication = result["handed_back"][0]["adjudication"]
+    assert adjudication["verdict"] == "spin-out" and adjudication["pmOnly"] is False
+    assert adjudication["actionable"] is False
 
 
-def test_row_with_writes_is_undone_before_the_re_fix():
-    late_tradeoff = {
-        "outcome": "done", "touched_files": ["a.py"], "has_tradeoff": True,
-        "tradeoff": "a corner", "ruling_on_tradeoff": "no-ruling",
-    }
-    triage_clean = {**_TRADEOFF_TRIAGE, "has_tradeoff": False, "tradeoff": ""}
+def test_gated_external_action_stays_pm_only_even_when_marked_actionable():
+    result = _run({"rulings": [_ruled("r0", externalAction="merge to main")]})
+    assert result["handed_back"][0]["adjudication"]["pmOnly"] is True
+    assert result["handed_back"][0]["adjudication"]["actionable"] is False
+
+
+def test_a_throwing_adjudicator_fails_every_bound_hand_back_closed():
+    result = _run(RuntimeError("boom"), ("r0", "r1"))
+    assert [h["adjudication"]["pmOnly"] for h in result["handed_back"]] == [True, True]
+
+
+def test_no_pm_bound_hand_back_spawns_no_adjudicate_call():
     budget = _Budget()
-    fixes = [late_tradeoff, {"outcome": "done", "touched_files": ["a.py"]}]
-    undo_sink: list = []
+    kinds: list = []
 
     def agent(kind, unit_id):
-        budget.spend(gc.STAGE_OUTPUT_TOKENS.get(kind, 10))
+        kinds.append(kind)
         if kind == "triage":
-            return [triage_clean]
-        if kind == "adjudicate":
-            return _ACTIONABLE
-        if kind == "fix":
-            return fixes.pop(0)
-        if kind == "verify":
-            return {"outcome": "pass", "undo": {"outcome": "undone"}}
-        if kind == "commit":
-            return {"committed": True, "sha": "x", "rows": [{"row_id": "r0", "outcome": "settled", "sha": "x"}]}
+            return [{"row": "r0", "verdict": "duplicate", "tshirt_size": "S", "has_tradeoff": False, "tradeoff": ""}]
         return {"outcome": "recorded", "swept": True}
 
-    result = gc.run_admission(
-        [("b0", ["r0"])], _routing(), "triage",
-        reserve=gc.batch_reserve(1), budget=budget, agent=agent, undo_paths_sink=undo_sink,
-    )
-    assert result["handed_back"] == []
-    assert undo_sink and undo_sink[0]["paths"] == ["a.py"]
-    assert result["spend"]["agent_calls_by_stage_kind"]["fix"] == 2
-    assert [s["outcome"] for s in result["settled"]] == ["committed"]
+    gc.run_admission([("b0", ["r0"])], _routing(), "triage", reserve=gc.batch_reserve(1), budget=budget, agent=agent)
+    assert "adjudicate" not in kinds
 
 
-def test_failed_undo_hands_back_stage_dead_and_does_not_loop():
-    late_tradeoff = {
-        "outcome": "done", "touched_files": ["a.py"], "has_tradeoff": True,
-        "tradeoff": "a corner", "ruling_on_tradeoff": "no-ruling",
-    }
-    triage_clean = {**_TRADEOFF_TRIAGE, "has_tradeoff": False, "tradeoff": ""}
-    budget = _Budget()
-
-    def agent(kind, unit_id):
-        budget.spend(gc.STAGE_OUTPUT_TOKENS.get(kind, 10))
-        if kind == "triage":
-            return [triage_clean]
-        if kind == "adjudicate":
-            return _ACTIONABLE
-        if kind == "fix":
-            return late_tradeoff
-        if kind == "verify":
-            return {"outcome": "pass", "undo": {"outcome": "undo-failed", "reason": "dirty"}}
-        return {"outcome": "recorded", "swept": True}
-
-    result = gc.run_admission(
-        [("b0", ["r0"])], _routing(), "triage", reserve=gc.batch_reserve(1), budget=budget, agent=agent,
-    )
-    assert [h["type"] for h in result["handed_back"]] == ["stage-dead"]
-    assert result["spend"]["agent_calls_by_stage_kind"]["fix"] == 1
-
-
-def test_emitted_hand_back_adjudicates_before_the_undo_branch_and_outside_any_lock():
+def test_emitted_hand_back_row_never_adjudicates_or_re_fixes():
     script = _compose()
     body = script[script.index("async function _handBackRow("):]
     body = body[: body.index("async function _applyRouteRow(")]
-    assert body.index("row.ruledOnce = true") < body.index("_UNDO_EXEMPT.includes(type)")
-    ruled = body[body.index("row.ruledOnce = true"): body.index("_UNDO_EXEMPT.includes(type)")]
-    assert "_adjudicateHandback(_entry)" in ruled
-    assert "withLock" not in ruled
-    assert "!row.ruledOnce" in body
+    for gone in ("_adjudicateHandback", "ruledOnce", "_reloop", "_ruledFixNode"):
+        assert gone not in body and gone not in script.replace("async function _adjudicateHandback(", "")
 
 
-def test_emitted_adjudication_helpers_are_visible_to_the_hand_back_path():
+def test_emitted_adjudicate_runs_once_after_the_loop_and_outside_it():
     script = _compose()
     outer_open = "try {\ntry { await runGrind(); }"
-    assert script.index("async function _adjudicateHandback(") < script.index(outer_open)
+    assert script.index("async function _adjudicatePmBound(") < script.index(outer_open)
     assert script.index("const PM_BOUND_TYPES") < script.index(outer_open)
-    assert "if (route.kind === 'handback' && PM_BOUND_TYPES.includes(route.value))" in script
+    assert script.count("await _adjudicatePmBound();") == 1
+    assert script.index("await _adjudicatePmBound();") > script.index("await runGrind()")
+
+
+def test_default_compose_has_one_sonnet_medium_adjudicate_call_and_no_apm():
+    script = _compose()
+    start = script.index("async function _adjudicateBatch(")
+    block = script[start: script.index("async function _adjudicatePmBound(")]
+    assert len(re.findall(r"label: 'adjudicate'", script)) == 1
+    assert "coordinator:apm" not in script and "model: 'opus'" not in block
+    assert "model: 'sonnet'" in block and "effort: 'medium'" in block
+    assert block.count("await agent(") == 1

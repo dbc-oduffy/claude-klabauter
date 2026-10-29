@@ -1918,9 +1918,12 @@ def _fold_close_residue(
     worktree_root: "Union[Path, str]",
     sid: Optional[str],
     snap: "close_residue.ResidueSnapshot",
+    decisions: Optional[dict[str, Any]] = None,
 ) -> None:
     """Sets `report["completion_verdict"]` from the post-close residue readings
-    plus the brief envelope's census gates, and folds an `open` residue reading
+    plus the brief envelope's census gates (the plan-only gates read
+    not-applicable when `decisions` answers `no-governing-plan` with
+    `no-plan-governed`), and folds an `open` residue reading
     into `report["failed"]`. `snap` was taken before the close commit released
     the session's claims; `excluded` is empty because anything owned and still
     dirty after the commit is residue."""
@@ -1939,7 +1942,16 @@ def _fold_close_residue(
         "landed_reconciliation": _completion_verdict.landed_reconciliation,
         "review_scale": _completion_verdict.review_scale,
     }
-    readings = {name: reader(gates[name]) for name, reader in readers.items() if name in gates}
+    plan_less = _completion_verdict.no_plan_governed(decisions)
+    readings = {
+        name: (
+            _completion_verdict.plan_only_not_applicable(name)
+            if plan_less and name in _completion_verdict.PLAN_ONLY_GATES
+            else reader(gates[name])
+        )
+        for name, reader in readers.items()
+        if name in gates
+    }
     readings[_completion_verdict.OWNED_UNCOMMITTED] = _completion_verdict.owned_uncommitted(owned)
     readings[_completion_verdict.UNSTAMPED_RUN_BATONS] = _completion_verdict.unstamped_run_batons(batons)
     report["completion_verdict"] = _completion_verdict.compose_completion_verdict(readings)
@@ -2383,7 +2395,7 @@ def apply(*, decisions: Optional[dict[str, Any]] = None) -> tuple[int, dict[str,
                         path=landing["path"],
                     )
 
-            _fold_close_residue(report, envelope, worktree_root, sid, residue_snapshot)
+            _fold_close_residue(report, envelope, worktree_root, sid, residue_snapshot, effective_decisions)
             if report.get("failed") and exit_code == int(WorkstreamApplyExitCode.SUCCESS):
                 exit_code = int(WorkstreamApplyExitCode.PARTIAL_MUTATION)
 

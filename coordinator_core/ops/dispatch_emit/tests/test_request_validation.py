@@ -59,6 +59,30 @@ def test_default_stays_lenient_and_strict_accepts_known_keys() -> None:
     assert validate_params("dispatch.x", {"sizing_path": "a"}, SPEC, strict=True) is None
 
 
+def test_emit_refuses_unknown_top_level_key_and_writes_nothing(tmp_path) -> None:
+    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+
+    out = tmp_path / "x.workflow.mjs"
+    reply = _dispatch_emit(
+        {"kind": "abandon_run", "run_id": "r1", "plan_path": "p.md", "output_path": str(out)}, tmp_path
+    )
+    assert "params.kind is not accepted" in reply["error"]
+    assert '{"abandon_run": "<run_id>"}' in reply["error"]
+    assert not out.exists()
+
+
+def test_emit_accepts_every_typed_and_untyped_known_key() -> None:
+    from coordinator_core.ops.dispatch_emit.op import (
+        _PARAM_FIELDS,
+        _UNTYPED_PARAM_KEYS,
+        _unknown_param_refusal,
+    )
+
+    known = {f.name: None for f in _PARAM_FIELDS} | dict.fromkeys(_UNTYPED_PARAM_KEYS)
+    assert _unknown_param_refusal(known) is None
+    assert _unknown_param_refusal({"abandon_run": "r1"}) is None
+
+
 def test_dict_kind() -> None:
     spec = (Field("d", "dict"),)
     assert validate_params("o", {"d": {}}, spec) is None

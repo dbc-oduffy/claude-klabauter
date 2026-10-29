@@ -444,6 +444,24 @@ def test_admit_before_spawn_holds_when_headroom_is_short():
     assert not v.admitted and v.reason.startswith("HOLD scip-rebuild")
 
 
+def test_hold_reason_names_top_holders_on_one_path_free_line():
+    host, _ = _fake_host(avail_gib=4.5)
+    host.top_holders = lambda path, n: [
+        {"session_id": "box-memory-snapshot", "run": "test-runner-pytest:7", "pid": 7,
+         "image": "sys32\\conhost.exe", "bytes": 2 * _GIB}]
+    r = _hcc.admit_before_spawn("scip-rebuild", 4.0, host=host).reason
+    assert "holders: box-memory-snapshot test-runner-pytest:7 pid=7 conhost.exe 2.0GiB" in r
+    assert "\n" not in r and "\\" not in r and "/" not in r
+
+
+def test_hold_reason_degrades_without_top_holders_or_when_it_raises():
+    host, _ = _fake_host(avail_gib=4.5)
+    assert "holders" not in _hcc.admit_before_spawn("k", 4.0, host=host).reason
+    host.top_holders = lambda path, n: 1 / 0
+    r = _hcc.admit_before_spawn("k", 4.0, host=host).reason
+    assert r.startswith("HOLD k") and "holders" not in r
+
+
 def test_admit_before_spawn_nets_peer_reservations_and_honours_larger_recorded_peak():
     host, _ = _fake_host(avail_gib=10, reserved_gib=6)
     assert not _hcc.admit_before_spawn("k", 4.0, host=host).admitted
@@ -455,6 +473,24 @@ def test_admit_before_spawn_nets_peer_reservations_and_honours_larger_recorded_p
 def test_admit_before_spawn_refuses_on_an_unreadable_reading():
     host, _ = _fake_host(avail_gib=99, boom=True)
     v = _hcc.admit_before_spawn("k", 1.0, host=host)
+    assert not v.admitted and "unreadable" in v.reason
+
+
+def test_host_without_admission_lock_reaches_a_memory_verdict():
+    host, log = _fake_host(avail_gib=10)
+    del host.admission_lock
+    v = _hcc.admit_before_spawn("k", 4.0, host=host, register_pid=9)
+    assert v.admitted and log == [("k", 9, 4.0)]
+    host, log = _fake_host(avail_gib=1)
+    del host.admission_lock
+    v = _hcc.admit_before_spawn("k", 4.0, host=host, register_pid=9)
+    assert not v.admitted and v.reason.startswith("HOLD k") and log == []
+
+
+def test_host_without_admission_lock_still_refuses_an_unreadable_reading():
+    host, _ = _fake_host(avail_gib=99, boom=True)
+    del host.admission_lock
+    v = _hcc.admit_before_spawn("k", 1.0, host=host, register_pid=9)
     assert not v.admitted and "unreadable" in v.reason
 
 
@@ -598,6 +634,7 @@ _NOT_HEAVY = {
     "coordinator_core/ops/ceremony/detached_spawn.py": "light housekeeping scripts",
     "coordinator_core/ops/ceremony/git_native.py": "git subprocess",
     "coordinator_core/ops/emit/enrich.py": "git log subprocess",
+    "coordinator_core/ops/dispatch_emit/terminal_commit.py": "detached launcher whose child is the memory-admitted structural_index_refresh_admitted",
     "coordinator_core/ops/session/safe_commit_offer.py": "light detached offer",
     "coordinator_core/ops/workflow_fire/fire.py": "workflow runner launch, admitted by the fire op",
     "coordinator/bin/lib/claude_author_control/relay_posix.py": "relay shim",
@@ -652,6 +689,15 @@ def test_exemption_lists_carry_no_stale_entries():
     sites = _spawn_site_files()
     assert set(_NOT_HEAVY) <= set(sites) and set(_SUPERVISED) <= set(sites)
     assert not any("admit_before_spawn" in sites[rel] for rel in _NOT_HEAVY)
+
+
+def test_terminal_commit_not_heavy_exemption_rests_on_an_admitted_child():
+    from coordinator_core.ops.dispatch_emit import terminal_commit
+
+    assert "structural_index_refresh_admitted" in terminal_commit._INDEX_REFRESH_CODE
+    manifest = (_REPO / "coordinator_core/workday_start/manifest.py").read_text(encoding="utf-8")
+    body = manifest.split("def structural_index_refresh_admitted", 1)[1]
+    assert body.index("--admit-peak") < body.index("structural-index-refresh")
 
 
 def _hold(monkeypatch):

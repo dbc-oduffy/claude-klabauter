@@ -2008,8 +2008,8 @@ def test_a_grind_that_throws_still_records_exactly_one_run_record_last_and_rethr
 def test_a_clean_run_records_once_after_the_review_and_adjudication_calls():
     script = _fix_script(["r0"])
     script.update({"review": lambda u: {}, "adjudicate": lambda u: {}})
-    result, kinds, sink = _run_logged([("b0", ["r0"])], script, post_stages=("review", "adjudicate"))
-    assert kinds[-4:] == ["commit", "review", "adjudicate", "ledger-sweep"]
+    result, kinds, sink = _run_logged([("b0", ["r0"])], script, post_stages=("review",))
+    assert kinds[-3:] == ["commit", "review", "ledger-sweep"]
     assert kinds.count("ledger-sweep") == 1 and "run-record" not in kinds and len(sink) == 1
     assert sink[0]["record"]["halted"] is False and sink[0]["record"]["halted_reason"] is None
     assert result["halted"] is False

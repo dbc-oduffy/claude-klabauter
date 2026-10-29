@@ -40,5 +40,5 @@ def test_composed_gate_exempts_em_context_ids_before_any_status_check(monkeypatc
     script = _script(monkeypatch)
     assert 'const _emContextIds = ["R2"];' in script
     body = script.split("const _ledgerBlocking = ", 1)[1]
-    assert body.index("_emContextIds.includes(i.id)) return false") < body.index("status === 'drifted'")
+    assert body.index("_emContextIds.includes(i.id) ||") < body.index("status === 'drifted'")
     assert "_emContextIds.includes(i.id)" in body.split("});", 1)[0]

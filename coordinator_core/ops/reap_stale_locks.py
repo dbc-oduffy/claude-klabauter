@@ -193,6 +193,39 @@ def do_reap(
     return 0
 
 
+def reap_ref_lock(repo_root: "str | Path", lock_path: "str | Path") -> bool:
+    """Reap one named `<ref>.lock` under the repo's git-common-dir `refs/` when stale and stable.
+
+    Returns True only when the lock was removed. Refuses (False) a path that is not a `.lock`
+    file inside `<git-common-dir>/refs/`; a fresh, changing, absent or unremovable lock is also
+    False. Relative `lock_path` resolves against `repo_root`.
+    """
+    root = Path(repo_root)
+    git_dir = _git_absolute_git_dir(root)
+    if git_dir is None:
+        return False
+    refs_dir = (_git_common_dir(git_dir, root) / "refs").resolve()
+    lock = Path(lock_path)
+    if not lock.is_absolute():
+        lock = root / lock
+    lock = Path(os.path.normpath(lock))
+    try:
+        resolved = lock.resolve()
+        resolved.relative_to(refs_dir)
+    except (ValueError, OSError):
+        return False
+    if resolved.suffix != ".lock" or resolved == refs_dir:
+        return False
+    return do_reap(
+        resolved,
+        _env_int("COORDINATOR_LOCK_REAP_AGE_SEC", _DEFAULT_AGE_SEC),
+        "ref lock",
+        git_dir / "lock-reap.log",
+        _env_float("COORDINATOR_LOCK_REAP_STABILITY_SEC", _DEFAULT_STABILITY_SEC),
+        bool(os.environ.get("COORDINATOR_LOCK_REAP_NO_SLEEP", "")),
+    ) == 0
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if raw is None or raw == "":

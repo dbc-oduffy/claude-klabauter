@@ -182,6 +182,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.claude_home_census import DEFAULT_MAX_AGE_HOURS as _CENSUS_DEFAULT_MAX_AGE_HOURS
 from coordinator_core.ops.claude_home_census import DEFAULT_MAX_MB as _CENSUS_DEFAULT_MAX_MB
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.session.record_homes import home_dir
 from coordinator_core.wire_paths import rel_id
 from coordinator_core.win_portability import (
     leaf_spawn_creationflags,
@@ -1929,6 +1930,56 @@ def _is_scratch_clone_root(path: Path, scratch_root: Path) -> bool:
     return path.parent == scratch_root and (path / ".git").is_dir()
 
 
+WARP_PROMPTS_RETENTION_DAYS = 7
+
+
+def sweep_warp_prompts(
+    repo_root: Path,
+    *,
+    now: float,
+    dry_run: bool,
+    quiet: bool,
+    watchdog_ceiling_secs: Optional[float] = None,
+) -> Tuple[int, int]:
+    """Delete `state/warp/<run>/prompts/` once the run's outcome file is older
+    than WARP_PROMPTS_RETENTION_DAYS. A run with no outcome file is open and
+    skipped. Returns (bytes, items); dry_run counts without deleting."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_OUTCOME_FILE
+
+    warp_root = Path(home_dir(str(repo_root), "warp"))
+    window = WARP_PROMPTS_RETENTION_DAYS * 86400
+    wd = _Watchdog(watchdog_ceiling_secs)
+    total_bytes = 0
+    total_items = 0
+    try:
+        with os.scandir(warp_root) as it:
+            runs = sorted((e.path for e in it if e.is_dir(follow_symlinks=False)))
+    except OSError:
+        return 0, 0
+    for run in runs:
+        if not wd.check():
+            _banner(
+                f"[cruft-sweep] wall-clock ceiling bail on warp prompts sweep "
+                f"after {total_items} runs; will finish next run",
+                quiet=quiet,
+            )
+            break
+        prompts = Path(run) / "prompts"
+        try:
+            outcome_mtime = os.stat(os.path.join(run, RUN_OUTCOME_FILE)).st_mtime
+        except OSError:
+            continue
+        if now - outcome_mtime <= window or not prompts.is_dir():
+            continue
+        size = _dir_size_bytes(prompts)
+        if not dry_run and not _delete_path(prompts):
+            _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {prompts}", quiet=quiet)
+            continue
+        total_bytes += size
+        total_items += 1
+    return total_bytes, total_items
+
+
 def sweep_scratch(
     repo_root: Path,
     scratch_age_days: int,
@@ -2957,6 +3008,14 @@ def _run_all_phases(
             apply=apply, json_mode=json_mode, quiet=quiet,
             log_path=log_path, emit_fn=emit_fn,
         )
+        warp_bytes, warp_items = sweep_warp_prompts(
+            _resolve_repo_root(repo_root_override), now=time.time(),
+            dry_run=not apply, quiet=quiet,
+        )
+        if apply and warp_items > 0:
+            _append_log_row(log_path, "warp-prompts", warp_bytes, warp_items)
+        sandbox_bytes += warp_bytes
+        sandbox_items += warp_items
     if class_ in ("orphans", "all"):
         orphans_bytes, orphans_items = sweep_orphans(
             parent_roots, whitelist,

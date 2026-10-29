@@ -85,6 +85,11 @@ _SUPPORTED_KEYWORDS = frozenset({
     # present. Implemented rather than allowlisted-away: tolerating it would
     # have shipped the brightline requirement as a silent no-op.
     "contains",
+    # Implemented in _validate_json_schema_node's object-level block. Arrived
+    # with plan-merge-delta.schema.json; implemented rather than
+    # allowlisted-away (APM ruling 2026-10-23, enforce-minproperties-and-else).
+    "minProperties",
+    "else",
 })
 
 # Non-keyword structural/metadata keys that may appear on a schema node but
@@ -223,7 +228,7 @@ def _walk_schema_node(
             # property name itself against _SUPPORTED_KEYWORDS.
             for prop_name, prop_schema in val.items():
                 _walk_schema_node(prop_schema, f"{json_path}/properties/{prop_name}", offenders, unpaired)
-        elif key in ("items", "not", "propertyNames", "if", "then"):
+        elif key in ("items", "not", "propertyNames", "if", "then", "else"):
             _walk_schema_node(val, f"{json_path}/{key}", offenders, unpaired)
         elif key in ("anyOf", "allOf", "oneOf") and isinstance(val, list):
             for i, sub in enumerate(val):
@@ -262,7 +267,7 @@ def _collect_format_values(node, json_path: str, found: list[tuple[str, str]]) -
         if key == "properties" and isinstance(val, dict):
             for prop_name, prop_schema in val.items():
                 _collect_format_values(prop_schema, f"{json_path}/properties/{prop_name}", found)
-        elif key in ("items", "not", "propertyNames", "if", "then"):
+        elif key in ("items", "not", "propertyNames", "if", "then", "else"):
             _collect_format_values(val, f"{json_path}/{key}", found)
         elif key in ("anyOf", "allOf", "oneOf") and isinstance(val, list):
             for i, sub in enumerate(val):
@@ -383,3 +388,27 @@ class TestSchemaKeywordCoverage:
         # "unsupported keyword"; it's a shape error.
         with pytest.raises(TypeError, match=r"\$defs is not an object"):
             _walk_schema_node({"$defs": ["not", "a", "dict"]}, "$", [], [])
+
+
+class TestMinPropertiesAndElseEnforced:
+    """The two keywords are in `_SUPPORTED_KEYWORDS`, so they must actually bite."""
+
+    def test_min_properties_rejects_short_object(self):
+        from coordinator_core.frontmatter.schema_validate import _validate_json_schema_node
+
+        schema = {"type": "object", "minProperties": 1}
+        assert _validate_json_schema_node({}, schema, schema, "x")
+        assert _validate_json_schema_node({"a": None}, schema, schema, "x") == []
+
+    def test_else_applies_only_when_if_fails(self):
+        from coordinator_core.frontmatter.schema_validate import _validate_json_schema_node
+
+        schema = {
+            "if": {"properties": {"new": {"const": True}}, "required": ["new"]},
+            "then": {"required": ["after"]},
+            "else": {"required": ["fields"]},
+        }
+        assert _validate_json_schema_node({"new": True, "after": "a"}, schema, schema, "") == []
+        assert _validate_json_schema_node({"new": True}, schema, schema, "")
+        assert _validate_json_schema_node({"id": 1}, schema, schema, "")
+        assert _validate_json_schema_node({"id": 1, "fields": {}}, schema, schema, "") == []

@@ -27,7 +27,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin
 declare_benchmark_origin()
 
 from coordinator_core.benchmarks.process_time import single_invocation_tree_process_time
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 DEFAULT_FILES = 5000
 DEFAULT_CANDIDATES = 200
@@ -42,10 +42,10 @@ _HANDOFF = (
 
 
 def _git(root: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=root, check=True, capture_output=True, text=True,
-        **no_console_creationflags(),
-    ).stdout.strip()
+    result = run_git(list(args), cwd=str(root))
+    if result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed rc={result.returncode}: {result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def build_corpus(root: Path, files: int = DEFAULT_FILES, candidates: int = DEFAULT_CANDIDATES,

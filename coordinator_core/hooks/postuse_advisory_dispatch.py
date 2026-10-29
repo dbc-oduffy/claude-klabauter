@@ -1482,15 +1482,16 @@ def _task_gone_in_tail(transcript_path: str, task_id: str) -> bool:
     return f"No task found with ID: {task_id}" in (text or "")
 
 
-def _task_finished_in_tail(transcript_path: str, task_id: str) -> bool:
+def _task_finished_in_tail(transcript_path: str, task_id: str, text: "str | None" = None) -> bool:
     """True when the tail holds a `<task-notification>` for `<task_id>` with a terminal status
-    (completed, failed, killed). Reads the tail only; never raises."""
-    try:
-        from coordinator_core.workflow_watch.tail import TailReader
+    (completed, failed, killed). Reads the tail only (or matches the passed `text`); never raises."""
+    if text is None:
+        try:
+            from coordinator_core.workflow_watch.tail import TailReader
 
-        text = TailReader(transcript_path, seek_to_tail=True).poll()
-    except Exception:
-        return False
+            text = TailReader(transcript_path, seek_to_tail=True).poll()
+        except Exception:
+            return False
     pattern = (
         r"<task-id>" + re.escape(task_id)
         + r"</task-id>.{0,300}?<status>(?:completed|failed|killed)</status>"
@@ -1551,7 +1552,8 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
     nothing and never writes the journal. Its only writes are
     `resolve_workflow_run_records`' (while a pending record exists) and the
     stopped marker, touched once when the transcript tail shows the run's task
-    is gone (reported once as abandoned, then silent). Never raises.
+    is gone (reported once as abandoned, then silent) or finished with a terminal
+    status (silent from then on). Never raises.
     """
     if not session_id or not isinstance(session_id, str) or not _SAFE_ID_RE.fullmatch(session_id):
         return ""
@@ -1582,6 +1584,15 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
             if run_id not in newest or fired_at > newest[run_id]["fired_at"]:
                 newest[run_id] = record
 
+        tail_text: "str | None" = None
+        if transcript_path and newest:
+            try:
+                from coordinator_core.workflow_watch.tail import TailReader
+
+                tail_text = TailReader(transcript_path, seek_to_tail=True).poll() or ""
+            except Exception:
+                tail_text = None
+
         for run_id, record in newest.items():
             task_id = record.get("task_id")
             transcript_dir = record.get("transcript_dir")
@@ -1593,13 +1604,17 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
                 continue
             if os.path.exists(marker):
                 continue
-            stalled = stall.scan_for_stall(os.path.join(transcript_dir, "journal.jsonl"), now)
-            if stalled is None:
-                continue
-            if transcript_path and _task_finished_in_tail(transcript_path, task_id):
+            # Terminal status is checked before the stall scan and persisted as the stopped
+            # marker, so a completion that later scrolls out of the tail stays silent.
+            if tail_text is not None and _task_finished_in_tail(transcript_path, task_id, tail_text):
+                with open(marker, "a", encoding="utf-8"):
+                    pass
                 _remove_workflow_run_record(
                     os.path.join(tmpdir, f"workflow-run-{session_id}-{task_id}.json")
                 )
+                continue
+            stalled = stall.scan_for_stall(os.path.join(transcript_dir, "journal.jsonl"), now)
+            if stalled is None:
                 continue
             if transcript_path and _task_paused_in_tail(transcript_path, task_id):
                 continue

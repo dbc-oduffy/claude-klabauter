@@ -69,6 +69,41 @@ def test_reset_archives_each_missed_week_and_keeps_current_week(tmp_path):
     assert "**Week starting:** 2026-10-13" in (d / "HEADER.md").read_text(encoding="utf-8")
 
 
+def _dailies(tmp_path, *names):
+    d = tmp_path / "state" / "week-changelog"
+    d.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (d / name).write_text("x", encoding="utf-8")
+    return d
+
+
+def test_missed_weeks_unset_anchor_lists_each_unarchived_completed_week(tmp_path):
+    h.bootstrap(tmp_path)
+    _dailies(
+        tmp_path, "2026-09-29-a.md", "2026-10-07-a.md", "2026-10-08-pending-release.md",
+        "2026-10-14-a.md",
+    )
+    assert h.missed_weeks(tmp_path, "2026-10-15") == ("2026-09-28", "2026-10-05")
+
+
+def test_missed_weeks_unset_anchor_skips_archived_week_and_uses_its_chain(tmp_path):
+    _dailies(tmp_path, "2026-09-29-a.md", "2026-10-07-a.md")
+    (tmp_path / "archive" / "week-changelogs" / "2026-09-29").mkdir(parents=True)
+    assert h.missed_weeks(tmp_path, "2026-10-20") == ("2026-10-06",)
+
+
+def test_missed_weeks_unset_anchor_without_dated_files_is_empty(tmp_path):
+    h.bootstrap(tmp_path)
+    assert h.missed_weeks(tmp_path, "2026-10-15") == ()
+
+
+def test_missed_weeks_stale_anchor_adds_unarchived_pre_anchor_weeks_only(tmp_path):
+    d = _dailies(tmp_path, "2026-09-15-a.md", "2026-09-22-a.md")
+    (d / "HEADER.md").write_text("**Week starting:** 2026-09-28\n", encoding="utf-8")
+    (tmp_path / "archive" / "week-changelogs" / "2026-09-21").mkdir(parents=True)
+    assert h.missed_weeks(tmp_path, "2026-10-14") == ("2026-09-14", "2026-09-28")
+
+
 def test_reset_inside_header_week_archives_nothing(tmp_path):
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)

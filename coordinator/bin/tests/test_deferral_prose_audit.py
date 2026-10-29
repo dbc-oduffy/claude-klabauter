@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -165,6 +166,13 @@ def test_seed_with_launcher_absent_exits_2(tmp_path, monkeypatch):
     _write(tmp_path, "2026-08-01-a.md", PLAN)
     monkeypatch.setattr(audit, "resolve_launcher", lambda: None)
     assert audit.main(["--root", str(tmp_path), "--seed"], runner=Recorder()) == 2
+
+
+def test_seed_with_engine_unresolvable_exits_2(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "2026-08-01-a.md", PLAN)
+    monkeypatch.setitem(sys.modules, "coordinator_core.win_portability", None)
+    assert audit.main(["--root", str(tmp_path), "--seed"], launcher="launcher") == 2
+    assert "could not check: engine unavailable" in capsys.readouterr().err
 
 
 def test_launcher_found_in_settings_home(tmp_path, monkeypatch):

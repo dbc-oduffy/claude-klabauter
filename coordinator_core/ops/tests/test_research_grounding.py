@@ -26,6 +26,21 @@ def test_ungrounded_named_once_per_line():
     assert len(out) == 2 and all(p.startswith("ungrounded:") for p in out)
 
 
+def test_not_reopened_downgrade_names_reopen_requirement():
+    text = _report("- **ungrounded** claim -- source not re-opened", "- **contradicted** c (Not Reopened)")
+    out = g.grounding_problems(text, NAMES)
+    assert len(out) == 4 and all("re-open" in p for p in out)
+
+
+def test_reasoned_ungrounded_keeps_plain_message():
+    out = g.grounding_problems(_report("- **ungrounded** source says otherwise"), ["digest-a.md"])
+    assert out and all(p.startswith("ungrounded: ") and "re-open" not in p for p in out)
+
+
+def test_grounded_with_not_reopened_text_is_not_blocked():
+    assert g.grounding_problems(_report("- **grounded** x -- not re-opened"), NAMES) == []
+
+
 def test_contradicted_named_once_per_line():
     out = g.grounding_problems(_report("- **contradicted** c", "- **grounded** ok"), ["digest-a.md"])
     assert [p.startswith("contradicted:") for p in out] == [True, True]
@@ -223,7 +238,7 @@ def test_key_ruling_name_outside_judged_falls_back_to_all():
 def test_grader_version_is_derived_from_ruling_note():
     import hashlib
 
-    assert g.GRADER_VERSION == hashlib.sha256(g.RULING_NOTE.encode("utf-8")).hexdigest()[:12]
+    assert g.GRADER_VERSION == hashlib.sha256((g.REOPEN_NOTE + g.RULING_NOTE).encode("utf-8")).hexdigest()[:12]
     assert len(g.GRADER_VERSION) == 12
 
 

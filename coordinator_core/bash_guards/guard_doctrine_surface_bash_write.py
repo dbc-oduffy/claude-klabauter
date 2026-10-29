@@ -2717,7 +2717,7 @@ def _record(verdict_kind: str, text: str, *, offer_edit: bool = True) -> Any:
             *(
                 (
                     AdaptableOffer(
-                        template="use the Write or Edit tool on the governed file",
+                        template="the Edit tool",
                         what_to_adapt="the governed file path",
                     ),
                 )

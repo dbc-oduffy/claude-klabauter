@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 
 import pytest
 
@@ -80,6 +81,9 @@ def env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", boom)
     monkeypatch.setattr(subprocess, "Popen", boom)
+    sys_tmp = tmp_path / "sys-tmp"
+    sys_tmp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sys_tmp))
     return Env(tmp_path)
 
 
@@ -174,6 +178,19 @@ def test_ninth_read_advises_with_fire_step_and_is_allowed(env):
     assert reason(res).startswith("[em-prefire-survey] 9 exploratory calls")
     assert warp_fire.fire_step() in reason(res)
     assert "cd-prefixed retry" not in reason(res) and "em_context" in reason(res)
+
+
+def test_repeat_advisory_is_one_terse_counted_line_and_still_fires(env):
+    env.write(user())
+    env.survey(8)
+    first = reason(g.evaluate(env.payload()))
+    assert warp_fire.fire_step() in first
+    second_res = g.evaluate(env.payload())
+    assert second_res is not None
+    second = reason(second_res)
+    assert second.startswith("[engine-ask nag #2]")
+    assert "Next step, the only one" not in second and "[em-prefire-survey]" not in second
+    assert "\n" not in second
 
 
 def test_prefire_deny_arms_the_session_latch_and_under_budget_does_not(env):
@@ -704,16 +721,16 @@ def test_missing_manifest_still_charges_the_run_sizing(env, monkeypatch):
     assert _step(env, "v3", "Read", sizing) is not None
 
 
-def test_deny_route_names_the_non_survey_exemptions():
+def test_advisory_names_the_count_the_budget_and_the_em_context_hand_off():
     text = g.prefire_advisory_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
-    assert "files you wrote with Write/Edit" in text and "user turn" in text and "cross-repo-memo" in text
-    assert "ops jobs" in text and "cross-repo reads" in text
+    assert "9 exploratory calls" in text and "budget %d" % g.PREFIRE_EXPLORATORY_CALLS_MAX in text
+    assert "em_context" in text
 
 
 def test_prefire_advisory_is_a_nudge_not_a_mandate():
     text = g.prefire_advisory_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
     assert "denied" not in text and "fire the engine-ask now" not in text
-    assert "cheaper path" in text and warp_fire.fire_step() in text
+    assert warp_fire.fire_step() in text
 
 
 def test_self_written_scratch_read_is_not_charged_through_evaluate(env):

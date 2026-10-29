@@ -55,6 +55,14 @@ def _owner(root: Path, run_id: str, path: str, own_plan: Optional[str]) -> str:
     return UNKNOWN_OWNER
 
 
+def _is_run_own_artifact(root: Path, run_id: str, path: str) -> bool:
+    """A stage, not a row, wrote the run's record dir, delivery note and sizings: no baseline exists
+    for them and the run is their producer."""
+    from coordinator_core.ops.dispatch_emit import run_artifact_ownership
+
+    return run_artifact_ownership.own_artifact_paths(root, run_id).covers(path)
+
+
 def _unproduced(root: Path, run_id: str, path: str) -> str:
     """Committed-side line ranges ("3-4, 9") of hunks no row produced; "" when all are produced."""
     from coordinator_core.git import git_objects
@@ -93,6 +101,8 @@ def _unproduced(root: Path, run_id: str, path: str) -> str:
 
     base = hha._baseline(root, run_id)
     if base is None or path not in base:
+        if _is_run_own_artifact(root, run_id, path):
+            return ""
         raise ValueError("run has no write_baseline for the path")
     old: list = []
     if base[path] is not None:

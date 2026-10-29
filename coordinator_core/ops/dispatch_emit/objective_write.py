@@ -213,8 +213,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(f"falsifier_script {rel!r} escapes the repo root")
     if not script.is_file():
         return _refuse(f"falsifier_script {rel!r} does not exist")
-    if not rel.endswith(".py") and not os.access(script, os.X_OK):
-        return _refuse(f"falsifier_script {rel!r} is not executable")
+    # NTFS has no exec bit: os.access(X_OK) degrades to the is_file() check above.
+    if os.name != "nt":
+        if not rel.endswith(".py") and not os.access(script, os.X_OK):
+            return _refuse(f"falsifier_script {rel!r} is not executable")
     if not _tracked(root, rel):
         return _refuse(f"falsifier_script {rel!r} is not git-tracked")
 

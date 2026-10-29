@@ -18,6 +18,9 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: _BLITZ)
+    # A bare ask chains into its {sizing} script and embeds no planBlitz call; the wave args ride
+    # that call, so the script under test is the one an M+ sizing composes.
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS)
     return tmp_path
 
 

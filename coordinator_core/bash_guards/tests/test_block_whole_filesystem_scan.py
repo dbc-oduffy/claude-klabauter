@@ -194,6 +194,12 @@ def test_runaway_find_bounded_root_warns(cmd):
         "find / -maxdepth -name x",
         "find / -maxdepth 2 -name x; find / -name y",
         "sh -c 'find / -name x'",
+        "find /../.. -name x",
+        "find /usr/.. -name x",
+        "find /a/b/../.. -name x",
+        "find //../ -name x",
+        "find C:/Windows/.. -name x",
+        "find C:" + BS + ".." + BS + ".. -name x",
     ],
 )
 def test_runaway_find_unbounded_root_still_denies(cmd):

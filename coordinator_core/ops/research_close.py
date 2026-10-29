@@ -557,6 +557,10 @@ def _close_archived(
             return _err(f"commit refused: {exc}", paths=commit_rel)
     dropped = pre_drop is not None
     note = {"research_block": block_note} if block_note is not None else {}
+    if dropped or (meta.get("sizing_rel") and not group_runs):
+        released_runs = _release_build_sibling(worktree, run_id, trail_rel)
+        if released_runs is not None:
+            note["released_runs"] = released_runs
     if local:
         return {
             **note,
@@ -580,6 +584,30 @@ def _close_archived(
         },
         worktree, dest_dir, since,
     )
+
+
+def _release_build_sibling(worktree: Path, run_id: str, trail_rel: str) -> Optional[list[str]]:
+    """Run ids freed by closing the research run ``run_id``, or None when it has no sibling status file.
+
+    The trail record marks the halted-shaped status ``closed_by`` so its ``after`` successor releases.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit import run_close
+    from coordinator_core.warp_fire import fire_command
+
+    reply = run_close.sibling_release(worktree, run_id, landed_sha=None, closed_by=trail_rel)
+    if not reply:
+        return None
+    fired = set(reply.get("released") or ())
+    if not fired:
+        return []
+    try:
+        parent = contract.ParentRecord.from_json(
+            json.loads((worktree / contract.parent_record_rel(reply["parent_id"])).read_text(encoding="utf-8"))
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    return [r.run_id for r in parent.runs if fire_command(r.slice_sizing) in fired]
 
 
 def _with_strays(result: dict, worktree: Path, dest_dir: Path, since: float) -> dict:

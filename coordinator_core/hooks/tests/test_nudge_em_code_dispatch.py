@@ -268,7 +268,8 @@ def test_unsized_advises_and_repeats_at_warn(monkeypatch) -> None:
     first = _advisory(op(_payload()))
     second = _advisory(op(_payload()))
     assert "No sizing" in first
-    assert first == second
+    assert "[engine-ask nag #2]" in second
+    assert "coordinator:engine-ask" in second
 
 
 def test_unsized_denies_at_strict(monkeypatch) -> None:
@@ -299,7 +300,7 @@ def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch) -> N
     second = _advisory(op(_payload()))
     assert "routed to a plan" in first and 'args: {"sizing": ' in first
     assert "coordinator:executor" not in first
-    assert first == second
+    assert "[engine-ask nag #2]" in second and 'args: {"sizing": ' in second
 
 
 def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch) -> None:

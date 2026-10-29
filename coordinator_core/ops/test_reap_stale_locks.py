@@ -234,3 +234,68 @@ def test_rm_failure_returns_1(repo, monkeypatch):
     rc = rsl.main([])
     assert rc == 1
     assert lock.exists()
+
+
+def _ref_lock(repo):
+    d = repo / ".git" / "refs" / "remotes" / "origin" / "work" / "machine-a"
+    d.mkdir(parents=True, exist_ok=True)
+    lock = d / "2026-10-16to17.lock"
+    lock.write_bytes(b"")
+    return lock
+
+
+def test_aged_ref_lock_reaped(repo, monkeypatch):
+    lock = _ref_lock(repo)
+    _age_file(lock, 300)
+    monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
+    assert rsl.reap_ref_lock(repo, lock) is True
+    assert not lock.exists()
+
+
+def test_aged_ref_lock_reaped_via_relative_path(repo, monkeypatch):
+    lock = _ref_lock(repo)
+    _age_file(lock, 300)
+    monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
+    assert rsl.reap_ref_lock(repo, lock.relative_to(repo)) is True
+    assert not lock.exists()
+
+
+def test_fresh_ref_lock_kept(repo, monkeypatch):
+    lock = _ref_lock(repo)
+    monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
+    assert rsl.reap_ref_lock(repo, lock) is False
+    assert lock.exists()
+
+
+def test_changing_ref_lock_kept(repo, monkeypatch):
+    lock = _ref_lock(repo)
+    _age_file(lock, 300)
+
+    def touch():
+        os.utime(lock, None)
+
+    orig = rsl.stale_and_stable
+    monkeypatch.setattr(rsl, "stale_and_stable", lambda l, a, s, n, on_wait=None: orig(l, a, s, n, touch))
+    assert rsl.reap_ref_lock(repo, lock) is False
+    assert lock.exists()
+
+
+def test_lock_outside_refs_refused(repo, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
+    index_lock = repo / ".git" / "index.lock"
+    index_lock.write_text("x")
+    _age_file(index_lock, 300)
+    assert rsl.reap_ref_lock(repo, index_lock) is False
+    assert index_lock.exists()
+    escape = repo / ".git" / "refs" / ".." / "index.lock"
+    assert rsl.reap_ref_lock(repo, escape) is False
+    assert index_lock.exists()
+
+
+def test_non_lock_file_under_refs_refused(repo, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
+    ref = _ref_lock(repo).with_name("branch")
+    ref.write_text("deadbeef")
+    _age_file(ref, 300)
+    assert rsl.reap_ref_lock(repo, ref) is False
+    assert ref.exists()

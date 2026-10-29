@@ -224,8 +224,6 @@ coordinator/bin/handoff-archive-transition.py
 coordinator/bin/hollow-completion-record-sweep.py
 # merge-gate-and-pr.py: kind 3: git/gh ref and PR operations through subprocess; no file-content write
 coordinator/bin/merge-gate-and-pr.py
-# merge-recovery-and-tag-cut.py: kind 3: git merge/tag operations through subprocess; no file-content write
-coordinator/bin/merge-recovery-and-tag-cut.py
 # pm-turns.py: kind 1: read-only PM-turn log reader (quote/referent/window); writes nothing
 coordinator/bin/pm-turns.py
 # plan-spine-check.py: kind 1: read-only plan-spine validator; imports spine_read/wave_map for width, writes nothing

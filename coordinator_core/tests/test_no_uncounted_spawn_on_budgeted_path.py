@@ -1998,7 +1998,50 @@ class _Legitimation(typing.NamedTuple):
 #: resolve it in one direction or the other: refusing both leaves a
 #: correctly-counted site permanently undischargeable, and admitting both silently exempts a site
 #: nothing counts. Op-keying is what lets each pair carry its own verdict.
+_RESUME_LAUNCH_SEAM = _Legitimation(
+    # `halted_run._schedule_resume_build` launches `halt_resume_build` detached, only for a halt
+    # marker written with a sizing, and returns before any spawn under pytest. A budgeted op's own
+    # fixtures never write such a marker (spied 2026-10-29: no `spawn_detached` call in them).
+    counter=_SEAM,
+    counted_by="coordinator_core/ops/dispatch_emit/tests/test_halt_resume_build.py",
+    executed="Seam substitution under `test_write_halt_marker_schedules_the_producer_through_the_"
+    "spawner_seam` (`calls == [(repo, RUN)]`) and `test_a_halt_without_a_sizing_schedules_nothing` "
+    "(`calls == []`); detached Popen measured 2026-10-29 at 0ms parent CPU, 2-5ms wall.",
+)
+
+_ROLLBACK_GIT_REACH = _Legitimation(
+    # `git/rollback_check.py::_git` is the one subprocess.run behind the opt-in `detect_rollback`
+    # leg (rev-parse + one `git log --first-parent --raw`). Measured 2026-10-29: 2 spawns, 156-188ms
+    # process time (3 paths, 1000-commit window); NOT executed by these ops' counted fixtures
+    # (spied 2026-10-29 across the roadmap.blitz_stage / roadmap.blitz_land / memo.send spawn-count
+    # files: 10 tests, zero `_git` calls). Each op's exact-equality global-counter test would fail
+    # loudly the day the leg runs, because the counter sees every subprocess.run.
+    counter=_GLOBAL_SUBPROCESS_RUN,
+    counted_by="coordinator_core/git/tests/test_rollback_check.py",
+    executed="Reach-only: measured NOT executed under this op's counter (2026-10-29 spy, zero hits); "
+    "the site's own cost is 2 spawns / 156-188ms process where it does run.",
+)
+
 _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
+    **{
+        (op, "coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0):
+        _RESUME_LAUNCH_SEAM
+        for op in (
+            "dispatch.emit",
+            "dispatch.ask_gate",
+            "dispatch.ask_stage",
+            "hooks.postuse_advisory_dispatch",
+            "hooks.block_unenumerated_agent_type",
+            "hooks.nudge_em_turn_budget",
+            "hooks.guard_em_prefire_survey",
+            "hooks.submit_engine_ask",
+            "hooks.preuse_search_dispatch",
+        )
+    },
+    **{
+        (op, "coordinator_core/git/rollback_check.py", "_git", "git", 0): _ROLLBACK_GIT_REACH
+        for op in ("roadmap.blitz_land", "roadmap.blitz_stage", "memo.send")
+    },
     (
         "bin.workday_complete_backfill_scan.scan",
         "coordinator_core/ops/workday_complete_backfill_scan.py",
@@ -7230,7 +7273,15 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # archive_and_commit -- the auto_push and warm.skew machinery it does not
     # execute -- so raising an alarm about "13 spawns" from this row alone is a
     # misreading; go to the brightline test for what it actually costs.
-    "ceremony.commit_v2": 2,
+    # 2 -> 3, 2026-10-29: `git/rollback_check.py::_git` (f36f41d9d1), reached through commit_paths'
+    # opt-in `detect_rollback` leg, which commit_v2 passes True: measured 2026-10-29 as 2 spawns
+    # (rev-parse + one `git log --first-parent --raw`), 156-188ms process time over 3 paths and a
+    # 1000-commit window here, under the 500ms bar. EXECUTED when the rollback check has candidates.
+    # NOT RAISED to 4: `git/checkpoint_symbols.py::_candidate_paths` (the checkpoint-only
+    # `git grep --untracked`, a83524e120) now goes through the counted `run_git` seam, which the
+    # op's existing reach already covers, so the pin holds at 3. Its 750-906ms process time
+    # (2026-10-29) is still over the 500ms bar; the cut is owed, not excused by this pin.
+    "ceremony.commit_v2": 3,
     # 4 -> 3, 2026-08-30 (two-ratchet-gates C3): scope.py::_git_run's removal from
     # the reachable set.
     "fleet.archive_actioned_memos": 3,
@@ -7291,7 +7342,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 1 -> 2: 98f04d91ca added scope.release_committed_claims to _commit_group, reaching
     # git/run.py::run_git via normalize_touch_path's `ls-files` slow arm (zero-spawn fast arm
     # first). That site is already priced into memo.transition and housekeeping.cycle.
-    "session.safe_commit_offer": 3,
+    # 3 -> 4, 2026-10-29: `rollback_check._git`, EXECUTED (safe_commit_offer passes
+    # `detect_rollback=True`): 2 spawns (rev-parse + one `git log --first-parent --raw`), 156-188ms
+    # process over 3 paths and a 1000-commit window (measured 2026-10-29), under the 500ms bar.
+    "session.safe_commit_offer": 4,
     # 20 -> 21, 2026-10-12 (3843db8c19): P-24 runs `machine-local check` once per sentinel
     # run, not per key -- one constant spawn under the probe's own timeout.
     "plugin_health.sentinel": 21,
@@ -7320,7 +7374,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "fleet.archive_terminal_sizings": 3,
     # 8 -> 9, 2026-10-09: bash guard `deploy-dirty-tree` adds one `git status --porcelain`
     # (session_facts._dirty_paths), reached ONLY when the command resolves to a deploy shape.
-    "warm_guard.evaluate": 5,
+    # 5 -> 6, 2026-10-29: `spawn_detached` via `halted_run._schedule_resume_build` (reach-only on a
+    # guard evaluation; detached Popen measured 0ms CPU / 2-5ms wall, skipped under pytest).
+    "warm_guard.evaluate": 6,
     # 9 -> 10, 2026-10-12 (f10d5c0233): `_common.files_citing` is the batched citation
     # prefetch -- one `rg -f` per needle set (live scope, harvest scope), never per candidate.
     # 10 -> 11, 2026-10-28: `_common.active_reference_guard_many` is a new reachable site (the
@@ -7411,7 +7467,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cartography.chunk_table": 1,
     "research.archive_workdir": 1,
     "research.restructure_for_repeat_topic": 1,
-    "research.close": 2,
+    # 2 -> 3, 2026-10-29: `rollback_check._git`, reach-only (`detect_rollback` stays False); where
+    # executed 2 spawns, 156-188ms process (measured 2026-10-29).
+    "research.close": 3,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
     "changelog.compute_day_fields": 1,
@@ -7500,8 +7558,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "records.history": 1,
     "repo_setup.validate_target_root": 1,
     # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).
-    "review.freeze_diff": 3,
-    "review.partition_slices": 4,
+    # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
+    "review.freeze_diff": 4,
+    # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
+    "review.partition_slices": 5,
     "review.reachability": 1,
     "review.snapshot_diff_and_head": 1,
     "scratchpad.sweep": 1,
@@ -7526,12 +7586,23 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # `git status` (_worktree_paths) and one `git log <oldest>..HEAD` (_committed_since): real,
     # constant at 2 however many records exist, skipped when no record carries a usable sha.
     "testing.suite_runs": 2,
-    "deliverable.cascade_terminal": 2,
+    # 2 -> 3, 2026-10-29: `git/rollback_check.py::_git`, reach-only here (commit_paths leaves
+    # `detect_rollback` False); where executed it is 2 spawns, 156-188ms process (measured 2026-10-29).
+    "deliverable.cascade_terminal": 3,
     # Six reachable sites: five git/plumbing sites (archive_stamp._run_git, git_native._invoke and
     # _hash_object_stdin_bytes, git/run.py::run_git, commit_signing) plus the one detached launch of
     # the close job (spawn_detached from _launch_close_job), which keeps the commit from waiting
     # on it. The launch is a single site; a second one is a budget increase.
-    "dispatch.terminal_commit": 5,
+    # 5 -> 11, 2026-10-29: six sites reached since the pin, none a per-call spawn on the op's path.
+    # Measured 2026-10-29: `run_push.nudge_push` (reached via terminal_commit, 55565d43ef) ran
+    # 0 spawns / 0ms in-process (`decide_only=True` publishes nothing and skips the p4 leg), so
+    # `auto_push._run_git`, `auto_push._invoke_cockpit_publish`, `git_native.push_streamed` and
+    # `p4/runner.py::run` are REACH-ONLY (the same sites `push.outstanding` already carries).
+    # `terminal_commit._spawn_index_refresh` is one detached `python -c` launch, parent-side 0ms CPU
+    # and 2-5ms wall (Popen only, nothing waited on), skipped under pytest: EXECUTED, off the op's
+    # process time. `rollback_check._git`: 2 spawns, 156-188ms process, executed only under the
+    # opt-in `detect_rollback` leg.
+    "dispatch.terminal_commit": 11,
     # Static reachability, not the runtime ceiling. A landing runs at most 2 spawns (the budget test's
     # per-shape ceilings): `git hash-object --stdin-paths` through run_git, only for a filter- or
     # attribute-pinned path `commit_paths` cannot hash in process, and the one detached close-job
@@ -7540,8 +7611,16 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # git_native._invoke through shared helpers: five sites, as the op it replaces reached.
     # 4 -> 5, 2026-10-22 (2939d6540d): _unchanged_since_halt lazily reaches halt_landing.landed_before_halt
     # (run_git), refusal path only.
-    "dispatch.land_run": 5,
-    "dispatch.reap_abandoned_runs": 1,
+    # 5 -> 10, 2026-10-29: five sites reached since the pin, all reach-only on a landing:
+    # `rollback_check._git` (2 spawns, 156-188ms process, only under the opt-in `detect_rollback`
+    # leg) plus the decide-only push chain `auto_push._run_git`, `auto_push._invoke_cockpit_publish`,
+    # `git_native.push_streamed` and `p4/runner.py::run` (measured 2026-10-29: `nudge_push` runs
+    # 0 spawns / 0ms; `decide_only=True` publishes nothing and skips the p4 leg).
+    "dispatch.land_run": 10,
+    # 1 -> 2, 2026-10-29: `detached_spawn.spawn_detached` via `halted_run._schedule_resume_build`,
+    # a best-effort detached launch on a halt marker that carries a sizing; parent-side Popen
+    # measured 0ms CPU / 2-5ms wall (2026-10-29), skipped under pytest, never waited on.
+    "dispatch.reap_abandoned_runs": 2,
     "dispatch.commit_halted_rows": 1,
     "docindex.emit": 1,
     # doctor_kept_blobs and kept_blob_replay spawn only through git.run.run_git.
@@ -7554,10 +7633,14 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.mise_autofire": 1,
     "hooks.pickup_autofire": 1,
     # 8 -> 9, 2026-10-09: same deploy-dirty-tree `git status` as warm_guard.evaluate (gated).
-    "hooks.preuse_bash_dispatch": 5,
+    # 5 -> 6, 2026-10-29: `spawn_detached` via `halted_run._schedule_resume_build` (reach-only on
+    # a bash dispatch; detached Popen measured 0ms CPU / 2-5ms wall, skipped under pytest).
+    "hooks.preuse_bash_dispatch": 6,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
-    "hooks.sessionend_auto_commit": 3,
+    # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only (commit_paths leaves `detect_rollback`
+    # False); where executed 2 spawns, 156-188ms process (measured 2026-10-29).
+    "hooks.sessionend_auto_commit": 4,
     "hooks.sessionstart_ensure_http_forwarder": 1,
     "hooks.subagent_zero_tool_use_detect": 1,
     # 10 -> 7, 2026-10-12: sweep_boot reaches build_cache; the same three sites left its reach.
@@ -7569,17 +7652,22 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Reachable-site ceiling, not a per-call count: the delivery path is zero-hook; the sites are the
     # removal commit of a git-tracked home copy (commit_scoped) and the commit seams' shared helpers.
     # An empty or absent home inbox runs none (test_empty_or_absent_home_inbox_spawns_nothing).
-    "memo.migrate_group_em_inbox": 3,
+    # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only (`detect_rollback` stays False); where
+    # executed 2 spawns, 156-188ms process (measured 2026-10-29).
+    "memo.migrate_group_em_inbox": 4,
     "p4.register_workspace": 1,
     # plan.gated_criteria_met: one batched rev-list plus commit_authored_content's sites.
     "plan.gated_criteria_met": 4,
     # plan.narrow_criterion: locked_rmw commit via git_native, same site set as other plan writers.
     "plan.narrow_criterion": 4,
-    "review_mint.bookkeep_wave": 4,
+    # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
+    "review_mint.bookkeep_wave": 5,
     # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site; 5 -> 4 by 7d1da49c7a.
-    "review_mint.record_superseding_review": 4,
+    # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
+    "review_mint.record_superseding_review": 5,
     "review_stamp.check": 1,
-    "review_stamp.mint": 4,
+    # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
+    "review_stamp.mint": 5,
     # --- 2026-10-02 merge reconciliation (claude/admiring-franklin x work/machine-a). The git
     # routing sweep (7481613e80, 7835b34367) moved per-module `subprocess` git calls onto the
     # shared `git/run.py::run_git` site, so the same physical call is now one site key for every
@@ -7592,7 +7680,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     #   push.outstanding 5->6: _range_touches_lfs_paths -> _run_git -> run_git
     # Enrolled 2026-10-15: new ops, pinned at their measured reachable counts (a ratchet, not execution evidence).
     "plan.readiness_verdict": 1,
-    "review.prep": 1,
+    # 1 -> 2, 2026-10-29: `spawn_detached` via `halted_run._schedule_resume_build` (reach-only;
+    # detached Popen measured 0ms CPU / 2-5ms wall, skipped under pytest).
+    "review.prep": 2,
     # Enrolled 2026-10-26: halted-run supersede/combined-landing ops, pinned at measured reachable counts.
     "dispatch.close_halted_run_superseded": 1,
     "dispatch.land_combined_index": 2,
@@ -7600,6 +7690,18 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "dispatch.objective_calibrate": 1,
     "dispatch.objective_check": 4,
     "dispatch.objective_write": 2,
+    # Enrolled 2026-10-29 (fix-uncounted-spawn-budget-tests): pinned, not legitimized -- a pin
+    # beside a full legitimization is dead weight (AC20c) and no companion counts these sites.
+    # Static reach, one site: `spawn_detached` via `halted_run._schedule_resume_build`. The op
+    # itself spawns nothing (C2 disposition: one `session_live` call); detached Popen measured
+    # 0ms CPU / 2-5ms wall (2026-10-29), skipped under pytest. Reach-only.
+    "dispatch.adopt_orphaned_run": 1,
+    # Three sites. `land_remainder_verify.verify_remainder -> spawn_detached`: the retest child,
+    # one detached launch, only on a fingerprint miss (EXECUTED then; detached, 0ms CPU parent-side).
+    # `commit_paths -> rollback_check._git`: reach-only (`detect_rollback` stays False); where
+    # executed 2 spawns, 156-188ms process (measured 2026-10-29). `run_git`: the batched
+    # `_dirty_in_write_set` status, one spawn over the whole write set.
+    "dispatch.land_verified_remainder": 3,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

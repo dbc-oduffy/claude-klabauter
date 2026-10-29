@@ -263,7 +263,10 @@ EXPECTED_LIVE_FLOORS: Dict[str, int] = {
     "block_subagent_plan_body_bash_write": 1,
     "block_topic_branch": 1,
     "block_worktree_creation": 3,
-    "check_blanket_git_add": 2,
+    # 1, not 2: plan 2026-10-27-commit-guard-denials-name-commit-v2-94603e step C5
+    # removed the `git add -- path/to/file` offer (the post-fire guard denies it);
+    # commit_v2 is the one route.
+    "check_blanket_git_add": 1,
     "check_cat_heredoc_write_advise": 1,
     "check_destructive_git_clean": 2,
     "check_destructive_git_revert": 3,

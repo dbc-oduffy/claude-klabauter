@@ -7,8 +7,9 @@ Reply: ``{ok, reaped: [run_id], sizings: [rel], artifacts: {run_id: [rel]}, comm
 skipped: [{run_id, reason, path?}]}``.
 
 A run is ended when it has changed top-level record files or a dirty artifact that
-``run_artifacts.runs_of_artifacts`` maps to it (newest mtime then comes from those artifacts), no live or claimed run token, and
-either its newest record file is older than ``TOKENLESS_QUIET_SECONDS`` (``run_token.TTL_SECONDS``
+``run_artifacts.runs_of_artifacts`` maps to it (newest mtime then comes from those artifacts), no run token with activity inside
+``TOKENLESS_QUIET_SECONDS`` (an idle token is released, and its live-run index entry dropped,
+when its run is reaped), and either its newest record file is older than ``TOKENLESS_QUIET_SECONDS`` (``run_token.TTL_SECONDS``
 is the outer bound), or older than ``QUIET_SECONDS`` and the run is superseded by a later record dir binding the
 same sizing, halt-marked, or carries a tracked top-level file modified after its commit. Each
 ended run lands with its ``run_artifacts`` candidates (sizing, baton, plan, sidecars, slice
@@ -236,7 +237,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     snapshot, tracked = status
     base["artifacts"] = {}
     records = _token_records(root)
-    live_ids = {r["run_id"] for r in records}
 
     files: dict[str, list[str]] = {}
     deleted: list[str] = []
@@ -270,9 +270,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             newest[run_id] = max(mtimes)
 
     now = time.time()
-    held_sizings = {
-        str(r.get("sizing_rel") or "").replace("\\", "/") for r in records if _token_active(root, r, newest, now)
-    } - {""}
+    active = [r for r in records if _token_active(root, r, newest, now)]
+    live_ids = {r["run_id"] for r in active}
+    idle_tokens = {r["run_id"] for r in records} - live_ids
+    held_sizings = {str(r.get("sizing_rel") or "").replace("\\", "/") for r in active} - {""}
 
     session_id = params.get("session_id")
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):
@@ -332,6 +333,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     base["reaped"], base["sizings"] = reaped, sizings
     if params.get("dry_run") is True:
         return base
+
+    from coordinator_core.ops.dispatch_emit import run_close
+
+    for run_id in reaped:
+        if run_id in idle_tokens:
+            run_token.discard(root, run_id)
+        if run_id not in halted:
+            run_close.close_builds_held_after(root, run_id, "research-run-reaped")
 
     if not process_artifact_policy.hosts_coordinator_state(root):
         held_back = []

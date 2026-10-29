@@ -189,7 +189,9 @@ Sending a mid-run revision to a warp run:
   coordinator-invoke workflow.revise '{"run_id": "<run id>", "verbatim": "<requirement>"}'
   params: run_id (required); verbatim (a requirement, adds a row); note (free text, no row);
   from (sending peer session); all_of_pm_ask (bool); out_of_scope (row ids, needs verbatim);
-  withhold_paths ([{path, reason}]); credit_chunks ([{chunk, evidence}]); build_only (bool);
+  withhold_paths ([{path, reason}]); add_paths ([repo-relative path]: write paths the run was not sized
+  for; any outside its write set refuses); owned_red ([{nodeid, owner_run_id, reason?}]: failing tests another
+  run owns); credit_chunks ([{chunk, evidence}]); build_only (bool);
   stop_after ("plan": park the run after planning); retract_note ({note_id, reason});
   retract_row ({row_id, reason}: withdraws one open, unclaimed revision row); claim (bool, records the ruling as work; needs verbatim).
   Full contract: coordinator-invoke workflow.revise --describe

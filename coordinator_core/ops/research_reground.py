@@ -147,7 +147,7 @@ def _scoped_note(
             for ln in flagged.get(name, []):
                 note += f"  previously flagged: {ln.strip()}\n"
         note += "Carried, not to be graded: " + ", ".join(carried) + "\n"
-    return note + rg.RULING_NOTE
+    return note + rg.REOPEN_NOTE + rg.RULING_NOTE
 
 
 def _reground_sync(worktree: Path, params: dict) -> dict:

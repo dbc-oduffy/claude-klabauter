@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from coordinator_core.git.run import run_git
+from coordinator_core.install.write_surface import (
+    ShapedClause,
+    StaticClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
 from coordinator_core.workday_start.runtime_ignore_set import (
     load_template_rules,
     resolve_template_path,
@@ -17,6 +23,32 @@ from coordinator_core.workday_start.runtime_ignore_set import (
 )
 
 HEADER = "# coordinator — runtime ignore set (applied from repo-setup template)"
+
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="runtime-ignore-apply",
+    source_module="coordinator_core.install.runtime_ignore_apply",
+    clauses=(
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path="<repo-root>/.gitignore",
+                    reason="_append_rules appends the template rules the root .gitignore lacks, under HEADER",
+                ),
+            ),
+        ),
+        ShapedClause(
+            effect="delete",
+            discovered_by="runtime_ignore_findings (tracked files matching the template rules, git rm --cached)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<repo-root>/<tracked-runtime-path>",
+                effect="delete",
+                reason="index entry only (--cached); the working-tree file is kept and nothing is committed",
+            ),
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True)

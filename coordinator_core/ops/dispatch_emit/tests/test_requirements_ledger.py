@@ -144,7 +144,8 @@ def test_a_non_live_run_replies_the_refire_next_and_a_live_one_does_not(run):
     assert "refire" in out["note"]
     run_token.mint(repo, RUN, "s.mjs")
     live = _revise(repo, verbatim="b")
-    assert "next" not in live and "note" not in live
+    assert "next" not in live and "refire" not in live["note"]
+    assert "late-row leg" in live["note"] and not live.get("lands_on_refire")
 
 
 def test_a_non_live_run_with_no_sizing_names_the_raw_ask_form(repo):

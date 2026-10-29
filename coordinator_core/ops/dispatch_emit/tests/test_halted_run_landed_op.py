@@ -181,10 +181,39 @@ def test_solo_running_status_refuses(repo):
 SUCCESSOR = "warp-2026-10-21-successor-20261021T000000-abcdef"
 
 
-def _successor(root: Path, resumed_from: str = SOLO) -> None:
+def _successor(root: Path, resumed_from: str = SOLO, stage: str | None = "running") -> None:
     d = root / "state" / "warp" / SUCCESSOR
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.json").write_text(json.dumps({"resumed_from": resumed_from}), encoding="utf-8")
+    if stage is not None:
+        (d / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
+
+
+def test_never_started_successor_does_not_block_landing(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, first, _ = repo
+    _solo(root, "resumed")
+    monkeypatch.setattr(run_token, "is_live", lambda r, rid: True)
+    for stage in (None, "minted"):
+        _successor(root, stage=stage)
+        assert op._live_successor(root, SOLO) is None
+    _successor(root, stage="running")
+    assert op._live_successor(root, SOLO) == SUCCESSOR
+    assert not _call(root, run_id=SOLO, sha=first)["ok"]
+
+
+def test_abandoned_successor_does_not_block_landing(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token
+
+    root, first, _ = repo
+    marker = _solo(root, "resumed")
+    _successor(root, stage="running")
+    monkeypatch.setattr(run_token, "is_live", lambda r, rid: True)
+    assert not _call(root, run_id=SOLO, sha=first)["ok"]
+    halted_run._write(root / "state" / "warp" / SUCCESSOR, {"status": halted_run.STATUS_CLOSED})
+    out = _call(root, run_id=SOLO, sha=first)
+    assert out["ok"] and json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
 
 
 def test_solo_resumed_without_live_successor_records_landed(repo, monkeypatch):

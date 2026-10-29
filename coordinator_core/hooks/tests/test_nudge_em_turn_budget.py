@@ -60,6 +60,7 @@ class Env:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     e = Env(tmp_path)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "nagtmp"))
     monkeypatch.setattr(etc, "state_path", lambda root, sid: e.state)
     monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: e.phase)
     monkeypatch.delenv("COORDINATOR_HOOK_NUDGE_EM_TURN_BUDGET_DISABLED", raising=False)

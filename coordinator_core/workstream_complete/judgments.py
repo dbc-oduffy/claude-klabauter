@@ -99,6 +99,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from coordinator_core.workstream_complete.directives_completion import COMPLETION_ENTRY_KEYS
+
 from coordinator_core.contract.decision_object.judgment import (
     build_disposition,
     build_judgment_point,
@@ -311,7 +313,8 @@ def build_completion_entry_prose_judgment_point() -> dict[str, Any]:
         id="completion-entry-prose",
         question=(
             "What should this completion entry's title, body, or one-liner append say "
-            "-- respecting ordering and banned-section rules?"
+            "-- respecting ordering and banned-section rules? "
+            f"apply reads the decisions keys: {', '.join(COMPLETION_ENTRY_KEYS)}."
         ),
         dispositions=[
             build_disposition("drafted", resolves=["d-complete-entry"]),

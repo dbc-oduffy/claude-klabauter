@@ -141,6 +141,46 @@ def test_unknown_baseline_holds(world):
     assert "unreadable" in found[0].detail
 
 
+@pytest.mark.parametrize("rel", [f"docs/delivery/{ME}.md", f"state/warp/{ME}/record.json"])
+def test_run_own_artifact_without_baseline_resolves_as_own(world, rel):
+    world.head(b"")
+    (world.root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (world.root / rel).write_bytes(b"delivery\n")
+    assert hp.unproduced_hunks(world.root, ME, [rel], own_plan="plan-a") == []
+
+
+def test_run_own_sizing_without_baseline_resolves_as_own(world, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_artifact_ownership as rao
+
+    rel = "state/sizings/own-sizing.json"
+    monkeypatch.setattr(rao, "own_artifact_paths", lambda root, run: rao.OwnArtifacts(sizings=frozenset({rel})))
+    world.head(b"")
+    (world.root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (world.root / rel).write_bytes(b"{}")
+    assert hp.unproduced_hunks(world.root, ME, [rel], own_plan="plan-a") == []
+    other = "state/sizings/peer-sizing.json"
+    (world.root / other).write_bytes(b"{}")
+    assert [f.reason for f in hp.unproduced_hunks(world.root, ME, [other], own_plan="plan-a")] == [
+        hp.FOREIGN_HUNK_UNPRODUCED
+    ]
+
+
+def test_foreign_doc_without_baseline_is_withheld_not_own(world):
+    rel = f"docs/delivery/{PEER}.md"
+    world.head(b"")
+    (world.root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (world.root / rel).write_bytes(b"delivery\n")
+    found = hp.unproduced_hunks(world.root, ME, [rel], own_plan="plan-a")
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert "unreadable" in found[0].detail
+
+
+def test_foreign_hunk_finding_is_provenance_never_a_refusal():
+    from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import is_refusal
+
+    assert not is_refusal(hp.FOREIGN_HUNK_UNPRODUCED)
+
+
 def test_unchanged_path_yields_nothing(world):
     world.head(_text({}))
     world.tree(_text({}))

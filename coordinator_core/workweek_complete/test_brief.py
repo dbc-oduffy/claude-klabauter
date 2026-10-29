@@ -202,6 +202,84 @@ def test_header_without_a_dated_anchor_keeps_the_concluding_ceremony(
     assert "d_step13_archive_close" in _ids(env)
 
 
+@pytest.fixture(autouse=True)
+def _no_git_scan(monkeypatch) -> None:
+    from coordinator_core.ops.workday_complete_backfill_scan import GapScan
+
+    monkeypatch.setattr(wwc_brief.backfill_scan, "scan", lambda root, *a, **k: GapScan())
+
+
+def _write_dailies(tmp_path: Path, *names: str) -> None:
+    week = tmp_path / "state" / "week-changelog"
+    week.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (week / name).write_text("x", encoding="utf-8")
+
+
+def test_unset_anchor_catch_up_lists_every_unarchived_completed_week(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _write_dailies(tmp_path, "2026-09-29-h.md", "2026-10-07-h.md", "2026-10-14-h.md")
+    (tmp_path / "state" / "week-changelog" / "HEADER.md").write_text(
+        "**Week starting:** (not yet set)\n", encoding="utf-8"
+    )
+    code, env = _brief_at(monkeypatch, tmp_path, None, datetime(2026, 10, 15, 10, 0), catch_up=True)
+    assert code == 0
+    assert env["period_mode"]["mode"] == "catch_up"
+    assert env["period_mode"]["missed"] == ["2026-09-28", "2026-10-05"]
+    assert env["period_mode"]["in_progress"] == "2026-10-12"
+    archives = [d["id"] for d in env["directives"] if d["id"].startswith(wwc_brief.CATCH_UP_ARCHIVE_PREFIX)]
+    assert archives == [
+        "d_step13_catch_up_archive_2026-09-28",
+        "d_step13_catch_up_archive_2026-10-05",
+    ]
+
+
+def test_unset_anchor_without_flags_keeps_concluding(monkeypatch, tmp_path: Path) -> None:
+    _write_dailies(tmp_path, "2026-09-29-h.md")
+    _, env = _brief_at(monkeypatch, tmp_path, None, datetime(2026, 10, 15, 10, 0))
+    assert env["period_mode"]["mode"] == "conclude"
+    assert "d_step13_archive_close" in _ids(env)
+
+
+def test_unset_anchor_catch_up_skips_archived_weeks(monkeypatch, tmp_path: Path) -> None:
+    _write_dailies(tmp_path, "2026-09-29-h.md", "2026-10-07-h.md")
+    (tmp_path / "archive" / "week-changelogs" / "2026-09-29").mkdir(parents=True)
+    _, env = _brief_at(monkeypatch, tmp_path, None, datetime(2026, 10, 15, 10, 0), catch_up=True)
+    assert env["period_mode"]["missed"] == ["2026-10-06"]
+
+
+@pytest.mark.parametrize("mode", [{}, {"catch_up": True}, {"conclude": True}])
+def test_every_directive_carries_a_nonempty_detail(monkeypatch, tmp_path: Path, mode) -> None:
+    _, env = _brief_at(monkeypatch, tmp_path, "2026-09-28", datetime(2026, 10, 14, 10, 0), **mode)
+    assert env["directives"]
+    for d in env["directives"]:
+        assert isinstance(d["detail"], str) and d["detail"], d["id"]
+
+
+def test_catch_up_archive_detail_names_the_week_and_the_invocation_detail_names_the_cli() -> None:
+    d = wwc_brief._catch_up_archive_directive("2026-09-28", move_priorities=False)
+    assert "2026-09-28" in d["detail"]
+    assert wwc_brief._directive("x", cli="list-week-changelog", args=["a"])["detail"] == (
+        "list-week-changelog a"
+    )
+
+
+def test_catch_up_lead_reports_the_daily_gap_count(monkeypatch, tmp_path: Path) -> None:
+    from coordinator_core.ops.workday_complete_backfill_scan import GapRow, GapScan
+
+    rows = [GapRow("2026-10-01", 2, "a", "b"), GapRow("2026-10-02", 1, "c", "d")]
+    monkeypatch.setattr(
+        wwc_brief.backfill_scan, "scan", lambda root, *a, **k: GapScan(rows, ["2026-08-01"])
+    )
+    _, env = _brief_at(monkeypatch, tmp_path, "2026-09-28", datetime(2026, 10, 14, 10, 0), catch_up=True)
+    assert "Daily backfill-scan gaps: 2 day(s) plus 1 older." in env["narration"]
+    _, concluding = _brief_at(
+        monkeypatch, tmp_path, "2026-10-12", datetime(2026, 10, 16, 10, 0)
+    )
+    assert "backfill-scan gaps" not in concluding["narration"]
+
+
 def test_catch_up_step_cost_row_exists() -> None:
     import json
 

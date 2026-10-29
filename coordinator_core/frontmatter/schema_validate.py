@@ -505,13 +505,16 @@ def _evaluated_property_keys(value: dict, schema: dict, root_schema: dict) -> se
     for sub in schema.get('allOf') or []:
         evaluated |= _branch_properties(sub)
 
-    if 'if' in schema and 'then' in schema:
+    if 'if' in schema and ('then' in schema or 'else' in schema):
         if_schema = schema['if']
         if_errors = _validate_json_schema_node(value, if_schema, root_schema, '')
         if len(if_errors) == 0:
             if isinstance(if_schema, dict):
                 evaluated |= set(if_schema.get('properties') or {})
-            evaluated |= _branch_properties(schema['then'])
+            if 'then' in schema:
+                evaluated |= _branch_properties(schema['then'])
+        elif 'else' in schema:
+            evaluated |= _branch_properties(schema['else'])
 
     return evaluated
 
@@ -561,11 +564,12 @@ def _validate_json_schema_node(
 
     Supported keywords: $ref, anyOf, allOf, oneOf, type, enum, format
     (date/date-time), pattern, minLength, maxLength, minItems, maxItems, uniqueItems, minimum, maximum,
+    minProperties (object values only), else (with if/then),
     propertyNames, required (array form), properties, additionalProperties (both boolean
     false and schema-valued — a schema-valued additionalProperties recurses
     into every key not declared in this node's `properties`, same as
     `properties`/`propertyNames` do), items,
-    if/then (object-level conditional; claude-klabauter-local addition —
+    if/then/else (object-level conditional; claude-klabauter-local addition —
     see handoff.schema.json's deployment_state==ready_to_fire ->
     gate_dependency-forbidden rule, added for C1's schema-hardening
     sub-step). const (used only inside an if-branch's properties, e.g.
@@ -962,15 +966,29 @@ def _validate_json_schema_node(
                         _validate_json_schema_node(value[prop_name], prop_schema, root_schema, prop_path)
                     )
 
-        # if/then — object-level conditional. When the value matches the `if`
-        # sub-schema, the `then` sub-schema is also applied (errors merged in).
-        # No `else` branch is supported — not needed by any current schema.
-        if 'if' in schema and 'then' in schema:
+        # if/then/else — object-level conditional. When the value matches the
+        # `if` sub-schema, `then` is applied (errors merged in); when it does
+        # not, `else` is applied. A lone `if` or `else` is inert, per spec.
+        if 'if' in schema and ('then' in schema or 'else' in schema):
             if_errors = _validate_json_schema_node(value, schema['if'], root_schema, path)
             if len(if_errors) == 0:
+                if 'then' in schema:
+                    errors.extend(
+                        _validate_json_schema_node(value, schema['then'], root_schema, path)
+                    )
+            elif 'else' in schema:
                 errors.extend(
-                    _validate_json_schema_node(value, schema['then'], root_schema, path)
+                    _validate_json_schema_node(value, schema['else'], root_schema, path)
                 )
+
+        # minProperties — object values only; counts keys present, null-valued
+        # keys included.
+        if 'minProperties' in schema and len(value) < schema['minProperties']:
+            errors.append({
+                'field': field,
+                'error': f'object has {len(value)} propert{"y" if len(value) == 1 else "ies"}, fewer than minProperties {schema["minProperties"]}',
+                'hint': f'Provide at least {schema["minProperties"]} propert{"y" if schema["minProperties"] == 1 else "ies"}',
+            })
 
         # propertyNames — validate every KEY of the object against a nested
         # subschema (keys are always strings, so this typically composes

@@ -22,10 +22,28 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
+from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.session.scope import OwnerFact
 
 import pytest
+
+
+def _validate_commit_envelope(payload_json: str):
+    """The commit-validation check's own verdict, enveloped. The dispatcher
+    (``evaluate_payload_json``) demotes every non-allowlisted deny to an
+    advisory (DR-475), so a test pinning the strict-scope deny text reads the
+    check, not the dispatcher."""
+    import json
+
+    payload = json.loads(payload_json)
+    return envelope_of(
+        dispatch_checks.check_validate_commit(
+            payload["tool_input"]["command"], payload["session_id"], cwd=payload["cwd"]
+        )
+    )
+
 
 
 REAL_SID = "46499673-d8dd-4fdd-a514-d8cd34bbba81"
@@ -403,16 +421,13 @@ class TestOwnerNameProvenanceNote:
         note -- the vacuous-pin shape ``state/lessons/2026-08-19-a-
         suppressor-pin-can-pass-vacuously.md`` was written about. This
         drives the real deny/warn text through ``check_validate_commit``
-        end to end (via ``bash_dispatch.evaluate_payload_json``, the same
-        entry point ``test_check_validate_commit.py``'s strict-mode suite
-        uses) over a real git repo, a peer session's live claim, and this
+        end to end (via ``_validate_commit_envelope``) over a real git repo, a peer session's live claim, and this
         session's own staged deletion -- the shipped templates are read,
         never re-typed."""
         import json
         import subprocess
         from datetime import datetime, timezone
 
-        from coordinator_core.bash_guards import dispatch as bash_dispatch
         from coordinator_core.session import core, touch_record
         from coordinator_core.win_portability import no_console_creationflags
 
@@ -478,7 +493,7 @@ class TestOwnerNameProvenanceNote:
         _git(root, "rm", "-q", "sibling.txt")
 
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
-        result = bash_dispatch.evaluate_payload_json(
+        result = _validate_commit_envelope(
             _em_payload(root, sid, 'git commit -m "rm sibling"')
         )
         assert result is not None
@@ -489,7 +504,7 @@ class TestOwnerNameProvenanceNote:
 
         monkeypatch.delenv("COORDINATOR_SCOPE_STRICT", raising=False)
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT_OFF", "1")
-        result = bash_dispatch.evaluate_payload_json(
+        result = _validate_commit_envelope(
             _em_payload(root, sid, 'git commit -m "rm sibling"')
         )
         assert result is not None
@@ -504,7 +519,7 @@ class TestOwnerNameProvenanceNote:
         monkeypatch.delenv("COORDINATOR_SCOPE_STRICT_OFF", raising=False)
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
         _claim(root, sid, "sibling.txt")
-        result = bash_dispatch.evaluate_payload_json(
+        result = _validate_commit_envelope(
             _em_payload(root, sid, 'git commit -m "rm sibling"')
         )
         assert result is not None
@@ -528,7 +543,6 @@ class TestOwnerNameProvenanceNote:
         import subprocess
         from datetime import datetime, timezone
 
-        from coordinator_core.bash_guards import dispatch as bash_dispatch
         from coordinator_core.session import core, touch_record
         from coordinator_core.win_portability import no_console_creationflags
 
@@ -594,7 +608,7 @@ class TestOwnerNameProvenanceNote:
         _git(root, "rm", "-q", "sibling.txt")
 
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
-        result = bash_dispatch.evaluate_payload_json(
+        result = _validate_commit_envelope(
             _em_payload(root, sid, 'git commit -m "rm sibling"')
         )
         assert result is not None
@@ -620,7 +634,6 @@ class TestOwnerNameProvenanceNote:
         import subprocess
         from datetime import datetime, timezone
 
-        from coordinator_core.bash_guards import dispatch as bash_dispatch
         from coordinator_core.session import core, touch_record
         from coordinator_core.win_portability import no_console_creationflags
 
@@ -687,7 +700,7 @@ class TestOwnerNameProvenanceNote:
         _git(root, "add", "sibling.txt")
 
         monkeypatch.setenv("COORDINATOR_SCOPE_STRICT", "1")
-        result = bash_dispatch.evaluate_payload_json(
+        result = _validate_commit_envelope(
             _em_payload(root, sid, 'git commit -m "modify sibling"')
         )
         assert result is not None
@@ -803,9 +816,9 @@ class TestBulkForeignIndexRefusal:
 
         NARROWED from "no commit form succeeds" (the claim this test pinned
         when it landed at 71c28ef903) to "no `git commit` form": the wider
-        claim is false, and the message now says so. `coordinator-safe-commit.py`
-        routes through `ceremony.commit_v2` on the default axis, where
-        `commit_paths` commits worktree bytes for declared paths and passes
+        claim is false, and the message now says so. The named route
+        (`COMMIT_ROUTE`, i.e. `ceremony.commit_v2`) on the default axis
+        runs `commit_paths`, which commits worktree bytes for declared paths and passes
         over every staged path it did not name -- so an operator's own paths
         DO commit while a peer holds the index. Pinned by
         `coordinator_core/git/tests/test_action_guard_default_path.py ::
@@ -816,7 +829,7 @@ class TestBulkForeignIndexRefusal:
         msg = self._msg()
         assert "no `git commit` form succeeds" in msg
         assert "pathspec does not narrow" in msg
-        assert "coordinator-safe-commit.py" in msg
+        assert COMMIT_ROUTE in msg
 
     def test_it_names_the_safe_route_with_its_glob_warning_attached(self):
         """The route and the "literal paths" qualifier travel together or not
@@ -826,7 +839,7 @@ class TestBulkForeignIndexRefusal:
         Naming the route without the qualifier converts this refusal into
         instructions for reproducing that incident."""
         for msg in (self._msg(), self._msg(77)):
-            assert "coordinator-safe-commit.py" in msg
+            assert COMMIT_ROUTE in msg
             assert "never a glob" in msg
 
     def test_it_reports_the_size_that_makes_this_branch_apply(self):
@@ -858,7 +871,6 @@ class TestBulkRefusalIsReachedThroughCheckValidateCommit:
         import subprocess
         from datetime import datetime, timezone
 
-        from coordinator_core.bash_guards import dispatch as bash_dispatch
         from coordinator_core.session import core, touch_record
         from coordinator_core.win_portability import no_console_creationflags
 
@@ -919,7 +931,7 @@ class TestBulkRefusalIsReachedThroughCheckValidateCommit:
             "session_id": sid,
             "cwd": root,
         })
-        return bash_dispatch.evaluate_payload_json(payload)
+        return _validate_commit_envelope(payload)
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence

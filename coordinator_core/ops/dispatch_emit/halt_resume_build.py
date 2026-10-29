@@ -51,6 +51,16 @@ def _landed_state_sha(root: Path, plan_rel: Optional[str]) -> Optional[str]:
     return (landed.checkpoint_shas[0] if landed.checkpoint_shas else None) or landed.ledger_sha
 
 
+def _run_session_id(root: Path, run_id: str) -> str:
+    """The run record's canonical-UUID `session_id`, else "" (absent or malformed stays omitted)."""
+    from coordinator_core.git.commit_trailers import _UUID_RE
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+    stage = read_run_stage(root, run_id) or {}
+    sid = stage.get("session_id")
+    return sid if isinstance(sid, str) and _UUID_RE.fullmatch(sid) else ""
+
+
 def build(root, run_id: str) -> Optional[dict]:
     """Compute the halted run's resume work and write its record; the record, or None when the run
     has no `halted` marker naming a sizing. A gate refusal is recorded as the verdict (no script)."""
@@ -77,6 +87,7 @@ def build(root, run_id: str) -> Optional[dict]:
     except OSError:
         pass  # the hint only serves a refire whose halted-run lookup stalls
     run_base = halted_run.halted_run_base(rd)
+    session_id = _run_session_id(root, run_id)
 
     verdict: dict = {}
     script_rel: Optional[str] = None
@@ -98,7 +109,7 @@ def build(root, run_id: str) -> Optional[dict]:
             prompt=None,
             sizing_rel=sizing_rel,
             run_id=run_id,
-            session_id=None,
+            session_id=session_id or None,
             script_path=f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
             plan_blitz_args=ask_sizing.get("plan_blitz_args"),
             writes=ask_sizing.get("writes", ()),
@@ -116,7 +127,7 @@ def build(root, run_id: str) -> Optional[dict]:
         atomic_write_bytes(target, script.encode("utf-8"))
         from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
 
-        _write_emission_receipt(target, resume_plan_rel or plan_rel, {}, {"session_id": ""})
+        _write_emission_receipt(target, resume_plan_rel or plan_rel, {}, {"session_id": session_id})
         script_rel = target.relative_to(root).as_posix()
     except (SizingFireRefused, SizingHandBack) as exc:
         verdict = {

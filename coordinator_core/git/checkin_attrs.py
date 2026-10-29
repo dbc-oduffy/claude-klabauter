@@ -38,7 +38,7 @@ NEGATIVE SPEC:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from coordinator_core.git.content_hash import _attributes_pattern_matches, _read_text_scoped
 from coordinator_core.git.git_dir import resolve_git_dir
@@ -104,3 +104,79 @@ def checkin_disposition(root: Path, normalized: str) -> str:
                 else:
                     return UNRESOLVED
     return verdict
+
+
+TEXT_SET = "set"
+TEXT_AUTO = "auto"
+TEXT_UNSET = "unset"
+TEXT_UNSPECIFIED = "unspecified"
+
+
+class TextPin(NamedTuple):
+    """`text` is one of TEXT_SET / TEXT_AUTO / TEXT_UNSET / TEXT_UNSPECIFIED; `eol` is
+    None, "lf" or "crlf". The two are separate attributes in git: each is last-match-wins
+    on its own, so `* text=auto` then `*.x eol=lf` leaves text=auto with eol=lf."""
+
+    text: str
+    eol: Optional[str]
+
+
+# Attribute spellings that change the checkin conversion but that this resolver does not
+# model; any matching line carrying one makes the whole path unresolvable.
+_UNMODELLED_TOKENS = ("binary", "crlf", "-crlf", "!text", "!eol", "!crlf")
+
+
+def resolve_text_pin(root: Path, normalized: str) -> Optional[TextPin]:
+    """The `text` state and `eol` value that apply to `normalized`, per attribute, or None
+    when a macro, an unmodelled spelling (`binary`, legacy `crlf`, `!text`) or an unknown
+    value governs the path. Same candidate files and walk order as `checkin_disposition`."""
+    parent = Path(normalized).parent
+    parts = [] if parent == Path(".") else list(parent.parts)
+
+    candidates = [(resolve_git_dir(root) / "info" / "attributes", normalized)]
+    for depth in range(len(parts) + 1):
+        candidates.append(
+            (
+                root.joinpath(*parts[:depth]) / _LOCAL_ATTRIBUTES_FILENAME,
+                "/".join(normalized.split("/")[depth:]),
+            )
+        )
+
+    text_state = TEXT_UNSPECIFIED
+    eol: Optional[str] = None
+    for candidate, rel_to_attrs_dir in candidates:
+        content = _read_text_scoped(candidate)
+        if content is None:
+            continue
+        for line in content.splitlines():
+            code = line.split("#", 1)[0].strip()
+            if not code:
+                continue
+            tokens = code.split()
+            attr_tokens = tokens[1:]
+            relevant = [
+                tok
+                for tok in attr_tokens
+                if tok in ("text", "-text")
+                or tok.startswith("text=")
+                or tok.startswith("eol=")
+                or tok in _UNMODELLED_TOKENS
+            ]
+            if not relevant:
+                continue
+            if code.startswith("[attr]"):
+                return None
+            if not _attributes_pattern_matches(tokens[0], rel_to_attrs_dir):
+                continue
+            for tok in relevant:
+                if tok == "text":
+                    text_state = TEXT_SET
+                elif tok == "-text":
+                    text_state = TEXT_UNSET
+                elif tok == "text=auto":
+                    text_state = TEXT_AUTO
+                elif tok in ("eol=lf", "eol=crlf"):
+                    eol = tok.split("=", 1)[1]
+                else:
+                    return None
+    return TextPin(text_state, eol)

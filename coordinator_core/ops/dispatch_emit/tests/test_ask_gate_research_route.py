@@ -1,11 +1,10 @@
-"""ask_gate research branch: a research sizing hands back at every t-shirt, research plus writes is refused."""
+"""ask_gate research branch: a research sizing hands back at every t-shirt, research plus writes splits."""
 
 from __future__ import annotations
 
 import pytest
 import yaml
 
-from coordinator_core.ops.dispatch_emit.ask_contract import RESEARCH_MIXED_REFUSAL
 from coordinator_core.ops._research_sizing import drop_research_block
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.warp_fire import fire_command
@@ -59,15 +58,14 @@ def test_research_sizing_hands_back_at_every_tshirt(repo, tshirt):
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "M"])
-def test_research_plus_writes_is_refused_with_two_step_remedy(repo, tshirt):
+def test_research_plus_writes_splits_instead_of_refusing(repo, tshirt):
     _put(repo, tshirt, RESEARCH)
     v = gate(repo, REL, writes=["a.py"])
-    assert v.arm is None and v.halt["kind"] == "refusal"
-    assert v.halt["reason"] == RESEARCH_MIXED_REFUSAL
-    assert "/coordinator:research" in RESEARCH_MIXED_REFUSAL
-    assert "engine-ask" not in RESEARCH_MIXED_REFUSAL
-    assert "research.close" in RESEARCH_MIXED_REFUSAL
-    assert "workflow.revise build_only=true" in RESEARCH_MIXED_REFUSAL
+    assert v.arm is None and v.halt["kind"] == "research"
+    split = v.halt["split"]
+    assert split["research"]["status"] == "ready"
+    assert split["build"]["status"] == "after"
+    assert split["build"]["after"] == [split["research"]["run_id"]]
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S"])

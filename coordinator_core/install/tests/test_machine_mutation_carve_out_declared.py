@@ -42,6 +42,7 @@ _INSTALL_PLANE_OUTSIDE_SETTINGS_HOME = {
     "clone_sibling_repo": "git clone into a caller-supplied directory",
     "detect_test_cmd": "frontmatter keys in the target project's coordinator.local.md",
     "forwarder_door_census": "coordinator_core/ops/warm_entrypoint_allowlist.json in claude-klabauter's own tree",
+    "runtime_ignore_apply": "the onboarded repo's own .gitignore and git index",
     "scaffold_structure": "manifest-declared directories in the target project",
     "settings_env": "the caller-supplied settings.json, rewritten by the spawned check-settings-env.py",
 }

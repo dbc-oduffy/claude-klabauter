@@ -108,9 +108,6 @@ RULING_ON_TRADEOFF = ("accepts", "rejects", "silent", "no-ruling")
 #: ``backlog-grind-assemble`` command (undo, drain) never rides it.
 GENERAL_PURPOSE_AGENT_TYPE = "general-purpose"
 COMMIT_AGENT_TYPE = _COMMIT_AGENT_TYPE
-#: Equals ``pm_adjudication.ADJUDICATOR_AGENT_TYPE``, which imports this module.
-APM_AGENT_TYPE = "coordinator:apm"
-
 #: The routing verify judges a verdict and what the row cites, which the test-runner's role refuses
 #: as review work; the premise-checker resolves citations against the tree and can run the ledger command.
 ROUTING_VERIFY_AGENT_TYPE = "coordinator:premise-checker"
@@ -134,7 +131,6 @@ STAGE_AGENT_TYPES: dict[str, str] = {
     "verify-routing": ROUTING_VERIFY_AGENT_TYPE,
     "verify-op": OP_RUNNER_AGENT_TYPE,
     "commit": COMMIT_AGENT_TYPE,
-    "adjudicate": APM_AGENT_TYPE,
 }
 
 #: The grind size scout's return: the shared scout fields plus its closing sizing chain's result.
@@ -160,6 +156,7 @@ STAGE_MODELS: dict[str, str] = {
     "triage": "haiku",
     "refute-close": "sonnet",
     "fix": "sonnet",
+    "adjudicate": "sonnet",
     # The drain runs `backlog-grind-assemble`, which the op-runner's spec refuses (it runs
     # `coordinator-invoke <op>` only), so it rides a general-purpose agent like the other grind-row legs.
     "ledger-sweep": "haiku",
@@ -546,7 +543,7 @@ def compose_triage_call(
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         run_key=run_key,
-        effort="medium",
+        effort="low",
         schema=schema,
         is_expr=True,
     )
@@ -890,7 +887,9 @@ def compose_fix_call(
             "extra files, and take no other action. If the fix needs a plan "
             "before it can proceed, report NEEDS_PLAN. Set `has_tradeoff` to "
             "true only when your fix genuinely carries a tradeoff triage did "
-            "not catch, and describe it in `tradeoff`; otherwise set "
+            "not catch, and describe it in `tradeoff`. Choosing a test-side "
+            "or code-side fix within the locked files is your call: name the "
+            "reason in your report and never set `has_tradeoff` for it; otherwise set "
             "`has_tradeoff` to false and leave `tradeoff` empty. "
             "Set `ruling_on_tradeoff` to `no-ruling` when the row carries no "
             "`pm_ruling`; otherwise `accepts`, `rejects`, or `silent` by whether "
@@ -1001,7 +1000,7 @@ def compose_fix_call(
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         run_key=run_key,
-        effort="high",
+        effort="medium",
         schema=schema,
         is_expr=True,
     )
@@ -1151,7 +1150,7 @@ def compose_verify_agent_call(
         agent_type=ROUTING_VERIFY_AGENT_TYPE if routing else _TEST_AGENT_TYPE,
         agent_type_host=agent_type_host,
         run_key=run_key,
-        effort="high",
+        effort="medium",
         schema=schema,
         is_expr=True,
         carve_out_model=ROUTING_VERIFY_HAND_BACK_MODEL if routing and hand_back else None,

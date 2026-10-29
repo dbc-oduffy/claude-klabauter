@@ -22,6 +22,7 @@ never the ``dispatch_checks`` facade or another family module.
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import shlex
 from typing import Any, Dict, List, Optional
@@ -644,8 +645,25 @@ def check_multiprobe_banner_rewrite(
 # 7. check_runaway_find -- block-runaway-find.sh
 # ---------------------------------------------------------------------------
 
+def _collapse_dotdot(t: str) -> str:
+    """Resolve `.`/`..` segments of an absolute or drive-rooted token lexically
+    (`/../..` -> `/`, a drive-rooted `C:/..` -> `C:/`); relative tokens pass through."""
+    drive = ""
+    rest = t
+    if re.match(r"^[A-Za-z]:[/\\]", t):
+        drive, rest = t[:2], t[2:].replace("\\", "/")
+    if not rest.startswith("/"):
+        return t
+    norm = posixpath.normpath(rest)
+    if norm.startswith("//"):
+        norm = "/" + norm.lstrip("/")
+    return drive + norm
+
+
 def _find_is_root_anchor(tok: str) -> bool:
     t = _strip_q(tok)
+    if ".." in t:
+        t = _collapse_dotdot(t)
     if re.match(r"^/+$", t):
         return True
     if re.match(r"^[A-Za-z]:[/\\]*$", t):

@@ -175,8 +175,6 @@ def test_enumerated_type_with_violating_model_denies_via_composed_pin_reason(mon
         return (frozenset({"coordinator:executor"}), None)
 
     monkeypatch.setattr(unenumerated_mod, "resolve_roster", _fake_resolve_roster)
-    # The executor family is a writer type: an unsized session would be refused by the
-    # unsized-writer leg before the pin leg is reached.
     monkeypatch.setattr(engine_route_state, "session_sizing_state", lambda p, s: (True, False))
     _patch_pins(
         monkeypatch,

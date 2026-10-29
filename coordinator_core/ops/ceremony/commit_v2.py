@@ -625,6 +625,38 @@ def _index_classify(worktree_root: Path, paths: list) -> tuple:
     return [p for p in paths if p not in gone], [p for p in paths if p in gone], in_index
 
 
+def _checkpoint_symbol_refusal(
+    worktree_root: Path, paths: list, deleted: list, blobs: dict
+) -> Optional[str]:
+    """Refusal text when the bytes a checkpoint commits remove a symbol an outside caller uses."""
+    py_paths = [p for p in [*paths, *deleted] if p.endswith(".py")]
+    if not py_paths:
+        return None
+    from coordinator_core.git.checkpoint_symbols import removed_symbol_refusal
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import head_blobs
+
+    common = resolve_git_common_dir(worktree_root)
+    head: dict = {}
+    for path, (_mode, sha) in head_blobs(worktree_root, py_paths).items():
+        got = read_object(common, sha)
+        head[path.replace("\\", "/")] = got[1] if got else None
+    staged: dict = {}
+    for path in py_paths:
+        key = path.replace("\\", "/")
+        if path in deleted:
+            staged[key] = None
+        elif key in blobs:
+            got = read_object(common, blobs[key])
+            staged[key] = got[1] if got else None
+        else:
+            try:
+                staged[key] = (worktree_root / path).read_bytes()
+            except OSError:
+                staged[key] = None
+    return removed_symbol_refusal(worktree_root, staged, head)
+
+
 def _split_gone_tracked(worktree_root: Path, paths: list) -> tuple:
     """(kept, deleted): `paths` entries absent from disk but tracked at HEAD move to
     `deleted`. Never raises; an unresolvable HEAD spine leaves `paths` untouched."""
@@ -1394,6 +1426,42 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     if allowlist_drift is not None:
         return _error(allowlist_drift)
 
+    # A wave checkpoint lands the run's own hunks only and never removes a symbol an outside caller uses.
+    checkpoint_withheld: list = []
+    if checkpoint_guard.checkpoint_row_ids(message.split("\n", 1)[0]):
+        from coordinator_core.git import checkpoint_hunks
+
+        with ledger.phase("checkpoint_refusal"):
+            # Judged over the declared set first: a withheld path must not hide a closed or moved one.
+            declared_refusal = checkpoint_guard.checkpoint_refusal(
+                worktree_root, resolve_git_common_dir(worktree_root), head_sha(worktree_root),
+                message, list(raw_paths),
+            )
+        if declared_refusal:
+            return _error(declared_refusal)
+        with ledger.phase("checkpoint_own_hunks"):
+            run_id = checkpoint_hunks.checkpoint_run_id(worktree_root, message, own_sid)
+            own_blobs, checkpoint_withheld = checkpoint_hunks.checkpoint_own_blobs(
+                worktree_root, run_id, raw_paths, message
+            )
+            if checkpoint_withheld:
+                held = {p.replace("\\", "/") for p in checkpoint_withheld}
+                raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in held]
+            for path, sha in own_blobs.items():
+                expectations["supplied_blobs"].setdefault(path, sha)
+        if not (raw_paths or raw_deleted or raw_untracked):
+            return _error(
+                "every checkpoint path holds hunks outside this run or the run is unresolved, nothing to commit.",
+                nothing_to_commit=True,
+                checkpoint_withheld_paths=checkpoint_withheld,
+            )
+        with ledger.phase("checkpoint_symbols"):
+            symbol_refusal = _checkpoint_symbol_refusal(
+                worktree_root, raw_paths, raw_deleted, expectations["supplied_blobs"]
+            )
+        if symbol_refusal is not None:
+            return _error(symbol_refusal)
+
     # Process files (see `_PROCESS_PREFIXES`) never ride in a
     # product commit on a non-DoE repo: a mixed call lands product first, process second.
     with ledger.phase("split_process_paths"):
@@ -1621,6 +1689,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     }
     if checkpoint_stamp:
         result["checkpoint_stamp"] = checkpoint_stamp
+    if checkpoint_withheld:
+        result["checkpoint_withheld_paths"] = checkpoint_withheld
     if process_sha is not None:
         result["process_sha"] = process_sha
     merge_parent = next((o.merge_parent for o in outcomes if o.merge_parent), None)

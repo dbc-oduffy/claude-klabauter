@@ -2,6 +2,8 @@
 
 Params: ``run_id`` (string, required: the halted run), ``sha`` (string: one commit sha), ``shas``
 (list of strings: further commit shas, unioned with ``sha``; at least one of the two is required),
+``met_by`` (object, optional: ``{blocking row id: sha}``; each sha an ancestor-or-equal of HEAD and equal to or after the
+halt commit, else the op refuses naming the row; recorded on the landed marker and echoed in the reply),
 ``session_id`` (string, optional uuid: the calling session, used to find the run's review sidecar),
 ``in_run`` (bool, optional: close the calling run itself as already delivered; admits a ``running``
 sibling status or a solo run with no halt marker, and refuses unless every manifest
@@ -49,6 +51,8 @@ OP_NAME = "dispatch.record_halted_run_landed"
 
 _FULL_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA_PREFIX = re.compile(r"[0-9a-f]{4,40}")
+#: Param, reply key and halt-marker key: ``{blocking row id: full sha of the commit at or after the halt that met it}``.
+MET_BY_FIELD = "met_by"
 
 
 #: close_background.BACKGROUND_LEGS order; review-stamp precedes plan-reconciliation, which fails
@@ -213,12 +217,14 @@ def _live_successor(root: Path, run_id: str) -> Optional[str]:
 
 
 def _terminal(cand: Path) -> bool:
-    """True when the run dir records the run landed or halted: its token's TTL is not liveness then."""
+    """True when the run dir records the run landed, closed (abandoned) or halted, or never left `minted`: its token's TTL is not liveness then."""
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
 
     marker = halted_run._read(cand)
-    if marker is not None and marker.get("status") == halted_run.STATUS_LANDED:
+    if marker is not None and marker.get("status") in (halted_run.STATUS_LANDED, halted_run.STATUS_CLOSED):
+        return True
+    if halted_run._is_shell(cand):
         return True
     try:
         stage = json.loads((cand / RUN_STAGE_FILE).read_text(encoding="utf-8"))
@@ -400,6 +406,70 @@ def _clean_at_head(root: Path, common, load_dir, paths: list, base: Optional[str
     return clean
 
 
+_UNTOUCHED_WORDING = re.compile(
+    r"needed no change|no change (?:was )?(?:needed|made)|\bunchanged\b|\buntouched\b|not authored here"
+    r"|not (?:edited|modified) (?:here|by this)",
+    re.IGNORECASE,
+)
+
+
+def _note_blocks(text: str) -> list:
+    """The delivery note split into blank-line paragraphs and, inside them, bullets with their continuation lines."""
+    blocks: list = []
+    for para in re.split(r"\n\s*\n", text):
+        current: list = []
+        for line in para.splitlines():
+            if re.match(r"\s*(?:[-*]|\d+\.)\s", line) and current:
+                blocks.append(" ".join(current))
+                current = []
+            current.append(line.strip())
+        if current:
+            blocks.append(" ".join(current))
+    return blocks
+
+
+def _unauthored_paths(root: Path, run_id: str, record_dir: Path, paths: list) -> set:
+    """The unchanged *paths* the run never authored a hunk on, so the landing record does not owe them.
+
+    Excused when the run's current bytes equal its ``write_baseline`` print (it left the path as it
+    found it, the delta is foreign), or when the run's delivery note carries one bullet naming the
+    path and saying it was left unchanged. Refused either way when the path is in the baseline,
+    differs from it, and equals a blob ``kept.json`` fingerprints for the run (its own uncommitted
+    hunks). Reads only; any unreadable evidence excuses nothing.
+
+    Trap: the note wording is free text, so one bullet that names the path and also says "unchanged"
+    of something else excuses the path.
+    """
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+    from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR
+
+    try:
+        base = hha._baseline(root, run_id) or {}
+        kept = kept_work.kept_fingerprints(record_dir)
+        try:
+            blocks = _note_blocks((root / DELIVERY_NOTE_DIR / f"{run_id}.md").read_text(encoding="utf-8"))
+        except OSError:
+            blocks = []
+        out: set = set()
+        for p in paths:
+            cur = kept_work.fingerprint(root, p)
+            if p in base and cur != base[p] and cur is not None and cur in kept.get(p, frozenset()):
+                continue
+            if p in base and cur == base[p]:
+                out.add(p)
+                continue
+            name = p.rsplit("/", 1)[-1].casefold()
+            if any(
+                (p.casefold() in b.casefold() or name in b.casefold()) and _UNTOUCHED_WORDING.search(b)
+                for b in blocks
+            ):
+                out.add(p)
+        return out
+    except Exception:  # noqa: BLE001 -- unreadable evidence excuses nothing
+        return set()
+
+
 def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str], dict, list]:
     """``(None, covers, voided)`` when *shas* together changed every owed path the run's halt marker withholds, else ``(refusal, {}, [])``.
 
@@ -467,6 +537,10 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
         voided_list += [p for p in unchanged if p in clean]
         unchanged = [p for p in unchanged if p not in clean]
     if unchanged:
+        unauthored = _unauthored_paths(root, run_id, record_dir, unchanged)
+        voided_list += [p for p in unchanged if p in unauthored]
+        unchanged = [p for p in unchanged if p not in unauthored]
+    if unchanged:
         more = f" (+{len(unchanged) - 1} more)" if len(unchanged) > 1 else ""
         who = shas[0] if len(shas) == 1 else "shas together"
         return (
@@ -476,38 +550,96 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
     return None, covers, voided_list
 
 
-def _verify(root: Path, run_id: str, shas: list) -> tuple[Optional[str], Optional[str], dict]:
+def _halt_commit(root: Path, record_dir: Path) -> Optional[str]:
+    """The commit that first added the run's ``halted.json`` (the halt commit), else None; one git spawn."""
+    from coordinator_core import git_ancestry
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    rel = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
+    result = git_ancestry.run_git(["log", "--diff-filter=A", "--format=%H", "--", rel], cwd=str(root))
+    lines = result.stdout.split() if result.returncode == 0 else []
+    return lines[-1] if lines and _FULL_SHA.fullmatch(lines[-1]) else None
+
+
+def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -> Optional[str]:
+    """Refusal naming the first ``met_by`` row whose sha is not a blocking row's commit at or after the halt, else None.
+
+    *met_by* holds full shas already proven ancestors of HEAD (*reached*). At-or-after the halt is
+    equal to the halt commit or not an ancestor of it: one batched ``rev-list`` for all rows.
+    """
+    from coordinator_core import git_ancestry
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    try:
+        record_dir = ask_contract.record_dir(root, run_id)
+    except ValueError as exc:
+        return str(exc)
+    marker = halted_run._read(record_dir)
+    if marker is None:
+        return f"met_by needs {run_id}'s halt record; none is readable"
+    blocking = _withheld(marker)
+    for row, sha in met_by.items():
+        if row not in blocking:
+            return f"met_by row {row} is not a blocking row of {run_id}"
+        if sha not in reached:
+            return f"met_by row {row}: {sha} is not an ancestor of HEAD; pass the commit that met the row"
+    halt = _halt_commit(root, record_dir)
+    if halt is None:
+        return f"{run_id} halt commit could not be found; met_by cannot be placed after it"
+    read_ok, before = git_ancestry.ancestors_of(list(met_by.values()), halt, cwd=str(root))
+    if not read_ok:
+        return "ancestry of the met_by shas could not be read; retry"
+    for row, sha in met_by.items():
+        if sha != halt and sha in before:
+            return f"met_by row {row}: {sha} is before the halt commit {halt}; pass a commit at or after the halt"
+    return None
+
+
+def _verify(
+    root: Path, run_id: str, shas: list, met_by: Optional[dict] = None,
+) -> tuple[Optional[str], Optional[str], dict]:
     """``(newest_full_sha, None, echo)`` when *shas* resolve, are reachable and cover the withheld paths, else ``(None, refusal, {})``.
 
-    ``echo`` is ``{"shas": every verified full sha, "covers": {sha: withheld paths it changed}}``.
+    ``echo`` is ``{"shas": every verified full sha, "covers": {sha: withheld paths it changed}}``,
+    plus ``"met_by": {row: full sha}`` when *met_by* is given. *met_by* shas join the same
+    prefix-resolve and HEAD-ancestry reads as *shas*.
     """
     from coordinator_core import git_ancestry
     from coordinator_core.git.commit_walk import commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_state import head_sha
 
+    met_by = met_by or {}
     common = resolve_git_common_dir(root)
-    for sha in shas:
+    for sha in [*shas, *met_by.values()]:
         if _FULL_SHA.fullmatch(sha) and commit_meta(common, sha) is None:
             return None, f"{sha} is not a commit in this repo; pass the landing commit's full sha", {}
     head = head_sha(root)
     if not head:
         return None, "HEAD is unreadable; retry", {}
-    abbreviated = [s for s in shas if not _FULL_SHA.fullmatch(s)]
+    abbreviated = [s for s in [*shas, *met_by.values()] if not _FULL_SHA.fullmatch(s)]
     resolved, problem = git_ancestry.resolve_commit_prefixes(abbreviated, cwd=str(root))
     if problem:
         return None, problem, {}
     full = list(dict.fromkeys(resolved.get(s, s) for s in shas))
-    read_ok, reached = git_ancestry.ancestors_of(full, head, cwd=str(root))
+    full_met = {row: resolved.get(s, s) for row, s in met_by.items()}
+    read_ok, reached = git_ancestry.ancestors_of(list(dict.fromkeys([*full, *full_met.values()])), head, cwd=str(root))
     if not read_ok:
         return None, "ancestry of the sha could not be read; retry", {}
     for sha in full:
         if sha not in reached:
             return None, f"{sha} is not an ancestor of HEAD; pass the commit that landed the work", {}
+    if full_met:
+        problem = _met_by_problem(root, run_id, full_met, reached)
+        if problem:
+            return None, problem, {}
     problem, covers, voided = _carries_withheld(root, run_id, full)
     if problem:
         return None, problem, {}
-    echo = {"shas": full, "covers": covers, **({"voided": voided} if voided else {})}
+    echo = {
+        "shas": full, "covers": covers, **({"voided": voided} if voided else {}),
+        **({MET_BY_FIELD: full_met} if full_met else {}),
+    }
     if len(full) == 1:
         return full[0], None, echo
     newest = full[0]
@@ -562,6 +694,31 @@ def _shas_param(params: dict) -> tuple[list, Optional[str]]:
     return list(dict.fromkeys(shas)), None
 
 
+def _met_by_param(params: dict) -> tuple[dict, Optional[str]]:
+    """``({row_id: sha}, None)`` from the optional ``met_by`` param, else ``({}, refusal)``."""
+    raw = params.get(MET_BY_FIELD)
+    if raw is None:
+        return {}, None
+    if not isinstance(raw, dict):
+        return {}, f"{OP_NAME} requires met_by to be an object of row id to sha"
+    for row, sha in raw.items():
+        if not isinstance(row, str) or not row:
+            return {}, f"{OP_NAME} requires every met_by key to be a non-empty row id"
+        if not isinstance(sha, str) or not _SHA_PREFIX.fullmatch(sha):
+            return {}, f"{OP_NAME} requires met_by row {row} to be a lowercase hex sha of 4 to 40 characters"
+    return dict(raw), None
+
+
+def _stamp_met_by(root: Path, run_id: str, met_by: dict) -> None:
+    """Record *met_by* on the run's halt marker; ``mark_landed`` carries it into the landed marker."""
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    record_dir = ask_contract.record_dir(root, run_id)
+    marker = halted_run._read(record_dir)
+    if marker is not None:
+        halted_run._write(record_dir, {**marker, MET_BY_FIELD: met_by})
+
+
 def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
     """None when every ``review_declared_paths`` entry of the run manifest has no delta between the manifest's ``head_sha`` and HEAD and the worktree; else the refusal.
 
@@ -602,6 +759,7 @@ def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
 
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
+    met_by: Optional[dict] = None,
 ) -> dict:
     """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``.
 
@@ -619,7 +777,7 @@ def _record_solo(
     except halted_run.UnreadableHaltRecord as exc:
         return _refuse(f"{exc.reason}: halt marker unreadable; {run_id} is not recorded landed")
     if marker is None and in_run:
-        sha, problem, echo = _verify(root, run_id, shas)
+        sha, problem, echo = _verify(root, run_id, shas, met_by)
         problem = problem or _in_run_unclean(root, run_id)
         if problem:
             return _refuse(problem)
@@ -641,9 +799,11 @@ def _record_solo(
             return _refuse(f"{run_id} is resumed and its successor {successor} is still live; wait for it or stop it")
     elif status != halted_run.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}; only a halted or resumed run is recorded landed")
-    sha, problem, echo = _verify(root, run_id, shas)
+    sha, problem, echo = _verify(root, run_id, shas, met_by)
     if problem:
         return _refuse(problem)
+    if met_by:
+        _stamp_met_by(root, run_id, echo[MET_BY_FIELD])
     if not halted_run.mark_landed(record_dir, sha):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     recorded = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
@@ -669,6 +829,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     shas, problem = _shas_param(params)
     if problem:
         return _refuse(problem)
+    met_by, problem = _met_by_param(params)
+    if problem:
+        return _refuse(problem)
     in_run = params.get("in_run")
     if in_run is not None and not isinstance(in_run, bool):
         return _refuse(f"{OP_NAME} requires in_run to be a boolean")
@@ -680,7 +843,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         prior = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _record_solo(root, run_id, shas, session_id, bool(in_run))
+        return _record_solo(root, run_id, shas, session_id, bool(in_run), met_by)
     except (OSError, ValueError):
         return _refuse(f"{run_id} sibling status is unreadable")
     status = prior.get("status") if isinstance(prior, dict) else None
@@ -695,13 +858,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if status != contract.STATUS_HALTED and not (in_run and status == contract.STATUS_RUNNING):
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
-    sha, problem, echo = _verify(root, run_id, shas)
+    sha, problem, echo = _verify(root, run_id, shas, met_by)
     if problem:
         return _refuse(problem)
     if in_run:
         problem = _in_run_unclean(root, run_id)
         if problem:
             return _refuse(problem)
+    if met_by:
+        _stamp_met_by(root, run_id, echo[MET_BY_FIELD])
     reply = run_close.sibling_release(root, run_id, sha)
     out: dict = {"ok": True, "run_id": run_id, "sha": sha, "written": True, **echo}
     if reply is not None:

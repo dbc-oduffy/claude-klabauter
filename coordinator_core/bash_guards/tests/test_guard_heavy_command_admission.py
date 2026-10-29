@@ -1127,6 +1127,30 @@ class TestOrphanAttribution:
         assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
 
+class TestFinishedLeaseRelease:
+    """A test_tier lease whose command exited frees its reservation while the session lives."""
+
+    def _lease(self, session, launch):
+        leases.write_lease(LeaseRecord(session[0], session[1], session[0], session[1], "test_tier", time.time(), launch))
+
+    def test_the_sessions_finished_lease_is_freed_and_another_sessions_stays(self, host):
+        host.avail = 1200
+        host.rows = host.rows + [ProcRow(900, 1, 90, "claude.exe")]
+        self._lease((CLAUDE.pid, CLAUDE.ctime), 5)  # launching shell (ctime 5) is gone
+        self._lease((900, 90), 6)
+        out = _enveloped(guard.check)(_payload("pnpm build"))
+        assert out is not None and "ram-floor" in _reason(out)
+        assert {r.session_pid for r in leases.live_leases()} == {900}
+
+    def test_a_lease_whose_launching_shell_is_alive_is_kept(self, host):
+        host.avail = 1200
+        host.rows = host.rows + [ProcRow(900, 1, 90, "claude.exe")]
+        self._lease((CLAUDE.pid, CLAUDE.ctime), CALLER.ctime)
+        self._lease((900, 90), 6)
+        _enveloped(guard.check)(_payload("pnpm build"))
+        assert {r.session_pid for r in leases.live_leases()} == {CLAUDE.pid, 900}
+
+
 class TestBarePytestLeg:
     """A subagent spawned by a workflow run may not run a bare multi-file pytest."""
 

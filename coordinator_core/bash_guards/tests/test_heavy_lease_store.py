@@ -170,6 +170,25 @@ def _open(launch, cls="typecheck", session=(1, 10), at=None):
     return LeaseRecord(session[0], session[1], session[0], session[1], cls, time.time() if at is None else at, launch)
 
 
+class TestReleaseFinished:
+    ROWS = [ProcRow(1, 0, 10, "claude.exe"), ProcRow(7, 1, 30, "bash.exe")]
+
+    def test_a_lease_whose_launch_shell_is_gone_and_has_no_tree_is_freed(self, tmp_path):
+        write_lease(_open(launch=20, cls="test_tier"), tmp_path)
+        assert store.release_finished(1, 10, self.ROWS, [], tmp_path) == 1
+        assert live_leases(tmp_path) == []
+
+    def test_a_live_launch_shell_a_fitting_tree_a_missing_mark_or_another_session_keep_it(self, tmp_path):
+        write_lease(_open(launch=30, cls="test_tier"), tmp_path)
+        write_lease(_open(launch=0, cls="test_tier"), tmp_path)
+        write_lease(_open(launch=21, cls="test_tier"), tmp_path)
+        write_lease(_open(launch=22, cls="test_tier", session=(2, 20)), tmp_path)
+        assert store.release_finished(1, 10, self.ROWS, [_tree(40, 25, heavy=("pytest",))], tmp_path) == 0
+        assert len(live_leases(tmp_path)) == 4
+        assert store.release_finished(1, 10, self.ROWS, [], tmp_path) == 1
+        assert len(live_leases(tmp_path)) == 3
+
+
 class TestClaimOrphans:
     def test_a_lease_claims_the_tree_created_soonest_after_its_launch(self, tmp_path):
         path = write_lease(_open(launch=100), tmp_path)

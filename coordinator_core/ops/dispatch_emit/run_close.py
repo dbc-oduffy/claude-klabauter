@@ -797,6 +797,65 @@ def close_halted_runs_for_plan(root: Path, plan_rel: str, sizing_rel: str) -> di
     return out
 
 
+ABANDONED_WITH_KEY = "abandoned_with"
+RESEARCH_LABEL = "research"
+
+
+def close_builds_held_after(root: Path, run_id: str, reason: str) -> list[str]:
+    """Close each build sibling held ``after`` the abandoned research run *run_id*; return their run ids.
+
+    Only a research-labelled run of a split parent record counts. Each waiting dependent gets a
+    ``halted`` status file naming *reason* and ``abandoned_with``, and the parent record's run entry
+    becomes ``halted`` with *reason* as its ``hold_reason``. Nothing is fired. A dependent already
+    running, landed, halted or superseded is left alone, as is a run with no parent record.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.session import claimed_write
+
+    base = Path(root)
+    own = _read_json(base / contract.status_rel(run_id))
+    parent_id = own.get("parent_id") if own else None
+    if not isinstance(parent_id, str) or not parent_id:
+        parent_id = _own_parent_id(base, run_id, contract)
+    if not parent_id:
+        return []
+    record_path = base / contract.parent_record_rel(parent_id)
+    data = _read_json(record_path)
+    if data is None:
+        return []
+    try:
+        parent = contract.ParentRecord.from_json(data)
+    except (ValueError, KeyError, TypeError):
+        return []
+    if not any(r.run_id == run_id and r.label == RESEARCH_LABEL for r in parent.runs):
+        return []
+    waiting = (contract.STATUS_AFTER, contract.STATUS_QUEUED)
+    closed: list[str] = []
+    for run in parent.runs:
+        if run_id not in run.after:
+            continue
+        status_path = base / contract.status_rel(run.run_id)
+        prior = _read_json(status_path)
+        status = prior.get("status") if prior else run.status
+        if status not in waiting or contract.read_superseded_by(base, run.run_id) is not None:
+            continue
+        entry = {
+            "status": contract.STATUS_HALTED,
+            "parent_id": parent_id,
+            "reason": reason,
+            ABANDONED_WITH_KEY: run_id,
+        }
+        claimed_write.replace_text(status_path, json.dumps(entry, sort_keys=True) + "\n")
+        closed.append(run.run_id)
+    if closed:
+        for item in data.get("runs", ()):
+            if item.get("run_id") in closed:
+                item["status"] = contract.STATUS_HALTED
+                item["hold_reason"] = reason
+        claimed_write.replace_text(record_path, json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return closed
+
+
 def _own_parent_id(base: Path, run_id: str, contract: Any) -> Optional[str]:
     copy = _read_json(base / contract.run_parent_copy_rel(run_id))
     parent_id = copy.get("parent_id") if copy else None

@@ -476,6 +476,7 @@ def _ram_leg(config: Mapping[str, Any], primitives, payload: Mapping[str, Any]) 
         return None
     own = _requester_session(payload, primitives)
     if own is not None:
+        _release_finished_own(own, primitives)
         reserved = leases.unattributed_count(exclude_session=own) * reserve
         if reading.avail_mb - reserved >= floor:
             return None
@@ -487,6 +488,17 @@ def _ram_leg(config: Mapping[str, Any], primitives, payload: Mapping[str, Any]) 
         _retry("wait for a holder to finish, then retry"),
         legacy="Wait for a holder to finish, then retry",
     )
+
+
+def _release_finished_own(own: Tuple[int, int], primitives) -> None:
+    """Free the requesting session's leases whose command has exited, before the RAM leg denies."""
+    from coordinator_core.bash_guards import _heavy_lease_store as leases
+    from coordinator_core.bash_guards import _session_census as census_mod
+
+    rows = primitives.snapshot()
+    if rows is None:
+        return
+    leases.release_finished(own[0], own[1], rows, census_mod.orphan_trees(rows, 0))
 
 
 def _chain_pids(by_pid: Mapping[int, Any], start: int, anchor_pid: int) -> set:

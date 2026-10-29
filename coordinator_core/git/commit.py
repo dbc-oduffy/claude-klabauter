@@ -100,7 +100,7 @@ from coordinator_core.git.git_objects import (
     object_batch,
     write_object,
 )
-from coordinator_core.git.git_state import head_blobs, head_sha, head_tree_sha, read_commit, read_tree_spine
+from coordinator_core.git.git_state import IndexParseError, read_index, head_blobs,head_sha, head_tree_sha, read_commit, read_tree_spine
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
 from coordinator_core.git import checkpoint_guard
@@ -140,7 +140,23 @@ _EPHEMERAL_EMISSION_RE = re.compile(
 
 class CommitRefused(Exception):
     """The commit did not land and nothing was written. Always safe to
-    retry after reconciling -- no object, no ref move, no index write."""
+    retry after reconciling -- no object, no ref move, no index write.
+
+    `cause` / `first_unhashed` / `batch_count` are set by
+    `hash_worktree_blobs_via_spawn`; every other raise leaves the defaults."""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        cause: str = "",
+        first_unhashed: Optional[str] = None,
+        batch_count: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.first_unhashed = first_unhashed
+        self.batch_count = batch_count
 
 
 class CommitOutcome(NamedTuple):
@@ -371,6 +387,48 @@ def checkin_sizes(
     return sizes
 
 
+_AUTO_NONPRINTABLE = bytes([*range(1, 8), 11, *range(14, 27), *range(28, 32), 127])
+
+
+def _auto_looks_binary(data: bytes) -> bool:
+    """git's `convert_is_binary` for CR-bearing `data`: NUL, a lone CR, or too many
+    non-printable bytes (`gather_stats` counts)."""
+    if b"\x00" in data or re.search(rb"\r(?!\n)", data):
+        return True
+    nonprintable = len(data) - len(data.translate(None, _AUTO_NONPRINTABLE))
+    if data.endswith(b"\x1a"):
+        nonprintable -= 1
+    printable = len(data) - nonprintable - data.count(b"\n") - data.count(b"\r")
+    return (printable >> 7) < nonprintable
+
+
+def _text_pin_checkin(root: Path, rel: str, data: bytes) -> Optional[bytes]:
+    """git's checkin bytes for CR-bearing `data` at a path pinned by `text`, `text=auto` or
+    `eol=lf`, or None when this shape is not reproduced (`eol=crlf`, `-text`, a macro or an
+    unmodelled spelling, an unreadable index). Under `text=auto`, git skips conversion when
+    the path's index blob already carries a CR; that blob is read here, never guessed."""
+    pin = checkin_attrs.resolve_text_pin(root, rel)
+    if pin is None or pin.text == checkin_attrs.TEXT_UNSET or pin.eol == "crlf":
+        return None
+    if pin.text == checkin_attrs.TEXT_UNSPECIFIED and pin.eol is None:
+        return None
+    if pin.text != checkin_attrs.TEXT_AUTO:
+        return data.replace(b"\r\n", b"\n")
+    if _auto_looks_binary(data):
+        return data
+    try:
+        entry = read_index(root).get(rel)
+        if entry is not None:
+            obj = read_object(resolve_git_common_dir(root), entry.sha)
+            if obj is None:
+                return None
+            if b"\r" in obj[1]:
+                return data
+    except IndexParseError:
+        return None
+    return data.replace(b"\r\n", b"\n")
+
+
 def _checkin_bytes(
     root: Path, rel: str, data: bytes, autocrlf: Optional[Callable[[], bool]] = None
 ) -> bytes:
@@ -432,6 +490,9 @@ def _checkin_bytes(
         # batched fallback rather than guessed.
         if bytes([13]) not in data:
             return data
+        converted = _text_pin_checkin(root, rel, data)
+        if converted is not None:
+            return converted
         raise FilterUnsupported(
             f"{rel}: a text/eol attribute ({disposition}) pins this path's "
             "checkin conversion and its content contains CR bytes -- "
@@ -529,12 +590,22 @@ def hash_worktree_blobs_via_spawn(
 
     stdin_data = ("\n".join(paths) + "\n").encode("utf-8", "surrogateescape")
     result = run_git(["hash-object", "-w", "--stdin-paths"], cwd=str(cwd), input=stdin_data)
+    shas = [line for line in result.stdout.splitlines() if line]
     if result.returncode != 0:
+        if result.timed_out:
+            cause = "timed out"
+        elif result.stderr.strip():
+            cause = result.stderr.strip()
+        else:
+            cause = f"exit {result.returncode} with no stderr"
+        first = paths[len(shas)] if len(shas) < len(paths) else None
         raise CommitRefused(
             "git hash-object -w --stdin-paths failed for "
-            f"{len(paths)} path(s): {result.stderr.strip()}"
+            f"{len(paths)} path(s) ({len(shas)} hashed; first unhashed: {first}): {cause}",
+            cause=cause,
+            first_unhashed=first,
+            batch_count=len(paths),
         )
-    shas = [line for line in result.stdout.splitlines() if line]
     if len(shas) != len(paths):
         raise CommitRefused(
             "git hash-object -w --stdin-paths returned "

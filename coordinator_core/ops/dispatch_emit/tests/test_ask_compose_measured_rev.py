@@ -13,8 +13,15 @@ _REFUSED_CLAUSE = "when the measured-rev op refused, that gate measured HEAD, no
 
 def test_measured_rev_instruction_precedes_the_scoped_test_instruction():
     script = _compose(**_JUDGE_KW)
-    assert script.count(f"`coordinator-invoke {MEASURED_REV_OP}`") == 1
-    assert script.index(f"coordinator-invoke {MEASURED_REV_OP}") < script.index("Run the scoped test targets: [")
+    # Each verify agent starts with no context, so every leg that runs scoped tests (the review
+    # wave's and the remnant re-verify's) carries its own measured-rev instruction.
+    measured = [m.start() for m in re.finditer(re.escape(f"`coordinator-invoke {MEASURED_REV_OP}`"), script)]
+    scoped = [m.start() for m in re.finditer(re.escape("Run the scoped test targets: ["), script)]
+    assert len(measured) == len(scoped) >= 1
+    previous_scoped = -1
+    for rev_at, scoped_at in zip(measured, scoped):
+        assert previous_scoped < rev_at < scoped_at
+        previous_scoped = scoped_at
     assert f"{MEASURED_REV_ENV} set to that sha in the test process environment" in script
     assert "If the op refuses, run the tests without it and report the refusal as raw evidence" in script
 

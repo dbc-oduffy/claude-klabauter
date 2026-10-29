@@ -34,6 +34,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, NamedTuple, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.git import call_io_scope
 from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, ROUTES as DESIGN_ROUTES
@@ -116,6 +117,9 @@ def dependents_unstarted_refire_next_action(reason: str, *, run_id: str, sizing_
 
 #: Record-dir file holding a run's revised stop-after phase.
 STOP_AFTER_FILE = "stop-after.json"
+#: `workflow.late_rows`: the live ledger ids the run's staged manifest holds no work for.
+OP_LATE_ROWS = "workflow.late_rows"
+LATE_ROWS_FIELD = "late_rows"
 #: `dispatch.ask_stage` reply key marking a parked run (no manifest handle follows).
 PARKED_REPLY_KEY = "parked"
 SIZING_SCOUT_AGENT_TYPE = "coordinator:sizing-scout"
@@ -286,12 +290,6 @@ def research_is_bounded_single_write(sizing: Mapping, writes: Sequence[str]) -> 
     return _BOUNDED_INPUT_RE.search(str(sizing.get("intent") or "")) is not None
 
 
-#: `ask_gate` refusal for a research sizing whose request carries `writes`.
-RESEARCH_MIXED_REFUSAL = (
-    "Research ask also names file writes. Submit the research ask alone to /coordinator:research. "
-    "Once research.close (with `sizing`) or `workflow.revise build_only=true` drops the sizing's "
-    "research block, the build ask fires."
-)
 ASSEMBLE_SCHEMA = {
     "type": "object",
     "required": ["exit_code", "stdout"],
@@ -475,7 +473,14 @@ def measured_rev_record_path(repo_root: Path, run_id: str) -> Path:
 def record_dir(repo_root: Path, run_id: str) -> Path:
     """The run's record directory: `state/warp/<run_id>`, except an in-flight run whose record
     file sits only under `scratch/warp/<run_id>`. Only a record file selects scratch, never the
-    directory's existence. Raises ValueError on an unsafe run_id or an escape."""
+    directory's existence. Raises ValueError on an unsafe run_id or an escape. Inside a
+    `call_io_scope` the answer is computed once per (root, run_id)."""
+    if not isinstance(run_id, str):
+        return _record_dir(repo_root, run_id)
+    return call_io_scope.memo("record-dir", f"{repo_root}\0{run_id}", lambda: _record_dir(repo_root, run_id))
+
+
+def _record_dir(repo_root: Path, run_id: str) -> Path:
     if not isinstance(run_id, str) or not safe_id(run_id):
         raise ValueError(f"run_id {run_id!r} is not a single safe path segment")
     root = Path(repo_root)
@@ -503,6 +508,9 @@ RESUME_LEDGER_HALT_SHA_FIELD = "halt_sha"
 RESUME_LEDGER_SINCE_SHA_FIELD = "since_sha"
 #: `resume_ledger` verdict key carrying the full shas of this plan's checkpoint commits newer than the since-halt base.
 RESUME_LEDGER_SINCE_HALT_SHAS_FIELD = "since_halt_shas"
+#: `resume_ledger` verdict key carrying `{row_id: full sha}` from `dispatch.record_halted_run_landed`'s `met_by`:
+#: hand commits at or after the halt, which `since_halt_shas` (checkpoint commits only) never holds.
+RESUME_LEDGER_LANDED_MET_BY_FIELD = "landed_met_by"
 #: `resume_ledger` verdict key carrying `{row_id: {remaining: [str], evidence: str}}` for blocking rows.
 RESUME_LEDGER_REMAINING_FIELD = "remaining"
 #: `resume_ledger` verdict key carrying the revise note texts, oldest first.

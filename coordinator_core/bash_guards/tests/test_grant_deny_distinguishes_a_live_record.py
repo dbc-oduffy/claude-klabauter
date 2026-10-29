@@ -48,10 +48,12 @@ def _render(**kwargs) -> str:
 
 class TestNoRecordBranchIsUnchanged:
 
-    def test_absent_record_still_asks_the_pm(self) -> None:
+    def test_absent_record_routes_to_the_group_em(self) -> None:
         rendered = _render(ungranted_record=None)
-        assert "Ask the PM for a Tier-U authorization grant" in rendered
-        assert 'tier-u-grant-cli grant pm "<verbatim PM utterance>"' in rendered
+        assert "Tier-U suite run without an authorization grant" in rendered
+        assert ctsi._GROUP_EM_GRANT_LINE in rendered
+        assert "Ask the PM" not in rendered
+        assert "tier-u-grant-cli grant pm" not in rendered
 
     def test_tie_branch_still_names_no_tier_f_escape(self) -> None:
         assert "No Tier-F escape" in _render(is_tie=True, ungranted_record=None)

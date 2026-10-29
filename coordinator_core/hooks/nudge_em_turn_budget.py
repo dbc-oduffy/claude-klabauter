@@ -17,17 +17,19 @@ import os
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
-from coordinator_core.warp_fire import fire_step
+from coordinator_core.warp_fire import NAG_REPEAT_PREFIX, fire_step, nag_text
 
 GENERATES: list = []
 
 _KILL_SWITCH = "COORDINATOR_HOOK_NUDGE_EM_TURN_BUDGET_DISABLED"
 
 
-def pre_fire_text(turns: int, bar: int) -> str:
-    return (
-        f"[em-turn-budget] {turns} turns before the first engine-ask, bar {bar}. " + fire_step()
-    )
+def pre_fire_text(turns: int, bar: int, session_id: str = "") -> str:
+    """Full text on the session's first nag; a repeat is the one terse counted line. No session id: full."""
+    nag = nag_text(session_id) if session_id else fire_step()
+    if nag.startswith(NAG_REPEAT_PREFIX):
+        return nag
+    return f"[em-turn-budget] {turns} turns before the first engine-ask, bar {bar}. " + nag
 
 
 def post_landing_text(turns: int, bar: int) -> str:
@@ -70,7 +72,7 @@ def _advisory(params: dict) -> str:
                 from coordinator_core.hooks._em_write_budget import arm_advised
 
                 arm_advised(root, sid)
-                text = pre_fire_text(turns, etc.PRE_FIRE_TURNS_MAX)
+                text = pre_fire_text(turns, etc.PRE_FIRE_TURNS_MAX, sid)
         elif phase == ers.PHASE_IN_FLIGHT and phase.run_id:
             state["last_engine_run_id"] = phase.run_id
         elif phase == ers.PHASE_LANDED_GREEN and phase.run_id:

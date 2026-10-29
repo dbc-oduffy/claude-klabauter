@@ -2,7 +2,8 @@
 
 Invariant: the set is the run's own declared, leg-footprint, credited-chunk and withheld paths,
 minus scratch and minus any path `land_run._peer_held` reports held by a live peer (an
-unanswerable claim lookup holds nothing). Never the tree. `run_write_set` spawns nothing; `unclaimed_dirty` spawns one git.
+unanswerable claim lookup holds nothing). A peer's bare declaration never drops a path this
+run's own checkpoint landed; a live touch claim still does. Never the tree. `run_write_set` spawns nothing; `unclaimed_dirty` spawns one git.
 """
 
 from __future__ import annotations
@@ -95,7 +96,20 @@ def _without_peer_held(root: Path, ordered: list, own_session: str, run_id: str)
     # Lazy: land_run imports refire_inherited_scope, which reaches this module.
     from coordinator_core.ops.dispatch_emit import land_run
 
-    held = land_run._peer_held(root, ordered, own_session or None, run_id, None)
+    plan_rel = run_base = None
+    base = record_dir(root, run_id) if run_id else None
+    manifest = _json_object(base / "manifest.json") if base else None
+    if base is not None and manifest is not None:
+        plan_rel = _plan_rel(root, manifest, _sizing_rel(base))
+        try:
+            from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base
+            from coordinator_core.ops.dispatch_emit.halted_run import halted_run_base
+
+            run_base = halted_run_base(base) or recorded_run_base(root, run_id)
+        except Exception:  # noqa: BLE001 -- no base: the checkpoint walk stops at the first non-checkpoint commit
+            run_base = None
+    held = land_run._peer_held(
+        root, ordered, own_session or None, run_id, None, plan_rel=plan_rel, run_base=run_base)
     return tuple(p for p in ordered if p not in held)
 
 

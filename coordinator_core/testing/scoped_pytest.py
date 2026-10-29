@@ -101,20 +101,16 @@ def check_allowed(allow: Sequence[str], pytest_args: Sequence[str]) -> Optional[
     return None
 
 
-def _std_handles() -> dict:
-    """Popen kwargs handing the child the caller's own stdout/stderr. CREATE_NO_WINDOW gives the
-    child a fresh hidden console unless std handles are passed explicitly, so its output vanishes."""
-    return {"stdout": 1, "stderr": 2}
-
-
 def _spawn(argv: list) -> tuple:
     """Start the child contained; returns (proc, kill) where kill() ends the whole tree."""
     if _IS_WINDOWS:
         from coordinator_core.diagnostics import contained_run as cr
+        from coordinator_core.win_portability import no_console_passthrough_kwargs
 
         job = cr._create_kill_on_close_job()
         flags = cr.CREATE_NO_WINDOW | cr.CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP
-        proc = subprocess.Popen(argv, creationflags=flags, **_std_handles())
+        # Passthrough fds: without a std-stream kwarg a CREATE_NO_WINDOW child's pytest output is lost.
+        proc = subprocess.Popen(argv, **{**no_console_passthrough_kwargs(), "creationflags": flags})
         try:
             cr._assign_to_job(job, int(proc._handle))
         except Exception:

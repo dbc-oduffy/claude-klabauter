@@ -21,6 +21,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 from glob import escape as glob_escape
 
 from coordinator_core.ops.dispatch_emit import halt_product_gates
+from coordinator_core.ops.dispatch_emit.ask_staged_prompts import PROMPTS_DIR
 from coordinator_core.session.record_homes import home_dir
 
 ARTIFACT_CLASSES = (
@@ -155,8 +156,8 @@ def _read_json(root: Path, rel: str) -> Optional[dict]:
 
 def _tree_files(root: Path, dir_rel: str) -> list[str]:
     """Every file under ``dir_rel``, recursive, sorted; ``scratch/`` paths, emitted workflow scripts
-    and their receipts (gitignored; `git.commit` refuses them, e.g. a halt-time resume script) and
-    symlinked dirs are skipped. A missing dir yields ``[]``."""
+    and their receipts (gitignored; `git.commit` refuses them, e.g. a halt-time resume script), any
+    ``prompts/`` dir (local scratch, gitignored) and symlinked dirs are skipped. A missing dir yields ``[]``."""
     out: list[str] = []
     stack = [dir_rel]
     while stack:
@@ -171,6 +172,8 @@ def _tree_files(root: Path, dir_rel: str) -> list[str]:
                         if not entry.name.endswith((".workflow.mjs", ".workflow.mjs.emitted.json")):
                             out.append(rel)
                     elif entry.is_dir(follow_symlinks=False):
+                        if entry.name == PROMPTS_DIR:
+                            continue
                         stack.append(rel)
         except OSError:
             continue

@@ -111,7 +111,10 @@ def test_ask_with_context_in_a_registered_sibling_repo_emits_a_run(tmp_path, mon
         real_load(root, brief=None, brief_file=None, context=params["ask_context"], session_id="s1")
         return {"path": str(root / "run.js"), "run_id": "r1", "fire_args": {}}
 
-    env = mod.evaluate(_ask_payload(cwd_repo, ctx), emit=emit)
+    payload = _ask_payload(cwd_repo, ctx)
+    # The sibling context reroots the run to a foreign repo, which needs cross-repo assent.
+    payload["tool_input"]["args"]["cross_repo_approved"] = True
+    env = mod.evaluate(payload, emit=emit)
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert roots == [sibling]
 

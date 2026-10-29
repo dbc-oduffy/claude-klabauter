@@ -110,6 +110,19 @@ def test_finished_task_yields_nothing_and_retires_record(tmp_path, tdir, status)
     assert not (tdir / f"workflow-run-{SID}-t1.json").exists()
 
 
+def test_completion_seen_before_stall_stays_silent_after_it_leaves_the_tail(tmp_path, tdir):
+    run_dir = _run(tmp_path, "r1", transcript_age=10)  # fresh: not yet stalled
+    _record(tdir, run_dir)
+    note = "<task-notification><task-id>t1</task-id><status>completed</status></task-notification>"
+    tp = _transcript(tmp_path, json.dumps({"content": note}))
+    assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
+    # the run's journal later reads stalled and the notification has scrolled away
+    _age(run_dir / "subagents" / "agent-a1.jsonl", 7200)
+    tp2 = _transcript(tmp_path, json.dumps({"content": "unrelated later turn"}))
+    assert mod.workflow_stall_resume_text(SID, tp2, NOW) == ""
+    assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
+
+
 def test_other_tasks_completion_leaves_live_run_advised(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"))
     note = "<task-notification><task-id>zzz</task-id><status>completed</status></task-notification>"

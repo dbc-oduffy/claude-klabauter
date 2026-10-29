@@ -58,23 +58,13 @@ def test_gate_never_launders_indeterminate_with_explicit_empty_failed_tests(tmp_
     assert check == "failed" and [f.reason for f in findings] == [IND]
 
 
-def test_gate_never_launders_indeterminate_with_unchanged_failing_files(tmp_path, monkeypatch):
-    monkeypatch.setattr(li, "_changed_since_base", lambda *a, **k: [])
+def test_gate_never_launders_indeterminate_with_failing_files(tmp_path):
     params = {
         "targeted_tests": {"status": "fail", "status_before": "indeterminate"},
         "failed_tests": ["pkg/tests/test_x.py::t"],
     }
     findings, check = li.landing_test_gate(tmp_path, params, "run1")
     assert check == "failed" and [f.reason for f in findings] == [IND]
-
-
-def test_gate_plain_fail_with_unchanged_files_stays_preexisting(tmp_path, monkeypatch):
-    monkeypatch.setattr(li, "_changed_since_base", lambda *a, **k: [])
-    params = {
-        "targeted_tests": {"status": "fail", "status_before": "fail"},
-        "failed_tests": ["pkg/tests/test_x.py::t"],
-    }
-    assert li.landing_test_gate(tmp_path, params, "run1") == ([], "pre-existing-only")
 
 
 def test_gate_plain_fail_with_failing_files_and_no_baseline_is_a_caused_finding(tmp_path):

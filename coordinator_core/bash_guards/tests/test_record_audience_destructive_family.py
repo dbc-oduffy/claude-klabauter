@@ -81,7 +81,7 @@ def test_stash_destruction_deny_keeps_em_text_and_a_typed_subagent_render():
     record = destruction.check({"tool_name": "Bash", "tool_input": {"command": "git stash drop"}})
     assert isinstance(record, AlternativeRecord) and record.verdict_kind == "deny"
     em = render(record, Audience.EM)["hookSpecificOutput"]["permissionDecisionReason"]
-    assert em == record.em_text and "permanently discards stash content" in em
+    assert em == record.em_text and "discards stash content for good" in em
     sub = render(record, Audience.SUBAGENT)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "git stash show -p" in sub and "needs authorizing" in sub
 

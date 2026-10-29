@@ -207,6 +207,39 @@ def release(
     return removed
 
 
+def release_finished(
+    session_pid: int,
+    session_ctime: int,
+    rows: Sequence,
+    trees: Sequence,
+    directory: Optional[Path] = None,
+) -> int:
+    """Delete the session's unattributed leases whose command has finished; return the count.
+
+    A lease is finished when it carries a launch mark, no process in rows was created at that mark
+    (the launching shell has exited), and no tree in trees could still be its command. A lease
+    without a mark, or of another session, is never touched.
+
+    TRAP: a pytest or test_tier lease holds the session's own pid until a tree is attributed, and a
+    run that exits before attribution leaves it reserving RAM until the TTL.
+    """
+    live_ctimes = {r.ctime for r in rows}
+    removed = 0
+    for path, rec in _entries(directory or leases_dir()):
+        if rec is None or not _is_unattributed(rec) or rec.launch_ctime <= 0:
+            continue
+        if (rec.session_pid, rec.session_ctime) != (session_pid, session_ctime):
+            continue
+        if rec.launch_ctime in live_ctimes:
+            continue
+        family = CLASS_IMAGES.get(rec.heavy_class, frozenset())
+        if any(t.root.ctime >= rec.launch_ctime and t.lead in family for t in trees):
+            continue
+        _remove(path)
+        removed += 1
+    return removed
+
+
 def oldest_open_launch(
     directory: Optional[Path] = None,
     now: Optional[Callable[[], float]] = None,

@@ -97,6 +97,39 @@ def test_build_ignores_a_run_that_is_not_halted(repo, monkeypatch):
     assert hrr.read(record_dir(repo, RUN), 1000) is hrr.MISSING
 
 
+SID = "7f8efcbc-1111-4222-8333-444455556666"
+
+
+def _stage(repo, session_id):
+    rd = record_dir(repo, RUN)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "run-stage.json").write_text(json.dumps({"session_id": session_id, "stage": "halted"}), encoding="utf-8")
+
+
+def test_build_threads_the_run_records_canonical_session_id_into_script_and_receipt(repo, monkeypatch):
+    _halt(repo, monkeypatch)
+    _stage(repo, SID)
+    record = hrb.build(repo, RUN)
+    script = repo / record["composed_script_rel"]
+    text = script.read_text(encoding="utf-8")
+    assert f"const _SESSION_ID = '{SID}';" in text or f'const _SESSION_ID = "{SID}";' in text
+    receipt = json.loads(script.with_name(script.name + ".emitted.json").read_text(encoding="utf-8"))
+    assert receipt["session_id"] == SID
+
+
+@pytest.mark.parametrize("bad", [None, "", "not-a-uuid"])
+def test_build_omits_an_absent_or_non_canonical_session_id(repo, monkeypatch, bad):
+    _halt(repo, monkeypatch)
+    _stage(repo, bad)
+    record = hrb.build(repo, RUN)
+    script = repo / record["composed_script_rel"]
+    text = script.read_text(encoding="utf-8")
+    assert "const _SESSION_ID = '';" in text or 'const _SESSION_ID = "";' in text
+    assert "not-a-uuid" not in text
+    receipt = json.loads(script.with_name(script.name + ".emitted.json").read_text(encoding="utf-8"))
+    assert receipt["session_id"] == ""
+
+
 def test_main_rejects_a_wrong_argument_count():
     assert hrb.main(["only-one"]) == 2
 

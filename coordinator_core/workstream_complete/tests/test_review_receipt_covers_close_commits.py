@@ -1,0 +1,61 @@
+"""review_receipt counts only a receipt stamped at or after the close's newest commit."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+
+import pytest
+
+import coordinator_core.workstream_complete as wsc
+from coordinator_core.subagent_sandbox import provision_report
+
+_SID = "covsid123"
+_STAMP = "2026-08-27T13:00:00+00:00"
+_STAMP_EPOCH = int(datetime.fromisoformat(_STAMP).astimezone(timezone.utc).timestamp())
+
+
+def _write_sidecar(tmp_path: Path, with_receipt: bool = True) -> Path:
+    d = tmp_path / "state" / "subagent-share" / _SID
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "code-reviewer.deadbeef01.md"
+    agent_type = "coordinator:code-reviewer"
+    doc = (
+        f"---\nstatus: complete\nagent_type: {agent_type}\nlead_session_id: {_SID}\n"
+        "commits: []\n---\n\n## Findings\n\nReal review content here.\n"
+    )
+    if with_receipt:
+        doc = provision_report._splice_review_receipt(doc, _SID, "deadbeef01", agent_type, _STAMP)
+    p.write_text(doc, encoding="utf-8")
+    return p
+
+
+def _gate(tmp_path: Path, commits):
+    return wsc._compute_review_receipt_gate(
+        tmp_path, _SID, "implemented", None, None, close_commits=commits
+    )
+
+
+def test_stale_receipt_with_later_commit_blocks_and_names_sha(tmp_path):
+    _write_sidecar(tmp_path)
+    gate = _gate(tmp_path, (("aaaa111", _STAMP_EPOCH - 60), ("bbbb222", _STAMP_EPOCH + 60)))
+    assert gate.blocks is True
+    assert "bbbb222" in gate.detail
+    assert "aaaa111" not in gate.detail
+
+
+def test_receipt_stamped_after_newest_commit_clears(tmp_path):
+    _write_sidecar(tmp_path)
+    gate = _gate(tmp_path, (("aaaa111", _STAMP_EPOCH - 60), ("bbbb222", _STAMP_EPOCH)))
+    assert gate.blocks is False
+
+
+def test_no_known_close_commits_keeps_prior_behaviour(tmp_path):
+    _write_sidecar(tmp_path)
+    assert _gate(tmp_path, ()).blocks is False
+
+
+def test_without_receipt_block_the_gate_blocks_even_when_commits_precede(tmp_path):
+    _write_sidecar(tmp_path, with_receipt=False)
+    gate = _gate(tmp_path, (("aaaa111", _STAMP_EPOCH - 60),))
+    assert gate.blocks is True

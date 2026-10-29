@@ -371,6 +371,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "dispatch.terminal_commit":                "coordinator_core.ops.dispatch_emit.terminal_commit",
     "dispatch.land_run":                       "coordinator_core.ops.dispatch_emit.land_run",
     "dispatch.land_verified_remainder":        "coordinator_core.ops.dispatch_emit.land_remainder",
+    "dispatch.adopt_orphaned_run":             "coordinator_core.ops.dispatch_emit.orphan_adopt",
     "dispatch.objective_write":                "coordinator_core.ops.dispatch_emit.objective_write",
     "dispatch.objective_check":                "coordinator_core.ops.dispatch_emit.objective_check",
     "dispatch.objective_calibrate":            "coordinator_core.ops.dispatch_emit.objective_calibrate",

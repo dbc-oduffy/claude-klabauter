@@ -174,6 +174,7 @@ from typing import Any, Mapping, NamedTuple, Optional
 
 from coordinator_core.completion_record_integrity import _find_archived_plan
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
+from coordinator_core.workstream_complete.decision_keys import COMPLETION_KEY_ALIASES
 from coordinator_core.ops.ceremony.wsc_disposition import PREDECESSOR_CONSUMED, canonicalize
 from coordinator_core.workstream_complete.directives_session_hygiene import AFTER_CLOSE_COMMIT_KEY
 
@@ -215,7 +216,12 @@ _KEY_TITLE = "title"
 #: One written decision per review note; the close commit refuses until each note has one.
 _KEY_REVIEW_NOTE_DECISIONS = "review_note_decisions"
 
+#: Bare `decisions` keys `d-complete-entry` needs (title, prose, nature) — the
+#: alias targets, so the judgment point and the brief stub name what apply reads.
+COMPLETION_ENTRY_KEYS: tuple[str, ...] = tuple(COMPLETION_KEY_ALIASES.values())
+
 FREE_VALUE_KEYS: tuple[str, ...] = (
+    *COMPLETION_ENTRY_KEYS,
     _KEY_GOVERNING_PLAN_SLUG,
     _KEY_NATURE,
     _KEY_PLAN_SLUG,

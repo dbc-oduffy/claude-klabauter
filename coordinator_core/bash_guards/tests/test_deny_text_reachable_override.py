@@ -168,8 +168,9 @@ def test_deny_reason_grant_render_never_names_an_override_route(is_tie: bool) ->
     if is_tie:
         assert "No Tier-F escape" in rendered
     else:
-        assert "Ask the PM for a Tier-U authorization grant" in rendered
-    assert 'tier-u-grant-cli grant pm "<verbatim PM utterance>"' in rendered
+        assert "Tier-U suite run without an authorization grant" in rendered
+    assert "tier-u-grant-cli grant pm" not in rendered
+    assert _ctsi._GROUP_EM_GRANT_LINE in rendered
 
 
 def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:

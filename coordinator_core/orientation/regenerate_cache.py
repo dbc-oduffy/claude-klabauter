@@ -955,6 +955,10 @@ _ACTION_MAP = {
     "gh-size-limit": "see .git/push-failures.log; resolve, then push",
     "gh-lfs-quota": "see .git/push-failures.log; resolve, then push",
     "timeout": "push timed out — retry: git push (see .git/push-failures.log if it recurs)",
+    "ref-lock": (
+        "stale local ref lock under .git/refs (a *.lock file) blocks every push — "
+        "with no git process running, remove it, then: git push"
+    ),
     # `cadence-sweep`'s two classes (`_feed_failure_detector` in
     # warm/push_cadence.py -- the sole non-test caller of `log_failure`).
     # OBSERVED vs NEVER-OBSERVED is the whole point: `sweep-failed` is a push

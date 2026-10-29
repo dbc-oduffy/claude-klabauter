@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -1161,21 +1162,47 @@ def test_every_doe_typed_call_reads_the_engine_table():
     for stage, agent_type in grind_stages.STAGE_AGENT_TYPES.items():
         assert grind_stages.STAGE_MODELS[stage] == emit._AGENT_MODELS[agent_type]
     general = set(grind_stages.STAGE_MODELS) - set(grind_stages.STAGE_AGENT_TYPES)
-    assert general == {"triage", "refute-close", "fix", "ledger-sweep"}
+    assert general == {"triage", "refute-close", "fix", "ledger-sweep", "adjudicate"}
 
 
-@pytest.mark.parametrize("stage", sorted(set(grind_stages.STAGE_AGENT_TYPES) - {"adjudicate"}))
+@pytest.mark.parametrize("stage", sorted(grind_stages.STAGE_AGENT_TYPES))
 def test_a_models_override_changing_a_pinned_type_is_refused(stage):
     with pytest.raises(ValueError, match="pinned to"):
         _calls_by_stage(models={stage: "opus"})
 
 
-def test_the_adjudicator_override_is_refused_and_its_model_is_opus():
+def test_the_adjudicate_block_is_one_sonnet_medium_call_with_no_apm():
     from coordinator_core.ops.dispatch_emit import pm_adjudication
 
-    assert pm_adjudication.ADJUDICATOR_AGENT_TYPE == grind_stages.APM_AGENT_TYPE
-    assert "model: 'opus'" in pm_adjudication.compose_adjudicate_block(agent_type_host=None)
-    with pytest.raises(ValueError, match="pinned to 'opus'"):
-        pm_adjudication.compose_adjudicate_block(
-            agent_type_host=None, models={"adjudicate": "haiku"}
-        )
+    assert pm_adjudication.ADJUDICATOR_AGENT_TYPE == grind_stages.GENERAL_PURPOSE_AGENT_TYPE
+    assert pm_adjudication.APM_RULING_AGENT_TYPE == "coordinator:apm"
+    block = pm_adjudication.compose_adjudicate_block(agent_type_host=None)
+    assert "model: 'sonnet'" in block and "effort: 'medium'" in block
+    assert "coordinator:apm" not in block and "opus" not in block
+    assert len(re.findall(r"\bagent\(", block)) == 1
+    assert "Promise.all" not in block
+
+
+def test_fix_prompt_makes_test_vs_code_side_the_fixers_call_without_a_tradeoff():
+    fix_call = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
+    )
+    assert "test-side or code-side fix within the locked files is your call" in fix_call
+    assert "never set `has_tradeoff` for it" in fix_call
+    assert "true only when your fix genuinely carries a tradeoff" in fix_call
+
+
+@pytest.mark.parametrize("targeted", [False, True])
+def test_verify_judge_leg_runs_at_medium_effort(targeted):
+    call = grind_stages.compose_verify_agent_call(
+        label="v", phase_title="Verify", targeted_runner=targeted
+    )
+    assert "effort: 'medium'" in call
+    assert "effort: 'high'" not in call
+
+
+def test_the_adjudicate_block_pins_sonnet():
+    from coordinator_core.ops.dispatch_emit import pm_adjudication
+
+    block = pm_adjudication.compose_adjudicate_block(agent_type_host=None)
+    assert "model: 'sonnet'" in block

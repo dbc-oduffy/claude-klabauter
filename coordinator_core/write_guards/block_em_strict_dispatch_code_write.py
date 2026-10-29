@@ -46,7 +46,7 @@ from coordinator_core.hooks.nudge_unrouted_sizing import (
 from coordinator_core.ops.read_sizing_object_fields import _read_sizing_object_fields
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
-from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_step
+from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, fire_step, nag_text
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -111,14 +111,20 @@ def _no_sizing_deny(file_path: str) -> Dict[str, Any]:
     }
 
 
-def _dispatch_deny(tshirt_display: str) -> Dict[str, Any]:
+def _nag(session_id: str) -> str:
+    """The session's counted nag: full on the first, one terse line after. No session id: full."""
+    sizing = "<this session's sizing path>"
+    return nag_text(session_id, sizing) if session_id else fire_step(sizing)
+
+
+def _dispatch_deny(tshirt_display: str, session_id: str = "") -> Dict[str, Any]:
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
                 f"strict_dispatch: sized {tshirt_display} — EM does not type "
-                "code at ≥S.\n" + fire_step("<this session's sizing path>")
+                "code at ≥S.\n" + _nag(session_id)
             ),
         }
     }
@@ -159,15 +165,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         tshirt = estimate.get("tshirt") if isinstance(estimate, dict) else None
 
         if not isinstance(tshirt, str) or not tshirt.strip():
-            return _dispatch_deny("<missing/unparseable tshirt, treated as >= S>")
+            return _dispatch_deny("<missing/unparseable tshirt, treated as >= S>", session_id)
 
         tshirt_norm = tshirt.strip().upper()
         if tshirt_norm == "XS":
             return None
         if tshirt_norm in _DENY_TSHIRTS:
-            return _dispatch_deny(tshirt_norm)
+            return _dispatch_deny(tshirt_norm, session_id)
         return _dispatch_deny(
-            f"<unparseable tshirt {_sanitize_for_reason(tshirt_norm)!r}, treated as >= S>"
+            f"<unparseable tshirt {_sanitize_for_reason(tshirt_norm)!r}, treated as >= S>",
+            session_id,
         )
     except Exception:
         return None

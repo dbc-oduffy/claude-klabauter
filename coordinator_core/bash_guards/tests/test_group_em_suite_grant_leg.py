@@ -50,9 +50,10 @@ def test_live_group_em_grant_clears_the_authority_leg(repo, monkeypatch):
 def test_expired_group_em_grant_is_denied_with_both_remedy_lines(repo, monkeypatch):
     monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (False, {"k": 1}))
     reason = _reason(_enveloped(guard.check)(_payload(_FULL, repo)))
-    assert "with-suite-mutex" not in reason
-    assert "tier-u-grant-cli grant pm" in reason
+    assert "with-suite-mutex -- python -m pytest" in reason
+    assert "without an authorization grant" in reason
     assert 'tier-u-grant-cli group-em-grant <session> "<ruling>"' in reason
+    assert "tier-u-grant-cli grant pm" not in reason
 
 
 def test_pm_grant_record_is_returned_when_both_legs_miss(repo, monkeypatch):

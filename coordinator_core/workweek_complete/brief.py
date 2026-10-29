@@ -77,6 +77,7 @@ import argparse
 import json
 import re
 import sys
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -103,8 +104,10 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
     partition_reportable,
 )
+from coordinator_core.ops import workday_complete_backfill_scan as backfill_scan
 from coordinator_core.resolution.facade import resolve_operator_config
 from coordinator_core.session import record_homes
+from coordinator_core.workweek_start import header
 from coordinator_core.workweek_complete.brief_inputs import (
     _resolve_repo_root,
     compute_brief_inputs,
@@ -174,16 +177,19 @@ def _directive(
     args: list[str],
     depends_on: Optional[str] = None,
     already_satisfied: bool = False,
+    detail: Optional[str] = None,
 ) -> dict[str, Any]:
     """One `directives[]` entry. `cli` MUST be a member of `CONSUMES_MANIFEST`
     (enforced by `_build_directives`'s own assertion, mirroring C2's
-    `_directive` helper)."""
+    `_directive` helper). `detail` is the string the command renders verbatim;
+    absent, it names the invocation."""
     return {
         "id": id,
         "cli": cli,
         "args": list(args),
         "depends_on": depends_on,
         "already_satisfied": already_satisfied,
+        "detail": detail if detail else " ".join([cli, *args]),
     }
 
 
@@ -233,7 +239,13 @@ def _catch_up_archive_directive(week_start: str, *, move_priorities: bool) -> di
     if move_priorities:
         args.append("--move-priorities")
     return _directive(
-        f"{CATCH_UP_ARCHIVE_PREFIX}_{week_start}", cli="workweek-complete-close", args=args
+        f"{CATCH_UP_ARCHIVE_PREFIX}_{week_start}",
+        cli="workweek-complete-close",
+        args=args,
+        detail=(
+            f"Archive missed week {week_start}..{week_end}: dated files move to "
+            f"archive/week-changelogs/{week_start}/, no release, no push."
+        ),
     )
 
 
@@ -252,7 +264,12 @@ def _to_catch_up(
     out: list[dict[str, Any]] = []
     for entry in directives:
         if entry["id"] == "d_step1b_backfill_changelog_gaps":
-            entry = {**entry, "args": ["--through", through.isoformat()]}
+            args = ["--through", through.isoformat()]
+            entry = {
+                **entry,
+                "args": args,
+                "detail": f"{entry['cli']} {' '.join(args)}",
+            }
         if entry["id"] == "d_step13_archive_close":
             out.extend(
                 _catch_up_archive_directive(week, move_priorities=week == anchor_iso)
@@ -502,6 +519,8 @@ def _build_directives(
             "not a member of CONSUMES_MANIFEST (AC15c: no phantom verbs)"
         )
         entry["hard_block"] = entry["id"] in hard_block_ids
+        if not entry.get("detail"):
+            entry["detail"] = " ".join([entry["cli"], *entry["args"]])
         if entry["id"] in best_effort_ids:
             entry["best_effort"] = True
     return directives
@@ -808,23 +827,47 @@ def _resolve_week_period(
     period arithmetic is possible: an unflagged run keeps the full concluding ceremony."""
     anchor = _read_week_anchor(repo_root)
     explicit = "catch_up" if catch_up else "conclude" if conclude else None
-    if anchor is None:
-        if explicit is None:
-            return (
-                PeriodMode(
-                    "conclude",
-                    "auto-clock",
-                    now_local.date().isoformat(),
-                    (),
-                    "no dated Week starting in HEADER.md; concluding ceremony kept",
-                ),
-                None,
-            )
-        anchor = now_local.date()
-    period = resolve_period_mode(
-        "week", now_local, explicit, week_anchor=anchor, concluded=_archived_weeks(repo_root)
+    if anchor is None and explicit is None:
+        return (
+            PeriodMode(
+                "conclude",
+                "auto-clock",
+                now_local.date().isoformat(),
+                (),
+                "no dated Week starting in HEADER.md; concluding ceremony kept",
+            ),
+            None,
+        )
+    archived = set(_archived_weeks(repo_root))
+    derived = tuple(
+        w
+        for w in (header.missed_weeks(Path(repo_root), now_local.date()) if repo_root else ())
+        if w not in archived
     )
+    chain = anchor
+    if chain is None:
+        chain = date.fromisoformat(derived[0]) if derived else now_local.date()
+    period = resolve_period_mode(
+        "week", now_local, explicit, week_anchor=chain, concluded=archived
+    )
+    if period.mode == "catch_up" and derived:
+        missed = tuple(sorted({*period.missed, *derived}))
+        if anchor is None:
+            missed = tuple(w for w in missed if w in derived)
+        period = replace(period, missed=missed)
     return period, anchor
+
+
+def _daily_gap_summary(repo_root: Optional[str]) -> str:
+    """The daily backfill-scan's uncovered-day count for a catch-up lead; empty when the scan cannot run."""
+    if not repo_root:
+        return ""
+    try:
+        result = backfill_scan.scan(str(repo_root))
+    except Exception:  # noqa: BLE001 - a lead line must not fail the brief
+        return ""
+    older = f" plus {len(result.older_gaps)} older" if result.older_gaps else ""
+    return f" Daily backfill-scan gaps: {len(result.rows)} day(s){older}."
 
 
 def _catch_up_narration_lead(period: PeriodMode) -> str:
@@ -889,7 +932,9 @@ def brief(
     if reported_narration:
         narration = f"{narration} {reported_narration}"
     if in_catch_up:
-        narration = f"{_catch_up_narration_lead(period)} {narration}"
+        narration = (
+            f"{_catch_up_narration_lead(period)}{_daily_gap_summary(inputs.repo_root)} {narration}"
+        )
 
     envelope = build_envelope(
         artifact={"kind": "ceremony", "name": "workweek-complete"},

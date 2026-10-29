@@ -39,7 +39,6 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     LEG_REFUSE,
     UNCLAIMED_ROWS_HALT_KIND,
     RESEARCH_HANDBACK_ROUTE,
-    RESEARCH_MIXED_REFUSAL,
     research_is_bounded_single_write,
     LEDGER_DERIVED_ROW_PREFIX,
     RESUME_LEDGER_ARM_FIELD,
@@ -145,6 +144,80 @@ def handback_line(sizing: dict) -> str:
 
 def _halt(kind: str, reason: str, **extra: object) -> GateVerdict:
     return GateVerdict(arm=None, halt={"kind": kind, "reason": reason, **extra})
+
+
+def _research_build_split_verdict(
+    repo_root: Path, sizing: Mapping, sizing_rel: str, writes: Sequence[str]
+) -> GateVerdict:
+    """Mint a ready research sibling and a build sibling held `after` it; the verdict fires the research run.
+
+    Writes two derived sizings beside `sizing_rel` and mints the pair through `ask_fanout`'s `sizings` arm.
+    A notebooklm source with no derivable targets halts naming them, writing nothing."""
+    import uuid
+
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit import ask_fanout
+    from coordinator_core.ops.dispatch_emit.research_build_split import (
+        notebooklm_targets_or_halt,
+        split_research_build,
+    )
+    from coordinator_core.session import claimed_write
+
+    targets, missing = notebooklm_targets_or_halt(sizing["research"])
+    if missing:
+        return _halt(HALT_RESEARCH, missing, route=RESEARCH_HANDBACK_ROUTE)
+    research_doc, build_doc = split_research_build(sizing, sizing_rel, writes)
+    if targets:
+        research_doc["research"]["targets"] = targets
+    stem = Path(sizing_rel).stem
+    for doc in (research_doc, build_doc):
+        # The fan-out requires a plan edge. A sizing with none gets a pointer to no file: a plan edge that
+        # names no plan reads as "no plan" downstream.
+        if not (isinstance(doc.get("plan"), str) and doc["plan"].strip()):
+            doc["plan"] = f"docs/plans/{stem}.md"
+    base = f"{sizing_rel[: -len('.yaml')] if sizing_rel.endswith('.yaml') else sizing_rel}-{uuid.uuid4().hex[:6]}"
+    rels = (f"{base}-research.yaml", f"{base}-build.yaml")
+    for rel, doc in zip(rels, (research_doc, build_doc)):
+        claimed_write.create_exclusive(
+            Path(repo_root) / rel, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+        )
+    params: dict = {
+        "sizings": [
+            {"sizing": rels[0], "label": "research", "ids": ["research"], "writes": []},
+            {"sizing": rels[1], "label": "build", "ids": ["build"], "blocked_by": ["research"],
+             "writes": [str(w) for w in build_doc["writes"]]},
+        ],
+        "edges_from": "blocked_by",
+    }
+    reply = ask_fanout.fanout(params, Path(repo_root))
+    if reply.get("exit_code"):
+        for rel in rels:
+            (Path(repo_root) / rel).unlink(missing_ok=True)
+        return _refuse(str(reply.get("error") or "research/build split refused"))
+    by_label = {r["label"]: r for r in reply["runs"]}
+    ready_ids = {r["run_id"] for r in reply["ready"]}
+    research_run, build_run = by_label["research"], by_label["build"]
+    split = {
+        "parent_id": reply["parent_id"],
+        "research": {
+            "run_id": research_run["run_id"], "sizing": rels[0],
+            "status": "ready" if research_run["run_id"] in ready_ids else "after",
+        },
+        "build": {
+            "run_id": build_run["run_id"], "sizing": rels[1],
+            "status": "ready" if build_run["run_id"] in ready_ids else "after",
+            "after": list(build_run.get("after", ())),
+        },
+    }
+    return _halt(
+        HALT_RESEARCH,
+        f"research sizing {sizing_rel} also names writes: split into research run {split['research']['run_id']} "
+        f"and build run {split['build']['run_id']}, held after it",
+        route=RESEARCH_HANDBACK_ROUTE,
+        fire=reply["fire"],
+        split=split,
+    )
 
 
 class _NoInRunRemedy(Exception):
@@ -473,7 +546,7 @@ def _arm_verdict(
     research = sizing.get("research")
     if isinstance(research, dict) and research and not research_is_bounded_single_write(sizing, writes):
         if writes:
-            return _refuse(RESEARCH_MIXED_REFUSAL)
+            return _research_build_split_verdict(repo_root, sizing, sizing_rel, writes)
         return _halt(
             HALT_RESEARCH,
             f"research sizing {sizing_rel}: the run's `fire` entry is the one call",

@@ -504,6 +504,57 @@ def test_dead_token_does_not_hold_the_sizing(bare):
 
     out = _reap(bare)
 
-    assert out["reaped"] == [FOO_OLD]
+    assert out["reaped"] == [FOO_OLD, FOO_NEW]
     assert FOO_SIZING in out["artifacts"][FOO_OLD]
     assert not [s for s in out["skipped"] if s.get("reason") == "sizing-held-by-live-token"]
+
+
+def _aged_token(root: Path, run_id: str, age: float) -> None:
+    run_token.mint(root, run_id, SCRIPT, session_id="s")
+    path = run_token._record_path(root, run_id)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["minted_at"] = time.time() - age
+    path.write_text(json.dumps(record), encoding="utf-8")
+    os.utime(path, (record["minted_at"],) * 2)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_idle_held_token_run_is_reaped_and_its_token_released(bare):
+    _record(bare, FOO_OLD, age=ar.TOKENLESS_QUIET_SECONDS + 600)
+    _aged_token(bare, FOO_OLD, ar.TOKENLESS_QUIET_SECONDS + 600)
+
+    dry = _reap(bare, dry_run=True)
+    assert dry["reaped"] == [FOO_OLD]
+    assert run_token.is_live(bare, FOO_OLD)
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [FOO_OLD]
+    assert not run_token.is_live(bare, FOO_OLD)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_active_held_token_run_is_still_skipped(bare):
+    _record(bare, FOO_OLD, age=ar.TOKENLESS_QUIET_SECONDS + 600)
+    run_token.mint(bare, FOO_OLD, SCRIPT, session_id="s")
+
+    out = _reap(bare)
+
+    assert out["reaped"] == []
+    assert run_token.is_live(bare, FOO_OLD)
+
+
+def test_abandon_run_needs_no_plan_path_for_a_plan_less_run(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_run, op
+
+    rid = "warp-xs-20261029T000000-abcdef"
+    rdir = tmp_path / "state" / "warp" / rid
+    rdir.mkdir(parents=True)
+    (rdir / "run.json").write_text(json.dumps({"resumed_from": "ask-20261029T000000-aaaaaa"}), encoding="utf-8")
+
+    out = op._dispatch_emit({"abandon_run": rid}, tmp_path)
+
+    assert out["abandoned"] is True
+    assert halted_run._read(rdir)["status"] == halted_run.STATUS_CLOSED

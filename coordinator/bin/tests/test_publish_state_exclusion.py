@@ -112,8 +112,16 @@ def test_all_klabauter_rows_present():
     # bin, scripts, coordinator/lib (x2), coordinator/bin, coordinator/tests and
     # coordinator_core; no inclusion entry in any of the nine allowlists is
     # `state`. Same fail-closed mechanism, not a state/-carrying change. 9 -> 10.
-    assert len(rows) == 10, (
-        f"expected 10 publish-mirror:claude_klabauter rows, found {len(rows)}: "
+    # Re-audited 2026-10-28: `claude-klabauter-guard-routes` is the only row added
+    # since the 2026-09-02 walk (source and destination `docs/reference/guard-routes`,
+    # no allowlist, flat folder with no `state` entry on disk). The other ten rows
+    # are the same rows, but four of them (`claude-klabauter`,
+    # `claude-klabauter-coordinator-bin`, `claude-klabauter-coordinator-lib`,
+    # `claude-klabauter-lib`) gained allowlist entries; none is a top-level `state`
+    # or a `state/` path. Of the eleven, nine declare an allowlist and two
+    # (publish-repo-toplevel, guard-routes) deliberately do not. 10 -> 11.
+    assert len(rows) == 11, (
+        f"expected 11 publish-mirror:claude_klabauter rows, found {len(rows)}: "
         f"{[r[0] for r in rows]} — re-audit this file's row-by-row rationale"
     )
 
@@ -145,9 +153,9 @@ def test_no_klabauter_allowlist_admits_state():
         )
 
     assert checked_allowlisted == 9, (
-        f"expected 9 of the 10 claude_klabauter rows to declare an allowlist "
-        f"(the 10th, claude-klabauter-publish-repo-toplevel, deliberately has "
-        f"none), found {checked_allowlisted} — row shape has drifted, re-audit"
+        f"expected 9 of the 11 claude_klabauter rows to declare an allowlist "
+        f"(claude-klabauter-publish-repo-toplevel and claude-klabauter-guard-routes "
+        f"deliberately have none), found {checked_allowlisted} — row shape has drifted, re-audit"
     )
 
 
@@ -251,3 +259,11 @@ def test_toplevel_row_percolate_ignore_blocks_a_future_state_entry():
     # Regression floor: files this row legitimately ships must still be kept.
     assert ignore_mod.is_ignored("README.md", patterns) is False
     assert ignore_mod.is_ignored("LICENSE", patterns) is False
+
+
+def test_guard_routes_row_source_dir_has_no_state_entry_on_disk():
+    """`claude-klabauter-guard-routes` is a flat-mirror with no allowlist and
+    no secondary gate, so a staged `state` entry in its source would publish."""
+    source_dir = _CLAUDE_KLABAUTER_ROOT / "docs" / "reference" / "guard-routes"
+    assert source_dir.is_dir(), f"expected {source_dir} to exist"
+    assert not (source_dir / "state").exists()

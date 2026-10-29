@@ -200,6 +200,7 @@ SETTINGS_HOME_WRITER_CARVE_OUT = (
     "dep_check",
     "door_install",
     "door_uninstall",
+    "ensure_venv",
     "first_run",
     "forwarder_self_heal",
     "gen_settings_hooks",
@@ -232,6 +233,10 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
         CARVE_OUT_INSTALL_PLANE,
         "upserts frontmatter keys in the project's own coordinator.local.md",
     ),
+    "ensure_venv.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "builds and swaps the settings-home venv; its rmtree targets venv build/previous dirs there",
+    ),
     "first_run.py": (
         CARVE_OUT_INSTALL_PLANE,
         "provisions the stamped engine build under settings-home",
@@ -255,6 +260,10 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
     "plugin_cache_sessions.py": (
         CARVE_OUT_INSTALL_PLANE,
         "SessionStart hook records each session's plugin root under the claude config dir; the switch cannot apply because the record is what keeps a cache sweep from stranding a live session",
+    ),
+    "runtime_ignore_apply.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "appends template rules to the onboarded repo's own .gitignore and untracks matching files (index only)",
     ),
     "scaffold_structure.py": (
         CARVE_OUT_INSTALL_PLANE,
@@ -296,6 +305,10 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
     "run_platform_localize.py": (
         CARVE_OUT_NOT_A_WRITE,
         "its flagged call is the read-only schema validation spawn; the localize write is platform_localize's",
+    ),
+    "provisioned_interpreter.py": (
+        CARVE_OUT_NOT_A_WRITE,
+        "read-only spawn of example-retrieval-repo's pin reader; the pin is read back from stdout",
     ),
     "step_zero_emit.py": (CARVE_OUT_NOT_A_WRITE, "detector false positive: str.replace in json_escape"),
     "git_perf_config.py": (CARVE_OUT_NOT_A_WRITE, "detector false positive: sys.path.remove"),

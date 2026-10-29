@@ -100,6 +100,15 @@ function _isOwnRedirect(child, e) {
     && typeof r.to === 'string' && r.to.split('/').pop() === e.run_id + '.workflow.mjs';
 }
 
+// A stale halt-time record recomposes the child's own sizing under warp-<sizing stem>-<stamp>, with no redirect marker.
+function _isOwnRecompose(child, e) {
+  if (typeof e.run_id !== 'string' || typeof child.sizing_rel !== 'string') return false;
+  const stem = child.sizing_rel.split('/').pop().replace(/\.[^.]*$/, '');
+  const prefix = 'warp-' + stem + '-';
+  return stem !== '' && e.run_id.slice(0, prefix.length) === prefix
+    && /^\d{8}T\d{6}-[0-9a-f]{6}$/.test(e.run_id.slice(prefix.length));
+}
+
 function _emitRefusal(child, e, chained) {
   if (!e || typeof e !== 'object') return 'emit reply is not an object';
   if (typeof e.error === 'string' && e.error !== '') return 'emit failed: ' + e.error;
@@ -107,7 +116,7 @@ function _emitRefusal(child, e, chained) {
     if (typeof e.run_id !== 'string' || e.run_id === '' || e.run_id === child.run_id) {
       return 'chain emit reply run_id ' + String(e.run_id) + ' is not a fresh run id';
     }
-  } else if (e.run_id !== child.run_id && !_isOwnRedirect(child, e)) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
+  } else if (e.run_id !== child.run_id && !_isOwnRedirect(child, e) && !_isOwnRecompose(child, e)) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
   if (typeof e.path !== 'string' || e.path === '') return 'emit reply path is not a non-empty string';
   const p = e.path.replace(/\\/g, '/');
   if (p.split('/').indexOf('..') !== -1) return 'emit reply path contains ..';
@@ -195,7 +204,7 @@ async function _chainHop(child, handoff) {
 
 // A recomposed run this emit minted that nothing started is closed engine-side; the engine leaves a run that already progressed.
 async function _abandonRedirect(child, emitted) {
-  if (emitted === null || typeof emitted !== 'object' || !_isOwnRedirect(child, emitted)) return;
+  if (emitted === null || typeof emitted !== 'object' || !(_isOwnRedirect(child, emitted) || _isOwnRecompose(child, emitted))) return;
   try {
     await _emitLeg(child, { ...child.emit_params, abandon_run: emitted.run_id }, 'abandon-' + emitted.run_id);
   } catch (e) {

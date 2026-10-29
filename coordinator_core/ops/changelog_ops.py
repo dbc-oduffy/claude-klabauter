@@ -633,6 +633,9 @@ def _compose_backfill_block(date: str, host: str, git_body: str) -> str:
     )
 
 
+_DATED_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(?:[-.]|$)")
+
+
 def _has_daily_file(date: str, today: str, host: str, week_changelog_dir: Path) -> bool:
     """Return True if a sacred (non-overwritable) daily file exists for date.
 
@@ -758,23 +761,38 @@ def backfill_gaps(
     week_changelog_dir = worktree / "state" / "week-changelog"
     header_file = week_changelog_dir / "HEADER.md"
 
-    if not header_file.exists():
-        logger.warning("backfill_gaps: no HEADER.md at %s — nothing to backfill", header_file)
-        return {"backfilled": [], "skipped": [], "message": "no HEADER.md"}
-
-    header_text = header_file.read_text(encoding="utf-8", errors="replace")
-    # Oracle: sed -nE 's/^\*\*Week starting:\*\* *([0-9]{4}-[0-9]{2}-[0-9]{2}).*/\1/p'
-    m = re.search(
-        r"^\*\*Week starting:\*\*\s*(\d{4}-\d{2}-\d{2})",
-        header_text,
-        re.MULTILINE,
-    )
-    if not m:
-        logger.warning("backfill_gaps: HEADER.md has no parseable 'Week starting:' — skipping")
-        return {"backfilled": [], "skipped": [], "message": "no Week starting: in HEADER.md"}
-
-    week_start = m.group(1)
+    week_start: Optional[str] = None
+    if header_file.exists():
+        header_text = header_file.read_text(encoding="utf-8", errors="replace")
+        # Oracle: sed -nE 's/^\*\*Week starting:\*\* *([0-9]{4}-[0-9]{2}-[0-9]{2}).*/\1/p'
+        m = re.search(
+            r"^\*\*Week starting:\*\*\s*(\d{4}-\d{2}-\d{2})",
+            header_text,
+            re.MULTILINE,
+        )
+        if m:
+            week_start = m.group(1)
     today = today_override or local_day(str(worktree))
+    if week_start is None:
+        # Unset anchor: the gap range starts at the earliest live dated file.
+        live = sorted(
+            f.name[:10]
+            for f in week_changelog_dir.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*.md")
+            if _DATED_PREFIX_RE.match(f.name)
+        ) if week_changelog_dir.is_dir() else []
+        if not live:
+            msg = (
+                "no HEADER.md"
+                if not header_file.exists()
+                else "no Week starting: in HEADER.md"
+            )
+            return {"backfilled": [], "skipped": [], "message": msg}
+        week_start = live[0]
+    archived = {
+        f.name[:10]
+        for f in (worktree / "archive" / "week-changelogs").glob("*/*.md")
+        if _DATED_PREFIX_RE.match(f.name)
+    }
     last_day = min(today, through) if through else today
     resolved_host = (
         host
@@ -791,7 +809,9 @@ def backfill_gaps(
     d = week_start
     while d <= last_day:
         next_d = _next_day(d)
-        if not _has_daily_file(d, today, resolved_host, week_changelog_dir):
+        if d in archived:
+            skipped.append(d)
+        elif not _has_daily_file(d, today, resolved_host, week_changelog_dir):
             git_body = _git_log_for_date(str(worktree), d, next_d)
             if git_body:
                 out = week_changelog_dir / f"{d}-{resolved_host}-backfill.md"

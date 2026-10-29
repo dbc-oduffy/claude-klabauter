@@ -556,6 +556,8 @@ def _load_box_memory_host() -> Any:
     import sys
     from pathlib import Path
 
+    from coordinator_core.bin_lib_binding import exec_module_bin_bound
+
     cached = sys.modules.get("box_memory_host")
     if cached is not None and hasattr(cached, "admit"):
         return cached
@@ -567,7 +569,7 @@ def _load_box_memory_host() -> Any:
             module = importlib.util.module_from_spec(spec)
             sys.modules["box_memory_host"] = module  # its @dataclass classes resolve through it
             try:
-                spec.loader.exec_module(module)
+                exec_module_bin_bound(spec.loader, module, str(lib.parent))
             except BaseException:
                 sys.modules.pop("box_memory_host", None)
                 raise
@@ -590,6 +592,22 @@ def _wait_for_slot(key: str, peak_gib: float, session_id: str, wait_kw: dict) ->
     if not sid:
         return None
     return slot_wait.request_and_wait(sid, key, peak_gib * 1024, **wait_kw)
+
+
+def _holders_suffix(host: Any, adm_path: Any) -> str:
+    """`; holders: session run pid=N image GiB, ...` for the top 3 reservations; empty when the
+    host lacks `top_holders`, none hold, or the read fails. Image is a basename: the reason is path-free."""
+    try:
+        rows = host.top_holders(adm_path, 3)
+        parts = []
+        for r in rows:
+            image = os.path.basename(str(r.get("image") or "?").replace("\\", "/"))
+            parts.append("%s %s pid=%s %s %sGiB" % (
+                r.get("session_id"), r.get("run"), r.get("pid"), image,
+                round(r["bytes"] / host.GIB, 1)))
+        return "; holders: " + ", ".join(parts) if parts else ""
+    except Exception:
+        return ""
 
 
 def admit_before_spawn(
@@ -619,7 +637,9 @@ def admit_before_spawn(
         status = host.read_memory_status()
         # TRAP: with a pid to register, the reservation read and the START write share one lock,
         # or two callers both read zero reservations and both admit.
-        with (host.admission_lock(adm_path) if register_pid is not None else contextlib.nullcontext()):
+        # A host without `admission_lock` (older box_memory_host) degrades to no lock, not a refusal.
+        lock = getattr(host, "admission_lock", None) if register_pid is not None else None
+        with (lock(adm_path) if lock is not None else contextlib.nullcontext()):
             reserved = host.reserved_bytes(adm_path)
             status = dataclasses.replace(
                 status,
@@ -634,7 +654,7 @@ def admit_before_spawn(
     gib = lambda n: round(n / host.GIB, 1)
     if not verdict.admit:
         hold = "HOLD %s: need %sGiB avail, %sGiB free after reservations" % (
-            key, gib(verdict.need_avail), gib(status.avail_phys))
+            key, gib(verdict.need_avail), gib(status.avail_phys)) + _holders_suffix(host, adm_path)
         granted = _wait_for_slot(key, peak_gib, session_id, wait_kw) if wait_kw is not None else None
         if not (granted and granted.get("admitted")):
             reason = hold if not granted else "%s; slot wait: %s" % (hold, granted.get("reason"))

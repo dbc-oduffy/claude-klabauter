@@ -386,6 +386,71 @@ def test_relative_argv_element_does_not_match_even_in_cwd(tmp_path, monkeypatch)
     assert pair_stop.find_pair_processes(tmp_path, psutil_module=w) == []
 
 
+def test_duplicate_servers_one_appearing_mid_stop_are_all_stopped(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    for pid in (30, 31):
+        w.add(pid, "python.exe", [sys.executable, _script(root, SRV)])
+    first = w.procs[0]
+    original = first.terminate
+
+    def terminate_and_respawn():
+        original()
+        w.add(32, "python.exe", [sys.executable, _script(root, SRV)])
+
+    first.terminate = terminate_and_respawn
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert result.ok()
+    assert not any(p.alive for p in w.procs)
+    assert {("terminate", 30), ("terminate", 31), ("terminate", 32)} <= set(w.log)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_real_duplicate_servers_stopped_from_foreign_cwd(tmp_path, monkeypatch):
+    import subprocess
+    import time
+
+    psutil = pytest.importorskip("psutil")
+    root = tmp_path / "engine"
+    script = root.joinpath(*SRV)
+    script.parent.mkdir(parents=True)
+    script.write_text("import time\ntime.sleep(120)\n", encoding="utf-8")
+    foreign = tmp_path / "elsewhere"
+    foreign.mkdir()
+    monkeypatch.chdir(foreign)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    procs = [
+        subprocess.Popen([sys.executable, str(script)], cwd=str(foreign), creationflags=flags)
+        for _ in range(2)
+    ]
+    try:
+        deadline = time.monotonic() + 10
+        while len(pair_stop.find_pair_processes(root)) < 2 and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert len(pair_stop.find_pair_processes(root)) == 2
+        result = pair_stop.stop_warm_pair(root, ask_server=lambda _pipe: False)
+        assert result.ok(), result.render_survivors()
+        assert pair_stop.find_pair_processes(root) == []
+        assert not any(psutil.pid_exists(p.pid) and p.poll() is None for p in procs)
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait(timeout=10)
+
+
+def test_survivor_rendering_names_why(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    w.add(30, "python.exe", [sys.executable, _script(root, SRV)], stubborn=True)
+    w.add(31, "python.exe", [sys.executable, _script(root, SRV)], stubborn=True)
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    lines = result.render_survivors().splitlines()
+    assert len(lines) == 2
+    assert all("why=still running after terminate and kill" in ln for ln in lines)
+
+
 def test_access_denied_process_is_skipped(tmp_path):
     w = _World()
     bad = w.add(9, "python.exe", [])

@@ -64,7 +64,10 @@ def test_design_review_check_matches_the_stage_refused_spelling_only_at_the_star
     assert json.loads(proc.stdout) == [True, True, False, False]
 
 
-def test_any_ready_op_error_but_the_did_not_run_sentinel_becomes_a_stage_refusal():
+def test_any_ready_op_error_but_the_did_not_run_sentinel_becomes_a_stage_refusal(monkeypatch):
+    # The plan-blitz arm (where _adoptReadyError is composed) exists only for the M+ and roadmap arms; repo_root="REPO" cannot read the sizing.
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS)
+    monkeypatch.setattr(ask_compose, "_intake_sizing", lambda *_: None)
     script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
     assert "_adoptReadyError(_ready)" in script and "_adoptReadyError(_reready)" in script
     assert "_re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;" in script

@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Set
 
+from coordinator_core.git.run import run_git
 from coordinator_core.diff_scoped_tests import _TEST_FILE_RE, _read_testpaths, _under_testpaths
 from coordinator_core.git.run import run_git
 

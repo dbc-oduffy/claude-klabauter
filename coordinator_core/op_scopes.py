@@ -798,6 +798,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.close_halted_run_superseded":     "common_dir",
     "dispatch.land_combined_index":             "common_dir",
     "dispatch.release_run_token":               "common_dir",
+    # dispatch.adopt_orphaned_run — MUTATING: re-homes a dead session's run dir under the caller.
+    "dispatch.adopt_orphaned_run":              "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
     # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the

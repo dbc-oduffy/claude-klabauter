@@ -1,7 +1,7 @@
 """Shared adjudication block for emitted grind workflows.
 
-A hand-back a grind would put to the PM goes first to an adjudicator agent (coordinator:apm for
-scope, direction and priority). Only an entry the adjudicator marks ``pm_only`` stays PM-bound.
+Every hand-back a grind would put to the PM is ruled by one batched Sonnet call per run. Only an
+entry the adjudicator marks ``pm-only`` stays PM-bound; a plan-weight one returns ``spin-out``.
 A ruling never clears a named irreversible or external gate, and a missing verdict fails closed.
 """
 
@@ -16,7 +16,11 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 #: dispositions, not questions, and stay outside.
 PM_BOUND_HANDBACK_TYPES: tuple[str, ...] = ("needs-judgment", "unclear-direction")
 
-ADJUDICATOR_AGENT_TYPE = "coordinator:apm"
+#: The opus APM persona: ask_compose's accept and xl-exit legs only; the grind never uses it.
+APM_RULING_AGENT_TYPE = "coordinator:apm"
+
+#: The grind's one batched adjudicate call: a plain Sonnet agent, no persona (model: ``STAGE_MODELS["adjudicate"]``).
+ADJUDICATOR_AGENT_TYPE = stages.GENERAL_PURPOSE_AGENT_TYPE
 
 #: Must appear in the grind's meta.phases, or the contract linter warns on every emit.
 ADJUDICATE_PHASE_TITLE = "Adjudicate"
@@ -27,12 +31,12 @@ IRREVERSIBLE_GATE_SOURCE = (
     r"|cross-repo commit|branch deletion|history rewrite|rewrite history)\b"
 )
 
-_ADJUDICATION_SCHEMA = {
+_RULING_SCHEMA = {
     "type": "object",
-    "required": ["verdict", "pmOnly", "ruling", "externalAction", "actionable"],
+    "required": ["row", "verdict", "ruling", "externalAction", "actionable"],
     "properties": {
-        "verdict": {"type": "string", "enum": ["ruled", "pm-only"]},
-        "pmOnly": {"type": "boolean"},
+        "row": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["ruled", "spin-out", "pm-only"]},
         "pmOnlyGround": {"type": "string"},
         "ruling": {"type": "string"},
         "externalAction": {"type": "string"},
@@ -40,21 +44,28 @@ _ADJUDICATION_SCHEMA = {
     },
 }
 
+#: One reply rules every PM-bound hand-back of the run; a row missing from it fails closed to pmOnly.
+_ADJUDICATION_SCHEMA = {
+    "type": "object",
+    "required": ["rulings"],
+    "properties": {"rulings": {"type": "array", "items": _RULING_SCHEMA}},
+}
+
 _PROMPT_HEAD = (
     "phase: adjudicate\n\n"
-    "You are the PM's delegate for one hand-back of a grind run. Nobody escalates to the human here: "
-    "a scope, direction or priority matter is yours as the APM. Rule it, do not re-ask it.\n\n"
+    "Rule every hand-back below in this one reply. Nobody escalates to the human here: decide each "
+    "from what is on disk, do not re-ask it.\n\n"
 )
 _PROMPT_TAIL = (
-    "\n\nDo this:\n"
+    "\n\nReturn one entry per row in `rulings`, keyed by `row`:\n"
     "  1. Read the row and what it cites. Decide the question with what is on disk.\n"
-    "  2. Write one line on the row record: `pm_ruling: \"apm (PM-delegated) <your ruling>\"`.\n"
-    "  3. Return verdict 'ruled' and pmOnly false.\n"
-    "  4. Return externalAction: the external or irreversible act the ruling needs, or '' for none.\n"
-    "  5. Return actionable true only when the ruling names a concrete change the fix stage can apply now.\n\n"
-    "Return pmOnly true (verdict 'pm-only', with pmOnlyGround) ONLY when the matter is important AND "
-    "urgent AND has no clear right answer, or needs an external or irreversible action (merge, "
-    "publish, push to main, cross-repo commit assent). Being unsure is not a ground. "
+    "  2. verdict 'ruled' for a matter you can decide; ruling is one line. actionable true only when "
+    "the ruling names a concrete change the fix stage can apply now.\n"
+    "  3. verdict 'spin-out' for a plan-weight matter (it needs a plan, not a fix); actionable false.\n"
+    "  4. externalAction: the external or irreversible act the ruling needs, or '' for none.\n\n"
+    "Return verdict 'pm-only' (with pmOnlyGround) ONLY when the matter is important AND urgent AND "
+    "has no clear right answer, or needs an external or irreversible action (merge, publish, push to "
+    "main, cross-repo commit assent). Being unsure is not a ground. "
     "You do not stage or commit anything."
 )
 
@@ -62,10 +73,9 @@ _PROMPT_TAIL = (
 def compose_adjudicate_block(
     *,
     agent_type_host: Optional[str],
-    models: Optional[Mapping[str, str]] = None,
     run_key: str = stages.DEFAULT_RUN_KEY,
 ) -> str:
-    """JS text defining ``_adjudicatePmBound()`` and ``_adjudicateHandback(h)``; the caller awaits the former after the grind loop.
+    """JS text defining ``_adjudicatePmBound()``; the caller awaits it after the grind loop.
 
     Every PM-bound entry in ``_handedBack`` gains an ``adjudication`` record
     (adjudicator, verdict, pmOnly, ruling, actionable); a missing verdict yields ``pmOnly: true``.
@@ -74,12 +84,12 @@ def compose_adjudicate_block(
     call = stages._agent_call(
         _adjudicate_prompt_expr(),
         stage="adjudicate",
-        models=models,
+        models=None,
         label="adjudicate",
         phase_title=ADJUDICATE_PHASE_TITLE,
         agent_type=ADJUDICATOR_AGENT_TYPE,
         agent_type_host=agent_type_host,
-        effort="high",
+        effort="medium",
         schema=_ADJUDICATION_SCHEMA,
         is_expr=True,
         run_key=run_key,
@@ -91,33 +101,37 @@ def compose_adjudicate_block(
     return (
         f"const PM_BOUND_TYPES = [{types}];\n"
         f"const IRREVERSIBLE_GATE = /{IRREVERSIBLE_GATE_SOURCE}/i;\n"
-        "async function _adjudicateOne(h) {\n"
+        "async function _adjudicateBatch(pending) {\n"
         + agent_call
         + "\n  _recordCall('adjudicate');\n"
-        "  return _result.verdict ? _result : null;\n"
+        "  return Array.isArray(_result.rulings) ? _result.rulings : [];\n"
         "}\n"
         "function _settleAdjudication(h, v) {\n"
-        "  const gated = !!v && IRREVERSIBLE_GATE.test(v.externalAction || '');\n"
-        "  const pmOnly = !v || v.pmOnly === true || gated;\n"
+        "  const known = !!v && ['ruled', 'spin-out', 'pm-only'].includes(v.verdict);\n"
+        "  const gated = known && IRREVERSIBLE_GATE.test(v.externalAction || '');\n"
+        "  const stated = known && v.verdict === 'pm-only';\n"
+        "  const pmOnly = !known || stated || gated;\n"
         "  h.adjudication = {\n"
         f"    adjudicator: {_js_string_literal(ADJUDICATOR_AGENT_TYPE)},\n"
-        "    verdict: v ? v.verdict : 'unavailable',\n"
+        "    verdict: known ? v.verdict : 'unavailable',\n"
         "    pmOnly,\n"
-        "    ...(v && v.pmOnlyGround ? { pmOnlyGround: v.pmOnlyGround } : {}),\n"
-        "    ...(gated && !(v && v.pmOnly === true) ? { pmOnlyGround: 'external-or-irreversible' } : {}),\n"
-        "    ruling: v ? v.ruling : null,\n"
-        "    actionable: !!(v && v.actionable) && !pmOnly,\n"
+        "    ...(known && v.pmOnlyGround ? { pmOnlyGround: v.pmOnlyGround } : {}),\n"
+        "    ...(gated && !stated ? { pmOnlyGround: 'external-or-irreversible' } : {}),\n"
+        "    ruling: known ? v.ruling : null,\n"
+        "    actionable: known && v.verdict === 'ruled' && !!v.actionable && !pmOnly,\n"
         "  };\n"
         "}\n"
-        "async function _adjudicateHandback(h) {\n"
-        "  let v = null;\n"
-        "  try { v = await _adjudicateOne(h); } catch (_e) { v = null; }\n"
-        "  _settleAdjudication(h, v);\n"
-        "  return h.adjudication;\n"
+        "async function _adjudicateEntries(pending) {\n"
+        "  let rulings = [];\n"
+        "  try { rulings = await _adjudicateBatch(pending); } catch (_e) { rulings = []; }\n"
+        "  for (const h of pending) {\n"
+        "    _settleAdjudication(h, rulings.find((r) => r && r.row === h.row) || null);\n"
+        "  }\n"
         "}\n"
         "async function _adjudicatePmBound() {\n"
-        "  const bound = _handedBack.filter((h) => PM_BOUND_TYPES.includes(h.type));\n"
-        "  await Promise.all(bound.filter((h) => !h.adjudication).map((h) => _adjudicateHandback(h)));\n"
+        "  const pending = _handedBack.filter((h) => PM_BOUND_TYPES.includes(h.type) && !h.adjudication);\n"
+        "  if (pending.length === 0) return;\n"
+        "  await _adjudicateEntries(pending);\n"
         "}"
     )
 
@@ -126,16 +140,15 @@ def _adjudicate_prompt_expr() -> str:
     return stages._join_prompt_parts(
         [
             ("lit", _PROMPT_HEAD),
-            ("lit", "Row: "),
-            ("expr", "h.row"),
-            ("lit", "\nProfile: "),
+            ("lit", "Profile: "),
             ("expr", "PROFILE_NAME"),
-            ("lit", "   Hand-back type: "),
-            ("expr", "h.type"),
-            ("lit", "\nQuestion: "),
-            ("expr", "h.reason || '(no question stated)'"),
-            ("lit", "\nManifest path: "),
-            ("expr", "(QUEUE_GRIND_MANIFEST.entries.find((x) => x.row_id === h.row) || {}).path || '(unknown)'"),
+            ("lit", "\nHand-backs:\n"),
+            (
+                "expr",
+                "pending.map((h) => '- row ' + h.row + ' [' + h.type + ']: ' + (h.reason || '(no question stated)')"
+                " + ' (manifest: ' + ((QUEUE_GRIND_MANIFEST.entries.find((x) => x.row_id === h.row) || {}).path"
+                " || '(unknown)') + ')').join('\\n')",
+            ),
             ("lit", "\nYour repo is `"),
             ("expr", "REPO_ROOT"),
             ("lit", "`: `cd` there before any command."),

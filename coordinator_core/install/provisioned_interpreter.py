@@ -9,6 +9,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from coordinator_core.install.write_surface import WriteSurfaceDeclaration
+
+# Read-only: the one subprocess spawn reads example-retrieval-repo's pin back from stdout.
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="provisioned-interpreter",
+    source_module="coordinator_core.install.provisioned_interpreter",
+    clauses=(),
+)
+
 _READER_REL = Path("project_rag_scripts") / "lib" / "read_claude_pin.py"
 _READ_TIMEOUT_SECS = 5
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]

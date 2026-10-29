@@ -38,6 +38,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_RELAYED,
     CLAIM_PARAM,
     EMPTY_REGISTER_REASON,
+    LATE_ROWS_FIELD,
+    OP_LATE_ROWS,
     PLAN_ROW_ANCHOR_PREFIX,
     RECORD_DIR_ROOT,
     STOP_AFTER_FILE,
@@ -1837,8 +1839,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if unclaimed:
         out["unclaimed_rows"] = unclaimed
         warnings.append(
-            f"{unclaimed_plan} omits register row(s) {', '.join(unclaimed)} in register_claims.rows: "
-            "the run's next stage claims them on the plan, and its ledger re-plan leg adds rows serving them."
+            f"{unclaimed_plan} omits register row(s) {', '.join(unclaimed)} in register_claims.rows"
+            + (": the refire's ledger re-plan leg adds rows serving them." if not live else ".")
         )
     refused: list[dict] = list(widen_refused)
     if params.get("build_only") and not outcome.get("research_dropped"):
@@ -1847,13 +1849,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["warning"] = " ".join(warnings)
     if not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
-    elif _rows_briefed(dir_):
-        out["briefed"] = True
-        out["delta_cycle"] = _record_delta_request(dir_, added, unclaimed)
+    elif verify_staged(dir_):
+        out["lands_on_refire"] = True
+        out.update(_refire(ledger.sizing_rel, root, unclaimed_result))
         out["note"] = (
-            "run live, rows already briefed: the revision is queued as a delta cycle on this run "
-            f"({DELTA_REQUEST_FILE}): only the delta rows are planned, run after the current wave and "
-            "reviewed by one overview; no refire."
+            "run live, verify already staged: this run's verify and ledger-fix legs never judge this "
+            "revision; " + out["note"].replace("run finished: ", "", 1) + " Fire next.call to land it."
+        )
+    else:
+        if _rows_briefed(dir_):
+            out["briefed"] = True
+        out["note"] = (
+            ("run live, rows already briefed: no row brief reads this revision; " if out.get("briefed") else "run live: ")
+            + "the pre-verify late-row leg claims it before verify, so verify and the ledger-fix leg judge it "
+            "before the commit gate."
         )
     applied = [f"row {added}"] if added else []
     applied += [k for k in _APPLIED_KEYS if out.get(k)]
@@ -1876,23 +1885,41 @@ def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> di
     return out
 
 
-DELTA_REQUEST_FILE = "delta-request.json"
-
-
-def _record_delta_request(dir_: Path, added: Optional[str], unclaimed: list) -> dict:
-    """Append this revision's delta rows (the minted row plus register rows the plan omits) to the run's
-    `delta-request.json`; the next wave boundary re-plans exactly those rows. Returns the merged request."""
-    path = dir_ / DELTA_REQUEST_FILE
+def late_rows(repo_root: Path, run_id: str) -> list[str]:
+    """Ids of the run's live ledger items its staged manifest holds no work for (not in
+    `manifest.json` `ledger_item_ids`, not withheld), in arrival order. [] with no readable manifest.
+    Two file reads, no spawn; LedgerRefused on an unsafe run_id or unreadable sizing."""
+    dir_ = run_dir(repo_root, run_id)
     try:
-        rows = list(json.loads(path.read_text(encoding="utf-8")).get("rows") or ())
+        staged = json.loads((dir_ / "manifest.json").read_text(encoding="utf-8")).get("ledger_item_ids")
     except (OSError, ValueError, AttributeError):
-        rows = []
-    for rid in [added, *unclaimed]:
-        if rid and rid not in rows:
-            rows.append(rid)
-    request = {"rows": rows, "review": "delta-only"}
-    path.write_text(json.dumps(request), encoding="utf-8")
-    return request
+        return []
+    ledger = read_ledger(repo_root, dir_)
+    if ledger is None:
+        return []
+    held = {str(i) for i in staged or ()} | {w["id"] for w in ledger.withheld}
+    return [i.id for i in ledger.items if i.id not in held]
+
+
+def verify_staged(dir_: Path) -> bool:
+    """True once the run's verify prompt (`prompts/verify.md`, stage_as="verify") is on disk: a row
+    revised after that is judged by no verify leg of this run."""
+    return (dir_ / "prompts" / "verify.md").is_file()
+
+
+@register_op(OP_LATE_ROWS)
+def _late_rows_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "workflow.late_rows" (COMPUTE_ONLY): params `run_id`. Replies `{late_rows: [id]}`;
+    a refused request replies `{"error": str}`."""
+    if repo_root is None:
+        return {"error": f"{OP_LATE_ROWS} requires repo_root"}
+    refusal = validate_params(OP_LATE_ROWS, params, (Field("run_id", "nonempty_str", required=True),), strict=True)
+    if refusal is not None:
+        return refusal
+    try:
+        return {LATE_ROWS_FIELD: late_rows(main_worktree_root(Path(repo_root)), params["run_id"])}
+    except LedgerRefused as exc:
+        return {"error": str(exc)}
 
 
 def _rows_briefed(dir_: Path) -> bool:

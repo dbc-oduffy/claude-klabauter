@@ -18,7 +18,7 @@ from coordinator_core._hook_envelope import context_only, deny, no_advisory, pay
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
-from coordinator_core.warp_fire import fire_step
+from coordinator_core.warp_fire import NAG_REPEAT_PREFIX, fire_step, nag_text
 
 GENERATES: list = []
 
@@ -31,15 +31,19 @@ DENY_PREFIX = "[em-prefire-survey]"
 _ADVISORY_MARK = "\x00advisory\x00"  # _decide's text carries it when the leg warns instead of denying
 
 
-def prefire_advisory_text(n: int, budget: int) -> str:
+def prefire_advisory_text(n: int, budget: int, session_id: str = "") -> str:
+    """Full text on the session's first nag; a repeat is the one terse counted line. No session id: full."""
+    if not session_id:
+        return (
+            f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (all). "
+            + fire_step() + " Add em_context."
+        )
+    nag = nag_text(session_id)
+    if nag.startswith(NAG_REPEAT_PREFIX):
+        return nag
     return (
-        f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (retries too). "
-        "The engine-ask is the cheaper path for an implementation ask: " + fire_step()
-        + " Pass what you already know in em_context. Not survey, never counted: reads and syntax"
-        " checks of files you wrote with Write/Edit since the last task or user turn,"
-        " cross-repo-memo sends, ops jobs that run an existing verb across repos, and cross-repo"
-        " reads of sibling docs or release listings. Exempt after a landing:"
-        " coordinator-invoke workflow.revise --params-file <file>."
+        f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (all). "
+        + nag + " Add em_context."
     )
 
 
@@ -180,7 +184,7 @@ def _decide(payload: dict) -> Optional[str]:
         from coordinator_core.hooks._em_write_budget import arm_advised
 
         arm_advised(root, sid)
-        return _ADVISORY_MARK + prefire_advisory_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX)
+        return _ADVISORY_MARK + prefire_advisory_text(pre_n, PREFIRE_EXPLORATORY_CALLS_MAX, sid)
     if phase in (ers.PHASE_LANDED_GREEN, ers.PHASE_HALTED) and phase.run_id:
         landings = dict(state.get("landings") or {})
         rec = landings.get(phase.run_id)
