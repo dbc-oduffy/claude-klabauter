@@ -6,6 +6,8 @@ a halted `review_blocked` run record, and `--commits` first-parent commits after
 `resume_landed_state` + `rows_landed_outside_executor`) and reports process ms (cold and warm), git
 spawns, `commit_walk.commit_meta` calls, the verdict, and a cProfile top-N of one profiled call.
 `measure()` is the single entry the cost pin (`test_submit_hook_resume_emit_cost_pin.py`) drives.
+The fixture is a small synthetic history: an UNDER-bar result here does not show the production
+12.0s symptom is gone; only a run against a production-sized history does.
 
 Run: `python -m coordinator_core.benchmarks.submit_hook_resume_emit [--commits N] [--top T]
 [--profile-out PATH] [--enforce-bar]`. Scratch lives in a managed temp dir this script removes.

@@ -14,13 +14,12 @@ Interface:
   ``GateOutcome(action: dispatch|close_wont_do|wait, cite: Optional[dict])``.
   ``cite`` is ``{chunk, verdict, ref}`` (``verdict`` is ``"no"`` or ``"absent"``) for
   ``close_wont_do``; ``{chunk}`` for ``wait``; ``{chunk, reason: "legacy-absent"}`` for a
-  ``dispatch`` that a not-opted-in plan reached with the verdict absent (today's
-  sequencing-only behaviour); ``None`` for any other ``dispatch``.
+  ``dispatch`` reached with the verdict absent (``verdict-absent`` when opted in); ``None`` for any other ``dispatch``.
 * ``PREMISE_RECORD_BRIEF_LINE``: the one line ask_stage appends to a premise row's brief.
 
 Decision per row, over its epistemic-premise edges only: any edge whose premise row is finished
 (``disposition`` other than ``open``) and recorded ``no`` -> ``close_wont_do``; recorded absent
--> ``close_wont_do`` when ``opted_in``, else legacy-absent dispatch; the first closing edge is
+-> dispatch citing ``verdict-absent`` when ``opted_in``, else ``legacy-absent``; the first closing edge is
 cited. Otherwise any premise row still ``open`` -> ``wait`` (a verdict never closes a row
 while its premise row is open); else ``dispatch``. A premise row missing from ``rows_by_id`` is skipped: an
 unknown id is a plan-shape defect owned by the spine validators, not a verdict. YAML 1.1 reads
@@ -48,6 +47,8 @@ import yaml
 PREMISES_KEY = "premises"
 EPISTEMIC_PREMISE = "epistemic-premise"
 LEGACY_ABSENT = "legacy-absent"
+#: A finished premise row that never recorded its verdict: the dependent dispatches, citing this.
+VERDICT_ABSENT = "verdict-absent"
 PREMISE_GATE_CUTOVER = datetime.date(2026, 10, 27)
 
 PREMISE_RECORD_BRIEF_LINE = (
@@ -141,8 +142,9 @@ def evaluate_premise_gate(
         verdict = _normalise(entry.get("verdict"))
         if verdict == "yes":
             continue
-        if verdict is None and not opted_in:
-            legacy = legacy or {"chunk": chunk, "reason": LEGACY_ABSENT}
+        if verdict is None:
+            # A skipped bookkeeping step is not a "no": closing on it wont_do'd a whole plan (6467a3).
+            legacy = legacy or {"chunk": chunk, "reason": VERDICT_ABSENT if opted_in else LEGACY_ABSENT}
             continue
         ref = entry.get("ref")
         return GateOutcome(

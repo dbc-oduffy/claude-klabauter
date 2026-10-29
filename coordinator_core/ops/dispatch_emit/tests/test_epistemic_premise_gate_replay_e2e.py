@@ -93,8 +93,8 @@ def _rows(plan: Path) -> dict:
     return {r["id"]: r for r in yaml.safe_load(body)}
 
 
-@pytest.mark.parametrize("record", ["no", None])
-def test_premise_no_or_absent_closes_c2_wont_do_and_spawns_neither_c2_nor_d3(tmp_path, record):
+@pytest.mark.parametrize("record", ["no"])  # an absent verdict dispatches (premise_gate.VERDICT_ABSENT)
+def test_premise_no_closes_c2_wont_do_and_spawns_neither_c2_nor_d3(tmp_path, record):
     repo, plan = _plan(tmp_path)
     if record:
         _record(repo, plan, record)

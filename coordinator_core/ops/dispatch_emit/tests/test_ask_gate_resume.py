@@ -38,6 +38,25 @@ def test_s_with_unfired_plan_gates_with_resume_plan_and_no_refusal(repo):  # noq
     assert v.to_json()["resume_plan"] == PLAN_REL
 
 
+def test_refire_gate_computes_the_resume_plan_once(repo, monkeypatch):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit import ask_gate, sizing_fire
+
+    _put(repo, tshirt="S", route="spec-dispatch")
+    _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
+    calls = []
+    real = sizing_fire.resumable_plan
+
+    def counted(*a, **k):
+        calls.append(a[1])
+        return real(*a, **k)
+
+    monkeypatch.setattr(sizing_fire, "resumable_plan", counted)
+    monkeypatch.setattr(ask_gate, "resumable_plan", counted)
+    v = gate(repo, REL)
+    assert v.resume_rows == ["A2"]
+    assert len(calls) == 1
+
+
 def test_fully_landed_plan_resumes_to_verify_not_refuses(repo):  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, disposition="coded")

@@ -33,10 +33,11 @@ def test_no_closes_citing_premise_even_when_not_opted_in():
         assert out.cite == {"chunk": "C1", "verdict": "no", "ref": "docs/x.md"}
 
 
-def test_absent_closes_when_opted_in():
+def test_absent_dispatches_when_opted_in():
+    """Run 6467a3: C0 coded without recording its verdict, and every dependent closed wont_do."""
     out = pg.evaluate_premise_gate(DEP, _rows(), {}, True)
-    assert out.action == "close_wont_do"
-    assert out.cite == {"chunk": "C1", "verdict": "absent", "ref": None}
+    assert out.action == "dispatch"
+    assert out.cite == {"chunk": "C1", "reason": "verdict-absent"}
 
 
 def test_absent_legacy_dispatches_with_reason():

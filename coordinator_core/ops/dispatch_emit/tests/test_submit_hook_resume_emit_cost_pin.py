@@ -37,3 +37,33 @@ def test_the_resume_path_spawns_no_more_git_than_the_pinned_ceiling(measured):
 
 def test_the_resume_path_reads_no_more_commits_than_the_pinned_ceiling(measured):
     assert measured["commit_meta_calls"] <= META_CEILING, measured["commit_meta_calls"]
+
+
+#: Past `resume_landed_state`'s `git log -n 500` window: the commit walk is capped there, not at history length.
+PRODUCTION_COMMITS = 600
+WALK_WINDOW = 500
+
+
+@pytest.fixture(scope="module")
+def production_sized() -> dict:
+    return bench.measure(commits=PRODUCTION_COMMITS, top=1)
+
+
+def test_a_production_sized_history_keeps_the_warm_resume_under_the_bar(production_sized):
+    assert production_sized["warm_process_ms"] is not None
+    assert production_sized["warm_process_ms"] < bench.BAR_MS, production_sized["warm_process_ms"]
+    assert production_sized["git_spawns"] <= SPAWN_CEILING, production_sized["git_spawn_argv"]
+
+
+def test_a_production_sized_history_bounds_the_commit_walk_at_the_window(production_sized):
+    assert production_sized["commit_meta_calls"] <= WALK_WINDOW + 1, production_sized["commit_meta_calls"]
+
+
+def test_the_submit_hook_is_a_resident_engine_op_on_the_warm_blocking_transport():
+    """The hook the benchmark measures is reached as a registered engine op over PreToolUse (no interpreter start)."""
+    import coordinator_core.hooks.submit_engine_ask  # noqa: F401 -- registers the op
+    from coordinator_core.ipc import get_op_handler
+    from coordinator_core.warm.hook_http import BLOCKING_EVENTS
+
+    assert get_op_handler("hooks.submit_engine_ask") is not None
+    assert "PreToolUse" in BLOCKING_EVENTS

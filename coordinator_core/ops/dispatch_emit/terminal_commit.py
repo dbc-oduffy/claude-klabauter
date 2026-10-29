@@ -1543,6 +1543,9 @@ def _terminal_commit(
 
 
 _CLAIM_POLL_SECS = 0.05
+#: Ceiling on the claim wait, inside the 500ms process budget; never the dispatcher deadline.
+_CLAIM_WAIT_MAX_SECS = 0.3
+CLAIM_WAIT_LEG = "run-token-claim-wait"
 
 
 def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_path: object) -> Optional[dict]:
@@ -1565,7 +1568,7 @@ def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_pa
     if run_token.claim_pending(worktree_root, run_id, token, script_path):
         left = dispatch_abandon.remaining()
         if left is not None:
-            end = time.monotonic() + max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS)
+            end = time.monotonic() + min(_CLAIM_WAIT_MAX_SECS, max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS))
             while run_token.claim_pending(worktree_root, run_id, token, script_path) and time.monotonic() < end:
                 landed = terminal_commit_reconcile.already_landed_reply(worktree_root, run_id, token, script_path)
                 if landed is not None:
@@ -1581,6 +1584,7 @@ def _redeem_or_answer(worktree_root: Path, run_id: object, token: str, script_pa
                 "a first call of this run's terminal commit still holds the run token claim and has not "
                 "finished; this call committed nothing",
                 refused="run-token-in-flight",
+                blocked_leg=CLAIM_WAIT_LEG,
             )
     return _error(
         "params.run_token does not match a live, unspent token minted for params.run_id and "
