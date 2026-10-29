@@ -230,12 +230,24 @@ class TestRamLeg:
         holders = [json.loads(p.read_text(encoding="utf-8"))["holder_pid"] for p in _lease_files(tmp_path)]
         assert holders == [CLAUDE.pid]
 
-    def test_back_to_back_launches_reserve_the_first_leases_memory(self, host, tmp_path):
+    def test_another_sessions_unattributed_lease_reserves_memory(self, host, tmp_path):
         host.avail = 1400
-        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        leases.write_lease(
+            leases.LeaseRecord(
+                holder_pid=777, holder_ctime=7, session_pid=777, session_ctime=7,
+                heavy_class="build", admitted_at=time.time(),
+            )
+        )
+        host.rows = host.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
         out = _enveloped(guard.check)(_payload("pnpm build"))
         assert out is not None and "ram-floor" in _reason(out)
         assert len(_lease_files(tmp_path)) == 1
+
+    def test_requesting_sessions_own_unattributed_lease_never_blocks_it(self, host, tmp_path):
+        host.avail = 1400
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        assert len(_lease_files(tmp_path)) == 2
 
     def test_unreadable_ram_denies(self, host):
         host.trusted = False

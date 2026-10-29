@@ -98,3 +98,27 @@ def test_stage_halts_register_rows_unclaimed_only_once_the_attempts_are_spent(tm
             root, root / PLAN_REL, _fm_with_sizing_object(root), PLAN_REL, REL, _run_sizing()
         )
     assert len(calls) == MAX_IN_RUN_REMEDY_ATTEMPTS
+
+
+def _gate(register_class):
+    return {"plan": "p.md", "verdict": "NOT-PREPPED", "withheld_rows": [], "message": "",
+            "classes": {"REGISTER": register_class}}
+
+
+def test_readiness_routes_unclaimed_register_rows_to_the_in_run_replan_not_a_judgment_pull():
+    from coordinator_core.ops.plan_readiness_verdict import readiness_verdict
+
+    out = readiness_verdict(_gate({
+        "status": "FAIL", "kind": "register-rows-unclaimed", "mechanical": False, "repair": None,
+        "detail": "register_claims.rows omit 2 row(s) of s: R2, R3",
+    }), None, [])
+    assert out["pull_class"] == "mechanical" and "needs judgment" not in out["reason"]
+    assert out["mechanical_repairs"][0]["kind"] == "register-rows-unclaimed"
+    assert "R2, R3" in out["mechanical_repairs"][0]["instruction"]
+
+
+def test_readiness_still_pulls_other_register_defects_for_judgment():
+    from coordinator_core.ops.plan_readiness_verdict import readiness_verdict
+
+    out = readiness_verdict(_gate({"status": "FAIL", "kind": "register-pin-missing", "mechanical": False, "repair": None}), None, [])
+    assert out["pull_class"] == "substantive" and "needs judgment" in out["reason"]

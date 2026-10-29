@@ -2108,6 +2108,20 @@ def _static_plan_rel(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]
     return rel if rel and (root / rel).is_file() else None
 
 
+def stale_resume_plan(repo_root: str, sizing_rel: Optional[str]) -> Optional[str]:
+    """The sizing's existing plan when `plan_currency.assess` finds it not decent, else None.
+
+    A stale plan is not trusted as ready on resume: the script routes it through plan-blitz, whose pull
+    feeds the plan-revise stage, so it is upgraded in-run and its open rows stage afterwards.
+    """
+    plan_rel = _static_plan_rel(repo_root, sizing_rel)
+    if not plan_rel:
+        return None
+    from coordinator_core.ops.dispatch_emit import plan_currency
+
+    return None if plan_currency.assess(repo_root, plan_rel)["decent"] else plan_rel
+
+
 def preblitz_anchor_lines(repo_root: str, plan_rel: Optional[str]) -> list[str]:
     """`CONTRADICTED: <claim> -- <evidence>` per declared anchor the tree contradicts; [] otherwise.
 
@@ -4155,8 +4169,10 @@ def compose_ask_script(
         b.append("      }")
         b.append("      }")
         b.append("    }")
+        b.append(f"    const _staleResumePlan = {json.dumps(stale_resume_plan(repo_root, sizing_rel))};")
         b.append(
-            "    if ((_gate.resume_ready || (_reusePhase('plan') && _reusePhase('plan_review'))) && _gate.resume_plan) "
+            "    if ((_gate.resume_ready || (_reusePhase('plan') && _reusePhase('plan_review'))) && _gate.resume_plan "
+            "&& _gate.resume_plan !== _staleResumePlan) "
             "{ _planRel = _gate.resume_plan; }"
         )
         b.append("    if (!_planRel && !_halted) {")
@@ -5163,6 +5179,11 @@ def compose_ask_script(
     )
     if judged:
         b.append(_criterion_blocker_halt_js(sizing_rel) + " }")
+    b.append(
+        f"  if (_halted && typeof _halted === 'object' && !_halted.next_action && _nextAction "
+        f"&& [{_lit(HALT_NOT_CLOSEABLE)}, {_lit(HALT_STOP_RULE)}].includes(_halted.halted)) "
+        "{ _halted.next_action = _nextAction; }"
+    )
     if objective_cfg is not None:
         b.append("  if (_nextAction.params && _objResult) { _nextAction.params.objective_loop = _objResult; }")
     b.append(

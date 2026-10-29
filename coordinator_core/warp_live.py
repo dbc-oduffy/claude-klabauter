@@ -29,6 +29,9 @@ refused submitting call); the unlaunched-grace timer answers "not live" but neve
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import functools
 import json
 import os
 import re
@@ -147,6 +150,50 @@ def _launched_task_ids(session_id: str, script_path: str, dirs: list[str]) -> li
     return [task_id for task_id, _ in _launch_records(session_id, script_path, dirs)]
 
 
+_ScopeCache = dict[tuple[str, str], list[str]]
+_LISTING_SCOPE: contextvars.ContextVar[Optional[_ScopeCache]] = contextvars.ContextVar(
+    "warp_live_listing_scope", default=None
+)
+
+
+@contextlib.contextmanager
+def listing_scope() -> Iterator[None]:
+    """Share one `os.listdir` per launch dir across every `LaunchSnapshot` built in the block: the
+    legacy temp dir holds ~10^5 entries and each listing costs ~25ms. Nests (the outermost scope
+    owns the cache). Trap: a launch record written inside the block is not seen by it."""
+    if _LISTING_SCOPE.get() is not None:
+        yield
+        return
+    token = _LISTING_SCOPE.set({})
+    try:
+        yield
+    finally:
+        _LISTING_SCOPE.reset(token)
+
+
+def _scoped(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with listing_scope():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _launch_names(tmpdir: str, prefix: str) -> list[str]:
+    """`workflow-run-<session>-*.json` names in `tmpdir`. Only the raw listing is cached per scope
+    (keyed by dir); the prefix filter runs on every call, since sessions differ."""
+    scope = _LISTING_SCOPE.get()
+    key = (tmpdir, "")  # second slot reserved by `_ScopeCache`'s tuple shape; always empty
+    if scope is not None and key in scope:
+        listed = scope[key]
+    else:
+        listed = os.listdir(tmpdir)
+        if scope is not None:
+            scope[key] = listed
+    return [n for n in listed if n.startswith(prefix) and n.endswith(".json")]
+
+
 class LaunchSnapshot:
     """One session's launch-record filenames per launch dir, listed once, with each record read at
     most once. Scoped to a single caller's loop: it never outlives it, so nothing invalidates it."""
@@ -161,10 +208,9 @@ class LaunchSnapshot:
             prefix = f"workflow-run-{session_id}-"
             for tmpdir in self.dirs:
                 try:
-                    listed = os.listdir(tmpdir)
+                    self._names[tmpdir] = _launch_names(tmpdir, prefix)
                 except OSError:
                     continue
-                self._names[tmpdir] = [n for n in listed if n.startswith(prefix) and n.endswith(".json")]
 
     def tail(self, path: str) -> str:
         if path not in self._tails:
@@ -533,6 +579,7 @@ def run_ended_on_evidence(
     )
 
 
+@_scoped
 def live_run_for_sizing(
     repo_root: Path,
     sizing_rel: str,
@@ -562,6 +609,7 @@ def live_run_for_sizing(
     return None
 
 
+@_scoped
 def live_run_for_session(
     repo_root: Path,
     session_id: Optional[str],
@@ -610,6 +658,7 @@ def _call_refused(transcript_tail: str, tool_use_id: str) -> bool:
     return False
 
 
+@_scoped
 def unlaunched_run_for_sizing(
     repo_root: Path,
     sizing_rel: str,

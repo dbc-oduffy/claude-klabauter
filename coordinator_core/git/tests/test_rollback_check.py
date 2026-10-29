@@ -264,7 +264,7 @@ def test_default_window_is_1000_not_500():
     assert sig.parameters["window"].default == 1000
 
 
-def test_reads_no_process(tmp_path):
+def test_short_history_spawns_only_the_boundary_probe(tmp_path):
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "v0\n", "v0")
     head = _commit(repo, "p.txt", "v1\n", "v1")
@@ -274,7 +274,8 @@ def test_reads_no_process(tmp_path):
             _common(repo), head, {"p.txt": _blob_sha(b"v0\n")}, window=500
         )
 
-    assert counter.argvs == [], f"expected zero spawns, got {counter.argvs}"
+    verbs = [a[a.index("--literal-pathspecs") + 1] for a in counter.argvs]
+    assert set(verbs) == {"rev-parse"}, f"history shorter than window: expected only the probe, got {counter.argvs}"
 
 
 def test_values_along_equals_per_pair_walk(tmp_path):

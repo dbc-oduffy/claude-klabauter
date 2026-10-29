@@ -2,6 +2,8 @@
 
 import hashlib
 
+import pytest
+
 from coordinator_core.ops._anchor_premise import (
     FIELD,
     VERDICTS,
@@ -231,6 +233,59 @@ def test_row_and_carry_outrank_engine_and_engine_needs_repo_root(monkeypatch, tm
     (v,) = anchor_verdicts(one, [], [], "p", None)
     assert (v["verdict"], v["source"]) == (None, "none") and calls == []
     assert anchor_findings(one, [], [], "p") == ["anchor-premise-no-verdict: AP1"]
+
+
+def _repo_with_baseline(tmp_path):
+    import subprocess
+
+    def git(*a):
+        subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    target = tmp_path / "mod.py"
+    target.write_text("refuse here\n")
+    git("add", "mod.py")
+    git("commit", "-q", "-m", "base")
+    sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], check=True,
+                         capture_output=True, text=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+    target.write_text("converted\n")
+    return sha
+
+
+BASELINE_ONLY = {"id": "AP1", "claim": "c", "check": {"command": "grep -c refuse mod.py", "expect": "1"}}
+
+
+@pytest.mark.spawns_process
+def test_baseline_only_anchor_falsified_by_own_run_reanchors(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: (sha, {"mod.py": "ask-1"}))
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [], [], "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
+    assert v["observed"].startswith(ap.REANCHORED)
+    assert ap.anchor_findings([BASELINE_ONLY], [], [], "p", tmp_path) == []
+
+
+@pytest.mark.spawns_process
+def test_baseline_only_anchor_still_contradicts_without_own_run_write_or_baseline_hold(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: (sha, {"other.py": "ask-1"}))
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: None)
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+    never_held = {**BASELINE_ONLY, "check": {"command": "grep -c refuse mod.py", "expect": "5"}}
+    monkeypatch.setattr(ap, "_own_context", lambda text, root: (sha, {"mod.py": "ask-1"}))
+    (v,) = ap.anchor_verdicts([never_held], [], [], "p", tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
 
 
 def _anchors(*ids):

@@ -250,8 +250,10 @@ def apply_in_run_resize(
 
 
 def s_plan_path(sizing_rel: str) -> str:
-    """Stage-1 plan location, `docs/plans/<sizing-stem>.md`."""
-    return f"docs/plans/{PurePosixPath(str(sizing_rel).replace(chr(92), '/')).stem}.md"
+    """Stage-1 plan location, `docs/plans/<sizing-stem>.md`; a repeated leading `YYYY-MM-DD-` collapses to one."""
+    stem = PurePosixPath(str(sizing_rel).replace(chr(92), "/")).stem
+    stem = re.sub(r"^((?:\d{4}-\d{2}-\d{2}-))(?:\1)+", r"\1", stem)
+    return f"docs/plans/{stem}.md"
 
 
 def resumable_plan(
@@ -262,8 +264,9 @@ def resumable_plan(
     The plan is the sizing's `plan:` edge, else at arm S `s_plan_path`. Incomplete rows are those
     neither closed by disposition (`coded`, `delivered_elsewhere`, ...) nor landed by a checkpoint
     commit of this plan or a `ledger-check` halt commit whose `Halt-Plan:` names it; row reports
-    on disk are stale history and do not refuse. A plan with rows, every one landed, raises SizingFireRefused ("already ran") unless a ledger-halt pointer
-    (`ledger-check` or `commit` halt) names this plan and sizing and no row is coded: then `ResumePlan.ledger` carries it.
+    on disk are stale history and do not refuse. A plan with rows, every one landed, resumes at its ledger: a ledger-halt pointer (`ledger-check` or `commit`
+    halt) naming this plan and sizing with no row coded is carried in `ResumePlan.ledger`; with nothing to rule, an
+    `ALL_LANDED_HALT_KIND` halt with empty `blocking` routes the run to verify the exit criterion.
     Failing that, a rulable register row or a not_met recorded outcome resumes it as a synthesised
     `ALL_LANDED_HALT_KIND` ledger resume (`_all_landed_halt`); a spine with no `coded` row also pays the
     one `resume_landed_state` git spawn. A plan with
@@ -272,9 +275,7 @@ def resumable_plan(
     landed, as in `read_spine` (`em_discharge_eligible`). A row the EM credited through
     `workflow.revise credit_chunks` on any run of this sizing (`run_credit.credits_for_sizing`) also counts
     landed: one date-floored scandir plus a `credit.jsonl` read per candidate dir, only while a row is
-    still open. The "already ran" refusal appends `halted_run_route.halted_route_for_sizing`'s line when a halted
-    run of the sizing is on disk. One file read, plus one more on the already-ran
-    path, plus one more (the evidence sidecar) only when an open em-performed row exists; one `git log` only when a
+    still open. One file read, plus one more (the evidence sidecar) only when an open em-performed row exists; one `git log` only when a
     row is open. With rows left open, a ledger resume
     also needs the newest ledger-check halt's committed record to have staged every one of them
     (`_ledger_halt_for`), pointer or no pointer; a row it did not stage keeps `ResumePlan.rows`,
@@ -365,11 +366,10 @@ def resumable_plan(
                 plan_rel, (), ledger=replace(halt, unlanded=tuple(pending)), held=held,
                 not_run_reasons=ledger_reasons,
             )
-        from coordinator_core.ops.dispatch_emit.halted_run_route import halted_route_for_sizing
-
-        refusal = f"{plan_rel} already ran: every row is landed and nothing is left to judge; residue is a new sizing naming it"
-        route = halted_route_for_sizing(root, sizing_rel)
-        raise SizingFireRefused([f"{refusal} {route}" if route else refusal])
+        pointer = _own_pointer(root, plan_rel, sizing_rel)
+        run = pointer.run_id if pointer is not None else (state.ledger_run if state is not None else None)
+        verify = LedgerHalt(run or ALL_LANDED_NO_RUN, plan_rel, sizing_rel, (), halted=ALL_LANDED_HALT_KIND)
+        return ResumePlan(plan_rel, (), ledger=verify, held=_held_rows(named, pending, credited, state), not_run_reasons=ledger_reasons)
     unclaimed_halt = _unclaimed_rows_halt(root, plan_rel, plan_text, sizing, sizing_rel, pending)
     if unclaimed_halt is not None:
         return ResumePlan(
@@ -835,14 +835,10 @@ def collect_fire_refusals(
         plan_rel = s_plan_path(sizing_rel)
         try:
             resumable = resumable_plan(sizing, sizing_rel, Path(repo_root), arm)
+            if resumable is None and (Path(repo_root) / plan_rel).exists():
+                resumable = ResumePlan(plan_rel, ())
             if resume_sink is not None:
                 resume_sink.append(resumable)
         except SizingFireRefused as exc:
             out.extend(exc.fields)
-            resumable = plan_rel
-        if resumable is None and (Path(repo_root) / plan_rel).exists():
-            out.append(
-                f"{plan_rel} already exists — stage 1 would overwrite it; "
-                f"run `emit-dispatch-workflow --plan {plan_rel}` instead"
-            )
     return out

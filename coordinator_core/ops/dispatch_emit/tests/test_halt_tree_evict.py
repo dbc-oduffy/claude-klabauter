@@ -68,6 +68,47 @@ def test_evict_skips_absent_path_and_unlisted_paths(tmp_path):
     assert (root / "peer.py").exists()
 
 
+def _git_repo(tmp_path, files):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for rel, text in files.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t"}
+    import os
+
+    full = {**os.environ, **env}
+    for cmd in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "x"]):
+        subprocess.run(["git", *cmd], cwd=repo, env=full, check=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return repo
+
+
+def test_broken_paths_flags_undefined_import_and_cascading_importer(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halt_tree_check
+
+    repo = _git_repo(tmp_path, {"pkg/__init__.py": "", "pkg/a.py": "def old():\n    pass\n",
+                                "pkg/b.py": "x = 1\n"})
+    (repo / "pkg/a.py").write_text("from pkg.b import undefined_name\ndef old():\n    pass\n")
+    (repo / "pkg/b.py").write_text("from pkg.a import old\nx = 1\n")
+    out = halt_tree_check.broken_paths(repo, ["pkg/a.py"], ["pkg/a.py", "pkg/b.py"])
+    assert "pkg/a.py" in out
+    assert "pkg/b.py" not in out
+
+
+def test_broken_paths_clean_and_syntax(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halt_tree_check
+
+    repo = _git_repo(tmp_path, {"pkg/__init__.py": "", "pkg/a.py": "y = 1\n"})
+    (repo / "pkg/a.py").write_text("y = 2\n")
+    assert halt_tree_check.broken_paths(repo, ["pkg/a.py"], ["pkg/a.py"]) == {}
+    (repo / "pkg/a.py").write_text("def (:\n")
+    assert "syntax error" in halt_tree_check.broken_paths(repo, ["pkg/a.py"], ["pkg/a.py"])["pkg/a.py"]
+
+
 def test_second_evict_after_reset_keeps_original_entry(tmp_path):
     root, rec = _setup(tmp_path)
     hte.evict(root, rec, ["tracked.py"], {"tracked.py": HEAD})

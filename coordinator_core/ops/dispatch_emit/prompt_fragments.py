@@ -27,6 +27,18 @@ MIN_CHUNK = 40
 _PREV_OPENERS = set("(,=:[!&|?{};+-*%<>~^")
 _ESC_UNIT = re.compile(r"\\.|[^\\]", re.S)
 _REF_NAME = "_PF{}"
+#: A run of code characters (whitespace included) no scanner branch acts on: consumed in one match.
+_PLAIN_RUN = re.compile(r"[^'\"`/{}]+")
+
+
+def _before(src: str, i: int) -> str:
+    """Up to eight characters of ``src[:i].rstrip()``'s tail ('' when only whitespace precedes), without copying the prefix."""
+    j = i
+    while j > 0 and src[j - 1].isspace():
+        j -= 1
+    return src[max(0, j - 8) : j]
+
+
 #: Shortest JSON object/array literal worth a const.
 MIN_JSON = 40
 _JSON_OPEN = re.compile(r'[\[{]"')
@@ -93,9 +105,11 @@ def _scan(src: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
                 depth -= 1
                 i, prev = i + 1, c
             else:
-                if not c.isspace():
-                    prev = c
-                i += 1
+                end = _PLAIN_RUN.match(src, i).end()
+                tail = src[i:end].rstrip()
+                if tail:
+                    prev = tail[-1]
+                i = end
         return i
 
     def template(i: int) -> int:
@@ -169,7 +183,7 @@ def _constant_chains(body: str, ids: dict[str, int]) -> list[list[_Tok]]:
         prev_end = e
     out: list[list[_Tok]] = []
     for ch in chains:
-        before = body[: ch[0].start].rstrip()
+        before = _before(body, ch[0].start)
         ok_start = (
             not before
             or before[-1] in _OPERAND_START_OK
@@ -417,7 +431,7 @@ def _hoist_runs(body: str, first: int) -> tuple[str, str, int]:
     seqs: list[list[str]] = []
     spans: list[tuple[int, int]] = []
     for run in runs:
-        head = body[: run[0][0]].rstrip()
+        head = _before(body, run[0][0])
         tail = body[run[-1][1] : run[-1][1] + 3].lstrip()
         if len(run) < 2 or (head and head[-1] not in _RUN_PREV) or tail[:1] in (".", "[", "(", "*", "/", "%") or tail[:2] == "?.":
             continue

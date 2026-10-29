@@ -108,13 +108,20 @@ def live_leases(directory: Optional[Path] = None) -> List[LeaseRecord]:
 def unattributed_count(
     directory: Optional[Path] = None,
     now: Optional[Callable[[], float]] = None,
+    exclude_session: Optional[tuple] = None,
 ) -> int:
-    """Leases still unattributed and inside the TTL window: the ones the RAM leg reserves for."""
+    """Leases still unattributed and inside the TTL window: the ones the RAM leg reserves for.
+
+    A lease of exclude_session (pid, ctime) is not counted: a session's own earlier launches have
+    run or are running under its own caps, and must not block its next one.
+    """
     clock = (now or time.time)()
     return sum(
         1
         for rec in live_leases(directory)
-        if _is_unattributed(rec) and clock - rec.admitted_at <= LEASE_ATTRIBUTION_TTL_S
+        if _is_unattributed(rec)
+        and clock - rec.admitted_at <= LEASE_ATTRIBUTION_TTL_S
+        and (rec.session_pid, rec.session_ctime) != exclude_session
     )
 
 

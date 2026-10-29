@@ -38,11 +38,15 @@ Negative spec:
       merge commit's OWN version of a path (the blob its tree records) is
       one version on the first-parent line like any other.
 
-    - NO SPAWNS. Every read here is `commit_walk.commit_meta` (object-store
-      commit parse) or `git_state._parse_tree_entries` over
-      `git_objects.read_object` (object-store tree parse) -- no
-      `subprocess`, direct or indirect, is reachable from any function in
-      this module.
+    - TWO SPAWNS AT MOST PER 8000 PATH CHARS (`rev-parse`, then one
+      `git log --first-parent --raw`): measured on 21 paths over 1000
+      commits (example-retrieval-repo): the git spawns 15.6-31ms process time, 2 spawns,
+      0 object reads; the in-process walk with targeted single-entry tree
+      lookups (`_tree_lookup`) 1156-1172ms process time, 3717 object reads,
+      down from 1.6s with full tree parses. The spawn path wins on both axes
+      and is kept. The in-process
+      walk (`_values_along`) is the fallback when git fails, the history is shorter than
+      `window`, or the spawn times out.
 
     - NO INDEX OR WORKTREE READS. `candidates` is handed to this module
       fully resolved (a blob sha the caller already computed, or `ABSENT`
@@ -64,8 +68,8 @@ Negative spec:
 
 Cost: measured by the `P2a` spike against this repo's live object store
 (cold cache, no warm reuse credited) and a 150-file/3-revision hermetic
-fixture -- the same mechanism this module ships. Added spawns: 0 (no
-`subprocess` import reachable from any function below). Check cost at 150
+fixture -- the same mechanism this module ships. Added spawns: 0 for the
+object-store walk, now 2 for the git path (see TWO SPAWNS above). Check cost at 150
 paths, `commit_paths` seam (fixture, hermetic): baseline 33.774ms, with
 check 35.647ms -- added ~1.87ms at `W=500`, ~+0.207ms more at `W=1000`
 (~2.08ms total), against 466.2ms of remaining headroom at the 500ms
@@ -85,16 +89,23 @@ this does NOT resolve" section.)
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Mapping, NamedTuple, Optional, Tuple, Union
 
 from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_objects import read_object
 from coordinator_core.git.git_state import _parse_tree_entries
+from coordinator_core.win_portability import no_console_creationflags
+
+_GIT_TIMEOUT_S = 5
+#: Pathspec characters per `git log` argv; Windows caps a command line near 32k.
+_ARGV_CHAR_BUDGET = 8000
 
 ABSENT = object()
 
 _TREE_MODE = 0o40000
+_NUL = bytes(1)
 
 #: Tree-sha-keyed, content-addressed, bounded the same way
 #: `commit_walk._COMMIT_CACHE` and `git_objects._OBJECT_CACHE` are -- see
@@ -157,6 +168,29 @@ def _tree_entries(
         _TREE_CACHE.clear()
     _TREE_CACHE[key] = entries
     return entries
+
+
+def _tree_lookup(
+    common_dir: Path, tree_sha: str, names: "set"
+) -> Optional[Dict[str, Tuple[int, str]]]:
+    """Only the `names` entries of one tree, scanned from the raw bytes; None if unreadable."""
+    obj = read_object(common_dir, tree_sha)
+    if obj is None or obj[0] != "tree":
+        return None
+    raw = obj[1]
+    wanted = {n.encode("utf-8", "surrogateescape"): n for n in names}
+    found: Dict[str, Tuple[int, str]] = {}
+    pos, end = 0, len(raw)
+    while pos < end and len(found) < len(wanted):
+        sp = raw.find(b" ", pos)
+        nul = raw.find(_NUL, sp)
+        if sp < 0 or nul < 0:
+            break
+        name = wanted.get(raw[sp + 1:nul])
+        if name is not None:
+            found[name] = (int(raw[pos:sp], 8), raw[nul + 1:nul + 21].hex())
+        pos = nul + 21
+    return found
 
 
 def _blob_at_commit(common_dir: Path, commit_sha: str, path: str):
@@ -244,7 +278,7 @@ def _resolve_node(
         for p in _paths_below(node):
             cur[p] = ABSENT
         return
-    entries = _tree_entries(common_dir, tree_sha)
+    entries = _tree_lookup(common_dir, tree_sha, set(node.files) | set(node.dirs))
     if entries is None:
         _forget_below(node)
         for p in _paths_below(node):
@@ -291,6 +325,88 @@ def _values_along(
     return out
 
 
+def _git(common_dir: Path, args: List[str]) -> Optional[str]:
+    try:
+        r = subprocess.run(
+            ["git", "--git-dir", str(common_dir), "--literal-pathspecs", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
+            timeout=_GIT_TIMEOUT_S,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _git_series(
+    common_dir: Path, head_sha: str, paths: List[str], window: int
+) -> "Optional[Dict[str, List[Tuple[str, object]]]]":
+    """Each path's (commit, value) versions inside the window, newest first.
+
+    One `git log --first-parent --raw` yields every in-window change with the
+    old and new blob oid. The value at `head_sha` is the newest change's new
+    oid; each older value sits at that change's first parent. A parent equal
+    to the window boundary (`head~window`) is outside the window and ends the
+    series. A path with no change in the window has an empty series (one
+    version, so never a finding). None means git could not answer.
+    """
+    boundary = _git(
+        common_dir, ["rev-parse", "--verify", "--quiet", f"{head_sha}~{window}^{{commit}}"]
+    )
+    if boundary is None or not boundary.strip():
+        return None
+    boundary = boundary.strip()
+    wanted = set(paths)
+    changes: "Dict[str, List[Tuple[str, Optional[str], str, str]]]" = {p: [] for p in paths}
+    batch: List[str] = []
+    size = 0
+    for path in paths + [None]:  # type: ignore[list-item]
+        if path is not None and (size + len(path) < _ARGV_CHAR_BUDGET or not batch):
+            batch.append(path)
+            size += len(path) + 1
+            continue
+        out = _git(
+            common_dir,
+            [
+                "log", "--first-parent", "--diff-merges=first-parent", "--no-renames",
+                "--format=%H %P", "--raw", "--no-abbrev", "-z",
+                f"{boundary}..{head_sha}", "--", *batch,
+            ],
+        )
+        if out is None:
+            return None
+        commit, parent = "", None
+        tokens = out.split("\0")
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i].lstrip("\n")
+            i += 1
+            if tok.startswith(":"):
+                fields = tok[1:].split(" ")
+                if i < len(tokens) and len(fields) >= 5 and tokens[i] in wanted:
+                    changes[tokens[i]].append((commit, parent, fields[2], fields[3]))
+                i += 1
+            elif tok:
+                parts = tok.split(" ")
+                commit = parts[0]
+                parent = parts[1] if len(parts) > 1 else None
+        batch, size = ([path], len(path) + 1) if path is not None else ([], 0)
+    series: "Dict[str, List[Tuple[str, object]]]" = {}
+    for p, rows in changes.items():
+        entries: "List[Tuple[str, object]]" = []
+        if rows:
+            entries.append((head_sha, ABSENT if not rows[0][3].strip("0") else rows[0][3]))
+            for _commit, parent, old, _new in rows:
+                if parent is None or parent == boundary:
+                    break
+                entries.append((parent, ABSENT if not old.strip("0") else old))
+        series[p] = entries
+    return series
+
+
 def find_exact_blob_rollbacks(
     common_dir: Union[str, Path],
     head_sha: str,
@@ -300,9 +416,11 @@ def find_exact_blob_rollbacks(
     common_dir = Path(common_dir)
     if not candidates:
         return []
-    ancestors = _first_parent_ancestors(common_dir, head_sha, window)
     findings: List[RollbackFinding] = []
-    along = _values_along(common_dir, ancestors, list(candidates))
+    along = _git_series(common_dir, head_sha, list(candidates), window)
+    if along is None:
+        ancestors = _first_parent_ancestors(common_dir, head_sha, window)
+        along = _values_along(common_dir, ancestors, list(candidates))
     for path, new_value in candidates.items():
         # Depth counts VERSIONS of the path, not commits: a commit that did
         # not touch `path` adds no version. V(1) is head's own value -- equal

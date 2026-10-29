@@ -30,6 +30,11 @@ RESULT_DIGEST_STR_CHARS = 200
 #: Door-form stdout larger than this is not parsed; the digest says "stdout_unparsed".
 RESULT_STDOUT_PARSE_BYTES = 1 << 20
 
+#: A finished failure's reason text, kept on the record (not in the result LRU) at
+#: most FAILURE_TEXT_BYTES long, dropped only once read AND FAILURE_TEXT_MIN_SECS old.
+FAILURE_TEXT_BYTES = 2048
+FAILURE_TEXT_MIN_SECS = 600.0
+
 DROPPED_OVER_CAP = "over-cap"
 DROPPED_NOT_SERIALISABLE = "not-serialisable"
 DROPPED_EVICTED = "evicted"
@@ -153,6 +158,31 @@ def _outcome_digest(result: Any) -> dict:
     return digest
 
 
+def _clip_text(text: str) -> str:
+    return text.encode("utf-8")[:FAILURE_TEXT_BYTES].decode("utf-8", "ignore")
+
+
+def _failure_text_of(result: Any) -> Optional[str]:
+    """The reason text of a landed op that failed (nonzero `exit_code`): its
+    stderr, else its `error`, else its stdout, else None. At most FAILURE_TEXT_BYTES.
+    An `invoke.from_argv` op carries its JSON-RPC error in stdout with stderr empty."""
+    if not isinstance(result, dict):
+        return None
+    code = result.get("exit_code")
+    if isinstance(code, bool) or not isinstance(code, int) or code == 0:
+        return None
+    for field in ("stderr", "error", "stdout"):
+        value = result.get(field)
+        if isinstance(value, str) and value.strip():
+            return _clip_text(value)
+        if value:
+            try:
+                return _clip_text(json.dumps(value))
+            except (TypeError, ValueError, RecursionError):
+                return _clip_text(str(value))
+    return None
+
+
 class AckStore:
 
     def __init__(
@@ -161,10 +191,12 @@ class AckStore:
         *,
         boot_ns: Optional[int] = None,
         executing_bound: Optional[Callable[[Optional[str]], float]] = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """`executing_bound` maps a method to the seconds an admitted record may
         read `executing`; None means unbounded. Passed in, never imported, so
-        this module stays stdlib-only."""
+        this module stays stdlib-only. `clock` times failure-text retention."""
+        self._clock = clock
         self._executing_bound = executing_bound
         self._capacity = capacity
         self.boot_ns = time.monotonic_ns() if boot_ns is None else boot_ns
@@ -209,15 +241,22 @@ class AckStore:
         *,
         error_code: Optional[int] = None,
         result: Any = None,
+        error_message: Optional[str] = None,
     ) -> None:
         """Terminal stamp. `result` is kept only for a `result` outcome, only if
-        JSON-serialisable and within the per-entry cap; it never affects state."""
+        JSON-serialisable and within the per-entry cap; it never affects state.
+        A failure's reason text (`error_message` for an `error` outcome, the
+        result's stderr/error for a nonzero `exit_code`) is kept on the record."""
         size: Optional[int] = None
         dropped: Optional[str] = None
         digest: Optional[dict] = None
+        failure: Optional[str] = None
         if outcome == OUTCOME_RESULT and result is not None:
             size, dropped = self._measure(result)
             digest = _outcome_digest(result)
+            failure = _failure_text_of(result)
+        elif outcome == OUTCOME_ERROR and error_message:
+            failure = _clip_text(str(error_message))
         with self._lock:
             record = self._records.get(key)
             if record is None:
@@ -231,6 +270,10 @@ class AckStore:
             record["state"] = _STAMPED
             record["outcome"] = outcome
             record["error_code"] = error_code
+            if failure:
+                record["failure_text"] = failure
+                record["failure_at"] = self._clock()
+                record["failure_read"] = False
             if outcome == OUTCOME_RESULT and result is not None:
                 record["result_offered"] = True
                 record["result_digest"] = digest
@@ -322,6 +365,15 @@ class AckStore:
                 payload = {"state": STATE_FINISHED, "outcome": outcome}
                 if outcome == OUTCOME_ERROR and record.get("error_code") is not None:
                     payload["error_code"] = record["error_code"]
+                text = record.get("failure_text")
+                if text is not None:
+                    payload["failure_text"] = text
+                    if record["failure_read"] and (
+                        self._clock() - record["failure_at"] >= FAILURE_TEXT_MIN_SECS
+                    ):
+                        # Read once and old enough: this answer is the last carrier.
+                        del record["failure_text"]
+                    record["failure_read"] = True
                 if record.get("result_offered"):
                     kept = self._results.get(key)
                     if kept is not None:

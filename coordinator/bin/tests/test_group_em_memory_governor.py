@@ -768,3 +768,19 @@ def test_run_pauses_nothing_when_no_tree_covers_the_shortfall():
     gov.run(_args(), emit=lines.append, sample=lambda: True, procs_fn=lambda: procs,
             signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=1, shortfall_fn=lambda: 4000.0)
     assert all("PAUSED" not in line for line in lines)
+
+
+def test_open_log_or_exit_appends_to_the_named_log(tmp_path):
+    """Inline under box-launch-windowless the governor wrote to the launcher's log, and --log stayed empty."""
+    log = tmp_path / "sub" / "governor.log"
+    stream = gov.open_log_or_exit(log)
+    stream.write("HEADROOM 1.0\n")
+    stream.close()
+    assert log.read_text(encoding="utf-8") == "HEADROOM 1.0\n"
+
+
+def test_open_log_or_exit_refuses_an_unwritable_log(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        gov.open_log_or_exit(tmp_path)
+    assert exc.value.code == 2
+    assert "cannot write --log" in capsys.readouterr().err

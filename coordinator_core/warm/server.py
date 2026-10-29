@@ -539,7 +539,12 @@ def _stamp_dispatch_outcome(dispatch_key: str, response: Any) -> None:
         if error.get("code") == WARM_DISPATCH_INDETERMINATE:
             _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_ABANDONED)
         else:
-            _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_ERROR, error_code=error.get("code"))
+            _ack_store.stamp(
+                dispatch_key,
+                dispatch_ack.OUTCOME_ERROR,
+                error_code=error.get("code"),
+                error_message=error.get("message"),
+            )
     else:
         _ack_store.stamp(
             dispatch_key,

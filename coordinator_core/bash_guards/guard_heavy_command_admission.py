@@ -438,7 +438,18 @@ def _box_hold_leg(payload: Mapping[str, Any]) -> Any:
     )
 
 
-def _ram_leg(config: Mapping[str, Any], primitives) -> Any:
+def _requester_session(payload: Mapping[str, Any], primitives) -> Optional[Tuple[int, int]]:
+    """(pid, ctime) of the requesting session's anchor, or None when it cannot be resolved."""
+    from coordinator_core.bash_guards import _session_census as census_mod
+
+    rows = primitives.snapshot()
+    if rows is None:
+        return None
+    anchor = census_mod.resolve_anchor({"pid": _caller_pid(payload)}, primitives, snapshot=rows)
+    return (anchor.pid, anchor.ctime) if anchor is not None else None
+
+
+def _ram_leg(config: Mapping[str, Any], primitives, payload: Mapping[str, Any]) -> Any:
     from coordinator_core.bash_guards import _heavy_lease_store as leases
 
     floor = _positive_int(config, KEY_FREE_RAM_FLOOR_MB)
@@ -463,6 +474,11 @@ def _ram_leg(config: Mapping[str, Any], primitives) -> Any:
     effective = reading.avail_mb - reserved
     if effective >= floor:
         return None
+    own = _requester_session(payload, primitives)
+    if own is not None:
+        reserved = leases.unattributed_count(exclude_session=own) * reserve
+        if reading.avail_mb - reserved >= floor:
+            return None
     held = leases.holders()
     return _deny_text(
         LEG_RAM_FLOOR,
@@ -775,7 +791,7 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Any:
     primitives = _primitives()
 
     if heavy and not _bypassed(LEG_RAM_FLOOR, payload, command):
-        envelope = _ram_leg(config, primitives)
+        envelope = _ram_leg(config, primitives, payload)
         if envelope is not None:
             return denied(LEG_RAM_FLOOR, envelope)
 

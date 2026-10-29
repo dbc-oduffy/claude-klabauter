@@ -123,6 +123,17 @@ def test_each_halt_assigns_before_the_guarded_stage_and_execute():
     assert f"'{HALT_REFUSAL}'" in script
 
 
+def test_not_closeable_and_stop_rule_halts_carry_the_refire_next_action():
+    from coordinator_core.ops.dispatch_emit import halt_remedy_class as hrc
+
+    script = _compose()
+    for kind in ("not_closeable", "stop_rule"):
+        assert hrc.is_mechanical(kind) and kind not in hrc.RECOVERABLE_DEBT
+        assert f"'{kind}'" in script
+    assert "!_halted.next_action && _nextAction" in script
+    assert "_halted.next_action = _nextAction;" in script
+
+
 def test_script_carries_manifest_marker_and_both_verbs():
     script = _compose()
     assert f"\n{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/{_RUN_ID}/manifest.json\n" in script
@@ -743,3 +754,14 @@ def test_a_resumed_review_wave_sizes_and_briefs_itself_for_only_the_blocked_slic
     assert 'review_slice_ids: ["s2"]' in prompt and "Review only the listed slice ids" in prompt
     assert _eval_emitted_review_wave(count, rows=rows, phase_verdicts={}) == 3
     assert _eval_emitted_review_wave(suffix, rows=rows, phase_verdicts={}) == ""
+
+
+def test_a_stale_resume_plan_is_not_trusted_as_ready_and_a_decent_one_is(monkeypatch, m_plus_known_arm):
+    monkeypatch.setattr(ask_compose, "stale_resume_plan", lambda root, sizing: "docs/plans/p.md")
+    stale = _compose()
+    monkeypatch.setattr(ask_compose, "stale_resume_plan", lambda root, sizing: None)
+    decent = _compose()
+    assert 'const _staleResumePlan = "docs/plans/p.md";' in stale
+    assert "const _staleResumePlan = null;" in decent
+    guard = "&& _gate.resume_plan !== _staleResumePlan) { _planRel = _gate.resume_plan; }"
+    assert guard in stale and guard in decent

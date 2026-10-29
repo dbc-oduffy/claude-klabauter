@@ -79,6 +79,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import (
     stamp_plan_executing,
 )
 from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
+from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_S,
@@ -410,12 +411,11 @@ def _arm_verdict(
 
     if baton and arm == ARM_XS:
         if not _baton_belongs_to_sizing(repo_root, sizing, sizing_rel, baton):
-            return _halt(
-                HALT_REFUSAL,
-                f"baton {baton} is not this sizing's: neither its sizing_object nor the sizing's baton names the other",
-            )
+            # Only the sizing's own baton binds an XS run: a foreign one is dropped, not refused.
+            baton = remedy_or_halt("baton-not-this-sizings", lambda n: None, lambda failures: None)
     elif baton and arm != ARM_M_PLUS:
-        return _halt(HALT_REFUSAL, f"baton given but arm {arm} mints no baton")
+        # S and roadmap mint no baton: the surplus argument is dropped, not refused.
+        baton = remedy_or_halt("baton-not-this-sizings", lambda n: None, lambda failures: None)
 
     if sizing.get("xl_exit") == "split":
         return _halt(
@@ -507,14 +507,25 @@ def _arm_verdict(
             resume = resumable_plan(sizing, sizing_rel, repo_root, arm)
         except SizingFireRefused as exc:
             refusals.extend(f for f in exc.fields if f not in refusals)
-    if refusals:
-        unread = _unread_notes_on_ran_refusal(repo_root, refusals, run_id)
-        if unread:
-            return _halt(
-                HALT_REFUSAL,
-                f"{'; '.join(refusals)}; run {run_id} carries unread revise note(s) {unread}: "
-                "reopen work with `workflow.revise` with `verbatim`",
+    if resume is None and arm == ARM_M_PLUS and not refusals:
+        accepted_plan = _accepted_plan_hit(repo_root, sizing, sizing_rel)
+        if accepted_plan:
+            bound = remedy_or_halt(
+                "accepted-plan-exists",
+                lambda n: _bind_plan_edge(repo_root, sizing, sizing_rel, accepted_plan),
+                lambda failures: _halt(
+                    HALT_REFUSAL,
+                    f"accepted plan {accepted_plan} exists for this ask but `plan:` could not be set on "
+                    f"{sizing_rel}: {'; '.join(failures)}",
+                ),
             )
+            if isinstance(bound, GateVerdict):
+                return bound
+            try:
+                resume = resumable_plan(sizing, sizing_rel, repo_root, arm)
+            except SizingFireRefused as exc:
+                refusals.extend(f for f in exc.fields if f not in refusals)
+    if refusals:
         return _halt(HALT_REFUSAL, "; ".join(refusals))
     try:
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
@@ -558,15 +569,6 @@ def _arm_verdict(
             resume_ledger=resume_ledger, design_route=route_payload, pending_rulings=pending_rulings,
         )
 
-    if resume is None:
-        accepted_plan = _accepted_plan_hit(repo_root, sizing, sizing_rel)
-        if accepted_plan:
-            return _halt(
-                HALT_REFUSAL,
-                f"accepted plan {accepted_plan} already exists for this ask: set `plan: {accepted_plan}` on "
-                f"{sizing_rel} and refire to resume it",
-            )
-
     doc_new = _load_doc_new()
     try:
         baton = doc_new.mint_baton_from_sizing(sizing_rel, str(repo_root), baton=baton)
@@ -597,20 +599,35 @@ def _arm_verdict(
     )
 
 
-def _unread_notes_on_ran_refusal(repo_root: Path, refusals: Sequence[str], run_id: Optional[str]) -> list[str]:
-    """Live carried revise notes (each capped at 120 chars) of `run_id`'s chain when `refusals` hold the
-    all-landed "already ran" refusal, else []. A note never reopens landed rows; only a verbatim row does."""
-    # Phrase is built in sizing_fire's all-landed refusal; keep the two in step.
-    if not run_id or not any(" already ran: every row is landed" in r for r in refusals):
-        return []
-    from coordinator_core.ops.dispatch_emit import run_notes
-    from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, carried_notes
+def _bind_plan_edge(repo_root: Path, sizing: dict, sizing_rel: str, plan_rel: str) -> str:
+    """Write `plan: <plan_rel>` onto the sizing file and the in-memory `sizing`; raises on a refused write.
+
+    A sizing that already names a plan is left as is.
+    """
+    import yaml
+
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
+    def mutate(old: str) -> str:
+        doc = yaml.safe_load(old) or {}
+        if doc.get("plan"):
+            return old
+        doc["plan"] = plan_rel
+        crlf = "\r\n" in old
+        text = yaml.safe_dump(doc, default_flow_style=False, sort_keys=False, allow_unicode=True, width=100000)
+        text = requirements_ledger._validated(text)
+        return text.replace("\n", "\r\n") if crlf else text
 
     try:
-        live = run_notes.live(carried_notes(Path(repo_root), run_id))
-    except LedgerRefused:
-        return []
-    return [repr(n["note"][:120]) for n in live]
+        locked_rmw(
+            requirements_ledger._sizing_path(repo_root, sizing_rel), mutate, repo_root=Path(repo_root),
+            timeout=GATE_LOCK_WAIT_SECS,
+        )
+    except (MutateAbort, LockTimeout, requirements_ledger.LedgerRefused, OSError) as exc:
+        raise RuntimeError(str(exc.args[0]) if getattr(exc, "args", None) else repr(exc)) from exc
+    sizing["plan"] = plan_rel
+    return plan_rel
 
 
 def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Optional[dict], pending: Sequence[str], plan_ready) -> dict:

@@ -398,6 +398,9 @@ def _carry_rows(repo_root: Path, plan_rel: str) -> list:
     return record["rows"] if record else []
 
 
+REGISTER_ROWS_UNCLAIMED_KIND = "register-rows-unclaimed"
+
+
 def _repair(kind: str, target: str, instruction: str) -> dict:
     return {"kind": kind[:100], "target": target[:300], "instruction": instruction[:_INSTRUCTION_MAX]}
 
@@ -535,6 +538,12 @@ def readiness_verdict(
             continue
         if cls.get("mechanical") and cls.get("repair"):
             repairs.append(_repair(str(cls.get("kind") or name), name, cls["repair"]))
+        elif cls.get("kind") == REGISTER_ROWS_UNCLAIMED_KIND:
+            repairs.append(_repair(
+                REGISTER_ROWS_UNCLAIMED_KIND, name,
+                "re-plan in-run and claim the unclaimed register rows (claim_register_rows): "
+                + str(cls.get("detail") or ""),
+            ))
         else:
             entry = f"{name}:{cls.get('kind') or cls.get('status')}"
             if cls.get("kind") == ZERO_DISPATCHABLE_KIND:

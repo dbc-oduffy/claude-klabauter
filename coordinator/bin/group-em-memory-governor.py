@@ -743,6 +743,16 @@ def _settings_home() -> Path:
     return Path(base) / ".coordinator-claude-settings"
 
 
+def open_log_or_exit(path: Path):
+    """An append stream on `path`; exit 2 with one stderr line when it cannot be opened."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return open(path, "a", encoding="utf-8", buffering=1)
+    except OSError as exc:
+        print(f"governor: cannot write --log {path}: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     ap.add_argument("--interval", type=float, default=10.0, help="seconds between samples")
@@ -767,6 +777,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     rc = session_detach.ensure_detached("group-em-memory-governor", child_argv, log)
     if rc is not None:
         sys.exit(rc)
+    if args.log is not None:
+        # Inline under a launcher, stdout is the launcher's log; a waiter tailing --log would go blind.
+        sys.stdout = open_log_or_exit(args.log)
     getattr(sys.stdout, "reconfigure", lambda **_: None)(line_buffering=True)
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None:

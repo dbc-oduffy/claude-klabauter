@@ -78,6 +78,8 @@ def _flush_as_pack():
 def fx(tmp_path_factory):
     gitdir = tmp_path_factory.mktemp("rbbudget") / ".git"
     (gitdir / "objects" / "pack").mkdir(parents=True)
+    (gitdir / "refs" / "heads").mkdir(parents=True)
+    (gitdir / "HEAD").write_text("ref: refs/heads/main\n")
     rng = random.Random(344)
     paths = [f"d{i % 6}/s{i % 5}/f{i}.txt" for i in range(_PATHS)]
     state: "dict[str, str]" = {}
@@ -177,6 +179,33 @@ def test_full_window_60_paths_under_500ms_process_time(fx):
     assert spent < _BUDGET_MS, f"{spent:.0f}ms process time on {_PATHS} paths, bar {_BUDGET_MS:.0f}ms"
 
 
+def test_21_paths_1000_commits_cost_is_two_spawns_and_no_object_reads(fx, monkeypatch):
+    """The cost pin: a count, not a clock. Two git spawns and zero object reads."""
+    argvs = []
+    real_run = rollback_check.subprocess.run
+
+    def run_spy(argv, *a, **kw):
+        argvs.append(list(argv))
+        return real_run(argv, *a, **kw)
+
+    reads = []
+    real_read = rollback_check.read_object
+
+    def read_spy(*a, **kw):
+        reads.append(a)
+        return real_read(*a, **kw)
+
+    monkeypatch.setattr(rollback_check.subprocess, "run", run_spy)
+    monkeypatch.setattr(rollback_check, "read_object", read_spy)
+    candidates = {p: hashlib.sha1(p.encode()).hexdigest() for p in fx.paths[:21]}
+    assert len(candidates) == 21
+    _clear_caches()
+    assert find_exact_blob_rollbacks(fx.gitdir, fx.head, candidates, _WINDOW) == []
+    verbs = [a[a.index("--literal-pathspecs") + 1] for a in argvs]
+    assert verbs == ["rev-parse", "log"], verbs
+    assert reads == []
+
+
 def test_findings_equal_brute_force_oracle(fx):
     _clear_caches()
     per_path = {p: _versions(fx, p) for p in fx.paths}
@@ -218,3 +247,14 @@ def test_findings_equal_brute_force_oracle(fx):
     assert rollback_check.refusal(got)
     breadth_only = [f for f in got if f.depth == 1]
     assert rollback_check.refusal(breadth_only) is (len({f.path for f in breadth_only}) >= 3)
+
+
+def test_git_failure_falls_back_to_the_in_process_walk(fx, monkeypatch):
+    """When git cannot answer, the in-process walk gives the same findings."""
+    per_path = {p: _versions(fx, p) for p in fx.paths[:8]}
+    candidates = {p: (vs[1] if len(vs) > 1 else vs[0]) for p, vs in per_path.items()}
+    want = _oracle(fx, candidates)
+    assert want
+    monkeypatch.setattr(rollback_check, "_git", lambda *a, **k: None)
+    _clear_caches()
+    assert find_exact_blob_rollbacks(fx.gitdir, fx.head, candidates, _WINDOW) == want

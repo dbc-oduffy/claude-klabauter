@@ -38,12 +38,12 @@ def test_s_with_unfired_plan_gates_with_resume_plan_and_no_refusal(repo):  # noq
     assert v.to_json()["resume_plan"] == PLAN_REL
 
 
-def test_fully_landed_plan_still_refuses(repo):  # noqa: F811
+def test_fully_landed_plan_resumes_to_verify_not_refuses(repo):  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, disposition="coded")
     v = gate(repo, REL)
-    assert v.arm is None and v.halt["kind"] == "refusal"
-    assert "already ran" in v.halt["reason"] and "new sizing" in v.halt["reason"]
+    assert v.halt is None and v.resume_plan is None and v.resume_ledger is not None
+    assert "already ran" not in str(v.to_json())
 
 
 def test_refire_of_a_halted_plan_resumes_its_incomplete_rows(repo):  # noqa: F811
@@ -106,10 +106,71 @@ def test_resumable_plan_refuses_an_edge_escaping_plans(repo):  # noqa: F811
     assert resumable_plan({"plan": "elsewhere.md"}, REL, repo, "m_plus") is None
 
 
-def test_resumable_plan_coded_raises(repo):  # noqa: F811
+def test_resumable_plan_coded_resumes_at_verify(repo):  # noqa: F811
     _plan(repo, disposition="coded")
-    with pytest.raises(SizingFireRefused, match="already ran"):
-        resumable_plan({}, REL, repo, "s")
+    plan = resumable_plan({}, REL, repo, "s")
+    assert plan.incomplete == () and plan.ledger is not None
+
+
+ACCEPTED_PLAN_REL = "docs/plans/gate.md"
+
+
+def _accepted_plan(repo, disposition="open"):
+    _plan(repo, disposition=disposition, rel=ACCEPTED_PLAN_REL)
+    path = repo / ACCEPTED_PLAN_REL
+    path.write_text(path.read_text(encoding="utf-8").replace("run_id: fixture", "status: approved"), encoding="utf-8", newline="\n")
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_accepted_plan_with_empty_plan_edge_is_bound_and_resumed(repo):  # noqa: F811
+    import yaml
+
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _put(repo, tshirt="M", route="plan", accepted=ACCEPTED)
+    _accepted_plan(repo)
+    v = gate(repo, REL)
+    assert v.halt is None and v.resume_plan == ACCEPTED_PLAN_REL and v.resume_rows == ["A1"]
+    assert yaml.safe_load((repo / REL).read_text(encoding="utf-8"))["plan"] == ACCEPTED_PLAN_REL
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_accepted_plan_all_landed_is_bound_and_never_the_exists_refusal(repo):  # noqa: F811
+    import yaml
+
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _put(repo, tshirt="M", route="plan", accepted=ACCEPTED)
+    _accepted_plan(repo, disposition="coded")
+    v = gate(repo, REL)
+    assert "already exists for this ask" not in str((v.halt or {}).get("reason"))
+    assert yaml.safe_load((repo / REL).read_text(encoding="utf-8"))["plan"] == ACCEPTED_PLAN_REL
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_unaccepted_plan_on_disk_is_not_bound(repo):  # noqa: F811
+    import yaml
+
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _put(repo, tshirt="M", route="plan", accepted=ACCEPTED)
+    _plan(repo, rel=ACCEPTED_PLAN_REL)
+    gate(repo, REL)
+    assert not yaml.safe_load((repo / REL).read_text(encoding="utf-8")).get("plan")
+
+
+def test_foreign_or_surplus_baton_is_dropped_not_refused(repo):  # noqa: F811
+    _put(repo, tshirt="S", route="spec-dispatch")
+    _plan(repo)
+    v = gate(repo, REL, baton="docs/batons/other.md")
+    assert v.halt is None and v.resume_plan == PLAN_REL
+
+
+def test_all_landed_refire_no_longer_names_unread_revise_notes(repo):  # noqa: F811
+    _put(repo, tshirt="S", route="spec-dispatch")
+    _plan(repo, disposition="coded")
+    v = gate(repo, REL, run_id="warp-2026-10-21-x-73b78a-20261021T235625-cfe57e")
+    assert v.halt is None and "unread revise note" not in str(v.to_json())
 
 
 @pytest.mark.cadence

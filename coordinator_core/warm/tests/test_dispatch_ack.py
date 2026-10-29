@@ -210,6 +210,55 @@ def test_result_lru_evicts_the_oldest_result_but_keeps_its_state():
     assert store.status(keys[-1])["result"] == {"n": dispatch_ack.RESULT_RETAIN_COUNT}
 
 
+def _churn(store, n):
+    for i in range(n):
+        k = _key(2, 2_000_000 + i)
+        store.admit(k, "invoke.from_argv")
+        store.stamp(k, dispatch_ack.OUTCOME_RESULT, result={"n": i})
+
+
+def test_late_failure_text_survives_result_churn_until_read_and_ten_minutes():
+    now = [0.0]
+    store = _store(clock=lambda: now[0])
+    late = _key(1, 1_000_100)
+    store.admit(late, "ceremony.commit_v2")
+    # The caller timed out; the op finishes later, then more results churn the LRU.
+    store.stamp(
+        late,
+        dispatch_ack.OUTCOME_RESULT,
+        result={"stdout": "", "stderr": "x" * 5000, "exit_code": 1},
+    )
+    _churn(store, dispatch_ack.RESULT_RETAIN_COUNT + 5)
+    first = store.status(late)
+    assert first["result_dropped"] == "evicted"
+    assert first["failure_text"] == "x" * dispatch_ack.FAILURE_TEXT_BYTES
+    # Read once but younger than ten minutes: still carried.
+    now[0] = dispatch_ack.FAILURE_TEXT_MIN_SECS - 1
+    assert "failure_text" in store.status(late)
+    # Read once and old enough: the next answer is the last carrier.
+    now[0] = dispatch_ack.FAILURE_TEXT_MIN_SECS
+    assert "failure_text" in store.status(late)
+    assert "failure_text" not in store.status(late)
+
+
+def test_unread_failure_text_outlives_ten_minutes():
+    now = [0.0]
+    store = _store(clock=lambda: now[0])
+    key = _key(1, 1_000_100)
+    store.admit(key, "ceremony.commit_v2")
+    store.stamp(key, dispatch_ack.OUTCOME_ERROR, error_code=-32000, error_message="refused: dirty tree")
+    now[0] = 10 * dispatch_ack.FAILURE_TEXT_MIN_SECS
+    assert store.status(key)["failure_text"] == "refused: dirty tree"
+
+
+def test_success_carries_no_failure_text():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "invoke.from_argv")
+    store.stamp(key, dispatch_ack.OUTCOME_RESULT, result={"stderr": "warn", "exit_code": 0})
+    assert "failure_text" not in store.status(key)
+
+
 def test_oversize_result_is_not_retained():
     store = _store()
     key = _key(1, 1_000_100)
@@ -404,3 +453,12 @@ def test_oversize_stdout_is_not_parsed_and_says_so():
     assert digest["stdout_unparsed"] is True and "stdout" not in digest
     ok = dispatch_ack._outcome_digest({"exit_code": 0, "stdout": '{"a": 1}'})
     assert ok["stdout"] == {"a": 1} and "stdout_unparsed" not in ok
+
+
+def test_failure_text_falls_back_to_stdout_for_an_invoke_from_argv_op():
+    """rag-56's commit_v2: exit 1, empty stderr, the JSON-RPC error only in stdout."""
+    from coordinator_core.warm import dispatch_ack
+
+    out = '{"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": "rollback refused"}}'
+    text = dispatch_ack._failure_text_of({"exit_code": 1, "stderr": "", "stdout": out})
+    assert text is not None and "rollback refused" in text

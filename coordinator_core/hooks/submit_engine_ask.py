@@ -904,12 +904,13 @@ def evaluate(
     if sizing_rel:
         from coordinator_core.ops.dispatch_emit import run_token
 
-        stale = warp_live.unlaunched_run_for_sizing(root, sizing_rel, session_id)
-        if stale:
-            run_token.consume(root, stale)
-        live = warp_live.live_run_for_sizing(
-            root, sizing_rel, session_id=session_id, transcript_path=transcript
-        )
+        with warp_live.listing_scope():
+            stale = warp_live.unlaunched_run_for_sizing(root, sizing_rel, session_id)
+            if stale:
+                run_token.consume(root, stale)
+            live = warp_live.live_run_for_sizing(
+                root, sizing_rel, session_id=session_id, transcript_path=transcript
+            )
         if live:
             return deny(
                 "PreToolUse",

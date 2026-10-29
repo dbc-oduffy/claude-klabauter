@@ -57,6 +57,14 @@ def test_unattributed_ttl(tmp_path):
     assert store.unattributed_count(tmp_path) == 0
 
 
+def test_unattributed_count_excludes_the_named_session(tmp_path):
+    store.write_lease(_rec(holder=(10, 100), session=(10, 100)), tmp_path)
+    store.write_lease(_rec(holder=(20, 200), session=(20, 200)), tmp_path)
+    now = lambda: 1001.0
+    assert store.unattributed_count(tmp_path, now=now) == 2
+    assert store.unattributed_count(tmp_path, now=now, exclude_session=(10, 100)) == 1
+
+
 def test_corrupt_file_skipped_and_removed(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")

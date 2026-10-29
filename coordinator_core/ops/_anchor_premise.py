@@ -196,11 +196,70 @@ def _verdict_for(
 _ENGINE_VERDICT = {"held": "RESOLVES", "broke": "CONTRADICTED"}
 
 
+REANCHORED = "re-anchored at baseline_ref"
+
+
+def _own_context(plan_text: str, repo_root: Path) -> Optional[tuple[str, dict]]:
+    """(baseline_ref, {path: run_id} the plan's own run wrote) or None when the plan names no
+    baseline_ref or sizing, or the run wrote nothing."""
+    from coordinator_core.ops import _own_run_premise
+    from coordinator_core.roadmap.prep_gate import plan_frontmatter
+
+    try:
+        fm = plan_frontmatter(plan_text)
+        pec = fm.get("prime_exit_criterion")
+        falsifier = pec.get("falsifier") if isinstance(pec, dict) else None
+        ref = falsifier.get("baseline_ref") if isinstance(falsifier, dict) else None
+        if not _text(ref):
+            return None
+        own = _own_run_premise.own_run_paths(Path(repo_root), fm.get("sizing_object"))
+    except Exception:
+        return None
+    return (ref.strip(), own) if own else None
+
+
+def _reanchor(anchor: dict, plan_text: str, repo_root: Path) -> Optional[str]:
+    """The observed text when a working-tree-broken anchor holds at the plan's baseline_ref and
+    every file it checks was written by the plan's own run (post-conversion drift); else None.
+    One git read per checked file, only on the broke path."""
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops import _anchor_check
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as index
+
+    ctx = _own_context(plan_text, repo_root)
+    if ctx is None:
+        return None
+    ref, own = ctx
+    command = str((anchor.get("check") or {}).get("command") or "")
+    try:
+        paths = sorted({stage[2] for stage in _anchor_check._parse_stages(command)})
+    except _anchor_check._NotEvaluable:
+        return None
+    if not paths or any(index._norm(p) not in own for p in paths):
+        return None
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="anchor-baseline-") as tmp:
+        for rel in paths:
+            done = run_git(["-C", str(repo_root), "show", f"{ref}:{rel}"], binary=True)
+            if done.returncode != 0:
+                return None
+            target = Path(tmp) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(done.stdout_bytes)
+        result = anchor_lane.evaluate(anchor, Path(tmp))
+    if result.outcome != "held":
+        return None
+    return f"{REANCHORED} {ref[:12]}: {result.observed or ''}".rstrip()
+
+
 def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dict]:
     """One {id, verdict, source, observed} per declared anchor, in declaration order.
     source: "row" | "carry" | "engine-check" | "none"; verdict is None only when source is "none".
     Precedence: passed row > live carry row > engine check (MATCH -> RESOLVES,
-    MISMATCH -> CONTRADICTED) > none. NOT_EVALUABLE leaves source "none"."""
+    MISMATCH -> CONTRADICTED) > none. NOT_EVALUABLE leaves source "none". A MISMATCH on a file the
+    plan's own run wrote that held at the plan's baseline_ref is RESOLVES with ``observed``
+    opening ``REANCHORED`` (source stays "engine-check": the reply schema enumerates sources)."""
     live = frozenset(line_hashes(plan_text))
     known = frozenset(a["id"] for a in anchors)
     out: list[dict] = []
@@ -213,6 +272,10 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
             engine = _ENGINE_VERDICT.get(result.outcome)
             if engine is not None:
                 verdict, source = engine, "engine-check"
+            if engine == "CONTRADICTED":
+                moved = _reanchor(anchor, plan_text, repo_root)
+                if moved is not None:
+                    verdict, observed = "RESOLVES", moved
         out.append({"id": anchor["id"], "verdict": verdict, "source": source, "observed": observed})
     return out
 
