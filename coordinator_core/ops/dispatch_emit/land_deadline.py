@@ -22,6 +22,14 @@ from typing import Iterator, Optional
 #: Seconds one land_run may spend before its next leg halts; well under the 30s op budget.
 LAND_BUDGET_SECS = 10.0
 
+#: Seconds past `LAND_BUDGET_SECS` that only the `RESERVED_LEGS` may start in, so a reviewed landing
+#: is not refused by a deadline its optional legs spent. Outer clamps (dispatcher, server window)
+#: bound both deadlines and stay authoritative.
+RESERVE_SECS = 3.0
+
+#: Final name segments of the legs that draw on the reserve (`land_run.integrity`, `*.commit`).
+RESERVED_LEGS = frozenset({"integrity", "_integrity", "commit"})
+
 REFUSED = "land-deadline"
 
 #: Monotonic clock seam; tests substitute a fake clock so nothing sleeps.
@@ -31,6 +39,9 @@ _DEADLINE: ContextVar[Optional[float]] = ContextVar("land_run_deadline", default
 
 #: Seconds the request waited for a pool worker before the handler ran; declared by `set_queue_wait`.
 _QUEUE_WAIT: ContextVar[float] = ContextVar("land_run_queue_wait", default=0.0)
+
+#: Deadline for the reserved legs (>= `_DEADLINE`); None when unbound.
+_HARD: ContextVar[Optional[float]] = ContextVar("land_run_hard_deadline", default=None)
 
 #: Per-scope ledger of started legs as `(leg, start)`; None outside a scope.
 _LEGS: ContextVar[Optional[list]] = ContextVar("land_run_legs", default=None)
@@ -58,36 +69,45 @@ class LandDeadlineExceeded(BaseException):
 
 @contextmanager
 def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
-    """Bind the op's deadline; an enclosing, earlier deadline (or the dispatcher's own, less its
+    """Bind the op's deadlines: legs start until `budget_secs`, the reserved legs until `RESERVE_SECS`
+    later; an enclosing, earlier deadline (or the dispatcher's own, less its
     reply margin) wins. `budget_secs` of None uses `LAND_BUDGET_SECS`; a `LAND_BUDGET_SECS` of None
     disables the bound."""
     budget = LAND_BUDGET_SECS if budget_secs is None else budget_secs
     deadline = None if budget is None else _now() + budget
+    hard = None if deadline is None else deadline + RESERVE_SECS
     from coordinator_core import dispatch_abandon
 
+    clamps = []
     left = dispatch_abandon.remaining()
     if left is not None:
-        outer = _now() + max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS)
-        deadline = outer if deadline is None else min(deadline, outer)
+        clamps.append(_now() + max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS))
     window = _SERVER_WINDOW.get()
     wait = _QUEUE_WAIT.get()
     if window is not None and wait > 0.0:
-        server = _now() + max(0.0, window - wait - dispatch_abandon.REPLY_MARGIN_SECS)
-        deadline = server if deadline is None else min(deadline, server)
+        clamps.append(_now() + max(0.0, window - wait - dispatch_abandon.REPLY_MARGIN_SECS))
+    for clamp in clamps:
+        deadline = clamp if deadline is None else min(deadline, clamp)
+        hard = clamp if hard is None else min(hard, clamp)
     current = _DEADLINE.get()
     if current is not None and (deadline is None or current < deadline):
         deadline = current
+    current_hard = _HARD.get()
+    if current_hard is not None and (hard is None or current_hard < hard):
+        hard = current_hard
     token = _DEADLINE.set(deadline)
+    hard_token = _HARD.set(hard)
     legs_token = _LEGS.set([])
     try:
         yield
     finally:
         _LEGS.reset(legs_token)
+        _HARD.reset(hard_token)
         _DEADLINE.reset(token)
 
 
 def expired() -> bool:
-    """True once the bound deadline has passed; False when none is bound."""
+    """True once the bound budget deadline has passed; False when none is bound."""
     deadline = _DEADLINE.get()
     return deadline is not None and _now() >= deadline
 
@@ -96,11 +116,22 @@ def check(leg: str) -> None:
     """Raise `LandDeadlineExceeded(leg)` when the deadline has passed, carrying the started legs'
     elapsed; otherwise record the leg's start. A no-op when no deadline is bound."""
     now = _now()
-    if expired():
+    hard = _HARD.get()
+    if _is_reserved(leg):
+        refused = hard is not None and now >= hard
+    else:
+        refused = expired()
+    if refused:
         raise LandDeadlineExceeded(leg, _legs_elapsed(now))
     ledger = _LEGS.get()
     if ledger is not None:
         ledger.append((leg, now))
+
+
+def _is_reserved(leg: str) -> bool:
+    """True for the integrity and commit legs and the sub-legs under them, which may spend the
+    reserved tail of the budget."""
+    return any(seg in RESERVED_LEGS for seg in leg.split("."))
 
 
 def _legs_elapsed(now: float) -> list:

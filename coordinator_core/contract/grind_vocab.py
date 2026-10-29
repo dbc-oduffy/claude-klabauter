@@ -34,6 +34,10 @@ KNOB_NAMES: frozenset[str] = frozenset(
 
 OVERRIDABLE_KNOBS: frozenset[str] = frozenset({"where", "limit", "budget_tokens"})
 
+# Token ceiling a bug-blitz carries when the caller names no budget_tokens. Deliberately not in
+# emit_vocab's payload: grind-vocab.golden.json is a frozen external contract.
+DEFAULT_BUDGET_TOKENS: int = 2_000_000
+
 APPETITE_PRESETS: frozenset[str] = frozenset({"hunt", "standard", "sweep"})
 
 TRIAGE_DEPTHS: frozenset[str] = frozenset({"shallow", "standard", "deep"})

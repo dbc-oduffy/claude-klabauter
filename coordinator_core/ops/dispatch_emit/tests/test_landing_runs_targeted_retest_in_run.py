@@ -9,7 +9,6 @@ from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_targeted_tests import (  # noqa: F401
     _fire,
-    _git,
     _write,
     repo,
 )
@@ -23,7 +22,9 @@ CAUSED = {
 }
 
 
-def test_refusal_carries_a_retest_step_on_exactly_the_failing_node(repo, monkeypatch):
+@pytest.mark.parametrize("attempts", [0, MAX_IN_RUN_REMEDY_ATTEMPTS])
+def test_a_caused_targeted_red_lands_with_an_advisory_naming_the_node(repo, monkeypatch, attempts):
+    # Claim model (88252271a8): only LANDING_REFUSAL_KINDS refuse; test evidence is recorded, never refuses.
     import subprocess
 
     real = subprocess.Popen
@@ -34,32 +35,16 @@ def test_refusal_carries_a_retest_step_on_exactly_the_failing_node(repo, monkeyp
         return real(*a, **k)
 
     monkeypatch.setattr(subprocess, "Popen", spy)
-    head = _write(repo)
-
-    out = _fire(repo, "ok.py", targeted_tests=CAUSED)
-
-    assert not [a for a in argvs if " -m pytest" in a or a.split()[0].endswith("pytest")]
-
-    assert out["committed"] is False and out["refused"] == ltt.TARGETED_TESTS_FAILED
-    step = out["remedy_step"]
-    assert step["nodes"] == [INVARIANT]
-    assert step["attempt"] == 1 and step["max_attempts"] == MAX_IN_RUN_REMEDY_ATTEMPTS
-    assert step["exhausted"] is False
-    assert f"--tests {INVARIANT.split('::')[0]}" in step["command"]
-    assert out["targeted_tests_attempts"] == 0
-    assert _git(["rev-parse", "HEAD"], repo) == head
-
-
-def test_refusal_after_the_attempt_bound_is_final_and_names_the_node(repo):
     _write(repo)
 
-    out = _fire(repo, "ok.py", targeted_tests=CAUSED, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
+    out = _fire(repo, "ok.py", targeted_tests=CAUSED, retest_attempts=attempts)
 
-    assert out["committed"] is False
-    assert out["remedy_step"]["exhausted"] is True
-    detail = out["integrity"][0]["detail"]
-    assert INVARIANT in detail and "in-run retest spent" in detail
-    assert out["targeted_tests_attempts"] == MAX_IN_RUN_REMEDY_ATTEMPTS
+    assert not [a for a in argvs if " -m pytest" in a or a.split()[0].endswith("pytest")]
+    assert out["committed"] is True and not out.get("refused"), out
+    assert "remedy_step" not in out
+    advisory = out["advisory"]
+    assert [a["reason"] for a in advisory] == [ltt.TARGETED_TESTS_FAILED]
+    assert INVARIANT in advisory[0]["detail"]
 
 
 def test_a_passing_verdict_carries_no_remedy_step(repo):
@@ -108,3 +93,39 @@ def test_retest_step_parses_the_repo_wide_invariant_node_and_falls_back_to_the_f
 
     assert ltt.retest_step([inv], {})["nodes"] == [INVARIANT]
     assert ltt.retest_step([bare], {})["nodes"] == ["pkg/test_z.py"]
+
+
+_INV = "pkg/tests/test_inv.py::test_invariant"
+
+
+def _spent():
+    return {ltt.RETEST_ATTEMPTS_PARAM: MAX_IN_RUN_REMEDY_ATTEMPTS}
+
+
+def _spent_detail(tmp_path, monkeypatch, fresh):
+    from coordinator_core.ops.dispatch_emit import landing_integrity as li
+
+    monkeypatch.setattr(li, "landing_invariant_nodes", lambda *a, **k: [_INV])
+    monkeypatch.setattr(li, "fresh_targeted_verdict", lambda *a, **k: fresh)
+    (finding,) = li.invariant_findings(tmp_path, ["x.py"], "r1", _spent())
+    return finding.detail
+
+
+def test_spent_retest_with_no_fresh_verdict_says_none_exists(tmp_path, monkeypatch):
+    assert "no fresh retest verdict exists" in _spent_detail(tmp_path, monkeypatch, None)
+
+
+def test_spent_retest_that_passed_without_running_the_invariant_says_so(tmp_path, monkeypatch):
+    detail = _spent_detail(tmp_path, monkeypatch, {"status": "pass", "tests": ["pkg/tests/test_other.py"]})
+    assert "passed without running it" in detail
+
+
+@pytest.mark.parametrize("status, tail", [("error", "ended error, measuring no failure"),
+                                          (None, "ended without a status, measuring no failure")])
+def test_spent_retest_ending_neither_pass_nor_fail_says_no_failure_measured(tmp_path, monkeypatch, status, tail):
+    assert tail in _spent_detail(tmp_path, monkeypatch, {"status": status})
+
+
+def test_spent_retest_failing_the_invariant_itself_says_it_failed(tmp_path, monkeypatch):
+    detail = _spent_detail(tmp_path, monkeypatch, {"status": "fail", "baseline": None})
+    assert detail.endswith("failed its in-run retest")

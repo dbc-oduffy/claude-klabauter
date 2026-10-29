@@ -15,11 +15,21 @@ FOREIGN_HUNK_UNPRODUCED = "foreign-hunk-unproduced"
 UNKNOWN_OWNER = "unknown"
 
 
-def unproduced_hunks(root: Path, run_id: str, paths: Sequence[str], *, own_plan: Optional[str]) -> list:
+def unproduced_hunks(
+    root: Path,
+    run_id: str,
+    paths: Sequence[str],
+    *,
+    own_plan: Optional[str],
+    advisories: Optional[list] = None,
+) -> list:
     """`[landing_integrity.Finding(path, FOREIGN_HUNK_UNPRODUCED, detail)]` per path whose committed
     blob holds a hunk no row of `run_id` produced; the detail names the probable owner (first
     co-declaring sibling run, else `unknown`). Paths with no change against HEAD yield nothing.
-    Never raises: a read failure is a finding. Trap: a peer write landing after this run's stage
+    Never raises: a read failure is a finding, except on a path the run's own record produced
+    (its write_baseline names it, or it is a run-own artifact): there the unattributable read is
+    appended to `advisories` as `{"path", "detail"}` and yields no finding. DR-467: a path the run
+    never baselined stays a finding. Trap: a peer write landing after this run's stage
     inside the run's own delta span is indistinguishable here."""
     from coordinator_core.ops.dispatch_emit.landing_targeted_tests import Finding
 
@@ -31,7 +41,11 @@ def unproduced_hunks(root: Path, run_id: str, paths: Sequence[str], *, own_plan:
         try:
             bad = _unproduced(Path(root), run_id, path)
         except Exception as exc:  # noqa: BLE001 -- unknown holds
-            out.append(Finding(path, FOREIGN_HUNK_UNPRODUCED, f"provenance unreadable: {type(exc).__name__}: {exc}"))
+            detail = f"provenance unreadable: {type(exc).__name__}: {exc}"
+            if advisories is not None and _run_produced(Path(root), run_id, path):
+                advisories.append({"path": path, "detail": detail})
+            else:
+                out.append(Finding(path, FOREIGN_HUNK_UNPRODUCED, detail))
             continue
         if bad:
             owner = _owner(Path(root), run_id, path, own_plan)
@@ -61,6 +75,20 @@ def _is_run_own_artifact(root: Path, run_id: str, path: str) -> bool:
     from coordinator_core.ops.dispatch_emit import run_artifact_ownership
 
     return run_artifact_ownership.own_artifact_paths(root, run_id).covers(path)
+
+
+def _run_produced(root: Path, run_id: str, path: str) -> bool:
+    """The run's own record produced `path`: its write_baseline names it, or it is a run-own artifact.
+    False on any read failure (unknown is not attributable)."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+        base = hha._baseline(root, run_id)
+        if base is not None and path in base:
+            return True
+        return _is_run_own_artifact(root, run_id, path)
+    except Exception:  # noqa: BLE001 -- unknown stays a finding
+        return False
 
 
 def _unproduced(root: Path, run_id: str, path: str) -> str:

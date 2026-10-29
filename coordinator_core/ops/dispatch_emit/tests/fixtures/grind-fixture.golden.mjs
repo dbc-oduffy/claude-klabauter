@@ -7,7 +7,7 @@ export const meta = {
   name: 'queue-grind:fixture',
   description: 'Queue grind over profile \'fixture\'.',
   phases: ['Grind', 'Review prep', 'Review wave', 'Review integration', 'Review re-verify', 'Review fixes', 'Adjudicate'],
-  fanout: {"expectedAgents": 10, "basis": "lower-bound", "units": 7, "startupTokensPerAgent": 31000, "startupTokensTotal": 310000, "groups": [["row0", "row1", "row2", "row3"], ["row4", "row5", "row6"]]},
+  fanout: {"expectedAgents": 19, "basis": "expected", "units": 7, "startupTokensPerAgent": 31000, "startupTokensTotal": 589000, "rowOutputTokensTotal": 980532, "groups": [["row0", "row1", "row2", "row3"], ["row4", "row5", "row6"]]},
 };
 
 

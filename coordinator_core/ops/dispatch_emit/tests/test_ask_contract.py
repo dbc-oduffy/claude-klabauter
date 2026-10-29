@@ -366,4 +366,4 @@ def test_dependents_unstarted_halt_carries_one_refire_call_with_the_hold_reason(
 
     env = c.dependents_unstarted_refire_next_action("C2 held on C1", run_id="ask-1", sizing_rel="state/sizings/s.yaml")
     assert halt_refire.is_refire_next_action(env)
-    assert env["resume"]["halted"] == c.HALT_DEPENDENTS_UNSTARTED and env["detail"] == "C2 held on C1"
+    assert env["resume"]["halted"] == c.HALT_DEPENDENTS_UNSTARTED and env["detail"].startswith("C2 held on C1") and c.ACCEPT_PARTIAL_FORM.format(run_id="ask-1") in env["detail"]

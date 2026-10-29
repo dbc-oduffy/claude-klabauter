@@ -1173,6 +1173,11 @@ def stage(
             f"the spine derives zero dispatchable rows{named}",
             owed_em_ids=[o.id for o in owed],
             plan_path=plan_posix,
+            gated_rows=[
+                {"id": g.id, "owner_repo": g.owner_repo}
+                for g in gated
+                if g.reason == "external_gate" and g.owner_repo
+            ],
         )
 
     context = derive_plan_context(
@@ -2024,6 +2029,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         reply = {"error": str(exc)}
         if getattr(exc, "owed_em_ids", None):
             reply["owed_em_ids"] = exc.owed_em_ids
+            reply["owed_plan"] = exc.plan_path
+        if getattr(exc, "gated_rows", None):
+            reply["gated_rows"] = exc.gated_rows
             reply["owed_plan"] = exc.plan_path
         return reply
     finally:

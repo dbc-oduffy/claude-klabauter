@@ -7,9 +7,10 @@ slice and the write-once parent record, and returns the frozen reply plus the re
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
 Three arms:
-  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, writes?, stop_after?}],
+  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, writes?, after?, stop_after?}],
             sender?, confirm_split?} -- the parent register is one row
-            (R1..Rn) per ask, each slice claims its own. An entry key outside ASKS_ITEM_KEYS is
+            (R1..Rn) per ask, each slice claims its own. An entry's `after` (earlier sibling labels or
+            0-based indices) makes those siblings its predecessors; one naming none is refused. An entry key outside ASKS_ITEM_KEYS is
             refused by name. An entry's `em_context` and prose `context` land on its slice sizing as
             `em_analysis.em_brief`, its path-shaped `context` as `em_analysis.em_context_paths`
             (one string, one path per line); the ask, intent and pm_verbatims are never touched.
@@ -150,6 +151,14 @@ def _read_slices(params: Mapping, fan_out: bool = False) -> tuple[list[contract.
             if not isinstance(row_ids, list) or not all(isinstance(r, str) for r in row_ids):
                 raise _Refused(f"{where}: rows must be a list of register row ids")
             rows = tuple(row_ids)
+        pending_after: tuple[int, ...] = ()
+        if asks is not None and item.get("after") is not None:
+            try:
+                pending_after = contract.resolve_after(
+                    where, item["after"], [o.label for o in out] + [label], i
+                )
+            except ValueError as exc:
+                raise _Refused(str(exc)) from exc
         estimate = criterion = None
         if fan_out and label != contract.SEAM_PASS_LABEL:
             estimate, criterion = item.get("estimate"), item.get("exit_criterion")
@@ -163,7 +172,7 @@ def _read_slices(params: Mapping, fan_out: bool = False) -> tuple[list[contract.
             criterion = criterion.strip()
         out.append(contract.AskSlice(
             label, ask.strip(), rows, _writes(item.get("writes"), where), source=source,
-            estimate=estimate, exit_criterion=criterion,
+            estimate=estimate, exit_criterion=criterion, after=pending_after,
         ))
     parent_sizing = None
     if slices is not None:

@@ -1976,6 +1976,8 @@ def _dispatch_emit(
     unknown = _unknown_param_refusal(params)
     if unknown is not None:
         return unknown
+    if not isinstance(params, dict):
+        return validate_params("dispatch.emit", params, _PARAM_FIELDS)
     if params.get("abandon_run"):
         return _abandon_run(params, repo_root)
     params = _anchor_relative_paths(params, repo_root)

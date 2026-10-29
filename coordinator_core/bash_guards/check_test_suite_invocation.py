@@ -3047,9 +3047,36 @@ def _has_glob_magic(path: str) -> bool:
     return any(c in _GLOB_MAGIC_CHARS for c in path)
 
 
+_PROSE_SLASH_PAIRS = frozenset({
+    "and/or", "either/or", "yes/no", "true/false", "on/off", "he/she",
+    "pass/fail", "read/write", "input/output", "before/after",
+})
+
+
+def _looks_like_directory_path(norm: str) -> bool:
+    """Disk-free directory shape: a separator, no file extension, no glob magic.
+
+    ``norm`` is ``_norm_path`` output. A bare word has no separator and is
+    never directory-shaped, which keeps prose tokens out; ``_PROSE_SLASH_PAIRS``
+    keeps out the slash-joined prose alternations (``and/or``).
+    """
+    if norm.lower() in _PROSE_SLASH_PAIRS:
+        return False
+    if "/" not in norm or _has_glob_magic(norm) or norm.startswith(("http:", "https:")):
+        return False
+    last = norm.rsplit("/", 1)[-1]
+    return bool(last) and "." not in last.lstrip(".") and re.fullmatch(r"[\w.\-/:~]+", norm) is not None
+
+
 def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
-                           cwd: Optional[str]) -> List[str]:
+                           cwd: Optional[str],
+                           syntactic: bool = False) -> List[str]:
     """Positional pytest arguments that name a DIRECTORY on disk.
+
+    ``syntactic=True`` (dispatch-brief text only) additionally accepts a
+    directory-shaped positional (``_looks_like_directory_path``) when no
+    ``cwd`` is given or the path does not exist on disk; the Bash-command
+    caller never sets it.
 
     DR-088 R9 (DoE ruling, 2026-07-28): for a caller carrying a top-level
     ``agent_id``, Tier T is file-and-node-id precision, not directory
@@ -3118,7 +3145,7 @@ def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
     globbed unless it also contains a directory-only expansion), so the two
     checks stay strictly additive rather than replacing one another.
     """
-    if not cwd:
+    if not cwd and not syntactic:
         return []
     found: List[str] = []
     for argv in segments_argv:
@@ -3138,8 +3165,16 @@ def _pytest_directory_args(segments_argv: Sequence[Sequence[str]],
             norm = _norm_path(arg.replace("\\", "/"))
             if not norm:
                 continue
+            if not cwd:
+                if _looks_like_directory_path(norm):
+                    found.append(arg)
+                continue
             try:
-                if os.path.isdir(os.path.join(cwd, norm)):
+                full = os.path.join(cwd, norm)
+                if os.path.isdir(full):
+                    found.append(arg)
+                    continue
+                if syntactic and not os.path.exists(full) and _looks_like_directory_path(norm):
                     found.append(arg)
                     continue
             except OSError:
@@ -5066,12 +5101,18 @@ def _classify_command_precision_core(
     cwd: Optional[str],
     testpaths: Sequence[str],
     configured: Sequence[ConfiguredCmd],
+    *,
+    syntactic: bool = False,
 ) -> List[PrecisionMatch]:
     out: List[PrecisionMatch] = []
-    if not command or not cwd:
+    if not command or (not cwd and not syntactic):
         return out
 
-    suite_spans = [m.span for m in _classify_command_core(command, cwd, testpaths, configured)]
+    # Text mode: a span carrying a directory positional is the precision
+    # target even though the identity leg also flags it as suite-shaped.
+    suite_spans = [] if syntactic else [
+        m.span for m in _classify_command_core(command, cwd, testpaths, configured)
+    ]
 
     def _is_suite_shaped(seg_start: int, seg_end: int) -> bool:
         return any(s < seg_end and seg_start < e for s, e in suite_spans)
@@ -5098,7 +5139,7 @@ def _classify_command_precision_core(
         else:
             continue
 
-        dir_args = _pytest_directory_args([argv], cwd)
+        dir_args = _pytest_directory_args([argv], cwd, syntactic)
         if not dir_args:
             continue
 
@@ -5122,16 +5163,18 @@ def classify_command_precision(command: str, *, cwd: Optional[str] = None) -> Li
 
 
 def classify_text_precision(text: str, *, cwd: Optional[str] = None) -> List[PrecisionMatch]:
-    if not isinstance(text, str) or not text or not cwd:
+    if not isinstance(text, str) or not text:
         return []
 
-    repo_root = resolve_git_root(cwd) or cwd
+    repo_root = (resolve_git_root(cwd) or cwd) if cwd else None
     testpaths = _read_testpaths(repo_root)
-    configured = _configured_test_cmds(repo_root)
+    configured = _configured_test_cmds(repo_root) if repo_root else []
 
     matches: List[PrecisionMatch] = []
     for abs_start, line_body, base_position, window_start, window_end in _iter_prose_candidates(text):
-        for pm in _classify_command_precision_core(line_body, cwd, testpaths, configured):
+        for pm in _classify_command_precision_core(
+            line_body, cwd, testpaths, configured, syntactic=True
+        ):
             match_start = abs_start + pm.span[0]
             match_end = abs_start + pm.span[1]
             position = _resolve_position(text, match_start, base_position, window_start, window_end)

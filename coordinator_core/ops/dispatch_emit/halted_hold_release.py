@@ -31,6 +31,7 @@ RELEASE_SIZING_SHIPPED = "sizing-shipped"
 RELEASE_KEPT_AT_HEAD = "kept-at-head"
 RELEASE_CRITERION_MET = "criterion-met-at-head"
 RELEASE_PHANTOM = "phantom-no-own-hunk-owner-gone"
+RELEASE_WITHHELD_CLEAN = "withheld-clean-at-head"
 _RECORDED_RELEASES = frozenset({RELEASE_CRITERION_MET, RELEASE_PHANTOM})
 
 #: Marker field `{path: {reason, at}}`: the halted run no longer holds those paths. Written only by
@@ -294,9 +295,27 @@ def _release_reason(
             return RELEASE_PLAN_LANDING
         if _kept_at_head(root, _record(root, halted_run_id), marker):
             return RELEASE_KEPT_AT_HEAD
+        if _withheld_clean(root, _record(root, halted_run_id)):
+            return RELEASE_WITHHELD_CLEAN
     except Exception:
         return None
     return None
+
+
+def _withheld_clean(root: Path, record: Path) -> bool:
+    """True when the halt withholds something and none of its withheld paths is dirty in the worktree.
+    Dirtiness is `commit_companion.own_left_behind`'s index-identity test (zero spawn), the one
+    `terminal_commit._dirty_held_by_halted_run` applies. Fail-closed: an unreadable record or index holds."""
+    from coordinator_core.ops.ceremony import commit_companion
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    try:
+        withheld = list(halted_run.halted_withheld_strict(record))
+        if not withheld:
+            return False
+        return not commit_companion.own_left_behind(root, {"-": withheld}, "-", ())
+    except Exception:  # noqa: BLE001 -- unreadable: the hold stands
+        return False
 
 
 def held_paths(

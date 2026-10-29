@@ -76,6 +76,28 @@ def test_cost_total_and_basis_validation():
         f.FanoutCost(1, 1, "guess")
 
 
+def test_expected_basis_is_accepted_and_rendered():
+    assert "expected" in f.BASES
+    cost = f.FanoutCost(4, 9, "expected")
+    assert cost.meta_dict()["basis"] == "expected"
+    assert cost.startup_tokens_total == 9 * f.STARTUP_TOKENS_PER_AGENT
+    with pytest.raises(ValueError):
+        f.FanoutCost(4, 9, "estimated")
+
+
+def test_row_output_tokens_emitted_only_when_set():
+    assert "rowOutputTokensTotal" not in f.FanoutCost(4, 9, "expected").meta_dict()
+    assert f.FanoutCost(4, 9, "expected", row_output_tokens=120).meta_dict()["rowOutputTokensTotal"] == 120
+    assert f.FanoutCost(4, 9, "expected", row_output_tokens=0).meta_dict()["rowOutputTokensTotal"] == 0
+
+
+def test_default_budget_tokens_is_a_positive_int_outside_the_frozen_vocab():
+    from coordinator_core.contract import grind_vocab as gv
+
+    assert isinstance(gv.DEFAULT_BUDGET_TOKENS, int) and gv.DEFAULT_BUDGET_TOKENS == 2_000_000
+    assert "DEFAULT_BUDGET_TOKENS" not in gv.KNOB_NAMES
+
+
 def test_with_fanout_is_a_pure_literal_and_reads_back():
     cost = f.FanoutCost(6, 3, "lower-bound", groups=(("u0", "u1"), ("u2",)))
     out = f.with_fanout(META, cost)

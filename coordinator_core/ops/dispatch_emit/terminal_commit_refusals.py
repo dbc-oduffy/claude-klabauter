@@ -586,7 +586,12 @@ def _landing_integrity_gate(
         from coordinator_core.ops.dispatch_emit import halted_hunk_attribution, hunk_provenance
 
         if halted_hunk_attribution._baseline(worktree_root, run_id) is not None:
-            findings += hunk_provenance.unproduced_hunks(worktree_root, run_id, contested, own_plan=plan)
+            hp_advisories: list = []
+            findings += hunk_provenance.unproduced_hunks(
+                worktree_root, run_id, contested, own_plan=plan, advisories=hp_advisories,
+            )
+            if hp_advisories:
+                extra["hunk_provenance_advisory"] = hp_advisories
         else:
             extra["hunk_provenance_check"] = "no-baseline"
     if run_id and session_id:

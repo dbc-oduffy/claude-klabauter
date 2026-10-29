@@ -530,6 +530,79 @@ def test_second_call_past_deadline_respawns(repo, tmp_path, monkeypatch):
     assert spawned
 
 
+def _params_file(repo: Path, **extra) -> Path:
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
+
+    path = params_path(repo, RUN_ID)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_id": RUN_ID, "run_token": "t", "script_path": "s.mjs", **extra}), encoding="utf-8")
+    return path
+
+
+def test_params_file_input_writes_the_verdict_the_gate_accepts(repo):
+    seen = []
+    rc = retest_targeted.main(
+        ["--params-file", str(_params_file(repo)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=lambda argv, cwd, **_kw: seen.append(argv) or 0,
+    )
+    assert rc == 0 and seen[0][-1] == "test_a.py"
+    assert li.fresh_targeted_verdict(repo, RUN_ID)["status"] == "pass"
+
+
+def test_params_file_naming_a_task_output_expands_it_and_the_file_keys_win(repo, tmp_path):
+    out = _task_output(tmp_path)
+    data = json.loads(out.read_text(encoding="utf-8"))
+    data["next_action"]["params"]["targeted_tests"]["tests"] = ["test_a.py::test_a"]
+    out.write_text(json.dumps(data), encoding="utf-8")
+    seen = []
+    rc = retest_targeted.main(
+        ["--params-file", str(_params_file(repo, task_output_path=str(out), run_id="other-run")), "--repo-root", str(repo), "--detached-child"],
+        run=lambda argv, cwd, **_kw: seen.append(argv) or 0,
+    )
+    assert rc == 0 and seen[0][-1] == "test_a.py"
+    assert li.fresh_verdict_path(repo, "other-run").exists() and not li.fresh_verdict_path(repo, RUN_ID).exists()
+
+
+def test_absent_params_file_exits_2_naming_its_writer_and_writes_no_record(repo, capsys):
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
+
+    missing = params_path(repo, RUN_ID)
+    rc = retest_targeted.main(
+        ["--params-file", str(missing), "--tests", "test_a.py", "--repo-root", str(repo)],
+        spawn=lambda *a, **k: pytest.fail("must not spawn"),
+    )
+    err = capsys.readouterr().err.strip()
+    assert rc == 2 and "was never written" in err and len(err.splitlines()) == 1
+    assert not li.fresh_verdict_path(repo, RUN_ID).exists()
+
+
+def test_unreadable_params_file_exits_2_without_a_traceback(repo, tmp_path, capsys):
+    bad = tmp_path / "params.json"
+    bad.write_text("[1]", encoding="utf-8")
+    rc = retest_targeted.main(["--params-file", str(bad), "--repo-root", str(repo)])
+    assert rc == 2 and "does not hold a JSON object" in capsys.readouterr().err
+    bad.write_text("{nope", encoding="utf-8")
+    assert retest_targeted.main(["--params-file", str(bad), "--repo-root", str(repo)]) == 2
+
+
+def test_both_inputs_or_neither_is_a_usage_error(repo, tmp_path):
+    for argv in (["--from-task-output", str(_task_output(tmp_path)), "--params-file", str(_params_file(repo))], []):
+        with pytest.raises(SystemExit) as exc:
+            retest_targeted.main(argv)
+        assert exc.value.code == 2
+
+
+def test_the_poll_line_and_child_argv_carry_the_params_file_flag(repo, capsys):
+    params = _params_file(repo)
+    spawned = []
+    args = ["--params-file", str(params), "--tests", "test_a.py", "--repo-root", str(repo)]
+    assert retest_targeted.main(args, spawn=lambda *a, **k: spawned.append(a) or True) == 0
+    assert f"--poll --params-file {params}" in capsys.readouterr().out.replace("\\\\", "\\")
+    child = spawned[0][2]
+    assert child[child.index("--params-file") + 1] == str(params.resolve()) and "--from-task-output" not in child
+    assert retest_targeted.main([*args, "--poll"]) == 3
+
+
 def _poll_exit(repo, tmp_path, record):
     path = li.fresh_verdict_path(repo, RUN_ID)
     if record is not None:

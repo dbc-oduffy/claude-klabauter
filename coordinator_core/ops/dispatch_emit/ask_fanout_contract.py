@@ -9,6 +9,7 @@ write-once supersession marker. ``AskSlice.source`` is a slice's own ask source 
 ``SLICE_SOURCE_KEY`` is the ``em_analysis`` key a relayed slice sizing carries; ``slice_ask_source``
 reads it back. ``NOT_FIRED_REASONS`` / ``PLAN_BLITZ_UNFIRED_BUCKETS`` / ``not_fired_entry`` /
 ``not_fired_refusal`` are the roadmap fan-out's unfired-plan report vocabulary.
+``resolve_after`` maps an entry's declared ``after`` to earlier slice indices.
 ``ASKS_ITEM_KEYS`` / ``unknown_keys_refusal`` are the accepted ``asks[]`` entry keys (``stop_after``
 among them, value ``plan`` only) and the sentence refusing a key outside an accepted set.
 Reference: docs/reference/multi-ask-submission-contract.md.
@@ -66,6 +67,7 @@ class AskSlice:
     source: Optional[str] = None
     estimate: Optional[str] = None
     exit_criterion: Optional[str] = None
+    after: tuple[int, ...] = ()
 
 
 #: XL/XXL fan-out: the submit param, the seam slice's label, and the t-shirts a component / the seam carry.
@@ -307,6 +309,7 @@ ASKS_ITEM_KEYS: tuple[str, ...] = (
     "em_context",
     "context",
     "label",
+    "after",
     "writes",
     "stop_after",
 )
@@ -319,6 +322,30 @@ def unknown_keys_refusal(where: str, supplied: Iterable[str], accepted: Sequence
         if key not in accepted:
             return f"{where}: unknown key {key!r}. Accepted: {', '.join(accepted)}"
     return None
+
+
+def resolve_after(where: str, refs: object, labels: Sequence[str], index: int) -> tuple[int, ...]:
+    """Indices of the earlier siblings an ``asks[index].after`` list names (a label or a 0-based index).
+
+    Raises ValueError naming ``where``.after for a non-list, an entry that is neither a non-empty
+    string nor an int, or one naming no sibling earlier than ``index`` (unknown, itself, or later).
+    """
+    key = f"{where}.after"
+    if not isinstance(refs, list) or not refs:
+        raise ValueError(f"{key} must be a non-empty list of earlier sibling labels or indices")
+    out: list[int] = []
+    for ref in refs:
+        if isinstance(ref, bool) or not isinstance(ref, (int, str)):
+            raise ValueError(f"{key}: {ref!r} is neither a sibling label nor an index")
+        if isinstance(ref, int):
+            hit = ref if 0 <= ref < index else None
+        else:
+            hit = next((k for k in range(index) if labels[k] == ref.strip()), None)
+        if hit is None:
+            raise ValueError(f"{key}: {ref!r} names no earlier sibling of this submission")
+        if hit not in out:
+            out.append(hit)
+    return tuple(out)
 
 
 def ledger_partition(parent_row_ids: Sequence[str], slices: Sequence[AskSlice]) -> Optional[str]:
@@ -373,7 +400,7 @@ def after_edges(slices: Sequence[AskSlice]) -> dict[int, tuple[int, ...]]:
     """Map slice index to the earlier indices it must follow.
 
     j follows earlier i when both declare writes and those overlap (exact path, or one a directory
-    prefix of the other), or when both carry a ``wave`` and i's is lower. A slice with no ``writes``
+    prefix of the other), when both carry a ``wave`` and i's is lower, or when j declared ``after`` naming i. A slice with no ``writes``
     hint overlaps nothing: undeclared slices run in parallel and the shared-tree claim mechanism
     arbitrates their overlap. An empty ``writes`` list likewise overlaps nothing.
     """
@@ -388,6 +415,7 @@ def after_edges(slices: Sequence[AskSlice]) -> dict[int, tuple[int, ...]]:
                 and _writes_overlap(slices[i].writes, later.writes)
             )
             or _earlier_wave(slices[i], later)
+            or i in later.after
         )
     return edges
 

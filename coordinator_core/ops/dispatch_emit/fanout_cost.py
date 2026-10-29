@@ -36,7 +36,7 @@ LARGE_UNIT_BYTES = 16_000
 GROUP_CONTEXT_CAP_BYTES = 24_000
 STARTUP_TOKENS_PER_AGENT = 31_000
 
-BASES = ("exact", "lower-bound")
+BASES = ("exact", "lower-bound", "expected")
 
 # One `agent(` dispatch site. Unlike `_workflow_contract._AGENT_CALL_SITE` (`\bagent\s*\(`, which
 # also matches a `.agent(` member call), the lookbehind refuses `_rows.agent(` and `xagent(`.
@@ -91,13 +91,16 @@ def propose_groups(units: "list[Unit] | tuple[Unit, ...]", mode: str = "auto") -
 @dataclass(frozen=True)
 class FanoutCost:
     """How many agents a script starts: `units` fan-out units in `agents` agents. `basis` is
-    "exact" when the count is fixed at emit and "lower-bound" when run-time legs add more."""
+    "exact" when the count is fixed at emit, "lower-bound" when run-time legs add more, and
+    "expected" when it is the expected-case count of every leg the script spawns on its happy path
+    (per-row and per-hand-back legs included)."""
 
     units: int
     agents: int
     basis: str
     startup_tokens_per_agent: int = STARTUP_TOKENS_PER_AGENT
     groups: tuple[tuple[str, ...], ...] = ()
+    row_output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if self.basis not in BASES:
@@ -115,6 +118,8 @@ class FanoutCost:
             "startupTokensPerAgent": self.startup_tokens_per_agent,
             "startupTokensTotal": self.startup_tokens_total,
         }
+        if self.row_output_tokens is not None:
+            out["rowOutputTokensTotal"] = self.row_output_tokens
         if self.groups:
             out["groups"] = [list(g) for g in self.groups]
         return out

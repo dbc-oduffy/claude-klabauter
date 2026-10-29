@@ -124,6 +124,7 @@ from coordinator_core.ops.review_mint.execute_review import compose_execute_revi
 from coordinator_core.ops.review_mint.roster import parse_execute_review
 from coordinator_core.ops._workflow_contract import scrub
 from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, FanoutCost, with_fanout
+from coordinator_core.ops.dispatch_emit.grind_admission import ROW_OUTPUT_TOKENS
 from coordinator_core.ops.dispatch_emit.grind_profile import Profile
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -2394,15 +2395,28 @@ def compose_grind_script(
     )
     lines.append("return HANDBACK;")
 
-    # Per-row legs (size/fix/reject/verify/close) and a retried drain route at run time, so the
-    # count is a floor; the adjudicate leg is one post-loop call, counted once via once_per_run_legs.
+    # Expected case: the happy path of every row (fix, each agent-mode verify) plus a triage leg and,
+    # where the profile has a refute-close node, a close leg per batch. Size scouts, reject-undo legs
+    # and retries fire only off the happy path and are not counted. The adjudicate leg is one
+    # post-loop call, counted once via once_per_run_legs.
+    fix_legs_per_row = 1 if any(kind == "fix" for kind in node_kind.values()) else 0
+    per_batch_legs = 1 + (1 if has_close_node else 0)
+    per_row_agent_legs = sum(
+        fix_legs_per_row
+        + sum(1 for node_id in verify_node_ids if verify_spec_by_node[node_id][entry.batch_key]["mode"] == "agent")
+        for _, entries in grouped
+        for entry in entries
+    )
     lines[meta_index] = with_fanout(
         meta_text,
         FanoutCost(
             units=len(manifest.entries),
-            agents=len(grouped) + sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs),
-            basis="lower-bound",
+            agents=len(grouped) * per_batch_legs
+            + per_row_agent_legs
+            + sum(len(AGENT_CALL_RE.findall(scrub(leg))) for leg in once_per_run_legs),
+            basis="expected",
             groups=tuple(tuple(e.row_id for e in entries) for _, entries in grouped),
+            row_output_tokens=ROW_OUTPUT_TOKENS * len(manifest.entries),
         ),
     )
     return "\n\n".join(lines) + "\n"

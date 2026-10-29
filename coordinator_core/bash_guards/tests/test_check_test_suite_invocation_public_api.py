@@ -1281,10 +1281,45 @@ def test_classify_command_precision_no_cwd_fails_open(precision_repo):
     ) == []
 
 
-def test_classify_text_precision_no_cwd_fails_open():
-    assert guard.classify_text_precision(
-        "Run pytest coordinator_core/frontmatter/tests/sub over your changes."
-    ) == []
+def test_classify_text_precision_no_cwd_bare_word_and_file_still_no_match():
+    assert guard.classify_text_precision("Run pytest across the whole tree.") == []
+    assert guard.classify_text_precision("Run pytest tests/test_x.py to confirm.") == []
+    assert guard.classify_text_precision("Run pytest tests/test_x.py::test_a.") == []
+
+
+def test_classify_text_precision_prose_slash_alternation_no_match():
+    assert guard.classify_text_precision("Run pytest and/or unittest here.") == []
+    assert guard.classify_text_precision("pytest either/or unittest") == []
+    assert guard.classify_text_precision("Run pytest coordinator/tests/ here.") != []
+
+
+_MEMO_FORMS = [
+    "pytest coordinator/tests/",
+    "python -m pytest coordinator/tests",
+]
+
+
+@pytest.mark.parametrize("form", _MEMO_FORMS)
+@pytest.mark.parametrize("use_cwd", [False, True])
+def test_classify_text_precision_memo_forms_match(form, use_cwd, precision_repo):
+    cwd = str(precision_repo) if use_cwd else None
+    matches = guard.classify_text_precision(form, cwd=cwd)
+    assert matches
+    assert all(m.position == "imperative" for m in matches)
+    assert matches[0].directory_args == ["coordinator/tests/" if form.endswith("/") else "coordinator/tests"]
+
+
+@pytest.mark.parametrize("form", _MEMO_FORMS)
+@pytest.mark.parametrize("use_cwd", [False, True])
+def test_precision_deny_envelope_fires_on_memo_forms(form, use_cwd, tmp_path):
+    from coordinator_core.hooks import block_dispatch_suite_invocation as hook
+
+    cwd = str(tmp_path) if use_cwd else None
+    assert hook._precision_deny_envelope(f"Run:\n{form}\n", cwd) is not None
+
+
+def test_classify_command_precision_no_cwd_directory_shaped_still_fails_open():
+    assert guard.classify_command_precision("pytest coordinator/tests/") == []
 
 
 def test_classify_text_precision_fenced_directory_scoped_pytest(precision_repo):

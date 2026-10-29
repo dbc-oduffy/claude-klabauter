@@ -8,7 +8,8 @@ bug grind through `dispatch.emit`'s queue route (run token, receipt, script), wr
 beside the receipt and answers allow + `updatedInput` = `{scriptPath, args}`, so the call the EM made
 launches the emitted run in the background. Its completion notification is the EM's one wake.
 
-`args` shape: `{targets: str}` plus optional `appetite`, `limit` (int), `budget_tokens` (int). Any other key
+`args` shape: `{targets: str}` plus optional `appetite`, `limit` (int), `budget_tokens` (int, defaults to
+`DEFAULT_BUDGET_TOKENS`: rows past it are not admitted and the run halts at it). Any other key
 denies. `targets` names no suite tier and carries no Tier-U decision: verification runs through the
 targeted test runner, so no grant record is ever written here.
 
@@ -33,6 +34,7 @@ from coordinator_core.bug_blitz.contract import (
     run_tag,
 )
 from coordinator_core.bug_blitz.evidence import BACKLOG_DIR
+from coordinator_core.contract.grind_vocab import DEFAULT_BUDGET_TOKENS
 from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewrite_input
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import BASELINE_DIRTY_KEY, run_write_roots, under_roots
@@ -44,7 +46,7 @@ QUEUE_DIR = BACKLOG_DIR
 SCRATCH_ROOT = "state/scratch/bug-blitz"
 DECISIONS_FILE = "decisions.json"
 _ALLOWED_ARGS = frozenset({"targets", "appetite", "limit", "budget_tokens"})
-_ARGS_SHAPE = 'args: {targets: "<red-set dir | failing-tests file | backlog>"}, optional appetite, limit, budget_tokens'
+_ARGS_SHAPE = 'args: {targets: "<red-set dir | failing-tests file | backlog>"}, optional appetite, limit, budget_tokens (defaults to DEFAULT_BUDGET_TOKENS)'
 
 EmitFn = Callable[[dict, Path], dict]
 ResolveFn = Callable[[str, Path], TargetSpec]
@@ -272,6 +274,7 @@ def evaluate(
     for key in ("limit", "budget_tokens"):
         if args.get(key) is not None:
             overrides[key] = args[key]
+    overrides.setdefault("budget_tokens", DEFAULT_BUDGET_TOKENS)
     appetite = args.get("appetite") or ("sweep" if minted else "standard")
 
     out_path = str(root / SCRATCH_ROOT / stamp / "blitz.workflow.mjs")

@@ -254,6 +254,7 @@ def _kept_repo(tmp_path: Path, head_text: str, kept_text: str):
     base = _git(tmp_path, "rev-parse", "HEAD")
     _write(tmp_path / "a.py", head_text)
     _git(tmp_path, "commit", "-q", "--allow-empty", "-am", "head")
+    _write(tmp_path / "a.py", head_text + "# uncommitted\n")  # dirty, so a clean-tree release cannot free the run
     kept_blob = _git(tmp_path, "hash-object", "-w", "--stdin", stdin=kept_text)
     _sizing(tmp_path, SIZING)
     h, c = _rid("ask", 300, "aaaaaa"), _rid("ask", 10, "bbbbbb")
@@ -354,6 +355,8 @@ def _two_path_run(tmp_path: Path, b_head_text: str):
     halted["run_artifacts"] = {"withheld": {"a.py": "halt-record-only", "b.py": "halt-record-only"}}
     _write(rec / "halted.json", json.dumps(halted))
     _write(rec / "kept.json", json.dumps({"chunks": {"X1": {"paths": {"a.py": kept_a, "b.py": kept_b}}}, "plan_gate": None}))
+    for p in ("a.py", "b.py"):  # dirty withheld paths: a clean-tree release cannot free the run
+        _write(tmp_path / p, "# uncommitted\n")
     return h, c, rec, halted
 
 
@@ -384,6 +387,8 @@ def _withhold(root: Path, run_id: str, *paths: str) -> None:
     body = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
     body["run_artifacts"] = {"withheld": {p: "kept" for p in paths}}
     _write(rec / "halted.json", json.dumps(body))
+    for p in paths:  # untracked on disk = dirty, so a clean-tree release does not free the run
+        _write(root / p.removeprefix("./"), "# uncommitted\n")
 
 
 def test_held_paths_is_the_normalized_withheld_set_while_the_run_holds(tmp_path):
@@ -696,6 +701,8 @@ def test_a_per_path_release_drops_that_pair_and_that_path_from_held_paths(tmp_pa
     marker = json.loads(marker_file.read_text(encoding="utf-8"))
     marker["run_artifacts"] = {"withheld": {"a.py": "peer-held", "b.py": "peer-held"}}
     marker[hr.RELEASED_PATHS_FIELD] = {"a.py": {"reason": "mine at HEAD", "at": "2026-10-27T00:00:00Z"}}
+    for p in ("a.py", "b.py"):  # untracked on disk = dirty, so a clean-tree release does not free the run
+        _write(root / p, "# uncommitted\n")
     marker_file.write_text(json.dumps(marker), encoding="utf-8")
 
     assert hr.released_path_reasons(root, holder) == {"a.py": "mine at HEAD"}

@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.bug_blitz.contract import FailingTest, ParseResult, TargetSpec, run_tag
+from coordinator_core.contract.grind_vocab import DEFAULT_BUDGET_TOKENS
 from coordinator_core.hooks import submit_bug_blitz as mod
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -208,7 +209,28 @@ def test_emit_params_carry_run_tag_where_and_sweep_appetite(repo):
     assert seen["overrides"] == {
         "where": [[["status", "==", "open"], ["tags", "contains", run_tag(RUN_ID)]]],
         "limit": 5,
+        "budget_tokens": DEFAULT_BUDGET_TOKENS,
     }
+
+
+def _seen_overrides(repo, args) -> dict:
+    seen: dict = {}
+
+    def emit(params: dict, root: Path) -> dict:
+        seen.update(params)
+        return {"ok": False}
+
+    _call(repo, args, emit=emit)
+    return seen["overrides"]
+
+
+def test_submission_without_budget_tokens_forwards_the_default(repo):
+    assert _seen_overrides(repo, {"targets": "red-set"})["budget_tokens"] == DEFAULT_BUDGET_TOKENS
+    assert _seen_overrides(repo, {"targets": "backlog"})["budget_tokens"] == DEFAULT_BUDGET_TOKENS
+
+
+def test_caller_budget_tokens_wins_over_the_default(repo):
+    assert _seen_overrides(repo, {"targets": "red-set", "budget_tokens": 5_000_000})["budget_tokens"] == 5_000_000
 
 
 def test_backlog_target_neither_parses_nor_mints_and_keeps_the_profile_where(repo):
@@ -223,7 +245,7 @@ def test_backlog_target_neither_parses_nor_mints_and_keeps_the_profile_where(rep
 
     _call(repo, {"targets": "backlog", "appetite": "hunt"}, emit=emit, parse=boom, mint=boom)
     assert seen["appetite"] == "hunt"
-    assert "overrides" not in seen
+    assert seen["overrides"] == {"budget_tokens": DEFAULT_BUDGET_TOKENS}
 
 
 def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo):
@@ -243,7 +265,7 @@ def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo):
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"  # the stub emit refused after resolve
     assert "no failing" not in _reason(env)
     assert seen["queue"] == ["state/bug-backlog"]
-    assert "overrides" not in seen
+    assert seen["overrides"] == {"budget_tokens": DEFAULT_BUDGET_TOKENS}
 
 
 def test_backlog_dir_target_allows_through_the_real_emit(repo):
@@ -336,15 +358,15 @@ def test_non_workflow_tool_is_a_no_op(repo):
     assert mod.evaluate(payload) == mod.no_advisory()
 
 
-def test_real_parser_denies_a_bare_test_file_target_naming_it_and_mints_nothing(repo):
+def test_real_parser_mints_a_bare_test_file_target_as_a_file_level_row(repo):
     (repo / "red.txt").write_text(
         "FAILED pkg/tests/test_a.py::test_one - AssertionError\npkg/tests/test_b.py\n", encoding="utf-8"
     )
+    minted: list = []
 
-    def mint(*a, **k):
-        raise AssertionError("must not mint")
+    def mint(root, run_id, tests, *, target_ref):
+        minted.extend(tests)
+        return []
 
-    env = _call(repo, {"targets": "red.txt"}, resolve=None, parse=None, mint=mint)
-    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
-    reason = _reason(env)
-    assert "pkg/tests/test_b.py" in reason and "file::test" in reason, reason
+    _call(repo, {"targets": "red.txt"}, resolve=None, parse=None, mint=mint)
+    assert ("pkg/tests/test_b.py", "") in {(t.file, t.name) for t in minted}, minted

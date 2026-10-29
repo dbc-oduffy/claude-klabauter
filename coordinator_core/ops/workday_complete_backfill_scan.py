@@ -355,13 +355,22 @@ def _has_changelog_block(root: str, state_root: Optional[str], day: str) -> bool
     archive_root = os.path.join(root, "archive", "week-changelogs")
     candidates.extend(glob.glob(os.path.join(archive_root, "*", f"{day}*.md")))
 
+    # A stub is closed by a machine-named daily summary (`<day>-*.md`): the
+    # ceremony ran for that day, only the curated block never replaced the stub.
+    stub_closed = bool(
+        glob.glob(os.path.join(root, "archive", "daily-summaries", f"{day}-*.md"))
+    )
     covered = False
     for path in candidates:
         if _is_synthesized_backfill_stub(path):
+            if stub_closed:
+                covered = True
+                continue
             print(
                 f"workday_complete_backfill_scan: {day}: {path} is a synthesized "
                 f"backfill stub (no human-curated narrative) — NOT counted as "
-                f"changelog coverage for this day",
+                f"changelog coverage for this day; missing: curated changelog "
+                f"block state/week-changelog/{day}*.md",
                 file=sys.stderr,
             )
             continue

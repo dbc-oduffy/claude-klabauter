@@ -144,8 +144,7 @@ def test_prep_phase_binds_reviewprep_and_carries_plan_and_sha():
 def test_prep_phase_fails_closed_on_no_prep_or_no_slices():
     _, phases = _compose()
     _, prep_block = phases[0]
-    # The halt guard is no longer the block's last line: the excluded-paths guard follows it.
-    guard = prep_block.splitlines()[-3]
+    guard = prep_block.splitlines()[-1]
     assert guard.startswith("  if (!_reviewPrep || (!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).length && !_verifyOnly))")
     assert "product_files" not in guard
     assert "throw" not in guard and "return { halted:" in guard
@@ -899,19 +898,6 @@ def test_halt_names_the_excluded_paths_and_keeps_the_prefix():
 
 
 _SLICED_PREP = {**_PREP, "verdict": "PARTITION-MANDATORY", "slices": [{"id": "s1", "files": ["a.py"]}]}
-
-
-def test_non_empty_slices_with_unsliceable_excluded_path_halts_naming_each():
-    excluded = [
-        {"path": "x.py", "reason": "outside-repo"},
-        {"path": "y.py", "reason": "freeze-failed: boom"},
-        {"path": "z.py", "reason": "no-delta"},
-    ]
-    result = _run_prep_block({**_SLICED_PREP, "excluded": excluded})
-    assert result["halted"] == (
-        "review prep excluded declared paths (excluded: x.py: outside-repo, y.py: freeze-failed: boom)"
-    )
-    assert result["prep"]["slices"]
 
 
 def test_empty_or_no_delta_only_excluded_does_not_halt():

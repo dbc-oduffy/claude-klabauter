@@ -549,11 +549,38 @@ def _write_record(path: Path, record: dict) -> None:
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
-def _poll_command(task_output: str) -> str:
-    return f"{landing_targeted_tests.RETEST_LAUNCHER} --poll --from-task-output {json.dumps(task_output) if ' ' in task_output else task_output}"
+def _input_pair(args: argparse.Namespace) -> tuple[str, str]:
+    """``(flag, value)`` of the params input the caller gave: ``--params-file`` or ``--from-task-output``."""
+    if args.params_file:
+        return "--params-file", args.params_file
+    return "--from-task-output", args.from_task_output
 
 
-def _poll(path: Path, task_output: str) -> int:
+def _load_params(args: argparse.Namespace) -> dict:
+    """The run's landing params from whichever input was given. A ``--params-file`` is the commit stage's
+    raw ``_nextAction.params`` JSON; one carrying ``task_output_path`` is expanded as ``land_run`` does
+    (task-output fields first, the file's keys win). Raises ValueError naming the file."""
+    from coordinator_core.ops.dispatch_emit.land_run import params_from_task_output
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import missing_file_diagnosis
+
+    if not args.params_file:
+        return params_from_task_output(args.from_task_output)
+    try:
+        data = json.loads(Path(args.params_file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(missing_file_diagnosis(args.params_file) or f"cannot read params file {args.params_file!r}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"params file {args.params_file!r} does not hold a JSON object")
+    if isinstance(data.get("task_output_path"), str):
+        return {**params_from_task_output(data["task_output_path"]), **{k: v for k, v in data.items() if k != "task_output_path"}}
+    return data
+
+
+def _poll_command(flag: str, value: str) -> str:
+    return f"{landing_targeted_tests.RETEST_LAUNCHER} --poll {flag} {json.dumps(value) if ' ' in value else value}"
+
+
+def _poll(path: Path, flag: str, value: str) -> int:
     """Print the record's status line; 0 pass, 1 fail, 2 error/stale/absent/abandoned, 3 running."""
     record = _read_record(path)
     if record is None:
@@ -564,7 +591,7 @@ def _poll(path: Path, task_output: str) -> int:
         if _past_deadline(record):
             print(f"{path} error: retest child abandoned past deadline")
             return 2
-        print(f"{path} running since {record.get('at')}; poll: {_poll_command(task_output)}")
+        print(f"{path} running since {record.get('at')}; poll: {_poll_command(flag, value)}")
         return 3
     reason = record.get("reason") or record.get("note")
     print(f"{path} {status}" + (f": {reason}" if reason else ""))
@@ -577,7 +604,8 @@ def _start_detached(
 ) -> int:
     """Warm path: write the ``running`` record, spawn the child, return. Launches no tests and reads
     no interpreter pin, so it stays inside the warm budget."""
-    poll = _poll_command(args.from_task_output)
+    flag, value = _input_pair(args)
+    poll = _poll_command(flag, value)
     existing = _read_record(path)
     if existing and existing.get("status") == landing_retest.RETEST_RUNNING and not _past_deadline(existing):
         print(f"{path} running since {existing.get('at')}; poll: {poll}")
@@ -593,7 +621,7 @@ def _start_detached(
     })
     engine = Path(__file__).resolve().parents[3]
     child_argv = [
-        "--from-task-output", str(Path(args.from_task_output).resolve()),
+        flag, str(Path(value).resolve()),
         "--repo-root", str(root),
         *[x for t in tests for x in ("--tests", t)],
         *[x for t in dropped for x in ("--dropped", t)],
@@ -949,10 +977,10 @@ def main(
     spawn: Optional[Callable[..., bool]] = None,
 ) -> int:
     from coordinator_core.git.git_state import head_sha
-    from coordinator_core.ops.dispatch_emit.land_run import params_from_task_output
-
     ap = argparse.ArgumentParser(prog="retest_targeted")
-    ap.add_argument("--from-task-output", required=True)
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--from-task-output")
+    source.add_argument("--params-file")
     ap.add_argument("--tests", action="append", default=[])
     ap.add_argument("--repo-root")
     ap.add_argument("--dropped", action="append", default=[], help=argparse.SUPPRESS)
@@ -962,7 +990,7 @@ def main(
     args = ap.parse_args(argv)
 
     try:
-        params = params_from_task_output(args.from_task_output)
+        params = _load_params(args)
         root = _repo_root(args.repo_root)
     except (ValueError, RuntimeError) as exc:
         print(f"retest_targeted: {exc}", file=sys.stderr)
@@ -974,7 +1002,7 @@ def main(
 
     path = landing_retest.fresh_verdict_path(root, run_id)
     if args.poll:
-        return _poll(path, args.from_task_output)
+        return _poll(path, *_input_pair(args))
 
     tests = _tests_to_run(args.tests, params)
     if not tests:

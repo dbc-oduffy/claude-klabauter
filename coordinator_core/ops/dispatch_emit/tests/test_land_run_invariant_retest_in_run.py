@@ -92,6 +92,26 @@ def test_a_failed_retest_past_the_attempt_budget_refuses_naming_the_invariant(ow
     assert _git(["rev-parse", "HEAD"], owed).strip() == head
 
 
+def test_no_retest_verdict_past_the_budget_names_the_missing_verdict_not_a_failure(owed):
+    out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
+
+    assert out["committed"] is False and out["refused"] == "targeted-tests-failed", out
+    details = [f["detail"] for f in out["integrity"] if INV in f["detail"]]
+    assert details and all("no fresh retest verdict exists" in d for d in details), details
+    assert not any("failed its in-run retest" in d for d in details)
+
+
+def test_an_errored_retest_past_the_budget_names_its_status_not_a_failure(owed):
+    _record(owed, "error")
+
+    out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
+
+    assert out["committed"] is False, out
+    details = [f["detail"] for f in out["integrity"] if INV in f["detail"]]
+    assert details and all("ended error" in d for d in details), details
+    assert not any("failed its in-run retest" in d for d in details)
+
+
 def test_the_emitted_commit_stage_runs_the_remedy_step_and_reinvokes_the_landing():
     lines: list = []
     ask_compose._append_docs_and_commit(

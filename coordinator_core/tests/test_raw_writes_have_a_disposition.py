@@ -331,6 +331,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/terminal_commit_stamp.py': ('in-repo-non-state', 'regenerated publish allowlist under coordinator/, committed with the run; move rollback via os.replace'),
     'coordinator_core/ops/dispatch_emit/halt_resume_record.py': ('in-repo-non-state', 'resume.json and the resume.building claim under the tracked run record dir state/warp/<run_id>/, the halted-run hint under .coordinator-local/halt-resume-hint/: write, claim_recompose, write_hint'),
     'coordinator_core/ops/dispatch_emit/held_revisions.py': ('claims-explicitly', 'held-revision store jsonl appended under the run record dir, declared through declare_write: _append'),
+    'coordinator_core/ops/dispatch_emit/run_accept_partial.py': ('claims-explicitly', 'accept_partial.jsonl appended under the run dir, declared through declare_write: record'),
     'coordinator_core/ops/dispatch_emit/run_credit.py': ('claims-explicitly', 'credit.jsonl appended under the run dir, declared through declare_write: record'),
     'coordinator_core/ops/dispatch_emit/pipeline_run.py': ('claims-explicitly', 'revisions.md appended under the run scratch dir, declared through declare_write: append_revision'),
     'coordinator_core/ops/fleet/scratch_hygiene.py': ('ignored-target', 'sweep cursor tmp + os.replace under the gitignored scratch/ dir: _write_cursor'),

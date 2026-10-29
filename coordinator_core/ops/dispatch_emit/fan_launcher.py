@@ -92,6 +92,11 @@ const TWIN_PREFIX = __TWIN_PREFIX__;
 const TWIN_MIDDLE = __TWIN_MIDDLE__;
 const TWIN_SUFFIX = __TWIN_SUFFIX__;
 
+// Trap: the emit agent re-serializes the reply path, so a Windows path can arrive with each backslash doubled; fold backslashes and runs of separators into single slashes.
+function _normEmitPath(p) {
+  return p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+}
+
 // The only foreign run id accepted: the one this emit minted as the redirect for this child's halted run.
 function _isOwnRedirect(child, e) {
   const r = e.__REDIRECT_KEY__;
@@ -118,7 +123,7 @@ function _emitRefusal(child, e, chained) {
     }
   } else if (e.run_id !== child.run_id && !_isOwnRedirect(child, e) && !_isOwnRecompose(child, e)) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
   if (typeof e.path !== 'string' || e.path === '') return 'emit reply path is not a non-empty string';
-  const p = e.path.replace(/\\/g, '/');
+  const p = _normEmitPath(e.path);
   if (p.split('/').indexOf('..') !== -1) return 'emit reply path contains ..';
   if (p.slice(0, WARP_PREFIX.length).toLowerCase() !== WARP_PREFIX.toLowerCase()) {
     return 'emit reply path ' + p + ' is outside ' + WARP_PREFIX;
@@ -194,7 +199,7 @@ async function _chainHop(child, handoff) {
   }
   const refusal = _emitRefusal(child, emitted, true);
   if (refusal !== null) return fail(refusal);
-  const chained = await _startLoop(child, emitted.run_id, emitted.path.replace(/\\/g, '/'));
+  const chained = await _startLoop(child, emitted.run_id, _normEmitPath(emitted.path));
   if (chained.status !== 'ok') return fail(chained.error);
   if (_handoffOf(chained.result) !== null) return fail('the chained run returned a second hand-off');
   const r = chained.result;
@@ -224,7 +229,7 @@ async function _runChild(child) {
     await _abandonRedirect(child, emitted);
     return { run_id: child.run_id, status: 'emit_refused', error: refusal };
   }
-  const first = await _startLoop(child, emitted.run_id, emitted.path.replace(/\\/g, '/'));
+  const first = await _startLoop(child, emitted.run_id, _normEmitPath(emitted.path));
   if (first.status !== 'ok') await _abandonRedirect(child, emitted);
   const handoff = first.status === 'ok' ? _handoffOf(first.result) : null;
   return handoff === null ? first : _chainHop(child, handoff);

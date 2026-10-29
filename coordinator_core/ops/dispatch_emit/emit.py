@@ -4623,6 +4623,38 @@ def _widened_seed(
     }
 
 
+def _accepted_seed(
+    record_dir: Optional[Path], repo_root: Optional[str | Path], run_id: Optional[str]
+) -> dict:
+    """``{chunk id: reason}`` from the run's ``accept_partial.jsonl``; empty when no record dir is
+    nameable or the record is absent."""
+    from coordinator_core.ops.dispatch_emit import run_accept_partial
+
+    run_dir = record_dir
+    if run_dir is None and run_id and repo_root is not None:
+        run_dir = Path(repo_root) / _record_dir_root() / run_id
+    if run_dir is None:
+        return {}
+    return run_accept_partial.read([Path(run_dir)])
+
+
+def _held_halt_record_js() -> str:
+    """JS lifting a bare held-dependents `_halted` into the typed halt whose `next_action` detail names the accept_partial revise form."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import ACCEPT_PARTIAL_FORM, HALT_DEPENDENTS_UNSTARTED
+
+    head, tail = ACCEPT_PARTIAL_FORM.format(run_id="@@").split("@@")
+    form = f"{json.dumps(head)} + _runId + {json.dumps(tail)}"
+    return (
+        "  if (_haltedByHold && typeof _halted === 'string' && typeof _runId === 'string') {\n"
+        "    const _heldReason = _halted;\n"
+        f"    _halted = {{ halted: {json.dumps(HALT_DEPENDENTS_UNSTARTED)}, reason: _heldReason, "
+        "sizing: typeof _sizingRel === 'undefined' ? null : _sizingRel, run_id: _runId, "
+        f"next_action: _heldReason + '; to start them over a PARTIAL holder: ' + {form} + ', then re-fire', "
+        "toString() { return this.reason; } };\n"
+        "  }"
+    )
+
+
 def _run_row_helper_js(
     agent_type_host: Optional[str] = None,
     default_plan: Optional[str] = None,
@@ -4631,6 +4663,7 @@ def _run_row_helper_js(
     sidecar_run_key: Optional[str] = None,
     repo_root: Optional[str | Path] = None,
     widened_seed: Optional[Mapping[str, str]] = None,
+    accepted_seed: Optional[Mapping[str, str]] = None,
 ) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
@@ -4710,6 +4743,8 @@ def _run_row_helper_js(
         "  const _rowIdOf = new WeakMap();\n"
         f"  const _DEP_NON_DONE_RE = {_NON_DONE_STATUS_JS_RE};\n"
         f"  const _DEP_ANY_STATUS_RE = {_ANY_STATUS_JS_RE};\n"
+        f"  const _DEP_PARTIAL_RE = {_PARTIAL_STATUS_JS_RE};\n"
+        f"  const _acceptPartial = {json.dumps(dict(accepted_seed or {}))};\n"
         f"  const _DEP_BLOCKED_RE = {_BLOCKED_STATUS_JS_RE};\n"
         f"  const _GATE_OWED_RE = {GATE_OWED_JS_RE};\n"
         f"  const _CHECKPOINT_RE = {_CHECKPOINT_JS_RE};\n"
@@ -4792,6 +4827,7 @@ def _run_row_helper_js(
         "      const _o = r != null ? _gateOwedOf(t) : null;\n"
         "      if (_o && _owedReleases(_o, id)) continue;\n"
         "      if (_o && await _owedDischarged(_o, id)) continue;\n"
+        "      if (r != null && Object.hasOwn(_acceptPartial, _rowIdOf.get(deps[i])) && _DEP_PARTIAL_RE.test(t) && !_DEP_BLOCKED_RE.test(t)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
         "(!settled && !_DEP_ANY_STATUS_RE.test(t) && _trVerdictOf(t) !== 'pass')) {\n"
         "        return _rowIdOf.get(deps[i]) || '?';\n"
@@ -6431,6 +6467,7 @@ def compose_script(
                 sidecar_run_key=_sidecar_run_key(plan_path),
                 repo_root=repo_root,
                 widened_seed=_widened_seed(widen_run_dir, repo_root, absorb_run_id),
+                accepted_seed=_accepted_seed(widen_run_dir, repo_root, absorb_run_id),
             )
         )
 
@@ -7102,6 +7139,7 @@ def compose_script(
         body_blocks.append(
             "  if (!_halted) { const _r = _heldDependentsReason(); if (_r) { _halted = _r; _haltedByHold = true; } }"
         )
+        body_blocks.append(_held_halt_record_js())
     if verify_launch_block is not None:
         body_blocks.append(verify_launch_block)
     if review_blocks:
@@ -7211,6 +7249,9 @@ _NON_DONE_STATUS_JS_RE = (
     rf'|{_LINE_START_JS}{_STATUS_FIELD_JS}(?:PARTIAL|BLOCKED)\b'
     r'|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
 )
+#: ``_NON_DONE_STATUS_JS_RE`` narrowed to one status word; an accepted-partial row releases its
+#: dependents only when it reads PARTIAL and never BLOCKED.
+_PARTIAL_STATUS_JS_RE = _NON_DONE_STATUS_JS_RE.replace("(?:PARTIAL|BLOCKED)", "(?:PARTIAL)")
 
 #: A reply that refused its row as out of role or ran nothing. Matched against the
 #: JSON-stringified reply; ``_runRowInner`` re-routes such a reply once when the row

@@ -156,6 +156,53 @@ def test_every_gate_halt_carries_a_non_empty_reason(gate, expect, sized_in_run, 
     assert halted["halted"] == (gate["halt"] or {}).get("kind", "refusal")
 
 
+_RECOVER_MARK = "const _regate = await "
+
+
+def _run_recover(reply: dict, tmp_path, *, halted: str = "null", sizing_rel: str = "'s.yaml'") -> dict:
+    """Runs the no-arm-no-halt recovery line then the gate-halt line against a gate agent answering `reply`."""
+    if not shutil.which("node"):
+        pytest.skip("node not installed")
+    script = _compose()
+    prog = (
+        f"let _calls = 0; const agent = async () => {{ _calls++; return {json.dumps(reply)}; }};\n"
+        "(async () => {\n"
+        f"let _halted = {halted}; const _runId = 'run-1'; const _sizingRel = {sizing_rel}; const _pmExit = null;\n"
+        "const _scouted = { exit_code: 0, stdout: 'x' };\n"
+        "const _agentDefsClause = () => ''; const _writes = []; const _RUN_TOKEN = '';\n"
+        "let _gate = { arm: null, halt: null };\n"
+        + _line(script, _RECOVER_MARK) + "\n" + _line(script, _GATE_MARK)
+        + "\nconsole.log(JSON.stringify({ calls: _calls, arm: _gate.arm, halted: _halted }));\n})();\n"
+    )
+    f = tmp_path / "r.js"
+    f.write_text(prog, encoding="utf-8")
+    out = subprocess.run(
+        ["node", str(f)], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout
+    return json.loads(out)
+
+
+def test_a_clean_scout_with_no_arm_and_no_halt_runs_the_gate_in_run(tmp_path):
+    got = _run_recover({"arm": "s", "halt": None}, tmp_path)
+    assert got == {"calls": 1, "arm": "s", "halted": None}
+
+
+def test_the_in_run_gate_halt_is_named_not_the_no_arm_refusal(tmp_path):
+    got = _run_recover({"arm": None, "halt": {"kind": "room", "reason": "no room"}}, tmp_path)
+    assert got["calls"] == 1 and got["halted"]["halted"] == "room" and got["halted"]["reason"] == "no room"
+
+
+def test_an_empty_in_run_gate_reply_still_halts_as_a_refusal(tmp_path):
+    got = _run_recover({"arm": None, "halt": None}, tmp_path)
+    assert got["calls"] == 1 and got["halted"]["halted"] == "refusal"
+
+
+@pytest.mark.parametrize("over", [{"halted": "{ halted: 'refusal' }"}, {"sizing_rel": "null"}])
+def test_the_in_run_gate_is_skipped_when_already_halted_or_no_sizing(over, tmp_path):
+    assert _run_recover({"arm": "s", "halt": None}, tmp_path, **over)["calls"] == 0
+
+
 def test_no_arm_reason_cites_the_scout_stdout_when_sized_in_run():
     assert "scout stdout:" in _line(_compose(), _GATE_MARK)
     assert "scout stdout:" not in _line(_compose(prompt=None, sizing_rel="state/sizings/x.yaml"), _GATE_MARK)

@@ -435,6 +435,29 @@ def reverify_record(params: Mapping) -> Optional[Mapping]:
     return record if isinstance(record, Mapping) else None
 
 
+FAILING_AT_BASE = "failing_at_base"
+BASE_RED_KEYS = ("pre_existing", "foreign", FAILING_AT_BASE)
+
+
+def _record_base_red(record: Optional[Mapping]) -> set[str]:
+    """Node ids a record names red at the run base (``BASE_RED_KEYS``)."""
+    if not isinstance(record, Mapping):
+        return set()
+    return {str(n) for key in BASE_RED_KEYS for n in (record.get(key) or []) if n}
+
+
+def base_red_ids(params: Mapping) -> set[str]:
+    """Node ids the run's own records name red at the run base: the re-verify record's
+    ``BASE_RED_KEYS`` and a ``failing_at_base`` list on ``params`` (top level or ``params.params``).
+    The one attribution the re-verify and the recorded-fail paths share."""
+    nested = params.get("params") if isinstance(params, Mapping) else None
+    out = _record_base_red(reverify_record(params))
+    for holder in (params, nested):
+        raw = holder.get(FAILING_AT_BASE) if isinstance(holder, Mapping) else None
+        out |= {str(n) for n in raw if n} if isinstance(raw, (list, tuple)) else set()
+    return out
+
+
 def reverify_verdict(record: Mapping) -> object:
     """``status_after``, else ``status_before`` when after is null."""
     after = record.get("status_after")
@@ -464,10 +487,7 @@ def reverify_red_findings(
         return []
     landed = {str(p).replace("\\", "/") for p in landing_paths}
     failing = [str(n) for n in (record.get("failing") or []) if n]
-    from coordinator_core.ops.dispatch_emit.self_correction import FOREIGN_FIELD
-
-    pre = {str(n) for n in (record.get("pre_existing") or [])}
-    pre |= {str(n) for n in (record.get(FOREIGN_FIELD) or [])}
+    pre = _record_base_red(record)
     nodes: list[str] = [n for n in failing if n not in pre]
     for entry in record.get("reverted") or []:
         if isinstance(entry, Mapping):

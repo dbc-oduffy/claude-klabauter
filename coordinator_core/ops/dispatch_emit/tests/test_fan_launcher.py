@@ -126,7 +126,7 @@ def _refusal(script: str, child_id: str, reply: dict, sizing_rel: str = ""):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
-    m = re.search(r"function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
+    m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
     assert m
     prog = (
         "const WARP_PREFIX='/r/scratch/warp/';"
@@ -155,6 +155,26 @@ def test_genuine_run_id_mismatch_still_refused(tmp_path):
     assert _refusal(script, "ask-r1", ok_shape) == "emit reply run_id ask-other is not ask-r1"
     good = dict(ok_shape, run_id="ask-r1")
     assert _refusal(script, "ask-r1", good) is None
+
+
+@pytest.mark.spawns_process
+def test_doubled_separator_path_in_tree_accepted_outside_still_refused(tmp_path):
+    _, script = _write(tmp_path)
+    base = {"run_id": "ask-r1", "fire_args": {}}
+    doubled = dict(base, path="/r//scratch//warp//ask-r1.workflow.mjs")
+    assert _refusal(script, "ask-r1", doubled) is None
+    backslashes = dict(base, path="\\r\\\\scratch\\\\warp\\\\ask-r1.workflow.mjs")
+    assert _refusal(script, "ask-r1", backslashes) is None
+    outside = dict(base, path="/r//elsewhere//warp//ask-r1.workflow.mjs")
+    assert _refusal(script, "ask-r1", outside) == "emit reply path /r/elsewhere/warp/ask-r1.workflow.mjs is outside /r/scratch/warp/"
+    traversal = dict(base, path="/r//scratch//warp//..//x.mjs")
+    assert _refusal(script, "ask-r1", traversal) == "emit reply path contains .."
+
+
+def test_every_start_site_normalizes_the_emitted_path(tmp_path):
+    _, script = _write(tmp_path)
+    assert script.count("_normEmitPath(emitted.path)") == 2
+    assert "emitted.path.replace" not in script
 
 
 @pytest.mark.spawns_process

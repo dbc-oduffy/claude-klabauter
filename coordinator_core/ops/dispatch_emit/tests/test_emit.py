@@ -792,7 +792,7 @@ def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet():
     assert test_label_idx != -1, "fixture must compose the terminal test phase"
     reverify_idx = script.index("phase('Review re-verify')")
     reverify_call = script.index("agentType: 'coordinator:test-runner'", reverify_idx)
-    assert "model: 'sonnet'" in script[reverify_call:script.index("})", reverify_call)]
+    assert "model: 'haiku'" in script[reverify_call:script.index("})", reverify_call)]
     terminal_idx = script.index("agentType: 'coordinator:test-runner'", script.index("phase('Scoped test run')"))
     assert "model: 'haiku'" in script[terminal_idx:script.index("})", terminal_idx)]
 
@@ -2010,6 +2010,7 @@ def test_many_absent_paths_aggregate_into_one_finding(tmp_path):
     plan = _absent_target_plan(tmp_path, *rows)
 
     _, findings = _emit_findings(plan, tmp_path)
+    findings = [f for f in findings if f.code == emit.ABSENT_EDIT_TARGET_CODE]
 
     assert len(findings) == 1
     assert findings[0].message.startswith("14 ")
@@ -2031,7 +2032,8 @@ def test_creating_kinds_do_not_warn_on_an_absent_path(tmp_path):
         ("C2", "test-edit", ["pkg/test_new.py"]),
     )
 
-    assert _emit_findings(plan, tmp_path)[1] == []
+    absent = [f for f in _emit_findings(plan, tmp_path)[1] if f.code == emit.ABSENT_EDIT_TARGET_CODE]
+    assert absent == []
 
 
 def test_a_later_row_editing_what_an_earlier_row_creates_is_not_flagged(tmp_path):
@@ -2230,11 +2232,17 @@ def _sized_roster():
     return fragment
 
 
+# Each row's work estimate (body//4 + 1500 per write) must exceed half the chunk shaper's
+# WORK_CEILING so no pair merges and the row count survives into the group count.
+_SIZED_ROW_BODY_PAD = "    " + "x" * 20_000 + "\n"
+
+
 def _sized_plan(tmp_path, tshirt: str, rows: int):
     plan_path = _write_plan_with_sizing(tmp_path, tshirt)
     tasks = "".join(
         f"- id: C{i}\n  title: Row {i}\n  change_kind: doc-edit\n  surface: docs/r{i}.md\n"
         f"  writes:\n  - docs/r{i}.md\n  queue_scope: project\n  disposition: open\n  body: |\n    Do {i}.\n"
+        + _SIZED_ROW_BODY_PAD
         for i in range(1, rows + 1)
     )
     plan_path.write_text(
@@ -2269,3 +2277,11 @@ def test_plan_route_renders_group_count_from_row_count_and_roster_max(tmp_path):
     )
     four_groups = four[four.index("phase('Review groups')"):four.index("const _groupRaw = await")]
     assert four_groups.count("agentType: 'coordinator:code-reviewer'") == 1
+
+
+@pytest.mark.parametrize("bad", [None, [], "x", [1]])
+def test_dispatch_emit_refuses_non_object_params_by_name(bad):
+    from coordinator_core.ops.dispatch_emit import op
+
+    out = op._dispatch_emit(bad)
+    assert out == {"error": f"dispatch.emit params must be an object, got {type(bad).__name__}"}

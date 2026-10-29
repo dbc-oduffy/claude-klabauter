@@ -778,6 +778,7 @@ _MANIFEST_SCHEMA = _obj(
         "error": {"type": ["string", "null"]},
         "owed_em_ids": {"type": "array", "items": _STR},
         "owed_plan": _STR,
+        "gated_rows": {"type": "array", "items": {"type": "object"}},
         "rows": {
             "type": "array",
             "items": _obj(
@@ -875,6 +876,7 @@ _DESIGN_PREFIX_JS = f"(_gate?.{DESIGN_BRIEF_KEY} ? String(_gate.{DESIGN_BRIEF_KE
 _ADMIT_MANIFEST_JS = (
     "  let _stageRefusal = null;\n"
     "  let _stageOwedEm = null;\n"
+    "  let _stageGatedRows = null;\n"
     "  let _relayGap = null;\n"
     "  let _parked = null;\n"
     "  let _diskHalt = null;\n"
@@ -918,6 +920,8 @@ _ADOPT_STAGE_REPLY_HEAD_JS = (
     "'stage reply carries both error and manifest_handle'; return; }\n"
     "    if (r.error) { if (!soft && !_stageRefusal) { _stageRefusal = String(r.error); "
     "if (Array.isArray(r.owed_em_ids) && r.owed_em_ids.length) _stageOwedEm = { ids: r.owed_em_ids.map(String), "
+    "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; "
+    "if (Array.isArray(r.gated_rows) && r.gated_rows.length) _stageGatedRows = { rows: r.gated_rows, "
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
     f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) _parked = String(r.{PARKED_REPLY_KEY}); return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
@@ -3803,6 +3807,13 @@ def compose_ask_script(
             f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }}" + (")" if launcher_child else "") + ";"
         )
+        # A clean scout that wrote the sizing but returned neither arm nor halt: run the gate once from
+        # the sizing on disk; only its own empty reply falls through to the named refusal below.
+        b.append(
+            "  if (!_halted && !_gate.arm && !_gate.halt && _sizingRel) { const _regate = await "
+            + _gate_agent_call("gate-recover", "gate")
+            + "; _gate = { ..._gate, ...Object.fromEntries(Object.entries(_regate ?? {}).filter(([, v]) => v != null)) }; }"
+        )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
             b.append(
@@ -4739,7 +4750,7 @@ def compose_ask_script(
     )
     b.append(
         "  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt, owed_em_ids: _stageOwedEm?.ids ?? [], "
-        "owed_plan: _stageOwedEm?.plan ?? null }; }"
+        "owed_plan: _stageOwedEm?.plan ?? _stageGatedRows?.plan ?? null, gated_rows: _stageGatedRows?.rows ?? [] }; }"
     )
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
@@ -5645,6 +5656,21 @@ def _all_em_next_action_js(sizing_rel: Optional[str]) -> str:
         "_manifest.owed_em_ids"
         ".map((id) => 'coordinator-invoke plan.tasks.mutate {\"verb\":\"em-discharge\",\"plan_path\":' "
         "+ JSON.stringify(_manifest.owed_plan ?? _planRel ?? '') + ',\"id\":' + JSON.stringify(id) + ',\"text\":\"<what you did>\"}').join('; ') "
+        f"+ '. Then refire: ' + {_refire_js(sizing_rel)} }} : {_gated_next_action_js(sizing_rel)})"
+    )
+
+
+def _gated_next_action_js(sizing_rel: Optional[str]) -> str:
+    """JS expression: `{next_action}` for a stage refusal that derived zero dispatchable rows with
+    rows withheld on an uncleared external_gate (the reply's `gated_rows`), else the no-manifest
+    resume. Names the clear-gate call per gated row, then the refire; a refire alone cannot clear it."""
+    return (
+        "((_manifest?.gated_rows ?? []).length ? { next_action: "
+        "'Every row is withheld on an uncleared external_gate; a refire cannot clear it. Clear each once its owner has landed the work: ' + "
+        "_manifest.gated_rows"
+        ".map((g) => 'coordinator-invoke plan.tasks.mutate {\"verb\":\"clear-gate\",\"plan_path\":' "
+        "+ JSON.stringify(_manifest.owed_plan ?? _planRel ?? '') + ',\"id\":' + JSON.stringify(String(g.id)) "
+        "+ ',\"owner_repo\":' + JSON.stringify(String(g.owner_repo)) + ',\"evidence\":\"<closure evidence>\"}').join('; ') "
         f"+ '. Then refire: ' + {_refire_js(sizing_rel)} }} : {_no_manifest_next_action_js(sizing_rel)})"
     )
 
@@ -5838,7 +5864,7 @@ def _append_docs_and_commit(
         "&& _commit.remedy_step.exhausted !== true && Number(_commit.remedy_step.attempt) > _retestAttempts) {"
     )
     b.append("      const _rs = _commit.remedy_step; _retestAttempts = Number(_rs.attempt);")
-    b.append(f"      try {{ await {_invariant_retest_call(head=head, anchor=anchor, run_id=run_id)}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
+    b.append(f"      try {{ await {_invariant_retest_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append(f"      try {{ _commit = await {commit_call}; }} catch (e) {{ _haltOnUsageLimit(e); }}")
     b.append("    }")
     b.append(
@@ -5926,14 +5952,19 @@ _RETEST_FILES_JS = (
 )
 
 
-def _invariant_retest_call(*, head: str, anchor: str, run_id: str) -> str:
+def _invariant_retest_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
     """The `retest-invariant` agent call: runs the refused landing's `remedy_step` retest (start, then poll
     to a terminal verdict) so the commit stage can re-invoke the landing. The retest is `--isolated-export`:
-    it judges HEAD plus the run's landing paths, never a peer run's dirty files in the shared tree. Reads `_rs` and
-    `_nextAction.params.task_output_path` from the emitted scope."""
+    it judges HEAD plus the run's landing paths, never a peer run's dirty files in the shared tree. Reads `_rs`
+    from the emitted scope. Trap: its params come from the commit stage's params file (`--params-file`); an ask
+    run's `_nextAction.params` carries no `task_output_path`, so `--from-task-output` there gets `undefined`
+    and the child writes no verdict."""
+    params_file = params_path(repo_root, run_id)
+    if params_file is None:
+        raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
     start = (
-        "'python -m coordinator_core.ops.dispatch_emit.retest_targeted --isolated-export --from-task-output ' "
-        f"+ _nextAction.params.task_output_path + {_RETEST_FILES_JS}"
+        f"'python -m coordinator_core.ops.dispatch_emit.retest_targeted --isolated-export --params-file {params_file.as_posix()}' "
+        f"+ {_RETEST_FILES_JS}"
     )
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing refused on a repo-wide invariant with no fresh passing "

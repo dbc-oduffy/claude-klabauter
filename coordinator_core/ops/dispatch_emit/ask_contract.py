@@ -110,9 +110,16 @@ def parked_refire_next_action(plan_rel: str | None, *, run_id: str, sizing_rel: 
     return refire_next_action_for(HALT_PARKED, run_id=run_id, sizing_rel=sizing_rel, detail=parked_next_action(plan_rel))
 
 
+#: The revise form that releases a PARTIAL holder's dependents on the refire.
+ACCEPT_PARTIAL_FORM = "workflow.revise run_id={run_id} accept_partial=[{{chunk, reason}}]"
+
+
 def dependents_unstarted_refire_next_action(reason: str, *, run_id: str, sizing_rel: str) -> dict:
-    """The refire envelope of a held-dependents halt: the refire starts the dependents the hold left unstarted."""
-    return refire_next_action_for(HALT_DEPENDENTS_UNSTARTED, run_id=run_id, sizing_rel=sizing_rel, detail=reason)
+    """The refire envelope of a held-dependents halt: the refire starts the dependents the hold left unstarted.
+
+    The detail names `ACCEPT_PARTIAL_FORM`: a PARTIAL holder the EM accepts through it stops holding."""
+    detail = f"{reason}; to start them over a PARTIAL holder: {ACCEPT_PARTIAL_FORM.format(run_id=run_id)}, then re-fire"
+    return refire_next_action_for(HALT_DEPENDENTS_UNSTARTED, run_id=run_id, sizing_rel=sizing_rel, detail=detail)
 
 
 #: Record-dir file holding a run's revised stop-after phase.

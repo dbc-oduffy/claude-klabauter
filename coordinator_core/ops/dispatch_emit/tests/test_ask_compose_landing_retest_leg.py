@@ -1,88 +1,105 @@
-"""The composed ask script's landing leg performs the `targeted-tests-failed` remedy in-run.
+"""The ask commit stage's in-run retest leg hands `retest_targeted` the commit stage's params file, so the
+retest writes the verdict record the landing reads and a run whose own diff is clean lands.
 
-A landing refusal carrying `remedy_step` launches the detached retest, polls it and re-lands with
-`retest_attempts` raised, bounded by `MAX_IN_RUN_REMEDY_ATTEMPTS`; the emitted helper runs under node
-with the agent and the landing stubbed.
+An ask run's `_nextAction.params` carries no `task_output_path`; a `--from-task-output` built from it is the
+literal `undefined`, the child exits 2 before writing anything, and the landing finds no verdict.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
+import re
+import shlex
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import ask_compose
-from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
-from coordinator_core.ops.dispatch_emit.landing_targeted_tests import RETEST_ATTEMPTS_PARAM, RETEST_LAUNCHER
+from coordinator_core.ops.dispatch_emit import ask_compose, landing_retest, retest_targeted
+from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
+from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
+from coordinator_core.ops.dispatch_emit.tests.test_land_run_landing_remedies import (  # noqa: F401
+    RUN,
+    SCRIPT,
+    _author,
+    _declare,
+    _git,
+    _land,
+    _write,
+    repo,
+)
 
-RUN_ID = "ask-20261027T000000-aaaaaa"
-NODE = shutil.which("node")
-pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.skipif(NODE is None, reason="node is not on PATH")]
-STEP = {"kind": "targeted-tests-failed", "nodes": ["pkg/tests/test_a.py::test_x", "pkg/tests/test_b.py"],
-        "attempt": 1, "max_attempts": MAX_IN_RUN_REMEDY_ATTEMPTS, "exhausted": False}
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_HARNESS = """
-let _halted = null;
-const _runId = %(run)s;
-const _nextAction = { params: { script_path: 'scratch/warp/x.mjs' } };
-const _USAGE_LIMIT_RE = /usage limit/;
-function _haltOnUsageLimit(e) { _halted = { halted: 'usage_limit' }; }
-%(helper)s
-(async () => {
-  const replies = %(replies)s; const exits = %(exits)s;
-  const log = { prompts: [], lands: [] };
-  globalThis.agent = async (prompt) => { log.prompts.push(prompt); return { exit_code: exits.shift() ?? 0 }; };
-  const out = await _landRetest(async () => { log.lands.push(_retestAttempts); return replies.shift(); });
-  console.log(JSON.stringify({ out, log }));
-})();
-"""
+INV_FILE = "coordinator_core/session/tests/test_machinery_paths.py"
+INV = f"{INV_FILE}::test_every_tracked_state_first_segment_is_on_the_allowlist"
+_START = re.compile(r"'python -m coordinator_core\.ops\.dispatch_emit\.retest_targeted ([^']*)'")
 
 
-def _run(replies: list, exits: list) -> dict:
-    script = _HARNESS % {
-        "run": json.dumps(RUN_ID), "helper": ask_compose._land_retest_js(RUN_ID),
-        "replies": json.dumps(replies), "exits": json.dumps(exits),
-    }
-    done = subprocess.run(
-        [NODE, "-e", script], capture_output=True, text=True, timeout=60,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+def _emitted_retest_argv(root) -> list[str]:
+    """The arguments of the retest command `_invariant_retest_call` emits, with the node-side `--tests`
+    tail (a JS expression over the refusal's nodes) replaced by the invariant file it yields."""
+    call = ask_compose._invariant_retest_call(head="h", anchor="a", repo_root=str(root), run_id=RUN)
+    match = _START.search(call)
+    assert match is not None, call
+    return [*shlex.split(match.group(1)), "--tests", INV_FILE]
+
+
+def test_the_emitted_retest_command_names_the_commit_stage_params_file_not_a_task_output(tmp_path):
+    call = ask_compose._invariant_retest_call(head="h", anchor="a", repo_root=str(tmp_path), run_id=RUN)
+
+    assert f"--params-file {params_path(tmp_path, RUN).as_posix()}" in call
+    assert "--from-task-output" not in call and "task_output_path" not in call
+    assert "--isolated-export" in call
+
+
+def test_the_commit_stage_threads_its_repo_root_into_the_retest_leg():
+    lines: list = []
+    ask_compose._append_docs_and_commit(
+        lines, head="h", anchor="a", repo_root="/r", run_id=RUN, manifest_rel="m.json"
     )
-    assert done.returncode == 0, done.stderr
-    return json.loads(done.stdout)
+
+    assert f"--params-file {params_path('/r', RUN).as_posix()}" in "\n".join(lines)
 
 
-def test_a_failing_landing_retests_the_named_files_then_relands_with_the_attempt_raised():
-    res = _run([{"committed": False, "remedy_step": STEP}, {"committed": True, "sha": "abc"}], [0])
-    assert res["out"]["committed"] is True
-    assert res["log"]["lands"] == [0, 1]
-    (prompt,) = res["log"]["prompts"]
-    assert RETEST_LAUNCHER in prompt and "--poll" in prompt
-    assert prompt.count(" --tests pkg/tests/test_a.py") == 1 and "--tests pkg/tests/test_b.py" in prompt
-    assert "test_x" not in prompt
+def test_a_clean_run_lands_after_the_emitted_retest_command_writes_its_verdict(repo, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
+    monkeypatch.setattr(imp, "invariants_for_paths", lambda paths, root: [INV])
+    monkeypatch.setattr(imp, "existing_invariants", lambda root, nodes: list(nodes))
+    _write(repo, INV_FILE, "def test_every_tracked_state_first_segment_is_on_the_allowlist():\n    pass\n")
+    _git(["add", "."], repo)
+    _git(["commit", "-q", "-m", "invariant"], repo)
+    _author(repo, "a.py", "a = 1\n")
+    _declare(repo, [("C1", ["a.py"])])
+    record = (record_dir(repo, RUN) / "manifest.json").relative_to(repo).as_posix()
+    _write(repo, record, json.dumps({"review_declared_paths": ["a.py"]}))
 
+    refused = _land(repo)
+    assert refused["committed"] is False and refused["remedy_step"]["nodes"] == [INV], refused
 
-def test_a_retest_that_never_passes_is_bounded_and_the_spent_landing_is_the_halt():
-    spent = {**STEP, "attempt": MAX_IN_RUN_REMEDY_ATTEMPTS + 1, "exhausted": True}
-    res = _run(
-        [{"committed": False, "remedy_step": STEP}, {"committed": False, "remedy_step": spent}],
-        [1] * MAX_IN_RUN_REMEDY_ATTEMPTS,
+    params_file = params_path(repo, RUN)
+    params_file.parent.mkdir(parents=True, exist_ok=True)
+    params_file.write_text(
+        json.dumps({"run_id": RUN, "run_token": "tok", "script_path": SCRIPT}), encoding="utf-8"
     )
-    assert len(res["log"]["prompts"]) == MAX_IN_RUN_REMEDY_ATTEMPTS
-    assert res["log"]["lands"] == [0, MAX_IN_RUN_REMEDY_ATTEMPTS]
-    assert res["out"]["remedy_step"]["exhausted"] is True
+    verdict = landing_retest.fresh_verdict_path(repo, RUN)
+    assert not verdict.exists()
+
+    def _child_inline(_engine, _script, child_argv, **_kw):
+        return retest_targeted.main(child_argv, run=lambda *a, **k: 0) == 0
+
+    argv = [*_emitted_retest_argv(repo), "--repo-root", str(repo)]
+    assert retest_targeted.main(argv, spawn=_child_inline) == 0
+
+    record = json.loads(verdict.read_text(encoding="utf-8"))
+    assert record["status"] == "pass" and record["run_id"] == RUN, record
+
+    out = _land(repo, retest_attempts=1)
+    assert out["committed"] is True, out
+    assert "a.py" in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
 
 
-def test_a_refusal_without_a_remedy_step_or_with_a_spent_one_launches_nothing():
-    plain = _run([{"committed": False, "refused": "peer-contested"}], [])
-    assert plain["log"] == {"prompts": [], "lands": [0]}
-    spent = _run([{"committed": False, "remedy_step": {**STEP, "exhausted": True}}], [])
-    assert spent["log"] == {"prompts": [], "lands": [0]}
+def test_the_retired_task_output_argument_still_writes_no_record_for_an_unreadable_path(repo):
+    argv = ["--from-task-output", "undefined", "--tests", INV_FILE, "--repo-root", str(repo)]
 
-
-def test_the_commit_stage_lands_through_the_leg_and_carries_the_attempt_count():
-    stage = ask_compose._commit_stage_call(head="h", anchor="a", repo_root="/r", run_id=RUN_ID)
-    assert stage.startswith("_landRetest(() => agent(")
-    assert f"{RETEST_ATTEMPTS_PARAM}: _retestAttempts" in stage
-    assert "remedy_step" in stage
+    assert retest_targeted.main(argv, spawn=lambda *a, **k: pytest.fail("must not spawn")) == 2
+    assert not landing_retest.fresh_verdict_path(repo, RUN).exists()

@@ -959,7 +959,7 @@ def _reverify_phase(
         prompt = (
             f"{prompt_head}\n\n{role}"
             "Re-verify the edits this run's review applied in place, and keep only the ones whose "
-            "tests pass. Review ran per executor group, and each slice prefix holds its own "
+            "tests pass. Review ran for each executor group, and each slice prefix holds its own "
             "pre-review snapshot, so every engine call below is made once per prefix. Four steps, "
             "in order.\n"
             f"1. List what review changed with one engine call per slice prefix: {list_calls}; each "

@@ -133,6 +133,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import posixpath
 import subprocess
 import sys
 import time
@@ -1241,6 +1242,7 @@ def run_close_commit(
         kept_entries=kept_entries,
         trailers=trailers,
     )
+    stage_paths, normalize_diagnostics = _normalize_stage_paths(root, stage_paths, deleted_paths)
     # `commit_paths` cannot read a path it cannot find. A `stage_paths` entry
     # absent on disk and not declared via `deleted_paths` is dropped from the
     # pathspec and named in `diagnostics` (one entry per path), on every
@@ -1263,7 +1265,7 @@ def run_close_commit(
             commit_failed=True,
             integrity_breach=False,
             sha_unverified=False,
-            diagnostics=vanished_diagnostics,
+            diagnostics=[*normalize_diagnostics, *vanished_diagnostics],
         )
     if not present_paths and not deleted_paths:
         # Mirrors `run_commit_pipeline`'s own empty-`commit_paths` short-
@@ -1279,7 +1281,7 @@ def run_close_commit(
             commit_failed=False,
             integrity_breach=False,
             sha_unverified=False,
-            diagnostics=[EMPTY_PATHSPEC_DIAGNOSTIC],
+            diagnostics=[*normalize_diagnostics, EMPTY_PATHSPEC_DIAGNOSTIC],
         )
     # Engine-owned trailers (Session-Id/Deliverable-Id/Co-Authored-By): this
     # route lands via `commit_paths`' commit-tree plumbing, which fires no
@@ -1312,7 +1314,7 @@ def run_close_commit(
             commit_failed=False,
             integrity_breach=False,
             sha_unverified=False,
-            diagnostics=[*vanished_diagnostics, str(exc)],
+            diagnostics=[*normalize_diagnostics, *vanished_diagnostics, str(exc)],
         )
     except (CommitRefused, FilterUnsupported) as exc:
         return CommitTailOutcome(
@@ -1322,7 +1324,7 @@ def run_close_commit(
             commit_failed=True,
             integrity_breach=False,
             sha_unverified=False,
-            diagnostics=[*vanished_diagnostics, str(exc)],
+            diagnostics=[*normalize_diagnostics, *vanished_diagnostics, str(exc)],
         )
     if on_committed is not None:
         on_committed(outcome.sha)
@@ -1333,8 +1335,89 @@ def run_close_commit(
         commit_failed=False,
         integrity_breach=False,
         sha_unverified=False,
-        diagnostics=vanished_diagnostics,
+        diagnostics=[*normalize_diagnostics, *vanished_diagnostics],
     )
+
+
+def _normalize_stage_paths(
+    root: Path, stage_paths: "Sequence[str]", deleted_paths: "Sequence[str]"
+) -> "tuple[list[str], list[str]]":
+    """`(paths, diagnostics)`: `stage_paths` with each directory entry expanded
+    to its modified/untracked non-ignored files (one `git ls-files` spawn for
+    all directories), and gitignored or emitted-workflow files dropped, every
+    drop and expansion named in `diagnostics`. A declared deletion is never
+    dropped. A failed git read leaves the paths unexpanded and undropped, so
+    `commit_paths` still refuses them rather than this guessing."""
+    from coordinator_core.git.commit import _EPHEMERAL_EMISSION_RE
+
+    deleted_set = set(deleted_paths)
+    diagnostics: "list[str]" = []
+    dirs = [p for p in stage_paths if p not in deleted_set and (root / p).is_dir()]
+    expanded: "dict[str, list[str]]" = {d: [] for d in dirs}
+    if dirs:
+        prefixes = {
+            d: "" if d.strip("./\\") == "" else posixpath.normpath(d.replace("\\", "/")) + "/"
+            for d in dirs
+        }
+        rc, out, _err = _spawn_git(
+            root,
+            ["ls-files", "-z", "--modified", "--others", "--exclude-standard", "--",
+             *[prefixes[d] or "." for d in dirs]],
+        )
+        if rc == 0:
+            for f in out.split("\0"):
+                if not f:
+                    continue
+                for d in dirs:
+                    if f.startswith(prefixes[d]):
+                        expanded[d].append(f)
+                        break
+        else:
+            expanded = {}
+    paths: "list[str]" = []
+    seen: "set[str]" = set()
+    for p in stage_paths:
+        if p in expanded:
+            files = [f for f in expanded[p] if (root / f).exists()]
+            diagnostics.append(
+                f"stage path expanded from directory: {p} -> {len(files)} file(s)"
+            )
+            candidates = files
+        else:
+            candidates = [p]
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                paths.append(c)
+    kept: "list[str]" = []
+    for p in paths:
+        if p not in deleted_set and _EPHEMERAL_EMISSION_RE.search(p):
+            diagnostics.append(f"stage path dropped, emitted workflow output: {p}")
+        else:
+            kept.append(p)
+    probe = [p for p in kept if p not in deleted_set and (root / p).is_file()]
+    ignored: "set[str]" = set()
+    if probe:
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(root), "--no-optional-locks", "check-ignore", "-z", "--stdin"],
+                input="\0".join(probe) + "\0",
+                capture_output=True,
+                text=True,
+                timeout=30,
+                **_NO_CONSOLE,
+            )
+            if proc.returncode == 0:
+                ignored = {x for x in proc.stdout.split("\0") if x}
+        except (OSError, subprocess.SubprocessError):
+            pass
+    result: "list[str]" = []
+    for p in kept:
+        if p in ignored:
+            diagnostics.append(f"stage path dropped, gitignored: {p}")
+        else:
+            result.append(p)
+    return result, diagnostics
 
 
 def _release_committed_path_claims(

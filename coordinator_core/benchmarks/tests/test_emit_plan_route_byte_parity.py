@@ -5,11 +5,12 @@ fixture plan, so the test is implementation-blind: it must pass on whichever mod
 routes a plain `--plan` argv to, before and after the plan-route cutover.
 
 The goldens (`emit_full_path_plan.expected.script.mjs` and `.receipt.json`) were captured once
-from the pre-rebuild path. A golden is never regenerated to make this test pass; a mismatch is a
-behaviour change in a byte the workflow runtime or `--restamp` reads, and the code is what moves.
+from the pre-rebuild path. A golden moves only for a named deliberate behaviour change, recorded
+in the commit that regenerates it; any other mismatch is a change in a byte the workflow runtime
+or `--restamp` reads, and the code is what moves.
 
 Volatile values are replaced by placeholders before comparing, and nothing else is touched:
-the repo root, the emitting session id (full and 8-char prefix), the run-base commit sha (full
+the pytest launcher's interpreter, the repo root, the emitting session id (full and 8-char prefix), the run-base commit sha (full
 and 12-char prefix), the receipt's `emitted_at`, and the receipt's `sha256`, which is recomputed
 over the normalised script because the raw digest covers the volatile values.
 """
@@ -81,13 +82,16 @@ def _root_spellings(repo: Path) -> list[str]:
     return sorted(spellings, key=len, reverse=True)
 
 
-# Host-dependent bytes: the runtime cap reads os.cpu_count() and the vitest clause reads a
-# machine-local registry key, so either would pin the golden to the box that regenerated it.
+# Host-dependent bytes: the runtime cap reads os.cpu_count(), the vitest clause reads a
+# machine-local registry key, and the pytest launcher names the emitting interpreter, so each
+# would pin the golden to the box that regenerated it.
 _HOST_CAP_RES = (
     (re.compile(r"(dispatched-agent calls: )\d+( on the emitting host)"), r"\1<RUNTIME_CAP>\2"),
     (re.compile(r"(runtime_cap_on_emitting_host: )\d+"), r"\1<RUNTIME_CAP>"),
     (re.compile(r"Vitest worker cap: every vitest invocation you run passes `--maxWorkers=\d+` "
                 r"-- this box caps vitest at \d+ workers\."), "<VITEST_CAP_CLAUSE>"),
+    (re.compile(r"(Run pytest only as `)[^\s`]+( -m coordinator_core\.testing\.scoped_pytest)"),
+     r"\1<TEST_PYTHON>\2"),
 )
 
 

@@ -346,8 +346,8 @@ def test_not_fired_refusal_accepts_valid_and_names_first_bad_index():
 def test_asks_item_keys_pinned():
     assert c.ASKS_ITEM_KEYS == (
         "ask", "source", "sender", "relayed_text", "route_preference",
-        "em_rationale", "em_context", "context", "label", "writes",
-        "stop_after",
+        "em_rationale", "em_context", "context", "label", "after",
+        "writes", "stop_after",
     )
 
 
@@ -375,3 +375,20 @@ def test_superseded_marker_path_and_reader(tmp_path):
     path.write_text('{"superseded_by": "n"}', encoding="utf-8")
     assert c.read_superseded_by(tmp_path, "r") == "n"
     assert (c.CLOSED_BY_KEY, c.SUPERSEDED_BY_KEY) == ("closed_by", "superseded_by")
+
+
+def test_declared_after_is_an_edge_without_writes_and_merges_with_overlap():
+    a, b = _slice("a", writes=("x.py",)), _slice("b", writes=("x.py",))
+    third = c.AskSlice(label="c", ask="c", after=(0,))
+    assert c.after_edges([a, _slice("b"), third]) == {0: (), 1: (), 2: (0,)}
+    assert c.after_edges([a, b, c.AskSlice(label="c", ask="c", writes=("x.py",), after=(0,))])[2] == (0, 1)
+
+
+def test_resolve_after_accepts_label_and_index_of_earlier_siblings():
+    assert c.resolve_after("asks[2]", ["a", 1, "a"], ["a", "b", "c"], 2) == (0, 1)
+
+
+@pytest.mark.parametrize("refs", ["a", [], ["c"], ["zzz"], [2], [-1], [True], [None]])
+def test_resolve_after_refuses_non_earlier_or_malformed_naming_the_key(refs):
+    with pytest.raises(ValueError, match=r"asks\[2\]\.after"):
+        c.resolve_after("asks[2]", refs, ["a", "b", "c"], 2)

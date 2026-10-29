@@ -3,6 +3,7 @@ superseding `tests` in place of the frozen one."""
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -46,7 +47,7 @@ def test_pinned_interpreter_clause_replaces_python3_sentence(tmp_path, monkeypat
     out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
     rd.emit_reverify(repo_root=repo, plan_path=str(plan), run_record=str(record), out_path=str(out))
     text = out.read_text(encoding="utf-8")
-    assert str(pin) in text and "pinned interpreter" in text
+    assert json.dumps(str(pin))[1:-1] in text and "pinned interpreter" in text
     assert PORTABLE_CLAUSE not in text
 
 

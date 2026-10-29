@@ -92,6 +92,29 @@ def test_overlapping_declared_slices_are_sequenced_and_undeclared_runs_parallel(
     assert [r["run_id"] for r in out["ready"]] == [first["run_id"], third["run_id"]]
 
 
+def test_declared_after_holds_the_run_on_the_named_sibling_by_label_and_index(repo):
+    out = _go(repo, {"asks": [
+        {"ask": "one", "label": "first"},
+        {"ask": "two", "after": ["first"]},
+        {"ask": "three", "after": [0, 1]},
+        {"ask": "four"},
+    ]})
+    assert out["exit_code"] == 0, out
+    r1, r2, r3, r4 = out["runs"]
+    assert "after" not in r1 and "after" not in r4
+    assert r2["after"] == [r1["run_id"]]
+    assert r3["after"] == [r1["run_id"], r2["run_id"]]
+    assert [r["run_id"] for r in out["ready"]] == [r1["run_id"], r4["run_id"]]
+
+
+@pytest.mark.parametrize("after", [["nope"], ["slice-2"], [1], [0]])
+def test_after_naming_no_earlier_sibling_is_refused_by_key_and_writes_nothing(repo, after):
+    before = _snapshot(repo)
+    out = _go(repo, {"asks": [{"ask": "one", "after": after}, {"ask": "two"}]})
+    assert out["exit_code"] == 1 and "asks[0].after" in out["error"]
+    assert _snapshot(repo) == before
+
+
 def test_three_undeclared_asks_are_sibling_runs_with_no_after_edges(repo, monkeypatch):
     out = _go(repo, {"asks": [{"ask": f"job {i}"} for i in range(3)]})
     assert out["exit_code"] == 0, out

@@ -802,6 +802,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.adopt_orphaned_run":              "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
+    # workflow.late_rows — reads the caller's worktree run ledger; scope lets --repo supply repo_root.
+    "workflow.late_rows":                       "common_dir",
     # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the
     # caller's own worktree's sizing and plan.
     "workflow.pending_revisions":               "common_dir",

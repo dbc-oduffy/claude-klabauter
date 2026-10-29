@@ -228,9 +228,17 @@ class AskStageError(ValueError):
 
     `owed_em_ids` / `plan_path` are set when every row is EM-owned; the op reply carries them as fields."""
 
-    def __init__(self, message: str, *, owed_em_ids: Optional[list] = None, plan_path: Optional[str] = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        owed_em_ids: Optional[list] = None,
+        plan_path: Optional[str] = None,
+        gated_rows: Optional[list] = None,
+    ):
         super().__init__(message)
         self.owed_em_ids = list(owed_em_ids) if owed_em_ids else None
+        self.gated_rows = list(gated_rows) if gated_rows else None
         self.plan_path = plan_path
 
 

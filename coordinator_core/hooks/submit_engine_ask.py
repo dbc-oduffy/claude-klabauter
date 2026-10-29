@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?, chatty?}` (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?, chatty?}` (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
 lazy-emit launcher (`fan_launcher.write_launcher`) that emits and starts each, with one ready run it fires
@@ -69,7 +69,11 @@ from coordinator_core.hooks.sizing_scout_deny import (
     sizing_scout_deny as _scout_deny,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ASKS_ITEM_KEYS, unknown_keys_refusal
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+    ASKS_ITEM_KEYS,
+    resolve_after,
+    unknown_keys_refusal,
+)
 from coordinator_core.ops.sizing_intake_contract import is_path_shaped, with_em_context
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 
@@ -496,6 +500,12 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         writes = item.get("writes")
         if writes is not None and not (isinstance(writes, list) and all(isinstance(w, str) for w in writes)):
             return None, f"asks[{i}].writes must be a list of repo-relative paths."
+        if item.get("after") is not None:
+            earlier = [(asks[k].get("label") or "").strip() or f"slice-{k + 1}" for k in range(i)]
+            try:
+                resolve_after(f"asks[{i}]", item["after"], earlier, i)
+            except ValueError as exc:
+                return None, str(exc)
         stop_why = _stop_after_refusal(f"asks[{i}]", item.get("stop_after"))
         if stop_why:
             return None, stop_why
@@ -964,6 +974,24 @@ def _unmarked_emitted_run(root: Path, sizing_rel: str) -> Optional[str]:
     return None
 
 
+def _resume_fire_args(root: Path, run_id: str, sizing_rel: str, session_id: Optional[str]) -> dict:
+    """`{"fire_args": ...}` handing the stored resume script a run token, else `{}`.
+
+    The stored script is composed with `script_path` `<RUN_DIR_ROOT>/<run_id>.workflow.mjs` (not the
+    stored file's path), and its commit leg presents that path to `run_token.admits`, so the token
+    binds to it. A mint that cannot bind returns `{}`: the run hands its commit back, as before."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    try:
+        token = run_token.mint(
+            root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs", session_id=session_id, sizing_rel=sizing_rel
+        )
+    except (OSError, ValueError):
+        return {}
+    return {"fire_args": {"repoRoot": root.as_posix(), "runToken": token}}
+
+
 def _resume_route(
     root: Path,
     sizing_rel: str,
@@ -1036,7 +1064,7 @@ def _resume_route(
         if on_disk is True:
             if refusal is not None:
                 return _refuse(refusal), None
-            return None, {"path": str(script), "run_id": halted_id}
+            return None, {"path": str(script), "run_id": halted_id, **_resume_fire_args(root, halted_id, sizing_rel, session_id)}
 
     if (stored is None or refusal is not None) and hrr.claim_recompose(rd, time.time(), hrr.RECOMPOSE_TTL_S):
         _spawn_recompose(root, halted_id)

@@ -55,6 +55,28 @@ def test_unknown_entry_key_denies_before_the_fanout(tmp_path):
     assert all(key in reason for key in ASKS_ITEM_KEYS)
 
 
+def test_after_is_an_accepted_entry_key_and_reaches_the_fanout(tmp_path):
+    _repo(tmp_path)
+    assert "after" in ASKS_ITEM_KEYS
+    seen: list[dict] = []
+
+    def fanout(params, root):
+        seen.append(params)
+        return {"error": "stop here"}
+
+    args = {"asks": [{"ask": "one", "label": "a"}, {"ask": "two", "after": ["a"]}]}
+    mod.evaluate(_payload(tmp_path, args), emit=_boom, fanout=fanout)
+    assert seen[0]["asks"][1]["after"] == ["a"]
+
+
+def test_after_naming_no_earlier_sibling_denies_naming_the_key(tmp_path):
+    _repo(tmp_path)
+    args = {"asks": [{"ask": "one", "after": ["two"]}, {"ask": "two", "label": "two"}]}
+    env = mod.evaluate(_payload(tmp_path, args), emit=_boom, fanout=_boom)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "asks[0].after" in _reason(env)
+
+
 def test_single_element_asks_context_reaches_the_emit(tmp_path):
     _repo(tmp_path)
     seen: list[dict] = []

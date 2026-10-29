@@ -95,6 +95,7 @@ _PARAMS = (
     Field("all_of_pm_ask", "bool"),
     Field("out_of_scope", "str_list"),
     Field("withhold_paths", "list"),
+    Field("accept_partial", "list"),
     Field("add_paths", "list"),
     Field("widened", "list"),
     Field("credit_chunks", "list"),
@@ -1051,7 +1052,7 @@ def revise(
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
     claim: bool = False, owned_red: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
-    widened: Sequence = (),
+    widened: Sequence = (), accept_partial: Sequence = (),
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -1070,6 +1071,9 @@ def revise(
     `add_paths` (repo-relative paths) names write paths the run was not sized for: any outside the run's
     write set refuses, as does a `note` citing an existing repo file outside a staged run's footprint;
     the refusal names the routes (a new ask, or resize the sizing) and nothing is written.
+    `accept_partial` (`[{chunk, reason}]`, `run_accept_partial.validate` before any write) rules PARTIAL
+    chunks good enough to release their dependents on the refire: recorded to the run's
+    `accept_partial.jsonl`, same preconditions and effects as `withhold_paths`; a BLOCKED chunk stays held.
     `credit_chunks` (`[{chunk, evidence}]`, `run_credit.validate` before any write) marks stranded
     chunks complete: recorded to the run's `credit.jsonl`, same preconditions and effects as
     `withhold_paths`; the re-fired terminal commit re-grades the named chunks.
@@ -1106,6 +1110,14 @@ def revise(
 
         try:
             withheld_entries = run_withhold.validate(withhold_paths)
+        except ValueError as exc:
+            raise LedgerRefused(str(exc)) from exc
+    accept_entries: list[dict] = []
+    if accept_partial:
+        from coordinator_core.ops.dispatch_emit import run_accept_partial
+
+        try:
+            accept_entries = run_accept_partial.validate(accept_partial)
         except ValueError as exc:
             raise LedgerRefused(str(exc)) from exc
     credit_entries: list[dict] = []
@@ -1145,12 +1157,12 @@ def revise(
         raise LedgerRefused(f"stop_after takes only {STOP_AFTER_PLAN!r}, got {stop_after!r}")
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
-        and not red_entries and not build_only and stop_after is None and retraction is None and not add_paths
+        and not accept_entries and not red_entries and not build_only and stop_after is None and retraction is None and not add_paths
         and not widened and row_retraction is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "credit_chunks, retract_note, retract_row, build_only, stop_after, or a combination"
+            "accept_partial, credit_chunks, retract_note, retract_row, build_only, stop_after, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -1174,7 +1186,7 @@ def revise(
                 raise LedgerRefused(f"research pipeline run {run_id!r} is finished: revision not delivered")
             if (
                 named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
-                or stop_after or retraction is not None or claim
+                or stop_after or retraction is not None or claim or accept_entries
             ):
                 raise LedgerRefused(
                     f"{run_id!r} is a research pipeline run: it takes only a verbatim or note revision, "
@@ -1202,7 +1214,7 @@ def revise(
             return Ledger((), False), dir_, None
         if (
             named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
-            or stop_after or retraction is not None or row_retraction is not None
+            or stop_after or retraction is not None or row_retraction is not None or accept_entries
         ):
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
@@ -1311,6 +1323,8 @@ def revise(
         declare_write(dir_ / NOTES_FILE)
     if withheld_entries:
         run_withhold.record(dir_, withheld_entries, _now())
+    if accept_entries:
+        run_accept_partial.record(dir_, accept_entries, _now())
     if credit_entries:
         run_credit.record(dir_, credit_entries, _now())
     if red_entries:
@@ -1709,6 +1723,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     its ruling, carried open on the commit, and replied as `withheld`), `withhold_paths` (list of
     `{path, reason}`: product paths the run's terminal commit leaves out, recorded to the run's
     `withhold.jsonl`; needs an emitted run, no sizing, adds no row; replied as `withhold_paths`),
+    `accept_partial` (list of `{chunk, reason}`: PARTIAL chunks whose dependents the refire starts,
+    recorded to the run's `accept_partial.jsonl`; needs an emitted run, no sizing, adds no row; replied
+    as `accept_partial`),
     `credit_chunks` (list of `{chunk, evidence}`: stranded chunks the EM rules complete, recorded to
     the run's `credit.jsonl` for the re-fired terminal commit to re-grade; needs an emitted run, no
     sizing, adds no row; replied as `credit_chunks`), `retract_note` (`{note_id, reason}`: withdraws
@@ -1753,6 +1770,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
             owned_red=params.get("owned_red") or (), add_paths=params.get("add_paths") or (),
             retract_row=params.get("retract_row"), widened=params.get("widened") or (),
+            accept_partial=params.get("accept_partial") or (),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -1813,6 +1831,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import run_withhold
 
         out["withhold_paths"] = run_withhold.validate(params["withhold_paths"])
+    if params.get("accept_partial"):
+        from coordinator_core.ops.dispatch_emit import run_accept_partial
+
+        out["accept_partial"] = run_accept_partial.validate(params["accept_partial"])
     if params.get("credit_chunks"):
         from coordinator_core.ops.dispatch_emit import run_credit
 
@@ -1870,7 +1892,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
 
 
-_APPLIED_KEYS = ("widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "credit_chunks", "owned_red", "retracted_note", "withheld")
+_APPLIED_KEYS = ("widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "retracted_note", "withheld")
 
 
 def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:

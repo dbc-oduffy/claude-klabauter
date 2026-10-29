@@ -70,6 +70,8 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     _module_files,
     _node_file,
     _repo_test_path,
+    FAILING_AT_BASE,
+    base_red_ids,
     baseline_caused_files,
     failed_targeted_tests,
     named_failures,
@@ -241,14 +243,14 @@ def landing_test_gate(
         return findings, check
     foreign: dict = {}
     owed = invariant_findings(worktree_root, landed_paths, run_id, params, foreign)
+    carried = findings.foreign_evidence or {}
     if not owed:
         if foreign:
-            findings = GateFindings(findings)
-            findings.foreign_evidence = foreign
+            findings.foreign_evidence = {**carried, **foreign}
         return findings, check
     out = GateFindings([*findings, *owed])
     out.deleted_note = findings.deleted_note
-    out.foreign_evidence = foreign
+    out.foreign_evidence = {**carried, **foreign}
     return out, "failed"
 
 
@@ -354,13 +356,28 @@ def invariant_findings(
         from coordinator_core.ops.dispatch_emit.landing_targeted_tests import retests_spent
 
         actual = sorted(red - {node}) if node not in red else []
-        detail = (
-            f"repo-wide invariant {node} did not fail; the in-run retest failed on "
-            f"{', '.join(actual[:3])}" if retests_spent(params) and actual
-            else f"repo-wide invariant {node} failed its in-run retest" if retests_spent(params)
-            else f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
-            f"retest ran it; re-run: {retest_remedy(params, [node])}"
-        )
+        spent = retests_spent(params)
+        if spent and actual:
+            detail = (
+                f"repo-wide invariant {node} did not fail; the in-run retest failed on "
+                f"{', '.join(actual[:3])}"
+            )
+        elif spent and fresh is None:
+            detail = f"repo-wide invariant {node}: no fresh retest verdict exists after the in-run retest"
+        elif spent and fresh.get("status") == "pass":
+            detail = f"repo-wide invariant {node}: the in-run retest passed without running it"
+        elif spent and fresh.get("status") != "fail":
+            detail = (
+                f"repo-wide invariant {node}: the in-run retest ended "
+                f"{fresh.get('status') or 'without a status'}, measuring no failure"
+            )
+        elif spent:
+            detail = f"repo-wide invariant {node} failed its in-run retest"
+        else:
+            detail = (
+                f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
+                f"retest ran it; re-run: {retest_remedy(params, [node])}"
+            )
         out.append(tests_failed_finding(node.split("::")[0], detail))
     return out
 
@@ -372,7 +389,7 @@ def _landing_test_gate_core(
     result, ``findings.deleted_note`` names the dropped targets the run's own diff deleted, so every
     caller reads one computation. ``check`` is never changed by the note."""
     findings, check = _landing_test_gate(worktree_root, params, run_id)
-    out = GateFindings(findings)
+    out = findings if isinstance(findings, GateFindings) else GateFindings(findings)
     if not findings and check in ("no-verdict", NOT_RUN_CHECK):
         out.deleted_note = deleted_targets_receipt_note(worktree_root, params, run_id)
     return out, check
@@ -432,15 +449,19 @@ def _landing_test_gate(
                 return [_ran_zero_finding(params, _renamed_detail(worktree_root, params, run_id))], "failed"
             if check_now == NOT_RUN_CHECK:
                 return [], NOT_RUN_CHECK
-        nodes = _failed_nodes(params, verdict)
+        nodes = list(dict.fromkeys([*_failed_nodes(params, verdict), *_recorded_failed_nodes(worktree_root, run_id)]))
         if nodes and failed_targeted_tests(verdict)[1] == ZERO_FAIL_CHECK:
             verdict = {**verdict, "tests_failed": None}
         files = list(dict.fromkeys(f for f in (_node_file(n) for n in nodes) if f))
-        findings, check = failed_targeted_tests(verdict, retest_remedy(params, files), measured=False)
+        findings, check = failed_targeted_tests(verdict, retest_remedy(params, files), measured=False, nodes=nodes)
         if any(f.reason == REVIEW_REVERIFY_INDETERMINATE for f in findings):
             return findings, check
         if check != "failed" or verdict.get("baseline"):
             return findings, check
+        if nodes and set(nodes) <= base_red_ids(params):
+            attributed = GateFindings()
+            attributed.foreign_evidence = {n: [FAILING_AT_BASE] for n in nodes}
+            return attributed, "pre-existing-only"
         if not files:
             if _explicit_empty_failed_tests(params) and _retest_record_status(worktree_root, run_id) == "pass":
                 return [], "pre-existing-only"
@@ -458,6 +479,17 @@ def _landing_test_gate(
     if check == "pass" and fresh.get("status") == "pass" and _ran_zero_int(fresh.get("tests_run")):
         return [_ran_zero_finding(params)], "failed"
     return findings, "pass-on-retest" if check == "pass" else check
+
+
+def _recorded_failed_nodes(worktree_root: Path, run_id: Optional[str]) -> list[str]:
+    """Failing node ids the run's retest record names, fresh or not (naming only, never clearing):
+    its ``failed_tests`` and the ``export`` and ``live`` passes'. In-process; one record read."""
+    record = _retest_record(worktree_root, run_id) or {}
+    out: list[str] = []
+    for holder in (record, record.get("export"), record.get("live")):
+        raw = holder.get(FAILED_TESTS_PARAM) if isinstance(holder, Mapping) else None
+        out += [str(n).strip() for n in raw if n] if isinstance(raw, list) else []
+    return [n for n in dict.fromkeys(out) if n]
 
 
 def _ran_zero_int(tests_run: object) -> bool:
