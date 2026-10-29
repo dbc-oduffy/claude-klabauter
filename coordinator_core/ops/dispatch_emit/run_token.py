@@ -11,8 +11,9 @@ admits one landed product commit, never two; a halted run's record-only commit r
 releases it. A landed grind commit passes `landed` to `consume`, which leaves a spent receipt
 (`spent/<run_id>.json`: the record's digest, script and mint time plus the landed sha, rows and
 paths); `spent_receipt` answers a repeat call from it and lands nothing. Accepted residual: an op
-process killed between `redeem` and `release` strands the claim until its pid is dead or it is
-older than `CLAIM_MAX_AGE_SECONDS`; the next `redeem` then adopts it. Every other subagent commit stays denied.
+process killed between `redeem` and `release` strands the claim until its holder is dead (its pid
+gone, or in the same process its thread exited); the next `redeem` then adopts it. A live holder
+past any age keeps its claim: it may still be committing. Every other subagent commit stays denied.
 
 Invariants: the record lives in the git common dir (never the worktree, so no commit can carry
 it); only a sha256 of the token is stored, except a launcher child's escrow
@@ -37,13 +38,14 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Iterator, Optional
 
 TTL_SECONDS = 24 * 3600
 KINDS = ("ask", "grind")
-#: A claim older than this, or whose holder pid is gone, is adopted by the next `redeem`
+#: A legacy claim (no holder pid recorded) older than this is adopted by the next `redeem`
 #: (twice the dispatcher's 30s backstop: the original op's reply is long abandoned).
 CLAIM_MAX_AGE_SECONDS = 60.0
 _DIR = "coordinator-warp-run-tokens"
@@ -299,7 +301,10 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
 
 def _write_claim(fd: int, record: dict) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump({**record, "claimed_at": time.time(), "pid": os.getpid()}, fh, sort_keys=True)
+        json.dump(
+            {**record, "claimed_at": time.time(), "pid": os.getpid(), "thread": threading.get_ident()},
+            fh, sort_keys=True,
+        )
 
 
 def _holder_alive(pid: object) -> bool:
@@ -315,17 +320,22 @@ def _holder_alive(pid: object) -> bool:
 
 
 def _claim_expirable(record: dict, path: Path) -> bool:
-    """True when the claim's holder is dead or the claim is older than `CLAIM_MAX_AGE_SECONDS`.
-    A legacy claim without `claimed_at` ages by the file's mtime."""
+    """True when the claim's holder is provably dead: its pid gone, or, in this process, its thread
+    exited. A warm op past its budget is abandoned, not stopped, so age alone never expires a claim
+    whose holder is recorded. A legacy claim without `pid` ages by `claimed_at` or the file mtime."""
+    pid = record.get("pid")
+    if isinstance(pid, int) and pid > 0:
+        if pid == os.getpid():
+            thread = record.get("thread")
+            return isinstance(thread, int) and thread not in {t.ident for t in threading.enumerate()}
+        return not _holder_alive(pid)
     stamp = record.get("claimed_at")
     if not isinstance(stamp, (int, float)):
         try:
             stamp = path.stat().st_mtime
         except OSError:
             return False
-    if time.time() - stamp > CLAIM_MAX_AGE_SECONDS:
-        return True
-    return not _holder_alive(record.get("pid"))
+    return time.time() - stamp > CLAIM_MAX_AGE_SECONDS
 
 
 def _adopt_expired_claim(
@@ -345,7 +355,7 @@ def _adopt_expired_claim(
         fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
         return False, aside
-    _write_claim(fd, {k: v for k, v in record.items() if k not in ("claimed_at", "pid")})
+    _write_claim(fd, {k: v for k, v in record.items() if k not in ("claimed_at", "pid", "thread")})
     return True, aside
 
 

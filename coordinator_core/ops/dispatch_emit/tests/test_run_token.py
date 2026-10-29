@@ -91,22 +91,44 @@ def test_a_dead_holder_claim_is_adopted_by_the_refire(tmp_path, monkeypatch):
     path = _claimed_path(repo)
     record = json.loads(path.read_text(encoding="utf-8"))
     assert record["pid"] > 0 and record["claimed_at"] > 0
+    path.write_text(json.dumps({**record, "pid": record["pid"] + 1}), encoding="utf-8")  # another process
     monkeypatch.setattr(run_token, "_holder_alive", lambda pid: False)
     assert not run_token.claim_pending(repo, "ask-1", token, "a.mjs")
     assert run_token.redeem(repo, "ask-1", token, "a.mjs")
-    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs") is False
-    monkeypatch.undo()
-    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")  # the adopter is this live thread
 
 
-def test_an_over_budget_claim_is_adopted_and_a_wrong_token_is_not(tmp_path, monkeypatch):
+def test_an_over_age_claim_whose_holder_lives_is_kept(tmp_path, monkeypatch):
+    """group-em-7d: adopting a live, overdue holder lands a second commit over one still running."""
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     assert run_token.redeem(repo, "ask-1", token, "a.mjs")
     real = time.time()
     monkeypatch.setattr(run_token.time, "time", lambda: real + run_token.CLAIM_MAX_AGE_SECONDS + 5)
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_a_same_process_claim_is_adopted_once_its_thread_exits(tmp_path):
+    import threading
+
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    won = []
+    holder = threading.Thread(target=lambda: won.append(run_token.redeem(repo, "ask-1", token, "a.mjs")))
+    holder.start()
+    holder.join()
+    assert won == [True]
     assert not run_token.redeem(repo, "ask-1", "f" * 32, "a.mjs")
     assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_a_same_process_claim_is_kept_while_its_thread_runs(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")  # this thread holds it and is alive
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
 
 
 def test_a_legacy_claim_without_pid_ages_by_file_mtime(tmp_path):
