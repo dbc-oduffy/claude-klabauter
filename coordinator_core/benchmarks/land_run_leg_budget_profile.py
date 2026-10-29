@@ -12,7 +12,7 @@ Axes:
                                              `land_run.integrity` leg start (`land_deadline.check`)
   peer_hunk_gate.co_declared_peer_holds      every call of that function inside the op, summed
                                              (`attribution.calls` is the per-call split)
-  peer_hunk_gate.sibling_spine               every `_spine_writes` call inside the op, summed
+  peer_hunk_gate.sibling_spine               every `_sibling_spines` call inside the op, summed
 
 `spine_parses` counts yaml loads of a sizing or a plan spine body. `--attribute` adds a cProfile
 top-20 per span to `attribution`.
@@ -222,19 +222,26 @@ def _install(profiler: Profiler):
 
     from coordinator_core.ops.dispatch_emit import land_deadline, peer_hunk_gate
 
-    real_check, real_holds, real_spine = land_deadline.check, peer_hunk_gate.co_declared_peer_holds, peer_hunk_gate._spine_writes
+    real_check, real_holds, real_spine = land_deadline.check, peer_hunk_gate.co_declared_peer_holds, peer_hunk_gate._sibling_spines
     real_safe, real_load, real_init = yaml.safe_load, yaml.load, subprocess.Popen.__init__
 
     def check(leg):
         real_check(leg)
         profiler.mark(leg)
 
+    inside = []  # yaml.safe_load calls yaml.load: one parse, one count
+
     def safe_load(stream, *a, **k):
         profiler.parses.see(stream)
-        return real_safe(stream, *a, **k)
+        inside.append(1)
+        try:
+            return real_safe(stream, *a, **k)
+        finally:
+            inside.pop()
 
     def load(stream, *a, **k):
-        profiler.parses.see(stream)
+        if not inside:
+            profiler.parses.see(stream)
         return real_load(stream, *a, **k)
 
     def popen_init(self, *a, **k):
@@ -243,13 +250,13 @@ def _install(profiler: Profiler):
 
     land_deadline.check = check
     peer_hunk_gate.co_declared_peer_holds = profiler.timed(AXIS_HOLDS, real_holds)
-    peer_hunk_gate._spine_writes = profiler.timed(AXIS_SPINE, real_spine)
+    peer_hunk_gate._sibling_spines = profiler.timed(AXIS_SPINE, real_spine)
     yaml.safe_load, yaml.load = safe_load, load
     subprocess.Popen.__init__ = popen_init
 
     def undo() -> None:
         land_deadline.check = real_check
-        peer_hunk_gate.co_declared_peer_holds, peer_hunk_gate._spine_writes = real_holds, real_spine
+        peer_hunk_gate.co_declared_peer_holds, peer_hunk_gate._sibling_spines = real_holds, real_spine
         yaml.safe_load, yaml.load = real_safe, real_load
         subprocess.Popen.__init__ = real_init
 

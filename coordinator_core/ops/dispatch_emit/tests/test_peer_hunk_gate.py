@@ -163,6 +163,31 @@ def test_live_sibling_declaring_only_in_plan_spine_is_held(repo):
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, run_id)]
 
 
+def test_siblings_sharing_one_plan_parse_it_once_and_hold_as_before(repo, monkeypatch):
+    run_ids = [_stamped(f"7cc6{n:02d}") for n in range(4)]
+    for run_id in run_ids:
+        _spine_sibling(repo, run_id)
+        run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    parses: list = []
+    real = peer_hunk_gate._plan_spine_writes
+    monkeypatch.setattr(peer_hunk_gate, "_plan_spine_writes", lambda r, p: parses.append(p) or real(r, p))
+    holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH, "src/a.py"], [PATH, "src/a.py"])
+    assert holds == [(PATH, run_id) for run_id in sorted(run_ids)]
+    assert parses == ["docs/plans/b.md"]
+
+
+def test_sibling_spines_returns_the_exception_for_an_unparseable_plan_and_sets_otherwise(repo):
+    bad, good = _stamped("7cc6aa"), _stamped("7cc6bb")
+    _spine_sibling(repo, bad)
+    (repo / "docs" / "plans" / "b.md").write_text(
+        "# B\n\n## Tasks\n\n```yaml plan-tasks\n- id: C0\n  writes: [unclosed\n```\n", encoding="utf-8"
+    )
+    _run_dir(repo, good)
+    spines = peer_hunk_gate._sibling_spines(repo, [bad, good])
+    assert isinstance(spines[bad], Exception)
+    assert spines[good] == set()
+
+
 def test_halted_sibling_declaring_but_not_withholding_holds_nothing(repo):
     run_id = _stamped("7cc61e")
     _halt(_spine_sibling(repo, run_id))

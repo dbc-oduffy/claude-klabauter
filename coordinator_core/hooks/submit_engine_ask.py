@@ -724,6 +724,15 @@ def _live_write_overlap_deny(
             _record_skipped_overlap_check(root)
         return None
     hits = live_run_index.overlaps(writes, index)
+    if hits:
+        from coordinator_core.warp_live import _holds_ended_marker
+
+        # The index is pruned in the background; a halted or landed run holds nothing (read per hit only).
+        hits = {
+            rid: paths
+            for rid, paths in hits.items()
+            if _bounded_call(("ended", str(root), rid), lambda rid=rid: _holds_ended_marker(root, rid)) is not True
+        }
     if not hits:
         return None
     run_id, paths = next(iter(sorted(hits.items())))
@@ -1077,7 +1086,8 @@ def _durable_refusal(payload: Mapping[str, Any], envelope: dict) -> dict:
         return envelope
     cause = full.split("\nInstead:")[0].strip().replace("\n", " ")
     lead = cause if len(cause) <= _LEAD_CHARS else cause[: _LEAD_CHARS - 3] + "..."
-    hso["permissionDecisionReason"] = f"{lead} [full text: {REFUSAL_LOG_REL}]\n{full}"
+    tail = full[full.find("\nInstead:"):] if lead == cause and "\nInstead:" in full else f"\n{full}"
+    hso["permissionDecisionReason"] = f"{lead} [full text: {REFUSAL_LOG_REL}]{tail}"
     return envelope
 
 

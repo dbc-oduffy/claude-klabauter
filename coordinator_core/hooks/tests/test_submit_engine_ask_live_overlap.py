@@ -127,3 +127,16 @@ def test_a_refire_is_never_denied_by_the_halted_run_it_resumes(tmp_path, monkeyp
     assert why and "run-other" in why and "ask-halted" not in why
     _live(tmp_path, {"run-other": {"x.py"}})
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {}, "state/sizings/s.yaml") is None
+
+
+def test_a_halted_run_still_in_the_index_denies_nothing(tmp_path):
+    import json
+
+    (tmp_path / ".git").mkdir()
+    _live(tmp_path, {"ask-20261029T080212-46892a": {"pkg/mod.py"}})
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {})
+    rd = tmp_path / "state" / "warp" / "ask-20261029T080212-46892a"
+    rd.mkdir(parents=True)
+    (rd / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None

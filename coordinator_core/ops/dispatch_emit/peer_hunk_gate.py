@@ -44,26 +44,14 @@ def _norm(path: object) -> str:
     return text
 
 
-def _spine_writes(root: Path, run_id: str) -> set:
-    """`writes` of every row in the plan spine the run's sizing names. Empty when the run records no
-    sizing, or its sizing or plan file is absent, or the plan has no spine block; raises when a
-    present file or spine cannot be read or parsed (the caller holds)."""
+def _plan_spine_writes(root: Path, plan_rel: str) -> set:
+    """`writes` of every row in `plan_rel`'s spine. Empty when the plan file or spine block is absent;
+    raises when the spine is malformed or unparseable."""
     import yaml
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-    from coordinator_core.ops import warp_run_deliverable
 
     out: set = set()
-    sizing_rel = warp_run_deliverable.record_sizing_rel(root, run_id)
-    if not sizing_rel:
-        return out
-    try:
-        sizing = yaml.safe_load((root / sizing_rel).read_text(encoding="utf-8")) or {}
-    except FileNotFoundError:
-        return out
-    plan_rel = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
-    if not plan_rel:
-        return out
     try:
         located = locate_fenced_block((root / plan_rel).read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -71,7 +59,7 @@ def _spine_writes(root: Path, run_id: str) -> set:
     if located.status is LocateStatus.ABSENT:
         return out
     if located.status is not LocateStatus.LOCATED:
-        raise ValueError(f"plan spine of run {run_id} is malformed")
+        raise ValueError(f"plan spine of {plan_rel} is malformed")
     rows = yaml.safe_load(located.body) or []
     for row in rows if isinstance(rows, list) else []:
         writes = row.get("writes") if isinstance(row, dict) else None
@@ -79,6 +67,63 @@ def _spine_writes(root: Path, run_id: str) -> set:
             out.update(_norm(w) for w in writes if isinstance(w, str))
     out.discard("")
     return out
+
+
+def _sibling_spines(root: Path, run_ids: Iterable[str]) -> dict:
+    """`{run_id: set | Exception}`: each run's plan-spine `writes` (a set; empty when the run records no
+    sizing or its sizing or plan file is absent) or the exception its read raised (the caller holds).
+    One pass: each sizing is read once and each distinct plan path is parsed once, however many runs
+    share it. Inside a `halted_hold_release.release_scope()` the answers are memoised per
+    (root, run_id) and per plan path in the scope's state."""
+    import yaml
+
+    from coordinator_core.ops import warp_run_deliverable
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    state = halted_hold_release._SCOPE.get()
+    if state is None:
+        runs_memo: dict = {}
+        plans_memo: dict = {}
+    else:
+        runs_memo = state.setdefault("sibling_spines", {})
+        plans_memo = state.setdefault("sibling_plan_spines", {})
+    out: dict = {}
+    for run_id in run_ids:
+        key = (str(root), run_id)
+        if key not in runs_memo:
+            land_deadline.check("peer_hunk_gate.sibling_spine")
+            try:
+                sizing_rel = warp_run_deliverable.record_sizing_rel(root, run_id)
+                spine: object = set()
+                if sizing_rel:
+                    try:
+                        sizing = yaml.safe_load((root / sizing_rel).read_text(encoding="utf-8")) or {}
+                    except FileNotFoundError:
+                        sizing = {}
+                    plan_rel = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""
+                    if plan_rel:
+                        plan_key = (str(root), plan_rel)
+                        if plan_key not in plans_memo:
+                            try:
+                                plans_memo[plan_key] = _plan_spine_writes(root, plan_rel)
+                            except Exception as exc:  # noqa: BLE001 -- carried to every sharing run
+                                plans_memo[plan_key] = exc
+                        spine = plans_memo[plan_key]
+            except Exception as exc:  # noqa: BLE001 -- this run's spine unknown: the caller holds
+                spine = exc
+            runs_memo[key] = spine
+        out[run_id] = runs_memo[key]
+    return out
+
+
+def _spine_writes(root: Path, run_id: str) -> set:
+    """`writes` of every row in the plan spine the run's sizing names. Empty when the run records no
+    sizing, or its sizing or plan file is absent, or the plan has no spine block; raises when a
+    present file or spine cannot be read or parsed (the caller holds)."""
+    spine = _sibling_spines(root, [run_id])[run_id]
+    if isinstance(spine, Exception):
+        raise spine
+    return set(spine)
 
 
 def co_declared_peer_holds(
@@ -116,16 +161,18 @@ def co_declared_peer_holds(
                 root, own_run_id, wanted, own_plan=own_plan, minted_before=minted_before, own_declared=own,
                 unlanded=unlanded,
             ))
+            spine_runs = []
             for run_id in unlanded:
-                land_deadline.check("peer_hunk_gate.sibling_spine")
                 if warp_run_deliverable._halted(root, run_id):
                     continue
                 paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
-                if paths or prefixes:
-                    continue
-                try:
-                    spine = _spine_writes(root, run_id)
-                except Exception:  # noqa: BLE001 -- this sibling's spine unknown: it holds every wanted path
+                if not (paths or prefixes):
+                    spine_runs.append(run_id)
+            land_deadline.check("peer_hunk_gate.sibling_spine")
+            spines = _sibling_spines(root, spine_runs)
+            for run_id in spine_runs:
+                spine = spines[run_id]
+                if isinstance(spine, Exception):  # this sibling's spine unknown: it holds every wanted path
                     for path in wanted:
                         claims.setdefault(path, run_id)
                     continue
@@ -163,7 +210,12 @@ def _also_claims(root: Path, run_id: str, path: str) -> bool:
         if sibling_claims._declares(root, run_id, path) or path in sibling_claims._extra_declared(root, run_id):
             return True
         paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
-        return not (paths or prefixes) and path in _spine_writes(root, run_id)
+        if paths or prefixes:
+            return False
+        spine = _sibling_spines(root, [run_id])[run_id]  # re-read unless inside a release_scope
+        if isinstance(spine, Exception):
+            raise spine
+        return path in spine
     except Exception:  # noqa: BLE001 -- this run's claim unknown: it adds no holder
         return False
 
