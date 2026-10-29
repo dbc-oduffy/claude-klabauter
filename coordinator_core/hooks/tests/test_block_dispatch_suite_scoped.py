@@ -70,3 +70,11 @@ def test_engine_emitted_workflow_script_is_allowed_only_with_receipt(tmp_path):
     receipt = {"sha256": hashlib.sha256(script.read_bytes()).hexdigest(), "plan": "p"}
     (tmp_path / "run.workflow.js.emitted.json").write_text(json.dumps(receipt), encoding="utf-8")
     assert decide() == "allow"
+
+
+def test_the_guard_is_registered_box_degrading_so_its_deny_survives_the_policy_point():
+    """Unregistered, apply_guard_level demotes every deny to a log: a Workflow agent running the full
+    suite was allowed live (DoE report, 2026-10-29) while the tests above, at strict level, stayed green."""
+    from coordinator_core.deny_registry import BOX_DEGRADING, GUARD_DENY_CLASS
+
+    assert GUARD_DENY_CLASS.get(bdsi.GUARD_NAME) == BOX_DEGRADING

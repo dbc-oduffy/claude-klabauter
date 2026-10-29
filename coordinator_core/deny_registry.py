@@ -48,6 +48,7 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-editor-kill-by-name": BOX_DEGRADING,
     "blanket-git-add": DISRUPTIVE,
     "check-test-suite-invocation": BOX_DEGRADING,
+    "block-dispatch-suite-invocation": BOX_DEGRADING,
 }
 
 #: Guards whose deny is registered for a dispatched caller only; the EM's call is a log.
