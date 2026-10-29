@@ -142,6 +142,13 @@ def test_record_widens_persists_wellformed_items_and_skips_the_rest(tmp_path):
     assert record_widens(tmp_path, None) == 0
 
 
+def test_widened_by_row_groups_paths_per_row_in_order_without_duplicates(tmp_path):
+    for row, path in (("r1", "a.py"), ("r2", "b.py"), ("r1", "c.py"), ("r1", "a.py")):
+        w.record_widen(tmp_path, row, path)
+    assert w.widened_by_row(tmp_path) == {"r1": ["a.py", "c.py"], "r2": ["b.py"]}
+    assert w.widened_by_row(tmp_path / "absent") == {}
+
+
 def test_record_widens_refuses_denied_surfaces_the_classifier_halts_on(tmp_path):
     items = [{"row": "r1", "path": p} for p in ("state/x.yaml", "CLAUDE.md", "sub/CLAUDE.md", ".git/config", "a//b.py")]
     assert w.record_widens(tmp_path, items) == 0

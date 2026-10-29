@@ -94,6 +94,7 @@ _PARAMS = (
     Field("out_of_scope", "str_list"),
     Field("withhold_paths", "list"),
     Field("add_paths", "list"),
+    Field("widened", "list"),
     Field("credit_chunks", "list"),
     Field("owned_red", "list"),
     Field("retract_note", "dict"),
@@ -102,6 +103,10 @@ _PARAMS = (
     Field("stop_after", "str"),
     Field("from", "str"),
     Field(CLAIM_PARAM, "bool"),
+    Field("halted", "dict"),
+    Field("inline_review", "dict"),
+    Field("ledger_verdict", "dict"),
+    Field("objective_loop", "dict"),
 )
 #: Separator between a revision anchor's UTC stamp and the peer session that sent it.
 SENDER_SEP = " from "
@@ -268,6 +273,38 @@ def _inbox(dir_: Path) -> list[dict]:
         if isinstance(entry, dict) and isinstance(entry.get("text"), str) and entry["text"].strip():
             out.append(entry)
     return out
+
+
+def carry_inbox(repo_root: Path, from_run_ids: Iterable[str], to_run_id: str) -> int:
+    """Append the queued revisions filed under `from_run_ids` that `to_run_id`'s inbox lacks (matched on
+    stripped text); the count appended. Unsafe ids and missing dirs carry nothing."""
+    from coordinator_core.atomic_append import append_line
+
+    try:
+        dest = run_dir(repo_root, to_run_id)
+    except LedgerRefused:
+        return 0
+    if not dest.is_dir():
+        return 0
+    have = {e["text"].strip() for e in _inbox(dest)}
+    carried = 0
+    for source_id in from_run_ids:
+        if source_id == to_run_id:
+            continue
+        try:
+            source = run_dir(repo_root, source_id)
+        except LedgerRefused:
+            continue
+        for entry in _inbox(source):
+            key = entry["text"].strip()
+            if key in have:
+                continue
+            append_line(dest / INBOX_FILE, (json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
+            have.add(key)
+            carried += 1
+    if carried:
+        declare_write(dest / INBOX_FILE)
+    return carried
 
 
 def read_notes(dir_: Path) -> list[str]:
@@ -1012,6 +1049,7 @@ def revise(
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
     claim: bool = False, owned_red: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
+    widened: Sequence = (),
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -1106,7 +1144,7 @@ def revise(
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
         and not red_entries and not build_only and stop_after is None and retraction is None and not add_paths
-        and row_retraction is None
+        and not widened and row_retraction is None
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
@@ -1699,7 +1737,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
-    refusal = validate_params("workflow.revise", params, _PARAMS)
+    refusal = validate_params("workflow.revise", params, _PARAMS, strict=True)
     if refusal is not None:
         return refusal
     root = main_worktree_root(Path(repo_root))
@@ -1712,7 +1750,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             credit_chunks=params.get("credit_chunks") or (), stop_after=params.get("stop_after"),
             retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
             owned_red=params.get("owned_red") or (), add_paths=params.get("add_paths") or (),
-            retract_row=params.get("retract_row"),
+            retract_row=params.get("retract_row"), widened=params.get("widened") or (),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -1725,14 +1763,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                  "at its next stage start; a stage already running does not see it.",
         )
     if read_run(dir_) is None:
+        held_refused = (
+            ({"input": "widened", "reason": "run not emitted yet: no run directory to record the widen in"},)
+            if params.get("widened") else ()
+        )
         return _mutation_reply(
-            (f"row {added} held for emit",) if added else (), (), params["run_id"],
+            (f"row {added} held for emit",) if added else (), held_refused, params["run_id"],
             run_id=params["run_id"], item=added, items=len(ledger.items),
             all_of_pm_ask=False, sizing=None, ledger=None, run_live=False, held=True,
             note="run not emitted yet: the revision is held and folds into the ledger at emit.",
         )
     from coordinator_core.ops.dispatch_emit import halted_run, run_token
 
+    widen_refused: list[dict] = []
     halted_run.mark_revised(dir_, _now())
     halted = halted_run.revised_halt(dir_) is not None
     live = run_token.is_live(root, params["run_id"]) and not halted
@@ -1752,6 +1795,18 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["claimed"] = outcome["claimed"]
     if params.get("stop_after"):
         out["stop_after"] = params["stop_after"]
+    if params.get("widened"):
+        from coordinator_core.ops.dispatch_emit import in_run_widen
+
+        recorded = in_run_widen.record_widens(dir_, params["widened"])
+        if recorded:
+            out["widened"] = recorded
+        if recorded < len(params["widened"]):
+            widen_refused.append({
+                "input": "widened",
+                "reason": f"{len(params['widened']) - recorded} item(s) not recorded: each must be {{row, path}} "
+                          "with a repo-relative path outside the denied prefixes",
+            })
     if params.get("withhold_paths"):
         from coordinator_core.ops.dispatch_emit import run_withhold
 
@@ -1785,7 +1840,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"{unclaimed_plan} omits register row(s) {', '.join(unclaimed)} in register_claims.rows: "
             "the run's next stage claims them on the plan, and its ledger re-plan leg adds rows serving them."
         )
-    refused: list[dict] = []
+    refused: list[dict] = list(widen_refused)
     if params.get("build_only") and not outcome.get("research_dropped"):
         refused.append({"input": "build_only", "reason": "the bound sizing holds no research block to remove"})
     if warnings:
@@ -1806,7 +1861,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
 
 
-_APPLIED_KEYS = ("research_dropped", "claimed", "stop_after", "withhold_paths", "credit_chunks", "owned_red", "retracted_note", "withheld")
+_APPLIED_KEYS = ("widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "credit_chunks", "owned_red", "retracted_note", "withheld")
 
 
 def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:

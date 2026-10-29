@@ -4592,6 +4592,30 @@ def _row_state_decls_js(
     )
 
 
+def _record_dir_root() -> str:
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    return RECORD_DIR_ROOT
+
+
+def _widened_seed(
+    widen_run_dir: Optional[Path], repo_root: Optional[str | Path], run_id: Optional[str]
+) -> dict:
+    """``{row id: widened paths}`` from the run's widen record, every path per row joined so the
+    prompt clause's backticks wrap each; empty when no record dir is nameable or the record is
+    absent."""
+    from coordinator_core.ops.dispatch_emit import in_run_widen
+    run_dir = widen_run_dir
+    if run_dir is None and run_id and repo_root is not None:
+        run_dir = Path(repo_root) / _record_dir_root() / run_id
+    if run_dir is None:
+        return {}
+    return {
+        row: "`, `".join(paths)
+        for row, paths in in_run_widen.widened_by_row(Path(run_dir)).items()
+    }
+
+
 def _run_row_helper_js(
     agent_type_host: Optional[str] = None,
     default_plan: Optional[str] = None,
@@ -4599,6 +4623,7 @@ def _run_row_helper_js(
     sidecar_workflow: str = _SIDECAR_WORKFLOW,
     sidecar_run_key: Optional[str] = None,
     repo_root: Optional[str | Path] = None,
+    widened_seed: Optional[Mapping[str, str]] = None,
 ) -> str:
     """The ONE shared ``_runRow`` async function every DAG node's own
     ``_rows[id] = _runRow(...)`` registration calls (§ Design D4).
@@ -4656,7 +4681,7 @@ def _run_row_helper_js(
     from coordinator_core.ops.dispatch_emit.in_run_widen import classify_block_js
 
     widen_js = (
-        "  const _widenOf = {};\n"
+        f"  const _widenOf = {json.dumps(dict(widened_seed or {}))};\n"
         "  const _widened = [];\n"
         "  const _commitOf = {};\n"
         + "".join("  " + ln + "\n" for ln in classify_block_js().splitlines())
@@ -6093,9 +6118,13 @@ def compose_script(
     route_notes: Sequence[str] = (),
     absorb_run_id: Optional[str] = None,
     commit_retry: Optional[Mapping[int, str]] = None,
+    widen_run_dir: Optional[Path] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``
     (§ Design D4).
+
+    ``widen_run_dir`` (default: the ``absorb_run_id`` run's record dir under ``repo_root``) is read
+    for the run's widen record; each recorded row's prompt names its revised path.
 
     ``absorb_run_id`` (a warp run id; needs ``plan_path``) splices
     ``revise_absorb.absorb_tail_js`` once, after the DAG and its verifications settle and
@@ -6393,6 +6422,7 @@ def compose_script(
                 plan_path if seam_leg else None,
                 sidecar_run_key=_sidecar_run_key(plan_path),
                 repo_root=repo_root,
+                widened_seed=_widened_seed(widen_run_dir, repo_root, absorb_run_id),
             )
         )
 
@@ -8313,6 +8343,11 @@ def emit_script(
         prior_run_base=prior_run_base,
         prior_landed_rows=prior_landed_rows,
         absorb_run_id=absorb_run_id if sibling is None or sibling.get("terminal_commit", True) else None,
+        widen_run_dir=(
+            Path(repo_root) / _record_dir_root() / absorb_run_id
+            if absorb_run_id and repo_root is not None
+            else None
+        ),
         commit_retry=commit_retry,
         review_terminal_sha=review_terminal_sha,
         routes=routes,

@@ -183,6 +183,16 @@ def widened_paths(run_dir: Union[str, Path]) -> "list[str]":
     return seen
 
 
+def widened_by_row(run_dir: Union[str, Path]) -> "dict[str, list[str]]":
+    """``{row id: [paths]}`` from the widen record, first-seen order, deduplicated per row."""
+    out: "dict[str, list[str]]" = {}
+    for rec in _records(Path(run_dir)):
+        paths = out.setdefault(rec["row"], [])
+        if rec["path"] not in paths:
+            paths.append(rec["path"])
+    return out
+
+
 def classify_block_js(repo_root_rel_denylist: Optional[Sequence[str]] = None) -> str:
     """JS source of ``classifyBlock(replyText, heldPaths) -> {widen: path} | {halt: reason}``,
     generated from this module's constants. ``repo_root_rel_denylist`` adds repo-relative deny

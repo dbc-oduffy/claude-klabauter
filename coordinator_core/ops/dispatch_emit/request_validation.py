@@ -36,10 +36,23 @@ KINDS: dict[str, tuple[Any, str]] = {
 }
 
 
-def validate_params(op: str, params: Any, fields: tuple[Field, ...]) -> dict | None:
-    """Return `{"error": ...}` naming the first malformed field of `params`, else None."""
+def validate_params(
+    op: str, params: Any, fields: tuple[Field, ...], *, strict: bool = False
+) -> dict | None:
+    """Return `{"error": ...}` naming the first malformed field of `params`, else None.
+
+    `strict=True` also refuses a key outside `fields`, naming it and the accepted keys; the
+    default stays lenient because callers outside the opted-in ops send extra keys.
+    """
     if not isinstance(params, dict):
         return {"error": f"{op} params must be an object, got {type(params).__name__}"}
+    if strict:
+        accepted = {f.name for f in fields}
+        for key in params:
+            if key not in accepted:
+                return {
+                    "error": f"{op} params.{key} is not accepted; accepted: {', '.join(sorted(accepted))}"
+                }
     for field in fields:
         if field.name not in params or params[field.name] is None:
             if field.required:

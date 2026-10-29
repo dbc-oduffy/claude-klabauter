@@ -46,6 +46,19 @@ def test_wrong_type_refused_naming_field(params: dict, name: str) -> None:
     assert err is not None and f"params.{name} must be" in err["error"]
 
 
+def test_strict_refuses_unknown_key_naming_key_and_accepted() -> None:
+    err = validate_params("dispatch.x", {"sizing_path": "a", "widened": []}, SPEC, strict=True)
+    assert err == {
+        "error": "dispatch.x params.widened is not accepted; accepted: run_id, sizing_path, writes"
+    }
+
+
+def test_default_stays_lenient_and_strict_accepts_known_keys() -> None:
+    params = {"sizing_path": "a", "extra": 1}
+    assert validate_params("dispatch.x", params, SPEC) is None
+    assert validate_params("dispatch.x", {"sizing_path": "a"}, SPEC, strict=True) is None
+
+
 def test_dict_kind() -> None:
     spec = (Field("d", "dict"),)
     assert validate_params("o", {"d": {}}, spec) is None
