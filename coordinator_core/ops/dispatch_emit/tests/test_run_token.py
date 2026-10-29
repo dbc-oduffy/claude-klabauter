@@ -70,6 +70,64 @@ def test_release_returns_a_claimed_token_to_live_once(tmp_path):
     assert run_token.redeem(repo, "ask-1", token, "a.mjs")
 
 
+def _claimed_path(repo):
+    return repo / ".git" / "coordinator-warp-run-tokens" / "claimed" / "ask-1.json"
+
+
+def test_a_live_in_budget_holder_keeps_its_claim(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_a_dead_holder_claim_is_adopted_by_the_refire(tmp_path, monkeypatch):
+    import json
+
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    path = _claimed_path(repo)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert record["pid"] > 0 and record["claimed_at"] > 0
+    monkeypatch.setattr(run_token, "_holder_alive", lambda pid: False)
+    assert not run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs") is False
+    monkeypatch.undo()
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+
+
+def test_an_over_budget_claim_is_adopted_and_a_wrong_token_is_not(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + run_token.CLAIM_MAX_AGE_SECONDS + 5)
+    assert not run_token.redeem(repo, "ask-1", "f" * 32, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_a_legacy_claim_without_pid_ages_by_file_mtime(tmp_path):
+    import json
+    import os
+
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    live = repo / ".git" / "coordinator-warp-run-tokens" / "ask-1.json"
+    record = json.loads(live.read_text(encoding="utf-8"))
+    path = _claimed_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    live.unlink()
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    old = time.time() - run_token.CLAIM_MAX_AGE_SECONDS - 5
+    os.utime(path, (old, old))
+    assert not run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
 def test_consume_during_a_claim_leaves_nothing_to_release(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")

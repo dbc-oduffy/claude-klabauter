@@ -92,6 +92,28 @@ def parked_next_action_js(plan_expr: str) -> str:
     )
 
 
+def refire_next_action_for(halted: str, *, run_id: str, sizing_rel: str, detail: str) -> dict:
+    """The `next_action` envelope of a `halted` halt that the run itself remedies: one engine-ask refire, no hand step.
+
+    Used by `dependents_unstarted` (the refire runs the held dependents) and `parked` (the refire stages past
+    the consumed stop-after marker); the halt record carries it so the refire resumes the work kept.
+    """
+    from coordinator_core.ops.dispatch_emit import halt_refire
+
+    call = f'Workflow({{name: "coordinator:engine-ask", args: {{"sizing": {json.dumps(sizing_rel)}}}}})'
+    return halt_refire.refire_next_action(call=call, run_id=run_id, sizing=sizing_rel, halted=halted, detail=detail)
+
+
+def parked_refire_next_action(plan_rel: str | None, *, run_id: str, sizing_rel: str) -> dict:
+    """The refire envelope of a parked halt: continues past the plan, `parked_next_action` kept as its detail."""
+    return refire_next_action_for(HALT_PARKED, run_id=run_id, sizing_rel=sizing_rel, detail=parked_next_action(plan_rel))
+
+
+def dependents_unstarted_refire_next_action(reason: str, *, run_id: str, sizing_rel: str) -> dict:
+    """The refire envelope of a held-dependents halt: the refire starts the dependents the hold left unstarted."""
+    return refire_next_action_for(HALT_DEPENDENTS_UNSTARTED, run_id=run_id, sizing_rel=sizing_rel, detail=reason)
+
+
 #: Record-dir file holding a run's revised stop-after phase.
 STOP_AFTER_FILE = "stop-after.json"
 #: `dispatch.ask_stage` reply key marking a parked run (no manifest handle follows).

@@ -257,7 +257,8 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
     """One {id, verdict, source, observed} per declared anchor, in declaration order.
     source: "row" | "carry" | "engine-check" | "none"; verdict is None only when source is "none".
     Precedence: passed row > live carry row > engine check (MATCH -> RESOLVES,
-    MISMATCH -> CONTRADICTED) > none. NOT_EVALUABLE leaves source "none". A MISMATCH on a file the
+    MISMATCH -> CONTRADICTED) > none. A row or carry verdict other than RESOLVES yields to a
+    met engine check (the declared check holds, so the premise is confirmed). NOT_EVALUABLE leaves source "none". A MISMATCH on a file the
     plan's own run wrote that held at the plan's baseline_ref is RESOLVES with ``observed``
     opening ``REANCHORED`` (source stays "engine-check": the reply schema enumerates sources)."""
     live = frozenset(line_hashes(plan_text))
@@ -266,6 +267,10 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
     for anchor in anchors:
         verdict, source = _verdict_for(anchor["id"], rows or [], carry_rows or [], live, known)
         observed = ""
+        if verdict not in (None, "RESOLVES") and repo_root is not None:
+            result = anchor_lane.evaluate(anchor, repo_root)
+            if result.outcome == "held":
+                verdict, source, observed = "RESOLVES", "engine-check", result.observed or ""
         if verdict is None and repo_root is not None:
             result = anchor_lane.evaluate(anchor, repo_root)
             observed = result.observed or ""

@@ -32,14 +32,23 @@ def _line(script: str, marker: str) -> str:
 
 
 def _decision_lines(script: str) -> list[str]:
-    """The parse helper, the decision assignment and the did-not-run check, in composed order."""
-    return [_line(script, m) for m in (_PARSE_MARK, _ASSIGN_MARK, _NOT_RUN_MARK)]
+    """The parse helper, the decision assignment, the did-not-run check, the sizing-file probe and the
+    halt, in composed order."""
+    return [_line(script, m) for m in (_PARSE_MARK, _ASSIGN_MARK, _NOT_RUN_MARK, _PROBE_MARK, _HALT_MARK)]
 
 
-def _run(lines: list[str], setup: str, tmp_path) -> dict:
+def _run(lines: list[str], setup: str, tmp_path, sizing_present: bool = False) -> dict:
+    """Runs `lines` with `agent` stubbed as the sizing-file probe answering `sizing_present`."""
     if not shutil.which("node"):
         pytest.skip("node not installed")
-    prog = setup + "\n" + "\n".join(lines) + "\nconsole.log(JSON.stringify(_halted));\n"
+    stub = (
+        f"const agent = async () => ({{ present: {json.dumps(sizing_present)} }}); "
+        "const _PFC1 = ''; const _sizingPath = 'REPO/state/sizings/x.yaml';"
+    )
+    prog = (
+        stub + "\n(async () => {\n" + setup + "\n" + "\n".join(lines)
+        + "\nconsole.log(JSON.stringify(_halted));\n})();\n"
+    )
     f = tmp_path / "t.js"
     f.write_text(prog, encoding="utf-8")
     out = subprocess.run(
@@ -52,6 +61,8 @@ def _run(lines: list[str], setup: str, tmp_path) -> dict:
 _PARSE_MARK = "const _try = "
 _ASSIGN_MARK = "_decision = _parseDecision("
 _NOT_RUN_MARK = "_decision === null"
+_PROBE_MARK = "const _sizingOnDisk = "
+_HALT_MARK = "if (_assembleUnproven && !_sizingOnDisk)"
 _GATE_MARK = "if (_gate.halt || !_gate.arm)"
 
 
@@ -75,6 +86,17 @@ def test_exit_zero_with_a_non_decision_stdout_halts_with_a_named_refusal(stdout,
     assert halted["reason"].startswith("scout failure:")
     assert halted["detail"] == stdout.strip()
     assert halted["run_id"] == "run-1"
+
+
+@pytest.mark.spawns_process
+def test_a_paraphrased_stdout_with_the_sizing_on_disk_does_not_halt(tmp_path):
+    """Run 6467a3: the scout wrote the sizing, then replied with a summary line, not the decision."""
+    script = _compose()
+    setup = (
+        "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
+        "const _scouted = { exit_code: 0, stdout: 'sizing-assemble exit 0: route=plan, tshirt=M', stderr: '' };"
+    )
+    assert _run(_decision_lines(script), setup, tmp_path, sizing_present=True) is None
 
 
 @pytest.mark.spawns_process
@@ -172,7 +194,7 @@ def test_only_an_object_with_a_string_route_is_the_decision(stdout, expect, tmp_
     script = _compose()
     prog = (
         f"let _halted = null; let _decision; const _scouted = {{ exit_code: 0, stdout: {json.dumps(stdout)}, stderr: '' }};\n"
-        + "\n".join(_decision_lines(script)[:-1])
+        + "\n".join(_decision_lines(script)[:2])
         + "\nconsole.log(JSON.stringify(_decision));\n"
     )
     f = tmp_path / "t.js"

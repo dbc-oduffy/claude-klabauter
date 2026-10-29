@@ -20,12 +20,12 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     # ask_contract: the run needs a human or G-EM answer.
     "room": (DECISION, None),
     "touchpoint": (DECISION, None),
-    "refusal": (DECISION, None),
-    "dependents_unstarted": (DECISION, None),
+    "refusal": (MECHANICAL, "wait-out-transient-refusal"),
+    "dependents_unstarted": (MECHANICAL, "halt-record-carries-refire-next-action"),
     "split": (DECISION, None),
     "research": (DECISION, None),
     "design-review": (DECISION, None),
-    "parked": (DECISION, None),
+    "parked": (MECHANICAL, "halt-record-carries-refire-next-action"),
     # ask_compose terminal halts.
     "usage_limit": (DECISION, None),
     "review_blocked": (DECISION, None),
@@ -39,13 +39,13 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "peer-contested": (DECISION, None),
     "deleted": (DECISION, None),
     "out-of-worktree": (DECISION, None),
-    "halt-record-only": (DECISION, None),
+    "halt-record-only": (MECHANICAL, "refire-resumes-kept-work"),
     "halt-on-run-owned-merge": (DECISION, None),
-    "halted-run": (DECISION, None),
-    "review-reverify-failed": (DECISION, None),
-    "review-reverify-indeterminate": (DECISION, None),
-    "indeterminate": (DECISION, None),
-    "test-verdict-names-no-failure": (DECISION, None),
+    "halted-run": (MECHANICAL, "refire-resumes-kept-work"),
+    "review-reverify-failed": (MECHANICAL, "landing-runs-targeted-retest"),
+    "review-reverify-indeterminate": (MECHANICAL, "landing-runs-targeted-retest"),
+    "indeterminate": (MECHANICAL, "landing-runs-targeted-retest"),
+    "test-verdict-names-no-failure": (MECHANICAL, "landing-runs-targeted-retest"),
     # Mechanical: the remedy is computed into halted_by.next_action, so the run executes it.
     "REGISTER-ROWS-UNCLAIMED": (MECHANICAL, "replan-claim-omitted-rows"),
     "arm-no-replan-leg": (MECHANICAL, "replan-claim-omitted-rows"),
@@ -72,7 +72,7 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     # The dry-refire publish gate replays a built-in sample.
     "dry-refire-no-refireable-run": (MECHANICAL, "replay-built-in-sample"),
     # A halt kind with no constant of its own (orphan_adopt.ORPHAN_PENDING); the census classes it recoverable.
-    "orphan_pending": (DECISION, None),
+    "orphan_pending": (MECHANICAL, "adopt-orphan-pending-run"),
 }
 
 #: Class label of a kind whose continuing would do irreversible harm or commit an unasked direction.
@@ -111,20 +111,8 @@ PM_RULED_KEEPER: dict[str, str] = {
     ),
 }
 
-#: Frozen census debt: DECISION kinds that are not irreversible, kind -> emitting module. Shrinks only; C7 alone
-#: empties the ask/warp/landing-chain entries, by converting each site to a MECHANICAL kind above.
-RECOVERABLE_DEBT: dict[str, str] = {
-    "refusal": "ask_gate.py",
-    "orphan_pending": "ask_gate.py",
-    "dependents_unstarted": "ask_contract.py",
-    "parked": "ask_contract.py",
-    "halt-record-only": "land_run_halt.py",
-    "halted-run": "halted_record_commit.py",
-    "review-reverify-failed": "landing_targeted_tests.py",
-    "review-reverify-indeterminate": "landing_targeted_tests.py",
-    "indeterminate": "landing_targeted_tests.py",
-    "test-verdict-names-no-failure": "landing_targeted_tests.py",
-}
+#: Recoverable DECISION kinds, kind -> emitting module. Empty: a new recoverable halt kind is MECHANICAL above.
+RECOVERABLE_DEBT: dict[str, str] = {}
 
 
 def is_mechanical(kind: str) -> bool:

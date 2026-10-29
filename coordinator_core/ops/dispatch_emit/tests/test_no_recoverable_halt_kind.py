@@ -1,8 +1,6 @@
 """Ratchet: every halt kind is mechanical, irreversible, a PM-ruled keeper, or frozen recoverable debt."""
 from __future__ import annotations
 
-import pytest
-
 from coordinator_core.ops.dispatch_emit import halt_remedy_class as hrc
 from coordinator_core.ops.dispatch_emit.tests.test_no_mechanical_halt_reaches_em import _halt_constants
 from coordinator_core.ops.dispatch_emit.ask_contract import REGISTER_ROWS_UNCLAIMED_REFUSAL
@@ -15,7 +13,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
 )
 
 #: The debt only shrinks: lowering this is the only edit a conversion makes here.
-RECOVERABLE_DEBT_CEILING = 10
+RECOVERABLE_DEBT_CEILING = 0
 PM_RULED_KEEPER_KINDS = {"stop_after-refusal"}
 _CHAIN_PREFIXES = ("ask_", "sizing_fire", "land", "halt")
 
@@ -71,7 +69,6 @@ def test_a_new_unclassified_kind_is_refused(monkeypatch):
     assert _bucket("brand-new-halt") == []
 
 
-@pytest.mark.designed_red
 def test_recoverable_debt_holds_no_ask_warp_landing_chain_kind():
     chain = {k: m for k, m in hrc.RECOVERABLE_DEBT.items() if m.startswith(_CHAIN_PREFIXES)}
     assert not chain, f"recoverable halt kinds still unconverted in the ask/warp/landing chain: {chain}"

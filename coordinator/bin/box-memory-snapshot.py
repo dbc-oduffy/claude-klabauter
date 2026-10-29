@@ -6,7 +6,8 @@ compressed + swapped), which can far exceed `ps` RSS. Prints Available, commit u
 top N consumers by private commit. A counter that fails to read prints `unavailable` for that
 field alone. `--admit-peak GIB` adds one line, `ADMIT ...` (exit 0) or `HOLD ...` naming the
 failed clause (exit 4); the figure is net of `reserved=`, the sum over live START pids without an
-END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is peak + min(0.25*peak, 8 GiB).
+END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is peak + min(0.25*peak, 8 GiB);
+`--fleet` drops the cushion (need is peak) for a fleet already sized with its reserve S.
 `--command-key K` with `--record-peak GIB` keeps K's largest seen peak (used when `--admit-peak` is omitted, except on a record or release call);
 `--register-pid P` on ADMIT reserves P's headroom, `--release-pid P` frees it. `--json` emits the same
 fields. Other hosts: exit 6.
@@ -142,7 +143,10 @@ def main(
 ) -> int:
     parser = argparse.ArgumentParser(prog=PROG, description="One-screen box memory snapshot.")
     parser.add_argument("--top", type=int, default=10, help="top N consumers (default 10)")
-    parser.add_argument("--admit-peak", type=float, metavar="GIB", help="check admission of a peak")
+    parser.add_argument("--admit-peak", type=float, metavar="GIB", help="check admission of a peak; the default "
+                        "mode fits a single heavy job and adds a cushion of min(--cushion-pct of peak, 8 GiB)")
+    parser.add_argument("--fleet", action="store_true", help="admit with no cushion: available >= peak and "
+                        "commit + peak <= limit only. For a fleet already sized with its reserve S")
     parser.add_argument("--cushion-pct", type=float, default=25.0, help="available cushion percent")
     parser.add_argument("--commit-limit-gib", type=float, help="override the commit limit")
     parser.add_argument("--admission-file", help="admission.jsonl path (default: settings-home channel)")
@@ -152,6 +156,8 @@ def main(
     parser.add_argument("--register-pid", type=int, help="on ADMIT, reserve this pid's headroom until release or exit")
     parser.add_argument("--release-pid", type=int, help="free the reservation registered for this pid")
     args = parser.parse_args(argv)
+    if args.fleet:  # a fleet's width formula already took its reserve S out; a cushion pads it twice
+        args.cushion_pct = 0.0
 
     host = _load("box_memory_host")
     adm_path = args.admission_file or host.admission_file()

@@ -732,7 +732,8 @@ _OVERLAP_REMEDY = (
 
 def _redeem_or_answer(root: Path, run_id: object, token: str, script_path: object) -> Optional[dict]:
     """None when this call holds the claim; else the reply that ends it: ``already_landed`` from the
-    spent receipt, ``run-token-in-flight`` for a claim a first call still holds, else ``run-token``."""
+    spent receipt, ``run-token-in-flight`` for a claim a live, in-budget first call still holds (a dead
+    or over-budget holder's claim is adopted by ``redeem``), else ``run-token``."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     if run_token.redeem(root, run_id, token, script_path):

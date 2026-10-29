@@ -40,10 +40,39 @@ def tests_failed_finding(path: str, detail: str) -> Finding:
     finding is the refusal only once that remedy is spent, so it is built as the halt of ``remedy_or_halt``."""
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
 
-    def attempt(_n: int) -> Finding:
-        raise RuntimeError("the in-run retest leg runs the remedy")
+    return remedy_or_halt(TARGETED_TESTS_FAILED, _in_leg_attempt, lambda _f: Finding(path, TARGETED_TESTS_FAILED, detail), attempts=1)
 
-    return remedy_or_halt(TARGETED_TESTS_FAILED, attempt, lambda _f: Finding(path, TARGETED_TESTS_FAILED, detail), attempts=1)
+
+def _in_leg_attempt(_n: int) -> Finding:
+    raise RuntimeError("the in-run retest leg runs the remedy")
+
+
+def reverify_failed_finding(path: str, detail: str) -> Finding:
+    """The ``review-reverify-failed`` finding; the remedy is ``retest_step``, so this is the halt of ``remedy_or_halt``."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
+
+    return remedy_or_halt(
+        REVIEW_REVERIFY_FAILED, _in_leg_attempt, lambda _f: Finding(path, REVIEW_REVERIFY_FAILED, detail), attempts=1,
+    )
+
+
+def reverify_indeterminate_finding(detail: str) -> Finding:
+    """The ``review-reverify-indeterminate`` finding; the remedy is ``retest_step``, so this is the halt of ``remedy_or_halt``."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
+
+    return remedy_or_halt(
+        REVIEW_REVERIFY_INDETERMINATE, _in_leg_attempt,
+        lambda _f: Finding("", REVIEW_REVERIFY_INDETERMINATE, detail), attempts=1,
+    )
+
+
+def zero_fail_finding(detail: str) -> Finding:
+    """The ``test-verdict-names-no-failure`` finding; the remedy is ``retest_step``, so this is the halt of ``remedy_or_halt``."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
+
+    return remedy_or_halt(
+        ZERO_FAIL_UNATTRIBUTED, _in_leg_attempt, lambda _f: Finding("", ZERO_FAIL_UNATTRIBUTED, detail), attempts=1,
+    )
 
 
 def targeted_test_verdict(params: Mapping) -> Optional[Mapping]:
@@ -154,12 +183,12 @@ _INVARIANT_NODE = re.compile(r"repo-wide invariant (\S+)")
 
 
 def remedy_nodes(findings: Sequence[Finding], params: Optional[Mapping] = None) -> list[str]:
-    """The failing test nodes the in-run retest runs, only those: the nodes TARGETED_TESTS_FAILED
+    """The failing test nodes the in-run retest runs, only those: the nodes the ``TEST_EVIDENCE_REASONS``
     findings name (a repo-wide invariant node, a ``file::test`` id in the detail), else the finding's
     test file, plus the task-output digest's ``named_failures``. Never a tier."""
     out: list[str] = []
     for f in findings:
-        if f.reason != TARGETED_TESTS_FAILED:
+        if f.reason not in TEST_EVIDENCE_REASONS:
             continue
         inv = _INVARIANT_NODE.search(f.detail)
         if inv:
@@ -187,19 +216,22 @@ def retests_spent(params: Optional[Mapping]) -> bool:
 
 
 def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optional[dict]:
-    """The mechanical remedy step for a ``targeted-tests-failed`` refusal, or None when no such
-    finding exists. ``{kind, remedy, nodes, command, attempt, max_attempts, exhausted}``: the run
+    """The mechanical remedy step for a test-evidence refusal (``TEST_EVIDENCE_REASONS``: failed targeted
+    tests, red or indeterminate re-verify, a verdict naming no failure), or None when no such
+    finding exists. ``{kind, remedy, nodes, command, attempt, max_attempts, exhausted}``, ``kind`` the
+    first such finding's reason: the run
     launches the detached retest (``command``) on ``nodes``, polls it, and re-invokes the landing
     with ``retest_attempts`` raised by one; ``exhausted`` once ``params.retest_attempts`` reached
     ``MAX_IN_RUN_REMEDY_ATTEMPTS``, when the refusal is the EM's. The landing never spawns pytest."""
-    if not any(f.reason == TARGETED_TESTS_FAILED for f in findings):
+    first = next((f for f in findings if f.reason in TEST_EVIDENCE_REASONS), None)
+    if first is None:
         return None
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 
     done = retests_done(params)
     nodes = remedy_nodes(findings, params)
     return {
-        "kind": TARGETED_TESTS_FAILED, "remedy": "landing-runs-targeted-retest",
+        "kind": first.reason, "remedy": "landing-runs-targeted-retest",
         "nodes": nodes, "command": retest_remedy(params, list(dict.fromkeys(_node_file(n) for n in nodes))),
         "attempt": done + 1, "max_attempts": MAX_IN_RUN_REMEDY_ATTEMPTS,
         "exhausted": done >= MAX_IN_RUN_REMEDY_ATTEMPTS,
@@ -228,8 +260,7 @@ def advisory_entries(advisory: Sequence[Finding]) -> list[dict]:
 
 def _indeterminate_finding(error: object, remedy: str) -> Finding:
     cause = error if isinstance(error, str) and error.strip() else "no error recorded"
-    return Finding(
-        "", REVIEW_REVERIFY_INDETERMINATE,
+    return reverify_indeterminate_finding(
         f"re-verify did not run ({cause}); engine defect, not a test result; re-run: {remedy}",
     )
 
@@ -289,8 +320,7 @@ def failed_targeted_tests(
     if not isinstance(baseline, Mapping):
         count = verdict.get("tests_failed")
         if status == "fail" and isinstance(count, int) and not isinstance(count, bool) and count == 0:
-            return [Finding(
-                "", ZERO_FAIL_UNATTRIBUTED,
+            return [zero_fail_finding(
                 f"the verdict reads fail with 0 failing tests and no failing node id to attribute "
                 f"(no baseline evidence){note}; re-run: {remedy or retest_remedy(None)}",
             )], ZERO_FAIL_CHECK
@@ -450,17 +480,15 @@ def reverify_red_findings(
     out: list[Finding] = []
     if not any(by_file):
         # Trap: a red verdict naming no test file cannot be shown off-landing, so it must not land.
-        return [Finding(
-            "", REVIEW_REVERIFY_FAILED,
-            f"re-verify ended red naming no failing test; re-run: {retest_remedy(params, [])}",
+        return [reverify_failed_finding(
+            "", f"re-verify ended red naming no failing test; re-run: {retest_remedy(params, [])}",
         )]
     for test_file, ids in by_file.items():
         repo_file = (_repo_test_path(worktree_root, test_file, landed) or test_file) if test_file else None
         if not repo_file or not (repo_file in landed or _imports_landed(worktree_root, repo_file, landed)):
             continue
         shown = "; ".join(list(dict.fromkeys(ids))[:3])
-        out.append(Finding(
-            test_file, REVIEW_REVERIFY_FAILED,
-            f"{shown}; re-run: {retest_remedy(params, [test_file])}",
+        out.append(reverify_failed_finding(
+            test_file, f"{shown}; re-run: {retest_remedy(params, [test_file])}",
         ))
     return out

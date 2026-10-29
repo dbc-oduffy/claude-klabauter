@@ -1261,10 +1261,6 @@ def revise(
             (json.dumps({"note": note.strip(), "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"),
         )
         declare_write(dir_ / NOTES_FILE)
-        if run.get("sizing_rel"):
-            parts = _lettered_entries(note)
-            if parts:
-                _append_rows(root, run["sizing_rel"], parts)
     if retraction is not None:
         from coordinator_core.atomic_append import append_line
 

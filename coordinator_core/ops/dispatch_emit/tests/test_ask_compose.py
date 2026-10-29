@@ -701,6 +701,18 @@ def test_a_scout_reply_without_exit_code_is_redispatched_once_then_halts_distinc
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 
+def test_a_paraphrased_scout_stdout_with_the_sizing_file_on_disk_does_not_halt():
+    script = _compose()
+    assert script.count("label: 'sizing-probe'") == 1
+    probe = next(ln for ln in script.splitlines() if "label: 'sizing-probe'" in ln)
+    assert "test -f" in probe and "_sizingPath" in probe
+    # The probe runs only when assemble is unproven, and the halt fires only when the file is absent too.
+    assert "const _sizingOnDisk = _assembleUnproven ?" in script
+    assert "if (_assembleUnproven && !_sizingOnDisk) { _halted" in script
+    assert script.index("const _assembleUnproven") < script.index("const _sizingOnDisk") < script.index("scout failure: sizing-assemble did not run")
+    assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
+
+
 def test_size_reword_stage_fold_drops_with_stop_after():
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 

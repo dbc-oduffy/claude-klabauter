@@ -349,3 +349,21 @@ def test_measured_rev_constants_and_record_path(tmp_path):
 
 def test_ask_verify_return_keys_unchanged_by_measured_rev():
     assert not set(c.MEASURED_REV_KEYS) & set(c.ASK_VERIFY_RETURN_KEYS)
+
+
+def test_parked_halt_carries_one_refire_call_not_a_hand_step():
+    from coordinator_core.ops.dispatch_emit import halt_refire
+
+    env = c.parked_refire_next_action("docs/plans/x.md", run_id="ask-1", sizing_rel="state/sizings/s.yaml")
+    assert halt_refire.is_refire_next_action(env)
+    assert env["resume"]["halted"] == c.HALT_PARKED and env["resume"]["sizing"] == "state/sizings/s.yaml"
+    assert "coordinator:engine-ask" in env["call"] and "state/sizings/s.yaml" in env["call"]
+    assert env["detail"] == c.parked_next_action("docs/plans/x.md")
+
+
+def test_dependents_unstarted_halt_carries_one_refire_call_with_the_hold_reason():
+    from coordinator_core.ops.dispatch_emit import halt_refire
+
+    env = c.dependents_unstarted_refire_next_action("C2 held on C1", run_id="ask-1", sizing_rel="state/sizings/s.yaml")
+    assert halt_refire.is_refire_next_action(env)
+    assert env["resume"]["halted"] == c.HALT_DEPENDENTS_UNSTARTED and env["detail"] == "C2 held on C1"

@@ -131,6 +131,13 @@ _NO_STDIN_ASSEMBLY = (
 )
 
 
+#: Tier markers a re-verify run excludes: a pending_fix or designed_red test is red by design, never evidence.
+_TIER_MARKER_EXPR = "not pending_fix and not designed_red"
+_TIER_MARKER_CLAUSE = (
+    f'Add `-m "{_TIER_MARKER_EXPR}"` to every pytest invocation, so a pending_fix or designed_red test is '
+    "never run or reported failing. "
+)
+
 _ADMIT_PEAK_SEED_GIB = 4
 _ADMIT_RETRIES = 60
 _ADMIT_PAUSE_S = 30
@@ -193,6 +200,7 @@ def _scope_clause(tests: Optional[List[str]], error: str, base: str, unmapped: O
         + _batched_paths(tests)
         + ". "
         + _NO_STDIN_ASSEMBLY
+        + _TIER_MARKER_CLAUSE
         + (_ADMIT_GATE if len(tests) > 1 else "")
         + unmapped_clause
         + f"Re-run each red at the run base {base} in an export of it and list in `baseline.pre_existing` "

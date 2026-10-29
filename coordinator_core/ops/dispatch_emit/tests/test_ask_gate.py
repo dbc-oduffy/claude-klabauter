@@ -14,6 +14,15 @@ REL = "state/sizings/2026-10-01-gate.yaml"
 ACCEPTED = {"pm_quote": "yes", "on": "2026-10-01", "mode": "pm"}
 
 
+@pytest.fixture(autouse=True)
+def _mechanical_gate_kinds(monkeypatch):
+    """The registry state C7 lands: `refusal` and `orphan_pending` are mechanical kinds."""
+    from coordinator_core.ops.dispatch_emit import halt_remedy_class as hrc
+
+    monkeypatch.setitem(hrc.HALT_REMEDY, "refusal", (hrc.MECHANICAL, "wait-out-transient-refusal"))
+    monkeypatch.setitem(hrc.HALT_REMEDY, "orphan_pending", (hrc.MECHANICAL, "adopt-orphan-pending-run"))
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     (tmp_path / "state" / "sizings").mkdir(parents=True)
@@ -294,24 +303,25 @@ def test_baton_given_at_xs_is_carried_when_it_is_the_sizings(repo):
     assert v.halt is None and v.arm == ARM_XS and v.baton is None
 
 
-def test_baton_given_at_xs_naming_another_sizing_is_refused(repo):
+def test_baton_given_at_xs_naming_another_sizing_is_dropped(repo):
+    from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
+
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"], baton=_handoff(repo, "state/sizings/other.yaml"))
-    assert v.arm is None and v.halt["kind"] == "refusal" and "not this sizing's" in v.halt["reason"]
-    assert "state/handoffs/x.md" in v.halt["reason"]
+    assert v.halt is None and v.arm == ARM_XS and v.baton is None
 
 
 @pytest.mark.parametrize("baton", ["../x.md", "/etc/passwd", "d:x.md"])
-def test_baton_given_at_xs_escaping_the_repo_is_refused(repo, baton):
+def test_baton_given_at_xs_escaping_the_repo_is_dropped(repo, baton):
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"], baton=baton)
-    assert v.halt["kind"] == "refusal" and "not this sizing's" in v.halt["reason"]
+    assert v.halt is None and v.baton is None
 
 
-def test_baton_given_at_xs_missing_file_is_refused(repo):
+def test_baton_given_at_xs_missing_file_is_dropped(repo):
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"], baton="state/handoffs/none.md")
-    assert v.halt["kind"] == "refusal" and "not this sizing's" in v.halt["reason"]
+    assert v.halt is None and v.baton is None
 
 
 def test_missing_statement_halts_as_touchpoint_for_the_accept_stage(repo):
@@ -463,3 +473,55 @@ def test_bounded_research_sizing_with_two_writes_stays_refused(repo):
          intent=_CENSUS_INTENT, research=_RESEARCH)
     v = gate(repo, REL, writes=["runs/a.md", "runs/b.md"])
     assert v.halt["kind"] == "refusal"
+
+
+def _orphan(monkeypatch, handler):
+    from coordinator_core.ops.dispatch_emit import ask_gate, orphan_adopt as oa
+
+    monkeypatch.setattr(ask_gate, "_newest_run_binding", lambda root, rel, skip: "ask-20261029T010101-aaaaaa")
+    monkeypatch.setattr(
+        oa, "orphan_verdict",
+        lambda root, run_id, sid: {"orphaned": True, "recorded_session": "dead", "stage": "plan"},
+    )
+    monkeypatch.setattr(oa, "_handler", handler)
+
+
+def test_orphan_pending_is_adopted_in_run_and_the_fire_goes_on(repo, monkeypatch):
+    adopted = []
+    _orphan(monkeypatch, lambda params, root=None: adopted.append(params["run_id"]) or {"ok": True})
+    _put(repo, tshirt="S", route="spec-dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS)
+    v = gate(repo, REL)
+    assert adopted == ["ask-20261029T010101-aaaaaa"] and v.halt is None
+
+
+def test_orphan_pending_halts_only_when_both_adopt_tries_fail(repo, monkeypatch):
+    calls = []
+    _orphan(monkeypatch, lambda params, root=None: calls.append(1) or {"ok": False, "reason": "no-session"})
+    _put(repo, tshirt="S", route="spec-dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS)
+    v = gate(repo, REL)
+    assert len(calls) == 2 and v.halt["kind"] == "orphan_pending"
+    assert v.halt["orphan_run"] == "ask-20261029T010101-aaaaaa" and "no-session" in v.halt["reason"]
+
+
+def test_held_sizing_lock_that_frees_inside_the_wait_is_not_a_refusal(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_gate
+
+    held = iter(["locked by 42", None])
+    monkeypatch.setattr(ask_gate, "_held_lock_refusal", lambda root, target: next(held))
+    assert ask_gate._clear_held_lock(repo, repo / REL) is None
+
+
+def test_held_sizing_lock_that_never_frees_is_the_refusal(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_gate
+
+    monkeypatch.setattr(ask_gate, "_held_lock_refusal", lambda root, target: "locked by 42")
+    v = ask_gate._clear_held_lock(repo, repo / REL)
+    assert v.halt == {"kind": "refusal", "reason": "locked by 42"}
+
+
+def test_a_refusal_naming_a_sizing_defect_keeps_kind_reason_and_extras(repo):
+    """No engine repair exists for a defect in the sizing's own fields: the bounded tries end in the same halt."""
+    from coordinator_core.ops.dispatch_emit import ask_gate
+
+    v = ask_gate._refuse("status: draft", design_route={"x": 1})
+    assert v.arm is None and v.halt == {"kind": "refusal", "reason": "status: draft", "design_route": {"x": 1}}

@@ -94,6 +94,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RELAYED_ASK_FILE,
     HALT_DESIGN_REVIEW,
     HALT_REFUSAL,
+    REGISTER_ROWS_UNCLAIMED_REFUSAL,
     HALT_RESEARCH,
     HALT_ROOM,
     HALT_SPLIT,
@@ -162,6 +163,7 @@ from coordinator_core.ops.dispatch_emit.self_correction import (
 REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
+from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, STAGE_REFUSAL_PREFIX, next_action as _design_next_action
@@ -527,6 +529,8 @@ _ONLY_ROWS_JS = (
     "...(_gate.resume_plan && _gate.resume_rows ? { only_rows: _gate.resume_rows } : {}), "
 )
 _RECORDED_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
+#: The sizing-file probe's return: whether the file sizing-assemble writes exists on disk.
+_SIZING_PRESENT_SCHEMA = _obj(["present"], {"present": {"type": "boolean"}})
 
 
 def _ruling_schema(ruling_schema: dict) -> dict:
@@ -3627,10 +3631,25 @@ def compose_ask_script(
         # a parsed assemble decision (always carries `route`) or a gate reply (an arm or a halt):
         # ask_gate reads the sizing from disk, so it answers only once the file exists. Scouts
         # abridge long stdout, so the gate reply alone must suffice.
+        # The sizing file at _sizingPath is proof too: a scout that paraphrases its stdout still wrote it.
+        probe_call = _agent(
+            _cat(
+                "Run `test -f ", "js:JSON.stringify(_sizingPath)", "` once and return present true when it exits 0, "
+                "else false. Write nothing.",
+            ),
+            label="sizing-probe", phase="size", agent_type=_MECHANICAL_AGENT_TYPE,
+            agent_model=_MECHANICAL_MODEL, schema=_SIZING_PRESENT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+        )
         b.append(
-            "  if (!_halted && (_decision === null || typeof _decision !== 'object' "
+            "  const _assembleUnproven = !_halted && (_decision === null || typeof _decision !== 'object' "
             "|| typeof _decision.route !== 'string') && typeof _scouted.arm !== 'string' "
-            "&& !(_scouted.halt && typeof _scouted.halt === 'object')) { _halted = { halted: "
+            "&& !(_scouted.halt && typeof _scouted.halt === 'object');"
+        )
+        b.append(
+            f"  const _sizingOnDisk = _assembleUnproven ? !!((await {probe_call})?.present) : false;"
+        )
+        b.append(
+            "  if (_assembleUnproven && !_sizingOnDisk) { _halted = { halted: "
             f"{_lit(HALT_REFUSAL)}, reason: 'scout failure: sizing-assemble did not run: the scout replied exit 0 but its stdout is "
             "not a sizing-assemble decision, so the sizing file was never written; the gate, plan, stage, execute "
             "and review phases were skipped', "
@@ -3891,11 +3910,11 @@ def compose_ask_script(
         f"  const _ledgerUnserved = _resumeLedger && (({_rl0}.{RESUME_LEDGER_UNSERVED_FIELD} ?? []).length > 0);"
     )
     b.append(
-        f"  const _ledgerOwes = _resumeLedger && _gate.arm === {_lit(ARM_M_PLUS)}"
-        f" && ((({_rl0}.blocking ?? [])"
+        f"  const _ledgerOwes = (_resumeLedger && ((_gate.arm === {_lit(ARM_M_PLUS)}"
+        f" && (({_rl0}.blocking ?? [])"
         f".some((id) => (((({_rl0}.{RESUME_LEDGER_REMAINING_FIELD} ?? {{}})[id]) ?? {{}}).remaining ?? []).length > 0)"
-        f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)}))"
-        f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0) || _ledgerUnserved;"
+        f" && ({_rl0}.{RESUME_LEDGER_LEG_FIELD}?.action !== {_lit(LEG_SKIP)})))"
+        f" || ({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0)) || _ledgerUnserved;"
     )
     b.append(
         f"  if (_resumeLedger) {{ _planRel = {_rl0}.plan; if (_ledgerUnlanded.length || _ledgerDerived.length) {{ _ledgerExec = true; }} "
@@ -3983,13 +4002,19 @@ def compose_ask_script(
         b.append(
             "  if (_ledgerOwes && !_stageRefusal) { const _gateStaged = _stagedManifest; const _gateGap = _relayGap; "
             "const _gateDisk = _diskHalt; _stagedManifest = null; _relayGap = null; _diskHalt = null; "
-            f"const _replanned = await {replan_call}; "
+            f"const _unclaimedOwed = ({_rl0}?.{RESUME_LEDGER_UNCLAIMED_FIELD} ?? []).length > 0; "
+            "let _replanned = null; let _try = 0; "
+            f"do {{ _replanned = await {replan_call}; _try++; "
             "_ledgerAdded = (Array.isArray(_replanned?.added_rows) ? _replanned.added_rows : [])"
-            ".filter((s) => typeof s === 'string' && s.trim()); "
+            ".filter((s) => typeof s === 'string' && s.trim()); } "
+            f"while (!_ledgerAdded.length && _unclaimedOwed && _try < {MAX_IN_RUN_REMEDY_ATTEMPTS}); "
             "if (_ledgerAdded.length) { _ledgerExec = true; "
             "await _adoptStageReply(_replanned?.stage_reply); } "
             "else { if (!_ledgerUnlanded.length) { _xsTail = true; } "
             "_stagedManifest = _gateStaged; _relayGap = _gateGap; _diskHalt = _gateDisk; "
+            f"if (_unclaimedOwed && !_ledgerUnserved) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
+            f"reason: {_lit(REGISTER_ROWS_UNCLAIMED_REFUSAL)} + ': register row(s) ' + JSON.stringify({_rl0}.{RESUME_LEDGER_UNCLAIMED_FIELD}) "
+            f"+ ' still unclaimed after {MAX_IN_RUN_REMEDY_ATTEMPTS} in-run re-plan attempts', sizing: _sizingRel, run_id: _runId }}; }} "
             f"if (_ledgerUnserved) {{ _halted = {{ halted: {_lit(HALT_REFUSAL)}, "
             f"reason: 'unserved register row(s) ' + JSON.stringify({_rl0}.{RESUME_LEDGER_UNSERVED_FIELD}) "
             "+ ': the re-plan added no row; re-size the sizing, or fire a fresh ask whose asks[].writes "

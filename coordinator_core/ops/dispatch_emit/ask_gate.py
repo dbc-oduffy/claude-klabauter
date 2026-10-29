@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
@@ -79,7 +80,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import (
     stamp_plan_executing,
 )
 from coordinator_core.ops.dispatch_emit import ask_stage_receipt, reply_sidecar
-from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
+from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS, remedy_or_halt
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_S,
@@ -144,6 +145,37 @@ def handback_line(sizing: dict) -> str:
 
 def _halt(kind: str, reason: str, **extra: object) -> GateVerdict:
     return GateVerdict(arm=None, halt={"kind": kind, "reason": reason, **extra})
+
+
+class _NoInRunRemedy(Exception):
+    """A refusal whose cause the gate cannot repair in-run: the halt then names it."""
+
+
+def _refuse(reason: str, **extra: object) -> GateVerdict:
+    """The `refusal` verdict for `reason`, after the bounded in-run tries; every gate refusal goes through here.
+
+    A refusal naming a defect in the sizing's own fields has no engine repair: both tries fail and the verdict
+    carries `reason` unchanged. A transient cause (a held lock) is cleared by `_clear_held_lock`.
+    """
+    def attempt(n: int) -> GateVerdict:
+        raise _NoInRunRemedy(reason)
+
+    return remedy_or_halt(HALT_REFUSAL, attempt, lambda failures: _halt(HALT_REFUSAL, reason, **extra))
+
+
+def _clear_held_lock(root: Path, target: Path) -> Optional[GateVerdict]:
+    """None when `target`'s RMW lock is free, or frees within `GATE_LOCK_WAIT_SECS`; else the `refusal` verdict."""
+    held = _held_lock_refusal(root, target)
+    if held is None:
+        return None
+
+    def attempt(n: int) -> None:
+        time.sleep(GATE_LOCK_WAIT_SECS / MAX_IN_RUN_REMEDY_ATTEMPTS)
+        again = _held_lock_refusal(root, target)
+        if again is not None:
+            raise _NoInRunRemedy(again)
+
+    return remedy_or_halt(HALT_REFUSAL, attempt, lambda failures: _halt(HALT_REFUSAL, held))
 
 
 #: Longest the gate waits on any file lock it takes itself; the gate's whole budget is 500ms.
@@ -248,7 +280,7 @@ def gate(
     except ValueError:
         shown = None
     if error:
-        return replace(_halt(HALT_REFUSAL, f"{error}: repair {shown or registry}"), design_route=route_payload)
+        return replace(_refuse(f"{error}: repair {shown or registry}"), design_route=route_payload)
     verdict = _arm_verdict(
         root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink, run_id=run_id, kept_sink=kept_sink,
         phase_sink=phase_sink, held_sink=held_sink, reasons_sink=reasons_sink,
@@ -360,8 +392,8 @@ def _newest_run_binding(repo_root: Path, sizing_rel: str, skip: Optional[str]) -
 
 
 def _orphan_pending_halt(repo_root: Path, sizing_rel: str, run_id: Optional[str]) -> Optional[GateVerdict]:
-    """The `orphan_pending` halt naming the adopt call when the newest run binding the sizing is an
-    orphan (dead emitter, nothing halted, nothing newer); else None."""
+    """None when no orphan binds the sizing, or when the gate adopted it in-run (the fire then resumes from
+    the run's disk evidence); the `orphan_pending` halt naming the adopt call only when both adopt tries fail."""
     from coordinator_core.ops.dispatch_emit import halt_refire
     from coordinator_core.ops.dispatch_emit import orphan_adopt as oa
     from coordinator_core.session.core import resolve_session_id
@@ -376,10 +408,18 @@ def _orphan_pending_halt(repo_root: Path, sizing_rel: str, run_id: Optional[str]
         f"run {newest} was orphaned by dead session {verdict['recorded_session']} at stage {verdict['stage']}: "
         "adopt it to resume from its first unreceipted stage instead of re-running the sizing"
     )
-    return _halt(
-        oa.ORPHAN_PENDING, reason, orphan_run=newest,
-        next_action=halt_refire.exit_next_action(
-            reason=reason, route=halt_refire.ROUTE_ADOPT, call=oa.adopt_call(newest, repo_root)
+    def adopt(n: int) -> None:
+        reply = oa._handler({"run_id": newest}, repo_root)
+        if not reply.get("ok"):
+            raise _NoInRunRemedy(f"adopt {newest}: {reply.get('reason') or reply.get('error')}")
+
+    return remedy_or_halt(
+        oa.ORPHAN_PENDING, adopt,
+        lambda failures: _halt(
+            oa.ORPHAN_PENDING, f"{reason} ({'; '.join(failures)})", orphan_run=newest,
+            next_action=halt_refire.exit_next_action(
+                reason=reason, route=halt_refire.ROUTE_ADOPT, call=oa.adopt_call(newest, repo_root)
+            ),
         ),
     )
 
@@ -397,7 +437,7 @@ def _arm_verdict(
         sizing = load_sizing_effective(repo_root, sizing_rel)
         arm = resolve_arm(sizing)
     except SizingFireRefused as exc:
-        return _halt(HALT_REFUSAL, "; ".join(exc.fields))
+        return _refuse("; ".join(exc.fields))
 
     pending_orphan = _orphan_pending_halt(repo_root, sizing_rel, run_id)
     if pending_orphan is not None:
@@ -433,7 +473,7 @@ def _arm_verdict(
     research = sizing.get("research")
     if isinstance(research, dict) and research and not research_is_bounded_single_write(sizing, writes):
         if writes:
-            return _halt(HALT_REFUSAL, RESEARCH_MIXED_REFUSAL)
+            return _refuse(RESEARCH_MIXED_REFUSAL)
         return _halt(
             HALT_RESEARCH,
             f"research sizing {sizing_rel}: the run's `fire` entry is the one call",
@@ -473,7 +513,7 @@ def _arm_verdict(
         # A sizing written exit-criterion-pending: the accept stage authors the statement in-run.
         others = [r for r in refusals if not r.startswith((STATEMENT_ABSENT_PREFIX, _ACCEPTED_NULL_PREFIX))]
         if others:
-            return _halt(HALT_REFUSAL, "; ".join(others))
+            return _refuse("; ".join(others))
         return _halt(
             HALT_TOUCHPOINT,
             "no exit criterion on record",
@@ -526,11 +566,11 @@ def _arm_verdict(
             except SizingFireRefused as exc:
                 refusals.extend(f for f in exc.fields if f not in refusals)
     if refusals:
-        return _halt(HALT_REFUSAL, "; ".join(refusals))
+        return _refuse("; ".join(refusals))
     try:
         resume_ledger = _resume_ledger(sizing, resume.ledger, repo_root, run_id=run_id, sizing_rel=sizing_rel) if resume else None
     except SizingFireRefused as exc:
-        return _halt(HALT_REFUSAL, "; ".join(exc.fields))
+        return _refuse("; ".join(exc.fields))
     resume_plan = resume.plan_rel if resume and resume_ledger is None else None
     resume_rows = list(resume.incomplete) if resume and resume_ledger is None else None
     if landed_sink is not None and resume_rows:
@@ -573,7 +613,7 @@ def _arm_verdict(
     try:
         baton = doc_new.mint_baton_from_sizing(sizing_rel, str(repo_root), baton=baton)
     except doc_new.SizingMintRefused as exc:
-        return _halt(HALT_REFUSAL, str(exc))
+        return _refuse(str(exc))
     # The effective route, so a PM-recorded accept_multi_session plans in the
     # single-mode wave instead of re-adjudicating the sizing's raw `pm-decision`.
     minted = {"id": baton["id"], "path": baton["path"], "route": route}
@@ -582,7 +622,7 @@ def _arm_verdict(
         minted["deliverableId"] = deliverable_id
     spine, spine_refusal = (None, None) if resume else _spine_plan(repo_root, sizing, sizing_rel)
     if spine_refusal:
-        return _halt(HALT_REFUSAL, spine_refusal)
+        return _refuse(spine_refusal)
     resume_ready = bool(resume_plan) and pending_rulings == [] and plan_ready(resume_plan)
     return GateVerdict(
         resume_ready=resume_ready,
@@ -1017,11 +1057,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.ops.dispatch_emit import requirements_ledger
 
         try:
-            held = _held_lock_refusal(root, requirements_ledger._sizing_path(root, sizing_rel))
+            held = _clear_held_lock(root, requirements_ledger._sizing_path(root, sizing_rel))
         except requirements_ledger.LedgerRefused:
             held = None
         if held is not None:
-            return _halt(HALT_REFUSAL, held).to_json()
+            return held.to_json()
     route_verdicts: list = []
     if params.get("run_id"):
         # A refire's refusal returns before the verdict writes its own snapshot; the prior attempt's must not outlive it.
@@ -1031,8 +1071,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         if not run_token.is_live(root, params["run_id"]):
             _mark_token_spent(root, params["run_id"])
-            return _halt(
-                HALT_REFUSAL,
+            return _refuse(
                 f"run token for {params['run_id']} is spent or gone (a run that halted or ended no longer "
                 "holds one), so this refire could land nothing. This run is retired; the call starts a "
                 f"new run id with a new token: {fire_command(sizing_rel)}",
@@ -1043,7 +1082,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             verdict_sink=route_verdicts,
         )
         if refused is not None:
-            return _halt(HALT_REFUSAL, refused).to_json()
+            return _refuse(refused).to_json()
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
     landed: list = []
     kept: list = []

@@ -363,15 +363,7 @@ def scaffold_markers(text: str) -> dict[str, int]:
     return found
 
 
-class AskStageError(ValueError):
-    """The stage inputs name no stageable plan or sizing, or escape the run dir.
-
-    `owed_em_ids` / `plan_path` are set when every row is EM-owned; the op reply carries them as fields."""
-
-    def __init__(self, message: str, *, owed_em_ids: Optional[list] = None, plan_path: Optional[str] = None):
-        super().__init__(message)
-        self.owed_em_ids = list(owed_em_ids) if owed_em_ids else None
-        self.plan_path = plan_path
+from coordinator_core.ops.dispatch_emit.ask_stage_blocks import AskStageError  # noqa: E402
 
 
 def _write(path: Path, text: str) -> None:
@@ -959,18 +951,18 @@ def _claim_register_rows(root: Path, plan_path: Path) -> None:
         return
 
 
-def _refuse_unclaimed_register_rows(
-    fm_text: str, plan_posix: str, run_sizing_rel: Optional[str], run_sizing: Optional[Mapping]
-) -> None:
-    """Raise AskStageError REGISTER-ROWS-UNCLAIMED when the plan's `register_claims.rows` omit a
-    row of the register it claims against that no ruling retires. Silent when the plan claims
+def _missing_register_rows(
+    fm_text: str, run_sizing_rel: Optional[str], run_sizing: Optional[Mapping]
+) -> tuple[Optional[str], list]:
+    """`(claimed_sizing, ids)`: the row ids of the register the plan claims against that its
+    `register_claims.rows` omit and no ruling retires. `ids` is empty when the plan claims
     against another sizing than the run's, or carries no register."""
     from coordinator_core.ops import requirement_register as rr
 
     claimed_sizing, claimed = rr.plan_claims(fm_text)
     cited = read_fm_field_unquoted(fm_text, "sizing_object")
     if not claimed_sizing or claimed_sizing != rr._plan_key(cited) or claimed_sizing != rr._plan_key(run_sizing_rel):
-        return
+        return claimed_sizing, []
     rows = [
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or []
         if isinstance(r, Mapping)
@@ -979,11 +971,29 @@ def _refuse_unclaimed_register_rows(
         r.get(rr.ROW_ID) for r in rows
         if r.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED) and not rr._unruled(r)
     ]
-    missing = rr.unclaimed_ids(rows, claimed, exclude=ruled_out)
+    return claimed_sizing, list(rr.unclaimed_ids(rows, claimed, exclude=ruled_out))
+
+
+def _settle_unclaimed_register_rows(
+    root: Path, plan_path: Path, fm_text: str, plan_posix: str,
+    run_sizing_rel: Optional[str], run_sizing: Optional[Mapping],
+) -> None:
+    """Claim into the plan every register row it omits, re-checking after each claim; raise
+    AskStageError REGISTER-ROWS-UNCLAIMED only once MAX_IN_RUN_REMEDY_ATTEMPTS claims left a row omitted."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+
+    claimed_sizing, missing = _missing_register_rows(fm_text, run_sizing_rel, run_sizing)
+    for _ in range(MAX_IN_RUN_REMEDY_ATTEMPTS):
+        if not missing:
+            return
+        _claim_register_rows(root, plan_path)
+        split = split_frontmatter(plan_path.read_text(encoding="utf-8"))
+        fm_text = split.fm_text if split is not None else fm_text
+        claimed_sizing, missing = _missing_register_rows(fm_text, run_sizing_rel, run_sizing)
     if missing:
         raise AskStageError(
             f"{REGISTER_ROWS_UNCLAIMED_REFUSAL}: {plan_posix} omits register row(s) "
-            f"{', '.join(missing)} in register_claims.rows. Refire {claimed_sizing}: its re-plan leg claims them."
+            f"{', '.join(missing)} in register_claims.rows after {MAX_IN_RUN_REMEDY_ATTEMPTS} in-run claims."
         )
 
 
@@ -1157,7 +1167,7 @@ def stage(
         if revisions:
             intent = intent + ("\n" if intent else "") + revisions
     if plan_rel and not ledger_resume and _split is not None:
-        _refuse_unclaimed_register_rows(_split.fm_text, plan_posix, run_sizing_rel, run_sizing)
+        _settle_unclaimed_register_rows(root, plan_path, _split.fm_text, plan_posix, run_sizing_rel, run_sizing)
     em_block = em_brief_block(run_sizing, root)
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block

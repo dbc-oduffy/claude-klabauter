@@ -251,3 +251,37 @@ def test_help_exits_zero_on_linux(capsys):
     with pytest.raises(SystemExit) as exc:
         mod.main(["--help"], platform="linux")
     assert exc.value.code == 0
+
+
+def test_fleet_admits_the_sized_fleet_the_default_cushion_holds(tmp_path, capsys):
+    """MetaHuman 2026-10-29: a 43.5 GiB fleet, reserve S already out, waited for 51.5 GiB."""
+    adm = str(tmp_path / "a.jsonl")
+    status = _status(avail=43.5, used=10, limit=100)
+    assert _run(["--admit-peak", "43.5", "--fleet", "--admission-file", adm], status_fn=status) == 0
+    assert "ADMIT" in capsys.readouterr().out
+    assert _run(["--admit-peak", "43.5", "--admission-file", adm], status_fn=status) == 4
+    assert "HOLD" in capsys.readouterr().out
+
+
+def test_fleet_still_holds_on_available_and_on_commit(tmp_path, capsys):
+    adm = str(tmp_path / "a.jsonl")
+    assert _run(["--admit-peak", "43.6", "--fleet", "--admission-file", adm],
+                status_fn=_status(avail=43.5, used=10, limit=100)) == 4
+    assert "available:" in capsys.readouterr().out
+    assert _run(["--admit-peak", "43.5", "--fleet", "--admission-file", adm],
+                status_fn=_status(avail=60, used=60, limit=100)) == 4
+    assert "commit:" in capsys.readouterr().out
+
+
+def test_fleet_drops_the_cushion_on_the_register_pid_path(tmp_path, capsys):
+    adm = str(tmp_path / "a.jsonl")
+    rc = _run(["--admit-peak", "43.5", "--fleet", "--admission-file", adm, "--command-key", "mh",
+               "--register-pid", "4242"], status_fn=_status(avail=43.5, used=10, limit=100))
+    assert rc == 0 and "ADMIT" in capsys.readouterr().out
+
+
+def test_help_names_which_mode_fits_which_case(capsys):
+    with pytest.raises(SystemExit):
+        _run(["--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "single heavy job" in out and "already sized with its reserve S" in out

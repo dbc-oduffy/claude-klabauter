@@ -189,6 +189,20 @@ def test_a_halt_other_than_ledger_check_lands_the_record_only(repo):
     assert halted_run.halted_withheld(repo / RECORD_DIR_ROOT / RUN) == {"done.py": land_run_halt.HALT_RECORD_ONLY}
 
 
+def test_record_only_product_is_kept_fingerprinted_for_the_refire(repo):
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    _record(repo)
+    _chunks(repo, {"C1": ["done.py"]})
+
+    out = _call(repo, {"halted": "refusal", "reason": "x"})
+
+    assert out["withheld"] == {"done.py": land_run_halt.HALT_RECORD_ONLY}
+    kept = kept_work.read(repo / RECORD_DIR_ROOT / RUN)
+    assert kept["chunks"]["C1"]["paths"]["done.py"] == kept_work.fingerprint(repo, "done.py")
+    assert "done.py" in kept_work.held_paths(repo, ["done.py"])
+
+
 def test_a_live_peer_runs_undeclared_dirt_is_neither_landed_nor_listed(repo):
     """Closed membership: the peer's dirty plan and its record dir are not this run's paths."""
     _record(repo)

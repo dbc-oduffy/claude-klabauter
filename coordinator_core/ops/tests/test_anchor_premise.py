@@ -223,16 +223,30 @@ def test_row_and_carry_outrank_engine_and_engine_needs_repo_root(monkeypatch, tm
 
     one = [{**GOOD, "id": "AP1"}]
     calls = _engine(monkeypatch, "MATCH")
-    row = {"anchor": "AP1", "verdict": "UNRESOLVED"}
+    row = {"anchor": "AP1", "verdict": "RESOLVES"}
     (v,) = anchor_verdicts(one, [row], [], "p", tmp_path)
-    assert (v["verdict"], v["source"]) == ("UNRESOLVED", "row")
-    carry = {"anchor": "AP1", "verdict": "CONTRADICTED", "line_hash": _h("p")}
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "row")
+    carry = {"anchor": "AP1", "verdict": "RESOLVES", "line_hash": _h("p")}
     (v,) = anchor_verdicts(one, [], [carry], "p", tmp_path)
-    assert (v["verdict"], v["source"]) == ("CONTRADICTED", "carry")
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "carry")
     assert calls == []
     (v,) = anchor_verdicts(one, [], [], "p", None)
     assert (v["verdict"], v["source"]) == (None, "none") and calls == []
     assert anchor_findings(one, [], [], "p") == ["anchor-premise-no-verdict: AP1"]
+
+
+def test_blocking_row_yields_to_a_met_check_but_not_to_a_broken_one(monkeypatch, tmp_path):
+    from coordinator_core.ops._anchor_premise import anchor_verdicts
+
+    one = [{**GOOD, "id": "AP1"}]
+    row = {"anchor": "AP1", "verdict": "UNRESOLVED"}
+    _engine(monkeypatch, "MATCH", "1")
+    (v,) = anchor_verdicts(one, [row], [], "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
+    assert anchor_findings(one, [row], [], "p", tmp_path) == []
+    _engine(monkeypatch, "MISMATCH", "2")
+    (v,) = anchor_verdicts(one, [row], [], "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("UNRESOLVED", "row")
 
 
 def _repo_with_baseline(tmp_path):

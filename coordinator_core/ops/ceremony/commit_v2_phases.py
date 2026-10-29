@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import ContextManager, Optional
 
 OP = "ceremony.commit_v2"
+BUDGET_MS = 500.0
 
 
 def _child_cpu_secs() -> float:
@@ -33,16 +34,36 @@ class PhaseLedger:
     def __init__(self, corr_id: Optional[str] = None) -> None:
         self.corr_id = corr_id
         self._ms: dict[str, float] = {}
+        self._wall_ms: dict[str, float] = {}
 
     @contextlib.contextmanager
     def _bracket(self, name: str):
         t0 = time.thread_time()
         c0 = _child_cpu_secs()
+        w0 = time.monotonic()
         try:
             yield
         finally:
             delta = (time.thread_time() - t0) + (_child_cpu_secs() - c0)
             self._ms[name] = self._ms.get(name, 0.0) + delta * 1000.0
+            self._wall_ms[name] = self._wall_ms.get(name, 0.0) + (time.monotonic() - w0) * 1000.0
+
+    def blocked_leg(self) -> Optional[dict]:
+        """Name the leg that broke the process budget, or None when none did.
+
+        Compute: total CPU >= BUDGET_MS names the costliest phase. Wait: a phase whose wall time
+        exceeds its CPU by >= BUDGET_MS is a wait leg (lock, claim poll, child wait). Wall time is
+        a diagnostic here, never a budget measure.
+        """
+        phases = self.phases_ms()
+        if sum(phases.values()) >= BUDGET_MS:
+            leg = max(phases, key=phases.get)
+            return {"leg": leg, "kind": "compute", "process_ms": phases[leg]}
+        waits = {n: self._wall_ms.get(n, 0.0) - c for n, c in phases.items()}
+        if waits and max(waits.values()) >= BUDGET_MS:
+            leg = max(waits, key=waits.get)
+            return {"leg": leg, "kind": "wait", "process_ms": phases[leg], "wait_ms": waits[leg]}
+        return None
 
     def phase(self, name: str) -> ContextManager[None]:
         """Bracket a step; re-entry of the same name sums."""
@@ -79,6 +100,8 @@ class PhaseLedger:
                     "dispatch_op": _dispatch_op(),
                     "phases_ms": phases,
                     "total_ms": sum(phases.values()),
+                    "wall_ms": dict(self._wall_ms),
+                    "blocked_leg": self.blocked_leg(),
                     "abandoned": bool(abandoned or dispatch_abandon.is_abandoned()),
                     "paths": int(paths),
                     "spawns": spawns,

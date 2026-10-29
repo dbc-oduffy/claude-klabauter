@@ -60,6 +60,41 @@ def test_handler_never_answers_not_received():
     assert result["state"] != "not_received"
 
 
+def test_handler_answers_under_process_budget():
+    import time
+
+    start = time.process_time()
+    wrs._warm_request_status({"key": "1234-5678"}, repo_root=None)
+    assert time.process_time() - start < 0.5
+
+
+def test_poll_after_timeout_answers_from_store_without_waiting_on_the_op():
+    """Production poll path: an admitted record past its deadline answers at once,
+    while the op's own thread is still running and the store lock is free."""
+    import time
+
+    from coordinator_core.warm import dispatch_ack, server
+
+    store = dispatch_ack.AckStore(executing_bound=lambda _m: 0.02)
+    key = dispatch_ack.mint_key()
+    assert store.admit(key, "ceremony.commit_v2")
+    time.sleep(0.03)
+    original = server._ack_store
+    server._ack_store = store
+    try:
+        start_wall = time.perf_counter()
+        start_cpu = time.process_time()
+        answer = server._store_poll({"key": key})
+        wall = time.perf_counter() - start_wall
+        cpu = time.process_time() - start_cpu
+    finally:
+        server._ack_store = original
+    assert answer["state"] == dispatch_ack.STATE_EXECUTING
+    assert answer["overdue"] is True
+    assert cpu < 0.5
+    assert wall < 0.5
+
+
 @pytest.mark.parametrize("params", [{}, {"key": ""}, {"key": None}])
 def test_missing_or_blank_key_is_value_error(params):
     with pytest.raises(ValueError):

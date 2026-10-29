@@ -11,8 +11,8 @@ admits one landed product commit, never two; a halted run's record-only commit r
 releases it. A landed grind commit passes `landed` to `consume`, which leaves a spent receipt
 (`spent/<run_id>.json`: the record's digest, script and mint time plus the landed sha, rows and
 paths); `spent_receipt` answers a repeat call from it and lands nothing. Accepted residual: an op
-process killed between `redeem` and `release` strands the claim; recovery is a re-mint through
-workflow.revise. Every other subagent commit stays denied.
+process killed between `redeem` and `release` strands the claim until its pid is dead or it is
+older than `CLAIM_MAX_AGE_SECONDS`; the next `redeem` then adopts it. Every other subagent commit stays denied.
 
 Invariants: the record lives in the git common dir (never the worktree, so no commit can carry
 it); only a sha256 of the token is stored, except a launcher child's escrow
@@ -43,6 +43,9 @@ from typing import Iterator, Optional
 
 TTL_SECONDS = 24 * 3600
 KINDS = ("ask", "grind")
+#: A claim older than this, or whose holder pid is gone, is adopted by the next `redeem`
+#: (twice the dispatcher's 30s backstop: the original op's reply is long abandoned).
+CLAIM_MAX_AGE_SECONDS = 60.0
 _DIR = "coordinator-warp-run-tokens"
 #: Where `redeem` creates the claim record; `consume` or `release` ends it.
 _CLAIMED = "claimed"
@@ -271,14 +274,19 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
         return False
     record = _read(live)
     if not _matches(record, run_id, token, script_path):
-        return False
+        held = _read(claimed)
+        if held is None:
+            return False
+        adopted, aside = _adopt_expired_claim(claimed, held, run_id, token, script_path)
+        if aside is not None:
+            aside.unlink(missing_ok=True)
+        return adopted
     try:
         claimed.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
         return False
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(record, fh, sort_keys=True)
+    _write_claim(fd, record)
     for _ in range(50):
         try:
             live.unlink(missing_ok=True)
@@ -287,6 +295,58 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
             time.sleep(0.005)
     _drop_staged_twins(repo_root, run_id)
     return True
+
+
+def _write_claim(fd: int, record: dict) -> None:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump({**record, "claimed_at": time.time(), "pid": os.getpid()}, fh, sort_keys=True)
+
+
+def _holder_alive(pid: object) -> bool:
+    """False only for a pid that is provably gone; any doubt reads as alive."""
+    if not isinstance(pid, int) or pid <= 0:
+        return True
+    try:
+        from coordinator_core.session.core import pid_alive
+
+        return bool(pid_alive(pid))
+    except Exception:  # noqa: BLE001 -- liveness is advisory; age still expires the claim
+        return True
+
+
+def _claim_expirable(record: dict, path: Path) -> bool:
+    """True when the claim's holder is dead or the claim is older than `CLAIM_MAX_AGE_SECONDS`.
+    A legacy claim without `claimed_at` ages by the file's mtime."""
+    stamp = record.get("claimed_at")
+    if not isinstance(stamp, (int, float)):
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            return False
+    if time.time() - stamp > CLAIM_MAX_AGE_SECONDS:
+        return True
+    return not _holder_alive(record.get("pid"))
+
+
+def _adopt_expired_claim(
+    claimed: Path, record: dict, run_id: object, token: object, script_path: object
+) -> tuple[bool, Optional[Path]]:
+    """Take over a matching, expirable claim: the rename out of `claimed` has exactly one winner,
+    who re-creates the claim under its own pid and time. Returns (adopted, the renamed-aside
+    file the caller unlinks)."""
+    if not _matches(record, run_id, token, script_path) or not _claim_expirable(record, claimed):
+        return False, None
+    aside = claimed.with_name(f"{claimed.name}.adopt.{os.getpid()}")
+    try:
+        os.replace(claimed, aside)
+    except OSError:
+        return False, None
+    try:
+        fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:
+        return False, aside
+    _write_claim(fd, {k: v for k, v in record.items() if k not in ("claimed_at", "pid")})
+    return True, aside
 
 
 def _drop_staged_twins(repo_root: Path, run_id: object) -> None:
@@ -373,10 +433,13 @@ def spent_receipt(repo_root: Path, run_id: object, token: object, script_path: o
 
 def claim_pending(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
     """Read-only: True while a `redeem`ed claim for this `token` and `script_path` is neither
-    consumed nor released, i.e. a terminal commit is running. Claims nothing."""
+    consumed nor released and its holder is live and in budget, i.e. a terminal commit is running.
+    An expirable claim (`_claim_expirable`) is not pending: `redeem` adopts it. Claims nothing."""
     if not _well_formed(run_id, token, script_path):
         return False
-    return _matches(_read(_record_path(repo_root, run_id, claimed=True)), run_id, token, script_path)
+    path = _record_path(repo_root, run_id, claimed=True)
+    record = _read(path)
+    return _matches(record, run_id, token, script_path) and not _claim_expirable(record, path)
 
 
 def note_halt_landing(repo_root: Path, run_id: object, token: object, script_path: object, landed: dict) -> None:
