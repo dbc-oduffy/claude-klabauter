@@ -157,4 +157,30 @@ def test_claim_release_past_the_deadline_is_skipped_and_named(clock, monkeypatch
         clock.now += 2.0
         note = commit_v2._release_committed_claims_step(tmp_path, ["a.py"])
     assert note is not None and "_release_committed_claims_step" in note
+    assert "deferred to the next op" in note
     assert len(released) == 1
+
+
+def test_expired_release_records_paths_and_sha_and_a_record_failure_is_swallowed(clock, monkeypatch, tmp_path):
+    from coordinator_core.session import deferred_release
+
+    recorded = []
+    monkeypatch.setattr(commit_v2.session_core, "resolve_session_id", lambda _cwd: "sid-1")
+    monkeypatch.setattr(deferred_release, "record", lambda *a: recorded.append(a) or True)
+    monkeypatch.setattr(
+        commit_v2.session_scope, "release_committed_claims_or_retain", lambda *a, **k: recorded.append("inline")
+    )
+    with land_deadline.scope(1.0):
+        assert commit_v2._release_committed_claims_step(tmp_path, ["a.py"], "abc123") is None
+        assert recorded == ["inline"]
+        clock.now += 2.0
+        recorded.clear()
+        note = commit_v2._release_committed_claims_step(tmp_path, ["a.py", "b.py"], "abc123")
+        assert recorded == [("sid-1", str(tmp_path), "abc123", ["a.py", "b.py"])]
+
+        def boom(*a):
+            raise RuntimeError("disk")
+
+        monkeypatch.setattr(deferred_release, "record", boom)
+        assert "deferred to the next op" in commit_v2._release_committed_claims_step(tmp_path, ["a.py"], "abc123")
+    assert note is not None

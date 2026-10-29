@@ -696,7 +696,7 @@ def _resume_commit_retry(root: Optional[Path], plan_path: str) -> dict:
     from coordinator_core.ops.dispatch_emit.emit import _require_base_reaches_head
     from coordinator_core.ops.dispatch_emit.halt_refire import commit_retry_from_reason
     from coordinator_core.ops.dispatch_emit.halted_run import (
-        HALT_REASON_FIELD, HALTED_FILE, halted_ask_run_for, halted_run_base, halted_run_for,
+        HALT_REASON_FIELD, HALTED_FILE, halted_run_base, halted_run_to_resume,
     )
 
     plan = Path(plan_path)
@@ -707,7 +707,7 @@ def _resume_commit_retry(root: Optional[Path], plan_path: str) -> dict:
     sizing_rel = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
     if not sizing_rel or sizing_rel == "null":
         return {}
-    halted_id = halted_run_for(root, sizing_rel) or halted_ask_run_for(root, sizing_rel)
+    halted_id = halted_run_to_resume(root, sizing_rel)
     if not halted_id:
         return {}
     run_dir = record_dir(root, halted_id)

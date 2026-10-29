@@ -200,7 +200,9 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         "block-topic-branch",
         "block-topic-branch-fire",
         "git checkout -b topic/shape-probe",
-        True,
+        # A topic-branch create emits nothing since 900eac166a; the guard is
+        # off deny_registry (DR-475, 307ea22403; advisory by b17ec35251).
+        False,
         GuardBand.CONFINEMENT_DENY,
         False,
     ),
@@ -244,7 +246,7 @@ def _classify_chain(
     chain: List[GuardEntry], label: str, exceptions: frozenset = _KNOWN_ALLOW_WITH_CONTENT_EXCEPTIONS
 ) -> List[Dict[str, Any]]:
     """Call `.fn()` for every `CONFINEMENT_DENY` entry in `chain` and flag
-    any envelope that is not `None` and not a proper deny-with-no-rewrite.
+    any deny envelope that carries a rewrite (non-deny envelopes are held by dispatch).
     `exceptions` is threaded as a parameter (rather than read as a bare
     module global) so `test_no_confinement_deny_guard_is_currently_exempted`
     below can call this with an empty set and fire the former exception's
@@ -265,7 +267,9 @@ def _classify_chain(
         hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None
         decision = hso.get("permissionDecision") if isinstance(hso, dict) else None
         has_rewrite = isinstance(hso, dict) and "updatedInput" in hso
-        if decision != "deny" or has_rewrite:
+        # A non-deny envelope is held by dispatch's loop and never shadows a later
+        # deny; only a deny that carries a rewrite breaks the band contract.
+        if decision == "deny" and has_rewrite:
             violations.append(
                 {
                     "guard": entry.name,
@@ -355,7 +359,12 @@ def test_every_live_confinement_deny_guard_has_a_firing_row_in_corpus():
     chain = _dummy_chain()
     confinement_names = {e.name for e in chain if e.band is GuardBand.CONFINEMENT_DENY}
     firing_names = {row.guard for row in ALL_ROWS if row.expected_speaker}
-    missing = confinement_names - firing_names
+    from coordinator_core import deny_registry
+
+    # block-topic-branch: advisory-only, off deny_registry, its topic-branch
+    # row emits nothing (900eac166a); it keeps a row below pinned to None.
+    assert deny_registry.guard_deny_class("block-topic-branch") is None
+    missing = confinement_names - firing_names - {"block-topic-branch"}
     assert not missing, (
         "CONFINEMENT_DENY guards registered in the live chain with no "
         "firing row in this file's corpus -- their non-None branch was "
@@ -480,13 +489,37 @@ def test_extra_firing_rows_actually_fire():
                 )
 
 
+def test_topic_branch_create_row_stays_silent(tmp_path):
+    """The silent side of the `block-topic-branch` re-pin: a topic-branch
+    create returns None (900eac166a), so the row above cannot be a speaker."""
+    cmd = "git checkout -b topic/shape-probe"
+    session_id = "confinement-deny-band-shape-topic-%s" % uuid.uuid4().hex
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("CLAUDE_CODE_SESSION_ID", session_id)
+        chain = dispatch._build_guard_chain(
+            cmd=cmd,
+            session_id=session_id,
+            cwd=str(tmp_path),
+            payload={
+                "tool_name": "Bash",
+                "tool_input": {"command": cmd},
+                "session_id": session_id,
+                "cwd": str(tmp_path),
+            },
+            policy_file=None,
+            host_is_windows=False,
+        )
+        entry = next(e for e in chain if e.name == "block-topic-branch")
+        assert entry.fn() is None
+
+
 def test_gate_catches_a_synthetic_confinement_deny_violation():
     """Falsifiability (module docstring point 5, modeled on
     `test_guard_message_size.py`'s own AC7 falsifiability tests): splice a
     synthetic `CONFINEMENT_DENY` entry -- real chain, real neighbouring
-    guards, real shadow list -- that returns an allow+`updatedInput`
-    envelope (the exact shape `dispatch.GuardBand`'s docstring forbids, and
-    the shape commit `e63c42e39` shipped), and assert the checker flags it
+    guards, real shadow list -- that returns a deny+`updatedInput`
+    envelope (a hard verdict carrying a rewrite, which dispatch cannot hold),
+    and assert the checker flags it
     by name, index, and shadow list. A gate that cannot fail here is worse
     than no gate."""
     chain = _dummy_chain()
@@ -497,7 +530,7 @@ def test_gate_catches_a_synthetic_confinement_deny_violation():
         fn=lambda: {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
+                "permissionDecision": "deny",
                 "updatedInput": {"command": "echo rewritten-by-synthetic-violation"},
             }
         },
@@ -516,25 +549,12 @@ def test_gate_catches_a_synthetic_confinement_deny_violation():
     assert v["would_shadow"] == [e.name for e in chain[target_idx + 1 :]]
 
 
-def test_gate_catches_a_synthetic_allow_with_additional_context():
-    """Sibling falsifiability cell: the invariant also forbids a bare
-    allow+`additionalContext` (content, no rewrite) from an UNEXEMPTED
-    guard -- only `block-dev-repo-sentinel-removal` is named. A different
-    guard returning that exact shape must still be caught.
-
-    Spliced at the LAST non-exempted CONFINEMENT_DENY entry (rather than
-    the first, which `test_gate_catches_a_synthetic_confinement_deny_
-    violation` already uses) so the two falsifiability tests together
-    exercise `_classify_chain`'s shadow-list computation (`names[idx +
-    1:]`) at both an interior/terminal position and position 0, not the
-    same position twice. (Review: code-reviewer, Finding 4, 2026-08-05).
-    """
+def test_dispatch_holds_a_synthetic_allow_with_additional_context():
+    """The advisory side: an allow+`additionalContext` envelope from a
+    CONFINEMENT_DENY entry is not a violation, because dispatch holds it and
+    keeps walking the chain (a later hard deny still fires)."""
     chain = _dummy_chain()
-    target_idx = max(
-        i
-        for i, e in enumerate(chain)
-        if e.band is GuardBand.CONFINEMENT_DENY and e.name not in _KNOWN_ALLOW_WITH_CONTENT_EXCEPTIONS
-    )
+    target_idx = max(i for i, e in enumerate(chain) if e.band is GuardBand.CONFINEMENT_DENY)
     original = chain[target_idx]
     synthetic = GuardEntry(
         name=original.name,
@@ -551,8 +571,4 @@ def test_gate_catches_a_synthetic_allow_with_additional_context():
     spliced = list(chain)
     spliced[target_idx] = synthetic
 
-    violations = _classify_chain(spliced, label="synthetic-allow-with-context-probe")
-
-    assert len(violations) == 1, violations
-    assert violations[0]["guard"] == original.name
-    assert violations[0]["chain_index"] == target_idx
+    assert _classify_chain(spliced, label="synthetic-allow-with-context-probe") == []

@@ -170,7 +170,16 @@ def mint(
     if stale_params is not None:
         stale_params.unlink(missing_ok=True)
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+    _index("index_mint", repo_root, run_id, record["minted_at"])
     return token
+
+
+def _index(fn: str, repo_root: Path, *args) -> None:
+    """Keep the live-run index in step with the records. Deferred import: the index module
+    imports this one."""
+    from coordinator_core.ops.dispatch_emit import live_run_writes
+
+    getattr(live_run_writes, fn)(repo_root, *args)
 
 
 def escrow(repo_root: Path, run_id: str, token: str) -> bool:
@@ -511,6 +520,7 @@ def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> N
     held = _record_path(repo_root, run_id, escrow=True)
     if held is not None:
         held.unlink(missing_ok=True)
+    _index("index_remove", repo_root, run_id)
 
 
 def discard(repo_root: Path, run_id: str) -> Optional[dict]:
@@ -527,6 +537,7 @@ def discard(repo_root: Path, run_id: str) -> Optional[dict]:
     held = _record_path(repo_root, run_id, escrow=True)
     if held is not None:
         held.unlink(missing_ok=True)
+    _index("index_remove", repo_root, run_id)
     return record
 
 

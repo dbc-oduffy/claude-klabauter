@@ -3277,8 +3277,18 @@ def _release_own_path_claims(
     agents_base = os.path.join(base, ".agents")
     if not os.path.isdir(agents_base):
         return
+    indexed = (
+        None
+        if release_set is None
+        else _indexed_agent_dir_names(base, sid, release_set, paths)
+    )
     try:
-        agent_entries = sorted(os.scandir(agents_base), key=lambda e: e.name)
+        if indexed is None:
+            agent_entries = sorted(os.scandir(agents_base), key=lambda e: e.name)
+        else:
+            agent_entries = [
+                _AgentDirEntry(name, os.path.join(agents_base, name)) for name in indexed
+            ]
     except OSError:
         return
 
@@ -3337,6 +3347,52 @@ def _release_own_path_claims(
             _normalize_agent_touched_entry,
             agent_id=agent_dir.name,
         )
+
+
+class _AgentDirEntry:
+    """``os.DirEntry``-shaped record for an agent dir named by the claim index."""
+
+    __slots__ = ("name", "path")
+
+    def __init__(self, name: str, path: str) -> None:
+        self.name = name
+        self.path = path
+
+    def is_dir(self) -> bool:
+        return True
+
+
+def _indexed_agent_dir_names(
+    base: str, sid: str, release_set: Set[str], requested: Optional[Iterable[str]]
+) -> Optional[List[str]]:
+    """Agent dir names under ``base/.agents`` that hold a claim on *release_set* and belong to
+    *sid*, read from the claim index (``p`` stream per path, ``s`` stream for the sid) instead
+    of a scan of every agent dir. ``None`` when the index is absent, unstamped, the sid has no
+    ``s`` stream or any read fails -- the caller then scans. A sink missing from the index is
+    a sink no adder indexed, which the index contract excludes (see ``claim_index``)."""
+    try:
+        index_dir = touch_record.claim_index_dir(base)
+        if not os.path.isfile(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE)):
+            return None
+        keys = {claim_index._normalize_key(p) for p in release_set}
+        keys.update(claim_index._normalize_key(p) for p in (requested or ()) if p)
+        sid_names = claim_index._read_index_names(touch_record.claim_index_file(index_dir, "s", sid))
+        if sid_names is None:
+            return None
+        path_names: Set[str] = set()
+        for key in keys:
+            path_names.update(
+                claim_index._read_index_names(touch_record.claim_index_file(index_dir, "p", key)) or ()
+            )
+    except OSError:
+        return None
+    prefix = ".agents/"
+    out: Set[str] = set()
+    for name in path_names & sid_names:
+        parts = name.split("/")
+        if len(parts) == 3 and name.startswith(prefix):
+            out.add(parts[1])
+    return sorted(out)
 
 
 def own_path_claims(sid: str, cwd: Optional[str] = None) -> List[str]:

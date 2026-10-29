@@ -147,7 +147,39 @@ def write_halt_marker(
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
     target = _write(Path(record_dir), payload)
     stamp_run_stage_at(Path(record_dir), "halted")
+    if sizing_rel:
+        _schedule_resume_build(Path(record_dir))
     return target
+
+
+#: Test seam: a callable `(target_root, run_id)` replacing the detached spawn.
+_RESUME_SPAWNER = None
+
+
+def _schedule_resume_build(record_dir: Path) -> None:
+    """Start `halt_resume_build` detached for the halted run at `record_dir`
+    (`<root>/<RECORD_DIR_ROOT or scratch/warp>/<run>`); never raises and never waits.
+
+    Skipped under pytest unless `_RESUME_SPAWNER` is set, so a fixture halt never starts a real process."""
+    rd = Path(record_dir)
+    try:
+        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
+    except IndexError:
+        return
+    try:
+        if _RESUME_SPAWNER is not None:
+            _RESUME_SPAWNER(root, rd.name)
+            return
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            return
+        from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+
+        engine_root = Path(__file__).resolve().parents[3]
+        spawn_detached(
+            str(engine_root), str(Path(__file__).with_name("halt_resume_build.py")), [str(root), rd.name]
+        )
+    except Exception:  # noqa: BLE001 -- scheduling is best-effort; the marker is the truth
+        pass
 
 
 def halted_run_base(record_dir: Path) -> Optional[str]:
@@ -212,6 +244,12 @@ def _is_shell(run_dir: Path) -> bool:
     except (OSError, ValueError):
         return False
     return isinstance(stage, dict) and stage.get("stage") in (None, "minted")
+
+
+def halted_run_to_resume(repo_root: Path, sizing_rel: str) -> Optional[str]:
+    """The halted run a refire of `sizing_rel` resumes, a `warp-<stem>-*` run or else an `ask-<stamp>`
+    one. The submit hook and the emit body both resolve through here so their lookups cannot drift."""
+    return halted_run_for(repo_root, sizing_rel) or halted_ask_run_for(repo_root, sizing_rel)
 
 
 def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:

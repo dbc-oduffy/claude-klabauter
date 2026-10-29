@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.bash_guards import bump_outside_repo_write as guard
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
 from coordinator_core.ops.sibling_repo_provision_contract import ROUTE_REMEDY
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
@@ -56,25 +57,27 @@ def world(tmp_path, monkeypatch):
 
 
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the deny reason is now one nudge line,
+    # so the route-remedy tail is no longer delivered.
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_mkdir_into_absent_sibling_denies_and_names_route(world):
+def test_mkdir_into_absent_sibling_bumps_with_the_advisory_line(world):
     cmd = f"mkdir -p {world['sibling']}/x"
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert _reason(result).endswith(ROUTE_REMEDY)
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
-def test_redirect_into_absent_sibling_denies_and_names_route(world):
+def test_redirect_into_absent_sibling_bumps_with_the_advisory_line(world):
     cmd = f"echo hi > {world['sibling']}/f.txt"
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     assert result is not None
-    assert _reason(result).endswith(ROUTE_REMEDY)
+    assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
-def test_non_sibling_outside_target_denies_without_route(world):
+def test_non_sibling_outside_target_bumps_without_route(world):
     cmd = f"mkdir -p {world['elsewhere']}"
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     assert result is not None
@@ -87,7 +90,7 @@ def test_remedy_is_text_only_verdict_matches_unremedied(world, monkeypatch):
     monkeypatch.setattr(guard, "_with_route_remedy", lambda message, *_a: message)
     without = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     assert with_remedy is not None and without is not None
-    assert _reason(with_remedy) == _reason(without) + "\n" + ROUTE_REMEDY
+    assert _reason(with_remedy) == _reason(without)
     assert with_remedy["hookSpecificOutput"]["permissionDecision"] == (
         without["hookSpecificOutput"]["permissionDecision"]
     )

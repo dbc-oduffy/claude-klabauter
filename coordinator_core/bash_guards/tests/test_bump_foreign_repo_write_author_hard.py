@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core import machine_profile
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
 from coordinator_core.bash_guards._write_bump_marker import marker_basename, resolve_gitdir
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _posix,
@@ -52,8 +53,12 @@ def _run(repos, cmd, sid: str = SID, payload=None):  # noqa: F811
     return _enveloped(guard.check_bump_foreign_repo_write)(cmd, sid, str(repos["anchor"]), payload or {})
 
 
+_ADVISORY = "Advisory: " + CROSS_REPO_WARN_RISK
+
+
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the deny reason is now one nudge line.
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 def _armed(monkeypatch, repos):  # noqa: F811
@@ -78,12 +83,7 @@ def test_peer_repo_write_denied_despite_marker_and_warn(repos, monkeypatch, temp
     result = _run(repos, cmd)
 
     assert result is not None
-    reason = _reason(result)
-    assert "out-of-repo writes are blocked" in reason
-    flat = reason.replace("\\", "/")
-    assert _posix(repos["anchor"]) in flat and "/scratch/" in flat
-    assert "touch" not in reason
-    assert "cross-repo-memo" in reason
+    assert _reason(result) == _ADVISORY
 
 
 def test_read_only_peer_gitdir_is_still_denied(repos, monkeypatch):  # noqa: F811
@@ -93,7 +93,7 @@ def test_read_only_peer_gitdir_is_still_denied(repos, monkeypatch):  # noqa: F81
     result = _run(repos, f"echo hi > {_posix(repos['foreign'] / 'out.txt')}")
 
     assert result is not None
-    assert "out-of-repo writes are blocked" in _reason(result)
+    assert _reason(result) == _ADVISORY
 
 
 def test_read_only_peer_gitdir_passes_with_flag_off(repos, monkeypatch):  # noqa: F811
@@ -111,10 +111,7 @@ def test_subagent_is_denied_with_its_share_dir_named(repos, monkeypatch):  # noq
     result = _run(repos, cmd, payload={"agent_id": "a1b2c3d4e5f6a7b8"})
 
     assert result is not None
-    reason = _reason(result)
-    share = machinery_paths.share_dir(guard.resolve_git_root(str(repos["anchor"])), SID)
-    assert share.replace("\\", "/") in reason.replace("\\", "/")
-    assert "dispatching EM" in reason
+    assert _reason(result) == _ADVISORY
 
 
 def test_cross_repo_memo_invocation_passes(repos, monkeypatch):  # noqa: F811
@@ -192,7 +189,7 @@ def test_owner_hand_edit_in_its_mirror_stays_denied(repos, monkeypatch):  # noqa
     result = _run(repos, f"echo x > {_posix(repos['foreign'] / 'foo.py')}")
 
     assert result is not None
-    assert "out-of-repo writes are blocked" in _reason(result)
+    assert _reason(result) == _ADVISORY
 
 
 @pytest.mark.parametrize("verb", ["push origin candidate", "pull origin candidate", "merge origin/candidate"])
@@ -203,7 +200,7 @@ def test_non_owner_mirror_sync_and_owner_non_ff_merge_are_denied(repos, monkeypa
     result = _run(repos, f"git -C {_posix(repos['foreign'])} {verb}")
 
     assert result is not None
-    assert "out-of-repo writes are blocked" in _reason(result)
+    assert _reason(result) == _ADVISORY
 
 
 def test_mirror_reads_are_admitted_for_a_non_owner(repos, monkeypatch):  # noqa: F811
@@ -230,7 +227,7 @@ def test_flag_off_owner_sync_keeps_the_marker_message(repos, monkeypatch):  # no
     result = _run(repos, f"git -C {_posix(repos['foreign'])} push origin candidate")
 
     assert result is not None
-    assert "out-of-repo writes are blocked" not in _reason(result)
+    assert _reason(result) == _ADVISORY
 
 
 def test_flag_off_message_is_the_marker_message(repos, monkeypatch):  # noqa: F811
@@ -240,4 +237,4 @@ def test_flag_off_message_is_the_marker_message(repos, monkeypatch):  # noqa: F8
     result = _run(repos, f"echo hi > {_posix(repos['foreign'] / 'out.txt')}")
 
     assert result is not None
-    assert "out-of-repo writes are blocked" not in _reason(result)
+    assert _reason(result) == _ADVISORY

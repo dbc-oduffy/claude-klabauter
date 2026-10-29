@@ -90,6 +90,33 @@ def test_emit_reply_with_findings_still_names_them(tmp_path):
     assert "bad sizing" in _hso(env)["permissionDecisionReason"]
 
 
+def test_refusal_is_logged_whole_and_deny_leads_with_cause_and_log_path(tmp_path):
+    import json
+
+    _submit_root(tmp_path)
+    long_cause = "dispatch refused: " + ("x" * 400) + " END-OF-CAUSE"
+    env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r: {"ok": False, "findings": long_cause})
+    reason = _hso(env)["permissionDecisionReason"]
+    assert _hso(env)["permissionDecision"] == "deny"
+    assert reason[:280].startswith("[coordinator] The engine emitted no run: dispatch refused")
+    assert mod.REFUSAL_LOG_REL in reason[:280]
+    lines = (tmp_path / mod.REFUSAL_LOG_REL).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert "END-OF-CAUSE" in json.loads(lines[0])["refusal"]
+    mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r: {"ok": False, "findings": "again"})
+    assert len((tmp_path / mod.REFUSAL_LOG_REL).read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_log_failure_leaves_the_refusal_unchanged(tmp_path):
+    _submit_root(tmp_path)
+    (tmp_path / "state").write_text("a file where the state dir should be", encoding="utf-8")
+    env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r: {"ok": False, "findings": "bad sizing"})
+    reason = _hso(env)["permissionDecisionReason"]
+    assert _hso(env)["permissionDecision"] == "deny"
+    assert "bad sizing" in reason
+    assert mod.REFUSAL_LOG_REL not in reason
+
+
 def test_handler_never_returns_empty_for_a_submission(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "evaluate", lambda _p: {})
     monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: None)
@@ -121,3 +148,16 @@ def test_retire_failure_is_named_in_the_rewrite_and_does_not_block(tmp_path, mon
     assert hso["permissionDecision"] == "allow"
     assert "OSError: disk gone" in hso["additionalContext"]
     assert hso["updatedInput"]["scriptPath"] == str(script)
+
+
+def test_refusal_log_keeps_its_newest_half_past_the_cap(tmp_path, monkeypatch):
+    _submit_root(tmp_path)
+    monkeypatch.setattr(mod, "_REFUSAL_LOG_CAP_BYTES", 400)
+    log = tmp_path / mod.REFUSAL_LOG_REL
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join('{"old": %d}\n' % i for i in range(60)), encoding="utf-8")
+    mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r: {"ok": False, "findings": "dispatch refused: NEWEST"})
+    text = log.read_text(encoding="utf-8")
+    assert len(text.encode("utf-8")) < 400 + 200
+    assert text.splitlines()[-1].count("NEWEST") == 1 and '{"old": 0}' not in text
+    assert all(line.startswith("{") for line in text.splitlines())

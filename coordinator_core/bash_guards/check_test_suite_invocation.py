@@ -1113,6 +1113,15 @@ def _expand_segments(
     return out_s, out_j
 
 
+def _is_windowless_launcher(token: str) -> bool:
+    """``box-launch-windowless`` by base name, any extension."""
+    return _base(token).split(".", 1)[0] == "box-launch-windowless"
+
+
+def _is_interpreter_token(token: str) -> bool:
+    return re.match(r"^python[0-9.]*$", _base(token)) is not None
+
+
 def _peel_prefix(tokens: Sequence[str]) -> Tuple[List[str], Optional[str]]:
     """``(remaining_tokens, shell_c_payload)``: the tokens after the prefix
     peel, and the raw payload string when the peel stopped at a shell ``-c``
@@ -1145,6 +1154,18 @@ def _peel_prefix(tokens: Sequence[str]) -> Tuple[List[str], Optional[str]]:
         # runner was seen -- every body, broad ones included, was invisible.
         if tok in _SHELL_RESERVED_PREFIX_WORDS:
             i += 1
+            continue
+        launcher_at = i
+        if _is_interpreter_token(tok) and i + 1 < n:
+            launcher_at = i + 1
+        if _is_windowless_launcher(tokens[launcher_at]):
+            if "--" in tokens[launcher_at + 1:]:
+                i = tokens.index("--", launcher_at + 1) + 1
+            else:
+                i = launcher_at + 1
+                while i < n and tokens[i] in ("--log", "--cwd"):
+                    i += 2
+                i = min(i, n)
             continue
         if _ENV_ASSIGN_RE.match(tok):
             i += 1

@@ -3076,6 +3076,65 @@ def test_argsfile_command_without_mutex_is_denied_through_check(tmp_path):
     assert guard.classify_command(cmd, cwd=str(tmp_path))
 
 
+_LAUNCHERS = [
+    "box-launch-windowless",
+    "box-launch-windowless.py",
+    "python coordinator/bin/box-launch-windowless.py",
+    "bin/box-launch-windowless.cmd",
+]
+
+
+@pytest.mark.parametrize("launcher", _LAUNCHERS)
+def test_launcher_wrapped_pytest_classified_like_direct(tmp_path, launcher):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("", encoding="utf-8")
+    cwd = str(tmp_path)
+    for tail in ("python -m pytest", "pytest -n 7", "python -m pytest tests"):
+        wrapped = "%s --log l.txt -- %s" % (launcher, tail)
+        assert bool(guard.classify_command(wrapped, cwd=cwd)) == bool(
+            guard.classify_command(tail, cwd=cwd)), tail
+    assert guard.classify_command(
+        "%s --log l.txt -- python -m pytest -n 7" % launcher, cwd=cwd)
+    assert not guard.classify_command(
+        "%s -- python -m pytest tests/test_a.py" % launcher, cwd=cwd)
+
+
+@pytest.mark.parametrize("launcher", _LAUNCHERS)
+def test_launcher_without_separator_classified_like_direct(tmp_path, launcher):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("", encoding="utf-8")
+    cwd = str(tmp_path)
+    for flags in ("", "--log l.txt ", "--log l.txt --cwd d "):
+        assert guard.classify_command(
+            "%s %spython -m pytest" % (launcher, flags), cwd=cwd)
+        assert guard.classify_command(
+            "%s %spytest -n 7" % (launcher, flags), cwd=cwd)
+        assert not guard.classify_command(
+            "%s %spython -m pytest tests/test_a.py" % (launcher, flags), cwd=cwd)
+
+
+@pytest.mark.parametrize("launcher", ["", "box-launch-windowless --log l.txt -- ",
+                                      "box-launch-windowless "])
+@pytest.mark.parametrize("content", [None, "", "\n  \n"])
+def test_argsfile_only_empty_or_missing_is_refused(tmp_path, launcher, content):
+    args = tmp_path / "files.args"
+    if content is not None:
+        args.write_text(content, encoding="utf-8")
+    posix = args.as_posix()
+    cmd = "%spython -m pytest -q @%s" % (launcher, posix)
+    assert guard.classify_command(cmd, cwd=str(tmp_path))
+
+
+def test_argsfile_only_nonempty_scoped_is_allowed_through_launcher(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("", encoding="utf-8")
+    args = tmp_path / "files.args"
+    args.write_text("tests/test_a.py\n", encoding="utf-8")
+    posix = args.as_posix()
+    cmd = "box-launch-windowless -- python -m pytest @%s" % posix
+    assert not guard.classify_command(cmd, cwd=str(tmp_path))
+
+
 @pytest.fixture
 def dir_tree(tmp_path):
     for sub in ("coordinator_core", "tests/sub", "tests/sub2"):

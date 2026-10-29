@@ -275,11 +275,14 @@ def _guard_class_relay_step(
     return {"transitions": transitions, "skips": skips}
 
 
-def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> Optional[str]:
+def _release_committed_claims_step(
+    worktree_root: Path, released: list[str], sha: Optional[str] = None
+) -> Optional[str]:
     """Runs AFTER `commit_paths` has already landed the commit -- like
     `_guard_class_relay_step`, this step cannot refuse, delay, or fail it
-    (NEGATIVE SPEC). Past the land_run deadline it skips the release and returns the note naming
-    the leg: the claims stay held until reaped, the landed commit is still reported landed.
+    (NEGATIVE SPEC). Past the land_run deadline it skips the release, records (sid, sha, paths)
+    via `deferred_release.record` for the session's next op or Stop to drain, and returns the
+    note naming the leg; a recording failure is swallowed.
 
     `sid` comes from `session_core.resolve_session_id`, which can resolve to the SPAWNING
     session inside the resident warm server rather than the true caller.
@@ -289,9 +292,17 @@ def _release_committed_claims_step(worktree_root: Path, released: list[str]) -> 
     from coordinator_core.ops.dispatch_emit import land_deadline
 
     if land_deadline.expired():
+        try:
+            from coordinator_core.session import deferred_release
+
+            deferred_release.record(
+                session_core.resolve_session_id(str(worktree_root)), str(worktree_root), sha, released
+            )
+        except Exception:  # noqa: BLE001 -- never raise (negative spec)
+            pass
         return (
             "land-deadline: leg commit_v2._release_committed_claims_step skipped past the land_run "
-            "budget; the committed paths' claims stay held until reaped"
+            "budget; release deferred to the next op"
         )
     session_scope.release_committed_claims_or_retain(
         worktree_root,
@@ -1465,7 +1476,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 with ledger.phase("record_ledger"):
                     _record_ledger(worktree_root, done_paths, done_sha, done_message)
                 with ledger.phase("release_committed_claims"):
-                    _release_committed_claims_step(worktree_root, done_paths)
+                    _release_committed_claims_step(worktree_root, done_paths, done_sha)
             return _error(
                 f"{landing.error['error']} The product commit {landed_halves[0][3]} landed; "
                 f"these process paths did not: {unlanded}. Retry the same call to land them.",
@@ -1563,7 +1574,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     # Post-commit, same negative spec. Release set includes outcome.no_delta members.
     with ledger.phase("release_committed_claims"):
         release_note = _release_committed_claims_step(
-            worktree_root, list(raw_paths) + raw_removed
+            worktree_root, list(raw_paths) + raw_removed, sha
         )
     if release_note is not None:
         warnings.append(release_note)

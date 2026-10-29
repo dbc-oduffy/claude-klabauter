@@ -45,9 +45,14 @@ def _denied(result):
     if result is None:
         return False
     out = result["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    assert "<repo>/scratch/" in out["permissionDecisionReason"]
-    assert "COORDINATOR_" not in out["permissionDecisionReason"]
+    # Ruled advisory (deny_registry.ADVISORY_BY_RULING, DR-475, landed b17ec35251): the would-be
+    # deny surfaces as an allow carrying the deny text, never a refusal.
+    assert out["permissionDecision"] == "allow"
+    assert result["guardLevel"] == "log"
+    text = out["additionalContext"]
+    assert "DENY:" in text
+    assert "<repo>/scratch/" in text
+    assert "COORDINATOR_" not in text
     return True
 
 

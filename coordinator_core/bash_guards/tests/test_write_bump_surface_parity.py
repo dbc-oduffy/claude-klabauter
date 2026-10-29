@@ -83,6 +83,13 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
 
 
+@pytest.fixture(autouse=True)
+def _commit_advisory_off(monkeypatch):
+    """These tests probe the bump with `git commit`; a cross-repo commit otherwise warns on stderr
+    and returns None (040758b972, pinned in test_bump_foreign_repo_write_nested_scratch_clone)."""
+    monkeypatch.setattr(fg_guard, "_CROSS_REPO_ADVISORY_VERBS", frozenset())
+
+
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 

@@ -187,6 +187,7 @@ import os
 import queue
 import signal
 import sys
+import collections
 import threading
 import time
 from pathlib import Path
@@ -852,6 +853,61 @@ def _prune_dispatch_claims(claim_dir) -> None:
         pass
 
 
+#: Reserved `msg` key carrying the accept process's `time.monotonic()` at submit; popped by
+#: `_pool_dispatch_worker` before dispatch. Monotonic clocks are system-wide on every platform
+#: this engine runs on, so the worker can subtract it from its own reading.
+_SUBMIT_STAMP_KEY = "_pool_submit_monotonic"
+
+
+def _declare_queue_wait(stamp: Any) -> None:
+    """Hand bind-minus-submit seconds to `land_deadline`; resets to 0 with no stamp so a prior
+    task in this worker process never leaks its wait. Never raises."""
+    try:
+        from coordinator_core.ops.dispatch_emit import land_deadline
+
+        wait = time.monotonic() - float(stamp) if isinstance(stamp, (int, float)) else 0.0
+        land_deadline.set_queue_wait(wait, _POOL_RESULT_DEADLINE_SECS)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class _AdmissionGate:
+    """Counting gate over pool slots; waiters are served mutating-first, FIFO within a class."""
+
+    def __init__(self, size: int) -> None:
+        self._free = max(1, int(size))
+        self._lock = threading.Lock()
+        self._mutating: "collections.deque[threading.Event]" = collections.deque()
+        self._reading: "collections.deque[threading.Event]" = collections.deque()
+
+    def acquire(self, mutating: bool, timeout: float) -> Optional[float]:
+        """Seconds waited for a slot (0.0 when one was free), or None when `timeout` elapsed."""
+        with self._lock:
+            if self._free > 0 and not self._mutating and not self._reading:
+                self._free -= 1
+                return 0.0
+            granted = threading.Event()
+            (self._mutating if mutating else self._reading).append(granted)
+        t0 = time.monotonic()
+        if granted.wait(max(0.0, timeout)):
+            return time.monotonic() - t0
+        with self._lock:
+            if granted.is_set():
+                return time.monotonic() - t0
+            for q in (self._mutating, self._reading):
+                if granted in q:
+                    q.remove(granted)
+        return None
+
+    def release(self) -> None:
+        with self._lock:
+            for q in (self._mutating, self._reading):
+                if q:
+                    q.popleft().set()
+                    return
+            self._free += 1
+
+
 def _pool_dispatch_worker(
     msg: dict,
     caller: Optional[CallerContext],
@@ -864,9 +920,11 @@ def _pool_dispatch_worker(
     The claim is the first act: if the accept process already withdrew this
     key (it won the same O_EXCL create at its deadline), the op does not run.
     """
+    stamp = msg.pop(_SUBMIT_STAMP_KEY, None) if isinstance(msg, dict) else None
     claim = _claim_path(claim_dir, dispatch_key)
     if claim is not None and not _take_claim(claim, os.getpid()):
         return {_NOT_DISPATCHED_MARKER: True}
+    _declare_queue_wait(stamp)
     disarm = _arm_stall_dump(stall_secs, claim)
     try:
         return _pool_dispatch_worker_body(msg, caller)
@@ -1101,7 +1159,7 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
     env_for_bind = caller.env if caller is not None else None
-    _repair_settings_home_to_pristine()
+    _restore_worker_environ_to_pristine()
     try:
         with per_request_state(
             env=env_for_bind,
@@ -1798,49 +1856,35 @@ def _bind_null_std_streams() -> None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8", newline="\n"))
 
 
-_PRISTINE_HOME_UNCAPTURED = object()
+_worker_pristine_environ: Optional[dict] = None
+"""This worker process's whole `os.environ`, copied as the last act of
+`_worker_process_init`; `None` in any process that never ran it (the accept
+process, direct importers), where restore must not fire.
 
-_worker_pristine_settings_home: object = _PRISTINE_HOME_UNCAPTURED
-"""This worker process's own `COORDINATOR_SETTINGS_HOME` disposition, captured
-once at process start -- `None` for "the spawner had none set", a `str` for the
-value it did have, and `_PRISTINE_HOME_UNCAPTURED` in any process that never ran
-`_worker_process_init` (the accept process, and every test importing this module
-directly), where repair must not fire.
-
-WHY A CAPTURE AND NOT A TRUST OF THE `finally`. `per_request_state`'s borrow
-restores on the way out, and that restore is correct for every reader that lives
-and dies inside the task. It does not cover a reader that OUTLIVES the task
-boundary: a background thread, an `atexit` handler, or a child process spawned
-inside the borrowed block keeps reading the borrowed home after the restore
-runs. Nor does it cover a restore that never runs at all -- `os._exit`, a
-C-level crash -- which leaves a POOLED, REUSED worker permanently mis-homed for
-whichever caller lands on it next, silently and in the direction that disarms
-guards (`bash_guards/_blanket_disarm.py :: marker_path`). Verifying at task
-entry makes that state unreachable rather than remembered.
+A pooled worker is reused, and an op that mutates `os.environ` (a test run, a
+replay, a borrow whose `finally` never ran) would otherwise hand that state to
+whichever op lands on the worker next.
 """
 
 
-def _repair_settings_home_to_pristine() -> None:
-    """Return this worker's `COORDINATOR_SETTINGS_HOME` to its captured
-    process-start disposition, before the next request's borrow opens.
-
-    A no-op in the ordinary case (nothing leaked, the value already matches),
-    and a no-op in any process that never captured -- repair fires only where a
-    pristine disposition is actually known, so the accept process and direct
-    importers are untouched.
+def _restore_worker_environ_to_pristine() -> None:
+    """Reset `os.environ` to the snapshot taken at worker init, before the next
+    request's borrow opens. Compares through `os.environ` itself so Windows
+    key case-folding applies to both sides. A no-op when uncaptured.
     """
-    if _worker_pristine_settings_home is _PRISTINE_HOME_UNCAPTURED:
+    pristine = _worker_pristine_environ
+    if pristine is None:
         return
-    if _worker_pristine_settings_home is None:
-        os.environ.pop("COORDINATOR_SETTINGS_HOME", None)
-    else:
-        os.environ["COORDINATOR_SETTINGS_HOME"] = str(_worker_pristine_settings_home)
+    for key in [k for k in os.environ if k not in pristine]:
+        os.environ.pop(key, None)
+    for key, value in pristine.items():
+        if os.environ.get(key) != value:
+            os.environ[key] = value
 
 
 def _worker_process_init(stderr_dir=None, stall_dir=None) -> None:
-    global _worker_pristine_settings_home, _WORKER_STALL_DIR
+    global _worker_pristine_environ, _WORKER_STALL_DIR
     _WORKER_STALL_DIR = Path(stall_dir) if stall_dir else None
-    _worker_pristine_settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
 
     from coordinator_core.warm import polite_io
 
@@ -1854,6 +1898,7 @@ def _worker_process_init(stderr_dir=None, stall_dir=None) -> None:
         daemon=True,
     ).start()
     _preload_op_registry()
+    _worker_pristine_environ = dict(os.environ)
 
 
 def _strip_ambient_pid(
@@ -2703,6 +2748,13 @@ class _ServerContext:
                     )
         return self._dispatch_pool
 
+    def _admission_gate(self) -> "_AdmissionGate":
+        """Per-context slot gate sized `DISPATCH_PROCESS_POOL_SIZE`, built on first use."""
+        gate = self.__dict__.get("_pool_gate")
+        if gate is None:
+            gate = self.__dict__.setdefault("_pool_gate", _AdmissionGate(DISPATCH_PROCESS_POOL_SIZE))
+        return gate
+
     def _track_pool_task(self, future: "concurrent.futures.Future", op: Optional[str]) -> None:
         """Record `future` (op, submit time) until it resolves; feeds `_stalled_holders`."""
         tasks = self.__dict__.setdefault("_pool_tasks", {})
@@ -2750,20 +2802,45 @@ class _ServerContext:
                     msg, holders, getattr(self, "_worker_stderr_dir", None)
                 )
             claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
-            _t_submit = time.time()
-            if claim is None:
-                future = pool.submit(_pool_dispatch_worker, msg, caller)
-            else:
-                future = pool.submit(
-                    _pool_dispatch_worker, msg, caller, dispatch_key, str(claim.parent), STALL_DUMP_SECS
+            gate = self._admission_gate()
+            _gate_wait = gate.acquire(_op_may_mutate(msg.get("method")), _POOL_RESULT_DEADLINE_SECS)
+            if _gate_wait is None:
+                if dispatch_key is not None:
+                    _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+                return _pool_not_started_envelope(
+                    msg,
+                    {
+                        "pool_size": DISPATCH_PROCESS_POOL_SIZE,
+                        "outstanding": self._pool_outstanding(),
+                    },
                 )
+            _t_submit = time.time()
+            _stamp = time.monotonic()
+            _wait_left = max(0.0, _POOL_RESULT_DEADLINE_SECS - _gate_wait)
+            _stamped_msg = {**msg, _SUBMIT_STAMP_KEY: _stamp}
+            try:
+                if claim is None:
+                    future = pool.submit(_pool_dispatch_worker, _stamped_msg, caller)
+                else:
+                    future = pool.submit(
+                        _pool_dispatch_worker,
+                        _stamped_msg,
+                        caller,
+                        dispatch_key,
+                        str(claim.parent),
+                        STALL_DUMP_SECS,
+                    )
+            except BaseException:
+                gate.release()
+                raise
+            future.add_done_callback(lambda _f: gate.release())
             self._track_pool_task(future, msg.get("method"))
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:
                 future.add_done_callback(lambda _f: _stamp_pool_future(dispatch_key, _f))
             try:
-                out = future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
+                out = future.result(timeout=_wait_left)
                 _release_claim(claim)
                 return out
             except concurrent.futures.TimeoutError:

@@ -20,6 +20,13 @@ from coordinator_core.win_portability import (
 from coordinator_core.guard_messages.testing import envelope_of
 
 
+@pytest.fixture(autouse=True)
+def _commit_advisory_off(monkeypatch):
+    """These tests probe the bump with `git commit`; a cross-repo commit otherwise warns on stderr
+    and returns None (040758b972, pinned in test_bump_foreign_repo_write_nested_scratch_clone)."""
+    monkeypatch.setattr(fg_guard, "_CROSS_REPO_ADVISORY_VERBS", frozenset())
+
+
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
@@ -657,13 +664,12 @@ def test_ac6_marker_carries_no_expiry_identity_gating_or_hard_deny(tmp_path, mon
     assert result is not None, "guard must actually fire for the absence assertions below to mean anything"
 
     hook_output = result["hookSpecificOutput"]
-    # This is an advisory bump (`permissionDecision: "deny"`, a passable
-    # speed bump), never a hard CONFINEMENT_DENY -- the registration-side
-    # `band`/`fail_closed` attributes this asserts are pinned by
-    # test_bump_foreign_repo_write.py's own AC19 test; this test asserts the
-    # MARKER's own absence properties, on a genuinely fired result.
-    assert hook_output["permissionDecision"] == "deny"
-    reason = hook_output["permissionDecisionReason"].lower()
+    # An advisory bump (allow plus one line; 307ea22403 DR-475, b17ec35251), never a hard
+    # CONFINEMENT_DENY -- the registration-side `band`/`fail_closed` attributes are pinned by
+    # test_bump_foreign_repo_write.py's own AC19 test; this asserts the MARKER's own absence
+    # properties, on a genuinely fired result.
+    assert hook_output["permissionDecision"] == "allow"
+    reason = hook_output["additionalContext"].lower()
     assert "expir" not in reason
     assert "identity" not in reason
     assert "fail_closed" not in reason

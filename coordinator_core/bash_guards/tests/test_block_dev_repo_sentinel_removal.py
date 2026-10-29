@@ -255,20 +255,22 @@ class TestReachableThroughTheDispatchChain:
             return "advisory"
         return "allow"
 
-    def test_bare_rm_denied_end_to_end(self):
-        assert self._decision("rm %s" % SENTINEL) == "deny"
+    # DR-475 (307ea22403): block-dev-repo-sentinel-removal is ADVISORY_BY_RULING in
+    # deny_registry, so a fire reaches the end of the chain as an advisory, never a deny.
+    def test_bare_rm_advises_end_to_end(self):
+        assert self._decision("rm %s" % SENTINEL) == "advisory"
 
-    def test_cd_prefixed_rm_denied_end_to_end(self):
-        assert self._decision("cd /repo && rm %s" % SENTINEL) == "deny"
+    def test_cd_prefixed_rm_advises_end_to_end(self):
+        assert self._decision("cd /repo && rm %s" % SENTINEL) == "advisory"
 
-    def test_git_dash_c_prefixed_rm_denied_end_to_end(self):
-        assert self._decision("git -C /repo status; git rm %s" % SENTINEL) == "deny"
+    def test_git_dash_c_prefixed_rm_advises_end_to_end(self):
+        assert self._decision("git -C /repo status; git rm %s" % SENTINEL) == "advisory"
 
     def test_unrelated_rm_allowed_end_to_end(self):
         assert self._decision("rm somefile.txt") == "allow"
 
     def test_registered_ahead_of_offer_git_c(self):
-        assert self._decision("cd /repo && rm %s" % SENTINEL) == "deny"
+        assert self._decision("cd /repo && rm %s" % SENTINEL) == "advisory"
 
 
 class TestAdvisoryLegAtItsNewChainPosition:
@@ -365,7 +367,9 @@ class TestAdvisoryLegAtItsNewChainPosition:
         first_non_none = None
         for i in range(start, len(chain)):
             envelope = envelope_of(chain[i].fn(), "em")
-            if envelope is not None:
+            # DR-475: earlier off-allowlist guards fire as advisories; the registry-listed
+            # block-stash-destruction is the downstream deny this advisory must not shadow.
+            if envelope is not None and envelope["hookSpecificOutput"]["permissionDecision"] == "deny":
                 first_non_none = (i, chain[i].name, envelope)
                 break
         assert first_non_none is not None, "expected a later guard to deny this input"

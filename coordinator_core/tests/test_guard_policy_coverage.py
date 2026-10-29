@@ -64,5 +64,11 @@ def test_floor_guards_name_only_existing_guards():
     write_modules = {
         p.stem.replace("_", "-") for p in (ROOT / "write_guards").glob("*.py")
     }
-    unknown = sorted(n for n in mp.FLOOR_GUARDS if n not in bash_names and n not in write_modules)
+    hook_modules = {
+        p.stem.replace("_", "-")
+        for p in (ROOT / "hooks").glob("*.py")
+        if p.name != "__init__.py"
+    }
+    registered = bash_names | write_modules | hook_modules
+    unknown = sorted(n for n in mp.FLOOR_GUARDS if n not in registered)
     assert not unknown, f"FLOOR_GUARDS names no registered guard: {unknown}"

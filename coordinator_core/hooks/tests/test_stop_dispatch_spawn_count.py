@@ -50,6 +50,14 @@ def test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log(tmp_path
     assert all("log" in s.argv for s in spawns), [s.argv for s in spawns]
 
 
+def test_deferred_release_leg_with_no_record_adds_no_spawn(tmp_path, monkeypatch):
+    payload = {"session_id": "sess-no-record", "cwd": str(tmp_path)}
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        stop_dispatch._deferred_release_stop_handler({"payload": payload})
+
+    assert spawns == [], [s.argv for s in spawns]
+
+
 def test_unmapped_directive_leg_adds_no_spawn(tmp_path, monkeypatch):
     entries = [{"turn": 20, "index": i, "text": f"fix thing {i}"} for i in range(3)]
     from coordinator_core.ops import pm_directive_map

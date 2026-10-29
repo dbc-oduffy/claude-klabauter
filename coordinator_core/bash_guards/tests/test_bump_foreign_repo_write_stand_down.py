@@ -209,7 +209,7 @@ def test_guard_stands_down_end_to_end_on_a_host_with_no_fleet(
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_guard_still_denies_end_to_end_where_the_premise_holds(
+def test_guard_still_bumps_end_to_end_where_the_premise_holds(
     repos, monkeypatch, _clean_bump_env
 ):
     """Property 3 of this file's header, through the entry point: on a fleet
@@ -221,12 +221,14 @@ def test_guard_still_denies_end_to_end_where_the_premise_holds(
     )
 
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the bump allows with one line.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_guard_denies_end_to_end_when_the_capability_layer_raises(
+def test_guard_bumps_end_to_end_when_the_capability_layer_raises(
     repos, monkeypatch, cloud_container, exploding_capability, _clean_bump_env
 ):
     """Fail open toward TODAY'S behaviour: venue markers say "stand down",
@@ -239,4 +241,5 @@ def test_guard_denies_end_to_end_when_the_capability_layer_raises(
     )
 
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")

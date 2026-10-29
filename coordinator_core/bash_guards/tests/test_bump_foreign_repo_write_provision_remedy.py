@@ -1,5 +1,6 @@
-"""A subagent Bash write into a provisioned sibling target is still bumped, and the bump reason
-ends in ROUTE_REMEDY; an unmarked registered sibling is bumped with no remedy line."""
+"""A subagent Bash write into a provisioned sibling target is still bumped, and the bump carries
+the one advisory line; the route-remedy tail the legacy deny reason ended in is no longer
+delivered (the bump guard is advisory-by-ruling: 307ea22403 DR-475, classified in b17ec35251)."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import json
 import pytest
 
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _clean_bump_env,  # noqa: F401 -- autoused fixture
     _commit_advisory_off,  # noqa: F401 -- autoused fixture
@@ -30,7 +32,7 @@ _PAYLOAD = {"agent_id": "deadbeef0123", "session_id": _SID}
 
 
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 def _run(repos, monkeypatch):
@@ -39,11 +41,13 @@ def _run(repos, monkeypatch):
     return _enveloped(guard.check_bump_foreign_repo_write)(cmd, _SID, str(repos["anchor"]), _PAYLOAD)
 
 
-def test_marked_target_is_bumped_and_reason_ends_in_route_remedy(repos, monkeypatch):
+def test_marked_target_is_bumped_with_the_advisory_line_and_no_remedy_tail(repos, monkeypatch):
     (repos["foreign"] / ".git" / MARKER_NAME).write_text(json.dumps({"name": "foreign"}), encoding="utf-8")
     result = _run(repos, monkeypatch)
     assert result is not None
-    assert _reason(result).endswith(ROUTE_REMEDY)
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
+    assert ROUTE_REMEDY not in _reason(result)
 
 
 def test_failing_contract_import_leaves_verdict_and_reason_unchanged(repos, monkeypatch):
@@ -63,7 +67,7 @@ def test_failing_contract_import_leaves_verdict_and_reason_unchanged(repos, monk
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == baseline["hookSpecificOutput"]["permissionDecision"]
     assert ROUTE_REMEDY not in _reason(result)
-    assert _reason(result) == _reason(baseline).removesuffix("\n" + ROUTE_REMEDY)
+    assert _reason(result) == _reason(baseline)
 
 
 def test_unmarked_registered_sibling_is_bumped_without_remedy(repos, monkeypatch):

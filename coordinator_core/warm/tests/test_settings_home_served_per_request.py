@@ -106,7 +106,7 @@ def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch, tm
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", pristine)
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _echo_settings_home)
 
-    monkeypatch.setattr(server, "_worker_pristine_settings_home", pristine)
+    monkeypatch.setattr(server, "_worker_pristine_environ", dict(os.environ))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "leaked-home"))
 
     result = server._pool_dispatch_worker(
@@ -118,22 +118,21 @@ def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch, tm
 
 def test_a_worker_whose_spawner_set_no_home_repairs_by_unsetting(monkeypatch, tmp_path):
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _echo_settings_home)
-    monkeypatch.setattr(server, "_worker_pristine_settings_home", None)
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setattr(server, "_worker_pristine_environ", dict(os.environ))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "leaked-home"))
 
-    server._repair_settings_home_to_pristine()
+    server._restore_worker_environ_to_pristine()
 
     assert "COORDINATOR_SETTINGS_HOME" not in os.environ
 
 
 def test_repair_is_inert_in_a_process_that_never_captured(monkeypatch, tmp_path):
     ambient = str(tmp_path / "ambient-home")
-    monkeypatch.setattr(
-        server, "_worker_pristine_settings_home", server._PRISTINE_HOME_UNCAPTURED
-    )
+    monkeypatch.setattr(server, "_worker_pristine_environ", None)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", ambient)
 
-    server._repair_settings_home_to_pristine()
+    server._restore_worker_environ_to_pristine()
 
     assert os.environ["COORDINATOR_SETTINGS_HOME"] == ambient
 
@@ -145,12 +144,12 @@ def test_worker_process_init_captures_the_pristine_disposition(monkeypatch, tmp_
     monkeypatch.setattr(server, "_preload_op_registry", lambda: None)
     monkeypatch.setattr(server.threading, "Thread", lambda **kw: _NoopThread())
 
-    before = server._worker_pristine_settings_home
+    before = server._worker_pristine_environ
     try:
         server._worker_process_init()
-        assert server._worker_pristine_settings_home == captured
+        assert server._worker_pristine_environ["COORDINATOR_SETTINGS_HOME"] == captured
     finally:
-        server._worker_pristine_settings_home = before
+        server._worker_pristine_environ = before
 
 
 class _NoopThread:

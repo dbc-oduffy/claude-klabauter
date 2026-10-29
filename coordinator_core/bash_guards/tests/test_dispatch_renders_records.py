@@ -23,6 +23,9 @@ from coordinator_core.guard_messages.alternative_record import (
 )
 
 _ENV_VAR = "COORDINATOR_FAKE_RECORD_OVERRIDE"
+# A deny_registry guard name: since 3ca9e4bee6 (apply_guard_level as the one policy point) an
+# unregistered chain entry's deny, a crash-deny included, is demoted to a nudge.
+_GUARD = "guard-disk-fill"
 _OVERRIDE_POINTER = "override keys"
 
 
@@ -38,7 +41,7 @@ def _record(*, with_override: bool = True, with_route: bool = True) -> Alternati
 
 
 def _fire(monkeypatch, tmp_path, result, *, subagent: bool = False):
-    chain = [GuardEntry("fake-record-guard", lambda: result, True, GuardBand.CONFINEMENT_DENY)]
+    chain = [GuardEntry(_GUARD, lambda: result, True, GuardBand.CONFINEMENT_DENY)]
     monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(chain))
     payload = {
         "tool_name": "Bash",
@@ -67,7 +70,7 @@ def test_em_payload_with_reachable_routes_index_carries_the_route_not_the_overri
     monkeypatch.setattr(keys, "routes_index_reachable", lambda: True)
     reason = _reason(_fire(monkeypatch, tmp_path, _record()))
     assert "synthetic deny." in reason
-    assert "Route key gr:fake-record-guard" in reason
+    assert f"Route key gr:{_GUARD}" in reason
     assert _OVERRIDE_POINTER not in reason
 
 
@@ -108,23 +111,23 @@ def _legacy(decision):
 def test_unpinned_deny_dict_crash_denies(monkeypatch, tmp_path):
     reason = _reason(_fire(monkeypatch, tmp_path, _legacy("deny")))
     assert "legacy dict text" not in reason
-    assert "fake-record-guard" in reason
+    assert _GUARD in reason
 
 
 def test_unpinned_non_deny_dict_crash_denies(monkeypatch, tmp_path):
     reason = _reason(_fire(monkeypatch, tmp_path, _legacy("allow")))
     assert "legacy dict text" not in reason
-    assert "fake-record-guard" in reason
+    assert _GUARD in reason
 
 
 def test_pinned_non_deny_dict_passes_through(monkeypatch, tmp_path):
-    monkeypatch.setitem(dispatch._PINNED_DICT_RETURNS, "fake-record-guard", "test pin")
+    monkeypatch.setitem(dispatch._PINNED_DICT_RETURNS, _GUARD, "test pin")
     envelope = _fire(monkeypatch, tmp_path, _legacy("allow"))
     assert _reason(envelope).startswith("legacy dict text")
 
 
 def test_pinned_deny_dict_still_crash_denies(monkeypatch, tmp_path):
-    monkeypatch.setitem(dispatch._PINNED_DICT_RETURNS, "fake-record-guard", "test pin")
+    monkeypatch.setitem(dispatch._PINNED_DICT_RETURNS, _GUARD, "test pin")
     assert "legacy dict text" not in _reason(_fire(monkeypatch, tmp_path, _legacy("deny")))
 
 

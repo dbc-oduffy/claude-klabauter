@@ -13,6 +13,7 @@ import hashlib
 import json
 import re
 import shlex
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Optional, Sequence
@@ -1156,6 +1157,18 @@ def stage(
             named += "; waiting on another plan: " + ", ".join(
                 f"{e['id']} ({e.get('detail') or ''})" for e in plan_held
             )
+        already = {g.id for g in gated} | {o.id for o in owed} | {e["id"] for e in plan_held}
+        closed = [
+            e
+            for e in exclusions
+            if e.get("id") not in already
+            and e.get("reason") != "checkpoint-landed"
+            and e.get("detail") != "disposition: coded"
+        ]
+        if closed:
+            named += "; excluded: " + ", ".join(
+                f"{e['id']} ({e.get('reason')}: {e.get('detail') or ''})" for e in closed
+            )
         raise AskStageError(
             f"the spine derives zero dispatchable rows{named}",
             owed_em_ids=[o.id for o in owed],
@@ -1388,7 +1401,11 @@ def stage(
     )
     if dropped_rows:
         _record_staging_drops(record, run_id, dropped_rows)
-    reply_sidecar.write_reply(root, record / "manifest.json", manifest_payload(root, manifest))
+    payload = manifest_payload(root, manifest)
+    reply_sidecar.write_reply(root, record / "manifest.json", payload)
+    from coordinator_core.ops.dispatch_emit import live_run_writes
+
+    live_run_writes.index_stage(root, run_id, payload, time.time())
     stamp_run_stage(root, run_id, "staged", steps_planned=len(manifest_rows))
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt

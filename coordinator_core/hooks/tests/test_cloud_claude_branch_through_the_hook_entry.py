@@ -48,7 +48,12 @@ def test_http_door_reads_the_cloud_host(repo, monkeypatch):
     assert not _topic_denied(preuse_bash_dispatch._handler({"payload": payload}))
 
 
-def test_a_desk_still_denies_the_claude_branch(repo, monkeypatch):
+def test_a_desk_no_longer_denies_or_nudges_the_claude_branch(repo, monkeypatch):
+    # block-topic-branch is in ADVISORY_BY_RULING (b17ec35251; DR-475) and emits nothing for a
+    # topic-branch push: a desk is neither denied nor nudged about the `claude/*` branch.
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     payload = payload_from_event(_event(repo, {}), FORWARDED_ENV_NAMES)
-    assert _topic_denied(preuse_bash_dispatch._handler({"payload": payload}))
+    out = preuse_bash_dispatch._handler({"payload": payload})
+    hso = (out or {}).get("hookSpecificOutput") or {}
+    assert not _topic_denied(out)
+    assert "topic branch" not in hso.get("additionalContext", "")

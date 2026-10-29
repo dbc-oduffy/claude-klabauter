@@ -7,7 +7,7 @@ import json
 import pytest
 
 from coordinator_core import warp_live
-from coordinator_core.ops.dispatch_emit import live_run_writes, run_token
+from coordinator_core.ops.dispatch_emit import live_run_index, live_run_writes, run_token
 
 SCRIPT = "scratch/warp/x.mjs"
 
@@ -20,7 +20,87 @@ def repo(tmp_path, monkeypatch):
     managed.mkdir()
     monkeypatch.setattr(warp_live, "managed_tempdir", lambda: managed)
     monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: managed / name)
+    monkeypatch.setenv("COORDINATOR_LOCK_ROOT", str(tmp_path / "locks"))
     return root
+
+
+def _index(root):
+    got = live_run_index.read(root, 2000.0)
+    assert got is not live_run_index.MISSING and got is not live_run_index.STALLED
+    return got
+
+
+def _submit(root, run_id):
+    warp_live.record_submission(
+        root, run_id, session_id="s", transcript_path=None, script_path=SCRIPT, sizing_rel=None
+    )
+
+
+def test_index_built_by_mint_stage_consume_matches_live_footprints(repo):
+    for rid, rows in (("r1", [["a/x.py"]]), ("r2", [["b/y.py"], ["c/z.py"]]), ("r3", None)):
+        run_token.mint(repo, rid, SCRIPT, session_id=None)
+        if rows is not None:
+            _stage(repo, rid, rows=rows, declared=["d/e.md"])
+            manifest = json.loads((repo / "scratch" / "warp" / rid / "manifest.json").read_text(encoding="utf-8"))
+            live_run_writes.index_stage(repo, rid, manifest)
+    run_token.mint(repo, "gone", SCRIPT, session_id=None)
+    run_token.consume(repo, "gone")
+    run_token.mint(repo, "dropped", SCRIPT, session_id=None)
+    run_token.discard(repo, "dropped")
+    index = _index(repo)
+    assert index == live_run_writes.live_footprints(repo, exclude_run_id=None)
+    for writes in (["a/x.py"], ["d"], ["c/z.py", "q"], ["nothing"]):
+        assert live_run_index.overlaps(writes, index) == live_run_writes.overlaps(
+            writes, live_run_writes.live_footprints(repo, exclude_run_id=None)
+        )
+
+
+def test_remint_resets_a_staged_footprint(repo):
+    run_token.mint(repo, "r1", SCRIPT, session_id=None)
+    live_run_writes.index_stage(repo, "r1", {"rows": [{"writes": ["a.py"]}]})
+    run_token.mint(repo, "r1", SCRIPT, session_id=None)
+    assert _index(repo) == {"r1": None}
+
+
+def test_unlaunched_entry_ages_out_launched_entry_stays(repo):
+    run_token.mint(repo, "unlaunched", SCRIPT, session_id=None)
+    run_token.mint(repo, "launched", SCRIPT, session_id="s")
+    _submit(repo, "launched")
+    assert live_run_writes.prune_index(repo) == []
+    past = __import__("time").time() + warp_live.UNLAUNCHED_GRACE_SECONDS + 60
+    assert live_run_writes.prune_index(repo, now=past) == ["unlaunched"]
+    assert set(_index(repo)) == {"launched"}
+    run_token.consume(repo, "launched")
+    assert _index(repo) == {}
+
+
+def test_ended_marker_drops_a_launched_entry(repo):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s")
+    _submit(repo, "r1")
+    marker = warp_live._ask_record_dir(repo, "r1")
+    marker.mkdir(parents=True, exist_ok=True)
+    (marker / warp_live._HALTED_FILE).write_text(json.dumps({"status": warp_live._STATUS_HALTED}), encoding="utf-8")
+    assert live_run_writes.prune_index(repo) == ["r1"]
+
+
+@pytest.mark.spawns_process
+def test_concurrent_mints_in_separate_processes_all_land(repo):
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; from pathlib import Path; from coordinator_core.ops.dispatch_emit import run_token;"
+        "[run_token.mint(Path(sys.argv[1]), f'{sys.argv[2]}{i}', sys.argv[3], session_id=None) for i in range(4)]"
+    )
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", code, str(repo), f"p{n}_", SCRIPT],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        for n in range(4)
+    ]
+    assert [p.wait(timeout=60) for p in procs] == [0, 0, 0, 0]
+    assert set(_index(repo)) == {f"p{n}_{i}" for n in range(4) for i in range(4)}
 
 
 def _stage(root, run_id, rows=(), declared=(), docs=()):

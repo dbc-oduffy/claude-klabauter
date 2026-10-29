@@ -241,7 +241,9 @@ def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
         }
     )
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
+    # guard-named-dispatch-tool-restriction is in ADVISORY_BY_RULING (b17ec35251; DR-475): allows, nudges.
+    assert hso["permissionDecision"] == "allow"
+    assert "denied" in hso["additionalContext"]
 
 
 def test_enforce_agent_dispatch_mode_registers():
@@ -283,7 +285,9 @@ def test_enforce_agent_dispatch_mode_teammate_name_path_segment_denied():
         }
     )
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
+    # enforce-agent-dispatch-mode is in ADVISORY_BY_RULING (b17ec35251; DR-475): nudges, no deny.
+    assert "permissionDecision" not in hso
+    assert "illegal in a sidecar path" in hso["additionalContext"]
 
 
 def test_enforce_agent_dispatch_mode_mode_escape_hatch(monkeypatch):
@@ -340,7 +344,9 @@ def test_preuse_agent_dispatch_first_deny_wins_over_leg4():
     )
     hso = out.get("hookSpecificOutput")
     assert hso is not None
-    assert hso.get("permissionDecision") == "deny"
+    # block-unenumerated-agent-type is in ADVISORY_BY_RULING (b17ec35251; DR-475): no deny, later legs still run.
+    assert hso.get("permissionDecision") != "deny"
+    assert hso["updatedInput"]["mode"] == "bypassPermissions"
 
 
 def test_preuse_skill_dispatch_registers():

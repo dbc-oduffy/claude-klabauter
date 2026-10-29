@@ -2565,6 +2565,7 @@ async def _dispatch_message_impl(msg: dict) -> dict:
     # start_server_async removed by C5. is_draining/in_flight_increment/in_flight_decrement
     # no longer called from dispatch_message.
     # Backlink: docs/decisions/DR-215-coordinator-core-command-type-execution-model.md
+    _drain_deferred_release(op_repo_key or request_repo)
     op_timeout = _timeout_for(method, msg)
     # DR-276: open a declare-write collection around the handler so an op may use
     # `session.declared_writes.declare_write()` and have it work identically here
@@ -3309,6 +3310,29 @@ def _exit_dispatch(rec: "_DispatchRecord") -> bool:
                 del _ACTIVE_DISPATCHES[i]
                 break
         return not rec.contaminated
+
+
+def _drain_deferred_release(repo) -> None:
+    """Release this session's deferred post-commit claims before the next op body.
+
+    One directory listing when nothing is pending. Skipped while a land deadline is
+    bound (a commit op's own budget); failures are swallowed to debug."""
+    try:
+        if not repo:
+            return
+        from coordinator_core.ops.dispatch_emit import land_deadline
+
+        if land_deadline._DEADLINE.get() is not None:
+            return
+        sid = _telemetry_sid()
+        if not sid:
+            return
+        from coordinator_core.session import deferred_release
+
+        if deferred_release.has_pending(sid, str(repo)):
+            deferred_release.drain(sid, str(repo))
+    except Exception:
+        _log().debug("coordinator_core.ipc: deferred release drain failed", exc_info=True)
 
 
 def _telemetry_sid() -> Optional[str]:

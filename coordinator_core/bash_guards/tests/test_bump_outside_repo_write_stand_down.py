@@ -129,7 +129,7 @@ def test_bash_leg_stand_down_leaves_a_durable_audit_line(env, monkeypatch):
     )
 
 
-def test_bash_leg_still_denies_where_the_premise_holds(env, monkeypatch):
+def test_bash_leg_still_bumps_where_the_premise_holds(env, monkeypatch):
     """Property 2, resting on the package pin rather than restating it."""
     _set_anchor(monkeypatch, env, "sess-sd-bash-fleet")
 
@@ -138,10 +138,12 @@ def test_bash_leg_still_denies_where_the_premise_holds(env, monkeypatch):
     )
 
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the bump allows with one line.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
-def test_bash_leg_denies_when_the_capability_layer_raises(
+def test_bash_leg_bumps_when_the_capability_layer_raises(
     env, monkeypatch, cloud_container, exploding_capability
 ):
     """Property 3. The venue markers say "stand down" and the capability
@@ -154,7 +156,9 @@ def test_bash_leg_denies_when_the_capability_layer_raises(
     )
 
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the bump allows with one line.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +189,7 @@ def test_powershell_leg_stands_down_on_a_host_with_no_fleet(env, monkeypatch, ca
 
 
 @requires_powershell_grammar
-def test_powershell_leg_still_denies_where_the_premise_holds(env, monkeypatch):
+def test_powershell_leg_still_bumps_where_the_premise_holds(env, monkeypatch):
     _set_anchor(monkeypatch, env, "sess-sd-ps-fleet")
     cmd = "New-Item -Path %s -ItemType File" % (env["outside"] / "ps-fleet.txt")
 
@@ -194,11 +198,13 @@ def test_powershell_leg_still_denies_where_the_premise_holds(env, monkeypatch):
     )
 
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the bump allows with one line.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
 @requires_powershell_grammar
-def test_powershell_leg_denies_when_the_capability_layer_raises(
+def test_powershell_leg_bumps_when_the_capability_layer_raises(
     env, monkeypatch, cloud_container, exploding_capability
 ):
     _set_anchor(monkeypatch, env, "sess-sd-ps-broken-cap")
@@ -209,4 +215,6 @@ def test_powershell_leg_denies_when_the_capability_layer_raises(
     )
 
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the bump allows with one line.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert result["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")

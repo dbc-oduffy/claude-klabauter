@@ -13,7 +13,7 @@ import pytest
 
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards._write_bump_marker import marker_basename, resolve_gitdir
-from coordinator_core.bash_guards._write_bump_message import render_gem_refusal_message
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _commit_advisory_off,  # noqa: F401 -- autouse fixture reused
     _posix,
@@ -86,8 +86,8 @@ def test_live_gem_pathspec_from_file_is_allowed_on_and_refused_off(
     monkeypatch.setattr(guard, "_CROSS_REPO_ADVISORY_VERBS", frozenset({"git commit", "git add"}))
     result = _run(repos, cmd)
     assert result is not None
-    label = guard._show_toplevel(str(repos["foreign"])) or str(repos["foreign"])
-    assert render_gem_refusal_message(label).split("\n")[0][:40] in str(result)
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the refusal text is the one fixed line.
+    assert CROSS_REPO_WARN_RISK in str(result)
 
 
 @pytest.mark.parametrize("sub", ["push", "add -A", "commit -a -m x"])
@@ -107,9 +107,7 @@ def test_off_refuses_with_gem_message_and_marker_does_not_clear(repos, monkeypat
     _setting(monkeypatch, "off")
     result = _run(repos, _scoped(repos))
     assert result is not None
-    reason = str(result)
-    label = guard._show_toplevel(str(repos["foreign"])) or str(repos["foreign"])
-    assert render_gem_refusal_message(label).split("\n")[0][:40] in reason
+    assert CROSS_REPO_WARN_RISK in str(result)
     (resolve_gitdir(str(repos["foreign"])) / marker_basename(GEM_SID)).touch()
     assert _run(repos, _scoped(repos)) is not None
 

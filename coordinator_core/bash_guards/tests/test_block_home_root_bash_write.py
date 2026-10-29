@@ -40,8 +40,11 @@ def _denied(result):
     if result is None:
         return False
     out = result["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    assert out["permissionDecisionReason"] == DENY_REASON
+    # Ruled advisory (deny_registry.ADVISORY_BY_RULING, DR-475, landed 307ea22403/b17ec35251): the
+    # would-be deny surfaces as an allow carrying the deny text, never a refusal.
+    assert out["permissionDecision"] == "allow"
+    assert result["guardLevel"] == "log"
+    assert out["additionalContext"] == "Advisory: " + DENY_REASON
     return True
 
 
@@ -120,15 +123,12 @@ def test_msys_spelled_home_is_denied(home, tmp_path):
     assert _denied(_enveloped(guard.check)(_payload(f"echo x > {msys}", cwd=tmp_path)))
 
 
-@pytest.mark.parametrize("level,decision", [("warn", "allow"), ("off", None)])
-def test_guard_level_downgrades_the_deny(home, tmp_path, monkeypatch, level, decision):
+@pytest.mark.parametrize("level", ["warn", "off"])
+def test_guard_level_never_denies(home, tmp_path, monkeypatch, level):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     machine_profile.reset_cache()
     out = _enveloped(guard.check)(_payload("echo x > ~/fo.txt", cwd=tmp_path))
-    if decision is None:
-        assert out is None
-    else:
-        assert out["hookSpecificOutput"]["permissionDecision"] == decision
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 def test_malformed_payload_allows(home):

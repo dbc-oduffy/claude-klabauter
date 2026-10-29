@@ -43,10 +43,25 @@ from coordinator_core.bash_guards._write_bump_marker import (
     marker_basename,
     resolve_gitdir,
 )
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
 from coordinator_core.bash_guards._write_bump_sink_shapes import WRITE_SINK_BINARIES
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
+
+
+_ADVISORY = "Advisory: " + CROSS_REPO_WARN_RISK
+# The bump is advisory-by-ruling (307ea22403 DR-475; b17ec35251): its deny text no longer reaches
+# the agent, so message clauses are pinned on the label builder and the line on the envelope.
+
+
+def _label(cmd: str, anchor: str) -> str:
+    resolved, _head, raw = next(iter(guard._iter_write_sink_candidates(cmd, anchor)))
+    return guard._no_git_repo_target_label(cmd, anchor, 0, resolved, raw)
+
+
+def _reason(result) -> str:
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 def _enveloped(check):
@@ -311,10 +326,10 @@ def test_backslash_spelled_outside_target_message_names_bash_landing_effect(env,
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-bs-outside", anchor_str, {})
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _reason(result) == _ADVISORY
     assert (
         f"no git repo ({backslash_target}; unquoted backslashes, so bash "
-        "writes into cwd instead)" in reason
+        "writes into cwd instead)" in _label(cmd, anchor_str)
     )
 
 
@@ -344,8 +359,7 @@ def test_doubled_backslash_outside_target_clause_tracks_quoting_not_the_backslas
         unquoted_cmd, "sess-bs-doubled-unquoted", anchor_str, {}
     )
     assert unquoted_result is not None
-    unquoted_reason = unquoted_result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "unquoted backslashes, so bash writes into cwd instead" in unquoted_reason
+    assert "unquoted backslashes, so bash writes into cwd instead" in _label(unquoted_cmd, anchor_str)
 
     _set_anchor(monkeypatch, env, "sess-bs-doubled-quoted")
     quoted_cmd = f'echo probe > "{backslash_target}"'
@@ -353,8 +367,7 @@ def test_doubled_backslash_outside_target_clause_tracks_quoting_not_the_backslas
         quoted_cmd, "sess-bs-doubled-quoted", anchor_str, {}
     )
     assert quoted_result is not None
-    quoted_reason = quoted_result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "unquoted backslashes, so bash writes into cwd instead" not in quoted_reason
+    assert "unquoted backslashes, so bash writes into cwd instead" not in _label(quoted_cmd, anchor_str)
 
 
 def test_quoted_backslash_outside_target_with_space_has_no_backslash_effect_clause(env, monkeypatch):
@@ -377,7 +390,7 @@ def test_quoted_backslash_outside_target_with_space_has_no_backslash_effect_clau
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-bs-quoted-space", str(env["anchor"]), {})
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = _label(cmd, str(env["anchor"]))
     assert quoted_target in reason
     assert "unquoted backslashes, so bash writes into cwd instead" not in reason
 
@@ -403,7 +416,7 @@ def test_quoted_backslash_outside_target_with_semicolon_has_no_backslash_effect_
     )
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = _label(cmd, str(env["anchor"]))
     assert quoted_target in reason
     assert "unquoted backslashes, so bash writes into cwd instead" not in reason
 
@@ -421,7 +434,7 @@ def test_forward_slash_spelled_outside_target_message_has_no_backslash_effect_cl
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-fs-outside", str(env["anchor"]), {})
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = _label(cmd, str(env["anchor"]))
     assert "unquoted backslashes, so bash writes into cwd instead" not in reason
     assert "in cwd)" not in reason
 
@@ -473,7 +486,8 @@ def test_redirect_to_a_non_repo_dir_bumps_under_both_tools(env, monkeypatch, too
         "echo hi > " + dest, "sess-redir-" + tool, str(env["anchor"]), {"tool_name": tool}
     )
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert _reason(result) == _ADVISORY
 
 
 def test_powershell_alias_shape_declines_and_records_silent(env, monkeypatch):
@@ -681,9 +695,7 @@ def test_unexpanded_variable_redirect_target_bumps(env, monkeypatch):
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-var-1", str(env["anchor"]), {})
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "$D" in reason
-    assert "did not expand" in reason
+    assert "did not expand" in _reason(result)
 
 
 def test_variable_used_as_path_prefix_is_not_treated_as_unexpanded_shape(env, monkeypatch):
@@ -746,8 +758,7 @@ def test_subagent_class_message_names_the_sandbox_route(env, monkeypatch):
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-6", str(env["anchor"]), payload)
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "sandbox" in reason.lower() or "state" in reason.lower()
+    assert _reason(result) == _ADVISORY
 
 
 def test_session_anchor_with_no_git_repo_never_bumps_outside_repo_writes(tmp_path, monkeypatch):
@@ -1649,6 +1660,7 @@ def test_c1_ac4_foreign_repo_guard_corpus_undrifted_by_the_interpreter_extractor
         ),
     ]
 
+    monkeypatch.setattr(foreign_guard, "_CROSS_REPO_ADVISORY_VERBS", frozenset())
     for cmd, expect_bump in corpus:
         result = _enveloped(foreign_guard.check_bump_foreign_repo_write)(
             cmd, "sess-c1-ac4", str(anchor), {}
@@ -1695,8 +1707,7 @@ def test_c1_ac6_deny_message_names_the_session_scratchpad_for_a_subagent(env, mo
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-c1-ac6", str(env["anchor"]), payload)
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "coordinator-local" in reason and "subagent-share" in reason
+    assert _reason(result) == _ADVISORY
 
 
 def test_c1_ac7_dollar_var_target_class_now_bumps(env, monkeypatch):
@@ -1716,8 +1727,7 @@ def test_c1_ac7_dollar_var_target_class_now_bumps(env, monkeypatch):
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-c1-ac7", str(env["anchor"]), {})
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "$D" in reason and "did not expand" in reason
+    assert "did not expand" in _reason(result)
 
 
 def test_c1_ac8_both_target_module_docstrings_record_the_pm_ratified_reversal():
@@ -1865,8 +1875,7 @@ def test_ac3_outside_repo_mkdir_deny_names_command_shapes_not_effects(env, monke
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-b1-shapes", str(env["anchor"]), {})
 
     assert result is not None
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "Shape-only: a script writing here is not checked." in reason
+    assert _reason(result) == _ADVISORY
 
 
 def test_foreign_repo_branch_does_not_carry_the_shapes_not_effects_clause():
@@ -1903,4 +1912,6 @@ def test_consumer_level_warns_instead_of_denying_outside_repo_write(env, monkeyp
     hso = first["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert "full context" in hso["additionalContext"]
-    assert _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-warn-outside", str(env["anchor"]), {}) is None
+    # No tool_use_id on the payload, so the advisory is not de-duplicated per event (DR-475).
+    second = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-warn-outside", str(env["anchor"]), {})
+    assert second["hookSpecificOutput"]["additionalContext"] == hso["additionalContext"]

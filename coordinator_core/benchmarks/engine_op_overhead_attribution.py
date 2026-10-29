@@ -224,7 +224,7 @@ def _driver_dispatch_stages(repo: str, out: str) -> None:
     ipc.register_op("engine_overhead.noop", _noop_handler)
     msg = {"jsonrpc": "2.0", "id": 1, "method": "engine_overhead.noop", "params": {}}
     ipc_dispatch = ipc.dispatch_message
-    server._worker_pristine_settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    server._worker_pristine_environ = dict(os.environ)
     resp_msg, response = _real_payload(repo)
     script = ifa._resolve_entrypoint_script(_ENTRYPOINT)
 
@@ -302,7 +302,7 @@ def _driver_dispatch_stages(repo: str, out: str) -> None:
         "serve_line_accept_path": accept,
         "run_entrypoint_shell": entrypoint_shell,
         "per_request_state": state,
-        "settings_home_repair": server._repair_settings_home_to_pristine,
+        "environ_restore": server._restore_worker_environ_to_pristine,
         "dispatch_message_impl": impl,
         "dispatch_message": wrapped,
         "record_op_process_time": record,

@@ -3,6 +3,8 @@
 import json
 import subprocess
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import halted_run as hr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
@@ -376,3 +378,28 @@ def test_non_object_marker_raises(tmp_path):
     with pytest.raises(hr.UnreadableHaltRecord) as exc:
         hr.read_strict_run(tmp_path)
     assert exc.value.reason == f"unreadable-halt-record:{tmp_path.name}"
+
+
+def test_a_halt_schedules_the_resume_build_with_root_and_run_id(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(hr, "_RESUME_SPAWNER", lambda root, run_id: calls.append((root, run_id)))
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
+    assert calls == [(tmp_path, d.name)]
+
+
+def test_a_failing_spawner_never_fails_the_halt(tmp_path, monkeypatch):
+    def boom(root, run_id):
+        raise OSError("no spawn")
+
+    monkeypatch.setattr(hr, "_RESUME_SPAWNER", boom)
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    assert hr.write_halt_marker(d, halted="x", sizing_rel=SIZING) == d / hr.HALTED_FILE
+
+
+def test_no_real_process_is_spawned_under_pytest(tmp_path, monkeypatch):
+    import coordinator_core.ops.ceremony.detached_spawn as ds
+
+    monkeypatch.setattr(hr, "_RESUME_SPAWNER", None)
+    monkeypatch.setattr(ds, "spawn_detached", lambda *a, **k: pytest.fail("spawned"))
+    hr.write_halt_marker(_dir(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=SIZING)

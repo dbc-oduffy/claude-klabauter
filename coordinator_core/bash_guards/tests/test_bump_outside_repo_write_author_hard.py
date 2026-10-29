@@ -18,6 +18,7 @@ from coordinator_core.bash_guards import _write_bump_applicability as applicabil
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.bash_guards import bump_outside_repo_write as guard
 from coordinator_core.bash_guards._write_bump_marker import marker_basename, resolve_gitdir
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
 from coordinator_core.session import machinery_paths
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
@@ -91,8 +92,12 @@ def _check(env, cmd, payload=None, cwd=None):
     return _enveloped(guard.check_bump_outside_repo_write)(cmd, _SID, cwd or str(env["anchor"]), payload or {})
 
 
+_ADVISORY = "Advisory: " + CROSS_REPO_WARN_RISK
+
+
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the deny reason is now one nudge line.
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 def test_python_heredoc_outside_repo_denied_despite_marker_and_warn_level(env, monkeypatch):
@@ -104,9 +109,7 @@ def test_python_heredoc_outside_repo_denied_despite_marker_and_warn_level(env, m
     result = _check(env, cmd)
 
     assert result is not None
-    reason = _reason(result)
-    assert _posix(env["anchor"]) + "/scratch/" in reason.replace("\\", "/")
-    assert "marker" not in reason.lower()
+    assert _reason(result) == _ADVISORY
 
 
 def test_redirect_outside_repo_denied_despite_marker_and_off_level(env, monkeypatch):
@@ -136,7 +139,7 @@ def test_cwd_drive_reading_of_slash_letter_literal_is_judged(env):
     result = _check(env, cmd)
 
     assert result is not None
-    assert (env["anchor"].drive.lower() + "\\" + other) in _reason(result).lower().replace("/", "\\")
+    assert _reason(result) == _ADVISORY
 
 
 def test_subagent_denied_with_share_dir_as_alternative(env):
@@ -145,9 +148,7 @@ def test_subagent_denied_with_share_dir_as_alternative(env):
     result = _check(env, cmd, payload={"agent_id": "af307f34d8afa24eb"})
 
     assert result is not None
-    reason = _reason(result)
-    assert "subagent-share" in reason.replace("\\", "/")
-    assert "marker" not in reason.lower()
+    assert _reason(result) == _ADVISORY
 
 
 def test_flag_off_marker_clears_consumer_parity(env, monkeypatch):
@@ -164,7 +165,7 @@ def test_flag_off_message_is_unchanged_bump_copy(env, monkeypatch):
     result = _check(env, f"echo hi > {_posix(env['outside'] / 'd.txt')}")
 
     assert result is not None
-    assert "out-of-repo writes are blocked on this box" not in _reason(result)
+    assert _reason(result) == _ADVISORY
 
 
 def test_sanctioned_settings_home_passes(env):

@@ -31,13 +31,29 @@ def _strict(monkeypatch):
 
 
 _CASES = [
-    ("approval-direct", lambda: approval.check_ungated(_payload("touch .coordinator-doctrine-edit-approved"))),
-    ("approval-indirection", lambda: approval.check_ungated(_payload("xargs rm"))),
     ("dev-repo-direct", lambda: dev_repo.check(_payload("rm .coordinator-dev-repo"))),
     ("worktree", lambda: worktree.check(_payload("git worktree add ../x"))),
+]
+
+# DR-475 (307ea22403): these guards are ADVISORY_BY_RULING in deny_registry, so
+# apply_guard_level clamps even a strict fire to a leveled log-only dict envelope.
+_ADVISORY_CASES = [
+    ("approval-direct", lambda: approval.check_ungated(_payload("touch .coordinator-doctrine-edit-approved"))),
+    ("approval-indirection", lambda: approval.check_ungated(_payload("xargs rm"))),
     ("worktree-sentinel-direct", lambda: worktree_sentinel.check(_payload("touch .coordinator-override-worktree-guard"))),
     ("worktree-sentinel-indirection", lambda: worktree_sentinel.check(_payload("xargs rm"))),
 ]
+
+
+@pytest.mark.parametrize("name,fire", _ADVISORY_CASES, ids=[c[0] for c in _ADVISORY_CASES])
+def test_an_off_allowlist_fire_is_a_log_only_advisory_envelope(name, fire, monkeypatch):
+    _strict(monkeypatch)
+    out = fire()
+    assert isinstance(out, dict)
+    assert out["guardLevel"] == "log"
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory:")
 
 
 @pytest.mark.parametrize("name,fire", _CASES, ids=[c[0] for c in _CASES])
@@ -64,13 +80,14 @@ def test_em_render_is_the_legacy_text_and_subagent_render_denies_with_the_route(
     assert "needs authorizing" in sub["permissionDecisionReason"]
 
 
-def test_gate_disable_denial_is_a_record(monkeypatch):
+def test_gate_disable_denial_is_a_log_only_advisory(monkeypatch):
     _strict(monkeypatch)
     record = approval.gate_disable_denial(_payload("coordinator set doctrine_edit_gate off > x"))
     if record is None:
         pytest.skip("shape not flagged on this host")
-    assert isinstance(record, AlternativeRecord)
-    assert any(isinstance(m, EscalationRoute) for m in record.members)
+    assert isinstance(record, dict)
+    assert record["guardLevel"] == "log"
+    assert record["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 def test_dev_repo_advisory_is_an_advisory_record():

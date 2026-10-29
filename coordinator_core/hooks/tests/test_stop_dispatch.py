@@ -417,7 +417,26 @@ def _pm_aggregate(monkeypatch, tmp_path, **payload_extra):
 def test_stop_leg_is_registered_last_in_the_fold() -> None:
     mod = importlib.import_module(_MODULE)
     assert mod._FOLDED_LEGS[-1][0] == "pm_directive_unmapped"
-    assert len(mod._FOLDED_LEGS) == 10
+    assert len(mod._FOLDED_LEGS) == 11
+    assert "deferred_release_drain" in [n for n, _ in mod._FOLDED_LEGS]
+
+
+def test_stop_leg_drains_pending_deferred_release(monkeypatch, tmp_path) -> None:
+    mod = importlib.import_module(_MODULE)
+    from coordinator_core.session import deferred_release
+
+    calls = []
+    monkeypatch.setattr(deferred_release, "has_pending", lambda s, c: True)
+    monkeypatch.setattr(deferred_release, "drain", lambda s, c: calls.append((s, c)) or [])
+    payload = {"session_id": "sid-x", "cwd": str(tmp_path)}
+    mod._deferred_release_stop_handler({"payload": payload})
+    assert calls == [("sid-x", str(tmp_path))]
+    calls.clear()
+    mod._deferred_release_stop_handler({"payload": {**payload, "agent_id": "a"}})
+    assert calls == []
+    monkeypatch.setattr(deferred_release, "has_pending", lambda s, c: False)
+    mod._deferred_release_stop_handler({"payload": payload})
+    assert calls == []
 
 
 def test_unmapped_turn_20_directives_are_an_advisory_line_each(monkeypatch, tmp_path) -> None:

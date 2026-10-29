@@ -40,14 +40,24 @@ Called from `hooks.block_unenumerated_agent_type.check` (the engine leg DoE's Pr
 fan-in already runs). A Workflow's own `agent()` spawns raise no
 PreToolUse(Agent), so a workflow that dispatches the sizing scout (plan-blitz) is untouched.
 
-Negative spec: never launches a process — the harness runs the rewritten call. Never edits
-the emitted script. Never denies a Workflow call that does not name the stub.
+A refire of a halted sizing reads the halt-time record (`resume.json`, `halt_resume_record`),
+checks its fingerprint (file bytes and the halt marker; no git) and emits from the stored
+script. A missing, stale or stalled record spawns `halt_resume_build` detached and starts the run
+through a one-child launcher; the hook never composes. The overlap check reads the live-run index
+(`live_run_index`), never the warp dirs. Every such read is deadline-bound (`_bounded_call`): a
+stalled disk degrades to the background path and never blocks the run start.
+
+Negative spec: never launches a process except the detached recompose — the harness runs the
+rewritten call. Never edits the emitted script. Never denies a Workflow call that does not name
+the stub.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import threading
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
@@ -321,14 +331,106 @@ def _default_emit(params: dict, repo_root: Path) -> dict:
     return _dispatch_emit(params, repo_root)
 
 
+#: Total stall one hook call may absorb across every read it makes; a read past it returns
+#: `STALLED` without waiting. Outside `evaluate` each direct call is bounded by it alone.
+_READ_DEADLINE_MS = 300.0
+_INFLIGHT: set = set()
+_INFLIGHT_LOCK = threading.Lock()
+_BUDGET: Optional[list] = None  # [ms still unspent] while `evaluate` runs; single-threaded per hook call
+
+
+class _SizingStalled(Exception):
+    """The sizing read outlived the stall budget: its ask_parent marker and research block are unknown."""
+
+
+def _wait_ms(deadline_ms: Optional[float]) -> float:
+    """The wait a read may take now: its own cap, cut to the unspent hook budget."""
+    cap = _READ_DEADLINE_MS if deadline_ms is None else deadline_ms
+    return cap if _BUDGET is None else min(cap, _BUDGET[0])
+
+
+def _charge(started: float) -> None:
+    if _BUDGET is not None:
+        import time
+
+        _BUDGET[0] -= (time.monotonic() - started) * 1000.0
+
+
+def _budgeted_read(read: Callable[[float], Any]) -> Any:
+    """`read(deadline_ms)` for a reader that bounds itself; `STALLED` at once when the budget is spent."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
+
+    wait = _wait_ms(None)
+    if wait <= 0:
+        return STALLED
+    started = time.monotonic()
+    try:
+        return read(wait)
+    finally:
+        _charge(started)
+
+
+def _bounded_call(key: Any, fn: Callable[[], Any], deadline_ms: Optional[float] = None) -> Any:
+    """`fn()` run on a daemon thread joined for the remaining hook budget (at most `deadline_ms`);
+    `halt_resume_record.STALLED` when it outlives that (the thread is left to finish), and `fn`'s own
+    exception re-raised. A spent budget returns `STALLED` without starting `fn`.
+    At most one call per `key` is in flight: a second while one is outstanding returns `STALLED` at once."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
+
+    wait = _wait_ms(deadline_ms)
+    if wait <= 0:
+        return STALLED
+    with _INFLIGHT_LOCK:
+        if key in _INFLIGHT:
+            return STALLED
+        _INFLIGHT.add(key)
+    box: list = []
+    done = threading.Event()
+
+    def work() -> None:
+        try:
+            box.append((True, fn()))
+        except BaseException as exc:
+            box.append((False, exc))
+        finally:
+            with _INFLIGHT_LOCK:
+                _INFLIGHT.discard(key)
+            done.set()
+
+    try:
+        threading.Thread(target=work, daemon=True).start()
+    except BaseException:
+        with _INFLIGHT_LOCK:
+            _INFLIGHT.discard(key)
+        return STALLED
+    started = time.monotonic()
+    finished = done.wait(wait / 1000.0)
+    _charge(started)
+    if not finished:
+        return STALLED
+    ok, value = box[0]
+    if ok:
+        return value
+    raise value
+
+
 def _load_sizing_doc(root: Path, sizing_rel: str) -> dict:
-    """The sizing mapping; an unreadable sizing reads `{}` and is left to the engine's own refusal."""
+    """The sizing mapping; an unreadable sizing reads `{}` and is left to the engine's own refusal.
+    A stalled read raises `_SizingStalled`: `{}` would drop the ask_parent marker and the research block."""
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
     from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 
     try:
-        return load_sizing(root, sizing_rel)
+        doc = _bounded_call(("sizing", str(root), sizing_rel), lambda: load_sizing(root, sizing_rel))
     except SizingFireRefused:
         return {}
+    if doc is STALLED:
+        raise _SizingStalled(sizing_rel)
+    return doc if isinstance(doc, dict) else {}
 
 
 def _has_research_block(sizing: Mapping[str, Any]) -> bool:
@@ -556,24 +658,61 @@ def _declared_writes(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapp
         return []
     from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import _declared_write_paths
 
-    plans = (root / "docs" / "plans").resolve()
-    plan = (root / plan_rel.strip()).resolve()
-    if plans not in plan.parents or not plan.is_file():
+    def read_spine() -> list[str]:
+        plans = (root / "docs" / "plans").resolve()
+        plan = (root / plan_rel.strip()).resolve()
+        if plans not in plan.parents or not plan.is_file():
+            return []
+        return sorted(_declared_write_paths(plan))
+
+    try:
+        spine = _bounded_call(("spine", str(root), plan_rel.strip()), read_spine)
+    except OSError:
         return []
-    return sorted(_declared_write_paths(plan))
+    return spine if isinstance(spine, list) else []
+
+
+FRICTION_LOG_REL = ".coordinator-local/engine-friction.jsonl"
+
+
+def _record_skipped_overlap_check(root: Path) -> None:
+    """Append an engine-friction row naming the live-write overlap check a stalled index read skipped. Never raises."""
+    try:
+        import json
+        from datetime import datetime, timezone
+
+        log = root / FRICTION_LOG_REL
+        log.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "kind": "engine-friction",
+            "source": "submit_engine_ask._live_write_overlap_deny",
+            "event": "live-write overlap check skipped: live-run index read stalled; the run started unchecked",
+        }
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _live_write_overlap_deny(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any]) -> Optional[str]:
-    """Deny text when a single ask's declared writes overlap a live run's staged footprint; else None."""
+    """Deny text when a single ask's declared writes overlap a live run's staged footprint; else None.
+
+    Reads the live-run index once; a missing or stalled index denies nothing."""
     writes = _declared_writes(root, tool_input, sizing_doc)
     if not writes:
         return None
-    from coordinator_core.ops.dispatch_emit import live_run_writes
+    from coordinator_core.ops.dispatch_emit import live_run_index
 
     try:
-        hits = live_run_writes.overlaps(writes, live_run_writes.live_footprints(root, exclude_run_id=None))
+        index = _bounded_call(("index", str(root)), lambda: live_run_index.read(root, _READ_DEADLINE_MS))
     except OSError:
         return None
+    if not isinstance(index, dict):
+        if index is live_run_index.STALLED:
+            _record_skipped_overlap_check(root)
+        return None
+    hits = live_run_index.overlaps(writes, index)
     if not hits:
         return None
     run_id, paths = next(iter(sorted(hits.items())))
@@ -629,6 +768,30 @@ def _refuse(text: str) -> dict:
     return deny("PreToolUse", f"{text}\nInstead: `Workflow({{name: \"{SUBMIT_WORKFLOW_NAME}\", {_ARGS_SHAPE}}})`.")
 
 
+def _cause(exc: BaseException) -> str:
+    """The exception's message, or its class name when the message is empty (a bare TimeoutError)."""
+    text = str(exc).strip()
+    return text or type(exc).__name__
+
+
+def _no_run_detail(result: Any) -> str:
+    """Why an emit reply carried no run: its findings or error text, else the reply's own shape."""
+    if isinstance(result, dict):
+        for key in ("findings", "error", "reason", "message"):
+            value = result.get(key)
+            if value:
+                return str(value)
+        if result.get("ok") is False:
+            return f"ok was false with no findings (reply keys: {', '.join(sorted(result)) or 'none'})"
+        return (
+            f"the reply carried no path and no findings (reply keys: {', '.join(sorted(result)) or 'none'}); "
+            "the engine may have timed out or restarted. Re-submit once."
+        )
+    if result:
+        return str(result)
+    return "the engine returned an empty reply (a timeout or an engine restart). Re-submit once."
+
+
 def _child_params(
     root: Path, tool_input: Mapping[str, Any], session_id: Optional[str], run: Any, call_stop: Any, approved: bool
 ) -> dict:
@@ -672,14 +835,17 @@ def _launch_all(
     tool_input = payload["tool_input"]
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
     transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
-    children = [
-        LaunchChild(
-            run_id=r.run_id,
-            sizing_rel=r.slice_sizing,
-            emit_params=_child_params(sizing_root or root, tool_input, session_id, r, call_stop, approved),
-        )
-        for r in ready
-    ]
+    try:
+        children = [
+            LaunchChild(
+                run_id=r.run_id,
+                sizing_rel=r.slice_sizing,
+                emit_params=_child_params(sizing_root or root, tool_input, session_id, r, call_stop, approved),
+            )
+            for r in ready
+        ]
+    except _SizingStalled as exc:
+        return _refuse(f"The sizing read of {exc} stalled; its route is unknown. Re-submit once.")
     parent_id = str(fan_reply["parent_id"])
     try:
         script = (launch or _default_launch)(root, parent_id, children, session_id)
@@ -712,6 +878,198 @@ def _launch_all(
     return envelope
 
 
+def _spawn_recompose(root: Path, run_id: str) -> bool:
+    """Start `halt_resume_build` for `run_id` detached; False when it could not start (never raises)."""
+    from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
+
+    script = Path(__file__).resolve().parent.parent / "ops" / "dispatch_emit" / "halt_resume_build.py"
+    try:
+        return bool(spawn_detached(str(root), str(script), [str(root), run_id]))
+    except Exception:
+        return False
+
+
+#: Params every refire carries; any other key is the call's own (stop_after, brief, chatty, writes,
+#: cross-repo approval) and the halt-time script cannot honour it, so such a call goes through the launcher.
+_RESUME_NEUTRAL_PARAMS = frozenset({"session_id", "ask", "sizing_path", "reserved_run_id"})
+
+
+def _stored_refusal(record: dict) -> Optional[str]:
+    """The refusal text of a record whose build was refused (`gate_verdict` carries `halt` and/or
+    `refused`), else None."""
+    verdict = record.get("gate_verdict")
+    if not isinstance(verdict, dict):
+        return None
+    halt = verdict.get("halt")
+    if isinstance(halt, dict):
+        return f"The engine refused the submission: {halt.get('kind')}: {halt.get('reason')}"
+    if verdict.get("refused"):
+        return f"The engine refused the submission: {verdict.get('refused')}"
+    return None
+
+
+def _resume_route(
+    root: Path,
+    sizing_rel: str,
+    payload: Mapping[str, Any],
+    params: dict,
+    session_id: Optional[str],
+    launch: Optional[Callable[..., Path]],
+    reserved_run_id: Optional[str] = None,
+) -> tuple[Optional[dict], Optional[dict]]:
+    """(envelope, emit result) for a refire of a halted sizing, else (None, None).
+
+    A fan-out slice's sizing reserves its own run id; it resumes here only when that reserved run is
+    the halted one (any other reserved id is a fresh slice start).
+
+    A stored script whose fingerprint matches is the emit result. A missing, stale or stalled
+    record spawns the detached recompose and answers a one-child launcher envelope. A halted-run
+    lookup that finds nothing is (None, None): the plain emit follows. One that stalls takes the run id
+    from the halt-time hint (`hrr.read_hint`); with no hint the run id is unknown and the call is refused."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+    try:
+        halted_id = _bounded_call(("halted", str(root), sizing_rel), lambda: halted_run_to_resume(root, sizing_rel))
+    except (OSError, ValueError):
+        return None, None
+    if halted_id is hrr.STALLED:
+        halted_id = hrr.read_hint(root, sizing_rel)
+        if halted_id is None:
+            return _refuse("The halted-run lookup stalled, so the submission would compose inline. Re-submit once."), None
+    if not isinstance(halted_id, str):
+        return None, None
+    if reserved_run_id is not None and reserved_run_id != halted_id:
+        return None, None
+    rd = record_dir(root, halted_id)
+
+    stored: Optional[dict] = None
+    record = _budgeted_read(lambda wait: hrr.read(rd, wait))
+    if isinstance(record, dict):
+        try:
+            current = _bounded_call(
+                ("fingerprint", str(root), halted_id),
+                lambda: hrr.fingerprint_for_run(root, rd, sizing_rel, hrr.resolve_fingerprint_plan(root, rd, sizing_rel)),
+            )
+        except OSError:
+            current = None
+        if isinstance(current, dict) and hrr.matches(record, current):
+            stored = record
+    call_specific = any(k not in _RESUME_NEUTRAL_PARAMS for k in params)
+    script_rel = stored.get("composed_script_rel") if stored else None
+    refusal = _stored_refusal(stored) if stored else None
+    refused_in_backoff = refusal is not None and hrr.in_backoff(stored, time.time())
+    if refused_in_backoff:
+        return _refuse(refusal), None
+    if isinstance(script_rel, str) and script_rel and not call_specific:
+        script = root / script_rel
+        try:
+            on_disk = _bounded_call(("script", str(script)), script.is_file)
+        except OSError:
+            on_disk = False
+        if on_disk is True:
+            if refusal is not None:
+                return _refuse(refusal), None
+            return None, {"path": str(script), "run_id": halted_id}
+
+    if (stored is None or refusal is not None) and hrr.claim_recompose(rd, time.time(), hrr.RECOMPOSE_TTL_S):
+        _spawn_recompose(root, halted_id)
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+
+    child = LaunchChild(run_id=halted_id, sizing_rel=sizing_rel, emit_params={**params, "target_root": str(root)})
+    parent_id = f"resume-{halted_id}-{uuid.uuid4().hex[:6]}"
+    try:
+        script = (launch or _default_launch)(root, parent_id, [child], session_id)
+    except Exception as exc:  # the launcher's refusal text is the whole message
+        return _refuse(f"The engine wrote no launcher: {exc}"), None
+    from coordinator_core import warp_live
+
+    call_id = payload.get("tool_use_id")
+    transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
+    try:
+        warp_live.record_submission(
+            root,
+            halted_id,
+            session_id=session_id,
+            transcript_path=transcript,
+            script_path=str(script),
+            sizing_rel=sizing_rel,
+            tool_use_id=call_id if isinstance(call_id, str) else None,
+        )
+    except OSError:
+        pass  # liveness then reads the run token alone
+    envelope = rewrite_input(
+        "PreToolUse",
+        {"scriptPath": str(script)},
+        f"Submitted to the engine as run {halted_id} under one launcher: the halt-time record is missing or stale, "
+        f"so a background recompose was started and the run starts now. "
+        f"It runs to its commit in the background; its completion notification is your one wake. "
+        f"End the turn: no polling, dispatch or verification meanwhile. {_revise_hint(halted_id)}",
+    )
+    hso = envelope["hookSpecificOutput"]
+    hso["permissionDecision"] = "allow"
+    hso["permissionDecisionReason"] = f"Engine submission: wrote {Path(script).name} this call."
+    return envelope, None
+
+
+REFUSAL_LOG_REL = ".coordinator-local/engine-ask-refusals.jsonl"
+_LEAD_CHARS = 120
+_DENY_CAP = 280
+_REFUSAL_LOG_CAP_BYTES = 1 << 20  # past this the log keeps its newest half, whole lines only
+
+
+def _durable_refusal(payload: Mapping[str, Any], envelope: dict) -> dict:
+    """Append the whole refusal to the repo's refusal log and lead the deny with its cause and that path.
+
+    A downstream surface caps the deny near 280 characters; the lead keeps cause and path inside it, the
+    full text follows. A log failure leaves the deny as it was."""
+    hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None
+    if not isinstance(hso, dict) or hso.get("permissionDecision") != "deny":
+        return envelope
+    full = str(hso.get("permissionDecisionReason") or "")
+    if not full:
+        return envelope
+    try:
+        import json
+        from datetime import datetime, timezone
+
+        root = _repo_root(None, dict(payload))
+        if root is None:
+            cwd = payload.get("cwd")
+            root = Path(cwd) if isinstance(cwd, str) and cwd else None
+        if root is None:
+            return envelope
+        log = root / REFUSAL_LOG_REL
+        log.parent.mkdir(parents=True, exist_ok=True)
+        if log.is_file() and log.stat().st_size > _REFUSAL_LOG_CAP_BYTES:
+            from coordinator_core.atomic_replace import atomic_write_bytes
+
+            # Atomic so a crash never empties the log; an append racing the trim can lose its one line.
+            tail = log.read_bytes()[-(_REFUSAL_LOG_CAP_BYTES // 2):]
+            atomic_write_bytes(log, tail[tail.find(b"\n") + 1:])
+        line = json.dumps(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "session_id": payload.get("session_id"),
+                "refusal": full,
+            },
+            ensure_ascii=False,
+        )
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:
+        return envelope
+    if len(full) <= _DENY_CAP:
+        return envelope
+    cause = full.split("\nInstead:")[0].strip().replace("\n", " ")
+    lead = cause if len(cause) <= _LEAD_CHARS else cause[: _LEAD_CHARS - 3] + "..."
+    hso["permissionDecisionReason"] = f"{lead} [full text: {REFUSAL_LOG_REL}]\n{full}"
+    return envelope
+
+
 def evaluate(
     payload: Mapping[str, Any],
     *,
@@ -719,7 +1077,27 @@ def evaluate(
     fanout: Optional[FanoutFn] = None,
     launch: Optional[Callable[..., Path]] = None,
 ) -> dict:
-    """The PreToolUse envelope for a Workflow call: the fire rewrite for a submission, else nothing."""
+    """The PreToolUse envelope for a Workflow call: the fire rewrite for a submission, else nothing.
+
+    A refusal is logged whole and leads with its cause (see `_durable_refusal`)."""
+    global _BUDGET
+    _BUDGET = [_READ_DEADLINE_MS]
+    try:
+        envelope = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
+    finally:
+        _BUDGET = None
+    if is_submission(payload):
+        return _durable_refusal(payload, envelope)
+    return envelope
+
+
+def _evaluate(
+    payload: Mapping[str, Any],
+    *,
+    emit: Optional[EmitFn] = None,
+    fanout: Optional[FanoutFn] = None,
+    launch: Optional[Callable[..., Path]] = None,
+) -> dict:
     if not is_submission(payload):
         return no_advisory()
     if payload.get("agent_id"):
@@ -866,7 +1244,7 @@ def evaluate(
         try:
             fan_reply = (fanout or _default_fanout)(fan_params, root)
         except Exception as exc:  # the engine's refusal text is the whole message
-            return deny("PreToolUse", str(exc))
+            return deny("PreToolUse", _cause(exc))
         if not isinstance(fan_reply, dict):
             return deny("PreToolUse", f"The fan-out returned no reply: {fan_reply!r}.")
         if fan_reply.get("error") or fan_reply.get("exit_code") or fan_reply.get("applied") is False:
@@ -886,7 +1264,15 @@ def evaluate(
         root = writer_root
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
 
-    sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}
+    try:
+        sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}
+    except _SizingStalled:
+        from coordinator_core.ops.dispatch_emit import halt_resume_record as _hrr
+
+        hinted = None if asks is not None else _hrr.read_hint(root, sizing_rel)
+        if hinted is None:
+            return _refuse(f"The sizing read of {sizing_rel} stalled; its ask_parent marker is unknown. Re-submit once.")
+        sizing_doc, reserved_run_id = {}, hinted
     if sizing_submitted and repo_arg and Path(repo_arg).is_absolute():
         cross = _cross_repo_refusal(root, _repo_root(None, payload), _has_research_block(sizing_doc), approved)
         if cross:
@@ -928,7 +1314,7 @@ def evaluate(
         from coordinator_core.ops.dispatch_emit.ask_gate import retire_token_spent_halt
 
         try:
-            retire_token_spent_halt(root, sizing_rel)
+            _bounded_call(("retire", str(root), sizing_rel), lambda: retire_token_spent_halt(root, sizing_rel))
         except (OSError, ValueError) as exc:  # non-blocking: a failed retire leaves the halted run resumable
             retire_note = f" Retiring the spent halt failed: {type(exc).__name__}: {exc}."
 
@@ -970,20 +1356,27 @@ def evaluate(
     if approved:
         params["cross_repo_approved"] = True
 
-    try:
-        result = (emit or _default_emit)(params, root)
-    except Exception as exc:  # the engine's refusal text is the whole message
-        return _refuse(f"The engine refused the submission: {exc}")
+    result: Any = None
+    if sizing_rel and asks is None and "from_sizing" not in params:
+        resume_envelope, result = _resume_route(
+            root, sizing_rel, payload, params, session_id, launch, reserved_run_id=reserved_run_id
+        )
+        if resume_envelope is not None:
+            return resume_envelope
+    if result is None:
+        try:
+            result = (emit or _default_emit)(params, root)
+        except Exception as exc:  # the engine's refusal text is the whole message
+            return _refuse(f"The engine refused the submission: {_cause(exc)}")
 
     script = result.get("path") if isinstance(result, dict) else None
     if not script or result.get("ok") is False:
-        detail = result.get("findings") if isinstance(result, dict) else result
         stale = result.get("run_id") if isinstance(result, dict) else None
         if stale:
             from coordinator_core.ops.dispatch_emit import run_token
 
             run_token.consume(root, str(stale))
-        return _refuse(f"The engine emitted no run: {detail}")
+        return _refuse(f"The engine emitted no run: {_no_run_detail(result)}")
 
     run_id = result.get("run_id") or Path(script).name
     call_id = payload.get("tool_use_id")
@@ -1091,7 +1484,13 @@ def _handler(params: dict, repo_root=None) -> dict:
         envelope = evaluate(payload)
     except Exception as exc:
         envelope = deny("PreToolUse", f"The submit hook failed: {type(exc).__name__}: {exc}. Check for an existing run record before re-submitting.")
-    return apply_guard_level(GUARD_NAME, envelope) or no_advisory()
+    submission = is_submission(payload)
+    if submission and envelope.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+        return envelope  # a refusal lowered to an allow carries no rewrite: the caller reports "emitted no run: it said nothing"
+    resolved = apply_guard_level(GUARD_NAME, envelope)
+    if not resolved and submission:
+        return deny("PreToolUse", "The submit hook resolved to an empty reply. Check for an existing run record before re-submitting.")
+    return resolved or no_advisory()
 
 
 __all__ = [

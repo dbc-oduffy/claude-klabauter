@@ -2029,6 +2029,21 @@ def _evaluate_payload_json_budgeted(
                     out = None
                 else:
                     _nudge_claimed = True
+        if (
+            out is not None
+            and not _demoted
+            and _band is GuardBand.CONFINEMENT_DENY
+            and not _is_deny_envelope(out)
+        ):
+            # A guard retired to advisory (or a rewrite) keeps its band slot;
+            # hold its envelope like a demoted deny so a later hard deny still fires.
+            _demoted = True
+            _held_hso = out.get("hookSpecificOutput") if isinstance(out, dict) else None
+            if not (isinstance(_held_hso, dict) and "updatedInput" in _held_hso):
+                if _nudge_claimed:
+                    out = None
+                else:
+                    _nudge_claimed = True
         if out is not None:
             # In-session operator unlock (docs/plans/2026-08-03-in-session-
             # operator-unlock-for-the-hard-.md § C3): mirrors write_guards/

@@ -220,6 +220,28 @@ def _workflow_stall_stop_op(params: dict, repo_root=None) -> dict:
     return _workflow_stall_stop_handler(params, repo_root)
 
 
+def _deferred_release_stop_handler(params: dict, repo_root=None) -> dict:
+    """Release this session's deferred post-commit claims at a top-level Stop.
+
+    One listdir when nothing is pending; never denies, never raises."""
+    payload = payload_of(params)
+    if payload.get("agent_id"):
+        return no_advisory()
+    session_id = payload.get("session_id")
+    raw_cwd = payload.get("cwd")
+    if not isinstance(session_id, str) or not session_id:
+        return no_advisory()
+    cwd = raw_cwd if isinstance(raw_cwd, str) and raw_cwd else os.getcwd()
+    try:
+        from coordinator_core.session import deferred_release
+
+        if deferred_release.has_pending(session_id, cwd):
+            deferred_release.drain(session_id, cwd)
+    except Exception:
+        pass
+    return no_advisory()
+
+
 def _pm_directive_unmapped_handler(params: dict, repo_root=None) -> dict:
     """Advisory listing each PM directive of this session with no task, plan row or
     disposition, one line per directive with its turn. Never denies; silent on a
@@ -417,6 +439,7 @@ _FOLDED_LEGS = (
     ("nudge_harness_directive_dispatch", lambda p: _nudge_harness_directive_dispatch_handler(p)),
     ("nudge_unrouted_sizing", lambda p: _nudge_unrouted_sizing_handler(p)),
     ("workflow_stall_resume", lambda p: _workflow_stall_stop_handler(p)),
+    ("deferred_release_drain", lambda p: _deferred_release_stop_handler(p)),
     ("pm_directive_unmapped", lambda p: _pm_directive_unmapped_handler(p)),
 )
 PRODUCER_LEG_NAMES = ("receiver_state_sensor", "group_em_park_spool")

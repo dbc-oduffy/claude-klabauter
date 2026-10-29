@@ -35,14 +35,14 @@ def _has_route(record: AlternativeRecord) -> bool:
     return any(isinstance(m, EscalationRoute) for m in record.members)
 
 
-def test_topic_branch_override_is_a_member_not_prose():
-    record = topic._deny_reason("fix/foo")
-    overrides = [m for m in record.members if isinstance(m, Override)]
-    assert [o.env_var for o in overrides] == [topic.OVERRIDE_KEY]
-    sub = _text(render(record, Audience.SUBAGENT))
-    assert topic.OVERRIDE_KEY not in sub and "Group EM" in sub and "day branch" in sub
-    em = _text(render(record, Audience.EM, override_note="NOTE"))
-    assert em == record.em_text and topic.OVERRIDE_KEY in em and "NOTE" not in em
+@pytest.mark.parametrize("command", ["git checkout -b fix/foo", "git push -u origin fix/foo"])
+def test_topic_branch_create_or_push_emits_nothing(tmp_path, command):
+    # Contract retired by 900eac166a: block-topic-branch no longer judges a non-day branch.
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/fix/foo\n", encoding="utf-8")
+    payload = {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(tmp_path)}
+    assert topic.check(payload) is None
 
 
 def test_topic_branch_push_hold_carries_no_override():
@@ -51,21 +51,21 @@ def test_topic_branch_push_hold_carries_no_override():
     assert "push-hold clear" in _text(render(record, Audience.EM))
 
 
-def test_topic_branch_main_commit_refusal_is_an_override_record(monkeypatch):
-    legacy = (
-        "BLOCKED: x\n\nException: %s with a non-empty reason, or %s=1, prefixed on the command."
-        % (topic.OVERRIDE_KEY, topic.MAIN_COMMIT_OVERRIDE_KEY)
-    )
-    record = topic._record("BLOCKED: x", legacy, topic._escalation("y"), topic._override())
-    assert _has_override(record) and _has_route(record)
+def test_topic_branch_main_commit_refusal_is_an_escalation_record_without_override():
+    # Contract retired by 900eac166a: the record carries no Override member; the inline
+    # env prefix is read by the guard itself, never offered through the record.
+    legacy = "BLOCKED: x Alternative: commit to the day branch."
+    record = topic._record("BLOCKED: x", legacy, topic._escalation("y"))
+    assert _has_route(record) and not _has_override(record)
     assert topic.OVERRIDE_KEY not in _text(render(record, Audience.SUBAGENT))
-    em = _text(render(record, Audience.EM))
-    assert em == legacy and topic.MAIN_COMMIT_OVERRIDE_KEY in em
+    assert _text(render(record, Audience.EM)) == legacy
 
 
-def test_home_root_and_drive_root_em_text_is_the_legacy_reason():
-    assert home_root._deny().em_text == home_root.DENY_REASON
-    assert _text(render(home_root._deny(), Audience.EM)) == home_root.DENY_REASON
+def test_home_root_em_text_survives_as_the_advisory_context():
+    # Advisory by ruling: the would-be deny reaches the model as an allow carrying the deny text.
+    out = home_root._deny()
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert home_root.DENY_REASON.partition(" Instead: ")[0] in out["hookSpecificOutput"]["additionalContext"]
 
 
 @pytest.mark.parametrize(
@@ -95,18 +95,13 @@ def test_whole_filesystem_scan_still_allows_a_scoped_search():
 
 
 @pytest.mark.parametrize("guard, call", [(drive_root, lambda g: g._deny("stray")), (home_root, lambda g: g._deny())])
-def test_drive_and_home_root_return_a_record_at_strict_and_the_leveled_envelope_otherwise(
-    guard, call, monkeypatch
-):
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
-    machine_profile.reset_cache()
-    assert isinstance(call(guard), AlternativeRecord)
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
-    machine_profile.reset_cache()
-    leveled = call(guard)
-    assert isinstance(leveled, dict)
-    assert leveled["hookSpecificOutput"]["permissionDecision"] == "allow"
-    monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "off")
-    machine_profile.reset_cache()
-    assert call(guard) is None
+def test_drive_and_home_root_are_advisory_at_every_level(guard, call, monkeypatch):
+    # Neither guard is a deny_registry floor guard, so no level yields a record or a refusal.
+    for level in ("strict", "warn", "off"):
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+        machine_profile.reset_cache()
+        out = call(guard)
+        assert isinstance(out, dict) and not isinstance(out, AlternativeRecord)
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert out["guardLevel"] == "log"
     machine_profile.reset_cache()

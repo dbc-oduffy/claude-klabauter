@@ -43,7 +43,8 @@ documented fallback rung), so this reuse degrades correctly on this door
 too rather than requiring a parallel resolver.
 
 Graceful degradation: any failure inside `evaluate_payload_json` fails OPEN
-(never raises, never denies) — a Bash/PowerShell call must never be bricked
+(never raises) except for the closed `_IRREVERSIBLE` set, which is denied
+(`_cannot_evaluate`) — a Bash/PowerShell call must never be bricked
 by a guard-chain defect, mirroring the DoE dispatcher's own fail-open
 philosophy for engine-resolution failure (which cannot occur here) and
 `preuse_write_dispatch`'s identical contract for its own chain. Open does NOT
@@ -121,6 +122,20 @@ def _irreversible_on_import_failure(command: str) -> str | None:
     return None
 
 
+def _cannot_evaluate(params: dict, exc: Exception, phase: str) -> dict:
+    """Deny the closed irreversible set, advise on everything else, when the chain cannot run."""
+    detail = f"{type(exc).__name__}: {exc}"
+    tool_input = params.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    matched = _irreversible_on_import_failure(command)
+    if matched:
+        return deny(
+            "PreToolUse",
+            f"`{matched}` denied: bash guard chain failed to {phase} ({detail}).",
+        )
+    return _unevaluated(detail)
+
+
 def _is_deny(out: object) -> bool:
     if not isinstance(out, dict):
         return False
@@ -172,16 +187,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             _policy_file_for,
         )
     except Exception as exc:
-        detail = f"{type(exc).__name__}: {exc}"
-        tool_input = params.get("tool_input")
-        command = tool_input.get("command") if isinstance(tool_input, dict) else None
-        matched = _irreversible_on_import_failure(command)
-        if matched:
-            return deny(
-                "PreToolUse",
-                f"`{matched}` denied: bash guard chain failed to import ({detail}).",
-            )
-        return _unevaluated(detail)
+        return _cannot_evaluate(params, exc, "import")
 
     try:
         raw = json.dumps(params)
@@ -191,7 +197,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             resolution_class=_engine_resolution_class(),
         )
     except Exception as exc:
-        return _unevaluated(f"{type(exc).__name__}: {exc}")
+        return _cannot_evaluate(params, exc, "evaluate")
 
     if _is_deny(out):
         return out

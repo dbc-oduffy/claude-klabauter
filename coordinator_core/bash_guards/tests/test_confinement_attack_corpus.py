@@ -435,24 +435,55 @@ def test_confinement_attack_corpus(guard_name, shape_name, tmp_path, monkeypatch
     decide, base_cmd = _GUARD_SETUP[guard_name](tmp_path, monkeypatch)
     variant = _SHAPE_FN[shape_name](base_cmd)
     got = decide(variant)
-    assert got == "deny", "%s / %s: %r -> %s (expected deny)" % (
+    expected = _expected_outcome(guard_name)
+    assert got == expected, "%s / %s: %r -> %s (expected %s)" % (
         guard_name,
         shape_name,
         variant,
         got,
+        expected,
     )
+
+
+def _expected_outcome(guard_name: str) -> str:
+    """`deny` only for a guard `deny_registry` lists as denying; every other
+    guard nudges (advisory by ruling, 307ea22403 DR-475; classified by
+    b17ec35251). Derived from the registry so a guard promoted to deny
+    re-pins itself and a retired deny cannot hide as a pass."""
+    from coordinator_core import deny_registry
+
+    cls = deny_registry.guard_deny_class(guard_name, subagent=True)
+    return "deny" if cls else "advisory"
+
+
+def test_confinement_corpus_still_pins_deny_for_registry_denying_guards():
+    """Guards the re-pin above: the corpus must keep at least the
+    deny_registry-listed guards asserting `deny`, and the retired ones
+    asserting `advisory`, so neither side of the decision goes vacuous."""
+    outcomes = {name: _expected_outcome(name) for name in GUARD_NAMES}
+    assert {"destructive-rm", "blanket-git-add", "runaway-find", "block-worktree-creation",
+            "block-subagent-destructive-action", "check-test-suite-invocation"} <= {
+        n for n, o in outcomes.items() if o == "deny"
+    }, outcomes
+    assert {"no-verify", "block-subagent-commit", "block-approval-sentinel-creation",
+            "block-worktree-sentinel-creation",
+            "block-reviewer-bash-outside-allowlist"} <= {
+        n for n, o in outcomes.items() if o == "advisory"
+    }, outcomes
 
 
 @pytest.mark.parametrize("guard_name,shape_name", _advisory_cells())
 def test_advisory_rewrite_attack_corpus(guard_name, shape_name, tmp_path, monkeypatch):
     """`ADVISORY_GUARDS`'s own SHAPES cross-product -- guards registered in
-    the ADVISORY_REWRITE band that still deny. A silent `"allow"` or an
-    advisory on any evasion shape is the regression this proves against.
+    the ADVISORY_REWRITE band. Neither guard is deny_registry-listed, so each
+    nudges since 307ea22403 (DR-475; classified advisory by b17ec35251). A
+    silent `"allow"` or a `"deny"` on any evasion shape is the regression.
     """
     decide, base_cmd = _ADVISORY_GUARD_SETUP[guard_name](tmp_path, monkeypatch)
     variant = _SHAPE_FN[shape_name](base_cmd)
     got = decide(variant)
-    assert got == "deny", "%s / %s: %r -> %s (expected deny)" % (
+    assert _expected_outcome(guard_name) == "advisory"
+    assert got == "advisory", "%s / %s: %r -> %s (expected advisory)" % (
         guard_name,
         shape_name,
         variant,

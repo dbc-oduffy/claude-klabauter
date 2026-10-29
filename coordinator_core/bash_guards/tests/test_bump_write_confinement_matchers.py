@@ -507,8 +507,10 @@ def test_ac11_extracted_literal_target_does_bump(segment_template, tmp_path, mon
         "`None` here is the bypass this corpus exists to catch: cmd=%r"
         % (cmd,)
     )
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): a bump allows with one advisory line.
     assert (
-        result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        and result["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
     ), result
 
 

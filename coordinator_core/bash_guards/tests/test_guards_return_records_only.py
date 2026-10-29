@@ -93,7 +93,7 @@ def test_admit_refuses_a_non_record_non_dict(bad):
 
 def test_a_dict_returning_fail_closed_guard_is_crash_denied(monkeypatch):
     entry = dispatch.GuardEntry(
-        "fake-legacy-guard", lambda: _ALLOW, True, dispatch.GuardBand.CONFINEMENT_DENY
+        "guard-disk-fill", lambda: _ALLOW, True, dispatch.GuardBand.CONFINEMENT_DENY
     )
     monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
     payload = {"tool_name": "Bash", "tool_input": {"command": "echo hi"}, "session_id": "s3n"}
@@ -102,7 +102,8 @@ def test_a_dict_returning_fail_closed_guard_is_crash_denied(monkeypatch):
     out = dispatch.evaluate_payload_json(json.dumps(payload))
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
-    assert "fake-legacy-guard guard crashed" in hso["permissionDecisionReason"]
+    # Registered name: since 3ca9e4bee6 an unregistered guard's crash-deny is demoted to a nudge.
+    assert "guard-disk-fill guard crashed" in hso["permissionDecisionReason"]
 
 
 def test_em_text_record_skips_the_override_note(monkeypatch):

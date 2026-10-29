@@ -1,4 +1,9 @@
-"""Audience and level behaviour of the converted write-bump and doctrine-surface guards."""
+"""Level behaviour of the converted write-bump and doctrine-surface guards.
+
+All three guards are advisory-by-ruling (deny_registry.ADVISORY_BY_RULING; 307ea22403 DR-475,
+classified in b17ec35251): at every guard level the would-be deny comes back as one allow-plus-context
+line, never an AlternativeRecord or a deny envelope.
+"""
 
 from __future__ import annotations
 
@@ -10,15 +15,11 @@ from coordinator_core.bash_guards import (
     bump_outside_repo_write as outside,
     guard_doctrine_surface_bash_write as doctrine,
 )
-from coordinator_core.guard_messages.alternative_record import (
-    AlternativeRecord,
-    Audience,
-    EscalationRoute,
-    Override,
-)
-from coordinator_core.guard_messages.render import render
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
+from coordinator_core.guard_messages.alternative_record import AlternativeRecord
 
 _MESSAGE = "Coordinator guard — instead: writing into `x` is refused.\n\nGuard: `g`."
+_ADVISORY = "Advisory: " + CROSS_REPO_WARN_RISK
 
 
 def _set_level(monkeypatch, level: str) -> None:
@@ -41,26 +42,24 @@ def _outside(monkeypatch, level: str):
 
 
 @pytest.mark.parametrize("build", [_foreign, _outside])
-def test_strict_returns_a_record_whose_em_render_is_the_message_verbatim(monkeypatch, build):
-    record = build(monkeypatch, "strict")
-    assert isinstance(record, AlternativeRecord)
-    env = render(record, Audience.EM)["hookSpecificOutput"]
-    assert env["permissionDecision"] == "deny"
-    assert env["permissionDecisionReason"] == _MESSAGE
+def test_strict_returns_the_advisory_envelope_not_a_record(monkeypatch, build):
+    result = build(monkeypatch, "strict")
+    assert not isinstance(result, AlternativeRecord)
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"] == _ADVISORY
 
 
 @pytest.mark.parametrize("build", [_foreign, _outside])
-def test_subagent_render_offers_a_route_and_no_override(monkeypatch, build):
-    record = build(monkeypatch, "strict")
-    assert any(isinstance(m, EscalationRoute) for m in record.members)
-    assert not any(isinstance(m, Override) for m in record.members)
-    env = render(record, Audience.SUBAGENT)["hookSpecificOutput"]
-    assert env["permissionDecision"] == "deny"
+def test_advisory_offers_no_override_key(monkeypatch, build):
+    hso = build(monkeypatch, "strict")["hookSpecificOutput"]
+    assert set(hso) == {"hookEventName", "additionalContext", "permissionDecision"}
 
 
 @pytest.mark.parametrize("build", [_foreign, _outside])
-def test_off_level_allows_silently(monkeypatch, build):
-    assert build(monkeypatch, "off") is None
+def test_off_level_still_returns_the_advisory(monkeypatch, build):
+    result = build(monkeypatch, "off")
+    assert result["hookSpecificOutput"]["additionalContext"] == _ADVISORY
 
 
 @pytest.mark.parametrize("build", [_foreign, _outside])
@@ -72,24 +71,18 @@ def test_warn_level_returns_the_advisory_envelope_not_a_record(monkeypatch, buil
     assert "additionalContext" in hso
 
 
-def test_doctrine_deny_is_a_record_at_strict_and_an_envelope_otherwise(monkeypatch):
+def test_doctrine_deny_is_an_advisory_envelope_at_every_level(monkeypatch):
     payload = {"tool_name": "Bash", "tool_input": {"command": "echo x > CLAUDE.md"}, "cwd": ""}
     monkeypatch.setattr(doctrine, "feature_enabled", lambda name: True)
     monkeypatch.setattr(doctrine, "_is_onboarding_write", lambda *a, **k: False)
 
-    _set_level(monkeypatch, "strict")
-    record = doctrine.check(payload, ["CLAUDE.md"])
-    assert isinstance(record, AlternativeRecord)
-    reason = render(record, Audience.EM)["hookSpecificOutput"]["permissionDecisionReason"]
-    assert reason.startswith("BLOCKED: writes a governed doctrine surface.")
-
-    _set_level(monkeypatch, "warn")
-    warned = doctrine.check(payload, ["CLAUDE.md"])
-    assert isinstance(warned, dict)
-    assert warned["hookSpecificOutput"]["permissionDecision"] == "allow"
-
-    _set_level(monkeypatch, "off")
-    assert doctrine.check(payload, ["CLAUDE.md"]) is None
+    for level in ("strict", "warn", "off"):
+        _set_level(monkeypatch, level)
+        result = doctrine.check(payload, ["CLAUDE.md"])
+        assert isinstance(result, dict), level
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow", level
+        assert hso["additionalContext"].startswith("Advisory: this command writes a governed"), level
 
 
 def test_doctrine_still_allows_an_unrelated_command(monkeypatch):
@@ -99,15 +92,19 @@ def test_doctrine_still_allows_an_unrelated_command(monkeypatch):
     assert doctrine.check(payload, ["CLAUDE.md"]) is None
 
 
-def test_doctrine_sizing_deny_is_a_record_with_the_legacy_text():
+def test_doctrine_sizing_deny_is_an_advisory_envelope():
     payload = {"tool_name": "Bash", "tool_input": {"command": "echo x > state/sizings/a.yaml"}, "cwd": ""}
-    record = doctrine.check(payload, [])
-    assert isinstance(record, AlternativeRecord)
-    env = render(record, Audience.EM)["hookSpecificOutput"]
-    assert env["permissionDecisionReason"] == doctrine._SIZING_RECORD_DENY
+    result = doctrine.check(payload, [])
+    assert isinstance(result, dict)
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: this command writes the sizing")
 
 
 def test_doctrine_advisory_is_an_advisory_record(monkeypatch):
+    from coordinator_core.guard_messages.render import render
+    from coordinator_core.guard_messages.alternative_record import Audience
+
     monkeypatch.setattr(doctrine, "feature_enabled", lambda name: False)
     monkeypatch.setattr(doctrine, "_is_onboarding_write", lambda *a, **k: False)
     _set_level(monkeypatch, "warn")

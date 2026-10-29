@@ -250,6 +250,25 @@ def test_case_b_three_concurrent_refires_are_each_rewritten(door, tmp_path, reco
     assert len(set(scripts)) == 3, scripts
 
 
+def test_ask_run_halt_takes_the_plain_emit_and_spawns_no_recompose(tmp_path, monkeypatch):
+    """The resume record covers a halted `warp-<stem>-*` run; a halted `ask-*` run's refire takes a fresh
+    run id, so the hook emits as before and starts no recompose."""
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    halted = _halted_repo(tmp_path, "alpha")
+    spawned: list = []
+    monkeypatch.setattr(hook, "_spawn_recompose", lambda root, run_id: spawned.append(run_id) or True)
+    seen: list = []
+
+    def emit(params, root):
+        seen.append(params)
+        return {"path": str(root / "run.js"), "run_id": "r1", "fire_args": {}}
+
+    env = hook.evaluate(json.loads(_payload(halted)), emit=emit)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert len(seen) == 1 and spawned == []
+
+
 # Door-free cases: the dispatch-timeout detail and the asks fan-out launcher.
 
 

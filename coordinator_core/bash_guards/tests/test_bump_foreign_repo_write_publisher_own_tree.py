@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core import machine_profile
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
+from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
 from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
     _init_repo,
     _posix,
@@ -54,7 +55,8 @@ def _run(repos, cmd):  # noqa: F811
 
 
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    # Advisory-by-ruling (307ea22403 DR-475; b17ec35251): the deny reason is now one nudge line.
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 OWN_ROW = [_row("klabauter-top", "publish-mirror:claude_klabauter")]
@@ -90,7 +92,7 @@ def test_same_tree_from_a_non_publisher_command_is_denied(repos, monkeypatch, tm
     result = _run(repos, template.format(m=_posix(repos["foreign"])))
 
     assert result is not None
-    assert "out-of-repo writes are blocked" in _reason(result)
+    assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
 @pytest.mark.parametrize(
@@ -105,7 +107,7 @@ def test_another_foreign_repo_is_denied(repos, monkeypatch, tmp_path, template):
     result = _run(repos, template.format(o=_posix(other)))
 
     assert result is not None
-    assert "out-of-repo writes are blocked" in _reason(result)
+    assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
 @pytest.mark.parametrize(
@@ -120,7 +122,7 @@ def test_tree_that_is_no_rows_destination_is_denied(repos, monkeypatch, tmp_path
     result = _run(repos, template.format(m=_posix(repos["foreign"])))
 
     assert result is not None
-    assert "out-of-repo writes are blocked" in _reason(result)
+    assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
 def test_row_whose_source_is_another_repo_is_denied(repos, monkeypatch, tmp_path):  # noqa: F811
