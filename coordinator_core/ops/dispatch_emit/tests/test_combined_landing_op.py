@@ -56,10 +56,12 @@ def _halt(root: Path, run_id: str, withheld: list, kept: dict | None = None, bas
     for path in withheld:
         text = (kept or {}).get(path, f"staged {path}\n")
         done = subprocess.run(
-            ["git", "hash-object", "-w", "--stdin"], cwd=str(root), input=text, check=True,
-            capture_output=True, text=True, **no_console_creationflags(),
+            # Bytes, not text=True: text-mode stdin writes CRLF on Windows, so the kept blob would never
+            # equal the LF blob the fixture commits.
+            ["git", "hash-object", "-w", "--stdin"], cwd=str(root), input=text.encode("utf-8"), check=True,
+            capture_output=True, **no_console_creationflags(),
         )
-        blobs[path] = done.stdout.strip()
+        blobs[path] = done.stdout.decode("ascii").strip()
     (rd / "kept.json").write_text(json.dumps({"chunks": {"X1": {"paths": blobs}}, "plan_gate": None}), encoding="utf-8")
 
 
@@ -236,6 +238,8 @@ def test_refuses_foreign_hunk_duplicating_a_credited_line(repo, line):
 
 
 def test_refuses_line_ending_only_change(repo):
+    # Pinned off: under a box-wide autocrlf=true a CRLF working tree over an LF blob is no change at all.
+    _git(repo, "config", "core.autocrlf", "false")
     kept = b"a\nb\nR\n"
     _multi(repo, b"a\nb\n", kept, kept, kept.replace(b"\n", b"\r\n"))
     _refused(repo)

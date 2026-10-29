@@ -2,6 +2,8 @@
 import os
 import sys
 import textwrap
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -1698,3 +1700,197 @@ def test_a_claim_is_reindexed_after_another_process_reset_erased_its_memoised_st
     _session_touched(base, "peer", [_touch_line("T", "a.py", "2026-08-08T11:00:00.000000Z")])
 
     assert os.path.isfile(stream)
+
+
+def test_index_names_unchanged_file_is_not_reread_and_change_is_seen(tmp_path, monkeypatch):
+    import builtins
+
+    claim_index._INDEX_NAMES_CACHE.clear()
+    f = tmp_path / "p.idx"
+    f.write_bytes(b"a/s1\n")
+    assert claim_index._read_index_names(str(f)) == {"a/s1"}
+
+    opened = []
+    real_open = builtins.open
+
+    def spy(p, *a, **k):
+        opened.append(str(p))
+        return real_open(p, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", spy)
+    got = claim_index._read_index_names(str(f))
+    got.add("mutated")
+    assert claim_index._read_index_names(str(f)) == {"a/s1"}
+    assert opened == []
+
+    f.write_bytes(b"a/s1\nb/s2\n")
+    assert claim_index._read_index_names(str(f)) == {"a/s1", "b/s2"}
+    f.unlink()
+    assert claim_index._read_index_names(str(f)) is None
+
+
+def _count_decodes(monkeypatch):
+    decoded = []
+    real = touch_record.decode_line
+
+    def spy(line):
+        decoded.append(line)
+        return real(line)
+
+    monkeypatch.setattr(touch_record, "decode_line", spy)
+    return decoded
+
+
+def test_a_sink_that_only_grew_is_folded_from_its_previous_offset(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(
+        base,
+        "peer",
+        [_touch_line("T", f"f{i}.py") for i in range(20)] + [_touch_line("R", "f0.py")],
+    )
+    touch_record._FOLD_CACHE.clear()
+    assert claim_index.lookup(["f1.py", "f0.py"], sessions_dir=base) == {
+        "f1.py": ["peer"],
+        "f0.py": [],
+    }
+
+    decoded = _count_decodes(monkeypatch)
+    assert claim_index.lookup(["f1.py"], sessions_dir=base) == {"f1.py": ["peer"]}
+    assert decoded == []
+
+    _session_touched(
+        base,
+        "peer",
+        [_touch_line("R", "f1.py", "2026-08-08T11:00:00.000000Z"), _touch_line("T", "f0.py", "2026-08-08T11:00:01.000000Z")],
+    )
+    assert claim_index.lookup(["f1.py", "f0.py"], sessions_dir=base) == {
+        "f1.py": [],
+        "f0.py": ["peer"],
+    }
+    assert len(decoded) == 2
+
+
+def test_a_grown_sink_with_a_torn_tail_folds_only_complete_lines_then_the_rest(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    sink = os.path.join(base, "peer", "touch-record.jsonl")
+    touch_record._FOLD_CACHE.clear()
+    claim_index.lookup(["a.py"], sessions_dir=base)
+
+    _session_touched(base, "donor", [_touch_line("R", "a.py", "2026-08-08T12:00:00.000000Z")])
+    with open(os.path.join(base, "donor", "touch-record.jsonl"), "rb") as fh:
+        line = fh.read()
+    with open(sink, "ab") as fh:
+        fh.write(line[:10])
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+
+    with open(sink, "ab") as fh:
+        fh.write(line[10:])
+    assert claim_index.lookup(["a.py"], sessions_dir=base)["a.py"] == []
+
+
+def test_a_sink_rewritten_larger_than_its_folded_prefix_is_read_whole(tmp_path):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    sink = os.path.join(base, "peer", "touch-record.jsonl")
+    touch_record._FOLD_CACHE.clear()
+    assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
+
+    os.remove(sink)
+    _session_touched(
+        base,
+        "peer",
+        [_touch_line("T", "zzzzzz.py"), _touch_line("T", "yyyyyy.py"), _touch_line("R", "a.py", "2026-08-08T12:00:00.000000Z")],
+    )
+    assert claim_index.lookup(["a.py", "zzzzzz.py"], sessions_dir=base) == {
+        "a.py": [],
+        "zzzzzz.py": ["peer"],
+    }
+
+
+def test_held_by_is_folded_on_first_read_not_by_the_lookup(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    _session_touched(base, "peer", [_touch_line("T", "a.py")])
+    agent_dir = os.path.join(base, ".agents", "ag1")
+    _write(os.path.join(agent_dir, "em-session-id.txt"), "peer\n")
+    _append_fixture_line(
+        os.path.join(agent_dir, "touch-record.jsonl"), "ag1", "ag1", _touch_line("T", "other.py")
+    )
+    claim_index.lookup(["a.py"], sessions_dir=base)
+
+    touch_record._FOLD_CACHE.clear()
+    folded = []
+    real = touch_record.read_stream_claims_and_held_kind
+
+    def spy(sink):
+        folded.append(os.path.basename(os.path.dirname(str(sink))))
+        return real(sink)
+
+    monkeypatch.setattr(touch_record, "read_stream_claims_and_held_kind", spy)
+    result = claim_index.lookup(["a.py"], sessions_dir=base)
+
+    assert result == {"a.py": ["peer"]}
+    assert folded == ["peer"]
+    assert result.held_by == {"peer": ["a.py", "other.py"]}
+    assert "ag1" in folded
+    assert result.held_by == {"peer": ["a.py", "other.py"]}
+
+
+def test_concurrent_cold_lookups_fold_each_sink_once(tmp_path, monkeypatch):
+    base = str(tmp_path / "sessions")
+    for i in range(4):
+        _session_touched(base, f"s{i}", [_touch_line("T", "hot.py")])
+    claim_index.lookup(["hot.py"], sessions_dir=base)
+    touch_record._FOLD_CACHE.clear()
+
+    reads = []
+    real_read = Path.read_bytes
+
+    def slow(self):
+        if self.name == "touch-record.jsonl":
+            reads.append(str(self))
+            time.sleep(0.05)
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", slow)
+    barrier = threading.Barrier(8)
+    answers = []
+
+    def run():
+        barrier.wait()
+        answers.append(claim_index.lookup(["hot.py"], sessions_dir=base)["hot.py"])
+
+    workers = [threading.Thread(target=run) for _ in range(8)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join()
+
+    assert answers == [["s0", "s1", "s2", "s3"]] * 8
+    assert len(reads) == 4 and len(set(reads)) == 4
+
+
+def test_read_index_names_cache_serves_crlf_file(tmp_path):
+    index = tmp_path / "idx.txt"
+    index.write_bytes(b"a/touch-record.jsonl\r\nb/touch-record.jsonl\r\n")
+    claim_index._INDEX_NAMES_CACHE.clear()
+    first = claim_index._read_index_names(str(index))
+    assert first == {"a/touch-record.jsonl", "b/touch-record.jsonl"}
+    assert str(index) in claim_index._INDEX_NAMES_CACHE
+    assert claim_index._read_index_names(str(index)) == first
+
+
+def test_dir_claim_listing_distinguishes_live_only_from_rotated(tmp_path):
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "touch-record.jsonl").write_bytes(b"")
+    both = tmp_path / "both"
+    both.mkdir()
+    (both / "touch-record.jsonl").write_bytes(b"")
+    (both / "touch-record.jsonl.rotated-1700000000000-1-1.jsonl").write_bytes(b"")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert touch_record.dir_claim_listing(str(live)) == (True, False, True)
+    assert touch_record.dir_claim_listing(str(both)) == (True, False, False)
+    assert touch_record.dir_claim_listing(str(empty)) == (False, False, False)
+    assert touch_record.dir_claim_listing(str(tmp_path / "missing")) == (False, False, False)

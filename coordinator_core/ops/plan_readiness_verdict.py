@@ -79,6 +79,7 @@ from coordinator_core.ops import (
     _own_run_premise,
     readiness_declared_absent,
 )
+from coordinator_core.ops._major_finding_answer import unanswered
 from coordinator_core.ops._param_alias import aliased_param, spellings
 from coordinator_core.ops.plan_prep_gate import prep_gate_with_text
 from coordinator_core.ops.review_findings_ledger import read_ledger
@@ -399,6 +400,7 @@ def _carry_rows(repo_root: Path, plan_rel: str) -> list:
 
 
 REGISTER_ROWS_UNCLAIMED_KIND = "register-rows-unclaimed"
+MAJOR_FINDING_KIND = "major-finding-needs-fix-row"
 
 
 def _repair(kind: str, target: str, instruction: str) -> dict:
@@ -453,6 +455,20 @@ def _split_unmapped_anchors(findings: list, entries: Any, census: Any) -> tuple:
             continue
         repairs.append(_repair("anchor-premise-unchecked", f"#{index}", instruction))
     return kept, repairs
+
+
+def _row_outranks_match(verdicts: list, anchors: list, rows: list) -> list:
+    """A passed premise row that is not RESOLVES stands over an engine-check match: a checker that
+    ruled on the anchor is never overwritten by the in-process check."""
+    known = frozenset(a["id"] for a in anchors)
+    out = []
+    for entry in verdicts:
+        if entry["source"] == "engine-check" and entry["verdict"] == "RESOLVES":
+            verdict, source = _anchor_premise._verdict_for(entry["id"], rows or [], [], frozenset(), known)
+            if source == "row" and verdict != "RESOLVES":
+                entry = {"id": entry["id"], "verdict": verdict, "source": "row", "observed": ""}
+        out.append(entry)
+    return out
 
 
 def _check_params(params: dict) -> tuple:
@@ -572,9 +588,18 @@ def readiness_verdict(
         if not _clear(coverage.get("verdict")) and not mechanical and not judged:
             notes.append(f"coverage verdict {coverage.get('verdict')!r} carries no findings")
     for review in reviews:
+        read = _ledger_read(review, repo_root)
+        # A verified major default-path finding with no fix row or G-EM scope ruling pulls under any review verdict.
+        for row in unanswered(read[1] if read is not None else [], spine_rows, repo_root):
+            repairs.append(_repair(
+                MAJOR_FINDING_KIND, str(row.get("id") or "?"),
+                "answer this major default-path finding with a fix row in the plan's spine "
+                "(answered_by: {kind: fix-row, row: <id>}) or a G-EM scope ruling "
+                "(answered_by: {kind: gem-scope-ruling, ref: <repo-relative file>}); "
+                "a disclosure or PM waiver does not clear it",
+            ))
         if _clear(review.get("verdict")):
             continue
-        read = _ledger_read(review, repo_root)
         if _ledger_verdict(review) and _rows_clear(read):
             continue
         judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
@@ -675,12 +700,18 @@ def readiness_verdict(
     if engine_checked:
         notes.append(f"{engine_checked} anchor premise(s) resolved by in-process check")
     unevaluable = _anchor_premise.unevaluable_anchors(anchor_verdicts or []) + refused
-    if unevaluable:
-        lane = "premise-checker ran, no blocking row" if checker_ran else "no premise-checker in this lane"
+    if unevaluable and checker_ran:
         notes.append(
-            f"anchor check not evaluable in-process, not blocking ({lane}): "
+            "anchor check not evaluable in-process, not blocking (premise-checker ran, no blocking row): "
             + "; ".join(f"{i} ({d[:80]})" for i, d in unevaluable)
         )
+    elif unevaluable:
+        for anchor_id, detail in unevaluable:
+            repairs.append(_repair(
+                "anchor-check-not-evaluable", anchor_id,
+                f"rewrite anchor {anchor_id}'s check in the in-process form ({_anchor_check.GRAMMAR}); "
+                f"it was not evaluable: {detail[:200]}",
+            ))
     if uncheckable:
         notes.append(f"{uncheckable} UNCHECKABLE premise row(s) left to reviewer judgment")
     if covered:
@@ -766,7 +797,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         carried = (
             _own_run_premise.regrade(_carry_rows(repo_root, str(prep_gate["plan"])), own) if anchors else []
         )
-        verdicts = _anchor_premise.anchor_verdicts(anchors, premise_rows, carried, text, anchor_root)
+        verdicts = _row_outranks_match(
+            _anchor_premise.anchor_verdicts(anchors, premise_rows, carried, text, anchor_root),
+            anchors, premise_rows,
+        )
         anchor = defects + _anchor_premise.anchor_findings(
             anchors, premise_rows, carried, text, anchor_root, verdicts
         )

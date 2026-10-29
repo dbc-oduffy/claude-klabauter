@@ -753,6 +753,42 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "release for the whole landing, and this helper threads no session id",
         "confirmed": True,
     },
+    "benchmarks/distill_disposal_large_corpus.py::build_corpus": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/land_run_slow_disk_profile.py::build_land_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/submit_hook_resume_emit.py::_seed_plan_and_sizing": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/submit_hook_resume_emit.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/submit_hook_resume_emit.py::seed_resume_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/updatedocs_gates_cold_full_path.py::ensure_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "git/kept_pin.py::pin_kept": {
+        "reason": "ineligible: writes a pin commit of blob references "
+        "under a kept-blobs ref via `cas_ref`; touches no worktree "
+        "path and threads no session id, so no claim exists to release",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_remainder.py::land": {
+        "reason": "ineligible: lands a halted run's verified remainder keyed by "
+        "run_id; params carry no session id, so there is no id to release "
+        "claims under",
+        "confirmed": True,
+    },
     "ops/dispatch_emit/run_close_parts.py::part_closes": {
         "reason": "ineligible: pure outcome computation; its commit_paths "
         "parameter is a read-only commit-to-files lookup, no commit is made",
@@ -843,7 +879,9 @@ def test_no_unlisted_commit_site():
 #: Allowlist keys whose module ships only in the engine source tree. An entry is
 #: exempt from the stale check only while its module is absent; where the module
 #: exists, the entry is held to the enumerated sites like any other.
-_SOURCE_TREE_ONLY_SITES = frozenset({"percolate/round.py::step_commit"})
+_SOURCE_TREE_ONLY_SITES = frozenset(
+    {"percolate/round.py::step_commit", "percolate/publish_lease.py::acquire"}
+)
 
 
 def test_no_stale_allowlist_entry():

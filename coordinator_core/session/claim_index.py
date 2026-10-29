@@ -144,9 +144,11 @@ pass ``sessions_dir`` explicitly and never touch a real git repo.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import os
 import shutil
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -229,7 +231,7 @@ _TOUCHED_FILENAME = touch_record.RECORD_FILENAME
 
 
 def _has_claim_surface(sink_path: str) -> bool:
-    return bool(os.path.isfile(sink_path) or touch_record.discover_family(sink_path))
+    return bool(touch_record.discover_family(sink_path))
 
 
 def _normalize_key(path: str) -> str:
@@ -315,11 +317,29 @@ class _LookupResult(dict):
     """
 
     complete: bool = True
-    held_by: Dict[str, List[str]] = None  # type: ignore[assignment]
+    _held_by: Optional[Dict[str, List[str]]] = None
+    _held_by_thunk = None
     abort_cause: Optional[str] = None
     edit_ts: Dict[str, Dict[str, datetime]] = None  # type: ignore[assignment]
     recorded_name: Dict[str, Dict[str, str]] = None  # type: ignore[assignment]
     recorded_kind: Dict[str, Dict[str, str]] = None  # type: ignore[assignment]
+
+    @property
+    def held_by(self) -> Optional[Dict[str, List[str]]]:
+        """Folded on first read: a caller that never reads it does not pay for folding every sink of
+        every claimant found. A fold that cannot be completed sets ``complete`` False."""
+        thunk = self._held_by_thunk
+        if thunk is not None:
+            # Cleared only after the fold lands: a concurrent reader must not see a
+            # cleared thunk with ``_held_by`` still unset.
+            self._held_by = thunk(self)
+            self._held_by_thunk = None
+        return self._held_by
+
+    @held_by.setter
+    def held_by(self, value: Optional[Dict[str, List[str]]]) -> None:
+        self._held_by_thunk = None
+        self._held_by = value
 
 
 @dataclasses.dataclass
@@ -450,7 +470,9 @@ def _agent_owner_sid(agent_dir_path: str) -> tuple:
     return touch_record.agent_owner_sid(agent_dir_path)
 
 
-def _enumerate_claim_sinks(base: str) -> tuple:
+def _enumerate_claim_sinks(base: str, live_only_out: "Optional[Set[str]]" = None) -> tuple:
+    """``(pairs, complete)`` of every claimant sink under ``base``. ``live_only_out``, when given,
+    collects the sinks listed as a live file with no rotated generation."""
     pairs: List[tuple] = []
     complete = True
 
@@ -474,11 +496,16 @@ def _enumerate_claim_sinks(base: str) -> tuple:
         if not is_dir:
             continue
         touched_path = os.path.join(entry.path, _TOUCHED_FILENAME)
-        if _has_claim_surface(touched_path):
+        has_surface, has_pointer, live_only = touch_record.dir_claim_listing(entry.path)
+        if live_only and live_only_out is not None:
+            live_only_out.add(touched_path)
+        if has_surface:
             # A Workflow-spawned agent's own session dir carries the
             # dispatching session's back-pointer: its claims are that
             # session's, attributed as an agent source.
-            owner_sid, owner_complete = _agent_owner_sid(entry.path)
+            owner_sid, owner_complete = (
+                _agent_owner_sid(entry.path) if has_pointer else ("", True)
+            )
             if not owner_complete:
                 complete = False
             if owner_sid and owner_sid != entry.name:
@@ -500,7 +527,10 @@ def _enumerate_claim_sinks(base: str) -> tuple:
         if not owner_sid:
             continue
         touched_path = os.path.join(agent_entry.path, _TOUCHED_FILENAME)
-        if _has_claim_surface(touched_path):
+        has_surface, _pointer, live_only = touch_record.dir_claim_listing(agent_entry.path)
+        if live_only and live_only_out is not None:
+            live_only_out.add(touched_path)
+        if has_surface:
             pairs.append((touched_path, owner_sid, agent_entry.name))
 
     return pairs, complete
@@ -602,28 +632,34 @@ def _walk(base: str, on_sink=None) -> _IndexState:
     """``rebuild``'s walk over a resolved sessions dir. ``on_sink(sink_path, claimant_sid,
     stream_claims)`` sees every sink read cleanly, for the index build."""
     process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
-    touched_pairs, complete = _enumerate_claim_sinks(base)
+    live_only: Set[str] = set()
+    touched_pairs, complete = _enumerate_claim_sinks(base, live_only)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
     folded: List[tuple] = []
 
-    for touched_path, claimant_sid, agent_id in touched_pairs:
-        if time.process_time() > process_deadline:
-            complete = False
-            if abort_cause is None:
-                abort_cause = ABORT_CAUSE_CAP_EXCEEDED
-            break
-        read = _read_stream_claims(touched_path)
-        stream_claims, content_read_ok = read
-        stream_held = getattr(read, "held_kind", {})
-        if not content_read_ok:
-            complete = False
-            if abort_cause is None:
-                abort_cause = ABORT_CAUSE_IO_ERROR
-            continue
-        if on_sink is not None:
-            on_sink(touched_path, claimant_sid, stream_claims)
-        for path, event in stream_claims.items():
-            folded.append((event, path, claimant_sid, agent_id, stream_held))
+    for sink in live_only:
+        touch_record.hint_live_only(sink)
+    try:
+        for touched_path, claimant_sid, agent_id in touched_pairs:
+            if time.process_time() > process_deadline:
+                complete = False
+                if abort_cause is None:
+                    abort_cause = ABORT_CAUSE_CAP_EXCEEDED
+                break
+            read = _read_stream_claims(touched_path)
+            stream_claims, content_read_ok = read
+            stream_held = getattr(read, "held_kind", {})
+            if not content_read_ok:
+                complete = False
+                if abort_cause is None:
+                    abort_cause = ABORT_CAUSE_IO_ERROR
+                continue
+            if on_sink is not None:
+                on_sink(touched_path, claimant_sid, stream_claims)
+            for path, event in stream_claims.items():
+                folded.append((event, path, claimant_sid, agent_id, stream_held))
+    finally:
+        touch_record.clear_live_only_hints(live_only)
 
     claims, edit_ts, recorded_name, recorded_kind, held_kind, agent_claims = _fold_rows(
         folded
@@ -800,13 +836,36 @@ def _held_from_maps(wanted, claims, held_kind) -> Dict[str, List[str]]:
     return held
 
 
+#: index file -> ((size, mtime_ns), names). Index files are append-only and a build removes them, so
+#: an unchanged signature means unchanged content; an unchanged file costs one stat, not a read.
+_INDEX_NAMES_CACHE: Dict[str, tuple] = {}
+_INDEX_NAMES_CACHE_MAX = 8192
+
+
 def _read_index_names(file_path: str) -> Optional[Set[str]]:
     """Sink names listed in an index file; ``None`` when the file does not exist."""
     try:
-        with open(file_path, "r", encoding="utf-8") as fh:
-            return {line.strip() for line in fh if line.strip()}
+        st = os.stat(file_path)
     except FileNotFoundError:
+        _INDEX_NAMES_CACHE.pop(file_path, None)
         return None
+    signature = (st.st_size, st.st_mtime_ns)
+    cached = _INDEX_NAMES_CACHE.get(file_path)
+    if cached is not None and cached[0] == signature:
+        return set(cached[1])
+    try:
+        with open(file_path, "rb") as fh:
+            raw_bytes = fh.read()
+    except FileNotFoundError:
+        _INDEX_NAMES_CACHE.pop(file_path, None)
+        return None
+    names = {line.strip() for line in raw_bytes.decode("utf-8").splitlines() if line.strip()}
+    # Kept only when no append landed between the stat and the read.
+    if len(raw_bytes) == st.st_size:
+        if len(_INDEX_NAMES_CACHE) >= _INDEX_NAMES_CACHE_MAX:
+            _INDEX_NAMES_CACHE.clear()
+        _INDEX_NAMES_CACHE[file_path] = (signature, frozenset(names))
+    return names
 
 
 def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]":
@@ -820,8 +879,11 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
     index_dir = touch_record.claim_index_dir(base)
     if not os.path.isfile(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE)):
         return None
-    deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
-    state = {"complete": True, "cause": None}
+    state = {
+        "complete": True,
+        "cause": None,
+        "deadline": time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS,
+    }
 
     def _degrade(cause: str) -> None:
         state["complete"] = False
@@ -836,7 +898,7 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
         if name in folds:
             return folds[name]
         folds[name] = None
-        if time.process_time() > deadline:
+        if time.process_time() > state["deadline"]:
             _degrade(ABORT_CAUSE_CAP_EXCEEDED)
             return None
         owner, conclusive = touch_record.attribute_sink(base, name, _agent_owner_sid)
@@ -844,7 +906,8 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
             _degrade(ABORT_CAUSE_IO_ERROR)
         if owner is None:
             return None
-        read = _read_stream_claims(os.path.join(base, *name.split("/")))
+        with _single_flight(os.path.join(base, *name.split("/"))):
+            read = _read_stream_claims(os.path.join(base, *name.split("/")))
         stream_claims, content_read_ok = read
         if not content_read_ok:
             _degrade(ABORT_CAUSE_IO_ERROR)
@@ -870,29 +933,43 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
         claims, edit_ts, recorded_name, recorded_kind, _held, _agent = _fold_rows(rows)
         found = {path: sorted(sids) for path, sids in claims.items() if sids}
         wanted = {sid for sids in found.values() for sid in sids}
-
-        held_rows: List[tuple] = []
-        for sid in sorted(wanted):
-            names = _read_index_names(touch_record.claim_index_file(index_dir, "s", sid))
-            if names is None:
-                return None
-            names.update(
-                name
-                for name, folded in folds.items()
-                if folded is not None and folded[0] == sid
-            )
-            for name in sorted(names):
-                folded = _fold_sink(name)
-                if folded is None or folded[0] != sid:
-                    continue
-                _sid, agent_id, stream_claims, stream_held = folded
-                for path, event in stream_claims.items():
-                    held_rows.append((event, path, sid, agent_id, stream_held))
-        held_claims, _e, _n, _k, held_kinds, _a = _fold_rows(held_rows)
     except OSError:
         return None
 
-    return _assemble(
+    def _fold_held(result: "_LookupResult") -> Dict[str, List[str]]:
+        state["deadline"] = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
+        was_complete = state["complete"]
+        try:
+            held_rows: List[tuple] = []
+            for sid in sorted(wanted):
+                names = _read_index_names(touch_record.claim_index_file(index_dir, "s", sid))
+                if names is None:
+                    raise FileNotFoundError(sid)
+                names.update(
+                    name
+                    for name, folded in folds.items()
+                    if folded is not None and folded[0] == sid
+                )
+                for name in sorted(names):
+                    folded = _fold_sink(name)
+                    if folded is None or folded[0] != sid:
+                        continue
+                    _sid, agent_id, stream_claims, stream_held = folded
+                    for path, event in stream_claims.items():
+                        held_rows.append((event, path, sid, agent_id, stream_held))
+            held_claims, _e, _n, _k, held_kinds, _a = _fold_rows(held_rows)
+        except OSError:
+            walked = _walk(base)
+            if not walked.complete:
+                result.complete = False
+                result.abort_cause = result.abort_cause or walked.abort_cause
+            return _held_from_maps(wanted, walked.claims, walked.held_kind)
+        if was_complete and not state["complete"]:
+            result.complete = False
+            result.abort_cause = state["cause"]
+        return _held_from_maps(wanted, held_claims, held_kinds)
+
+    result = _assemble(
         paths,
         found,
         {p: v for p, v in edit_ts.items() if v},
@@ -900,8 +977,34 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
         {p: v for p, v in recorded_kind.items() if v},
         state["complete"],
         state["cause"],
-        _held_from_maps(wanted, held_claims, held_kinds),
+        None,
     )
+    if wanted:
+        result._held_by_thunk = _fold_held
+    else:
+        result.held_by = {}
+    return result
+
+
+_FLIGHTS: Dict[str, list] = {}
+_FLIGHTS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _single_flight(key: str):
+    """Serialize concurrent folds of one sink: the second thread waits, then reads the first's fold
+    from the fold cache instead of reading the file again."""
+    with _FLIGHTS_GUARD:
+        entry = _FLIGHTS.setdefault(key, [threading.Lock(), 0])
+        entry[1] += 1
+    try:
+        with entry[0]:
+            yield
+    finally:
+        with _FLIGHTS_GUARD:
+            entry[1] -= 1
+            if entry[1] == 0:
+                _FLIGHTS.pop(key, None)
 
 
 def _begin_index(base: str, index_dir: str) -> Optional[str]:

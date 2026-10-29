@@ -959,6 +959,9 @@ def _deliverable_cascade(ctx: JobContext) -> LegResult:
     rels = list(dict.fromkeys(
         r for r in (sizing_rel, baton_rel, *(Path(b).as_posix() for b in ctx.claimed_batons)) if r
     ))
+    from coordinator_core.ops.dispatch_emit.plan_linked_handoffs import linked_handoffs
+
+    rels = list(dict.fromkeys([*rels, *linked_handoffs(ctx.root, plan_rel)]))
     if not rels:
         return _leg("not-applicable", "run names no sizing or baton record")
     from coordinator_core.ops.deliverable_cascade import cascade_run

@@ -109,6 +109,32 @@ def test_record_shape(tmp_path, monkeypatch):
     assert entry["repo_key"] == str(fake_common_dir)
 
 
+def test_record_op_latency_rotates_oversized_sinks_at_default_arguments(tmp_path, monkeypatch):
+    from coordinator_core.telemetry import log_rotation
+
+    monkeypatch.setattr(log_rotation, "_last_checked", {})
+    fake_common_dir = tmp_path / ".git"
+    logs = fake_common_dir / "coordinator-sessions" / "logs"
+    logs.mkdir(parents=True)
+    monkeypatch.setattr(
+        "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
+    )
+    size = log_rotation._ROTATE_THRESHOLD_BYTES
+    for name in ("op-latency.jsonl", "agent-audit.jsonl"):
+        with open(logs / name, "wb") as fh:
+            fh.truncate(size)
+    (logs / "host-samples.jsonl").write_bytes(b"x" * 10)
+
+    record_op_latency(op="ping", t_start=1.0, elapsed_ms=1.0, outcome="ok", repo_root=tmp_path)
+
+    assert (logs / "op-latency.1.jsonl").stat().st_size == size
+    assert (logs / "agent-audit.1.jsonl").stat().st_size == size
+    assert not (logs / "agent-audit.jsonl").exists()
+    assert not (logs / "host-samples.1.jsonl").exists()
+    fresh = (logs / "op-latency.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(fresh) == 1 and json.loads(fresh[0])["op"] == "ping"
+
+
 def test_kill_switch(tmp_path, monkeypatch):
     fake_common_dir = tmp_path / ".git"
     fake_common_dir.mkdir()

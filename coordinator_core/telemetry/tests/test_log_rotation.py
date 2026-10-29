@@ -127,3 +127,28 @@ def test_rotate_all_known_sinks_rotates_only_over_threshold(tmp_path: Path) -> N
 def test_rotate_all_known_sinks_missing_dir_does_not_raise(tmp_path: Path) -> None:
     missing = tmp_path / "nope"
     assert rotate_all_known_sinks(missing) == 0
+
+
+def test_rotate_on_cadence_checks_once_per_window_then_again(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.telemetry import log_rotation
+
+    monkeypatch.setattr(log_rotation, "_ROTATE_THRESHOLD_BYTES", 500)
+    monkeypatch.setattr(log_rotation, "_last_checked", {})
+    calls = []
+    real = log_rotation.rotate_all_known_sinks
+    monkeypatch.setattr(
+        log_rotation, "rotate_all_known_sinks",
+        lambda d, **kw: calls.append(d) or real(d, threshold_bytes=500),
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    sink = logs_dir / "op-latency.jsonl"
+    _write(sink, b"a" * 1000)
+
+    assert log_rotation.rotate_on_cadence(logs_dir, now=100.0) == 1
+    _write(sink, b"a" * 1000)
+    assert log_rotation.rotate_on_cadence(logs_dir, now=110.0) == 0
+    assert sink.exists()
+    assert len(calls) == 1
+    assert log_rotation.rotate_on_cadence(logs_dir, now=200.0) == 1
+    assert len(calls) == 2

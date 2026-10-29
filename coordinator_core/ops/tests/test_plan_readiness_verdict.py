@@ -602,9 +602,9 @@ def test_non_string_baseline_ref_is_refused(tmp_path):
 
 def test_blocking_is_sorted_deduplicated_and_empty_on_ready():
     rows = [_row("UNRESOLVED", "b"), _row("CONTRADICTED", "a"), _row("UNRESOLVED", "b")]
-    out = _premise(rows, [{"reviewer": "patrik", "verdict": "reject"}])
+    out = _premise(rows, [{"reviewer": "a-reviewer", "verdict": "reject"}])
     assert out["blocking"] == [
-        "the Staff Engineer: 'reject'",
+        "a-reviewer: 'reject'",
         "premise-check: CONTRADICTED a",
         "premise-check: UNRESOLVED b",
     ]
@@ -812,9 +812,10 @@ def test_anchor_premises_key_absent_pulls_as_undeclared(tmp_path):
 )
 def test_anchor_without_a_screenable_check_pulls_as_unchecked(tmp_path, block):
     reply = op._handler({"plan": REL}, _anchor_plan(tmp_path, block))
-    assert reply["verdict"] == "ready"
-    assert reply["mechanical_repairs"] == []
-    assert "AP1" in reply["reason"]
+    assert (reply["verdict"], reply["pull_class"]) == ("pulled", "mechanical")
+    assert reply["blocking"] == []
+    (repair,) = reply["mechanical_repairs"]
+    assert (repair["kind"], repair["target"]) == ("anchor-check-not-evaluable", "AP1")
 
 
 def test_r32_anchor_with_an_unevaluable_check_does_not_block_in_the_checker_lane(tmp_path):
@@ -1152,3 +1153,27 @@ def test_r34_gem_scope_ruling_answer_stays_ready(tmp_path):
 
 def test_r34_untagged_row_is_not_judged(tmp_path):
     assert _r34(tmp_path, {"kind": "disclosure"}, severity="minor")["verdict"] == "ready"
+
+
+def _major_row(**extra) -> dict:
+    return {"id": "F1", "severity": "major", "scope": "default-path", **extra}
+
+
+def _major_verdict(monkeypatch, rows, spine_rows=None, verdict="clear"):
+    monkeypatch.setattr(op, "_ledger_read", lambda review, repo_root: (True, rows))
+    return op.readiness_verdict(
+        _gate(PASS, verdict="PREPPED"), None, [{"reviewer": "r", "verdict": verdict, "ledger": "l.md"}],
+        None, None, spine_rows=spine_rows,
+    )
+
+
+def test_unanswered_major_finding_pulls_under_a_clear_review(monkeypatch):
+    out = _major_verdict(monkeypatch, [_major_row()])
+    assert out["verdict"] != "ready"
+    assert any(r["kind"] == op.MAJOR_FINDING_KIND and r["target"] == "F1" for r in out["mechanical_repairs"])
+
+
+def test_major_finding_answered_by_a_live_fix_row_stays_ready(monkeypatch):
+    row = _major_row(answered_by={"kind": "fix-row", "row": "R1"})
+    out = _major_verdict(monkeypatch, [row], [{"id": "R1", "disposition": "open"}])
+    assert out["verdict"] == "ready"

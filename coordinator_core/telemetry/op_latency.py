@@ -548,6 +548,9 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
         except OSError:
             return
 
+        from coordinator_core.telemetry.log_rotation import rotate_on_cadence
+
+        rotate_on_cadence(sink.parent)
         _append_line(sink, encoded)
     except Exception:
         try:

@@ -249,6 +249,101 @@ def test_register_and_release_drive_reserved(tmp_path):
     assert host.reserved_bytes(adm, **kw) == 0
 
 
+def _kw(**extra):
+    return dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True, **extra)
+
+
+def _ledger(tmp_path, *rows):
+    import json
+
+    adm = tmp_path / "admission.jsonl"
+    adm.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return adm
+
+
+def _start(run, pid=5, **extra):
+    return {"phase": "START", "session_id": "s", "run": run, "pids": [pid], "declared_peak_mb": 4096, **extra}
+
+
+def test_register_stamps_create_time_and_ts(tmp_path):
+    import json
+
+    adm = tmp_path / "admission.jsonl"
+    host.register_command(adm, "k", 5, 4.0, create_time_fn=lambda p: 1234.5)
+    line = json.loads(adm.read_text(encoding="utf-8"))
+    assert line["create_time"] == 1234.5 and isinstance(line["ts"], float)
+
+
+def test_matching_create_time_reserves_and_recycled_pid_does_not(tmp_path):
+    adm = tmp_path / "admission.jsonl"
+    host.register_command(adm, "k", 5, 4.0, create_time_fn=lambda p: 1000.0)
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 1000.0, **_kw()) == 4 * host.GIB
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 1000.9, **_kw()) == 4 * host.GIB
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 1001.5, **_kw()) == 0
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: None, **_kw()) == 0
+
+
+def test_legacy_start_with_ts_keeps_only_while_create_time_not_after_ts(tmp_path):
+    adm = _ledger(tmp_path, _start("a", ts=1000.0))
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 900.0, **_kw()) == 4 * host.GIB
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 1000.0, **_kw()) == 4 * host.GIB
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 1001.0, **_kw()) == 4 * host.GIB
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 1001.1, **_kw()) == 0
+
+
+def test_legacy_start_without_ts_or_create_time_reserves_while_pid_live(tmp_path):
+    adm = _ledger(tmp_path, _start("a"))
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 5e9, **_kw()) == 4 * host.GIB
+    assert host.reserved_bytes(adm, rss_fn=lambda p: 0.0, alive_fn=lambda p: False) == 0
+
+
+def test_compaction_drops_dead_and_recycled_and_closed_and_backfills_legacy(tmp_path):
+    import json
+
+    end = {"phase": "END", "session_id": "s", "run": "closed", "pids": []}
+    adm = _ledger(
+        tmp_path,
+        _start("dead", pid=1, create_time=10.0),
+        _start("recycled", pid=2, create_time=10.0),
+        _start("closed", pid=3, create_time=10.0),
+        end,
+        _start("stamped", pid=4, create_time=10.0),
+        _start("legacy-ts", pid=6, ts=500.0),
+        _start("legacy-ts-recycled", pid=7, ts=500.0),
+        _start("legacy-bare", pid=8),
+    )
+    with open(adm, "a", encoding="utf-8") as fh:
+        fh.write("not json\n")
+    times = {2: 99.0, 3: 10.0, 4: 10.0, 6: 400.0, 7: 600.0, 8: 250.0}
+    removed = host.compact_admission(
+        adm, alive_fn=lambda p: p != 1, create_time_fn=lambda p: times.get(p)
+    )
+    kept = [l for l in adm.read_text(encoding="utf-8").splitlines()]
+    runs = [json.loads(l)["run"] for l in kept if l.startswith("{")]
+    assert runs == ["stamped", "legacy-ts", "legacy-bare"] and "not json" in kept
+    assert removed == 5
+    by_run = {json.loads(l)["run"]: json.loads(l) for l in kept if l.startswith("{")}
+    assert by_run["legacy-ts"]["create_time"] == 400.0 and by_run["legacy-bare"]["create_time"] == 250.0
+    assert by_run["stamped"]["create_time"] == 10.0
+    assert host.compact_admission(adm, alive_fn=lambda p: True, create_time_fn=lambda p: times.get(p)) == 0
+
+
+def test_after_compaction_backfilled_legacy_row_is_recycle_safe(tmp_path):
+    adm = _ledger(tmp_path, _start("legacy", pid=8))
+    host.compact_admission(adm, alive_fn=lambda p: True, create_time_fn=lambda p: 250.0)
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 250.0, **_kw()) == 4 * host.GIB
+    assert host.reserved_bytes(adm, create_time_fn=lambda p: 9999.0, **_kw()) == 0
+
+
+def test_admit_and_register_compacts_dead_rows(tmp_path):
+    adm = _ledger(tmp_path, _start("dead", pid=1, create_time=10.0))
+    status = host.MemoryStatus(avail_phys=100 * host.GIB, total_phys=128 * host.GIB, commit_used=0, commit_limit=200 * host.GIB)
+    kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: p != 1, create_time_fn=lambda p: 7.0)
+    verdict, reserved = host.admit_and_register(adm, "k", 6, 1.0, status, **kw)
+    assert verdict.admit and reserved == 0
+    assert '"dead"' not in adm.read_text(encoding="utf-8")
+
+
 def test_concurrent_admits_serialize_check_and_reserve(tmp_path):
     import threading
 

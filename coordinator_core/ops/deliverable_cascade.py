@@ -475,6 +475,13 @@ def _plan_origin(path: str) -> str:
     return f"docs/plans/{m.group(1)}" if m else path
 
 
+def _strip_root_prefix(value: str) -> str:
+    """`value` POSIX-normalised with a leading `<root>:` prefix removed (a drive letter is not one)."""
+    norm = value.strip().replace("\\", "/")
+    head, sep, tail = norm.partition(":")
+    return tail if sep and len(head) > 1 else norm
+
+
 def _plan_fk_matches(value: Any, plan_fk: str) -> bool:
     """True when a record's `plan` field names `plan_fk`, tolerating a `<root>:` prefix.
 
@@ -482,11 +489,7 @@ def _plan_fk_matches(value: Any, plan_fk: str) -> bool:
     """
     if not isinstance(value, str):
         return False
-    norm = value.strip().replace("\\", "/")
-    head, sep, tail = norm.partition(":")
-    if sep and len(head) > 1:
-        norm = tail
-    return _plan_origin(norm) == _plan_origin(plan_fk)
+    return _plan_origin(_strip_root_prefix(value)) == _plan_origin(plan_fk)
 
 
 def _collect_live_candidates_for_kind(
@@ -1655,6 +1658,10 @@ def cascade_run(
     `ship_sha` is the handoff `ship-commit` fallback. Leg (b), the live-successor
     check, still reads the handoff corpus for a handoff-kind record.
 
+    Divergence from `cascade_terminal_sync`: a handoff of ANOTHER deliverable is also admitted when it
+    links `plan_path` and every plan it links is implemented (`links_and_all_implemented`). The corpus
+    scan never admits it, since widening a scan-fired flip is forbidden.
+
     The candidate loop restates `cascade_terminal_sync`'s; the only guard against drift between the two
     is `test_cascade_run_outcome_equals_cascade_terminal_sync`.
     """
@@ -1693,10 +1700,22 @@ def cascade_run(
         if not did_match and not (
             kind is _SIZING_KIND and sizing_plan_fk and _plan_fk_matches(fm.get("plan"), sizing_plan_fk)
         ):
-            continue
+            from coordinator_core.ops.dispatch_emit.plan_linked_handoffs import links_and_all_implemented
+
+            if not (
+                kind is _HANDOFF_KIND
+                and sizing_plan_fk
+                and links_and_all_implemented(fm, sizing_plan_fk, worktree_root)
+            ):
+                continue
         if fm.get(kind.lifecycle_field) in kind.terminal_values:
             continue
         candidates.append({"path": path, "fm": fm, "kind": kind})
+
+    corpus_metas: Optional[Dict[str, dict]] = None
+    if any(c["kind"] is _HANDOFF_KIND for c in candidates):
+        corpus_metas = {}
+        _collect_live_candidates_for_kind(worktree_root, "", kind=_HANDOFF_KIND, metas_out=corpus_metas)
 
     advanced: List[dict] = []
     already_advanced: List[dict] = []
@@ -1722,6 +1741,7 @@ def cascade_run(
                 path, fm, common_dir,
                 exclude_children_check=resolved_this_run,
                 kind=kind,
+                corpus_metas=corpus_metas if kind is _HANDOFF_KIND else None,
                 caller_session_id=caller_session_id,
             )
             if refusal is None:

@@ -45,16 +45,11 @@ Size/generation arithmetic (state your numbers, don't just assert them):
     against the worst-observed sink, not tuned per-sink.
 
 Negative-spec (hard-won):
-    - NEVER called from a write path. Every one of the four sinks' own
-      writers (``op_latency._write_entry``, ``agent_completion_log``'s
-      append, the canary hook, ``safe_commit_offer``'s diagnostics append)
-      does exactly one ``atomic_append.append_line`` call and returns — no
-      read-modify-write, no size check, no stat() on the hot path. This
-      mirrors ``coordinator_core.ops.ceremony.detached_spawn``'s
-      deliberate choice to keep trim/cap off its own writer. A per-append
-      size check would cost a stat() on every one of the ~85ms-floor
-      invocations this sits behind; rotation belongs on a cadence/reaper
-      site that already runs periodically, never inline with a write.
+    - Never a per-append size check. The append path reaches rotation only
+      through ``rotate_on_cadence`` (``op_latency._write_entry``): one dict
+      lookup per append, the stat sweep at most once per cadence per dir per
+      process. Calling ``rotate_if_needed`` directly inline with a write
+      would cost a stat() on every ~85ms-floor invocation.
     - Never raises. Every public entry point here swallows every exception
       (unwritable dir, disk full, a permission error, a vanished file, a
       concurrent renamer) to a debug log and returns, mirroring
@@ -87,6 +82,7 @@ Spec backlink: state/audits/2026-08-15-fleet-degradation-forensics.md
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 _ROTATE_THRESHOLD_BYTES = 25 * 1024 * 1024
@@ -199,3 +195,32 @@ def rotate_all_known_sinks(
             except Exception:
                 pass
     return rotated
+
+
+_CADENCE_SECS = 60.0
+
+_last_checked: dict = {}
+
+
+def rotate_on_cadence(
+    logs_dir: Path,
+    *,
+    cadence_secs: float = _CADENCE_SECS,
+    now: "float | None" = None,
+) -> int:
+    """Rotate every known sink in ``logs_dir``, at most once per ``cadence_secs``
+    per directory per process; an in-window call costs one dict lookup.
+
+    The append path's entry point: reached by the process that writes the
+    sink, so no unrelated sweep has to cover this directory. Never raises.
+    """
+    try:
+        t = time.monotonic() if now is None else now
+        key = str(logs_dir)
+        last = _last_checked.get(key)
+        if last is not None and 0 <= t - last < cadence_secs:
+            return 0
+        _last_checked[key] = t
+        return rotate_all_known_sinks(logs_dir)
+    except Exception:
+        return 0

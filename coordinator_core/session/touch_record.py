@@ -1378,9 +1378,8 @@ def discover_family(sink_path: "Path | str") -> list[Path]:
     always the newest generation: nothing can rotate INTO existence after
     it, only out of it.
     """
-    sink_path = Path(sink_path)
-    parent = sink_path.parent
-    name = sink_path.name
+    parent, name = os.path.split(os.fspath(sink_path))
+    parent = parent or "."  # a bare filename lists the cwd, as Path(...).parent did
 
     # ONE `os.scandir` of the parent, not `is_dir()` + `glob()` + `exists()`.
     # This is a corpus-walk hot path -- `scope.compute_scope`, `claim_index`
@@ -1437,7 +1436,7 @@ def discover_family(sink_path: "Path | str") -> list[Path]:
 
     family = [candidate for _, _, _, candidate in rotated]
     if live_exists:
-        family.append(sink_path)
+        family.append(Path(sink_path))
     return family
 
 
@@ -1457,6 +1456,45 @@ def _live_signature(sink_path: "Path | str") -> Optional[tuple[int, int]]:
     except OSError:
         return None
     return st.st_size, st.st_mtime_ns
+
+
+def dir_claim_listing(dir_path: str) -> tuple[bool, bool, bool]:
+    """One scandir of a claimant dir: ``(has_claim_surface, has_owner_pointer, live_only)``.
+    A claim surface is the live sink or any rotated generation of it, exactly
+    ``discover_family``'s non-empty test; ``live_only`` is a live sink with no rotated
+    generation. A missing or non-directory path is ``(False, False, False)``."""
+    prefix = f"{RECORD_FILENAME}.rotated-"
+    live = rotated = pointer = False
+    try:
+        with os.scandir(dir_path) as entries:
+            for entry in entries:
+                name = entry.name
+                if name == RECORD_FILENAME:
+                    live = entry.is_file() or entry.is_dir()
+                elif name == _OWNER_POINTER_FILENAME:
+                    pointer = True
+                elif not rotated and name.startswith(prefix):
+                    match = _ROTATED_SUFFIX_RE.match(name)
+                    rotated = bool(match and match.group("base") == RECORD_FILENAME)
+    except (FileNotFoundError, NotADirectoryError):
+        return False, False, False
+    return live or rotated, pointer, live and not rotated
+
+
+_OWNER_POINTER_FILENAME = "em-session-id.txt"
+
+#: Sink paths a walk's enumeration just listed as a live file with no rotated generation; the
+#: fold of such a sink skips its own directory scan. Scoped to one walk (``hint_live_only`` /
+#: ``clear_live_only_hints``): a stale entry only withholds a generation rotated mid-walk.
+_LIVE_ONLY_HINT: set = set()
+
+
+def hint_live_only(sink_path: str) -> None:
+    _LIVE_ONLY_HINT.add(sink_path)
+
+
+def clear_live_only_hints(sink_paths: Iterable[str]) -> None:
+    _LIVE_ONLY_HINT.difference_update(sink_paths)
 
 
 def agent_owner_sid(agent_dir_path: str) -> tuple[str, bool]:
@@ -1498,16 +1536,24 @@ def read_stream_claims_and_held_kind(
     read; whatever else in the family DID decode is still returned."""
     cache_key = str(sink_path)
     cached = _FOLD_CACHE.get(cache_key)
-    if cached is not None and cached[0] == _live_signature(sink_path):
-        return dict(cached[1]), dict(cached[2]), False, ()
+    if cached is not None:
+        live_signature = _live_signature(sink_path)
+        if cached[0] == live_signature:
+            return dict(cached[1]), dict(cached[2]), False, ()
+        if live_signature is not None:
+            grown = _fold_grown_sink(sink_path, cache_key, cached, live_signature)
+            if grown is not None:
+                return grown
     events: list[TouchEvent] = []
     degraded = False
     reasons: list[str] = []
     # Signature of the live file as read; a read an append overtook is served but not kept.
     signature: Optional[tuple[int, int]] = None
+    live_raw: Optional[bytes] = None
     live = Path(sink_path)
 
-    for member in discover_family(sink_path):
+    family = [live] if cache_key in _LIVE_ONLY_HINT else discover_family(sink_path)
+    for member in family:
         try:
             raw = member.read_bytes()
             # Append-only: a size equal to the bytes read means nothing landed in between.
@@ -1515,6 +1561,7 @@ def read_stream_claims_and_held_kind(
                 st = os.stat(member)
                 if st.st_size == len(raw):
                     signature = (st.st_size, st.st_mtime_ns)
+                    live_raw = raw
         except FileNotFoundError:
             # A peer's rotation raced our directory listing -- not data
             # loss, same posture as a trailing unterminated line.
@@ -1534,11 +1581,75 @@ def read_stream_claims_and_held_kind(
 
     claims = {e.path: e for e in _last_verb_wins(events)} if events else {}
     held = _held_kind(events) if events else {}
-    if signature is not None and not degraded:
-        if len(_FOLD_CACHE) >= _FOLD_CACHE_MAX:
-            _FOLD_CACHE.clear()
-        _FOLD_CACHE[cache_key] = (signature, dict(claims), dict(held))
+    if signature is not None and live_raw is not None and not degraded:
+        consumed = live_raw.rfind(b"\n") + 1
+        tail_state = (
+            consumed,
+            live_raw[max(consumed - _TAIL_ANCHOR_BYTES, 0) : consumed],
+            tuple(str(m) for m in family if m != live),
+            events,
+        )
+        _remember_fold(cache_key, signature, claims, held, tail_state)
     return claims, held, degraded, tuple(reasons)
+
+
+#: Bytes before a fold's end offset re-read and compared on a grown file, to notice a rewrite
+#: (compaction) that happens to be larger than the folded prefix.
+_TAIL_ANCHOR_BYTES = 64
+
+
+def _remember_fold(cache_key: str, signature: tuple[int, int], claims, held, tail_state) -> None:
+    if len(_FOLD_CACHE) >= _FOLD_CACHE_MAX:
+        _FOLD_CACHE.clear()
+    _FOLD_CACHE[cache_key] = (signature, dict(claims), dict(held), tail_state)
+
+
+def _fold_grown_sink(sink_path, cache_key: str, cached: tuple, live_signature: tuple[int, int]):
+    """The fold of a sink that only grew since ``cached``: reads from the previous end offset, not the
+    whole file. ``None`` (the caller folds whole) when the file shrank, its rotated generations
+    changed, the folded prefix no longer matches, or a tail line is unreadable."""
+    offset, anchor, rotated, events = cached[3]
+    if live_signature[0] <= offset:
+        return None
+    live = Path(sink_path)
+    try:
+        if tuple(str(m) for m in discover_family(sink_path) if m != live) != rotated:
+            return None
+        start = offset - len(anchor)
+        with open(live, "rb") as fh:
+            fh.seek(start)
+            data = fh.read()
+        st = os.stat(live)
+    except OSError:
+        return None
+    if data[: len(anchor)] != anchor:
+        return None
+    tail = data[len(anchor) :]
+    try:
+        new_events = [decode_line(line) for line in iter_complete_lines(tail)]
+    except MalformedRecordLine:
+        return None
+    all_events = events + new_events
+    claims = {e.path: e for e in _last_verb_wins(all_events)} if all_events else {}
+    held = _held_kind(all_events) if all_events else {}
+    if st.st_size == start + len(data):
+        consumed = offset + tail.rfind(b"\n") + 1
+        _remember_fold(
+            cache_key,
+            (st.st_size, st.st_mtime_ns),
+            claims,
+            held,
+            (consumed, _anchor_at(anchor, tail, offset, consumed), rotated, all_events),
+        )
+    return claims, held, False, ()
+
+
+def _anchor_at(anchor: bytes, tail: bytes, offset: int, consumed: int) -> bytes:
+    """The ``_TAIL_ANCHOR_BYTES`` bytes ending at ``consumed``, given the previous anchor (ending at
+    ``offset``) and the bytes read after it."""
+    joined = anchor + tail
+    end = len(anchor) + (consumed - offset)
+    return joined[max(end - _TAIL_ANCHOR_BYTES, 0) : end]
 
 
 def _merge_across_streams(per_stream_claims: list[dict[str, TouchEvent]]) -> dict[str, TouchEvent]:
