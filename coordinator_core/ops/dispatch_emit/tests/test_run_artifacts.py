@@ -279,3 +279,13 @@ def test_residue_leaves_a_foreign_dirty_path_unclaimed(graph):
     a = ra.candidate_paths(graph, RUN)
     assert ra.residue(a, [SIZING], [], {}, foreign=[SIZING]) == {}
     assert ra.residue(a, [SIZING], [], {}, foreign=["other.py"]) == {SIZING: "sizing"}
+
+
+def test_record_dir_walk_skips_emitted_workflow_scripts_and_receipts(tmp_path):
+    from coordinator_core.ops.dispatch_emit.run_artifacts import _tree_files
+
+    rd = tmp_path / "state" / "warp" / "r1"
+    rd.mkdir(parents=True)
+    for name in ("halted.json", "resume-script.workflow.mjs", "resume-script.workflow.mjs.emitted.json"):
+        (rd / name).write_text("x", encoding="utf-8")
+    assert _tree_files(tmp_path, "state/warp/r1") == ["state/warp/r1/halted.json"]

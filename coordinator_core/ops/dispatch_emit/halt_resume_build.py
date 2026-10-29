@@ -114,6 +114,9 @@ def build(root, run_id: str) -> Optional[dict]:
         )
         target = rd / COMPOSED_SCRIPT_FILE
         atomic_write_bytes(target, script.encode("utf-8"))
+        from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
+
+        _write_emission_receipt(target, resume_plan_rel or plan_rel, {}, {"session_id": ""})
         script_rel = target.relative_to(root).as_posix()
     except (SizingFireRefused, SizingHandBack) as exc:
         verdict = {

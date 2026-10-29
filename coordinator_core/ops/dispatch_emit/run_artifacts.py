@@ -154,8 +154,9 @@ def _read_json(root: Path, rel: str) -> Optional[dict]:
 
 
 def _tree_files(root: Path, dir_rel: str) -> list[str]:
-    """Every file under ``dir_rel``, recursive, sorted; ``scratch/`` paths and symlinked dirs
-    are skipped. A missing dir yields ``[]``."""
+    """Every file under ``dir_rel``, recursive, sorted; ``scratch/`` paths, emitted workflow scripts
+    and their receipts (gitignored; `git.commit` refuses them, e.g. a halt-time resume script) and
+    symlinked dirs are skipped. A missing dir yields ``[]``."""
     out: list[str] = []
     stack = [dir_rel]
     while stack:
@@ -167,7 +168,8 @@ def _tree_files(root: Path, dir_rel: str) -> list[str]:
                     if _is_scratch(rel):
                         continue
                     if entry.is_file():
-                        out.append(rel)
+                        if not entry.name.endswith((".workflow.mjs", ".workflow.mjs.emitted.json")):
+                            out.append(rel)
                     elif entry.is_dir(follow_symlinks=False):
                         stack.append(rel)
         except OSError:

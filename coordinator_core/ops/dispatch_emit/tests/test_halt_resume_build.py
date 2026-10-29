@@ -99,3 +99,24 @@ def test_build_ignores_a_run_that_is_not_halted(repo, monkeypatch):
 
 def test_main_rejects_a_wrong_argument_count():
     assert hrb.main(["only-one"]) == 2
+
+
+def test_build_writes_a_receipt_the_fire_guards_accept_and_a_bare_script_is_still_refused(repo, monkeypatch):
+    import hashlib
+
+    from coordinator_core.hooks import allow_emitted_workflow_fire as allow
+    from coordinator_core.hooks.block_workflow_foreign_emission import evaluate
+
+    _halt(repo, monkeypatch)
+    record = hrb.build(repo, RUN)
+    script = repo / record["composed_script_rel"]
+    receipt = json.loads(script.with_name(script.name + ".emitted.json").read_text(encoding="utf-8"))
+    assert receipt["sha256"] == hashlib.sha256(script.read_bytes()).hexdigest()
+    payload = {"tool_name": "Workflow", "tool_input": {"scriptPath": str(script)}, "cwd": str(repo)}
+    assert allow._decide(payload) is not None
+    assert evaluate(payload, env={}) == {}
+    hand = repo / "hand.workflow.mjs"
+    hand.write_text("await agent({prompt: 'x'});", encoding="utf-8")
+    hand_payload = {**payload, "tool_input": {"scriptPath": str(hand)}}
+    assert allow._decide(hand_payload) is None
+    assert evaluate(hand_payload, env={}) != {}
