@@ -144,15 +144,24 @@ def test_land_run_commits_past_a_phantom_holder_and_records_the_release(repo, mo
     assert prod._git(["show", "HEAD:" + attr.PATH], repo) == attr.B2
 
 
-def test_land_run_refuses_a_live_owner_holder(repo, monkeypatch):
+def _names_peer_hunks_in_provenance(out) -> bool:
+    prov = [e.get("reason") for e in out.get("provenance") or []]
+    return peer_hunk_gate.PEER_HUNKS_CO_DECLARED in prov
+
+
+def test_land_run_commits_past_a_live_owner_holder_naming_it_in_provenance(repo, monkeypatch):
     out, rdir = _phantom_landing(repo, monkeypatch, live=True, receipt=True, b_landing=attr.B0)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    assert out.get("refused") is None, out
+    assert out.get("committed") is True, out
+    assert _names_peer_hunks_in_provenance(out), out
     assert _released(rdir) is None
 
 
-def test_land_run_refuses_a_dead_owner_holder_with_real_hunks(repo, monkeypatch):
+def test_land_run_commits_past_a_dead_owner_holder_with_real_hunks_naming_it_in_provenance(repo, monkeypatch):
     out, rdir = _phantom_landing(repo, monkeypatch, live=False, receipt=True, b_landing=attr.B1)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    assert out.get("refused") is None, out
+    assert out.get("committed") is True, out
+    assert _names_peer_hunks_in_provenance(out), out
     assert _released(rdir) is None

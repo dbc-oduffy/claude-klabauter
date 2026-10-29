@@ -46,16 +46,18 @@ ALLOW = [
     "find . -path /x/y",
     "find . -name /",
     "find . -path / -prune",
-    "grep -r foo .",
     "grep foo /",
     "grep -E '^[A-Z_0-9]*=' file.txt",
     "rg / src",
-    "rg foo",
     "fd / src",
     "fd /",
     "grep -r / src",
     "echo find /",
 ]
+
+
+def _reason(out):
+    return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def _run(cmd, tool="Bash"):
@@ -76,6 +78,7 @@ def test_allows_scoped(cmd):
 def test_powershell_tool_is_matched():
     assert _run("find / -name x", tool="PowerShell")
 
+
 def _repo(tmp_path, heavy="scratch", git_file=False):
     root = tmp_path / "repo"
     root.mkdir()
@@ -93,114 +96,30 @@ def _run_cwd(cmd, cwd):
     return check({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(cwd)})
 
 
-def _raw(cmd, cwd):
-    return _check({"tool_name": "Bash", "tool_input": {"command": cmd, "timeout": 5}, "cwd": str(cwd)})
-
-
-def _rewritten(cmd, cwd):
-    out = _raw(cmd, cwd)
-    assert out is not None and out.verdict_kind == "rewrite", cmd
-    return out.updated_input["command"]
-
-
 @pytest.mark.parametrize("heavy", ["scratch", "data", "toolchains", "node_modules"])
-def test_heavy_tree_recursive_grep_at_repo_root_is_rewritten_never_denied(tmp_path, heavy):
+def test_repo_root_recursive_search_is_not_handled_here(tmp_path, heavy):
+    # Handled by rewrite_repo_root_search (git grep rewrite or advisory); this guard allows it.
     root = _repo(tmp_path, heavy)
-    for cmd in ("grep -rn foo .", "grep -r foo", f"cd {root.as_posix()} && grep -R foo .", f"grep -r foo {root.as_posix()}"):
-        out = _raw(cmd, root)
-        assert out.verdict_kind == "rewrite", cmd
-        assert f"--exclude-dir={heavy} " in out.updated_input["command"], cmd
-        assert out.updated_input["timeout"] == 5
-        assert _run_cwd(cmd, root)["hookSpecificOutput"].get("permissionDecision") != "deny"
+    for cmd in (
+        "grep -rn foo .",
+        "grep -r foo",
+        "grep -rn x . | grep -v y",
+        "rg x",
+        "find . -name '*.py'",
+        f"cd {root.as_posix()} && grep -R foo .",
+        f"grep -r foo {root.as_posix()}",
+    ):
+        assert _run_cwd(cmd, root) is None, cmd
 
 
-def test_heavy_tree_rewrite_is_idempotent_and_whole_drive_scan_still_denies(tmp_path):
+def test_scoped_grep_passes_untouched(tmp_path):
+    root = _repo(tmp_path, heavy=None)
+    assert _check({"tool_name": "Bash", "tool_input": {"command": "grep -rn x coordinator/hooks"}, "cwd": str(root)}) is None
+
+
+def test_whole_drive_scan_still_denies_from_a_repo_root(tmp_path):
     root = _repo(tmp_path)
-    again = _rewritten("grep -rn foo .", root)
-    assert _raw(again, root) is None
     assert _run_cwd("grep -rn foo ~", root)["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_heavy_tree_unrewritable_command_is_admitted_without_context(tmp_path):
-    root = _repo(tmp_path)
-    assert _raw("grep -rn foo . ; grep -rn bar .", root) is None
-
-
-def test_include_filter_does_not_narrow_the_walked_tree(tmp_path):
-    root = _repo(tmp_path)
-    for cmd in ("grep -rln foo --include=*.py .", "grep -rln --include '*.py' foo ."):
-        out = _run_cwd(cmd, root)
-        assert out and out["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
-        assert "project-rag" in _reason(out) and "--exclude-dir=scratch" in _reason(out)
-    for cmd in (
-        "grep -rln foo --include=*.py --exclude-dir=scratch .",
-        "grep -rln foo --include=*.py coordinator_core",
-    ):
-        assert _run_cwd(cmd, root) is None, cmd
-    assert _run_cwd("grep -rln foo --include=*.py .", root / "scratch")
-
-
-def test_heavy_tree_allows_covered_scoped_or_non_repo(tmp_path):
-    root = _repo(tmp_path)
-    (root / "data").mkdir()
-    for cmd in (
-        "grep -rn --exclude-dir=scratch --exclude-dir=data foo .",
-        "grep -r --exclude-dir={scratch,data} foo .",
-        "grep -r --exclude-dir scratch --exclude-dir 'da*' foo .",
-        "grep -r foo src",
-        "grep foo .",
-        "rg foo .",
-    ):
-        assert _run_cwd(cmd, root) is None, cmd
-    bare = tmp_path / "nogit"
-    bare.mkdir()
-    (bare / "scratch").mkdir()
-    assert _run_cwd("grep -rn foo .", bare) is None
-
-
-def test_heavy_tree_partial_cover_rewrites_adding_only_the_uncovered(tmp_path):
-    root = _repo(tmp_path)
-    (root / "data").mkdir()
-    new = _rewritten("grep -rn --exclude-dir=scratch foo .", root)
-    assert new.startswith("grep --exclude-dir=data ") and new.count("--exclude-dir=scratch") == 1
-
-
-def test_heavy_tree_git_file_counts_as_repo_root(tmp_path):
-    root = _repo(tmp_path, git_file=True)
-    assert _rewritten("grep -rn foo .", root)
-
-
-def test_heavy_tree_msys_and_drive_spellings_of_the_root(tmp_path):
-    root = _repo(tmp_path)
-    posix = root.as_posix()
-    spellings = [posix]
-    if len(posix) > 2 and posix[1] == ":":
-        spellings.append("/" + posix[0].lower() + posix[2:])
-    for sp in spellings:
-        assert _rewritten(f"grep -r foo {sp}", tmp_path), sp
-
-
-def test_heavy_tree_unknown_cwd_allows_relative_target():
-    assert _run("grep -rn foo .") is None
-    assert _run("grep -r foo") is None
-
-
-def test_heavy_tree_unreadable_root_allows(tmp_path, monkeypatch):
-    root = _repo(tmp_path)
-
-    def boom(*a, **k):
-        raise OSError("denied")
-
-    monkeypatch.setattr("coordinator_core.bash_guards.block_whole_filesystem_scan.os.scandir", boom)
-    assert _run_cwd("grep -rn foo .", root) is None
-
-
-def test_heavy_tree_rewrite_excludes_every_uncovered_child(tmp_path):
-    root = _repo(tmp_path)
-    for n in ("data", "toolchains", "Saved", "Intermediate"):
-        (root / n).mkdir()
-    new = _rewritten("grep -r foo .", root)
-    assert "--exclude-dir={Intermediate,Saved,data,scratch,toolchains}" in new
 
 
 UE = "/opt/UE_5.8"

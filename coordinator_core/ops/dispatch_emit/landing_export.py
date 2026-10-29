@@ -248,13 +248,45 @@ def check_cap_adapting(root: Path, *, keep_run: Optional[str] = None) -> None:
         ) from None
 
 
+_ALLOWLIST_REL = "docs/reference/state-corpus-allowlist.txt"
+
+
+def _seed_state_invariant_inputs(common_dir: Path, head_tree: str, dest: Path) -> None:
+    """Give a DATA_DIRS-less extraction HEAD's state allowlist and one placeholder per tracked
+    state/ first segment (empty dir, empty file for a tracked top-level file), read from the
+    object store with no git spawn. The overlay then writes over them."""
+    top = _entries(common_dir, head_tree)
+    state = top.get("state")
+    if state is not None and state[0] == _MODE_TREE:
+        (dest / "state").mkdir(exist_ok=True)
+        for name, (mode, _sha) in _entries(common_dir, state[1]).items():
+            seg = dest / "state" / _safe_name(name)
+            if mode == _MODE_TREE or mode == _MODE_SUBMODULE:
+                seg.mkdir(exist_ok=True)
+            else:
+                seg.touch()
+    cur: Optional[str] = head_tree
+    parts = _ALLOWLIST_REL.split("/")
+    for part in parts[:-1]:
+        entry = _entries(common_dir, cur).get(part)
+        if entry is None or entry[0] != _MODE_TREE:
+            return
+        cur = entry[1]
+    entry = _entries(common_dir, cur).get(parts[-1])
+    if entry is not None and entry[0] not in (_MODE_TREE, _MODE_SUBMODULE):
+        target = dest / _ALLOWLIST_REL
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(_read(common_dir, entry[1], "blob"))
+
+
 def build_head_export(
     worktree_root: Path, out_dir: Path, landing_paths: Sequence[str]
 ) -> LandingExport:
     """Extract HEAD (one git spawn) at `out_dir`, then overlay `landing_paths` worktree bytes.
 
     A prior export at `out_dir` is replaced. The extraction goes to the sibling `<out_dir>.base`,
-    which `build_landing_export` consumes; on failure it is removed.
+    which `build_landing_export` consumes; on failure it is removed. DATA_DIRS stay unextracted;
+    only HEAD's state allowlist and the tracked state/ first-segment set are seeded.
     """
     root = Path(worktree_root).resolve()
     scratch = (root / "scratch").resolve()
@@ -278,10 +310,12 @@ def build_head_export(
             baseline_export.remove(staging)
         staging.mkdir(parents=True)
         baseline_export.export(root.as_posix(), head, staging)
+        common = resolve_git_common_dir(root)
+        _seed_state_invariant_inputs(common, _commit_tree(common, head), staging)
         return build_landing_export(
             root, out, landing_paths, base_export=staging, base_sha=head
         )
-    except (baseline_export.ExportError, OSError) as exc:
+    except (baseline_export.ExportError, OSError, ValueError) as exc:
         raise LandingExportError(f"head export failed: {exc}") from None
     finally:
         if staging.exists():

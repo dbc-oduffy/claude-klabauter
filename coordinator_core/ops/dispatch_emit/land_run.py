@@ -271,9 +271,24 @@ def _settle_token(token_state: dict, *, landed: bool, receipt: Optional[dict] = 
 # ---- params -----------------------------------------------------------------------------------
 
 
-def params_from_task_output(path_raw: str) -> dict:
+def with_run_session(repo_root: Path, params: dict) -> dict:
+    """``params`` with ``session_id`` filled from the run's emission receipt when it lacks one.
+
+    The run id is ``params['run_id']``; a run with no receipt, or a caller-supplied
+    ``session_id``, leaves ``params`` unchanged."""
+    run_id = params.get("run_id")
+    if params.get("session_id") or not isinstance(run_id, str) or not run_id or "/" in run_id or "\\" in run_id:
+        return params
+    from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
+
+    session = recorded_emitter(repo_root, run_id)
+    return {**params, "session_id": session} if session else params
+
+
+def params_from_task_output(path_raw: str, repo_root: Optional[Path] = None) -> dict:
     """``next_action.params`` out of a Workflow task-output file, bare or ``{result}``-wrapped.
 
+    With ``repo_root`` the params gain the run's ``session_id`` (``with_run_session``).
     Raises ValueError naming the file when no ``next_action.params`` dict is found."""
     path = Path(path_raw)
     try:
@@ -289,7 +304,7 @@ def params_from_task_output(path_raw: str) -> dict:
             f"{path_raw!r} carries no next_action.params: neither a digest nor a "
             "task-output envelope wrapping one"
         )
-    return found
+    return with_run_session(repo_root, found) if repo_root is not None else found
 
 
 def _reclose_params(root: Path, params: object) -> Optional[dict]:
@@ -2538,7 +2553,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
             params = {
-                **params_from_task_output(params["task_output_path"]),
+                **params_from_task_output(params["task_output_path"], root),
                 **{k: v for k, v in params.items() if k != "task_output_path"},
             }
         except ValueError as exc:
@@ -3885,19 +3900,30 @@ def _within_handoffs_home(root: Path, artifacts):
 
 def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) -> tuple:
     """``(superseded run ids, their changed record files)``: dirty record dirs of earlier runs bound to
-    ``sizing_rel``. One scoped in-process status over the record root, run only for a run id that
-    carries a stamp tail; a gap in that status skips the scan. Trap: the status is record-root-sized, and
-    test_land_run_off_commit_path spies only on the two corpus scans it names, not on this one."""
+    ``sizing_rel``. A record-dir listing finds the earlier same-sizing dirs; one scoped in-process status
+    runs over those only, for a run id that carries a stamp tail; a gap in that status skips the scan.
+    Trap: test_land_run_off_commit_path spies only on the two corpus scans it names, not on this one."""
+    import os
+
     from coordinator_core.ops.dispatch_emit import run_artifacts
 
     if not re.search(r"\d{8}T\d{6}-[0-9a-f]{6}$", run_id or ""):
         return (), set()
     from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
 
-    snap = scoped_worktree_status(root, [], [RECORD_DIR_ROOT], [])
+    live = {str(r["run_id"]) for r in run_token.held_records(root) if isinstance(r.get("run_id"), str)}
+    try:
+        listing = [e.name for e in os.scandir(root / RECORD_DIR_ROOT) if e.is_dir()]
+    except OSError:
+        return (), set()
+    bound = run_artifacts.superseded_runs(
+        root, run_id, sizing_rel, [f"{RECORD_DIR_ROOT}/{n}/run.json" for n in listing], live_run_ids=live,
+    )
+    if not bound:
+        return (), set()
+    snap = scoped_worktree_status(root, [], [f"{RECORD_DIR_ROOT}/{n}" for n in bound], [])
     if snap is None:
         return (), set()
-    live = {str(r["run_id"]) for r in run_token.held_records(root) if isinstance(r.get("run_id"), str)}
     names = run_artifacts.superseded_runs(root, run_id, sizing_rel, snap[0], live_run_ids=live)
     extra = {p for p in snap[0] if any(p.startswith(f"{RECORD_DIR_ROOT}/{n}/") for n in names)}
     return names, extra

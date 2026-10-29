@@ -154,7 +154,7 @@ def release_scope():
         return
     from coordinator_core.git import call_io_scope
 
-    token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False, "seen_root": None, "seen": {}})
+    token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False, "seen_root": None, "seen": {}, "scope_seen": {}})
     try:
         if call_io_scope.scope_open():
             yield _SCOPE.get()
@@ -185,9 +185,14 @@ def _blob_batch(root: Path, specs: list) -> Optional[dict]:
     """`{spec: bytes | None}` for each git object spec; None when git fails. One `git cat-file --batch`
     spawn for the specs a live `blob_scope` has not already read, none when it holds them all."""
     state = _SCOPE.get()
-    if state is None or state["seen_root"] != str(root):
+    if state is None:
         return _blob_fetch(root, specs)
-    seen = state["seen"]
+    if state["seen_root"] != str(root):
+        if state["seen_root"] is not None:
+            return _blob_fetch(root, specs)
+        seen = state["scope_seen"].setdefault(str(root), {})
+    else:
+        seen = state["seen"]
     missing = [s for s in dict.fromkeys(specs) if s not in seen]
     if missing:
         fetched = _blob_fetch(root, missing)

@@ -39,6 +39,8 @@ def _clear_caches() -> None:
         "_PACK_LISTING_CACHE",
         "_PACK_INDEXES_BY_LISTING",
         "_LAST_HIT_PACK",
+        "_LOOKUP_SOURCES",
+        "_MIDX_CACHE",
         "_PACK_INDEX_CACHE",
         "_OBJECT_CACHE",
     ):
@@ -79,17 +81,18 @@ def _measure(common_dir: Path, hit_shas: list[str]) -> dict:
     cold_probe = hits[0] if hits else misses[0]
     cold_ms = _process_ms(lambda: git_objects.read_object(common_dir, cold_probe))
 
+    # Steady-state legs: caches settled once, then never cleared, so the one-time
+    # table build is charged to cold_first_lookup_process_ms only. Distinct shas
+    # keep _OBJECT_CACHE from answering a repeat.
     _clear_caches()
-    git_objects.read_object(common_dir, misses[0])  # settle listing + lazy index state outside the timed loops
+    git_objects.read_object(common_dir, "0" * 40)
     row = {"cold_first_lookup_process_ms": round(cold_ms, 3)}
 
     def run(fn, shas):
         return lambda: [fn(common_dir, s) for s in shas]
 
     for label, shas in (("hit", hits), ("miss", misses)):
-        _clear_caches()
         row[f"read_object_{label}_process_ms"] = round(_process_ms(run(git_objects.read_object, shas)), 3)
-        _clear_caches()
         row[f"packed_contains_{label}_process_ms"] = round(_process_ms(run(git_objects.packed_contains, shas)), 3)
     row["hit_lookups"] = len(hits)
     row["miss_lookups"] = len(misses)  # process_time is ~15.6ms-granular on Windows; read sub-50ms legs as noise

@@ -1,4 +1,4 @@
-"""dispatch.land_run refuses a path carrying an unresolved structured out-of-ask finding, even when the halted-hold release frees the path."""
+"""dispatch.land_run commits a path carrying an unresolved structured out-of-ask finding and names the finding in the reply provenance, with or without the halted-hold release."""
 
 from __future__ import annotations
 
@@ -61,27 +61,29 @@ def _land_dirty(root) -> tuple:
     return prod._land(root), head
 
 
-def test_unresolved_marked_row_on_the_landing_path_refuses_out_of_ask_hunks(repo):
+def _commits_naming_the_finding(out, head, repo) -> None:
+    assert out.get("refused") is None, out
+    assert out.get("committed") is True, out
+    assert prod._git(["rev-parse", "HEAD"], repo).strip() != head
+    prov = out.get("provenance") or []
+    assert any(e.get("reason") == peer_hunk_gate.OUT_OF_ASK_HUNKS and "rev-1" in str(e) for e in prov), out
+
+
+def test_unresolved_marked_row_on_the_landing_path_lands_with_out_of_ask_provenance(repo):
     _review(repo)
 
     out, head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.OUT_OF_ASK_HUNKS, out
-    assert "rev-1" in str(out), out
-    assert out.get("committed") is not True
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    _commits_naming_the_finding(out, head, repo)
 
 
-def test_halted_hold_release_does_not_bypass_the_unresolved_finding(repo):
+def test_halted_hold_release_still_lands_with_the_unresolved_finding_in_provenance(repo):
     _review(repo)
     _halted_sibling_on_the_landing_plan(repo)
 
     out, head = _land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.OUT_OF_ASK_HUNKS, out
-    assert "rev-1" in str(out), out
-    assert out.get("committed") is not True
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    _commits_naming_the_finding(out, head, repo)
 
 
 def test_the_same_row_marked_applied_lands(repo):

@@ -2442,6 +2442,10 @@ def _build_guard_chain(
     from coordinator_core.bash_guards.guard_no_optional_locks import (
         check_git_no_optional_locks as _check_git_no_optional_locks,
     )
+    from coordinator_core.bash_guards.rewrite_repo_root_search import (
+        check as _check_rewrite_repo_root_search,
+        MATCHERS as _matchers_rewrite_repo_root_search,
+    )
     from coordinator_core.bash_guards.guard_background_publish import (
         check_background_publish as _check_background_publish,
     )
@@ -3202,6 +3206,7 @@ def _build_guard_chain(
         GuardEntry("reap-stale-git-lock", lambda: _check_reap_stale_git_lock(cmd, cwd, session_id), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4, same plan/Bucket
         GuardEntry("git-no-optional-locks", lambda: _check_git_no_optional_locks(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
+        GuardEntry("rewrite-repo-root-search", lambda: _check_rewrite_repo_root_search(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_rewrite_repo_root_search)),
         # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4, same plan/Bucket
         GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("inprocess-search", lambda: _check_inprocess_search(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_inprocess_search)),

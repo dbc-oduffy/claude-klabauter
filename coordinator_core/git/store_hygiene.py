@@ -32,6 +32,19 @@ STALE_PACK_SLACK = 32
 STALE_LOOSE_SLACK = 512
 #: Minimum seconds between claims of the daily tier by commit-route triggers.
 CLAIM_INTERVAL_S = 3600
+#: Packs under this size are engine per-batch packs (smallest seen 1.7KB); git's own
+#: packs are larger and left to `incremental-repack`.
+CONSOLIDATE_SIZE_FLOOR = 64 * 1024
+#: Small-pack count the store may carry; past it the daily child merges them all. Each
+#: extra pack costs lookup time and a cache slot, and a few dozen is below any budget.
+CONSOLIDATE_MAX_PACKS = 32
+#: Bytes merged into one pack per group, bounding the daily child's memory.
+CONSOLIDATE_GROUP_BYTES = 16 * 1024 * 1024
+#: A tier deferred (index.lock held by the committing parent) is retried this often; a
+#: deferral that outlives the retries releases the claim so the next owed commit refires
+#: instead of waiting CLAIM_INTERVAL_S with the MIDX unrefreshed.
+DEFER_RETRIES = 3
+DEFER_RETRY_S = 3.0
 
 _SAMPLE_FANOUT = "00"
 _LOOSE_NAME_LEN = 38
@@ -176,11 +189,112 @@ def maybe_refresh(repo_root, common_dir) -> bool:
         return False
 
 
+def _small_packs(pack_dir: Path) -> list[tuple[Path, Path]]:
+    """`(idx, pack)` pairs under CONSOLIDATE_SIZE_FLOOR with no .keep/.promisor sibling."""
+    try:
+        with os.scandir(pack_dir) as it:
+            names = {e.name for e in it}
+    except OSError:
+        return []
+    out = []
+    for name in sorted(n for n in names if n.endswith(".idx") and n.startswith("pack-")):
+        stem = name[:-4]
+        if stem + ".pack" not in names or stem + ".keep" in names or stem + ".promisor" in names:
+            continue
+        try:
+            if (pack_dir / (stem + ".pack")).stat().st_size < CONSOLIDATE_SIZE_FLOOR:
+                out.append((pack_dir / name, pack_dir / (stem + ".pack")))
+        except OSError:
+            continue
+    return out
+
+
+def _unlink_quiet(path: Path) -> bool:
+    for _ in range(2):
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
+
+def consolidate_small_packs(common_dir) -> int:
+    """Merge the store's small packs into few larger ones; returns packs removed.
+
+    Runs only in the detached daily child, before `run_tier` (never beside git's own
+    repack). A no-op at or under CONSOLIDATE_MAX_PACKS small packs. Per group the merged
+    pack is written pack-first/idx-last, then each old idx is unlinked before its pack;
+    a pack that cannot be unlinked (Windows lock) stays for a later pass. Any unreadable
+    object abandons the group with nothing removed."""
+    from coordinator_core.git import git_objects as go
+
+    common_dir = Path(common_dir)
+    pack_dir = common_dir / "objects" / "pack"
+    small = _small_packs(pack_dir)
+    if len(small) <= CONSOLIDATE_MAX_PACKS:
+        return 0
+    removed = 0
+    group: list[tuple[Path, Path]] = []
+    pending: dict = {}
+    size = 0
+
+    def flush() -> int:
+        nonlocal group, pending, size
+        done = 0
+        if len(group) > 1 and pending:
+            name = go._build_pack(pending)[2]
+            go._write_pack(common_dir, pending)
+            if (pack_dir / f"pack-{name}.idx").exists():
+                for idx, pack in group:
+                    if idx.stem == f"pack-{name}":
+                        continue
+                    if _unlink_quiet(idx):
+                        done += _unlink_quiet(pack)
+        group, pending, size = [], {}, 0
+        return done
+
+    for idx, pack in small:
+        parsed = go._parse_pack_index(idx)
+        if parsed is None:
+            continue
+        shas = [parsed.shas[i : i + 20].hex() for i in range(0, len(parsed.shas), 20)]
+        objs = {}
+        for sha in shas:
+            got = go.read_object(common_dir, sha)
+            if got is None:
+                objs = None
+                break
+            objs[sha] = (got[0].encode("ascii"), got[1])
+        if objs is None:
+            continue
+        group.append((idx, pack))
+        pending.update(objs)
+        size += pack.stat().st_size
+        if size >= CONSOLIDATE_GROUP_BYTES:
+            removed += flush()
+    removed += flush()
+    return removed
+
+
 def _run_daily(repo: Path) -> int:
     try:
         from coordinator_core.ops.git_maintenance import run_tier
 
-        return run_tier(repo, "daily").rc
+        try:
+            consolidate_small_packs(resolve_git_common_dir(str(repo)))
+        except Exception as exc:  # noqa: BLE001 -- consolidation must not block the MIDX refresh
+            _record_failure(repo, exc)
+        for attempt in range(DEFER_RETRIES + 1):
+            result = run_tier(repo, "daily")
+            if not result.deferred:
+                return result.rc
+            if attempt < DEFER_RETRIES:
+                time.sleep(DEFER_RETRY_S)
+        _release_claim(resolve_git_common_dir(str(repo)))
+        return result.rc
     except Exception as exc:  # noqa: BLE001
         _record_failure(repo, exc)
         return 1

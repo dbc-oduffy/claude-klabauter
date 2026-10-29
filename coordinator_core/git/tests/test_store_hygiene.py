@@ -166,6 +166,91 @@ def test_declined_spawn_releases_the_claim(tmp_path, monkeypatch):
     assert not (common / "coordinator" / "store-hygiene.claim").exists()
 
 
+def _git_fixture(tmp_path, n, real_git=False):
+    import hashlib
+    import subprocess
+
+    from coordinator_core.git import git_objects as go
+
+    if real_git:
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    common = tmp_path / ".git"
+    shas = []
+    for i in range(n):
+        body = f"blob-{i}".encode()
+        sha = hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest()
+        go._write_pack(common, {sha: (b"blob", body)})
+        shas.append((sha, body))
+    return tmp_path, common, shas
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_daily_consolidates_200_engine_packs_and_keeps_every_object(tmp_path):
+    from coordinator_core.git import git_objects as go
+
+    repo, common, shas = _git_fixture(tmp_path, 200, real_git=True)
+    assert sh.status(common).pack_count == 200
+    assert sh.main(["--repo", str(repo), "--daily"]) == 0
+    s = sh.status(common)
+    assert s.pack_count <= sh.CONSOLIDATE_MAX_PACKS
+    assert s.pack_count - (s.midx_pack_count or 0) <= sh.STALE_PACK_SLACK
+    go._PACK_LISTING_CACHE.clear()
+    go._PACK_INDEXES_BY_LISTING.clear()
+    for sha, body in shas:
+        assert go.read_object(common, sha) == ("blob", body)
+
+
+def test_consolidate_leaves_a_store_at_the_bound_alone(tmp_path):
+    _, common, _ = _git_fixture(tmp_path, sh.CONSOLIDATE_MAX_PACKS)
+    assert sh.consolidate_small_packs(common) == 0
+    assert sh.status(common).pack_count == sh.CONSOLIDATE_MAX_PACKS
+
+
+def test_consolidate_skips_keep_and_unreadable_packs(tmp_path):
+    _, common, _ = _git_fixture(tmp_path, sh.CONSOLIDATE_MAX_PACKS + 5)
+    pack_dir = common / "objects" / "pack"
+    kept = sorted(pack_dir.glob("*.idx"))[0]
+    kept.with_suffix(".keep").write_bytes(b"")
+    (pack_dir / ("pack-" + "f" * 40 + ".idx")).write_bytes(b"torn")
+    (pack_dir / ("pack-" + "f" * 40 + ".pack")).write_bytes(b"torn")
+    sh.consolidate_small_packs(common)
+    assert kept.exists() and kept.with_suffix(".pack").exists()
+    assert (pack_dir / ("pack-" + "f" * 40 + ".idx")).exists()
+
+
+def test_deferred_tier_retries_then_releases_the_claim(tmp_path, monkeypatch):
+    from coordinator_core.ops import git_maintenance as gm
+
+    repo, common = _repo(tmp_path)
+    claim = common / "coordinator" / "store-hygiene.claim"
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_bytes(b"")
+    calls = []
+
+    def deferred(r, tier):
+        calls.append(tier)
+        return gm.MaintenanceResult(tier=tier, deferred="index.lock is held")
+
+    monkeypatch.setattr(gm, "run_tier", deferred)
+    monkeypatch.setattr(sh, "DEFER_RETRY_S", 0)
+    assert sh._run_daily(repo) == 0
+    assert len(calls) == sh.DEFER_RETRIES + 1
+    assert not claim.exists()
+
+
+def test_ran_tier_keeps_the_claim(tmp_path, monkeypatch):
+    from coordinator_core.ops import git_maintenance as gm
+
+    repo, common = _repo(tmp_path)
+    claim = common / "coordinator" / "store-hygiene.claim"
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_bytes(b"")
+    monkeypatch.setattr(gm, "run_tier", lambda r, t: gm.MaintenanceResult(tier=t, ran=True))
+    assert sh._run_daily(repo) == 0
+    assert claim.exists()
+
+
 def test_spawn_exception_never_raises(tmp_path, monkeypatch):
     from coordinator_core.ops.ceremony import detached_spawn
 

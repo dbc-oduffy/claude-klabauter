@@ -30,6 +30,7 @@ _TEMPLATE: list = []
 def _build_template(root):
     root.mkdir()
     _git(root, "init", "-q")
+    _git(root, "config", "core.autocrlf", "false")
     (root / "pkg").mkdir()
     (root / "pkg" / "own.py").write_bytes(b"own v1\r\n")
     (root / "pkg" / "peer.py").write_bytes(b"peer v1\n")
@@ -178,6 +179,25 @@ def test_head_export_overlays_write_set_over_head_bytes(repo):
     assert res.overlaid == ("pkg/own.py",)
     assert res.head_sha == _git(root, "rev-parse", "HEAD")
     assert not (root / "scratch" / "hout.base").exists()
+
+
+def test_head_export_seeds_head_allowlist_and_tracked_state_segments_only(repo):
+    root, _, _ = repo
+    for rel, body in (
+        ("state/alpha/x.md", "a\n"),
+        ("state/top.json", "{}\n"),
+        ("docs/reference/state-corpus-allowlist.txt", "alpha\ntop.json\n"),
+    ):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(body, encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "state")
+    (root / "state" / "untracked").mkdir()
+    (root / "docs" / "reference" / "state-corpus-allowlist.txt").write_text("dirty\n")
+    out = Path(_head_export(root, ["pkg/own.py"]).path)
+    assert sorted(p.name for p in (out / "state").iterdir()) == ["alpha", "top.json"]
+    assert not any((out / "state" / "alpha").iterdir())
+    assert (out / "docs/reference/state-corpus-allowlist.txt").read_text() == "alpha\ntop.json\n"
 
 
 def test_head_export_removes_tracked_write_set_path_absent_live(repo):

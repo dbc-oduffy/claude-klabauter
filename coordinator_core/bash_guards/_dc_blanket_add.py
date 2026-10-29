@@ -79,7 +79,8 @@ def _awk_quote_aware_split(cmd: str) -> List[str]:
 #: compose the option group with its own `_BYPASS_PREFIX` wrapper vocabulary
 #: instead.
 _GIT_ADD_GLOBAL_OPT_RE = (
-    r"(?:-C\s+\S+|-c\s+\S+|--(?:git-dir|work-tree|namespace)(?:=\S+|\s+\S+)|"
+    r"(?:-C\s+(?:\"[^\"]*\"|'[^']*'|\S+)|-c\s+(?:\"[^\"]*\"|'[^']*'|\S+)|"
+    r"--(?:git-dir|work-tree|namespace)(?:=\S+|\s+\S+)|"
     r"--exec-path(?:=\S+)?|-p|--paginate|--no-pager|--bare|--no-replace-objects|"
     r"--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|"
     r"--no-optional-locks)"
@@ -88,7 +89,7 @@ _GIT_ADD_GATE_RE = re.compile(r"\bgit(?:\s+" + _GIT_ADD_GLOBAL_OPT_RE + r")*\s+a
 _GIT_ADD_INVOCATION_OPTS_RE = re.compile(
     r"\bgit((?:\s+" + _GIT_ADD_GLOBAL_OPT_RE + r")*)\s+add\b"
 )
-_GIT_ADD_DASH_C_VALUE_RE = re.compile(r"-C\s+(\S+)")
+_GIT_ADD_DASH_C_VALUE_RE = re.compile(r"-C\s+(\"[^\"]*\"|'[^']*'|\S+)")
 #: C6 (Items 28/16.6): the COMMIT-side gate this guard's top-of-function
 #: short-circuit also checks -- widens the same "does this command line even
 #: mention the subcommand" pre-filter to `git commit`, reusing the identical
@@ -226,8 +227,10 @@ def check_blanket_git_add(
     for seg in list(_awk_quote_aware_split(cmd)) + _ga_ps_segments:
         if not seg.strip():
             continue
-        seg_cmd = re.sub(r'"[^"]*"', " ", seg)
-        seg_cmd = re.sub(r"'[^']*'", " ", seg_cmd)
+        # Non-empty placeholder: a blanked `-C "<dir>"` must still leave an
+        # argument token for `-C` to consume.
+        seg_cmd = re.sub(r'"[^"]*"', "Q", seg)
+        seg_cmd = re.sub(r"'[^']*'", "Q", seg_cmd)
         # BX-13 fix (2026-07-29, confirmed live): `env git add -A` / `nice
         # git add -A` were never recognized (only a bare env-assignment
         # prefix was tolerated, not an `env`/passthrough-wrapper token
@@ -416,8 +419,8 @@ def check_blanket_git_add(
         for seg in list(_awk_quote_aware_split(cmd)) + _ga_ps_segments:
             if not seg.strip():
                 continue
-            seg_cmd = re.sub(r'"[^"]*"', " ", seg)
-            seg_cmd = re.sub(r"'[^']*'", " ", seg_cmd)
+            seg_cmd = re.sub(r'"[^"]*"', "Q", seg)
+            seg_cmd = re.sub(r"'[^']*'", "Q", seg_cmd)
             if not re.match(
                 r"^\s*" + _BYPASS_PREFIX + r"git(?:\s+" + _GIT_ADD_GLOBAL_OPT_RE + r")*\s+commit\b",
                 seg_cmd,
