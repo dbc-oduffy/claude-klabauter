@@ -304,8 +304,8 @@ class TestDenyTextNamesAlternativeAndOverride:
         result = guard.check(_payload("CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert (
-            f"  Unblock: the EM obtains PM approval, then runs {GRANT_CLI_NAME} in the "
-            "target repo and re-sends the edit through workflow.revise.\n"
+            f"  Unblock: EM confirms with PM, runs {GRANT_CLI_NAME} in the "
+            "repo, re-sends via workflow.revise.\n"
         ) in reason
         assert GRANT_CLI_COMMAND not in reason
         assert "grant pm" not in reason
@@ -350,7 +350,7 @@ class TestDenyTextNamesAlternativeAndOverride:
         result = guard.check(_payload("coordinator/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "coordinator/CLAUDE.md" in reason
-        assert "no live CLAUDE.md write grant" in reason
+        assert "Reason: no live grant" in reason
 
 
 class TestDirectionalDenyGrowthOnly:

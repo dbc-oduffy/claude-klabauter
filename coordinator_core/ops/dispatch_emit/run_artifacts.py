@@ -197,6 +197,22 @@ def _scalar(text: Optional[str], key: str) -> Optional[str]:
 _is_scratch = halt_product_gates.is_scratch
 
 
+def _resolve_plan(root: Path, named: Optional[str], sizing: Optional[str]) -> Optional[str]:
+    """The plan the planner wrote: a named file that exists wins as-is (doubled paths on disk keep
+    resolving); else the ``s_plan_path`` single-date form of the named plan or, unnamed, of the sizing."""
+    if named and (root / named).is_file():
+        return named
+    from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
+
+    source = named or sizing
+    if not source:
+        return named
+    single = s_plan_path(source)
+    if named:
+        single = f"{PurePosixPath(named).parent.as_posix()}/{PurePosixPath(single).name}"
+    return single if (root / single).is_file() or not named else named
+
+
 def candidate_paths(
     worktree_root: Path,
     run_id: str,
@@ -244,7 +260,7 @@ def candidate_paths(
         notes.append("ask-dir: no ask dir resolved (run.json has no ask field and no halted ask run names the sizing)")
     sizing_text = _read_text(root, sizing)
     add("baton", _scalar(sizing_text, "baton"))
-    plan = _norm_rel(plan_rel) or _norm_rel(_scalar(sizing_text, "plan"))
+    plan = _resolve_plan(root, _norm_rel(plan_rel) or _norm_rel(_scalar(sizing_text, "plan")), sizing)
     if plan:
         add("plan", plan)
         stem = PurePosixPath(plan)

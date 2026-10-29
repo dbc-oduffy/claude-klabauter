@@ -928,6 +928,42 @@ def _stored_refusal(record: dict) -> Optional[str]:
     return None
 
 
+def _unmarked_emitted_run(root: Path, sizing_rel: str) -> Optional[str]:
+    """The newest `warp-<stem>-*` run bound to `sizing_rel` that stopped between stages without a halt
+    marker (run.json bound, run-stage `staged` or `halted`, no halted.json), else None. One scandir and
+    three small reads, no git spawn; a landed, minted-only or marked run is not one."""
+    import json
+
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+    from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, _norm
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import read_run
+
+    norm = _norm(sizing_rel)
+    prefix = f"warp-{Path(norm).stem}-"
+    base = root / RECORD_DIR_ROOT
+    with os.scandir(base) as it:
+        names = sorted((e.name for e in it if e.name.startswith(prefix) and e.is_dir()), reverse=True)
+    for name in names:
+        rd = base / name
+        if not safe_id(name) or (rd / HALTED_FILE).exists():
+            return None
+        try:
+            stage = json.loads((rd / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue  # a minted-only shell (e.g. a timed-out refire) hides no older run
+        except (OSError, ValueError):
+            return None
+        kind = stage.get("stage") if isinstance(stage, dict) else None
+        if kind in (None, "minted"):
+            continue
+        run = read_run(rd)
+        if run is None or run.get("sizing_rel") != norm:
+            return None
+        return name if kind in ("staged", "halted") else None
+    return None
+
+
 def _resume_route(
     root: Path,
     sizing_rel: str,
@@ -960,6 +996,13 @@ def _resume_route(
         halted_id = hrr.read_hint(root, sizing_rel)
         if halted_id is None:
             return _refuse("The halted-run lookup stalled, so the submission would compose inline. Re-submit once."), None
+    if halted_id is None and reserved_run_id is None:
+        try:
+            halted_id = _bounded_call(("emitted", str(root), sizing_rel), lambda: _unmarked_emitted_run(root, sizing_rel))
+        except (OSError, ValueError):
+            return None, None
+        if halted_id is hrr.STALLED:
+            return _refuse("The emitted-run lookup stalled, so the submission would compose inline. Re-submit once."), None
     if not isinstance(halted_id, str):
         return None, None
     if reserved_run_id is not None and reserved_run_id != halted_id:

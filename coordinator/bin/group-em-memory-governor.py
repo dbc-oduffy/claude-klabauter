@@ -19,6 +19,13 @@ Independently of pressure, every `--runaway-every` samples it reads each process
 over `--runaway-mb`. Pausing never frees memory, and a process paging itself out reads as a tiny
 RSS, so a single runaway shows up only here. The Group EM decides whether to kill it.
 
+Every sample, from the tick's one process snapshot, it kills each orphaned grep/find/xargs/rg tree
+whole (the bash wrapper and every descendant): one whose root's parent has exited (`owner-gone`: the
+Bash call that started it ended) or that is older than `REAP_AGE_S` (`age`). It appends one jsonl
+record per reap to `--reap-log` and prints one `GOVERNOR REAPED pid=.. reason=..` line. A tree
+holding any process that is not a shell or a search tool, or whose launcher registered it with
+`--guard PID` (a fresh heartbeat), is never reaped or paused.
+
 Critical, per OS: macOS `kern.memorystatus_vm_pressure_level == 4`; Linux PSI
 `/proc/pressure/memory` `full avg10 >= --psi-full`; elsewhere (Windows) available memory under
 `--avail-pct` percent of total, read through `host_sampler.avail_mb`.
@@ -42,12 +49,15 @@ When available memory rises `HEADROOM_RISE_GIB` over its low-water mark, or the 
 after a PAUSED, it prints one `GOVERNOR HEADROOM available=<GiB>` line so the Group EM wakes.
 
 Hourly (first tick, then every `RETENTION_EVERY` samples) it stamp-checks the engine's
-`retention_run` and spawns it detached when due; the governor itself deletes nothing. On the same
+`retention_run` and spawns it detached when due; the governor itself deletes no file. On the same
 tick it prints one `GOVERNOR SCRATCH-OVER-BUDGET` line per session whose Temp scratch exceeds
 `scratch_budget.per_session_gib` (report only; the engine sweep does the deleting).
 
-NEGATIVE SPEC: suspends and resumes only; never trims the cache itself, never creates or schedules a task (it only fires the existing BoxCacheTrim); never kills, never signals a protected process; reads the
-box admission channel but never writes outside stdout. A suspended process it can no longer find
+NEGATIVE SPEC: suspends and resumes, and kills only whole orphaned grep/find/xargs/rg trees; never
+trims the cache itself, never creates or schedules a task (it only fires the existing BoxCacheTrim);
+never signals a protected or guarded process; reads the box admission channel and the guard
+registrations; writes only stdout, the reap jsonl, its frozen-pid file, and (via `--guard`) a guard
+registration. A suspended process it can no longer find
 (exited) is dropped silently.
 """
 
@@ -97,30 +107,32 @@ class Proc:
     cmd: str
 
 
-def is_protected(p: Proc, noticed_tree: frozenset = frozenset()) -> bool:
-    """Harness, language-server, deploy and self are always protected; example-retrieval-repo is protected
-    unless the process belongs to a launch noticed on the admission channel."""
-    if PROTECTED_HARD.search(p.cmd):
+def is_protected(p: Proc, noticed_tree: frozenset = frozenset(),
+                 guarded: frozenset = frozenset()) -> bool:
+    """Harness, language-server, deploy, self and a tree whose launcher registration is fresh are
+    always protected; example-retrieval-repo is protected unless the process belongs to a launch noticed on
+    the admission channel."""
+    if p.pid in guarded or PROTECTED_HARD.search(p.cmd):
         return True
     return bool(EXAMPLE_RETRIEVAL_REPO.search(p.cmd)) and p.pid not in noticed_tree
 
 
 def is_candidate(p: Proc, self_pid: int, noticed: frozenset = frozenset(),
-                 noticed_tree: frozenset = frozenset()) -> bool:
-    if p.pid == self_pid or is_protected(p, noticed_tree):
+                 noticed_tree: frozenset = frozenset(), guarded: frozenset = frozenset()) -> bool:
+    if p.pid == self_pid or is_protected(p, noticed_tree, guarded):
         return False
     return p.pid in noticed or (p.rss_mb >= MIN_RSS_MB and bool(HEAVY.search(p.cmd)))
 
 
 def choose_victim(procs: list[Proc], paused: set[int], self_pid: int,
                   noticed: frozenset = frozenset(), tree: frozenset = frozenset(),
-                  shortfall_mb: float = 0.0) -> Optional[Proc]:
+                  shortfall_mb: float = 0.0, guarded: frozenset = frozenset()) -> Optional[Proc]:
     """The candidate whose tree frees the most RSS when paused; ties go to the youngest.
 
     A worker whose parent is itself a candidate is never chosen alone; its parent's tree covers it.
     A tree freeing less than `shortfall_mb` (or MIN_RSS_MB) cannot relieve the pressure and is skipped.
     """
-    heavy = {p.pid for p in procs if is_candidate(p, self_pid, noticed, tree)}
+    heavy = {p.pid for p in procs if is_candidate(p, self_pid, noticed, tree, guarded)}
     rss = {p.pid: p.rss_mb for p in procs}
     floor = max(MIN_RSS_MB, shortfall_mb)
     freed = {p.pid: sum(rss.get(t, 0.0) for t in descendants(p.pid, procs))
@@ -195,8 +207,9 @@ def descendants(root: int, procs: list[Proc]) -> list[int]:
     return out
 
 
-def protected_pids(procs: list[Proc], noticed_tree: frozenset = frozenset()) -> set[int]:
-    return {p.pid for p in procs if is_protected(p, noticed_tree)}
+def protected_pids(procs: list[Proc], noticed_tree: frozenset = frozenset(),
+                   guarded: frozenset = frozenset()) -> set[int]:
+    return {p.pid for p in procs if is_protected(p, noticed_tree, guarded)}
 
 
 def _etime_seconds(etime: str) -> float:
@@ -206,6 +219,111 @@ def _etime_seconds(etime: str) -> float:
         parts.insert(0, 0)
     h, m, s = parts
     return (int(days) if days else 0) * 86400 + h * 3600 + m * 60 + s
+
+
+_FILETIME_EPOCH_S = 11644473600
+#: Images whose command line is read (one psutil call each) after the snapshot; every other pid keeps
+#: its image name as `cmd`. A process at or over MIN_RSS_MB is also read, since HEAVY matches
+#: (node, tsc, vitest) need arguments. The bound is the few matching pids, never the whole table.
+_CMDLINE_IMAGES = frozenset({"bash", "sh", "grep", "egrep", "fgrep", "find", "xargs", "rg", "python",
+                             "python3", "pythonw"})
+
+
+def parse_system_process_information(buf: bytes, base: int, now: float) -> list[Proc]:
+    """Procs from one NtQuerySystemInformation(SystemProcessInformation) x64 buffer.
+
+    `base` is the address the buffer lives at: each ImageName.Buffer points into it. `cmd` is the
+    image name only; age comes from CreateTime, rss from WorkingSetSize."""
+    out: list[Proc] = []
+    off = 0
+    while True:
+        nxt = int.from_bytes(buf[off:off + 4], "little")
+        create = int.from_bytes(buf[off + 32:off + 40], "little")
+        nlen = int.from_bytes(buf[off + 56:off + 58], "little")
+        nptr = int.from_bytes(buf[off + 64:off + 72], "little")
+        pid = int.from_bytes(buf[off + 80:off + 88], "little")
+        ppid = int.from_bytes(buf[off + 88:off + 96], "little")
+        wss = int.from_bytes(buf[off + 144:off + 152], "little")
+        start = nptr - base
+        name = buf[start:start + nlen].decode("utf-16-le", errors="replace") if nlen and 0 <= start else ""
+        if pid and name:
+            age = max(0.0, now - (create / 1e7 - _FILETIME_EPOCH_S)) if create else 0.0
+            out.append(Proc(pid, ppid, age, wss / 1048576, name))
+        if not nxt:
+            return out
+        off += nxt
+
+
+def _nt_snapshot_buffer() -> tuple[bytes, int]:
+    """The raw SystemProcessInformation buffer and its address; grows on STATUS_INFO_LENGTH_MISMATCH."""
+    import ctypes
+    nt = ctypes.WinDLL("ntdll")
+    nt.NtQuerySystemInformation.argtypes = [ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+                                            ctypes.POINTER(ctypes.c_ulong)]
+    nt.NtQuerySystemInformation.restype = ctypes.c_long
+    size = 1 << 20
+    for _ in range(8):
+        buf = ctypes.create_string_buffer(size)
+        need = ctypes.c_ulong(0)
+        status = nt.NtQuerySystemInformation(5, buf, size, ctypes.byref(need))
+        if status == 0:
+            return buf.raw, ctypes.addressof(buf)
+        if status & 0xFFFFFFFF != 0xC0000004:
+            raise OSError(f"NtQuerySystemInformation status {status & 0xFFFFFFFF:#x}")
+        size = max(size * 2, need.value + (1 << 16))
+    raise OSError("NtQuerySystemInformation buffer kept growing")
+
+
+def parse_ps(raw: str) -> list[Proc]:
+    """Procs from `ps -axo pid=,ppid=,etime=,rss=,command=` output."""
+    out = []
+    for line in raw.splitlines():
+        f = line.split(None, 4)
+        if len(f) == 5:
+            out.append(Proc(int(f[0]), int(f[1]), _etime_seconds(f[2]), int(f[3]) / 1024, f[4]))
+    return out
+
+
+def _with_cmdlines(procs: list[Proc]) -> list[Proc]:
+    """Replace the image-name `cmd` with the real command line for the bounded set of pids that need it."""
+    if psutil is None:
+        return procs
+    out = []
+    for p in procs:
+        if _exe(p) in _CMDLINE_IMAGES or p.rss_mb >= MIN_RSS_MB:
+            try:
+                cmd = " ".join(psutil.Process(p.pid).cmdline())
+                if cmd:
+                    p = Proc(p.pid, p.ppid, p.age_s, p.rss_mb, cmd)
+            except Exception:  # exited, or access denied: the image name stands
+                pass
+        out.append(p)
+    return out
+
+
+def snapshot_procs() -> list[Proc]:
+    """The whole process table in one system call: NtQuerySystemInformation on Windows, one `ps` spawn
+    elsewhere. No per-pid psutil read of size, parent or age; falls back to `list_procs` on a fault."""
+    try:
+        if sys.platform == "win32":
+            raw, base = _nt_snapshot_buffer()
+            return _with_cmdlines(parse_system_process_information(raw, base, time.time()))
+        return parse_ps(subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,etime=,rss=,command="], capture_output=True, text=True,
+            check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout)
+    except Exception:
+        return list_procs()
+
+
+def tree_rss_mb(pids: list[int]) -> float:
+    """Summed resident MB of `pids`; a pid that is gone counts 0."""
+    total = 0.0
+    for pid in pids:
+        try:
+            total += psutil.Process(pid).memory_info().rss / 1048576
+        except Exception:
+            pass
+    return total
 
 
 def list_procs() -> list[Proc]:
@@ -219,15 +337,9 @@ def list_procs() -> list[Proc]:
             out.append(Proc(info["pid"], info["ppid"] or 0, now - (info["create_time"] or now),
                             info["memory_info"].rss / 1048576, " ".join(info["cmdline"] or [])))
         return out
-    raw = subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,rss=,command="],
-                         capture_output=True, text=True, check=False,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
-    out = []
-    for line in raw.splitlines():
-        f = line.split(None, 4)
-        if len(f) == 5:
-            out.append(Proc(int(f[0]), int(f[1]), _etime_seconds(f[2]), int(f[3]) / 1024, f[4]))
-    return out
+    return parse_ps(subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,rss=,command="],
+                                   capture_output=True, text=True, check=False,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout)
 
 
 def shortfall_mb(avail_pct: float) -> float:
@@ -325,6 +437,95 @@ def signal_tree(pids: list[int], stop: bool) -> None:
                 os.kill(pid, signal.SIGSTOP if stop else signal.SIGCONT)
         except Exception:  # exited between listing and signalling
             pass
+
+
+def kill_tree(pids: list[int]) -> None:
+    for pid in pids:
+        try:
+            if psutil is not None:
+                psutil.Process(pid).kill()
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except Exception:  # exited between listing and killing
+            pass
+
+
+#: A search tree older than this is reaped whatever its owner is doing.
+REAP_AGE_S = 1800.0
+_SEARCH_TOOL = re.compile(r"(?:grep|egrep|fgrep|find|xargs|rg)")
+_SHELL = re.compile(r"(?:bash|sh)")
+_SEARCH_WORD = re.compile(r"(?<![\w.-])(?:grep|egrep|fgrep|find|xargs|rg)(?![\w-])")
+
+
+def _exe(p: Proc) -> str:
+    """Lower-cased program name of `p`, without directory or `.exe`."""
+    head = p.cmd.split(None, 1)[0] if p.cmd.strip() else ""
+    name = head.strip('"').replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def _is_search_tool(p: Proc) -> bool:
+    return bool(_SEARCH_TOOL.fullmatch(_exe(p)))
+
+
+def _is_search_wrapper(p: Proc) -> bool:
+    return bool(_SHELL.fullmatch(_exe(p))) and bool(_SEARCH_WORD.search(p.cmd))
+
+
+def orphan_trees(procs: list[Proc], guarded: frozenset = frozenset()) -> list[tuple[Proc, str]]:
+    """(root, reason) for each reapable search tree.
+
+    A root is a bash/sh wrapper whose command runs grep/find/xargs/rg, or a bare search tool whose
+    parent is not such a wrapper; every process in its tree must be a shell or a search tool, so a
+    wrapper around a build or test run is never a root. `owner-gone`: the root's parent is absent
+    from the snapshot. `age`: older than REAP_AGE_S. A guarded or protected root is skipped.
+    """
+    by_pid = {p.pid: p for p in procs}
+    out: list[tuple[Proc, str]] = []
+    for p in procs:
+        parent = by_pid.get(p.ppid)
+        if _is_search_wrapper(p):
+            pass
+        elif not _is_search_tool(p) or (parent is not None and _is_search_wrapper(parent)):
+            continue
+        if p.pid in guarded or PROTECTED_HARD.search(p.cmd):
+            continue
+        tree = descendants(p.pid, procs)
+        if any(t in guarded or not (_is_search_tool(by_pid[t]) or _SHELL.fullmatch(_exe(by_pid[t]))
+                                    or _exe(by_pid[t]) == "conhost") for t in tree):
+            continue
+        if parent is None:
+            out.append((p, "owner-gone"))
+        elif p.age_s > REAP_AGE_S:
+            out.append((p, "age"))
+    return out
+
+
+def reap_orphans(procs: list[Proc], guarded: frozenset, log_path: Path,
+                 emit: Callable[[str], None], kill_fn: Callable[[list[int]], None],
+                 self_pid: int, rss_fn: Optional[Callable[[list[int]], float]] = None) -> set[int]:
+    """Kill each orphaned search tree whole, append one jsonl record per root to `log_path`, and
+    return the pids killed. A log that cannot be written never stops the kill."""
+    killed: set[int] = set()
+    rss = {p.pid: p.rss_mb for p in procs}
+    for root, reason in orphan_trees(procs, guarded):
+        tree = descendants(root.pid, procs)
+        if self_pid in tree:
+            continue
+        size = rss_fn(tree) if rss_fn is not None else sum(rss.get(t, 0.0) for t in tree)
+        kill_fn(tree)
+        killed.update(tree)
+        rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "pid": root.pid,
+               "cmd_head": root.cmd[:200], "age_s": round(root.age_s),
+               "rss_mb": round(size), "reason": reason}
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        except OSError:
+            pass
+        emit(f"GOVERNOR REAPED pid={root.pid} reason={reason}")
+    return killed
 
 
 _PIDFILE_NAME = "group-em-memory-governor.frozen.json"
@@ -505,6 +706,72 @@ def thaw_leftovers(pidfile: Optional[Path],
     return thawed
 
 
+#: A launcher heartbeats its registration well inside this window; a registration older than it
+#: belongs to a launcher that died or hung, so its tree stops being exempt rather than staying
+#: immune forever.
+GUARD_FRESH_S = 120.0
+GUARD_PRUNE_S = 5 * GUARD_FRESH_S
+_GUARD_DIR_NAME = "guarded-trees"
+
+
+def guard_dir() -> Path:
+    """Where guarded launchers register: one `<root pid>.json` each."""
+    return _managed_dir() / _GUARD_DIR_NAME
+
+
+def write_guard(pid: int, directory: Optional[Path] = None, now: Optional[float] = None) -> Path:
+    """(Re)write the registration for guarded root `pid` with a fresh heartbeat; the launcher calls
+    this on start and again inside GUARD_FRESH_S. Raises ValueError when `pid` is not a live process."""
+    created = process_start_time(pid)
+    if created is None:
+        raise ValueError(f"pid {pid} is not a live process")
+    target = Path(directory) if directory is not None else guard_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{pid}.json"
+    tmp = path.with_name(f"{pid}.json.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({"pid": pid, "create_time": created,
+                               "heartbeat": time.time() if now is None else now}), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def read_guarded(directory: Optional[Path], procs: list[Proc], now: float) -> frozenset:
+    """Pids of every tree whose registration is fresh and whose root is still the registered process.
+
+    One directory read per call. A missing, unreadable or malformed registration is skipped; a
+    root whose start time differs from the snapshot's (pid reuse) or is not live is skipped.
+    """
+    if directory is None:
+        return frozenset()
+    by_pid = {p.pid: p for p in procs}
+    out: set[int] = set()
+    try:
+        entries = list(Path(directory).glob("*.json"))
+    except OSError:
+        return frozenset()
+    for entry in entries:
+        try:
+            rec = json.loads(entry.read_text(encoding="utf-8"))
+            pid = int(rec["pid"])
+            created = float(rec["create_time"])
+            heartbeat = float(rec["heartbeat"])
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+        if now - heartbeat > GUARD_PRUNE_S:  # a launcher long dead; do not re-read it every tick
+            try:
+                entry.unlink()
+            except OSError:
+                pass
+            continue
+        root = by_pid.get(pid)
+        if root is None or not (0 <= now - heartbeat <= GUARD_FRESH_S):
+            continue
+        if abs((now - root.age_s) - created) > START_TIME_TOLERANCE_S:
+            continue
+        out.update(descendants(pid, procs))
+    return frozenset(out)
+
+
 HEADROOM_RISE_GIB = 8.0
 
 
@@ -541,8 +808,21 @@ def cache_trim_hint(bin_dir: Path) -> str:
 
 TRIM_COOLDOWN_S = 600.0
 CACHE_CAUSE_GIB = 8.0
-#: The heavy-command admission floor: under it, a cache-bound box trims without waiting for critical.
-LOW_AVAIL_GIB = 8.0
+#: Extraction header reads refill the cache at ~8 GiB/min; a 10-min cooldown starves its guard.
+LOW_TRIM_CACHE_GB = 20.0
+LOW_TRIM_AVAIL_GIB = 16.0
+LOW_TRIM_COOLDOWN_S = 120.0
+
+
+def append_trim_record(path: Optional[Path], record: dict) -> None:
+    """Append one jsonl line for a trim; a write failure never stops the governor."""
+    if path is None:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError:
+        pass
 
 
 def cache_gib(bin_dir: Path) -> Optional[float]:
@@ -572,12 +852,18 @@ def fire_cache_trim(bin_dir: Path) -> Optional[str]:
 
 
 def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
-        sample: Optional[Callable[[], bool]] = None, procs_fn: Callable[[], list[Proc]] = list_procs,
+        sample: Optional[Callable[[], bool]] = None, procs_fn: Callable[[], list[Proc]] = snapshot_procs,
         signal_fn: Callable[[list[int], bool], None] = signal_tree,
         sleep: Callable[[float], None] = time.sleep, max_ticks: Optional[int] = None,
         footprint_fn: Callable[[], dict[int, float]] = footprints,
         notice_path: Optional[Path] = None,
         notice_fn: Callable[[Optional[Path], list[Proc]], frozenset] = read_noticed_pids,
+        guard_path: Optional[Path] = None,
+        guard_fn: Callable[[Optional[Path], list[Proc], float], frozenset] = read_guarded,
+        reap_path: Optional[Path] = None,
+        scan_fn: Callable[[], list[Proc]] = snapshot_procs,
+        rss_fn: Optional[Callable[[list[int]], float]] = None,
+        kill_fn: Callable[[list[int]], None] = kill_tree,
         bin_dir: Optional[Path] = None, pidfile: Optional[Path] = None,
         start_time_fn: Optional[Callable[[int], Optional[float]]] = None,
         avail_fn: Optional[Callable[[], Optional[float]]] = None,
@@ -586,6 +872,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         trim_fn: Optional[Callable[[], Optional[str]]] = None,
         shortfall_fn: Optional[Callable[[], float]] = None,
         cache_gib_fn: Optional[Callable[[], Optional[float]]] = None,
+        trim_log_path: Optional[Path] = None,
         clock: Callable[[], float] = time.monotonic) -> None:
     last_trim: Optional[float] = None
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
@@ -626,6 +913,10 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                                      f"size={nbytes / 1024 ** 3:.1f}GiB")
                     except Exception:  # a report failure never stops the governor
                         pass
+            if reap_path is not None and ticks % REAP_EVERY == 1 % REAP_EVERY:
+                scan = scan_fn()  # light snapshot: the full one costs seconds of process time
+                reap_orphans(scan, guard_fn(guard_path, scan, time.time()), reap_path, emit, kill_fn,
+                             self_pid, rss_fn)
             if args.runaway_mb > 0 and ticks % max(args.runaway_every, 1) == 1 % max(args.runaway_every, 1):
                 over = {pid: mb for pid, mb in footprint_fn().items()
                         if mb >= args.runaway_mb and pid not in flagged and pid != self_pid}
@@ -644,12 +935,13 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 due = not paused or crit_streak >= 3
                 if due and len(paused) < args.max_pauses:
                     procs = procs_fn()
+                    guarded = guard_fn(guard_path, procs, time.time())
                     noticed = notice_fn(notice_path, procs)
                     ntree = noticed_tree(noticed, procs)
                     victim = choose_victim(procs, {p.pid for p, _ in paused}, self_pid, noticed, ntree,
-                                           shortfall_fn() if shortfall_fn else 0.0)
+                                           shortfall_fn() if shortfall_fn else 0.0, guarded)
                     if victim:
-                        prot = protected_pids(procs, ntree)
+                        prot = protected_pids(procs, ntree, guarded)
                         # A pid with no readable start time cannot be recorded, so it is never frozen:
                         # an unrecorded freeze is one no later thaw can find.
                         tree = [t for t in descendants(victim.pid, procs)
@@ -692,11 +984,12 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
             avail = avail_fn() if avail_fn is not None else None
             # The critical floor (avail_pct) sits far under the 8 GiB heavy-admission floor; between the
             # two a cache-bound box starves admissions while the critical branch above never trims.
-            if (avail is not None and avail < LOW_AVAIL_GIB and sys.platform == "win32"
-                    and (last_trim is None or clock() - last_trim >= TRIM_COOLDOWN_S)):
-                cache = (cache_gib_fn or (lambda: cache_gib(bin_dir)))()
-                if cache is not None and cache >= CACHE_CAUSE_GIB:
-                    last_trim = clock()
+            if (avail is not None and avail < LOW_TRIM_AVAIL_GIB and sys.platform == "win32"
+                    and (last_trim is None or clock() - last_trim >= LOW_TRIM_COOLDOWN_S)):
+                read_cache = cache_gib_fn or (lambda: cache_gib(bin_dir))
+                cache = read_cache()
+                if cache is not None and cache >= LOW_TRIM_CACHE_GB:
+                    t0 = last_trim = clock()
                     emit(f"GOVERNOR LOW available={avail:.1f} cache={cache:.1f}")
                     try:
                         tail = (trim_fn or (lambda: fire_cache_trim(bin_dir)))()
@@ -704,6 +997,16 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                         tail = None
                     emit(cache_trim_hint(bin_dir) if tail is None
                          else f"GOVERNOR CACHE-TRIM fired {tail}".rstrip())
+                    try:
+                        cache_after, avail_after = read_cache(), avail_fn()
+                    except Exception:
+                        cache_after = avail_after = None
+                    append_trim_record(trim_log_path, {
+                        "ts": time.time(), "cache_before_gb": cache, "avail_before_gib": avail,
+                        "cache_after_gb": cache_after, "avail_after_gib": avail_after,
+                        "elapsed_s": clock() - t0,
+                        "reason": f"cache>={LOW_TRIM_CACHE_GB:g}GB and avail<{LOW_TRIM_AVAIL_GIB:g}GiB",
+                        "fired": tail is not None})
             if avail_fn is not None:
                 line, low_gib = headroom_line(avail, low_gib, pause_recovery and not paused)
                 if line:
@@ -724,6 +1027,8 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
 
 
 RETENTION_EVERY = 360
+#: The reap scan runs once per this many ticks.
+REAP_EVERY = 6
 
 
 def spawn_retention_if_due() -> bool:
@@ -782,7 +1087,19 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--runaway-every", type=int, default=6, help="samples between footprint reads")
     ap.add_argument("--log", type=Path, default=None,
                     help="log the detached governor appends to (default <settings home>/scratch/governor.log)")
+    ap.add_argument("--reap-log", type=Path, default=None,
+                    help="jsonl the governor appends one record per reaped search tree to "
+                         "(default governor-reaps.jsonl beside --log)")
+    ap.add_argument("--guard", type=int, default=None, metavar="PID",
+                    help="register or heartbeat PID as a guarded tree the governor never pauses, then exit")
     args = ap.parse_args(argv)
+    if args.guard is not None:
+        try:
+            print(write_guard(args.guard))
+        except (ValueError, OSError) as exc:
+            print(f"governor: cannot register guard for pid {args.guard}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        return
     lib = str(Path(__file__).resolve().parent / "lib")
     if lib not in sys.path:
         sys.path.insert(0, lib)
@@ -801,7 +1118,9 @@ def main(argv: Optional[list[str]] = None) -> None:
     for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
         if sig is not None:
             signal.signal(sig, lambda *_: sys.exit(0))
-    run(args, notice_path=resolve_notice_path(), pidfile=default_pidfile(), avail_fn=avail_gib,
+    run(args, notice_path=resolve_notice_path(), guard_path=guard_dir(),
+        reap_path=args.reap_log or log.parent / "governor-reaps.jsonl",
+        trim_log_path=log.parent / "governor-trims.jsonl", pidfile=default_pidfile(), avail_fn=avail_gib, rss_fn=tree_rss_mb,
         retention_fn=spawn_retention_if_due, scratch_fn=scratch_over_budget,
         shortfall_fn=lambda: shortfall_mb(args.avail_pct))
 

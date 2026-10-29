@@ -36,6 +36,7 @@ Spec backlink: docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md, chunk 
 """
 from __future__ import annotations
 
+import bisect
 import binascii
 import hashlib
 import mmap
@@ -427,27 +428,16 @@ def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple
             result.append((pack_dir / name, pack_dir / pack_name))
     _PACK_LISTING_CACHE[key] = (generation, result)
     _PACK_INDEXES_BY_LISTING.pop(key, None)
+    _LOOKUP_SOURCES.pop(key, None)
     _LAST_HIT_PACK.pop(key, None)
     return result
 
 
 _PACK_INDEXES_BY_LISTING: "dict[str, list[tuple[Path, Path, _PackIndex]]]" = {}
 # Position in the `_pack_indexes` list of the pack that answered the previous
-# hit, per `str(common_dir)`; cleared whenever that list is rebuilt.
+# hit among the small uncovered set, per `str(common_dir)`; cleared whenever
+# that list is rebuilt.
 _LAST_HIT_PACK: "dict[str, int]" = {}
-
-
-def _probe_order(key: str, indexes: list):
-    """Yields positions of `indexes` lazily: the last-hit pack first, then the
-    rest in listing order; each position appears exactly once."""
-    last = _LAST_HIT_PACK.get(key)
-    if last is not None and last < len(indexes):
-        yield last
-    else:
-        last = -1
-    for i in range(len(indexes)):
-        if i != last:
-            yield i
 
 
 def _newest_first(listing: list[tuple[Path, Path]]) -> list[tuple[Path, Path]]:
@@ -480,6 +470,13 @@ class _LazyPackIndexes(Sequence):
 
     def __len__(self) -> int:
         return len(self._listing)
+
+    def names(self) -> "dict[str, int]":
+        """`.idx` file name -> position, without parsing any index."""
+        return {pair[0].name: i for i, pair in enumerate(self._listing)}
+
+    def pack_path(self, i: int) -> Path:
+        return self._listing[i][1]
 
     def __getitem__(self, i):  # type: ignore[override]
         idx_path, pack_path = self._listing[i]
@@ -574,6 +571,195 @@ def _pack_index_find(pidx: _PackIndex, sha_hex: str) -> Optional[int]:
         else:
             hi = mid
     return None
+
+
+class _Midx(NamedTuple):
+    data: bytes
+    fanout: tuple
+    oidl: int
+    ooff: int
+    loff: Optional[int]
+    loff_len: int
+    names: tuple
+
+
+_MIDX_CACHE_MAX_ENTRIES = 8
+_MIDX_CACHE: "OrderedDict[tuple[str, int, int], Optional[_Midx]]" = OrderedDict()
+
+
+def _parse_midx_uncached(path: Path) -> Optional[_Midx]:
+    """Parses a v1 SHA-1 `multi-pack-index`; any structural inconsistency
+    (torn write, base files, other hash) yields `None` so lookup falls back
+    to the per-pack path."""
+    try:
+        data = path.read_bytes()
+        if len(data) < 12 + 12 + 20 or data[:4] != b"MIDX" or data[4] != 1 or data[5] != 1:
+            return None
+        nchunks, nbase = data[6], data[7]
+        (npacks,) = struct.unpack_from(">I", data, 8)
+        if nbase != 0 or nchunks == 0:
+            return None
+        end = len(data) - 20
+        table = [struct.unpack_from(">4sQ", data, 12 + 12 * i) for i in range(nchunks + 1)]
+        if table[-1][1] != end:
+            return None
+        chunks: dict[bytes, tuple[int, int]] = {}
+        for (cid, start), (_nid, stop) in zip(table, table[1:]):
+            if not 12 + 12 * (nchunks + 1) <= start <= stop <= end:
+                return None
+            chunks[cid] = (start, stop - start)
+        for need in (b"OIDF", b"OIDL", b"OOFF", b"PNAM"):
+            if need not in chunks:
+                return None
+        oidf, oidf_len = chunks[b"OIDF"]
+        if oidf_len != 1024:
+            return None
+        fanout = struct.unpack_from(">256I", data, oidf)
+        count = fanout[255]
+        oidl, oidl_len = chunks[b"OIDL"]
+        ooff, ooff_len = chunks[b"OOFF"]
+        if oidl_len != count * 20 or ooff_len != count * 8:
+            return None
+        pnam, pnam_len = chunks[b"PNAM"]
+        names = tuple(
+            n.decode("utf-8", errors="replace") for n in data[pnam : pnam + pnam_len].split(b"\x00")[:npacks]
+        )
+        if len(names) != npacks:
+            return None
+        loff = chunks.get(b"LOFF")
+        return _Midx(data, fanout, oidl, ooff, loff[0] if loff else None, loff[1] if loff else 0, names)
+    except (OSError, struct.error, IndexError):
+        return None
+
+
+def _parse_midx(common_dir: Path) -> Optional[_Midx]:
+    """Memoized by `(path, st_mtime_ns, st_size)` like `_parse_pack_index`."""
+    path = common_dir / "objects" / "pack" / "multi-pack-index"
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key in _MIDX_CACHE:
+        _MIDX_CACHE.move_to_end(key)
+        return _MIDX_CACHE[key]
+    result = _parse_midx_uncached(path)
+    _MIDX_CACHE[key] = result
+    while len(_MIDX_CACHE) > _MIDX_CACHE_MAX_ENTRIES:
+        _MIDX_CACHE.popitem(last=False)
+    return result
+
+
+def _midx_find(midx: _Midx, target: bytes) -> Optional[tuple[int, int]]:
+    """One fanout bisect: `(pack id, offset)` or `None`."""
+    first = target[0]
+    lo = midx.fanout[first - 1] if first > 0 else 0
+    hi = midx.fanout[first]
+    data = midx.data
+    while lo < hi:
+        mid = (lo + hi) // 2
+        p = midx.oidl + mid * 20
+        mid_sha = data[p : p + 20]
+        if mid_sha == target:
+            pack_id, off = struct.unpack_from(">II", data, midx.ooff + mid * 8)
+            if off & 0x80000000:
+                if midx.loff is None or (off & 0x7FFFFFFF) * 8 + 8 > midx.loff_len:
+                    return None
+                (off,) = struct.unpack_from(">Q", data, midx.loff + (off & 0x7FFFFFFF) * 8)
+            return pack_id, off
+        if mid_sha < target:
+            lo = mid + 1
+        else:
+            hi = mid
+    return None
+
+
+#: Packs a MIDX does not cover are probed one by one only up to this many
+#: (a handful of fresh packs keeps lazy, stop-at-hit idx parsing); past it
+#: one merged sorted table answers for all of them.
+_UNCOVERED_LAZY_MAX = 8
+
+
+class _LookupSource:
+    """Where a sha lives, for one pack listing: the MIDX, then the packs the
+    MIDX does not name (newer than it)."""
+
+    __slots__ = ("indexes", "midx", "midx_pos", "uncovered", "_merged")
+
+    def __init__(self, common_dir: Path, indexes: "_LazyPackIndexes") -> None:
+        self.indexes = indexes
+        self.midx = _parse_midx(common_dir)
+        names = indexes.names() if isinstance(indexes, _LazyPackIndexes) else {e[0].name: i for i, e in enumerate(indexes)}
+        if self.midx is None:
+            self.midx_pos: list = []
+            self.uncovered = sorted(names.values())
+        else:
+            self.midx_pos = [names.get(n) for n in self.midx.names]
+            covered = set(self.midx.names)
+            self.uncovered = sorted(i for n, i in names.items() if n not in covered)
+        self._merged: "Optional[tuple[list[bytes], list[tuple[int, int]]]]" = None
+
+    def _merged_table(self) -> "tuple[list[bytes], list[tuple[int, int]]]":
+        if self._merged is None:
+            entries: list = []
+            for i in self.uncovered:
+                pidx = self.indexes[i][2]
+                if pidx is None:
+                    continue
+                shas, offs = pidx.shas, pidx.offsets
+                for j in range(len(shas) // 20):
+                    entries.append((shas[j * 20 : j * 20 + 20], i, offs[j]))
+            entries.sort(key=lambda e: (e[0], e[1]))
+            self._merged = ([e[0] for e in entries], [(e[1], e[2]) for e in entries])
+        return self._merged
+
+    def find(self, key: str, sha_hex: str, target: bytes) -> Optional[tuple[int, int]]:
+        """`(position in indexes, offset)` or `None`."""
+        if self.midx is not None:
+            hit = _midx_find(self.midx, target)
+            if hit is not None and hit[0] < len(self.midx_pos) and self.midx_pos[hit[0]] is not None:
+                return self.midx_pos[hit[0]], hit[1]
+        if len(self.uncovered) <= _UNCOVERED_LAZY_MAX:
+            order = self.uncovered
+            last = _LAST_HIT_PACK.get(key)
+            if last is not None and last in order:
+                order = [last] + [i for i in order if i != last]
+            for i in order:
+                pidx = self.indexes[i][2]
+                if pidx is None:
+                    continue
+                offset = _pack_index_find(pidx, sha_hex)
+                if offset is not None:
+                    _LAST_HIT_PACK[key] = i
+                    return i, offset
+            return None
+        shas, locs = self._merged_table()
+        k = bisect.bisect_left(shas, target)
+        if k < len(shas) and shas[k] == target:
+            return locs[k]
+        return None
+
+
+_LOOKUP_SOURCES: "dict[str, _LookupSource]" = {}
+
+
+def _locate_packed(common_dir: Path, sha: str, *, revalidate: bool) -> "Optional[tuple[_LazyPackIndexes, int, int]]":
+    try:
+        target = bytes.fromhex(sha)
+    except ValueError:
+        return None
+    if len(target) != 20:
+        return None
+    key = str(common_dir)
+    indexes = _pack_indexes(common_dir, revalidate=revalidate)
+    src = _LOOKUP_SOURCES.get(key)
+    if src is None or src.indexes is not indexes:
+        src = _LookupSource(common_dir, indexes)
+        _LOOKUP_SOURCES[key] = src
+    hit = src.find(key, sha, target)
+    if hit is None:
+        return None
+    return indexes, hit[0], hit[1]
 
 
 def _read_pack_bytes(pack_path: Path) -> bytes | mmap.mmap:
@@ -760,40 +946,26 @@ def _read_pack_object_at(
 
 def packed_contains(common_dir: Path, sha: str) -> bool:
     """Index-only membership: no pack bytes are read or inflated."""
-    common_dir = Path(common_dir)
-    key = str(common_dir)
-    indexes = _pack_indexes(common_dir, revalidate=False)
-    for i in _probe_order(key, indexes):
-        pidx = indexes[i][2]
-        if pidx is not None and _pack_index_find(pidx, sha) is not None:
-            _LAST_HIT_PACK[key] = i
-            return True
-    return False
+    return _locate_packed(Path(common_dir), sha, revalidate=False) is not None
 
 
 def _search_packs_for_sha(
     common_dir: Path, sha: str, *, revalidate: bool
 ) -> Optional[tuple[Optional[tuple[str, bytes]]]]:
-    key = str(common_dir)
-    indexes = _pack_indexes(common_dir, revalidate=revalidate)
-    for i in _probe_order(key, indexes):
-        _idx_path, pack_path, pidx = indexes[i]
-        if pidx is None:
-            continue
-        offset = _pack_index_find(pidx, sha)
-        if offset is None:
-            continue
-        try:
-            pack_bytes = _pack_bytes_for_read(pack_path)
-        except OSError:
-            continue
-        _LAST_HIT_PACK[key] = i
-        type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
-        type_name = _PACK_TYPE_NAMES.get(type_num)
-        if type_name is None:
-            return (None,)
-        return ((type_name, content),)
-    return None
+    located = _locate_packed(common_dir, sha, revalidate=revalidate)
+    if located is None:
+        return None
+    indexes, pos, offset = located
+    pack_path = indexes.pack_path(pos) if isinstance(indexes, _LazyPackIndexes) else indexes[pos][1]
+    try:
+        pack_bytes = _pack_bytes_for_read(pack_path)
+    except OSError:
+        return None
+    type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
+    type_name = _PACK_TYPE_NAMES.get(type_num)
+    if type_name is None:
+        return (None,)
+    return ((type_name, content),)
 
 
 def _read_pack_object_by_sha(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:

@@ -353,3 +353,69 @@ def test_real_launcher_script_carries_every_child_and_maps_each_result(tmp_path)
     text = script.read_text(encoding="utf-8")
     assert all(r.run_id in text for r in ready)
     assert "CHILDREN.map((child, i)" in text and "child threw" in text
+
+
+# A run that stopped at plan-blitz leaves run.json bound to its sizing but, historically, no halted.json.
+
+
+def _unmarked_run(tmp_path, stage="halted"):
+    halted = _halted_repo(tmp_path, "alpha")
+    record_root = halted.repo / RECORD_DIR_ROOT
+    shutil.rmtree(record_root / halted.halted_run)
+    run_id = "warp-2026-10-28-alpha-20261028T010101-abcdef"
+    rd = record_root / run_id
+    rd.mkdir(parents=True)
+    (rd / "run.json").write_text(json.dumps({"sizing_rel": halted.sizing_rel}), encoding="utf-8")
+    (rd / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
+    return halted, run_id
+
+
+def _refire(halted, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    spawned, emitted, launched = [], [], []
+    monkeypatch.setattr(hook, "_spawn_recompose", lambda root, run_id: spawned.append(run_id) or True)
+
+    def emit(params, root):
+        emitted.append(params)
+        return {"path": str(root / "run.js"), "run_id": "r1", "fire_args": {}}
+
+    script = halted.repo / "launcher.js"
+    script.write_text("//", encoding="utf-8")
+
+    def launch(root, parent_id, children, session_id):
+        launched.append([c.run_id for c in children])
+        return script
+
+    env = hook.evaluate(json.loads(_payload(halted)), emit=emit, launch=launch)
+    return env, spawned, emitted, launched
+
+
+def test_sizing_with_an_unmarked_emitted_run_refires_through_the_launcher(tmp_path, monkeypatch):
+    halted, run_id = _unmarked_run(tmp_path)
+    env, spawned, emitted, launched = _refire(halted, monkeypatch)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert emitted == [] and spawned == [run_id] and launched == [[run_id]]
+
+
+@pytest.mark.parametrize("stage", ["landed", "minted"])
+def test_unmarked_run_outside_the_stopped_stages_takes_the_plain_emit(tmp_path, monkeypatch, stage):
+    halted, _ = _unmarked_run(tmp_path, stage=stage)
+    env, spawned, emitted, launched = _refire(halted, monkeypatch)
+    assert len(emitted) == 1 and launched == [] and spawned == []
+
+
+def test_newer_minted_only_shell_hides_no_stopped_run(tmp_path, monkeypatch):
+    halted, run_id = _unmarked_run(tmp_path)
+    shell = halted.repo / RECORD_DIR_ROOT / "warp-2026-10-28-alpha-20261028T020202-fedcba"
+    shell.mkdir(parents=True)
+    (shell / "run-stage.json").write_text(json.dumps({"stage": "minted"}), encoding="utf-8")
+    env, spawned, emitted, launched = _refire(halted, monkeypatch)
+    assert emitted == [] and launched == [[run_id]]
+
+
+def test_unbound_run_takes_the_plain_emit(tmp_path, monkeypatch):
+    halted, run_id = _unmarked_run(tmp_path)
+    (halted.repo / RECORD_DIR_ROOT / run_id / "run.json").write_text(json.dumps({"sizing_rel": "other.yaml"}), encoding="utf-8")
+    env, spawned, emitted, launched = _refire(halted, monkeypatch)
+    assert len(emitted) == 1 and launched == []

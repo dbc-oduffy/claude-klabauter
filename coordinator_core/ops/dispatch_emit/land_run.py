@@ -1098,11 +1098,12 @@ def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optiona
         with halted_hold_release.blob_scope(root):
             halted_hold_release.prefetch_kept_blobs(root, sibling_claims.halted_records(root, run_id, wanted))
             unlanded = list(sibling_claims._unlanded_run_ids(root, run_id, plan_rel, covering=wanted))
-        live = {
-            rid: run_ownership.LiveRun(withheld=frozenset(warp_run_deliverable.halted_withheld_paths(root, rid)))
-            for rid in unlanded
-            if warp_run_deliverable._halted(root, rid)
-        }
+            # held_paths frees a withheld path whose kept hunks are already at HEAD (hand-committed).
+            live = {
+                rid: run_ownership.LiveRun(withheld=halted_hold_release.held_paths(root, rid, run_id, plan_rel))
+                for rid in unlanded
+                if warp_run_deliverable._halted(root, rid)
+            }
         if not any(r.withheld for r in live.values()):
             return {}
         out: dict = {}
@@ -3636,8 +3637,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             f"ledger rows not reported met: commit omits changed file(s) {withheld_product}"[:_UNDONE_CAP]
         )
     reply.update(recovery_reply)
-    if declared_left:
-        reply["withheld"] = {**(reply.get("withheld") or {}), **declared_left}
+    foreign_named = {p: withhold_reason[p] for p in foreign_held if p in withhold_reason}
+    if declared_left or foreign_named:
+        reply["withheld"] = {**(reply.get("withheld") or {}), **foreign_named, **declared_left}
     reply[contract.REPLY_CREDITED_CHUNKS] = sorted(set(credited_ids) & (set(regraded) | {c.id for c in credited_absent}))
     if recorded_changed:
         landed_now = set(paths)
@@ -3680,7 +3682,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         withheld_art.update(process_withheld)
         reply["run_artifacts"] = {
             "landed": sorted(p for p in landable_artifacts.paths() if p in landed_now),
-            "withheld": dict(sorted(withheld_art.items())),
+            "withheld": dict(sorted({**withheld_art, **foreign_named}.items())),
         }
         if reread_artifacts:
             reply["run_artifacts"]["reread"] = reread_artifacts

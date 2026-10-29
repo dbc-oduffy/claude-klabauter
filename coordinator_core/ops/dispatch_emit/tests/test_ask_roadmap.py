@@ -196,6 +196,28 @@ def test_roadmap_no_ready_halt_appends_pulled_reasons(repo):
     assert "reason: ('plan-blitz reported no ready plan' + ((_pulled ?? [])" in script
 
 
+def test_roadmap_halt_reaches_the_halt_record_commit_after_the_terminal_commit(repo):
+    _put(repo)
+    script = _compose(repo)
+    assert "async function _commitHaltRecord()" in script
+    leg = "if (_halted && _RUN_TOKEN && !(_commit && _commit.committed === true))"
+    assert script.count(leg) == 1
+    assert script.index("phase('commit');") < script.index(leg) < script.index("return { arm: 'roadmap'")
+    assert "_haltCommit = await _commitHaltRecord()" in script
+    for decl in ("let _haltCommit = null;", "let _planRel = null;", "let _consumedReturns = {};"):
+        assert script.index(decl) < script.index("async function _commitHaltRecord()")
+    assert not any(f.severity is Severity.ERROR for f in run_checks(script))
+
+
+def test_plan_blitz_halts_name_plan_and_stage_but_gate_halts_stay_bare(repo):
+    _put(repo)
+    script = _compose(repo)
+    tail = "plan: (_pulled.map(_pth).find(Boolean) ?? null), stage: 'plan-blitz' }"
+    assert script.count(tail) == 2
+    assert script.index(tail) > script.index("for (const w of _waves)")
+    assert "no waves'" in script and "stage: 'plan-blitz' }; }" not in script.split("no waves'")[1].split("\n")[0]
+
+
 def test_next_action_carries_the_run_mode_in_the_fanout_spec():
     from coordinator_core.ops.dispatch_emit.ask_roadmap import roadmap_next_action_js
 

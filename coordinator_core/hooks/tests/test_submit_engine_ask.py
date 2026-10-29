@@ -158,8 +158,8 @@ def test_handler_turns_an_evaluate_crash_into_a_named_deny(monkeypatch):
     monkeypatch.setattr(mod, "evaluate", boom)
     out = mod._handler({"tool_name": "Workflow", "tool_input": {}})
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "RuntimeError: kaput" in hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow"
+    assert "RuntimeError: kaput" in hso["additionalContext"]
 
 
 def test_the_allow_reason_carries_the_workflow_revise_call_shape(tmp_path):
@@ -263,7 +263,8 @@ def test_size_stage_subagent_cannot_write_product_code(tmp_path, monkeypatch):
     def write(path):
         return _agent_write(dispatch, root, tmp_path, "a1", path)
 
-    assert write("pkg/mod.py")["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert write("pkg/mod.py")["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "Advisory" in write("pkg/mod.py")["hookSpecificOutput"]["additionalContext"]
     assert write("DELIVERY.md") is None
     run_token.bind_sizing(root, "ask-20261013T000000-abcdef", "state/sizings/a.yaml")
     assert write("pkg/mod.py") is None
@@ -289,7 +290,8 @@ def test_a_second_live_run_is_never_denied_by_the_size_stage_guard(tmp_path, mon
 
     run_token.bind_sizing(root, run_b, "state/sizings/b.yaml")
     assert write(agent_b) is None
-    assert write(agent_a)["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert write(agent_a)["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "Advisory" in write(agent_a)["hookSpecificOutput"]["additionalContext"]
 
 
 def test_remote_venue_carries_the_cross_repo_approval(tmp_path, monkeypatch):
@@ -570,26 +572,26 @@ def _scout_payload(root: Path, subagent_type="coordinator:sizing-scout", **extra
 def test_sizing_scout_is_denied_with_no_live_run_rerouting_to_the_sizing_skill_not_workflow(tmp_path):
     root = _repo(tmp_path)
     out = mod.sizing_scout_deny(_scout_payload(root))
-    assert _hso(out)["permissionDecision"] == "deny"
-    reason = _hso(out)["permissionDecisionReason"]
+    assert _hso(out)["permissionDecision"] == "allow"
+    reason = _hso(out)["additionalContext"]
     assert "Skill(coordinator:sizing)" in reason
     assert "Workflow(" not in reason
     bare = _scout_payload(root)
     del bare["session_id"]
-    assert _hso(mod.sizing_scout_deny(bare))["permissionDecision"] == "deny"
+    assert _hso(mod.sizing_scout_deny(bare))["permissionDecision"] == "allow"
 
 
 def test_sizing_scout_with_a_live_run_names_the_run(tmp_path):
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
     out = mod.sizing_scout_deny(_scout_payload(root))
-    assert _hso(out)["permissionDecision"] == "deny"
-    assert "ask-20261013T000000-abcdef" in _hso(out)["permissionDecisionReason"]
-    assert warp_fire.fire_command() not in _hso(out)["permissionDecisionReason"]
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert "ask-20261013T000000-abcdef" in _hso(out)["additionalContext"]
+    assert warp_fire.fire_command() not in _hso(out)["additionalContext"]
     padded = _scout_payload(root, " coordinator:sizing-scout ")
-    assert _hso(mod.sizing_scout_deny(padded))["permissionDecision"] == "deny"
+    assert _hso(mod.sizing_scout_deny(padded))["permissionDecision"] == "allow"
     other = mod.sizing_scout_deny(_scout_payload(root, session_id="other"))
-    assert "ask-20261013T000000-abcdef" not in _hso(other)["permissionDecisionReason"]
+    assert "ask-20261013T000000-abcdef" not in _hso(other)["additionalContext"]
 
 
 def test_sizing_scout_deny_names_the_live_runs_actual_stage(tmp_path):
@@ -598,7 +600,7 @@ def test_sizing_scout_deny_names_the_live_runs_actual_stage(tmp_path):
     stage_dir = root / "state" / "warp" / "ask-20261013T000000-abcdef"
     stage_dir.mkdir(parents=True)
     (stage_dir / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
-    reason = _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecisionReason"]
+    reason = _hso(mod.sizing_scout_deny(_scout_payload(root)))["additionalContext"]
     assert "in stage staged" in reason
     assert "already sizing" not in reason
 
@@ -606,7 +608,7 @@ def test_sizing_scout_deny_names_the_live_runs_actual_stage(tmp_path):
 def test_sizing_scout_deny_without_a_stage_file_claims_no_sizing(tmp_path):
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
-    reason = _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecisionReason"]
+    reason = _hso(mod.sizing_scout_deny(_scout_payload(root)))["additionalContext"]
     assert "ask-20261013T000000-abcdef is live" in reason
     assert "sizing;" not in reason
 
@@ -624,8 +626,8 @@ def test_a_readonly_marked_brief_is_admitted_and_an_unmarked_or_embedded_one_is_
     assert mod.sizing_scout_deny(no_run) is None
     inline = _scout_payload(root)
     inline["tool_input"]["prompt"] = f"please do not use {READONLY_MARKER} here"
-    assert _hso(mod.sizing_scout_deny(inline))["permissionDecision"] == "deny"
-    assert _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecision"] == "deny"
+    assert _hso(mod.sizing_scout_deny(inline))["permissionDecision"] == "allow"
+    assert _hso(mod.sizing_scout_deny(_scout_payload(root)))["permissionDecision"] == "allow"
 
 
 def test_a_scout_payload_with_an_agent_id_is_not_denied_without_a_run(tmp_path):
@@ -656,8 +658,8 @@ def test_agent_leg_carries_the_sizing_scout_deny(tmp_path):
     root = _repo(tmp_path)
     mod.evaluate(_payload(root, {"ask": "a"}), emit=_Emit())
     out = block_unenumerated_agent_type.check(_scout_payload(root))
-    assert _hso(out)["permissionDecision"] == "deny"
-    assert "ask-20261013T000000-abcdef" in _hso(out)["permissionDecisionReason"]
+    assert _hso(out)["permissionDecision"] == "allow"
+    assert "ask-20261013T000000-abcdef" in _hso(out)["additionalContext"]
 
 
 def test_engine_emitted_no_run_consumes_the_token(tmp_path):

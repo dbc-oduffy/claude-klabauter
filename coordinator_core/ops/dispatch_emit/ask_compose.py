@@ -44,7 +44,7 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, GROUP_
 from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import REVIEWER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief, brief_decl_js
 from coordinator_core.ops.dispatch_emit import ask_gate as _ask_gate  # noqa: F401 -- installs the fleet-mode provider
-from coordinator_core.ops.dispatch_emit.sizing_fire import RESUME_LEDGER_HALT_BLOCKING_FIELD
+from coordinator_core.ops.dispatch_emit.sizing_fire import DATE_HEAD_PATTERN, PLAN_PATH_JS, RESUME_LEDGER_HALT_BLOCKING_FIELD
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
@@ -3178,6 +3178,7 @@ def compose_ask_script(
     b.append(f"  let _writes = {writes_literal};")
     b.append(f"  const _crossRepoApproved = {'true' if cross_repo_approved else 'false'};")
     b.append("  let _planRel = null;")
+    b.append("  " + PLAN_PATH_JS)
     b.append("  let _gated = [];")
     b.append("  let _manifest = null;")
     b.append("  let _stagedManifest = null;")
@@ -3464,7 +3465,7 @@ def compose_ask_script(
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
         b.append(
             "  const _slugOf = (r) => String(r.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
-            ".replace(/^-+|-+$/g, '') || 'ask';"
+            ".replace(/^-+|-+$/g, '').replace(/^" + DATE_HEAD_PATTERN + "/, '') || 'ask';"
         )
         if intake is not None:
             b.append(f"  const _sizingPathFor = (r) => REPO_ROOT + '/' + {_lit(sizing_rel)};")
@@ -4092,7 +4093,9 @@ def compose_ask_script(
         "Author the plan for the sizing at ",
         "js:_sizingRel",
         f": scaffold it with `{DOC_NEW_CMD} --type plan --sizing-object <that sizing path> --title "
-        "\"<title>\" --out docs/plans/<sizing-stem>.md` (that launcher, never `python3` on the "
+        "\"<title>\" --out ",
+        "js:_planPathFor(_sizingRel)",
+        "` (that launcher, never `python3` on the "
         "script; never author the frontmatter block by hand), then change its existing `scope_mode:` line to `spec-dispatch`, derive its "
         "spine from the sizing, then FILL the "
         "scaffold: no PLACEHOLDER, `path/to/file` or `<REPLACE:` marker may remain anywhere in the "

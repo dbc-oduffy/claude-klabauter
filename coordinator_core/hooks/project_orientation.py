@@ -734,9 +734,9 @@ def _engine_resolution_banner(out: List[str]) -> None:
         branch_suffix = ""
 
     if klass == RESOLUTION_RESOLVED_ENGINE:
-        out.append(f"── Engine: published engine mirror{branch_suffix} — this session's hooks resolve to {root} ──\n")
+        out.append(f"── Engine: published mirror{branch_suffix}: {root} ──\n")
     elif klass == RESOLUTION_LIVE_WORKING_TREE:
-        out.append(f"── Engine: sibling LIVE working tree{branch_suffix} ──\n")
+        out.append(f"── Engine: live tree{branch_suffix} ──\n")
 
 
 def _extract_cache_field(cache_text: str, key: str) -> str:
@@ -790,7 +790,7 @@ def _cache_banner_line(cache_text: Optional[str]) -> str:
         age = None
     if age is None:
         return f"── Orientation (RAM cache) — age unknown (no parseable generated_at) · now {now} ──\n"
-    return f"── Orientation (RAM cache) — regenerated {_render_age(age)} ago · now {now} ──\n"
+    return f"Orientation (RAM cache), {_render_age(age)} old, now {now}:\n"
 
 
 def _orientation_staleness_grace_minutes(env: Mapping[str, Any]) -> float:
@@ -962,8 +962,8 @@ def _collapse_banner(lines: List[str], detail: bool) -> List[str]:
     kept = [ln for i, ln in enumerate(lines) if i not in dropped and ln.strip()]
     heads = "; ".join(h for h in (_warning_head(w) for w in warnings) if h)
     summary = (
-        f"── ⚠ {len(warnings)} session warnings ({heads}) — full text and remedies: "
-        f"set {BANNER_DETAIL_ENV}=1 and restart ──\n"
+        f"⚠ {len(warnings)} session warnings ({heads}) — detail: "
+        f"{BANNER_DETAIL_ENV}=1, restart\n"
     )
     return ["\n", summary, *kept]
 

@@ -249,11 +249,22 @@ def apply_in_run_resize(
     return resolve_arm(amended), amended, detents
 
 
+DATE_HEAD_PATTERN = r"\d{4}-\d{2}-\d{2}-"
+
+
 def s_plan_path(sizing_rel: str) -> str:
     """Stage-1 plan location, `docs/plans/<sizing-stem>.md`; a repeated leading `YYYY-MM-DD-` collapses to one."""
     stem = PurePosixPath(str(sizing_rel).replace(chr(92), "/")).stem
-    stem = re.sub(r"^((?:\d{4}-\d{2}-\d{2}-))(?:\1)+", r"\1", stem)
+    stem = re.sub(rf"^({DATE_HEAD_PATTERN})(?:{DATE_HEAD_PATTERN})+", r"\1", stem)
     return f"docs/plans/{stem}.md"
+
+
+#: JS twin of `s_plan_path`, built from the same pattern; the planner prompt names its result.
+PLAN_PATH_JS = (
+    "const _planPathFor = (rel) => { const s = String(rel).replace(/\\\\/g, '/').split('/').pop()"
+    ".replace(/\\.[^.]*$/, '').replace(/^(" + DATE_HEAD_PATTERN + ")(?:" + DATE_HEAD_PATTERN
+    + ")+/, '$1'); return 'docs/plans/' + s + '.md'; };"
+)
 
 
 def resumable_plan(

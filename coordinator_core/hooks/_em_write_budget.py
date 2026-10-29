@@ -27,7 +27,7 @@ from coordinator_core.hooks.doc_data_extensions import _DOC_DATA_EXTENSIONS
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session import general_work_scope
 from coordinator_core.session.engine_route_state import session_sizing_state as _session_sizing_state
-from coordinator_core.warp_fire import fire_step
+from coordinator_core.warp_fire import fire_command
 
 _EXT_EXECUTOR_MAP: dict[str, str] = {
     ".py": "python-executor",
@@ -66,13 +66,17 @@ _DEVOPS_FILENAME_RE = re.compile(
 
 _SESSION_SIZING = "<this session's sizing path>"
 
+
+def _fire(sizing_rel: str | None = None) -> str:
+    return f"Call `{fire_command(sizing_rel)}`, once."
+
 _SIZED_ADVISORY = (
     "[em-code-dispatch nudge] EM edits route through the warp run. "
-    + fire_step(_SESSION_SIZING)
+    + _fire(_SESSION_SIZING)
 )
 
 _ROUTE_UNFIRED_DENY = (
-    "Sized S or larger; its engine run has not fired. " + fire_step(_SESSION_SIZING)
+    "Sized S or larger; its engine run has not fired. " + _fire(_SESSION_SIZING)
 )
 
 
@@ -242,7 +246,7 @@ def shell_write_budget(
 
 
 def _closed_text(rec: dict) -> str:
-    return f"XS hand edits closed. {fire_step()} Put `git diff {rec['base_sha'][:12]}` in the ask."
+    return f"XS hand edits closed. {_fire()} Put `git diff {rec['base_sha'][:12]}` in the ask."
 
 
 class _Unprojectable(Exception):
@@ -259,7 +263,7 @@ def _strict() -> bool:
 
 
 def _latched_text() -> str:
-    return "XS hand edits closed until engine-ask fires. " + fire_step()
+    return "XS hand edits closed until engine-ask fires. " + _fire()
 
 
 def _latch(xlb, root, session_id: str, unmeasured_path: str | None = None) -> None:
@@ -303,7 +307,7 @@ def advised_deny_envelope(root, session_id, paths: tuple = ()) -> dict | None:
             return None
         if paths and not any(_em_post_fire.is_product_path(p, root, session_id) for p in paths):
             return None
-        text = "Product writes closed until engine-ask fires. " + fire_step()
+        text = "Product writes closed until engine-ask fires. " + _fire()
         return apply_guard_level("nudge-em-code-dispatch", deny("PreToolUse", text)) or None
     except Exception:
         return None
@@ -328,13 +332,13 @@ def _discard_fresh(xlb, root, session_id: str) -> None:
 
 
 def _trajectory(xlb, root, rec: dict, file_path: str) -> str:
-    """The lane's spent and remaining budget before this write; 'used unknown' when the base is unreadable."""
+    """' <spent and remaining budget before this write>' with a leading space; '' when the base is unreadable."""
     try:
         u = xlb.measure(root, rec, file_path, xlb._read_text(xlb._abs(root, xlb._norm_rel(root, file_path))))
     except Exception:
-        return f"XS budget used unknown of {xlb.BUDGET_FILES} files, {xlb.BUDGET_LINES} lines."
+        return ""
     return (
-        f"XS budget used {u.files}/{xlb.BUDGET_FILES} files, {u.lines}/{xlb.BUDGET_LINES} lines; "
+        f" XS budget used {u.files}/{xlb.BUDGET_FILES} files, {u.lines}/{xlb.BUDGET_LINES} lines; "
         f"remaining {max(xlb.BUDGET_FILES - u.files, 0)} files, {max(xlb.BUDGET_LINES - u.lines, 0)} lines."
     )
 
@@ -393,7 +397,7 @@ def _budget_core(
     kind = rec.get("kind")
     if s_plus:
         return False, None
-    over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + fire_step()
+    over_text = lambda u: _budget_text("XS budget spent (projected):", u) + " Size S or larger. " + _fire()
     if rec.get("corrupt"):
         return True, _budget_deny(over_text(xlb.Usage(0, 0, True)))
     if xlb.deny_count(rec) >= xlb.GOLF_DENY_LIMIT:
@@ -402,7 +406,7 @@ def _budget_core(
         usage = xlb.measure(root, rec, file_path, project())
     except Exception as exc:
         reason = str(exc) if isinstance(exc, _Unprojectable) else f"{type(exc).__name__}: {exc}"
-        text = f"Budget unmeasurable ({reason}). {_trajectory(xlb, root, rec, file_path)} Size S or larger. {fire_step()}"
+        text = f"Budget unmeasurable ({reason}).{_trajectory(xlb, root, rec, file_path)} Size S or larger. {_fire()}"
         if shell and _strict():
             _latch(xlb, root, session_id, file_path)
             _charge_unmeasured(xlb, root, session_id, file_path)

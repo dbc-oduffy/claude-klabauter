@@ -357,13 +357,12 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     return (
-        "BLOCKED: needs a session grant -- check the discharge hierarchy "
-        "(mechanize/reroute/wiki) first.\n"
+        "Discharge first (mechanize/reroute/wiki).\n"
         "Report BLOCKED to your EM instead:\n"
         f"  Target: `{file_path_safe}`\n"
-        "  Reason: no live CLAUDE.md write grant.\n"
-        f"  Unblock: the EM obtains PM approval, then runs {GRANT_CLI_NAME} in the target "
-        "repo and re-sends the edit through workflow.revise.\n"
+        "  Reason: no live grant.\n"
+        f"  Unblock: EM confirms with PM, runs {GRANT_CLI_NAME} in the "
+        "repo, re-sends via workflow.revise.\n"
     )
 
 

@@ -42,9 +42,8 @@ def released_path_reasons(root: Path, run_id: str) -> dict:
     """`{path: reason}` the halted run's marker releases per path; empty when none or the marker is unreadable."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_run
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
-        marker = halted_run._read(record_dir(Path(root), run_id)) or {}
+        marker = halted_run._read(_record(Path(root), run_id)) or {}
         raw = marker.get(RELEASED_PATHS_FIELD)
         if not isinstance(raw, dict):
             return {}
@@ -153,9 +152,15 @@ def release_scope():
     if _SCOPE.get() is not None:
         yield _SCOPE.get()
         return
+    from coordinator_core.git import call_io_scope
+
     token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False, "seen_root": None, "seen": {}})
     try:
-        yield _SCOPE.get()
+        if call_io_scope.scope_open():
+            yield _SCOPE.get()
+        else:
+            with call_io_scope.call_io_scope():
+                yield _SCOPE.get()
     finally:
         _SCOPE.reset(token)
 
@@ -210,6 +215,20 @@ def prefetch_kept_blobs(root: Path, runs: list) -> None:
         _blob_batch(root, specs)
 
 
+def _record(root: Path, run_id: str) -> Path:
+    """`ask_contract.record_dir`, memoised per release scope: its symlink-safe resolve costs ~0.2ms and
+    a hold computation asks for the same run's record dozens of times."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    state = _SCOPE.get()
+    if state is None:
+        return record_dir(Path(root), run_id)
+    key = ("record", str(root), run_id)
+    if key not in state["memo"]:
+        state["memo"][key] = record_dir(Path(root), run_id)
+    return state["memo"][key]
+
+
 def release_reason(
     root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str] = None,
 ) -> Optional[str]:
@@ -234,10 +253,10 @@ def _release_reason(
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
         from coordinator_core.ops.dispatch_emit import halted_run
-        from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_FIELD, record_dir
+        from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_FIELD
 
         root = Path(root)
-        marker = halted_run._read(record_dir(root, halted_run_id))
+        marker = halted_run._read(_record(root, halted_run_id))
         status = marker.get("status") if marker else None
         if status == halted_run.STATUS_LANDED:
             return RELEASE_RECORDED_LANDED
@@ -268,7 +287,7 @@ def _release_reason(
         plan = marker.get(HALT_PLAN_FIELD)
         if committing_plan and isinstance(plan, str) and wrd._norm(plan) == wrd._norm(committing_plan):
             return RELEASE_PLAN_LANDING
-        if _kept_at_head(root, record_dir(root, halted_run_id), marker):
+        if _kept_at_head(root, _record(root, halted_run_id), marker):
             return RELEASE_KEPT_AT_HEAD
     except Exception:
         return None
@@ -284,8 +303,22 @@ def held_paths(
     path lands whole or not at all (DR-462): this names no hunk subset. Fail-closed: an error computing the
     release or the normalized set falls back to the raw halt-record withheld set, never to empty; only an
     unreadable halt record itself propagates. Spawns what `release_reason` spawns (its `_kept_at_head`
-    batched `cat-file`, when no cheaper release applied).
+    batched `cat-file`, when no cheaper release applied). Inside `release_scope()` the answer is memoised
+    per key; an unreadable halt record is not memoised.
     """
+    state = _SCOPE.get()
+    if state is None:
+        with release_scope():
+            return _held_paths_scoped(root, halted_run_id, committing_run_id, committing_plan)
+    key = ("held", str(root), halted_run_id, committing_run_id, committing_plan)
+    if key not in state["memo"]:
+        state["memo"][key] = _held_paths_scoped(root, halted_run_id, committing_run_id, committing_plan)
+    return state["memo"][key]
+
+
+def _held_paths_scoped(
+    root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str],
+) -> frozenset:
     try:
         if release_reason(root, halted_run_id, committing_run_id, committing_plan) is not None:
             return frozenset()
@@ -293,19 +326,25 @@ def held_paths(
         pass
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
+        from coordinator_core.ops.dispatch_emit import halted_run
 
-        return frozenset(wrd.halted_withheld_paths(Path(root), halted_run_id)) - set(
+        record = _record(Path(root), halted_run_id)
+        held = frozenset(wrd.halted_withheld_paths(Path(root), halted_run_id)) - set(
             released_path_reasons(Path(root), halted_run_id)
         )
+        marker = halted_run._read(record)
+        if held and marker:
+            with contextlib.suppress(Exception):  # unknown: the hold stands
+                held -= {wrd._norm(p) for p in kept_at_head_paths(Path(root), record, marker)}
+        return held
     except Exception as exc:  # noqa: BLE001 -- normalizer unavailable: the raw record still holds
         from coordinator_core.ops.dispatch_emit import halted_run
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
         if isinstance(exc, halted_run.UnreadableHaltRecord):
             raise
         return frozenset(
             p.replace("\\", "/").removeprefix("./")
-            for p in halted_run.halted_withheld_strict(record_dir(Path(root), halted_run_id))
+            for p in halted_run.halted_withheld_strict(_record(Path(root), halted_run_id))
         )
 
 
@@ -323,9 +362,8 @@ def _is_halted_holder(root: Path, owner: str, run_id: str) -> Optional[bool]:
     """True when `owner` is a halted/resumed run that still holds against `run_id`; False when its hold is
     released; None when its marker is missing, unreadable or in any other state (treated as live)."""
     from coordinator_core.ops.dispatch_emit import halted_run
-    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
-    marker = halted_run._read(record_dir(Path(root), owner))
+    marker = halted_run._read(_record(Path(root), owner))
     if not marker or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
         return False if release_reason(root, owner, run_id, None) is not None else None
     return release_reason(root, owner, run_id, None) is None
@@ -395,6 +433,7 @@ def _squash(text: str) -> str:
 def _blob_fetch(root: Path, specs: list) -> Optional[dict]:
     from coordinator_core.git.run import run_git
 
+    specs = list(dict.fromkeys(specs))
     proc = run_git(["cat-file", "--batch"], cwd=str(root), input="".join(s + "\n" for s in specs).encode())
     if proc.returncode != 0:
         return None
@@ -495,11 +534,10 @@ def prefetch_kept_at_head(root: Path, run_ids) -> None:
         return
     try:
         from coordinator_core.ops.dispatch_emit import halted_run
-        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
         specs: list = []
         for run_id in run_ids:
-            record = record_dir(Path(root), run_id)
+            record = _record(Path(root), run_id)
             marker = halted_run._read(record)
             if not marker or marker.get("status") != halted_run.STATUS_HALTED:
                 continue

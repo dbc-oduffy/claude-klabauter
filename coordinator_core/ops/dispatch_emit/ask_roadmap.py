@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import with_fanout
 from coordinator_core.ops.dispatch_emit.halt_refire import refire_next_action_js
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     FANOUT_RECORD_PARAM,
+    HALT_PLAN_FIELD,
     HALT_REFUSAL,
     OP_ASK_GATE,
     RUN_DIR_ROOT,
@@ -74,7 +75,10 @@ def approver_for(interaction_mode: object) -> str:
 
 ROADMAP_DECLS = ("  let _rb = null;", "  const _ready = [];", "  const _unfired = [];", "  const _pulled = [];")
 
-NO_READY_LITERAL = "plan-blitz reported no ready plan"
+#: `stage` of a halt raised by the roadmap arm's plan-blitz waves.
+PLAN_BLITZ_STAGE = "plan-blitz"
+
+NO_READY_LITERAL ="plan-blitz reported no ready plan"
 
 
 def no_ready_reason_js(pulled_js: str) -> str:
@@ -122,6 +126,10 @@ def roadmap_stage_lines(
     halt = lambda reason: (  # noqa: E731
         f"_halted = {{ halted: {lit(HALT_REFUSAL)}, reason: {reason}, sizing: _sizingRel, run_id: _runId }};"
     )
+    plan_halt = lambda reason: (  # noqa: E731
+        f"_halted = {{ halted: {lit(HALT_REFUSAL)}, reason: {reason}, sizing: _sizingRel, run_id: _runId, "
+        f"{HALT_PLAN_FIELD}: (_pulled.map(_pth).find(Boolean) ?? null), stage: {lit(PLAN_BLITZ_STAGE)} }};"
+    )
     chatty_keys = ""
     if plan_blitz_args and plan_blitz_args.get("chatty") is True and plan_blitz_args.get("chattyReview"):
         chatty_keys = (
@@ -162,7 +170,7 @@ def roadmap_stage_lines(
         "      _unfired.push({ wave: w.index, ...(_b ? { baton: String(_b) } : {}), ...(_p ? { plan: _p } : {}), reason: 'absent-from-wave-reply' });",
         "    }",
         "    if ((_pb?.surfacedToPm ?? []).length) { "
-        + halt("'plan-blitz surfaced items to the PM'") + " _halted.surfaced = _pb.surfacedToPm; break; }",
+        + plan_halt("'plan-blitz surfaced items to the PM'") + " _halted.surfaced = _pb.surfacedToPm; break; }",
         "    for (const r of (_pb?.ready ?? [])) _ready.push({ wave: w.index, planPath: (r && typeof r === 'object') ? r.planPath : r });",
         "    for (const p of (_pb?.pulled ?? [])) _pulled.push(p);",
         "  }",
@@ -172,7 +180,7 @@ def roadmap_stage_lines(
         "      _unfired.push({ wave: w.index, ...(_b ? { baton: String(_b) } : {}), ...(_p ? { plan: _p } : {}), reason: 'wave-not-run' });",
         "    }",
         "  }",
-        "  if (!_halted && !_ready.length) { " + halt(no_ready_reason_js("_pulled")) + " }",
+        "  if (!_halted && !_ready.length) { " + plan_halt(no_ready_reason_js("_pulled")) + " }",
         "  }",
         f"  if (!_halted) {{ _nextAction = {roadmap_next_action_js(script_path, interaction_mode)}; }}",
     ]
@@ -226,6 +234,14 @@ def compose_roadmap_script(
         ),
         *ROADMAP_DECLS,
         *ac.roadmap_commit_decls(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id),
+        "  let _haltCommit = null;",
+        "  let _planRel = null;",
+        "  let _testResult = null;",
+        "  let _docs = null;",
+        "  let _consumedReturns = {};",
+        ac._halt_record_commit_fn(
+            head=head, anchor=anchor, script_path=script_path, repo_root=repo_root, run_id=run_id,
+        ),
         rb_fn,
         plan_blitz_fn,
         "  phase('gate');",
@@ -242,6 +258,9 @@ def compose_roadmap_script(
         *ac.roadmap_commit_lines(
             head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, script_path=script_path
         ),
+    ]
+    ac._append_halt_record_commit(b)
+    b += [
         "  _refireNextAction();",
         "  return { arm: 'roadmap', sizing: _sizingRel, run_id: _runId, roadmap: _rb, ready: _ready, "
         f"{NOT_FIRED_KEY}: _commit?.fanout?.{NOT_FIRED_KEY} ?? _unfired, "
