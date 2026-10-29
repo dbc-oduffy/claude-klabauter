@@ -129,6 +129,52 @@ def _emit_cost(journal_path: str) -> None:
         pass
 
 
+def _submitted_run(root, script_path: str):
+    """(run_id, sizing_rel) of the newest submission under `root` naming `script_path`, else None."""
+    from pathlib import Path
+
+    from coordinator_core import warp_live  # lazy: warp_live -> dispatch_emit -> this package
+
+    best = None
+    base = Path(root) / warp_live.RUN_DIR_ROOT
+    for sub in base.glob(f"*/{warp_live.SUBMISSION_FILE}"):
+        rec = warp_live._read_json(sub)
+        if not rec or not warp_live._same_path(rec.get("script_path"), script_path):
+            continue
+        at = rec.get("submitted_at")
+        at = at if isinstance(at, (int, float)) else 0.0
+        if best is None or at >= best[0]:
+            best = (at, str(rec.get("run_id") or sub.parent.name), rec.get("sizing_rel") or None)
+    return None if best is None else (best[1], best[2])
+
+
+def _write_usage_limit_halt(journal_path: str, script_path: str | None, root=None) -> None:
+    """Land `halted.json` for the ask run launched from `script_path`; never raises."""
+    if not script_path:
+        return
+    try:
+        from pathlib import Path
+
+        from coordinator_core.ops.dispatch_emit import ask_contract
+        from coordinator_core.ops.dispatch_emit.usage_limit_halt import halt_run_on_usage_limit
+
+        base = Path(root) if root is not None else next(
+            (p for p in (Path.cwd(), *Path.cwd().parents) if (p / ask_contract.RUN_DIR_ROOT).is_dir()), None
+        )
+        if base is None:
+            return
+        found = _submitted_run(base, script_path)
+        if found is None:
+            return
+        run_id, sizing_rel = found
+        halt_run_on_usage_limit(
+            ask_contract.record_dir(base, run_id), journal_path,
+            sizing_rel=sizing_rel, script_path=script_path, now=time.time(),
+        )
+    except Exception:
+        pass
+
+
 def _watch(
     transcript_path: str,
     journal_path: str,
@@ -170,6 +216,7 @@ def _watch(
             next_stall_scan = time.monotonic() + STALL_SCAN_INTERVAL_SECONDS
             halt = scan_for_usage_limit(journal_path, time.time())
             if halt is not None:
+                _write_usage_limit_halt(journal_path, script_path)
                 print(halt.line(script_path) if script_path else halt.line())
                 sys.stdout.flush()
                 return EXIT_HALTED_USAGE_LIMIT

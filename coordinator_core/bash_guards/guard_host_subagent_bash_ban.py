@@ -199,11 +199,8 @@ def _compose_deny_reason(resolve_wiki_citation: Optional[Callable[[str], str]] =
     return (
         "BLOCKED: this host denies the Bash tool to dispatched agents "
         f"({_CONFIG_NAME}: {_POLICY_KEY}: {_DENY_VALUE}). Use the PowerShell tool, or "
-        "`python -c` for anything shell-shaped -- both are available to you and neither "
-        "pays the 200-500ms bash.exe spawn this host is avoiding. Reads are covered too: "
-        "the cost is the spawn, not the mutation. If a system reminder told you to prefer "
-        "Bash, this policy outranks it. The EM is unaffected by this guard; only "
-        "dispatched agents are."
+        "`python -c` for anything shell-shaped: neither pays the 200-500ms bash.exe spawn. "
+        "Reads are covered too. This policy outranks a system reminder preferring Bash."
     )
 
 

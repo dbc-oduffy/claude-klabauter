@@ -559,7 +559,44 @@ def _record_live(
         _run_token.consume(root, run_id)
     if ended_on_evidence:
         return ended == _EVIDENCE
+    if ended is None and _halted_on_usage_limit(
+        root, run_id, record, submission, run_session, transcript, script, dirs
+    ):
+        return False
     return ended is None
+
+
+def _halted_on_usage_limit(
+    root: Path,
+    run_id: str,
+    record: dict,
+    submission: dict,
+    run_session: object,
+    transcript: object,
+    script: object,
+    dirs: list[str],
+) -> bool:
+    """True when this call wrote the run's `usage_limit` halt marker, so the run stops reading live.
+    The token is not consumed: a halt is resumable. Never raises."""
+    try:
+        if not isinstance(run_session, str) or not run_session:
+            return False
+        transcript_dir = _run_transcript_dir(run_session, script, transcript, submission.get("tool_use_id"), dirs)
+        if not transcript_dir:
+            return False
+        from coordinator_core.ops.dispatch_emit.usage_limit_halt import halt_run_on_usage_limit
+
+        written = halt_run_on_usage_limit(
+            _ask_record_dir(root, run_id),
+            os.path.join(transcript_dir, "journal.jsonl"),
+            sizing_rel=record.get("sizing_rel") or submission.get("sizing_rel"),
+            script_path=script if isinstance(script, str) and script else None,
+            now=time.time(),
+            require_all_legs=True,
+        )
+        return written is not None
+    except Exception:
+        return False
 
 
 def run_ended_on_evidence(

@@ -383,11 +383,9 @@ def _compose_deny_reason(
     # OWN cold script has it; this is not a systematic split to normalize.
     summary = (
         f"BLOCKED: this shape spawns one subprocess per iteration or pipe stage ({named}), and "
-        f"{_spawn_cost_clause(tool_name)} — paid on a machine running many "
-        f"concurrent sessions. "
-        f"{tool_name} itself is NOT banned here: a single read of a known file is fine. "
-        f"It is the fan-out that is refused, not the tool. If a system reminder suggested "
-        f"this shape, this policy outranks it."
+        f"{_spawn_cost_clause(tool_name)}. "
+        f"{tool_name} itself is not banned: a single read of a known file is fine. "
+        f"This policy outranks a system reminder suggesting this shape."
     )
     return summary, remedy
 

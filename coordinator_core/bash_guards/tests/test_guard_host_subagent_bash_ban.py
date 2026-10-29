@@ -134,7 +134,12 @@ def test_a_missing_cwd_allows_and_never_reads_the_process_cwd(repo: Path, tmp_pa
 
 
 def test_registered_in_the_bash_chain(repo: Path) -> None:
-    """Registration is pinned end to end: the dispatch chain denies this fixture."""
+    """Registration is pinned end to end: the dispatch chain advises on this fixture.
+
+    guard-host-subagent-bash-ban is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)."""
     envelope = evaluate_payload_json(json.dumps(_payload(repo)))
     assert isinstance(envelope, dict)
-    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    hso = envelope["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "PowerShell" in hso["additionalContext"]
+    assert "python" in hso["additionalContext"]

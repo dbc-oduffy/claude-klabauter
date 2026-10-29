@@ -105,6 +105,7 @@ class Proc:
     age_s: float
     rss_mb: float
     cmd: str
+    image: str = ""  # image name from the process table; names the program when `cmd` is unreadable
 
 
 def is_protected(p: Proc, noticed_tree: frozenset = frozenset(),
@@ -248,7 +249,7 @@ def parse_system_process_information(buf: bytes, base: int, now: float) -> list[
         name = buf[start:start + nlen].decode("utf-16-le", errors="replace") if nlen and 0 <= start else ""
         if pid and name:
             age = max(0.0, now - (create / 1e7 - _FILETIME_EPOCH_S)) if create else 0.0
-            out.append(Proc(pid, ppid, age, wss / 1048576, name))
+            out.append(Proc(pid, ppid, age, wss / 1048576, name, name))
         if not nxt:
             return out
         off += nxt
@@ -294,7 +295,7 @@ def _with_cmdlines(procs: list[Proc]) -> list[Proc]:
             try:
                 cmd = " ".join(psutil.Process(p.pid).cmdline())
                 if cmd:
-                    p = Proc(p.pid, p.ppid, p.age_s, p.rss_mb, cmd)
+                    p = Proc(p.pid, p.ppid, p.age_s, p.rss_mb, cmd, p.image)
             except Exception:  # exited, or access denied: the image name stands
                 pass
         out.append(p)
@@ -330,12 +331,14 @@ def list_procs() -> list[Proc]:
     if psutil is not None:
         now = time.time()
         out = []
-        for pr in psutil.process_iter(["pid", "ppid", "create_time", "memory_info", "cmdline"]):
+        for pr in psutil.process_iter(["pid", "ppid", "create_time", "memory_info", "cmdline", "name"]):
             info = pr.info
             if info.get("memory_info") is None:
                 continue
             out.append(Proc(info["pid"], info["ppid"] or 0, now - (info["create_time"] or now),
-                            info["memory_info"].rss / 1048576, " ".join(info["cmdline"] or [])))
+                            info["memory_info"].rss / 1048576,
+                            " ".join(info["cmdline"] or []) or info.get("name") or "",
+                            info.get("name") or ""))
         return out
     return parse_ps(subprocess.run(["ps", "-axo", "pid=,ppid=,etime=,rss=,command="],
                                    capture_output=True, text=True, check=False,
@@ -457,9 +460,18 @@ _SHELL = re.compile(r"(?:bash|sh)")
 _SEARCH_WORD = re.compile(r"(?<![\w.-])(?:grep|egrep|fgrep|find|xargs|rg)(?![\w-])")
 
 
+_WIN_EXE_HEAD = re.compile(r'\s*(?:"([^"]*)"|([A-Za-z]:[\\/].*?\.exe)(?=\s|$))', re.IGNORECASE)
+
+
 def _exe(p: Proc) -> str:
-    """Lower-cased program name of `p`, without directory or `.exe`."""
-    head = p.cmd.split(None, 1)[0] if p.cmd.strip() else ""
+    """Lower-cased program name of `p`, without directory or `.exe`. A quoted head or a drive path
+    ending `.exe` may contain spaces (a joined psutil cmdline carries no quotes)."""
+    cmd = p.cmd if p.cmd.strip() else p.image
+    m = _WIN_EXE_HEAD.match(cmd)
+    if m:
+        head = m.group(1) if m.group(1) is not None else m.group(2)
+    else:
+        head = cmd.split(None, 1)[0] if cmd.strip() else ""
     name = head.strip('"').replace("\\", "/").rsplit("/", 1)[-1].lower()
     return name[:-4] if name.endswith(".exe") else name
 

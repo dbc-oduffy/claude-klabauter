@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -951,6 +952,41 @@ def test_orphaned_grep_pipeline_is_reaped_whole_and_logged(tmp_path):
     assert recs[0]["ts"]
 
 
+_GIT = "C:\\Program Files\\Git"  # abs-path-ok: real Windows image-path shape with a space
+
+
+def test_exe_reads_a_spaced_windows_path_a_quoted_head_and_an_image_name():
+    assert gov._exe(P(1, 0, 1, 1, f"{_GIT}\\usr\\bin\\grep.exe -rn x .")) == "grep"
+    assert gov._exe(P(1, 0, 1, 1, f'"{_GIT}\\bin\\bash.exe" -c y')) == "bash"
+    assert gov._exe(P(1, 0, 1, 1, "grep.exe")) == "grep"
+    assert gov._exe(P(1, 0, 1, 1, "/usr/bin/find /x")) == "find"
+    assert gov._exe(P(1, 0, 1, 1, "")) == ""
+
+
+def test_orphaned_spaced_path_pipeline_with_parent_absent_is_reaped_whole(tmp_path):
+    # Real Windows snapshot fields: psutil cmdline joined (no quotes, spaced image path), parent
+    # pid absent from the snapshot, one member with an unreadable cmdline (image name only).
+    procs = [P(22648, 4242, 60, 20, f"{_GIT}\\usr\\bin\\grep.exe -rn _TEST_ENV_PREFIXES --include=*.py ."),
+             P(36728, 4242, 60, 5, "grep.exe"),
+             P(5, 1, 9000, 10, "node claude-session")]
+    lines, killed, recs = _reap_run(procs, tmp_path)
+    assert sorted(killed) == [(22648,), (36728,)]
+    assert sorted(r["reason"] for r in recs) == ["owner-gone", "owner-gone"]
+
+
+def test_orphaned_spaced_path_bash_wrapper_pipeline_is_reaped_whole(tmp_path):
+    procs = [P(100, 999, 60, 10, f"{_GIT}\\bin\\bash.exe -c grep -rn x . | grep -v ^./scratch"),
+             P(101, 100, 60, 700, f"{_GIT}\\usr\\bin\\grep.exe -rn x ."), P(102, 100, 60, 5, "grep.exe")]
+    lines, killed, recs = _reap_run(procs, tmp_path)
+    assert sorted(killed[0]) == [100, 101, 102]
+
+
+def test_spaced_path_wrapper_around_a_non_search_tool_still_survives(tmp_path):
+    procs = [P(100, 999, 60, 10, f"{_GIT}\\bin\\bash.exe -c grep x; pytest"),
+             P(101, 100, 60, 700, f"{_GIT}\\usr\\bin\\python.exe -m pytest")]
+    assert _reap_run(procs, tmp_path)[1] == []
+
+
 def test_live_owner_young_search_is_left_alone(tmp_path):
     procs = [P(5, 1, 9000, 10, "node claude-session"), P(6, 5, 70, 10, "bash.exe -c rg foo"),
              P(7, 6, 70, 300, "rg foo")]
@@ -1111,3 +1147,35 @@ def test_reap_log_cli_default_sits_beside_the_log(tmp_path, monkeypatch):
     monkeypatch.setattr(gov, "run", lambda args, **kw: seen.update(kw))
     gov.main(["--log", str(tmp_path / "gov.log")])
     assert seen["reap_path"] == tmp_path / "governor-reaps.jsonl"
+
+
+def test_list_procs_unreadable_cmdline_falls_back_to_image_name_and_is_reaped(monkeypatch, tmp_path):
+    class _Mem:
+        rss = 5 * 1048576
+
+    class _Pr:
+        def __init__(self, pid, name):
+            self.info = {"pid": pid, "ppid": 4242, "create_time": time.time() - 60,
+                         "memory_info": _Mem(), "cmdline": [], "name": name}
+
+    class _Ps:
+        @staticmethod
+        def process_iter(_attrs):
+            return [_Pr(22648, "grep.exe"), _Pr(36728, "grep.exe")]
+
+    monkeypatch.setattr(gov, "psutil", _Ps)
+    procs = gov.list_procs()
+    assert [p.cmd for p in procs] == ["grep.exe", "grep.exe"]
+    lines, killed, recs = _reap_run(procs, tmp_path)
+    assert sorted(killed) == [(22648,), (36728,)]
+    assert sorted(r["reason"] for r in recs) == ["owner-gone", "owner-gone"]
+
+
+def test_empty_cmdline_with_image_name_and_absent_parent_is_reaped_whole(tmp_path):
+    procs = [P(22648, 4242, 60, 20, "", "grep.exe"), P(36728, 4242, 60, 5, "", "grep.exe"),
+             P(5, 1, 9000, 10, "", "node.exe")]
+    lines, killed, recs = _reap_run(procs, tmp_path)
+    assert sorted(killed) == [(22648,), (36728,)]
+    assert sorted(r["reason"] for r in recs) == ["owner-gone", "owner-gone"]
+    assert gov._exe(P(1, 0, 1, 1, "", "")) == ""
+    assert _reap_run([P(9, 4242, 60, 5, "", "")], tmp_path)[1] == []
