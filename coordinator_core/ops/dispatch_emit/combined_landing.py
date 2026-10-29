@@ -182,7 +182,8 @@ def _peer_holder(root: Path, declared: set, credited: set) -> Optional[tuple[str
         holder = name[: -len(".json")]
         if holder in credited:
             continue
-        for path in idx._paths_of(idx._dir(root) / name):
+        entry = idx._parse(idx._dir(root) / name)
+        for path in entry.paths if entry else ():
             if path in declared and holds_path(root, holder, path, None):
                 try:
                     prints = (ask_contract.record_dir(root, holder) / WITHHELD_PRINTS_FILE).exists()

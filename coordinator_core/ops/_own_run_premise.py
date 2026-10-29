@@ -88,7 +88,8 @@ def own_run_paths(repo_root: Path, sizing_rel: str) -> dict:
             _index.rebuild(root)
         file = _index._dir(root) / f"{run_id}.json"
         if os.path.isfile(file):
-            paths.update(_index._paths_of(file))
+            entry = _index._parse(file)
+            paths.update(entry.paths if entry else ())
     paths.update(_kept_paths(root / RECORD_DIR_ROOT / run_id))
     return {path: run_id for path in paths}
 
