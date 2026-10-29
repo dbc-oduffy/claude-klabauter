@@ -65,6 +65,15 @@ def test_directory_target_deny_names_the_directory_and_the_node_id_remedy():
     assert "coordinator_core/hooks/tests" in reason and "node ids" in reason
 
 
+def test_suite_root_directory_deny_names_the_command_and_the_node_id_remedy():
+    """A testpaths root is suite-shaped, so the precision leg skips it; the suite reason still names
+    the directory (DoE test_precision_leg_denies_directory_scoped_imperative_brief)."""
+    result = bdsi._handler({"tool_name": "Agent", "tool_input": {"prompt": "Run: pytest coordinator/tests"}, "cwd": _ROOT})
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "pytest coordinator/tests" in reason and "node ids" in reason
+
+
 def test_engine_emitted_workflow_script_is_allowed_only_with_receipt(tmp_path):
     script = tmp_path / "run.workflow.js"
     script.write_text("agent(`\nRun python -m pytest -q\n`)\n", encoding="utf-8")

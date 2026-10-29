@@ -216,8 +216,8 @@ def _compose_precision_deny_reason(
     tool_name: str, detected: str, tier: str, env: object = None
 ) -> str:
     message = compose(
-        f"{tool_name}: Tier-{tier} suite command ({detected}) -- overridable "
-        "for this one dispatch; see the doc for how.",
+        f"{tool_name}: Tier-{tier} suite command `{detected}` -- name the touched test files or "
+        "node ids, or use the documented per-dispatch override.",
         anchor=_WIKI_ANCHOR,
     )
     return render(message, env=env)
@@ -271,7 +271,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         return apply_guard_level(GUARD_NAME, precision) or no_advisory()
 
     hit = imperative[0]
-    detected = getattr(hit, "detected", "a test-suite command")
+    detected = getattr(hit, "matched_text", "") or getattr(hit, "detected", "a test-suite command")
     tier = getattr(hit, "tier", "U")
 
     reason = _compose_precision_deny_reason(tool_name, detected, tier, env)
