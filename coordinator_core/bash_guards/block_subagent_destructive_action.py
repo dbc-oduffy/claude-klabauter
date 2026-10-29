@@ -2576,6 +2576,23 @@ def _dash_c_value(seg: str) -> Optional[str]:
     return None
 
 
+#: True while `check()` runs for coordinator:git-commit-agent, which may `git -C <repo> commit`
+#: a supplied pathspec (append-only, recoverable).
+_COMMIT_AGENT: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "_subagent_commit_agent", default=False
+)
+_COMMIT_ALL_FLAGS = frozenset({"-a", "--all", "-A"})
+
+
+def _has_explicit_pathspec(remaining: List[str]) -> bool:
+    """True when a commit's argv names paths after `--` and sweeps nothing (`-a`/`--all`)."""
+    toks = list(remaining or ())
+    if "--" not in toks or not toks[toks.index("--") + 1 :]:
+        return False
+    head = toks[: toks.index("--")]
+    return not any(t in _COMMIT_ALL_FLAGS for t in head)
+
+
 def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Optional[str]:
     """Verdict for `git [-C <p>] add|commit|config` aimed at a repo outside the session scratchpad
     (denied when `<p>` is inside the cwd's own repo), else `_NO_VERDICT`."""
@@ -2599,6 +2616,8 @@ def _scratchpad_repo_verdict(seg: str, subcmd: str, remaining: List[str]) -> Opt
     if dash_c is not None:
         tgt_root = _repo_root_of(Path(os.path.realpath(path)))
         if tgt_root is not None and "scratch" not in tgt_root.parts:
+            if subcmd == "commit" and _COMMIT_AGENT.get() and _has_explicit_pathspec(remaining):
+                return _NO_VERDICT
             return f"git -C {subcmd} (only into a repo under the session scratchpad)"
     return _NO_VERDICT
 
@@ -4860,6 +4879,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         else None
     )
     memo_token = _SP_MEMO.set({})
+    commit_agent_token = _COMMIT_AGENT.set(
+        (payload.get("agent_type") or payload.get("subagent_type") or "") == "coordinator:git-commit-agent"
+    )
     raw_token = _RAW_CMD.set(flat)
     decl_token = _DECL_CTX.set(
         {"cmd": flat, "cwd": cwd, "session_id": payload.get("session_id") or "", "license": {}}
@@ -4874,6 +4896,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     finally:
         _DECL_CTX.reset(decl_token)
         _RAW_CMD.reset(raw_token)
+        _COMMIT_AGENT.reset(commit_agent_token)
         _SP_MEMO.reset(memo_token)
         _SP_CTX.reset(sp_token)
         _SCRATCH_CTX.reset(token)

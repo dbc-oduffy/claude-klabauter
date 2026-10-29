@@ -227,6 +227,43 @@ def _terminal(cand: Path) -> bool:
     return isinstance(stage, dict) and stage.get("stage") in ("halted", "landed")
 
 
+_REPO_QUALIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]+:(?=[^/\\])")
+
+
+def _tree_path(path: str) -> str:
+    """*path* without a leading ``<repo>:`` qualifier (a withheld entry may name its repo); a one-letter drive prefix is kept.
+
+    The qualifier is only stripped here; ``_own_tree_path`` decides whether it names the run's repo.
+    """
+    return _REPO_QUALIFIER.sub("", path, count=1)
+
+
+def _own_tree_path(root: Path, path: str, _seen: Optional[dict] = None) -> Optional[str]:
+    """The run-repo tree path of *path*, or None when its ``<repo>:`` qualifier names another repo.
+
+    A qualifier is the run's own when it matches the root's directory name or the machine registry
+    (``repos.<name>``) resolves it to *root*. Anything else is a foreign repo's path and stays owed.
+    """
+    if not _REPO_QUALIFIER.match(path):
+        return path
+    qualifier = path.split(":", 1)[0]
+    seen = _seen if _seen is not None else {}
+    if qualifier not in seen:
+        own = qualifier.casefold() == root.name.casefold()
+        if not own:
+            try:
+                import os
+
+                from coordinator_core.machine_resolver import registry_get
+
+                reg = registry_get("repos." + qualifier.casefold().replace("-", "_"))
+                own = bool(reg) and os.path.normcase(os.path.realpath(reg)) == os.path.normcase(os.path.realpath(str(root)))
+            except Exception:  # noqa: BLE001 -- an unresolvable qualifier is foreign
+                own = False
+        seen[qualifier] = own
+    return _tree_path(path) if seen[qualifier] else None
+
+
 def _casefolded_entries(load_dir, root_tree: str, path: str) -> Optional[frozenset]:
     """Every tree entry under *root_tree* whose path casefolds to *path*, as ``{(exact_path, mode, oid)}``.
 
@@ -335,22 +372,29 @@ def _clean_at_head(root: Path, common, load_dir, paths: list, base: Optional[str
     if not meta or not meta.get("tree") or not base_meta or not base_meta.get("tree"):
         return set()
     clean: set = set()
+    seen: dict = {}
     for p in paths:
-        entries = _casefolded_entries(load_dir, meta["tree"], p)
-        if entries is None or len(entries) > 1 or entries != _casefolded_entries(load_dir, base_meta["tree"], p):
+        tp = _own_tree_path(root, p, seen)
+        if tp is None:
             continue
-        target = root / p
+        entries = _casefolded_entries(load_dir, meta["tree"], tp)
+        if entries is None or len(entries) > 1 or entries != _casefolded_entries(load_dir, base_meta["tree"], tp):
+            continue
+        target = root / tp
         try:
             if not entries:
                 if not target.exists() and not target.is_symlink():
                     clean.add(p)
                 continue
             (exact, mode, oid), = entries
-            if exact != p or mode & 0o170000 != 0o100000 or not target.is_file() or target.is_symlink():
+            if exact != tp or mode & 0o170000 != 0o100000 or not target.is_file() or target.is_symlink():
                 continue
             data = target.read_bytes()
-            if hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest() == oid:
-                clean.add(p)
+            # core.autocrlf checks out CRLF over an LF blob; git status calls that clean, so do we.
+            for body in (data, data.replace(b"\r\n", b"\n")) if b"\r\n" in data else (data,):
+                if hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest() == oid:
+                    clean.add(p)
+                    break
         except OSError:
             continue
     return clean
@@ -395,6 +439,7 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
 
     covered: set = set()
     covers: dict = {}
+    seen: dict = {}
     for sha in shas:
         meta = commit_meta(common, sha)
         parents = meta.get("parents") if meta else None
@@ -403,8 +448,11 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
             return f"{sha} or its parent is unreadable; retry", {}, []
         changed = set()
         for p in withheld:
-            after = _casefolded_entries(_dir, meta["tree"], p)
-            before = _casefolded_entries(_dir, parent_meta["tree"], p) if parent_meta else frozenset()
+            tp = _own_tree_path(root, p, seen)
+            if tp is None:
+                continue
+            after = _casefolded_entries(_dir, meta["tree"], tp)
+            before = _casefolded_entries(_dir, parent_meta["tree"], tp) if parent_meta else frozenset()
             if after is None or before is None:
                 return f"{sha} tree is unreadable; retry", {}, []
             if after != before:

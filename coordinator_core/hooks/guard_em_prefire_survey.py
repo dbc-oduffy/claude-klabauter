@@ -34,11 +34,11 @@ _ADVISORY_MARK = "\x00advisory\x00"  # _decide's text carries it when the leg wa
 def prefire_advisory_text(n: int, budget: int) -> str:
     return (
         f"{DENY_PREFIX} {n} exploratory calls since the last turn, budget {budget} (retries too). "
-        + fire_step()
-        + " A reworded or cd-prefixed retry of a survey call is denied too: fire the engine-ask now,"
-        " with what you already know in em_context. Not survey, never counted: reads and syntax"
-        " checks of files you wrote with Write/Edit since the last task or user turn, and"
-        " cross-repo-memo sends. Exempt after a landing:"
+        "The engine-ask is the cheaper path for an implementation ask: " + fire_step()
+        + " Pass what you already know in em_context. Not survey, never counted: reads and syntax"
+        " checks of files you wrote with Write/Edit since the last task or user turn,"
+        " cross-repo-memo sends, ops jobs that run an existing verb across repos, and cross-repo"
+        " reads of sibling docs or release listings. Exempt after a landing:"
         " coordinator-invoke workflow.revise --params-file <file>."
     )
 
@@ -149,7 +149,7 @@ def _decide(payload: dict) -> Optional[str]:
     prior = epw.load_state(path, transcript)
     current_id = field(payload, "tool_use_id") or None
     state = epw.advance(
-        transcript, prior, current_id, settings_home=home, current_call=(tool_name, tool_input)
+        transcript, prior, current_id, settings_home=home, current_call=(tool_name, tool_input), repo_root=root
     )
     pre_now, all_now = epw.classify(
         tool_name,
@@ -158,6 +158,7 @@ def _decide(payload: dict) -> Optional[str]:
         home,
         named=state.get("named"),
         written=state.get("written"),
+        repo_root=root,
     )
     if state != prior:
         epw.save_state(path, state)

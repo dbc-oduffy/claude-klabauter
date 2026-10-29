@@ -110,6 +110,95 @@ def test_withheld_path_with_no_delta_is_not_owed(tmp_path):
     assert got == {"wiki/clean.md", "wiki/never.md"}
 
 
+def test_autocrlf_checkout_of_an_lf_blob_is_clean(tmp_path):
+    """DoE shard1: an unchanged wiki file checked out CRLF over its LF blob stayed owed."""
+    common, load_dir, base = _head_tree(tmp_path, {"wiki/crlf.md": "a\nb\n", "wiki/edited.md": "a\n"})
+    (tmp_path / "wiki/crlf.md").write_bytes(b"a\r\nb\r\n")
+    (tmp_path / "wiki/edited.md").write_bytes(b"x\r\n")
+    got = hrl._clean_at_head(tmp_path, common, load_dir, ["wiki/crlf.md", "wiki/edited.md"], base)
+    assert got == {"wiki/crlf.md"}
+
+
+def test_qualified_withheld_path_resolves_in_the_run_repo(tmp_path):
+    common, load_dir, base = _head_tree(tmp_path, {"wiki/clean.md": "a\n", "wiki/dirty.md": "b\n"})
+    (tmp_path / "wiki/dirty.md").write_bytes(b"changed\n")
+    own = tmp_path.name
+    got = hrl._clean_at_head(tmp_path, common, load_dir, [f"{own}:wiki/clean.md", f"{own}:wiki/dirty.md"], base)
+    assert got == {f"{own}:wiki/clean.md"}
+    assert hrl._tree_path("coordinator-content-repo:wiki/a.md") == "wiki/a.md"
+    assert hrl._tree_path("wiki/a.md") == "wiki/a.md"
+    assert hrl._tree_path("C:/a.md") == "C:/a.md"  # abs-path-ok: drive-prefix negative case
+
+
+def test_foreign_repo_qualifier_stays_owed(tmp_path, monkeypatch):
+    common, load_dir, base = _head_tree(tmp_path, {"wiki/clean.md": "a\n"})
+    monkeypatch.setattr("coordinator_core.machine_resolver.registry_get", lambda key: None)
+    got = hrl._clean_at_head(tmp_path, common, load_dir, ["otherrepo:wiki/clean.md", "wiki/clean.md"], base)
+    assert got == {"wiki/clean.md"}
+    assert hrl._own_tree_path(tmp_path, "otherrepo:wiki/clean.md") is None
+    assert hrl._own_tree_path(tmp_path, f"{tmp_path.name}:wiki/clean.md") == "wiki/clean.md"
+
+
+def test_registered_foreign_qualifier_resolving_to_the_run_root_is_own(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "coordinator_core.machine_resolver.registry_get",
+        lambda key: str(tmp_path) if key == "repos.content_root" else None,
+    )
+    assert hrl._own_tree_path(tmp_path, "coordinator-content-repo:wiki/a.md") == "wiki/a.md"
+    assert hrl._own_tree_path(tmp_path, "other-repo:wiki/a.md") is None
+
+
+def _halted_solo(root: Path, base: str, withheld: tuple) -> str:
+    import json
+
+    rid = "warp-2026-10-29-x-20261029T000000-abcdef"
+    d = root / "state" / "warp" / rid
+    d.mkdir(parents=True)
+    (d / "halted.json").write_text(json.dumps({
+        "status": "halted", "halted": "x", "sizing_rel": None, "run_base_sha": base,
+        "run_artifacts": {"withheld": {p: "r" for p in withheld}},
+    }), encoding="utf-8")
+    return rid
+
+
+def _landing_repo(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(hrl, "_launch", lambda root, run_id: True)
+    monkeypatch.setattr("coordinator_core.machine_resolver.registry_get", lambda key: None)
+    _, _, base = _head_tree(tmp_path, {"wiki/clean.md": "a\n", "wiki/landed.md": "l\n"})
+    (tmp_path / "wiki/landed.md").write_bytes(b"landed\n")
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "land"],
+                   cwd=str(tmp_path), check=True, capture_output=True, **no_console_creationflags())
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(tmp_path), check=True, capture_output=True,
+                         text=True, **no_console_creationflags()).stdout.strip()
+    return base, sha
+
+
+def test_handler_records_landed_with_qualified_unchanged_clean_path(tmp_path, monkeypatch):
+    base, sha = _landing_repo(tmp_path, monkeypatch)
+    rid = _halted_solo(tmp_path, base, (f"{tmp_path.name}:wiki/clean.md", "wiki/landed.md"))
+    out = hrl._handler({"run_id": rid, "sha": sha}, tmp_path)
+    assert out["ok"] and out["written"] is True
+    assert out["voided"] == [f"{tmp_path.name}:wiki/clean.md"]
+    assert out["covers"] == {sha: ["wiki/landed.md"]}
+
+
+def test_handler_refuses_foreign_and_dirty_qualified_paths(tmp_path, monkeypatch):
+    base, sha = _landing_repo(tmp_path, monkeypatch)
+    rid = _halted_solo(tmp_path, base, ("otherrepo:wiki/clean.md", "wiki/landed.md"))
+    out = hrl._handler({"run_id": rid, "sha": sha}, tmp_path)
+    assert not out["ok"] and "otherrepo:wiki/clean.md" in out["error"]
+    (tmp_path / "wiki/clean.md").write_bytes(b"dirty\n")
+    own =f"{tmp_path.name}:wiki/clean.md"
+    import shutil
+
+    shutil.rmtree(tmp_path / "state")
+    rid = _halted_solo(tmp_path, base, (own, "wiki/landed.md"))
+    out = hrl._handler({"run_id": rid, "sha": sha}, tmp_path)
+    assert not out["ok"] and own in out["error"]
+
+
 def test_deleted_tracked_path_is_still_owed(tmp_path):
     common, load_dir, base = _head_tree(tmp_path, {"wiki/gone.md": "a\n"})
     (tmp_path / "wiki/gone.md").unlink()

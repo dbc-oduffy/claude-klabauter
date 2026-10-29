@@ -229,6 +229,45 @@ def test_a_reviewed_file_outside_every_declared_directory_lands(repo):
     assert "elsewhere/stray.py" not in _committed(repo)
 
 
+def _doe_shape(repo: Path) -> dict:
+    (repo / "coordinator" / "agents").mkdir(parents=True)
+    (repo / "coordinator" / "agent-index.md").write_text("idx\n", encoding="utf-8", newline="")
+    (repo / "coordinator" / "agents" / "x.md").write_text("x\n", encoding="utf-8", newline="")
+    request = CommitRequest(chunks=(
+        ChunkCommit(id="C1", title="t1", paths=("coordinator/agent-index.md",)),
+    ))
+    (repo / "run.mjs").write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
+    return {"script_path": "run.mjs", "incomplete_chunks": [], "session_id": SELF}
+
+
+def test_a_session_claimed_write_in_a_sibling_directory_is_reported_stranded(repo):
+    # DoE 180af03eb1 shape: declared coordinator/agent-index.md, executor wrote coordinator/agents/x.md.
+    params = _doe_shape(repo)
+    session_scope.touch(SELF, "coordinator/agents/x.md", cwd=str(repo))
+    out = terminal_commit._handler({**params, "inline_review": _REVIEWED}, repo_root=repo / ".git")
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["coordinator/agent-index.md"]
+    assert "coordinator/agents/x.md" in out["undeclared_dirty"]
+
+
+def test_an_unclaimed_write_in_a_sibling_directory_is_not_reported(repo):
+    params = _doe_shape(repo)
+    out = terminal_commit._handler({**params, "inline_review": _REVIEWED}, repo_root=repo / ".git")
+    assert out["committed"] is True, out
+    assert "coordinator/agents/x.md" not in out["undeclared_dirty"]
+
+
+def test_a_reviewed_write_in_a_sibling_directory_lands_not_reported(repo):
+    params = _doe_shape(repo)
+    session_scope.touch(SELF, "coordinator/agents/x.md", cwd=str(repo))
+    out = terminal_commit._handler(
+        {**params, "inline_review": _reviewed_touching("coordinator/agents/x.md")}, repo_root=repo / ".git"
+    )
+    assert out["committed"] is True, out
+    assert "coordinator/agents/x.md" in _committed(repo)
+    assert "coordinator/agents/x.md" not in out["undeclared_dirty"]
+
+
 def test_a_call_without_a_session_id_keeps_the_declared_only_behaviour(repo):
     (repo / "src" / "own.py").write_text("own\n", encoding="utf-8", newline="")
     session_scope.touch(SELF, "src/own.py", cwd=str(repo))

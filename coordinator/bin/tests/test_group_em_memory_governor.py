@@ -38,6 +38,7 @@ def _non_windows_host(monkeypatch):
 def _no_trim_task(monkeypatch):
     # Default: BoxCacheTrim absent, so no test ever spawns a real schtasks.
     monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: None)
+    monkeypatch.setattr(gov, "cache_gib", lambda bin_dir: None)
 
 
 @pytest.fixture(autouse=True)
@@ -277,7 +278,7 @@ def test_help_exits_zero():
     assert exc.value.code == 0
 
 
-def _stream(verdicts, tmp_path, plat="win32", sibling=True, monkeypatch=None):
+def _stream(verdicts, tmp_path, plat="win32", sibling=True, monkeypatch=None, clock=None, cache=None):
     if sibling:
         (tmp_path / "trim-file-cache.py").write_text("")
     monkeypatch.setattr(gov.sys, "platform", plat)
@@ -285,8 +286,14 @@ def _stream(verdicts, tmp_path, plat="win32", sibling=True, monkeypatch=None):
     lines = []
     gov.run(_args(resume_after=1), emit=lines.append, sample=lambda: next(it), procs_fn=lambda: PROCS,
             signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=len(verdicts),
-            bin_dir=tmp_path)
+            bin_dir=tmp_path, **({"clock": clock} if clock else {}),
+            **({"cache_gib_fn": cache} if cache else {}))
     return lines
+
+
+def _tick(step):
+    t = iter(range(0, 10 ** 6, step))
+    return lambda: next(t)
 
 
 def _hints(lines):
@@ -300,7 +307,7 @@ def test_hint_prints_once_across_critical_streak(tmp_path, monkeypatch):
 
 
 def test_hint_rearms_after_calm(tmp_path, monkeypatch):
-    lines = _stream([True, False, True], tmp_path, monkeypatch=monkeypatch)
+    lines = _stream([True, False, True], tmp_path, monkeypatch=monkeypatch, clock=_tick(1000))
     assert len(_hints(lines)) == 2
 
 
@@ -321,8 +328,34 @@ def test_task_present_fires_once_per_episode_and_replaces_the_hint(tmp_path, mon
 def test_task_present_refires_after_calm(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")
-    _stream([True, False, True], tmp_path, monkeypatch=monkeypatch)
+    _stream([True, False, True], tmp_path, monkeypatch=monkeypatch, clock=_tick(1000))
     assert len(calls) == 2
+
+
+def test_cooldown_blocks_refire_after_calm_then_allows(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")
+    _stream([True, False, True, False, True], tmp_path, monkeypatch=monkeypatch, clock=_tick(400))
+    assert len(calls) == 2  # reads 0 (fire), 400 (inside cooldown), 800 (past it)
+
+
+def test_cooldown_also_rate_limits_the_hint_when_no_task(tmp_path, monkeypatch):
+    lines = _stream([True, False, True], tmp_path, monkeypatch=monkeypatch, clock=_tick(100))
+    assert len(_hints(lines)) == 1
+
+
+def test_cache_not_the_cause_fires_nothing_and_hints_nothing(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")
+    lines = _stream([True, True], tmp_path, monkeypatch=monkeypatch, cache=lambda: 2.0)
+    assert calls == [] and _hints(lines) == [] and _fired(lines) == []
+
+
+def test_cache_big_fires(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")
+    _stream([True], tmp_path, monkeypatch=monkeypatch, cache=lambda: 46.0)
+    assert len(calls) == 1
 
 
 def test_task_never_fired_outside_a_critical_episode_or_off_win32(tmp_path, monkeypatch):

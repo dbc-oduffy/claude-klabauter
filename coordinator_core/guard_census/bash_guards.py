@@ -26,6 +26,8 @@ _REDIRECT = {
     "block-stash-destruction": "git stash show; keep the stash",
     "block-worktree-creation": "disjoint file scope on the shared tree",
     "block-whole-filesystem-scan": "a scoped search under the repo",
+    "guard-disk-fill": "write under the repo or scratch on a drive with headroom",
+    "runaway-find": "a find rooted under the repo with -maxdepth, or example-retrieval-repo",
     "guard-heavy-command-admission": "the engine's heavy-run admission",
     "block-external-workspace-vcs-write": "the workspace's own owner",
     "block-editor-kill-by-name": "close the editor by pid",

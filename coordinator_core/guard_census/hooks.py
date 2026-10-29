@@ -1,6 +1,6 @@
 """Hook-plane census: one fate per ``coordinator_core/hooks`` module.
 
-Fate rule: ``block`` only for a ``deny_registry`` entry; no hook module is registered, so every
+Fate rule: ``block`` only for a ``deny_registry`` entry (``_REDIRECT`` names each); every other
 hook is ``guide``. A hook's deny paths resolve through ``machine_profile.apply_guard_level``, which
 logs an off-registry deny and never injects it; ``guard-em-prefire-survey`` emits its own
 context-only nudge. Off the registry ``apply_guard_level`` turns a deny into one nudge line, so a
@@ -12,7 +12,7 @@ a module absent from it is reached through a dispatcher or a ``hooks/scripts`` w
 
 from __future__ import annotations
 
-from coordinator_core.guard_census import DELETED, GUIDE, Row
+from coordinator_core.guard_census import BLOCK, DELETED, GUIDE, Row
 
 WIRED = {
     "assert-em-role": "SessionStart",
@@ -102,7 +102,6 @@ _TEST_MODULES = (
     "test-platform-localize",
     "test-postuse-advisory-dispatch",
     "test-postusefailure-cross-repo-memo-remediate",
-    "test-preuse-search-dispatch",
     "test-session-start-write-plugin-root-breadcrumb",
     "test-subagent-arrival-check",
     "test-subagent-fabrication-check",
@@ -219,13 +218,21 @@ _DELETED = (
     "unsized-writer-dispatch-deny",
 )
 
+_REDIRECT = {
+    "block-worktree-tool": "disjoint file scope on the shared tree",
+    "block-workflow-foreign-emission": "emit the script from this session, then fire it",
+    "block-dispatch-suite-invocation": "name the touched test files or node ids in the brief",
+}
+
+
+def _row(n: str, note: str) -> Row:
+    return Row(n, BLOCK, _REDIRECT[n]) if n in _REDIRECT else Row(n, GUIDE, note=note)
+
+
 ROWS = (
-    [
-        Row(n, GUIDE, note=f"DoE hooks.json {event}; deny paths resolve through apply_guard_level")
-        for n, event in WIRED.items()
-    ]
+    [_row(n, f"DoE hooks.json {event}; deny paths resolve through apply_guard_level") for n, event in WIRED.items()]
     + [Row("guard-em-prefire-survey", GUIDE, note="emits a context-only nudge, never a deny; DoE wires it through preuse-bash-dispatch and preuse-search-dispatch")]
-    + [Row(n, GUIDE, note="no direct hooks.json entry; reached through a dispatcher or wrapper") for n in _DISPATCHED]
+    + [_row(n, "no direct hooks.json entry; reached through a dispatcher or wrapper") for n in _DISPATCHED]
     + [Row(n, GUIDE, note="support module, no verdict of its own") for n in _HELPERS]
     + [Row(n, GUIDE, note="test module sitting in the hooks package; enumerated as a module, no verdict") for n in _TEST_MODULES]
     + [Row(n, DELETED) for n in _DELETED]

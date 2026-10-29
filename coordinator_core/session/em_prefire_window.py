@@ -529,6 +529,60 @@ def publish_mechanics(command: object) -> bool:
     return bool(segs) and all(_segment_exempt(s, state) for s in segs)
 
 
+_CROSS_READERS = ("grep", "rg", "cat", "head", "tail", "ls", "find", "wc", "jq")
+_CROSS_GIT_READ_VERBS = ("log", "show", "grep", "ls-files", "merge-base", "rev-parse")
+_CROSS_PATTERN_FIRST = ("grep", "rg")
+_OUTSIDE_SCRIPT_EXT = (".py", ".sh", ".cmd", ".mjs")
+
+
+def _outside(path: str, base: str, root: str) -> bool:
+    p = os.path.expanduser(_norm(path))
+    if not (os.path.isabs(p) or p.startswith("/")):
+        p = os.path.join(base, p)
+    np, r = os.path.normcase(os.path.normpath(p)), os.path.normcase(os.path.normpath(root))
+    return not (np == r or np.startswith(r.rstrip(os.sep) + os.sep))
+
+
+def cross_repo_work(command: object, repo_root: object = None) -> bool:
+    """True for one plain Bash command that only reads outside the session repo root, lists releases, or runs an
+    existing script outside it: an ops job across repos, not a survey of this repo.
+
+    Exempt: `gh release list|view`; grep/rg/cat/head/tail/ls/find/wc/jq or `git -C <dir> log|show|grep|...` whose
+    every path argument resolves outside the root (after an optional leading `cd <dir> &&`); `[python] <abs script>`
+    outside the root. Trap: a chain, pipe, substitution or redirect counts, as does any path inside the root.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return False
+    root = str(repo_root) if repo_root else os.getcwd()
+    base = root
+    m = _LEAD_CD_RE.match(command)
+    if m:
+        target = _unquote(m.group(0).split()[1])
+        command = command[m.end():]
+        base = os.path.join(base, os.path.expanduser(_norm(target)))
+    first, rest = _first_command_token(command)
+    args = _plain_args(rest)
+    if args is None or not first:
+        return False
+    name = _norm(first).rsplit("/", 1)[-1]
+    if name == "gh":
+        return args[:2] in (["release", "list"], ["release", "view"])
+    if name == "git":
+        if args[:1] != ["-C"] or len(args) < 3 or not _outside(args[1], base, root):
+            return False
+        return args[2] in _CROSS_GIT_READ_VERBS and not any(a.startswith("--output") for a in args[3:])
+    if _PYTHONS.match(name) and args and not args[0].startswith("-"):
+        first, args = args[0], args[1:]
+        name = ""
+    if not name or name not in _CROSS_READERS:
+        script = _norm(first)
+        return script.endswith(_OUTSIDE_SCRIPT_EXT) and (script.startswith("/") or script[1:2] == ":" or script[:1] == "~") and _outside(script, base, root)
+    positional = [a for a in args if not a.startswith("-")]
+    if name in _CROSS_PATTERN_FIRST:
+        positional = positional[1:]
+    return bool(positional) and all(_outside(a, base, root) for a in positional)
+
+
 def is_test_run(command: object) -> bool:
     """True for one plain `pytest` / `python -m pytest` naming explicit test files, no chain."""
     if not isinstance(command, str) or _CHAIN_RE.search(command):
@@ -557,8 +611,9 @@ def classify(
     test_used: bool = False,
     named: object = (),
     written: object = (),
+    repo_root: object = None,
 ) -> tuple[bool, bool]:
-    """(pre_counted, all_counted) for one main-thread tool call.
+    """(pre_counted, all_counted) for one main-thread tool call; `repo_root` defaults to the cwd.
 
     `pre_counted` applies the pre-fire exemptions (paths, settings-home CLI); `all_counted` keeps the
     path exemptions only, for the post-landing window, plus the publish-mechanics exemption and the
@@ -573,7 +628,7 @@ def classify(
         cmd = inp.get("command")
         if memo_tooling(cmd) or lifecycle_op(cmd) or comms_integrity_write(cmd):
             return False, False
-        if publish_mechanics(cmd):
+        if publish_mechanics(cmd) or cross_repo_work(cmd, repo_root):
             return False, False
         pre = not is_settings_bin_cli(cmd, settings_home)
         if not test_used and is_test_run(cmd):
@@ -719,6 +774,7 @@ def advance(
     *,
     settings_home: Optional[str] = None,
     current_call: Optional[tuple] = None,
+    repo_root: object = None,
 ) -> dict:
     """Fold transcript bytes appended since `state['offset']` into the window; returns a new state.
 
@@ -787,12 +843,12 @@ def advance(
             for block in content:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
-                _fold_tool_use(st, block, settings_home)
+                _fold_tool_use(st, block, settings_home, repo_root)
     if isinstance(current_tool_use_id, str) and current_tool_use_id:
         name, inp = current_call if current_call else (None, None)
         pre, every = classify(
             name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named"),
-            st.get("written"),
+            st.get("written"), repo_root,
         )
         if pre:
             _add(st["pre"], current_tool_use_id)
@@ -835,7 +891,7 @@ def _task_key(name: str, inp: object) -> str:
     return ""
 
 
-def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
+def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str], repo_root: object = None) -> None:
     name = block.get("name")
     inp = block.get("input")
     if name == "Workflow":
@@ -861,7 +917,7 @@ def _fold_tool_use(st: dict, block: dict, settings_home: Optional[str]) -> None:
         return
     pre, every = classify(
         name, inp, st.get("opening") or "", settings_home, bool(st.get("test_used")), st.get("named"),
-        st.get("written"),
+        st.get("written"), repo_root,
     )
     if name == "Bash" and isinstance(inp, dict):
         op = lifecycle_op(inp.get("command"))

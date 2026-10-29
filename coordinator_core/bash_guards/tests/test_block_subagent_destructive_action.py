@@ -4781,3 +4781,58 @@ def test_em_payload_revert_unaffected(revert_repo):
     payload = _payload(f"git checkout -- {_REV_DECLARED}", agent_id=None)
     payload["cwd"] = str(revert_repo)
     assert _enveloped(guard.check)(payload) is None
+
+
+# --- git-commit-agent: `git -C <repo> commit -- <pathspec>` ---
+
+
+@pytest.fixture
+def commit_target_repo(tmp_path):
+    repo = tmp_path / "target"
+    (repo / ".git").mkdir(parents=True)
+    other = tmp_path / "cwd"
+    other.mkdir()
+    return repo, other
+
+
+def _commit_verdict(command, repo_cwd, agent_type):
+    payload = _payload(command, agent_type=agent_type)
+    payload["cwd"] = str(repo_cwd)
+    result = _enveloped(guard.check)(payload)
+    return None if result is None else result["hookSpecificOutput"]["permissionDecision"]
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ['commit -m "wave 1" -- a.py b.py', "commit -m x --only -- a.py"],
+)
+def test_commit_agent_git_dash_c_commit_with_pathspec_allows(commit_target_repo, tail):
+    repo, cwd = commit_target_repo
+    cmd = f'git -C "{repo.as_posix()}" {tail}'
+    assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") != "deny"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ['commit -m "wave 1"', 'commit -a -m x -- a.py', 'commit --all -m x -- a.py', "commit -m x --", "commit --amend -m x -- a.py"],
+)
+def test_commit_agent_git_dash_c_commit_without_pathspec_or_sweeping_still_denies(commit_target_repo, tail):
+    repo, cwd = commit_target_repo
+    cmd = f'git -C "{repo.as_posix()}" {tail}'
+    assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") == "deny"
+
+
+def test_other_agent_git_dash_c_commit_with_pathspec_still_denies(commit_target_repo):
+    repo, cwd = commit_target_repo
+    cmd = f'git -C "{repo.as_posix()}" commit -m x -- a.py'
+    assert _commit_verdict(cmd, cwd, "coordinator:executor") == "deny"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    ["reset --hard HEAD~1", "clean -fd", "push --force origin main", "branch -D feat", "add -A", "add ."],
+)
+def test_commit_agent_destructive_dash_c_verbs_still_deny(commit_target_repo, tail):
+    repo, cwd = commit_target_repo
+    cmd = f'git -C "{repo.as_posix()}" {tail}'
+    assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") == "deny"

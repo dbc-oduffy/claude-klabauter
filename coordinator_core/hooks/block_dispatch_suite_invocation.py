@@ -264,13 +264,11 @@ def _handler(params: dict, repo_root=None) -> dict:
         if matches
         else []
     )
-    if not imperative:
-        envelope = apply_guard_level(
-            GUARD_NAME, _precision_deny_envelope(text, cwd, env)
-        )
-        if envelope is None:
-            return no_advisory()
-        return envelope
+    # A directory target also classifies as a suite command; its reason names the directory and the
+    # node-id remedy, so it wins over the generic suite reason.
+    precision = _precision_deny_envelope(text, cwd, env)
+    if precision is not None or not imperative:
+        return apply_guard_level(GUARD_NAME, precision) or no_advisory()
 
     hit = imperative[0]
     detected = getattr(hit, "detected", "a test-suite command")

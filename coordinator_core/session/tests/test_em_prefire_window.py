@@ -266,6 +266,36 @@ def test_workflow_revise_with_cd_cat_substitution_and_trim_is_exempt():
         assert epw.lifecycle_op(bad) is None, bad
 
 
+def test_cross_repo_reads_release_lists_and_outside_scripts_are_uncounted(tmp_path):
+    root = tmp_path / "repo"
+    other = (tmp_path / "sibling").as_posix()
+    exempt = [
+        "gh release list --repo a/b",
+        f"grep -rn publish {other}/docs",
+        f"cat {other}/docs/x.md",
+        f"git -C {other} log --oneline -5",
+        f"cd {other} && grep -n release docs/ops.md",
+        f"python {other}/scripts/structural_index_refresh.py publish",
+        f"{other}/scripts/refresh.sh publish",
+    ]
+    for cmd in exempt:
+        assert epw.classify("Bash", {"command": cmd}, "", None, repo_root=root) == (False, False), cmd
+    counted = [
+        "grep -rn publish docs",
+        f"grep -rn publish {root.as_posix()}/docs",
+        f"grep -rn publish {other}/docs docs",
+        f"grep publish {other}/docs | head",
+        f"git -C {other} log --output=x",
+        f"git -C {other} diff HEAD",
+        "gh release delete v1",
+        f"cat {other}/a.md && cat docs/b.md",
+        "grep -rn publish",
+        f"cd {root.as_posix()}/sub && cat ../a.md",
+    ]
+    for cmd in counted:
+        assert epw.classify("Bash", {"command": cmd}, "", None, repo_root=root) == (True, True), cmd
+
+
 def test_deny_texts_name_the_exempt_form():
     from coordinator_core.hooks import guard_em_prefire_survey as g
 
@@ -548,3 +578,16 @@ def test_written_list_is_capped_and_paths_past_the_cap_are_charged(tmp_path):
     events.append(tool_use("last", "Read", {"file_path": f"/r/scratch/f{over - 1}.py"}))
     st = run(tmp_path, events)
     assert len(st["written"]) == epw.WRITTEN_CAP and st["pre"] == ["last"]
+
+
+def test_advance_threads_repo_root_to_classification(tmp_path):
+    root = tmp_path / "repo"
+    other = (tmp_path / "sibling").as_posix()
+    tr = tmp_path / "t.jsonl"
+    rec = {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": f"cat {other}/a.md"}}]}}
+    tr.write_text(__import__("json").dumps(rec, separators=(",", ":")) + chr(10), encoding="utf-8")
+    inside = epw.advance(tr, {}, repo_root=root)
+    elsewhere = epw.advance(tr, {}, repo_root=tmp_path / "sibling")
+    assert "t1" not in inside["pre"]
+    assert "t1" in elsewhere["pre"]

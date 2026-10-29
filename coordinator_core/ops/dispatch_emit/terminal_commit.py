@@ -806,10 +806,48 @@ def _in_scope(path: str, request: CommitRequest) -> bool:
     return False
 
 
+def _session_writes_outside_scope(
+    worktree_root: Path, request: CommitRequest, session_id: Optional[str],
+    landed: frozenset, snapshot: Optional[_Snapshot],
+) -> set:
+    """Dirty paths the committing session (or its sub-agents) write-claimed that sit outside every
+    directory ``_in_scope`` covers and that nothing landed. They are invisible to the run's
+    scoped snapshot, so without this a clean reply could leave an executor write uncommitted.
+    Reads the session's own claim records and the index only (no git spawn); any failure yields
+    nothing, never a refusal."""
+    if not session_id:
+        return set()
+    try:
+        from coordinator_core.ops.ceremony import commit_companion
+        from coordinator_core.session import claims as session_claims
+        from coordinator_core.session import core as session_core
+        from coordinator_core.session import scope as session_scope
+
+        sink = Path(session_core.session_dir(session_id, str(worktree_root))) / session_scope._TOUCH_RECORD_FILENAME
+        own, _degraded = session_scope.project_self_write_scope(sink)
+        claimed = {p.replace("\\", "/") for p in own}
+        claimed.update(
+            p.replace("\\", "/")
+            for p in session_claims.my_agent_touched(session_id, "exact", str(worktree_root))
+        )
+        declared = {p for c in request.chunks for p in c.paths}
+        candidates = sorted(
+            p for p in claimed
+            if p not in declared and p not in landed and not _in_scope(p, request)
+            and not (snapshot is not None and snapshot.covers(p))
+        )
+        if not candidates:
+            return set()
+        return set(commit_companion.own_left_behind(worktree_root, {session_id: candidates}, session_id, ()))
+    except Exception:  # noqa: BLE001 -- an unreadable claim record reports nothing extra
+        return set()
+
+
 def _undeclared_dirty(
     worktree_root: Path, request: CommitRequest,
     snapshot: Optional[_Snapshot] = None, landed: frozenset = frozenset(),
     *, run_id: Optional[str] = None, full_out: Optional[set] = None,
+    session_id: Optional[str] = None,
 ) -> dict:
     """Dirty files beside the run's declared writes that no chunk declares.
 
@@ -849,6 +887,7 @@ def _undeclared_dirty(
             }
             - declared
         )
+    dirty = sorted({*dirty, *_session_writes_outside_scope(worktree_root, request, session_id, landed, snapshot)})
     if full_out is not None:
         full_out.update(dirty)
     peer_held = _peer_held(worktree_root, request.session_id, dirty, run_id=run_id)
@@ -1280,6 +1319,7 @@ def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
                 scope["root"], scope["request"], scope.get("snapshot"), frozenset(scope.get("landed", ())),
                 run_id=params.get("run_id") if isinstance(params, dict) else None,
                 full_out=in_scope_dirty,
+                session_id=scope.get("session_id"),
             )
         )
         arts = reply.get("run_artifacts")
@@ -2575,7 +2615,7 @@ def _terminal_commit_inner(
         return reply
 
     if (wh_map or proc_wh) and not all_paths and not deleted_paths:
-        scope.update(root=worktree_root, request=request, snapshot=snapshot)
+        scope.update(root=worktree_root, request=request, snapshot=snapshot, session_id=session_id)
         if close_ctx is not None:
             close_ctx.clear()
         return _with_withheld(_with_siblings({
@@ -2590,7 +2630,7 @@ def _terminal_commit_inner(
             deliverable_id=request.deliverable_id, plan_path=request.plan_path,
             session_id=request.session_id,
         )
-    scope.update(root=worktree_root, request=scope_request, snapshot=snapshot)
+    scope.update(root=worktree_root, request=scope_request, snapshot=snapshot, session_id=session_id)
     scope["stranded_residue"] = residue
     review_land: tuple = ()
     review_unanswerable: Optional[str] = None

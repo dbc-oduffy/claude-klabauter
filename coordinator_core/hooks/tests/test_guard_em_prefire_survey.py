@@ -173,7 +173,7 @@ def test_ninth_read_advises_with_fire_step_and_is_allowed(env):
     assert res is not None and "permissionDecision" not in res["hookSpecificOutput"]
     assert reason(res).startswith("[em-prefire-survey] 9 exploratory calls")
     assert warp_fire.fire_step() in reason(res)
-    assert "cd-prefixed retry" in reason(res) and "em_context" in reason(res)
+    assert "cd-prefixed retry" not in reason(res) and "em_context" in reason(res)
 
 
 def test_prefire_deny_arms_the_session_latch_and_under_budget_does_not(env):
@@ -707,6 +707,13 @@ def test_missing_manifest_still_charges_the_run_sizing(env, monkeypatch):
 def test_deny_route_names_the_non_survey_exemptions():
     text = g.prefire_advisory_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
     assert "files you wrote with Write/Edit" in text and "user turn" in text and "cross-repo-memo" in text
+    assert "ops jobs" in text and "cross-repo reads" in text
+
+
+def test_prefire_advisory_is_a_nudge_not_a_mandate():
+    text = g.prefire_advisory_text(9, g.PREFIRE_EXPLORATORY_CALLS_MAX)
+    assert "denied" not in text and "fire the engine-ask now" not in text
+    assert "cheaper path" in text and warp_fire.fire_step() in text
 
 
 def test_self_written_scratch_read_is_not_charged_through_evaluate(env):

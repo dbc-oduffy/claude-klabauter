@@ -8970,5 +8970,78 @@ def test_function_digest_covers_decorators_and_tracks_position(tmp_path):
     assert by_file["hop.py"]["entry"] != by_file["shifted.py"]["entry"]
 
 
+def _review_prep_spawn_counts(root: pathlib.Path, n_paths: int, n_halted: int) -> tuple[int, int]:
+    """Process spawns of ``review.prep`` and of ``foreign_halted_withheld`` over a fixture repo holding
+    ``n_paths`` files one peer commit touched and ``n_halted`` halted run records."""
+    import json
+    import subprocess
+    import time
+
+    from coordinator_core.ops import review_prep
+    from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "T")
+    names = [f"pkg/f{i}.txt" for i in range(n_paths)]
+    (root / "pkg").mkdir()
+    for name in names:
+        (root / name).write_text("0\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    for name in names:
+        (root / name).write_text("1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "peer edit\n\nSession-Id: sess-peer\n")
+    for i in range(n_halted):
+        stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+        run_dir = root / "state" / "warp" / f"ask-{stamp}-{i:06x}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "halted.json").write_text(
+            json.dumps({"status": "halted", "run_artifacts": {"withheld": {names[i % len(names)]: "targeted-tests-failed"}}}),
+            encoding="utf-8",
+        )
+
+    counter = {"n": 0}
+    real_init = subprocess.Popen.__init__
+
+    def counting_init(self, *a, **k):
+        counter["n"] += 1
+        return real_init(self, *a, **k)
+
+    params = {
+        "base": base, "paths": names, "slice_prefix": "spawn-pin", "head": "HEAD",
+        "plan_path": "docs/plans/spawn-pin.md", "session_id": "sess-own",
+    }
+    subprocess.Popen.__init__ = counting_init
+    try:
+        review_prep._handler(params, root)
+        prep = counter["n"]
+        counter["n"] = 0
+        foreign_halted_withheld(root, "landing-run", None, names)
+        fhw = counter["n"]
+    finally:
+        subprocess.Popen.__init__ = real_init
+    return prep, fhw
+
+
+def test_review_prep_git_spawns_do_not_grow_with_paths_or_halted_runs(tmp_path):
+    """``review.prep`` and ``foreign_halted_withheld`` spawn a constant number of processes however many
+    declared paths and halted run records there are; a per-path or per-run spawn doubles the count."""
+    (tmp_path / "small").mkdir()
+    (tmp_path / "large").mkdir()
+    small = _review_prep_spawn_counts(tmp_path / "small", 3, 2)
+    large = _review_prep_spawn_counts(tmp_path / "large", 40, 30)
+    assert small == large, f"spawn counts grew with paths/halted runs: small={small} large={large}"
+    assert small[0] <= 10 and small[1] <= 4, f"spawn budget exceeded: {small}"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

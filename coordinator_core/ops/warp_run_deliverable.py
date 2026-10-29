@@ -253,12 +253,69 @@ def _withheld_paths(root: Path, run_id: str) -> set:
     return {n for n in (_norm(p) for p in run_withhold.read([record_dir(root, run_id)])) if n}
 
 
+#: A run still at stage `minted` this long after its last recorded activity is abandoned: its agent
+#: died or was stopped before the ledger advanced it, and it holds nothing against a peer.
+MINTED_STALE_SECONDS = 1800
+ABANDONED_AT_MINTED = "abandoned_at_minted"
+
+
+def _stamp_epoch(value: object) -> Optional[float]:
+    """Epoch seconds of a `run-stage.json` ISO-8601 UTC stamp, None when absent or unparseable."""
+    from datetime import datetime, timezone
+
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bool:
+    """True when the run's `run-stage.json` reads `minted` with `last_activity_at` (else
+    `started_at`) older than `MINTED_STALE_SECONDS`. An absent or malformed stage record, any other
+    stage, or no parseable stamp is not stale. One file read."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+    stage = read_run_stage(root, run_id)
+    if not stage or stage.get("stage") != "minted":
+        return False
+    seen = _stamp_epoch(stage.get("last_activity_at"))
+    if seen is None:
+        seen = _stamp_epoch(stage.get("started_at"))
+    if seen is None:
+        return False
+    return (time.time() if now is None else now) - seen > MINTED_STALE_SECONDS
+
+
+def _halt_abandoned(root: Path, run_id: str) -> None:
+    """Record the terminal `halted` outcome of a run stale at `minted`, so `_halted` sees it and the
+    firing EM finds a halt record. Best effort: a failed write leaves the run merely released."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    try:
+        halted_run.write_halt_marker(
+            record_dir(root, run_id),
+            halted=ABANDONED_AT_MINTED,
+            sizing_rel=record_sizing_rel(root, run_id) or None,
+            reason=f"abandoned: stuck at stage minted for over {MINTED_STALE_SECONDS}s with no activity",
+        )
+    except Exception:  # noqa: BLE001 -- the release does not depend on the record
+        logging.getLogger(__name__).warning("run %s: abandoned-at-minted halt record not written", run_id)
+
+
 def _live_peer_run(
     root: Path, record: dict, exclude_session: str, cwd: Optional[str], minted_before: Optional[tuple] = None,
 ) -> bool:
     """True when a held `record` is a live peer's run: fresh (claimed records included), a
     non-empty `session_id` other than `exclude_session` that is `touch_record.session_live`, not
-    halted, not landed, and (when given) strictly senior to `minted_before=(minted_at, run_id)`."""
+    halted, not landed, not stale at stage `minted` (`_stale_at_minted`; such a run is halted here),
+    and (when given) strictly senior to `minted_before=(minted_at, run_id)`."""
     from coordinator_core.session import touch_record
 
     sid = record.get("session_id")
@@ -267,7 +324,12 @@ def _live_peer_run(
         return False
     if minted_before is not None and (record["minted_at"], run_id) >= tuple(minted_before):
         return False
-    return touch_record.session_live(sid, cwd) and not _halted(root, run_id) and not _landed(root, run_id)
+    if not touch_record.session_live(sid, cwd) or _halted(root, run_id) or _landed(root, run_id):
+        return False
+    if _stale_at_minted(root, run_id):
+        _halt_abandoned(root, run_id)
+        return False
+    return True
 
 
 def live_record_dir_owners(

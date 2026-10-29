@@ -35,7 +35,8 @@ suspending a language server hangs every LSP call in its session.
 On win32 only, the first critical sample of an episode fires the PM-installed on-demand scheduled
 task BoxCacheTrim and prints one `GOVERNOR CACHE-TRIM fired <trim.log tail>` line; with no such task
 it prints one GOVERNOR CACHE-TRIM-HINT line naming the elevated `trim-file-cache.py --apply`
-command. A calm verdict re-arms it.
+command. A calm verdict re-arms it, but the fire (or hint) happens at most once per
+`TRIM_COOLDOWN_S` and only while the file cache holds at least `CACHE_CAUSE_GIB` (unreadable counts as yes).
 
 When available memory rises `HEADROOM_RISE_GIB` over its low-water mark, or the verdict goes calm
 after a PAUSED, it prints one `GOVERNOR HEADROOM available=<GiB>` line so the Group EM wakes.
@@ -538,6 +539,23 @@ def cache_trim_hint(bin_dir: Path) -> str:
     return f'GOVERNOR CACHE-TRIM-HINT run elevated: python "{sibling.as_posix()}" --apply'
 
 
+TRIM_COOLDOWN_S = 600.0
+CACHE_CAUSE_GIB = 8.0
+
+
+def cache_gib(bin_dir: Path) -> Optional[float]:
+    """System file-cache size in GiB (win32 PDH counter, in-process), or None when unreadable."""
+    lib = str(Path(bin_dir) / "lib")
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    try:
+        from file_cache_win32 import Win32FileCacheHost
+
+        return Win32FileCacheHost().read_memory().cache_bytes / 1024 ** 3
+    except Exception:
+        return None
+
+
 def fire_cache_trim(bin_dir: Path) -> Optional[str]:
     """Fire the PM-installed BoxCacheTrim task; the trim.log tail line, or None when the task is
     absent or would not start."""
@@ -564,7 +582,10 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         retention_fn: Optional[Callable[[], object]] = None,
         scratch_fn: Optional[Callable[[], "dict[str, int]"]] = None,
         trim_fn: Optional[Callable[[], Optional[str]]] = None,
-        shortfall_fn: Optional[Callable[[], float]] = None) -> None:
+        shortfall_fn: Optional[Callable[[], float]] = None,
+        cache_gib_fn: Optional[Callable[[], Optional[float]]] = None,
+        clock: Callable[[], float] = time.monotonic) -> None:
+    last_trim: Optional[float] = None
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
     start_times_fn = process_start_times if start_time_fn is None else (
         lambda pids: {p: start_time_fn(p) for p in pids})
@@ -641,6 +662,13 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 elif due and not gave_up:
                     gave_up = True
                     emit(f"GOVERNOR STILL-CRITICAL after {len(paused)} pause(s); nothing left it may pause")
+                if fire_trim and (last_trim is None or clock() - last_trim >= TRIM_COOLDOWN_S):
+                    cache = (cache_gib_fn or (lambda: cache_gib(bin_dir)))()
+                    fire_trim = cache is None or cache >= CACHE_CAUSE_GIB
+                    if fire_trim:
+                        last_trim = clock()
+                else:
+                    fire_trim = False
                 if fire_trim:  # after the pause: the fire can block for seconds on schtasks and the log wait
                     try:
                         tail = (trim_fn or (lambda: fire_cache_trim(bin_dir)))()
