@@ -193,7 +193,16 @@ def _canonical(path: str) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
-_TEST_ENV_PREFIXES = ("PYTEST_", "_COORDINATOR_TEST_", "COORDINATOR_PYTEST_")
+def _warm_spawn_refused_for_test(resolved_path: Path) -> bool:
+    """True when a test-marked process, with no test-isolated runtime base, targets a
+    `coordinator_core/warm/` script: such a spawn would become the box's warm server.
+    The single choke point for the client, front door and supervisor delegates.
+    """
+    if resolved_path.parent.name != "warm":
+        return False
+    from coordinator_core.warm.client import process_is_test_marked
+
+    return process_is_test_marked() and not os.environ.get("COORDINATOR_WARM_RUNTIME_BASE")
 
 
 def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
@@ -254,8 +263,9 @@ def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     env.pop("COORDINATOR_WARM_BOOT_WAIT_SECS", None)
     # A detached child outlives the pytest that spawned it; inherited test markers make a
     # box-wide warm server classify every live hook as a test (RealSettingsHomeLeakError).
-    for var in [k for k in env if k.startswith(_TEST_ENV_PREFIXES)]:
-        del env[var]
+    from coordinator_core.warm.client import scrub_test_env
+
+    scrub_test_env(env)
     for var in _LIVE_TREE_ENV_VARS:
         inherited = env.get(var)
         if inherited and _canonical(inherited) != _canonical(repo_root):
@@ -329,6 +339,8 @@ def spawn_detached(
     args = list(args) if args is not None else []
     resolved_path = Path(repo_root) / script_path
     script_path = str(resolved_path)
+    if _warm_spawn_refused_for_test(resolved_path):
+        return False
     python_exe = _resolve_python_exe()
     if not python_exe:
         _log_spawn_failure(

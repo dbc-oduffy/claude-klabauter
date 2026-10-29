@@ -535,6 +535,30 @@ def _caller_session_id() -> str:
         return ""
 
 
+#: The one definition of "test-only environment variable": consumed by the spawn choke point
+#: (`detached_spawn`), the client decline, and the server and supervisor boot scrubs.
+TEST_ENV_PREFIXES = ("PYTEST_", "_COORDINATOR_TEST_", "COORDINATOR_PYTEST_")
+
+
+def is_test_env_key(name: str) -> bool:
+    """True when `name` is a test-only environment variable."""
+    return name.startswith(TEST_ENV_PREFIXES)
+
+
+def scrub_test_env(environ: Any = None) -> None:
+    """Delete every test-only variable from `environ` (default `os.environ`) in place."""
+    env = os.environ if environ is None else environ
+    for key in [k for k in env if is_test_env_key(k)]:
+        del env[key]
+
+
+def process_is_test_marked() -> bool:
+    """True when this process runs inside pytest or descends from a test-marked one."""
+    return "PYTEST_CURRENT_TEST" in os.environ or any(
+        k.startswith("_COORDINATOR_TEST_") for k in os.environ
+    )
+
+
 def spawn_detached(
     repo_root: str,
     script_path: str,
@@ -542,6 +566,10 @@ def spawn_detached(
     env_extra: Optional[dict] = None,
 ) -> bool:
     """Lazy delegate to `ops.ceremony.detached_spawn.spawn_detached`.
+
+    A test-marked process spawns nothing here unless it runs a test-isolated runtime base:
+    every spawn delegate (client, front door, supervisor) is closed by `detached_spawn`'s
+    own check of `process_is_test_marked`.
 
     THE IMPORT IS INSIDE THE FUNCTION ON PURPOSE — it is the single most
     expensive thing this module could do, and it was being done on every
@@ -1222,9 +1250,7 @@ def _try_warm_dispatch_inner(
     # reach nor (via `_spawn_once` below) spawn the box-shared server: a server
     # spawned here keeps the test's env for life. A test-isolated runtime base
     # (a warm-suite test's own server) is exempt.
-    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get(
-        "COORDINATOR_WARM_RUNTIME_BASE"
-    ):
+    if process_is_test_marked() and not os.environ.get("COORDINATOR_WARM_RUNTIME_BASE"):
         _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
         return None
 

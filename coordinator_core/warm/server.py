@@ -232,6 +232,7 @@ from coordinator_core.warm.client import (
     MUTATION_READ_DEADLINE_SECS,
     WARM_DISPATCH_INDETERMINATE,
     _op_may_mutate,
+    scrub_test_env,
 )
 from coordinator_core.warm import dispatch_ack
 
@@ -3821,5 +3822,12 @@ def _preload_op_registry() -> None:
         print(f"[warm-server] op-registry preload failed: {exc!r}", file=sys.stderr)
 
 
+def _process_entry() -> int:
+    """Spawned-process entry: drop every inherited test-only variable, then boot. Kept out
+    of `main()` so an in-process call from a test never rewrites the test's environment."""
+    scrub_test_env()
+    return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_process_entry())

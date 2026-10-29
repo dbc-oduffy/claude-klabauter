@@ -102,6 +102,7 @@ from coordinator_core.warm import (
     skew,
     telemetry,
 )
+from coordinator_core.warm.client import scrub_test_env
 from coordinator_core.warm.http_listener import (
     ENGINE_TOKEN_HEADER,
     _collect_response,
@@ -1371,5 +1372,12 @@ def main() -> int:
     return 0
 
 
+def _process_entry() -> int:
+    """Spawned-process entry: drop every inherited test-only variable, then boot. Kept out
+    of `main()` so an in-process call from a test never rewrites the test's environment."""
+    scrub_test_env()
+    return main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_process_entry())
