@@ -126,3 +126,18 @@ def test_blob_scope_memoises_and_fetches_only_the_missing(tmp_path, monkeypatch)
     assert calls == [["HEAD:f0.py"], ["HEAD:nope.py"]]
     hr._blob_batch(tmp_path, ["HEAD:f0.py"])
     assert len(calls) == 3  # outside a scope nothing is memoised
+
+
+@pytest.mark.parametrize("count", [1, 6])
+def test_foreign_halted_withheld_fetches_only_blobs_of_runs_withholding_a_wanted_path(tmp_path, monkeypatch, count):
+    """A landing whose paths no halted run withholds reads no blob; the one run that does is read alone."""
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    paths = _repo_with_halted_runs(tmp_path, count)
+    calls = _count_fetches(monkeypatch)
+    assert land_run.foreign_halted_withheld(tmp_path, _rid(5, "ffffff"), None, ["unrelated.py"]) == {}
+    assert calls == []
+    held = land_run.foreign_halted_withheld(tmp_path, _rid(5, "ffffff"), None, [paths[0]])
+    assert list(held) == [paths[0]]  # the withholding run still holds against its own path
+    assert len(calls) == 1
+    assert all(f"f{i}.py" not in spec for spec in calls[0] for i in range(1, count))

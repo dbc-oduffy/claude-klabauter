@@ -173,9 +173,13 @@ def test_halted_record_does_not_stage_a_review_edit_another_run_holds(repo, monk
     assert "pkg/twin.py" in out["review_edits_unlanded"], out
 
 
-def test_halted_record_stages_a_review_edit_no_run_holds(repo, monkeypatch):
+def test_halted_record_keeps_a_review_edit_no_run_holds_in_the_tree(repo, monkeypatch):
+    """A halt commit lands the record only; an unheld review edit stays for the refire (040758b972)."""
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import HALT_RUN_REASON
+
     out, landed = _review_edit_halt_commit(repo, monkeypatch, lambda _r, _id, _p, paths: {})
-    assert landed, out
+    assert not landed, out
+    assert out["review_edits_unlanded"] == {"pkg/twin.py": HALT_RUN_REASON}, out
 
 
 def test_a_co_declared_hold_on_an_inherited_path_is_recorded_as_provenance_and_lands(product_repo, monkeypatch):

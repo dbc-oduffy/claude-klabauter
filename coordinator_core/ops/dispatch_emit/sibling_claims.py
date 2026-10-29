@@ -23,7 +23,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Iterable, Mapping, Optional, Sequence
 
 SIBLING_WITHHELD_REASON = "sibling-claimed"
 
@@ -78,15 +78,29 @@ def _in_window_run_ids(root: Path, own_run_id: Optional[str]) -> list:
     return out
 
 
+def _withholds_any(marker: dict, covering: Sequence[str]) -> bool:
+    """Whether the halt marker's withheld paths cover (equal, or are a directory over) any of `covering`.
+    Trap: a marker whose withheld set cannot be read counts as covering, so a hold is never dropped unread."""
+    from coordinator_core.ops.dispatch_emit import halted_run, run_ownership
+
+    try:
+        withheld = halted_run._withheld_of(marker)
+    except Exception:  # noqa: BLE001 -- unknown set: it holds
+        return True
+    return any(run_ownership._covers(w, c) for w in withheld for c in covering)
+
+
 def _unlanded_run_ids(
     root: Path, own_run_id: Optional[str], own_plan: Optional[str] = None, minted_before: Optional[tuple] = None,
+    covering: Optional[Sequence[str]] = None,
 ) -> list:
     """Run ids other than `own_run_id` that are halted and unresumed, or hold a fresh token
     (unclaimed or claimed), sorted. One record-dir scan; the token is a point read per run, never a
     token-store listing. A stamped run id older than the token TTL is never opened. A halted run
     `halted_hold_release.release_reason` frees (against `own_run_id`/`own_plan`), and a resumed run
     whose successor landed or whose sizing is superseded, is not listed. A listed halted run may
-    still claim nothing: `_held_extras` narrows it to what it withheld or left dirty."""
+    still claim nothing: `_held_extras` narrows it to what it withheld or left dirty. With `covering`, a
+    readable halted run that withholds none of those paths is skipped before `release_reason` weighs it."""
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token, stopped_runs
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
@@ -110,6 +124,8 @@ def _unlanded_run_ids(
             found.append(run_id)
             continue
         if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
+            if covering is not None and not _withholds_any(marker, covering):
+                continue
             if stamp is not None and not halted_hold_release.release_reason(root, run_id, own_run_id, own_plan):
                 found.append(run_id)
             continue
@@ -124,10 +140,10 @@ def _unlanded_run_ids(
     return found
 
 
-def halted_records(root: Path, own_run_id: Optional[str]) -> list:
+def halted_records(root: Path, own_run_id: Optional[str], covering: Optional[Sequence[str]] = None) -> list:
     """`[(record dir, halt marker)]` for each halted run other than `own_run_id` within the token TTL:
     the runs `_unlanded_run_ids` may weigh through `release_reason`, for `prefetch_kept_blobs`. One
-    record-dir scan, file reads only; never raises."""
+    record-dir scan, file reads only; never raises. With `covering`, only runs withholding one of those paths."""
     from coordinator_core.ops.dispatch_emit import halted_run, run_token, stopped_runs
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
@@ -143,7 +159,8 @@ def halted_records(root: Path, own_run_id: Optional[str]) -> list:
             record = root / RECORD_DIR_ROOT / name
             marker = halted_run._read(record)
             if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
-                out.append((record, marker))
+                if covering is None or _withholds_any(marker, covering):
+                    out.append((record, marker))
     except Exception:  # noqa: BLE001 -- the blobs are read on demand instead
         return out
     return out
