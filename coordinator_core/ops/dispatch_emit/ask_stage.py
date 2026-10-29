@@ -1406,6 +1406,14 @@ def stage(
     from coordinator_core.ops.dispatch_emit import live_run_writes
 
     live_run_writes.index_stage(root, run_id, payload, time.time())
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    try:
+        halted_withheld_index.record_declared(
+            root, run_id, live_run_writes.manifest_footprint(payload), sizing_rel=run_sizing_rel
+        )
+    except (OSError, ValueError):
+        pass
     stamp_run_stage(root, run_id, "staged", steps_planned=len(manifest_rows))
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt

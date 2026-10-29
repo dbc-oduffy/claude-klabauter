@@ -188,6 +188,22 @@ def test_sibling_spines_returns_the_exception_for_an_unparseable_plan_and_sets_o
     assert spines[good] == set()
 
 
+def test_sibling_spines_inside_release_scope_parse_each_plan_once_across_calls(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    run_id = _stamped("7cc6cc")
+    _spine_sibling(repo, run_id)
+    parses: list = []
+    real = peer_hunk_gate._plan_spine_writes
+    monkeypatch.setattr(peer_hunk_gate, "_plan_spine_writes", lambda r, p: parses.append(p) or real(r, p))
+    with halted_hold_release.release_scope():
+        first = peer_hunk_gate._sibling_spines(repo, [run_id])
+        second = peer_hunk_gate._sibling_spines(repo, [run_id])
+    assert first == second and parses == ["docs/plans/b.md"]
+    peer_hunk_gate._sibling_spines(repo, [run_id])
+    assert len(parses) == 2
+
+
 def test_halted_sibling_declaring_but_not_withholding_holds_nothing(repo):
     run_id = _stamped("7cc61e")
     _halt(_spine_sibling(repo, run_id))

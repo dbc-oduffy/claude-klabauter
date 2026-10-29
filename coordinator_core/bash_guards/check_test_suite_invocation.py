@@ -4548,6 +4548,16 @@ _PROSE_NEGATIVE_RE = re.compile(
 
 _BARE_LINE_LEAD_RE = re.compile(r"^[\s\-*\$\d\.\)]+")
 
+#: An interpreter launch that makes the runner its module, the whole cosmetic-
+#: stripped lead: ``python -m pytest <dir>`` on a bare line IS the command head,
+#: exactly like a bare ``pytest <dir>``. Without it the bare-line pass dropped
+#: every ``python -m`` brief line, so the dispatch deny never saw it.
+_INTERPRETER_MODULE_LEAD_RE = re.compile(
+    r"^(?:python(?:3(?:\.\d+)?)?(?:\.exe)?|py(?:\s+-3(?:\.\d+)?)?|uv\s+run(?:\s+python3?)?)"
+    r"(?:\s+-[A-Za-z]\S*)*?\s+-m\s*$",
+    re.IGNORECASE,
+)
+
 #: A single lettered ordered-list marker (``a.``, ``B)``) at the very start
 #: of the prefix, stripped ahead of ``_BARE_LINE_LEAD_RE`` -- that regex's
 #: permissive character class cannot safely include bare letters (doing so
@@ -4650,7 +4660,7 @@ def _bare_line_is_command_shaped(prefix: str) -> bool:
         return True
     lead_source = _LIST_MARKER_LEAD_RE.sub("", prefix, count=1)
     lead = _BARE_LINE_LEAD_RE.sub("", lead_source)
-    return not lead.strip()
+    return not lead.strip() or bool(_INTERPRETER_MODULE_LEAD_RE.match(lead))
 
 
 #: A HYPHENATED ``re-`` repetition prefix directly touching an imperative

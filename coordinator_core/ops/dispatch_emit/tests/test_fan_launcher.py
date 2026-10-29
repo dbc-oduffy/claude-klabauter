@@ -126,7 +126,7 @@ def _refusal(script: str, child_id: str, reply: dict):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
-    m = re.search(r"function _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
+    m = re.search(r"function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
     assert m
     prog = (
         "const WARP_PREFIX='/r/scratch/warp/';"
@@ -157,6 +157,34 @@ def test_genuine_run_id_mismatch_still_refused(tmp_path):
     assert _refusal(script, "ask-r1", good) is None
 
 
+@pytest.mark.spawns_process
+def test_own_redirect_run_id_accepted_foreign_still_refused(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
+
+    _, script = _write(tmp_path)
+    redirect = {"from": "d/ask-r1.workflow.mjs", "to": "d/warp-new.workflow.mjs", "halted_run": "ask-r1"}
+    reply = {"path": "/r/scratch/warp/x/s.js", "run_id": "warp-new", "fire_args": {}, OUTPUT_PATH_REDIRECT_KEY: redirect}
+    assert _refusal(script, "ask-r1", reply) is None
+    foreign = dict(reply, run_id="warp-other")
+    assert _refusal(script, "ask-r1", foreign) == "emit reply run_id warp-other is not ask-r1"
+    other_child = dict(reply, **{OUTPUT_PATH_REDIRECT_KEY: dict(redirect, halted_run="ask-r2")})
+    assert _refusal(script, "ask-r1", other_child) == "emit reply run_id warp-new is not ask-r1"
+
+
+@pytest.mark.spawns_process
+def test_launcher_starts_the_redirected_run_id(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
+
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    sha = "ab" * 32
+    redirect = {"halted_run": "ask-r1", "to": "scratch/warp/warp-new.workflow.mjs"}
+    result, calls, _ = _run_child_stage(
+        script, sha, emit_extra={OUTPUT_PATH_REDIRECT_KEY: redirect}, emit_run_id="warp-new"
+    )
+    assert result["status"] == "ok"
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('warp-new', sha)}"}
+
+
 def test_chain_hop_renders_one_hop_on_the_one_start_site(tmp_path):
     _, script = _write(tmp_path)
     assert f"result.{CHAIN_HANDOFF_KEY}" in script
@@ -176,7 +204,7 @@ def test_launcher_no_longer_reads_the_sidecar(tmp_path):
     assert "stage_pending repeated for a handle already supplied" in script
 
 
-def _run_child_stage(script: str, sha, fire_args=None, repeat=False) -> list:
+def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=None, emit_run_id="ask-r1") -> list:
     """Run _runChild in node with stubs; returns [result, paths workflow() was started with]."""
     import shutil
     import subprocess
@@ -192,7 +220,7 @@ def _run_child_stage(script: str, sha, fire_args=None, repeat=False) -> list:
         "const calls = [];\n"
         "const labels = [];\n"
         f"const agent = async (p, o) => {{ labels.push(o.label); "
-        f"return {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: 'ask-r1', fire_args: {json.dumps(fire_args or {})} }}; }};\n"
+        f"return {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: {json.dumps(emit_run_id)}, fire_args: {json.dumps(fire_args or {})}, ...{json.dumps(emit_extra or {})} }}; }};\n"
         f"const workflow = async (o) => {{ calls.push(o); return {'true' if repeat else 'calls.length === 1'} ? PENDING : {{ done: true }}; }};\n"
         "const parallel = async () => [];\n"
         + body
@@ -388,3 +416,40 @@ def test_a_declared_directory_path_does_not_stop_the_commit(tmp_path, monkeypatc
     )
     assert out.get("committed") is True and out.get("sha"), out.get("error")
     assert "is a directory" not in json.dumps(out, default=str)
+
+
+@pytest.mark.spawns_process
+def test_a_failed_start_of_the_redirected_run_abandons_it_and_a_good_start_does_not(tmp_path):
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
+    root = re.search(r"const REPO_ROOT = (\".*?\");", body).group(1)
+    redirect = {"halted_run": "ask-r1", "to": "scratch/warp/warp-new.workflow.mjs"}
+
+    def run(workflow_js):
+        code = (
+            "const prompts = [];\n"
+            f"const agent = async (p, o) => {{ prompts.push(p); return {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: 'warp-new', fire_args: {{}}, "
+            f"{json.dumps(OUTPUT_PATH_REDIRECT_KEY)}: {json.dumps(redirect)} }}; }};\n"
+            f"const workflow = async (o) => {workflow_js};\n"
+            "const parallel = async () => [];\n" + body
+            + "\n_runChild(CHILDREN[0]).then((r) => console.log(JSON.stringify([r, prompts])));\n"
+        )
+        out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        assert out.returncode == 0, out.stderr
+        return json.loads(out.stdout)
+
+    failed, prompts = run("(() => { throw new Error('boom'); })()")
+    assert failed["status"] == "failed"
+    assert any('"abandon_run":"warp-new"' in p for p in prompts)
+    ok, prompts = run("({ done: true })")
+    assert ok["status"] == "ok"
+    assert not any("abandon_run" in p for p in prompts)

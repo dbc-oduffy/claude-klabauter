@@ -494,6 +494,21 @@ def test_bare_line_is_command_shaped_direct_cases():
     ) is False
 
 
+def test_bare_line_is_command_shaped_interpreter_module_lead():
+    assert guard._bare_line_is_command_shaped("python -m ") is True
+    assert guard._bare_line_is_command_shaped("$ python3 -B -m ") is True
+    assert guard._bare_line_is_command_shaped("2. py -3.11 -m ") is True
+    assert guard._bare_line_is_command_shaped("uv run python -m ") is True
+    assert guard._bare_line_is_command_shaped("the python -m ") is False
+    assert guard._bare_line_is_command_shaped("python ") is False
+
+
+def test_classify_text_bare_python_m_pytest_line_is_imperative(repo):
+    matches = guard.classify_text("python -m pytest\n", cwd=str(repo))
+    assert len(matches) == 1
+    assert matches[0].position == "imperative"
+
+
 def test_bare_line_is_command_shaped_colon_headed_cue(repo):
     assert guard._bare_line_is_command_shaped("Run: ") is True
     assert guard._bare_line_is_command_shaped("Verify: ") is True

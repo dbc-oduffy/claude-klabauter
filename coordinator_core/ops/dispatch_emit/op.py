@@ -1055,6 +1055,7 @@ _PARAM_FIELDS = (
     Field("ask_context", "str_list"),
     Field("all_of_pm_ask", "bool"),
     Field("launcher_child", "bool"),
+    Field("abandon_run", "str"),
     Field("required_reviewers", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
@@ -1871,6 +1872,27 @@ class _EmitWrites:
                 pass
 
 
+def _abandon_run(params: dict, repo_root: Optional[Path]) -> dict:
+    """Close a recomposed refire run that nothing started: it carries `resumed_from` and a minted-only
+    stage. A run that progressed, or any other run, is left untouched (`abandoned: False`)."""
+    from coordinator_core.ops.dispatch_emit import halted_run as _hr
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as _rl
+
+    run_id = params["abandon_run"]
+    given = repo_root or params.get("target_root")
+    if not given:
+        raise ValueError("dispatch.emit abandon_run requires repo_root or target_root")
+    rdir = record_dir(Path(given), run_id)
+    run = _rl.read_run(rdir) or {}
+    live = isinstance(run.get(_rl.RESUMED_FROM_FIELD), str) and _hr._is_shell(rdir)
+    if live:
+        _hr._write(rdir, {
+            "status": _hr.STATUS_CLOSED,
+            "closed": {"reason": "refire-start-failed", "at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S")},
+        })
+    return {"path": "", "run_id": run_id, "fire_args": {}, "abandoned": live}
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(
     params: dict,
@@ -1879,6 +1901,8 @@ def _dispatch_emit(
     only_review_plans: Optional[frozenset] = None,
     _research_ready: Optional[tuple] = None,
 ) -> dict:
+    if params.get("abandon_run"):
+        return _abandon_run(params, repo_root)
     writes = _EmitWrites()
     try:
         return _dispatch_emit_body(

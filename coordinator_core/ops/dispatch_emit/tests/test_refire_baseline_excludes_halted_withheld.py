@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import coordinator_core.git.git_state as git_state
 from coordinator_core.ops.dispatch_emit import ask_stage, halted_withheld_index
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, ManifestRow
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, fingerprint
-from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE, unwritten
+from coordinator_core.ops.dispatch_emit.write_baseline import unwritten
 
 SIZING_A = "state/sizings/a.yaml"
 SIZING_OTHER = "state/sizings/other.yaml"
@@ -19,14 +18,9 @@ HEAD_BLOB = blob_sha(b"committed\n")
 def _run_a_halts(root: Path, sizing: str) -> None:
     (root / "pkg").mkdir(exist_ok=True)
     (root / "pkg" / "w.py").write_text("withheld hunk\n", encoding="utf-8", newline="\n")
-    d = root / RECORD_DIR_ROOT / "runA"
-    d.mkdir(parents=True)
-    (d / "halted.json").write_text(
-        json.dumps({"status": "halted", "sizing_rel": sizing, "run_artifacts": {"withheld": {"pkg/w.py": "why"}}}),
-        encoding="utf-8",
+    halted_withheld_index.add_run(
+        root, "runA", ["pkg/w.py"], sizing_rel=sizing, prints={"pkg/w.py": fingerprint(root, "pkg/w.py")}
     )
-    (d / WITHHELD_PRINTS_FILE).write_text(json.dumps({"pkg/w.py": fingerprint(root, "pkg/w.py")}), encoding="utf-8")
-    halted_withheld_index.add_run(root, "runA", ["pkg/w.py"])
     (root / halted_withheld_index.INDEX_DIR / halted_withheld_index.SENTINEL).write_bytes(b"")
 
 

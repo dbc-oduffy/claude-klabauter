@@ -102,64 +102,29 @@ def pre_existing_dirt(
 WITHHELD_PRINTS_FILE = "withheld-prints.json"
 
 
-def _norm_rel(p: object) -> Optional[str]:
-    if not isinstance(p, str) or not p:
-        return None
-    cleaned = _clean_paths([p])
-    return next(iter(cleaned), None)
-
-
-def _read_prints(run_record: Path) -> dict[str, str]:
-    try:
-        data = json.loads((run_record / WITHHELD_PRINTS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    out: dict[str, str] = {}
-    for k, v in data.items():
-        key = _norm_rel(k)
-        if key is not None and isinstance(v, str) and v:
-            out[key] = v
-    return out
-
-
 def predecessor_withheld(root: Path, sizing_rel: Optional[str], run_dir: Path) -> frozenset[str]:
-    """Keys of ``halted.json`` ``run_artifacts.withheld`` of every other run whose halt marker is
-    bound to ``sizing_rel``: the work an earlier run of the same sizing left on disk. Spawn-free;
-    a dir without a readable matching marker contributes nothing. ``run_dir`` itself is skipped.
-    Every indexed same-sizing halt is walked, not only the last holder of each path, so a later
+    """The paths an earlier run of ``sizing_rel`` left withheld on disk, answered from the per-run
+    index alone (no ``halted.json`` is opened). ``run_dir`` itself is skipped.
+    Every indexed same-sizing run is walked, not only the last holder of each path, so a later
     run that changed a path an earlier run withheld still chains. A path is credited only while its
-    current blob equals the print recorded by the newest same-sizing halt that withheld it
-    (newest by ``halted.json`` mtime, run id as tiebreak); a missing record, a missing print or a
-    mismatch credits nothing (a foreign edit after the halt stays dirt)."""
+    current blob equals the print the newest same-sizing run that withheld it recorded (newest by
+    index ``at_ns``, run id as tiebreak); a missing print or a mismatch credits nothing (a foreign
+    edit after the halt stays dirt), and only credited paths are fingerprinted."""
     if not sizing_rel:
         return frozenset()
-    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
-    from coordinator_core.ops.dispatch_emit.halted_withheld_index import run_ids, withheld_by_path
+    from coordinator_core.ops.dispatch_emit.halted_withheld_index import entries
 
     norm = PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
-    withheld_by_path(Path(root))  # builds the index once when its sentinel is absent
     newest: dict[str, tuple[tuple[int, str], Optional[str]]] = {}
-    for run_id in run_ids(Path(root)):
-        if run_id == run_dir.name:
+    for run_id, entry in entries(Path(root)).items():
+        if run_id == run_dir.name or not entry.paths or entry.sizing_rel is None:
             continue
-        halted = Path(root) / RECORD_DIR_ROOT / run_id / "halted.json"
-        try:
-            data = json.loads(halted.read_text(encoding="utf-8"))
-            stamp = (halted.stat().st_mtime_ns, run_id)
-        except (OSError, ValueError):
+        if PurePosixPath(entry.sizing_rel.replace("\\", "/")).as_posix() != norm:
             continue
-        bound = data.get("sizing_rel") if isinstance(data, dict) else None
-        if not isinstance(bound, str) or PurePosixPath(bound.replace("\\", "/")).as_posix() != norm:
-            continue
-        arts = data.get("run_artifacts")
-        withheld = arts.get("withheld") if isinstance(arts, dict) else None
-        if isinstance(withheld, dict):
-            prints = _read_prints(Path(root) / RECORD_DIR_ROOT / run_id)
-            for p in _clean_paths(withheld):
-                if p not in newest or stamp > newest[p][0]:
-                    newest[p] = (stamp, prints.get(p))
+        stamp = (entry.at_ns, run_id)
+        for p in _clean_paths(entry.paths):
+            if p not in newest or stamp > newest[p][0]:
+                newest[p] = (stamp, entry.prints.get(p))
     return frozenset(p for p, (_, print_) in newest.items() if print_ is not None and print_ == fingerprint(root, p))
 
 
@@ -173,29 +138,18 @@ def exclude_halted_withheld(
     so the hunk reads as this run's own write. Different sizing: the path is omitted, and an
     unbaselined path is neither unwritten nor dirt. A print that no longer matches the live blob
     leaves the capture alone. Spawn-free."""
-    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
-    from coordinator_core.ops.dispatch_emit.halted_withheld_index import run_ids
+    from coordinator_core.ops.dispatch_emit.halted_withheld_index import entries
 
     norm = PurePosixPath(sizing_rel.replace("\\", "/")).as_posix() if sizing_rel else None
     same: set[str] = set()
     foreign: set[str] = set()
-    for run_id in run_ids(Path(root)):
-        if run_id == run_name:
+    for run_id, entry in entries(Path(root)).items():
+        if run_id == run_name or not entry.paths:
             continue
-        rec = Path(root) / RECORD_DIR_ROOT / run_id
-        try:
-            data = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        arts = data.get("run_artifacts") if isinstance(data, dict) else None
-        withheld = arts.get("withheld") if isinstance(arts, dict) else None
-        if not isinstance(withheld, dict):
-            continue
-        bound = data.get("sizing_rel")
-        is_same = norm is not None and isinstance(bound, str) and PurePosixPath(bound.replace("\\", "/")).as_posix() == norm
-        prints = _read_prints(rec)
-        for p in _clean_paths(withheld):
-            if p in captured and captured[p] is not None and prints.get(p) == captured[p]:
+        bound = entry.sizing_rel
+        is_same = norm is not None and bound is not None and PurePosixPath(bound.replace("\\", "/")).as_posix() == norm
+        for p in _clean_paths(entry.paths):
+            if p in captured and captured[p] is not None and entry.prints.get(p) == captured[p]:
                 (same if is_same else foreign).add(p)
     foreign -= same
     if not same and not foreign:

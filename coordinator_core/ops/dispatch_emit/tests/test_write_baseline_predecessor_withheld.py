@@ -1,58 +1,44 @@
-"""predecessor_withheld: sizing binding, path hygiene, index-bounded scan, content-tied credit; pre_existing_dirt exemption."""
+"""predecessor_withheld: sizing binding, path hygiene, index-only read, content-tied credit; pre_existing_dirt exemption."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import halted_withheld_index
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
-from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE, pre_existing_dirt, predecessor_withheld
+from coordinator_core.ops.dispatch_emit.write_baseline import pre_existing_dirt, predecessor_withheld
 
 SIZING = "state/sizings/a.yaml"
 
 
-def _halt(root: Path, run_id: str, sizing, withheld, *, raw: str | None = None, prints: bool = True) -> Path:
-    d = root / RECORD_DIR_ROOT / run_id
-    d.mkdir(parents=True, exist_ok=True)
-    if prints and isinstance(withheld, dict):
-        rec = {}
-        for k in withheld:
-            if k.startswith(("/", ".", "C:")) and k != "./ok.py":
-                continue
-            f = root / k
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(k, encoding="utf-8")
-            rec[k] = fingerprint(root, k)
-        (d / WITHHELD_PRINTS_FILE).write_text(json.dumps(rec), encoding="utf-8")
-    body = raw if raw is not None else json.dumps(
-        {"status": "halted", "sizing_rel": sizing, "run_artifacts": {"withheld": withheld}}
-    )
-    (d / "halted.json").write_text(body, encoding="utf-8")
-    return d
-
-
-def _index(root: Path, run_id: str, paths) -> None:
-    halted_withheld_index.add_run(root, run_id, paths)
+def _index(root: Path, run_id: str, paths, *, sizing=SIZING, prints=None, at_ns=None) -> None:
+    """Write the run's files, then its index entry; prints default to the files' current blob ids."""
+    for k in paths:
+        if k.startswith(("/", "C:")) or ".." in k or k == ".":
+            continue
+        f = root / k
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(k, encoding="utf-8")
+    if prints is None:
+        prints = {k: fingerprint(root, k) for k in paths if (root / k).is_file()}
+    halted_withheld_index.add_run(root, run_id, paths, sizing_rel=sizing, prints=prints, at_ns=at_ns)
     (root / halted_withheld_index.INDEX_DIR / halted_withheld_index.SENTINEL).write_bytes(b"")
 
 
 def test_matching_sizing_returns_keys(tmp_path):
-    _halt(tmp_path, "r1", SIZING, {"a.py": "why", "b/c.py": "why"})
     _index(tmp_path, "r1", ["a.py", "b/c.py"])
     assert predecessor_withheld(tmp_path, SIZING, tmp_path / "run-x") == frozenset({"a.py", "b/c.py"})
 
 
-def test_backslash_and_dot_prefix_sizing_normalized(tmp_path):
-    _halt(tmp_path, "r1", "state\\sizings\\a.yaml", {"a.py": "w"})
-    _index(tmp_path, "r1", ["a.py"])
+def test_backslash_sizing_normalized(tmp_path):
+    _index(tmp_path, "r1", ["a.py"], sizing="state\\sizings\\a.yaml")
+    assert predecessor_withheld(tmp_path, "state\\sizings\\a.yaml", tmp_path / "x") == frozenset({"a.py"})
     assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"a.py"})
 
 
-def test_different_sizing_contributes_nothing(tmp_path):
-    _halt(tmp_path, "r1", "state/sizings/other.yaml", {"a.py": "w"})
-    _index(tmp_path, "r1", ["a.py"])
+def test_different_or_unbound_sizing_contributes_nothing(tmp_path):
+    _index(tmp_path, "r1", ["a.py"], sizing="state/sizings/other.yaml")
+    _index(tmp_path, "r2", ["b.py"], sizing="")
     assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
 
 
@@ -60,38 +46,59 @@ def test_empty_sizing_returns_empty(tmp_path):
     assert predecessor_withheld(tmp_path, None, tmp_path / "x") == frozenset()
 
 
-def test_malformed_halted_json_skipped(tmp_path):
-    _halt(tmp_path, "bad", None, None, raw="{not json")
-    _halt(tmp_path, "good", SIZING, {"g.py": "w"})
-    _index(tmp_path, "bad", ["z.py"])
-    _index(tmp_path, "good", ["g.py"])
-    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"g.py"})
-
-
 def test_absolute_and_parent_paths_rejected(tmp_path):
-    _halt(
-        tmp_path,
-        "r1",
-        SIZING,
-        # abs-path-ok: rejected-input fixture, never opened
-        {"/etc/passwd": "w", "../up.py": "w", "C:/x.py": "w", ".": "w", "./ok.py": "w", "ok2.py": "w"},
-    )
-    _index(tmp_path, "r1", ["ok.py"])
-    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"ok.py", "ok2.py"})
+    bad = {"/etc/passwd": "a" * 40, "../up.py": "a" * 40, "C:/x.py": "a" * 40}  # abs-path-ok: rejected-input fixture, never opened
+    (tmp_path / "ok.py").write_text("ok.py", encoding="utf-8")
+    _index(tmp_path, "r1", ["ok.py", *bad], prints={**bad, "ok.py": fingerprint(tmp_path, "ok.py")})
+    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"ok.py"})
 
 
 def test_run_dir_skipped(tmp_path):
-    d = _halt(tmp_path, "self", SIZING, {"mine.py": "w"})
-    _halt(tmp_path, "peer", SIZING, {"peer.py": "w"})
+    d = tmp_path / "self"
     _index(tmp_path, "self", ["mine.py"])
     _index(tmp_path, "peer", ["peer.py"])
     assert predecessor_withheld(tmp_path, SIZING, d) == frozenset({"peer.py"})
 
 
+def test_self_run_never_credits_itself_when_only_indexed_run(tmp_path):
+    _index(tmp_path, "self", ["mine.py"])
+    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "self") == frozenset()
+
+
 def test_run_absent_from_index_not_scanned(tmp_path):
-    _halt(tmp_path, "r1", SIZING, {"a.py": "w"})
-    _index(tmp_path, "other", ["zzz.py"])
+    _index(tmp_path, "other", ["zzz.py"], sizing="state/sizings/other.yaml")
+    d = tmp_path / "state" / "warp" / "r1"
+    d.mkdir(parents=True)
+    (d / "halted.json").write_text('{"status": "halted", "sizing_rel": "%s", "run_artifacts": {"withheld": {"a.py": "w"}}}' % SIZING, encoding="utf-8")
     assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
+
+
+def test_opens_no_halted_json(tmp_path, monkeypatch):
+    _index(tmp_path, "r1", ["a.py"])
+    opened: list[str] = []
+    real_read_text, real_read_bytes, real_open = Path.read_text, Path.read_bytes, Path.open
+
+    def spy(real):
+        def wrapped(self, *a, **k):
+            opened.append(self.name)
+            return real(self, *a, **k)
+
+        return wrapped
+
+    monkeypatch.setattr(Path, "read_text", spy(real_read_text))
+    monkeypatch.setattr(Path, "read_bytes", spy(real_read_bytes))
+    monkeypatch.setattr(Path, "open", spy(real_open))
+    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"a.py"})
+    assert "halted.json" not in opened and "withheld-prints.json" not in opened
+
+
+def test_newest_print_wins_per_path(tmp_path):
+    _index(tmp_path, "old", ["a.py"], at_ns=1)
+    current = fingerprint(tmp_path, "a.py")
+    _index(tmp_path, "new", ["a.py"], prints={"a.py": "b" * 40}, at_ns=2)
+    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
+    _index(tmp_path, "new", ["a.py"], prints={"a.py": current}, at_ns=3)
+    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"a.py"})
 
 
 def test_pre_existing_dirt_exempts_head_equal_path_only(tmp_path, monkeypatch):
@@ -115,54 +122,19 @@ def test_head_blob_differing_from_tree_is_still_dirt(tmp_path, monkeypatch):
 
 
 def test_edit_after_halt_is_not_credited(tmp_path):
-    _halt(tmp_path, "r1", SIZING, {"a.py": "w", "b.py": "w"})
     _index(tmp_path, "r1", ["a.py", "b.py"])
     (tmp_path / "a.py").write_text("foreign edit", encoding="utf-8")
     assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"b.py"})
 
 
-def test_no_prints_record_fails_closed(tmp_path):
-    _halt(tmp_path, "r1", SIZING, {"a.py": "w"}, prints=False)
-    (tmp_path / "a.py").write_text("a.py", encoding="utf-8")
-    _index(tmp_path, "r1", ["a.py"])
+def test_missing_or_empty_print_fails_closed(tmp_path):
+    _index(tmp_path, "r1", ["a.py"], prints={})
     assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
-
-
-def test_malformed_prints_record_fails_closed(tmp_path):
-    d = _halt(tmp_path, "r1", SIZING, {"a.py": "w"})
-    _index(tmp_path, "r1", ["a.py"])
-    for raw in ("{nope", "[]", json.dumps({"a.py": 5}), json.dumps({"a.py": ""})):
-        (d / WITHHELD_PRINTS_FILE).write_text(raw, encoding="utf-8")
-        assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
+    _index(tmp_path, "r1", ["a.py"], prints={"a.py": ""})
+    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
 
 
 def test_absent_file_not_credited(tmp_path):
-    _halt(tmp_path, "r1", SIZING, {"a.py": "w"})
     _index(tmp_path, "r1", ["a.py"])
     (tmp_path / "a.py").unlink()
     assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
-
-
-def test_non_dict_halted_and_bad_withheld_shapes_fail_closed(tmp_path):
-    _halt(tmp_path, "a", None, None, raw="[1, 2]")
-    _halt(tmp_path, "b", SIZING, ["a.py"], raw=json.dumps({"sizing_rel": SIZING, "run_artifacts": {"withheld": ["a.py"]}}))
-    _halt(tmp_path, "c", SIZING, None, raw=json.dumps({"sizing_rel": SIZING, "run_artifacts": "x"}))
-    _halt(tmp_path, "d", SIZING, None, raw=json.dumps({"sizing_rel": 7, "run_artifacts": {"withheld": {"a.py": "w"}}}))
-    for r in "abcd":
-        _index(tmp_path, r, ["a.py"])
-    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset()
-
-
-def test_bad_withheld_keys_never_credited_even_with_prints(tmp_path):
-    d = _halt(tmp_path, "r1", SIZING, {"../up.py": "w", "ok.py": "w"})
-    prints = json.loads((d / WITHHELD_PRINTS_FILE).read_text(encoding="utf-8"))
-    prints["../up.py"] = "a" * 40
-    (d / WITHHELD_PRINTS_FILE).write_text(json.dumps(prints), encoding="utf-8")
-    _index(tmp_path, "r1", ["ok.py"])
-    assert predecessor_withheld(tmp_path, SIZING, tmp_path / "x") == frozenset({"ok.py"})
-
-
-def test_self_run_never_credits_itself_when_only_indexed_run(tmp_path):
-    d = _halt(tmp_path, "self", SIZING, {"mine.py": "w"})
-    _index(tmp_path, "self", ["mine.py"])
-    assert predecessor_withheld(tmp_path, SIZING, d) == frozenset()

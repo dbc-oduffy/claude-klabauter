@@ -161,11 +161,18 @@ def co_declared_peer_holds(
                 root, own_run_id, wanted, own_plan=own_plan, minted_before=minted_before, own_declared=own,
                 unlanded=unlanded,
             ))
+            indexed = _indexed_declared(root)
             spine_runs = []
             for run_id in unlanded:
+                if run_id in indexed:
+                    if not warp_run_deliverable._halted(root, run_id):
+                        for path in wanted:
+                            if path in indexed[run_id]:
+                                claims.setdefault(path, run_id)
+                    continue
                 if warp_run_deliverable._halted(root, run_id):
                     continue
-                paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
+                paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)  # unindexed run
                 if not (paths or prefixes):
                     spine_runs.append(run_id)
             land_deadline.check("peer_hunk_gate.sibling_spine")
@@ -183,7 +190,9 @@ def co_declared_peer_holds(
             if holders:
                 for run_id in unlanded:
                     for path in wanted:
-                        if path in holders and run_id not in holders[path] and _also_claims(root, run_id, path):
+                        if path in holders and run_id not in holders[path] and _also_claims(
+                            root, run_id, path, indexed,
+                        ):
                             holders[path].append(run_id)
             pairs = [
                 (p, r) for p in wanted if p in holders and p in own
@@ -197,17 +206,33 @@ def co_declared_peer_holds(
         return [(p, UNREADABLE_PEER_CLAIMS) for p in wanted if p in own]
 
 
-def _also_claims(root: Path, run_id: str, path: str) -> bool:
+def _indexed_declared(root: Path) -> dict:
+    """`{run_id: declared paths}` for every run whose staged footprint the per-run index records: one
+    directory listing, no per-sibling manifest parse. Empty when the index is unreadable."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+        return {r: frozenset(e.declared) for r, e in halted_withheld_index.entries(root).items() if e.declared}
+    except Exception:  # noqa: BLE001 -- no index: every live sibling is read through its spine
+        return {}
+
+
+def _also_claims(root: Path, run_id: str, path: str, indexed: dict) -> bool:
     """Whether an unlanded `run_id` claims an already-contested `path` without a status read: a halted
-    run when it withholds the path; a live run when its manifest, extra records or plan spine declare
-    it. Dirt-only halted claims name only the first claimant (they need the shared status read)."""
+    run when it withholds the path; a live run when the index's declared footprint, its extra records or
+    (no indexed footprint) its plan spine declare it. Dirt-only halted claims name only the first claimant
+    (they need the shared status read)."""
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     try:
         if warp_run_deliverable._halted(root, run_id):
             return path in {_norm(w) for w in warp_run_deliverable.halted_withheld_paths(root, run_id)}
-        if sibling_claims._declares(root, run_id, path) or path in sibling_claims._extra_declared(root, run_id):
+        if path in indexed.get(run_id, ()) or path in sibling_claims._extra_declared(root, run_id):
+            return True
+        if run_id in indexed:
+            return False
+        if sibling_claims._declares(root, run_id, path):  # unindexed run: its manifest
             return True
         paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
         if paths or prefixes:

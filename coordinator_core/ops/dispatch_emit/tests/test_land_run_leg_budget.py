@@ -1,11 +1,13 @@
-"""Leg-budget pins for `dispatch.land_run`: sibling spines are read once per op, and the
-script_read-to-integrity span spawns nothing. Counts, never wall clock (peer load moves wall)."""
+"""Leg-budget pins for `dispatch.land_run`: sibling spines are read once per op, the
+script_read-to-integrity span spawns nothing, and an indexed sibling's claim costs no per-sibling parse.
+Counts, never wall clock (peer load moves wall)."""
 
 from __future__ import annotations
 
 import pytest
 
 from coordinator_core.benchmarks import land_run_leg_budget_profile as prof
+from coordinator_core.ops.dispatch_emit import halted_withheld_index, peer_hunk_gate, run_token
 
 SIBLINGS = 6
 
@@ -35,3 +37,67 @@ def test_read_to_integrity_span_is_measured_and_spawns_nothing(rows) -> None:
     span = rows[prof.AXIS_READ_TO_INTEGRITY]
     assert span.attribution["measured"] is True
     assert span.spawns == 0
+
+
+PATH = "pkg/shared.py"
+OWN = "plan-20200101T000000-aaaaaa"
+
+
+def _live_sibling(root, run_id: str, declared: str, *, indexed: bool) -> None:
+    """An unlanded sibling with a fresh token and no manifest or spine on disk."""
+    (root / ".git").mkdir(exist_ok=True)
+    (root / "state" / "warp" / run_id).mkdir(parents=True, exist_ok=True)
+    run_token.mint(root, run_id, "run-sib.mjs", session_id="00000000-0000-4000-8000-000000000001")
+    if indexed:
+        halted_withheld_index.record_declared(root, run_id, [declared])
+
+
+def _count_parses(monkeypatch) -> dict:
+    from coordinator_core.ops import warp_run_deliverable
+
+    calls = {"manifest": 0, "spine": 0}
+    real_manifest, real_spine = warp_run_deliverable._manifest_declared, peer_hunk_gate._sibling_spines
+
+    def manifest(*a, **k):
+        calls["manifest"] += 1
+        return real_manifest(*a, **k)
+
+    def spine(root, run_ids):
+        calls["spine"] += len(list(run_ids))
+        return real_spine(root, run_ids)
+
+    monkeypatch.setattr(warp_run_deliverable, "_manifest_declared", manifest)
+    monkeypatch.setattr(peer_hunk_gate, "_sibling_spines", spine)
+    return calls
+
+
+def test_indexed_sibling_is_named_from_the_index_with_no_per_sibling_parse(tmp_path, monkeypatch) -> None:
+    halted_withheld_index.rebuild(tmp_path)
+    siblings = [prof.sibling_run_id(i) for i in range(SIBLINGS)]
+    for run_id in siblings:
+        _live_sibling(tmp_path, run_id, PATH, indexed=True)
+    calls = _count_parses(monkeypatch)
+
+    holds = peer_hunk_gate.co_declared_peer_holds(tmp_path, OWN, [PATH], [PATH])
+
+    assert sorted(s for _p, s in holds) == sorted(siblings)
+    assert calls == {"manifest": 0, "spine": 0}
+
+
+def test_indexed_sibling_declaring_another_path_holds_nothing(tmp_path) -> None:
+    halted_withheld_index.rebuild(tmp_path)
+    _live_sibling(tmp_path, prof.sibling_run_id(0), "pkg/other.py", indexed=True)
+
+    assert peer_hunk_gate.co_declared_peer_holds(tmp_path, OWN, [PATH], [PATH]) == []
+
+
+def test_unindexed_sibling_still_reads_its_own_records(tmp_path, monkeypatch) -> None:
+    halted_withheld_index.rebuild(tmp_path)
+    run_id = prof.sibling_run_id(0)
+    _live_sibling(tmp_path, run_id, PATH, indexed=False)
+    calls = _count_parses(monkeypatch)
+
+    peer_hunk_gate.co_declared_peer_holds(tmp_path, OWN, [PATH], [PATH])
+
+    assert calls["manifest"] >= 1
+    assert halted_withheld_index.entries(tmp_path) == {}

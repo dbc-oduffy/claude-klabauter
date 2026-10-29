@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.git import call_io_scope
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_HELD_ROWS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
@@ -60,9 +61,18 @@ def _norm(sizing_rel: str) -> str:
     return PurePosixPath(sizing_rel.replace("\\", "/")).as_posix()
 
 
+def _marker_text(record_dir: Path) -> str:
+    """`halted.json` text, read through the open `call_io_scope` (one read per path per scope);
+    FileNotFoundError when absent. `_write` drops the cached read."""
+    raw = call_io_scope.read_bytes(Path(record_dir) / HALTED_FILE)
+    if raw is None:
+        raise FileNotFoundError(HALTED_FILE)
+    return raw.decode("utf-8")
+
+
 def _read(record_dir: Path) -> Optional[dict]:
     try:
-        data = json.loads((record_dir / HALTED_FILE).read_text(encoding="utf-8"))
+        data = json.loads(_marker_text(record_dir))
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -72,7 +82,7 @@ def read_strict(record_dir: Path) -> Optional[dict]:
     """The marker, None when `halted.json` is absent; ValueError when it exists but is unreadable,
     not JSON, or not an object. For hold computations, where a corrupt marker must hold."""
     try:
-        data = json.loads((record_dir / HALTED_FILE).read_text(encoding="utf-8"))
+        data = json.loads(_marker_text(record_dir))
     except FileNotFoundError:
         return None
     except (OSError, ValueError) as exc:
@@ -105,6 +115,7 @@ def read_strict_run(record_dir: Path) -> Optional[dict]:
 def _write(record_dir: Path, payload: dict) -> Path:
     target = record_dir / HALTED_FILE
     atomic_write_bytes(target, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
+    call_io_scope.invalidate(path=target)
     return target
 
 
@@ -286,7 +297,7 @@ def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:
             return name
         if status == STATUS_RESUMED and skipped:
             _write(root / name, {**marker, "status": STATUS_HALTED})
-            _index_call("add_run", root / name, halted_withheld(root / name))
+            _index_call("add_run", root / name, halted_withheld(root / name), sizing_rel=norm)
             return name
         return None
     return None
@@ -325,7 +336,7 @@ def rebind_blocker(repo_root: Path, run_id: str, session_id: str) -> Optional[st
     return None if session_live(recorded) else EMITTER_GONE
 
 
-def _index_call(fn: str, record_dir: Path, *args) -> None:
+def _index_call(fn: str, record_dir: Path, *args, **kwargs) -> None:
     """Mirror a marker transition into the halted-withheld index of the checkout holding `record_dir`
     (`<root>/<RECORD_DIR_ROOT>/<run>`). Best-effort: the marker write is the truth, so an index
     failure never fails the transition. Imported lazily: the index module imports this one."""
@@ -333,9 +344,22 @@ def _index_call(fn: str, record_dir: Path, *args) -> None:
 
     rd = Path(record_dir)
     try:
-        getattr(idx, fn)(rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)], rd.name, *args)
+        getattr(idx, fn)(rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)], rd.name, *args, **kwargs)
     except (OSError, ValueError, IndexError):
         pass
+
+
+def _withheld_prints(record_dir: Path, withheld: dict) -> dict:
+    """Blob id of each withheld path as it stands in the checkout holding `record_dir`; a path that
+    is absent or unreadable is left out. The same fingerprint `_record_withheld_prints` records."""
+    from coordinator_core.ops.dispatch_emit.kept_work import fingerprint
+
+    rd = Path(record_dir)
+    try:
+        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
+    except IndexError:
+        return {}
+    return {p: f for p in sorted(withheld) if isinstance(p, str) and (f := fingerprint(root, p)) is not None}
 
 
 def record_withheld(record_dir: Path, withheld: dict) -> bool:
@@ -346,7 +370,10 @@ def record_withheld(record_dir: Path, withheld: dict) -> bool:
     if not withheld or marker is None or marker.get("status") != STATUS_HALTED:
         return False
     _write(Path(record_dir), {**marker, HALT_RUN_ARTIFACTS_FIELD: {"withheld": dict(sorted(withheld.items()))}})
-    _index_call("add_run", record_dir, withheld)
+    _index_call(
+        "add_run", record_dir, withheld,
+        sizing_rel=marker.get("sizing_rel") or "", prints=_withheld_prints(record_dir, withheld),
+    )
     return True
 
 

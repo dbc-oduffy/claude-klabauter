@@ -59,3 +59,27 @@ def test_an_unblocked_rebind_records_no_resumed_from(repo, monkeypatch):
     _halt(repo)
     assert _fire(repo)["run_id"] == OLDER
     assert (rl.read_run(rl.run_dir(repo, OLDER)) or {}).get(rl.RESUMED_FROM_FIELD) is None
+
+
+def _abandon(repo, run_id):
+    return op._dispatch_emit({"abandon_run": run_id, "target_root": str(repo)}, repo)
+
+
+def test_abandoning_a_recomposed_run_nothing_started_closes_it(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run as hr
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    reply = _blocked_fire(repo, monkeypatch)
+    rid = reply["run_id"]
+    assert _abandon(repo, rid)["abandoned"] is True
+    assert hr._read(record_dir(repo, rid))["status"] == hr.STATUS_CLOSED
+
+
+def test_abandon_leaves_a_run_without_resumed_from_alone(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run as hr
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    _halt(repo)
+    assert _fire(repo)["run_id"] == OLDER
+    assert _abandon(repo, OLDER)["abandoned"] is False
+    assert hr._read(record_dir(repo, OLDER))["status"] != hr.STATUS_CLOSED

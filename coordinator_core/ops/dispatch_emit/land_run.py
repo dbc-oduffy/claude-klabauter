@@ -1147,14 +1147,14 @@ def _halted_only_release(
     """Ids of the halted runs whose hold on `foreign_held` the landing run `run_id` may override, else None.
 
     Armed only when `run_id` itself carries a halted marker (the door `record_halted_run_landed` takes),
-    `halted_hold_release.halted_only_withholders` names every withholder and each is a halted run, and no
-    sibling `co_declared_peer_holds` reports is outside that set. Whole paths only (DR-462): the caller
-    lands the held paths as ordinary candidates. Never raises; None keeps the refusal.
+    `halted_hold_release.halted_only_withholders` names every withholder and each is a halted run. A
+    peer's claim never gates it (DR-474: claims are provenance; a halted run holds nothing). Whole paths
+    only: the caller lands the held paths as ordinary candidates. Never raises; None keeps the exclusion.
     """
     if not foreign_held or not run_id:
         return None
     try:
-        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, peer_hunk_gate
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
         from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
         marker = halted_run._read(record_dir(root, run_id))
@@ -1162,11 +1162,6 @@ def _halted_only_release(
             return None
         holders = halted_hold_release.halted_only_withholders(root, run_id)
         if not holders or not set(foreign_held.values()) <= set(holders):
-            return None
-        holds = peer_hunk_gate.co_declared_peer_holds(
-            root, run_id, sorted(foreign_held), declared, own_plan=plan_rel, minted_before=minted_before,
-        )
-        if any(sibling not in holders for _, sibling in holds):
             return None
         return list(holders)
     except Exception:  # noqa: BLE001 -- unknown claim: the refusal stands
@@ -3246,6 +3241,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if foreign_held:
         from coordinator_core.ops.dispatch_emit import landing_integrity as li, peer_hunk_gate
 
+        # Non-retired job: provenance only. The claims a halted holder's withheld path carries are
+        # recorded in the reply for the commit agent; they never refuse (DR-474).
         findings += [
             li.Finding(
                 p, peer_hunk_gate.PEER_HUNKS_CO_DECLARED,
@@ -3601,6 +3598,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     _exclude_withheld()
     token_state["landed"] = True
     _settle_token(token_state, landed=True, receipt={"sha": sha, "rows": credited_ids, "paths": list(paths)})
+    if sibling_run_id:
+        try:
+            from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+            halted_withheld_index.record_declared(root, sibling_run_id, [])
+        except Exception:  # noqa: BLE001 -- the commit stands
+            pass
     if applies:
         from coordinator_core.ops.dispatch_emit.run_close import kind_presets, sibling_release
 
@@ -4024,6 +4028,8 @@ def _integrity(
 
     from coordinator_core.ops.dispatch_emit import co_declared_settle
 
+    # Non-retired job: hunk-level settlement (`stage` carries only this run's own hunks of a shared
+    # path) and the provenance record of what stays co-declared. Never a refusal (DR-474).
     stage, still_held = co_declared_settle.settle(root, run_id, merge_ancestry_release.release(
         root, peer_hunk_gate.co_declared_peer_holds(
             root, run_id, live, own_declared, own_plan=plan, minted_before=minted_before,

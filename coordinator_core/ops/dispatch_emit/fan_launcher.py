@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit import emission_receipt
+from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     CHAIN_HANDOFF_KEY,
     LAUNCHER_CHILD_EMIT_PARAM,
@@ -83,12 +84,21 @@ const EMIT_SCHEMA = {
     path: { type: 'string' },
     run_id: { type: 'string' },
     fire_args: { type: 'object' },
+    __REDIRECT_KEY__: { type: 'object' },
     error: { type: 'string' },
   },
 };
 const TWIN_PREFIX = __TWIN_PREFIX__;
 const TWIN_MIDDLE = __TWIN_MIDDLE__;
 const TWIN_SUFFIX = __TWIN_SUFFIX__;
+
+// The only foreign run id accepted: the one this emit minted as the redirect for this child's halted run.
+function _isOwnRedirect(child, e) {
+  const r = e.__REDIRECT_KEY__;
+  return r !== null && typeof r === 'object' && r.halted_run === child.run_id
+    && typeof e.run_id === 'string' && e.run_id !== ''
+    && typeof r.to === 'string' && r.to.split('/').pop() === e.run_id + '.workflow.mjs';
+}
 
 function _emitRefusal(child, e, chained) {
   if (!e || typeof e !== 'object') return 'emit reply is not an object';
@@ -97,7 +107,7 @@ function _emitRefusal(child, e, chained) {
     if (typeof e.run_id !== 'string' || e.run_id === '' || e.run_id === child.run_id) {
       return 'chain emit reply run_id ' + String(e.run_id) + ' is not a fresh run id';
     }
-  } else if (e.run_id !== child.run_id) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
+  } else if (e.run_id !== child.run_id && !_isOwnRedirect(child, e)) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
   if (typeof e.path !== 'string' || e.path === '') return 'emit reply path is not a non-empty string';
   const p = e.path.replace(/\\/g, '/');
   if (p.split('/').indexOf('..') !== -1) return 'emit reply path contains ..';
@@ -114,7 +124,7 @@ async function _emitLeg(child, emitParams, label) {
   const params = JSON.stringify(emitParams).replace(/'/g, "'\\''");
   const reply = await agent(
     'Run `' + INVOKE + ' ' + EMIT_OP + " '" + params + "'` once, with the command word exactly as written, and "
-    + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
+    + 'return path, run_id and fire_args from its JSON reply verbatim, plus __REDIRECT_KEY__ when the reply carries it. When the command is denied or fails, '
     + "return the command's error text verbatim (its stderr or the denial message) in the error field, "
     + 'with path as an empty string and fire_args as {}; on success omit error.',
     { label: label, phase: 'emit', agentType: 'general-purpose', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
@@ -183,6 +193,16 @@ async function _chainHop(child, handoff) {
   return { run_id: child.run_id, status: 'ok', result: tagged };
 }
 
+// A recomposed run this emit minted that nothing started is closed engine-side; the engine leaves a run that already progressed.
+async function _abandonRedirect(child, emitted) {
+  if (emitted === null || typeof emitted !== 'object' || !_isOwnRedirect(child, emitted)) return;
+  try {
+    await _emitLeg(child, { ...child.emit_params, abandon_run: emitted.run_id }, 'abandon-' + emitted.run_id);
+  } catch (e) {
+    return;
+  }
+}
+
 async function _runChild(child) {
   let emitted;
   try {
@@ -191,8 +211,12 @@ async function _runChild(child) {
     return { run_id: child.run_id, status: 'emit_refused', error: String(e && e.message ? e.message : e) };
   }
   const refusal = _emitRefusal(child, emitted, false);
-  if (refusal !== null) return { run_id: child.run_id, status: 'emit_refused', error: refusal };
-  const first = await _startLoop(child, child.run_id, emitted.path.replace(/\\/g, '/'));
+  if (refusal !== null) {
+    await _abandonRedirect(child, emitted);
+    return { run_id: child.run_id, status: 'emit_refused', error: refusal };
+  }
+  const first = await _startLoop(child, emitted.run_id, emitted.path.replace(/\\/g, '/'));
+  if (first.status !== 'ok') await _abandonRedirect(child, emitted);
   const handoff = first.status === 'ok' ? _handoffOf(first.result) : null;
   return handoff === null ? first : _chainHop(child, handoff);
 }
@@ -227,6 +251,7 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild]) -> str:
         "__INVOKE__": lit(_INVOKE),
         "__EMIT_OP__": lit(_EMIT_OP),
         "__PENDING_KEY__": STAGE_PENDING_KEY,
+        "__REDIRECT_KEY__": OUTPUT_PATH_REDIRECT_KEY,
         "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
         "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
         "__REFIRE_HEAD__": lit(refire_head),

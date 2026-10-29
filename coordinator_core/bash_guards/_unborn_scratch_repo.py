@@ -65,6 +65,38 @@ def _git(run_git: GitRunner, root: str, *args: str) -> str | None:
     return out if rc == 0 else None
 
 
+# Bounds the network call: no credential prompt, abort an HTTP transfer stalled for 2s.
+_LS_REMOTE_BOUNDED = (
+    "-c", "credential.interactive=never", "-c", "core.askPass=",
+    "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=2",
+)
+
+
+def _remote_advertised_tag_commits(run_git: GitRunner, root: str) -> list[str]:
+    """Commit ids of local tags that `origin` advertises under the same name and object; [] when
+    none, or when the remote cannot be read (the caller then keeps the tag ahead = UNPUSHED).
+    """
+    local = _git(
+        run_git, root, "for-each-ref", "--format=%(refname) %(objectname) %(*objectname)", "refs/tags"
+    )
+    remote = (
+        _git(run_git, root, *_LS_REMOTE_BOUNDED, "ls-remote", "--tags", "origin") if local else None
+    )
+    if not local or not remote:
+        return []
+    advertised: dict[str, str] = {}
+    for line in remote.splitlines():
+        oid, _, ref = line.partition("\t")
+        if oid and ref and not ref.endswith("^{}"):
+            advertised[ref.strip()] = oid.strip()
+    commits: list[str] = []
+    for line in local.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and advertised.get(parts[0]) == parts[1]:
+            commits.append(parts[2] if len(parts) > 2 else parts[1])
+    return commits
+
+
 def scratch_clone_failures(root: str, run_git: GitRunner) -> list[str] | None:
     """None when root is not a non-bare repo under an enclosing repo's `scratch/` (the predicate
     does not apply). Otherwise the failed recoverable-by-re-clone conditions, a subset of
@@ -75,7 +107,10 @@ def scratch_clone_failures(root: str, run_git: GitRunner) -> list[str] | None:
     any rc != 0 reads as UNREADABLE.
 
     TRAP: a repo with no remote-tracking refs fails UNPUSHED as soon as it has any local ref;
-    a detached HEAD is counted as a local ref. Ignored files are not checked.
+    a detached HEAD is counted as a local ref. A local tag is not under refs/remotes, so when
+    tips are ahead of --remotes, tags `origin` advertises (same name and object) are subtracted
+    via `ls-remote` before UNPUSHED is decided. Spawns: 2 (rev-list, status) when clean, 4 when a
+    tag is ahead. Ignored files are not checked.
     """
     gitdir = os.path.join(root, ".git")
     if not os.path.isdir(gitdir) or not _in_scratch(root):
@@ -93,6 +128,10 @@ def scratch_clone_failures(root: str, run_git: GitRunner) -> list[str] | None:
     except OSError:
         return [UNREADABLE]
     ahead = _git(run_git, root, "rev-list", "--max-count=1", *tips, "--not", "--remotes")
+    if ahead is not None and ahead.strip():
+        pushed = _remote_advertised_tag_commits(run_git, root)
+        if pushed:
+            ahead = _git(run_git, root, "rev-list", "--max-count=1", *tips, "--not", "--remotes", *pushed)
     status = _git(run_git, root, "status", "--porcelain=v1", "--untracked-files=all", "--no-renames")
     if ahead is None or status is None:
         return [UNREADABLE]
