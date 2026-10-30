@@ -92,6 +92,38 @@ def test_untracks_but_keeps_on_disk_and_exempts_memo_outbox(repo, template):
     assert (repo / ".coordinator-local/dispatch-briefs/a.md").exists()
 
 
+UNREAL_TEMPLATE = TEMPLATE + "Intermediate/\n"
+
+
+def test_non_unreal_repo_gets_no_unreal_rule_and_gitignore_unchanged(repo, tmp_path):
+    tmpl = tmp_path / "tmpl-unreal"
+    tmpl.write_text(UNREAL_TEMPLATE, encoding="utf-8")
+    original = ".coordinator-local/\nstate/watch.json\nscratch/\n"
+    (repo / ".gitignore").write_bytes(original.encode())
+    res = apply_runtime_ignore(repo, tmpl)
+    assert res.appended == ()
+    assert (repo / ".gitignore").read_bytes() == original.encode()
+
+
+def test_non_unreal_repo_still_gets_other_rules(repo, tmp_path):
+    tmpl = tmp_path / "tmpl-unreal"
+    tmpl.write_text(UNREAL_TEMPLATE, encoding="utf-8")
+    apply_runtime_ignore(repo, tmpl)
+    text = (repo / ".gitignore").read_text(encoding="utf-8")
+    assert "state/watch.json" in text
+    assert "Intermediate/" not in text
+
+
+@pytest.mark.parametrize("name", ["Game.uproject", "Plug.uplugin"])
+def test_unreal_repo_still_gets_intermediate(repo, tmp_path, name):
+    tmpl = tmp_path / "tmpl-unreal"
+    tmpl.write_text(UNREAL_TEMPLATE, encoding="utf-8")
+    _write(repo, name, "{}\n")
+    res = apply_runtime_ignore(repo, tmpl)
+    assert "Intermediate/" in res.appended
+    assert "Intermediate/" in (repo / ".gitignore").read_text(encoding="utf-8")
+
+
 def test_template_none_is_skipped(repo, monkeypatch):
     monkeypatch.setattr(mod, "resolve_template_path", lambda: None)
     res = apply_runtime_ignore(repo)

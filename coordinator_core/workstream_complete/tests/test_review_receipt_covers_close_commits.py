@@ -81,6 +81,20 @@ def test_bookkeeping_only_commits_after_receipt_do_not_block(tmp_path):
     assert gate.blocks is False
 
 
+def test_memo_send_commits_after_receipt_do_not_block(tmp_path):
+    # The paths memo.send commits: the sent draft and its sent-record.
+    _write_sidecar(tmp_path)
+    gate = _gate(
+        tmp_path,
+        (
+            ("aaaa111", _STAMP_EPOCH - 60, ("src/a.py",)),
+            ("bbbb222", _STAMP_EPOCH + 27, (".coordinator-local/memo-outbox/sent/topic.md",)),
+            ("cccc333", _STAMP_EPOCH + 28, (".coordinator-local/memo-outbox/sent-records/topic/r.json",)),
+        ),
+    )
+    assert gate.blocks is False
+
+
 def test_later_commit_without_paths_still_blocks(tmp_path):
     _write_sidecar(tmp_path)
     gate = _gate(

@@ -2771,7 +2771,14 @@ def _resolve_baton_claim_window_start(root: Path, gate: "SessionShapeGate") -> O
     return claimed_at if isinstance(claimed_at, str) and claimed_at.strip() else None
 
 
-_REVIEW_BOOKKEEPING_PREFIXES = ("state/cross-repo/", "state/warp/", "state/review-trail/diffs/")
+# memo.send commits land under the memo outbox, not state/cross-repo/.
+_REVIEW_BOOKKEEPING_PREFIXES = (
+    "state/cross-repo/",
+    "state/warp/",
+    "state/review-trail/diffs/",
+    ".coordinator-local/memo-outbox/",
+    "state/memo-outbox/",
+)
 
 
 def _commits_past_review(

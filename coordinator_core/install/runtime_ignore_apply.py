@@ -2,7 +2,8 @@
 
 `apply_runtime_ignore` appends the template rules the root `.gitignore` does not cover and
 untracks (`git rm --cached`, index only) the tracked runtime files they match. Paths under
-`UNTRACK_EXEMPT_PREFIXES` (memo-outbox) are never untracked. Never commits.
+`UNTRACK_EXEMPT_PREFIXES` (memo-outbox) are never untracked. `UNREAL_ONLY_RULES` apply only to a
+repo root carrying a `.uproject`/`.uplugin`. Never commits.
 """
 from __future__ import annotations
 
@@ -58,6 +59,17 @@ class ApplyResult:
     skipped: str | None = None
 
 
+UNREAL_ONLY_RULES = frozenset({"Intermediate/"})
+_UNREAL_SUFFIXES = frozenset({".uproject", ".uplugin"})
+
+
+def _is_unreal_repo(root: Path) -> bool:
+    try:
+        return any(p.suffix.lower() in _UNREAL_SUFFIXES for p in root.iterdir())
+    except OSError:
+        return False
+
+
 def _detect_eol(text: str) -> str:
     return "\r\n" if "\r\n" in text else "\n"
 
@@ -84,7 +96,10 @@ def apply_runtime_ignore(repo_root: Path, template: Path | None = None) -> Apply
     if template is None:
         return ApplyResult((), (), "template not found")
 
-    findings = runtime_ignore_findings(root, load_template_rules(template))
+    rules = load_template_rules(template)
+    if not _is_unreal_repo(root):
+        rules = tuple(r for r in rules if r not in UNREAL_ONLY_RULES)
+    findings = runtime_ignore_findings(root, rules)
     if findings.missing:
         _append_rules(root, findings.missing)
     if findings.tracked:

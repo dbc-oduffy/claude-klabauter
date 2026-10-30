@@ -51,9 +51,9 @@ def test_try_warm_dispatch_declines_on_the_forbid_var_alone(monkeypatch):
     assert spawned == []
 
 
-def test_a_test_isolated_runtime_base_is_still_served(monkeypatch):
+def test_a_test_isolated_runtime_base_is_still_served(tmp_path, monkeypatch):
     monkeypatch.setenv(FORBID, "1")
-    monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", "x")
+    monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path / "rt"))
     assert client.process_is_test_marked()
     reached = []
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
