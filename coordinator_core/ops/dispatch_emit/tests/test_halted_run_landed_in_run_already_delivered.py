@@ -130,6 +130,9 @@ def test_sibling_running_status_admitted_only_with_in_run(repo):
     root, first, second = repo
     _manifest(root, "A", first, ["one"])
     _status(root, "A", "running")
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    run_token.mint(root, "A", "scratch/x.py")
     refused = op._handler({"run_id": "A", "sha": second}, root)
     assert not refused["ok"] and "not halted" in refused["error"]
     out = op._handler({"run_id": "A", "sha": second, "in_run": True}, root)

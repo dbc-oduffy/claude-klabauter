@@ -122,8 +122,14 @@ def test_heredoc_that_writes_the_sizing_still_detected():
     assert _sizing_write_denied(_heredoc(f"open('{S}', 'w').write('x')"))
 
 
-def test_check_returns_none_for_a_sizing_write_because_the_deny_is_clamped_to_a_log():
+def test_check_answers_a_sizing_write_with_a_log_level_advisory():
     from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import check
 
     payload = {"tool_name": "Bash", "tool_input": {"command": f"echo x > {S}"}, "session_id": "s"}
-    assert check(payload, ["CLAUDE.md"]) is None
+    # guard-doctrine-surface-bash-write is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403):
+    # it answers with a log-level advisory, never a deny.
+    out = check(payload, ["CLAUDE.md"])
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert out["hookSpecificOutput"]["additionalContext"].startswith("Advisory:")
+    assert out["guardLevel"] == "log"

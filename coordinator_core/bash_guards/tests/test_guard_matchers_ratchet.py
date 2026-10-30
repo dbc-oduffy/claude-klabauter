@@ -488,7 +488,7 @@ def test_discovery_found_the_expected_scope():
     `block_drive_root_new_dir_bash_write`, and 46 -> 47 with
     `guard_disk_fill`."""
     stems = _scoped_module_stems()
-    assert len(stems) == 37, sorted(stems)
+    assert len(stems) == 38, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems
@@ -515,9 +515,9 @@ def test_every_registered_guard_is_classified():
     `block_drive_root_new_dir_bash_write`; 74 -> 75 with
     `block-external-workspace-vcs-write`; 75 -> 76 with `xs-lane-shell-write`; 76 -> 78 with
     `block-em-post-fire-product-write` and `block-em-halted-withheld-commit`; 78 -> 77 retiring
-    `block-em-halted-withheld-commit`; 77 -> 78 with `guard-disk-fill`."""
+    `block-em-halted-withheld-commit`; 77 -> 78 with `guard-disk-fill`; 69 after the DR-475 (307ea22403) reclassification."""
     actual = _actual_matchers()
-    assert len(actual) == 68, sorted(actual)
+    assert len(actual) == 69, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -558,7 +558,7 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 68
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 69
     assert bucket3 == 1, (
         "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "

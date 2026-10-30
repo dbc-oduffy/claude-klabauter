@@ -15,6 +15,42 @@ def test_params_come_out_of_bare_or_wrapped_digest(tmp_path, wrap):
     assert tc._params_from_task_output(str(f)) == digest["next_action"]["params"]
 
 
+SESSION = "4d47f5c4-9b93-49c0-bbbf-a67e580e5bc0"
+
+
+def _task_output(tmp_path, params):
+    f = tmp_path / "out.json"
+    f.write_text(json.dumps({"result": {"next_action": {"params": params}}}), encoding="utf-8")
+    return str(f)
+
+
+def _receipt(root, run_id, session):
+    from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
+
+    script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    emission_receipt_path(script).write_text(json.dumps({"session_id": session}), encoding="utf-8")
+
+
+def test_task_output_params_gain_the_runs_session_id(tmp_path):
+    from coordinator_core.ops.dispatch_emit.land_run import params_from_task_output
+
+    _receipt(tmp_path, "run-1", SESSION)
+    out = _task_output(tmp_path, {"run_id": "run-1", "script_path": "s.js"})
+    assert params_from_task_output(out, tmp_path)["session_id"] == SESSION
+    assert "session_id" not in params_from_task_output(out)
+
+
+def test_a_session_id_the_params_carry_is_kept_and_a_run_without_receipt_gets_none(tmp_path):
+    from coordinator_core.ops.dispatch_emit.land_run import params_from_task_output
+
+    _receipt(tmp_path, "run-1", SESSION)
+    kept = _task_output(tmp_path, {"run_id": "run-1", "session_id": "mine"})
+    assert params_from_task_output(kept, tmp_path)["session_id"] == "mine"
+    bare = _task_output(tmp_path, {"run_id": "run-2"})
+    assert "session_id" not in params_from_task_output(bare, tmp_path)
+
+
 def test_a_file_without_next_action_params_is_refused(tmp_path):
     f = tmp_path / "out.json"
     f.write_text(json.dumps({"result": {"other": 1}}), encoding="utf-8")

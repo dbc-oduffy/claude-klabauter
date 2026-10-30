@@ -674,6 +674,10 @@ def _compose_delivered_content(
                 f"compose it via memo.compose before sending."
             )
 
+    # Mirrors memo.draft's self_addressed refusal for a draft written by hand.
+    if to.strip().lower() == from_id.strip().lower():
+        return None, f"memo.send: SELF-ADDRESSED -- {to!r} is the sending EM. Fix it now, or queue a backlog row."
+
     cc, cc_error = _validate_cc(fm.get("cc"))
     if cc_error is not None:
         return None, cc_error

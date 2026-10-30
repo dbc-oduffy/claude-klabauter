@@ -82,13 +82,15 @@ def test_advisory_is_about_two_lines():
     assert len(DOCTRINE_SURFACE_ADVISORY.splitlines()) == 2
 
 
-def test_gate_on_keeps_the_hard_deny(monkeypatch):
+def test_gate_on_is_advisory_not_deny(monkeypatch):
+    # ADVISORY_BY_RULING: DR-475 (307ea22403), classified by b17ec35251.
     from coordinator_core import machine_profile
 
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "on")
     machine_profile.reset_cache()
     hso = _run(HEREDOC)["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
+    assert hso.get("permissionDecision") != "deny"
+    assert hso["additionalContext"]
 
 
 def test_any_repos_existing_claude_md_warns(tmp_path):

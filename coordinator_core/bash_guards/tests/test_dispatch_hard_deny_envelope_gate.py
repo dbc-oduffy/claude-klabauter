@@ -86,10 +86,10 @@ class TestBashCrossRepoDenyIsSentinelClearable:
     def test_deny_advertises_the_in_band_route_not_the_unlock_recipe(self, repos, monkeypatch):
         _set_anchor(monkeypatch, repos, "sess-deny-1")
         decision, out = _decision(_cross_repo_payload("sess-deny-1", repos))
-        assert decision == "deny"
-        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "machine-local set coordinator.guard_level warn" in reason
-        assert "cross-repo-memo" in reason
+        # bump-foreign-repo-write is off the PM deny allowlist (ADVISORY_BY_RULING, b17ec35251;
+        # DR-475, 307ea22403): it allows with an advisory.
+        assert decision == "allow"
+        reason = out["hookSpecificOutput"]["additionalContext"]
         assert "guard-unlock-" not in reason, (
             "deny reason must never hand out a pasteable unlock recipe (AC-2)"
         )
@@ -99,12 +99,14 @@ class TestBashCrossRepoDenyIsSentinelClearable:
         sentinel = gus.sentinel_path("sess-deny-2", "bump-foreign-repo-write")
         sentinel.write_text("", encoding="utf-8")
 
+        # bump-foreign-repo-write never denies since DR-475 (307ea22403; ADVISORY_BY_RULING in
+        # b17ec35251): nothing to clear, so the sentinel is not consumed and the advisory repeats.
         decision, _out = _decision(_cross_repo_payload("sess-deny-2", repos))
         assert decision == "allow"
-        assert not sentinel.exists()
+        assert sentinel.exists()
 
         decision2, _out2 = _decision(_cross_repo_payload("sess-deny-2", repos))
-        assert decision2 == "deny"
+        assert decision2 == "allow"
 
 
 class TestNoOtherGuardChangesBehaviourUnderTheNewGate:

@@ -285,7 +285,7 @@ RATCHET_BASELINE_MEAN_PROSE_BYTES_PER_BAND: Dict[str, int] = {
     # Lowered 225 -> 215 at merge 7b5405ad04: the corpus gained the whole-filesystem-scan rows
     # (parents 572fba1c48 and 68b5c75cda each added one pair; the duplicate is dropped) and the
     # live ceil5-mean fell to 215.
-    "confinement-deny": 215 + JITTER_ALLOWANCE_BYTES,
+    "confinement-deny": 205 + JITTER_ALLOWANCE_BYTES,
     # Legitimate bump (this dispatch): `block-venv-creation` (PM directive
     # 2026-09-29) is a new corpus population member, not a trimmable
     # regression -- raw raised from 165 to ceil5(172.46)=175.

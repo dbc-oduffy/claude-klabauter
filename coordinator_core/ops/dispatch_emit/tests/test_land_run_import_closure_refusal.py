@@ -46,6 +46,19 @@ def test_product_landing_lands_and_records_the_import_closure_as_provenance(prod
     assert out.get("refused") is None, out
     assert REASON in _provenance_reasons(out), out
     assert "src/a.py" in prod._tree(product_repo)
+    entry = next(e for e in out["provenance"] if e["reason"] == REASON)
+    assert entry["importer"] == "src/a.py", entry
+    assert entry["module"] == "wt_pkg.mod", entry
+
+
+def test_provenance_entries_adds_importer_and_module_only_for_import_closure():
+    F = landing_integrity.Finding
+    out = landing_integrity.provenance_entries([
+        F("a.py", REASON, "3: imports X from pkg.mod; pkg/mod.py is untracked"),
+        F("b.py", "out-of-ask-hunks", "x"),
+    ])
+    assert (out[0]["importer"], out[0]["module"]) == ("a.py", "pkg.mod")
+    assert "importer" not in out[1] and "module" not in out[1]
 
 
 def test_product_landing_without_the_import_lands(product_repo):

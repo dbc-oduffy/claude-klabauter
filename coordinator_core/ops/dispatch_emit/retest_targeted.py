@@ -85,7 +85,9 @@ def _run_argv(
     """Exit code, or ``LAUNCH_TIMED_OUT``. Trap: the timeout kills only the direct child; the log is a
     file so a surviving grandchild never blocks this call."""
     limit = RETEST_CHILD_TIMEOUT_SECS if timeout is None else timeout
-    from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn, register_spawn
+    from coordinator_core.bash_guards._heavy_command_class import (
+        admit_before_spawn, register_spawn, release_spawn,
+    )
 
     workers = next((int(argv[i + 1]) for i, t in enumerate(argv[:-1]) if t == "-n" and argv[i + 1].isdigit()), 1)
     admission = admit_before_spawn("retest-targeted-pytest", 0.75 + workers * 0.15)
@@ -108,6 +110,8 @@ def _run_argv(
             proc.kill()
             proc.wait()
             return LAUNCH_TIMED_OUT
+        finally:
+            release_spawn(admission.key, proc.pid)
     finally:
         if log is not None:
             sink.close()
@@ -873,7 +877,8 @@ def _head_baseline(
     shortfall in one session can hide behind an excess in another). A file present at HEAD that collects
     0 for a legitimate reason (module-level skip, platform gate) also skips the baseline. Collect-only
     and the run are separate invocations; verify their counts agree on a live tree before trusting a
-    baseline. A node-id target absent at HEAD makes HEAD collect-only exit 4 (a skip, not caused).
+    baseline. A node-id target is run at HEAD as its whole file: an id absent at HEAD would make HEAD
+    collect-only exit 4 and drop the baseline, un-attributing every run-uncaused red in the file.
     Ratified fail-closed: unbuildable argv, collect/run timeout, zero collected, a named collection
     error, an unresolvable id or rootdir, and a missing summary line each write ``baseline_skipped``."""
     from coordinator_core.ops.dispatch_emit import landing_export as le
@@ -887,7 +892,7 @@ def _head_baseline(
 
     try:
         le.build_head_export(root, head_root, [])
-        head_tests = [t for t in tests if (head_root / t.split("::")[0]).exists()]
+        head_tests = list(dict.fromkeys(f for f in (t.split("::")[0] for t in tests) if (head_root / f).exists()))
         if not head_tests:
             return _skip("no targeted test file exists at HEAD")
         collected = _collect_ids(run, head_root, head_tests, head_log.with_suffix(".collect.log"), deadline)

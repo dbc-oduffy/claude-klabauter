@@ -170,6 +170,9 @@ def test_head_tail_rewrite_matches_real_semi_form(
     if proc.returncode != 0:
         pytest.skip("PATH find could not run the ';' form: %r" % proc.stderr[:200])
     real = proc.stdout.decode("utf-8", "replace")
+    if verb_args.startswith("tail") and real and not real.endswith("\n"):
+        # 733ff27cdc: the tail rewrite newline-terminates an unterminated final line; real tail keeps it bare.
+        real += "\n"
     assert _run_rewrite(cmd, tmp_path, monkeypatch) == real
 
 

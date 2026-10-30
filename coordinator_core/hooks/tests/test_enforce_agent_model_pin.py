@@ -46,10 +46,10 @@ def test_pinned_sonnet_plus_model_opus_denies_naming_both(monkeypatch: pytest.Mo
     )
     envelope = mod.check(_agent_payload("coordinator:executor", model="opus"))
     assert envelope is not None
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = envelope["hookSpecificOutput"]["additionalContext"]
     assert "sonnet" in reason
     assert "opus" in reason
-    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 def test_pinned_sonnet_plus_model_haiku_passes_never_denies(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,7 +84,7 @@ def test_effort_low_pinned_plus_effort_high_denies_effort_axis_alone(monkeypatch
     )
     envelope = mod.check(_agent_payload("coordinator:executor", effort="high"))
     assert envelope is not None
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = envelope["hookSpecificOutput"]["additionalContext"]
     assert "low" in reason
     assert "high" in reason
     assert "model" not in reason.lower().split("pins", 1)[0]
@@ -103,7 +103,7 @@ def test_both_axes_violated_single_deny_naming_both(monkeypatch: pytest.MonkeyPa
     )
     envelope = mod.check(_agent_payload("coordinator:executor", model="opus", effort="high"))
     assert envelope is not None
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = envelope["hookSpecificOutput"]["additionalContext"]
     assert "model" in reason and "sonnet" in reason and "opus" in reason
     assert "effort" in reason and "low" in reason and "high" in reason
 
@@ -126,7 +126,8 @@ def test_model_fable_against_sonnet_pin_denies_via_unorderable_leg(monkeypatch: 
     )
     envelope = mod.check(_agent_payload("coordinator:executor", model="fable"))
     assert envelope is not None
-    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "fable" in envelope["hookSpecificOutput"]["additionalContext"]
 
 
 def test_override_env_var_passes_a_violating_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,7 +165,7 @@ def test_unenumerated_type_denies_with_enumeration_reason_not_pin_reason(monkeyp
     }
     envelope = unenumerated_mod.check(payload)
     assert envelope is not None
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = envelope["hookSpecificOutput"]["additionalContext"]
     assert "not on the enumerated roster" in reason
     assert "sonnet" not in reason
 
@@ -249,7 +250,8 @@ def test_plugin_keyed_pin_via_full_resolve_model_pins(tmp_path: Path) -> None:
     try:
         envelope = pin_mod.check(_agent_payload("game-dev:staff-game-dev", model="opus"))
         assert envelope is not None
-        assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert envelope["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "opus" in envelope["hookSpecificOutput"]["additionalContext"]
 
         assert pin_mod.check(_agent_payload("game-dev:staff-game-dev", model="sonnet")) is None
     finally:

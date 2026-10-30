@@ -1,9 +1,10 @@
 """import_closure detector: a committed .py may not import what HEAD will lack after the commit.
 
 Post-commit presence of a path = it is a gate path present in the worktree, or it is in HEAD and
-not a gate path absent from the worktree (a deletion in the commit). First-party roots are
-top-level directories holding `__init__.py` post-commit or in the worktree; everything else is
-skipped. A target is parsed only when it is in the commit, or when the worktree differs from HEAD
+not a gate path absent from the worktree (a deletion in the commit). First-party = a top-level
+module or package resolving against the repo root, the importer's own directory, or `src/`
+(post-commit or in the worktree), or a namespace package whose imported module file resolves there;
+everything else is skipped. A target is parsed only when it is in the commit, or when the worktree differs from HEAD
 (then HEAD's bytes are what the commit leaves behind); an unchanged target is assumed to satisfy
 its names. A committed file is parsed only when an added line looks like an import, or reads
 `alias.name` through an import alias of a first-party module that is in the commit or differs from
@@ -41,9 +42,23 @@ def candidates(gate_paths: Sequence[str]) -> Iterable[str]:
     return [p for p in gate_paths if p.endswith(".py")]
 
 
-def _module_files(module: str) -> List[str]:
+_ROOT_ONLY: Tuple[str, ...] = ("",)
+
+
+def _module_files(module: str, prefixes: Sequence[str] = _ROOT_ONLY) -> List[str]:
     base = module.replace(".", "/")
-    return [f"{base}.py", f"{base}/__init__.py"]
+    return [f for p in prefixes for f in (f"{p}{base}.py", f"{p}{base}/__init__.py")]
+
+
+def _prefixes(rel: str) -> Tuple[str, ...]:
+    """Import roots for an absolute import in `rel`: repo root, the importer's own directory, `src/`."""
+    out: List[str] = [""]
+    here = rel.rpartition("/")[0]
+    if here:
+        out.append(here + "/")
+    if here != "src" and not here.startswith("src/"):
+        out.append("src/")
+    return tuple(out)
 
 
 def _read_text(path: Path) -> Optional[str]:
@@ -118,11 +133,12 @@ def _needed_paths(records: Iterable[Tuple[str, ImportRecord]]) -> Set[str]:
         base = _absolute_base(rec, rel)
         if not base:
             continue
-        needed.add(f"{base.split('.')[0]}/__init__.py")
-        needed.update(_module_files(base))
+        pfx = _prefixes(rel)
+        needed.update(_module_files(base.split(".")[0], pfx))
+        needed.update(_module_files(base, pfx))
         for name in rec.names:
             if name != "*":
-                needed.update(_module_files(f"{base}.{name}"))
+                needed.update(_module_files(f"{base}.{name}", pfx))
     return needed
 
 
@@ -143,15 +159,21 @@ class _Closure:
             return self.worktree_has(path)
         return self.view.in_head(path)
 
-    def locate(self, module: str, has) -> Optional[str]:
-        for cand in _module_files(module):
+    def locate(self, module: str, has, pfx: Sequence[str] = _ROOT_ONLY) -> Optional[str]:
+        for cand in _module_files(module, pfx):
             if has(cand):
                 return cand
         return None
 
-    def first_party(self, top: str) -> bool:
-        init = f"{top}/__init__.py"
-        return self.post_has(init) or self.worktree_has(init)
+    def first_party(self, top: str, pfx: Sequence[str] = _ROOT_ONLY) -> bool:
+        return any(self.post_has(c) or self.worktree_has(c) for c in _module_files(top, pfx))
+
+    def first_party_import(self, base: str, rec: ImportRecord, pfx: Sequence[str]) -> bool:
+        """Top-level package/module on an import root, or (namespace package) a located module file."""
+        if self.first_party(base.split(".")[0], pfx):
+            return True
+        mods = [base] + [f"{base}.{n}" for n in rec.names if n != "*"]
+        return any(self.locate(m, has, pfx) for m in mods for has in (self.post_has, self.worktree_has))
 
     def post_names(self, target: str, force: bool = False) -> Optional[Set[str]]:
         """Names `target` binds once the commit lands; `None` = assume satisfied (or unparseable)."""
@@ -165,12 +187,15 @@ class _Closure:
 
     def check(self, rel: str, rec: ImportRecord) -> List[LeakFinding]:
         base = _absolute_base(rec, rel)
-        if not base or not self.first_party(base.split(".")[0]):
+        if not base:
             return []
-        post_file = self.locate(base, self.post_has)
+        pfx = _prefixes(rel)
+        if not self.first_party_import(base, rec, pfx):
+            return []
+        post_file = self.locate(base, self.post_has, pfx)
         if post_file is None:
-            wt_file = self.locate(base, self.worktree_has)
-            head_file = self.locate(base, self.view.in_head)
+            wt_file = self.locate(base, self.worktree_has, pfx)
+            head_file = self.locate(base, self.view.in_head, pfx)
             if wt_file and not head_file:
                 return [self._finding(rel, rec, base, base, wt_file, "uncommitted in the worktree")]
             if head_file:
@@ -184,9 +209,9 @@ class _Closure:
             if name == "*":
                 continue
             sub = f"{base}.{name}"
-            if is_package and self.locate(sub, self.post_has):
+            if is_package and self.locate(sub, self.post_has, pfx):
                 continue
-            wt_sub = is_package and self.locate(sub, self.worktree_has)
+            wt_sub = is_package and self.locate(sub, self.worktree_has, pfx)
             if wt_sub:
                 # A submodule only the worktree has: the package text decides, even if unchanged.
                 names = self.post_names(post_file, force=True)
@@ -226,17 +251,17 @@ def _alias_hits(wt_text: str, rel: str, added: List[Tuple[int, str]]) -> Dict[st
 
 
 def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFinding]:
-    top = ref.module.split(".")[0]
-    if not closure.first_party(top):
+    pfx = _prefixes(rel)
+    if not closure.first_party(ref.module.split(".")[0], pfx):
         return None
-    target = closure.locate(ref.module, closure.post_has)
+    target = closure.locate(ref.module, closure.post_has, pfx)
     if target is None or target in closure.gate:
         return None
     sub = f"{ref.module}.{ref.name}"
     is_package = target.endswith("/__init__.py")
-    if is_package and closure.locate(sub, closure.post_has):
+    if is_package and closure.locate(sub, closure.post_has, pfx):
         return None
-    wt_sub = bool(is_package and closure.locate(sub, closure.worktree_has))
+    wt_sub = bool(is_package and closure.locate(sub, closure.worktree_has, pfx))
     names = closure.post_names(target, force=wt_sub)
     if names is None or ref.name in names:
         return None
@@ -245,7 +270,7 @@ def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFindi
         wt_names = _target_bound_names(wt_text) if wt_text is not None else None
         if wt_names is None or ref.name not in wt_names:
             return None
-    where = closure.locate(sub, closure.worktree_has) if wt_sub else target
+    where = closure.locate(sub, closure.worktree_has, pfx) if wt_sub else target
     return LeakFinding(rel, ref.lineno, KIND, f"references {ref.name} from {ref.module}; {where} is uncommitted in the worktree")
 
 
@@ -277,8 +302,8 @@ class _ResidueClosure(_Closure):
     def worktree_has(self, path: str) -> bool:
         return path not in self.deleted and super().worktree_has(path)
 
-    def first_party(self, top: str) -> bool:
-        return super().first_party(top) or self.view.in_head(f"{top}/__init__.py")
+    def first_party(self, top: str, pfx: Sequence[str] = _ROOT_ONLY) -> bool:
+        return super().first_party(top, pfx) or any(self.view.in_head(c) for c in _module_files(top, pfx))
 
 
 def residue_findings(
@@ -423,15 +448,15 @@ def detect(
         if alias_map:
             hits[rel] = alias_map
     probe: Set[str] = set()
-    for alias_map in hits.values():
+    for rel, alias_map in hits.items():
         for mods in alias_map.values():
             for mod in mods:
-                probe.update(f for f in _module_files(mod) if (root / f).is_file())
+                probe.update(f for f in _module_files(mod, _prefixes(rel)) if (root / f).is_file())
     probe_view = HeadView(root, probe) if probe else None
     attr_files: Set[str] = set()
     if probe_view is not None:
         for rel, alias_map in hits.items():
-            if any(f in gate or probe_view.worktree_differs(f) for mods in alias_map.values() for mod in mods for f in _module_files(mod) if f in probe):
+            if any(f in gate or probe_view.worktree_differs(f) for mods in alias_map.values() for mod in mods for f in _module_files(mod, _prefixes(rel)) if f in probe):
                 attr_files.add(rel)
     parsed: List[Tuple[str, ImportRecord]] = []
     refs: List[Tuple[str, AttrRef]] = []
@@ -448,10 +473,11 @@ def detect(
     if not parsed and not refs:
         return []
     needed = _needed_paths(parsed)
-    for _, ref in refs:
-        needed.add(f"{ref.module.split('.')[0]}/__init__.py")
-        needed.update(_module_files(ref.module))
-        needed.update(_module_files(f"{ref.module}.{ref.name}"))
+    for rel, ref in refs:
+        pfx = _prefixes(rel)
+        needed.update(_module_files(ref.module.split(".")[0], pfx))
+        needed.update(_module_files(ref.module, pfx))
+        needed.update(_module_files(f"{ref.module}.{ref.name}", pfx))
     closure = _Closure(root, gate, HeadView(root, needed), landed_text)
     findings: List[LeakFinding] = []
     for rel, rec in parsed:

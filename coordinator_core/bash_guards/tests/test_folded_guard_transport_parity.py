@@ -65,8 +65,10 @@ def _assert_warm_denies(*, case: str, family: str, payload: Dict[str, Any]) -> N
     envelope = _run_warm(payload)
     assert isinstance(envelope, dict), f"{case}: engine did not deny this fixture (got {envelope!r})"
     hso = envelope.get("hookSpecificOutput") or {}
-    assert hso.get("permissionDecision") == "deny", f"{case}: engine envelope is not a deny ({envelope!r})"
-    reason = hso.get("permissionDecisionReason") or ""
+    # All four folded guards are ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403): firing is
+    # an allow carrying the guard's text as additionalContext.
+    assert hso.get("permissionDecision") == "allow", f"{case}: engine envelope is not an advisory ({envelope!r})"
+    reason = hso.get("additionalContext") or ""
     assert _DENY_TEXT[family] in reason, f"{case}: deny text lost its {family} prose: {reason!r}"
 
 

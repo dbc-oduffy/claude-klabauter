@@ -50,13 +50,17 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import itertools
+import json
 import os
 import stat
 import struct
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import IO, Collection, Dict, Mapping, Optional, Tuple, Union
 
+from coordinator_core import dispatch_abandon
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.git.git_objects import _replace_with_retry
 from coordinator_core.git.tree_spine import _ABSENT
@@ -289,16 +293,27 @@ def prepare_splice(
 
     preflight_reap_stale_lock(str(root))
 
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        fd = os.open(str(lock_path), flags, 0o644)
     except FileExistsError as exc:
-        raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc
+        if not _recover_dead_writer(lock_path):
+            raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc
+        try:
+            fd = os.open(str(lock_path), flags, 0o644)
+        except FileExistsError as exc2:
+            raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc2
 
     prepared = PreparedSplice(lock_path, index_path)
     try:
+        prepared._claim_owner()
         with os.fdopen(fd, "wb") as handle:
             _splice_locked(
                 handle, root, index_path, lock_path, updates, stat_fallback, collapse
+            )
+        if dispatch_abandon.is_abandoned():
+            raise IndexWriteError(
+                "dispatch timed out while the index splice was built; lock released"
             )
     except BaseException:
         prepared.abort()
@@ -451,27 +466,150 @@ class PreparedSplice:
     def __init__(self, lock_path: Path, index_path: Path) -> None:
         self._lock_path = lock_path
         self._index_path = index_path
+        self._owner_path = _owner_path(lock_path)
+        self._token: Optional[str] = None
+        self._ended = False
+
+    def _claim_owner(self) -> None:
+        """Record this writer's identity beside the lock so a later acquire can tell a dead
+        writer from a live one. Registered before the file is written: a peer that reads the
+        file always finds the token."""
+        token = f"{os.getpid()}-{threading.get_ident()}-{next(_TOKENS)}"
+        self._token = token
+        with _HOLDERS_GUARD:
+            _HOLDERS[token] = threading.current_thread()
+        self._owner_path.write_text(
+            json.dumps({"pid": os.getpid(), "token": token}), encoding="utf-8"
+        )
+
+    def _release_owner(self) -> None:
+        token, self._token = self._token, None
+        if token is not None:
+            with _HOLDERS_GUARD:
+                _HOLDERS.pop(token, None)
+        try:
+            self._owner_path.unlink()
+        except OSError:
+            pass
 
     def abort(self) -> None:
-        if self._lock_path.exists():
-            try:
-                self._lock_path.unlink()
-            except OSError:
-                pass
+        """Release the lock; idempotent, and a no-op once `publish()` succeeded."""
+        if self._ended:
+            return
+        self._ended = True
+        with _HOLDERS_GUARD:
+            reaped = self._token is not None and self._token not in _HOLDERS
+        if reaped:
+            # `_recover_dead_writer` took this lock over; the files now belong to its successor.
+            self._token = None
+            return
+        # Owner first: a lock with no owner file reads as busy, never as a reapable orphan.
+        self._release_owner()
+        try:
+            self._lock_path.unlink()
+        except OSError:
+            pass
+
+    def __del__(self) -> None:
+        # An abandoned PreparedSplice (op timed out, thread dropped it) frees its own lock.
+        try:
+            self.abort()
+        except Exception:  # noqa: BLE001 -- interpreter teardown
+            pass
 
     def publish(self) -> None:
         # Abort only on failure: after a successful rename the lock path is free, and a peer may
         # already hold a fresh `index.lock` there that `abort()` would delete.
         try:
+            self._release_owner()
             self._publish()
         except BaseException:
             self.abort()
             raise
+        self._ended = True
 
     def _publish(self) -> None:
         lock_path, index_path = self._lock_path, self._index_path
         if not _replace_with_retry(lock_path, index_path):
             _raise_stale(index_path)
+
+
+_OWNER_SUFFIX = ".owner"
+_TOKENS = itertools.count(1)
+_HOLDERS: Dict[str, threading.Thread] = {}
+_HOLDERS_GUARD = threading.Lock()
+
+
+def _owner_path(lock_path: Path) -> Path:
+    return lock_path.with_name(lock_path.name + _OWNER_SUFFIX)
+
+
+def _pid_gone(pid: int) -> bool:
+    """True only when the OS positively reports no such process; any doubt reads as alive.
+    Not `session_registry.pid_alive`: that reads doubt as dead, the unsafe direction for a lock."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.GetLastError() == 87  # ERROR_INVALID_PARAMETER: no such pid
+        try:
+            code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value != 259  # STILL_ACTIVE
+            return False
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _recover_dead_writer(lock_path: Path) -> bool:
+    """Remove `lock_path` when its owner file proves the writer is gone: a dead pid, or this
+    process with the owning thread finished. No owner file (git.exe's lock, a legacy lock) or any
+    doubt returns False. Never age-based: a slow live writer keeps its lock."""
+    owner = _owner_path(lock_path)
+    try:
+        info = json.loads(owner.read_text(encoding="utf-8"))
+        pid, token = int(info["pid"]), str(info["token"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    if pid == os.getpid():
+        with _HOLDERS_GUARD:
+            holder = _HOLDERS.get(token)
+        gone = holder is None or not holder.is_alive()
+    else:
+        gone = _pid_gone(pid)
+    if not gone:
+        return False
+    # Rename claims the recovery: of two racing recoverers only one wins the owner file, so the
+    # loser cannot delete a lock the winner's acquire has just retaken.
+    claimed = owner.with_name(f"{owner.name}.reap-{os.getpid()}-{threading.get_ident()}")
+    try:
+        os.replace(owner, claimed)
+    except OSError:
+        return False
+    with _HOLDERS_GUARD:
+        _HOLDERS.pop(token, None)
+    try:
+        claimed.unlink()
+    except OSError:
+        pass
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _raise_stale(index_path: Path) -> None:

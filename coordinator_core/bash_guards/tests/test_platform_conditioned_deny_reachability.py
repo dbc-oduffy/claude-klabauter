@@ -208,11 +208,14 @@ class TestPlumbingAndLoopsChainReachability:
 
 #: Fail-closed guards with no `-fire` row in the corpus or in the band-shape gate's extra firing
 #: rows. Shrink-only: an entry leaves when its row lands, and a new fail-closed guard may not join.
-_NO_FIRE_ROW_YET: frozenset = frozenset()
+#: block-topic-branch holds branches with a nudge since DR-475 (307ea22403; ADVISORY_BY_RULING in
+#: b17ec35251), so the corpus has no deny fire row for it.
+_NO_FIRE_ROW_YET: frozenset = frozenset({"block-topic-branch"})
 
 #: Fail-closed guards whose isolated deny the real chain intercepts with a
 #: rewrite or advisory first (DR-280); the classes above characterize them.
-_CHAIN_SHADOWED = frozenset({"multiprobe-banner", "plumbing-and-loops"})
+#: guard-post-executor-verification's probe (`python -m pytest`) is denied first by the suite-mutex guard.
+_CHAIN_SHADOWED = frozenset({"multiprobe-banner", "plumbing-and-loops", "guard-post-executor-verification"})
 
 
 def _fail_closed_entries():
@@ -289,6 +292,13 @@ def test_a_deny_the_guard_issues_survives_the_chain(name):
     isolated, via_chain = _fire(_fire_rows()[name])
     if isolated != "deny":
         assert via_chain != "deny"
+        return
+    from coordinator_core import deny_registry
+
+    if deny_registry.guard_deny_class(name, subagent=True) is None:
+        # Off the PM allowlist (b17ec35251 ADVISORY_BY_RULING; DR-475, 307ea22403): the chain
+        # demotes the guard's own deny to an advisory.
+        assert via_chain != "deny", f"{name} is advisory by ruling but the chain denied"
         return
     assert via_chain == "deny", f"{name} denies in isolation but the chain returned {via_chain!r}"
 

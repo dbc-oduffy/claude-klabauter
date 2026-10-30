@@ -75,12 +75,13 @@ def test_a_landing_that_queued_past_the_budget_still_gets_its_full_leg_budget(ru
 
 
 def test_a_leg_past_the_full_budget_halts_with_queue_wait_and_per_leg_elapsed(run):
-    reply = run(_slow_landing(LAND_BUDGET + 1.0), QUEUE_WAIT_SECS)
+    first_leg = LAND_BUDGET + land_deadline.RESERVE_SECS + 1.0
+    reply = run(_slow_landing(first_leg), QUEUE_WAIT_SECS)
     assert reply["refused"] == land_deadline.REFUSED
     assert reply["committed"] is False
     assert reply["leg"] == "land_run.integrity"
     assert reply["queue_wait_secs"] == QUEUE_WAIT_SECS
-    assert reply["legs"] == [{"leg": "land_run.script_read", "elapsed_secs": LAND_BUDGET + 1.0}]
+    assert reply["legs"] == [{"leg": "land_run.script_read", "elapsed_secs": first_leg}]
     assert "retried" not in reply
 
 

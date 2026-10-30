@@ -1487,7 +1487,16 @@ def _ledger_gate(
         prep = inline_review.get("prep")
         base = prep.get("run_base_sha") if isinstance(prep, dict) else None
         dirt: list = []
-        prior = prior_pass_written(root, run_dir) | predecessor_withheld(root, _cited_sizing(root, plan_rel), run_dir)
+        prior_credit: list = []
+
+        def prior() -> frozenset:
+            """Credit from earlier passes and same-sizing halts; read only once a path shows as dirt."""
+            if not prior_credit:
+                prior_credit.append(
+                    prior_pass_written(root, run_dir) | predecessor_withheld(root, _cited_sizing(root, plan_rel), run_dir)
+                )
+            return prior_credit[0]
+
         for it in verdict.get("items") or []:
             if not isinstance(it, dict) or it.get("status") not in ("met", "post_commit"):
                 continue
@@ -1505,7 +1514,9 @@ def _ledger_gate(
                 own = frozenset()
             if len(unwritten(root, baseline, writes)) != len(writes):
                 continue
-            foreign = pre_existing_dirt(root, baseline, writes, {*own, *prior})
+            foreign = pre_existing_dirt(root, baseline, writes, own)
+            if foreign:
+                foreign = pre_existing_dirt(root, baseline, writes, {*own, *prior()})
             if foreign:
                 dirt.append({"id": it.get("id"), "reason": "pre-existing-dirt: " + ", ".join(sorted(foreign))})
         if dirt:
@@ -3926,9 +3937,20 @@ def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) 
         listing = [e.name for e in os.scandir(root / RECORD_DIR_ROOT) if e.is_dir()]
     except OSError:
         return (), set()
-    bound = run_artifacts.superseded_runs(
-        root, run_id, sizing_rel, [f"{RECORD_DIR_ROOT}/{n}/run.json" for n in listing], live_run_ids=live,
-    )
+    mine = run_artifacts._STAMP_TAIL.search(run_id).group(0)
+    needle = sizing_rel.replace("\\", "/").rsplit("/", 1)[-1].encode("utf-8")
+    candidates: list = []
+    for n in listing:
+        tail = run_artifacts._STAMP_TAIL.search(n)
+        if tail is None or tail.group(0) >= mine:
+            continue
+        try:
+            raw = (root / RECORD_DIR_ROOT / n / "run.json").read_bytes()
+        except OSError:
+            continue
+        if needle in raw or not needle.isascii():
+            candidates.append(f"{RECORD_DIR_ROOT}/{n}/run.json")
+    bound = run_artifacts.superseded_runs(root, run_id, sizing_rel, candidates, live_run_ids=live)
     if not bound:
         return (), set()
     snap = scoped_worktree_status(root, [], [f"{RECORD_DIR_ROOT}/{n}" for n in bound], [])

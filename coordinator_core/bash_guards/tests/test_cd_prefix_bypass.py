@@ -245,9 +245,13 @@ def _assert_bypass_resistant(
     base_cmd: str,
     extra_shapes: Optional[Dict[str, str]] = None,
     known_bypasses: Optional[Dict[str, str]] = None,
+    fires: str = "deny",
 ) -> None:
-    """Assert `base_cmd` denies on its own, then assert every constructed
-    attack-shape variant ALSO denies. A single "allow" among the variants is
+    """`fires` is the decision a detected shape draws: "deny" for a deny_registry guard,
+    "advisory" for a guard off the PM allowlist (b17ec35251 ADVISORY_BY_RULING; DR-475, 307ea22403).
+
+    Assert `base_cmd` draws `fires` on its own, then assert every constructed
+    attack-shape variant ALSO draws it. A single "allow" among the variants is
     the live bypass this row exists to catch -- UNLESS its shape name is a
     key in `known_bypasses`, in which case the gap is already recorded (the
     value is the reason/citation) and this asserts the bypass is still
@@ -259,7 +263,7 @@ def _assert_bypass_resistant(
     `pytest.mark.xfail(strict=True)`, which this helper approximates without
     pytest's mark machinery since these classes are not cell-parametrized).
     """
-    assert decision_fn(base_cmd) == "deny", "baseline command must deny: %r" % base_cmd
+    assert decision_fn(base_cmd) == fires, "baseline command must %s: %r" % (fires, base_cmd)
     shapes = _wrap_variants(base_cmd)
     if extra_shapes:
         shapes.update(extra_shapes)
@@ -274,7 +278,7 @@ def _assert_bypass_resistant(
                 "a normal deny." % (name, variant, name, known_bypasses[name])
             )
             continue
-        assert got == "deny", "BYPASS via %s: %r -> %s (expected deny)" % (name, variant, got)
+        assert got == fires, "BYPASS via %s: %r -> %s (expected %s)" % (name, variant, got, fires)
 
 
 class TestNoVerify:
@@ -283,6 +287,7 @@ class TestNoVerify:
         _assert_bypass_resistant(
             _decision,
             base,
+            fires="advisory",  # no-verify: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
             known_bypasses={
                 "setsid_wrapper": (
                     "LIVE BYPASS: check_no_verify does not recognize `setsid` "
@@ -458,6 +463,7 @@ class TestBlockApprovalSentinelCreation:
         _assert_bypass_resistant(
             _decision,
             base,
+            fires="advisory",  # block-approval-sentinel-creation: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
             extra_shapes=_nice_bare_numeric_shape(base),
         )
 
@@ -469,6 +475,7 @@ class TestBlockWorktreeSentinelCreation:
         _assert_bypass_resistant(
             _decision,
             base,
+            fires="advisory",  # block-worktree-sentinel-creation: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
             extra_shapes=_nice_bare_numeric_shape(base),
         )
 
@@ -478,10 +485,11 @@ class TestCheckRawPidLiveness:
 
     def test_bypass_matrix_ps(self):
         flag = "-" + "p"
-        _assert_bypass_resistant(_decision, "ps %s 1234" % flag)
+        # check-raw-pid-liveness: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
+        _assert_bypass_resistant(_decision, "ps %s 1234" % flag, fires="advisory")
 
     def test_bypass_matrix_kill(self):
-        _assert_bypass_resistant(_decision, "kill -0 1234")
+        _assert_bypass_resistant(_decision, "kill -0 1234", fires="advisory")
 
 
 class TestBlockSubagentPlanBodyBashWrite:
@@ -491,7 +499,8 @@ class TestBlockSubagentPlanBodyBashWrite:
         def decide(cmd):
             return _decision(cmd, **_SUBAGENT_IDENTITY)
 
-        _assert_bypass_resistant(decide, "echo x >> docs/plans/foo.md")
+        # block-subagent-plan-body-bash-write: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
+        _assert_bypass_resistant(decide, "echo x >> docs/plans/foo.md", fires="advisory")
 
 
 class TestBlockReviewerBashOutsideAllowlist:
@@ -509,7 +518,8 @@ class TestBlockReviewerBashOutsideAllowlist:
         # member or this asserts a false "baseline must deny" failure that
         # is a test-authoring bug, not a guard finding). Any confined
         # agent's non-allowlisted command must deny, prefix-reshaped or not.
-        _assert_bypass_resistant(decide, "curl https://example.com")
+        # block-reviewer-bash-outside-allowlist: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
+        _assert_bypass_resistant(decide, "curl https://example.com", fires="advisory")
 
 
 class TestBlockSubagentDestructiveAction:
@@ -533,8 +543,9 @@ class TestBlockSubagentCommit:
             return _decision(cmd, **_SUBAGENT_IDENTITY)
 
         base = 'git commit -m "msg"'
+        # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
         _assert_bypass_resistant(
-            decide, base, extra_shapes=_nice_bare_numeric_shape(base)
+            decide, base, extra_shapes=_nice_bare_numeric_shape(base), fires="advisory"
         )
 
     def test_bypass_matrix_coordinator_safe_commit(self, monkeypatch):
@@ -545,45 +556,45 @@ class TestBlockSubagentCommit:
 
         base = 'coordinator-safe-commit -m "msg"'
         _assert_bypass_resistant(
-            decide, base, extra_shapes=_nice_bare_numeric_shape(base)
+            decide, base, extra_shapes=_nice_bare_numeric_shape(base), fires="advisory"
         )
 
 
 class TestSubagentCommitShellCWrapperBypass:
 
-    def test_sh_c_wrapped_git_commit_now_denies(self, monkeypatch):
+    def test_sh_c_wrapped_git_commit_advises(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision('sh -c "git commit -m x"', **_SUBAGENT_IDENTITY)
-        assert result == "deny"
+        assert result == "advisory"  # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
 
-    def test_bash_c_wrapped_git_commit_now_denies(self, monkeypatch):
+    def test_bash_c_wrapped_git_commit_advises(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision('bash -c "git commit -m x"', **_SUBAGENT_IDENTITY)
-        assert result == "deny"
+        assert result == "advisory"  # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
 
-    def test_env_sh_c_wrapped_git_commit_now_denies(self, monkeypatch):
+    def test_env_sh_c_wrapped_git_commit_advises(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision('env sh -c "git commit -m x"', **_SUBAGENT_IDENTITY)
-        assert result == "deny"
+        assert result == "advisory"  # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
 
-    def test_leading_env_assignment_sh_c_wrapped_still_denies(self, monkeypatch):
+    def test_leading_env_assignment_sh_c_wrapped_still_advises(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision('FOO=1 sh -c "git commit -m x"', **_SUBAGENT_IDENTITY)
-        assert result == "deny"
+        assert result == "advisory"  # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
 
-    def test_sh_c_wrapped_coordinator_safe_commit_now_denies(self, monkeypatch):
+    def test_sh_c_wrapped_coordinator_safe_commit_advises(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision(
             'sh -c "coordinator-safe-commit -m x"', **_SUBAGENT_IDENTITY
         )
-        assert result == "deny"
+        assert result == "advisory"  # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
 
     def test_sh_c_wrapped_unrelated_command_still_allows(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision('sh -c "echo hello"', **_SUBAGENT_IDENTITY)
         assert result == "allow"
 
-    def test_stacked_wrapper_then_env_coordinator_safe_commit_now_denies(
+    def test_stacked_wrapper_then_env_coordinator_safe_commit_advises(
         self, monkeypatch
     ):
         """Review-integrator fix (2026-07-29, code-reviewer Finding 1,
@@ -600,16 +611,16 @@ class TestSubagentCommitShellCWrapperBypass:
         result = _decision(
             "nice env FOO=1 coordinator-safe-commit -m x", **_SUBAGENT_IDENTITY
         )
-        assert result == "deny"
+        assert result == "advisory"  # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
 
-    def test_reverse_order_env_then_wrapper_coordinator_safe_commit_still_denies(
+    def test_reverse_order_env_then_wrapper_coordinator_safe_commit_still_advises(
         self, monkeypatch
     ):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")
         result = _decision(
             "env nice FOO=1 coordinator-safe-commit -m x", **_SUBAGENT_IDENTITY
         )
-        assert result == "deny"
+        assert result == "advisory"  # block-subagent-commit: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403)
 
     def test_quoted_prose_about_commit_via_echo_still_allows(self, monkeypatch):
         _wire_subagent_identity(monkeypatch, commit_guard, "coordinator:executor")

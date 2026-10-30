@@ -117,7 +117,7 @@ _EM_SPEAKING = [
     ("powershell", "advisory"),
     ("p4", "deny"),
     ("claude_home", "deny"),
-    ("illegal_filename", "rewrite"),
+    ("illegal_filename", "advisory"),  # ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403): no rewrite
     ("locks", "rewrite"),
 ]
 
@@ -158,7 +158,7 @@ def test_rewrite_allow_matches_head(tmp_path, monkeypatch):
     lock, _ = _fire("locks", monkeypatch, tmp_path)
     assert illegal.rewrite_allow is False
     assert lock.rewrite_allow is True
-    assert "permissionDecision" not in envelope_of(illegal, "em")["hookSpecificOutput"]
+    assert illegal.verdict_kind == "advisory"  # block-illegal-filename advises since DR-475 (307ea22403)
     assert envelope_of(lock, "em")["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 

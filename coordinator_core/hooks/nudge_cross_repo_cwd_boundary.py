@@ -24,9 +24,8 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 
 _REMEDIATION = (
-    "[cross-repo boundary] crossed into/out of the claude-klabauter sibling repo -- no "
-    "standing commit permission survives the crossing; ownership is the check, and "
-    "the G-EM decides a cross-repo commit. Scoped commits only, never "
+    "[cross-repo boundary] crossed the claude-klabauter repo line -- no commit permission "
+    "survives it; the G-EM decides a cross-repo commit. Scoped commits only, never "
     "`-A`/`.`/`-a`."
 )
 

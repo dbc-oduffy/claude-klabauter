@@ -48,12 +48,13 @@ def test_clone_from_a_subdirectory_into_repo_scratch_is_allowed(repo):
 def test_cd_into_the_same_repo_then_clone_is_allowed(repo):
     assert _run(f"cd {_p(repo)} && {CLONE}", repo) is None
     assert _run(f"cd {_p(repo)} && {CLONE}", repo / "sub") is None
-    assert _run(f"cd {_p(repo)}; {CLONE}", repo) is None
 
-
-def test_dash_c_to_the_same_repo_clone_is_allowed(repo):
-    assert _run(f"git -C {_p(repo)} clone --shared -n . scratch/c0-base/c", repo) is None
-    assert _run(f"git -C {_p(repo)} clone --shared -n . {_p(repo)}/scratch/c0-base/c", repo / "sub") is None
+def test_only_one_leading_cd_and_directly_resolves_the_repo(repo):
+    # The guard resolves the repo for a single leading `cd <abs dir> &&` (3b85a0c0df..307ea22403);
+    # `;` joiners and `git -C` re-points no longer resolve one, so the clone is refused.
+    assert _run(f"cd {_p(repo)}; {CLONE}", repo) is not None
+    assert _run(f"git -C {_p(repo)} clone --shared -n . scratch/c0-base/c", repo) is not None
+    assert _run(f"git -C {_p(repo)} clone --shared -n . {_p(repo)}/scratch/c0-base/c", repo / "sub") is not None
 
 
 def test_empty_or_missing_cwd_does_not_allow_a_clone(repo):
@@ -68,17 +69,19 @@ def test_clone_outside_repo_scratch_is_denied(repo):
     assert _run(f"git clone --shared -n . {_p(repo.parent)}/elsewhere", repo) is not None
 
 
-def test_repoint_to_another_repo_keeps_the_clone_denied(repo):
+def test_clone_after_repoint_is_allowed_only_into_the_named_repos_own_scratch(repo):
     other = repo.parent / "other"
-    assert _run(f"cd {_p(other)} && {CLONE}", repo) is not None
+    # A single leading cd lands in that repo's own scratch/ -- the clone stays inside the repo it names.
+    assert _run(f"cd {_p(other)} && {CLONE}", repo) is None
     assert _run(f"git -C {_p(other)} clone --shared -n . scratch/c0-base/c", repo) is not None
     assert _run(f"cd {_p(repo)} && cd {_p(other)} && {CLONE}", repo) is not None
     assert _run(f"cd .. && {CLONE}", repo) is not None
 
 
-def test_cd_into_a_nested_repo_under_the_same_root_stays_denied(repo):
+def test_cd_into_a_nested_repo_clones_into_the_nested_repos_own_scratch(repo):
     (repo / "sub" / "nested" / ".git").mkdir(parents=True)
-    assert _run(f"cd {_p(repo)}/sub/nested && {CLONE}", repo) is not None
+    assert _run(f"cd {_p(repo)}/sub/nested && {CLONE}", repo) is None
+    assert _run(f"cd {_p(repo)}/sub/nested && git clone --shared -n . {_p(repo)}/scratch/c0-base/c", repo) is not None
 
 
 def test_git_dir_and_work_tree_repoints_stay_denied(repo):
@@ -94,8 +97,8 @@ def test_cwd_inside_an_existing_scratch_clone_still_clones_only_into_main_scratc
     assert _run(f"git clone --shared -n . {_p(repo)}/sub/escape", clone) is not None
 
 
-def test_unrelated_cd_segment_in_the_compound_keeps_the_context(repo):
-    assert _run(f"cd {_p(repo)}/sub && cd {_p(repo)}/sub && {CLONE.replace('scratch/', _p(repo) + '/scratch/')}", repo) is None
+def test_a_second_cd_in_the_compound_refuses_the_clone(repo):
+    assert _run(f"cd {_p(repo)}/sub && cd {_p(repo)}/sub && {CLONE.replace('scratch/', _p(repo) + '/scratch/')}", repo) is not None
     assert _run(f"cd /nonexistent-dir-xyz && {CLONE}", repo) is not None
 
 

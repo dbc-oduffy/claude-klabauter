@@ -18,7 +18,7 @@ import pytest
 
 from coordinator_core.bash_guards import _dc_git_shared, dispatch_checks
 from coordinator_core.guard_messages.testing import envelope_of
-from coordinator_core.ops.dispatch_emit import landing_integrity, landing_targeted_tests
+from coordinator_core.ops.dispatch_emit import hunk_provenance, landing_integrity, landing_targeted_tests
 from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import (
     LANDING_REFUSAL_KINDS,
     PROVENANCE_KINDS,
@@ -73,16 +73,30 @@ def test_ratchet_fails_when_a_module_names_the_waivable_table(tmp_path):
     assert _waiver_offenders(pkg) == [f"mod.py: names {_TABLE_NAME}"]
 
 
-_LANDING_MODULE_PREFIXES = ("landing_", "peer_hunk", "shipped", "terminal_commit")
+def _string_constants(trees: list[ast.Module]) -> dict[str, str]:
+    """Module-level ``NAME = "literal"`` assignments across *trees*, keyed by bare name."""
+    consts: dict[str, str] = {}
+    for tree in trees:
+        for node in tree.body:
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        consts[target.id] = node.value.value
+    return consts
 
 
-def _finding_reason_literals() -> set[str]:
-    """Constant reason strings handed to ``Finding(path, reason, ...)`` in non-test dispatch_emit code."""
+def _finding_reason_literals(emit_dir: Path | None = None) -> set[str]:
+    """Reason strings handed to ``Finding(path, reason, ...)`` in every non-test dispatch_emit module:
+    a string constant, or a ``NAME`` / ``mod.NAME`` resolved against module-level string constants."""
+    emit_dir = emit_dir or PKG / "ops" / "dispatch_emit"
+    trees = [ast.parse(p.read_text(encoding="utf-8")) for p in sorted(emit_dir.glob("*.py"))]
+    consts = _string_constants(trees)
     reasons: set[str] = set()
-    for path in (PKG / "ops" / "dispatch_emit").glob("*.py"):
-        if not path.name.startswith(_LANDING_MODULE_PREFIXES):
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    for tree in trees:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -93,11 +107,35 @@ def _finding_reason_literals() -> set[str]:
             arg = node.args[1]
             if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 reasons.add(arg.value)
+            elif isinstance(arg, ast.Name) and arg.id in consts:
+                reasons.add(consts[arg.id])
+            elif isinstance(arg, ast.Attribute) and arg.attr in consts:
+                reasons.add(consts[arg.attr])
     return reasons
 
 
+def test_ratchet_sees_a_planted_module_name_reason_in_any_dispatch_emit_module(tmp_path):
+    (tmp_path / "anything_else.py").write_text(
+        'KIND = "planted-kind"\n\ndef f(p):\n    try:\n        pass\n    except Exception:\n'
+        '        return [Finding(p, KIND, "d")]\n'
+    )
+    (tmp_path / "other.py").write_text('import anything_else\nx = Finding("p", anything_else.KIND, "d")\n')
+    reasons = _finding_reason_literals(tmp_path)
+    assert reasons == {"planted-kind"}
+    assert reasons - LANDING_REFUSAL_KINDS - PROVENANCE_KINDS - _UNTABLED_NON_REFUSING
+
+
 # Emitted today but absent from the closed table: never refuses (is_refusal is False for it).
-_UNTABLED_NON_REFUSING = frozenset({landing_targeted_tests.ZERO_FAIL_UNATTRIBUTED})
+_UNTABLED_NON_REFUSING = frozenset({
+    landing_targeted_tests.ZERO_FAIL_UNATTRIBUTED,
+    hunk_provenance.FOREIGN_HUNK_UNPRODUCED,
+    # emit.py's plan-lint findings: raised at emit time, never on a landing path.
+    "absent-edit-target",
+    "import-window-row",
+    "new-module-with-importer",
+    "CHUNK-SHAPER-MERGED",
+    "test-verdict-names-no-failure",
+})
 
 
 def test_every_refusal_reason_is_in_the_closed_table():

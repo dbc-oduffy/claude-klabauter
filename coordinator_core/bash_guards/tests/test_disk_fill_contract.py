@@ -104,7 +104,6 @@ def test_verdict_denies_under_floor_and_names_redirect(tmp_path):
     v = c.verdict(str(tmp_path / "new" / "dst"), 5 * GiB, pol, _du(12 * GiB))
     assert v.deny
     assert "disk_budget sweep" in v.text
-    assert "COORDINATOR_DISK_BUDGET_VOLUME_FREE_FLOOR" in v.text
 
 
 def test_verdict_allows_above_floor(tmp_path):

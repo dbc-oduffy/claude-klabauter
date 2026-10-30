@@ -56,6 +56,7 @@ _SILENT_FOR_EM: Dict[str, str] = {
     "reap-stale-git-lock": "side-effect only; always returns None",
     "block-em-post-fire-product-write": "advisory fate: off the deny census, speaks no envelope",
     "xs-lane-shell-write": "advisory fate: off the deny census, speaks no envelope",
+    "block-topic-branch": "advisory fate: off the deny census, speaks no envelope (DR-475, 307ea22403)",
 }
 
 _SESSION_RE = re.compile(r"guard-message-corpus-audience-[a-z]+-[0-9a-f]{32}")
@@ -74,6 +75,8 @@ _REALPATH_PREFIX_RE = re.compile(r"/private(?=<scratch>)")
 #: (pinned in test_bump_outside_repo_write), so the host-invariant comparison drops it
 #: from both sides rather than letting whichever platform captured the fixture win.
 _PLATFORM_CLAUSE_RE = re.compile(r"; unquoted backslashes, so bash writes into cwd instead")
+#: The in-process search renders its own elapsed time, which differs on every fire.
+_ELAPSED_MS_RE = re.compile(r"(\[searched in-process: \d+ file\(s\), )\d+ms")
 
 
 def _drop_platform_clauses(text: str) -> str:
@@ -92,6 +95,7 @@ def _normalise_text(text: str) -> str:
         span = _SCRATCH_RE.sub("<scratch>", span)
         text = text[:start] + span + text[end:]
     text = _REALPATH_PREFIX_RE.sub("", text)
+    text = _ELAPSED_MS_RE.sub(r"\1<ms>ms", text)
     return _drop_platform_clauses(text)
 
 

@@ -55,9 +55,10 @@ def test_incident_command_is_denied(fake_fs):
     res = _enveloped(guard.check)(_payload(INCIDENT, "F:\\dev"))
     assert res is not None
     out = res["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    assert "'e'" in out["permissionDecisionReason"]
-    assert "<repo>/scratch/" in out["permissionDecisionReason"]
+    # block-drive-root-new-dir-bash-write is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403).
+    assert out["permissionDecision"] == "allow"
+    assert "'e'" in out["additionalContext"]
+    assert "<repo>/scratch/" in out["additionalContext"]
 
 
 def test_incident_denied_when_cd_is_the_only_drive_change(fake_fs):
@@ -88,7 +89,7 @@ def test_interpreter_write_to_new_msys_literal_still_denied(fake_fs):
     cmd = "python3 - <<'EOF'\nopen('/e/brand-new/x.md','w')\nEOF\n" + MEMO_EXE + " send"
     res = _enveloped(guard.check)(_payload(cmd, "F:\\dev"))
     assert res is not None
-    assert "'brand-new'" in res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "'brand-new'" in res["hookSpecificOutput"]["additionalContext"]
 
 
 SPACED_READ = (
@@ -106,7 +107,7 @@ def test_quoted_msys_path_with_space_naming_a_new_folder_still_denied(fake_fs):
     fake_fs.add("c:\\")  # abs-path-ok: in-memory fake drive table
     res = _enveloped(guard.check)(_payload(SPACED_READ, "C:\\"))
     assert res is not None
-    assert "'Program Files'" in res["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "'Program Files'" in res["hookSpecificOutput"]["additionalContext"]
 
 
 def test_bash_only_mkdir_uses_msys_reading(fake_fs):

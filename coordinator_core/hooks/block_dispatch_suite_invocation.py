@@ -202,9 +202,8 @@ def _precision_deny_envelope(
         dirs_desc = ", ".join(repr(d) for d in directory_args) or "a directory"
 
         message = compose(
-            f"{detected} targets directory {dirs_desc} -- a brief may not "
-            "carry a Tier-F/U command. Name the touched test files or node "
-            "ids, or use the documented per-dispatch override.",
+            f"{detected} targets directory {dirs_desc} -- name test files or "
+            "node ids, or override per dispatch.",
             anchor=_WIKI_ANCHOR,
         )
         return deny("PreToolUse", render(message, env=env))
@@ -216,8 +215,8 @@ def _compose_precision_deny_reason(
     tool_name: str, detected: str, tier: str, env: object = None
 ) -> str:
     message = compose(
-        f"{tool_name}: Tier-{tier} suite command `{detected}` -- name the touched test files or "
-        "node ids, or use the documented per-dispatch override.",
+        f"{tool_name}: Tier-{tier} `{detected}` -- name test files or node ids, or "
+        "override per dispatch.",
         anchor=_WIKI_ANCHOR,
     )
     return render(message, env=env)

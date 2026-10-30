@@ -364,8 +364,9 @@ class TestCheckFiveScopedStaging:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert out["permissionDecision"] == "deny"
-        assert "scratch.txt" in out["permissionDecisionReason"]
+        # validate-commit is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403): strict scope warns.
+        assert out["permissionDecision"] == "allow"
+        assert "scratch.txt" in out["additionalContext"]
 
 
 # ---------------------------------------------------------------------------
@@ -428,8 +429,9 @@ class TestCheckFiveStrictModePromotion:
 
         assert result is not None
         out = result["hookSpecificOutput"]
-        assert out["permissionDecision"] == "deny"
-        assert "sibling.txt" in out["permissionDecisionReason"]
+        # validate-commit is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403): strict scope warns.
+        assert out["permissionDecision"] == "allow"
+        assert "sibling.txt" in out["additionalContext"]
 
     def test_non_strict_mode_only_warns_same_shape(self, tmp_path, monkeypatch):
         # C6b item 3: `COORDINATOR_SCOPE_STRICT` no longer controls

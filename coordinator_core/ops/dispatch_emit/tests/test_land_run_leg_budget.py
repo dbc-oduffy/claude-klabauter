@@ -101,3 +101,31 @@ def test_unindexed_sibling_still_reads_its_own_records(tmp_path, monkeypatch) ->
 
     assert calls["manifest"] >= 1
     assert halted_withheld_index.entries(tmp_path) == {}
+
+
+SIZING = "state/sizings/2026-10-29-some-sizing-abcdef.yaml"
+MINE = "warp-x-20261029T111243-3cb988"
+
+
+def _record(root, name: str, sizing: str) -> None:
+    home = root / "state" / "warp" / name
+    home.mkdir(parents=True)
+    (home / "run.json").write_text('{"sizing_rel": "%s"}' % sizing, encoding="utf-8")
+
+
+def test_superseded_scan_hands_only_earlier_same_sizing_records_to_the_parser(tmp_path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import land_run, run_artifacts
+
+    _record(tmp_path, "warp-a-20261029T100000-aaaaaa", SIZING)
+    _record(tmp_path, "warp-b-20261029T100001-bbbbbb", "state/sizings/other.yaml")
+    _record(tmp_path, "warp-c-20261029T120000-cccccc", SIZING)
+    seen: list = []
+    monkeypatch.setattr(run_artifacts, "superseded_runs", lambda root, rid, sizing, changed, live_run_ids=(): seen.append(list(changed)) or ())
+
+    class Tokens:
+        @staticmethod
+        def held_records(_root):
+            return []
+
+    assert land_run._superseded(tmp_path, MINE, SIZING, None, Tokens) == ((), set())
+    assert seen == [["state/warp/warp-a-20261029T100000-aaaaaa/run.json"]]

@@ -3025,6 +3025,7 @@ def _s_prep_gate_loop_js(
         f"      try {{ _pg = await {gate_call}; }} catch (e) {{ log('plan-prep-gate threw: ' + String((e && e.message) ?? e)); }}",
         "      if (!_pg || typeof _pg.verdict !== 'string') { log('incident: plan-prep-gate returned no parseable reply'); break; }",
         "      if (_pg.verdict === 'PREPPED') break;",
+        "      if (_pg.verdict === 'REFUSED') { _pgHalt = String(_pg.message || _pg.verdict); break; }",
         f"      if (_pgRepairs >= {PREP_GATE_REPAIR_CAP}) {{ _pgHalt = String(_pg.message || _pg.verdict); break; }}",
         "      _pgRepairs++;",
         f"      const _pgRep = await {repair_call};",

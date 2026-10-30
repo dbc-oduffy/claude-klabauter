@@ -186,7 +186,7 @@ def _live_advisory_guard_names() -> List[str]:
     return sorted({entry.name for entry in chain if entry.band in _ADVISORY_BANDS})
 
 
-_NEVER_SPEAKS_GUARDS = frozenset({"reap-stale-git-lock"})
+_NEVER_SPEAKS_GUARDS = frozenset({"reap-stale-git-lock", "block-em-post-fire-product-write", "xs-lane-shell-write"})
 
 
 def test_every_live_advisory_guard_has_a_subagent_render_row():

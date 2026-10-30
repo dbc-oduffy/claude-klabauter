@@ -114,6 +114,8 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
         lambda mod: f"Remove-Item {mod._TARGET_BASENAME}"
     ),
     "block_illegal_filename": lambda mod: 'Remove-Item "bad:name.txt"',
+    # 1 TiB `fsutil file createnew`: the bulk-write estimate exceeds any volume's free space.
+    "guard_disk_fill": lambda mod: "fsutil file createnew altlive_probe.img 1099511627776",
     "block_noncanonical_branch_creation": (
         lambda mod: "git checkout -b wip-nonstandard-name"
     ),

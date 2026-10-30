@@ -120,6 +120,18 @@ def _check_module(module: Any, make_payload: Callable[[str], Dict[str, Any]], en
     return run
 
 
+def _held_branch_push(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
+    # block-topic-branch denies a push to a branch carrying a push hold, not a topic-branch shape
+    # (advisory by ruling, DR-475, 307ea22403).
+    _passthrough_guard_level(ctx, block_topic_branch)
+    git = ctx.tmp_path / ".git"
+    git.mkdir()
+    (git / "HEAD").write_text("ref: refs/heads/work/x/day" + chr(10), encoding="utf-8")
+    hold = chr(10).join(["[branch \"work/x/day\"]", chr(9) + "coordinatorPushHold = pr freeze", ""])
+    (git / "config").write_text(hold, encoding="utf-8")
+    return block_topic_branch.check(_bash(cmd, cwd=str(ctx.tmp_path)))
+
+
 def _perforce_armed(cmd: str, ctx: _Ctx) -> Optional[Dict[str, Any]]:
     from unittest import mock
 
@@ -261,8 +273,8 @@ _DENIED: List[Tuple[str, str, Runner]] = [
     ("p4-verb-fence", "P4ALIASES=x ls", _p4),
     ("block-stash-destruction", "git stash drop", _check_module(block_stash_destruction, _bash)),
     ("block-stash-destruction", "sh -c 'git stash clear'", _check_module(block_stash_destruction, _bash)),
-    ("block-topic-branch", "git checkout -b topic/x", _check_module(block_topic_branch, _bash)),
-    ("block-topic-branch", "git push origin topic/x", _check_module(block_topic_branch, _bash)),
+    ("block-topic-branch", "git push", _held_branch_push),
+    ("block-topic-branch", "git push origin HEAD", _held_branch_push),
     ("block-perforce-submit", "p4 submit -d x", _perforce_armed),
     ("block-external-workspace-vcs-write", "git commit -m x", _external_workspace_unreadable),
     (

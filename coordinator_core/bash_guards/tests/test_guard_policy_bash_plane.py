@@ -12,6 +12,9 @@ from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 
 _FIND = "find /mnt/c -maxdepth 4 -name '*.py'"
+# runaway-find (deny_registry, BOX_DEGRADING) denies the unbounded shape; the depth-bounded
+# _FIND above is advised only.
+_RUNAWAY = "find /mnt/c -name '*.py'"
 _CLEAN = "git clean -fdx"
 _PYTEST = "python -m pytest -q"
 
@@ -67,25 +70,23 @@ def test_no_flags_runaway_find_warns():
     out = _run(_FIND)
     assert _decision(out) != "deny"
     ctx = out["hookSpecificOutput"]["additionalContext"]
-    assert "runaway-find" in ctx
-    assert machine_profile.LEVEL_VERB.rsplit(" ", 1)[0] in ctx or "guard_level" in ctx
+    assert "depth-bounded" in ctx
 
 
 def test_global_strict_denies(monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
-    assert _decision(_run(_FIND)) == "deny"
+    assert _decision(_run(_RUNAWAY)) == "deny"
 
 
 def test_per_guard_strict_hardens_one_guard_alone(monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_RUNAWAY-FIND", "strict")
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_CHECK-TEST-SUITE-INVOCATION", "warn")
-    assert _decision(_run(_FIND)) == "deny"
+    assert _decision(_run(_RUNAWAY)) == "deny"
     out = _run(_PYTEST, session="sess-policy-2")
-    # guard-heavy-command-admission is a floor guard and may still deny; the suite guard must not.
-    if out is not None:
-        hso = out["hookSpecificOutput"]
-        assert hso["permissionDecision"] == "deny" and "guard-heavy-command-admission" in hso["permissionDecisionReason"]
+    # check-test-suite-invocation is in deny_registry (BOX_DEGRADING, b17ec35251): a registered
+    # guard denies whatever its level, so a per-guard warn no longer softens it.
+    assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_suite_guard_defaults_strict_under_a_global_warn(monkeypatch):
@@ -125,6 +126,10 @@ def test_crashed_floor_guard_still_denies(monkeypatch):
     chain = [GuardEntry("destructive-git-clean", boom, True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED)]
     out = dispatch._apply_guard_level("destructive-git-clean", dispatch._crash_deny("destructive-git-clean", RuntimeError("x")))
     assert _decision(out) == "deny"
+    # runaway-find is in deny_registry (BOX_DEGRADING): its crash denies. A guard off the allowlist
+    # (validate-commit, ADVISORY_BY_RULING in b17ec35251; DR-475, 307ea22403) does not.
     out = dispatch._apply_guard_level("runaway-find", dispatch._crash_deny("runaway-find", RuntimeError("x")))
+    assert _decision(out) == "deny"
+    out = dispatch._apply_guard_level("validate-commit", dispatch._crash_deny("validate-commit", RuntimeError("x")))
     assert _decision(out) != "deny"
     assert chain

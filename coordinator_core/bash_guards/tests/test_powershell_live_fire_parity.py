@@ -40,7 +40,8 @@ def test_illegal_filename_fires(tool, tmp_path):
     cmd = "echo x > " + str(tmp_path / "bad?name.txt")
     result = envelope_of(block_illegal_filename.check(_payload(tool, cmd, tmp_path)))
     assert result is not None
-    assert "bad-name" in result["hookSpecificOutput"]["updatedInput"]["command"]
+    # block-illegal-filename advises (ADVISORY_BY_RULING, b17ec35251; DR-475, 307ea22403), no rewrite.
+    assert "bad-name" in result["hookSpecificOutput"]["additionalContext"]
 
 
 @pytest.mark.parametrize("tool", TOOLS)
@@ -106,7 +107,9 @@ def test_approval_sentinel_denies_when_gate_on_and_allows_when_off(
     payload = _payload(tool, cmd, tmp_path)
     mp.reset_cache()
     result = envelope_of(block_approval_sentinel_creation.check(payload))
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # block-approval-sentinel-creation is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403).
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "approval sentinel" in result["hookSpecificOutput"]["additionalContext"]
     monkeypatch.setenv(GATE_ENV, "off")
     mp.reset_cache()
     assert block_approval_sentinel_creation.check(payload) is None

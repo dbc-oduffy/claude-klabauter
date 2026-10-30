@@ -53,7 +53,7 @@ _DENY_RECORD = AlternativeRecord(
     "deny",
     "hard-deny for testing",
     (ReadyCommand("true"),),
-    "fake-hard-deny-guard",
+    "block-stash-destruction",
     em_text="hard-deny for testing",
 )
 
@@ -69,7 +69,7 @@ def _payload(session_id="sess-c6-bash-deny", cwd=None):
     return p
 
 
-def _fake_chain(name="fake-hard-deny-guard"):
+def _fake_chain(name="block-stash-destruction"):
     return [
         dispatch.GuardEntry(
             name,
@@ -102,7 +102,7 @@ class TestUnclearedHardDenyProducesOneRecord:
         assert len(lines) == 1
         record = json.loads(lines[0])
         assert set(record.keys()) == {"guard", "session", "at", "cleared"}
-        assert record["guard"] == "fake-hard-deny-guard"
+        assert record["guard"] == "block-stash-destruction"
         assert record["session"] == "sess-c6-bash-deny"
         assert record["cleared"] is False
 
@@ -140,7 +140,7 @@ class TestClearedHardDenyProducesOneRecordAndChainContinues:
         assert len(lines) == 1
         record = json.loads(lines[0])
         assert record["cleared"] is True
-        assert record["guard"] == "fake-hard-deny-guard"
+        assert record["guard"] == "block-stash-destruction"
 
 
 class TestDenyCounterNeverReadBack:

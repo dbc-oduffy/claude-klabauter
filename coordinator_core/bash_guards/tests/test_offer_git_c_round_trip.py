@@ -29,7 +29,8 @@ def test_multiline_commit_message_suggestion_round_trips(tmp_path):
     (tmp_path / "r" / ".git").mkdir(parents=True)
     cmd = "cd %s/r && git commit -m %s" % (tmp_path, shlex.quote(MSG))
     out = _enveloped(g.check_offer_git_c)(cmd, "s", str(tmp_path))
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    # offer-git-c is advisory-only (DR-475, 307ea22403): the text rides additionalContext.
+    reason = out["hookSpecificOutput"]["additionalContext"]
     suggestion = reason.split("Did you mean:\n  ", 1)[1].split("\n\n\nNote:", 1)[0]
     assert shlex.split(suggestion) == ["git", "-C", "%s/r" % tmp_path, "commit", "-m", MSG]
 
@@ -39,7 +40,7 @@ def test_unfaithful_suggestion_is_omitted(tmp_path, monkeypatch):
     monkeypatch.setattr(g, "_offer_round_trips", lambda *a: False)
     cmd = "cd %s/r && git commit -m %s" % (tmp_path, shlex.quote(MSG))
     out = _enveloped(g.check_offer_git_c)(cmd, "s", str(tmp_path))
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    reason = out["hookSpecificOutput"]["additionalContext"]
     assert "permissionDecision" in out["hookSpecificOutput"]
     assert "Did you mean" not in reason
     assert "-C" in reason

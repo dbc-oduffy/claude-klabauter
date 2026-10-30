@@ -673,3 +673,19 @@ def test_a_run_json_sizing_rel_outside_state_sizings_exempts_nothing(tmp_path):
     root = _invariant_repo(tmp_path)
     _w(root, f"state/warp/{_RUN}/run.json", json.dumps({"sizing_rel": "state/other/x.yaml"}))
     assert li.landing_invariant_nodes(root, ["state/other/x.yaml"], _RUN) == [_ALLOWLIST_NODE]
+
+
+@pytest.mark.parametrize("detail, module", [
+    ("12: imports helper from pkg.mod; pkg/mod.py is untracked", "pkg.mod"),
+    ("7: references name from a.b.c; a/b/c.py is uncommitted in the worktree", "a.b.c"),
+    ("a detail with no module clause", ""),
+])
+def test_provenance_entries_name_the_importer_and_module_for_import_closure(detail, module):
+    closure = li.Finding("src/user.py", li.IMPORT_CLOSURE_UNTRACKED, detail)
+    other = li.Finding("src/user.py", li.PY_UNPARSEABLE, detail)
+
+    got_closure, got_other = li.provenance_entries([closure, other])
+
+    assert got_closure == {"path": "src/user.py", "reason": li.IMPORT_CLOSURE_UNTRACKED, "detail": detail,
+                           "importer": "src/user.py", "module": module}
+    assert "importer" not in got_other and "module" not in got_other

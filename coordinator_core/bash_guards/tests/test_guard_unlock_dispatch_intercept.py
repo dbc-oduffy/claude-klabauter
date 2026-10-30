@@ -36,7 +36,10 @@ from coordinator_core.session import guard_unlock_sentinel as gus
 
 
 SENTINEL_BASENAME = ".coordinator-dev-repo"
-GUARD_NAME = "block-dev-repo-sentinel-removal"
+#: The general slice runs against a deny_registry guard: block-dev-repo-sentinel-removal is
+#: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403) and no longer denies.
+GUARD_NAME = "block-stash-destruction"
+SENTINEL_REMOVAL_GUARD_NAME = "block-dev-repo-sentinel-removal"
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +51,7 @@ def _isolated_tempdir(tmp_path, monkeypatch):
 def _payload(session_id, command=None):
     p = {
         "tool_name": "Bash",
-        "tool_input": {"command": command or ("rm %s" % SENTINEL_BASENAME)},
+        "tool_input": {"command": command or "git stash drop"},
         "cwd": "/repo",
     }
     if session_id is not None:
@@ -146,7 +149,7 @@ class TestIndirectionLegIsAllowNotDeny:
         # first (both precede this guard in the chain), so this leg is
         # only bash-leg-reachable via the unparseable-shell-shape trigger.
         cmd = "rm '%s" % SENTINEL_BASENAME
-        sentinel = gus.sentinel_path("sess-1", GUARD_NAME)
+        sentinel = gus.sentinel_path("sess-1", SENTINEL_REMOVAL_GUARD_NAME)
         sentinel.write_text("", encoding="utf-8")
         assert _decision(_payload("sess-1", command=cmd)) == "allow"
         assert sentinel.exists()

@@ -207,6 +207,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional, TextIO
 
+from coordinator_core.group_em import box_load
 from coordinator_core.group_em import idle_report
 from coordinator_core.group_em import obligations
 from coordinator_core import memo_corpus
@@ -1001,10 +1002,13 @@ def save_prev_parked(
     repo_root: str,
     parked: dict[str, bool],
     peers: Optional[dict[str, dict[str, Any]]] = None,
+    load: Optional[dict[str, Any]] = None,
 ) -> bool:
     payload: dict[str, Any] = {"parked": dict(parked)}
     if peers is not None:
         payload["peers"] = dict(peers)
+    if load is not None:
+        payload["load"] = dict(load)
     return watch_heartbeat.write_atomic(parked_state_path(repo_root), payload)
 
 
@@ -1080,6 +1084,31 @@ def _prune_spool(repo_root: str) -> None:
         watch_spool.prune(repo_root)
     except Exception:
         pass
+
+
+def _load_alarm_tick(
+    repo_root: str, emit: Callable[[str], None]
+) -> Optional[dict[str, Any]]:
+    """Advance the persisted over-core streak; emit one alarm line on fire.
+
+    Returns the state to persist, or None (nothing to write) on any failure.
+    Never raises: a load probe must not fail a wake. Load is box-wide while
+    state is per repo_root, so each watcher alarms independently.
+    """
+    try:
+        prev = _load_prev_record(repo_root).get("load")
+        load5 = box_load.read_load5()
+        cores = box_load.core_count()
+        state, fire = box_load.next_state(prev, load5, cores)
+        if fire and load5 is not None:
+            emit(
+                box_load.alarm_line(
+                    load5, cores, state["count"], box_load.top_attributed()
+                )
+            )
+        return state
+    except Exception:
+        return None
 
 
 def tick_once(
@@ -1171,7 +1200,8 @@ def tick_once(
     # `save_prev_parked`/`stamp` bottom out in, is contractually non-raising
     # today; see `test_gone_emits_even_when_persistence_raises` below, which
     # pins that emission does not depend on persistence succeeding).
-    save_prev_parked(repo_root, cur_parked, peers=peer_notes)
+    load_state = _load_alarm_tick(repo_root, emit)
+    save_prev_parked(repo_root, cur_parked, peers=peer_notes, load=load_state)
     watch_heartbeat.stamp(
         repo_root,
         holder_session_id=group_em_session_id or "",

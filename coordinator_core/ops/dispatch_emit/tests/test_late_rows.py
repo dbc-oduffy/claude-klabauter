@@ -66,6 +66,12 @@ def test_op_replies_late_rows_and_refuses_unsafe_id(tmp_path, monkeypatch):
     assert OP_LATE_ROWS == "workflow.late_rows"
 
 
+def test_late_rows_op_declares_a_repo_scope():
+    from coordinator_core.op_scopes import OP_KEY_SCOPE
+
+    assert OP_KEY_SCOPE.get(OP_LATE_ROWS) == "common_dir"
+
+
 def test_verify_staged_follows_the_prompt_file(tmp_path):
     dir_ = tmp_path / "run"
     (dir_ / "prompts").mkdir(parents=True)

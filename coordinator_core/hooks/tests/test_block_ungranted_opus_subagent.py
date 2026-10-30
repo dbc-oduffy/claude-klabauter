@@ -466,7 +466,7 @@ def test_composed_seam_rewrites_absent_subagent_type(
     _assert_rewritten_to_sonnet(unenumerated_mod.check(payload), payload)
 
 
-def test_composed_seam_pin_deny_short_circuits_before_opus_gate(
+def test_composed_seam_pin_is_advisory_so_the_opus_gate_denies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def _fake_resolve_roster(*, content_root=None, home=None):
@@ -495,7 +495,7 @@ def test_composed_seam_pin_deny_short_circuits_before_opus_gate(
     assert envelope is not None
     reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
     assert "sonnet" in reason and "opus" in reason
-    assert "cost-and-role invariant" in reason
+    assert "AGENT DISPATCH BLOCKED" in reason and "PM grant" in reason
 
 
 def test_composed_seam_passes_clean_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -75,7 +75,7 @@ def _deny_record(text: str) -> Any:
         summary=text,
         members=(
             AdaptableOffer(
-                template="<the same command with its destination on a volume above the floor>",
+                template="write to a volume with room",
                 what_to_adapt="the destination path",
             ),
         ),

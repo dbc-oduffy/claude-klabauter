@@ -45,6 +45,8 @@ def _dir(repo_root: Path) -> Path:
 
 
 def _norm(path: str) -> str:
+    if not ("\\" in path or "//" in path or "/." in path or path.startswith(".") or path.endswith("/")):
+        return path  # already canonical: skips the PurePosixPath build the hot loops would repeat
     posix = PurePosixPath(path.replace("\\", "/")).as_posix()
     return posix[2:] if posix.startswith("./") else posix
 
@@ -211,7 +213,9 @@ def rebuild(repo_root: Path) -> None:
 
 def entries(repo_root: Path) -> dict:
     """`{run id: RunEntry}` over every readable run file, from one directory listing; a malformed file
-    is skipped. Runs `rebuild` once when the sentinel is absent."""
+    is skipped. Runs `rebuild` once when the sentinel is absent. Cost is one parse per run file, and a
+    declared-only entry is dropped only by `record_declared([])`/`remove_run`, so callers must not assume
+    the listing is bounded to live runs."""
     root = Path(repo_root)
     index = _dir(root)
     if not (index / SENTINEL).exists():

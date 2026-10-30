@@ -21,10 +21,10 @@ from coordinator_core.ops.dispatch_emit.tests import test_retest_isolated_export
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_the_emitted_retest_command_is_isolated_and_its_poll_inherits_the_flag():
-    call = ask_compose._invariant_retest_call(head="h", anchor="a", run_id=RUN)
+def test_the_emitted_retest_command_is_isolated_and_its_poll_inherits_the_flag(tmp_path):
+    call = ask_compose._invariant_retest_call(head="h", anchor="a", repo_root=str(tmp_path), run_id=RUN)
 
-    assert "retest_targeted --isolated-export --from-task-output " in call
+    assert "retest_targeted --isolated-export --params-file " in call
     assert "--poll" in call
 
 

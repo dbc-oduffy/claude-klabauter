@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.bash_guards import guard_xs_lane_shell_write as guard
 from coordinator_core.session import xs_lane_budget as xb
 from coordinator_core.bash_guards.tests.test_guard_xs_lane_shell_write import (  # noqa: F401
     SID,
@@ -15,6 +16,13 @@ from coordinator_core.bash_guards.tests.test_guard_xs_lane_shell_write import ( 
     _spend_the_budget,
     env,
 )
+
+@pytest.fixture
+def fires(monkeypatch):
+    seen = []
+    monkeypatch.setattr(guard, "_log", lambda session_id, cwd: seen.append(session_id))
+    return seen
+
 
 _BODY = "x = 1\ny = 2\n"
 
@@ -71,7 +79,7 @@ def test_literal_heredoc_body_mentioning_another_path_is_not_rescanned(env):
 
 
 @pytest.mark.parametrize("name", ["quoted-single", "heredoc-to-tee", "python-writes"])
-def test_unfired_s_plus_session_denies_heredoc_to_product_path(env, monkeypatch, name):
+def test_unfired_s_plus_session_denies_heredoc_to_product_path(env, monkeypatch, fires, name):
     from coordinator_core import warp_live
     from coordinator_core.hooks import flag_em_poll_in_flight as fl
 
@@ -81,16 +89,20 @@ def test_unfired_s_plus_session_denies_heredoc_to_product_path(env, monkeypatch,
     monkeypatch.setattr(warp_live, "live_run_for_session", lambda *a, **k: None)
     cmd = SHAPES[name].format(p=str(root / "pkg" / "mod.py"))
     record = _run(root, cmd)
-    assert record is not None and record.verdict_kind == "deny", name
+    # xs-lane-shell-write is ADVISORY_BY_RULING (b17ec35251) under DR-475 (307ea22403): log-only, never denies.
+    assert record is None, name
+    assert fires == [SID], name
     assert "pkg/mod.py" not in (xb.read_lane(root, SID) or {}).get("paths", [])
 
 
 @pytest.mark.parametrize("name", sorted(SHAPES))
-def test_spent_budget_denies_every_heredoc_shape(env, name):
+def test_spent_budget_denies_every_heredoc_shape(env, fires, name):
     root, sha = env
     assert xb.open_xs_lane(root, SID, sha)
     _spend_the_budget(root)
     cmd = SHAPES[name].format(p=str(root / "pkg" / "mod.py"))
     record = _run(root, cmd)
-    assert record is not None and record.verdict_kind == "deny", name
+    # xs-lane-shell-write is ADVISORY_BY_RULING (b17ec35251) under DR-475 (307ea22403): log-only, never denies.
+    assert record is None, name
+    assert fires == [SID], name
     assert "pkg/mod.py" not in xb.read_lane(root, SID)["paths"]

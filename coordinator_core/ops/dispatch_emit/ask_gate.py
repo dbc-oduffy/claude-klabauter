@@ -52,6 +52,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_NOTES_FIELD,
     RESUME_LEDGER_REMAINING_FIELD,
     RESUME_LEDGER_REVISED_FIELD,
+    RESUME_LEDGER_LANDED_MET_BY_FIELD,
     RESUME_LEDGER_SINCE_HALT_SHAS_FIELD,
     RESUME_LEDGER_SINCE_SHA_FIELD,
     RESUME_LEDGER_UNCLAIMED_FIELD,
@@ -866,6 +867,23 @@ def _credited_landed(blocking: Sequence[str], halt, repo_root: Path) -> list[str
     return credited
 
 
+def _landed_met_by(repo_root: Path, run_id: str) -> dict[str, str]:
+    """`{row_id: sha}` the run's halt marker carries from `record_halted_run_landed`'s `met_by`; `{}` when absent or unreadable.
+
+    One marker read, no spawn."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        marker = halted_run._read(record_dir(Path(repo_root), run_id))
+    except (ValueError, OSError):
+        return {}
+    raw = (marker or {}).get("met_by")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v for k, v in raw.items() if isinstance(v, str) and v}
+
+
 def _unserved_revise_rows(revised: Sequence[str], remaining: Mapping, unclaimed: Sequence[str], halt, repo_root: Path) -> list[str]:
     """Revise-minted blocking ids with no halt steps, no serving plan row and no unclaimed claim: the
     ledger-replan leg serves them. An unreadable plan adds nothing. Reads the plan once per candidate
@@ -961,6 +979,9 @@ def _resume_ledger(
         RESUME_LEDGER_NOTES_FIELD: notes,
         RESUME_EXCLUDE_FIELD: list(excluded_paths(sizing)),
     }
+    landed_met_by = {} if halt.run_id == ALL_LANDED_NO_RUN else _landed_met_by(Path(repo_root), halt.run_id)
+    if landed_met_by:
+        verdict[RESUME_LEDGER_LANDED_MET_BY_FIELD] = landed_met_by
     if credited:
         verdict[RESUME_LEDGER_CREDITED_FIELD] = credited
     revised = [b for b in blocking if b in revision_ids]

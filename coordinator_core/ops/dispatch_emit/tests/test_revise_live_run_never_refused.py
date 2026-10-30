@@ -1,4 +1,4 @@
-"""workflow.revise on a live run never refuses a row or note, briefed or not: a briefed run queues a delta cycle."""
+"""workflow.revise on a live run never refuses a row or note, briefed or not."""
 
 from __future__ import annotations
 
@@ -49,17 +49,25 @@ def test_live_revise_never_refuses_a_row_or_note(tmp_path, monkeypatch, tshirt, 
     assert "refire fresh" not in json.dumps(out)
 
 
-def test_briefed_live_revise_queues_a_delta_cycle_on_the_run(tmp_path, monkeypatch):
+def test_briefed_live_revise_before_verify_names_the_late_row_leg_and_writes_no_delta_file(tmp_path, monkeypatch):
     root = _repo(tmp_path, "M")
     _brief(root)
     monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
     out = rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
-    request = json.loads((record_dir(root, RUN) / rl.DELTA_REQUEST_FILE).read_text(encoding="utf-8"))
-    assert out["briefed"] is True and out["delta_cycle"] == request
-    assert out["item"] in request["rows"] and request["review"] == "delta-only"
-    again = rl._handler({"run_id": RUN, "verbatim": "and macOS"}, repo_root=root)
-    merged = json.loads((record_dir(root, RUN) / rl.DELTA_REQUEST_FILE).read_text(encoding="utf-8"))
-    assert {out["item"], again["item"]} <= set(merged["rows"])
+    assert out["briefed"] is True and "lands_on_refire" not in out
+    assert "late-row leg" in out["note"] and "next stage claims" not in json.dumps(out)
+    assert "delta_cycle" not in out and not list(record_dir(root, RUN).glob("delta*"))
+
+
+def test_live_revise_after_verify_staged_lands_on_refire(tmp_path, monkeypatch):
+    root = _repo(tmp_path, "M")
+    (record_dir(root, RUN) / "prompts").mkdir()
+    (record_dir(root, RUN) / "prompts" / "verify.md").write_text("verify", encoding="utf-8")
+    monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
+    out = rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
+    assert out["ok"] is True and out["run_live"] is True and out["lands_on_refire"] is True
+    assert out["next"]["kind"] == "refire" and "refire" in out["note"]
+    assert "next stage claims" not in json.dumps(out)
 
 
 def test_test_blockers_js_excludes_designed_red_nodes():
@@ -70,8 +78,8 @@ def test_test_blockers_js_excludes_designed_red_nodes():
     assert "_tExcluded.has(n)" in js
 
 
-def test_unbriefed_live_revise_queues_no_delta(tmp_path, monkeypatch):
+def test_unbriefed_live_revise_writes_no_delta_file(tmp_path, monkeypatch):
     root = _repo(tmp_path, "S")
     monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
     out = rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
-    assert "delta_cycle" not in out and not (record_dir(root, RUN) / rl.DELTA_REQUEST_FILE).exists()
+    assert "delta_cycle" not in out and not list(record_dir(root, RUN).glob("delta*"))

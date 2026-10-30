@@ -43,11 +43,11 @@ def test_briefed_live_run_says_the_revise_will_not_be_read(tmp_path, monkeypatch
     assert "no row brief reads this revision" in out["note"]
 
 
-def test_unbriefed_live_run_keeps_the_plain_reply(tmp_path, monkeypatch):
+def test_unbriefed_live_run_names_the_late_row_leg(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     out = _revise(root, monkeypatch)
     assert out["run_live"] is True
-    assert "briefed" not in out and "note" not in out
+    assert "briefed" not in out and "late-row leg" in out["note"]
     assert out["item"]
 
 

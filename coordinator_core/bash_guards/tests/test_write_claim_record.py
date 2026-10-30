@@ -134,12 +134,12 @@ _DENY_RECORD = AlternativeRecord(
     "deny",
     "hard deny (fake, isolated chain)",
     (ReadyCommand("true"),),
-    "fake-hard-deny-guard",
+    "block-stash-destruction",
     em_text="hard deny (fake, isolated chain)",
 )
 
 
-def _fake_hard_deny_entry(name="fake-hard-deny-guard"):
+def _fake_hard_deny_entry(name="block-stash-destruction"):
     return GuardEntry(
         name,
         lambda: _DENY_RECORD,

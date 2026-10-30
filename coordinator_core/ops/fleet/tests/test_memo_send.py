@@ -288,6 +288,27 @@ class TestMissingDraft:
         # Nothing was written into the receiver's tree.
         assert result["acted"] == []
 
+    def test_self_addressed_draft_is_refused(self, tmp_path, monkeypatch, capsys):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        outbox = sender_repo / "state" / "memo-outbox"
+        outbox.mkdir(parents=True)
+        (outbox / "to-self.md").write_text(
+            '---\n'
+            'title: "Friction I own"\n'
+            'from: "claude-klabauter-em"\n'
+            'to: "Project-Claude-Klabauter-EM"\n'
+            'kind: "friction"\n'
+            '---\n\n'
+            "A real body.\n",
+            encoding="utf-8",
+        )
+        result = _memo_send({"dry_run": False, "topic": "to-self"}, repo_root=sender_repo)
+        assert result["exit_code"] == 1
+        assert "SELF-ADDRESSED" in capsys.readouterr().err
+        assert result["acted"] == []
+
 
 # ---------------------------------------------------------------------------
 # dry_run preview

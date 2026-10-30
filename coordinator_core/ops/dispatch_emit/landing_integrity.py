@@ -102,9 +102,22 @@ def split_claim_provenance(findings: Sequence) -> tuple[list, list]:
     return kept, [f for f in findings if f not in kept]
 
 
+_CLOSURE_MODULE = re.compile(r"\bfrom ([\w.]+);")
+
+
 def provenance_entries(provenance: Sequence) -> list[dict]:
-    """The reply shape of recorded provenance findings."""
-    return [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in provenance]
+    """The reply shape of recorded provenance findings. An import-closure entry also carries
+    ``importer`` (the landing path) and ``module`` (the dotted module the detector named, "" if none); consumers are the
+    ``provenance``/``advisory`` reply fields of ``land_run`` and ``land_run_halt``."""
+    out: list[dict] = []
+    for f in provenance:
+        entry = {"path": f.path, "reason": f.reason, "detail": f.detail}
+        if f.reason == IMPORT_CLOSURE_UNTRACKED:
+            found = _CLOSURE_MODULE.search(f.detail or "")
+            entry["importer"] = f.path
+            entry["module"] = found.group(1) if found else ""
+        out.append(entry)
+    return out
 
 
 def unparseable_py(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:

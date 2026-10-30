@@ -27,7 +27,9 @@ def _halt(root: Path, run_id: str, sizing: str, path: str, content: str, mtime: 
         encoding="utf-8",
     )
     os.utime(marker, ns=(mtime, mtime))
-    halted_withheld_index.add_run(root, run_id, [path])
+    halted_withheld_index.add_run(
+        root, run_id, [path], sizing_rel=sizing, prints={path: fingerprint(root, path)}, at_ns=mtime
+    )
 
 
 def _built(root: Path) -> None:

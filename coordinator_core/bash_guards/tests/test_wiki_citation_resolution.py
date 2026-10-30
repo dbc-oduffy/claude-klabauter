@@ -145,6 +145,8 @@ class TestCheckThreadsResolverOnDenyPathOnly:
     }
     _GOVERNED_SURFACES = ["CLAUDE.md"]
 
+    # The guard is advisory by ruling (DR-475, 307ea22403): check() returns the
+    # levelled advisory, so the resolver threading is pinned on the deny-message composer.
     def test_resolver_is_invoked_and_its_output_lands_in_the_message(self) -> None:
         calls = []
 
@@ -152,16 +154,12 @@ class TestCheckThreadsResolverOnDenyPathOnly:
             calls.append(citation)
             return "RESOLVED-CITATION-MARKER"
 
-        result = _enveloped(_guard.check)(self._PAYLOAD, self._GOVERNED_SURFACES, resolve_wiki_citation=_resolver)
-        assert result is not None
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        reason = _guard._compose_deny_message(resolve_wiki_citation=_resolver)
         assert "RESOLVED-CITATION-MARKER" in reason
         assert calls == [_guard._WIKI_ANCHOR]
 
     def test_no_resolver_leaves_bare_literal(self) -> None:
-        result = _enveloped(_guard.check)(self._PAYLOAD, self._GOVERNED_SURFACES)
-        assert result is not None
-        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        reason = _guard._compose_deny_message()
         assert _guard._WIKI_ANCHOR in reason
 
     def test_resolver_never_invoked_on_allow_path(self) -> None:

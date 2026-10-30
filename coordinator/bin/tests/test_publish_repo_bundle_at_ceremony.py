@@ -398,6 +398,36 @@ def test_admitted_rebuild_is_leased_while_running_then_released(tool, monkeypatc
     assert not _lease(tmp_path).exists()
 
 
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_run_and_wait_frees_its_admission_reservation_on_exit_and_on_timeout(tool, monkeypatch, tmp_path, timed_out):
+    import subprocess
+
+    import coordinator_core.bash_guards._heavy_command_class as hcc
+
+    _patch_admission(monkeypatch, admitted=True)
+    released = []
+    monkeypatch.setattr(hcc, "release_spawn", lambda key, pid, host=None: released.append((key, pid)))
+
+    class _Proc:
+        pid = 6161
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            if timed_out:
+                raise subprocess.TimeoutExpired("cli", timeout)
+            return "", ""
+
+        def poll(self):
+            return None if timed_out else 0
+
+    monkeypatch.setattr(tool.subprocess, "Popen", lambda argv, **kw: _Proc())
+    monkeypatch.setattr(tool, "_bind_child_to_caller", lambda proc: None)
+    monkeypatch.setattr(tool, "_kill_tree", lambda pid: None)
+    code = tool._run_and_wait(["cli", "scip-rebuild"], tmp_path, 1)[0]
+    assert code == (None if timed_out else 0)
+    assert released == [("scip-rebuild", 6161)]
+
+
 def test_run_reports_dedupe_and_does_not_publish(tool, monkeypatch, tmp_path, fake_cli):
     monkeypatch.setattr(tool, "_git_common_dir", lambda root: None)
     calls = _calls_recorder(monkeypatch, tool, [(None, "", "dedupe: a rebuild is already running (sequencer pid 7)")])

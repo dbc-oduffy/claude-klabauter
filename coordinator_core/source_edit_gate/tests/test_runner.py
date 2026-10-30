@@ -269,6 +269,28 @@ def test_run_selected_pytest_group_timeout_returns_none_and_kills_group(tmp_path
     assert killed.get("called") is True
 
 
+@pytest.mark.parametrize("timed_out", [False, True])
+def test_run_with_group_cleanup_frees_its_admission_reservation_on_exit_and_on_timeout(monkeypatch, timed_out):
+    from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+    released = []
+    monkeypatch.setattr(hcc, "admit_before_spawn", lambda *a, **k: hcc.SpawnAdmission(True, "", "k1", 1.0))
+    monkeypatch.setattr(hcc, "register_spawn", lambda *a, **k: None)
+    monkeypatch.setattr(hcc, "release_spawn", lambda key, pid, host=None: released.append((key, pid)))
+
+    class _Proc(_FakeProc):
+        def wait(self, timeout=None):
+            if timed_out:
+                raise subprocess.TimeoutExpired(cmd=self.argv, timeout=timeout)
+            return 0
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", _Proc)
+
+    result = runner_module._run_with_group_cleanup(["pytest", "-n", "2"], cwd=".", timeout_s=1)
+    assert result is (not timed_out)
+    assert released == [("k1", 999999)]
+
+
 def test_run_selected_vitest_removes_temp_dir_on_success(tmp_path, monkeypatch):
     captured = {}
 

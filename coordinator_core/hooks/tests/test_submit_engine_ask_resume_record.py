@@ -200,13 +200,13 @@ def test_a_halted_ask_run_resumes_from_its_record(tmp_path, seams):
     assert spawned == [] and emitted == []
 
 
-@pytest.mark.parametrize("reserved,resumes", [(HALTED_ID, True), ("ask-20261029T020202-ffffff", False)])
-def test_a_reserved_slice_resumes_only_its_own_halted_run(tmp_path, seams, reserved, resumes):
-    """A fan-out slice's sizing reserves its run id: the halted run it reserved resumes from its record;
-    any other reserved id is a fresh slice start and leaves the resume route."""
+@pytest.mark.parametrize("reserved", [HALTED_ID, "ask-20261029T020202-ffffff"])
+def test_a_halted_sizing_resumes_whatever_run_id_the_slice_reserved(tmp_path, seams, reserved):
+    """A halted marker for the sizing wins over a fan-out slice's reserved run id: the halted run
+    resumes from its record whether the slice reserved that id or another."""
     root = _repo(tmp_path)
     env, result = mod._resume_route(root, SIZING_REL, _payload(root), {}, "s1", None, reserved_run_id=reserved)
-    assert (env is not None or result is not None) is resumes
+    assert env is not None or result is not None
 
 
 def test_a_refire_carrying_its_own_params_is_not_served_the_halt_time_script(tmp_path, seams):

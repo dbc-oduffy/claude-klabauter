@@ -24,7 +24,7 @@ _NO_TARGET = "Name one non-derived target file and use the Edit tool on it."
 def _armed(monkeypatch):
     monkeypatch.setattr(doctrine, "feature_enabled", lambda name: True)
     monkeypatch.setattr(doctrine, "_is_onboarding_write", lambda *a, **k: False)
-    monkeypatch.setattr(machine_profile, "guard_level", lambda name: "strict")
+    monkeypatch.setattr(doctrine, "apply_guard_level", lambda name, envelope, **kw: envelope)
     monkeypatch.setattr(machine_profile, "out_of_repo_write_blocked", lambda: False)
 
 
@@ -87,3 +87,16 @@ def test_verdict_stays_deny_for_the_admitted_caller(box):
     target = (box.doe / "global-doctrine" / "CLAUDE.md").as_posix()
     _, record, _ = _run(box, f"cat > {target}")
     assert record.verdict_kind == "deny"
+
+
+def test_unpatched_policy_point_demotes_the_deny_to_advisory(box, monkeypatch):
+    # guard-doctrine-surface-bash-write is ADVISORY_BY_RULING (DR-475, 307ea22403; classified b17ec35251).
+    monkeypatch.undo()
+    monkeypatch.setattr(doctrine, "feature_enabled", lambda name: True)
+    monkeypatch.setattr(doctrine, "_is_onboarding_write", lambda *a, **k: False)
+    target = (box.doe / "global-doctrine" / "CLAUDE.md").as_posix()
+    payload = box.payload("global-doctrine/CLAUDE.md", tool="Bash")
+    payload["tool_input"] = {"command": f"cat > {target}"}
+    result = doctrine.check(payload, ["CLAUDE.md"])
+    assert isinstance(result, dict)
+    assert result["hookSpecificOutput"].get("permissionDecision") != "deny"

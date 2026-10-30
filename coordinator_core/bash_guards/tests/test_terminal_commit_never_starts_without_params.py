@@ -113,7 +113,14 @@ def _reasons(out) -> list[str]:
     if not isinstance(out, dict):
         return []
     hso = out.get("hookSpecificOutput") or {}
-    return [str(hso.get("permissionDecisionReason") or out.get("permissionDecisionReason") or "")]
+    return [
+        str(
+            hso.get("permissionDecisionReason")
+            or out.get("permissionDecisionReason")
+            or hso.get("additionalContext")
+            or ""
+        )
+    ]
 
 
 @pytest.mark.parametrize("shape", _SHAPES)
@@ -136,7 +143,9 @@ def test_a_command_writing_the_params_file_is_denied_naming_the_shape(repo, monk
     token = run_token.mint(repo, _RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
     out = _verdict(repo, _command(repo, shape), _transcript(repo, params), "strict", monkeypatch)
-    assert _is_deny(out)
+    # block-subagent-commit is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403): the chain
+    # advises rather than denies; the guard's own record still names the shape.
+    assert out and not _is_deny(out)
     own = _enveloped(guard.check)(_payload(repo, _command(repo, shape), _transcript(repo, params)))
     assert "writes the run's params file" in "\n".join(_reasons(own))
 

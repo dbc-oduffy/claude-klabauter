@@ -1000,11 +1000,12 @@ def _resume_route(
     session_id: Optional[str],
     launch: Optional[Callable[..., Path]],
     reserved_run_id: Optional[str] = None,
+    ask_parent_id: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[dict]]:
     """(envelope, emit result) for a refire of a halted sizing, else (None, None).
 
-    A fan-out slice's sizing reserves its own run id; it resumes here only when that reserved run is
-    the halted one (any other reserved id is a fresh slice start).
+    A halted marker for the sizing wins over a fan-out slice's reserved run id: the halted run
+    resumes, and the revisions queued under the reserved or parent ask id are carried into its record.
 
     A stored script whose fingerprint matches is the emit result. A missing, stale or stalled
     record spawns the detached recompose and answers a one-child launcher envelope. A halted-run
@@ -1033,9 +1034,15 @@ def _resume_route(
             return _refuse("The emitted-run lookup stalled, so the submission would compose inline. Re-submit once."), None
     if not isinstance(halted_id, str):
         return None, None
-    if reserved_run_id is not None and reserved_run_id != halted_id:
-        return None, None
     rd = record_dir(root, halted_id)
+    filed_under = [i for i in (reserved_run_id, ask_parent_id) if isinstance(i, str) and i != halted_id]
+    if filed_under:
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import carry_inbox
+
+        try:
+            carry_inbox(root, filed_under, halted_id)
+        except OSError:
+            pass  # the resume proceeds; the queued revisions stay under their own id
 
     stored: Optional[dict] = None
     record = _budgeted_read(lambda wait: hrr.read(rd, wait))
@@ -1324,6 +1331,7 @@ def _evaluate(
 
     fan_reply: Optional[dict] = None
     reserved_run_id: Optional[str] = None
+    ask_parent_id: Optional[str] = None
     if asks is not None:
         fan_asks = [{k: v for k, v in item.items() if k != _CHATTY_KEY} for item in asks]
         fan_params: dict = {"asks": fan_asks, "session_id": session_id or ""}
@@ -1378,6 +1386,7 @@ def _evaluate(
             if why:
                 return deny("PreToolUse", why)
             reserved_run_id = marker[1]
+            ask_parent_id = marker[0]
 
     clash = None
     with warp_live.listing_scope():
@@ -1451,7 +1460,8 @@ def _evaluate(
     result: Any = None
     if sizing_rel and asks is None and "from_sizing" not in params:
         resume_envelope, result = _resume_route(
-            root, sizing_rel, payload, params, session_id, launch, reserved_run_id=reserved_run_id
+            root, sizing_rel, payload, params, session_id, launch,
+            reserved_run_id=reserved_run_id, ask_parent_id=ask_parent_id,
         )
         if resume_envelope is not None:
             return resume_envelope

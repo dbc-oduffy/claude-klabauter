@@ -358,7 +358,10 @@ def _evaluate_with_crashing(attr, command):
         raise RuntimeError("synthetic crash for band-membership gate")
 
     orig = getattr(dispatch._dc, attr)
-    setattr(dispatch._dc, attr, _boom)
+    if attr == "check_no_verify":
+        dispatch._dc.check_no_verify = _boom
+    else:
+        dispatch._dc.check_destructive_git_clean = _boom
     try:
         payload = json.dumps(
             {
@@ -370,7 +373,10 @@ def _evaluate_with_crashing(attr, command):
         )
         return dispatch.evaluate_payload_json(payload)
     finally:
-        setattr(dispatch._dc, attr, orig)
+        if attr == "check_no_verify":
+            dispatch._dc.check_no_verify = orig
+        else:
+            dispatch._dc.check_destructive_git_clean = orig
 
 
 def test_crash_deny_short_circuits_immediately():
@@ -398,7 +404,8 @@ def test_crash_of_an_unregistered_guard_is_dropped_never_denied():
     out = _evaluate_with_crashing_no_verify("git commit -m x")
     hso = (out or {}).get("hookSpecificOutput") or {}
     assert hso.get("permissionDecision") != "deny"
-    assert "synthetic crash" not in str(out)
+    # DR-475 (307ea22403): the clamp surfaces the crash as a log-level envelope, never a deny.
+    assert (out or {}).get("guardLevel") == "log"
 
 
 def test_crash_deny_is_scoped_to_the_crashed_guard_target_class():

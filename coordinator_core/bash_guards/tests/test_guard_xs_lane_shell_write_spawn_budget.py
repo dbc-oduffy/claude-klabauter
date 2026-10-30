@@ -31,12 +31,16 @@ def spawns(monkeypatch):
     return seen
 
 
-def test_firing_command_spawns_nothing(env, spawns):
+def test_firing_command_spawns_nothing(env, spawns, monkeypatch):
+    fires = []
+    monkeypatch.setattr(guard, "_log", lambda session_id, cwd: fires.append(session_id))
     root, sha = env
     assert xb.open_xs_lane(root, SID, sha)
     _spend_the_budget(root)
     record = guard.check(_heredoc(str(root / "pkg" / "mod.py")), SID, str(root), {"session_id": SID, "cwd": str(root)})
-    assert record is not None and record.verdict_kind == "deny"
+    # xs-lane-shell-write is ADVISORY_BY_RULING (b17ec35251) under DR-475 (307ea22403): log-only, never denies.
+    assert record is None
+    assert fires == [SID]
     assert spawns == []
 
 

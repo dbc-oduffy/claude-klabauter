@@ -340,3 +340,56 @@ def test_no_finding_never_calls_owning_runs(repo, monkeypatch):
     monkeypatch.setattr(import_closure.run_owner, "owning_runs", boom)
     _write(repo, "pkg/a.py", "from pkg.b import old_fn\n")
     assert _gate(repo, ["pkg/a.py"]).passed
+
+
+@pytest.fixture
+def bare(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _write(tmp_path, "README.md", "x\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    return tmp_path
+
+
+def test_flat_scripts_sibling_untracked_is_found(bare):
+    _write(bare, "scripts/helper.py", "y = 1\n")
+    _write(bare, "scripts/a.py", "import helper\n")
+    out = _gate(bare, ["scripts/a.py"])
+    assert not out.passed
+    assert "scripts/a.py:1" in out.diagnostics[0]
+    assert "scripts/helper.py is uncommitted in the worktree" in out.diagnostics[0]
+
+
+def test_flat_scripts_sibling_in_commit_passes(bare):
+    _write(bare, "scripts/helper.py", "y = 1\n")
+    _write(bare, "scripts/a.py", "from helper import y\n")
+    assert _gate(bare, ["scripts/a.py", "scripts/helper.py"]).passed
+
+
+def test_src_layout_untracked_module_is_found(bare):
+    _write(bare, "src/mypkg/__init__.py", "")
+    _git(bare, "add", "-A")
+    _git(bare, "commit", "-q", "-m", "pkg")
+    _write(bare, "src/mypkg/new.py", "y = 1\n")
+    _write(bare, "tests/test_a.py", "from mypkg.new import y\n")
+    out = _gate(bare, ["tests/test_a.py"])
+    assert not out.passed
+    assert "src/mypkg/new.py is uncommitted in the worktree" in out.diagnostics[0]
+
+
+def test_a33de71574_shape_namespace_package_untracked_module(bare):
+    _write(bare, "example_retrieval_repo_core/x.py", "z = 1\n")
+    _git(bare, "add", "-A")
+    _git(bare, "commit", "-q", "-m", "x")
+    _write(bare, "example_retrieval_repo_core/response_tokens.py", "def count():\n    pass\n")
+    _write(bare, "example_retrieval_repo_core/x.py", "z = 1\nfrom example_retrieval_repo_core.response_tokens import count\n")
+    out = _gate(bare, ["example_retrieval_repo_core/x.py"])
+    assert not out.passed
+    assert "example_retrieval_repo_core/response_tokens.py is uncommitted in the worktree" in out.diagnostics[0]
+    assert "example_retrieval_repo_core/x.py:2" in out.diagnostics[0]
+
+
+def test_stdlib_and_third_party_yield_no_finding_in_flat_layout(bare):
+    _write(bare, "scripts/helper.py", "y = 1\n")
+    _write(bare, "scripts/a.py", "import json\nimport yaml\nfrom os import path\n")
+    assert _gate(bare, ["scripts/a.py"]).passed

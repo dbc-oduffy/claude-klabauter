@@ -356,12 +356,11 @@ def _explicit_request_reason(
         for name, entry in pins.items()
         if isinstance(entry, dict) and entry.get("model") == "opus"
     )
-    routes = ", ".join(personas[:6]) if personas else "coordinator:staff-eng"
+    routes = ", ".join(personas[:3]) if personas else "coordinator:staff-eng"
     return (
         f"AGENT DISPATCH BLOCKED: subagent_type={subagent_type!r} requested "
-        f"model {passed_model!r}; the request is not rewritten, and a PM grant "
-        f"is the only way to run it. Opus-pinned personas: {routes}. "
-        "Or pass model: \"sonnet\"/\"haiku\"."
+        f"model {passed_model!r}; it needs a PM grant. Opus-pinned: {routes}. "
+        "Or pass model \"sonnet\"/\"haiku\"."
     )
 
 

@@ -240,7 +240,7 @@ def _huge_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Any
         if kind == "engine":
             return _record(
                 f"BLOCKED: `{toks[0]}` over {target} walks the UE engine tree and floods the file cache.",
-                " Use project_engine_type_hierarchy, project_cpp_symbol or project_engine_document_symbols.",
+                " Use project_engine_type_hierarchy or project_cpp_symbol.",
                 AdaptableOffer(template="example-retrieval-repo engine tool for the symbol", what_to_adapt="the symbol"),
             )
         if kind == "scratch":

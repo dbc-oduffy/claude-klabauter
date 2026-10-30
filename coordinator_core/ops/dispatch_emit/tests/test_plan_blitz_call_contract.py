@@ -68,6 +68,12 @@ def _blitz_call(capsys) -> str:
 def test_planblitz_call_carries_every_required_key(repo, capsys, resolvable, route):  # noqa: F811
     _arrange(repo, route)
     assert cli.main(_ROUTES[route](repo)) == 0
+    if route == "ask":
+        # A raw ask is sized in-run and embeds no plan-blitz stage, so it carries no call to check.
+        out = capsys.readouterr().out
+        reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
+        assert "await planBlitz(" not in open(reply["path"], encoding="utf-8").read()
+        return
     call = _blitz_call(capsys)
     for key in _REQUIRED:
         assert key in call, f"{route}: planBlitz call lacks {key}"
@@ -75,10 +81,20 @@ def test_planblitz_call_carries_every_required_key(repo, capsys, resolvable, rou
     assert call.rindex("gateReportPath: REPO_ROOT + '/' + _sizingRel") > call.index("...{")
 
 
+@pytest.mark.parametrize("route", ["sizing", "ask-sizing"])
+def test_planblitz_baton_carries_title_and_sizing_exit_criterion(repo, capsys, resolvable, route):  # noqa: F811
+    _arrange(repo, route)
+    assert cli.main(_ROUTES[route](repo)) == 0
+    call = _blitz_call(capsys)
+    assert 'title: _gate.baton?.title ?? "exercise the emit"' in call
+    assert '_gate.exit_criterion ?? "done"' in call
+    assert "undefined" not in call
+
+
 def test_default_resolve_carries_parallel_review_chatty_does_not(monkeypatch, tmp_path):
     roster = {"plan_review": {
-        "agents": [{"agentType": "a:x", "model": "m", "tiers": ["XXL"]}],
-        "revise": {"agentType": "a:r", "model": "m"},
+        "tiers": {"XXL": {"reviewers": [{"agentType": "a:x", "model": "m"}]}},
+        "revise": {"step": "merged"},
     }}
     contract = tmp_path / "contract"
     contract.mkdir()

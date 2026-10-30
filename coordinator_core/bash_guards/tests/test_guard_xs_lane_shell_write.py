@@ -64,6 +64,7 @@ def env(tmp_path, monkeypatch):
 
 
 def _heredoc(path: str, body: str = "x = 1\ny = 2\n", op: str = ">") -> str:
+    path = path.replace("\\", "/")  # bash reads a backslash as an escape; a real command carries `/`
     return f"cat {op} {path} <<'EOF'\n{body}EOF"
 
 

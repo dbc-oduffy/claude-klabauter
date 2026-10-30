@@ -74,7 +74,8 @@ class TestBlockNoncanonicalBranchCreation:
 
     def test_denies_through_dispatch(self):
         out = _evaluate(_payload_dict("git branch bad-name"))
-        _assert_deny(out, must_contain="branch")
+        # block-noncanonical-branch-creation: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403).
+        _assert_advisory_not_deny(out, must_contain="branch")
 
     def test_consumer_warn_level_turns_the_deny_into_an_advisory(self, monkeypatch):
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
@@ -107,14 +108,16 @@ class TestBlockSubagentPlanBodyBashWrite:
     def test_fires_deny_through_dispatch(self, monkeypatch):
         self._stub(monkeypatch)
         out = _evaluate(_payload_dict(self._WRITE_CMD, agent_id="deadbeef0123"))
-        _assert_deny(out, must_contain="coordinator:executor")
+        # block-subagent-plan-body-bash-write: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403).
+        _assert_advisory_not_deny(out, must_contain="coordinator:executor")
 
 
 class TestCheckRawPidLiveness:
     def test_fires_deny_through_dispatch(self, monkeypatch):
         monkeypatch.delenv(check_raw_pid_liveness._OVERRIDE_ENV, raising=False)
         out = _evaluate(_payload_dict("ps -p 12345"))
-        _assert_deny(out, must_contain="session-liveness-cli")
+        # check-raw-pid-liveness: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403).
+        _assert_advisory_not_deny(out, must_contain="session-liveness-cli")
 
 
 class TestBlockDevRepoSentinelRemoval:
@@ -122,4 +125,5 @@ class TestBlockDevRepoSentinelRemoval:
 
     def test_fires_deny_through_dispatch(self):
         out = _evaluate(_payload_dict("rm %s" % self.SENTINEL))
-        _assert_deny(out, must_contain="dev-repo guard")
+        # block-dev-repo-sentinel-removal: ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403).
+        _assert_advisory_not_deny(out, must_contain="dev-repo guard")

@@ -400,10 +400,8 @@ def verdict(
     if free - est >= floor:
         return Verdict(False)
     text = (
-        "BLOCKED [%s]: writing ~%s to %s leaves %s free, under the %s floor. "
-        "Alternative: write to a volume with room, or free space first "
-        "(disk_budget sweep prunes old transcripts and caches). Lower the "
-        "floor with COORDINATOR_DISK_BUDGET_VOLUME_FREE_FLOOR."
+        "BLOCKED [%s]: ~%s to %s leaves %s free (floor %s). "
+        "Alternative: write to a volume with room, or disk_budget sweep."
         % (GUARD_NAME, _gib(est), vol, _gib(max(free - est, 0)), _gib(floor))
     )
     return Verdict(True, text)

@@ -987,3 +987,99 @@ def test_main_launches_one_child_per_node_chunk(repo, tmp_path, monkeypatch):
         ["--from-task-output", str(out), "--repo-root", str(repo), "--detached-child",
          *[x for t in ids for x in ("--tests", t)]], run=run, dirty=lambda r: [])
     assert rc == 0 and [len([a for a in c if "::" in a]) for c in calls] == [2, 2, 1]
+
+
+INVARIANT = "test_a.py::test_every_tracked_segment_is_on_the_allowlist"
+
+
+def test_run_uncaused_invariant_red_in_a_file_with_a_run_new_id_lands_pre_existing(tmp_path, monkeypatch):
+    """The export is red on an invariant also red in the HEAD-only export; the run targets its own new
+    id in that file (absent at HEAD). The HEAD pass runs the whole file, so caused == [] and the gate
+    reads pre-existing-only. A red new id still lands in caused."""
+    from coordinator_core.ops.dispatch_emit import landing_export as le
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
+    export_root = tmp_path / "export"
+    export_root.mkdir()
+    export_log = tmp_path / "export.log"
+    new_id = "test_a.py::test_new_in_this_run"
+    export_log.write_text(f"FAILED {INVARIANT} - boom\n", encoding="utf-8")
+
+    def build(worktree, out_dir, paths):
+        Path(out_dir).mkdir(parents=True)
+        (Path(out_dir) / "test_a.py").write_text("", encoding="utf-8")
+        return le.LandingExport(Path(out_dir).as_posix(), "h" * 40, (), ())
+
+    monkeypatch.setattr(le, "build_head_export", build)
+    seen: list[list[str]] = []
+
+    def run(argv, cwd, *, log=None, timeout=None, append=False):
+        seen.append(list(argv))
+        if "--collect-only" in argv:
+            if any("::" in a for a in argv):
+                return 4
+            body = f"{INVARIANT}\ntest_a.py::test_other\n"
+            rc = 0
+        else:
+            body = f"FAILED {INVARIANT} - boom\n1 passed, 1 failed in 0.1s\n"
+            rc = 1
+        with open(log, "ab" if append else "wb") as sink:
+            sink.write(body.encode())
+        return rc
+
+    got = retest_targeted._head_baseline(
+        tmp_path, run, [new_id, INVARIANT], export_root, export_log, tmp_path / "head.log",
+        float("inf"),
+    )
+    baseline = got["baseline"]
+    assert baseline["caused"] == [] and baseline["foreign"] == [INVARIANT]
+    assert not any("::" in a for argv in seen for a in argv)
+    findings, check = ltt.failed_targeted_tests({"status": "fail", "baseline": baseline})
+    assert findings == [] and check == "pre-existing-only"
+
+    export_log.write_text(f"FAILED {INVARIANT} - boom\nFAILED {new_id} - boom\n", encoding="utf-8")
+    again = retest_targeted._head_baseline(
+        tmp_path, run, [new_id, INVARIANT], export_root, export_log, tmp_path / "head.log",
+        float("inf"),
+    )["baseline"]
+    assert again["caused"] == [new_id] and again["foreign"] == [INVARIANT]
+    assert ltt.failed_targeted_tests({"status": "fail", "baseline": again})[1] == "failed"
+
+
+@pytest.mark.parametrize("timeout, expected", [(30, 0), (0.05, retest_targeted.LAUNCH_TIMED_OUT)])
+def test_run_argv_frees_its_admission_reservation_on_exit_and_on_timeout(tmp_path, monkeypatch, timeout, expected):
+    import sys
+
+    from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+    released = []
+    monkeypatch.setattr(hcc, "admit_before_spawn", lambda *a, **k: hcc.SpawnAdmission(True, "", "k1", 1.0))
+    monkeypatch.setattr(hcc, "register_spawn", lambda *a, **k: None)
+    monkeypatch.setattr(hcc, "release_spawn", lambda key, pid, host=None: released.append(key))
+    code = "pass" if expected == 0 else "import time; time.sleep(30)"
+
+    assert retest_targeted._run_argv([sys.executable, "-c", code], tmp_path, timeout=timeout) == expected
+    assert released == ["k1"]
+
+
+def test_release_spawn_frees_the_pair_and_never_raises():
+    from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+    calls = []
+
+    class Host:
+        def admission_file(self):
+            return "adm"
+
+        def release_command(self, path, key, pid):
+            calls.append((path, key, pid))
+
+    hcc.release_spawn("k", 7, Host())
+    assert calls == [("adm", "k", 7)]
+
+    class Broken(Host):
+        def release_command(self, *a):
+            raise RuntimeError("boom")
+
+    hcc.release_spawn("k", 7, Broken())

@@ -16,7 +16,6 @@ from typing import Callable, Optional
 _IS_WINDOWS = os.name == "nt"
 _PS_TIMEOUT_S = 1
 _MAX_HOPS = 64
-_UNATTRIBUTED = "?@?"
 
 
 def read_load5() -> Optional[float]:
@@ -173,8 +172,6 @@ def alarm_line(load5: float, cores: int, ticks: int, attributed: list[dict]) -> 
     tops = ", ".join(
         f"{p.get('comm', '?')}({p.get('pcpu', 0)}%) "
         f"{p.get('session', '?')}@{p.get('repo', '?')}"
-        if p.get("session", "?") != "?" or p.get("repo", "?") != "?"
-        else f"{p.get('comm', '?')}({p.get('pcpu', 0)}%) {_UNATTRIBUTED}"
         for p in attributed
     )
     return f"load-alarm: load5={load5:.2f} cores={cores} for {ticks} ticks; top: {tops}"

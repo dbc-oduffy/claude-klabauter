@@ -448,3 +448,7 @@ def test_degraded_host_reverify_script_emits_no_coordinator_type_and_keeps_judge
     assert normal.count("agent(") == 2  # delivery verifier + the merged verify leg
     assert degraded.count("agent(") == 3  # the judge keeps its own leg where it holds Write
     assert "criterion: _judge" in degraded
+    tests_opts = re.search(r"phase: 'Tests re-run', agentType: '([^']*)'([^{]*?), schema:", degraded)
+    assert tests_opts and tests_opts.group(1) == "general-purpose"
+    assert "effort: 'low'" in tests_opts.group(2)
+    assert "model:" not in tests_opts.group(2)

@@ -175,10 +175,10 @@ class TestUnreadableFileRefusesRatherThanReadsEmpty:
 
         real_read = engine._read_text
 
-        def _locked_b(path: str):
+        def _locked_b(path: str, *args, **kwargs):
             if path.endswith("b.py"):
                 raise engine.Unanswerable("cannot read %r: sharing violation" % path)
-            return real_read(path)
+            return real_read(path, *args, **kwargs)
 
         monkeypatch.setattr(engine, "_read_text", _locked_b)
         assert answer("grep -rn alpha .", cwd=str(tmp_path)) is None

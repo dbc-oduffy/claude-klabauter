@@ -947,6 +947,42 @@ def test_tick_once_deadline_follows_the_callers_cadence_not_the_poll_interval(tm
     assert (nxt - last).total_seconds() >= watch._CRON_FLOOR_INTERVAL_SECONDS
 
 
+def _load_ticks(tmp_path, load5, n, monkeypatch):
+    monkeypatch.setattr(watch.box_load, "read_load5", lambda: load5)
+    monkeypatch.setattr(watch.box_load, "core_count", lambda: 4)
+    monkeypatch.setattr(
+        watch.box_load, "top_attributed", lambda *a, **k: [{"comm": "x", "pcpu": 9.0}]
+    )
+    lines = []
+    for _ in range(n):
+        stream = io.StringIO()
+        with mock.patch.object(watch, "poll_once", return_value=({"p": True}, [], {"p": {}}, 0)):
+            assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=stream) == 0
+        lines += [l for l in stream.getvalue().splitlines() if l.startswith("load-alarm:")]
+    return lines
+
+
+def test_tick_once_load_alarm_fires_once_at_n_ticks_and_keeps_parked(tmp_path, monkeypatch):
+    assert _load_ticks(tmp_path, 9.0, 2, monkeypatch) == []
+    assert len(_load_ticks(tmp_path, 9.0, 1, monkeypatch)) == 1
+    assert _load_ticks(tmp_path, 9.0, 2, monkeypatch) == []
+    assert watch.load_prev_parked(str(tmp_path)) == {"p": True}
+    assert watch.load_prev_peers(str(tmp_path)) == {"p": {}}
+
+
+def test_tick_once_load_alarm_rearms_below_cores(tmp_path, monkeypatch):
+    assert len(_load_ticks(tmp_path, 9.0, 3, monkeypatch)) == 1
+    assert _load_ticks(tmp_path, 1.0, 1, monkeypatch) == []
+    assert len(_load_ticks(tmp_path, 9.0, 3, monkeypatch)) == 1
+
+
+def test_tick_once_load_unavailable_is_silent_and_never_raises(tmp_path, monkeypatch):
+    assert _load_ticks(tmp_path, None, 5, monkeypatch) == []
+    monkeypatch.setattr(watch.box_load, "read_load5", mock.Mock(side_effect=RuntimeError("x")))
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=io.StringIO()) == 0
+
+
 def test_tick_once_exits_nonzero_and_loud_when_the_poll_raises(tmp_path):
     """No loop to carry on into: a wake that failed must not exit 0. A silent
     zero here rebuilds the exact indistinguishability this mode removes."""

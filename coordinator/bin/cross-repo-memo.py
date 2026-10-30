@@ -2780,6 +2780,7 @@ def _cmd_draft(args: argparse.Namespace) -> int:
             "unknown_receiver": 2,
             "registry_error": 3,
             "ambiguous_receiver": 3,
+            "self_addressed": 2,
         }
         return rejection_exit_codes.get(rejection_class, 1)
 

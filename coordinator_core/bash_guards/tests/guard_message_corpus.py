@@ -533,7 +533,8 @@ def _bump_foreign_repo_write_fire_setup(
     mp.setattr(guard, "bump_applies", lambda *a, **k: True)
     mp.setattr(guard, "resolve_launch_anchor", lambda *a, **k: str(anchor))
     return {
-        _CMD_OVERRIDE_KEY: f"git -C {foreign} commit --allow-empty -m x",
+        # `git commit`/`git add` are `_CROSS_REPO_ADVISORY_VERBS` (stderr notice, no envelope); `tag` still renders.
+        _CMD_OVERRIDE_KEY: f"git -C {foreign.as_posix()} tag v1",
         _CWD_OVERRIDE_KEY: str(anchor),
     }
 
@@ -2291,7 +2292,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "bump-foreign-repo-write",
         "bump-foreign-repo-write-fire",
-        "git -C <foreign> commit --allow-empty -m x",
+        "git -C <foreign> tag v1",
         True,
         _REWRITE,
         False,
@@ -4253,6 +4254,16 @@ def _fire_enforce_agent_model_pin_control() -> Optional[Dict[str, Any]]:
         return _to_envelope_or_none(_hook_enforce_agent_model_pin.check(payload))
 
 
+_NEMCD_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _nemcd_head_sha() -> str:
+    """A readable base commit: a fake sha makes the budget core render its `unmeasurable` branch, not the spent one."""
+    from coordinator_core.git import git_state
+
+    return git_state.head_sha(_NEMCD_REPO_ROOT) or ""
+
+
 def _fire_nudge_em_code_dispatch() -> Optional[Dict[str, Any]]:
     # A 2-line write now fits the XS budget and is admitted; the row drives a write whose
     # projected spend (40 lines) exceeds the 30-line budget. The lane is stubbed so no
@@ -4261,12 +4272,13 @@ def _fire_nudge_em_code_dispatch() -> Optional[Dict[str, Any]]:
 
     payload = {
         "tool_input": {
-            "file_path": "/repo/src/module.py",
+            "file_path": "coordinator_core/module_probe.py",
             "content": "".join("x%d = %d\n" % (i, i) for i in range(40)),
         },
         "session_id": "sess-c12-nemcd-fire-%s" % uuid.uuid4().hex,
+        "cwd": str(_NEMCD_REPO_ROOT),
     }
-    record = {"kind": "xs", "state": "open", "base_sha": "0" * 40, "paths": []}
+    record = {"kind": "xs", "state": "open", "base_sha": _nemcd_head_sha(), "paths": []}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
         mp.setattr(xlb, "read_lane", lambda root, sid: record)
@@ -4279,10 +4291,11 @@ def _fire_nudge_em_code_dispatch_spent(kind: str, denies: int = 0) -> Optional[D
     from coordinator_core.session import xs_lane_budget as xlb
 
     payload = {
-        "tool_input": {"file_path": "/repo/src/module.py", "content": "def foo():\n    return 42\n"},
+        "tool_input": {"file_path": "coordinator_core/module_probe.py", "content": "".join("x%d = %d\n" % (i, i) for i in range(40))},
         "session_id": "sess-nemcd-%s-%s" % (kind, uuid.uuid4().hex),
+        "cwd": str(_NEMCD_REPO_ROOT),
     }
-    record = {"kind": kind, "state": "spent", "base_sha": "0" * 40, "paths": [], "denies": denies}
+    record = {"kind": kind, "state": "spent", "base_sha": _nemcd_head_sha(), "paths": [], "denies": denies}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(_hook_nudge_em_code_dispatch, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
         mp.setattr(xlb, "read_lane", lambda root, sid: record)

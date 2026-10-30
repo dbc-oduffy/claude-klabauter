@@ -75,22 +75,28 @@ def _fire_registered_doctrine_surface_bash_write(cmd: str) -> Optional[Dict[str,
     return matches[0].fn()
 
 
-class TestBashMediatedLocalConfigWriteIsDenied:
-    def test_python_via_bash_write_is_denied(self) -> None:
+class TestBashMediatedLocalConfigWriteIsFlagged:
+    def test_python_via_bash_write_is_flagged(self) -> None:
         result = _fire_registered_doctrine_surface_bash_write(
             "python3 -c \"open('coordinator.local.md', 'a').write('x')\""
         )
         assert result is not None
         result = envelope_of(result)
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        # guard-doctrine-surface-bash-write is advisory by ruling (DR-475, 307ea22403): flagged, not denied.
+        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert result["guardLevel"] == "log"
+        assert "governed doctrine surface" in result["hookSpecificOutput"]["additionalContext"]
 
-    def test_shell_redirect_write_is_denied(self) -> None:
+    def test_shell_redirect_write_is_flagged(self) -> None:
         result = _fire_registered_doctrine_surface_bash_write(
             "echo corrupted > coordinator.local.md"
         )
         assert result is not None
         result = envelope_of(result)
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        # guard-doctrine-surface-bash-write is advisory by ruling (DR-475, 307ea22403): flagged, not denied.
+        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert result["guardLevel"] == "log"
+        assert "governed doctrine surface" in result["hookSpecificOutput"]["additionalContext"]
 
     def test_read_only_command_still_allows(self) -> None:
         assert _fire_registered_doctrine_surface_bash_write("cat coordinator.local.md") is None

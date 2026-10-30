@@ -53,6 +53,8 @@ def _repo_with_halted_runs(root: Path, count: int) -> list:
         _write(rec / "kept.json", json.dumps({"chunks": {"X1": {"paths": {f"f{i}.py": kept}}}, "plan_gate": None}))
     _git(root, "add", *paths)
     _git(root, "commit", "-q", "-m", "head")
+    for p in paths:  # dirty withheld paths: a clean-tree release cannot free the run
+        _write(root / p, "# uncommitted\n")
     return paths
 
 

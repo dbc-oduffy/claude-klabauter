@@ -38,29 +38,39 @@ def _run(command, cwd):
     )
 
 
-def test_init_under_temp_with_inline_ceiling_is_allowed(world):
-    work, repo, temp = world
-    assert _run(f"GIT_CEILING_DIRECTORIES={temp} git init {work / 'fx'}", repo) is None
-    assert _run(f"GIT_CEILING_DIRECTORIES={temp} git init fx", work) is None
-    assert _run(f"GIT_CEILING_DIRECTORIES={work} git init", work / "fx") is None
+# The session scratchpad (`<temp>/claude/<project>/<session_id>/scratchpad/`) replaced the declared
+# GIT_CEILING_DIRECTORIES temp dir as the place a subagent may init and write fixture repos
+# (see `_scratchpad_fixture_init` / `_scratchpad_repo_verdict`); a ceiling alone no longer admits.
+def _pad(temp):
+    pad = temp / "claude" / "proj" / "sess-ceil" / "scratchpad"
+    pad.mkdir(parents=True)
+    return pad
 
 
-def test_init_with_exported_or_process_ceiling_is_allowed(world, monkeypatch):
+def test_init_under_the_session_scratchpad_is_allowed_a_ceiling_alone_is_not(world):
     work, repo, temp = world
-    assert _run(f"export GIT_CEILING_DIRECTORIES={temp} && git init {work / 'fx'}", repo) is None
+    pad = _pad(temp)
+    assert _run(f"git init {pad / 'fx'}", repo) is None
+    assert _run("git init fx", pad) is None
+    assert _run(f"GIT_CEILING_DIRECTORIES={temp} git init {work / 'fx'}", repo) is not None
+    assert _run(f"GIT_CEILING_DIRECTORIES={temp} git init fx", work) is not None
+
+
+def test_init_with_exported_or_process_ceiling_does_not_admit_outside_the_scratchpad(world, monkeypatch):
+    work, repo, temp = world
+    assert _run(f"export GIT_CEILING_DIRECTORIES={temp} && git init {work / 'fx'}", repo) is not None
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(temp))
-    assert _run(f"git init {work / 'fx'}", repo) is None
+    assert _run(f"git init {work / 'fx'}", repo) is not None
 
 
-def test_dash_c_writes_into_ceilinged_temp_repo_are_allowed(world):
+def test_dash_c_writes_into_scratchpad_fixture_repos_are_allowed(world):
     work, repo, temp = world
-    fx = work / "fx"
+    fx = _pad(temp) / "fx"
     (fx / ".git").mkdir(parents=True)
-    pre = f"GIT_CEILING_DIRECTORIES={temp} "
-    assert _run(pre + f"git -C {fx} add .", repo) is None
-    assert _run(pre + f"git -C {fx} commit -m x", repo) is None
-    assert _run(pre + f"git -C {fx} config user.name t", repo) is None
-    assert _run(pre + f"git -C {fx} config core.hooksPath /x", repo) is not None
+    assert _run(f"git -C {fx} add .", repo) is None
+    assert _run(f"git -C {fx} commit -m x", repo) is None
+    assert _run(f"git -C {fx} config user.name t", repo) is None
+    assert _run(f"git -C {fx} config core.hooksPath /x", repo) is not None
 
 
 def test_init_without_or_with_wrong_ceiling_is_refused(world):

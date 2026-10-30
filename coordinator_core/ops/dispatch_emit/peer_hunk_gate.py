@@ -175,6 +175,8 @@ def co_declared_peer_holds(
                 paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)  # unindexed run
                 if not (paths or prefixes):
                     spine_runs.append(run_id)
+                elif paths and not prefixes and not _unreadable:
+                    _index_live_sibling(root, run_id, paths)
             land_deadline.check("peer_hunk_gate.sibling_spine")
             spines = _sibling_spines(root, spine_runs)
             for run_id in spine_runs:
@@ -206,9 +208,22 @@ def co_declared_peer_holds(
         return [(p, UNREADABLE_PEER_CLAIMS) for p in wanted if p in own]
 
 
+def _index_live_sibling(root: Path, run_id: str, paths: Iterable[str]) -> None:
+    """Record a live unindexed sibling's manifest footprint once, so later landings read it from the
+    index instead of its manifest. Best effort: a write that fails leaves the sibling unindexed."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+        halted_withheld_index.record_declared(root, run_id, paths)
+    except Exception:  # noqa: BLE001 -- the sibling is read through its manifest again next time
+        _LOG.debug("could not index live sibling %s", run_id, exc_info=True)
+
+
 def _indexed_declared(root: Path) -> dict:
     """`{run_id: declared paths}` for every run whose staged footprint the per-run index records: one
-    directory listing, no per-sibling manifest parse. Empty when the index is unreadable."""
+    directory listing, no per-sibling manifest parse. Empty when the index is unreadable. Trap: an
+    entry is written once (`_index_live_sibling`) and never refreshed, so a sibling whose manifest
+    footprint widens afterwards is under-claimed until its entry is rewritten."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_withheld_index
 

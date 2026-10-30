@@ -29,7 +29,9 @@ _WRONG_ROUTE = re.compile(
 
 
 def _reason(envelope) -> str:
-    return envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    hso = envelope["hookSpecificOutput"]
+    # A guard off the PM allowlist (b17ec35251; DR-475, 307ea22403) carries its text as additionalContext.
+    return hso.get("permissionDecisionReason") or hso["additionalContext"]
 
 
 def _assert_names_route_only(text: str) -> None:
@@ -105,13 +107,19 @@ def _destructive(command, cwd):
     )
 
 
-@pytest.mark.parametrize("sub", ["add --pathspec-from-file=list.txt", "add -- a.py", "commit -m x -- a.py"])
+@pytest.mark.parametrize("sub", ["add --pathspec-from-file=list.txt", "add -- a.py"])
 def test_subagent_git_c_into_the_real_repo_names_the_route(world, sub):
     pad, repo = world
     result = _destructive(f"git -C {repo} {sub}", pad)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     _assert_names_route_only(_reason(result))
+
+
+def test_git_commit_agent_may_commit_its_supplied_pathspec_through_git_c(world):
+    # b564bcaa2c: the committer's own `commit -m x -- <pathspec>` is admitted, not denied.
+    pad, repo = world
+    assert _destructive(f"git -C {repo} commit -m x -- a.py", pad) is None
 
 
 def test_subagent_commit_leg_messages_offer_one_route():
@@ -154,4 +162,6 @@ def test_approval_sentinel_denial_names_the_route_only():
     )
 
     out = _enveloped(sentinel.check)(_payload("touch %s" % SENTINEL))
-    _assert_names_route_only(_reason(out))
+    # block-approval-sentinel-creation is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403): its
+    # one-line advisory no longer carries a commit route, so the pin is that it names no wrong one.
+    assert not _WRONG_ROUTE.search(_reason(out))

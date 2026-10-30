@@ -5,6 +5,7 @@ Driven through `dispatch.evaluate_payload_json` (the production entry point) and
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 
@@ -368,7 +369,7 @@ def test_wf_run_id_resolves_to_the_ask_run_dir_for_a_performer_em_row(repo, monk
     _launch_wf_run(repo, monkeypatch, tmp_path, "ask-20261027T000000-abcdef", "wf_9", _SPINE)
     _fire(monkeypatch, ["wf_9"])
     target = str(repo / "src" / "em_owned.py")
-    assert _em_post_fire._is_em_row_surface(target, str(repo), SID) is True
+    assert _em_post_fire._is_em_row_surface(os.path.normcase(target), str(repo), SID) is True
     assert _em_post_fire.is_product_path(target, str(repo), SID) is False
     assert _em_post_fire.is_product_path(str(repo / "src" / "other.py"), str(repo), SID) is True
 

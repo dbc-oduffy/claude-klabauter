@@ -344,6 +344,7 @@ REJECTION_CLASS_UNKNOWN_RECEIVER = "unknown_receiver"
 REJECTION_CLASS_REGISTRY_ERROR = "registry_error"
 REJECTION_CLASS_AMBIGUOUS_RECEIVER = "ambiguous_receiver"
 REJECTION_CLASS_PUBLISH_TARGET = "publish_target_rejected"
+REJECTION_CLASS_SELF_ADDRESSED = "self_addressed"
 
 
 def _classify_receiver_for_draft(to: str, dry_run: bool):
@@ -871,6 +872,16 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         )
     except ValueError as exc:
         return build_setup_error_result(_MODE, dry_run, f"memo.draft: {exc}")
+
+    # A memo to yourself lands in your own inbox and is never acted on; the
+    # sender owns the fix, so it goes in this session or a backlog row.
+    if to.strip().lower() == from_id.strip().lower():
+        result = build_setup_error_result(
+            _MODE, dry_run,
+            f"memo.draft: SELF-ADDRESSED -- {to!r} is the sending EM. Fix it now, or queue a backlog row.",
+        )
+        result["rejection_class"] = REJECTION_CLASS_SELF_ADDRESSED
+        return result
 
     if collision_exists:
         return build_act_result(_MODE, [], [], [{

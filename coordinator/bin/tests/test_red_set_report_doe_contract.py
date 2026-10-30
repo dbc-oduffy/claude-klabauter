@@ -185,6 +185,38 @@ def test_capped_worker_count_unreadable_avail_is_conservative(monkeypatch):
     assert rsr.capped_worker_count(64) == 27
 
 
+@pytest.mark.parametrize("raises", [False, True])
+def test_run_pytest_json_frees_its_admission_reservation_on_exit_and_on_failure(monkeypatch, raises):
+    from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+    released = []
+    monkeypatch.setattr(rsr, "capped_worker_count", lambda workers: 2)
+    monkeypatch.setattr(hcc, "admit_before_spawn", lambda *a, **k: hcc.SpawnAdmission(True, "", "k1", 1.0))
+    monkeypatch.setattr(hcc, "register_spawn", lambda *a, **k: None)
+    monkeypatch.setattr(hcc, "release_spawn", lambda key, pid, host=None: released.append((key, pid)))
+
+    class _Proc:
+        pid = 4242
+
+        def __init__(self, cmd, env=None, **kw):
+            self.out = env["RED_SET_REPORT_OUT"]
+
+        def communicate(self):
+            if raises:
+                raise subprocess.TimeoutExpired("pytest", 1)
+            Path(self.out).write_text("{}", encoding="utf-8")
+            return "", ""
+
+    monkeypatch.setattr(rsr.subprocess, "Popen", _Proc)
+
+    if raises:
+        with pytest.raises(subprocess.TimeoutExpired):
+            rsr.run_pytest_json("t", marker_expr=None, workers=2)
+    else:
+        assert rsr.run_pytest_json("t", marker_expr=None, workers=2) == {}
+    assert released == [("k1", 4242)]
+
+
 def test_census_cli_shape_still_parses():
     ns = rsr.build_parser().parse_args(["some/dir", "--workers", "2"])
     assert (ns.target, ns.workers) == ("some/dir", 2)

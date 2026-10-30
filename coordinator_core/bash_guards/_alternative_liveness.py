@@ -99,6 +99,7 @@ copy).
 from __future__ import annotations
 
 import ast
+import collections
 import contextlib
 import enum
 import functools
@@ -142,7 +143,7 @@ from coordinator_core.bash_guards import block_worktree_sentinel_creation
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist
 from coordinator_core.bash_guards import block_subagent_commit
 from coordinator_core.bash_guards import guard_post_executor_verification
-from coordinator_core.bash_guards import guard_em_post_fire_shell_write
+from coordinator_core.bash_guards import guard_disk_fill
 from coordinator_core.bash_guards import block_subagent_destructive_action
 from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
@@ -579,34 +580,20 @@ def _trigger_block_noncanonical_branch_creation() -> Optional[Dict[str, Any]]:
         block_noncanonical_branch_creation._is_hazard_repo = orig_hazard
 
 
-def _trigger_guard_em_post_fire_shell_write() -> Optional[Dict[str, Any]]:
-    """A redirect to a never-written file at the engine repo root, with the session reported as
-    having fired a Workflow run and the path as a product path it owns (swapped on `_em_post_fire`
-    for the call, then restored): a checkout under the temp dir is otherwise exempt as scratch."""
-    from coordinator_core.hooks import _em_post_fire, nudge_unrouted_sizing
+_DiskUsage = collections.namedtuple("_DiskUsage", "total used free")
 
-    repo = os.path.dirname(os.path.dirname(os.path.dirname(_pkg.__file__)))
-    orig = (
-        _em_post_fire.fired,
-        _em_post_fire.owns_path,
-        _em_post_fire.is_product_path,
-        nudge_unrouted_sizing._repo_root,
-    )
-    _em_post_fire.fired = lambda session_id: True
-    _em_post_fire.owns_path = lambda abs_path, root, session_id: True
-    _em_post_fire.is_product_path = lambda abs_path, root, session_id: True
-    nudge_unrouted_sizing._repo_root = lambda payload: repo
+
+def _trigger_guard_disk_fill() -> Optional[Dict[str, Any]]:
+    """A 100 MiB `dd` against a volume reported 1 GiB free, under the 10 GiB default floor
+    (`_disk_usage` swapped for the call, then restored); nothing is written."""
+    orig = guard_disk_fill._disk_usage
+    guard_disk_fill._disk_usage = lambda path: _DiskUsage(100 * 1024**3, 99 * 1024**3, 1024**3)
     try:
-        return guard_em_post_fire_shell_write.check(
-            "echo x > altlive_probe.py", "altlive-probe", repo, {"cwd": repo}
+        return guard_disk_fill.check(
+            _payload("dd if=/dev/zero of=altlive_probe.img bs=1M count=100", cwd=tempfile.gettempdir())
         )
     finally:
-        (
-            _em_post_fire.fired,
-            _em_post_fire.owns_path,
-            _em_post_fire.is_product_path,
-            nudge_unrouted_sizing._repo_root,
-        ) = orig
+        guard_disk_fill._disk_usage = orig
 
 
 def _trigger_guard_post_executor_verification() -> Optional[Dict[str, Any]]:
@@ -807,6 +794,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         _payload("tsc --noEmit")
     ),
     "guard_deploy_dirty_tree": _trigger_deploy_dirty_tree,
+    "guard_disk_fill": _trigger_guard_disk_fill,
     "block_whole_filesystem_scan": lambda: block_whole_filesystem_scan.check(
         _payload("find / -name altlive-probe", agent_id=None)
     ),
@@ -900,7 +888,6 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_noncanonical_branch_creation": _trigger_block_noncanonical_branch_creation,
     "guard_post_executor_verification": _trigger_guard_post_executor_verification,
-    "guard_em_post_fire_shell_write": _trigger_guard_em_post_fire_shell_write,
 }
 
 

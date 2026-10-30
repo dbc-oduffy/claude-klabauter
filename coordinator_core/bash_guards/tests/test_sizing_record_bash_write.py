@@ -14,10 +14,11 @@ def _check(cmd):
 
 def test_append_redirect_into_sizings_is_refused():
     result = _check("cat >> state/sizings/x.yaml <<'EOF'\nk: v\nEOF")
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "sizing-assemble --write" in reason
-    assert "sizing.record_pm_resolution" in reason
-    assert "sizing-assemble --register <yaml> --write <sizing>" in reason
+    # guard-doctrine-surface-bash-write is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403):
+    # the sizing-store write is advised in one line; the route list left with the deny text.
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "sizing store" in hso["additionalContext"]
 
 
 def test_tee_into_sizings_is_refused():

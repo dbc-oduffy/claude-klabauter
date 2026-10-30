@@ -106,7 +106,7 @@ def _content_record(tag: str):
 
 
 def _deny_record(tag: str):
-    return _fake_record("deny", "fake hard deny: %s" % tag, "fake-platform-deny")
+    return _fake_record("deny", "fake hard deny: %s" % tag, "block-stash-destruction")
 
 
 # Two distinct soft/content-shaped advisory entries, in registration order --
@@ -125,7 +125,7 @@ _TWO_ADVISORY_CHAIN = [
 # upstream already produced an allow+context envelope."
 _ADVISORY_THEN_DENY_CHAIN = list(_TWO_ADVISORY_CHAIN) + [
     GuardEntry(
-        "fake-platform-deny",
+        "block-stash-destruction",
         lambda: _deny_record("tail"),
         True,
         GuardBand.PLATFORM_CONDITIONED_DENY,
@@ -203,7 +203,7 @@ class TestHardDenyShortCircuitsPropertyC:
         )
         _patch_chain(monkeypatch, _ADVISORY_THEN_DENY_CHAIN)
         result = dispatch.evaluate_payload_json(_payload(), collect_advisories=True)
-        assert unlock_calls == [("sess-collect-1", "fake-platform-deny")]
+        assert unlock_calls == [("sess-collect-1", "block-stash-destruction")]
         assert not isinstance(result, list)
         hso = result["hookSpecificOutput"]
         assert hso["permissionDecision"] == "deny"
@@ -257,11 +257,11 @@ class TestAdvisoryFireRecordedOncePerEnvelopePropertyE:
         )
         _patch_chain(monkeypatch, _ADVISORY_THEN_DENY_CHAIN)
         result = dispatch.evaluate_payload_json(_payload(), collect_advisories=True)
-        assert unlock_calls == [("sess-collect-1", "fake-platform-deny")]
+        assert unlock_calls == [("sess-collect-1", "block-stash-destruction")]
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "fake hard deny: tail" in result["hookSpecificOutput"]["permissionDecisionReason"]
         assert calls == ["fake-soft-first", "fake-content-second"]
-        assert "fake-platform-deny" not in calls
+        assert "block-stash-destruction" not in calls
 
 
 class TestSilentNeverReachesDispatchReturnValue:

@@ -73,7 +73,7 @@ def test_fail_open_log_declares_through_the_seam(tmp_path, monkeypatch):
     assert result is None  # fail-open: no verdict, same as pre-migration
     assert log_path.exists()
     content = log_path.read_text(encoding="utf-8")
-    assert "FAIL-OPEN" in content
+    assert "main-thread-out-of-scope" in content
     assert "branch='no-agent-id-key'" in content
 
     assert str(log_path) in declared, (

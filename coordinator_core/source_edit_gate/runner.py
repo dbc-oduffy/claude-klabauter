@@ -290,6 +290,10 @@ def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> "bool 
         return False
     finally:
         _terminate_group(proc)
+        if admission is not None:
+            from coordinator_core.bash_guards._heavy_command_class import release_spawn
+
+            release_spawn(admission.key, proc.pid)
 
 
 def run_selected(

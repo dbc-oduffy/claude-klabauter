@@ -255,7 +255,7 @@ KNOWN_DEAD_OFFERS: Dict[str, int] = {}
 #: UNVERIFIABLE is a loud failure. LIVE holds or grows, UNVERIFIABLE holds or
 #: shrinks, DEAD stays at KNOWN_DEAD_OFFERS.
 EXPECTED_LIVE_FLOORS: Dict[str, int] = {
-    "block_approval_sentinel_creation": 1,
+    "block_approval_sentinel_creation": 0,  # deny offers only the commit_v2 AdaptableOffer
     "block_dev_repo_sentinel_removal": 1,
     "block_illegal_filename": 2,
     "block_noncanonical_branch_creation": 1,
@@ -388,8 +388,8 @@ RUNG_FLOORS: Dict[str, str] = {
     "check_sed_range_read_advise": "BCC",
     "check_stale_write": "ACA",
     "guard_deploy_dirty_tree": "ADA",
+    "guard_disk_fill": "DDD",
     "guard_doctrine_surface_bash_write": "DCC",
-    "guard_em_post_fire_shell_write": "BDD",
     "guard_grep_via_bash": "CCC",
     "guard_heavy_command_admission": "DCC",
     "guard_host_subagent_bash_ban": "BCC",

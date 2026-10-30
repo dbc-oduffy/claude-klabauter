@@ -246,9 +246,8 @@ def _deny_reason(subagent_type: str, source_path: str, violations: "list[tuple[s
         for axis, pin_value, passed_value in violations
     ]
     return (
-        "DENY: " + " ".join(lines) + " Each pin is a "
-        "cost-and-role invariant, not a default: drop the parameter(s) and "
-        "re-dispatch.\n"
+        "DENY: " + " ".join(lines) + " The pin is a "
+        "cost-and-role invariant: drop them, re-dispatch.\n"
         f"<resolved from: {source_path}>"
     )
 

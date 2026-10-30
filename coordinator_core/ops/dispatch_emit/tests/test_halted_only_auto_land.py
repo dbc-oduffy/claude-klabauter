@@ -43,12 +43,12 @@ def test_live_peer_holder_still_refuses(tmp_path, monkeypatch):
     assert _release(root, me, peer) is None
 
 
-def test_live_co_declaring_sibling_refuses_even_when_withholders_are_halted(tmp_path, monkeypatch):
+def test_a_peers_claim_never_gates_the_release_when_every_withholder_is_halted(tmp_path, monkeypatch):
     root, me, peer = _armed(tmp_path)
     _no_siblings(monkeypatch, [("a.py", "ask-live-sibling")])
-    assert _release(root, me, peer) is None
+    assert _release(root, me, peer) == [peer]
     _no_siblings(monkeypatch, [("a.py", peer_hunk_gate.UNREADABLE_PEER_CLAIMS)])
-    assert _release(root, me, peer) is None
+    assert _release(root, me, peer) == [peer]
 
 
 def test_red_review_refuses(tmp_path, monkeypatch):

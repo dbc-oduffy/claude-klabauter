@@ -98,7 +98,7 @@ def _deny_reason(out):
 _FAKE_CHAIN = [
     GuardEntry("fake-confinement", lambda: None, True, GuardBand.CONFINEMENT_DENY),
     GuardEntry("fake-advisory", lambda: _ADV_REC, False, GuardBand.ADVISORY_REWRITE),
-    GuardEntry("fake-platform", lambda: _PLAT_REC, True, GuardBand.PLATFORM_CONDITIONED_DENY),
+    GuardEntry("block-stash-destruction", lambda: _PLAT_REC, True, GuardBand.PLATFORM_CONDITIONED_DENY),
 ]
 
 
@@ -148,7 +148,7 @@ class TestControlledBandSuppression:
         naming every band (rejected whole for naming confinement-deny)
         must not suppress it."""
         denying_chain = [
-            GuardEntry("fake-confinement-deny", lambda: _CONF_REC, True, GuardBand.CONFINEMENT_DENY),
+            GuardEntry("block-worktree-creation", lambda: _CONF_REC, True, GuardBand.CONFINEMENT_DENY),
             GuardEntry("fake-advisory", lambda: _ADV_REC, False, GuardBand.ADVISORY_REWRITE),
         ]
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(denying_chain))
@@ -160,6 +160,14 @@ class TestControlledBandSuppression:
             "Bands: advisory-rewrite,confinement-deny\nReason: x\n",
         )
         assert _deny_reason(_run(EM_PAYLOAD)).startswith("confinement-deny-fired")
+
+    def test_confinement_deny_advisory_is_held_and_a_later_hard_deny_still_fires(self, monkeypatch):
+        chain = [
+            GuardEntry("block-worktree-creation", lambda: _marker_record("advisory", "held-advisory"), True, GuardBand.CONFINEMENT_DENY),
+            GuardEntry("block-stash-destruction", lambda: _PLAT_REC, True, GuardBand.PLATFORM_CONDITIONED_DENY),
+        ]
+        monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(chain))
+        assert _deny_reason(_run(EM_PAYLOAD)).startswith("platform")
 
     def test_session_scope_does_not_leak_to_dispatched_subagent(self, tmp_path):
         now = datetime.now(timezone.utc)

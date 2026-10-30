@@ -672,3 +672,12 @@ def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> Non
         host.register_command(host.admission_file(), key, pid, peak_gib)
     except Exception:
         pass
+
+
+def release_spawn(key: str, pid: int, host: Any = None) -> None:
+    """Free the reservation `register_spawn` took for (key, pid); never raises."""
+    try:
+        host = host or _load_box_memory_host()
+        host.release_command(host.admission_file(), key, pid)
+    except Exception:
+        pass

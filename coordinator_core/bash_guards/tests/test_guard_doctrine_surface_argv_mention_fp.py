@@ -46,11 +46,13 @@ def test_argument_mention_with_scratch_redirect_is_allowed(cmd):
         "cat state/sizings/a.yaml > scratch/o <<EOF",
     ],
 )
-def test_write_into_sizings_still_denies(cmd):
+def test_write_into_sizings_still_advises(cmd):
     result = _check(cmd)
     assert result is not None
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "state/sizings" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    # guard-doctrine-surface-bash-write is ADVISORY_BY_RULING (b17ec35251; DR-475, 307ea22403):
+    # a sizings write is advised, never denied.
+    assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "sizing store" in result["hookSpecificOutput"]["additionalContext"]
 
 IDS = guard._SIZING_RECORD_IDENTIFIERS
 SZ = "state/sizings/2026-10-11-x.yaml"

@@ -57,7 +57,7 @@ def _fire(monkeypatch, name: str, fail_closed: bool, identity: dict) -> str:
 
 
 @pytest.mark.parametrize(
-    "name,fail_closed", [("synthetic-fail-closed", True), ("synthetic-non-sentinel", False)]
+    "name,fail_closed", [("block-stash-destruction", True), ("block-worktree-creation", False)]
 )
 def test_em_deny_carries_exactly_one_route_key(tmp_path, monkeypatch, name, fail_closed):
     _seed_readme(tmp_path, monkeypatch)
@@ -67,7 +67,7 @@ def test_em_deny_carries_exactly_one_route_key(tmp_path, monkeypatch, name, fail
 
 
 @pytest.mark.parametrize(
-    "name,fail_closed", [("synthetic-fail-closed", True), ("synthetic-non-sentinel", False)]
+    "name,fail_closed", [("block-stash-destruction", True), ("block-worktree-creation", False)]
 )
 def test_subagent_deny_carries_identity_but_no_route(tmp_path, monkeypatch, name, fail_closed):
     _seed_readme(tmp_path, monkeypatch)
@@ -80,15 +80,15 @@ def test_subagent_deny_carries_identity_but_no_route(tmp_path, monkeypatch, name
 def test_em_deny_without_readme_carries_no_route(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    reason = _fire(monkeypatch, "synthetic-non-sentinel", False, {})
+    reason = _fire(monkeypatch, "block-worktree-creation", False, {})
     assert "gr:" not in reason
 
 
 def test_em_deny_drops_override_note_only_when_route_resolves(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    without = _fire(monkeypatch, "synthetic-non-sentinel", False, {})
+    without = _fire(monkeypatch, "block-worktree-creation", False, {})
     _seed_readme(tmp_path, monkeypatch)
-    with_route = _fire(monkeypatch, "synthetic-non-sentinel", False, {})
+    with_route = _fire(monkeypatch, "block-worktree-creation", False, {})
     assert "guard-override-keys" in without
     assert "guard-override-keys" not in with_route
