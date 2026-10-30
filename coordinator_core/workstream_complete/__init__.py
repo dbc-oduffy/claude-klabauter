@@ -2771,13 +2771,44 @@ def _resolve_baton_claim_window_start(root: Path, gate: "SessionShapeGate") -> O
     return claimed_at if isinstance(claimed_at, str) and claimed_at.strip() else None
 
 
+_REVIEW_BOOKKEEPING_PREFIXES = ("state/cross-repo/", "state/warp/", "state/review-trail/diffs/")
+
+
+def _commits_past_review(
+    close_commits: tuple[tuple[Any, ...], ...], stamp_epoch: float
+) -> list[str]:
+    """Shas of close commits stamped after the receipt that the review did not cover.
+
+    Each entry is `(sha, epoch)` or `(sha, epoch, paths)`. A later commit is
+    covered when `paths` is known and either every path is engine bookkeeping
+    (memo/warp/frozen-diff state) or every path was already in the reviewed
+    set (files of non-bookkeeping commits at or before the stamp, which is
+    where a reviewer's uncommitted fixes land). No `paths` = uncovered.
+
+    Trap: the reviewed set is a proxy (all pre-stamp close-commit files), so an
+    unreviewed later edit to a file committed earlier in the close is credited."""
+    reviewed: set[str] = set()
+    for entry in close_commits:
+        if entry[1] <= stamp_epoch and len(entry) > 2 and entry[2]:
+            reviewed.update(p for p in entry[2] if not p.startswith(_REVIEW_BOOKKEEPING_PREFIXES))
+    uncovered: list[str] = []
+    for entry in close_commits:
+        if entry[1] <= stamp_epoch:
+            continue
+        paths = entry[2] if len(entry) > 2 else None
+        if paths and all(p.startswith(_REVIEW_BOOKKEEPING_PREFIXES) or p in reviewed for p in paths):
+            continue
+        uncovered.append(entry[0])
+    return uncovered
+
+
 def _compute_review_receipt_gate(
     root: Path,
     sid: str,
     target_status: str,
     claimed_at: Optional[str],
     plan_path: Optional[Path],
-    close_commits: tuple[tuple[str, int], ...] = (),
+    close_commits: tuple[tuple[Any, ...], ...] = (),
 ) -> ReviewReceiptGate:
     """The SOLE call site (AC7 leg ii) deciding whether `target_status` may
     be reached without a review receipt. No boolean/optional parameter here
@@ -2793,8 +2824,9 @@ def _compute_review_receipt_gate(
     `reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS` member, (b) `session_id` equals
     `sid`, (c) `stamped_at` resolves neither strictly before `claimed_at`
     (when both parse) nor strictly after now, (d) `stamped_at` is not earlier
-    than the newest of `close_commits` (`(sha, committer_epoch)` pairs of the
-    close's own non-merge commits; empty = no known commit, vacuous), and (e) `review_trail.
+    than the newest uncovered commit of `close_commits` (`(sha, epoch[, paths])`
+    of the close's own non-merge commits; empty = vacuous; see
+    `_commits_past_review` for which later commits are covered), and (e) `review_trail.
     receipt_credit._receipt_counts` (C3's completion-writer-aware content
     predicate, computed once via `_compute_session_summary` over every extant
     share-root directory — never `sidecar_dirs[0]` alone) is True for this
@@ -3008,9 +3040,7 @@ def _compute_review_receipt_gate(
         if stamped_at is not None and stamped_at > now:
             continue
         if stamped_at is not None and close_commits:
-            uncovered = [
-                sha for sha, epoch in close_commits if epoch > stamped_at.timestamp()
-            ]
+            uncovered = _commits_past_review(close_commits, stamped_at.timestamp())
             if uncovered:
                 if len(uncovered) > len(stale_uncovered):
                     stale_uncovered = uncovered
@@ -5547,7 +5577,11 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         review_receipt_claim_window_start,
         plan_path=governing_plan.path if governing_plan else None,
         close_commits=(
-            tuple((c.sha, c.committer_epoch) for c in history.own if not c.is_merge)
+            tuple(
+                (c.sha, c.committer_epoch, tuple(f.path for f in c.files))
+                for c in history.own
+                if not c.is_merge
+            )
             if history is not None and history.resolved
             else ()
         ),

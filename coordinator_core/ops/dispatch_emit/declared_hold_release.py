@@ -105,6 +105,8 @@ def absent_paths(root: Path, run_id: str, candidates: Optional[Iterable[str]] = 
         for path, kept_blobs in by_path.items():
             if _worktree_unreadable(root, path):
                 continue
+            if blobs.get(f"HEAD:{path}") is None and (root / path).is_file():
+                continue  # untracked-present: a file in the worktree counts as present
             head = (blobs.get(f"HEAD:{path}") or b"").decode("utf-8", "replace")
             base = (blobs.get(f"{base_sha}:{path}") or b"").decode("utf-8", "replace")
             work = _worktree_text(root, path)

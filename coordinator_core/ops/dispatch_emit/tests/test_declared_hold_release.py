@@ -87,6 +87,39 @@ def test_a_hunk_present_in_head_keeps_the_hold(tmp_path):
     assert PATH in halted_run.halted_withheld(rec)
 
 
+def _untracked_holder(tmp_path: Path, *, create: bool) -> Path:
+    """RUN halted holding NEW, which is in no commit; `create` puts a differing file in the worktree."""
+    new = "pkg/new.py"
+    _git(tmp_path, "init", "-q")
+    _put(tmp_path / "seed.txt", "seed\n")
+    _git(tmp_path, "add", "seed.txt")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    if create:
+        _put(tmp_path / new, "def other():\n    return 0\n")
+    blob = _git(tmp_path, "hash-object", "-w", "--stdin", stdin="def held():\n    return 'holder'\n")
+    rec = tmp_path / "state/warp" / RUN
+    _put(rec / "halted.json", json.dumps({
+        "status": "halted", "run_base_sha": base,
+        "run_artifacts": {"withheld": {new: "halt-record-only"}},
+    }))
+    _put(rec / "kept.json", json.dumps({"chunks": {"C1": {"paths": {new: blob}}}, "plan_gate": None}))
+    return rec
+
+
+def test_untracked_file_present_in_worktree_keeps_the_hold(tmp_path):
+    rec = _untracked_holder(tmp_path, create=True)
+    assert dhr.release_absent(tmp_path, ["pkg/new.py"], own_run_id="x") == {}
+    assert _released(rec) == []
+    assert "pkg/new.py" in halted_run.halted_withheld(rec)
+
+
+def test_untracked_file_absent_from_worktree_releases_the_hold(tmp_path):
+    rec = _untracked_holder(tmp_path, create=False)
+    assert dhr.release_absent(tmp_path, ["pkg/new.py"], own_run_id="x") == {RUN: ["pkg/new.py"]}
+    assert len(_released(rec)) == 1
+
+
 def test_own_run_and_unrelated_paths_are_untouched(tmp_path):
     rec = _holder(tmp_path, KEPT_ONE)
     assert dhr.release_absent(tmp_path, [PATH], own_run_id=RUN) == {}

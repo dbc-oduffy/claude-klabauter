@@ -107,16 +107,79 @@ def test_queue_wait_over_the_land_budget_still_gets_the_full_leg_budget(clock, w
     assert used == pytest.approx(land_deadline.LAND_BUDGET_SECS, abs=0.5)
 
 
-def test_queue_wait_near_the_server_window_halts_before_the_window_closes(clock, worker):
+def test_an_explicit_short_window_still_clamps_the_legs_and_names_server_window(clock, worker):
     window = 30.0
     wait = 25.0
     land_deadline.set_queue_wait(wait, window_secs=window)
     token = dispatch_abandon.DEADLINE.set(clock.now + OP_TIMEOUT)
     try:
         used = _run_legs(clock, 0.5)
+        with pytest.raises(land_deadline.LandDeadlineExceeded) as info:
+            with land_deadline.scope():
+                clock.now += 4.0
+                land_deadline.check("land_run.first")
     finally:
         dispatch_abandon.DEADLINE.reset(token)
     assert used <= window - wait - dispatch_abandon.REPLY_MARGIN_SECS + 0.5
+    assert land_deadline.halt_reply(info.value)["bound_by"] == "server-window"
+
+
+def _declare_as_the_server_does(clock, monkeypatch, wait):
+    from coordinator_core.warm import server
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock.now)
+    stamp = clock.now - wait
+    server._declare_queue_wait(stamp, "dispatch.land_run")
+
+
+def test_queue_wait_beyond_window_minus_budget_still_starts_first_and_commit_legs(clock, worker, monkeypatch):
+    wait = 28.0  # window - wait - REPLY_MARGIN_SECS == 0: the old clamp refused the first leg
+    _declare_as_the_server_does(clock, monkeypatch, wait)
+    assert land_deadline._QUEUE_WAIT.get() == pytest.approx(wait)
+    token = dispatch_abandon.DEADLINE.set(clock.now + OP_TIMEOUT)
+    try:
+        with land_deadline.scope():
+            land_deadline.check("land_run.first")
+            clock.now += land_deadline.LAND_BUDGET_SECS - 1.0
+            land_deadline.check("land_run.commit")
+    finally:
+        dispatch_abandon.DEADLINE.reset(token)
+
+
+def test_a_halt_inside_the_budget_names_budget_as_the_bound(clock, worker):
+    with pytest.raises(land_deadline.LandDeadlineExceeded) as info:
+        with land_deadline.scope():
+            clock.now += land_deadline.LAND_BUDGET_SECS + 0.1
+            land_deadline.check("land_run.first")
+    reply = land_deadline.halt_reply(info.value)
+    assert reply["bound_by"] == "budget"
+    assert "queue_wait_secs" in reply and "legs" in reply
+
+
+def test_a_halt_under_the_dispatcher_deadline_names_dispatcher(clock, worker):
+    token = dispatch_abandon.DEADLINE.set(clock.now + 4.0)
+    try:
+        with pytest.raises(land_deadline.LandDeadlineExceeded) as info:
+            with land_deadline.scope():
+                clock.now += 3.0
+                land_deadline.check("land_run.first")
+    finally:
+        dispatch_abandon.DEADLINE.reset(token)
+    assert land_deadline.halt_reply(info.value)["bound_by"] == "dispatcher"
+
+
+def test_a_nested_scope_reports_the_outer_bound(clock, worker):
+    token = dispatch_abandon.DEADLINE.set(clock.now + 4.0)
+    try:
+        with pytest.raises(land_deadline.LandDeadlineExceeded) as info:
+            with land_deadline.scope():
+                dispatch_abandon.DEADLINE.set(clock.now + 1000.0)
+                with land_deadline.scope():
+                    clock.now += 3.0
+                    land_deadline.check("land_run.first")
+    finally:
+        dispatch_abandon.DEADLINE.reset(token)
+    assert land_deadline.halt_reply(info.value)["bound_by"] == "dispatcher"
 
 
 def test_no_server_window_clamp_without_a_bound_queue_wait(clock, worker):

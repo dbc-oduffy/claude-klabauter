@@ -55,6 +55,57 @@ def test_no_known_close_commits_keeps_prior_behaviour(tmp_path):
     assert _gate(tmp_path, ()).blocks is False
 
 
+def test_commit_of_reviewed_files_after_receipt_does_not_block(tmp_path):
+    _write_sidecar(tmp_path)
+    gate = _gate(
+        tmp_path,
+        (
+            ("aaaa111", _STAMP_EPOCH - 60, ("src/a.py", "src/b.py")),
+            ("bbbb222", _STAMP_EPOCH + 60, ("src/a.py",)),
+        ),
+    )
+    assert gate.blocks is False
+
+
+def test_bookkeeping_only_commits_after_receipt_do_not_block(tmp_path):
+    _write_sidecar(tmp_path)
+    gate = _gate(
+        tmp_path,
+        (
+            ("aaaa111", _STAMP_EPOCH - 60, ("src/a.py",)),
+            ("bbbb222", _STAMP_EPOCH + 60, ("state/cross-repo/inbox/m.md",)),
+            ("cccc333", _STAMP_EPOCH + 90, ("state/review-trail/diffs/s.diff",)),
+            ("dddd444", _STAMP_EPOCH + 99, ("state/warp/run/x.yaml",)),
+        ),
+    )
+    assert gate.blocks is False
+
+
+def test_later_commit_without_paths_still_blocks(tmp_path):
+    _write_sidecar(tmp_path)
+    gate = _gate(
+        tmp_path,
+        (
+            ("aaaa111", _STAMP_EPOCH - 60, ("src/a.py",)),
+            ("bbbb222", _STAMP_EPOCH + 60),
+        ),
+    )
+    assert gate.blocks is True
+
+
+def test_later_commit_outside_reviewed_files_still_blocks(tmp_path):
+    _write_sidecar(tmp_path)
+    gate = _gate(
+        tmp_path,
+        (
+            ("aaaa111", _STAMP_EPOCH - 60, ("src/a.py",)),
+            ("bbbb222", _STAMP_EPOCH + 60, ("src/a.py", "src/new.py")),
+        ),
+    )
+    assert gate.blocks is True
+    assert "bbbb222" in gate.detail
+
+
 def test_without_receipt_block_the_gate_blocks_even_when_commits_precede(tmp_path):
     _write_sidecar(tmp_path, with_receipt=False)
     gate = _gate(tmp_path, (("aaaa111", _STAMP_EPOCH - 60),))

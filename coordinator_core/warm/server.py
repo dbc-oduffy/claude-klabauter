@@ -860,14 +860,18 @@ def _prune_dispatch_claims(claim_dir) -> None:
 _SUBMIT_STAMP_KEY = "_pool_submit_monotonic"
 
 
-def _declare_queue_wait(stamp: Any) -> None:
+def _declare_queue_wait(stamp: Any, method: Optional[str] = None) -> None:
     """Hand bind-minus-submit seconds to `land_deadline`; resets to 0 with no stamp so a prior
-    task in this worker process never leaks its wait. Never raises."""
+    task in this worker process never leaks its wait. Never raises.
+
+    The result window is re-based at bind: a started task's outcome is stamped into the ack store
+    and reconcilable after the connection thread withdraws, so the executing bound runs from bind,
+    not from submit. Queue wait is reported, never charged to the leg budget."""
     try:
         from coordinator_core.ops.dispatch_emit import land_deadline
 
         wait = time.monotonic() - float(stamp) if isinstance(stamp, (int, float)) else 0.0
-        land_deadline.set_queue_wait(wait, _POOL_RESULT_DEADLINE_SECS)
+        land_deadline.set_queue_wait(max(0.0, wait), max(0.0, wait) + _executing_bound_secs(method))
     except Exception:  # noqa: BLE001
         pass
 
@@ -925,7 +929,7 @@ def _pool_dispatch_worker(
     claim = _claim_path(claim_dir, dispatch_key)
     if claim is not None and not _take_claim(claim, os.getpid()):
         return {_NOT_DISPATCHED_MARKER: True}
-    _declare_queue_wait(stamp)
+    _declare_queue_wait(stamp, msg.get("method") if isinstance(msg, dict) else None)
     disarm = _arm_stall_dump(stall_secs, claim)
     try:
         return _pool_dispatch_worker_body(msg, caller)

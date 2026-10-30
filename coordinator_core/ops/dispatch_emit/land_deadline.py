@@ -50,10 +50,21 @@ _LEGS: ContextVar[Optional[list]] = ContextVar("land_run_legs", default=None)
 _SERVER_WINDOW: ContextVar[Optional[float]] = ContextVar("land_run_server_window", default=None)
 
 
+#: Which bound set a deadline: the leg budget itself, the dispatcher's remaining time, or the
+#: server's result window.
+BOUND_BUDGET = "budget"
+BOUND_DISPATCHER = "dispatcher"
+BOUND_SERVER_WINDOW = "server-window"
+
+#: `(deadline_by, hard_by)` of the innermost scope; None when unbound.
+_BOUND_BY: ContextVar[Optional[tuple]] = ContextVar("land_run_bound_by", default=None)
+
+
 def set_queue_wait(secs: float, window_secs: Optional[float] = None) -> None:
     """Declare the seconds this request waited for a pool worker, for `halt_reply` to report, and
-    the server's result window it must finish inside. The window is handed in because the ops
-    layer must not import the server; with no wait or no window no server-window clamp applies."""
+    the result window, measured from submit, the reply must land inside. The window is handed in
+    because the ops layer must not import the server; with no wait or no window no server-window
+    clamp applies."""
     _QUEUE_WAIT.set(max(0.0, float(secs)))
     _SERVER_WINDOW.set(None if window_secs is None else float(window_secs))
 
@@ -61,10 +72,11 @@ def set_queue_wait(secs: float, window_secs: Optional[float] = None) -> None:
 class LandDeadlineExceeded(BaseException):
     """The land_run deadline passed before leg `leg` started."""
 
-    def __init__(self, leg: str, legs: Optional[list] = None) -> None:
+    def __init__(self, leg: str, legs: Optional[list] = None, bound_by: str = BOUND_BUDGET) -> None:
         super().__init__(leg)
         self.leg = leg
         self.legs = legs or []
+        self.bound_by = bound_by
 
 
 @contextmanager
@@ -81,27 +93,36 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
     clamps = []
     left = dispatch_abandon.remaining()
     if left is not None:
-        clamps.append(_now() + max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS))
+        clamps.append((_now() + max(0.0, left - dispatch_abandon.REPLY_MARGIN_SECS), BOUND_DISPATCHER))
     window = _SERVER_WINDOW.get()
     wait = _QUEUE_WAIT.get()
     if window is not None and wait > 0.0:
-        clamps.append(_now() + max(0.0, window - wait - dispatch_abandon.REPLY_MARGIN_SECS))
-    for clamp in clamps:
-        deadline = clamp if deadline is None else min(deadline, clamp)
-        hard = clamp if hard is None else min(hard, clamp)
+        clamps.append(
+            (_now() + max(0.0, window - wait - dispatch_abandon.REPLY_MARGIN_SECS), BOUND_SERVER_WINDOW)
+        )
+    deadline_by = hard_by = BOUND_BUDGET
+    for clamp, source in clamps:
+        if deadline is None or clamp < deadline:
+            deadline, deadline_by = clamp, source
+        if hard is None or clamp < hard:
+            hard, hard_by = clamp, source
     current = _DEADLINE.get()
     if current is not None and (deadline is None or current < deadline):
         deadline = current
+        deadline_by = (_BOUND_BY.get() or (deadline_by, hard_by))[0]
     current_hard = _HARD.get()
     if current_hard is not None and (hard is None or current_hard < hard):
         hard = current_hard
+        hard_by = (_BOUND_BY.get() or (deadline_by, hard_by))[1]
     token = _DEADLINE.set(deadline)
     hard_token = _HARD.set(hard)
+    bound_token = _BOUND_BY.set((deadline_by, hard_by))
     legs_token = _LEGS.set([])
     try:
         yield
     finally:
         _LEGS.reset(legs_token)
+        _BOUND_BY.reset(bound_token)
         _HARD.reset(hard_token)
         _DEADLINE.reset(token)
 
@@ -122,7 +143,8 @@ def check(leg: str) -> None:
     else:
         refused = expired()
     if refused:
-        raise LandDeadlineExceeded(leg, _legs_elapsed(now))
+        by = _BOUND_BY.get() or (BOUND_BUDGET, BOUND_BUDGET)
+        raise LandDeadlineExceeded(leg, _legs_elapsed(now), by[1] if _is_reserved(leg) else by[0])
     ledger = _LEGS.get()
     if ledger is not None:
         ledger.append((leg, now))
@@ -156,5 +178,6 @@ def halt_reply(exc: LandDeadlineExceeded) -> dict:
         "refused": REFUSED,
         "leg": exc.leg,
         "queue_wait_secs": _QUEUE_WAIT.get(),
+        "bound_by": exc.bound_by,
         "legs": list(exc.legs),
     }
