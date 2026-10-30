@@ -3526,7 +3526,9 @@ def compose_ask_script(
             + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
             f"resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, resume_phases, design_brief and design_route{_VERDICT_RETURN if has_route_pref else ''} when present; then read estimate.tshirt and route from the sizing at {sizing_write_rel} "
             "and return them as tshirt and route (tshirt replaces your own judged value). "
-            "On a non-zero exit_code run no gate command and return no arm or halt."
+            "On a non-zero exit_code run no gate command and return no arm or halt. "
+            "When the gate reply carries neither arm nor halt, run the same gate command once more and return "
+            "that second reply in its place."
         )
         if _declared:
             scout_closing_tail += (
@@ -3810,13 +3812,6 @@ def compose_ask_script(
             f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }}" + (")" if launcher_child else "") + ";"
-        )
-        # A clean scout that wrote the sizing but returned neither arm nor halt: run the gate once from
-        # the sizing on disk; only its own empty reply falls through to the named refusal below.
-        b.append(
-            "  if (!_halted && !_gate.arm && !_gate.halt && _sizingRel) { const _regate = await "
-            + _gate_agent_call("gate-recover", "gate")
-            + "; _gate = { ..._gate, ...Object.fromEntries(Object.entries(_regate ?? {}).filter(([, v]) => v != null)) }; }"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")

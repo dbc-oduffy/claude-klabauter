@@ -76,6 +76,23 @@ RECORD_LEN_FLAG = "record-len"
 RECORD_SHA256_FLAG = "record-sha256"
 DECLARED_LEN_FLAG = "declared-len"
 DECLARED_SHA256_FLAG = "declared-sha256"
+# The drain agent types only this marker; the verb reads the urlenc record from the agent's own
+# transcript (the prompt carries it once between the run's open and close markers).
+RECORD_FROM_TRANSCRIPT_FLAG = "record-from-transcript"
+RECORD_OPEN_PREFIX = "RUNREC-OPEN-"
+RECORD_CLOSE_PREFIX = "RUNREC-CLOSE-"
+
+
+def record_markers(run_id: str) -> tuple[str, str]:
+    """``(open, close)`` transcript markers for ``run_id``."""
+    return RECORD_OPEN_PREFIX + run_id, RECORD_CLOSE_PREFIX + run_id
+
+
+def record_close_marker(open_marker: str) -> Optional[str]:
+    """The close marker paired with ``open_marker``; None when it is not a ``record_markers`` open marker."""
+    if not open_marker.startswith(RECORD_OPEN_PREFIX) or len(open_marker) == len(RECORD_OPEN_PREFIX):
+        return None
+    return RECORD_CLOSE_PREFIX + open_marker[len(RECORD_OPEN_PREFIX):]
 # Opens the stderr of a refused relay; grind_compose's run close matches it to re-drive the drain once.
 RELAY_CORRUPT_HEAD = "relayed payload is corrupt"
 

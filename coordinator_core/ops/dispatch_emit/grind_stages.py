@@ -79,8 +79,11 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
     HISTORICAL_RECORD_PREFIXES,
     IMAGE_VERB,
     QUEUE_FLAG,
+    RECORD_FROM_TRANSCRIPT_FLAG,
     RECORD_LEN_FLAG,
     RECORD_SHA256_FLAG,
+    RECORD_OPEN_PREFIX,
+    RECORD_CLOSE_PREFIX,
     RELAY_CORRUPT_HEAD,
     SWEEP_FLAG,
     UNLANDED_KEY,
@@ -1546,41 +1549,38 @@ def compose_ledger_sweep_call(
     declared_js: str,
     decisions_js: str,
 ) -> str:
-    """The drain's `ledger-sweep` op-runner call, and the run close: the record and declared paths are
-    appended to scratch files in sub-``BASH_COMMAND_CAP`` Bash calls, then ONE `grind-row run-record --sweep`
-    command that reads them settles, out of band, every ledger whose row left the named queues, then writes the
+    """The drain's `ledger-sweep` op-runner call, and the run close: the declared paths are appended to a
+    scratch file in sub-``BASH_COMMAND_CAP`` Bash calls, then ONE `grind-row run-record --sweep`
+    command settles, out of band, every ledger whose row left the named queues, then writes the
     run record whole and lands it -- the verb records a failed sweep instead of skipping the record.
-    ``record_js``/``declared_js`` name runtime expressions for the record object and the declared-paths
-    array; ``decisions_js`` names the decisions.json path, and the `--decisions-file` flag is omitted
-    when it evaluates empty. ``queue_dirs`` must be the FULL queue set the manifest was selected from:
-    a queue left out reads as closed and its live rows' ledgers are settled. With no ``queue_dirs`` the
-    sweep flag is omitted and the reply reports ``swept: true``. Returns `recorded` or `record-failed`
-    plus ``swept`` and ``sweep_reason``. This op-runner stages and commits nothing. Each payload is
-    encoded once and the same token is pieced and digested; the run-record command carries its
-    ``--*-len``/``--*-sha256`` so the verb refuses a damaged relay. Needs `_shq` and `_sha256Ascii`
-    in scope. Trap: the final command expands the whole urlenc record into argv, so a record past
-    the host's command-line limit (~32K chars on Windows) still fails there; only the Bash-call cap
-    is enforced."""
+    The run record is never relayed by the agent: the prompt carries it once between run-unique markers
+    and the command passes only the open marker plus ``--record-len``/``--record-sha256``; the verb reads
+    the segment from the agent's own transcript. ``record_js``/``declared_js`` name runtime expressions for
+    the record object and the declared-paths array; ``decisions_js`` names the decisions.json path, and the
+    `--decisions-file` flag is omitted when it evaluates empty. ``queue_dirs`` must be the FULL queue set
+    the manifest was selected from: a queue left out reads as closed and its live rows' ledgers are
+    settled. With no ``queue_dirs`` the sweep flag is omitted and the reply reports ``swept: true``.
+    Returns `recorded` or `record-failed` plus ``swept`` and ``sweep_reason``. This op-runner stages and
+    commits nothing. Each payload is encoded once and digested; the command carries its
+    ``--*-len``/``--*-sha256`` so the verb refuses a damaged read. Needs `_shq` and `_sha256Ascii`
+    in scope. Trap: the record segment rides the prompt, so it must be ASCII and contain neither marker."""
     queue_flags = "".join(f" --{QUEUE_FLAG} {q}" for q in queue_dirs)
     sweep_flags = f" --{SWEEP_FLAG} --profile-dir " if queue_dirs else ""
-    rec_file: list[tuple[str, str]] = [("lit", "scratch/run-record-"), ("expr", run_id_js), ("lit", ".rec")]
     dec_file: list[tuple[str, str]] = [("lit", "scratch/run-record-"), ("expr", run_id_js), ("lit", ".dec")]
-    rec_file_js = f"'scratch/run-record-' + ({run_id_js}) + '.rec'"
     dec_file_js = f"'scratch/run-record-' + ({run_id_js}) + '.dec'"
+    open_marker_js = f"'{RECORD_OPEN_PREFIX}' + ({run_id_js})"
+    close_marker_js = f"'{RECORD_CLOSE_PREFIX}' + ({run_id_js})"
     parts: list[tuple[str, str]] = [
         *_REPO_ANCHOR_PARTS,
         (
             "lit",
-            f"The Bash tool drops any command longer than {BASH_COMMAND_CAP} characters, so the run record "
-            "travels in pieces. Run each command below, in order, exactly as written, as its OWN Bash call, "
+            f"The Bash tool drops any command longer than {BASH_COMMAND_CAP} characters, so the declared paths "
+            "travel in pieces. Run each command below, in order, exactly as written, as its OWN Bash call, "
             "and run every one: " + RELAY_INCOMPLETE_CLAUSE + "\n```\n"
             "mkdir -p scratch && : > ",
         ),
-        *rec_file,
-        ("lit", " && : > "),
         *dec_file,
         ("lit", "\n```\n"),
-        _piece_blocks_part("_recEnc", rec_file_js),
         _piece_blocks_part("_decEnc", dec_file_js),
         ("lit", f"```\n{ASSEMBLE_CMD} grind-row run-record{sweep_flags}"),
     ]
@@ -1589,9 +1589,9 @@ def compose_ledger_sweep_call(
     parts += [
         ("lit", f" --profile {profile}{queue_flags} --run-id "),
         ("expr", run_id_js),
-        ("lit", ' --record-urlenc "$(cat '),
-        *rec_file,
-        ("lit", f')" --{RECORD_LEN_FLAG} '),
+        ("lit", f" --{RECORD_FROM_TRANSCRIPT_FLAG} "),
+        ("expr", open_marker_js),
+        ("lit", f" --{RECORD_LEN_FLAG} "),
         ("expr", "_recEnc.length"),
         ("lit", f" --{RECORD_SHA256_FLAG} "),
         ("expr", "_sha256Ascii(_recEnc)"),
@@ -1612,8 +1612,13 @@ def compose_ledger_sweep_call(
             "`recorded` when it exits 0, else `record-failed` with the verbatim stderr in `reason`; return "
             "`swept` and `sweep_reason` from its JSON output (`swept` true and `sweep_reason` empty when it "
             "prints none). If its stderr starts with `" + RELAY_CORRUPT_HEAD + "`, return `record-failed` "
-            "with that stderr verbatim in `reason` and do not retry by hand. " + _NO_STAGING_CLAUSE,
+            "with that stderr verbatim in `reason` and do not retry by hand. " + _NO_STAGING_CLAUSE
+            + "\nThe run record is the text between the two marker lines below. Never copy, retype or "
+            "edit it: the command reads it from this prompt.\n",
         ),
+        ("expr", open_marker_js + " + '\\n'"),
+        ("expr", "_recEnc + '\\n'"),
+        ("expr", close_marker_js),
     ]
     schema = {
         "type": "object",

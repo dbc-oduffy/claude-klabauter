@@ -937,6 +937,78 @@ def _run_usage(repo_root: Path, run_id: str) -> "dict[str, Any] | None":
         return {"reason": f"usage scan failed: {type(exc).__name__}: {exc}"}
 
 
+def _first_user_text(path: Path) -> Optional[str]:
+    """Text of the first ``type: user`` line of the transcript ``path``; None when it has none."""
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(obj, dict) or obj.get("type") != "user":
+                    continue
+                message = obj.get("message")
+                content = message.get("content") if isinstance(message, dict) else None
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    return "".join(
+                        b.get("text", "") for b in content if isinstance(b, dict) and isinstance(b.get("text"), str)
+                    )
+                return ""
+    except OSError:
+        return None
+    return None
+
+
+def _record_token_from_transcript(open_marker: str, length: str, sha256: str) -> tuple[Optional[str], str]:
+    """``(urlenc token, "")`` read from this session's newest agent transcript carrying ``open_marker``
+    whose segment passes the ``check_relay`` gate; else ``(None, refusal)``. Reads first user lines only."""
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+    close_marker = contract.record_close_marker(open_marker)
+    if close_marker is None:
+        return None, f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG} is not a run-record open marker: {open_marker!r}"
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not session or "/" in session or "\\" in session or session in (".", ".."):
+        return None, f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG} needs CLAUDE_CODE_SESSION_ID in the environment"
+    claude_home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or (Path.home() / ".claude"))
+
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    files = sorted(
+        claude_home.glob(f"projects/*/{session}/subagents/workflows/*/agent-*.jsonl"), key=_mtime, reverse=True
+    )
+    for transcript in files:
+        text = _first_user_text(transcript)
+        if text is None or open_marker not in text:
+            continue
+        refusal = (
+            f"{contract.RELAY_CORRUPT_HEAD}: --{contract.RECORD_FROM_TRANSCRIPT_FLAG} found no segment "
+            f"between {open_marker!r} and {close_marker!r} in {transcript.name}"
+        )
+        start = text.find(open_marker)
+        while start != -1:
+            seg_from = start + len(open_marker)
+            end = text.find(close_marker, seg_from)
+            if end != -1:
+                candidate = text[seg_from:end].strip("\r\n")
+                bad = contract.check_relay(contract.RECORD_FROM_TRANSCRIPT_FLAG, candidate, length, sha256)
+                if bad is None:
+                    return candidate, ""
+                refusal = bad
+            start = text.find(open_marker, start + 1)
+        return None, refusal
+    return None, (
+        f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}: no agent transcript of session {session} carries {open_marker!r}"
+    )
+
+
 def cmd_run_record(rest: list[str]) -> int:
     """`run-record --profile P --run-id T [--record-file F|- | --record-urlenc E] --repo-root D`:
     atomically writes `<repo_root>/state/queue-grind/<P>/runs/<T>.json` from
@@ -964,6 +1036,10 @@ def cmd_run_record(rest: list[str]) -> int:
     is unborn (the record is then written but left uncommitted). A commit refusal exits 1 with the verbatim
     refusal on stderr, the record already written.
 
+    `--record-from-transcript <open marker>` reads the urlenc record from the calling session's
+    newest agent transcript whose first user line carries the marker (segment up to the paired
+    close marker), gated by `--record-len`/`--record-sha256`; no match is a refusal, never a retype.
+
     `--record-urlenc` and `--declared-urlenc` arrive through an agent's piece-by-piece
     copy, so each must carry its `--*-len`/`--*-sha256` pair; a token that does not match
     is refused with `EXIT_RELAY_CORRUPT` before any decode, write or sweep
@@ -983,7 +1059,7 @@ def cmd_run_record(rest: list[str]) -> int:
     flags = _parse_flags(
         others, required=("profile", "run-id", "repo-root"),
         optional=(
-            "record-file", "record-urlenc", contract.DECLARED_FLAG, contract.DECISIONS_FLAG, "profile-dir",
+            "record-file", "record-urlenc", contract.RECORD_FROM_TRANSCRIPT_FLAG, contract.DECLARED_FLAG, contract.DECISIONS_FLAG, "profile-dir",
             contract.RECORD_LEN_FLAG, contract.RECORD_SHA256_FLAG,
             contract.DECLARED_LEN_FLAG, contract.DECLARED_SHA256_FLAG,
         ),
@@ -992,7 +1068,8 @@ def cmd_run_record(rest: list[str]) -> int:
     if flags is None:
         return _usage(
             "usage: grind-row run-record --profile P --run-id T "
-            "[--record-file F|- | --record-urlenc E --record-len N --record-sha256 H] [--queue Q ...] "
+            "[--record-file F|- | --record-urlenc E --record-len N --record-sha256 H | "
+            "--record-from-transcript M --record-len N --record-sha256 H] [--queue Q ...] "
             "[--declared-urlenc E --declared-len N --declared-sha256 H] [--decisions-file F] "
             "[--sweep --profile-dir D] --repo-root D"
         )
@@ -1000,9 +1077,29 @@ def cmd_run_record(rest: list[str]) -> int:
         ("record-urlenc", contract.RECORD_LEN_FLAG, contract.RECORD_SHA256_FLAG),
         (contract.DECLARED_FLAG, contract.DECLARED_LEN_FLAG, contract.DECLARED_SHA256_FLAG),
     )
-    if "record-urlenc" in flags and "record-file" in flags:
-        return _usage("grind-row run-record: pass --record-file or --record-urlenc, not both")
+    from_transcript = contract.RECORD_FROM_TRANSCRIPT_FLAG in flags
+    if sum(f in flags for f in ("record-urlenc", "record-file", contract.RECORD_FROM_TRANSCRIPT_FLAG)) > 1:
+        return _usage(
+            "grind-row run-record: pass one of --record-file, --record-urlenc, "
+            f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}"
+        )
+    if from_transcript:
+        absent = [f"--{f}" for f in (contract.RECORD_LEN_FLAG, contract.RECORD_SHA256_FLAG) if f not in flags]
+        if absent:
+            return _usage(
+                f"grind-row run-record: --{contract.RECORD_FROM_TRANSCRIPT_FLAG} needs {' and '.join(absent)}"
+            )
+        token, refusal = _record_token_from_transcript(
+            flags[contract.RECORD_FROM_TRANSCRIPT_FLAG], flags[contract.RECORD_LEN_FLAG],
+            flags[contract.RECORD_SHA256_FLAG],
+        )
+        if token is None:
+            print(refusal, file=sys.stderr)
+            return EXIT_RELAY_CORRUPT if refusal.startswith(contract.RELAY_CORRUPT_HEAD) else EXIT_USAGE
+        flags["record-urlenc"] = token
     for token_flag, len_flag, sha_flag in relayed:
+        if from_transcript and token_flag == "record-urlenc":
+            continue
         if token_flag not in flags:
             continue
         absent = [f"--{f}" for f in (len_flag, sha_flag) if f not in flags]

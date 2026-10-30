@@ -146,13 +146,36 @@ def _no_console() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _record_segment_from_prompt(prompt: str, argv: list) -> str:
+    """The verb's transcript read, stood in for: every open-marker occurrence in the prompt yields a
+    candidate up to the next close marker, and the one passing the len/sha256 gate is the record."""
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
+
+    open_m = argv[argv.index("--record-from-transcript") + 1]
+    close_m = open_m.replace("OPEN", "CLOSE", 1)
+    n, h = argv[argv.index("--record-len") + 1], argv[argv.index("--record-sha256") + 1]
+    start = 0
+    while (i := prompt.find(open_m, start)) != -1:
+        s = i + len(open_m)
+        j = prompt.find(close_m, s)
+        if j == -1:
+            break
+        cand = prompt[s:j].strip("\n")
+        if gcc.check_relay("record-urlenc", cand, n, h) is None:
+            return cand
+        start = i + 1
+    raise AssertionError("no open-marker candidate passes the len/sha256 gate")
+
+
 def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str, repo_root: str,
-                             profile_dir: str, queue_dirs=("q",)) -> list:
+                             profile_dir: str, queue_dirs=("q",), raw: list | None = None) -> list:
     """The `grind-row run-record` argv the op-runner's Bash calls deliver to the verb.
 
     The sweep prompt is evaluated by node (the Workflow runtime's stand-in), every fenced block is
     run as its own `bash -c` in ``cwd`` -- each under ``BASH_COMMAND_CAP`` -- and the final block's
     assemble command is swapped for a NUL-delimited printf so the verb's argv comes back as parsed.
+    The transcript flag is resolved from the prompt text and handed on as `--record-urlenc`; with
+    ``raw`` a list, the unresolved argv and the prompt are appended to it instead.
     Skips when node or bash cannot run on the host."""
     import re
 
@@ -207,7 +230,13 @@ def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str
             argv = ran.stdout.split("\0")[:-1]
     assert argv[0] == "grind-row"
     assert "rm -f" not in block, "the chained command carries no removal; the guard denies the whole command"
-    return argv[1:]
+    argv = argv[1:]
+    if raw is not None:
+        raw.extend([argv, out.stdout])
+        return argv
+    i = argv.index("--record-from-transcript")
+    seg = _record_segment_from_prompt(out.stdout, argv)
+    return argv[:i] + ["--record-urlenc", seg] + argv[i + 2:]
 
 
 @pytest.mark.spawns_process
@@ -260,7 +289,8 @@ def test_drain_call_carries_every_flag_in_one_command():
     assert f"grind-row run-record --{gcc.SWEEP_FLAG} --profile-dir " in call_text
     assert call_text.count("grind-row ") == 1
     assert f"--{gcc.QUEUE_FLAG} state/other" in call_text
-    assert "--record-urlenc" in call_text
+    assert "--record-from-transcript " in call_text
+    assert "--record-urlenc" not in call_text and ".rec'" not in call_text
     assert f"--{gcc.DECLARED_FLAG}" in call_text
     assert f"encodeURIComponent(JSON.stringify({{paths: DECLARED}})){grind_stages._URLENC_SHELL_INERT_JS}" in call_text
     assert f"--{gcc.DECISIONS_FLAG} " in call_text
@@ -960,6 +990,35 @@ def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path
     assert argv[argv.index("--profile-dir") + 1] == "C:\\a b\\profiles"
     assert argv[argv.index("--decisions-file") + 1] == "C:\\a b\\it's decisions.json"
     assert argv[argv.index("--repo-root") + 1] == "/r o/it's"
+
+
+@pytest.mark.spawns_process
+def test_a_lossy_to_retype_record_is_never_typed_and_lands_byte_identical(tmp_path):
+    """The agent types a marker and two numbers; the record bytes ride the prompt once and the
+    segment the verb reads equals the script's serialisation."""
+    from urllib.parse import unquote
+
+    from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
+
+    record = json.dumps({
+        "reason": "café — naïve ☃ $HOME $(x) `y` it's \"q\" 100% 50%25 \\a b\\c\nline2\ttab " * 120,
+        "spend": ["Ünï" * 30] * 100,
+    })
+    assert len(record) > 10000
+    raw: list = []
+    _emitted_run_record_argv(
+        tmp_path, record=record, declared=["a.py"], decisions="", repo_root=str(tmp_path),
+        profile_dir=str(tmp_path / "profiles"), raw=raw,
+    )
+    argv, prompt = raw
+    assert "--record-urlenc" not in argv and "--record-file" not in argv
+    assert all(len(a) < 200 for a in argv), "no record bytes in the typed command"
+    marker = argv[argv.index("--record-from-transcript") + 1]
+    assert marker == f"{gcc.RECORD_OPEN_PREFIX}20261017T161125Z"
+    seg = _record_segment_from_prompt(prompt, argv)
+    assert unquote(seg) == record
+    assert prompt.count(gcc.RECORD_CLOSE_PREFIX) == 1
+    assert ".rec " not in prompt
 
 
 def test_ledger_sweep_call_carries_both_digest_flags():
