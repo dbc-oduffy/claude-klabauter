@@ -1005,6 +1005,12 @@ def _resume_ledger(
                 [f"commit halt of run {halt.run_id} has no readable {RUN_OUTCOME_FILE}; its review verdict is unrecorded"]
             )
         verdict["inline_review"] = {**outcome["inline_review"], RESUMED_RUN_ID_KEY: halt.run_id}
+    elif halt.run_id and halt.run_id != ALL_LANDED_NO_RUN:
+        # A non-commit halt carries its review forward only when one was recorded.
+        outcome = read_run_outcome(Path(repo_root), halt.run_id)
+        review = outcome.get("inline_review") if isinstance(outcome, dict) else None
+        if isinstance(review, dict):
+            verdict["inline_review"] = {**review, RESUMED_RUN_ID_KEY: halt.run_id}
     return verdict
 
 

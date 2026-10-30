@@ -89,7 +89,9 @@ def _append(repo_root: Path, **fields: object) -> str:
 
 def _with_tag(text: str, tag: str, rel: str) -> str:
     """Return `text` with `tag` added as one more item of its block-list `tags:`; raises on any other shape."""
-    lines = text.split("\n")
+    # Trap: a row checked out on Windows is CRLF; match on the bare line and keep its ending.
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(nl)
     try:
         start = lines.index("tags:")
     except ValueError:
@@ -100,7 +102,7 @@ def _with_tag(text: str, tag: str, rel: str) -> str:
     if last == start:
         raise ValueError(f"{rel}: `tags` is not a block list; add the tag by hand")
     lines.insert(last + 1, f"  - {tag}")
-    return "\n".join(lines)
+    return nl.join(lines)
 
 
 def _plan_reuse(repo_root: Path, rec: dict, tag: str) -> str | None:

@@ -189,3 +189,11 @@ def test_closed_row_is_not_reused(tmp_path):
 
 def test_empty_tests_mints_nothing(tmp_path):
     assert mint_tf_rows(tmp_path, "r1", (), target_ref="t") == []
+
+
+def test_a_crlf_row_gains_the_tag_and_keeps_its_line_endings():
+    from coordinator_core.bug_blitz.mint import _with_tag
+
+    text = "id: r\r\ntags:\r\n  - tf\r\n  - bug-blitz-old\r\nstatus: open\r\n"
+    out = _with_tag(text, "bug-blitz-new", "r.yaml")
+    assert out == "id: r\r\ntags:\r\n  - tf\r\n  - bug-blitz-old\r\n  - bug-blitz-new\r\nstatus: open\r\n"
