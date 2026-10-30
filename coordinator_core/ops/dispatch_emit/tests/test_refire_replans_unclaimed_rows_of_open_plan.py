@@ -84,12 +84,13 @@ def test_gate_at_m_plus_resumes_the_ledger_with_the_unclaimed_rows(repo):  # noq
     assert ledger["unlanded"] == ["A1"]
 
 
-def test_gate_below_m_plus_refuses_naming_the_rows(repo):  # noqa: F811
+def test_gate_below_m_plus_arms_a_resume_ledger_naming_the_rows(repo):  # noqa: F811
     _sizing(repo)
     _put(repo, tshirt="S", route="spec-dispatch", plan=PLAN_REL, requirement_register={"rows": _ROWS})
     v = gate(repo, REL)
-    assert v.arm is None and v.halt["kind"] == "refusal"
-    assert v.halt["reason"].startswith("REGISTER-ROWS-UNCLAIMED") and "R2" in v.halt["reason"]
+    assert v.arm == "s" and v.halt is None
+    ledger = v.resume_ledger
+    assert ledger["kind"] == UNCLAIMED_ROWS_HALT_KIND and ledger["unclaimed_rows"] == ["R2"]
 
 
 def test_gate_below_m_plus_with_every_row_claimed_does_not_refuse(repo):  # noqa: F811

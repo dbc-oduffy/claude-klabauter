@@ -38,7 +38,18 @@ def orphan(repo, monkeypatch):  # noqa: F811
     return repo
 
 
-def test_gate_refuses_an_orphan_naming_the_adopt_call(orphan):
+def test_gate_adopts_an_orphan_in_run_and_resumes_without_halting(orphan):
+    out = gate_handler({"sizing_path": REL, "run_id": FRESH, "writes": ["a.py"]}, repo_root=orphan)
+
+    assert out["halt"] is None and out["resume_plan"] == PLAN_REL and out["resume_rows"] == ["A2"], out
+
+
+def _adopt_fails(monkeypatch):
+    monkeypatch.setattr(oa, "_handler", lambda params, repo_root=None: {"ok": False, "reason": "adopt refused"})
+
+
+def test_gate_refuses_an_orphan_naming_the_adopt_call(orphan, monkeypatch):
+    _adopt_fails(monkeypatch)
     out = gate_handler({"sizing_path": REL, "run_id": FRESH, "writes": ["a.py"]}, repo_root=orphan)
 
     assert out["arm"] is None and out["halt"]["kind"] == oa.ORPHAN_PENDING, out
@@ -63,7 +74,8 @@ def test_adopted_orphan_resumes_without_a_replan_and_ask_stage_is_already_staged
         assert again.get(ask_stage_receipt.ALREADY_STAGED_KEY) is True, again
 
 
-def test_orphan_pending_fire_does_not_make_the_orphan_superseded(orphan):
+def test_orphan_pending_fire_does_not_make_the_orphan_superseded(orphan, monkeypatch):
+    _adopt_fails(monkeypatch)
     out = gate_handler({"sizing_path": REL, "run_id": FRESH, "writes": ["a.py"]}, repo_root=orphan)
     assert out["halt"]["kind"] == oa.ORPHAN_PENDING
     fresh = record_dir(orphan, FRESH)

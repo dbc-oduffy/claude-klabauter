@@ -82,10 +82,11 @@ def test_read_baton_ids_refuses_missing_null_and_mismatch(repo):
 
 
 @pytest.mark.parametrize("tshirt", ["S"])
-def test_gate_refuses_baton_at_arm_that_mints_none(repo, tshirt):
+def test_gate_drops_baton_at_arm_that_mints_none(repo, tshirt):
     _sizing(repo, tshirt, accepted={"pm_quote": "y", "on": "2026-10-06", "mode": "pm"})
     v = gate(repo, REL, writes=["a.py"], baton=BATON)
-    assert v.halt["kind"] == "refusal" and "mints no baton" in v.halt["reason"]
+    # A surplus baton at an arm that mints none is dropped, not refused: the verdict arms and carries no baton.
+    assert v.halt is None and v.arm == tshirt.lower() and v.baton is None
 
 
 def test_gate_carries_xs_baton_named_by_the_sizings_own_baton_field(repo):
@@ -198,7 +199,10 @@ def test_prompt_ask_blitz_call_carries_resolved_args(repo, capsys, monkeypatch):
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
-    assert cli.main(["--ask", "do a thing", "--repo-root", str(repo)]) == 0
+    # A raw ask carries no plan-blitz stage; an M+ sizing-backed ask does.
+    subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
+    _sizing(repo, "XL", mode="pm")
+    assert cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo)]) == 0
     out = capsys.readouterr().out
     reply = json.loads(out[out.index("{") : out.rindex("}") + 1])
     text = Path(reply["path"]).read_text(encoding="utf-8")

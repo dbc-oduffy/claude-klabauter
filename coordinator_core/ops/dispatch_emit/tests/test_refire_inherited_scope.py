@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit.refire_inherited_scope import (
+    ORIGIN_COMPLETED_ROW,
     ORIGIN_PREDECESSOR_WITHHELD,
     ORIGIN_REVIEWER_APPLIED,
     inherited_scope,
@@ -94,6 +95,31 @@ def test_both_origins_union_and_withheld_wins_a_shared_path(tmp_path):
     }
 
 
+def test_completed_row_writes_inherit_with_lowest_precedence(tmp_path):
+    _halt(tmp_path, {"shared/w.py": "r"})
+    side = _review_sidecar(tmp_path, [{"verified": True, "file": "shared/r.py", "before": "a", "after": "b"}])
+    _outcome(tmp_path, {"fixes": 1, "wave_sidecar_paths": [side]})
+    manifest = {"rows": [
+        {"id": "C1", "writes": ["only/done.py", "shared/w.py", "shared/r.py"]},
+        {"id": "C2", "writes": ["other/done.py"]},
+    ]}
+    (tmp_path / "state" / "warp" / RUN / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert inherited_scope(tmp_path, {"run_id": RUN}) == {
+        "shared/w.py": ORIGIN_PREDECESSOR_WITHHELD,
+        "shared/r.py": ORIGIN_REVIEWER_APPLIED,
+        "only/done.py": ORIGIN_COMPLETED_ROW,
+        "other/done.py": ORIGIN_COMPLETED_ROW,
+    }
+
+
+def test_malformed_manifest_inherits_nothing(tmp_path):
+    d = _record(tmp_path)
+    (d / "manifest.json").write_text("{not json", encoding="utf-8")
+    assert inherited_scope(tmp_path, {"run_id": RUN}) == {}
+    (d / "manifest.json").write_text(json.dumps({"rows": [{"id": "C1", "writes": "a.py"}, 3]}), encoding="utf-8")
+    assert inherited_scope(tmp_path, {"run_id": RUN}) == {}
+
+
 # land_run refire: the reviewer-applied origin through the real run-outcome reader, and a non-inherited
 # footprint breach on the same refire. Neither `inherited_scope` nor `_ledger_gate` is stubbed.
 import pytest  # noqa: E402
@@ -172,6 +198,9 @@ def test_land_run_refire_still_withholds_a_non_inherited_footprint_breach(repo, 
         ledger_verdict={"items": [{"id": "R1", "status": "met", "wired": True}]},
     )
 
-    assert out.get("committed") is False and out.get("refused") == "shipped-claim-unbacked", out
+    # An unbacked shipped claim is provenance, not a refusal: the own file lands, the breach stays out.
+    assert out.get("committed") is True and out.get("refused") is None, out
+    assert [f["reason"] for f in out["provenance"]] == ["shipped-claim-unbacked"], out
+    assert out["footprint_breach"] == [_BREACH], out
     assert out["stranded"] == {"X1": [_BREACH]}, out
     assert _BREACH not in prod._tree(repo)

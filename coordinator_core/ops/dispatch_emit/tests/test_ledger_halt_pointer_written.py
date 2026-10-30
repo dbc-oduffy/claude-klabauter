@@ -8,10 +8,12 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import land_run
+from coordinator_core.ops.dispatch_emit.emit import _DISPATCH_REPORT_DIR
 from coordinator_core.win_portability import no_console_creationflags
 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALTED_RECORD_PARAM,
+    LEDGER_HALT_FILE,
     RECORD_DIR_ROOT,
     ledger_halt_path,
     read_ledger_halt,
@@ -111,7 +113,7 @@ def test_halt_without_plan_writes_nothing(repo):
     _call(repo, **{HALTED_RECORD_PARAM: {"halted": "ledger-check", "items": [{"id": "R1"}]}})
 
     assert not ledger_halt_path(repo, PLAN).exists()
-    assert not (repo / ".coordinator-local").exists()
+    assert not (repo / _DISPATCH_REPORT_DIR).exists()
 
 
 def test_escaping_plan_writes_nothing(repo):
@@ -120,7 +122,8 @@ def test_escaping_plan_writes_nothing(repo):
     _call(repo, **{HALTED_RECORD_PARAM: {**LEDGER_HALT, "plan": "../outside.md"}})
 
     assert not (repo.parent / ".coordinator-local").exists()
-    assert not (repo / ".coordinator-local").exists()
+    assert not (repo / _DISPATCH_REPORT_DIR).exists()
+    assert not list(repo.rglob(LEDGER_HALT_FILE))
 
 
 def test_spawn_count_matches_a_halt_without_a_plan(repo, monkeypatch):

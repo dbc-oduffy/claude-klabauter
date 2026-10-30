@@ -1,4 +1,4 @@
-"""resumable_plan / ask_gate admit a ledger-halt resume; every other all-landed case still refuses."""
+"""resumable_plan / ask_gate admit a ledger-halt resume; every other all-landed case resumes at an empty all-landed ledger (verify, then commit)."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     write_ledger_halt,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
-from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, resumable_plan
+from coordinator_core.ops.dispatch_emit.sizing_fire import resumable_plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
 from coordinator_core.win_portability import no_console_creationflags
@@ -200,25 +200,23 @@ def test_every_other_case_resumes_as_all_landed_with_a_rulable_register(repo, ca
 
 
 @pytest.mark.parametrize("case", ["no_pointer", "coded_row"])
-def test_every_other_case_refuses_when_the_register_has_nothing_to_judge(repo, case):  # noqa: F811
+def test_every_other_case_resumes_when_the_register_has_nothing_to_judge(repo, case):  # noqa: F811
     _put_s(repo)
     rows = (("A1", "coded"), ("A2", "open")) if case == "coded_row" else (("A1", "open"), ("A2", "open"))
     _landed_repo(repo, rows)
-    with pytest.raises(SizingFireRefused) as exc:
-        resumable_plan(_load(repo), REL, repo, "s")
-    assert exc.value.fields == [ALREADY_RAN]
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.incomplete == ()
+    assert plan.ledger.halted == ALL_LANDED_HALT_KIND and plan.ledger.blocking == ()
     v = gate(repo, REL)
-    assert v.arm is None and ALREADY_RAN in v.halt["reason"]
+    assert v.halt is None and v.resume_rows is None
+    assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND and v.resume_ledger["blocking"] == []
 
 
-def test_already_ran_refusal_names_the_halted_run_route_only_when_a_halted_run_exists(repo):  # noqa: F811
-    from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP
-
+def test_all_landed_resume_is_the_same_with_or_without_a_halted_run(repo):  # noqa: F811
     _put_s(repo)
     _landed_repo(repo)
-    with pytest.raises(SizingFireRefused) as bare:
-        resumable_plan(_load(repo), REL, repo, "s")
-    assert bare.value.fields == [ALREADY_RAN]
+    bare = resumable_plan(_load(repo), REL, repo, "s")
+    assert bare.incomplete == () and bare.ledger.halted == ALL_LANDED_HALT_KIND and bare.ledger.blocking == ()
 
     run_id = "ask-20261023T121013-e7c4ae"
     d = repo / "state" / "warp" / run_id
@@ -226,11 +224,10 @@ def test_already_ran_refusal_names_the_halted_run_route_only_when_a_halted_run_e
     (d / "halted.json").write_text(
         json.dumps({"status": "halted", "sizing_rel": REL, "plan": PLAN_REL}), encoding="utf-8"
     )
-    with pytest.raises(SizingFireRefused) as routed:
-        resumable_plan(_load(repo), REL, repo, "s")
-    (text,) = routed.value.fields
-    assert text.startswith(ALREADY_RAN + " ") and ROUTE_OP in text and run_id in text
-    assert "sha: <the halt commit>" in text
+    routed = resumable_plan(_load(repo), REL, repo, "s")
+    assert routed.incomplete == () and routed.ledger.halted == ALL_LANDED_HALT_KIND and routed.ledger.blocking == ()
+    v = gate(repo, REL)
+    assert v.halt is None and v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
 
 
 def test_gate_adds_no_spawn_beyond_the_one_git_log(repo, monkeypatch):  # noqa: F811

@@ -498,6 +498,14 @@ def _orphan_pending_halt(repo_root: Path, sizing_rel: str, run_id: Optional[str]
     )
 
 
+def _xs_baton_is_own(repo_root: Path, sizing_rel: str, baton: str) -> bool:
+    """True when `baton` is the XS sizing's own: the one `_arm_verdict` kept, not the one it dropped."""
+    try:
+        return _baton_belongs_to_sizing(repo_root, load_sizing_effective(repo_root, sizing_rel), sizing_rel, baton)
+    except SizingFireRefused:
+        return False
+
+
 def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
@@ -1202,9 +1210,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             held=held, reasons=reasons,
         )
         # XS carries the caller's baton (validated in _arm_verdict) instead of minting one.
-        claimed = verdict.baton["path"] if verdict.baton else (
-            params.get("baton") if verdict.arm == ARM_XS else None
-        )
+        if verdict.baton:
+            claimed = verdict.baton["path"]
+        elif verdict.arm == ARM_XS and params.get("baton") and _xs_baton_is_own(root, sizing_rel, params["baton"]):
+            claimed = params["baton"]
+        else:
+            claimed = None
         if verdict.halt is None and claimed:
             try:
                 write_run_baton(root, params["run_id"], claimed)
@@ -1288,11 +1299,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 leg = resume_out[RESUME_LEDGER_LEG_FIELD]
                 # A dispatch leg with no writes carries no work unless a note asks for the re-plan
                 # leg, and a note releases the predicate on its own.
-                rehalt = identical_rehalt_reason(
-                    resume_out, manifest.rows, manifest.owed, manifest.gated,
-                    derived if verdict.arm in (ARM_XS, ARM_S) else [],
-                    leg if leg.get("writes") else None,
-                )
+                # An all-landed resume is the register's first judgment of landed work, not a repeat
+                # of a halt, so it never meets the identical-rehalt refusal.
+                rehalt = None
+                if resume_out.get(RESUME_LEDGER_KIND_FIELD) != ALL_LANDED_HALT_KIND:
+                    rehalt = identical_rehalt_reason(
+                        resume_out, manifest.rows, manifest.owed, manifest.gated,
+                        derived if verdict.arm in (ARM_XS, ARM_S) else [],
+                        leg if leg.get("writes") else None,
+                    )
                 if rehalt is not None:
                     out["halt"] = {"kind": HALT_REFUSAL, "reason": rehalt}
                     return out

@@ -98,10 +98,11 @@ def test_xs_verdict_without_baton_records_nothing(repo):
     assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
 
 
-def test_xs_foreign_baton_halts_and_records_nothing(repo):
+def test_xs_foreign_baton_is_dropped_and_records_nothing(repo):
     _put(repo, "XS", "dispatch", ACCEPTED)
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "baton": BATON, "writes": ["a.py"]}, repo_root=repo)
-    assert out["halt"]["kind"]
+    # A foreign baton is dropped, not refused: the XS verdict arms and no baton is recorded.
+    assert out["arm"] == "xs" and not out.get("halt") and out["baton"] is None
     assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
 
 

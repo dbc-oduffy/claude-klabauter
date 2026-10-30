@@ -151,7 +151,9 @@ def test_the_real_gate_resumes_the_example_game_repo_shape_with_a_manifest_of_th
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
     assert out["resume_ledger"]["blocking"] == list(_RULABLE)
     assert "manifest_handle" in out and "manifest" not in out, out
-    assert [r["id"] for r in read_reply(repo, out["manifest_handle"])["rows"]] == ["A1", "A2"]
+    # A ledger resume stages exactly its unlanded rows: the landed A1/A2 and the discharged E1/E2 stage none.
+    assert read_reply(repo, out["manifest_handle"])["rows"] == []
+    assert out["resume_ledger"]["unlanded"] == []
 
 
 def test_without_the_evidence_sidecar_the_gate_returns_the_row_resume_the_real_run_took(repo):  # noqa: F811

@@ -211,7 +211,7 @@ def test_a_refusal_halt_resumes_ready_once_the_premise_target_is_fixed(repo, mon
     ready_line = next(
         ln
         for ln in script.splitlines()
-        if "_gate.resume_ready" in ln and "_gate.resume_plan) " in ln and "{ _planRel = _gate.resume_plan; }" in ln
+        if "_gate.resume_ready" in ln and "&& _gate.resume_plan !== _staleResumePlan) " in ln and "{ _planRel = _gate.resume_plan; }" in ln
     )
     assert "agent(" not in ready_line and "planBlitz(" not in ready_line
     assert "label: 'plan" not in ready_line and "reblitz" not in ready_line

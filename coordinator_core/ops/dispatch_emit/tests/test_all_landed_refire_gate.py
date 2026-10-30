@@ -11,11 +11,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
 from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
-from coordinator_core.ops.dispatch_emit.sizing_fire import ALL_LANDED_NO_RUN, SizingFireRefused, resumable_plan
+from coordinator_core.ops.dispatch_emit.sizing_fire import ALL_LANDED_NO_RUN, resumable_plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate import (
-    ALREADY_RAN,
     _landed_repo,
     _load,
     _put_s,
@@ -50,14 +49,15 @@ def test_the_handler_stages_a_whole_zero_row_manifest(repo):  # noqa: F811
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
 
 
-def test_a_register_all_met_or_waived_keeps_the_already_ran_refusal(repo):  # noqa: F811
+def test_a_register_all_met_or_waived_resumes_with_no_blocking_rows(repo):  # noqa: F811
     _put_s(repo, requirement_register=MET_REGISTER)
     _landed_repo(repo, CODED)
-    with pytest.raises(SizingFireRefused) as exc:
-        resumable_plan(_load(repo), REL, repo, "s")
-    assert exc.value.fields == [ALREADY_RAN]
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.incomplete == ()
+    assert plan.ledger.halted == ALL_LANDED_HALT_KIND and plan.ledger.blocking == ()
     v = gate(repo, REL)
-    assert v.arm is None and ALREADY_RAN in v.halt["reason"]
+    assert v.halt is None and v.resume_rows is None
+    assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND and v.resume_ledger["blocking"] == []
 
 
 def test_a_not_met_recorded_outcome_resumes_even_with_a_settled_register(repo):  # noqa: F811
@@ -73,7 +73,7 @@ def test_a_not_met_recorded_outcome_resumes_even_with_a_settled_register(repo): 
     assert plan.ledger.blocking == ()
 
 
-def test_a_met_recorded_outcome_keeps_the_refusal(repo):  # noqa: F811
+def test_a_met_recorded_outcome_resumes_with_no_blocking_rows(repo):  # noqa: F811
     _put_s(repo, requirement_register=MET_REGISTER)
     _landed_repo(repo, CODED)
     _pointer(repo, blocking=())
@@ -81,8 +81,9 @@ def test_a_met_recorded_outcome_keeps_the_refusal(repo):  # noqa: F811
         repo, "run-1",
         {"inline_review": {}, "ledger_verdict": {"items": [{"id": "R1", "status": "met"}]}},
     )
-    with pytest.raises(SizingFireRefused):
-        resumable_plan(_load(repo), REL, repo, "s")
+    plan = resumable_plan(_load(repo), REL, repo, "s")
+    assert plan.incomplete == () and plan.ledger.halted == ALL_LANDED_HALT_KIND
+    assert plan.ledger.run_id == "run-1" and plan.ledger.blocking == ()
 
 
 def _example_game_repo_shape(repo, discharged):  # noqa: F811
