@@ -1206,3 +1206,62 @@ def test_the_adjudicate_block_pins_sonnet():
 
     block = pm_adjudication.compose_adjudicate_block(agent_type_host=None)
     assert "model: 'sonnet'" in block
+
+
+def _six_adjudicated_record() -> dict:
+    """The 20261030T033306Z shape: six needs-judgment hand-backs carrying long adjudication rulings, six batons."""
+    ruling = "Canonical contract is halt-as-data; update both tests to the in-run adoption verdict. " * 6
+    needs_judgment = [
+        {
+            "row": f"2026-10-30-tf-coordinator-core-ops-dispatch-emit-te-{i:012x}", "type": "needs-judgment",
+            "reason": "triage reported a tradeoff: " + ruling[:120], "tradeoff": ruling[:120],
+            "adjudication": {"adjudicator": "general-purpose", "verdict": "ruled", "pmOnly": False,
+                             "ruling": ruling, "actionable": True},
+        }
+        for i in range(6)
+    ]
+    batons = [
+        {"row": f"baton-{i}", "type": "baton",
+         "reason": "sized at state/sizings/2026-10-30-fix-all-landed-refire-identical-rehalt-" + "x" * 90 + ".yaml"}
+        for i in range(6)
+    ]
+    return {
+        "profile": "p1", "run_id": "20261017T161125Z", "counts": {"by_type": {"needs-judgment": 6, "baton": 6}},
+        "spend": {}, "handed_back": needs_judgment + batons, "halted": False,
+    }
+
+
+@pytest.mark.spawns_process
+def test_a_six_adjudicated_run_record_reaches_the_verb_whole_over_stale_scratch_files(tmp_path, monkeypatch):
+    """A record past two pieces is relayed by commands that overwrite a prior relay's scratch files, so
+    the record lands with no `drain sweep did not complete` hand-back."""
+    import io
+    from urllib.parse import quote
+
+    from coordinator_core.backlog_grind_assemble import grind_rows
+    from coordinator_core.ops.dispatch_emit.grind_commit_contract import SWEEP_FAILED_HEAD
+
+    record = _six_adjudicated_record()
+    assert len(quote(json.dumps(record), safe="")) > 2 * grind_stages._PIECE_CHARS
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    for ext in ("rec", "dec"):
+        (scratch / f"run-record-20261017T161125Z.{ext}").write_text("STALE" * 4000, encoding="utf-8")
+    argv = _emitted_run_record_argv(
+        tmp_path, record=json.dumps(record), declared=[], decisions="", repo_root=str(tmp_path),
+        profile_dir=str(tmp_path / "profiles"), queue_dirs=(),
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    monkeypatch.setattr(grind_rows, "_declare_under_repo_root", lambda *_a: None)
+
+    assert grind_rows.main(argv) == grind_rows.EXIT_OK
+    target = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261017T161125Z.json"
+    landed = json.loads(target.read_text(encoding="utf-8"))
+    assert landed["handed_back"] == record["handed_back"]
+    assert not [h for h in landed["handed_back"] if h["reason"].startswith(SWEEP_FAILED_HEAD)]
+
+
+def test_the_ledger_sweep_relay_stays_on_the_haiku_floor():
+    # The floor legs are haiku-bound (leg_register ratchet); record fidelity is the op's to own.
+    assert grind_stages.STAGE_MODELS["ledger-sweep"] == "haiku"
+    assert "model: 'haiku'" in _sweep_call()

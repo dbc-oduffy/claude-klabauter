@@ -6,6 +6,8 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
+    ALL_LANDED_HALT_KIND,
+    RESUME_LEDGER_KIND_FIELD,
     RESUMED_RUN_ID_KEY,
     LedgerHalt,
     ledger_halt_path,
@@ -13,10 +15,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     write_run_outcome,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
+from coordinator_core.ops.dispatch_emit.sizing_fire import ALL_LANDED_NO_RUN
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_resume_gate import (
-    ALREADY_RAN,
     _landed_repo,
     _put_s,
 )
@@ -46,11 +48,15 @@ def test_all_landed_commit_pointer_resumes_with_the_recorded_inline_review(repo)
     assert v.resume_rows is None and v.resume_plan is None
 
 
-def test_no_pointer_still_refuses_already_ran(repo):  # noqa: F811
+def test_no_pointer_all_landed_refire_resumes_at_the_all_landed_ledger_with_no_run(repo):  # noqa: F811
     _put_s(repo)
     _landed_repo(repo)
     v = gate(repo, REL)
-    assert v.halt is not None and ALREADY_RAN in v.halt["reason"]
+    assert v.halt is None
+    assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
+    assert v.resume_ledger["run_id"] == ALL_LANDED_NO_RUN
+    assert v.resume_ledger["blocking"] == [] and "inline_review" not in v.resume_ledger
+    assert v.resume_rows is None and v.resume_plan is None
 
 
 def test_commit_pointer_without_a_recorded_outcome_refuses_naming_the_record(repo):  # noqa: F811
@@ -72,9 +78,13 @@ def test_commit_pointer_with_an_open_row_gives_resume_rows(repo):  # noqa: F811
     assert v.resume_rows == ["A2"]
 
 
-def test_commit_pointer_with_a_coded_row_is_stale_and_refuses(repo):  # noqa: F811
+def test_commit_pointer_with_a_coded_row_resumes_all_landed_carrying_the_inline_review(repo):  # noqa: F811
     _put_s(repo)
     _landed_repo(repo, rows=(("A1", "coded"), ("A2", "open")))
     _commit_pointer(repo)
     v = gate(repo, REL)
-    assert v.halt is not None and ALREADY_RAN in v.halt["reason"]
+    assert v.halt is None
+    assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
+    assert v.resume_ledger["run_id"] == "run-1"
+    assert v.resume_ledger["inline_review"] == {**REVIEW, RESUMED_RUN_ID_KEY: "run-1"}
+    assert v.resume_rows is None and v.resume_plan is None

@@ -159,6 +159,7 @@ STAGE_MODELS: dict[str, str] = {
     "adjudicate": "sonnet",
     # The drain runs `backlog-grind-assemble`, which the op-runner's spec refuses (it runs
     # `coordinator-invoke <op>` only), so it rides a general-purpose agent like the other grind-row legs.
+    # Retypes the percent-encoded run record verbatim, piece by piece: fidelity, not speed.
     "ledger-sweep": "haiku",
     **{stage: _AGENT_MODELS[t] for stage, t in STAGE_AGENT_TYPES.items()},
 }
@@ -1510,6 +1511,14 @@ BASH_COMMAND_CAP = 8000
 
 _PIECE_CHARS = 5000
 
+#: A relay that stopped part-way reports it, never a bare `swept: false`. Enforcement point: the verb's
+#: `--record-len`/`--record-sha256` check refuses a truncated record.
+RELAY_INCOMPLETE_CLAUSE = (
+    "if a command fails or you cannot run them all, stop and return `record-failed` with `reason` naming "
+    "the first command you did not complete, and leave `swept` unset; return `recorded` only when the last "
+    "command exited 0."
+)
+
 
 def _piece_blocks_part(enc_js: str, file_js: str) -> tuple[str, str]:
     """A prompt part: one fenced `printf %s <piece> >> file` Bash call per ``_PIECE_CHARS`` of the
@@ -1563,7 +1572,8 @@ def compose_ledger_sweep_call(
         (
             "lit",
             f"The Bash tool drops any command longer than {BASH_COMMAND_CAP} characters, so the run record "
-            "travels in pieces. Run each command below, in order, exactly as written, as its OWN Bash call:\n```\n"
+            "travels in pieces. Run each command below, in order, exactly as written, as its OWN Bash call, "
+            "and run every one: " + RELAY_INCOMPLETE_CLAUSE + "\n```\n"
             "mkdir -p scratch && : > ",
         ),
         *rec_file,

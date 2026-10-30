@@ -147,6 +147,9 @@ __all__ = [
 
 
 _REVIEW_FIX_PHASE = "Review fixes"
+#: Suffixes for a drain reply that reports a failure without saying why. Twins: ``_runClose``.
+_NO_SWEEP_REASON = "the relay reported swept=false with no sweep_reason"
+_NO_RECORD_REASON = "the relay reported no reason"
 
 STAGE_OUTPUT_TOKENS: dict[str, int] = {
     "triage": 5786,
@@ -500,9 +503,10 @@ def run_admission(
     "dropped": [{"row_id", "path", "reason"}], "error", "refused"}``. The params
     that call carries are appended to ``commit_params_sink`` when one is given,
     and a stage that raises still lands the rows finished so far before the
-    error propagates. ``post_stages`` names the stage kinds (review, review-fix,
-    adjudication) called once, in order, after that commit when the grind did not
-    throw. An outer ``finally`` then runs the run close: one ``ledger-sweep`` call (retried once
+    error propagates. After it one ``adjudicate`` call rules the PM-bound hand-backs, and each ruled
+    actionable one re-enters at the fix target with the ruling as its ``pm_ruling`` for a second pass
+    and terminal commit. ``post_stages`` names the stage kinds (review, review-fix)
+    called once, in order, after that when the grind did not throw. An outer ``finally`` then runs the run close: one ``ledger-sweep`` call (retried once
     if it raises) whose reply is ``{"outcome": "recorded"|"record-failed", "swept", "sweep_reason"}``
     -- a record-failed reply whose reason holds ``RELAY_CORRUPT_HEAD`` re-drives the call once --
     the verb sweeps and writes the record whole; the record and declared paths it carries are
@@ -717,7 +721,7 @@ def run_admission(
             why = reply.get("refused") or reply.get("error")
             _fail_all("terminal commit did not land" + (f": {why}" if why else "") + _SETTLE_HINT_TWIN)
             return
-        terminal_commit_dropped = list(reply.get("dropped") or [])
+        terminal_commit_dropped = [*terminal_commit_dropped, *(reply.get("dropped") or [])]
         has_rows = isinstance(reply.get("rows"), list)
         landed = {r["row_id"]: r for r in reply["rows"]} if has_rows else {}
         unlanded = {u["row_id"]: u for u in (reply.get(contract.UNLANDED_KEY) or [])}
@@ -1041,7 +1045,32 @@ def run_admission(
         if exhausted:
             for bid in queue:
                 for rid in batch_objs[bid].row_ids:
-                    handed_back.append({"row": rid, "type": "budget-exhausted", "reason": _EXHAUSTED_REASON})
+                    if not rows[rid].done:
+                        handed_back.append({"row": rid, "type": "budget-exhausted", "reason": _EXHAUSTED_REASON})
+
+    def _continue_ruled() -> bool:
+        """Re-enter every hand-back the one adjudication ruled actionable at the fix target, the ruling on
+        the row; True when any row re-entered. Skipped once the ceiling halted the grind. Twin: ``_continueRuled``."""
+        if exhausted or fix_target is None:
+            return False
+        ruled = [
+            h for h in handed_back
+            if h["type"] in pm_adjudication.PM_BOUND_HANDBACK_TYPES and h["row"] in rows
+            and (h.get("adjudication") or {}).get("actionable") and (h["adjudication"].get("ruling") or "").strip()
+        ]
+        for h in ruled:
+            handed_back.remove(h)
+            row = rows[h["row"]]
+            row.pm_ruling = h["adjudication"]["ruling"]
+            row.node, row.done, row.fix_node = fix_target, False, None
+            row.touched_files, row.created_files, row.removed_files, row.fix_reported = [], [], [], False
+            row.widened = row.verify_retried = row.dedupe_flipped = row.on_fail_used = False
+            row.verify_feedback = ""
+            by_triage_check["ruled_tradeoff"] += 1
+            if row.batch_id not in queue:
+                batch_objs[row.batch_id].triaged = True
+                queue.append(row.batch_id)
+        return bool(ruled)
 
     def _run_close(grind_err: Optional[BaseException]) -> None:
         def _stage_dead(reason: str) -> None:
@@ -1094,19 +1123,21 @@ def run_admission(
             _stage_dead(f"run record may be missing or incomplete: {record_path}: {threw}")
             return
         if drained.get("swept") is False:
-            reason = drained.get("sweep_reason")
-            sweep_entry = {"row": run_id, "type": "stage-dead", "reason": sweep_dead + (f": {reason}" if reason else "")}
+            reason = drained.get("sweep_reason") or _NO_SWEEP_REASON
+            sweep_entry = {"row": run_id, "type": "stage-dead", "reason": f"{sweep_dead}: {reason}"}
             if run_close_sink is not None:
                 sunk = run_close_sink[-1]["record"]
                 sunk["handed_back"].append(sweep_entry)
                 sunk["counts"]["by_type"]["stage-dead"] = sunk["counts"]["by_type"].get("stage-dead", 0) + 1
             handed_back.append(sweep_entry)
         if drained.get("outcome") != "recorded":
-            reason = drained.get("reason")
-            _stage_dead(f"run record may be missing or incomplete: {record_path}" + (f": {reason}" if reason else ""))
+            reason = drained.get("reason") or _NO_RECORD_REASON
+            _stage_dead(f"run record may be missing or incomplete: {record_path}: {reason}")
 
     grind_err: Optional[BaseException] = None
-    try:
+
+    def _grind_pass() -> None:
+        nonlocal grind_err
         try:
             _run_grind()
         except BaseException as err:
@@ -1118,9 +1149,14 @@ def run_admission(
                 for row in rows.values():
                     if not row.done and _has_writes(row):
                         _handback_row(row, "stage-dead", f"run threw: {grind_err}")
+
+    try:
+        _grind_pass()
+        _adjudicate_pm_bound()
+        if _continue_ruled():
+            _grind_pass()
         for kind in post_stages:
             _record_call(kind, "run")
-        _adjudicate_pm_bound()
     except BaseException as err:
         grind_err = err
         raise
@@ -1281,6 +1317,7 @@ _ISSUE_GATE_JS = (
     "let _gateResolve = null;\n"
     "let _grindOpen = false;\n"
     "let _workerFailure = null;\n"
+    "const _continuedBatches = new Set();\n"
     "function _gateKey(batchId, rowId) {\n"
     "  const i = BATCHES.findIndex((b) => b.id === batchId);\n"
     "  return String(i < 0 ? 999999 : i).padStart(6, '0') + ':' + (rowId || '');\n"
@@ -1301,7 +1338,7 @@ _ISSUE_GATE_JS = (
     "    }\n"
     "    if (_exhausted) break;\n"
     "    const bid = _queue.shift();\n"
-    "    const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: false, closedRows: new Set() };\n"
+    "    const batchState = { id: bid, batchKey: BATCHES.find((b) => b.id === bid).batch_key, triaged: _continuedBatches.has(bid), closedRows: new Set() };\n"
     "    _admitted[bid] = batchState;\n"
     "    _runBatchWorker(batchState).catch((err) => {\n"
     "      if (!_workerFailure) { _workerFailure = { err }; }\n"
@@ -1390,7 +1427,7 @@ _TERMINAL_COMMIT_JS = (
     "    return;\n"
     "  }\n"
     "  if (!reply || reply.committed !== true) { _failAll('terminal commit did not land' + _terminalReason(reply) + SETTLE_HINT); return; }\n"
-    "  _terminalCommitDropped = reply.dropped || [];\n"
+    "  _terminalCommitDropped = _terminalCommitDropped.concat(reply.dropped || []);\n"
     "  const _landed = {};\n"
     "  const _hasRows = Array.isArray(reply.rows);\n"
     "  for (const r of (_hasRows ? reply.rows : [])) { _landed[r.row_id] = r; }\n"
@@ -1492,10 +1529,10 @@ def _run_close_block(
         "    return;\n"
         "  }\n"
         "  if (_drained.swept === false) {\n"
-        f"    _handBack(RUN_ID, 'stage-dead', `{sweep_dead}` + (_drained.sweep_reason ? `: ${{_drained.sweep_reason}}` : ''));\n"
+        f"    _handBack(RUN_ID, 'stage-dead', `{sweep_dead}: ` + (_drained.sweep_reason || {_js_string_literal(_NO_SWEEP_REASON)}));\n"
         "  }\n"
         "  if (_drained.outcome !== 'recorded') {\n"
-        f"    _handBack(RUN_ID, 'stage-dead', `run record may be missing or incomplete: {record_path}` + _commitReason(_drained));\n"
+        f"    _handBack(RUN_ID, 'stage-dead', `run record may be missing or incomplete: {record_path}: ` + (_drained.reason || {_js_string_literal(_NO_RECORD_REASON)}));\n"
         "  }\n"
         "}"
     )
@@ -1861,6 +1898,7 @@ def compose_grind_script(
             "(row.refuteNote ? (' The refuter judged this defect live at HEAD; reason: ' + "
             "row.refuteNote) : '')"
         ),
+        ruling_note_js="(row.rulingNote || '')",
         profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
         run_id_js="RUN_ID", agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         targeted_runner=targeted_runner,
@@ -2041,7 +2079,7 @@ def compose_grind_script(
         "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, pmRuling: _entry.pm_ruling || '', node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixPlan: '', fixNode: null, closeResult: null, lastOutcome: '', "
-        "origin: '', refuteNote: '', fixReported: false, sizingPath: '', undoReason: '', "
+        "origin: '', refuteNote: '', rulingNote: '', fixReported: false, sizingPath: '', undoReason: '', "
         "widened: false, verifyRetried: false, dedupeFlipped: false, onFailUsed: false, done: false, sha: '' };\n"
         "  }\n"
         "}"
@@ -2326,11 +2364,32 @@ def compose_grind_script(
         "  if (_workerFailure) { throw _workerFailure.err; }\n"
         "  if (_exhausted) {\n"
         "    for (const bid of _queue) { for (const r of BATCHES.find((b) => b.id === bid).rows) "
-        "_handBack(r, 'budget-exhausted', " + repr(_EXHAUSTED_REASON) + "); }\n"
+        "{ if (!_rows[r].done) { _handBack(r, 'budget-exhausted', " + repr(_EXHAUSTED_REASON) + "); } } }\n"
         "  }\n"
         "}\n"
+        "async function _continueRuled() {\n"
+        "  if (_exhausted || !SIZE_FIX_TARGET || !ROUTING[SIZE_FIX_TARGET]) return;\n"
+        "  const _ruled = _handedBack.filter((h) => PM_BOUND_TYPES.includes(h.type) && _rows[h.row] && h.adjudication"
+        " && h.adjudication.actionable && String(h.adjudication.ruling || '').trim());\n"
+        "  if (_ruled.length === 0) return;\n"
+        "  for (const h of _ruled) {\n"
+        "    _handedBack.splice(_handedBack.indexOf(h), 1);\n"
+        "    const row = _rows[h.row];\n"
+        "    row.pmRuling = h.adjudication.ruling;\n"
+        "    row.rulingNote = ' Binding ruling for this row (its pm_ruling, adjudicated this run): ' + h.adjudication.ruling;\n"
+        "    row.node = SIZE_FIX_TARGET; row.done = false; row.fixNode = null; row.closeResult = null; row.lastOutcome = '';\n"
+        "    row.touchedFiles = [row.path]; row.createdFiles = []; row.removedFiles = []; row.fixReported = false;\n"
+        "    row.widened = false; row.verifyRetried = false; row.dedupeFlipped = false; row.onFailUsed = false;\n"
+        "    row.verifyFeedback = ''; row.undoReason = '';\n"
+        "    _byTriageCheck.ruled_tradeoff += 1;\n"
+        "    if (!_queue.includes(row.batchId)) { _continuedBatches.add(row.batchId); _queue.push(row.batchId); }\n"
+        "  }\n"
+        "  try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }\n"
+        "}\n"
         "try {\n"
-        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }"
+        "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } finally { await _terminalCommit(); await _undoUnfinished(); }\n"
+        "await _adjudicatePmBound();\n"
+        "await _continueRuled();"
     )
 
     review_fix_raw = stages.compose_review_fix_commit_call(
@@ -2377,7 +2436,6 @@ def compose_grind_script(
     )
 
     lines.append(
-        "await _adjudicatePmBound();\n"
         "} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
     )
 

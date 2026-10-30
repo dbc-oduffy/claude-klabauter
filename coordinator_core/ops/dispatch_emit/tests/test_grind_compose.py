@@ -273,10 +273,11 @@ def test_the_run_close_is_the_outer_finally_after_review_and_adjudication():
         "finally { await _terminalCommit(); await _undoUnfinished(); }"
     )
     outer_open = "try {\n" + inner
-    outer_close = "await _adjudicatePmBound();\n} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
-    assert outer_open in script and outer_close in script
-    assert script.count("await _terminalCommit()") == 1 and script.count("await _runClose()") == 1
-    assert script.index(outer_open) < script.index(inner) < script.index("const _reviewPaths")
+    outer_close = "} catch (e) { _grindErr = e; throw e; } finally { await _runClose(); }"
+    adjudicated = inner + "\nawait _adjudicatePmBound();\nawait _continueRuled();"
+    assert outer_open in script and outer_close in script and adjudicated in script
+    assert script.count("await _terminalCommit()") == 2 and script.count("await _runClose()") == 1
+    assert script.index(outer_open) < script.index(adjudicated) < script.index("const _reviewPaths")
     assert script.index("async function _adjudicatePmBound()") < script.index(outer_open)
     assert script.index("const _reviewPaths") < script.index(outer_close)
     assert script.index(outer_close) < script.index("const HANDBACK")
@@ -2069,6 +2070,27 @@ def test_a_failed_run_record_is_named_on_the_hand_back_and_never_masks_the_grind
     dead = [h for h in result["handed_back"] if h["type"] == "stage-dead"]
     assert len(dead) == 1 and "run record may be missing or incomplete" in dead[0]["reason"]
     assert "commit refused" in dead[0]["reason"]
+
+
+@pytest.mark.parametrize(
+    "reply, expect_sweep_dead, expect_record_dead",
+    [
+        ({"outcome": "record-failed", "swept": False}, True, True),
+        ({"outcome": "record-failed"}, False, True),
+        ({"outcome": "recorded", "swept": False}, True, False),
+    ],
+)
+def test_a_drain_that_reports_failure_without_a_reason_still_names_one(reply, expect_sweep_dead, expect_record_dead):
+    script = _fix_script(["r0"])
+    script["ledger-sweep"] = lambda u: reply
+    result, _kinds, sink = _run_logged([("b0", ["r0"])], script)
+    dead = [h["reason"] for h in result["handed_back"] if h["type"] == "stage-dead"]
+    swept = [r for r in dead if r.startswith(grind_commit_contract.SWEEP_FAILED_HEAD)]
+    recorded = [r for r in dead if r.startswith("run record may be missing or incomplete")]
+    assert len(swept) == int(expect_sweep_dead) and len(recorded) == int(expect_record_dead)
+    assert all(r.endswith(gc._NO_SWEEP_REASON) for r in swept)
+    assert all(r.endswith(gc._NO_RECORD_REASON) for r in recorded)
+    assert gc._NO_SWEEP_REASON in _compose() and gc._NO_RECORD_REASON in _compose()
 
 
 def _corrupt_then(second):
