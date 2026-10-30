@@ -3919,6 +3919,22 @@ def _within_handoffs_home(root: Path, artifacts):
     return within_handoffs_home(root, artifacts)
 
 
+def _sizing_stamp_floor(sizing_name: str) -> str:
+    """The lowest run stamp that can bind ``sizing_name``: a sizing file name opens with its creation
+    date and a run cannot bind a sizing before it exists, so the stamp may be a day early (zone slack).
+    ``""`` (no bound) for a name without a valid date prefix."""
+    from datetime import date, timedelta
+
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})-", sizing_name)
+    if m is None:
+        return ""
+    try:
+        day = date(int(m.group(1)), int(m.group(2)), int(m.group(3))) - timedelta(days=1)
+    except (ValueError, OverflowError):
+        return ""
+    return day.strftime("%Y%m%d") + "T000000-000000"
+
+
 def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) -> tuple:
     """``(superseded run ids, their changed record files)``: dirty record dirs of earlier runs bound to
     ``sizing_rel``. A record-dir listing finds the earlier same-sizing dirs; one scoped in-process status
@@ -3939,10 +3955,11 @@ def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) 
         return (), set()
     mine = run_artifacts._STAMP_TAIL.search(run_id).group(0)
     needle = sizing_rel.replace("\\", "/").rsplit("/", 1)[-1].encode("utf-8")
+    floor = _sizing_stamp_floor(needle.decode("utf-8", "replace"))
     candidates: list = []
     for n in listing:
         tail = run_artifacts._STAMP_TAIL.search(n)
-        if tail is None or tail.group(0) >= mine:
+        if tail is None or tail.group(0) >= mine or tail.group(0) < floor:
             continue
         try:
             raw = (root / RECORD_DIR_ROOT / n / "run.json").read_bytes()

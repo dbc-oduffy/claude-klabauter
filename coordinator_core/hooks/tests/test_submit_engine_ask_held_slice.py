@@ -60,11 +60,23 @@ def test_landed_predecessor_with_sha_does_not_deny(tmp_path):
     assert sea._slice_deny(tmp_path, (PARENT, B)) is None
 
 
-def test_non_held_after_slice_deny_text_is_unchanged(tmp_path):
+def test_queued_predecessor_deny_names_no_phantom_call(tmp_path):
     _parent(
         tmp_path,
         [c.SiblingRun(A, "a", status=c.STATUS_RUNNING), c.SiblingRun(B, "b", after=(A,), status=c.STATUS_AFTER)],
     )
     _write(tmp_path, c.status_rel(A), json.dumps({"status": "queued", "parent_id": PARENT}))
     why = sea._slice_deny(tmp_path, (PARENT, B))
-    assert why == f"Predecessor {A} has not landed (queued); its close names this run's fire call."
+    assert why is not None and f"Predecessor {A} has not landed (queued)" in why
+    assert "fire call" not in why
+
+
+def test_not_started_predecessor_deny_names_its_fire_line(tmp_path):
+    _parent(
+        tmp_path,
+        [c.SiblingRun(A, "a", slice_sizing="state/sizings/a.yaml", status=c.STATUS_RUNNING), c.SiblingRun(B, "b", after=(A,), status=c.STATUS_AFTER)],
+    )
+    why = sea._slice_deny(tmp_path, (PARENT, B))
+    assert why is not None and "not started" in why
+    assert "engine-ask {sizing: state/sizings/a.yaml}" in why
+    assert "fire call" not in why

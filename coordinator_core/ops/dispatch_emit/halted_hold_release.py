@@ -210,16 +210,45 @@ def prefetch_kept_blobs(root: Path, runs: list) -> None:
     state = _SCOPE.get()
     if state is None or state["seen_root"] != str(root):
         return
+    union: set = set()
     specs: list = []
     for record, marker in runs:
+        with contextlib.suppress(Exception):  # unreadable: that run is checked on its own
+            union.update(_withheld_keys(record))
         try:
             plan = _kept_plan(record)
             if plan is not None:
                 specs.extend(_kept_specs(plan[0], plan[1], _base_sha(marker)))
         except Exception:  # noqa: BLE001 -- planned again, and held, by kept_at_head_paths
             continue
+    state["memo"][("withheld-union", str(root))] = frozenset(union)
+    state["memo"].pop(("dirty-withheld", str(root)), None)
     if specs:
         _blob_batch(root, specs)
+
+
+def _withheld_keys(record: Path) -> set:
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.session.claim_index import _normalize_key
+
+    return {_normalize_key(p) for p in halted_run.halted_withheld_strict(record)}
+
+
+def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
+    """Dirty paths among every prefetched halted run's withheld paths, from ONE index walk shared by all
+    runs of the scope (`own_left_behind` over the union; its dirtiness and sibling-claim filter are per
+    path). None when no union was prefetched or the walk failed: the caller tests the run alone."""
+    key = ("dirty-withheld", str(root))
+    if key not in state["memo"]:
+        union = state["memo"].get(("withheld-union", str(root)))
+        dirty = None
+        if union:
+            from coordinator_core.ops.ceremony import commit_companion
+
+            with contextlib.suppress(Exception):  # unreadable index: each run holds
+                dirty = frozenset(commit_companion.own_left_behind(root, {"-": sorted(union)}, "-", ()))
+        state["memo"][key] = dirty
+    return state["memo"][key]
 
 
 def _record(root: Path, run_id: str) -> Path:
@@ -314,6 +343,12 @@ def _withheld_clean(root: Path, record: Path) -> bool:
         withheld = list(halted_run.halted_withheld_strict(record))
         if not withheld:
             return False
+        state = _SCOPE.get()
+        if state is not None and state["seen_root"] == str(root):
+            dirty = _dirty_withheld(root, state)
+            keys = _withheld_keys(record)
+            if dirty is not None and keys <= state["memo"][("withheld-union", str(root))]:
+                return not (keys & dirty)
         return not commit_companion.own_left_behind(root, {"-": withheld}, "-", ())
     except Exception:  # noqa: BLE001 -- unreadable: the hold stands
         return False

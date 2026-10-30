@@ -51,6 +51,7 @@ def _plan_spine_writes(root: Path, plan_rel: str) -> set:
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
     out: set = set()
     try:
         located = locate_fenced_block((root / plan_rel).read_text(encoding="utf-8"))
@@ -60,7 +61,7 @@ def _plan_spine_writes(root: Path, plan_rel: str) -> set:
         return out
     if located.status is not LocateStatus.LOCATED:
         raise ValueError(f"plan spine of {plan_rel} is malformed")
-    rows = yaml.safe_load(located.body) or []
+    rows = yaml.load(located.body, Loader=loader) or []
     for row in rows if isinstance(rows, list) else []:
         writes = row.get("writes") if isinstance(row, dict) else None
         if isinstance(writes, list):
@@ -97,7 +98,10 @@ def _sibling_spines(root: Path, run_ids: Iterable[str]) -> dict:
                 spine: object = set()
                 if sizing_rel:
                     try:
-                        sizing = yaml.safe_load((root / sizing_rel).read_text(encoding="utf-8")) or {}
+                        sizing = yaml.load(
+                            (root / sizing_rel).read_text(encoding="utf-8"),
+                            Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader),
+                        ) or {}
                     except FileNotFoundError:
                         sizing = {}
                     plan_rel = _norm(sizing.get("plan")) if isinstance(sizing, dict) else ""

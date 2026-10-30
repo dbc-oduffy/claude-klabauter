@@ -247,6 +247,47 @@ def _missing_context(root: Path, paths: list[str]) -> Optional[str]:
     return None
 
 
+_RESOLVED_MEMO_STATUSES = frozenset({"actioned", "closed"})
+_STATUS_LINE = re.compile(r"^status:[ \t]*[\"']?([A-Za-z_-]+)", re.MULTILINE)
+_COMMIT_LINE = re.compile(r"^(?:actioned_commit|commit|sha):[ \t]*[\"']?([0-9a-fA-F]{7,40})\b", re.MULTILINE)
+_NOTE_LINE = re.compile(r"^actioned_note:(.*)$", re.MULTILINE)
+_NOTE_SHA = re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b")
+
+
+def _memo_commit(front: str) -> str:
+    """The commit that actioned a memo: its commit key, else a sha inside `actioned_note`; "no commit recorded" otherwise."""
+    found = _COMMIT_LINE.search(front)
+    if found:
+        return f"commit {found.group(1)}"
+    note = _NOTE_LINE.search(front)
+    sha = _NOTE_SHA.search(note.group(1)) if note else None
+    return f"commit {sha.group(0)}" if sha else "no commit recorded"
+
+
+def _resolved_memos(root: Path, paths: list[str]) -> list[str]:
+    """`<memo> is <status> (<commit>)` per context under `state/cross-repo/{inbox,archive}` whose frontmatter status is resolved.
+
+    Feeds an advisory only: a re-sent actioned memo is duplicate work, never a deny."""
+    notes: list[str] = []
+    for raw in paths:
+        p = Path(raw.replace("\\", "/"))
+        parts = p.parts
+        if not any(a == "cross-repo" and b in ("inbox", "archive") for a, b in zip(parts, parts[1:])):
+            continue
+        try:
+            with open(p if p.is_absolute() else root / p, encoding="utf-8", errors="replace") as fh:
+                head = fh.read(4096)
+        except OSError:
+            continue
+        if not head.startswith("---"):
+            continue
+        front = head[3:].split("\n---", 1)[0]
+        found = _STATUS_LINE.search(front)
+        if found and found.group(1).lower() in _RESOLVED_MEMO_STATUSES:
+            notes.append(f"{p.name} is {found.group(1).lower()} ({_memo_commit(front)})")
+    return notes
+
+
 def _repo_root(repo_arg: Optional[str], payload: dict) -> Optional[Path]:
     """Root for the submission: absolute `repo`, else the session anchor's repo, else payload cwd.
 
@@ -358,6 +399,69 @@ def _charge(started: float) -> None:
         import time
 
         _BUDGET[0] -= (time.monotonic() - started) * 1000.0
+
+
+#: The caller's child budget (DoE `_hook_boot.py` `_CHILD_BUDGET_S`); the caller kills the hook at it
+#: and denies with no run id, so the hook answers on its own at `_EMIT_BUDGET_SHARE` of it.
+_CALLER_BUDGET_S = 12.0
+_EMIT_BUDGET_SHARE = 0.8
+
+
+class _EmitOverran(Exception):
+    """The emit outlived the caller's budget; `message` is the deny text."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def _caller_budget_s() -> float:
+    try:
+        value = float(os.environ.get("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", ""))
+    except ValueError:
+        return _CALLER_BUDGET_S
+    return value if value > 0 else _CALLER_BUDGET_S
+
+
+def _run_dirs(root: Path) -> set:
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+
+    try:
+        with os.scandir(root / RECORD_DIR_ROOT) as it:
+            return {e.name for e in it if e.is_dir() and os.path.exists(os.path.join(e.path, RUN_STAGE_FILE))}
+    except OSError:
+        return set()
+
+
+def _emit_within_budget(emit: EmitFn, params: dict, root: Path) -> dict:
+    """`emit(params, root)`, or `_EmitOverran` naming any run it minted once the emit budget is spent.
+
+    The emit keeps running on a daemon thread; the caller kills the process at its own budget, so
+    the answer must land first or the caller denies with no run id and the EM re-submits."""
+    before = _run_dirs(root)
+    box: dict = {}
+
+    def work() -> None:
+        try:
+            box["result"] = emit(params, root)
+        except BaseException as exc:  # re-raised on the caller's thread
+            box["error"] = exc
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(_caller_budget_s() * _EMIT_BUDGET_SHARE)
+    if thread.is_alive():
+        minted = sorted(_run_dirs(root) - before)
+        if minted:
+            names = ", ".join(minted)
+            raise _EmitOverran(
+                f"The submission outran the hook budget after minting run {names}. Do not re-submit: "
+                f"the run exists; reconcile it by id (a re-submit duplicates it)."
+            )
+        raise _EmitOverran("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
 
 
 def _budgeted_read(read: Callable[[float], Any]) -> Any:
@@ -594,7 +698,17 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
                 f"{{run_id: {pred}, sha}}; else resubmit the slice as a "
                 f'fresh {{ask, supersedes: "{run_id}"}}.'
             )
-        return f"Predecessor {pred} has not landed ({state or 'not started'}); its close names this run's fire call."
+        if state is None:
+            theirs = next((r for r in (parent.runs if parent else ()) if r.run_id == pred), None)
+            sizing = theirs.slice_sizing if theirs and theirs.slice_sizing else "<its slice sizing>"
+            return (
+                f"Predecessor {pred} has not landed (not started). Fire it first: engine-ask {{sizing: {sizing}}}; "
+                f"{run_id} then starts when it lands."
+            )
+        return (
+            f"Predecessor {pred} has not landed ({state}). "
+            f"Resubmit {run_id} once its close lands it; no call releases it sooner."
+        )
     return None
 
 
@@ -855,6 +969,7 @@ def _launch_all(
     launch: Optional[Callable[..., Path]],
     approved: bool,
     sizing_root: Optional[Path] = None,
+    advisory: str = "",
 ) -> dict:
     """The rewrite to one launcher script that emits and starts every ready run of an asks submission.
 
@@ -900,7 +1015,7 @@ def _launch_all(
     envelope = rewrite_input(
         "PreToolUse",
         {"scriptPath": str(script)},
-        f"Submitted to the engine as runs {', '.join(started)} under one launcher. {tail} {_revise_hint(started[0])}",
+        f"Submitted to the engine as runs {', '.join(started)} under one launcher.{advisory} {tail} {_revise_hint(started[0])}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
@@ -1312,11 +1427,17 @@ def _evaluate(
     missing = _missing_context(root, brief.get("ask_context", []))
     if missing:
         return _refuse(f"context {missing}: no such file. Pass inline prose as brief or context text, or fix the path.")
+    resolved_notes: list[str] = []
     for i, item in enumerate(asks or ()):
         entry_paths = [c.strip() for c in _context_items(item.get("context") or [], "context")[0] if is_path_shaped(c)]
         missing = _missing_context(root, entry_paths)
         if missing:
             return _refuse(f"asks[{i}].context {missing}: no such file. Pass inline prose as context text, or fix the path.")
+        resolved_notes += [f"asks[{i}] {n}" for n in _resolved_memos(root, entry_paths)]
+    resolved_notes += _resolved_memos(root, brief.get("ask_context", []))
+    memo_advisory = (
+        f" Advisory: context memo {'; '.join(resolved_notes)}. The work may already be done." if resolved_notes else ""
+    )
 
     if supersedes:
         from coordinator_core.ops.dispatch_emit.sibling_hold import supersede_refusal
@@ -1358,7 +1479,7 @@ def _evaluate(
         if unwritten:
             return deny("PreToolUse", f"The fan-out reported {unwritten} written under {writer_root}, but it is not on disk there.")
         if len(ready) >= 2:
-            return _launch_all(root, payload, fan_reply, ready, call_stop, launch, approved, writer_root)
+            return _launch_all(root, payload, fan_reply, ready, call_stop, launch, approved, writer_root, memo_advisory)
         first = ready[0]
         # Trap: rebinding moves every later `root` use (cross-repo, live-run, overlap, emit target_root), not only sizing.
         root = writer_root
@@ -1467,7 +1588,9 @@ def _evaluate(
             return resume_envelope
     if result is None:
         try:
-            result = (emit or _default_emit)(params, root)
+            result = _emit_within_budget(emit or _default_emit, params, root)
+        except _EmitOverran as over:
+            return _refuse(over.message)
         except Exception as exc:  # the engine's refusal text is the whole message
             return _refuse(f"The engine refused the submission: {_cause(exc)}")
 
@@ -1548,6 +1671,7 @@ def _evaluate(
         )
     if isinstance(result, dict) and result.get("pm_verification") == "unverifiable":
         derived += " source pm is unverified: no session turn log resolved."
+    derived += memo_advisory
     if asks is None and not (sizing_rel and _has_research_block(sizing_doc)):
         found = _existing_research(root, ask, sizing_rel)
         if found:

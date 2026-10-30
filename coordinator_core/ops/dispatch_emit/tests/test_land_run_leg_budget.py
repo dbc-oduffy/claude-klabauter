@@ -129,3 +129,42 @@ def test_superseded_scan_hands_only_earlier_same_sizing_records_to_the_parser(tm
 
     assert land_run._superseded(tmp_path, MINE, SIZING, None, Tokens) == ((), set())
     assert seen == [["state/warp/warp-a-20261029T100000-aaaaaa/run.json"]]
+
+
+def _handed_to_parser(tmp_path, monkeypatch, sizing: str) -> list:
+    from coordinator_core.ops.dispatch_emit import land_run, run_artifacts
+
+    seen: list = []
+    monkeypatch.setattr(run_artifacts, "superseded_runs", lambda root, rid, s, changed, live_run_ids=(): seen.append(list(changed)) or ())
+
+    class Tokens:
+        @staticmethod
+        def held_records(_root):
+            return []
+
+    land_run._superseded(tmp_path, MINE, sizing, None, Tokens)
+    return sorted(p.split("/")[2] for p in seen[0]) if seen else []  # seen[0]: run.json paths handed on
+
+
+def test_superseded_scan_skips_records_older_than_the_sizing_but_keeps_zone_slack(tmp_path, monkeypatch) -> None:
+    _record(tmp_path, "warp-old-20261020T100000-111111", SIZING)
+    _record(tmp_path, "warp-eve-20261028T230000-222222", SIZING)
+    _record(tmp_path, "warp-day-20261029T010000-333333", SIZING)
+
+    assert _handed_to_parser(tmp_path, monkeypatch, SIZING) == [
+        "warp-day-20261029T010000-333333", "warp-eve-20261028T230000-222222",
+    ]
+
+
+def test_superseded_scan_reads_every_earlier_record_for_an_undated_sizing(tmp_path, monkeypatch) -> None:
+    undated = "state/sizings/some-sizing.yaml"
+    _record(tmp_path, "warp-old-20261020T100000-111111", undated)
+
+    assert _handed_to_parser(tmp_path, monkeypatch, undated) == ["warp-old-20261020T100000-111111"]
+
+
+def test_sizing_stamp_floor_refuses_an_impossible_date(tmp_path) -> None:
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    assert land_run._sizing_stamp_floor("2026-13-45-x.yaml") == ""
+    assert land_run._sizing_stamp_floor("2026-10-29-x.yaml") == "20261028T000000-000000"

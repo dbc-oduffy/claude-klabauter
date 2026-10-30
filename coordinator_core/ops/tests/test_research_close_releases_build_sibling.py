@@ -84,6 +84,51 @@ def test_close_with_sizing_releases_the_build_run(repo, tmp_path):
     assert status["status"] == contract.STATUS_HALTED and status[contract.CLOSED_BY_KEY].endswith(f"{_RESEARCH}.yaml")
 
 
+_ASK = "ask-split-research"
+
+
+def _split_ask(repo: Path, with_status: bool) -> None:
+    """Parent record names the split ask id (not the pipeline-research run id), slicing ``_SIZING``."""
+    parent = contract.ParentRecord(
+        parent_id=_PARENT,
+        runs=(
+            contract.SiblingRun(_ASK, "research", (), _SIZING, contract.STATUS_READY),
+            contract.SiblingRun(_BUILD, "build", (_ASK,), _BUILD_SIZING, contract.STATUS_AFTER),
+        ),
+    )
+    texts = [
+        (contract.parent_record_rel(_PARENT), parent.to_json()),
+        (contract.status_rel(_BUILD), {"status": contract.STATUS_AFTER, "parent_id": _PARENT}),
+    ]
+    if with_status:
+        texts.append((contract.status_rel(_ASK), {"status": contract.STATUS_RUNNING, "parent_id": _PARENT}))
+    for rel, data in texts:
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("with_status", [False, True])
+def test_pipeline_run_close_releases_the_split_ask_and_build(repo, tmp_path, with_status):
+    _split_ask(repo, with_status)
+    out = _close(repo, tmp_path, run_id="pipeline-research-1")
+    assert out["exit_code"] == 0 and out["research_block_dropped"] is True, out
+    assert out["released_runs"] == [_BUILD]
+    status = json.loads((repo / contract.status_rel(_ASK)).read_text())
+    assert status["status"] == contract.STATUS_HALTED and status[contract.CLOSED_BY_KEY].endswith("pipeline-research-1.yaml")
+
+
+def test_pipeline_run_with_no_matching_split_releases_nothing(repo, tmp_path):
+    _split_ask(repo, True)
+    other = repo / "state/sizings/other.yaml"
+    other.write_bytes(_TEXT.encode("utf-8"))
+    out = _close(repo, tmp_path, run_id="pipeline-research-2", sizing="state/sizings/other.yaml")
+    assert out["exit_code"] == 0, out
+    assert "released_runs" not in out
+    status = json.loads((repo / contract.status_rel(_ASK)).read_text())
+    assert status["status"] == contract.STATUS_RUNNING
+
+
 def test_unsplit_research_run_releases_nothing(repo, tmp_path):
     out = _close(repo, tmp_path)
     assert out["exit_code"] == 0 and out["research_block_dropped"] is True, out

@@ -32,6 +32,9 @@ RESERVED_LEGS = frozenset({"integrity", "_integrity", "commit"})
 
 REFUSED = "land-deadline"
 
+#: Pseudo-leg naming the span from scope entry to the first `check`.
+SCOPE_LEG = "land_deadline.scope_entry"
+
 #: Monotonic clock seam; tests substitute a fake clock so nothing sleeps.
 _now = time.monotonic
 
@@ -123,7 +126,9 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
     hard_token = _HARD.set(hard)
     bound_token = _BOUND_BY.set((deadline_by, hard_by))
     ceiling_token = _CEILING.set(ceiling)
-    legs_token = _LEGS.set([])
+    # Seeded with the scope's own entry: without it, time before the first `check` (imports, token
+    # redemption) is in no leg, and a first-leg halt reports `legs: []` (75f803).
+    legs_token = _LEGS.set([(SCOPE_LEG, _now())])
     try:
         yield
     finally:

@@ -558,7 +558,7 @@ def _close_archived(
     dropped = pre_drop is not None
     note = {"research_block": block_note} if block_note is not None else {}
     if dropped or (meta.get("sizing_rel") and not group_runs):
-        released_runs = _release_build_sibling(worktree, run_id, trail_rel)
+        released_runs = _release_build_sibling(worktree, run_id, trail_rel, meta.get("sizing_rel"))
         if released_runs is not None:
             note["released_runs"] = released_runs
     if local:
@@ -586,16 +586,50 @@ def _close_archived(
     )
 
 
-def _release_build_sibling(worktree: Path, run_id: str, trail_rel: str) -> Optional[list[str]]:
-    """Run ids freed by closing the research run ``run_id``, or None when it has no sibling status file.
+def _split_ask_run(worktree: Path, sizing_rel: str) -> Optional[tuple[str, str]]:
+    """``(parent_id, run_id)`` of the split run whose slice sizing is ``sizing_rel``, None when none matches."""
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit import run_close
+
+    warp = worktree / Path(contract.parent_record_rel("x")).parents[1]
+    for rec in sorted(warp.glob("*/parent.json")):
+        data = run_close._read_json(rec)
+        try:
+            parent = contract.ParentRecord.from_json(data) if data else None
+        except (ValueError, KeyError, TypeError):
+            continue
+        for run in parent.runs if parent else ():
+            if run.slice_sizing == sizing_rel:
+                return parent.parent_id, run.run_id
+    return None
+
+
+def _release_build_sibling(
+    worktree: Path, run_id: str, trail_rel: str, sizing_rel: Optional[str] = None,
+) -> Optional[list[str]]:
+    """Run ids freed by closing the research run ``run_id``, or None when no sibling status is found.
 
     The trail record marks the halted-shaped status ``closed_by`` so its ``after`` successor releases.
+    A pipeline-research run has no status under its own id: the split ask run whose parent-record
+    slice sizing is ``sizing_rel`` is closed instead, its status file created when the slice never
+    bound one.
     """
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
     from coordinator_core.ops.dispatch_emit import run_close
+    from coordinator_core.session import claimed_write
     from coordinator_core.warp_fire import fire_command
 
     reply = run_close.sibling_release(worktree, run_id, landed_sha=None, closed_by=trail_rel)
+    if not reply and sizing_rel:
+        split = _split_ask_run(worktree, sizing_rel)
+        if split is not None and split[1] != run_id:
+            parent_id, split_id = split
+            own = worktree / contract.status_rel(split_id)
+            if not own.exists():
+                claimed_write.replace_text(
+                    own, json.dumps({"status": contract.STATUS_RUNNING, "parent_id": parent_id}, sort_keys=True) + "\n",
+                )
+            reply = run_close.sibling_release(worktree, split_id, landed_sha=None, closed_by=trail_rel)
     if not reply:
         return None
     fired = set(reply.get("released") or ())

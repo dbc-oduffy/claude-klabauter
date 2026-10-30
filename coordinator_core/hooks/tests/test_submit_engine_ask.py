@@ -1682,3 +1682,28 @@ def test_a_research_sizing_gets_no_existing_research_warning(tmp_path):
     out = mod.evaluate(_payload(root, {"sizing": "state/sizings/topic-y.yaml"}), emit=_Emit())
     assert _hso(out)["permissionDecision"] == "allow"
     assert "Research artifacts" not in _hso(out)["additionalContext"]
+
+
+def _memo(root: Path, name: str, front: str) -> str:
+    rel = f"state/cross-repo/inbox/{name}"
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(f"---\n{front}\n---\nbody\n", encoding="utf-8")
+    return rel
+
+
+def test_an_actioned_context_memo_advises_and_never_refuses(tmp_path):
+    root = _repo(tmp_path)
+    memo = _memo(root, "m1.md", "status: actioned\nactioned_commit: abcdef1234")
+    out = mod.evaluate(_payload(root, {"ask": "Do X.", "context": [memo]}), emit=_Emit())
+    hso = _hso(out)
+    assert hso["permissionDecision"] == "allow"
+    assert "m1.md is actioned (commit abcdef1234)" in hso["additionalContext"]
+
+
+def test_an_open_context_memo_carries_no_advisory(tmp_path):
+    root = _repo(tmp_path)
+    memo = _memo(root, "m2.md", "status: open")
+    out = mod.evaluate(_payload(root, {"ask": "Do X.", "context": [memo]}), emit=_Emit())
+    hso = _hso(out)
+    assert hso["permissionDecision"] == "allow"
+    assert "may already be done" not in hso["additionalContext"]

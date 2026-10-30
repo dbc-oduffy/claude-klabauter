@@ -366,3 +366,44 @@ def test_constants_and_no_spawn(repo, monkeypatch):
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
     assert peer_hunk_gate.PEER_HUNKS_CO_DECLARED == "peer-hunks-co-declared"
     assert peer_hunk_gate.OUT_OF_ASK_HUNKS == "out-of-ask-hunks"
+
+
+def _halt_withholding(repo: Path, run_id: str, paths: list) -> Path:
+    """A halted marker for `run_id` withholding `paths`; returns its record dir."""
+    rdir = _run_dir(repo, run_id)
+    (rdir / "halted.json").write_text(json.dumps({
+        "status": "halted", "run_artifacts": {"withheld": {p: "halt-record-only" for p in paths}},
+    }), encoding="utf-8")
+    return rdir
+
+
+def test_withheld_clean_walks_the_index_once_for_all_prefetched_runs(repo, monkeypatch):
+    from coordinator_core.ops.ceremony import commit_companion
+    from coordinator_core.ops.dispatch_emit import halted_hold_release as hr
+
+    runs = [(_stamped(t), p) for t, p in (("aaaaaa", "a.py"), ("bbbbbb", "b.py"), ("cccccc", "c.py"))]
+    records = [(_halt_withholding(repo, rid, [p]), {"status": "halted"}) for rid, p in runs]
+    seen: list = []
+
+    def fake_left_behind(root, held_by, sid, pathspec, contested=()):
+        seen.append(sorted(held_by[sid]))
+        return ["b.py"]
+
+    monkeypatch.setattr(commit_companion, "own_left_behind", fake_left_behind)
+    with hr.blob_scope(repo):
+        hr.prefetch_kept_blobs(repo, records)
+        verdicts = [hr._withheld_clean(repo, rec) for rec, _m in records]
+    assert verdicts == [True, False, True]
+    assert seen == [["a.py", "b.py", "c.py"]]
+
+
+def test_withheld_clean_outside_a_prefetch_tests_the_run_alone(repo, monkeypatch):
+    from coordinator_core.ops.ceremony import commit_companion
+    from coordinator_core.ops.dispatch_emit import halted_hold_release as hr
+
+    rec = _halt_withholding(repo, _stamped("dddddd"), ["d.py"])
+    monkeypatch.setattr(commit_companion, "own_left_behind", lambda *a, **k: ["d.py"])
+    with hr.blob_scope(repo):
+        assert hr._withheld_clean(repo, rec) is False
+    monkeypatch.setattr(commit_companion, "own_left_behind", lambda *a, **k: [])
+    assert hr._withheld_clean(repo, rec) is True

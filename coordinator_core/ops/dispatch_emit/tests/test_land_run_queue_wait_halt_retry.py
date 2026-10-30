@@ -81,7 +81,10 @@ def test_a_leg_past_the_full_budget_halts_with_queue_wait_and_per_leg_elapsed(ru
     assert reply["committed"] is False
     assert reply["leg"] == "land_run.integrity"
     assert reply["queue_wait_secs"] == QUEUE_WAIT_SECS
-    assert reply["legs"] == [{"leg": "land_run.script_read", "elapsed_secs": first_leg}]
+    assert reply["legs"] == [
+        {"leg": land_deadline.SCOPE_LEG, "elapsed_secs": 0.0},
+        {"leg": "land_run.script_read", "elapsed_secs": first_leg},
+    ]
     assert "retried" not in reply
 
 

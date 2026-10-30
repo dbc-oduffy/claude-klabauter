@@ -98,6 +98,14 @@ def test_excepted_never_moves_a_deadline_past_the_dispatcher_clamp(clock, monkey
             land_deadline.check("land_run.commit")
 
 
+def test_a_first_leg_halt_attributes_the_time_before_it_to_scope_entry(clock):
+    with land_deadline.scope():
+        clock.now += BUDGET + 1.0
+        with pytest.raises(land_deadline.LandDeadlineExceeded) as exc:
+            land_deadline.check("land_run.script_read")
+    assert exc.value.legs == [{"leg": land_deadline.SCOPE_LEG, "elapsed_secs": BUDGET + 1.0}]
+
+
 def test_no_deadline_bound_is_a_noop():
     land_deadline.check("land_run.script_read")
     land_deadline.check("land_run.integrity")

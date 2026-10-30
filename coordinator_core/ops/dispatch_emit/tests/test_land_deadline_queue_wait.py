@@ -70,6 +70,7 @@ def test_halt_reports_each_started_leg_elapsed(clock):
     reply = land_deadline.halt_reply(info.value)
     assert reply["leg"] == "c"
     assert reply["legs"] == [
+        {"leg": land_deadline.SCOPE_LEG, "elapsed_secs": 0.0},
         {"leg": "a", "elapsed_secs": 4.0},
         {"leg": "b", "elapsed_secs": 7.0},
     ]
