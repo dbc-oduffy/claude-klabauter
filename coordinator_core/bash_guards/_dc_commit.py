@@ -1402,6 +1402,38 @@ def check_validate_commit(
     if hard_violation and _override("COORDINATOR_OVERRIDE_CLAUDEMD_BUDGET", payload=payload):
         warnings.append("CLAUDEMD-BUDGET (override):%s" % hard_violation)
 
+    # Never blocks: advisory only. Reuses the blob readers above (one cached
+    # batch per ref), so no per-file git spawn.
+    for _doc_path in _budget_candidates:
+        _post_bytes = _budget_read_post(_doc_path)
+        if _post_bytes is None:
+            continue
+        _head_bytes = _budget_read_head(_doc_path)
+        _head_lines = set((_head_bytes or b"").decode("utf-8", "replace").splitlines())
+        _added = [
+            ln
+            for ln in _post_bytes.decode("utf-8", "replace").splitlines()
+            if ln.strip() and ln not in _head_lines
+        ]
+        if not _added:
+            continue
+        _changelog_shaped = any(
+            re.search(r"\b\d{4}-\d{2}-\d{2}\b|\b[0-9a-f]{10,40}\b", ln) or ln.lstrip().startswith(">")
+            for ln in _added
+        )
+        warnings.append(
+            "CLAUDE.md CHANGE (%s): always-loaded doctrine, read by every session. "
+            "Enforce the rule in code or a tripwire, not doctrine prose.%s"
+            "\n  → Unless the PM asked for this exact text, unstage it and file the rule as a guard, "
+            "test or op."
+            % (
+                _doc_path,
+                " A dated, SHA-tagged or quoted addition is a changelog, which CLAUDE.md never is."
+                if _changelog_shaped
+                else "",
+            )
+        )
+
     # --- Check 8: Plan/handoff frontmatter mutation needs commit-subject
     # discipline -- warn-only (strict-mode deny is a bash-only dormant
     # branch, see the module docstring "KNOWN PORTING GAPS"). Uses the

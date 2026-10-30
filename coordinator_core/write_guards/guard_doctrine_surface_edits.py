@@ -3,8 +3,12 @@ to always-loaded doctrine surfaces and privileged configuration.
 
 An edit to a protected surface lands. The guard returns `additionalContext`
 naming the review checks the run answers for itself (always-loaded byte
-budget; no unprompted rewrite). It never denies and reads no sentinel file,
-transcript turn or other human-created unlock.
+budget; no unprompted rewrite). Any CLAUDE.md edit by the EM also carries the
+strongest-terms "enforce the rule in code or a tripwire, not doctrine prose"
+warning, louder for a changelog-shaped addition (dated heading, quoted block).
+The EM path never denies. The one deny is a dispatched agent's edit of an
+existing CLAUDE.md (PM ruling), registered in `deny_registry.SUBAGENT_DENY_CLASS`.
+No sentinel file, transcript turn or other human-created unlock is read.
 
 Two classes of file are protected, for two distinct reasons; the advisory
 text is per-class because a class-1 reason attached to coordinator.local.md
@@ -377,6 +381,58 @@ def _surface_advisory(target: str, is_local_config: bool) -> str:
     )
 
 
+_STRONGEST_CLAUDE_MD_WARNING = (
+    "[doctrine-surface guard] STOP. CLAUDE.md edit: enforce the rule in code "
+    "or a tripwire, not doctrine prose. Alternative: a guard, a test, or a "
+    "wiki page. Edit CLAUDE.md only when nothing structural fits."
+)
+_CHANGELOG_SHAPE_WARNING = (
+    "[doctrine-surface guard] STOP. This addition is changelog-shaped (a "
+    "dated heading or a quoted verbatim block): enforce the rule in code or a "
+    "tripwire, not doctrine prose. Alternative: put the rule in a guard or "
+    "test and the verbatim in the plan or decision record."
+)
+_SUBAGENT_DENY_REASON = (
+    "[doctrine-surface guard] a dispatched agent may not edit CLAUDE.md (PM "
+    "ruling). Alternative: report the needed change to the EM."
+)
+_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
+_QUOTE_RE = re.compile(r"^\s*>")
+
+
+def _changelog_shaped(old: str, new: str) -> bool:
+    """Whether the edit ADDS a heading carrying a date/version/SHA token or a blockquote line."""
+    old_lines = set(old.splitlines())
+    for line in new.splitlines():
+        if line in old_lines:
+            continue
+        if _QUOTE_RE.match(line):
+            return True
+        if _HEADING_RE.match(line) and _rot_tokens(line):
+            return True
+    return False
+
+
+def _caller_is_subagent(payload: Dict[str, Any]) -> bool:
+    if payload.get("agent_id"):
+        return True
+    transcript = payload.get("transcript_path")
+    return isinstance(transcript, str) and "subagents" in re.split(r"[\\/]", transcript)
+
+
+def _subagent_deny(payload: Dict[str, Any]) -> "Optional[Dict[str, Any]]":
+    from coordinator_core._hook_envelope import deny
+    from coordinator_core.machine_profile import apply_guard_level
+
+    return apply_guard_level(
+        "guard-doctrine-surface-edits",
+        deny("PreToolUse", _SUBAGENT_DENY_REASON),
+        subagent=True,
+        session_id=payload.get("session_id") or "",
+        cwd=payload.get("cwd"),
+    )
+
+
 def _advisory_envelope(*texts: "Optional[str]") -> Dict[str, Any]:
     return {
         "hookSpecificOutput": {
@@ -694,10 +750,24 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     rot = _rot_token_advisory(tool_name, tool_input, target)
 
-    is_local_config = os.path.basename(target) == "coordinator.local.md"
+    basename = os.path.basename(target)
+    is_local_config = basename == "coordinator.local.md"
     if _is_first_time_create(tool_name, tool_input, target):
         return None
     if is_local_config and _is_unprivileged_config_edit(tool_name, tool_input, target):
         return None
 
-    return _advisory_envelope(_surface_advisory(target_raw, is_local_config), _rot_text(rot))
+    if basename == "CLAUDE.md" and _caller_is_subagent(payload):
+        return _subagent_deny(payload)
+
+    strong = None
+    if not is_local_config:
+        old, new = _edit_texts(tool_name, tool_input, target)
+        if _changelog_shaped(old, new):
+            strong = _CHANGELOG_SHAPE_WARNING
+        elif basename == "CLAUDE.md":
+            strong = _STRONGEST_CLAUDE_MD_WARNING
+
+    return _advisory_envelope(
+        strong, _surface_advisory(target_raw, is_local_config), _rot_text(rot)
+    )

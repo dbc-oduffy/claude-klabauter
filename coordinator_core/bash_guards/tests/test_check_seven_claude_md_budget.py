@@ -318,3 +318,46 @@ class TestCheckSevenRatchetWatermark:
         out = result["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny"
         assert "6000" in out["permissionDecisionReason"]
+
+
+class TestClaudeMdChangeWarning:
+    """Any staged CLAUDE.md change warns (never blocks); a changelog shape is louder."""
+
+    def _commit_and_restage(self, tmp_path: Path, added: str):
+        root = _init_repo(tmp_path)
+        target = Path(root) / "CLAUDE.md"
+        target.write_text("# Rules\nbase line\n", encoding="utf-8")
+        _git(root, "add", "CLAUDE.md")
+        _git(root, "commit", "-q", "-m", "seed")
+        target.write_text("# Rules\nbase line\n" + added, encoding="utf-8")
+        _git(root, "add", "CLAUDE.md")
+        return _enveloped(dispatch_checks.check_validate_commit)(
+            'git commit -m "edit doctrine"', "no-session", cwd=root
+        )
+
+    def test_plain_addition_warns_without_blocking(self, tmp_path):
+        result = self._commit_and_restage(tmp_path, "a new rule\n")
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "allow"
+        ctx = out["additionalContext"]
+        assert "enforce the rule in code or a tripwire" in ctx.lower()
+        assert "changelog" not in ctx
+
+    def test_dated_or_quoted_addition_is_louder(self, tmp_path):
+        result = self._commit_and_restage(
+            tmp_path, "## Capacity (2026-10-30)\n> verbatim PM words\n"
+        )
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "allow"
+        assert "changelog" in out["additionalContext"]
+
+    def test_unrelated_staged_file_does_not_warn(self, tmp_path):
+        root = _init_repo(tmp_path)
+        (Path(root) / "notes.md").write_text("a\n", encoding="utf-8")
+        _git(root, "add", "notes.md")
+        result = _enveloped(dispatch_checks.check_validate_commit)(
+            'git commit -m "notes"', "no-session", cwd=root
+        )
+        assert result is None or "CLAUDE.md CHANGE" not in result["hookSpecificOutput"].get(
+            "additionalContext", ""
+        )

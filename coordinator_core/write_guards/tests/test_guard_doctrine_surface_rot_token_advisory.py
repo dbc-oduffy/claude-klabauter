@@ -92,6 +92,78 @@ def test_plain_numeral_adds_no_rot_advisory(tmp_path, monkeypatch):
     assert "date-, version-" not in _context(result)
 
 
+_RULE = "enforce the rule in code or a tripwire, not doctrine prose"
+
+
+def test_em_edit_of_any_claude_md_carries_the_strongest_warning(tmp_path, monkeypatch):
+    _root, protected = _protected(tmp_path, monkeypatch, "Doctrine. Old sentence.\n")
+    result = guard.check(_edit_payload(protected, "Old sentence.", "Better sentence."))
+    context = _context(result)
+    assert _RULE in context
+    assert "changelog-shaped" not in context
+
+
+def test_dated_heading_addition_is_louder(tmp_path, monkeypatch):
+    _root, protected = _protected(tmp_path, monkeypatch, "Doctrine.\n")
+    result = guard.check(
+        _edit_payload(protected, "Doctrine.", "Doctrine.\n\n## Capacity (PM 2026-10-30)\nText.")
+    )
+    context = _context(result)
+    assert _RULE in context
+    assert "changelog-shaped" in context
+
+
+def test_quoted_verbatim_block_is_louder(tmp_path, monkeypatch):
+    _root, protected = _protected(tmp_path, monkeypatch, "Doctrine.\n")
+    result = guard.check(_edit_payload(protected, "Doctrine.", "Doctrine.\n> PM said so.\n"))
+    assert "changelog-shaped" in _context(result)
+
+
+def test_moved_dated_heading_is_not_changelog_shaped(tmp_path, monkeypatch):
+    _root, protected = _protected(tmp_path, monkeypatch, "## Old (2026-10-30)\nA.\n")
+    result = guard.check(_edit_payload(protected, "A.", "B."))
+    assert "changelog-shaped" not in _context(result)
+
+
+def test_non_claude_md_surface_has_no_strongest_warning(tmp_path, monkeypatch):
+    repo_root, _p = _protected(tmp_path, monkeypatch, "x\n")
+    local = repo_root / "coordinator.local.md"
+    local.write_text("fast_test_cmd: a\n", encoding="utf-8")
+    result = guard.check(_edit_payload(local, "fast_test_cmd: a", "fast_test_cmd: b"))
+    assert _RULE not in _context(result)
+
+
+def _as_subagent(payload):
+    return {**payload, "agent_id": "deadbeef0123", "agent_type": "coordinator:executor"}
+
+
+def test_subagent_edit_of_claude_md_is_denied(tmp_path, monkeypatch):
+    _root, protected = _protected(tmp_path, monkeypatch, "Doctrine. Old sentence.\n")
+    result = guard.check(_as_subagent(_edit_payload(protected, "Old sentence.", "New.")))
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_subagent_edit_of_non_claude_md_surface_is_not_denied(tmp_path, monkeypatch):
+    repo_root, _p = _protected(tmp_path, monkeypatch, "x\n")
+    local = repo_root / "coordinator.local.md"
+    local.write_text("fast_test_cmd: a\n", encoding="utf-8")
+    result = guard.check(_as_subagent(_edit_payload(local, "fast_test_cmd: a", "fast_test_cmd: b")))
+    assert "permissionDecision" not in result["hookSpecificOutput"]
+
+
+def test_subagent_deny_is_registered_and_survives_every_level(monkeypatch):
+    from coordinator_core import deny_registry as dr
+    from coordinator_core import machine_profile as mp
+
+    assert dr.guard_deny_class("guard-doctrine-surface-edits", subagent=True) in dr.GUARD_CLASSES
+    assert dr.guard_deny_class("guard-doctrine-surface-edits") is None
+    for level in ("strict", "warn", "off"):
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+        mp.reset_cache()
+        assert mp.resolved_level("guard-doctrine-surface-edits", subagent=True) == "floor"
+        assert mp.resolved_level("guard-doctrine-surface-edits") == "log"
+
+
 def test_guard_exposes_no_sentinel_reader():
     assert not hasattr(guard, "_sentinel_state")
     assert not hasattr(guard, "pm_approval_fresh")

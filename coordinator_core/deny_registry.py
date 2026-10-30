@@ -58,6 +58,10 @@ GUARD_DENY_CLASS: Dict[str, str] = {
 SUBAGENT_DENY_CLASS: Dict[str, str] = {
     "guard-subagent-heavy-ue-launch": BOX_DEGRADING,
     "block-subagent-destructive-action": BOX_DEGRADING,
+    #: PM ruling: "subagents should be hard-blocked from changes to CLAUDE.md too".
+    #: Always-loaded doctrine is fleet-wide; DISRUPTIVE is the admitted class (a write that
+    #: damages shared state peers load).
+    "guard-doctrine-surface-edits": DISRUPTIVE,
 }
 
 #: Guards ruled advisory after a predicate read against the five deny classes (disk fill,
@@ -148,7 +152,6 @@ ADVISORY_BY_RULING: Dict[str, str] = {
     "grep-via-bash-rewrite": "command rewrite or offer; the command still runs",
     "guard-class-relay": "shell hygiene or routing rule; recoverable",
     "guard-concrete-path-citations": "shell hygiene or routing rule; recoverable",
-    "guard-doctrine-surface-edits": "shell hygiene or routing rule; recoverable",
     "guard-host-subagent-bash-ban": "dispatch or agent-scope rule; recoverable by redo",
     "guard-host-subagent-bash-spawn-shapes": "dispatch or agent-scope rule; recoverable by redo",
     "guard-memory-store-cap": "work-state artifact write rule; recoverable by revert",
