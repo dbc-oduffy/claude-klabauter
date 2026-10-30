@@ -2260,8 +2260,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "12e980998152bced226e869602d006717d540e8d",
-    "coordinator_core/_engine_stamp": "ac66dfacc061d83627ab85fff3a7d3f6b00e7e19",
+    "coordinator_core/_engine_published_at": "9042b1f86aedf15574c21cb4b7f193286ff2e221",
+    "coordinator_core/_engine_stamp": "d66347be70e51d42e86d0af82066a0454961a126",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5113,13 +5113,13 @@
     "coordinator_core/ops/dispatch_emit/landed_reconcile.py": "3d569de3610f5e5aed5a71279f11c9b96010408e",
     "coordinator_core/ops/dispatch_emit/landing_dropped_targets.py": "a9541d1c1966d12c92a4a6965ce990ac56c4d39b",
     "coordinator_core/ops/dispatch_emit/landing_export.py": "868199ca5b5e0a9da31ea0734f2d8fb63e91890f",
-    "coordinator_core/ops/dispatch_emit/landing_integrity.py": "bccd7f8e4ddb840d7b254c522586b388cf2d5883",
+    "coordinator_core/ops/dispatch_emit/landing_integrity.py": "402ef13104d5a1e294748233128de769dc0ac59b",
     "coordinator_core/ops/dispatch_emit/landing_refusal_kinds.py": "8d9172a3170550310efe289fd4756b5f11e6e3e8",
     "coordinator_core/ops/dispatch_emit/landing_remedy.py": "b3246ef592edc9cf59be7700a391cfe3fc8118a2",
     "coordinator_core/ops/dispatch_emit/landing_retest.py": "bfa97d4642cc23b9ccae97aa44d6f6e3a9c6e5b8",
     "coordinator_core/ops/dispatch_emit/landing_scope.py": "c9d588f5a43bbedd8d458d9a726edca1bf94427e",
     "coordinator_core/ops/dispatch_emit/landing_secrets.py": "0d92642c4589fdb0da6fa0a0a51a45653439c5a4",
-    "coordinator_core/ops/dispatch_emit/landing_targeted_tests.py": "b3cde685a42e661961d9c143dcdd7ce25f1023eb",
+    "coordinator_core/ops/dispatch_emit/landing_targeted_tests.py": "e984e41880a2da6220fbe3aad7dcc92452afb6ff",
     "coordinator_core/ops/dispatch_emit/lanes.py": "13bf01065ed17569b0005a9c789bfb8aad57516f",
     "coordinator_core/ops/dispatch_emit/launcher_staged_twin.py": "92c1b01ff87ede27d48d84ab32318a0186e23f90",
     "coordinator_core/ops/dispatch_emit/ledger_prerule.py": "09b11c70162f66a1d1bfa724977222b34dc30351",
@@ -5986,6 +5986,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_landed_reconcile_evidence.py": "07819c2fcbf4a6e66b3d1c4582468a14bc0f3328",
     "coordinator_core/ops/dispatch_emit/tests/test_landed_rows_reemit.py": "a7728138d0bbff22c3e92cf5724abbbfb8fd205e",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_attribution_clause.py": "0e2093fa812d675f9efd42ca4ba2bec0a8050296",
+    "coordinator_core/ops/dispatch_emit/tests/test_landing_base_red_head_reader.py": "bc999687c5ed6f94c8f15a44ca718a1fa1ceaafc",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_base_red_node_recorded.py": "6eb5d3949d8e782a1d31e2693c2273b6a6e743d0",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_export.py": "fbd5194d886b969a19c4c9386508ebad4be4faa1",
     "coordinator_core/ops/dispatch_emit/tests/test_landing_fresh_verdict_halted.py": "0952a4f992f18009d122f4bf2d353a523b045b71",
@@ -10424,5 +10425,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "5c3da9a3d31814e264b969d946159907e70b25ee"
+  "source_head": "179c777e5585c40303133868f45da10eedd106eb"
 }

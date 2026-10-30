@@ -9,7 +9,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Collection, Mapping, Optional, Sequence
 
 TARGETED_TESTS_FAILED = "targeted-tests-failed"
 REVIEW_REVERIFY_FAILED = "review-reverify-failed"
@@ -274,7 +274,7 @@ def _node_note(nodes: Sequence[str]) -> str:
 
 def failed_targeted_tests(
     verdict: Optional[Mapping], remedy: Optional[str] = None, measured: bool = True,
-    nodes: Sequence[str] = (),
+    nodes: Sequence[str] = (), cleared: Collection[str] = (),
 ) -> tuple[list[Finding], str]:
     """``(findings, check)`` for a carried test verdict; ``check`` is ``"no-verdict"``, ``"pass"``,
     ``"not-run"``, ``"pre-existing-only"`` or ``"failed"``.
@@ -291,7 +291,8 @@ def failed_targeted_tests(
     fail/error verdict whose baseline has nothing caused is ``"pre-existing-only"`` only when every
     failing id (``pre_existing``, ``foreign``, ``unverified``) is in ``evidenced_clear_ids``; otherwise
     each unevidenced id is a TARGETED_TESTS_FAILED finding (counted caused), and a baseline naming no
-    failing id at all is one unattributed finding.
+    failing id at all is one unattributed finding. ``cleared`` (``base_red_cleared``) ids count as
+    evidenced, but only on a ``measured`` verdict and never against ``baseline.caused``.
     A ``fail`` verdict with ``tests_failed`` the integer 0 and no baseline names no failure and no
     evidence: one Finding(ZERO_FAIL_UNATTRIBUTED) with check ``ZERO_FAIL_CHECK``, never TARGETED_TESTS_FAILED.
     Trap: any other fail/error verdict with no baseline yields one Finding with ``path=""`` (unattributed,
@@ -346,6 +347,8 @@ def failed_targeted_tests(
             str(i.get("id") if isinstance(i, Mapping) else i)
             for key in ("pre_existing", "foreign", "unverified") for i in (baseline.get(key) or [])
         ]
+        if measured:
+            evidenced = evidenced | {str(n) for n in cleared}
         unevidenced = [n for n in dict.fromkeys(failing) if n not in evidenced]
         if failing and not unevidenced:
             return [], "pre-existing-only"
@@ -455,6 +458,35 @@ def base_red_ids(params: Mapping) -> set[str]:
     for holder in (params, nested):
         raw = holder.get(FAILING_AT_BASE) if isinstance(holder, Mapping) else None
         out |= {str(n) for n in raw if n} if isinstance(raw, (list, tuple)) else set()
+    return out
+
+
+_HEAD_READ = re.compile(r"""['"]HEAD(?:[~^:@][^'"]*)?['"]|\bHEAD[~^:@]""")
+
+
+def base_red_cleared(worktree_root: Path, params: Mapping, verdict: Optional[Mapping]) -> set[str]:
+    """The ``base_red_ids`` the run does not own: a node whose file the retest ran (``verdict["tests"]``)
+    or whose test source names ``HEAD`` as a quoted git ref in code (it compares committed state, so it can only go green after
+    the commit). A base-red node neither targeted nor reading HEAD stays counted caused."""
+    red = base_red_ids(params)
+    if not red:
+        return set()
+    ran = {str(t).split("::")[0] for t in ((verdict or {}).get("tests") or [])}
+    out: set[str] = set()
+    for node in red:
+        test_file = _node_file(node)
+        if test_file and (test_file in ran or any(r.endswith("/" + test_file) or test_file.endswith("/" + r) for r in ran)):
+            out.add(node)
+            continue
+        repo_file = _repo_test_path(worktree_root, test_file, set()) if test_file else None
+        if repo_file:
+            try:
+                src = (Path(worktree_root) / repo_file).read_text(encoding="utf-8")
+                code = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith("#"))
+                if _HEAD_READ.search(code):
+                    out.add(node)
+            except (OSError, UnicodeDecodeError):
+                pass
     return out
 
 

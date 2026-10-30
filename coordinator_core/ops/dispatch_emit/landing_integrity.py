@@ -71,6 +71,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     _node_file,
     _repo_test_path,
     FAILING_AT_BASE,
+    base_red_cleared,
     base_red_ids,
     baseline_caused_files,
     failed_targeted_tests,
@@ -488,7 +489,8 @@ def _landing_test_gate(
                     f"re-run: {retest_remedy(params, [f])}")
             for f in files
         ], "failed"
-    findings, check = failed_targeted_tests(fresh, retest_remedy(params))
+    findings, check = failed_targeted_tests(
+        fresh, retest_remedy(params), cleared=base_red_cleared(worktree_root, params, fresh))
     if check == "pass" and fresh.get("status") == "pass" and _ran_zero_int(fresh.get("tests_run")):
         return [_ran_zero_finding(params)], "failed"
     return findings, "pass-on-retest" if check == "pass" else check
