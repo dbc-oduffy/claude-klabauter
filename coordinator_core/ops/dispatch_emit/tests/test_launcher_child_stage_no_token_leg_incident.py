@@ -42,7 +42,6 @@ const scriptPaths = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
   labels.push(label);
-  if (label === 'emit-' + cfg.run_id) return cfg.emit;
   return {};
 };
 const parallel = async (xs) => Promise.all(xs.map((f) => f()));
@@ -96,8 +95,8 @@ def test_a_launcher_child_stages_and_resumes_with_only_its_emit_leg(env, monkeyp
     child = fan_launcher.LaunchChild(
         run_id=run_id, sizing_rel=_SIZING, emit_params={"ask": True, "sizing_path": _SIZING, "reserved_run_id": run_id},
     )
-    launcher = fan_launcher.write_launcher(root, "ask-parent", [child], "sess-1")
-    cfg = {"run_id": run_id, "emit": reply, "handle": handle, "commit": _LANDED}
+    launcher = fan_launcher.write_launcher(root, "ask-parent", [child], "sess-1", [reply])
+    cfg = {"run_id": run_id, "handle": handle, "commit": _LANDED}
     proc = subprocess.run(
         [node, "-"], input=_PROGRAM, capture_output=True, text=True, encoding="utf-8", timeout=60,
         env={**os.environ, "LAUNCHER_FILE": payload_file(launcher.read_text(encoding="utf-8")), "CFG": json.dumps(cfg)},
@@ -106,6 +105,6 @@ def test_a_launcher_child_stages_and_resumes_with_only_its_emit_leg(env, monkeyp
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
 
-    assert out["labels"] == [f"emit-{run_id}"]
+    assert out["labels"] == []
     assert out["scriptPaths"][1] == twin.as_posix()
     assert out["result"]["runs"][0]["status"] == "ok", out["result"]

@@ -468,7 +468,9 @@ CLOSE_JOB_SCRIPT: Optional[str] = None
 
 _CLOSE_JOB_WINDOW_MINUTES = 5
 
-_BACKGROUND_LEGS = ("review", "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
+_BACKGROUND_LEGS = (
+    "review", "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close", "symbol-knowledge",
+)
 
 _NOT_LANDED = "coded-stamp commit did not land"
 

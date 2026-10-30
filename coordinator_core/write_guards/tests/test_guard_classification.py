@@ -194,6 +194,7 @@ HARD_DENY_NAMES = [
 
 # Every advisory guard, alphabetical.
 ADVISORY_NAMES = [
+    "block_published_engine_mirror_write",
     "guard_concrete_path_citations",
     "guard_doctrine_surface_edits",
     "nudge_authoring_leak",

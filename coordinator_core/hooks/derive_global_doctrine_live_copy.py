@@ -153,6 +153,28 @@ def _tracked_rules_files(repo_root: Path) -> "list[Path]":
         return []
 
 
+#: Superseded rules files removed by explicit name (never pattern) from the live
+#: and published rules dirs, only while the tracked dir no longer holds the name.
+_RETIRED_RULES_FILES = ("context7.md", "fleet-friction-reporting.md")
+
+
+def _retire_superseded_rules(repo_root: Path, notes: "list[str]") -> None:
+    tracked_names = {p.name for p in _tracked_rules_files(repo_root)}
+    for name in _RETIRED_RULES_FILES:
+        if name in tracked_names:
+            continue
+        for rules_dir in (_live_rules_dir(), _published_rules_dir(repo_root)):
+            target = rules_dir / name
+            try:
+                if not target.is_file():
+                    continue
+                target.unlink()
+            except Exception:
+                notes.append(f"retired rules file not removed: {_display_path(target, repo_root)}")
+                continue
+            notes.append(f"retired superseded rules file: {_display_path(target, repo_root)}")
+
+
 def _is_dev_repo(repo_root: Optional[Path]) -> bool:
     if repo_root is None:
         return False
@@ -243,6 +265,7 @@ def evaluate(payload: dict):
             _derive_live_copy(
                 rules_tracked, _published_rules_dir(repo_root) / rules_tracked.name, notes, repo_root
             )
+        _retire_superseded_rules(repo_root, notes)
     else:
         if not file_path:
             return None

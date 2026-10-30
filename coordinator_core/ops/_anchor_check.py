@@ -1,5 +1,5 @@
-"""In-process evaluator for an anchor premise's check. No spawn, no walk: it reads only the
-files the command names, under the repo root it is handed.
+"""In-process evaluator for an anchor premise's check. No spawn, no walk: it streams only the
+files the command names (any size), under the repo root it is handed.
 
 Grammar (shlex, posix): stage := grep FLAGS (PATTERN | (-e PATTERN)+) FILE, FLAGS = c plus at most
 one of E or F (a line counts when any -e pattern matches);
@@ -11,8 +11,6 @@ import shlex
 from pathlib import Path, PurePosixPath
 from typing import List, Optional, Tuple
 
-MAX_BYTES: int = 1 << 20
-
 GRAMMAR: str = (
     'grep -c [-E|-F] (PATTERN | -e PATTERN ...) FILE [&& grep ...]; '
     'expect N|>=N|<=N|>N|<N|"N then M"'
@@ -22,9 +20,10 @@ _GLOB = set("*?[]{}")
 _BRE_UNESCAPE = set("|(){}")
 _BRE_ESCAPE = set("(){}|+?")
 _OPS = (">=", "<=", ">", "<")
-# Python re has no timeout, so catastrophic-backtracking shapes are refused before they can run
-# over a MAX_BYTES file: a quantified group holding a quantifier, and a quantified alternation
-# group unless its branches are plain literals with pairwise distinct first characters.
+# Python re has no timeout and files are streamed at any size, so catastrophic-backtracking
+# shapes are refused before they can run: a quantified group holding a quantifier, and a
+# quantified alternation group unless its branches are plain literals with pairwise distinct
+# first characters.
 _NESTED_QUANTIFIER = re.compile(r"\([^)]*[+*][^)]*\)[+*{]")
 _QUANTIFIED_GROUP = re.compile(r"\(([^()]*)\)[+*{]")
 _PLAIN_BRANCH = re.compile(r"[^\\.\[\]()*+?{}^$|]+")
@@ -163,13 +162,17 @@ def _count(regexes: "List[re.Pattern[str]]", path: Path) -> Optional[int]:
     """None when grep would print no count (missing file or not a regular file)."""
     if not path.is_file():
         return None
-    if path.stat().st_size > MAX_BYTES:
-        raise _NotEvaluable(f"file over {MAX_BYTES} bytes")
-    text = path.read_bytes().decode("utf-8", errors="replace")
-    lines = text.replace("\r\n", "\n").split("\n")
-    if lines[-1] == "":
-        lines.pop()
-    return sum(1 for line in lines if any(r.search(line) for r in regexes))
+    n = 0
+    with path.open("rb") as fh:
+        for raw in fh:
+            if raw.endswith(b"\r\n"):
+                raw = raw[:-2]
+            elif raw.endswith(b"\n"):
+                raw = raw[:-1]
+            line = raw.decode("utf-8", errors="replace")
+            if any(r.search(line) for r in regexes):
+                n += 1
+    return n
 
 
 def _parse_expect(expect: str) -> List[Tuple[str, int]]:

@@ -345,9 +345,21 @@ def test_op_is_registered_mutating_fire_and_forget_common_dir():
     assert OP_SCOPES["close.background"] == "common_dir"
 
 
-def test_background_ledger_ends_in_the_four_legacy_legs_without_review():
-    assert cb.BACKGROUND_LEGS[-4:] == ("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close")
+def test_background_ledger_ends_in_the_legacy_legs_then_symbol_knowledge_without_review():
+    assert cb.BACKGROUND_LEGS[-5:] == (
+        "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close", "symbol-knowledge",
+    )
     assert "review" not in cb.DEFAULT_RUNNERS
+
+
+def test_symbol_knowledge_leg_is_registered_and_run_bound(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_close as rc
+    from coordinator_core.symbol_knowledge import leg as sk
+
+    assert "symbol-knowledge" in cb.BACKGROUND_LEGS and "symbol-knowledge" in rc.RUN_BOUND_LEGS
+    sentinel = rc.LegResult("ran", "sk")
+    monkeypatch.setattr(sk, "symbol_knowledge_leg", lambda ctx: sentinel)
+    assert cb.DEFAULT_RUNNERS["symbol-knowledge"](object()) is sentinel
 
 
 def _stub_launchers(monkeypatch):

@@ -15,7 +15,7 @@ halt that names the gap, never a run.
 `args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?, chatty?}` (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
-lazy-emit launcher (`fan_launcher.write_launcher`) that emits and starts each, with one ready run it fires
+launcher (`fan_launcher.write_launcher`, given each run's pre-emitted reply) that starts each, with one ready run it fires
 that run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a
 slice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload
 cwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, the venue is remote, or an explicit absolute `repo` names a registered checkout), optional `source: "pm" | "relayed"` (a chosen source is forwarded to the engine verbatim as `ask_source`, and ignored on a `sizing` submission; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: "pm"` makes it the PM's
@@ -433,7 +433,7 @@ def _run_dirs(root: Path) -> set:
         return set()
 
 
-def _emit_within_budget(emit: EmitFn, params: dict, root: Path) -> dict:
+def _emit_within_budget(emit: EmitFn, params: dict, root: Path, budget_s: Optional[float] = None) -> dict:
     """`emit(params, root)`, or `_EmitOverran` naming any run it minted once the emit budget is spent.
 
     The emit keeps running on a daemon thread; the caller kills the process at its own budget, so
@@ -450,7 +450,7 @@ def _emit_within_budget(emit: EmitFn, params: dict, root: Path) -> dict:
 
     thread = threading.Thread(target=work, daemon=True)
     thread.start()
-    thread.join(_caller_budget_s() * _EMIT_BUDGET_SHARE)
+    thread.join(_caller_budget_s() * _EMIT_BUDGET_SHARE if budget_s is None else budget_s)
     if thread.is_alive():
         minted = sorted(_run_dirs(root) - before)
         if minted:
@@ -761,9 +761,30 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], started: Sequence[str], laun
 
 
 def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session_id: Optional[str]) -> Path:
-    from coordinator_core.ops.dispatch_emit.fan_launcher import write_launcher
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LAUNCHER_CHILD_EMIT_PARAM, write_launcher
 
-    return write_launcher(root, parent_id, children, session_id)
+    import time
+
+    # One deadline spans every child; an overran emit still runs on its daemon thread, so no further child is emitted.
+    deadline = time.monotonic() + _caller_budget_s() * _EMIT_BUDGET_SHARE
+    emitted: list = []
+    spent = ""
+    for child in children:
+        if spent:
+            emitted.append({"error": f"Not emitted: the hook budget was spent. {spent}"})
+            continue
+        try:
+            reply = _emit_within_budget(
+                _default_emit, {**child.emit_params, LAUNCHER_CHILD_EMIT_PARAM: True}, root,
+                max(deadline - time.monotonic(), 0.0),
+            )
+        except _EmitOverran as over:
+            spent = over.message
+            reply = {"error": over.message}
+        except Exception as exc:  # a refused child is named in the launcher; siblings still start
+            reply = {"error": str(exc)}
+        emitted.append(reply)
+    return write_launcher(root, parent_id, children, session_id, emitted)
 
 
 def _default_fanout(params: dict, repo_root: Path) -> dict:

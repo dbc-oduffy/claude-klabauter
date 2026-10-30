@@ -149,6 +149,35 @@ def test_resumed_released_by_successor_spent_receipt(tmp_path):
     assert hr.release_reason(root, r, None, None) == hr.RELEASE_SUCCESSOR_LANDED
 
 
+def test_successor_scan_reads_each_record_dir_once_per_scope(tmp_path, monkeypatch):
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    root = _root(tmp_path)
+    r1, r2, s = _rid("ask", 300, "aaaaaa"), _rid("ask", 290, "bbbbbb"), _rid("ask", 100, "cccccc")
+    _run(root, r1, marker="resumed")
+    _run(root, r2, marker="resumed")
+    _run(root, s, marker="landed")
+    reads: list = []
+    real = wrd._read_json
+    monkeypatch.setattr(wrd, "_read_json", lambda p: (reads.append(Path(p)), real(p))[1])
+
+    with hr.release_scope():
+        assert hr._successor_landed(root, r1, SIZING) is True
+        assert hr._successor_landed(root, r2, SIZING) is True
+    assert [p.parent.name for p in reads].count(s) == 1
+    assert hr._successor_landed(root, r1, SIZING) is True  # outside a scope: still answered, read fresh
+    assert [p.parent.name for p in reads].count(s) == 2
+
+
+def test_successor_scan_still_holds_when_no_successor_landed(tmp_path):
+    root = _root(tmp_path)
+    r, s = _rid("ask", 300, "aaaaaa"), _rid("ask", 100, "bbbbbb")
+    _run(root, r, marker="resumed")
+    _run(root, s)
+    with hr.release_scope():
+        assert hr._successor_landed(root, r, SIZING) is False
+
+
 def test_resumed_holds_when_successor_not_landed_even_sharing_sizing_and_plan(tmp_path):
     root = _root(tmp_path)
     r, s, older = _rid("ask", 300, "aaaaaa"), _rid("ask", 100, "bbbbbb"), _rid("ask", 500, "cccccc")
@@ -694,6 +723,89 @@ def test_residue_paths_excludes_own_paths_and_other_states(tmp_path):
     assert hr.residue_paths(root, me) == frozenset()
 
 
+def test_residue_paths_scoped_weighs_only_runs_withholding_a_requested_path(tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    me, peer = _auto_land_fixture(root)
+    other = _rid("ask", 290, "cccccc")
+    _run(root, other, marker="halted", plan="docs/plans/y.md", sizing="state/sizings/y.yaml")
+    _index(root, other, "far.py")
+    weighed: list = []
+    real = hr.release_reason
+    monkeypatch.setattr(hr, "release_reason", lambda r, owner, *a: weighed.append(owner) or real(r, owner, *a))
+
+    assert hr.residue_paths(root, me, paths=["./residue.py", "unheld.py"]) == frozenset({"residue.py"})
+    assert set(weighed) == {peer}
+    assert hr.residue_paths(root, me, paths=["unheld.py"]) == frozenset()
+    assert hr.residue_paths(root, me) == frozenset({"residue.py", "far.py"})
+
+
+def test_residue_paths_retires_a_run_released_for_every_committer_and_keeps_a_holder(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    root = _root(tmp_path)
+    me, peer = _auto_land_fixture(root)
+    assert hr.residue_paths(root, me, paths=["residue.py"]) == frozenset({"residue.py"})
+    assert peer in idx.entries(root)  # holds: stays indexed
+
+    _sizing(root, "state/sizings/z.yaml", "shipped")
+    _run(root, peer, marker="halted", plan="docs/plans/z.md", sizing="state/sizings/z.yaml")
+    assert hr.residue_paths(root, me, paths=["residue.py"]) == frozenset()
+    assert peer not in idx.entries(root)  # run-independent release: retired
+
+
+def test_residue_paths_never_retires_on_a_release_that_needs_the_committer(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    root = _root(tmp_path)
+    me, peer = _auto_land_fixture(root)
+    _run(root, peer, marker="halted", plan=PLAN, sizing="state/sizings/other.yaml")  # same sizing as `me`
+    _run(root, me, sizing="state/sizings/other.yaml", writes=("a.py", "b.py"))
+    assert hr.release_reason(root, peer, me, None) == hr.RELEASE_SUCCESSOR
+    assert hr.residue_paths(root, me, paths=["residue.py"]) == frozenset()
+    assert peer in idx.entries(root)  # frees this committer only
+
+
+def test_residue_paths_propagates_the_land_deadline(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    root = _root(tmp_path)
+    me, _ = _auto_land_fixture(root)
+    legs: list = []
+
+    def expire(leg):
+        legs.append(leg)
+        raise land_deadline.LandDeadlineExceeded(leg)
+
+    monkeypatch.setattr(land_deadline, "check", expire)
+    with pytest.raises(land_deadline.LandDeadlineExceeded):
+        hr.residue_paths(root, me, paths=["residue.py"])
+    assert legs == ["land_run._integrity.halted_residue"]
+
+
+def test_a_nested_prefetch_keeps_the_outer_scopes_blobs_and_reads_only_the_new_specs(tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    one, two = _rid("ask", 300, "aaaaaa"), _rid("ask", 290, "bbbbbb")
+    plans = {one: (["a.py"], {"a.py": "k1"}), two: (["b.py"], {"b.py": "k2"})}
+    for run_id in plans:
+        _run(root, run_id, marker="halted")
+    monkeypatch.setattr(hr, "_kept_plan", lambda record: plans[record.name])
+    fetched: list = []
+
+    def fetch(r, specs):
+        fetched.append(list(specs))
+        return {s: b"x" for s in specs}
+
+    monkeypatch.setattr(hr, "_blob_fetch", fetch)
+    with hr.release_scope() as state:
+        hr.prefetch_kept_at_head(root, [one])
+        first = set(state["specs"])
+        hr.prefetch_kept_at_head(root, [one, two])
+        assert first < state["specs"] and set(state["blobs"]) == state["specs"]
+        assert set(fetched[1]).isdisjoint(first) and len(fetched) == 2
+        hr.prefetch_kept_at_head(root, [one, two])
+        assert len(fetched) == 2  # nothing new: no read
+
+
 def test_a_per_path_release_drops_that_pair_and_that_path_from_held_paths(tmp_path):
     root = _root(tmp_path)
     holder = _rid("ask", 60, "aaaaaa")
@@ -718,3 +830,42 @@ def test_a_run_with_no_release_record_releases_nothing(tmp_path):
     _run(root, holder, marker="halted", plan="docs/plans/other.md")
     assert hr.released_path_reasons(root, holder) == {}
     assert hr.without_released_paths(root, [("a.py", holder)]) == [("a.py", holder)]
+
+
+def _interest_run(root: Path, writes) -> tuple:
+    run_id = _rid("ask", 300, "cccccc")
+    _run(root, run_id, marker="halted", writes=writes)
+    rec = root / "state/warp" / run_id
+    return run_id, rec, json.loads((rec / "halted.json").read_text(encoding="utf-8"))
+
+
+def test_irrelevant_needs_a_scope_interest(tmp_path):
+    root = _root(tmp_path)
+    _run_id, rec, marker = _interest_run(root, ("other.py",))
+    assert hr.irrelevant(root, rec, marker) is False
+    with hr.blob_scope(root):
+        assert hr.irrelevant(root, rec, marker) is False
+
+
+def test_irrelevant_true_only_when_every_declaration_misses_the_interest(tmp_path):
+    root = _root(tmp_path)
+    _run_id, rec, marker = _interest_run(root, ("other.py",))
+    with hr.blob_scope(root, interest={"a.py"}):
+        assert hr.irrelevant(root, rec, marker) is True
+    with hr.blob_scope(root, interest={"other.py"}):
+        assert hr.irrelevant(root, rec, marker) is False
+
+
+def test_irrelevant_false_when_the_halt_withholds_an_interest_path(tmp_path):
+    root = _root(tmp_path)
+    run_id, rec, marker = _interest_run(root, ("other.py",))
+    marker["run_artifacts"] = {"withheld": {"a.py": "halt-record-only"}}
+    with hr.blob_scope(root, interest={"a.py"}):
+        assert hr.irrelevant(root, rec, marker) is False
+
+
+def test_irrelevant_false_for_a_run_with_no_manifest_declaration(tmp_path):
+    root = _root(tmp_path)
+    _run_id, rec, marker = _interest_run(root, ())
+    with hr.blob_scope(root, interest={"a.py"}):
+        assert hr.irrelevant(root, rec, marker) is False

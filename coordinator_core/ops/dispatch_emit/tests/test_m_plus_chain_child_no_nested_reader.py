@@ -62,8 +62,8 @@ def test_child_script_sources_pass_launcher_child_to_the_emit(tmp_path):
     from coordinator_core.ops.dispatch_emit import fan_launcher as fl
 
     child = fl.LaunchChild("ask-r1", "state/sizings/s.yaml", {"ask": True, "sizing_path": "state/sizings/s.yaml"})
-    launcher = fl.write_launcher(tmp_path, "ask-parent", [child], "sess-1").read_text(encoding="utf-8")
-    assert f'"{LAUNCHER_CHILD_EMIT_PARAM}": true' in launcher
+    launcher = fl.write_launcher(tmp_path, "ask-parent", [child], "sess-1", [{"path": "scratch/warp/ask-r1.workflow.mjs", "run_id": "ask-r1", "fire_args": {}}]).read_text(encoding="utf-8")
+    assert f"{LAUNCHER_CHILD_EMIT_PARAM}: true" in launcher
     assert f"{LAUNCHER_CHILD_EMIT_PARAM}: true" in ask_compose._CHAIN_EMIT_PARAMS_JS
 
 

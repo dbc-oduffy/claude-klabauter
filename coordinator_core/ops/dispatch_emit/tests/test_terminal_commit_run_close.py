@@ -94,7 +94,7 @@ def test_queued_legs_name_a_job_record_that_exists(env):
     close = _fire(env)["close"]
 
     queued = [leg for leg, r in close["legs"].items() if r["status"] == "queued"]
-    assert sorted(queued) == ["baton-drain", "orientation-refresh", "post-close", "review"]
+    assert sorted(queued) == ["baton-drain", "orientation-refresh", "post-close", "review", "symbol-knowledge"]
     record = env["repo"] / run_close.close_job_path("run")
     assert json.loads(record.read_text(encoding="utf-8"))["legs"].keys() == set(queued)
     assert all(run_close.close_job_path("run") in close["legs"][leg]["detail"] for leg in queued)

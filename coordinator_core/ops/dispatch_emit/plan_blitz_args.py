@@ -206,6 +206,8 @@ def resolve(
     if sidecar:
         out["provisionSidecarCli"] = sidecar
     out["pluginAgentsAvailable"] = available
+    if plugin_root is not None:
+        out["pluginRoot"] = str(plugin_root)
     if sizing_abs:
         out["gateReportPath"] = sizing_abs
     spine = _default_spine_check_cli(plugin_root)

@@ -82,6 +82,17 @@ def test_pure_research_with_empty_writes_is_not_mixed(repo):
     assert gate(repo, REL, writes=[]).halt["kind"] == "research"
 
 
+def test_pure_research_halt_carries_fire_and_no_split_the_chain_guard_keys_on(repo):
+    _put(repo, "S", RESEARCH)
+    halt = gate(repo, REL).halt
+    assert halt["fire"] and "split" not in halt
+
+
+def test_a_split_halt_carries_a_split_so_the_pure_research_leg_skips_it(repo):
+    _put(repo, "S", RESEARCH)
+    assert "split" in gate(repo, REL, writes=["a.py"]).halt
+
+
 @pytest.mark.parametrize("research", [None, {}])
 def test_non_research_sizing_keeps_its_arm(repo, research):
     _put(repo, "S", research)

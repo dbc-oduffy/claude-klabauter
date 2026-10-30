@@ -1,5 +1,6 @@
 """A revise withhold_paths entry outside a staged run's frozen footprint is refused with the follow-up-ask
-route; note prose never counts toward the footprint, and a refire is not derived from stored notes."""
+route; a note only citing a file never counts toward the footprint (an edit-verb note naming an outside file
+is refused per note), and a refire is not derived from stored notes."""
 
 from __future__ import annotations
 
@@ -60,6 +61,14 @@ def test_writes_under_covers_a_nested_file(repo):
     _stage(repo, under=("pkg/sub/",))
     rl.revise(repo, RUN, note=f"also fix {UNDER}")
     assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
+
+
+def test_edit_verb_note_naming_an_outside_path_on_a_staged_run_is_not_stored(repo):
+    _stage(repo)
+    outcome: dict = {}
+    rl.revise(repo, RUN, note=f"also fix {OUTSIDE}", outcome=outcome)
+    assert rl.read_notes(rl.run_dir(repo, RUN)) == []
+    assert outcome["note_refused"]["paths"] == [OUTSIDE]
 
 
 def test_unstaged_run_has_no_frozen_footprint(repo):

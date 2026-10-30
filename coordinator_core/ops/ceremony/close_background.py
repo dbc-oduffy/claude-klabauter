@@ -70,6 +70,7 @@ BACKGROUND_LEGS: tuple[str, ...] = (
     "orientation-refresh",
     "memo-lifecycle",
     "post-close",
+    "symbol-knowledge",
 )
 
 
@@ -1199,6 +1200,12 @@ def _chain_closure_note(ctx: JobContext, problems: list[str]) -> str:
     return f"{note}: {', '.join(closed)}" if closed else note
 
 
+def _symbol_knowledge(ctx: JobContext) -> LegResult:
+    from coordinator_core.symbol_knowledge.leg import symbol_knowledge_leg
+
+    return symbol_knowledge_leg(ctx)
+
+
 DEFAULT_RUNNERS: Mapping[str, Runner] = {
     "review-stamp": _review_stamp,
     "coded-stamp": _coded_stamp,
@@ -1213,6 +1220,7 @@ DEFAULT_RUNNERS: Mapping[str, Runner] = {
     "orientation-refresh": _orientation_refresh,
     "memo-lifecycle": _memo_lifecycle,
     "post-close": _post_close,
+    "symbol-knowledge": _symbol_knowledge,
 }
 
 

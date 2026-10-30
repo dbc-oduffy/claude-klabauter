@@ -50,6 +50,7 @@ RUN_BOUND_LEGS: tuple[str, ...] = (
     "orientation-refresh",
     "memo-lifecycle",
     "post-close",
+    "symbol-knowledge",
 )
 SESSION_BOUND_LEGS: tuple[str, ...] = ("session-shape", "session-residue")
 STATUSES: frozenset[str] = frozenset(

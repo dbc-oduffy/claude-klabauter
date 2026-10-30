@@ -32,6 +32,13 @@ def test_terminal_return_reads_the_research_halts_fire_between_split_and_release
     assert split < research < released
 
 
+def test_a_research_halt_with_a_fire_takes_the_handoff_next_action_not_revise_and_refire():
+    script = _script()
+    na = script[script.index("  _nextAction = _closeable"):]
+    na = na[: na.index(";\n")]
+    assert na.index("kind: 'fire_research'") < na.index("kind: 'revise_and_refire'")
+
+
 def test_halt_record_commit_is_composed_and_guarded_only_by_halted_and_token():
     script = _script()
     guard = "if (_halted && _RUN_TOKEN && !(_commit && _commit.committed === true)) {"

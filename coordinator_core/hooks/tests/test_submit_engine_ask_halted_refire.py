@@ -341,15 +341,25 @@ def test_launcher_failure_is_a_named_deny(tmp_path):
     assert hso["permissionDecision"] == "deny" and "no launcher today" in hso["permissionDecisionReason"], hso
 
 
-def test_real_launcher_script_carries_every_child_and_maps_each_result(tmp_path):
+def test_real_launcher_script_carries_every_child_and_maps_each_result(tmp_path, monkeypatch):
     """The written launcher (not a stub) names both children and resolves every settled slot to a run entry,
     so a child absent from a completion result was dropped after the script, not omitted by it."""
     from coordinator_core.hooks import submit_engine_ask as hook
-    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LAUNCHER_CHILD_EMIT_PARAM, LaunchChild
 
     ready = _two_children(tmp_path)
     children = [LaunchChild(run_id=r.run_id, sizing_rel=r.slice_sizing, emit_params={"sizing": r.slice_sizing}) for r in ready]
+    emitted_params: list = []
+
+    def fake_emit(params, repo_root):
+        emitted_params.append(params)
+        rid = ready[len(emitted_params) - 1].run_id
+        return {"path": f"scratch/warp/{rid}.workflow.mjs", "run_id": rid, "fire_args": {"repoRoot": "/r"}}
+
+    monkeypatch.setattr(hook, "_default_emit", fake_emit)
     script = hook._default_launch(tmp_path, "ask-parent-20261028T000000-aaaaaa", children, _SESSION)
+    assert len(emitted_params) == len(ready)
+    assert all(p[LAUNCHER_CHILD_EMIT_PARAM] is True for p in emitted_params)
     text = script.read_text(encoding="utf-8")
     assert all(r.run_id in text for r in ready)
     assert "CHILDREN.map((child, i)" in text and "child threw" in text

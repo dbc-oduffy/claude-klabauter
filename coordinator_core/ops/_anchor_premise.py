@@ -323,6 +323,36 @@ def _evaluate(anchor: dict, fm: dict, repo_root: Path):
     return anchor_lane.evaluate(anchor, repo_root)
 
 
+_EXACT = re.compile(r"\d+")
+_COUNT_CLAIM = re.compile(
+    r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|once|twice|only|exactly|single|"
+    r"sole|unique|count|times)\b",
+    re.IGNORECASE,
+)
+
+
+def _overmatched(anchor: dict, result: Any) -> bool:
+    """True when a broke check only OVER-matched an existence claim: every stage's expect is an exact
+    count of at least one and its observed count is at least that, with some stage above, and the
+    claim states no count. The checked text is present (what an existence claim asserts), so the
+    count says the pattern is loose, not that the claim is false; a shortfall, an exact 0, a bound
+    expect (>=, <=, <, >) or a claim that itself counts ("one refuse") is never an over-match."""
+    if _COUNT_CLAIM.search(str(anchor.get("claim") or "")):
+        return False
+    counts = str(result.observed or "").split()
+    wants = [w.strip() for w in str((anchor.get("check") or {}).get("expect") or "").split(" then ")]
+    if len(wants) == 1:
+        wants = wants * len(counts)
+    if not counts or len(counts) != len(wants):
+        return False
+    pairs = []
+    for want, got in zip(wants, counts):
+        if not (_EXACT.fullmatch(want) and _EXACT.fullmatch(got)) or int(want) < 1:
+            return False
+        pairs.append((int(want), int(got)))
+    return all(got >= want for want, got in pairs) and any(got > want for want, got in pairs)
+
+
 def _spine_writes(spine_rows: Any) -> set[str]:
     """Normalised paths any spine row declares in ``writes``."""
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as index
@@ -370,6 +400,12 @@ def anchor_verdicts(anchors, rows, carry_rows, plan_text, repo_root) -> list[dic
             result = _evaluate(anchor, fm, repo_root)
             observed = result.observed or ""
             engine = _ENGINE_VERDICT.get(result.outcome)
+            if engine == "CONTRADICTED" and _overmatched(anchor, result):
+                engine = None
+                observed = (
+                    f"check over-matched (observed {' then '.join(observed.split())}, expected "
+                    f"{result.expect}): the pattern is loose; tighten it"
+                )
             if engine is not None:
                 verdict, source = engine, "engine-check"
             if engine == "CONTRADICTED":

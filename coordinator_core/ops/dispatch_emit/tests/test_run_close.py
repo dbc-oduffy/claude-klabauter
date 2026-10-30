@@ -22,6 +22,13 @@ def test_missing_leg_becomes_failed_and_outstanding():
     assert block["legs"]["session-shape"]["status"] == "session-bound"
 
 
+def test_unrun_symbol_knowledge_leg_is_failed_and_outstanding():
+    legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS if leg != "symbol-knowledge"}
+    block = rc.build_close_block("r1", True, legs)
+    assert block["legs"]["symbol-knowledge"] == {"status": "failed", "detail": "leg did not run"}
+    assert block["outstanding"] == ["symbol-knowledge"]
+
+
 def test_outstanding_equals_failed_set():
     legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS}
     legs["lessons"] = LegResult("failed", "boom")

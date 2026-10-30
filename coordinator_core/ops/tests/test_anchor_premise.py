@@ -180,11 +180,52 @@ def test_engine_states_map_to_verdicts(monkeypatch, tmp_path):
         {"id": "AP1", "verdict": "RESOLVES", "source": "engine-check", "observed": "1"}
     ]
     assert anchor_findings(one, [], [], "p", tmp_path) == []
-    _engine(monkeypatch, "MISMATCH", "2")
+    _engine(monkeypatch, "MISMATCH", "0")
     (v,) = anchor_verdicts(one, [], [], "p", tmp_path)
     assert (v["verdict"], v["source"]) == ("CONTRADICTED", "engine-check")
     (f,) = anchor_findings(one, [], [], "p", tmp_path)
     assert f.startswith("anchor-premise-CONTRADICTED: AP1")
+
+
+_AP1_CLAIM = "fan_launcher.write_launcher requires a fifth positional emitted argument at HEAD"
+_LAUNCHER = (
+    "def _render(root, children, emitted: Sequence[Mapping[str, Any]]) -> str:\n"
+    "def write_launcher(\n"
+    "    emitted: Sequence[Mapping[str, Any]],\n"
+)
+
+
+def _ap1(command, claim=_AP1_CLAIM, expect="1"):
+    return [{"id": "AP1", "claim": claim, "check": {"command": command, "expect": expect}}]
+
+
+def test_true_premise_with_a_loose_check_is_unevaluable_not_contradicted(tmp_path):
+    from coordinator_core.ops._anchor_premise import anchor_verdicts, unevaluable_anchors
+
+    (tmp_path / "fan_launcher.py").write_text(_LAUNCHER)
+    loose = _ap1("grep -c 'emitted: Sequence' fan_launcher.py")
+    (v,) = anchor_verdicts(loose, [], [], "p", tmp_path)
+    assert v["verdict"] is None and v["source"] == "none" and "over-matched" in v["observed"]
+    assert anchor_findings(loose, [], [], "p", tmp_path) == []
+    assert unevaluable_anchors([v])[0][0] == "AP1"
+    tight = _ap1("grep -c -F 'emitted: Sequence[Mapping[str, Any]],' fan_launcher.py")
+    (v,) = anchor_verdicts(tight, [], [], "p", tmp_path)
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
+
+
+def test_overmatch_relief_never_covers_a_shortfall_a_count_claim_or_a_bound(tmp_path):
+    from coordinator_core.ops._anchor_premise import anchor_verdicts
+
+    (tmp_path / "fan_launcher.py").write_text(_LAUNCHER)
+    cases = [
+        _ap1("grep -c 'absent_token' fan_launcher.py"),
+        _ap1("grep -c 'emitted: Sequence' fan_launcher.py", claim="write_launcher has one emitted"),
+        _ap1("grep -c 'emitted: Sequence' fan_launcher.py", expect="<=1"),
+        _ap1("grep -c 'emitted: Sequence' fan_launcher.py", expect="0"),
+    ]
+    for anchors in cases:
+        (v,) = anchor_verdicts(anchors, [], [], "p", tmp_path)
+        assert (v["verdict"], v["source"]) == ("CONTRADICTED", "engine-check"), anchors
 
 
 def test_not_evaluable_is_not_a_blocker_even_when_the_checker_ran(monkeypatch, tmp_path):

@@ -163,11 +163,13 @@ def _full_hold_computation(root: Path, committing: str, paths: list) -> tuple:
 
 # Process-time pin (time.process_time, never wall clock). The DR-344 500ms bar is not asserted here: the
 # remainder below it is L38's. HEAD_FIGURE_S is plain HEAD on this fixture (no release_scope; release_reason
-# recomputed per consumer); UNION_FIGURE_S is the union on the same fixture. Ceiling: union plus 20%, never
-# above HEAD.
+# recomputed per consumer); UNION_FIGURE_S is the union on the same fixture. Ceiling: union plus 20% plus two
+# process-clock ticks, never above HEAD. Windows advances process_time in 15.625ms ticks, so 20% of 0.23s is
+# under four ticks and one stray tick flaked it (0.281 against 0.276).
 HEAD_FIGURE_S = 0.94  # 3 runs: 0.942, 0.963, 0.958
 UNION_FIGURE_S = 0.23  # 3 runs: 0.234 each, with the 130 withheld paths dirty (a clean one releases early)
-CEILING_S = min(UNION_FIGURE_S * 1.2, HEAD_FIGURE_S)
+PROCESS_TICK_S = 0.015625
+CEILING_S = min(UNION_FIGURE_S * 1.2 + 2 * PROCESS_TICK_S, HEAD_FIGURE_S)
 
 
 def test_claim_pass_over_130_halted_runs_stays_under_the_process_time_bar(tmp_path):

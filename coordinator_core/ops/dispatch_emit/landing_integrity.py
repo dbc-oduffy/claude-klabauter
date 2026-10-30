@@ -309,7 +309,7 @@ def landing_invariant_nodes(
     if run_id:
         from coordinator_core.ops.dispatch_emit.halted_hold_release import residue_paths
 
-        residue = residue_paths(worktree_root, run_id)
+        residue = residue_paths(worktree_root, run_id, paths=landed_paths)
         if residue:
             landed_paths = [p for p in landed_paths if p.replace("\\", "/") not in residue]
         own_dir, own_files = _own_artifacts(worktree_root, run_id)

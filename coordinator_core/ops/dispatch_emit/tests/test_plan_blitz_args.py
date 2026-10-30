@@ -49,8 +49,15 @@ def test_no_plugin_root_is_false(isolated):
 
 
 def test_unresolvable_clis_are_omitted_not_null(isolated, tmp_path):
-    out = pba.resolve(plugin_root=_plugin(tmp_path), engine_root=None, sizing_abs="s")
-    assert set(out) == {"pluginAgentsAvailable", "gateReportPath"}
+    root = _plugin(tmp_path)
+    out = pba.resolve(plugin_root=root, engine_root=None, sizing_abs="s")
+    assert set(out) == {"pluginAgentsAvailable", "gateReportPath", "pluginRoot"}
+    assert out["pluginRoot"] == str(root)
+
+
+def test_plugin_root_omitted_when_unbound(isolated, tmp_path):
+    out = pba.resolve(plugin_root=None, engine_root=None, sizing_abs="s")
+    assert "pluginRoot" not in out
 
 
 def test_plugin_bins_resolve_when_present(isolated, tmp_path):

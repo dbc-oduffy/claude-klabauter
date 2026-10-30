@@ -23,7 +23,8 @@ _REFIRE = 'Workflow({name: "coordinator:engine-ask", args: {"sizing": "' + _SIZI
 
 def _script(tmp_path: Path) -> str:
     child = fl.LaunchChild("ask-r1", _SIZING, {"ask": True, "sizing_path": _SIZING, "reserved_run_id": "ask-r1"})
-    return fl.write_launcher(tmp_path, "ask-parent", [child], "sess-1").read_text(encoding="utf-8")
+    reply = {"path": "scratch/warp/ask-r1.workflow.mjs", "run_id": "ask-r1", "fire_args": {"repoRoot": "/r"}}
+    return fl.write_launcher(tmp_path, "ask-parent", [child], "sess-1", [reply]).read_text(encoding="utf-8")
 
 
 def _drive(script: str, workflow_results: list, chain_emit: dict, workflow_throws_at=None) -> dict:
@@ -44,7 +45,7 @@ def _drive(script: str, workflow_results: list, chain_emit: dict, workflow_throw
         " return RESULTS[calls.length - 1]; };\n"
         "const parallel = async () => [];\n"
         + body
-        + "\n_runChild(CHILDREN[0]).then((r) => console.log(JSON.stringify({ r, calls, emits })));\n"
+        + "\n_runChild(CHILDREN[0], EMITTED[0]).then((r) => console.log(JSON.stringify({ r, calls, emits })));\n"
     )
     out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -71,8 +72,8 @@ def test_launcher_emits_and_starts_the_chained_script_in_the_same_run(tmp_path):
     out = _drive(_script(tmp_path), [_CHILD_M_PLUS, {"route": "dispatch", "done": True}], _good_chain(tmp_path))
     assert out["r"] == {"run_id": "ask-r1", "status": "ok", "result": {"route": "dispatch", "done": True, "chained_from": "ask-r1"}}
     assert [c["scriptPath"] for c in out["calls"]][1] == f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.mjs"
-    assert [e["label"] for e in out["emits"]] == ["emit-ask-r1", "chain-emit-ask-r1"]
-    chain_prompt = out["emits"][1]["prompt"]
+    assert [e["label"] for e in out["emits"]] == ["chain-emit-ask-r1"]
+    chain_prompt = out["emits"][0]["prompt"]
     assert f'"sizing_path":"{_SIZING}"' in chain_prompt and '"launcher_child":true' in chain_prompt
 
 

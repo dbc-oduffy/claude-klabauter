@@ -34,6 +34,12 @@ RELEASE_OWNER_NOT_LIVE = "owner-not-live"
 _LEGACY_RELEASE_PHANTOM = "phantom-no-own-hunk-owner-gone"
 RELEASE_WITHHELD_CLEAN = "withheld-clean-at-head"
 _RECORDED_RELEASES = frozenset({RELEASE_CRITERION_MET, RELEASE_OWNER_NOT_LIVE, _LEGACY_RELEASE_PHANTOM})
+#: Releases that hold for every committer, so the run can leave the withheld index. The successor and
+#: plan-landing releases are absent: they free the run for one committer only.
+_RUN_INDEPENDENT_RELEASES = _RECORDED_RELEASES | frozenset({
+    RELEASE_RECORDED_LANDED, RELEASE_MARKER_SUPERSEDED, RELEASE_SUPERSEDED, RELEASE_SIZING_SHIPPED,
+    RELEASE_KEPT_AT_HEAD, RELEASE_WITHHELD_CLEAN,
+})
 
 #: Marker field `{path: {reason, at}}`: the halted run no longer holds those paths. Written only by
 #: `declared_hold_release._release_path`; read by `released_path_reasons` and its consumers.
@@ -547,17 +553,67 @@ def halted_only_withholders(root: Path, run_id: str) -> Optional[list]:
         return None
 
 
-def residue_paths(root: Path, run_id: str) -> frozenset:
-    """Paths other halted runs withhold that are not `run_id`'s own declared paths: residue a tree-wide
-    invariant should not charge to `run_id`. Empty on any error (nothing is excused unread)."""
+def _withheld_owners(root: Path, wanted: set) -> dict:
+    """`{path: run id}` for the `wanted` paths only, as `withheld_by_path` would map them (lexically last run
+    wins). Each run file is read as bytes and parsed only when it names one of `wanted`, so the cost is one
+    read per run file and a parse per run withholding a wanted path, not a parse of the whole history."""
+    import json
+    import os
+
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    index = idx._dir(Path(root))
+    if not (index / idx.SENTINEL).exists():
+        idx.rebuild(Path(root))
+    needles = [json.dumps(p)[1:-1].encode("utf-8") for p in wanted]
+    out: dict = {}
     try:
-        from coordinator_core.ops.dispatch_emit.halted_withheld_index import withheld_by_path
+        names = sorted(n for n in os.listdir(index) if n.endswith(".json"))
+    except OSError:
+        return out
+    for name in names:
+        try:
+            raw = (index / name).read_bytes()
+        except OSError:
+            continue
+        if not any(n in raw for n in needles):
+            continue
+        entry = idx._parse(index / name)
+        if entry is None:
+            continue
+        for path in entry.paths:
+            if path in wanted:
+                out[path] = name[: -len(".json")]
+    return out
+
+
+def residue_paths(root: Path, run_id: str, paths=None) -> frozenset:
+    """Paths other halted runs withhold that are not `run_id`'s own declared paths: residue a tree-wide
+    invariant should not charge to `run_id`. `paths`, when given, narrows the answer to those paths and
+    the weighing to the runs withholding one of them. Empty on any error (nothing is excused unread).
+    One batched blob read for the weighed runs; a `land_deadline` check per run (its exception is a
+    `BaseException` and propagates). A run released for every committer leaves the withheld index."""
+    try:
+        from coordinator_core.ops.dispatch_emit import land_deadline
+        from coordinator_core.ops.dispatch_emit.halted_withheld_index import remove_run, withheld_by_path
 
         own = _own_paths(root, run_id) or ((), ())
+        wanted = None if paths is None else {str(p).replace("\\", "/").removeprefix("./") for p in paths}
+        by_owner: dict = {}
+        owners = withheld_by_path(Path(root)) if wanted is None else _withheld_owners(Path(root), wanted)
+        for path, owner in owners.items():
+            if owner != run_id and not _covers(path, *own):
+                by_owner.setdefault(owner, []).append(path)
         out = set()
-        for path, owner in withheld_by_path(Path(root)).items():
-            if owner != run_id and not _covers(path, *own) and _is_halted_holder(root, owner, run_id):
-                out.add(path)
+        with release_scope():
+            prefetch_kept_at_head(root, by_owner)
+            for owner, owned in by_owner.items():
+                land_deadline.check("land_run._integrity.halted_residue")
+                reason = release_reason(root, owner, run_id, None)
+                if _is_halted_holder(root, owner, run_id):
+                    out.update(owned)
+                elif reason in _RUN_INDEPENDENT_RELEASES:
+                    remove_run(Path(root), owner)
         return frozenset(out)
     except Exception:  # noqa: BLE001
         return frozenset()
@@ -684,6 +740,19 @@ def prefetch_kept_at_head(root: Path, run_ids) -> None:
         if not specs:
             return
         specs = list(dict.fromkeys(specs))
+        if state["prefetched"]:  # additive: an outer prefetch's blobs survive a nested one
+            if state["blobs"] is None:
+                return
+            specs = [s for s in specs if s not in state["specs"]]
+            if not specs:
+                return
+            fetched = _blob_batch(Path(root), specs)
+            if fetched is None:
+                state["blobs"], state["specs"] = None, set()
+            else:
+                state["blobs"] = {**state["blobs"], **fetched}
+                state["specs"] |= set(specs)
+            return
         blobs = _blob_batch(Path(root), specs)
         state["prefetched"] = True
         state["blobs"] = blobs

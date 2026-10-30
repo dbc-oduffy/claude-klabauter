@@ -56,14 +56,15 @@ def _write_launcher(root: Path) -> str:
         sizing_rel=_SIZING_REL,
         emit_params={"ask": True, "sizing_path": _SIZING_REL, "reserved_run_id": _RUN_ID},
     )
-    return fan_launcher.write_launcher(root, "ask-budget-parent", [child], None).read_text(encoding="utf-8")
+    reply = {"path": f"scratch/warp/{_RUN_ID}.workflow.mjs", "run_id": _RUN_ID, "fire_args": {}}
+    return fan_launcher.write_launcher(root, "ask-budget-parent", [child], None, [reply]).read_text(encoding="utf-8")
 
 
 def _launcher_child_params(written: str) -> dict:
-    """The first child's emit_params exactly as the written launcher carries them."""
+    """The first child's sizing and run id exactly as the written launcher carries them."""
     line = next(ln for ln in written.splitlines() if ln.startswith(_CHILDREN_PREFIX))
-    children = json.loads(line[len(_CHILDREN_PREFIX):].rstrip(";"))
-    return children[0]["emit_params"]
+    child = json.loads(line[len(_CHILDREN_PREFIX):].rstrip(";"))[0]
+    return {"sizing_path": child["sizing_rel"], "reserved_run_id": child["run_id"]}
 
 
 def _compose(root: Path, shape: str, **stubs) -> str:
@@ -79,7 +80,6 @@ def _compose(root: Path, shape: str, **stubs) -> str:
     if shape == "refire":
         return ask_compose.compose_ask_script(prompt=None, sizing_rel=_SIZING_REL, run_id="run-1", **common)
     params = _launcher_child_params(_write_launcher(root))
-    assert params[fan_launcher.LAUNCHER_CHILD_EMIT_PARAM] is True
     return ask_compose.compose_ask_script(
         prompt=None,
         sizing_rel=params["sizing_path"],

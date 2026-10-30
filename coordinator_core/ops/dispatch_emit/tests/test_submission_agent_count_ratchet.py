@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import fan_launcher as fl
 from coordinator_core.ops.dispatch_emit import leg_register as lr
+from coordinator_core.ops.dispatch_emit.ask_compose import _OP_RELAY_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.tests import test_leg_register_ratchet as legs
 
 #: Per-child legs allowed to run an op, by label prefix: a chain hop fires only on an M+ hand-off after
@@ -20,8 +21,8 @@ _PER_CHILD_CONDITIONAL: frozenset[str] = frozenset({"chain-emit-"})
 _PER_CHILD_CONDITIONAL_MAX = 1
 
 #: Legs the launcher runs once per submission, whatever the child count. Closed: a new one is a review.
-_PER_SUBMISSION_AGENTS: frozenset[str] = frozenset({"emit-batch", "abandon-batch"})
-_HAPPY_PATH_EMIT_AGENTS = 1
+_PER_SUBMISSION_AGENTS: frozenset[str] = frozenset({"abandon-batch"})
+_HAPPY_PATH_EMIT_AGENTS = 0
 _PER_CHILD_ROOT = "_runChild"
 _HAPPY_PATH_ROOT = "_startAll"
 
@@ -155,13 +156,17 @@ def per_child_op_refusals(
         if unnamed:
             refusals.append(
                 f"per-child agent() {unnamed} in {site.function}() runs a deterministic op: "
-                "batch it into the once-per-submission emit-batch leg"
+                "pre-emit it in the submit hook, before the launcher is written"
             )
     return refusals
 
 
 def _launcher(tmp_path: Path, n: int) -> str:
-    path = fl.write_launcher(tmp_path, f"ask-parent-{n}", _children(n), None)
+    replies = [
+        {"path": f"scratch/warp/ask-r{i}.workflow.mjs", "run_id": f"ask-r{i}", "fire_args": {"repoRoot": "/r"}}
+        for i in range(n)
+    ]
+    path = fl.write_launcher(tmp_path, f"ask-parent-{n}", _children(n), None, replies)
     return path.read_text(encoding="utf-8")
 
 
@@ -182,11 +187,11 @@ def _happy_path_emit_agents(analysis: Analysis) -> list[Site]:
 
 
 @pytest.mark.parametrize("n", [1, 2, 24])
-def test_the_happy_path_spends_one_emit_agent_however_many_children(tmp_path, n):
+def test_the_happy_path_spends_no_emit_agent_however_many_children(tmp_path, n):
     analysis = analyse(_launcher(tmp_path, n))
     emit = _happy_path_emit_agents(analysis)
     assert len(emit) == _HAPPY_PATH_EMIT_AGENTS, [s.label for s in emit]
-    assert {s.agent_type for s in analysis.sites} == {legs._OP_RELAY_TYPE}
+    assert {s.agent_type for s in analysis.sites} == {_OP_RELAY_AGENT_TYPE}
 
 
 def test_the_agent_sites_do_not_depend_on_the_child_count(tmp_path):

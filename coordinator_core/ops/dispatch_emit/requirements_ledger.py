@@ -393,8 +393,8 @@ def _refuse_additions(
     root: Path, dir_: Path, run_id: str, run: Optional[Mapping], add_paths: Sequence,
 ) -> None:
     """LedgerRefused naming every `add_paths` entry outside the run's write set. An unstaged run's
-    write set is its sizing's `writes` alone. A note is prose: a path it names (a tool to run, a
-    source) is never a declared write, so it is never checked. Writes nothing."""
+    write set is its sizing's `writes` alone. A note is not checked here (`_note_uncovered_paths`
+    refuses it per note, never by raising). Writes nothing."""
     sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
     declared: list[str] = []
     for entry in add_paths:
@@ -421,6 +421,50 @@ def paths_outside_footprint(
         return []
     files, dirs = footprint
     return [p for p in dict.fromkeys(declared) if p not in files and not any(p.startswith(d + "/") for d in dirs)]
+
+
+def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> list[str]:
+    """Repo-relative paths a staged run's frozen footprint does not cover that `note` asks to change:
+    existing repo files named in a clause an edit verb governs (`sizing_xs_mint._EDIT_VERB` over
+    `_CLAUSE_SPLIT`), plus, when the note has such a clause and the run is halted, the uncovered
+    `self_correction.needs_paths` of its halt. A note with no edit-verb clause (provenance, a tool to
+    run, a re-ruling) is never checked. [] when the run has no manifest. Writes nothing."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import _CLAUSE_SPLIT, _EDIT_VERB
+
+    clauses = [c for c in _CLAUSE_SPLIT.split(note) if _EDIT_VERB.search(c)]
+    wanted = _paths_named(root, clauses)
+    try:
+        marker = halted_run.read_strict(dir_) if clauses else None
+    except ValueError:
+        marker = None
+    if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
+        correction = marker.get("self_correction")
+        needs = correction.get("needs_paths") if isinstance(correction, dict) else None
+        for raw in needs if isinstance(needs, list) else ():
+            if isinstance(raw, str) and raw.strip():
+                wanted.append(raw.strip().replace("\\", "/").removeprefix("./"))
+    sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
+    return paths_outside_footprint(root, dir_, sizing_rel, wanted)
+
+
+def _note_route(root: Path, run: Mapping, run_id: str, paths: Sequence[str]) -> str:
+    """The refusal text for a note naming `paths` outside the run's footprint, carrying the
+    `plan.tasks.mutate` add-task call that covers them (its `<...>` task fields are the caller's to fill)."""
+    sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
+    plan_rel = _sizing_plan(root, sizing_rel)[0] or "<plan path>"
+    task = {
+        "id": "<next id>", "title": "...", "change_kind": "<kind>", "surface": paths[0],
+        "writes": list(paths), "disposition": "open",
+    }
+    call = "coordinator-invoke plan.tasks.mutate " + "'" + json.dumps(
+        {"verb": "add-task", "plan_path": plan_rel, "task": task}, separators=(",", ":")
+    ).replace("'", "'\\''") + "'"
+    return (
+        f"note not stored: run {run_id}'s write footprint does not cover {', '.join(paths)}, so no leg could "
+        f"act on it. Cover them with a plan row: {call}. The note is accepted once those paths are in the "
+        "run's sizing `writes` (re-sending to this run_id before then is refused again) or on the refire's new run."
+    )
 
 
 def _footprint_route(run_id: str, paths: Sequence[str]) -> str:
@@ -1069,8 +1113,12 @@ def revise(
     out of the run's terminal commit: it is recorded to the run's `withhold.jsonl`, needs no bound
     sizing, adds no register row and no inbox entry, and alone satisfies the non-empty precondition.
     `add_paths` (repo-relative paths) names write paths the run was not sized for: any outside the run's
-    write set refuses, as does a `note` citing an existing repo file outside a staged run's footprint;
-    the refusal names the routes (a new ask, or resize the sizing) and nothing is written.
+    write set refuses, naming the routes (a new ask, or resize the sizing), and nothing is written.
+    A `note` with an edit-verb clause naming an existing repo file outside a staged run's footprint (or,
+    on a halted run, whose halt `self_correction.needs_paths` the footprint leaves uncovered) is never
+    stored and never raises: `outcome["note_refused"] = {paths, reason}` carries the paths and the
+    `plan.tasks.mutate` add-task call, and the rest of the call applies. A file named without an edit
+    verb (provenance, a tool to run) is not checked.
     `accept_partial` (`[{chunk, reason}]`, `run_accept_partial.validate` before any write) rules PARTIAL
     chunks good enough to release their dependents on the refire: recorded to the run's
     `accept_partial.jsonl`, same preconditions and effects as `withhold_paths`; a BLOCKED chunk stays held.
@@ -1218,9 +1266,9 @@ def revise(
         ):
             raise LedgerRefused(
                 f"no ledger-bearing run {run_id!r} under {RECORD_DIR_ROOT}: emit it first "
-                "(a held run takes only a verbatim revision)"
+                "(a held run takes only a verbatim or note revision)"
             )
-        if not text:
+        if not text and not has_note:
             return Ledger((), False), dir_, None
         if not _parent_lists_run(root, run_id):
             raise LedgerRefused(
@@ -1229,6 +1277,19 @@ def revise(
             )
         from coordinator_core.atomic_append import append_line
 
+        if has_note:
+            if len(str(note).encode("utf-8")) > VERBATIM_BYTE_CAP:
+                raise LedgerRefused(f"note exceeds {VERBATIM_BYTE_CAP} bytes")
+            dir_.mkdir(parents=True, exist_ok=True)
+            append_line(
+                dir_ / NOTES_FILE,
+                (json.dumps({"note": note.strip(), "at": _now()}, ensure_ascii=False) + "\n").encode("utf-8"),
+            )
+            declare_write(dir_ / NOTES_FILE)
+            if outcome is not None:
+                outcome["note_queued"] = True
+            if not text:
+                return Ledger((), False), dir_, None
         for n, queued_entry in enumerate(_inbox(dir_)):
             if queued_entry["text"].strip() == text:
                 return _queued_ledger(dir_, False), dir_, f"Q{n + 1}"
@@ -1305,7 +1366,11 @@ def revise(
             dir_ / STOP_AFTER_FILE, (json.dumps(marker, sort_keys=True) + "\n").encode("utf-8"), preserve_mode=False
         )
         declare_write(dir_ / STOP_AFTER_FILE)
-    if has_note:
+    note_uncovered = _note_uncovered_paths(root, dir_, run, note) if has_note else []
+    if note_uncovered:
+        if outcome is not None:
+            outcome["note_refused"] = {"paths": note_uncovered, "reason": _note_route(root, run, run_id, note_uncovered)}
+    elif has_note:
         from coordinator_core.atomic_append import append_line
 
         append_line(
@@ -1717,7 +1782,8 @@ def post_commit_owed(verdict: Mapping, sha: str, discharged: Collection[str] = (
 @register_op("workflow.revise")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str, a requirement), `note` (str, free
-    text that adds no row), `from` (str, the peer session sending the revision; stamped on the
+    text that adds no row; `notes` is its alias, a str or a list of str joined by newline, and
+    sending both is refused), `from` (str, the peer session sending the revision; stamped on the
     row), `all_of_pm_ask` (bool), `out_of_scope` (list of register row ids, needs
     `verbatim`: each is deferred with the verbatim as
     its ruling, carried open on the commit, and replied as `withheld`), `withhold_paths` (list of
@@ -1756,6 +1822,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
+    if "notes" in params:
+        if "note" in params:
+            return {"error": "workflow.revise takes `note`; `notes` is its alias, send one of them"}
+        notes = params["notes"]
+        params = {k: v for k, v in params.items() if k != "notes"}
+        if isinstance(notes, (list, tuple)) and all(isinstance(n, str) for n in notes):
+            notes = "\n".join(notes)
+        params["note"] = notes
     refusal = validate_params("workflow.revise", params, _PARAMS, strict=True)
     if refusal is not None:
         return refusal
@@ -1788,10 +1862,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if params.get("widened") else ()
         )
         return _mutation_reply(
-            (f"row {added} held for emit",) if added else (), held_refused, params["run_id"],
+            ((f"row {added} held for emit",) if added else ())
+            + (("note queued for the run's start",) if outcome.get("note_queued") else ()),
+            held_refused, params["run_id"],
             run_id=params["run_id"], item=added, items=len(ledger.items),
             all_of_pm_ask=False, sizing=None, ledger=None, run_live=False, held=True,
-            note="run not emitted yet: the revision is held and folds into the ledger at emit.",
+            note=(
+                "run not emitted yet: the note is queued for the run's start and is read at its first emit."
+                if outcome.get("note_queued") and not added
+                else "run not emitted yet: the revision is held and folds into the ledger at emit."
+                + (" The note is queued for the run's start." if outcome.get("note_queued") else "")
+            ),
         )
     from coordinator_core.ops.dispatch_emit import halted_run, run_token
 
@@ -1888,7 +1969,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
     applied = [f"row {added}"] if added else []
     applied += [k for k in _APPLIED_KEYS if out.get(k)]
-    applied += [k for k in ("note", "all_of_pm_ask") if params.get(k) is not None and params.get(k) != ""]
+    note_refused = outcome.get("note_refused")
+    if note_refused:
+        refused.append({"input": "note", "paths": note_refused["paths"], "reason": note_refused["reason"]})
+    applied += [
+        k for k in ("note", "all_of_pm_ask")
+        if params.get(k) is not None and params.get(k) != "" and not (k == "note" and note_refused)
+    ]
     return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
 
 

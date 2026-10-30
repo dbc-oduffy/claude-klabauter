@@ -1707,3 +1707,55 @@ def test_an_open_context_memo_carries_no_advisory(tmp_path):
     hso = _hso(out)
     assert hso["permissionDecision"] == "allow"
     assert "may already be done" not in hso["additionalContext"]
+
+
+def test_default_launch_pre_emits_each_child_and_names_a_refused_one(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+
+    children = [
+        LaunchChild(run_id=f"ask-r{i}", sizing_rel=f"state/sizings/ask-r{i}.yaml",
+                    emit_params={"ask": True, "sizing_path": f"state/sizings/ask-r{i}.yaml"})
+        for i in (1, 2)
+    ]
+    seen: list = []
+
+    def fake_emit(params, repo_root):
+        seen.append(params["sizing_path"])
+        if params["sizing_path"].endswith("ask-r1.yaml"):
+            raise RuntimeError("declined: r1 refused")
+        return {"path": "scratch/warp/ask-r2.workflow.mjs", "run_id": "ask-r2", "fire_args": {"repoRoot": "/r"}}
+
+    monkeypatch.setattr(mod, "_default_emit", fake_emit)
+    script = mod._default_launch(tmp_path, "ask-parent", children, None)
+    assert len(seen) == 2
+    text = script.read_text(encoding="utf-8")
+    assert "declined: r1 refused" in text and "ask-r2.workflow.mjs" in text
+
+
+def test_default_launch_stops_emitting_once_one_deadline_is_spent(tmp_path, monkeypatch):
+    import threading
+
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+
+    children = [
+        LaunchChild(run_id=f"ask-r{i}", sizing_rel=f"state/sizings/ask-r{i}.yaml",
+                    emit_params={"ask": True, "sizing_path": f"state/sizings/ask-r{i}.yaml"})
+        for i in (1, 2, 3)
+    ]
+    seen: list = []
+    release = threading.Event()
+
+    def slow_emit(params, repo_root):
+        seen.append(params["sizing_path"])
+        release.wait(5)
+        return {"path": "x.mjs", "run_id": "x", "fire_args": {}}
+
+    monkeypatch.setattr(mod, "_default_emit", slow_emit)
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "0.25")
+    try:
+        script = mod._default_launch(tmp_path, "ask-parent", children, None)
+    finally:
+        release.set()
+    assert seen == ["state/sizings/ask-r1.yaml"]
+    text = script.read_text(encoding="utf-8")
+    assert "outran the hook budget" in text and text.count("Not emitted") == 2

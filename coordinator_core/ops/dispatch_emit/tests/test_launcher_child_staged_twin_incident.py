@@ -49,7 +49,6 @@ const childWorkflowCalls = [];
 const childResults = [];
 const agent = async (prompt, opts) => {
   const label = opts && opts.label;
-  if (label === 'emit-' + cfg.run_id) return cfg.emit;
   if (label === 'halt-commit' || label === 'commit') return cfg.commit;
   if (label === 'verify') return cfg.verify;
   if (cfg.replies[label] !== undefined) return cfg.replies[label];
@@ -97,11 +96,11 @@ def _stage(root: Path, monkeypatch) -> dict:
     return {"script": script, "script_path": script_path, "manifest": manifest, "handle": handle, "twin": twin}
 
 
-def _launcher(root: Path) -> Path:
+def _launcher(root: Path, reply: dict) -> Path:
     child = fan_launcher.LaunchChild(
         run_id=_RUN_ID, sizing_rel=_SIZING, emit_params={"ask": True, "sizing_path": _SIZING, "reserved_run_id": _RUN_ID},
     )
-    return fan_launcher.write_launcher(root, "ask-parent", [child], "sess-1")
+    return fan_launcher.write_launcher(root, "ask-parent", [child], "sess-1", [reply])
 
 
 def _run(root: Path, staged: dict) -> dict:
@@ -112,14 +111,14 @@ def _run(root: Path, staged: dict) -> dict:
         "arm": "xs", "halt": None, "baton": None, "resume_ledger": _RESUME, "tshirt": "XS",
         "route": "spec-dispatch", "stage_reply": {"manifest_handle": staged["handle"]},
     }
+    reply = {"path": staged["script_path"].as_posix(), "run_id": _RUN_ID, "fire_args": {"repoRoot": root.as_posix()}}
     cfg = {
         "run_id": _RUN_ID, "nesting": _NESTING, "verify": {"items": _MET["items"]}, "commit": _LANDED,
-        "emit": {"path": staged["script_path"].as_posix(), "run_id": _RUN_ID, "fire_args": {"repoRoot": root.as_posix()}},
         "replies": {"gate": gate, "gate-stage": gate},
     }
     proc = subprocess.run(
         [node, "-"], input=_PROGRAM, capture_output=True, text=True, encoding="utf-8", timeout=60,
-        env={**os.environ, "LAUNCHER_FILE": payload_file(_launcher(root).read_text(encoding="utf-8")), "CFG": json.dumps(cfg)},
+        env={**os.environ, "LAUNCHER_FILE": payload_file(_launcher(root, reply).read_text(encoding="utf-8")), "CFG": json.dumps(cfg)},
         **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr

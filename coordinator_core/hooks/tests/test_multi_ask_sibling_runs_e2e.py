@@ -28,6 +28,9 @@ VERBATIM = "fix the parser and also rename the exporter, they are unrelated jobs
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 
 
+EMIT_CALLS: list[dict] = []
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
@@ -46,6 +49,14 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: _BLITZ)
+    EMIT_CALLS.clear()
+    real_emit = mod._default_emit
+
+    def recording_emit(params: dict, repo_root: Path) -> dict:
+        EMIT_CALLS.append(params)
+        return real_emit(params, repo_root)
+
+    monkeypatch.setattr(mod, "_default_emit", recording_emit)
     return root
 
 
@@ -132,7 +143,7 @@ def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launc
     assert "Fire the listed runs" not in _all_text(env)
     assert [ch["run_id"] for ch in _launcher_children(env)] == [r.run_id for r in parent.runs]
     for run in parent.runs:
-        assert not (repo / c.status_rel(run.run_id)).exists()
+        assert _status(repo, run.run_id) == "running"
 
     for run in parent.runs:
         doc = _sizing(repo, run.slice_sizing)
@@ -143,9 +154,6 @@ def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launc
 def test_slice_ledgers_union_to_the_parent_register_and_seed_no_verbatim(repo):
     reply = _reply_json(_submit(repo, {"asks": _disjoint()}))
     parent = _parent(repo, reply["parent_id"])
-    second = _fire_slice(repo, parent.runs[1].slice_sizing)
-    assert _hso(second)["permissionDecision"] == "allow", second
-
     seeded: list[str] = []
     for run in parent.runs:
         texts = _bind(repo, run)
@@ -234,23 +242,24 @@ def test_a_three_ask_submission_with_one_after_edge_launches_the_two_ready_runs_
         assert record is not None and record["script_path"] == _hso(env)["updatedInput"]["scriptPath"]
     assert _submission(repo, held[0].run_id) is None
     assert held[0].run_id not in json.dumps(children)
-    assert [p.name for p in (repo / "scratch" / "warp").glob("*.workflow.mjs")] == [
-        Path(_hso(env)["updatedInput"]["scriptPath"]).name
-    ]
-    for run in parent.runs:
-        assert not (repo / c.status_rel(run.run_id)).exists()
+    assert sorted(p.name for p in (repo / "scratch" / "warp").glob("*.workflow.mjs")) == sorted(
+        [Path(_hso(env)["updatedInput"]["scriptPath"]).name] + [f"{r.run_id}.workflow.mjs" for r in ready]
+    )
+    for run in ready:
+        assert _status(repo, run.run_id) == "running"
+    assert not (repo / c.status_rel(held[0].run_id)).exists()
 
 
-def test_three_disjoint_asks_all_read_ready_and_each_fires_while_the_others_run(repo):
+def test_three_disjoint_asks_all_read_ready_and_the_launcher_leaves_all_three_running(repo):
     reply = _reply_json(_submit(repo, {"asks": _disjoint(3)}))
     parent = _parent(repo, reply["parent_id"])
     assert [r.status for r in parent.runs] == ["ready", "ready", "ready"]
     assert len(reply["runs"]) == 3 and all("after" not in r for r in reply["runs"])
 
-    for run in parent.runs[1:]:
-        allowed = _fire_slice(repo, run.slice_sizing)
-        assert _hso(allowed)["permissionDecision"] == "allow", allowed
-    assert [_status(repo, r.run_id) for r in parent.runs[1:]] == ["running", "running"]
+    assert [_status(repo, r.run_id) for r in parent.runs] == ["running"] * 3
+    refire = _fire_slice(repo, parent.runs[1].slice_sizing)
+    assert _hso(refire)["permissionDecision"] == "deny"
+    assert "already working" in _hso(refire)["permissionDecisionReason"]
 
 
 def _split_parent(repo: Path) -> str:
@@ -315,10 +324,6 @@ def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo):
     relayed_run, pm_run = parent.runs
     assert [ch["run_id"] for ch in _launcher_children(env)] == [relayed_run.run_id, pm_run.run_id]
 
-    for run in (relayed_run, pm_run):
-        fired = _fire_slice(repo, run.slice_sizing)
-        assert _hso(fired)["permissionDecision"] == "allow", fired
-
     relayed_dir, pm_dir = record_dir(repo, relayed_run.run_id), record_dir(repo, pm_run.run_id)
     assert (relayed_dir / "relayed-ask.md").is_file() and not (relayed_dir / "ask.md").exists()
     assert not (pm_dir / "relayed-ask.md").exists()
@@ -339,15 +344,12 @@ def test_an_entry_context_reaches_only_its_own_slice_run_record_ledger_and_scrip
     assert _hso(env)["permissionDecision"] == "allow", env
     first, second = _parent(repo, _reply_json(env)["parent_id"]).runs
 
-    emit_params = {ch["run_id"]: ch["emit_params"] for ch in _launcher_children(env)}
+    emit_params = {p["reserved_run_id"]: p for p in EMIT_CALLS}
+    assert set(emit_params) == {first.run_id, second.run_id}
     assert ctx not in json.dumps(emit_params[first.run_id])
 
-    fired = _fire_slice(repo, second.slice_sizing)
-    assert _hso(fired)["permissionDecision"] == "allow", fired
-    first_fired = _fire_slice(repo, first.slice_sizing)
-    assert _hso(first_fired)["permissionDecision"] == "allow", first_fired
-    second_script = Path(_hso(fired)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
-    first_script = Path(_hso(first_fired)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    second_script = (repo / "scratch" / "warp" / f"{second.run_id}.workflow.mjs").read_text(encoding="utf-8")
+    first_script = (repo / "scratch" / "warp" / f"{first.run_id}.workflow.mjs").read_text(encoding="utf-8")
 
     second_dir, first_dir = record_dir(repo, second.run_id), record_dir(repo, first.run_id)
     second_ask = (second_dir / "relayed-ask.md").read_text(encoding="utf-8")
@@ -382,3 +384,73 @@ def test_a_malformed_asks_element_is_denied_before_anything_is_written(repo):
     env = _submit(repo, {"asks": [{"ask": ""}, {"ask": "two"}]})
     assert _hso(env)["permissionDecision"] == "deny"
     assert not (repo / "scratch" / "warp").exists()
+
+
+def test_a_default_launch_two_entry_pm_submission_writes_a_launcher_without_a_missing_argument_refusal(repo, monkeypatch):
+    def fake_emit(params: dict, repo_root: Path) -> dict:
+        rid = params["reserved_run_id"]
+        return {"path": (repo_root / "scratch" / "warp" / rid / "s.workflow.mjs").as_posix(), "run_id": rid, "fire_args": {}}
+
+    monkeypatch.setattr(mod, "_default_emit", fake_emit)
+    env = _submit(repo, {"asks": _disjoint(), "source": "pm"})
+
+    assert _hso(env)["permissionDecision"] == "allow", env
+    assert "missing 1 required" not in _all_text(env)
+    assert Path(_hso(env)["updatedInput"]["scriptPath"]).is_file()
+    reply = _reply_json(env)
+    assert [r["run_id"] for r in reply["runs"]] == [ch["run_id"] for ch in _launcher_children(env)]
+
+
+def _in_run_m_plus_block() -> str:
+    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+
+    script = ask_compose.compose_ask_script(
+        repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
+        wrap_stage=lambda text: ("", []), plan_blitz_text=None, **REVIEW_KW,
+    )
+    start = script.index("if (!_halted && _gate.arm === 'm_plus') {")
+    depth, i = 0, script.index("{", start)
+    for j in range(i, len(script)):
+        depth += script[j] == "{"
+        depth -= script[j] == "}"
+        if depth == 0:
+            return script[start:j + 1]
+    raise AssertionError("unbalanced m_plus block")
+
+
+def _run_m_plus_block(tmp_path: Path, reply: dict) -> dict:
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    code = (
+        f"const REPO_ROOT = {json.dumps(tmp_path.as_posix())}; const _SESSION_ID = 's'; const _crossRepoApproved = false;\n"
+        "const _runId = 'run-1'; const _sizingRel = 'state/sizings/s.yaml'; let _halted = null; const _gate = { arm: 'm_plus', chain_emit: " + json.dumps(reply) + " };\n"
+        "const _agentDefsClause = () => ''; const _PFC7 = ''; const _PFC5 = ''; const phase = () => {};\n"
+        f"const agent = async () => ({json.dumps(reply)});\n"
+        "const started = []; const workflow = async (o) => { started.push(o.scriptPath); return { done: true }; };\n"
+        "(async () => { const _out = await (async () => {\n" + _in_run_m_plus_block() + "\nreturn { halted: _halted }; })();\n"
+        "console.log(JSON.stringify({ out: _out, started })); })();\n"
+    )
+    done = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+@pytest.mark.spawns_process
+def test_an_in_run_ask_that_sizes_m_plus_chains_to_the_emit_reply_run_id(tmp_path):
+    path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.workflow.mjs"
+    got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "ask-r2", "fire_args": {}})
+    assert got["started"] == [path]
+    assert got["out"]["done"] is True and got["out"]["chained_from"] == "run-1"
+
+
+@pytest.mark.spawns_process
+def test_an_in_run_m_plus_chain_halts_by_name_on_a_reply_without_a_run_id(tmp_path):
+    path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.workflow.mjs"
+    got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "", "fire_args": {}})
+    assert got["started"] == []
+    assert "emit reply run_id is not a run id" in got["out"]["halted"]["reason"]

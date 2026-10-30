@@ -84,10 +84,16 @@ def test_crlf(root):
     assert evaluate("grep -cE 'x$' crlf.txt", "2", root)["state"] == "MATCH"
 
 
-def test_byte_cap(root, monkeypatch):
-    monkeypatch.setattr(_anchor_check, "MAX_BYTES", 5)
-    r = evaluate("grep -c foo a.txt", "3", root)
-    assert r["state"] == "NOT_EVALUABLE" and "over" in r["detail"]
+def test_file_over_one_mib_is_evaluated(root):
+    line = "pad " * 24 + "\n"
+    body = line * 12000 + "needle\nneedle\r\nlast needle"
+    (root / "huge.py").write_text(body, encoding="utf-8", newline="")
+    assert (root / "huge.py").stat().st_size > 1 << 20
+    r = evaluate("grep -c needle huge.py", "3", root)
+    assert r["state"] == "MATCH" and r["observed"] == "3"
+    assert _state(root, "grep -c needle huge.py", "2") == "MISMATCH"
+    assert _state(root, "grep -cE 'needle$' huge.py", "3") == "MATCH"
+    assert not hasattr(_anchor_check, "MAX_BYTES")
 
 
 def test_missing_file_is_mismatch(root):
