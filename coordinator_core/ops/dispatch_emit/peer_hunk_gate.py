@@ -158,7 +158,7 @@ def co_declared_peer_holds(
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import halted_hold_release, sibling_claims
 
-        with halted_hold_release.blob_scope(root):
+        with halted_hold_release.blob_scope(root, interest=wanted):  # interest drops halted runs claiming none of `wanted`; keep it
             halted_hold_release.prefetch_kept_blobs(root, sibling_claims.halted_records(root, own_run_id))
             unlanded = sibling_claims._unlanded_run_ids(root, own_run_id, own_plan, minted_before)
             claims = dict(sibling_claims.sibling_run_claims(

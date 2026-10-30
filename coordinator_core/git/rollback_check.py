@@ -191,6 +191,52 @@ def _tree_lookup(
     return found
 
 
+_MODES6 = (b"100644", b"100755", b"120000", b"160000")
+_ENTRY_CACHE_MAX = 16384
+_ENTRY_CACHE: "Dict[Tuple[str, str, str], Optional[Tuple[int, str]]]" = {}
+
+
+def _tree_entry(common_dir: Path, tree_sha: str, name: str):
+    """One entry of a tree as ``(mode, sha)``; ``ABSENT`` when missing, None when unreadable.
+
+    Finds ``<mode> <name>\\0`` by substring search instead of parsing the whole tree; a hit is
+    accepted only when a valid mode precedes it and 20 sha bytes follow. Trap: a sibling entry whose
+    own name embeds ``<mode> <name>`` (e.g. a file named ``100644 foo``) looks like a boundary; a hit
+    whose mode is preceded by a space (the header space of the embedding entry, or a sha-final 0x20 by
+    chance) falls back to a full parse, which is exact. Not exact: an embedding name whose mode is
+    preceded by another byte (``x100644 foo``) is accepted as the entry; a boundary cannot be proven
+    without parsing from the tree start.
+    """
+    key = (str(common_dir), tree_sha, name)
+    if key in _ENTRY_CACHE:
+        return _ENTRY_CACHE[key]
+    obj = read_object(common_dir, tree_sha)
+    if obj is None or obj[0] != "tree":
+        return None
+    raw = obj[1]
+    needle = b" " + name.encode("utf-8", "surrogateescape") + _NUL
+    result: object = ABSENT
+    pos = raw.find(needle)
+    while pos >= 0:
+        end = pos + len(needle) + 20
+        if end <= len(raw):
+            mode = raw[pos - 6 : pos] if raw[pos - 6 : pos] in _MODES6 else (
+                raw[pos - 5 : pos] if raw[pos - 5 : pos] == b"40000" else None
+            )
+            if mode is not None:
+                if raw[pos - len(mode) - 1 : pos - len(mode)] == b" ":
+                    full = _parse_tree_entries(raw)
+                    result = None if full is None else full.get(name, ABSENT)
+                else:
+                    result = (int(mode, 8), raw[pos + len(needle) : end].hex())
+                break
+        pos = raw.find(needle, pos + 1)
+    if len(_ENTRY_CACHE) >= _ENTRY_CACHE_MAX:
+        _ENTRY_CACHE.clear()
+    _ENTRY_CACHE[key] = result  # type: ignore[assignment]
+    return result
+
+
 def _blob_at_commit(common_dir: Path, commit_sha: str, path: str):
     meta = commit_meta(common_dir, commit_sha)
     if meta is None:
@@ -200,20 +246,16 @@ def _blob_at_commit(common_dir: Path, commit_sha: str, path: str):
         return None
     parts = path.split("/")
     for part in parts[:-1]:
-        entries = _tree_entries(common_dir, cur)
-        if entries is None:
-            return None
-        entry = entries.get(part)
+        entry = _tree_entry(common_dir, cur, part)
         if entry is None:
-            return ABSENT
-        if entry[0] != _TREE_MODE:
+            return None
+        if entry is ABSENT or entry[0] != _TREE_MODE:
             return ABSENT
         cur = entry[1]
-    entries = _tree_entries(common_dir, cur)
-    if entries is None:
-        return None
-    entry = entries.get(parts[-1])
+    entry = _tree_entry(common_dir, cur, parts[-1])
     if entry is None:
+        return None
+    if entry is ABSENT:
         return ABSENT
     return entry[1]
 

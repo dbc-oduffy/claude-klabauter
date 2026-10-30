@@ -64,6 +64,11 @@ def is_own_commit(
     return any(a.startswith(b) for b in stamped for a in anchors)
 
 
+def _halt_names_plan(message: str, plan: str, halt_plan_re: "re.Pattern[str]") -> bool:
+    """True when a ``Halt-Plan`` trailer names ``plan``: a halt record of this plan under any run id."""
+    return any(checkpoint_plan_matches(p, plan) for p in halt_plan_re.findall(message))
+
+
 def _base_ancestors(common_dir: Path, base: str) -> List[str]:
     """First-parent shas below ``base``, newest first, bounded by ``ANCESTOR_CAP``."""
     out: List[str] = []
@@ -156,7 +161,8 @@ def check(
     """Return ``(findings, notes)``. Findings are ``landing_integrity.Finding`` with reason
     ``SINCE_BASE_OVERLAP``; notes carry finding-free markers (``walk-capped``, ``unreadable:<path>``)
     the caller surfaces. ``run_id`` is accepted for the pinned signature; a commit whose subject
-    ``ask_contract.halted_run_id`` parses to ``run_id`` is the caller's own halt record. ``plan``
+    ``ask_contract.halted_run_id`` parses to ``run_id``, or whose ``Halt-Plan`` trailer names ``plan``
+    (an earlier run id of the same plan), is the caller's own halt record. ``plan``
     narrows the own-commit test to this run's plan."""
     from coordinator_core.ops.dispatch_emit.landing_integrity import SINCE_BASE_OVERLAP, Finding
 
@@ -174,8 +180,9 @@ def check(
     newest_first, base_sha = walked
     if not newest_first:
         return findings, notes
-    from coordinator_core.ops.dispatch_emit.ask_contract import halted_run_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
 
+    halt_plan_re = re.compile(r"^" + re.escape(HALT_PLAN_TRAILER) + r":[ \t]*(\S+)[ \t]*$", re.M)
     run_bases: Tuple[str, ...] = ()
     if run_id and plan is not None:
         from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
@@ -190,8 +197,10 @@ def check(
             if ancestors is None:
                 ancestors = _base_ancestors(common_dir, base_sha)
             is_own = is_own_commit(message, plan, base_sha, newest_first, ancestors, run_bases)
-        if is_own or (
-            run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id
+        if (
+            is_own
+            or (run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id)
+            or (plan is not None and _halt_names_plan(message, plan, halt_plan_re))
         ):
             own.add(sha)
     oldest_first = list(reversed(newest_first))

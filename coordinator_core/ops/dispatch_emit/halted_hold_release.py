@@ -112,8 +112,32 @@ def supersession_reason(root: Path, run_id: str) -> Optional[str]:
     return None
 
 
+def record_stamps(root: Path) -> list:
+    """`[(run id, minted epoch or None)]` for every record dir, sorted by name: one directory scan and one stamp
+    parse per dir, shared by every reader inside a `release_scope` (a dir minted mid-scope is not listed). Empty when the record
+    root is unreadable."""
+    from coordinator_core.ops.dispatch_emit import stopped_runs
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    state = _SCOPE.get()
+    key = str(root)
+    if state is not None and key in state.setdefault("stamps", {}):
+        return state["stamps"][key]
+    try:
+        with os.scandir(Path(root) / RECORD_DIR_ROOT) as entries:
+            names = sorted(e.name for e in entries if e.is_dir())
+    except OSError:
+        return []
+    out = [(n, stopped_runs._stamp_epoch(n)) for n in names]
+    if state is not None:
+        state["stamps"][key] = out
+    return out
+
+
 def _successor_landed(root: Path, run_id: str, sizing: str) -> bool:
-    """A later-stamped record dir binding `sizing` reads `landed`, or its spent token record carries a `landed` dict."""
+    """A later-stamped record dir binding `sizing` reads `landed`, or its spent token record carries a `landed` dict.
+    Inside a `release_scope` the record-dir listing, each dir's `sizing_rel` and landed answer are read once, shared
+    by every halted run weighed."""
     from coordinator_core.ops import warp_run_deliverable as wrd
     from coordinator_core.ops.dispatch_emit import halted_run, run_token, stopped_runs
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
@@ -122,22 +146,28 @@ def _successor_landed(root: Path, run_id: str, sizing: str) -> bool:
     if own is None or not sizing:
         return False
     base = Path(root) / RECORD_DIR_ROOT
-    try:
-        with os.scandir(base) as entries:
-            names = sorted(e.name for e in entries if e.is_dir())
-    except OSError:
+    state = _SCOPE.get()
+    memo = state.setdefault("successors", {}).setdefault(str(root), {}) if state is not None else {}
+    if "sizing" not in memo:
+        memo["sizing"], memo["landed"] = {}, {}
+    stamped = record_stamps(root)
+    if not stamped:
         return False
-    for name in names:
-        stamp = stopped_runs._stamp_epoch(name)
+    for name, stamp in stamped:
         if name == run_id or stamp is None or stamp <= own:
             continue
-        if wrd._norm(str(wrd._read_json(base / name / "run.json").get("sizing_rel") or "")) != sizing:
+        if name not in memo["sizing"]:
+            memo["sizing"][name] = wrd._norm(str(wrd._read_json(base / name / "run.json").get("sizing_rel") or ""))
+        if memo["sizing"][name] != sizing:
             continue
-        marker = halted_run._read(base / name)
-        if marker is not None and marker.get("status") == halted_run.STATUS_LANDED:
-            return True
-        receipt = run_token._read(run_token._record_path(root, name, spent=True))
-        if receipt is not None and isinstance(receipt.get("landed"), dict):
+        if name not in memo["landed"]:
+            marker = halted_run._read(base / name)
+            receipt = run_token._read(run_token._record_path(root, name, spent=True))
+            memo["landed"][name] = (
+                (marker is not None and marker.get("status") == halted_run.STATUS_LANDED)
+                or (receipt is not None and isinstance(receipt.get("landed"), dict))
+            )
+        if memo["landed"][name]:
             return True
     return False
 
@@ -156,7 +186,7 @@ def release_scope():
         return
     from coordinator_core.git import call_io_scope
 
-    token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False, "seen_root": None, "seen": {}, "scope_seen": {}})
+    token = _SCOPE.set({"memo": {}, "blobs": None, "specs": set(), "prefetched": False, "seen_root": None, "seen": {}, "scope_seen": {}, "interest": None})
     try:
         if call_io_scope.scope_open():
             yield _SCOPE.get()
@@ -168,19 +198,50 @@ def release_scope():
 
 
 @contextlib.contextmanager
-def blob_scope(root: Path):
+def blob_scope(root: Path, interest=None):
     """A `release_scope()` that also memoises `_blob_batch` reads for `root`, so a claim lookup over many
-    halted runs reads each git object once. Trap: HEAD is frozen for the block."""
+    halted runs reads each git object once. Trap: HEAD is frozen for the block. `interest`, the landing's
+    wanted paths, lets the scope's owner skip every halted run that provably claims none of them
+    (`irrelevant`); a nested entry keeps the owner's interest."""
     with release_scope() as state:
         owns = state["seen_root"] is None
         if owns:
             state["seen_root"] = str(root)
+            state["interest"] = frozenset(interest) if interest else None
         try:
             yield state
         finally:
             if owns:
                 state["seen_root"] = None
                 state["seen"] = {}
+                state["interest"] = None
+
+
+def irrelevant(root: Path, record: Path, marker: Optional[dict]) -> bool:
+    """True when the live scope has an `interest` and the halted run at `record` cannot claim any of it:
+    its withheld set, manifest declaration and extra records all miss it, and its manifest declares
+    something (a run with no manifest declaration is read through its plan spine, so stays relevant).
+    Fail-open: any unreadable input makes the run relevant."""
+    state = _SCOPE.get()
+    interest = state.get("interest") if state is not None else None
+    if not interest or not marker:
+        return False
+    try:
+        from coordinator_core.ops import warp_run_deliverable as wrd
+        from coordinator_core.ops.dispatch_emit import halted_run, run_ownership, sibling_claims
+
+        if any(run_ownership._covers(w, c) for w in halted_run._withheld_of(marker) for c in interest):
+            return False
+        run_id = record.name
+        paths, prefixes, unreadable = wrd._manifest_declared(run_id, Path(root))
+        if unreadable or not (paths or prefixes):
+            return False
+        declared = set(paths)
+        if any(c in declared or any(c == p or c.startswith(p + "/") for p in prefixes) for c in interest):
+            return False
+        return not (sibling_claims._extra_declared(Path(root), run_id) & interest)
+    except Exception:  # noqa: BLE001 -- unknown: the run is weighed
+        return False
 
 
 def _blob_batch(root: Path, specs: list) -> Optional[dict]:
@@ -213,6 +274,8 @@ def prefetch_kept_blobs(root: Path, runs: list) -> None:
     union: set = set()
     specs: list = []
     for record, marker in runs:
+        if irrelevant(root, record, marker):
+            continue
         with contextlib.suppress(Exception):  # unreadable: that run is checked on its own
             union.update(_withheld_keys(record))
         try:
@@ -249,6 +312,12 @@ def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
                 dirty = frozenset(commit_companion.own_left_behind(root, {"-": sorted(union)}, "-", ()))
         state["memo"][key] = dirty
     return state["memo"][key]
+
+
+def _halted_marker(record: Path) -> Optional[dict]:
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    return halted_run._read(record)
 
 
 def _record(root: Path, run_id: str) -> Path:
@@ -379,6 +448,14 @@ def held_paths(
 def _held_paths_scoped(
     root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str],
 ) -> frozenset:
+    try:
+        from coordinator_core.ops import warp_run_deliverable as wrd
+
+        record = _record(Path(root), halted_run_id)
+        if irrelevant(Path(root), record, _halted_marker(record)):  # claims none of the scope's interest: skip the weighing
+            return frozenset(wrd.halted_withheld_paths(Path(root), halted_run_id))
+    except Exception:  # noqa: BLE001 -- weighed in full below
+        pass
     try:
         if release_reason(root, halted_run_id, committing_run_id, committing_plan) is not None:
             return frozenset()
@@ -599,7 +676,7 @@ def prefetch_kept_at_head(root: Path, run_ids) -> None:
         for run_id in run_ids:
             record = _record(Path(root), run_id)
             marker = halted_run._read(record)
-            if not marker or marker.get("status") != halted_run.STATUS_HALTED:
+            if not marker or marker.get("status") != halted_run.STATUS_HALTED or irrelevant(Path(root), record, marker):
                 continue
             plan = _kept_plan(record)
             if plan is not None:

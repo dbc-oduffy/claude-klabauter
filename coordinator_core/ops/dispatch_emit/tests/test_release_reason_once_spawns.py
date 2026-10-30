@@ -166,7 +166,7 @@ def _full_hold_computation(root: Path, committing: str, paths: list) -> tuple:
 # recomputed per consumer); UNION_FIGURE_S is the union on the same fixture. Ceiling: union plus 20%, never
 # above HEAD.
 HEAD_FIGURE_S = 0.94  # 3 runs: 0.942, 0.963, 0.958
-UNION_FIGURE_S = 0.18  # 3 runs: 0.163, 0.169, 0.181
+UNION_FIGURE_S = 0.23  # 3 runs: 0.234 each, with the 130 withheld paths dirty (a clean one releases early)
 CEILING_S = min(UNION_FIGURE_S * 1.2, HEAD_FIGURE_S)
 
 

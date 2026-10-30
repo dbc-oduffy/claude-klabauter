@@ -112,6 +112,32 @@ def test_same_plan_not_landed_checkpoint_of_another_run_is_still_foreign(tmp_pat
     assert [f.reason for f in findings] == [SINCE_BASE_OVERLAP]
 
 
+def _halt_msg(run: str, plan: str) -> str:
+    return f"warp: record halted {run} run artifacts\n\nHalted-By: x\nHalt-Plan: {plan}"
+
+
+def test_same_plan_halt_commit_of_an_earlier_run_id_is_own(tmp_path: Path) -> None:
+    base = _scenario(tmp_path, lambda peer: _halt_msg("earlier-run-1", PLAN))
+
+    assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="later-run-2", plan=PLAN) == []
+
+
+def test_foreign_plan_halt_commit_is_still_foreign(tmp_path: Path) -> None:
+    base = _scenario(tmp_path, lambda peer: _halt_msg("earlier-run-1", "docs/plans/other-plan.md"))
+
+    findings = since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="later-run-2", plan=PLAN)
+
+    assert [f.reason for f in findings] == [SINCE_BASE_OVERLAP]
+
+
+def test_halt_commit_without_a_halt_plan_trailer_of_another_run_is_still_foreign(tmp_path: Path) -> None:
+    base = _scenario(tmp_path, lambda peer: "warp: record halted earlier-run-1 run artifacts\n\nHalted-By: x")
+
+    findings = since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="later-run-2", plan=PLAN)
+
+    assert [f.reason for f in findings] == [SINCE_BASE_OVERLAP]
+
+
 def test_without_a_plan_only_the_exact_run_base_is_own(tmp_path: Path) -> None:
     base = _scenario(tmp_path, lambda peer: _trailers(PLAN, peer[:12]))
 
