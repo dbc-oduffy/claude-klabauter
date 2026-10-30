@@ -199,6 +199,23 @@ def test_another_sessions_record_yields_nothing(tmp_path, tdir):
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
+def test_stall_line_given_once_per_window_then_again_after_it(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"))
+    assert "wf_1" in mod.workflow_stall_resume_text(SID, "", NOW)
+    assert mod.workflow_stall_resume_text(SID, "", NOW + 1) == ""
+    inside = NOW + mod._STALL_ADVISORY_WINDOW_SECONDS - 1
+    assert mod.workflow_stall_resume_text(SID, "", inside) == ""
+    after = NOW + mod._STALL_ADVISORY_WINDOW_SECONDS + 1
+    assert "wf_1" in mod.workflow_stall_resume_text(SID, "", after)
+
+
+def test_record_naming_another_session_yields_nothing(tmp_path, tdir):
+    _record(tdir, _run(tmp_path, "r1"), session="other")
+    (tdir / f"workflow-run-{SID}-t1.json").write_text(
+        (tdir / "workflow-run-other-t1.json").read_text(encoding="utf-8"), encoding="utf-8")
+    assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
+
+
 def test_record_past_horizon_yields_nothing(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"), fired_at=NOW - stall.STALL_HORIZON_SECONDS - 1)
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""

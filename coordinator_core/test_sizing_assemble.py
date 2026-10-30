@@ -1275,7 +1275,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # Moved 1.44.0 -> 1.45.0: claude-klabauter-first `xxl_infra_check_owed` detent; DoE copy pending.
     # Moved 1.45.0 -> 1.46.0: optional `tie_break`; 1.46.0 -> 1.47.0: `fan_out` joins `xl_exit`.
     # Moved 1.47.0 -> 1.48.0: optional `provenance`; 1.48.0 -> 1.49.0: optional `writes` (DoE 8e14712c0c).
-    assert schema["x-schema-version"] == "1.49.0"
+    # Moved 1.49.0 -> 1.50.0: claude-klabauter-first optional `research.notebooklm_need`.
+    assert schema["x-schema-version"] == "1.50.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1294,7 +1295,7 @@ def test_sizing_object_schema_version_and_bump_class():
     # they will not do (memo
     # 2026-08-13-coordinator-content-repo-em-bump-class-deliberately-absent.md).
     # Re-introduced at 1.45.0 by the claude-klabauter-first enum-value-additive bump; 1.49.0 is additive.
-    assert schema["x-bump-class"] == "additive"
+    assert schema["x-bump-class"] == "nested-field-additive"
 
 
 def test_completion_entry_schema_version_and_bump_class():

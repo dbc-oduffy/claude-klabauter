@@ -27,6 +27,9 @@ def repo(tmp_path, monkeypatch):
     (root / "pkg").mkdir()
     for target in (mod, leaf):
         monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
+    # Trap: tmp_path lives under the system temp dir, which `_is_scratch_or_tmp` classifies as
+    # scratch, so without this no fixture path is ever product.
+    monkeypatch.setattr(leaf, "_is_scratch_or_tmp", lambda file_path: False)
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: ["run-1"])
     run_dir = root / "state" / "warp" / "run-1"
     run_dir.mkdir(parents=True)

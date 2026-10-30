@@ -171,6 +171,17 @@ def test_doubled_separator_path_in_tree_accepted_outside_still_refused(tmp_path)
     assert _refusal(script, "ask-r1", traversal) == "emit reply path contains .."
 
 
+@pytest.mark.spawns_process
+def test_repo_relative_emit_path_resolves_under_the_root(tmp_path):
+    _, script = _write(tmp_path)
+    base = {"run_id": "ask-r1", "fire_args": {}}
+    assert _refusal(script, "ask-r1", dict(base, path="scratch/warp/ask-r1.workflow.mjs")) is None
+    assert _refusal(script, "ask-r1", dict(base, path="scratch\\warp\\ask-r1.workflow.mjs")) is None
+    assert _refusal(script, "ask-r1", dict(base, path="elsewhere/ask-r1.workflow.mjs")) == (
+        "emit reply path /r/elsewhere/ask-r1.workflow.mjs is outside /r/scratch/warp/"
+    )
+
+
 def test_every_start_site_normalizes_the_emitted_path(tmp_path):
     _, script = _write(tmp_path)
     assert script.count("_normEmitPath(emitted.path)") == 2

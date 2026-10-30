@@ -94,6 +94,11 @@ per leg:
      session with no task, plan row or disposition
      (`ops.pm_directive_map.unmapped_directives`). Silent on a subagent stop.
 
+  14. `research_drafting` — COMPOSED after the folded legs (not in `_FOLDED_LEGS`),
+     advisory only: the turn made >= READ_THRESHOLD research reads, or its final
+     assistant text drafts a research or plan sequence, with no engine-ask or
+     research run fired this turn -> `nudge_em_research_scoping` nudge, once per turn.
+
 AGGREGATION CONTRACT: mirrors `stop-dispatch.py`'s own CONCATENATE-ALL
 (never first-fires-wins) — every foldable leg above (all but the producers #8, #10) runs
 regardless of whether an earlier leg already produced a block/advisory; one
@@ -124,6 +129,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Mapping, Optional
@@ -427,6 +433,81 @@ def _guard_drive_root_new_dir_handler(params: dict, repo_root=None) -> dict:
     return deny("Stop", reason)
 
 
+_DRAFT_SUBJECT = re.compile(r"\b(?:research|plan)\b", re.IGNORECASE)
+_DRAFT_STEP = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+\S", re.MULTILINE)
+_DRAFT_MIN_STEPS = 3
+
+
+def _last_assistant_text(transcript_path: str) -> str:
+    """Text blocks of the final assistant record in the transcript tail; "" when none."""
+    from coordinator_core.hooks import nudge_em_research_scoping as scoping
+
+    size = os.stat(transcript_path).st_size
+    with open(transcript_path, "rb") as fh:
+        fh.seek(max(0, size - scoping.TAIL_CAP))
+        data = fh.read()
+    last = ""
+    for raw in data.splitlines():
+        if b'"assistant"' not in raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("type") != "assistant":
+            continue
+        content = (rec.get("message") or {}).get("content")
+        text = "\n".join(
+            str(b.get("text") or "")
+            for b in (content if isinstance(content, list) else ())
+            if isinstance(b, dict) and b.get("type") == "text"
+        )
+        if text.strip():
+            last = text
+    return last
+
+
+def _drafts_research_sequence(text: str) -> bool:
+    return bool(_DRAFT_SUBJECT.search(text)) and len(_DRAFT_STEP.findall(text)) >= _DRAFT_MIN_STEPS
+
+
+def _research_drafting_stop_handler(params: dict, repo_root=None) -> dict:
+    """Advisory when this turn made READ_THRESHOLD or more research reads, or its final
+    assistant text drafts a research or plan sequence (a research/plan mention plus a
+    numbered or bulleted run of steps), and no engine-ask or research run fired this turn.
+    Once per turn via the shared sentinel; reads only the transcript tail.
+    Never denies; silent on a chained or subagent Stop and on any failure."""
+    try:
+        from coordinator_core.hooks import nudge_em_research_scoping as scoping
+        from coordinator_core.hooks._payload import field
+
+        payload = payload_of(params)
+        if payload.get("agent_id") or payload.get("stop_hook_active"):
+            return no_advisory()
+        env = payload.get("env")
+        env = env if isinstance(env, dict) else {}
+        if (env.get(scoping._KILL_SWITCH) or os.environ.get(scoping._KILL_SWITCH)) == "1":
+            return no_advisory()
+        sid = field(payload, "session_id")
+        transcript = field(payload, "transcript_path")
+        if not sid or not transcript:
+            return no_advisory()
+        reads, fired, key, ask = scoping._scan_turn(transcript)
+        if fired:
+            return no_advisory()
+        if reads < scoping.READ_THRESHOLD and not _drafts_research_sequence(
+            _last_assistant_text(transcript)
+        ):
+            return no_advisory()
+        sentinel = scoping._sentinel_path(sid)
+        if scoping._already_signalled(sentinel, key):
+            return no_advisory()
+        scoping.mark_signalled(sentinel, key)
+        return post_advisory(scoping.nudge_text(ask))
+    except Exception:
+        return no_advisory()
+
+
 # Folded guard legs in fan-in order; handlers resolve at call time so a test
 # can substitute one. The two producers run after the fold and are not listed.
 _FOLDED_LEGS = (
@@ -506,6 +587,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
             block_reasons.append(text or "<no reason given>")
         elif text:
             advisories.append(text)
+
+    try:
+        is_block, text = _extract_advisory(_research_drafting_stop_handler(leg_params))
+        if text and not is_block:
+            advisories.append(text)
+    except Exception:
+        pass
 
     # receiver_state_sensor — PRODUCER only (see module docstring item 8):
     # composed for its write side-effect; its return is never folded into

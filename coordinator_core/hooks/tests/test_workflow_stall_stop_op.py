@@ -101,6 +101,7 @@ def test_stop_dispatch_composes_exactly_these_legs_in_order():
         "nudge_harness_directive_dispatch",
         "nudge_unrouted_sizing",
         "workflow_stall_resume",
+        "deferred_release_drain",
         "pm_directive_unmapped",
     )
     assert sd.PRODUCER_LEG_NAMES == ("receiver_state_sensor", "group_em_park_spool")

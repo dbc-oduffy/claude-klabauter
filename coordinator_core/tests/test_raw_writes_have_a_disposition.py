@@ -339,6 +339,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/git/sshsig.py': ('outside-repo', 'request frames written to the ssh-agent socket, never a file: _agent_requests'),
     'coordinator_core/hooks/submit_engine_ask.py': ('in-repo-non-state', 'engine-friction row appended to .coordinator-local/engine-friction.jsonl, never state/: _record_skipped_overlap_check; the refusal log line is appended under .coordinator-local likewise'),
     'coordinator_core/hooks/nudge_hand_written_plan.py': ('outside-repo', 'exclusive-create one-shot sentinel under tempfile.gettempdir()'),
+    'coordinator_core/hooks/nudge_em_research_scoping.py': ('outside-repo', 'per-session once-per-turn sentinel json under tempfile.gettempdir(): mark_signalled'),
     'coordinator_core/arrival_record.py': ('git-internal', 'subagent-arrivals.jsonl appended under <git-common-dir>/coordinator-sessions/<sid>: append_arrival'),
     'coordinator_core/ops/baton_pm_turns.py': ('git-internal', 'pm-turns log appended under <git-common-dir>/coordinator-sessions/<sid>: append_turn'),
     'coordinator_core/ops/dispatch_emit/landing_export.py': ('ignored-target', 'blob export and its staging dir under the gitignored <worktree_root>/scratch/: write_bytes, os.replace'),

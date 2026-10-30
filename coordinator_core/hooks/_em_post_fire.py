@@ -50,18 +50,11 @@ def live_run_ids(session_id: str, root: str) -> list:
 
 def fired(session_id: str, root: str = "") -> bool:
     """True when this session has a live Workflow run: launched, and neither halted nor landed
-    under `root`. Without `root` liveness is unknowable and any launched run counts. False on an
+    under `root`. Without `root` liveness is unknowable, so no run counts as live. False on an
     empty id or any read failure."""
-    if not session_id:
+    if not session_id or not root:
         return False
-    if root:
-        return bool(live_run_ids(session_id, root))
-    try:
-        from coordinator_core.hooks import flag_em_poll_in_flight
-
-        return bool(flag_em_poll_in_flight.session_workflow_run_ids(session_id))
-    except Exception:
-        return False
+    return bool(live_run_ids(session_id, root))
 
 
 def _owned_by_live_run(path: str, base: str, session_id: str) -> bool:

@@ -57,7 +57,8 @@ def _sizing(repo: Path, letters: str = "ABC", *extra: str) -> str:
     flags = [f for letter in letters for f in ("--research-target", f"notebooklm={letter}")]
     assert sa.main([
         "--tshirt", "XS", "--interaction-mode", "pm", "--write", rel,
-        "--research-class", "corpus", "--research-source", "notebooklm", *flags, *extra,
+        "--research-class", "corpus", "--research-source", "notebooklm",
+        "--research-notebooklm-need", "youtube", *flags, *extra,
     ]) == sa.EXIT_OK
     return rel
 

@@ -4075,7 +4075,8 @@ def _integrity(
     for path, stem, line in peer_hunk_gate.out_of_ask_holds(root, session_id or "", run_id, live):
         findings.append(li.Finding(path, peer_hunk_gate.OUT_OF_ASK_HUNKS, f"{stem}: {line}"))
     land_deadline.check("land_run._integrity.landing_test_gate")
-    tested, _check = li.landing_test_gate(root, params, run_id, live)
+    with land_deadline.excepted():
+        tested, _check = li.landing_test_gate(root, params, run_id, live)
     if deleted_notes is not None and tested.deleted_note:
         deleted_notes.append(tested.deleted_note)
     return findings + tested

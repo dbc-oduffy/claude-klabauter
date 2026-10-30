@@ -59,6 +59,10 @@ BOUND_SERVER_WINDOW = "server-window"
 #: `(deadline_by, hard_by)` of the innermost scope; None when unbound.
 _BOUND_BY: ContextVar[Optional[tuple]] = ContextVar("land_run_bound_by", default=None)
 
+#: Earliest outer clamp (dispatcher, server window) of the innermost scope: no `excepted` extension
+#: moves a deadline past it. None when no clamp is bound.
+_CEILING: ContextVar[Optional[float]] = ContextVar("land_run_ceiling", default=None)
+
 
 def set_queue_wait(secs: float, window_secs: Optional[float] = None) -> None:
     """Declare the seconds this request waited for a pool worker, for `halt_reply` to report, and
@@ -114,17 +118,38 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
     if current_hard is not None and (hard is None or current_hard < hard):
         hard = current_hard
         hard_by = (_BOUND_BY.get() or (deadline_by, hard_by))[1]
+    ceiling = min([clamp for clamp, _ in clamps] + [c for c in (_CEILING.get(),) if c is not None], default=None)
     token = _DEADLINE.set(deadline)
     hard_token = _HARD.set(hard)
     bound_token = _BOUND_BY.set((deadline_by, hard_by))
+    ceiling_token = _CEILING.set(ceiling)
     legs_token = _LEGS.set([])
     try:
         yield
     finally:
         _LEGS.reset(legs_token)
+        _CEILING.reset(ceiling_token)
         _BOUND_BY.reset(bound_token)
         _HARD.reset(hard_token)
         _DEADLINE.reset(token)
+
+
+@contextmanager
+def excepted() -> Iterator[None]:
+    """Time spent in this block does not count against the leg budget: both deadlines move later
+    by its elapsed, never past the scope's outer clamp. For the landing retest, a bulk test the
+    brightline excepts (DR-344 scope); counted, a 9-13s retest left no budget for the legs after it."""
+    start = _now()
+    try:
+        yield
+    finally:
+        spent = _now() - start
+        ceiling = _CEILING.get()
+        for var in (_DEADLINE, _HARD):
+            current = var.get()
+            if current is not None:
+                moved = current + spent
+                var.set(moved if ceiling is None else min(moved, max(current, ceiling)))
 
 
 def expired() -> bool:

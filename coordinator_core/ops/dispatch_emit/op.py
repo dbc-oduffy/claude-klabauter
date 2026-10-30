@@ -1066,6 +1066,7 @@ _PARAM_FIELDS = (
     Field("lists", "dict"),
     Field("per_group", "bool"),
     Field("group_refs", "str_list"),
+    Field("emits", "list"),
 )
 
 
@@ -1965,6 +1966,33 @@ def _abandon_run(params: dict, repo_root: Optional[Path]) -> dict:
     return {"path": "", "run_id": run_id, "fire_args": {}, "abandoned": live}
 
 
+# Envelope keys that may sit beside `emits`; each is inherited by every element that lacks it.
+_EMITS_ENVELOPE_KEYS = ("_caller_cwd", "repo_root", "session_id")
+
+
+def _emit_list(params: dict, repo_root: Optional[Path]) -> dict:
+    """List form: run each `emits` element through `_dispatch_emit` in order; reply `{"replies": [...]}`.
+
+    A failing element lands as `{"error": ...}` in its own slot and never stops the rest."""
+    extra = sorted(k for k in params if k != "emits" and k not in _EMITS_ENVELOPE_KEYS)
+    if extra:
+        return {"error": f"dispatch.emit params.emits excludes single-form keys; got: {', '.join(extra)}"}
+    items = params["emits"]
+    if not isinstance(items, list):
+        return {"error": "dispatch.emit params.emits must be a list of single-form params objects"}
+    envelope = {k: params[k] for k in _EMITS_ENVELOPE_KEYS if k in params}
+    replies: list = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict) or "emits" in item:
+            replies.append({"error": f"dispatch.emit params.emits[{i}] must be a single-form params object"})
+            continue
+        try:
+            replies.append(_dispatch_emit({**envelope, **item}, repo_root))
+        except Exception as exc:
+            replies.append({"error": f"{type(exc).__name__}: {exc}"})
+    return {"replies": replies}
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(
     params: dict,
@@ -1978,6 +2006,8 @@ def _dispatch_emit(
         return unknown
     if not isinstance(params, dict):
         return validate_params("dispatch.emit", params, _PARAM_FIELDS)
+    if "emits" in params:
+        return _emit_list(params, repo_root)
     if params.get("abandon_run"):
         return _abandon_run(params, repo_root)
     params = _anchor_relative_paths(params, repo_root)

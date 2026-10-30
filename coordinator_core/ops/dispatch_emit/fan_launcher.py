@@ -94,7 +94,9 @@ const TWIN_SUFFIX = __TWIN_SUFFIX__;
 
 // Trap: the emit agent re-serializes the reply path, so a Windows path can arrive with each backslash doubled; fold backslashes and runs of separators into single slashes.
 function _normEmitPath(p) {
-  return p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  // Trap: emit may answer repo-relative; compared raw against the absolute WARP_PREFIX it reads as outside.
+  return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : WARP_PREFIX.slice(0, -'scratch/warp/'.length) + s.replace(/^\.\//, '');
 }
 
 // The only foreign run id accepted: the one this emit minted as the redirect for this child's halted run.

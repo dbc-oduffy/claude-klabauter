@@ -27,21 +27,58 @@ def test_guard_name_is_not_a_floor_guard():
     assert pf.GUARD_NAME not in mp.FLOOR_GUARDS
 
 
-def test_fired_true_with_a_run(monkeypatch):
+def test_fired_true_with_a_run(monkeypatch, tmp_path):
     _runs(monkeypatch, ["run-1"])
-    assert pf.fired("s1") is True
+    assert pf.fired("s1", str(tmp_path)) is True
 
 
-def test_fired_false_without_a_run_or_session(monkeypatch):
+def test_fired_false_without_a_run_or_session(monkeypatch, tmp_path):
     _runs(monkeypatch, [])
-    assert pf.fired("s1") is False
+    assert pf.fired("s1", str(tmp_path)) is False
     _runs(monkeypatch, ["run-1"])
-    assert pf.fired("") is False
+    assert pf.fired("", str(tmp_path)) is False
 
 
-def test_fired_fails_open_on_exception(monkeypatch):
+def test_fired_fails_open_on_exception(monkeypatch, tmp_path):
     _runs(monkeypatch, OSError("boom"))
+    assert pf.fired("s1", str(tmp_path)) is False
+
+
+def test_fired_without_root_counts_no_launched_run(monkeypatch):
+    _runs(monkeypatch, ["run-1"])
     assert pf.fired("s1") is False
+    assert pf.fired("s1", "") is False
+
+
+@pytest.mark.parametrize("marker", ["_halted", "_landed"])
+def test_fired_excludes_a_halted_or_landed_run(monkeypatch, tmp_path, marker):
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    _runs(monkeypatch, ["run-1"])
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid: marker == "_halted")
+    monkeypatch.setattr(wrd, "_landed", lambda root, rid: marker == "_landed")
+    assert pf.fired("s1", str(tmp_path)) is False
+
+
+def test_post_fire_deny_gates_the_engine_route_on_a_live_run(monkeypatch, tmp_path):
+    from coordinator_core.hooks import nudge_em_code_dispatch as mod
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid: False)
+    monkeypatch.setattr(wrd, "_landed", lambda root, rid: False)
+    monkeypatch.setattr(pf, "is_product_path", lambda p, root, sid: True)
+    monkeypatch.setattr(mp, "guard_level", lambda name: "warn")
+    root = str(tmp_path)
+    path = (str(tmp_path / "x.py"),)
+
+    _runs(monkeypatch, [])
+    assert mod._post_fire_deny("s1", path, root) is None
+    _runs(monkeypatch, ["run-1"])
+    assert mod._post_fire_deny("s1", path, "") is None
+    env = mod._post_fire_deny("s1", path, root)
+    assert pf._POST_FIRE_DENY in _text(env)
+    monkeypatch.setattr(wrd, "_halted", lambda r, rid: True)
+    assert mod._post_fire_deny("s1", path, root) is None
 
 
 @pytest.fixture

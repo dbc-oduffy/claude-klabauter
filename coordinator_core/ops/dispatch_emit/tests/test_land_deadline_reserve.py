@@ -79,6 +79,25 @@ def test_server_window_clamp_binds_reserved_legs(clock):
         land_deadline.set_queue_wait(0.0, None)
 
 
+def test_excepted_retest_time_does_not_spend_the_leg_budget(clock):
+    with land_deadline.scope():
+        land_deadline.check("land_run.script_read")
+        with land_deadline.excepted():
+            clock.now += BUDGET + RESERVE + 5.0
+        clock.now += 1.0
+        land_deadline.check("peer_hunk_gate.co_declared_peer_holds")
+
+
+def test_excepted_never_moves_a_deadline_past_the_dispatcher_clamp(clock, monkeypatch):
+    monkeypatch.setattr(dispatch_abandon, "remaining", lambda: 20.0 + dispatch_abandon.REPLY_MARGIN_SECS)
+    with land_deadline.scope():
+        with land_deadline.excepted():
+            clock.now += 15.0
+        clock.now += 5.5
+        with pytest.raises(land_deadline.LandDeadlineExceeded):
+            land_deadline.check("land_run.commit")
+
+
 def test_no_deadline_bound_is_a_noop():
     land_deadline.check("land_run.script_read")
     land_deadline.check("land_run.integrity")

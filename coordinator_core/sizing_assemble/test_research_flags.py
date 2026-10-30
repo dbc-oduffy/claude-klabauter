@@ -442,6 +442,92 @@ def test_amend_question_target_merges_prior_targets_back_to_flag_spelling(repo: 
     assert captured["args"][8] == ["2=repo:."]
 
 
+@pytest.mark.parametrize("ref", ["what does MetaHumanCore do?", "two words", "q?"])
+def test_notebooklm_question_ref_is_refused_naming_the_repo_first_route(
+    repo: Path, capsys: pytest.CaptureFixture[str], ref: str
+) -> None:
+    code, doc = _run(
+        repo, "--research-class", "corpus", "--research-notebooklm-need", "youtube",
+        "--research-target", f"notebooklm={ref}",
+    )
+    err = capsys.readouterr().err
+    assert code == sa.EXIT_USAGE
+    assert "research" not in doc
+    assert "--research-primary repo" in err and "--research-target repo=<path>" in err
+
+
+def test_notebooklm_id_or_alias_ref_passes_the_ref_check() -> None:
+    block, errors = sa.build_research_block(
+        "corpus", None, [], None, ["notebooklm=my-alias_01"], None, None, None, None, None, None, ["podcast"]
+    )
+    assert errors == []
+    assert block["targets"] == [{"source": "notebooklm", "ref": "my-alias_01"}]
+
+
+def test_notebooklm_without_a_named_need_is_refused_pointing_at_repo_and_web(
+    repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for flags in (("--research-source", "notebooklm"), ("--research-target", "notebooklm=alias1")):
+        code, doc = _run(repo, "--research-class", "corpus", *flags)
+        assert code == sa.EXIT_USAGE
+        assert "research" not in doc
+        err = capsys.readouterr().err
+        assert "specialized tool" in err and "repo" in err and "web" in err
+
+
+def test_notebooklm_with_a_named_need_writes_the_need_into_a_schema_valid_record(repo: Path) -> None:
+    code, doc = _run(
+        repo, "--research-class", "corpus", "--research-source", "notebooklm",
+        "--research-notebooklm-need", "youtube", "--research-notebooklm-need", "google-search",
+    )
+    assert code == sa.EXIT_OK
+    assert doc["research"]["sources"] == ["notebooklm"]
+    assert doc["research"]["notebooklm_need"] == ["youtube", "google-search"]
+    assert validate_frontmatter(doc, _SCHEMA) == []
+
+
+def test_built_block_with_a_need_validates_and_the_schema_refuses_a_bad_need() -> None:
+    block, errors = sa.build_research_block(
+        "corpus", None, ["notebooklm"], None, [], None, None, None, None, None, None, ["podcast", "podcast"]
+    )
+    assert errors == [] and block["notebooklm_need"] == ["podcast"]
+    schema = json.loads(_SCHEMA.read_text(encoding="utf-8"))
+    base = yaml.safe_load(_DRAFT)
+    base["status"] = "routed"
+    base["route"] = "plan"
+    base["research"] = block
+    assert [e for e in validate_frontmatter(base, _SCHEMA) if e["field"].startswith("research")] == []
+    for bad in ([], ["tiktok"]):
+        base["research"] = {**block, "notebooklm_need": bad}
+        assert [e for e in validate_frontmatter(base, _SCHEMA) if e["field"].startswith("research")]
+    assert schema["properties"]["research"]["properties"]["notebooklm_need"]["minItems"] == 1
+
+
+def test_amend_of_a_notebooklm_record_needs_no_second_need_but_a_new_pick_does(
+    repo: Path, capsys
+) -> None:
+    _run(repo, "--research-class", "corpus", "--research-source", "notebooklm",
+         "--research-notebooklm-need", "podcast")
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    capsys.readouterr()
+    assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
+    kept = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
+    assert kept["research"]["notebooklm_need"] == ["podcast"]
+    assert sa.main(["--amend-research", rel, "--research-source", "web"]) == sa.EXIT_OK
+    assert sa.main(["--amend-research", rel, "--research-source", "notebooklm"]) == sa.EXIT_BUSINESS_FAIL
+    assert "specialized tool" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "need,sources,fragment",
+    [("tiktok", ["notebooklm"], "must be one of"), ("podcast", ["web"], "needs --research-source notebooklm")],
+)
+def test_bad_or_orphan_notebooklm_need_is_refused(need, sources, fragment) -> None:
+    block, errors = sa.build_research_block("corpus", None, sources, None, [], None, None, None, None, None, None, [need])
+    assert block is None
+    assert any(fragment in e for e in errors)
+
+
 def _seeded_video_sizing(repo: Path) -> tuple[str, Path]:
     _run(repo, "--research-class", "corpus", "--research-source", "notebooklm",
          "--research-seed", "video=https://youtu.be/x", "--research-seed", "repo=https://h/o/r")
@@ -476,3 +562,12 @@ def test_research_seed_on_amend_replaces_the_prior_seeds(repo: Path) -> None:
     assert code == sa.EXIT_OK
     research = yaml.safe_load(path.read_text(encoding="utf-8"))["research"]
     assert research["seeds"] == [{"kind": "repo", "url": "https://h/o/r2"}]
+
+
+@pytest.mark.parametrize("ref", ["alias1", "what does X do?"])
+def test_notebooklm_is_not_a_question_target_source(ref: str) -> None:
+    block, errors = sa.build_research_block(
+        "corpus", None, [], None, [], ["one"], None, "split", [f"1=notebooklm:{ref}"], None, None, ["podcast"]
+    )
+    assert block is None
+    assert any("source must be one of" in e for e in errors)

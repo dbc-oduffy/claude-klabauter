@@ -445,9 +445,9 @@ def _post_fire_deny(session_id: str, paths: tuple[str, ...] = (), root: str | No
     declares under `root`. Any read failure is no signal."""
     from coordinator_core.hooks import _em_post_fire
 
-    if not _em_post_fire.fired(session_id, root or ""):
+    if not root or not _em_post_fire.fired(session_id, root):
         return None
-    if paths and not any(_em_post_fire.is_product_path(p, root or "", session_id) for p in paths):
+    if paths and not any(_em_post_fire.is_product_path(p, root, session_id) for p in paths):
         return None
     return _em_post_fire.deny_envelope(session_id, None, paths)
 

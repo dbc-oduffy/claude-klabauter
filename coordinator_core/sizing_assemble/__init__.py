@@ -2250,6 +2250,10 @@ def parse_acceptance_rows(raw: str) -> tuple[Optional[list[dict[str, Any]]], lis
     return (None, errors) if errors else (rows, [])
 
 
+#: What a notebooklm pick must be needed for: the one capability web and repo research lack.
+NOTEBOOKLM_NEEDS = ("podcast", "youtube", "google-search")
+
+
 def build_research_block(
     value_class: Optional[str],
     appetite: Optional[str],
@@ -2262,18 +2266,26 @@ def build_research_block(
     question_targets: Optional[list[str]] = None,
     seeds: Optional[list[str]] = None,
     primary: Optional[str] = None,
+    notebooklm_needs: Optional[list[str]] = None,
+    notebooklm_vetted: bool = False,
 ) -> tuple[Optional[dict[str, Any]], list[str]]:
     """The sizing-object `research:` block from the --research-* flag values, with
     one refusal string per bad value. `(None, [])` when no research flag was given.
+    A notebooklm source or target is refused unless `notebooklm_needs` (a subset of
+    `NOTEBOOKLM_NEEDS`) names why, or a seed already routes to notebooklm; a notebooklm target
+    ref must be a notebook id or alias (no whitespace, no `?`). The needs are written to the
+    block as `notebooklm_need`, first-seen order; `notebooklm_vetted` (an amend of a record that
+    already picks notebooklm) waives the gate.
     `question_targets` are raw `<n>=<source>[:<ref>]` strings, split on the first `=` and
     then the first `:` so a ref holding a colon stays intact. `seeds` are raw `<kind>=<url>`
     strings split on the first `=`; repeats of a (kind, url) pair are dropped."""
     questions = [q.strip() for q in questions or ()]
     question_targets = list(question_targets or ())
     seeds = list(seeds or ())
+    notebooklm_needs = list(notebooklm_needs or ())
     if not (
         value_class or appetite or sources or depth or targets or questions or destination
-        or question_mode or question_targets or seeds or primary
+        or question_mode or question_targets or seeds or primary or notebooklm_needs
     ):
         return None, []
     from coordinator_core.ops import _research_contract as rc
@@ -2304,6 +2316,13 @@ def build_research_block(
             errors.append(f"--research-target source must be one of {rc.SOURCES}, got {source!r}")
         else:
             ref = ref.strip()
+            if source == "notebooklm" and (any(ch.isspace() for ch in ref) or "?" in ref):
+                errors.append(
+                    f"--research-target notebooklm={ref}: a notebooklm ref is a notebook id or alias, "
+                    "not a question; for research into code on disk use --research-primary repo "
+                    "with --research-target repo=<path>"
+                )
+                continue
             if source == "repo" and not any(ch in ref for ch in "/\\:"):
                 from coordinator_core import machine_resolver as mr
 
@@ -2368,6 +2387,24 @@ def build_research_block(
             parsed_question_targets.append(entry)
     if question_targets and not questions:
         errors.append("--research-question-target needs --research-question")
+    ordered_needs: list[str] = []
+    for need in notebooklm_needs:
+        if need not in NOTEBOOKLM_NEEDS:
+            errors.append(f"--research-notebooklm-need must be one of {NOTEBOOKLM_NEEDS}, got {need!r}")
+        elif need not in ordered_needs:
+            ordered_needs.append(need)
+    picks_notebooklm = "notebooklm" in ordered_sources or any(t["source"] == "notebooklm" for t in parsed_targets)
+    if picks_notebooklm and not ordered_needs and not notebooklm_vetted and not any(
+        rc.SEED_KIND_SOURCE.get(s["kind"]) == "notebooklm" for s in parsed_seeds
+    ):
+        errors.append(
+            "notebooklm is a specialized tool, picked only for podcast, YouTube or Google-search sources: "
+            f"name the need with --research-notebooklm-need {'|'.join(NOTEBOOKLM_NEEDS)}, "
+            "or research with --research-source repo (code on disk: --research-primary repo with "
+            "--research-target repo=<path>) or --research-source web"
+        )
+    if ordered_needs and not picks_notebooklm:
+        errors.append("--research-notebooklm-need needs --research-source notebooklm or a notebooklm target")
     if primary == "repo" and not (
         "repo" in ordered_sources
         or any(t["source"] == "repo" for t in parsed_targets)
@@ -2385,6 +2422,8 @@ def build_research_block(
         block["depth"] = depth
     if primary is not None:
         block["primary"] = primary
+    if ordered_needs:
+        block["notebooklm_need"] = ordered_needs
     if parsed_targets:
         block["targets"] = parsed_targets
     if parsed_seeds:
@@ -2445,6 +2484,7 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
             "sources": given.get("sources", prior.get("sources") or []),
             "depth": given.get("depth", prior.get("depth")),
             "primary": given.get("primary", prior.get("primary")),
+            "notebooklm_need": given.get("notebooklm_need") or list(prior.get("notebooklm_need") or []),
             "targets": given.get(
                 "targets", [f"{t['source']}={t['ref']}" for t in prior.get("targets") or []]
             ),
@@ -2477,11 +2517,19 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
                     f"{', '.join(stranded)}; clear them with --clear-research-seeds "
                     "or replace them with --research-seed <kind>=<url>"
                 )
+        if not given.get("notebooklm_need") and not (
+            "notebooklm" in merged["sources"] or any(t.startswith("notebooklm=") for t in merged["targets"])
+        ):
+            merged["notebooklm_need"] = []
         block, errors = build_research_block(
             merged["value_class"], merged["appetite"], list(merged["sources"]), merged["depth"],
             list(merged["targets"]), list(merged["questions"]), merged["destination"],
             merged["question_mode"], list(merged["question_targets"]), list(merged["seeds"]),
-            merged["primary"],
+            merged["primary"], list(merged["notebooklm_need"]),
+            not merged["notebooklm_need"] and (
+                "notebooklm" in (prior.get("sources") or [])
+                or any(t.get("source") == "notebooklm" for t in prior.get("targets") or [])
+            ),
         )
         if errors:
             raise MutateAbort("; ".join(errors))
@@ -2617,7 +2665,8 @@ def _usage(prog: str, stream=None) -> int:
         "    [--research-source web|repo|structured|notebooklm ...]\n"
         "    [--research-depth standard|deeper|deepest]\n"
         "    [--research-primary repo (repo segments run first and outrank web; needs a repo source/target/seed)]\n"
-        "    [--research-target <source>=<ref> ...]  (a repo ref may be a registered research key)\n"
+        "    [--research-target <source>=<ref> ...]  (a repo ref may be a registered research key; a notebooklm ref is a notebook id or alias)\n"
+        "    [--research-notebooklm-need podcast|youtube|google-search ... (required with a notebooklm source/target)]\n"
         "    [--research-seed <video|doc|repo|paper>=<url> ... (a URL to study; routed to its kind's pipeline)]\n"
         "    [--research-question <text> ...]\n"
         "    [--research-question-mode split|combine]\n"
@@ -2845,6 +2894,7 @@ def main(argv: list[str]) -> int:
     research_primary = None
     research_targets: list[str] = []
     research_seeds: list[str] = []
+    research_notebooklm_needs: list[str] = []
     clear_research_seeds = False
     research_questions: list[str] = []
     research_question_mode = None
@@ -3015,6 +3065,9 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--research-primary" and i + 1 < len(argv):
             research_primary = argv[i + 1]
+            i += 2
+        elif tok == "--research-notebooklm-need" and i + 1 < len(argv):
+            research_notebooklm_needs.append(argv[i + 1])
             i += 2
         elif tok == "--research-target" and i + 1 < len(argv):
             research_targets.append(argv[i + 1])
@@ -3253,7 +3306,7 @@ def main(argv: list[str]) -> int:
                 ("question_mode", research_question_mode),
                 ("question_targets", research_question_targets),
                 ("seeds", research_seeds), ("clear_seeds", clear_research_seeds),
-                ("primary", research_primary),
+                ("primary", research_primary), ("notebooklm_need", research_notebooklm_needs),
             )
             if v
         }
@@ -3278,7 +3331,7 @@ def main(argv: list[str]) -> int:
     research_block, research_errors = build_research_block(
         research_class, research_appetite, research_sources, research_depth, research_targets,
         research_questions, research_destination, research_question_mode, research_question_targets,
-        research_seeds, research_primary,
+        research_seeds, research_primary, research_notebooklm_needs,
     )
     if research_errors:
         for message in research_errors:

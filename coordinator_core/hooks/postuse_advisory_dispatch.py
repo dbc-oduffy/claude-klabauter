@@ -1541,9 +1541,15 @@ def _superseded_by_live_run(record: dict, records: list, now: float) -> bool:
     return False
 
 
+#: A stalled run's resume line repeats at most once per this window per session and task.
+_STALL_ADVISORY_WINDOW_SECONDS = 15 * 60
+
+
 def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float) -> str:
     """One register-shaped line naming this session's first stalled Workflow run
-    and the exact resume call, or "" when none is stalled.
+    and the exact resume call, or "" when none is stalled, the record's
+    `session_id` is not this session's, or the line was already given within
+    `_STALL_ADVISORY_WINDOW_SECONDS` (a `workflow-stall-told-*` marker's mtime).
 
     A run whose task the tail shows paused, or that a newer live record of the
     same run supersedes, yields no advisory.
@@ -1596,7 +1602,8 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
         for run_id, record in newest.items():
             task_id = record.get("task_id")
             transcript_dir = record.get("transcript_dir")
-            if not isinstance(task_id, str) or not isinstance(transcript_dir, str):
+            if (not isinstance(task_id, str) or not isinstance(transcript_dir, str)
+                    or record.get("session_id") != session_id):
                 continue
             try:
                 marker = stall.stopped_marker_path(tmpdir, session_id, task_id)
@@ -1633,6 +1640,15 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
             )
             if not call:
                 continue
+            told = os.path.join(tmpdir, f"workflow-stall-told-{session_id}-{task_id}")
+            try:
+                if now - os.stat(told).st_mtime < _STALL_ADVISORY_WINDOW_SECONDS:
+                    continue
+            except OSError:
+                pass
+            with open(told, "a", encoding="utf-8"):
+                pass
+            os.utime(told, (now, now))
             return (
                 f"Workflow run {run_id} stalled: agent {stalled.agent_label} idle "
                 f"{int(stalled.idle_seconds // 60)}m. Next action: {call}. "
@@ -2417,7 +2433,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     texts = [
         text
-        for text in (cp_text, rt_text, ad_text, uh_text, hw_text, ge_text, stall_text, turn_text)
+        for text in (
+            cp_text, rt_text, ad_text, uh_text, hw_text, ge_text, stall_text, turn_text,
+        )
         if text
     ]
     if texts:
