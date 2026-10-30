@@ -80,6 +80,8 @@ def test_bg_with_plugin_dir_passes_through_dispatch(tool_name, tmp_path):
         "claude --bg --plugin-dir /p x",
         'echo "claude --bg"',
         "claude --plugin-dir=/p -p x",
+        "claude --bare -p x",
+        "claude -p x --bare",
         "claude-author -p x",
         "claude-author.cmd -p x",
         "claude-author.ps1 --print x",

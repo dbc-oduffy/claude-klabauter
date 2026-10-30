@@ -31,7 +31,11 @@ class _Recorder:
 
 
 def _listing(*roots: Path) -> list[str]:
-    return sorted(str(p) for r in roots for p in r.rglob("*") if ".git" not in p.parts)
+    # The refusal log is the deny's own durable record, not a write the refusal must precede.
+    log_dir = Path(mod.REFUSAL_LOG_REL).parts[0]
+    return sorted(
+        str(p) for r in roots for p in r.rglob("*") if ".git" not in p.parts and log_dir not in p.relative_to(r).parts
+    )
 
 
 def _payload(own: Path, args, *, anchored: bool = True) -> dict:

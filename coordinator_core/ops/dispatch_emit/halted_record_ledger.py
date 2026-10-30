@@ -217,7 +217,8 @@ def _record_kept(
     baseline = _manifest_baseline(record_dir, manifest_doc)
     chunks = kept_work.kept_chunks(
         root, owner, withheld, baseline,
-        returns=persisted, finished=[r for r in persisted if r not in owning],
+        returns=persisted,
+        finished=[r for r in persisted if r not in owning and r not in (halted.get("stopped_rows") or ())],
     )
     gate = kept_work.plan_gate(halted, root)
     # A path owned by a chunk that was not kept (a peer co-declares it) is still recorded under

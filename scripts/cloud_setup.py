@@ -4239,15 +4239,21 @@ def _orientation_body(report: Report) -> str | None:
     )
 
 
-def _write_rule_surface(basename: str, body: str | None) -> bool:
-    """Land (or clear) one `<claude_home>/rules/*.md` surface.
+def _settings_home() -> Path:
+    """The settings home this script installs into: the process env first (set by
+    `set_engine_env`), else the derivation `_engine_env` would export."""
+    return Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or _engine_env()["COORDINATOR_SETTINGS_HOME"])
+
+
+def _write_rule_surface(basename: str, body: str | None, root: Path | None = None) -> bool:
+    """Land (or clear) one `*.md` surface under `root` (default `<claude_home>/rules`).
 
     Shared write mechanic for `write_session_orientation` and
     `write_session_verdict`: render → unlink-if-None → mkdir → write. Each
     caller keeps its own renderer and its own report bookkeeping; only the
     mechanics are shared. Returns whether a file was written.
     """
-    rule_path = _claude_home() / "rules" / basename
+    rule_path = (root if root is not None else _claude_home() / "rules") / basename
     if body is None:
         rule_path.unlink(missing_ok=True)
         return False
@@ -4267,14 +4273,11 @@ def write_session_orientation(report: Report) -> None:
 
 
 def write_session_verdict(report: Report) -> None:
-    """Land the pre-boot verdict where a session reads it without running anything.
+    """Land the pre-boot verdict as a plain file under the settings home.
 
-    `<claude_home>/rules/*.md` is pulled into session context by the harness
-    directly. That is the entire reason this surface is chosen over a
-    SessionStart hook: the failure most worth reporting — a PATH that resolves
-    nothing — is precisely the one that silences every hook, so a hook cannot be
-    the thing that reports it. The JSON report is the operator's artifact and is
-    read into no session at all.
+    Not under `<claude_home>/rules/`: that directory is loaded into every
+    session and this verdict changes no agent behaviour. The doctor boot
+    banners read it from the settings home instead.
 
     Written on EVERY run, healthy or not (claude-klabauter#26 (3)): its first
     line always states the hook-plane status plainly (ARMED/UNARMED plus the
@@ -4283,8 +4286,9 @@ def write_session_verdict(report: Report) -> None:
     differs from a broken one's — no `##` failure sections follow the status
     line — but the file itself is never absent.
     """
-    rule_path = _claude_home() / "rules" / SESSION_VERDICT_RULE
-    written = _write_rule_surface(SESSION_VERDICT_RULE, _verdict_body(report))
+    verdict_dir = _settings_home()
+    rule_path = verdict_dir / SESSION_VERDICT_RULE
+    written = _write_rule_surface(SESSION_VERDICT_RULE, _verdict_body(report), verdict_dir)
     report.session_verdict = {"written": written, "path": str(rule_path) if written else None}
 
 

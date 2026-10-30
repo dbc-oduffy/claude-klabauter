@@ -94,3 +94,9 @@ def test_a_queue_wait_beyond_the_server_window_halts_early_rather_than_overrunni
     assert reply["refused"] == land_deadline.REFUSED
     assert reply["queue_wait_secs"] == wait
     assert "retried" not in reply
+
+
+def test_a_halt_landing_past_the_leg_budget_still_lands_inside_the_dispatcher_window(run, monkeypatch):
+    monkeypatch.setattr(land_run.contract, "mode_of", lambda params: "halted")
+    reply = run(_slow_landing(LAND_BUDGET + land_deadline.RESERVE_SECS + 1.0), 0.0)
+    assert reply == {"committed": True, "sha": "abc"}

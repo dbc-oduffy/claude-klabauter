@@ -5371,10 +5371,25 @@ def compose_ask_script(
     criterion_open = " && !_criterionOpen" if judged else ""
     # The chunk gate's stop rule and the held-dependents check assign `_halted` a bare string; the
     # halt-record commit and `_mkRevise` read it as the typed `{halted, ...}` shape.
+    # A stop-rule halt names its row and that row's reply (or "returned nothing") in the reason, and
+    # `stopped_rows` lets the record writer keep a stopped row's returns.json entry out of `finished`.
     b.append(
+        "  let _stoppedRows = [];\n"
+        "  if (_halted && typeof _halted !== 'object' && !_haltedByHold) {\n"
+        "    const _stopRet = {};\n"
+        "    for (const _sid of _stoppedBy) {\n"
+        "      let _st = '';\n"
+        "      try { const _sr = await _rows[_sid]; _st = typeof _sr === 'string' ? _sr : (_sr == null ? '' : JSON.stringify(_sr)); } catch (e) { _st = ''; }\n"
+        "      _stopRet[_sid] = _st.trim() || 'returned nothing';\n"
+        "    }\n"
+        "    const _hs = String(_halted);\n"
+        "    if (Object.prototype.hasOwnProperty.call(_stopRet, _hs)) _halted = 'stop rule fired on ' + _hs + ': ' + _stopRet[_hs].replace(/\\s+/g, ' ').slice(0, 600);\n"
+        "    _consumedReturns = Object.assign({}, _stopRet, _consumedReturns);\n"
+        "    _stoppedRows = _stoppedBy.slice();\n"
+        "  }\n"
         "  if (_halted && typeof _halted !== 'object') { _halted = { halted: "
         f"(_haltedByHold ? {_lit(HALT_DEPENDENTS_UNSTARTED)} : {_lit(HALT_STOP_RULE)}), "
-        "reason: String(_halted), sizing: _sizingRel, run_id: _runId }; }"
+        "reason: String(_halted), sizing: _sizingRel, run_id: _runId, stopped_rows: _stoppedRows }; }"
     )
     if judged:
         b.append(_criterion_latest_test_reconcile_js())

@@ -26,6 +26,11 @@ _POST_FIRE_DENY = (
 _NON_PRODUCT_TOP_DIRS = ("state", ".coordinator-local")
 
 
+#: `(root, engine run id)` pairs already read as landed: terminal, so never re-read for the warm
+#: engine's life. Halted is not cached: a refire resumes the same id and makes it live again.
+_LANDED: set = set()
+
+
 def live_run_ids(session_id: str, root: str) -> list:
     """Engine run ids this session launched that are neither halted nor landed. Empty on an empty
     id or any read failure: the record fails open."""
@@ -38,10 +43,20 @@ def live_run_ids(session_id: str, root: str) -> list:
         from coordinator_core.ops import warp_run_deliverable as wrd
 
         live = []
+        engine_ids = _engine_run_id_map(session_id)
         for run_id in flag_em_poll_in_flight.session_workflow_run_ids(session_id):
-            engine_id = _engine_run_id(run_id, session_id)
-            if root and (wrd._halted(Path(root), engine_id) or wrd._landed(Path(root), engine_id)):
+            engine_id = engine_ids.get(run_id, run_id)
+            if engine_id in live:
                 continue
+            if root:
+                key = (os.path.normcase(os.path.abspath(root)), engine_id)
+                if key in _LANDED:
+                    continue
+                if wrd._landed(Path(root), engine_id):
+                    _LANDED.add(key)
+                    continue
+                if wrd._halted(Path(root), engine_id):
+                    continue
             live.append(engine_id)
         return live
     except Exception:
@@ -244,11 +259,11 @@ def _engine_row_writes(plan_text: str) -> list[str]:
     return [w for _rid, info in _plan_rows(plan_text) if info.get("performer") != "em" for w in info["writes"]]
 
 
-def _engine_run_id(run_id: str, session_id: str) -> str:
-    """The engine run id behind a harness `wf_` id: the `<run_id>.workflow.mjs` stem of the launch
-    record's `scriptPath`. Any other id, or an unmappable one, comes back unchanged."""
-    if not run_id.startswith("wf_"):
-        return run_id
+def _engine_run_id_map(session_id: str) -> dict:
+    """`{wf_ id: engine run id}` from one pass over this session's launch records, each mapped to
+    the `<run_id>.workflow.mjs` stem of its `scriptPath`. One pass per call, never one per run:
+    the record count grows with every fire, and a per-run rescan put seconds on every Bash hook."""
+    out: dict = {}
     try:
         import glob
 
@@ -257,16 +272,45 @@ def _engine_run_id(run_id: str, session_id: str) -> str:
         pattern = os.path.join(
             glob.escape(flag_em_poll_in_flight._tmpdir()), f"workflow-run-{glob.escape(session_id)}-*.json")
         for name in glob.glob(pattern):
-            with open(name, encoding="utf-8") as fh:
-                record = json.load(fh)
-            if not isinstance(record, dict) or record.get("run_id") != run_id:
+            record = flag_em_poll_in_flight.launch_record(name)
+            if not record:
                 continue
-            script = str(record.get("scriptPath") or "").replace("\\", "/").rsplit("/", 1)[-1]
-            if script.endswith(".workflow.mjs") and len(script) > len(".workflow.mjs"):
-                return script[: -len(".workflow.mjs")]
+            run_id = record.get("run_id")
+            if not isinstance(run_id, str) or not run_id.startswith("wf_") or run_id in out:
+                continue
+            engine_id = _engine_id_of_script(str(record.get("scriptPath") or ""))
+            if engine_id:
+                out[run_id] = engine_id
     except Exception:
         pass
-    return run_id
+    return out
+
+
+_LAUNCHER_STEM = re.compile(r"resume-(.+)-[0-9a-f]{6}\.launcher")
+
+
+def _engine_id_of_script(script_path: str) -> str | None:
+    """The engine run id a launched script runs: `<run>.workflow.mjs` -> `<run>`; a run's own
+    `<run>/resume-script.workflow.mjs` -> `<run>`; `resume-<run>-<hex6>.launcher.workflow.mjs`
+    -> `<run>`. Mapping the last two to their stems named no real run, so the run never read as
+    halted or landed and stayed live for the life of the session."""
+    parts = script_path.replace("\\", "/").split("/")
+    name = parts[-1]
+    if not name.endswith(".workflow.mjs") or len(name) <= len(".workflow.mjs"):
+        return None
+    stem = name[: -len(".workflow.mjs")]
+    if stem == "resume-script":
+        return parts[-2] if len(parts) >= 2 and parts[-2] else None
+    launcher = _LAUNCHER_STEM.fullmatch(stem)
+    return launcher.group(1) if launcher else stem
+
+
+def _engine_run_id(run_id: str, session_id: str) -> str:
+    """The engine run id behind a harness `wf_` id. Any other id, or an unmappable one, comes back
+    unchanged."""
+    if not run_id.startswith("wf_"):
+        return run_id
+    return _engine_run_id_map(session_id).get(run_id, run_id)
 
 
 def _run_plan_file(root: str, run_id: str, session_id: str = "") -> str | None:

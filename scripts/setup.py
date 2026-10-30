@@ -4449,11 +4449,11 @@ def write_rule_surface(claude_home: Path, basename: str, body: str | None) -> bo
 
 
 def install_write_hook_plane_verdict(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Install-chain step: land `<home>/.claude/rules/workstation-install-verdict.md`,
+    """Install-chain step: land `<settings-home>/machine-local/workstation-install-verdict.md`,
     whose first line is `HOOK PLANE: ARMED|UNARMED (delivery: <surface>)`.
 
-    The harness loads rules files with no hook involved, so the verdict
-    survives a dead hook plane. Install-time snapshot, refreshed only by
+    Read by the doctor boot banners, not auto-loaded into sessions; the legacy
+    `<home>/.claude/rules/` copy is removed. Install-time snapshot, refreshed only by
     re-running setup. Skipped in a container (cloud_setup.py owns that
     verdict). ADVISORY: any failure prints WARN and returns; zero spawns.
     """
@@ -4490,12 +4490,16 @@ def install_write_hook_plane_verdict(repo_root: Path, claude_klabauter_root_reso
         if problems:
             lines.append("")
             lines.extend(f"- {problem}" for problem in problems)
-        write_rule_surface(claude_home, WORKSTATION_VERDICT_RULE, "\n".join(lines) + "\n")
+        if settings_home_path is None:
+            raise RuntimeError("settings-home does not resolve")
+        written = hpv.verdict_path(settings_home_path, WORKSTATION_VERDICT_RULE)
+        written.parent.mkdir(parents=True, exist_ok=True)
+        written.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+        write_rule_surface(claude_home, WORKSTATION_VERDICT_RULE, None)  # clear the legacy always-loaded copy
     except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
         print(f"WARN [hook-plane] could not write the verdict: {type(exc).__name__}: {exc}", file=sys.stderr)
         return
 
-    written = claude_home / "rules" / WORKSTATION_VERDICT_RULE
     tag = "PASS" if status_line.startswith("HOOK PLANE: ARMED") else "WARN"
     print(f"{tag} [hook-plane] {status_line.removeprefix('HOOK PLANE: ')} -> {written}")
 

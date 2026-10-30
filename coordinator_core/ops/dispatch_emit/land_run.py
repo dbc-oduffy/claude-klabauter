@@ -229,8 +229,11 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
     from coordinator_core.lifecycle import main_worktree_root
 
     root = main_worktree_root(repo_root)
+    # A halt landing is the run leaving its record in the tree; the leg budget refusing it strands
+    # run state uncommitted, so only the dispatcher and server-window clamps bound it.
+    budget = float("inf") if mode == "halted" else None
     try:
-        with land_deadline.scope():
+        with land_deadline.scope(budget_secs=budget):
             return _dispatch_mode(mode, root, repo_root, params)
     except land_deadline.LandDeadlineExceeded as exc:
         return land_deadline.halt_reply(exc)

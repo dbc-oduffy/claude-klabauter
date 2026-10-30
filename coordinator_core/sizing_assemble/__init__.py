@@ -31,32 +31,19 @@ Ledger later refuted that attribution as mirror-side, which this
 measurement corroborates: no perf cut is needed here.
 
 Measured process time, C6 (2026-09-27-sizing-carries-exit-criterion-and-
-interaction-mode plan): a fresh in-tree `getrusage(RUSAGE_CHILDREN)`
-measurement (k=20, fresh process per sample; this session's container, not
-the ~56.8ms baseline's own machine, so the two absolute figures are not
-directly comparable — the DELTA is what this note establishes) of
-`main()` through the real CLI read ~44ms for `import
-coordinator_core.sizing_assemble` alone versus ~51ms for a full
-`--tshirt M --exit-criterion x --interaction-mode pm` run (a ~7ms delta,
-regardless of whether `--interaction-mode` is passed — `route()`'s own
-`_validate_interaction_mode` lazily imports `mode_resolution` on every
-call, flag or not). `mode_resolution`'s own cold-import cost, measured
-standalone the same way (`import coordinator_core.session.mode_resolution`,
-k=20, fresh process), read ~47ms against a ~12ms bare-interpreter floor in
-this same container (~35ms marginal). The ~7ms observed delta here is
-comfortably inside that import-cost envelope, and the absolute run time
-(~51ms) stays well under the ≤200ms budget ceiling (DR-344 §7) — no perf
-cut needed.
+interaction-mode plan): `import coordinator_core.sizing_assemble` ~44ms versus
+~51ms for a full `--tshirt M --exit-criterion x --interaction-mode pm` run
+(fresh in-tree `getrusage(RUSAGE_CHILDREN)`, k=20) — well under the 200ms
+budget ceiling (DR-344 §7). `_validate_interaction_mode` checks a local mirror
+and imports nothing.
 
 READ-ONLY, by construction (`route()`; `write_back()`, reached only through
 `main()`'s `--write <state/sizings/x.yaml>`, is the one writer): `route()` only reads its arguments — it never
-touches disk, never writes a sizing-object, never shells out; its lazy,
-function-local `mode_resolution` import (`_validate_interaction_mode`)
-reaches only that module's pure constants/validation, never
-`resolve_mode`'s fleet-record read. `main()` is the one caller that reads
-disk here, through `_resolve_interaction_mode_and_source`'s
-`resolve_mode`/`read_fleet_mode` calls, when no `--interaction-mode` flag
-was given. The caller (the sizing skill / a future scaffolder) is
+touches disk, never writes a sizing-object, never shells out; it imports neither
+`mode_resolution` nor `fleet_mode`. The fleet record is read by
+`coordinator/bin/sizing-assemble.py`, which installs a resolver through
+`set_interaction_mode_resolver` when no `--interaction-mode` flag was given.
+The caller (the sizing skill / a future scaffolder) is
 responsible for persisting the returned decision into a
 `state/sizings/*.yaml` sizing-object; this module computes the routing
 fields (`route`, `detents`, `fork`) of that object, plus transport-only
@@ -271,7 +258,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from coordinator_core import warp_fire as _warp_fire
 from coordinator_core.bounded_slug import bounded_slug
@@ -667,30 +654,18 @@ _ROOM_ENTRY = {
 _LIGHT_TERMINAL_TSHIRTS = ("XS", "S")
 
 # Mirrors `coordinator_core.session.mode_resolution.INTERACTION_MODES`
-# order. Duplicated locally (never imported at module top level) for the
-# same reason ROUTE_ENUM/DETENT_ENUM above are hand-authored copies of the
-# vendored schema rather than a live import: `route()` must stay
-# import-light (Design § Engine), and this totality check runs at IMPORT
-# TIME, before any lazy `mode_resolution` import has happened. Drift
-# between this tuple and C2's canonical one is caught by
-# `test_interaction_mode_touchpoints.py`, which imports both and asserts
-# equality.
+# order. This module never imports `mode_resolution` or `fleet_mode`: doing
+# so makes it, and every importer, a reader of the fleet record
+# (`test_fleet_mode_reader_set.py`). Drift between this tuple and the
+# canonical one is caught by `test_interaction_mode_touchpoints.py`, which
+# imports both and asserts equality.
 _INTERACTION_MODES_EXPECTED = ("hands-on", "pm", "ceo")
 
 
 def _validate_interaction_mode(interaction_mode: str) -> None:
-    # Lazy, function-local import (Design § Engine: "importing mode_resolution
-    # lazily ... so that route() stays import-light") -- validates against
-    # C2's canonical registry, not the local mirror above, so a caller
-    # actually gets checked against the live source of truth.
-    from coordinator_core.session.mode_resolution import (
-        INTERACTION_MODE_VALUES,
-        INTERACTION_MODES,
-    )
-
-    if interaction_mode not in INTERACTION_MODE_VALUES:
+    if interaction_mode not in _INTERACTION_MODES_EXPECTED:
         raise SizingAssembleError(
-            f"interaction_mode must be one of {INTERACTION_MODES}, got {interaction_mode!r}"
+            f"interaction_mode must be one of {_INTERACTION_MODES_EXPECTED}, got {interaction_mode!r}"
         )
 
 
@@ -2702,29 +2677,29 @@ def _usage(prog: str, stream=None) -> int:
     return EXIT_USAGE
 
 
-#: `main()`'s own dummy session id for the `interaction_mode` fleet-record
-#: read below. Never consulted for anything else: `interaction_mode`
-#: declares `session_pair=None` (C2), so `resolve_mode`'s session-scoped
-#: rung is never reached for this key -- any literal string works here.
-_CLI_SESSION_ID = "sizing-assemble-cli"
+#: The mode `main()` reports when no flag was given and no resolver is installed.
+_INTERACTION_MODE_DEFAULT = "ceo"
+
+_interaction_mode_resolver: Optional[Callable[[], tuple[str, str]]] = None
+
+
+def set_interaction_mode_resolver(resolver: Optional[Callable[[], tuple[str, str]]]) -> None:
+    """Install the no-flag resolver, returning `(mode, "fleet" | "default")`; None removes it.
+
+    The fleet record is read by the installing process (the CLI entry, a sanctioned
+    reader), never by this module.
+    """
+    global _interaction_mode_resolver
+    _interaction_mode_resolver = resolver
 
 
 def _resolve_interaction_mode_and_source(cli_value: Optional[str]) -> tuple[str, str]:
-    """flag -> fleet -> default (Design § Mode resolution). Lazy,
-    function-local import (`main()`'s own "importing mode_resolution lazily
-    ... so that route() stays import-light") -- resolving through C2's
-    `resolve_mode` (never a hand-rolled copy of its fleet-wins precedence)
-    keeps this in sync with the registry by construction."""
+    """flag -> installed resolver (fleet) -> default (Design § Mode resolution)."""
     if cli_value is not None:
         return cli_value, "flag"
-
-    from coordinator_core.session.fleet_mode import read_fleet_mode
-    from coordinator_core.session.mode_resolution import resolve_mode
-
-    resolved = resolve_mode("interaction_mode", _CLI_SESSION_ID, env=None)
-    fleet_map = read_fleet_mode()
-    source = "fleet" if fleet_map.get("interaction_mode") == resolved else "default"
-    return resolved, source
+    if _interaction_mode_resolver is not None:
+        return _interaction_mode_resolver()
+    return _INTERACTION_MODE_DEFAULT, "default"
 
 
 def _open_routed_obligation(write_path: str) -> None:

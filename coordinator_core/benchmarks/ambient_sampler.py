@@ -105,7 +105,7 @@ def append_sample(sink: Path, sample: dict) -> None:
     try:
         os.makedirs(sink.parent, exist_ok=True)
         line = json.dumps(sample, separators=(",", ":")) + "\n"
-        atomic_append.append_line(sink, line.encode("utf-8"))
+        atomic_append.append_line(sink, line.encode("utf-8"), droppable=True)
     except OSError as exc:
         print(f"ambient_sampler: cannot write {sink}: {exc}", file=sys.stderr)
 

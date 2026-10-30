@@ -882,7 +882,7 @@ def sample_once(
 
         atomic_append = _load_sibling("coordinator_core.atomic_append", "../atomic_append.py")
         line = json.dumps(row, separators=(",", ":")) + "\n"
-        atomic_append.append_line(sink, line.encode("utf-8"))
+        atomic_append.append_line(sink, line.encode("utf-8"), droppable=True)
         return row
     except Exception:
         try:

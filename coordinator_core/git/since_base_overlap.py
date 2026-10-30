@@ -182,10 +182,15 @@ def check(
 
         run_bases = tuple(closing_bases(root, run_id, {}))
     own = set()
-    ancestors = _base_ancestors(common_dir, base_sha) if plan is not None else []
+    ancestors: Optional[List[str]] = None
     for sha in newest_first:
         message = (commit_meta(common_dir, sha) or {}).get("message", "")
-        if is_own_commit(message, plan, base_sha, newest_first, ancestors, run_bases) or (
+        is_own = is_own_commit(message, plan, base_sha, newest_first, (), run_bases)
+        if not is_own and plan is not None and _BASE_RE.search(message):
+            if ancestors is None:
+                ancestors = _base_ancestors(common_dir, base_sha)
+            is_own = is_own_commit(message, plan, base_sha, newest_first, ancestors, run_bases)
+        if is_own or (
             run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id
         ):
             own.add(sha)

@@ -51,6 +51,24 @@ _POINTER_NAME = ".coordinator-content-root"
 #: One TCP connect, never a request: the forwarder either accepts or it is dark.
 _PORT_PROBE_TIMEOUT_S = 0.25
 
+#: Install verdict file names; they live under `<settings-home>/machine-local/`,
+#: never in the always-loaded `<claude_home>/rules/`.
+WORKSTATION_VERDICT_NAME = "workstation-install-verdict.md"
+CLOUD_VERDICT_NAME = "cloud-preboot-verdict.md"
+
+
+def verdict_path(settings_home: str | Path, basename: str) -> Path:
+    """Where the install verdict `basename` lives: the one path writer and reader share."""
+    return Path(settings_home) / "machine-local" / basename
+
+
+def read_verdict_status(settings_home: str | Path | None, basename: str = WORKSTATION_VERDICT_NAME) -> str | None:
+    """The first line of the stored install verdict, or None when absent or unreadable."""
+    if not settings_home:
+        return None
+    text = first_line_or_none(verdict_path(settings_home, basename))
+    return text.splitlines()[0] if text else None
+
 
 def script_tail(piece: str) -> str | None:
     """The `<dir>/<file>` tail of `piece` if it names a script file, else None."""

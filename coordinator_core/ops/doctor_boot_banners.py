@@ -43,6 +43,7 @@ def hook_plane_layer(config_dir: Path) -> Layer:
         derive_hook_plane,
         hook_plane_problems,
         hook_plane_status_line,
+        read_verdict_status,
     )
     from coordinator_core.content_root import read_content_root
 
@@ -59,7 +60,11 @@ def hook_plane_layer(config_dir: Path) -> Layer:
     problems = hook_plane_problems(plane)
     if problems:
         return Layer(HOOK_PLANE_NAME, "broken", [Finding("broken", p) for p in problems])
-    return Layer(HOOK_PLANE_NAME, "ok", [Finding("info", hook_plane_status_line(plane))])
+    findings = [Finding("info", hook_plane_status_line(plane))]
+    stored = read_verdict_status(settings_home_path)
+    if stored:
+        findings.append(Finding("info", f"Install verdict (settings home): {stored}"))
+    return Layer(HOOK_PLANE_NAME, "ok", findings)
 
 
 def boot_banner_layers(config_dir: Path) -> List[Layer]:

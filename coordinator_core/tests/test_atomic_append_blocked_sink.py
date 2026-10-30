@@ -31,7 +31,7 @@ def blocked_write(monkeypatch):
 def test_blocked_sink_returns_at_deadline_and_registers(tmp_path, blocked_write, capsys):
     sink = tmp_path / "s.jsonl"
     t0 = time.perf_counter()
-    atomic_append.append_line(sink, b"a\n")
+    atomic_append.append_line(sink, b"a\n", droppable=True)
     elapsed = time.perf_counter() - t0
     assert elapsed < atomic_append.APPEND_DEADLINE_SECS + 0.5
     assert str(sink) in atomic_append.in_flight_sinks()
@@ -42,9 +42,9 @@ def test_blocked_sink_returns_at_deadline_and_registers(tmp_path, blocked_write,
 @pytest.mark.deliberate_wall_clock(reason="a stalled sink must drop at once, not wait another deadline")
 def test_stalled_sink_drops_immediately_and_healthy_sink_unaffected(tmp_path, blocked_write):
     bad = tmp_path / "bad.jsonl"
-    atomic_append.append_line(bad, b"a\n")
+    atomic_append.append_line(bad, b"a\n", droppable=True)
     t0 = time.perf_counter()
-    atomic_append.append_line(bad, b"b\n")
+    atomic_append.append_line(bad, b"b\n", droppable=True)
     assert time.perf_counter() - t0 < atomic_append.APPEND_DEADLINE_SECS / 2
     blocked_write.set()
     deadline = time.monotonic() + 3
@@ -68,7 +68,7 @@ def test_blocked_sink_does_not_starve_other_sinks(tmp_path, monkeypatch):
 
     monkeypatch.setattr(atomic_append.os, "write", write)
     try:
-        atomic_append.append_line(slow, b"a\n")
+        atomic_append.append_line(slow, b"a\n", droppable=True)
         good = tmp_path / "good.jsonl"
         atomic_append.append_line(good, b"b\n")
         assert good.read_bytes() == b"b\n"
@@ -80,6 +80,15 @@ def test_writer_exception_inside_deadline_reraises(tmp_path):
     with pytest.raises(OSError):
         atomic_append.append_line(tmp_path / "missing" / "s.jsonl", b"a\n")
     assert not atomic_append.stalled_sinks()
+
+
+@pytest.mark.deliberate_wall_clock(reason="a record line waits out a wedged writer instead of dropping")
+def test_a_record_line_waits_out_a_stall_and_lands(tmp_path, blocked_write):
+    sink = tmp_path / "notes.jsonl"
+    atomic_append.append_line(sink, b"a\n", droppable=True)
+    threading.Timer(atomic_append.APPEND_DEADLINE_SECS * 2, blocked_write.set).start()
+    atomic_append.append_line(sink, b"b\n")
+    assert sink.read_bytes() == b"a\nb\n"
 
 
 def test_normal_append_registers_nothing(tmp_path):

@@ -10,7 +10,9 @@ Spec: docs/plans/2026-09-27-sizing-carries-exit-criterion-and-interaction-mode.m
 """
 from __future__ import annotations
 
+import importlib.util
 import json
+from pathlib import Path
 
 import pytest
 
@@ -25,17 +27,25 @@ def _run(monkeypatch, capsys, argv):
     return rc, captured
 
 
+_BIN = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "sizing-assemble.py"
+
+
+def _cli_entry_module():
+    spec = importlib.util.spec_from_file_location("sizing_assemble_cli_entry", _BIN)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _fleet_stub(monkeypatch, value):
-    """Stubs `read_fleet_mode` everywhere this module's lazy imports reach
-    it: `coordinator_core.session.fleet_mode` (the origin, and the name
-    `_resolve_interaction_mode_and_source`'s own `from ... import
-    read_fleet_mode` re-binds), AND `coordinator_core.session.
-    mode_resolution`'s OWN already-bound module-level name -- `resolve_mode`
-    calls that local name directly, never re-looking it up on the origin
-    module, so patching only the origin would silently miss it."""
+    """Stubs the fleet record and installs the resolver the CLI entry
+    (`coordinator/bin/sizing-assemble.py`) installs, since the engine itself
+    never reads the record. `resolve_mode` calls its own bound
+    `read_fleet_mode`, so both names are patched."""
     fn = lambda: value if value is not None else {}
     monkeypatch.setattr(fleet_mode_module, "read_fleet_mode", fn)
     monkeypatch.setattr(mode_resolution_module, "read_fleet_mode", fn)
+    monkeypatch.setattr(sa, "_interaction_mode_resolver", _cli_entry_module()._fleet_interaction_mode)
 
 
 class TestFlagWins:
@@ -56,6 +66,11 @@ class TestFleetWinsWhenNoFlag:
         out = json.loads(capsys.readouterr().out)
         assert out["interaction_mode"] == "ceo"
         assert out["interaction_mode_source"] == "fleet"
+
+
+def test_engine_default_mirrors_registry_default():
+    """`sizing_assemble` mirrors the registry default because it cannot import it."""
+    assert sa._INTERACTION_MODE_DEFAULT == mode_resolution_module.MODE_KEYS["interaction_mode"].default
 
 
 class TestDefaultWhenNeither:

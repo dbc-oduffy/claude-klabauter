@@ -438,6 +438,7 @@ def _emit_within_budget(emit: EmitFn, params: dict, root: Path) -> dict:
 
     The emit keeps running on a daemon thread; the caller kills the process at its own budget, so
     the answer must land first or the caller denies with no run id and the EM re-submits."""
+    # Trap: a concurrent submission's run minted in the window is named as ours; over-naming is the safe side of "do not re-submit".
     before = _run_dirs(root)
     box: dict = {}
 
@@ -852,10 +853,14 @@ def _live_write_overlap_deny(
         from coordinator_core.warp_live import _holds_ended_marker
 
         # The index is pruned in the background; a halted or landed run holds nothing (read per hit only).
+        # A fan-out child records its end in sibling-status.json, never halted.json.
+        def ended(rid: str) -> bool:
+            return _holds_ended_marker(root, rid) or _status_of(root, rid) in ("halted", "landed")
+
         hits = {
             rid: paths
             for rid, paths in hits.items()
-            if _bounded_call(("ended", str(root), rid), lambda rid=rid: _holds_ended_marker(root, rid)) is not True
+            if _bounded_call(("ended", str(root), rid), lambda rid=rid: ended(rid)) is not True
         }
     if not hits:
         return None

@@ -378,3 +378,28 @@ def test_unmappable_wf_run_id_comes_back_unchanged(repo, monkeypatch, tmp_path):
     monkeypatch.setattr(flag_em_poll_in_flight, "_tmpdir", lambda: str(tmp_path))
     assert _em_post_fire._engine_run_id("wf_none", SID) == "wf_none"
     assert _em_post_fire._engine_run_id("ask-1", SID) == "ask-1"
+
+
+@pytest.mark.parametrize("script, engine_id", [
+    (r"E:\r\scratch\warp\ask-20261030T000000-abcdef.workflow.mjs", "ask-20261030T000000-abcdef"),
+    ("E:/r/state/warp/warp-x-20261030T000000-1e48f4/resume-script.workflow.mjs", "warp-x-20261030T000000-1e48f4"),
+    ("E:/r/scratch/warp/resume-warp-x-20261030T000000-c98511-259aec.launcher.workflow.mjs",
+     "warp-x-20261030T000000-c98511"),
+    ("E:/r/scratch/warp/notes.md", None),
+])
+def test_a_resume_script_or_launcher_maps_to_the_run_it_resumes(script, engine_id):
+    assert _em_post_fire._engine_id_of_script(script) == engine_id
+
+
+def test_a_landed_run_is_not_reread_and_a_halted_one_can_resume(repo, monkeypatch):
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    landed_reads = []
+    halted = {"ask-halted-1": True}
+    monkeypatch.setattr(wrd, "_landed", lambda root, rid: landed_reads.append(rid) or rid == "ask-landed-1")
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid: halted.get(rid, False))
+    _fire(monkeypatch, ["ask-landed-1", "ask-halted-1"])
+    assert _em_post_fire.live_run_ids(SID, str(repo)) == []
+    halted["ask-halted-1"] = False
+    assert _em_post_fire.live_run_ids(SID, str(repo)) == ["ask-halted-1"]
+    assert landed_reads.count("ask-landed-1") == 1

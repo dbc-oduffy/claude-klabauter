@@ -10,8 +10,9 @@ observed completion. Every other case allows silently.
 
 In-flight source: the Workflow run record `_capture_workflow_run_record_sync`
 (`coordinator_core.hooks.postuse_advisory_dispatch`) already persists under
-`<fleet managed Temp root>/workflow-run-<session>-<task>.json` (the legacy top-level Temp
-location is read too). This op adds no second marker
+`<fleet managed Temp root>/workflow-run-<session>-<task>.json`. The legacy top-level Temp
+location is not scanned: nothing has written there since the managed layout, and listing a
+~90k-entry Temp root cost ~120ms on every hook. This op adds no second marker
 and does not edit that file — it only reads whether a record for this session exists and
 whether the transcript tail carries that run's completion.
 
@@ -177,27 +178,42 @@ def _run_ids_in_flight(tmpdir: str, session_id: str) -> list:
     try:
         prefix = f"workflow-run-{session_id}-"
         ids = []
-        legacy_dir = str(legacy_top_level_path(""))
-        roots = [tmpdir] if os.path.normcase(legacy_dir) == os.path.normcase(tmpdir) else [tmpdir, legacy_dir]
-        for root in roots:
-            try:
-                names = os.listdir(root)
-            except OSError:
+        try:
+            names = os.listdir(tmpdir)
+        except OSError:
+            return []
+        for name in names:
+            if not (name.startswith(prefix) and name.endswith(".json")):
                 continue
-            for name in names:
-                if not (name.startswith(prefix) and name.endswith(".json")):
-                    continue
-                try:
-                    with open(os.path.join(root, name), "r", encoding="utf-8") as fh:
-                        record = json.load(fh)
-                    run_id = record.get("run_id") if isinstance(record, dict) else None
-                    if isinstance(run_id, str) and run_id:
-                        ids.append(run_id)
-                except Exception:
-                    continue
+            record = launch_record(os.path.join(tmpdir, name))
+            run_id = record.get("run_id") if record else None
+            if isinstance(run_id, str) and run_id:
+                ids.append(run_id)
         return ids
     except Exception:
         return []
+
+
+#: Parsed launch records by path. A record is written once per launch and never rewritten, and a
+#: session accrues hundreds, so re-parsing them all put ~100ms on every hook that asked.
+_LAUNCH_RECORDS: dict = {}
+
+
+def launch_record(path: str) -> dict | None:
+    """The parsed `workflow-run-*.json` launch record at `path`; None when unreadable (not cached,
+    so a record caught mid-write is read again next time)."""
+    record = _LAUNCH_RECORDS.get(path)
+    if record is not None:
+        return record
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            record = json.load(fh)
+    except Exception:
+        return None
+    if not isinstance(record, dict):
+        return None
+    _LAUNCH_RECORDS[path] = record
+    return record
 
 
 def session_workflow_run_ids(session_id: str) -> list:

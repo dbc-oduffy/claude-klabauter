@@ -12,7 +12,7 @@ def test_stalled_open_does_not_block_caller_and_full_queue_drops(tmp_path, monke
     gate = threading.Event()
     landed = []
 
-    def slow_append(sink, encoded):
+    def slow_append(sink, encoded, droppable=False):
         gate.wait(5)
         landed.append(encoded)
 

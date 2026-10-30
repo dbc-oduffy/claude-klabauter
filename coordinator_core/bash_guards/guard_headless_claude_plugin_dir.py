@@ -140,7 +140,8 @@ def check_headless_claude_plugin_dir(
         args = [_plain(w[2]) for w in words[idx + 1:]]
         if not any(a in _HEADLESS_FLAGS for a in args):
             continue
-        if any(a == "--plugin-dir" or a.startswith("--plugin-dir=") for a in args):
+        # `--bare` asks for no plugins by definition; adding one defeats a deliberate clean run.
+        if any(a == "--bare" or a == "--plugin-dir" or a.startswith("--plugin-dir=") for a in args):
             continue
         inserts.append(words[idx][1])
     if not inserts:

@@ -348,3 +348,17 @@ def test_absent_registry_files_are_not_errors(tmp_path):
     ml = tmp_path / "machine-local"
     ml.mkdir()
     assert hpv.read_registry(ml, REGISTRY_KEY) == (None, [])
+
+
+def test_verdict_path_is_under_the_settings_home_machine_local(tmp_path):
+    path = hpv.verdict_path(tmp_path, hpv.WORKSTATION_VERDICT_NAME)
+    assert path == tmp_path / "machine-local" / "workstation-install-verdict.md"
+
+
+def test_read_verdict_status_returns_the_first_line_or_none(tmp_path):
+    assert hpv.read_verdict_status(tmp_path) is None
+    assert hpv.read_verdict_status(None) is None
+    path = hpv.verdict_path(tmp_path, hpv.WORKSTATION_VERDICT_NAME)
+    path.parent.mkdir(parents=True)
+    path.write_text("HOOK PLANE: UNARMED (delivery: none)\n\n- why\n", encoding="utf-8")
+    assert hpv.read_verdict_status(tmp_path) == "HOOK PLANE: UNARMED (delivery: none)"

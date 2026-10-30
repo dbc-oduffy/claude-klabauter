@@ -140,3 +140,20 @@ def test_a_halted_run_still_in_the_index_denies_nothing(tmp_path):
     rd.mkdir(parents=True)
     (rd / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None
+
+
+def test_a_fanout_child_halted_in_its_sibling_status_denies_nothing(tmp_path):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import status_rel
+
+    (tmp_path / ".git").mkdir()
+    run_id = "ask-20261030T094351-c6ffdb"
+    _live(tmp_path, {run_id: {"pkg/mod.py"}})
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    status = tmp_path / status_rel(run_id)
+    status.parent.mkdir(parents=True)
+    status.write_text(json.dumps({"status": "held"}), encoding="utf-8")
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {})
+    status.write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None

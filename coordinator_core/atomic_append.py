@@ -108,11 +108,8 @@ def _open_append_fd_windows(path: str) -> int:
 #: Scheduler yields a fresh sink gets when the stall window is spent, so a healthy sink is not dropped before its writer thread runs.
 _FRESH_SINK_YIELDS = 5
 
-#: Retained lines a stalled sink's writer may hold; past it a retained line drops like any other.
-_RETAIN_MAX = 256
 
-
-def append_line(sink: "Path | str", encoded: bytes, retain: bool = False) -> None:
+def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False) -> None:
     """Atomically append ``encoded`` (already newline-terminated) to ``sink``.
 
     A single write of one pre-encoded line, using the platform's genuinely
@@ -129,23 +126,21 @@ def append_line(sink: "Path | str", encoded: bytes, retain: bool = False) -> Non
     concurrency test can observe a real failure if the atomicity guarantee
     is ever violated.
 
-    The write runs on a per-sink daemon writer thread and the caller waits
-    ``APPEND_DEADLINE_SECS``: on expiry the sink is marked stalled, one stderr
-    line names it, and the line is dropped without raising; later calls to
-    that sink drop at once until its writer returns. An error raised inside
-    the deadline is re-raised here.
+    The write runs on a per-sink daemon writer thread. By default the caller waits
+    for it to land however long that takes: a record line (a run note, a ledger row)
+    lost to a slow sink is silent data loss, and a wedged sink must surface as a
+    slow op, not as a write reported done that never happened.
 
-    ``retain=True`` marks a line that must not be lost to a stall (an op's completion
-    row): while the sink is stalled it is queued behind the wedged write, without
-    waiting, and lands when that writer returns.
+    ``droppable=True`` is for telemetry only: the caller waits
+    ``APPEND_DEADLINE_SECS``; on expiry the sink is marked stalled, one stderr
+    line names it, and the line is dropped without raising; later droppable
+    calls to that sink drop at once until its writer returns. An error raised
+    inside the deadline is re-raised here.
     """
     sink_str = str(sink)
     job = _Job(encoded)
     with _registry_lock:
-        if sink_str in _stalled:
-            held = _writers.get(sink_str)
-            if retain and held is not None and held.qsize() < _RETAIN_MAX:
-                held.put(job)
+        if droppable and sink_str in _stalled:
             return
         w = _writers.get(sink_str)
         if w is None:
@@ -158,6 +153,11 @@ def append_line(sink: "Path | str", encoded: bytes, retain: bool = False) -> Non
         budget = APPEND_DEADLINE_SECS
         if _stalled:
             budget = max(0.0, APPEND_DEADLINE_SECS - (time.monotonic() - min(_stalled.values())))
+    if not droppable:
+        job.done.wait()
+        if job.error is not None:
+            raise job.error
+        return
     if budget <= 0.0:
         for _ in range(_FRESH_SINK_YIELDS):
             if job.done.is_set():
@@ -257,10 +257,8 @@ def _drain_worker(q: "queue.Queue") -> None:
     while True:
         sink, encoded, retain = q.get()
         try:
-            if retain:  # plain call below keeps the 2-arg shape that test guards wrap
-                append_line(sink, encoded, True)
-            else:
-                append_line(sink, encoded)
+            # A retained line (an op's completion row) waits out a wedged sink; the rest drop.
+            append_line(sink, encoded, droppable=not retain)
         except Exception:
             pass
         finally:
@@ -294,11 +292,12 @@ def append_line_bounded(sink: "Path | str", encoded: bytes, retain: bool = False
 
     For telemetry on an op's critical path: a stalled ``CreateFileW`` (AV
     minifilter, contended sink) must delay only the writer thread. A full queue
-    drops the line. ``retain`` is ``append_line``'s. Never raises.
+    drops the line. A ``retain`` line is never dropped to a stalled sink; any
+    other is ``append_line``'s ``droppable``. Never raises.
     """
     try:
         if "pytest" in sys.modules and not _force_async:
-            append_line(sink, encoded, retain)
+            append_line(sink, encoded, droppable=not retain)
             return
         _get_queue().put_nowait((str(sink), encoded, retain))
     except Exception:

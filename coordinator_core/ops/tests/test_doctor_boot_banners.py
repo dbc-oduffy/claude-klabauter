@@ -93,6 +93,27 @@ def test_armed_plane_is_ok_with_the_status_line(env: dict):
     assert layer.findings[0].message.startswith("HOOK PLANE: ARMED")
 
 
+def test_stored_install_verdict_is_read_from_the_settings_home(env: dict, tmp_path: Path):
+    _settings_hooks(env)
+    stored = tmp_path / "settings-home" / "machine-local" / "workstation-install-verdict.md"
+    stored.write_text("HOOK PLANE: ARMED (delivery: settings)\n\n# Workstation install verdict\n")
+    layer = banners.hook_plane_layer(env["config"])
+    assert layer.status == "ok"
+    assert any(
+        "Install verdict (settings home): HOOK PLANE: ARMED (delivery: settings)" == f.message
+        for f in layer.findings
+    )
+
+
+def test_install_verdict_in_the_legacy_rules_dir_is_ignored(env: dict):
+    _settings_hooks(env)
+    rules = env["config"] / "rules"
+    rules.mkdir()
+    (rules / "workstation-install-verdict.md").write_text("HOOK PLANE: ARMED (delivery: legacy)\n")
+    layer = banners.hook_plane_layer(env["config"])
+    assert not any("legacy" in f.message for f in layer.findings)
+
+
 def test_unresolvable_settings_home_does_not_raise(env: dict, monkeypatch: pytest.MonkeyPatch):
     _settings_hooks(env)
     from coordinator_core import _settings_home

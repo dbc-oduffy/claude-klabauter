@@ -30,7 +30,7 @@ def all_blocked(monkeypatch):
 def test_many_fresh_wedged_sinks_wait_one_window_total(tmp_path, all_blocked):
     t0 = time.perf_counter()
     for i in range(8):
-        atomic_append.append_line(tmp_path / f"s{i}.jsonl", b"a\n")
+        atomic_append.append_line(tmp_path / f"s{i}.jsonl", b"a\n", droppable=True)
     elapsed = time.perf_counter() - t0
     assert elapsed < atomic_append.APPEND_DEADLINE_SECS * 2.5
     assert len(atomic_append.stalled_sinks()) == 8
@@ -38,16 +38,16 @@ def test_many_fresh_wedged_sinks_wait_one_window_total(tmp_path, all_blocked):
 
 @pytest.mark.deliberate_wall_clock(reason="a spent window gives a fresh sink zero wait")
 def test_spent_window_fresh_sink_returns_without_waiting(tmp_path, all_blocked):
-    atomic_append.append_line(tmp_path / "a.jsonl", b"a\n")
+    atomic_append.append_line(tmp_path / "a.jsonl", b"a\n", droppable=True)
     time.sleep(atomic_append.APPEND_DEADLINE_SECS + 0.05)
     t0 = time.perf_counter()
-    atomic_append.append_line(tmp_path / "b.jsonl", b"b\n")
+    atomic_append.append_line(tmp_path / "b.jsonl", b"b\n", droppable=True)
     assert time.perf_counter() - t0 < atomic_append.APPEND_DEADLINE_SECS / 2
 
 
 @pytest.mark.deliberate_wall_clock(reason="the window clears when the wedged writer returns")
 def test_window_clears_when_writer_returns(tmp_path, all_blocked):
-    atomic_append.append_line(tmp_path / "a.jsonl", b"a\n")
+    atomic_append.append_line(tmp_path / "a.jsonl", b"a\n", droppable=True)
     all_blocked.set()
     deadline = time.monotonic() + 3
     while atomic_append.in_flight_sinks() and time.monotonic() < deadline:
