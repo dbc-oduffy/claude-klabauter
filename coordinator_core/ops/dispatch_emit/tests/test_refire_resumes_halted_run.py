@@ -192,6 +192,12 @@ def test_a_dead_owner_halted_run_with_explicit_output_path_does_not_redirect(rep
     assert "output_path_redirect" not in reply
 
 
+def test_a_plain_sizing_refire_carrying_its_halted_run_as_the_hint_resumes_it(repo):
+    _halt(repo)
+    assert _fire(repo, reserved_run_id=OLDER)["run_id"] == OLDER
+    assert _marker(repo)["status"] == "resumed"
+
+
 def test_a_reserved_run_id_fire_does_not_rebind(repo):
     _halt(repo)
     with pytest.raises(ValueError):

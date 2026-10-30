@@ -48,6 +48,9 @@ def test_leg_id():
     ("rg -n -i foo", "git grep -ni foo"),
     ("rg 'a|b'", "git grep -E 'a|b'"),
     ("rg -F 'a|b'", "git grep -F 'a|b'"),
+    ("grep -rI foo .", "git grep -I foo"),
+    ("grep -rn --include=*.py foo .", "git grep -n foo -- ':(glob)**/*.py'"),
+    ("grep -rIl foo . --exclude-dir=node_modules", "git grep -Il foo -- ':(exclude,glob)**/node_modules/**'"),
 ])
 def test_rewrites_to_git_grep_at_repo_root(repo, cmd, expected):
     assert _new(cmd, repo) == expected
@@ -70,8 +73,8 @@ def test_leading_cd_sets_the_root(repo, tmp_path):
     "rg -t py foo",
     "rg --hidden foo",
     "rg '\\d+' .",
-    "grep -rn --include=*.py foo .",
-    "grep -rI foo .",
+    "grep -rnH foo .",
+    "grep -rn --exclude=*.log foo .",
     "grep -rn foo . 2>/dev/null",
     "grep -rn foo . src",
 ])
@@ -101,15 +104,15 @@ def test_find_with_maxdepth_passes(repo):
 
 def test_unmapped_grep_keeps_the_heavy_tree_exclusion(repo):
     (repo / "scratch").mkdir()
-    out = _run("grep -rn --include=*.py foo .", repo)
+    out = _run("grep -rnH foo .", repo)
     assert out.verdict_kind == "rewrite"
-    assert out.updated_input["command"] == "grep --exclude-dir=scratch -rn --include=*.py foo ."
+    assert out.updated_input["command"] == "grep --exclude-dir=scratch -rnH foo ."
     assert ADVISORY in out.em_text
 
 
 def test_covered_heavy_tree_is_not_re_excluded(repo):
     (repo / "scratch").mkdir()
-    out = _run("grep -rn --include=*.py --exclude-dir=scratch foo .", repo)
+    out = _run("grep -rnH --exclude-dir=scratch foo .", repo)
     assert out.verdict_kind == "advisory"
 
 

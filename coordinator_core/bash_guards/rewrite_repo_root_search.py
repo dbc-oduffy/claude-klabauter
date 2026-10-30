@@ -73,10 +73,13 @@ def _segments(cmd: str) -> List[Tuple[int, int]]:
     return spans
 
 
-def _map_to_git_grep(head: str, args: List[str]) -> Optional[Tuple[List[str], List[str], List[str]]]:
-    """(flag letters, patterns, targets) when every flag has a faithful `git grep` twin, else None."""
+def _map_to_git_grep(head: str, args: List[str]) -> Optional[Tuple[List[str], List[str], List[str], List[str]]]:
+    """(flag letters, patterns, targets, pathspecs) when every flag has a faithful `git grep` twin, else None.
+
+    grep's `--include=G` / `--exclude-dir=D` become glob pathspecs: left unmapped, the excluding form
+    fell to the advisory and still walked the whole tree."""
     is_rg = token_matches_binary(head, "rg")
-    ok = "nilwF" if is_rg else "nilwFErR"
+    ok = "nilwF" if is_rg else "nilwFErRI"
     if token_matches_binary(head, "egrep"):
         return None
     if token_matches_binary(head, "fgrep"):
@@ -84,6 +87,7 @@ def _map_to_git_grep(head: str, args: List[str]) -> Optional[Tuple[List[str], Li
     flags: List[str] = []
     patterns: List[str] = []
     pos: List[str] = []
+    specs: List[str] = []
     i, n = 0, len(args)
     while i < n:
         a = args[i]
@@ -91,7 +95,14 @@ def _map_to_git_grep(head: str, args: List[str]) -> Optional[Tuple[List[str], Li
             pos.extend(args[i + 1:])
             break
         if a.startswith("--"):
-            if is_rg or a != "--recursive":
+            name, eq, value = a.partition("=")
+            if is_rg:
+                return None
+            if name == "--include" and eq and value:
+                specs.append(f":(glob)**/{value}")
+            elif name == "--exclude-dir" and eq and value:
+                specs.append(f":(exclude,glob)**/{value.strip('/')}/**")
+            elif a != "--recursive":
                 return None
         elif a.startswith("-") and len(a) > 1:
             cluster = a[1:]
@@ -117,7 +128,7 @@ def _map_to_git_grep(head: str, args: List[str]) -> Optional[Tuple[List[str], Li
             return None
         if "E" not in flags and any(_ERE_ONLY_RE.search(p) for p in patterns):
             flags.append("E")
-    return flags, patterns, pos
+    return flags, patterns, pos, specs
 
 
 def _repo_root_of(target: str, eff: Optional[str]) -> Optional[str]:
@@ -177,11 +188,11 @@ def _plan_segment(body: str, eff: Optional[str]) -> Optional[Tuple[str, Optional
 
     mapped = _map_to_git_grep(head, args) if simple and len(targets) == 1 else None
     if mapped is not None:
-        flags, patterns, tgt = mapped
+        flags, patterns, tgt, specs = mapped
         if len(tgt) > 1 or (tgt and tgt[0].startswith("~")):
             mapped = None
     if mapped is not None:
-        flags, patterns, tgt = mapped
+        flags, patterns, tgt, specs = mapped
         base = "git" if not tgt or tgt[0].rstrip("/\\") in ("", ".") or _same_dir(roots[0], eff) \
             else "git -C " + shlex.quote(tgt[0])
         parts = [base, "grep"]
@@ -192,6 +203,8 @@ def _plan_segment(body: str, eff: Optional[str]) -> Optional[Tuple[str, Optional
                 parts += ["-e", shlex.quote(p)]
             else:
                 parts.append(shlex.quote(p))
+        if specs:
+            parts += ["--"] + [shlex.quote(s) for s in specs]
         return "rewrite", " ".join(parts)
 
     if is_rg or not simple or body.split(None, 1)[0] != head:

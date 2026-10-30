@@ -618,6 +618,21 @@ class FiredDriftError(ValueError):
     """
 
 
+def _is_halt_resume_hint(root: Path, reserved: object, sizing_doc: Optional[dict], sizing_rel: Optional[str]) -> bool:
+    """True when `reserved` is the submit hook's halt-resume hint for a plain sizing, not a fan-out
+    slice's reservation: the sizing has no `em_analysis.ask_parent` and `reserved` is its own halted
+    run. The hook sends the hint when its sizing read stalls; refusing it stranded the refire, so it
+    takes the ordinary halted-run path instead. Any other id on a plain sizing still refuses."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parse_ask_parent
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
+
+    if not sizing_rel or sizing_doc is None:
+        return False
+    if parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent")) is not None:
+        return False
+    return reserved == halted_run_for(root, sizing_rel)
+
+
 def _reserved_run(root: Path, reserved: object, sizing_doc: Optional[dict], sizing_rel: Optional[str]) -> tuple:
     """(run_id, parent_id) for a fan-out slice's reserved run id; ValueError when the id is not the
     sizing's own `em_analysis.ask_parent` run or is bound to a run that has not halted.
@@ -2373,7 +2388,9 @@ def _dispatch_emit_body(
         inherited_base = None
         resumes_ask = None
         resumed_from = None
-        if params.get("reserved_run_id") is not None:
+        if params.get("reserved_run_id") is not None and not _is_halt_resume_hint(
+            ask_root, params["reserved_run_id"], sizing_doc, sizing_rel
+        ):
             run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
         elif sizing_rel:
             from coordinator_core.ops.dispatch_emit.halted_run import (

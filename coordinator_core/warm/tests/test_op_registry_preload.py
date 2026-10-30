@@ -65,3 +65,21 @@ def test_preload_populates_the_op_registry():
         "the preload must call `coordinator_core.ops._eager_import_all()` "
         "explicitly to force full registration."
     )
+
+
+def test_emit_chain_prewarm_loads_the_lazy_emit_imports():
+    code = (
+        "import sys, coordinator_core.warm.server as server;"
+        "server._prewarm_emit_chain();"
+        "print(all(m in sys.modules for m in ('coordinator_core.ops.dispatch_emit.plan_blitz_args',"
+        " 'coordinator_core.ops.dispatch_emit.sizing_fire', 'coordinator_core.hooks.submit_engine_ask')))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True", result.stderr

@@ -1904,6 +1904,8 @@ def _worker_process_init(stderr_dir=None, stall_dir=None) -> None:
     ).start()
     _preload_op_registry()
     _worker_pristine_environ = dict(os.environ)
+    # After the pristine capture: an import that touches os.environ must not race into it.
+    threading.Thread(target=_prewarm_emit_chain, name="warm-pool-emit-prewarm", daemon=True).start()
 
 
 def _strip_ambient_pid(
@@ -3824,6 +3826,28 @@ def _preload_op_registry() -> None:
         from coordinator_core.ipc import dispatch_message  # noqa: F401
     except Exception as exc:  # noqa: BLE001 -- a slow first call beats no server
         print(f"[warm-server] op-registry preload failed: {exc!r}", file=sys.stderr)
+
+
+def _prewarm_emit_chain() -> None:
+    """Import the engine-ask emit chain off the critical path of a pool worker's first submission.
+
+    The registry preload stops at op modules; the emit's function-local imports (~800 modules)
+    landed inside the submit hook's 9.6 s emit budget, and on a contended disk a fresh worker's
+    first `{ask}` outran it with ~400 ms of CPU. A background thread, so a job never waits on
+    modules it does not use; one that does blocks on the in-flight import instead of starting cold.
+    """
+    import importlib
+    import pkgutil
+
+    try:
+        import coordinator_core.ops.dispatch_emit as emit_pkg
+
+        for mod in pkgutil.iter_modules(emit_pkg.__path__):
+            if mod.name != "tests":
+                importlib.import_module(f"{emit_pkg.__name__}.{mod.name}")
+        importlib.import_module("coordinator_core.hooks.submit_engine_ask")
+    except Exception as exc:  # noqa: BLE001 -- a cold first emit beats a dead worker
+        print(f"[warm-server] emit-chain prewarm failed: {exc!r}", file=sys.stderr)
 
 
 def _process_entry() -> int:

@@ -115,8 +115,9 @@ def test_worker_init_starts_the_watchdog_as_a_daemon_thread(monkeypatch) -> None
     monkeypatch.setattr(server.threading, "Thread", _CapturingThread)
     server._worker_process_init()
 
-    assert len(started) == 1, "no watchdog thread was started"
-    watchdog = started[0]
+    watchdogs = [t for t in started if t._target is server._exit_with_parent]  # type: ignore[attr-defined]
+    assert len(watchdogs) == 1, "no watchdog thread was started"
+    watchdog = watchdogs[0]
     assert watchdog.daemon is True
     assert watchdog._target is server._exit_with_parent  # type: ignore[attr-defined]
 

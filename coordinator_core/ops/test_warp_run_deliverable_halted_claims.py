@@ -35,6 +35,9 @@ def _record(repo, run_id, *, writes=(), withheld=(), status=STATUS_HALTED, manif
         marker = {"status": status}
         if withheld:
             marker["run_artifacts"] = {"withheld": {p: "peer-held" for p in withheld}}
+            for p in withheld:  # a withheld path clean in the worktree releases (RELEASE_WITHHELD_CLEAN)
+                (repo / p).parent.mkdir(parents=True, exist_ok=True)
+                (repo / p).write_text("dirty\n", encoding="utf-8")
         (rec / halted_run.HALTED_FILE).write_text(json.dumps(marker), encoding="utf-8")
     return rec
 

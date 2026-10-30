@@ -61,6 +61,7 @@ def _repo_with_three_halted_runs(root: Path):
             "run_artifacts": {"withheld": {p: "halt-record-only"}},
         }))
         _write(rec / "kept.json", json.dumps({"chunks": {"X1": {"paths": {p: kept_blob}}}, "plan_gate": None}))
+        _write(root / p, KEPT_TEXT)  # the halted run's work is dirty in the tree, or the hold releases clean
         halted.append(run_id)
     return halted, _rid(10, "ffffff")
 
@@ -146,6 +147,7 @@ def _build_130_run_repo(root: Path) -> tuple:
             "run_artifacts": {"withheld": {p: "halt-record-only"}},
         }))
         _write(rec / "kept.json", json.dumps({"chunks": {"X1": {"paths": {p: kept_blob}}}, "plan_gate": None}))
+        _write(root / p, KEPT_TEXT)
     return base_paths, _rid(10, "ffffff")
 
 
