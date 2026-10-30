@@ -24,7 +24,7 @@ from coordinator_core.ops.dispatch_emit import agent_body_dedupe as _agent_body_
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit import run_notes as _run_notes
 from coordinator_core.ops.dispatch_emit.ask_staged_prompts import Stager, stage as _stage_prompt, stage_literal_runs
-from coordinator_core.ops.dispatch_emit.fan_launcher import _twin_affixes
+from coordinator_core.ops.dispatch_emit.fan_launcher import EMIT_RELAY_AUTHORITY, _twin_affixes
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     CHAIN_HANDOFF_KEY,
     LAUNCHER_CHILD_EMIT_PARAM,
@@ -411,6 +411,8 @@ _MECHANICAL_EFFORT = "low"
 #: The gate legs: general-purpose at haiku, until a type that admits their multi-act prompt exists.
 _MECHANICAL_AGENT_TYPE = "general-purpose"
 _MECHANICAL_MODEL = "haiku"
+#: A floor leg whose whole prompt is one shell command and a relay: a Bash-only type with no Read or Write.
+_OP_RELAY_AGENT_TYPE = "coordinator:op-relay"
 _PLAN_AUTHOR_AGENT_TYPE = "coordinator:plan-author"
 #: apply-rulings and pull-split: light judgment (edit a plan in place per a recorded ruling, slice rows by
 #: disjoint writes); haiku loses the census/corrects/declared_absent semantics the edit must preserve.
@@ -523,6 +525,7 @@ EXIT_CRITERION_RULES_CLAUSE = (
 _GATE_SCHEMA = _obj(
     ["arm", "halt"],
     {
+        "chain_emit": {"type": ["object", "null"]},
         "arm": {"type": ["string", "null"]},
         "halt": {"type": ["object", "null"]},
         "baton": {"type": ["object", "null"]},
@@ -544,8 +547,6 @@ _ONLY_ROWS_JS = (
     "...(_gate.resume_plan && _gate.resume_rows ? { only_rows: _gate.resume_rows } : {}), "
 )
 _RECORDED_SCHEMA = _obj(["ok"], {"ok": {"type": "boolean"}, "error": _STR})
-#: The sizing-file probe's return: whether the file sizing-assemble writes exists on disk.
-_SIZING_PRESENT_SCHEMA = _obj(["present"], {"present": {"type": "boolean"}})
 
 
 def _ruling_schema(ruling_schema: dict) -> dict:
@@ -568,7 +569,9 @@ _ACCEPT_SCHEMA = _obj(
         "statement": _STR,
     },
 )
-_PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR})
+#: The plan author's and the repair agent's closing `plan.prep_gate` reply.
+_PREP_GATE_PROPS = {"prep_verdict": _STR, "prep_message": _STR}
+_PLAN_SCHEMA = _obj(["plan_rel"], {"plan_rel": _STR, **_PREP_GATE_PROPS})
 #: The readiness reply's judgment fields, copied through a revise leg so a pull halt can name its rulings.
 _PULL_JUDGMENT_PROPS = {
     "rulings": {"type": "array", "items": {"type": "object"}},
@@ -819,7 +822,8 @@ _STAGE_REPLY_OR_NULL = {**STAGE_REPLY_SCHEMA, "type": ["object", "null"]}
 _STAGE_REPLY_PROP = {"stage_reply": _STAGE_REPLY_OR_NULL}
 
 _PLAN_STAGED_SCHEMA = _obj(
-    ["plan_rel", "stage_reply"], {"plan_rel": _STR, "stage_reply": STAGE_REPLY_SCHEMA, **_FALSIFIER_PROP}
+    ["plan_rel", "stage_reply"],
+    {"plan_rel": _STR, "stage_reply": STAGE_REPLY_SCHEMA, **_PREP_GATE_PROPS, **_FALSIFIER_PROP},
 )
 _REVISE_STAGED_SCHEMA = _obj(
     ["plan_rel"],
@@ -853,12 +857,16 @@ _REWORD_SCHEMA = _obj(
         "exit_criterion": _STR,
     },
 )
+#: The scout's closing `test -f` on the sizing file and, on an M+ arm, the chained run's `dispatch.emit` reply.
+_SCOUT_TAIL_PROPS = {"sizing_present": {"type": "boolean"}, "chain_emit": {"type": ["object", "null"]}}
+_ASK_SCOUT_SCHEMA = {**ASK_SCOUT_SCHEMA, "properties": {**ASK_SCOUT_SCHEMA["properties"], **_SCOUT_TAIL_PROPS}}
 #: The ask scout's return with its relayed stage reply held to the stage-reply schema.
 _ASK_SCOUT_STAGED_SCHEMA = {
     **ASK_SCOUT_SCHEMA,
     "properties": {
         **{k: v for k, v in ASK_SCOUT_SCHEMA["properties"].items() if k != "manifest"},
         **_STAGE_REPLY_PROP,
+        **_SCOUT_TAIL_PROPS,
     },
 }
 #: The blitz-stage-read leg's return: the stage op's reply, run only when readyOp never ran.
@@ -1230,7 +1238,8 @@ _REVIEW_RECOVER_JS = r"""
       if (!r || typeof r !== 'object') { status = 'blocked'; break; }
       const outsideAll = (Array.isArray(r.paths) ? r.paths : []).map(_hfPosix).filter((p) => !inFp(p));
       const outside = outsideAll.filter((p) => !_hfWidenable(p));
-      if (r.status === 'SCOPE' || outside.length) {
+      const blockedNeeds = r.status === 'BLOCKED' ? (Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_hfPosix).filter((p) => !inFp(p)) : [];
+      if (r.status === 'SCOPE' || outside.length || blockedNeeds.length) {
         needs.push(...(Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_hfPosix), ...outside);
         status = 'scope'; break;
       }
@@ -1742,7 +1751,8 @@ _LEDGER_RECOVER_JS = r"""
           if (!r || typeof r !== 'object') { st.last_reason = 'fix leg returned no result'; return; }
           const row = rowOf(cid);
           const outside = (Array.isArray(r.paths) ? r.paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p));
-          if (outside.length) st.paths = [...new Set([...st.paths, ...outside])];
+          const blockedNeeds = r.status === 'BLOCKED' ? (Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p)) : [];
+          if (outside.length || blockedNeeds.length) st.paths = [...new Set([...st.paths, ...outside, ...blockedNeeds])];
           st.last_reason = String(r.reason ?? '');
           if (r.status === 'BLOCKED') st.status = 'blocked';
           else if (outside.length) { st.status = 'blocked'; st.last_reason = 'fix wrote outside the footprint: ' + outside.join(', '); }
@@ -1815,6 +1825,17 @@ _LEDGER_RECOVER_JS = r"""
     if (!_halted) await _ledgerRecover();
 """
 
+_LEDGER_FIX_SCHEMA_NEEDS = {
+    **LEDGER_FIX_SCHEMA,
+    "properties": {**LEDGER_FIX_SCHEMA["properties"], "needs_paths": {"type": "array", "items": {"type": "string"}}},
+    "required": [*LEDGER_FIX_SCHEMA["required"], "needs_paths"],
+}
+
+_LEDGER_FIX_NEEDS_SENTENCE = (
+    "When BLOCKED because the fix needs a path outside the footprint, name each such path in `needs_paths`; "
+    "otherwise return `needs_paths` empty."
+)
+
 
 def _ledger_recover_js(
     *, head: str, anchor: str, session_tail: str, record_dir: str, ledger_rel: str, run_id: str, judged: bool, test_var: str,
@@ -1832,11 +1853,11 @@ def _ledger_recover_js(
         "js:(_fixRow.brief_path ?? '(none)')",
         ". ",
         *_prompt_parts(ledger_fix_prompt("remText", "evText", "failTxt", "fpText", f"{record_dir}/notes.jsonl")),
-        f" {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}{session_tail}",
+        f" {_LEDGER_FIX_NEEDS_SENTENCE} {SKILL_WEIGHT_HEADROOM_CLAUSE}{notes_block}{session_tail}",
     )
     fix_call = _agent(
         fix_prompt, label=LEDGER_FIX_LABEL, phase=LEDGER_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
-        schema=LEDGER_FIX_SCHEMA, run_id=run_id, stage_as="ledger-fix", stager=stager,
+        schema=_LEDGER_FIX_SCHEMA_NEEDS, run_id=run_id, stage_as="ledger-fix", stager=stager,
     ).replace(f"label: {_lit(LEDGER_FIX_LABEL)},", f"label: {_lit(LEDGER_FIX_LABEL)} + _cid,", 1)
     reverify_prompt = _cat(
         f"{head}\n\n{anchor}\n\nLedger re-verify leg. Fix legs just ran on the chunks behind these rows. "
@@ -1887,7 +1908,11 @@ _REMNANT_COMPLETE_JS = r"""
       if (_gate.arm === __XS__ || _halted) return;
       const rulable = _manifest?.rulable_ids ?? _gate.__RL__?.rulable_ids ?? [];
       const heldIds = [...(_manifest.gated ?? []), ...(_manifest.slot_withheld ?? [])].map((g) => String(g.id)).concat((_manifest.held_ids ?? []).map(String));
-      const open = (_ledger ? _ledgerBlocking(_ledger) : []).filter((i) => !rulable.includes(i.id) && !(Array.isArray(i.owed_by) && i.owed_by.length > 0));
+      const _wsP = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+      const writeSet = [...(_manifest.rows ?? []).flatMap((r) => [...(r?.writes ?? []).map(_wsP), ...(r?.writes_under ?? []).map((d) => _wsP(d).replace(/\/+$/, '') + '/')]), ...(_manifest.doc_writes ?? []).map(_wsP)];
+      const namesWriteSet = (i) => (_wsP(Array.isArray(i.remaining) ? i.remaining.join(' ') : String(i.remaining ?? '')).match(/[A-Za-z0-9_.\-\/]+/g) ?? [])
+        .map((t) => _wsP(t.replace(/\.+$/, ''))).some((t) => writeSet.some((f) => (f.endsWith('/') ? t.startsWith(f) : f === t)));
+      const open = (_ledger ? _ledgerBlocking(_ledger) : []).filter((i) => (!rulable.includes(i.id) || namesWriteSet(i)) && !(Array.isArray(i.owed_by) && i.owed_by.length > 0));
       const capped = (_ledger?.items ?? []).filter((i) => i && i.status === 'not_met' && typeof i.withheld_by === 'string' && _recoveryWithheld.includes(i.withheld_by) && !heldIds.includes(i.withheld_by));
       const origWithheld = Object.fromEntries(capped.map((i) => [i.id, i.withheld_by]));
       const view = [...open, ...capped].map((i) => (i.id in origWithheld ? { ...i, withheld_by: undefined } : i));
@@ -2520,7 +2545,7 @@ def _already_delivered_fn(*, head: str, anchor: str, repo_root: str, run_id: str
         f"'{_repo_flag(repo_root)}`. Return ok, error and close verbatim (null where absent). Run nothing else.",
     )
     call = _agent(
-        prompt, label="already-delivered-close", phase="review", agent_type=_MECHANICAL_AGENT_TYPE,
+        prompt, label="already-delivered-close", phase="review", agent_type=_OP_RELAY_AGENT_TYPE,
         agent_model=_MECHANICAL_MODEL, schema=_ALREADY_DELIVERED_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
     return (
@@ -2981,30 +3006,32 @@ def _sizing_procedure_pointer() -> str:
 
 OP_PREP_GATE = "plan.prep_gate"
 PREP_GATE_REPAIR_CAP = 3
-_PREP_GATE_SCHEMA = _obj(["verdict"], {"verdict": _STR, "message": _STR})
+
+
+def _prep_gate_act(repo_root: str, plan_params: str) -> tuple[str, ...]:
+    """The closing act of the plan author and the repair agent: run `plan.prep_gate` over the plan just written
+    and return its verdict and message, so no agent exists only to run the gate. ``plan_params`` is the JSON
+    object text, a literal or a ``js:`` expression."""
+    return (
+        f" As your very last act run `{_INVOKE} {OP_PREP_GATE} '",
+        plan_params,
+        f"'{_repo_flag(repo_root)}` once as its own Bash call and return its JSON reply's `verdict` as prep_verdict "
+        "and `message` as prep_message verbatim. Commit nothing.",
+    )
 
 
 def _s_prep_gate_loop_js(
     *, head: str, anchor: str, repo_root: str, run_id: str, repair_type: str, repair_model: Optional[str],
     fold_stage: bool, stage_parts: Sequence[str],
 ) -> list[str]:
-    """JS lines (4-space indent) that gate the S-arm authored plan with `plan.prep_gate` and repair it, capped.
+    """JS lines (4-space indent) that read the S-arm authored plan's `plan.prep_gate` verdict (the author's
+    closing act, in ``_authored``) and repair the plan, capped; each repair agent re-runs the gate as its own
+    closing act.
 
     Under ``fold_stage`` the caller holds the authored stage reply in ``_pgReply``; each repair replaces it and
-    `_adoptStageReply` runs once, on the last one. A no-parseable-reply gate logs and continues; a plan still
-    refused after the cap sets ``_halted`` (reason `prep-gate: ...`) and adopts nothing.
+    `_adoptStageReply` runs once, on the last one. A reply with no parseable verdict logs and continues; a plan
+    still refused after the cap sets ``_halted`` (reason `prep-gate: ...`) and adopts nothing.
     """
-    gate_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
-        f"Run `{_INVOKE} {OP_PREP_GATE} '",
-        "js:JSON.stringify({ plan: _planRel }).replace(/'/g, \"'\\\\''\")",
-        f"'{_repo_flag(repo_root)}` once as its own Bash call and return its JSON reply's `verdict` and `message` verbatim. "
-        "Run nothing else; commit nothing.",
-    )
-    gate_call = _agent(
-        gate_prompt, label="plan-prep-gate", phase="plan", agent_type=_MECHANICAL_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_PREP_GATE_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
-    )
     repair_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         "The plan prep gate refused the plan at ",
@@ -3016,23 +3043,25 @@ def _s_prep_gate_loop_js(
         "\n\nEdit that plan IN PLACE with Edit to fix every finding -- never scaffold a new plan, never change its "
         "path -- then return its repo-relative path as plan_rel.",
         *stage_parts,
+        *_prep_gate_act(repo_root, "js:JSON.stringify({ plan: _planRel }).replace(/'/g, \"'\\\\''\")"),
     )
     repair_call = _agent(
         repair_prompt, label="plan-prep-repair", phase="plan", agent_type=repair_type, agent_model=repair_model,
         schema=_PLAN_STAGED_SCHEMA if fold_stage else _PLAN_SCHEMA, effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
     )
     lines = [
-        "    let _pgRepairs = 0, _pgHalt = null;",
+        "    let _pgRepairs = 0, _pgHalt = null, _pgSrc = _authored;",
         "    for (;;) {",
-        "      let _pg = null;",
-        f"      try {{ _pg = await {gate_call}; }} catch (e) {{ log('plan-prep-gate threw: ' + String((e && e.message) ?? e)); }}",
-        "      if (!_pg || typeof _pg.verdict !== 'string') { log('incident: plan-prep-gate returned no parseable reply'); break; }",
+        "      const _pg = (_pgSrc && typeof _pgSrc.prep_verdict === 'string') "
+        "? { verdict: _pgSrc.prep_verdict, message: _pgSrc.prep_message } : null;",
+        "      if (!_pg) { log('incident: plan prep gate returned no parseable reply'); break; }",
         "      if (_pg.verdict === 'PREPPED') break;",
         "      if (_pg.verdict === 'REFUSED') { _pgHalt = String(_pg.message || _pg.verdict); break; }",
         f"      if (_pgRepairs >= {PREP_GATE_REPAIR_CAP}) {{ _pgHalt = String(_pg.message || _pg.verdict); break; }}",
         "      _pgRepairs++;",
         f"      const _pgRep = await {repair_call};",
         "      if (_pgRep?.plan_rel) _planRel = _pgRep.plan_rel;",
+        "      _pgSrc = _pgRep;",
     ]
     if fold_stage:
         lines.append("      if (_pgRep?.stage_reply) _pgReply = _pgRep.stage_reply;")
@@ -3421,10 +3450,13 @@ def compose_ask_script(
             "return {manifest_handle: <it verbatim>} as stage_reply; when it carries `manifest` holding an `error`, return "
             "{error: <that text>} as stage_reply; either way run no stage command. "
             "As your very last act otherwise, stage the run, but only when the gate reply's halt is null and its arm "
-            f"is XS and it carries no resume_plan (a resumed plan is staged elsewhere): run `{_INVOKE} {OP_ASK_STAGE} '<params>'{_repo_flag(repo_root)}` once, <params> being exactly this JSON object, "
+            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'{_repo_flag(repo_root)}` once, <params> being exactly this JSON object, "
             "with no key added, dropped or renamed: ",
             *params,
-            ". Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
+            ", except that with a resume_plan in the gate reply you drop `writes`, `gated` and `sizing_path`, set "
+            "`plan_path` to it and `commit_sizing_path` to the sizing_path value, and add `only_rows` set to its "
+            "resume_rows when present. "
+            "Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
             "On any other arm run no stage command and return no stage_reply.",
         )
 
@@ -3443,12 +3475,32 @@ def compose_ask_script(
                 if stage_act and fold_stage
                 else ()
             ),
+            *(_chain_emit_act(_chain_emit_params("_sizingRel")) if stage_act else ()),
         )
         return _agent(
             gate_prompt, label=label, phase=phase_title, agent_type=_MECHANICAL_AGENT_TYPE,
             agent_model=_MECHANICAL_MODEL,
             schema=_GATE_STAGED_SCHEMA if stage_act and fold_stage else _GATE_SCHEMA,
             effort=_MECHANICAL_EFFORT, run_id=run_id,
+        )
+
+    def _chain_emit_act(params: str) -> tuple[str, ...]:
+        """The closing act of the agent that just ran the gate on an M+ arm with no embedded plan-blitz: emit the
+        chained run and return the op's reply as `chain_emit`, so no agent exists only to run `dispatch.emit`.
+        ``params`` is the JSON object text, a literal or a ``js:`` expression."""
+        if blitz_fn:
+            return ()
+        return (
+            f" {EMIT_RELAY_AUTHORITY} On an M+ arm with a null halt, also run `{_INVOKE} dispatch.emit '",
+            params,
+            "'` once and return its JSON reply as chain_emit ({error: <its text>} on failure); on any other arm none.",
+        )
+
+    def _chain_emit_params(sizing_js: str) -> str:
+        """`js:` expression: the chained run's `dispatch.emit` params as single-quote-safe JSON."""
+        return (
+            f"js:JSON.stringify({_chain_emit_params_js(sizing_js)})"
+            ".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")"
         )
 
     # A launcher child whose twin carries a resume block runs from the inline manifest: every pre-stage leg sits
@@ -3460,7 +3512,7 @@ def compose_ask_script(
         f"resume_plan: (_STAGED_RESUME.arm !== {_lit(ARM_XS)} && typeof _STAGED_RESUME.plan_rel === 'string' "
         "&& _STAGED_RESUME.plan_rel) ? _STAGED_RESUME.plan_rel : null, "
         "resume_rows: null, resume_ledger: null, pending_rulings: null, resume_ready: null, resume_phases: null, spine_plan: null, "
-        f"{DESIGN_BRIEF_KEY}: null, {DESIGN_ROUTE_KEY}: null, {_ROUTE_VERDICT_KEY}: null }}"
+        f"{DESIGN_BRIEF_KEY}: null, {DESIGN_ROUTE_KEY}: null, {_ROUTE_VERDICT_KEY}: null, chain_emit: null }}"
     )
     if launcher_child:
         b.append(
@@ -3542,6 +3594,10 @@ def compose_ask_script(
                 "baseline falsifier for the exit_criterion you assembled. " + _FALSIFIER_ACT
                 + " Return it as falsifier. On any other arm, or a halt, author none and return no falsifier."
             )
+        scout_closing_tail += (
+            f" Then run `test -f {shlex.quote(f'{repo_root}/{sizing_write_rel}')}` once and return "
+            "sizing_present true when it exits 0, else false."
+        )
         if fold_stage:
             _scout_base = json.dumps(
                 {
@@ -3550,6 +3606,10 @@ def compose_ask_script(
                 }
             )[:-1] + ', "writes": <your writes array>, "gated": <your gated array>}'
             scout_closing_tail += "".join(_stage_act_parts(_scout_base))
+        scout_closing_tail += "".join(_chain_emit_act(json.dumps({
+            "ask": True, "sizing_path": sizing_write_rel, "session_id": session_id or "", "target_root": repo_root,
+            LAUNCHER_CHILD_EMIT_PARAM: True, **({"cross_repo_approved": True} if cross_repo_approved else {}),
+        }).replace("'", "'\\''")))
         scout_closing = (
             " Your closing acts, in order, once your fields are settled. (1) Run sizing-assemble once: "
             "replace each <field> in the command below with your own value, POSIX single-quoted (an "
@@ -3643,7 +3703,7 @@ def compose_ask_script(
             f"&& {json.dumps(_SCOUT_ARRAY_FIELDS)}.every((k) => Array.isArray(r[k]));"
         )
         b.append(
-            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)};"
+            f"  const _scoutedFirst = await {_agent(scout_prompt, label='size', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else _ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)};"
         )
         # One re-dispatch whenever assemble is unproven. With a full sizing in hand the retry carries
         # the engine-built command over those values; otherwise the scout is told to run it itself.
@@ -3656,7 +3716,7 @@ def compose_ask_script(
         )
         b.append(
             "  " + ("" if launcher_child else "const ") + "_scouted = _assembleProven(_scoutedFirst) ? _scoutedFirst : { ..._scoutedFirst, ...(await "
-            f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)}) }};"
+            f"{_agent(scout_prompt + ' + (_scoutHasValues(_scoutedFirst) ? (' + values_retry + ') : ' + _lit(SCOUT_DID_NOT_ASSEMBLE_RETRY) + ')', label='size-retry', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_ASK_SCOUT_STAGED_SCHEMA if fold_stage else _ASK_SCOUT_SCHEMA, run_id=run_id, stage_as='scout', stager=stager)}) }};"
         )
         b.append("  const _scoutAssembled = Number.isInteger(_scouted.exit_code);")
         # Captured before the reword path mutates `_scouted`: a folded manifest or falsifier is
@@ -3696,6 +3756,7 @@ def compose_ask_script(
                 if fold_stage
                 else ()
             ),
+            *_chain_emit_act(_chain_emit_params(_reword_sizing_js)),
         )
         # One reword: a remediable exit-criterion refusal from the scout's closing sizing-assemble goes
         # back to the scout, which rewords, re-assembles, re-gates and stages as its closing acts.
@@ -3741,7 +3802,7 @@ def compose_ask_script(
             f"{DESIGN_BRIEF_KEY}: _reworded.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _reworded.{_ROUTE_VERDICT_KEY} ?? null, "
-            "stage_reply: _reworded.stage_reply ?? null });"
+            "stage_reply: _reworded.stage_reply ?? null, chain_emit: _reworded.chain_emit ?? null });"
         )
         b.append("      _rewordStaged = !_scouted.halt && !!_scouted.arm;")
         b.append("    }")
@@ -3769,21 +3830,13 @@ def compose_ask_script(
         # ask_gate reads the sizing from disk, so it answers only once the file exists. Scouts
         # abridge long stdout, so the gate reply alone must suffice.
         # The sizing file at _sizingPath is proof too: a scout that paraphrases its stdout still wrote it.
-        probe_call = _agent(
-            _cat(
-                "Run `test -f ", "js:JSON.stringify(_sizingPath)", "` once and return present true when it exits 0, "
-                "else false. Write nothing.",
-            ),
-            label="sizing-probe", phase="size", agent_type=_MECHANICAL_AGENT_TYPE,
-            agent_model=_MECHANICAL_MODEL, schema=_SIZING_PRESENT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
-        )
         b.append(
             "  const _assembleUnproven = !_halted && (_decision === null || typeof _decision !== 'object' "
             "|| typeof _decision.route !== 'string') && typeof _scouted.arm !== 'string' "
             "&& !(_scouted.halt && typeof _scouted.halt === 'object');"
         )
         b.append(
-            f"  const _sizingOnDisk = _assembleUnproven ? !!((await {probe_call})?.present) : false;"
+            "  const _sizingOnDisk = _assembleUnproven ? _scouted.sizing_present === true : false;"
         )
         b.append(
             "  if (_assembleUnproven && !_sizingOnDisk) { _halted = { halted: "
@@ -3811,7 +3864,8 @@ def compose_ask_script(
             "resume_rows: _scouted.resume_rows ?? null, resume_ledger: _scouted.resume_ledger ?? null, pending_rulings: _scouted.pending_rulings ?? null, resume_ready: _scouted.resume_ready ?? null, resume_phases: _scouted.resume_phases ?? null, spine_plan: _scouted.spine_plan ?? null, "
             f"{DESIGN_BRIEF_KEY}: _scouted.{DESIGN_BRIEF_KEY} ?? null, "
             f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
-            f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null }}" + (")" if launcher_child else "") + ";"
+            f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null, chain_emit: _scouted.chain_emit ?? null }}"
+            + (")" if launcher_child else "") + ";"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -3842,7 +3896,7 @@ def compose_ask_script(
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
         arms_js = (
-            f"((_gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
+            f"(_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
             f"|| _gate.resume_ready || _gate.{RESUME_LEDGER_KEY})"
         )
         if sized_in_run:
@@ -3898,6 +3952,7 @@ def compose_ask_script(
                 if fold_stage
                 else ()
             ),
+            *_chain_emit_act(_chain_emit_params("_sizingRel")),
         )
         accept_schema = _ruling_schema(_ACCEPT_SCHEMA)
         if fold_stage:
@@ -3943,13 +3998,14 @@ def compose_ask_script(
                 "{ kind: 'xl_exit', ruling_ref: _runId }",
                 "`xl_exit` (your pick) and `apm_ruling` (your ruling, verbatim)",
             ),
+            *_chain_emit_act(_chain_emit_params("_sizingRel")),
         )
         xl_call = _agent(
             xl_prompt, label="xl-exit", phase="xl-exit", agent_type=APM_RULING_AGENT_TYPE,
             schema=_ruling_schema(_XL_SCHEMA), effort=_XL_EXIT_EFFORT, run_id=run_id, stage_as="xl-exit", stager=stager,
         )
         # A record writes neither estimate.tshirt nor route, so both carry over from the first gate.
-        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, resume_ready: %s.resume_ready ?? null, resume_phases: %s.resume_phases ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null };"
+        take_gate = "_gate = { ..._gate, arm: %s.arm, halt: %s.halt, baton: %s.baton ?? null, resume_plan: %s.resume_plan ?? null, resume_rows: %s.resume_rows ?? null, resume_ledger: %s.resume_ledger ?? null, pending_rulings: %s.pending_rulings ?? null, resume_ready: %s.resume_ready ?? null, resume_phases: %s.resume_phases ?? null, spine_plan: %s.spine_plan ?? null, design_route: %s.design_route ?? _gate.design_route ?? null, chain_emit: %s.chain_emit ?? null };"
         irreversible = f"new RegExp({_lit(IRREVERSIBLE_GATE_SOURCE)}, 'i')"
         b.append("  let _splitSlices = null;")
         b.append("  let _splitFan = null;")
@@ -3965,9 +4021,9 @@ def compose_ask_script(
             f"    const _apmGated = {irreversible}.test(_apm?.ruling ?? '');\n"
             "    if (_apm && _apm.verdict === 'ruled' && _apm.pmOnly !== true && !_apmGated && _apm.ruling "
             "&& _apm.recorded && _apm.recorded.ok === true && 'arm' in _apm && 'halt' in _apm) {\n"
-            f"      {take_gate % (('_apm',) * 11)}\n"
+            f"      {take_gate % (('_apm',) * 12)}\n"
             + (
-                f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)} && !_gate.resume_plan) {{ await _adoptStageReply(_apm.stage_reply); }}"
+                f"      if (!_gate.halt && _gate.arm === {_lit(ARM_XS)}) {{ await _adoptStageReply(_apm.stage_reply); }}"
                 f"{_fold_decline_js('!_gate.halt', _GATE_HALT_CAUSE_JS)}\n"
                 if fold_stage
                 else ""
@@ -3986,7 +4042,7 @@ def compose_ask_script(
             "    if (_xl && _xl.verdict === 'ruled' && _xl.pmOnly !== true && !_xlGated && _xl.ruling "
             "&& ['roadmap', 'accept_multi_session', 'split'].includes(_xl.pick) "
             "&& _xl.recorded && _xl.recorded.ok === true && 'arm' in _xl && 'halt' in _xl) {\n"
-            f"      {take_gate % (('_xl',) * 11)}\n"
+            f"      {take_gate % (('_xl',) * 12)}\n"
             "      if (_xl.pick === 'split' && Array.isArray(_xl.slices)) { _splitSlices = _xl.slices; _splitFan = _xl; }\n"
             "      _progressed = true;\n"
             "    }\n"
@@ -4022,6 +4078,7 @@ def compose_ask_script(
             f"{_lit(HALT_REFUSAL)}, ..._gate.halt, {_gate_reason_js}, sizing: _sizingRel, run_id: _runId"
             f", ...(_pmExit ? {{ {PM_EXIT_QUESTION_KEY}: _pmExit }} : {{}}) }}; }}"
         )
+    b.append(_research_split_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child))
     # A ledger resume re-judges the blocking rows of a run whose executors already landed. It
     # re-stages the plan (the terminal commit needs the manifest) and takes the XS tail: no plan
     # author, review wave or scoped test runs, and execution is skipped by `_resumeLedger`.
@@ -4067,26 +4124,11 @@ def compose_ask_script(
         f" && ({_rl0}.{RESUME_LEDGER_NOTES_FIELD} ?? []).length > 0;"
     )
     if fold_stage:
-        # An XS sizing whose plan edge names an existing plan stages that plan: the XS mint refuses a sizing with an edge.
-        xs_plan_stage_prompt = _cat(
-            f"{head}\n\n{anchor}\n\n",
-            f"Run `{_INVOKE} {OP_ASK_STAGE} '",
-            "js:JSON.stringify({ run_id: _runId, plan_path: _gate.resume_plan, "
-            "cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, " + _ONLY_ROWS_JS
-            + "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}) })",
-            f"'{_repo_flag(repo_root)}` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
-            "{\"error\": ...} refusal). Commit nothing.",
-        )
-        xs_plan_stage_call = _agent(
-            xs_plan_stage_prompt, label="xs-plan-stage", phase="gate", agent_type=_MECHANICAL_AGENT_TYPE,
-            agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
-            run_id=run_id,
-        )
+        # An XS sizing whose plan edge names an existing plan is staged by the agent that ran the gate (its stage
+        # act switches to plan_path); the XS mint refuses a sizing with an edge.
         b.append(
-            f"  if (!_halted && {_NO_RESUME} && !_resumeLedger && !_stagedManifest && !_stageRefusal "
-            f"&& _gate.arm === {_lit(ARM_XS)} && _gate.resume_plan) "
-            f"{{ _planRel = _gate.resume_plan; const _xsPlanStaged = await {xs_plan_stage_call}; "
-            "await _adoptStageReply(_xsPlanStaged?.stage_reply); }"
+            f"  if (!_halted && {_NO_RESUME} && !_resumeLedger && _gate.arm === {_lit(ARM_XS)} && _gate.resume_plan) "
+            "{ _planRel = _gate.resume_plan; }"
         )
     late_replan_call: Optional[str] = None
     if fold_stage:
@@ -4182,7 +4224,7 @@ def compose_ask_script(
                 "{\"error\": ...} refusal). Commit nothing.",
             )
             blitz_read_call = _agent(
-                blitz_read_prompt, label="blitz-stage-read", phase="plan", agent_type=_MECHANICAL_AGENT_TYPE,
+                blitz_read_prompt, label="blitz-stage-read", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
                 agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
                 run_id=run_id,
             )
@@ -4261,6 +4303,9 @@ def compose_ask_script(
         ),
         *(plan_falsifier_parts if fold_falsifier else ()),
         *(stage_fold(" Once the plan is filled and carries no marker,") if fold_stage else ()),
+        *_prep_gate_act(repo_root, "{\"plan\": \"<plan_rel>\"}"),
+        " (<plan_rel> is the plan's repo-relative path, as in the stage command.)" if fold_stage else
+        " (<plan_rel> is the plan's repo-relative path.)",
     )
     b.append(f"  if (!_halted && {_NO_RESUME} && _gate.arm === {_lit(ARM_S)}) {{")
     b.append("    if (_resumeLedger) { /* planRel already the ledger plan */ } else if (_gate.resume_plan) { _planRel = _gate.resume_plan; } else {")
@@ -4270,14 +4315,12 @@ def compose_ask_script(
         agent_model=stage_models["plan"], schema=_PLAN_STAGED_SCHEMA if fold_stage else _PLAN_SCHEMA,
         effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
     )
+    b.append(f"    const _authored = await {plan_call};")
+    b.append("    _planRel = _authored.plan_rel;")
     if fold_stage:
-        b.append(f"    const _authored = await {plan_call};")
-        b.append("    _planRel = _authored.plan_rel;")
         b.append("    let _pgReply = _authored.stage_reply;")
         if fold_falsifier:
             b.append("    _planFalsifier = _asPlanFalsifier(_authored.falsifier);")
-    else:
-        b.append(f"    _planRel = (await {plan_call}).plan_rel;")
     b.extend(_s_prep_gate_loop_js(
         head=head, anchor=anchor, repo_root=repo_root, run_id=run_id, repair_type=stage_types["plan"],
         repair_model=stage_models["plan"], fold_stage=fold_stage,
@@ -4451,7 +4494,9 @@ def compose_ask_script(
             + _ANCHOR_PREMISES_SENTENCE
             + "Then run the `plan.readiness_verdict` op on the revised plan, passing the "
             "pull's coverage and reviews values below when they are not null, apply every "
-            "mechanical_repairs entry in place with Edit, then re-run the op with the plan alone "
+            "mechanical_repairs entry (first run `plan.apply_mechanical_repairs` with the reply's "
+            "mechanical_repairs as `repairs`, then Edit in place only the entries it returns in "
+            "`skipped`), then re-run the op with the plan alone "
             "(no coverage, no reviews: the repairs answered those findings, and the same values "
             "would pull the plan again), and return that reply's pull_class and verdict "
             "alongside plan_rel. Also return that reply's rulings, blocking_findings and "
@@ -4481,8 +4526,10 @@ def compose_ask_script(
             "js:_pulledEntry.planPath",
             " at its prep gate, but its review did not find the plan unsaveable. Do not re-plan or "
             "rewrite it. Run the `plan.readiness_verdict` op on it, passing the pull's coverage and "
-            "reviews values below when they are not null, apply every mechanical_repairs entry in "
-            "place with Edit (a missing field or a reconciling anti-scope line, nothing more), then "
+            "reviews values below when they are not null, apply every mechanical_repairs entry (first run "
+            "`plan.apply_mechanical_repairs` with the reply's mechanical_repairs as `repairs`, then Edit "
+            "in place only the entries it returns in `skipped`: a missing field or a reconciling "
+            "anti-scope line, nothing more), then "
             "re-run the op with the plan alone and return that reply's pull_class and verdict "
             "alongside plan_rel (the plan's repo-relative path, unchanged). Also return that reply's "
             "rulings, blocking_findings and split_recommended verbatim.",
@@ -4657,7 +4704,8 @@ def compose_ask_script(
         _append_split_stage(b)
     elif launcher_child:
         b.append(
-            f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ return {{ {CHAIN_HANDOFF_KEY}: {_CHAIN_EMIT_PARAMS_JS}, "
+            f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ return {{ {CHAIN_HANDOFF_KEY}: "
+            f"{_chain_emit_params_js('_sizingRel', tail_js=', ...(_gate.chain_emit ?? {})')}, "
             "sizing: _sizingRel, run_id: _runId }; }"
         )
     else:
@@ -4797,7 +4845,7 @@ def compose_ask_script(
     )
     late_read_call = _agent(
         late_read_prompt, label="late-rows-read", phase=_emit._EXECUTE_PHASE_TITLE,
-        agent_type=_MECHANICAL_AGENT_TYPE, agent_model=_MECHANICAL_MODEL,
+        agent_type=_OP_RELAY_AGENT_TYPE, agent_model=_MECHANICAL_MODEL,
         schema=_obj([LATE_ROWS_FIELD], {LATE_ROWS_FIELD: {"type": "array", "items": _STR}}),
         effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
@@ -5569,10 +5617,20 @@ _CHAIN_EMIT_SCHEMA = _obj(["path", "run_id"], {"path": _STR, "run_id": _STR, "er
 
 
 # dispatch.emit params for the `{sizing}` script an M+ arm chains into; shared by the bare chain and the launcher hand-off.
-_CHAIN_EMIT_PARAMS_JS = (
-    "{ ask: true, sizing_path: _sizingRel, session_id: _SESSION_ID, "
-    f"target_root: REPO_ROOT, {LAUNCHER_CHILD_EMIT_PARAM}: true, ...(_crossRepoApproved ? {{ cross_repo_approved: true }} : {{}}) }}"
-)
+def _chain_emit_params_js(sizing_js: str, *, research: bool = False, tail_js: str = "") -> str:
+    """The `dispatch.emit` params object literal; ``tail_js`` (`, ...x`) is spread last."""
+    if research:
+        return (
+            f"{{ from_sizing: {sizing_js}, session_id: _SESSION_ID, "
+            f"target_root: REPO_ROOT, ...(_crossRepoApproved ? {{ cross_repo_approved: true }} : {{}}){tail_js} }}"
+        )
+    return (
+        f"{{ ask: true, sizing_path: {sizing_js}, session_id: _SESSION_ID, "
+        f"target_root: REPO_ROOT, {LAUNCHER_CHILD_EMIT_PARAM}: true, ...(_crossRepoApproved ? {{ cross_repo_approved: true }} : {{}}){tail_js} }}"
+    )
+
+
+_CHAIN_EMIT_PARAMS_JS = _chain_emit_params_js("_sizingRel")
 
 
 def _chain_stage_loop_js() -> str:
@@ -5590,38 +5648,38 @@ def _chain_stage_loop_js() -> str:
     ])
 
 
-def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str) -> str:
-    """The in-run M+ leg of a script that embeds no plan-blitz: emit the `{sizing}` script, start it with
-    `workflow({ scriptPath })`, and return its result. The refusal halt survives only for an emit or start failure.
+def _chain_emit_start_lines(
+    *, sizing_js: str, head: str, anchor: str, run_id: str, return_extra_js: str = "", fallback_extra_js: str = "",
+    research: bool = False, emitted_js: Optional[str] = None,
+) -> list[str]:
+    """JS lines that emit the engine-ask script for the sizing `sizing_js` evaluates to, start it with
+    `workflow({ scriptPath })` and `return` its result with `chained_from` set. Control falls through with `_why`
+    set (non-null) when the emit or the start failed, so the caller owns the failure shape.
 
-    The child is a full engine-ask over `_sizingRel`, so plan-blitz lives in its own script, never in this one.
+    `return_extra_js` / `fallback_extra_js` are `, key: value` suffixes for the object-result and bare-result returns.
+    `research` emits on the research route (`from_sizing`), which `dispatch.emit` refuses to combine with `ask`/`sizing_path`.
+    `emitted_js` is a JS expression for an emit reply an earlier agent already produced: no emit leg is composed.
     """
     params = (
-        f"JSON.stringify({_CHAIN_EMIT_PARAMS_JS})"
+        f"JSON.stringify({_chain_emit_params_js(sizing_js, research=research)})"
         ".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")"
     )
     emit_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n",
+        f"{head}\n\n{anchor}\n\n{EMIT_RELAY_AUTHORITY} ",
         f"Run `{_INVOKE} dispatch.emit '",
         "js:" + params,
         f"'` once and return path and run_id from its JSON reply verbatim. When the command "
         "is denied or fails, return its error text in error, with path and run_id as empty strings. Commit nothing.",
     )
-    emit_call = _agent(
-        emit_prompt, label="chain-emit", phase="plan", agent_type=_MECHANICAL_AGENT_TYPE,
+    emit_expr = emitted_js if emitted_js is not None else "await " + _agent(
+        emit_prompt, label="chain-emit", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
         agent_model=_MECHANICAL_MODEL, schema=_CHAIN_EMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
-    halt = (
-        f"_halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to M+ and the chained run did not "
-        "start (' + _why + '): resubmit Workflow({name: \"coordinator:engine-ask\", args: {sizing: \"' + _sizingRel + "
-        "'\"}})', sizing: _sizingRel, run_id: _runId };"
-    )
-    lines = [
-        f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{",
+    return [
         "    phase('plan');",
         "    let _why = null; let _chainPath = null; let _chainRunId = '';",
         "    try {",
-        f"      const _ce = await {emit_call};",
+        f"      const _ce = {emit_expr};",
         "      const _cp = typeof _ce?.path === 'string' ? _ce.path.split(String.fromCharCode(92)).join('/') : '';",
         "      const _warp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/scratch/warp/';",
         "      if (typeof _ce?.error === 'string' && _ce.error !== '') { _why = 'emit failed: ' + _ce.error; }",
@@ -5636,8 +5694,60 @@ def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str) -> 
         "      catch (e) { _why = 'start threw: ' + String(e && e.message ? e.message : e); }",
         _chain_stage_loop_js(),
         "      if (_why === null) { return (_chained !== null && typeof _chained === 'object') "
-        "? { ..._chained, chained_from: _runId } : { chained: _chained, chained_from: _runId, sizing: _sizingRel }; }",
+        f"? {{ ..._chained, chained_from: _runId{return_extra_js} }} : {{ chained: _chained, chained_from: _runId{fallback_extra_js} }}; }}",
         "    }",
+    ]
+
+
+def _research_split_chain_js(*, head: str, anchor: str, run_id: str, launcher_child: bool = False) -> str:
+    """The in-run leg for a research/build split whose research sibling is ready: the gate halt's `fire` is the
+    engine-ask over `split.research.sizing`, so the script chains that run instead of waking the EM to paste it.
+    The build sibling is held `after` the research run and is never chained here. An emit or start failure keeps
+    the research halt and its `fire` and adds `chain_error`.
+
+    A launcher child holds no `workflow()` reader: it returns the research-door params as the `chain` hand-off and
+    the launcher's `_chainHop` emits and starts the sibling.
+    """
+    sibling = "_halted.split.research.sizing"
+    guard = (
+        f"_halted && _halted.halted === {_lit(HALT_RESEARCH)} && _halted.split && _halted.split.research "
+        f"&& _halted.split.research.status === 'ready' && typeof {sibling} === 'string' && {sibling} !== '' "
+        "&& Array.isArray(_halted.fire) && _halted.fire.length > 0"
+    )
+    if launcher_child:
+        return (
+            f"  if ({guard}) {{ return {{ {CHAIN_HANDOFF_KEY}: {_chain_emit_params_js(sibling, research=True)}, "
+            f"sizing: {sibling}, split: _halted.split, run_id: _runId }}; }}"
+        )
+    lines = [
+        f"  if ({guard}) {{",
+        *_chain_emit_start_lines(
+            sizing_js=sibling, head=head, anchor=anchor, run_id=run_id, research=True,
+            return_extra_js=", split: _halted.split", fallback_extra_js=f", sizing: {sibling}, split: _halted.split",
+        ),
+        "    _halted = { ..._halted, chain_error: 'the research sibling did not chain in-run (' + _why + '): fire it from halted_by.fire' };",
+        "  }",
+    ]
+    return "\n".join(lines)
+
+
+def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str) -> str:
+    """The in-run M+ leg of a script that embeds no plan-blitz: emit the `{sizing}` script, start it with
+    `workflow({ scriptPath })`, and return its result. The refusal halt survives only for an emit or start failure.
+
+    The child is a full engine-ask over `_sizingRel`, so plan-blitz lives in its own script, never in this one.
+    """
+    halt = (
+        f"_halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to M+ and the chained run did not "
+        "start (' + _why + '): resubmit Workflow({name: \"coordinator:engine-ask\", args: {sizing: \"' + _sizingRel + "
+        "'\"}})', sizing: _sizingRel, run_id: _runId };"
+    )
+    lines = [
+        f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{",
+        *_chain_emit_start_lines(
+            sizing_js="_sizingRel", head=head, anchor=anchor, run_id=run_id, fallback_extra_js=", sizing: _sizingRel",
+            emitted_js="(_gate.chain_emit ?? { error: 'the gate agent returned no emit reply for the chained run' })",
+        ),
         f"    {halt}",
         "  }",
     ]

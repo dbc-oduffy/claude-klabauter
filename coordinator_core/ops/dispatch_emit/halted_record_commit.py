@@ -321,16 +321,20 @@ def _land(
     owner = declared
     home, _siblings = split_sibling_paths(list(owner), worktree_root)
     declared = [p for p in home if not p.startswith(record_dir_rel + "/")]
+    land_only: set = set()
     if not params.get("script_path"):
         # Land-only ask: no script names the product, so the marker's withheld paths are it. Not put
         # in ``owner``: no chunk owns them, so the record-only/closure legs never re-withhold them.
         # Every recorded reason is declared; peer-held, sibling and foreign-halted paths are re-withheld
         # by the gates below. Paths come from the marker uncontained: ``snapshot.changed`` bounds them.
         try:
-            withheld_recorded = sorted(halted_run.halted_withheld_strict(worktree_root / record_dir_rel))
+            recorded_reasons = halted_run.halted_withheld_strict(worktree_root / record_dir_rel)
+            withheld_recorded = sorted(recorded_reasons)
         except halted_run.UnreadableHaltRecord as exc:
             return _error(f"halt marker unreadable, its paths are held: {exc.reason}", refused=exc.reason, **base)
         recorded, _ = split_sibling_paths(withheld_recorded, worktree_root)
+        # Only the run's own product held for the halt; a peer-held marker path stays unowned.
+        land_only = {p for p in recorded if recorded_reasons.get(p) == kept_work.HALT_RECORD_ONLY}
         declared += [p for p in recorded if p not in declared and not p.startswith(record_dir_rel + "/")]
     sizing_rel = record_sizing_rel(worktree_root, run_id)
     if (
@@ -524,7 +528,8 @@ def _land(
     )
     withheld.update({
         p: r for p, r in gated.items()
-        if r != halt_product_gates.UNOWNED_PRODUCT or halted["halted"] == "ledger-check"
+        # A land-only ask's marker paths are the run's product by declaration, never unowned.
+        if r != halt_product_gates.UNOWNED_PRODUCT or (halted["halted"] == "ledger-check" and p not in land_only)
     })
     product = [p for p in product if p not in withheld]
     gone = [p for p in gone if p not in withheld]
