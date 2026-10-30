@@ -22,9 +22,8 @@ from typing import Iterator, Optional
 #: Seconds one land_run may spend before its next leg halts; well under the 30s op budget.
 LAND_BUDGET_SECS = 10.0
 
-#: Seconds past `LAND_BUDGET_SECS` that only the `RESERVED_LEGS`, and every leg checked once one has
-#: started in the scope, may start in, so a reviewed landing is not refused by a deadline its optional
-#: legs spent. Outer clamps (dispatcher, server window)
+#: Seconds past `LAND_BUDGET_SECS` that only the `RESERVED_LEGS` may start in, so a reviewed landing
+#: is not refused by a deadline its optional legs spent. Outer clamps (dispatcher, server window)
 #: bound both deadlines and stay authoritative.
 RESERVE_SECS = 3.0
 
@@ -169,14 +168,13 @@ def check(leg: str) -> None:
     elapsed; otherwise record the leg's start. A no-op when no deadline is bound."""
     now = _now()
     hard = _HARD.get()
-    reserved = _is_reserved(leg) or _reserved_leg_open()
-    if reserved:
+    if _is_reserved(leg):
         refused = hard is not None and now >= hard
     else:
         refused = expired()
     if refused:
         by = _BOUND_BY.get() or (BOUND_BUDGET, BOUND_BUDGET)
-        raise LandDeadlineExceeded(leg, _legs_elapsed(now), by[1] if reserved else by[0])
+        raise LandDeadlineExceeded(leg, _legs_elapsed(now), by[1] if _is_reserved(leg) else by[0])
     ledger = _LEGS.get()
     if ledger is not None:
         ledger.append((leg, now))
@@ -186,12 +184,6 @@ def _is_reserved(leg: str) -> bool:
     """True for the integrity and commit legs and the sub-legs under them, which may spend the
     reserved tail of the budget."""
     return any(seg in RESERVED_LEGS for seg in leg.split("."))
-
-
-def _reserved_leg_open() -> bool:
-    """True once a reserved leg has started in this scope: the integrity leg stays open until the
-    commit, so every leg checked after it draws on the reserve."""
-    return any(_is_reserved(name) for name, _ in (_LEGS.get() or []))
 
 
 def _legs_elapsed(now: float) -> list:

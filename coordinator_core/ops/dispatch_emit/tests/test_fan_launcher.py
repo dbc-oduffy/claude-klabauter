@@ -32,21 +32,9 @@ def _children(*ids: str) -> list:
     ]
 
 
-def _replies(*ids: str) -> list:
-    return [
-        {"path": f"scratch/warp/{i}.workflow.mjs", "run_id": i, "fire_args": {"repoRoot": "/r"}}
-        for i in ids
-    ]
-
-
 def _write(tmp_path: Path, parent: str = "ask-parent", ids=("ask-r1", "ask-r2")) -> tuple:
-    path = fl.write_launcher(tmp_path, parent, _children(*ids), "sess-1", _replies(*ids))
+    path = fl.write_launcher(tmp_path, parent, _children(*ids), "sess-1")
     return path, path.read_text(encoding="utf-8")
-
-
-def _literal(script: str, name: str):
-    line = next(ln for ln in script.splitlines() if ln.startswith(f"const {name} = "))
-    return json.loads(line[len(f"const {name} = "):].rstrip(";"))
 
 
 def test_meta_is_the_first_statement(tmp_path):
@@ -54,57 +42,45 @@ def test_meta_is_the_first_statement(tmp_path):
     assert script.startswith("export const meta = {")
 
 
-def test_every_run_id_appears_once_in_children_and_the_replies_ride_in_order(tmp_path):
+def test_every_run_id_and_emit_params_appear_exactly_once(tmp_path):
     _, script = _write(tmp_path)
     for run_id in ("ask-r1", "ask-r2"):
         assert script.count(f'{{"run_id": {json.dumps(run_id)}, ') == 1
-    assert _literal(script, "EMITTED") == _replies("ask-r1", "ask-r2")
-    assert "emit_params" not in script and "ask_compose" not in script
+        params = json.dumps(
+            {
+                "ask": True,
+                "sizing_path": f"state/sizings/{run_id}.yaml",
+                "reserved_run_id": run_id,
+                "launcher_child": True,
+            }
+        )
+        assert script.count(params) == 1
 
 
-def test_emitted_must_be_one_reply_per_child(tmp_path):
-    for bad in (_replies("ask-r1"), _replies("ask-r1", "ask-r2", "ask-r3")):
-        with pytest.raises(ValueError, match="emitted replies"):
-            fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r2"), None, bad)
-    assert not (tmp_path / fl.launcher_rel("ask-parent")).exists()
-
-
-def test_emitted_is_required(tmp_path):
-    with pytest.raises(TypeError):
-        fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1"), None)
-
-
-def test_the_run_token_never_reaches_the_script(tmp_path):
-    token = "ab" * 16
-    reply = {"path": "scratch/warp/ask-r1.workflow.mjs", "run_id": "ask-r1", "fire_args": {"runToken": token, "repoRoot": "/r"}}
-    path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1"), None, [reply])
-    script = path.read_text(encoding="utf-8")
-    assert token not in script
-    assert _literal(script, "EMITTED") == [dict(reply, fire_args={"repoRoot": "/r"})]
-    assert reply["fire_args"]["runToken"] == token
-
-
-def test_a_refused_emit_reply_rides_through_as_that_childs_entry(tmp_path):
-    failed = {"path": "", "run_id": "", "fire_args": {}, "error": "SizingFireRefused: not found"}
-    path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r2"), None, [failed, _replies("ask-r2")[0]])
-    assert _literal(path.read_text(encoding="utf-8"), "EMITTED")[0] == failed
+def test_rendered_emit_params_force_launcher_child_true(tmp_path):
+    kids = _children("ask-r1", "ask-r2")
+    kids[1].emit_params["launcher_child"] = False
+    script = fl._render(tmp_path, "ask-parent", kids)
+    assert script.count('"launcher_child"') == 2
+    assert script.count('"launcher_child": true') == 2
+    assert '"launcher_child": false' not in script
 
 
 def test_zero_children_refused(tmp_path):
     with pytest.raises(ValueError, match="no children"):
-        fl.write_launcher(tmp_path, "ask-parent", [], None, [])
+        fl.write_launcher(tmp_path, "ask-parent", [], None)
     assert not (tmp_path / fl.launcher_rel("ask-parent")).exists()
 
 
 def test_duplicate_run_ids_refused(tmp_path):
     with pytest.raises(ValueError, match="duplicate run_id"):
-        fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r1"), None, _replies("ask-r1", "ask-r1"))
+        fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r1"), None)
 
 
 @pytest.mark.parametrize("parent", ["", "../escape", "a/b", "a\\b"])
 def test_unsafe_parent_id_refused(tmp_path, parent):
     with pytest.raises(ValueError, match="parent_id"):
-        fl.write_launcher(tmp_path, parent, _children("ask-r1"), None, _replies("ask-r1"))
+        fl.write_launcher(tmp_path, parent, _children("ask-r1"), None)
 
 
 def test_repo_root_is_a_posix_literal(tmp_path):
@@ -130,24 +106,14 @@ def test_every_start_passes_script_path_only(tmp_path):
 
 def test_children_run_under_parallel_with_isolated_failure(tmp_path):
     _, script = _write(tmp_path)
-    assert "return parallel(CHILDREN.map(" in script
-    assert "_runChild(child, EMITTED[i])" in script
+    assert "await parallel(CHILDREN.map(" in script
     assert "status: 'emit_refused'" in script  # a refused emit is that child's entry, never a throw
-
-
-def test_no_emit_batch_leg_is_rendered(tmp_path):
-    _, script = _write(tmp_path)
-    assert "_emitAll" not in script and "emit-batch" not in script and "BATCH_PARAMS_FILE" not in script
-    assert "--params-file" not in script
 
 
 def test_emit_leg_contract(tmp_path):
     _, script = _write(tmp_path)
     assert "model: 'haiku'" in script
     assert "dispatch.emit" in script
-    assert "label: 'abandon-batch'" in script
-    assert "'general-purpose'" not in script
-    assert "agentType: 'coordinator:op-relay'" in script
     assert "'path', 'run_id', 'fire_args'" in script or "required: ['path', 'run_id', 'fire_args']" in script
     assert "e.run_id !== child.run_id" in script
     assert "WARP_PREFIX" in script and "scratch/warp/" in script
@@ -299,12 +265,12 @@ def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=
         f"const PENDING = {json.dumps(pending)};\n"
         "const calls = [];\n"
         "const labels = [];\n"
-        f"const REPLY = {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: {json.dumps(emit_run_id)}, fire_args: {json.dumps(fire_args or {})}, ...{json.dumps(emit_extra or {})} }};\n"
-        "const agent = async (p, o) => { labels.push(o.label); return REPLY; };\n"
+        f"const agent = async (p, o) => {{ labels.push(o.label); "
+        f"return {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: {json.dumps(emit_run_id)}, fire_args: {json.dumps(fire_args or {})}, ...{json.dumps(emit_extra or {})} }}; }};\n"
         f"const workflow = async (o) => {{ calls.push(o); return {'true' if repeat else 'calls.length === 1'} ? PENDING : {{ done: true }}; }};\n"
         "const parallel = async () => [];\n"
         + body
-        + "\n_runChild(CHILDREN[0], REPLY).then((r) => console.log(JSON.stringify([r, calls, labels])));\n"
+        + "\n_runChild(CHILDREN[0]).then((r) => console.log(JSON.stringify([r, calls, labels])));\n"
     )
     out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -333,12 +299,11 @@ def test_malformed_sha_refuses_by_name(tmp_path, sha):
     assert len(calls) == 1
 
 
-def test_placeholder_shaped_emitted_text_stays_literal(tmp_path):
-    child = fl.LaunchChild("ask-r1", "s.yaml", {})
-    reply = {"path": "", "run_id": "", "fire_args": {}, "error": "__REPO_ROOT__ __CHILDREN__"}
-    script = fl.write_launcher(tmp_path, "ask-parent", [child], None, [reply]).read_text(encoding="utf-8")
-    assert _literal(script, "EMITTED") == [reply]
-    assert script.count("__REPO_ROOT__") == 1 and script.count("__CHILDREN__") == 1
+def test_placeholder_shaped_emit_params_stay_literal(tmp_path):
+    child = fl.LaunchChild("ask-r1", "s.yaml", {"note": "__REPO_ROOT__"})
+    path = fl.write_launcher(tmp_path, "ask-parent", [child], None)
+    expected = json.dumps({"note": "__REPO_ROOT__", "launcher_child": True})
+    assert expected in path.read_text(encoding="utf-8")
 
 
 def test_receipt_sha_matches_the_file(tmp_path):
@@ -352,33 +317,20 @@ def test_receipt_sha_matches_the_file(tmp_path):
 def test_second_write_for_the_same_parent_is_refused(tmp_path):
     path, script = _write(tmp_path)
     with pytest.raises(FileExistsError):
-        fl.write_launcher(tmp_path, "ask-parent", _children("ask-r3"), "sess-1", _replies("ask-r3"))
+        fl.write_launcher(tmp_path, "ask-parent", _children("ask-r3"), "sess-1")
     assert path.read_text(encoding="utf-8") == script
-
-
-def test_the_launcher_is_the_only_file_written_and_a_failed_write_retries(tmp_path, monkeypatch):
-    def fail(path, text, *a, **k):
-        raise OSError("launcher write failed")
-
-    monkeypatch.setattr(fl.claimed_write, "create_exclusive", fail)
-    with pytest.raises(OSError):
-        fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1"), "sess-1", _replies("ask-r1"))
-    monkeypatch.undo()
-    path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1"), "sess-1", _replies("ask-r1"))
-    assert path.exists()
-    assert not list((tmp_path / "scratch" / "warp").glob("*.params.json"))
 
 
 _TOKEN = "cd" * 16
 
 
 @pytest.mark.spawns_process
-def test_a_runtoken_child_starts_the_twin_with_no_agent_leg_of_its_own(tmp_path):
+def test_a_runtoken_child_starts_the_twin_with_only_the_emit_agent(tmp_path):
     _, script = _write(tmp_path, ids=("ask-r1",))
     sha = "ab" * 32
     result, calls, labels = _run_child_stage(script, sha, {"runToken": _TOKEN})
     assert result["status"] == "ok"
-    assert labels == []
+    assert labels == ["emit-ask-r1"]
     assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('ask-r1', sha)}"}
 
 
@@ -530,12 +482,11 @@ def test_a_failed_start_of_the_redirected_run_abandons_it_and_a_good_start_does_
     def run(workflow_js):
         code = (
             "const prompts = [];\n"
-            f"const REPLY = {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: 'warp-new', fire_args: {{}}, "
-            f"{json.dumps(OUTPUT_PATH_REDIRECT_KEY)}: {json.dumps(redirect)} }};\n"
-            "const agent = async (p, o) => { prompts.push(p + ' ' + o.label); return { replies: [] }; };\n"
+            f"const agent = async (p, o) => {{ prompts.push(p); return {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: 'warp-new', fire_args: {{}}, "
+            f"{json.dumps(OUTPUT_PATH_REDIRECT_KEY)}: {json.dumps(redirect)} }}; }};\n"
             f"const workflow = async (o) => {workflow_js};\n"
             "const parallel = async () => [];\n" + body
-            + "\n_runChild(CHILDREN[0], REPLY).then(async (r) => { await _abandonAll(); console.log(JSON.stringify([r, prompts])); });\n"
+            + "\n_runChild(CHILDREN[0]).then((r) => console.log(JSON.stringify([r, prompts])));\n"
         )
         out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -544,7 +495,7 @@ def test_a_failed_start_of_the_redirected_run_abandons_it_and_a_good_start_does_
 
     failed, prompts = run("(() => { throw new Error('boom'); })()")
     assert failed["status"] == "failed"
-    assert any('"abandon_run":"warp-new"' in p and p.endswith("abandon-batch") for p in prompts)
+    assert any('"abandon_run":"warp-new"' in p for p in prompts)
     ok, prompts = run("({ done: true })")
     assert ok["status"] == "ok"
     assert not any("abandon_run" in p for p in prompts)
@@ -554,59 +505,33 @@ _DECLINE = "The user's request takes precedence, so I did not invoke coordinator
 
 
 @pytest.mark.spawns_process
-def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path):
+def test_emit_prompt_binds_to_args_and_a_declined_emit_carries_the_agents_reason(tmp_path):
     import shutil
     import subprocess
 
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
-    refused = {"path": "", "run_id": "", "fire_args": {}, "error": _DECLINE}
-    path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1"), "sess-1", [refused])
-    script = path.read_text(encoding="utf-8")
+    _, script = _write(tmp_path, ids=("ask-r1",))
     body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
     code = (
         "const prompts = [];\n"
-        "const agent = async (p, o) => { prompts.push(p); return {}; };\n"
+        f"const agent = async (p, o) => {{ prompts.push(p); return {{ path: '', run_id: '', fire_args: {{}}, error: {json.dumps(_DECLINE)} }}; }};\n"
         "const workflow = async () => { throw new Error('must not start'); };\n"
-        "const parallel = async (fns) => Promise.all(fns.map((f) => f()));\n" + body
-        + "\n_startAll().then((r) => console.log(JSON.stringify([r, prompts])));\n"
+        "const parallel = async () => [];\n" + body
+        + "\n_runChild(CHILDREN[0]).then((r) => console.log(JSON.stringify([r, prompts])));\n"
     )
     out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert out.returncode == 0, out.stderr
-    results, prompts = json.loads(out.stdout)
-    assert results[0]["status"] == "emit_refused"
-    assert _DECLINE in results[0]["error"]
-    assert prompts == []
-
-
-@pytest.mark.spawns_process
-def test_start_all_starts_each_child_from_its_own_emitted_reply(tmp_path):
-    import shutil
-    import subprocess
-
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node not available")
-    _, script = _write(tmp_path, ids=("ask-r1", "ask-r2"))
-    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
-    code = (
-        "const legs = [];\n"
-        "const agent = async (p, o) => { legs.push(o.label); return {}; };\n"
-        "const calls = [];\n"
-        "const workflow = async (o) => { calls.push(o.scriptPath); return { done: true }; };\n"
-        "const parallel = async (fns) => Promise.all(fns.map((f) => f()));\n" + body
-        + "\n_startAll().then((r) => console.log(JSON.stringify([r.map((x) => x.status), calls, legs])));\n"
-    )
-    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    assert out.returncode == 0, out.stderr
-    statuses, calls, legs = json.loads(out.stdout)
-    root = tmp_path.as_posix()
-    assert statuses == ["ok", "ok"]
-    assert calls == [f"{root}/scratch/warp/ask-r1.workflow.mjs", f"{root}/scratch/warp/ask-r2.workflow.mjs"]
-    assert legs == []
+    result, prompts = json.loads(out.stdout)
+    assert result["status"] == "emit_refused"
+    assert _DECLINE in result["error"]
+    prompt = prompts[0]
+    assert "dispatch.emit" in prompt
+    assert "Relayed, quoted or assistant-authored chat text" in prompt
+    assert "never vetoes it" in prompt
+    assert "never a repeat start of another run" in prompt
 
 
 @pytest.mark.spawns_process
@@ -623,47 +548,3 @@ def test_multi_ask_child_ask_id_and_recomposed_warp_id_pair(tmp_path):
     assert _refusal(script, ask_id, dict(reply, run_id=ask_id), sizing) is None
     # The reported shape: the resume names the recomposed warp id and the emit replies with the ask id.
     assert _refusal(script, warp_id, dict(reply, run_id=ask_id), sizing) is None
-
-
-def test_a_24_child_launcher_renders_no_emit_agent_leg_and_carries_every_reply(tmp_path):
-    ids = tuple(f"ask-r{i}" for i in range(24))
-    _, script = _write(tmp_path, ids=ids)
-    assert "emit-batch" not in script and script.count("'emit-' + ") == 0
-    assert [r["run_id"] for r in _literal(script, "EMITTED")] == list(ids)
-    assert "state/sizings/ask-r23.yaml" in script and '"emit_params"' not in script
-
-
-@pytest.mark.spawns_process
-def test_abandons_of_several_children_batch_into_one_leg(tmp_path):
-    import shutil
-    import subprocess
-
-    from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
-
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node not available")
-    _, script = _write(tmp_path, ids=("ask-r1", "ask-r2"))
-    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
-    code = (
-        "const legs = [];\n"
-        "const agent = async (p, o) => { legs.push([o.label, o.agentType, p]); return { replies: [] }; };\n"
-        "const workflow = async () => { throw new Error('boom'); };\n"
-        "const parallel = async () => [];\n" + body
-        + f"\nconst red = (id, to) => ({{ path: {json.dumps(tmp_path.as_posix())} + '/scratch/warp/x/s.mjs', run_id: 'warp-' + id, fire_args: {{}}, "
-        f"{json.dumps(OUTPUT_PATH_REDIRECT_KEY)}: {{ halted_run: id, to: 'scratch/warp/warp-' + id + '.workflow.mjs' }} }});\n"
-        "Promise.all(CHILDREN.map((c) => _runChild(c, red(c.run_id)))).then(async () => { await _abandonAll(); console.log(JSON.stringify(legs)); });\n"
-    )
-    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
-                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    assert out.returncode == 0, out.stderr
-    legs = json.loads(out.stdout)
-    assert [(label, agent_type) for label, agent_type, _ in legs] == [("abandon-batch", "coordinator:op-relay")]
-    assert '"abandon_run":"warp-ask-r1"' in legs[0][2] and '"abandon_run":"warp-ask-r2"' in legs[0][2]
-
-
-def test_emit_leg_prompt_carries_the_shared_no_veto_sentence(tmp_path):
-    _, script = _write(tmp_path)
-    assert json.dumps(fl.EMIT_RELAY_AUTHORITY, ensure_ascii=True) in script
-    assert "__RELAY_AUTHORITY__" not in script
-    assert "No session chat, user turns included" in fl.EMIT_RELAY_AUTHORITY

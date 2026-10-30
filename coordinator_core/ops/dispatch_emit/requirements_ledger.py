@@ -1717,8 +1717,7 @@ def post_commit_owed(verdict: Mapping, sha: str, discharged: Collection[str] = (
 @register_op("workflow.revise")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.revise": params `run_id` (str, required), `verbatim` (str, a requirement), `note` (str, free
-    text that adds no row; `notes` is its alias, a str or a list of str joined by newline, and
-    sending both is refused), `from` (str, the peer session sending the revision; stamped on the
+    text that adds no row), `from` (str, the peer session sending the revision; stamped on the
     row), `all_of_pm_ask` (bool), `out_of_scope` (list of register row ids, needs
     `verbatim`: each is deferred with the verbatim as
     its ruling, carried open on the commit, and replied as `withheld`), `withhold_paths` (list of
@@ -1757,14 +1756,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
-    if "notes" in params:
-        if "note" in params:
-            return {"error": "workflow.revise takes `note`; `notes` is its alias, send one of them"}
-        notes = params["notes"]
-        params = {k: v for k, v in params.items() if k != "notes"}
-        if isinstance(notes, (list, tuple)) and all(isinstance(n, str) for n in notes):
-            notes = "\n".join(notes)
-        params["note"] = notes
     refusal = validate_params("workflow.revise", params, _PARAMS, strict=True)
     if refusal is not None:
         return refusal

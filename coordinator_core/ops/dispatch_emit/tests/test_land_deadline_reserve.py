@@ -52,38 +52,6 @@ def test_optional_leg_halts_inside_the_reserve(clock, leg):
     assert exc.value.leg == leg
 
 
-def test_leg_after_an_open_integrity_leg_draws_on_the_reserve(clock):
-    with land_deadline.scope():
-        land_deadline.check("land_run.integrity")
-        clock.now += BUDGET + 1.0
-        land_deadline.check("peer_hunk_gate.sibling_spine")
-
-
-def test_leg_without_an_open_integrity_leg_halts_inside_the_reserve(clock):
-    with land_deadline.scope():
-        clock.now += BUDGET + 1.0
-        with pytest.raises(land_deadline.LandDeadlineExceeded):
-            land_deadline.check("peer_hunk_gate.sibling_spine")
-
-
-def test_nested_reserved_leg_is_still_bounded_by_the_hard_deadline(clock):
-    with land_deadline.scope():
-        land_deadline.check("land_run.integrity")
-        clock.now += BUDGET + RESERVE + 0.1
-        with pytest.raises(land_deadline.LandDeadlineExceeded) as exc:
-            land_deadline.check("peer_hunk_gate.sibling_spine")
-    assert exc.value.bound_by == land_deadline.BOUND_BUDGET
-
-
-def test_integrity_open_in_one_scope_does_not_reserve_the_next(clock):
-    with land_deadline.scope():
-        land_deadline.check("land_run.integrity")
-    with land_deadline.scope():
-        clock.now += BUDGET + 1.0
-        with pytest.raises(land_deadline.LandDeadlineExceeded):
-            land_deadline.check("peer_hunk_gate.sibling_spine")
-
-
 def test_reserved_leg_halts_past_the_full_budget(clock):
     with land_deadline.scope():
         clock.now += BUDGET + RESERVE + 0.1

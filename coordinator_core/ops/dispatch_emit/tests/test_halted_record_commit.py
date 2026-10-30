@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops import warp_run_deliverable
-from coordinator_core.ops.dispatch_emit import halted_run, land_run, review_edits, sibling_claims
+from coordinator_core.ops.dispatch_emit import land_run, review_edits, sibling_claims
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     RUN,
     _call,
@@ -47,10 +47,7 @@ def test_an_oserror_reading_the_halt_record_excludes_the_review_literal(repo, mo
     def unreadable(*_a, **_k):
         raise OSError("halt record unreadable")
 
-    # held_paths falls back to the raw record reader when the normalizer fails, so the unreadable
-    # record is simulated at that reader too.
     monkeypatch.setattr(warp_run_deliverable, "halted_withheld_paths", unreadable)
-    monkeypatch.setattr(halted_run, "halted_withheld_strict", unreadable)
     monkeypatch.setattr(sibling_claims, "_unlanded_run_ids", lambda *_a, **_k: ["ask-x"])
     monkeypatch.setattr(warp_run_deliverable, "_halted", lambda *_a, **_k: True)
 

@@ -277,7 +277,7 @@ def _stage_ask_dir(root: Path) -> None:
         root, f"{RECORD_DIR_ROOT}/{RUN}/run.json",
         json.dumps({"sizing_rel": SIZING, "ask": ASK}),
     )
-    _write(root, f"{RECORD_DIR_ROOT}/{ASK}/notes/x.md", "prompt\n")
+    _write(root, f"{RECORD_DIR_ROOT}/{ASK}/prompts/x.md", "prompt\n")
     _write(root, f"{RECORD_DIR_ROOT}/{ASK}/withheld-prints.json", "{}\n")
 
 
@@ -302,7 +302,7 @@ def test_a_terminal_run_leaves_no_ask_dir_file_dirty_and_reports_push(repo):
 
 def test_a_file_written_after_the_landing_is_relanded_in_the_same_op(repo, monkeypatch):
     _stage_ask_dir(repo)
-    late = f"{RECORD_DIR_ROOT}/{ASK}/notes/late.md"
+    late = f"{RECORD_DIR_ROOT}/{ASK}/prompts/late.md"
     real = terminal_commit._commit_residue
 
     def _residue(*a, **k):
@@ -324,7 +324,7 @@ def test_a_late_file_a_live_peer_holds_is_not_swept(repo, monkeypatch):
     from coordinator_core.session import scope
 
     _stage_ask_dir(repo)
-    late = f"{RECORD_DIR_ROOT}/{ASK}/notes/late.md"
+    late = f"{RECORD_DIR_ROOT}/{ASK}/prompts/late.md"
     real = terminal_commit._commit_residue
 
     def _residue(*a, **k):

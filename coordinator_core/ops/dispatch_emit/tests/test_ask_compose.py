@@ -492,9 +492,7 @@ def _presized(monkeypatch, arm="xs", **over):
 
 def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_only():
     scout = _scout_prompt(_compose())
-    after_stage = scout.split(OP_ASK_STAGE, 1)[1].split('"properties"', 1)[0]
-    base, edge = after_stage.split(", except that with a resume_plan in the gate reply", 1)
-    assert OP_ASK_STAGE in scout and "plan_path" not in base and "`plan_path` to it" in edge
+    assert OP_ASK_STAGE in scout and "plan_path" not in scout.split(OP_ASK_STAGE, 1)[1].split('"properties"', 1)[0]
     assert scout.index(OP_ASK_GATE) < scout.index(OP_ASK_STAGE)
     assert scout.rindex(OP_ASK_STAGE) > scout.index("sizing-assemble")
     assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
@@ -508,9 +506,7 @@ def test_the_presized_gate_agent_runs_ask_stage_after_the_gate_op(monkeypatch):
 def test_the_gate_prompt_stages_xs_only_and_passes_an_s_resume_manifest_through(monkeypatch):
     gate = _gate_prompt(_presized(monkeypatch))
     stage_act = gate.split("As your very last act", 1)[1]
-    base, edge = stage_act.split(", except that with a resume_plan in the gate reply", 1)
-    assert "arm is XS" in base and "plan_path" not in base and "resume_plan is non-null" not in gate
-    assert "`plan_path` to it" in edge and "drop `writes`, `gated` and `sizing_path`" in edge
+    assert "arm is XS" in stage_act and "plan_path" not in stage_act and "resume_plan is non-null" not in gate
     assert "an S resume stages itself" in gate and "stage_reply" in gate
     assert "stage_reply" in ask_compose._GATE_STAGED_SCHEMA["properties"]
     assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
@@ -707,14 +703,11 @@ def test_a_scout_reply_without_exit_code_is_redispatched_once_then_halts_distinc
 
 def test_a_paraphrased_scout_stdout_with_the_sizing_file_on_disk_does_not_halt():
     script = _compose()
-    assert "label: 'sizing-probe'" not in script
-    scout = _scout_prompt(script)
-    assert "test -f" in scout and "sizing_present" in scout
-    assert scout.index("sizing-assemble") < scout.index("test -f")
-    assert "sizing_present" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
-    assert "sizing_present" in ask_compose._ASK_SCOUT_SCHEMA["properties"]
-    # The scout's own `test -f` answers only when assemble is unproven, and the halt fires only when the file is absent too.
-    assert "const _sizingOnDisk = _assembleUnproven ? _scouted.sizing_present === true" in script
+    assert script.count("label: 'sizing-probe'") == 1
+    probe = next(ln for ln in script.splitlines() if "label: 'sizing-probe'" in ln)
+    assert "test -f" in probe and "_sizingPath" in probe
+    # The probe runs only when assemble is unproven, and the halt fires only when the file is absent too.
+    assert "const _sizingOnDisk = _assembleUnproven ?" in script
     assert "if (_assembleUnproven && !_sizingOnDisk) { _halted" in script
     assert script.index("const _assembleUnproven") < script.index("const _sizingOnDisk") < script.index("scout failure: sizing-assemble did not run")
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
@@ -784,11 +777,3 @@ def test_a_stale_resume_plan_is_not_trusted_as_ready_and_a_decent_one_is(monkeyp
     assert "const _staleResumePlan = null;" in decent
     guard = "&& _gate.resume_plan !== _staleResumePlan) { _planRel = _gate.resume_plan; }"
     assert guard in stale and guard in decent
-
-
-def test_chain_emit_prompt_declares_session_chat_no_veto():
-    from coordinator_core.ops.dispatch_emit.fan_launcher import EMIT_RELAY_AUTHORITY
-
-    script = "\n".join(ask_compose._chain_emit_start_lines(sizing_js="SZ", head="H", anchor="A", run_id="r1"))
-    assert EMIT_RELAY_AUTHORITY in script
-    assert script.index(EMIT_RELAY_AUTHORITY) < script.index("dispatch.emit")
