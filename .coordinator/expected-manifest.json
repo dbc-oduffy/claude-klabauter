@@ -2260,8 +2260,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "9042b1f86aedf15574c21cb4b7f193286ff2e221",
-    "coordinator_core/_engine_stamp": "d66347be70e51d42e86d0af82066a0454961a126",
+    "coordinator_core/_engine_published_at": "5f08d2991213013f4bdd1cb5a242ed053820c790",
+    "coordinator_core/_engine_stamp": "1459c2cf4ffc686ead298551b39237cd32c41e4c",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4742,7 +4742,7 @@
     "coordinator_core/ops/ceremony/__init__.py": "385b116f7f986b77f7f08ef4afbb446c7cca0018",
     "coordinator_core/ops/ceremony/branch_resolution.py": "fa0b9f60fdb4ef5b37ba09233d00e78fad004b5e",
     "coordinator_core/ops/ceremony/chunk_commits.py": "d6fb55d590e49539e60e4ff6ffb9244ea7a8bf45",
-    "coordinator_core/ops/ceremony/close_background.py": "79019f0053bb4216416b7a97b9bfc149749c927a",
+    "coordinator_core/ops/ceremony/close_background.py": "dbc4b9b77547bbfbd421bc79c7ff46c7dbfba8a8",
     "coordinator_core/ops/ceremony/close_review.py": "a91296c172b4da19dabe88af2a2db38856629003",
     "coordinator_core/ops/ceremony/commit_admission.py": "6601bbeba877436192c83a26f99cb2f10e5889fc",
     "coordinator_core/ops/ceremony/commit_companion.py": "c622bb77766d93fe06eea84a292ef5d2139700eb",
@@ -4794,6 +4794,7 @@
     "coordinator_core/ops/ceremony/tests/test_close_background_review_stamp_outcome.py": "598db0385e97d5b5015e2ff71cc98e63eb5cdcb8",
     "coordinator_core/ops/ceremony/tests/test_close_background_run_closed_trailer.py": "64b9d963bdc1166e9b7050ee0a5fb910b3996ff8",
     "coordinator_core/ops/ceremony/tests/test_close_background_sibling_blocked.py": "5fe55888ccc4946e09ed815582a9ddcc5f97b42d",
+    "coordinator_core/ops/ceremony/tests/test_close_background_xs_review_legs_run.py": "d9707ff3aac18b18970f79167eb02483a587884d",
     "coordinator_core/ops/ceremony/tests/test_close_review.py": "8a64419ae502c72d18fcc89fea5009631fad26bb",
     "coordinator_core/ops/ceremony/tests/test_commit_admission.py": "70fc03b10cee2cba1b116c04af31f79fcdf61537",
     "coordinator_core/ops/ceremony/tests/test_commit_authored_content_edges.py": "5c780e323265e0e3b968e73ce3024e51db794956",
@@ -5245,7 +5246,7 @@
     "coordinator_core/ops/dispatch_emit/stopped_runs.py": "bdd33c5d339edffd726844925fe7f0138fe40586",
     "coordinator_core/ops/dispatch_emit/stranded_part_rebuild.py": "5042bdbe855fb73a3a12384825ee80fe49699785",
     "coordinator_core/ops/dispatch_emit/symbol_context.py": "0c8aa7f9f65ea3700b4bf5f257b5980cd764e141",
-    "coordinator_core/ops/dispatch_emit/terminal_commit.py": "36c01edb5e02da83b405b1ccb3bfa101b4a6471c",
+    "coordinator_core/ops/dispatch_emit/terminal_commit.py": "b06841cd0fb5cdcf23f1ae5b174795df54d7d561",
     "coordinator_core/ops/dispatch_emit/terminal_commit_checkpoints.py": "766a73c5a60fe9afd565287d6653d7fd7ce81181",
     "coordinator_core/ops/dispatch_emit/terminal_commit_closeout.py": "79eb00a6775c605785566575e232c4b4b1cc2015",
     "coordinator_core/ops/dispatch_emit/terminal_commit_ledger.py": "a6e5a936cabdab79d53d406af29eebe482096825",
@@ -6735,6 +6736,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_xs_land_test_leg_gate.py": "4ce4ff1713bed7778a0beae610e5953bb8a82b34",
     "coordinator_core/ops/dispatch_emit/tests/test_xs_launcher_child_never_nests_incident.py": "9a29f0d34d61798815d83a58baa388c26cd07851",
     "coordinator_core/ops/dispatch_emit/tests/test_xs_one_row_leg_budget.py": "e1ea05ca0290a0e1270c90ed379d695b15d9da6a",
+    "coordinator_core/ops/dispatch_emit/tests/test_xs_run_lands_every_declared_path.py": "15b5fffd2979326a6f07d25341fe3661f231bace",
     "coordinator_core/ops/dispatch_emit/typecheck_leg.py": "8c7ee89c5c16932283a4eeda29e319c54f7475db",
     "coordinator_core/ops/dispatch_emit/ue_engine_facts.py": "cbd647ff91894cc95ec0c80152f0dfc98bd10230",
     "coordinator_core/ops/dispatch_emit/usage_limit_halt.py": "c344783d52ecba6b531ac324f51fbf5f120bb535",
@@ -10425,5 +10427,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "179c777e5585c40303133868f45da10eedd106eb"
+  "source_head": "587cd1c9539206c757e61afd4258924a6e29ece6"
 }

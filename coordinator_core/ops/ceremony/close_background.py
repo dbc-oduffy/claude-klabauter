@@ -1327,8 +1327,33 @@ def run_background(
     ):
         again = LegResult("queued", f"{_DEFER_TAG}1: lands the deferred legs' writes")
         run_close.record_leg_outcome(ctx.root, ctx.run_id, "close-commit", again.status, again.detail)
+    _settle_unqueued_review(ctx, outcomes.get("review-stamp"))
     _release_landed_claims(ctx)
     return outcomes
+
+
+def _settle_unqueued_review(ctx: JobContext, stamp: Optional[LegResult]) -> None:
+    """The landing reply names ``review`` queued; when the ``review-stamp`` leg settled without queueing it,
+    nothing would ever pay or time it out. Record it ``not-applicable`` with the stamp leg's reason."""
+    if stamp is None or stamp.status == "queued":
+        return
+    try:
+        record = _load_record(ctx.root, ctx.run_id)
+        if "review" in (record.get("legs") or {}):
+            return
+        deadline = datetime.fromisoformat(str(record.get("deadline", "")))
+        run_close.amend_close_job(ctx.root, ctx.run_id, queue=("review",), deadline=deadline)
+        reason = stamp.detail or f"review-stamp {stamp.status}"
+        run_close.record_leg_outcome(
+            ctx.root, ctx.run_id, "review", "not-applicable", run_close.scrub_detail(f"review did not run: {reason}", ctx.root)
+        )
+    except Exception as exc:  # noqa: BLE001 -- the stamp leg's own outcome stands
+        try:
+            run_close.record_leg_outcome(
+                ctx.root, ctx.run_id, "review", "failed", run_close.scrub_detail(f"review settle failed: {exc}", ctx.root)
+            )
+        except Exception:  # noqa: BLE001 -- no record to write to
+            pass
 
 
 def _deferrals(record: Any, leg: str) -> int:

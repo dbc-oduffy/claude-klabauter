@@ -937,8 +937,7 @@ def _run_owned_dirt(
     if not candidates:
         return [], []
     contested = session_scope.contested_by_live_peers(candidates, session_id, cwd=root_str)
-    if contested is None:
-        return [], []
+    contested = {} if contested is None else contested
     if left_out is not None:
         left_out.update({p: list(contested[p]) for p in candidates if p in contested})
     files = [p for p in present if p in owned and p not in contested]
@@ -1737,6 +1736,7 @@ def _terminal_commit_inner(
 
     manifest_rel: Optional[str] = None
     ask_run_dir: Optional[Path] = None
+    manifest_declared: tuple = ()
     request: Optional[CommitRequest] = None
     try:
         manifest_rel = parse_manifest_marker(script_text)
@@ -1767,6 +1767,7 @@ def _terminal_commit_inner(
                 withheld.update({g.id: g.reason for g in manifest.gated})
                 withheld.update({o.id: f"owed: {o.detail}" for o in manifest.owed})
             ask_run_dir = manifest_abs.parent
+            manifest_declared = tuple(manifest.review_declared_paths)
             from coordinator_core.ops.dispatch_emit.in_run_widen import record_widens
 
             record_widens(ask_run_dir, params.get("widened"))
@@ -2180,6 +2181,7 @@ def _terminal_commit_inner(
         + ([ask_note_rel] if ask_note_rel else [])
         + (list(artifacts.paths()) if artifacts is not None else [])
         + [p for p in (review_writes or ()) if not review_edits.out_of_worktree(p)]
+        + list(manifest_declared)
         + sorted(_run_touched.touched_paths(
             request, inline_review, artifacts.paths() if artifacts is not None else ()
         )),
@@ -2327,7 +2329,7 @@ def _terminal_commit_inner(
 
     touched = run_touched.touched_paths(
         request, inline_review, artifacts.paths() if artifacts is not None else ()
-    )
+    ) | frozenset(p.replace("\\", "/") for p in manifest_declared if p)
 
     left_out_map: dict = {}
     for chunk in done_chunks:
