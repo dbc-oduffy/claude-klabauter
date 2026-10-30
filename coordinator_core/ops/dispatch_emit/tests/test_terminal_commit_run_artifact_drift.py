@@ -11,7 +11,7 @@ import pytest
 
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops.review_mint import wave_bookkeeping
-from coordinator_core.ops.dispatch_emit import halted_record_commit, run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.session import touch_record
@@ -128,8 +128,18 @@ def test_a_rewrite_of_the_runs_own_sizing_is_reread_and_lands(tmp_path, monkeypa
     assert out["run_artifacts"]["reread"] == [OWN]
 
 
+def test_reread_is_reported_beside_the_runs_landed_artifacts(tmp_path, monkeypatch):
+    out, _ = _fire(tmp_path, monkeypatch, drift={OWN})
+    assert out["committed"] is True, out
+    assert out["run_artifacts"] == {
+        "landed": [OWN, "state/warp/run-1/run.json"], "withheld": {}, "reread": [OWN],
+    }, out
+
+
 def test_reread_is_reported_when_the_run_declares_no_run_artifacts(tmp_path, monkeypatch):
-    monkeypatch.setattr(halted_record_commit, "within_handoffs_home", lambda *a, **k: None)
+    from coordinator_core.ops.dispatch_emit import halted_record_request
+
+    monkeypatch.setattr(halted_record_request, "within_handoffs_home", lambda *a, **k: None)
     out, _ = _fire(tmp_path, monkeypatch, drift={OWN})
     assert out["committed"] is True, out
     assert out["run_artifacts"] == {"landed": [], "withheld": {}, "reread": [OWN]}, out

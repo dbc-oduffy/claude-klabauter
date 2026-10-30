@@ -84,6 +84,14 @@ def _total(path: Path) -> int:
     return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
 
 
+def _pressed(_path):
+    return 1 * MiB
+
+
+def _roomy(_path):
+    return 500 * 1024 * MiB
+
+
 def _prune(roots: Roots, **kw):
     policy = kw.pop("policy", Policy(projects_cap=CAP, per_session_cap=CAP))
     return disk_budget.prune_projects(
@@ -92,6 +100,7 @@ def _prune(roots: Roots, **kw):
         roots=roots,
         now=NOW,
         live_sessions=kw.pop("live_sessions", ("sess-live",)),
+        free_probe=kw.pop("free_probe", _pressed),
         **kw,
     )
 
@@ -146,6 +155,28 @@ def test_still_over_when_only_spared_bytes_remain(tree):
     assert report.still_over is True
     assert spared["live_main"].exists()
     assert spared["memory"].exists()
+
+
+def test_over_cap_with_ample_free_space_is_not_still_over(tree):
+    roots, _spared, _gone = tree
+    report = _prune(roots, policy=Policy(projects_cap=MiB, per_session_cap=MiB), free_probe=_roomy)
+    assert report.still_over is False
+
+
+def test_over_cap_with_free_space_exactly_at_floor_is_not_still_over(tree):
+    roots, _spared, _gone = tree
+    floor = Policy().volume_free_floor
+    report = _prune(roots, policy=Policy(projects_cap=MiB, per_session_cap=MiB), free_probe=lambda _p: floor)
+    assert report.still_over is False
+    report = _prune(roots, policy=Policy(projects_cap=MiB, per_session_cap=MiB), free_probe=lambda _p: floor - 1)
+    assert report.still_over is True
+
+
+def test_unreadable_free_probe_is_not_pressure_and_real_probe_reads_volume(tree, tmp_path):
+    roots, _spared, _gone = tree
+    report = _prune(roots, policy=Policy(projects_cap=MiB, per_session_cap=MiB), free_probe=lambda _p: -1)
+    assert report.still_over is False
+    assert disk_budget.volume_free_bytes(tmp_path / "missing" / "child") > 0
 
 
 def test_dry_run_deletes_nothing(tree):

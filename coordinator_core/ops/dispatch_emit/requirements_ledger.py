@@ -87,6 +87,7 @@ ROW_SURFACE = "internal"
 #: Item origin of a register row minted from a plan row (anchor `plan-row:<id>`).
 ORIGIN_PLAN_ROW = "plan-row"
 NOT_A_ROW_REASON = "names no requirement row"
+NOTE_NOT_MET_REASON = "revise note not met"
 
 _PARAMS = (
     Field("run_id", "nonempty_str", required=True),
@@ -319,6 +320,14 @@ def read_notes(dir_: Path) -> list[str]:
     return [e["note"] for e in run_notes.live(run_notes.entries(Path(dir_) / NOTES_FILE, ""))]
 
 
+def note_ids(dir_: Path) -> list[str]:
+    """The ids (`N<k>`) of the run's live revise notes, oldest first; the checker judges a note
+    under its id although a note is never a register row."""
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    return [e["id"] for e in run_notes.live(run_notes.entries(Path(dir_) / NOTES_FILE, ""))]
+
+
 def noted_paths(repo_root: Path, dir_: Path) -> list[str]:
     """Repo-relative, forward-slash paths of the files the run's stored notes name, first-seen order."""
     return _paths_named(repo_root, read_notes(dir_))
@@ -366,6 +375,36 @@ def run_footprint(repo_root: Path, dir_: Path, sizing_rel: Optional[str]) -> Opt
             files.update(w for w in row.get("writes") or [] if isinstance(w, str))
             dirs.extend(d.rstrip("/") for d in row.get("writes_under") or [] if isinstance(d, str))
     files.update(_sizing_writes(repo_root, sizing_rel))
+    plan_files, plan_dirs = _plan_row_writes(repo_root, sizing_rel)
+    files.update(plan_files)
+    dirs.extend(plan_dirs)
+    return files, dirs
+
+
+def _plan_row_writes(repo_root: Path, sizing_rel: Optional[str]) -> tuple[set[str], list[str]]:
+    """`(writes, writes_under)` of the task rows in the plan the sizing's `plan:` edge names, so a
+    `plan.tasks.mutate add-task` row widens the footprint; empty when there is no readable plan or
+    spine. One file read, no git."""
+    plan = _sizing_plan(Path(repo_root), sizing_rel)[1]
+    if plan is None:
+        return set(), []
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+    try:
+        located = locate_fenced_block(plan.read_text(encoding="utf-8", errors="replace"))
+        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+    except (OSError, yaml.YAMLError):
+        return set(), []
+    files: set[str] = set()
+    dirs: list[str] = []
+    for row in rows if isinstance(rows, list) else ():
+        if isinstance(row, dict):
+            files.update(w.replace("\\", "/") for w in row.get("writes") or [] if isinstance(w, str))
+            dirs.extend(
+                d.replace("\\", "/").rstrip("/") for d in row.get("writes_under") or [] if isinstance(d, str)
+            )
     return files, dirs
 
 
@@ -462,8 +501,8 @@ def _note_route(root: Path, run: Mapping, run_id: str, paths: Sequence[str]) -> 
     ).replace("'", "'\\''") + "'"
     return (
         f"note not stored: run {run_id}'s write footprint does not cover {', '.join(paths)}, so no leg could "
-        f"act on it. Cover them with a plan row: {call}. The note is accepted once those paths are in the "
-        "run's sizing `writes` (re-sending to this run_id before then is refused again) or on the refire's new run."
+        f"act on it. Cover them with a plan row: {call}. Once that row lands in the plan, re-send the note "
+        "to this run_id; it is accepted and reaches the briefs."
     )
 
 
@@ -471,7 +510,7 @@ def _footprint_route(run_id: str, paths: Sequence[str]) -> str:
     return (
         f"run {run_id}'s write footprint is frozen at its manifest and does not cover {', '.join(paths)}; "
         "a refire of the same sizing cannot reach them. Send the widened scope as a follow-up ask "
-        "(a new ask naming those files), or add them to the sizing's `writes` and refire."
+        "(a new ask naming those files), or cover them with a `plan.tasks.mutate` add-task row and refire."
     )
 
 
@@ -1555,6 +1594,7 @@ def judge(
     repo_root: Optional[Path] = None, plan_text: Optional[str] = None,
     wave_reviews: Sequence[Mapping] = (), noted_paths: Sequence[str] = (),
     code_paths: Sequence[str] = (), review_verdicts: Optional[int] = None,
+    note_ids: Collection[str] = (),
 ) -> dict:
     """`{"pass": bool, "failures": [{"id", "reason"}], "open": [{"id", "reason"}]}` for a checker
     `verdict` (`{"items": [{"id", "status", "essential"?, "withheld_by"?, "superseded_by"?,
@@ -1596,7 +1636,11 @@ def judge(
 
     `code_paths` (the run's declared code paths) with `review_verdicts` 0 or None (unsupplied counts
     as 0) sets `review_floor_note` on the result and fails nothing. A non-None
-    `review_verdicts` adds `receipt` ("review: N verdicts") to the result."""
+    `review_verdicts` adds `receipt` ("review: N verdicts") to the result.
+
+    `note_ids` are the run's live revise-note ids (`note_ids(run_dir)`): a verdict item under one is
+    not a register row and is not `NOT_A_ROW_REASON`; it passes only as `met`, else fails
+    `NOTE_NOT_MET_REASON`. Any other unregistered id still fails `NOT_A_ROW_REASON`."""
     floor = review_floor.floor_reason(list(code_paths), review_verdicts or 0)
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
@@ -1689,8 +1733,13 @@ def judge(
             else:
                 open_rows.append({"id": item.id, "reason": "non-essential"})
     withheld_ids = {w["id"] for w in ledger.withheld}
-    unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids - set(operator))
+    own_notes = set(note_ids) - set(order)
+    unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids - set(operator) - own_notes)
     failures.extend({"id": rid, "reason": NOT_A_ROW_REASON} for rid in unknown)
+    failures.extend(
+        {"id": rid, "reason": NOTE_NOT_MET_REASON}
+        for rid in sorted(own_notes & set(by_id)) if by_id[rid].get("status") != "met"
+    )
     open_rows.extend(dict(w) for w in ledger.withheld)
     result = {"pass": not failures, "failures": failures, "open": open_rows}
     if review_verdicts is not None:

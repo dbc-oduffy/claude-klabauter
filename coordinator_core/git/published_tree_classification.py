@@ -82,22 +82,43 @@ def deny_names(declarations_text: str, row_name: str) -> FrozenSet[str]:
     )
 
 
+def with_inclusions(portable_text: str, additions: Dict[str, Sequence[str]]) -> str:
+    """`portable_text` with each row's field 7 re-derived the way the generator
+    derives it -- sorted inclusions, then the row's `!` exclusions -- after
+    admitting `additions` (row name -> names). Rows not in `additions` are
+    untouched."""
+    lines = portable_text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        row_name = line.split("|", 1)[0]
+        names = additions.get(row_name)
+        if not names:
+            continue
+        body = line.rstrip("\r\n")
+        eol = line[len(body):]
+        fields = body.split("|")
+        if len(fields) <= _ALLOWLIST_FIELD:
+            continue
+        entries = [e for e in fields[_ALLOWLIST_FIELD].split(",") if e]
+        inclusions = {e for e in entries if not e.startswith("!")} | set(names)
+        exclusions = [e for e in entries if e.startswith("!")]
+        fields[_ALLOWLIST_FIELD] = ",".join(sorted(inclusions) + exclusions)
+        lines[i] = "|".join(fields) + eol
+    return "".join(lines)
+
+
 def unclassified(
     touched: Dict[str, FrozenSet[str]],
     read_landing: Callable[[str], Optional[str]],
-    declared: Optional[Dict[str, FrozenSet[str]]] = None,
 ) -> List[Tuple[str, str]]:
-    """Touched names the allowlist leaves unclassified. `declared` holds names
-    whose file the commit itself carries (same shape as `touched`); a carried
-    name is never refused, since field 7 is regenerated only at publish."""
+    """Touched names the allowlist leaves unclassified; the landing path admits
+    them with `with_inclusions` rather than refusing."""
     refused: List[Tuple[str, str]] = []
     portable_text = read_landing(PORTABLE_PATH)
     if portable_text is None:
         return refused
-    declared = declared or {}
     for row_name, names in touched.items():
         inclusions = field7_inclusions(portable_text, row_name)
-        missing = sorted(names - inclusions - declared.get(row_name, frozenset()))
+        missing = sorted(names - inclusions)
         if not missing:
             continue
         declarations_text = read_landing(DECLARATIONS_PATH)

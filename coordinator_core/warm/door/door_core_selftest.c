@@ -91,8 +91,31 @@ static void check_envelope(const char *what, const char *json,
     free(rf.stderr_buf.data);
 }
 
-int main(void) {
-    
+/* Not in door_core.h (outside this change's footprint); defined in door_core.c. */
+int door_repo_root_search_precheck_payload(const char *payload, size_t plen, buf_t *out);
+
+/* `--precheck <cwd>`: reads a Bash command from stdin, prints `0` or `1` plus the envelope.
+ * `--precheck-payload`: the same for a whole PreToolUse payload. Driven by
+ * test_hook_mode_repo_root_precheck.py over the shared shape fixture. */
+static int run_precheck_mode(int payload_mode, const char *cwd) {
+    buf_t in, out;
+    if (!buf_init(&in, 1024) || !buf_init(&out, 1024)) return 2;
+    char chunk[1024];
+    size_t got;
+    while ((got = fread(chunk, 1, sizeof(chunk), stdin)) > 0) {
+        if (!buf_append(&in, chunk, got)) return 2;
+    }
+    int r = payload_mode ? door_repo_root_search_precheck_payload(in.data, in.len, &out)
+                         : door_repo_root_search_precheck(in.data, in.len, cwd, &out);
+    printf("%d\n", r);
+    if (r == 1) fwrite(out.data, 1, out.len, stdout);
+    return r < 0 ? 2 : 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 3 && strcmp(argv[1], "--precheck") == 0) return run_precheck_mode(0, argv[2]);
+    if (argc >= 2 && strcmp(argv[1], "--precheck-payload") == 0) return run_precheck_mode(1, NULL);
+
     check_hash("sha1/empty", "", "da39a3ee5e6b4b0d");
     check_hash("sha1/abc", "abc", "a9993e364706816a");
     
@@ -330,6 +353,27 @@ int main(void) {
 
         check_int("dash_flag/null_argv_is_cold",
                   door_invocation_declares_stdin_read("sizing-assemble", 3, NULL), 1);
+    }
+
+    {
+        buf_t out;
+        buf_init(&out, 256);
+        const char *g = "grep -rn foo .";
+        check_int("precheck/no_cwd_yields", door_repo_root_search_precheck(g, strlen(g), NULL, &out), 0);
+        const char *nogit = "grep -rn foo .";
+        check_int("precheck/cwd_without_git_yields",
+                  door_repo_root_search_precheck(nogit, strlen(nogit), "/nonexistent-door-selftest", &out), 0);
+        const char *find = "find . -name '*.py'";
+        check_int("precheck/find_is_advisory_not_rewrite",
+                  door_repo_root_search_precheck(find, strlen(find), ".", &out), 0);
+        const char *scoped = "grep -rn foo coordinator_core";
+        check_int("precheck/scoped_target_yields",
+                  door_repo_root_search_precheck(scoped, strlen(scoped), ".", &out), 0);
+        const char *plain = "ls -la";
+        check_int("precheck/non_search_yields",
+                  door_repo_root_search_precheck(plain, strlen(plain), ".", &out), 0);
+        check_int("precheck/untouched_out_on_no_match", (long)out.len, 0);
+        free(out.data);
     }
 
     printf("%s: %d checks, %d failures\n",

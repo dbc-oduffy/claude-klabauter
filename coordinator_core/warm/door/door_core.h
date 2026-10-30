@@ -284,6 +284,24 @@ int door_basename_is_install_class(const char *basename);
 int door_hook_event_name(const char *json, size_t len, buf_t *out);
 
 
+/* Hook-mode repo-root recursive-search pre-check: answers without the engine.
+ *
+ * `cmd`/`len` is the Bash `tool_input.command` (UTF-8, not NUL-terminated);
+ * `cwd_utf8` is the call's cwd. Returns 1 and appends one complete
+ * `hookSpecificOutput` envelope (an `updatedInput` carrying a `git grep`
+ * command, plus the pinned rewrite note) to `out` when the command is in the
+ * simple git-grep-mappable subset AND `cwd_utf8` holds `.git`; returns 0 with
+ * `out` untouched for every other shape (the caller then relays to the engine
+ * or falls through loudly), and -1 on allocation failure. Pure: one `.git`
+ * stat, no walk, no spawn, no advisory.
+ *
+ * Source of truth is `bash_guards/rewrite_repo_root_search.py`; the shape table
+ * `bash_guards/tests/fixtures/repo_root_search_shapes.json` (rows with
+ * `door_ports` true) is read by this function's selftest and by the Python
+ * leg tests, and a parity test fails on drift. */
+int door_repo_root_search_precheck(const char *cmd, size_t len, const char *cwd_utf8, buf_t *out);
+
+
 int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name);
 
 

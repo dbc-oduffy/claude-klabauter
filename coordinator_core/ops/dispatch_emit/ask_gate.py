@@ -730,6 +730,9 @@ def _bind_plan_edge(repo_root: Path, sizing: dict, sizing_rel: str, plan_rel: st
 
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
     from coordinator_core.ops.dispatch_emit import requirements_ledger
+    from coordinator_core.ops.dispatch_emit.sizing_fire import single_dated_plan_edge
+
+    plan_rel = single_dated_plan_edge(plan_rel)
 
     def mutate(old: str) -> str:
         doc = yaml.safe_load(old) or {}
@@ -755,7 +758,8 @@ def _bind_plan_edge(repo_root: Path, sizing: dict, sizing_rel: str, plan_rel: st
 def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Optional[dict], pending: Sequence[str], plan_ready) -> dict:
     """`phase_ledger.resume_phases` for a resume of a halted run: landed phases the halt left valid.
 
-    plan / plan_review are credited only when `_plan_gate_resume_ready` holds with no ruling pending;
+    plan / plan_review (and plan_gate_rulings, for a plan-gate refusal) are credited only when
+    `_plan_gate_resume_ready` holds with no ruling pending;
     an unreadable halt kind ("unknown") invalidates every phase."""
     from coordinator_core.ops.dispatch_emit.halted_run import _read, halted_ask_run_for
 
@@ -775,18 +779,45 @@ def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Opti
     landed = phase_ledger.derive(root, pred) if pred else {}
     # An execute-phase halt passed its plan gate: readiness of a refused plan is not its question.
     past_plan_gate = phase_ledger.HALT_PHASE.get(kind or "unknown") == "execute"
-    if landed.get("plan") and (pending or (not past_plan_gate and not plan_ready(resume.plan_rel))):
+    # A refusal that kept a plan gate record is a plan-gate halt; any other refusal stays unmapped.
+    refusal_at_plan_gate = kind == "refusal" and bool(landed.get("plan"))
+    ready = None
+    if landed.get("plan") and not pending and not past_plan_gate:
+        ready = plan_ready(resume.plan_rel)
+    if landed.get("plan") and (pending or (not past_plan_gate and not ready)):
         landed.pop("plan", None)
         landed.pop("plan_review", None)
+        landed.pop("plan_gate_rulings", None)
+    cleared = ()
+    if refusal_at_plan_gate and ready and "plan_gate_rulings" in landed:
+        landed["plan_gate_rulings"] = {**landed["plan_gate_rulings"], "readiness": "ready"}
+        cleared = ("plan_gate_rulings",)
     revised = []
     if resume_ledger and (resume_ledger.get(RESUME_LEDGER_NOTES_FIELD) or resume_ledger.get(RESUME_LEDGER_REVISED_FIELD)):
         revised.append("requirement")
-    return phase_ledger.resume_phases(landed, kind or "unknown", revised)
+    halt_kind = "plan_gate" if refusal_at_plan_gate else (kind or "unknown")
+    return phase_ledger.resume_phases(landed, halt_kind, revised, cleared=cleared)
+
+
+def _delta_keeps_reviews(gate_record: Mapping, repo_root: Path, plan_rel: str) -> bool:
+    """True when the plan changed since the reviewed bytes by a repair-class delta only (or by nothing
+    scope-bearing). A record with no `plan_scope` projection never qualifies."""
+    from coordinator_core.ops.dispatch_emit import plan_delta
+
+    scope = gate_record.get("plan_scope")
+    if not isinstance(scope, dict):
+        return False
+    try:
+        text = (Path(repo_root) / plan_rel).read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return False
+    return plan_delta.classify(scope, text) in ("unchanged", "repair")
 
 
 def _plan_gate_resume_ready(repo_root: Path, sizing_rel: str, plan_rel: str) -> bool:
     """True when the newest halted ask run of this sizing was a plan-gate refusal of these very
-    plan bytes and `plan.readiness_verdict` over its carried reviews now reads `ready`.
+    plan bytes, or of a plan whose delta since is repair-class only, and `plan.readiness_verdict`
+    over its carried reviews now reads `ready`.
 
     One `kept.json` read, one plan hash, at most one in-process readiness call; no git spawn, but
     readiness runs the plan's anchor-premise check commands, which do spawn.
@@ -805,7 +836,7 @@ def _plan_gate_resume_ready(repo_root: Path, sizing_rel: str, plan_rel: str) -> 
         if not gate_record or gate_record.get("plan") != plan_rel:
             return False
         digest = hashlib.sha256((Path(repo_root) / plan_rel).read_bytes()).hexdigest()
-        if gate_record.get("plan_sha256") != digest:
+        if gate_record.get("plan_sha256") != digest and not _delta_keeps_reviews(gate_record, repo_root, plan_rel):
             return False
         from coordinator_core.ops.plan_readiness_verdict import _handler as readiness
 

@@ -343,22 +343,54 @@ def test_a_token_refusal_leaves_a_note_the_missing_file_diagnosis_names(repo):
     assert guard._LEG_PARAMS_TOKEN in chan.missing_file_diagnosis(str(path))
 
 
-def test_a_halt_commit_whose_live_token_was_consumed_mid_run_is_refused_and_noted(repo):
-    # 272860 (2026-10-29): both spawn prompts carried a well-formed params block and the typed
-    # path was canonical; the only refusal left was the token leg, because a peer
-    # (`warp_live._record_live` ended-evidence consume) had spent the live record while the
-    # run was still working.
+def test_a_halt_commit_whose_live_token_was_consumed_mid_run_is_admitted_from_the_retired_record(repo):
+    # 272860: a peer consumed the live record mid-run; the retired record still admits the
+    # record-only halt commit, and a re-mint to a different token no longer matches the prompt.
     token = run_token.mint(repo, _RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "halted_by": {"reason": "x"}}
     path = chan.params_path(repo, _RUN)
     path.parent.mkdir(parents=True)
     tp = _transcript(repo, params)
     run_token.consume(repo, _RUN)
+    assert _check(_land_run_argv(repo), tp) is None
+    assert json.loads(path.read_text(encoding="utf-8")) == params
+    path.unlink()
+    run_token.mint(repo, _RUN, _SCRIPT)
     assert _check(_land_run_argv(repo), tp) is not None
     assert not path.exists()
     assert _refused_note(repo).read_text(encoding="utf-8") == guard._LEG_PARAMS_TOKEN
-    run_token.mint(repo, _RUN, _SCRIPT)
-    assert _check(_land_run_argv(repo), tp) is not None
+
+
+def test_a_halt_commit_with_a_claimed_record_is_admitted(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "halted_by": {"reason": "x"}}
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    assert run_token.redeem(repo, _RUN, token, _SCRIPT)
+    assert _check(_land_run_argv(repo), _transcript(repo, params)) is None
+    assert path.exists()
+
+
+def test_a_halt_commit_with_a_spent_receipt_is_admitted(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "halted_by": {"reason": "x"}}
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    assert run_token.redeem(repo, _RUN, token, _SCRIPT)
+    run_token.consume(repo, _RUN, landed={"sha": "abc", "rows": [], "paths": []})
+    assert _check(_land_run_argv(repo), _transcript(repo, params)) is None
+    assert path.exists()
+
+
+def test_a_halt_commit_with_a_wrong_token_after_retirement_is_refused(repo):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32, "halted_by": {"reason": "x"}}
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    run_token.consume(repo, _RUN)
+    assert token != params["run_token"]
+    assert _check(_land_run_argv(repo), _transcript(repo, params)) is not None
+    assert not path.exists()
 
 
 def test_an_admit_clears_the_note_a_prior_refusal_left(repo):

@@ -711,21 +711,24 @@ class TestRunRecordFromTranscript:
         os.utime(f, (mtime, mtime))
         return f
 
-    def _prompt(self, open_m: str, close_m: str, token: str) -> str:
-        return f"Run the verb with --record-from-transcript {open_m}.\n{open_m}{token}{close_m}\nthen stop."
+    def _prompt(self, open_m: str, close_m: str, token: str, *, sent_for: str | None = None) -> str:
+        """The drain prompt: the segment is `<len> <sha256>\\n<token>`, the digest of ``sent_for`` (the token
+        the script serialised) when it differs from the ``token`` that reached the transcript."""
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        n, h = contract.relay_digest(token if sent_for is None else sent_for)
+        return f"Run the verb with --record-from-transcript {open_m}.\n{open_m}\n{n} {h}\n{token}\n{close_m}\nthen stop."
 
     def _env(self, monkeypatch, home: Path) -> None:
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", self.SESSION)
 
-    def _args(self, repo: Path, open_m: str, token: str) -> list[str]:
+    def _args(self, repo: Path, open_m: str) -> list[str]:
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 
-        n, h = contract.relay_digest(token)
         return [
             "run-record", "--profile", "bug", "--run-id", self.RUN_ID,
-            f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}", open_m,
-            "--record-len", str(n), "--record-sha256", h, "--repo-root", str(repo),
+            f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}", open_m, "--repo-root", str(repo),
         ]
 
     def test_lossy_record_lands_byte_identical(self, tmp_path, monkeypatch):
@@ -743,7 +746,7 @@ class TestRunRecordFromTranscript:
         self._write_transcript(home, "a", self._prompt(open_m, close_m, token), mtime=1000.0)
         self._env(monkeypatch, home)
 
-        assert grind_rows.main(self._args(repo, open_m, token)) == grind_rows.EXIT_OK
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_OK
         landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
         # The verb re-serialises with its own bookkeeping (usage), so the lossy field is the pin.
         got = json.loads(landed.read_text(encoding="utf-8"))
@@ -751,9 +754,7 @@ class TestRunRecordFromTranscript:
         assert {k: got[k] for k in ("profile", "run_id", "spend", "halted")} == {
             k: record[k] for k in ("profile", "run_id", "spend", "halted")
         }
-        assert grind_rows._record_token_from_transcript(
-            open_m, *map(str, contract.relay_digest(token))
-        ) == (token, "")
+        assert grind_rows._record_token_from_transcript(open_m) == (token, "")
         from urllib.parse import unquote
 
         assert unquote(token) == serialised
@@ -769,7 +770,76 @@ class TestRunRecordFromTranscript:
         repo.mkdir()
         self._write_transcript(home, "a", self._prompt(open_m, close_m, token), mtime=1000.0)
         self._env(monkeypatch, home)
-        assert grind_rows.main(self._args(repo, open_m, token)) == grind_rows.EXIT_OK
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_OK
+
+    def test_harness_indented_prompt_lands_the_record(self, tmp_path, monkeypatch):
+        """The harness indents every line of a computed prompt by two spaces (run 20261030T172043Z read
+        the token as 2 spaces + token + newline + 2 spaces, 5 chars over what was sent)."""
+        from urllib.parse import quote
+
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        record = self._lossy_record()
+        token = quote(json.dumps(record), safe="")
+        open_m, close_m = contract.record_markers(self.RUN_ID)
+        home, repo = tmp_path / "home", tmp_path / "repo"
+        repo.mkdir()
+        indented = "\n".join("  " + ln for ln in self._prompt(open_m, close_m, token).split("\n"))
+        self._write_transcript(home, "a", indented, mtime=1000.0)
+        self._env(monkeypatch, home)
+
+        assert grind_rows._record_token_from_transcript(open_m) == (token, "")
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_OK
+        landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
+        assert json.loads(landed.read_text(encoding="utf-8"))["note"] == record["note"]
+
+    def test_damaged_delivery_still_lands(self, tmp_path, monkeypatch, capsys):
+        """The harness wraps the token line and indents every line: the record still lands byte-identical,
+        while a token that lost a real char under the same wrap is still refused."""
+        import textwrap
+        from urllib.parse import quote
+
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        record = self._lossy_record()
+        token = quote(json.dumps(record), safe="")
+        open_m, close_m = contract.record_markers(self.RUN_ID)
+        home, repo = tmp_path / "home", tmp_path / "repo"
+        repo.mkdir()
+
+        def damaged(body: str, sent_for: str) -> str:
+            n, h = contract.relay_digest(sent_for)
+            wrapped = "\n".join(textwrap.wrap(body, 80, break_long_words=True, break_on_hyphens=False))
+            prompt = f"Run --record-from-transcript {open_m}.\n{open_m}\n{n} {h}\n{wrapped}\n{close_m}\nthen stop."
+            return "\n".join("  " + ln for ln in prompt.split("\n"))
+
+        self._write_transcript(home, "a", damaged(token, token), mtime=1000.0)
+        self._env(monkeypatch, home)
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_OK
+        landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
+        assert json.loads(landed.read_text(encoding="utf-8"))["note"] == record["note"]
+
+        bad_repo = tmp_path / "bad"
+        bad_repo.mkdir()
+        self._write_transcript(home, "a", damaged(token[:-1] + "X", token), mtime=2000.0)
+        assert grind_rows.main(self._args(bad_repo, open_m)) == grind_rows.EXIT_RELAY_CORRUPT
+        assert not (bad_repo / "state").exists()
+
+    def test_harness_indented_damaged_segment_is_still_refused(self, tmp_path, monkeypatch, capsys):
+        from urllib.parse import quote
+
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        token = quote(json.dumps(_record(v="x")), safe="")
+        open_m, close_m = contract.record_markers(self.RUN_ID)
+        home, repo = tmp_path / "home", tmp_path / "repo"
+        repo.mkdir()
+        prompt = self._prompt(open_m, close_m, token[:-1], sent_for=token)
+        self._write_transcript(home, "a", "\n".join("  " + ln for ln in prompt.split("\n")), mtime=1000.0)
+        self._env(monkeypatch, home)
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_RELAY_CORRUPT
+        assert contract.RECORD_SEGMENT_CAUSE in capsys.readouterr().err
+        assert not (repo / "state").exists()
 
     def test_newest_transcript_with_marker_wins_over_older_stale_segment(self, tmp_path, monkeypatch):
         from urllib.parse import quote
@@ -784,7 +854,7 @@ class TestRunRecordFromTranscript:
         self._write_transcript(home, "old", self._prompt(open_m, close_m, stale), mtime=1000.0)
         self._write_transcript(home, "new", self._prompt(open_m, close_m, good), mtime=2000.0, wf="wf-2")
         self._env(monkeypatch, home)
-        assert grind_rows.main(self._args(repo, open_m, good)) == grind_rows.EXIT_OK
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_OK
         landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
         assert json.loads(landed.read_text(encoding="utf-8"))["v"] == "new"
 
@@ -797,10 +867,13 @@ class TestRunRecordFromTranscript:
         open_m, close_m = contract.record_markers(self.RUN_ID)
         home, repo = tmp_path / "home", tmp_path / "repo"
         repo.mkdir()
-        self._write_transcript(home, "a", self._prompt(open_m, close_m, token[:-1]), mtime=1000.0)
+        self._write_transcript(
+            home, "a", self._prompt(open_m, close_m, token[:-1], sent_for=token), mtime=1000.0
+        )
         self._env(monkeypatch, home)
-        assert grind_rows.main(self._args(repo, open_m, token)) == grind_rows.EXIT_RELAY_CORRUPT
-        assert capsys.readouterr().err.startswith(contract.RELAY_CORRUPT_HEAD)
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_RELAY_CORRUPT
+        err = capsys.readouterr().err
+        assert err.startswith(contract.RELAY_CORRUPT_HEAD) and contract.RECORD_SEGMENT_CAUSE in err
         assert not (repo / "state").exists()
 
     def test_no_transcript_is_a_refusal_never_a_fallback(self, tmp_path, monkeypatch, capsys):
@@ -810,7 +883,7 @@ class TestRunRecordFromTranscript:
         home, repo = tmp_path / "home", tmp_path / "repo"
         repo.mkdir()
         self._env(monkeypatch, home)
-        assert grind_rows.main(self._args(repo, open_m, "abc")) == grind_rows.EXIT_USAGE
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_USAGE
         assert "no agent transcript" in capsys.readouterr().err
         assert not (repo / "state").exists()
 
@@ -824,14 +897,31 @@ class TestRunRecordFromTranscript:
         )
         assert exit_code == grind_rows.EXIT_USAGE
 
-    def test_transcript_flag_without_digest_flags_is_usage(self, tmp_path):
+    def test_transcript_flag_refuses_an_agent_typed_digest(self, tmp_path, capsys):
         exit_code = grind_rows.main(
             [
                 "run-record", "--profile", "bug", "--run-id", self.RUN_ID,
-                "--record-from-transcript", "RUNREC-OPEN-x", "--repo-root", str(tmp_path),
+                "--record-from-transcript", "RUNREC-OPEN-x",
+                "--record-len", "1", "--record-sha256", "0" * 64, "--repo-root", str(tmp_path),
             ]
         )
         assert exit_code == grind_rows.EXIT_USAGE
+        assert "reads its digest from the transcript" in capsys.readouterr().err
+
+    def test_segment_without_a_digest_line_is_never_taken_as_the_record(self, tmp_path, monkeypatch, capsys):
+        from urllib.parse import quote
+
+        from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
+
+        token = quote(json.dumps(_record(v="x")), safe="")
+        open_m, close_m = contract.record_markers(self.RUN_ID)
+        home, repo = tmp_path / "home", tmp_path / "repo"
+        repo.mkdir()
+        bare = f"Run --record-from-transcript {open_m}.\n{open_m}\n{token}\n{close_m}\n"
+        self._write_transcript(home, "a", bare, mtime=1000.0)
+        self._env(monkeypatch, home)
+        assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_RELAY_CORRUPT
+        assert not (repo / "state").exists()
 
     def test_lookup_over_200_agent_files_is_under_500ms(self, tmp_path, monkeypatch):
         import time
@@ -847,7 +937,7 @@ class TestRunRecordFromTranscript:
         self._write_transcript(home, "hit", self._prompt(open_m, close_m, token), mtime=1000.0, wf="wf-h")
         self._env(monkeypatch, home)
         start = time.process_time()
-        found, refusal = grind_rows._record_token_from_transcript(open_m, *map(str, contract.relay_digest(token)))
+        found, refusal = grind_rows._record_token_from_transcript(open_m)
         assert time.process_time() - start < 0.5
         assert found == token and refusal == ""
 

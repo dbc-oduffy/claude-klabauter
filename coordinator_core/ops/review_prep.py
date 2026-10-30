@@ -734,6 +734,12 @@ def _compute(
         out["no_slice_reason"] = (
             f"verdict {part['verdict']}: the frozen diff of {len(paths)} declared path(s) holds no product file"
         )
+        unsliced = _header_only_product_paths(Path(whole["diff_path"]))
+        if unsliced:
+            out["error"] = (
+                f"review prep sliced nothing from a non-empty frozen diff of {len(paths)} declared path(s); "
+                f"product delta with no ---/+++ lines: {', '.join(unsliced[:5])}"
+            )
     out["excluded"].extend(
         {"path": p, "reason": "no-delta"}
         for p in paths
@@ -751,6 +757,23 @@ def _covers(declared: str, files: Sequence[str]) -> bool:
     """True when ``declared`` names one of ``files`` or a directory holding one."""
     d = declared.rstrip("/")
     return any(f == d or f.startswith(d + "/") for f in files)
+
+
+def _header_only_product_paths(diff_path: Path) -> List[str]:
+    """Non-bookkeeping paths a frozen diff names in `diff --git` headers: a mode-only, rename-only or
+    binary stanza carries no ---/+++ lines, so `product_files` never sees it."""
+    from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
+
+    data = _read_or_none(diff_path)
+    if not data:
+        return []
+    found: List[str] = []
+    for line in data.decode("utf-8", errors="replace").splitlines():
+        if line.startswith("diff --git a/") and " b/" in line:
+            path = line.rsplit(" b/", 1)[1]
+            if path not in found and not path.startswith(PRODUCT_FILE_EXCLUDED_PREFIXES):
+                found.append(path)
+    return found
 
 
 def _read_or_none(path: Path) -> Optional[bytes]:

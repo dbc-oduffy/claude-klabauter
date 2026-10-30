@@ -68,7 +68,7 @@ def test_the_emit_reply_names_the_revisions_a_refire_inherited(tmp_path, monkeyp
 
     reply = op._dispatch_emit({"ask": True, "sizing_path": REL}, repo_root=root)
     assert reply["revisions_inherited"] == [
-        {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip()}
+        {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip(), "kind": "revision"}
         for i in rl.read_ledger(root, record_dir(root, RUN)).items
         if i.origin == "revision"
     ]

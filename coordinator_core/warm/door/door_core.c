@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 
 typedef struct {
@@ -729,4 +730,571 @@ int build_indeterminate_envelope(buf_t *out, const char *detail) {
     ok &= buf_append_json_escaped(out, detail, strlen(detail));
     ok &= buf_append_cstr(out, ")\"}}\n");
     return ok;
+}
+
+/* =========================================================================
+ * Hook-mode repo-root recursive-search pre-check (door_core.h ::
+ * door_repo_root_search_precheck). A C port of the git-grep-mappable subset
+ * of `bash_guards/rewrite_repo_root_search.py :: _plan_segment` /
+ * `_map_to_git_grep`, so the rewrite exists without the engine. Anything
+ * outside the subset returns 0 and is left to the engine; the subset is
+ * pinned by `repo_root_search_shapes.json` (rows with door_ports true).
+ *
+ * Trap: PRECHECK_NOTE must equal `rewrite_repo_root_search.REWRITE_NOTE`
+ * byte for byte (test_hook_mode_repo_root_precheck.py).
+ * ========================================================================= */
+#define PRECHECK_NOTE \
+    "Repo-root search rewritten to `git grep` (tracked files only); for content lookups use " \
+    "example-retrieval-repo (project_semantic_search), for untracked paths the Grep tool."
+
+#ifdef _WIN32
+#define PC_STAT_STRUCT struct _stat
+#define PC_STAT _stat
+#else
+#define PC_STAT_STRUCT struct stat
+#define PC_STAT stat
+#endif
+
+typedef struct { char **v; size_t n, cap; } pc_toks;
+
+static void pc_toks_free(pc_toks *t) {
+    for (size_t i = 0; i < t->n; i++) free(t->v[i]);
+    free(t->v);
+    t->v = NULL;
+    t->n = t->cap = 0;
+}
+
+static int pc_is_ws(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static int pc_is_word(char c) {
+    unsigned char u = (unsigned char)c;
+    return (u >= '0' && u <= '9') || (u >= 'A' && u <= 'Z') || (u >= 'a' && u <= 'z') ||
+           u == '_' || u >= 0x80;
+}
+
+/* `\b(?:find|rg|grep|egrep|fgrep)\b`, bytes >= 0x80 counted as word characters. */
+static int pc_has_search_word(const char *s, size_t n) {
+    static const char *const words[] = { "find", "rg", "grep", "egrep", "fgrep" };
+    for (size_t i = 0; i < n; i++) {
+        if (i > 0 && pc_is_word(s[i - 1])) continue;
+        for (size_t w = 0; w < sizeof(words) / sizeof(words[0]); w++) {
+            size_t wl = strlen(words[w]);
+            if (i + wl <= n && memcmp(s + i, words[w], wl) == 0 &&
+                (i + wl == n || !pc_is_word(s[i + wl]))) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Takes ownership of `cur`'s bytes; re-inits `cur`. */
+static int pc_toks_push(pc_toks *t, buf_t *cur) {
+    if (!buf_append(cur, "", 1)) return 0;
+    if (t->n == t->cap) {
+        size_t nc = t->cap ? t->cap * 2 : 8;
+        char **g = (char **)realloc(t->v, nc * sizeof(char *));
+        if (!g) return 0;
+        t->v = g;
+        t->cap = nc;
+    }
+    t->v[t->n++] = cur->data;
+    return buf_init(cur, 32);
+}
+
+/* POSIX `shlex.split`: 1 ok, 0 unterminated quote / dangling backslash, -1 out of memory. */
+static int pc_shlex_split(const char *s, size_t n, pc_toks *t) {
+    buf_t cur;
+    if (!buf_init(&cur, 32)) return -1;
+    int in_tok = 0, ok = 1;
+    size_t i = 0;
+    while (i < n && ok) {
+        char c = s[i];
+        if (pc_is_ws(c)) {
+            if (in_tok) {
+                if (!pc_toks_push(t, &cur)) { free(cur.data); return -1; }
+                in_tok = 0;
+            }
+            i++;
+            continue;
+        }
+        in_tok = 1;
+        if (c == '\'') {
+            size_t j = i + 1;
+            while (j < n && s[j] != '\'') j++;
+            if (j >= n) { free(cur.data); return 0; }
+            ok = buf_append(&cur, s + i + 1, j - i - 1);
+            i = j + 1;
+        } else if (c == '"') {
+            i++;
+            for (;;) {
+                if (i >= n) { free(cur.data); return 0; }
+                if (s[i] == '"') { i++; break; }
+                if (s[i] == '\\') {
+                    if (i + 1 >= n) { free(cur.data); return 0; }
+                    if (s[i + 1] == '"' || s[i + 1] == '\\') {
+                        ok = buf_append(&cur, s + i + 1, 1);
+                        i += 2;
+                    } else {
+                        ok = buf_append(&cur, "\\", 1);
+                        i++;
+                    }
+                } else {
+                    ok = buf_append(&cur, s + i, 1);
+                    i++;
+                }
+                if (!ok) break;
+            }
+        } else if (c == '\\') {
+            if (i + 1 >= n) { free(cur.data); return 0; }
+            ok = buf_append(&cur, s + i + 1, 1);
+            i += 2;
+        } else {
+            ok = buf_append(&cur, &c, 1);
+            i++;
+        }
+    }
+    if (ok && in_tok) ok = pc_toks_push(t, &cur);
+    if (!ok) { free(cur.data); return -1; }
+    free(cur.data);
+    return 1;
+}
+
+/* `shlex.quote`; 0 when the string is ASCII-safe except for bytes >= 0x80 (Python's `\w` is
+ * Unicode-aware, this port is not, so whether Python quotes it is unknown). */
+static int pc_quote(buf_t *out, const char *s) {
+    size_t n = strlen(s);
+    if (n == 0) return buf_append_cstr(out, "''") ? 1 : -1;
+    int safe = 1, high = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c >= 0x80) { high = 1; continue; }
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              c == '_' || c == '@' || c == '%' || c == '+' || c == '=' || c == ':' ||
+              c == ',' || c == '.' || c == '/' || c == '-')) {
+            safe = 0;
+        }
+    }
+    if (safe && high) return 0;
+    if (safe) return buf_append(out, s, n) ? 1 : -1;
+    int ok = buf_append_cstr(out, "'");
+    for (size_t i = 0; i < n && ok; i++) {
+        ok = s[i] == '\'' ? buf_append_cstr(out, "'\"'\"'") : buf_append(out, s + i, 1);
+    }
+    ok &= buf_append_cstr(out, "'");
+    return ok ? 1 : -1;
+}
+
+/* Appends ` 'prefix value suffix'` (space-separated after the first) to `specs`: 1 ok, 0 not
+ * quotable, -1 out of memory. */
+static int pc_add_spec(buf_t *specs, const char *prefix, const char *value, size_t vlen,
+                       const char *suffix) {
+    buf_t spec;
+    if (!buf_init(&spec, 32)) return -1;
+    int ok = buf_append_cstr(&spec, prefix) && buf_append(&spec, value, vlen) &&
+             buf_append_cstr(&spec, suffix) && buf_append(&spec, "", 1) &&
+             (specs->len == 0 || buf_append_cstr(specs, " "));
+    int q = ok ? pc_quote(specs, spec.data) : -1;
+    free(spec.data);
+    return q;
+}
+
+static int pc_head_is(const char *tok, const char *word) {
+    const char *base = tok;
+    for (const char *p = tok; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    size_t bl = strlen(base), wl = strlen(word);
+    if (bl >= 4 && (base[bl - 4] == '.') &&
+        (strcmp(base + bl - 3, "exe") == 0 || strcmp(base + bl - 3, "EXE") == 0 ||
+         strcmp(base + bl - 3, "cmd") == 0 || strcmp(base + bl - 3, "CMD") == 0)) {
+        bl -= 4;
+    }
+    if (bl != wl) return 0;
+    for (size_t i = 0; i < bl; i++) {
+        char c = base[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != word[i]) return 0;
+    }
+    return 1;
+}
+
+typedef struct {
+    const char *cwd;
+    int git_state; /* -1 unknown, 0 no `.git`, 1 has `.git` */
+} pc_ctx;
+
+static int pc_cwd_is_repo_root(pc_ctx *ctx) {
+    if (ctx->git_state < 0) {
+        ctx->git_state = 0;
+        if (ctx->cwd && ctx->cwd[0]) {
+            size_t n = strlen(ctx->cwd);
+            char *path = (char *)malloc(n + 6);
+            if (path) {
+                memcpy(path, ctx->cwd, n);
+                memcpy(path + n, "/.git", 6);
+                PC_STAT_STRUCT st;
+                if (PC_STAT(path, &st) == 0) ctx->git_state = 1;
+                free(path);
+            }
+        }
+    }
+    return ctx->git_state;
+}
+
+/* A recursive grep per `_recursive_grep_targets`: -r/-R in a short cluster, or --recursive. */
+static int pc_grep_is_recursive(char **a, size_t n) {
+    int past_dd = 0;
+    for (size_t i = 0; i < n; i++) {
+        const char *s = a[i];
+        if (strcmp(s, "--") == 0) { past_dd = 1; continue; }
+        if (!past_dd && (strcmp(s, "--recursive") == 0 || strncmp(s, "--recursive=", 12) == 0 ||
+                         strcmp(s, "--dereference-recursive") == 0 ||
+                         strncmp(s, "--dereference-recursive=", 24) == 0)) {
+            return 1;
+        }
+        if (s[0] == '-' && s[1] != '-' && s[1] != '\0') {
+            for (const char *p = s + 1; *p; p++) if (*p == 'r' || *p == 'R') return 1;
+        }
+    }
+    return 0;
+}
+
+/* One pipeline segment: 0 not a repo-root search (leave it), 1 rewritten into `nb`,
+ * -1 a shape outside the subset (the whole pre-check yields), -2 out of memory. */
+static int pc_plan(pc_ctx *ctx, const char *b, size_t n, buf_t *nb) {
+    if (!pc_has_search_word(b, n)) return 0;
+    pc_toks t = { NULL, 0, 0 };
+    int sr = pc_shlex_split(b, n, &t);
+    if (sr < 0) return -2;
+    if (sr == 0) return -1;
+    int rc = -1;
+    if (t.n == 0) { pc_toks_free(&t); return 0; }
+    const char *head = t.v[0];
+    char **args = t.v + 1;
+    size_t an = t.n - 1;
+    if (pc_head_is(head, "find") || pc_head_is(head, "egrep") || pc_head_is(head, "fgrep")) goto done;
+    int is_rg = strcmp(head, "rg") == 0;
+    int is_grep = strcmp(head, "grep") == 0;
+    if (!is_rg && !is_grep) {
+        rc = (pc_head_is(head, "grep") || pc_head_is(head, "rg")) ? -1 : 0;
+        goto done;
+    }
+    if (is_grep && !pc_grep_is_recursive(args, an)) { rc = 0; goto done; }
+    if (memchr(b, '<', n) || memchr(b, '>', n) || memchr(b, '$', n) || memchr(b, '`', n) ||
+        memchr(b, '(', n) || memchr(b, ')', n)) goto done;
+
+    const char *ok_flags = is_rg ? "nilwF" : "nilwFErRI";
+    char flags[16];
+    size_t nflags = 0;
+    const char **patterns = (const char **)malloc((an + 1) * sizeof(char *));
+    const char **pos = (const char **)malloc((an + 1) * sizeof(char *));
+    buf_t specs;
+    if (!patterns || !pos || !buf_init(&specs, 64)) {
+        free(patterns); free(pos);
+        rc = -2;
+        goto done;
+    }
+    size_t npat = 0, npos = 0;
+    int mapped = 1, oom = 0;
+    for (size_t i = 0; i < an && mapped; i++) {
+        const char *a = args[i];
+        if (strcmp(a, "--") == 0) {
+            for (size_t k = i + 1; k < an; k++) pos[npos++] = args[k];
+            break;
+        }
+        if (a[0] == '-' && a[1] == '-') {
+            if (is_rg) { mapped = 0; break; }
+            const char *eq = strchr(a, '=');
+            size_t name_len = eq ? (size_t)(eq - a) : strlen(a);
+            const char *value = eq ? eq + 1 : "";
+            if (name_len == 9 && memcmp(a, "--include", 9) == 0 && eq && *value) {
+                int q = pc_add_spec(&specs, ":(glob)**/", value, strlen(value), "");
+                if (q < 0) { oom = 1; break; }
+                if (q == 0) mapped = 0;
+            } else if (name_len == 13 && memcmp(a, "--exclude-dir", 13) == 0 && eq && *value) {
+                size_t vs = 0, ve = strlen(value);
+                while (vs < ve && value[vs] == '/') vs++;
+                while (ve > vs && value[ve - 1] == '/') ve--;
+                int q = pc_add_spec(&specs, ":(exclude,glob)**/", value + vs, ve - vs, "/**");
+                if (q < 0) { oom = 1; break; }
+                if (q == 0) mapped = 0;
+            } else if (strcmp(a, "--recursive") != 0) {
+                mapped = 0;
+            }
+        } else if (a[0] == '-' && a[1] != '\0') {
+            size_t cl = strlen(a + 1);
+            for (size_t k = 0; k < cl && mapped; k++) {
+                char ch = a[1 + k];
+                if (ch == 'e') {
+                    if (k != cl - 1 || i + 1 >= an) { mapped = 0; break; }
+                    patterns[npat++] = args[i + 1];
+                    i++;
+                } else if (!strchr(ok_flags, ch)) {
+                    mapped = 0;
+                } else if (ch != 'r' && ch != 'R') {
+                    int seen = 0;
+                    for (size_t f = 0; f < nflags; f++) if (flags[f] == ch) seen = 1;
+                    if (!seen && nflags < sizeof(flags) - 1) flags[nflags++] = ch;
+                }
+            }
+        } else {
+            pos[npos++] = a;
+        }
+    }
+    size_t pos_start = 0;
+    if (mapped && !oom) {
+        if (npat == 0) {
+            if (npos == 0) mapped = 0;
+            else { patterns[npat++] = pos[0]; pos_start = 1; }
+        }
+    }
+    if (mapped && !oom && is_rg) {
+        int has_f = 0;
+        for (size_t f = 0; f < nflags; f++) if (flags[f] == 'F') has_f = 1;
+        if (!has_f) {
+            int has_e = 0, ere = 0;
+            for (size_t f = 0; f < nflags; f++) if (flags[f] == 'E') has_e = 1;
+            for (size_t p = 0; p < npat; p++) {
+                const char *s = patterns[p];
+                for (; *s; s++) {
+                    if (*s == '\\' && strchr("dDsSpPuUx", s[1]) && s[1]) mapped = 0;
+                    if (strchr("|+?(){}", *s)) ere = 1;
+                }
+            }
+            if (mapped && !has_e && ere && nflags < sizeof(flags) - 1) flags[nflags++] = 'E';
+        }
+    }
+    size_t ntgt = npos - pos_start;
+    if (mapped && !oom) {
+        if (ntgt > 1) mapped = 0;
+        else if (ntgt == 1 && strcmp(pos[pos_start], ".") != 0 && strcmp(pos[pos_start], "./") != 0) {
+            mapped = 0;
+        }
+    }
+    if (mapped && !oom && !pc_cwd_is_repo_root(ctx)) mapped = 0;
+    if (mapped && !oom) {
+        int ok = buf_append_cstr(nb, "git grep");
+        if (nflags) {
+            ok &= buf_append_cstr(nb, " -");
+            ok &= buf_append(nb, flags, nflags);
+        }
+        for (size_t p = 0; p < npat && ok; p++) {
+            ok &= buf_append_cstr(nb, " ");
+            if (npat > 1 || patterns[p][0] == '-') ok &= buf_append_cstr(nb, "-e ");
+            int q = pc_quote(nb, patterns[p]);
+            if (q < 0) oom = 1;
+            else if (q == 0) mapped = 0;
+        }
+        if (ok && specs.len > 0) {
+            ok &= buf_append_cstr(nb, " -- ");
+            ok &= buf_append(nb, specs.data, specs.len);
+        }
+        if (!ok) oom = 1;
+    }
+    free(patterns);
+    free(pos);
+    free(specs.data);
+    rc = oom ? -2 : (mapped ? 1 : -1);
+done:
+    pc_toks_free(&t);
+    return rc;
+}
+
+/* Rewrites `cmd` (CRs removed) into `newcmd`: 1 when at least one segment became a `git grep`
+ * and every search segment was handled, 0 for no match or any out-of-subset shape, -1 OOM. */
+static int pc_rewrite(const char *cmd_in, size_t len_in, const char *cwd, buf_t *newcmd) {
+    char *cmd = (char *)malloc(len_in + 1);
+    if (!cmd) return -1;
+    size_t n = 0;
+    for (size_t i = 0; i < len_in; i++) if (cmd_in[i] != '\r') cmd[n++] = cmd_in[i];
+    cmd[n] = '\0';
+
+    size_t k = 0;
+    while (k < n && pc_is_ws(cmd[k])) k++;
+    if (k + 2 < n && cmd[k] == 'c' && cmd[k + 1] == 'd' && pc_is_ws(cmd[k + 2])) {
+        free(cmd);
+        return 0;
+    }
+
+    pc_ctx ctx = { cwd, -1 };
+    buf_t out;
+    if (!buf_init(&out, n + 64)) { free(cmd); return -1; }
+    size_t last = 0, start = 0, i = 0;
+    char quote = 0;
+    int rewrote = 0, result = 0, ok = 1;
+    for (;;) {
+        int boundary = 0;
+        size_t span_end = i;
+        if (i >= n) {
+            boundary = 1;
+            span_end = n;
+        } else {
+            char c = cmd[i];
+            if (quote) {
+                if (c == '\\' && quote == '"') i++;
+                else if (c == quote) quote = 0;
+            } else if (c == '\'' || c == '"') {
+                quote = c;
+            } else if (c == '\\') {
+                i++;
+            } else if (c == '|' || c == ';' || c == '&' || c == '\n') {
+                boundary = 1;
+                span_end = i;
+            }
+        }
+        if (boundary) {
+            size_t bs = start, be = span_end;
+            while (bs < be && pc_is_ws(cmd[bs])) bs++;
+            while (be > bs && pc_is_ws(cmd[be - 1])) be--;
+            if (be > bs) {
+                buf_t nb;
+                if (!buf_init(&nb, 64)) { result = -1; break; }
+                int pr = pc_plan(&ctx, cmd + bs, be - bs, &nb);
+                if (pr == 1) {
+                    ok = buf_append(&out, cmd + last, start - last) &&
+                         buf_append(&out, cmd + start, bs - start) &&
+                         buf_append(&out, nb.data, nb.len) &&
+                         buf_append(&out, cmd + be, span_end - be);
+                    last = span_end;
+                    rewrote = 1;
+                    if (!ok) { free(nb.data); result = -1; break; }
+                }
+                free(nb.data);
+                if (pr == -2) { result = -1; break; }
+                if (pr == -1) { result = 0; rewrote = 0; break; }
+            }
+            if (i >= n) break;
+            start = i + 1;
+        }
+        i++;
+    }
+    if (result == 0 && rewrote) {
+        if (buf_append(&out, cmd + last, n - last) && buf_append(newcmd, out.data, out.len)) result = 1;
+        else result = -1;
+    }
+    free(out.data);
+    free(cmd);
+    return result;
+}
+
+static int pc_envelope(buf_t *out, const char *new_cmd, size_t new_len, const char *other_pairs,
+                       size_t other_len) {
+    int ok = buf_append_cstr(out,
+        "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"updatedInput\":{");
+    if (other_len) {
+        ok &= buf_append(out, other_pairs, other_len);
+        ok &= buf_append_cstr(out, ",");
+    }
+    ok &= buf_append_cstr(out, "\"command\":\"");
+    ok &= buf_append_json_escaped(out, new_cmd, new_len);
+    ok &= buf_append_cstr(out, "\"},\"additionalContext\":\"");
+    ok &= buf_append_json_escaped(out, PRECHECK_NOTE, strlen(PRECHECK_NOTE));
+    ok &= buf_append_cstr(out, "\"}}\n");
+    return ok;
+}
+
+int door_repo_root_search_precheck(const char *cmd, size_t len, const char *cwd_utf8, buf_t *out) {
+    buf_t nc;
+    if (!buf_init(&nc, 64)) return -1;
+    int r = pc_rewrite(cmd, len, cwd_utf8, &nc);
+    if (r == 1) {
+        size_t mark = out->len;
+        if (!pc_envelope(out, nc.data, nc.len, NULL, 0)) { out->len = mark; r = -1; }
+    }
+    free(nc.data);
+    return r;
+}
+
+/* Next `"key": value` pair of the object `c` is inside: 1 pair (key unescaped into `key`,
+ * value spans [*vs, *ve)), 0 at the closing brace, -1 malformed. */
+static int pc_obj_next(cursor_t *c, buf_t *key, const char **vs, const char **ve) {
+    for (;;) {
+        skip_ws(c);
+        if (c->p >= c->end) return -1;
+        if (*c->p == '}') { c->p++; return 0; }
+        if (*c->p == ',') { c->p++; continue; }
+        break;
+    }
+    key->len = 0;
+    if (!parse_json_string(c, key)) return -1;
+    skip_ws(c);
+    if (c->p >= c->end || *c->p != ':') return -1;
+    c->p++;
+    skip_ws(c);
+    *vs = c->p;
+    if (!skip_json_value(c)) return -1;
+    *ve = c->p;
+    return 1;
+}
+
+static int pc_key_is(const buf_t *key, const char *name) {
+    return key->len == strlen(name) && memcmp(key->data, name, key->len) == 0;
+}
+
+int door_repo_root_search_precheck_payload(const char *payload, size_t plen, buf_t *out) {
+    cursor_t c = { payload, payload + plen };
+    skip_ws(&c);
+    if (c.p >= c.end || *c.p != '{') return 0;
+    c.p++;
+    buf_t key, tool, cwd, cmd, nc, others;
+    int have = buf_init(&key, 32) + buf_init(&tool, 16) + buf_init(&cwd, 64) + buf_init(&cmd, 128) +
+               buf_init(&nc, 128) + buf_init(&others, 128);
+    int r = 0;
+    if (have != 6) {
+        if (key.data) free(key.data);
+        if (tool.data) free(tool.data);
+        if (cwd.data) free(cwd.data);
+        if (cmd.data) free(cmd.data);
+        if (nc.data) free(nc.data);
+        if (others.data) free(others.data);
+        return -1;
+    }
+    const char *ti_s = NULL, *ti_e = NULL, *vs, *ve;
+    int pr;
+    while ((pr = pc_obj_next(&c, &key, &vs, &ve)) == 1) {
+        cursor_t sub = { vs, ve };
+        if (pc_key_is(&key, "tool_name") && *vs == '"') {
+            tool.len = 0;
+            if (!parse_json_string(&sub, &tool)) goto out;
+        } else if (pc_key_is(&key, "cwd") && *vs == '"') {
+            cwd.len = 0;
+            if (!parse_json_string(&sub, &cwd)) goto out;
+        } else if (pc_key_is(&key, "tool_input")) {
+            ti_s = vs;
+            ti_e = ve;
+        }
+    }
+    if (pr != 0 || !ti_s || *ti_s != '{' || !pc_key_is(&tool, "Bash")) goto out;
+    {
+        cursor_t ti = { ti_s + 1, ti_e };
+        int have_cmd = 0;
+        while ((pr = pc_obj_next(&ti, &key, &vs, &ve)) == 1) {
+            if (pc_key_is(&key, "command")) {
+                cursor_t sub = { vs, ve };
+                if (*vs != '"') goto out;
+                cmd.len = 0;
+                if (!parse_json_string(&sub, &cmd)) goto out;
+                have_cmd = 1;
+            } else {
+                if (others.len && !buf_append_cstr(&others, ",")) { r = -1; goto out; }
+                if (!buf_append_cstr(&others, "\"") ||
+                    !buf_append_json_escaped(&others, key.data, key.len) ||
+                    !buf_append_cstr(&others, "\":") || !buf_append(&others, vs, (size_t)(ve - vs))) {
+                    r = -1;
+                    goto out;
+                }
+            }
+        }
+        if (pr != 0 || !have_cmd) goto out;
+    }
+    if (!buf_append(&cwd, "", 1)) { r = -1; goto out; }
+    r = pc_rewrite(cmd.data, cmd.len, cwd.len > 1 ? cwd.data : NULL, &nc);
+    if (r == 1) {
+        size_t mark = out->len;
+        if (!pc_envelope(out, nc.data, nc.len, others.data, others.len)) { out->len = mark; r = -1; }
+    }
+out:
+    free(key.data); free(tool.data); free(cwd.data); free(cmd.data); free(nc.data); free(others.data);
+    return r;
 }

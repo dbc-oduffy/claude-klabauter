@@ -1408,9 +1408,10 @@ def commit_paths(
     # PUBLISHED-TREE ALLOWLIST CHECK -- a new top-level name under a
     # generator-owned source dir (`coordinator_core/`, `coordinator/bin/`)
     # that the landing field 7 of its publish row does not admit, and the
-    # landing `deny` list does not withhold, and whose file this commit does
-    # not itself carry (a carried file is declared: field 7 is regenerated
-    # at publish). This route fires no native
+    # landing `deny` list does not withhold. A name whose file this commit
+    # carries is NOT exempt: field 7 is not regenerated at publish (the
+    # pre-sync gate refuses a stale one), so the commit must carry the
+    # regenerated `setup/publish-targets.portable` itself. This route fires no native
     # hook -- same reasoning as the PHANTOM DELETION block above -- so the
     # refusal lives here or the defect ships silent until the next publish
     # round catches it. `touched_published_names` is a pure string
@@ -1435,12 +1436,29 @@ def commit_paths(
                 return None
             return obj[1].decode("utf-8")
 
-        carried = [p for p in path_list if (root / p).is_file()]
-        refused = published_tree_classification.unclassified(
-            touched,
-            _read_landing,
-            published_tree_classification.touched_published_names(carried),
-        )
+        refused = published_tree_classification.unclassified(touched, _read_landing)
+        if refused:
+            # Regenerate field 7 into this commit. Only when the portable file
+            # is the pathspec's own, or the worktree copy is byte-identical to
+            # HEAD's -- a peer's uncommitted edit to it is never overwritten.
+            portable_rel = published_tree_classification.PORTABLE_PATH
+            base = _read_landing(portable_rel)
+            on_disk = root / portable_rel
+            if base is not None and (
+                portable_rel in path_list
+                or (on_disk.is_file() and on_disk.read_text(encoding="utf-8") == base)
+            ):
+                additions: Dict[str, List[str]] = {}
+                for row, name in refused:
+                    additions.setdefault(row, []).append(name)
+                on_disk.write_text(
+                    published_tree_classification.with_inclusions(base, additions),
+                    encoding="utf-8",
+                    newline="",
+                )
+                if portable_rel not in path_list:
+                    path_list.append(portable_rel)
+                refused = []
         if refused:
             detail = ", ".join(f"{row}: {name}" for row, name in refused)
             subdirs = dict(published_tree_classification._ROWS)

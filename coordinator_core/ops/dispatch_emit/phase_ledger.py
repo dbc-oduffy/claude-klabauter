@@ -118,8 +118,8 @@ def _run_dirs(repo_root: Path, run_id: str) -> list:
 def derive(repo_root: Path, run_id: str) -> dict:
     """`{phase: verdict}` for each phase the predecessor run's `kept.json` proves landed.
 
-    plan and plan_review come from a recorded plan gate, execute from kept chunks. A phase with no
-    durable artifact (gate, size, plan_gate_rulings, review, test, criterion, commit) is absent: it
+    plan, plan_review and plan_gate_rulings come from a recorded plan gate, execute from kept chunks.
+    A phase with no durable artifact (gate, size, review, test, criterion, commit) is absent: it
     always re-runs. An unsafe run_id, a missing or malformed file reads `{}`."""
     for run_dir in _run_dirs(repo_root, run_id):
         try:
@@ -134,6 +134,7 @@ def derive(repo_root: Path, run_id: str) -> dict:
             out["plan"] = {"plan": gate["plan"], "plan_sha256": gate.get("plan_sha256")}
             if gate.get("reviews") is not None:
                 out["plan_review"] = {"plan": gate["plan"], "reviews": gate["reviews"], "coverage": gate.get("coverage")}
+                out["plan_gate_rulings"] = {"plan": gate["plan"], "coverage": gate.get("coverage")}
         chunks = data.get("chunks")
         if isinstance(chunks, dict) and chunks:
             out["execute"] = {"chunks": sorted(chunks)}
@@ -142,13 +143,19 @@ def derive(repo_root: Path, run_id: str) -> dict:
 
 
 def resume_phases(
-    landed: Mapping, halt_kind: Optional[str], revised: Iterable[str] = ()
+    landed: Mapping,
+    halt_kind: Optional[str],
+    revised: Iterable[str] = (),
+    *,
+    cleared: Iterable[str] = (),
 ) -> dict:
     """The gate's `resume_phases` value: landed phases the halt left valid are reused with their verdicts.
 
     A landed `review` that is re-run also carries its verdict, as the seed for the partial re-review.
+    `cleared` names halted phases the caller re-proved; only those leave the stale set, their
+    dependents (execute onward) still rerun.
     """
-    stale = invalidated(halt_kind, revised)
+    stale = set(invalidated(halt_kind, revised)) - set(cleared or ())
     reuse = [p for p in PHASES if p in landed and p not in stale]
     rerun = [p for p in PHASES if p not in reuse]
     verdicts = {p: landed[p] for p in reuse}

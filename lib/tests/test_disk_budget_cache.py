@@ -57,10 +57,37 @@ def home(tmp_path):
     return tmp_path / "home"
 
 
-def _prune(roots, runner, **policy):
+def _pressed(_path):
+    return 1 * MiB
+
+
+def _roomy(_path):
+    return 500 * 1024 * MiB
+
+
+def _prune(roots, runner, free_probe=_pressed, **policy):
     return disk_budget.prune_cache(
-        Policy(**policy), time.monotonic() + 30, roots=roots, runner=runner
+        Policy(**policy), time.monotonic() + 30, roots=roots, runner=runner, free_probe=free_probe
     )
+
+
+def test_over_cap_with_ample_free_space_is_not_still_over(home):
+    roots = resolve_roots(home=home, environ={})
+    _file(roots.cache / "experiments-1d" / "l.bin", 5 * MiB)
+    pressed = _prune(roots, FakeUv(roots.uv_cache), cache_total_cap=MiB)
+    assert pressed.still_over is True
+    roomy = _prune(roots, FakeUv(roots.uv_cache), free_probe=_roomy, cache_total_cap=MiB)
+    assert roomy.still_over is False
+
+
+def test_dry_run_over_cap_with_ample_free_space_is_not_still_over(home):
+    roots = resolve_roots(home=home, environ={})
+    _file(roots.cache / "junk" / "j.bin", 4 * MiB)
+    report = disk_budget.prune_cache(
+        Policy(cache_total_cap=MiB), time.monotonic() + 30, roots=roots,
+        runner=FakeUv(roots.uv_cache), apply=False, free_probe=_roomy,
+    )
+    assert report.still_over is False
 
 
 def test_policy_defaults_and_env_overrides():
@@ -203,6 +230,7 @@ def test_total_cap_spares_owned_elsewhere_and_embedder_snapshot(home):
     report = disk_budget.prune_cache(
         Policy(cache_total_cap=MiB), time.monotonic() + 30, roots=roots,
         runner=FakeUv(roots.uv_cache), embedder_model="org/embedder",
+        free_probe=_pressed,
     )
     assert not junk.exists()
     assert ladder.exists() and retest.exists() and snap.exists()
@@ -215,6 +243,7 @@ def test_total_cap_dry_run_deletes_nothing(home):
     report = disk_budget.prune_cache(
         Policy(cache_total_cap=MiB), time.monotonic() + 30, roots=roots,
         runner=FakeUv(roots.uv_cache), apply=False,
+        free_probe=_pressed,
     )
     assert junk.exists() and report.still_over is True
 

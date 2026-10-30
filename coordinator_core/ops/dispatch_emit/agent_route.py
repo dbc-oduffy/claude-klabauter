@@ -493,13 +493,19 @@ def route_rows(
 ) -> tuple[Sequence[Any], dict[str, Route], list[str]]:
     """Apply the repo's route table to `rows`: `(rows, routes by row id, narration notes)`.
 
-    With no table returns `(rows, {}, [])`, the same list object. A routed row is rewritten with
-    `_replace(agent_type=..., agent_model=...)`. Raises `RouteAdmissionError` for a refused row, a
-    class whose agent type lacks its own required tools, or a routed type with no model.
+    With no repo table, a UE repo with example-game-repo-control installed routes against the plugin's
+    table instead (`_plugin_table`); there any per-row refusal or drift keeps the row on its
+    regular type with a `drift:` note and never raises. Otherwise returns `(rows, {}, [])`, the
+    same list object. A routed row is rewritten with `_replace(agent_type=..., agent_model=...)`.
+    Under a repo-owned table raises `RouteAdmissionError` for a refused row, a class whose agent
+    type lacks its own required tools, or a routed type with no model.
     """
     table = load_route_table(repo_root)
+    roster: Optional[frozenset] = None
     if table is None:
-        return rows, {}, []
+        table, roster, drift = _plugin_table(repo_root)
+        if table is None:
+            return rows, {}, ([drift] if drift else [])
 
     defs = _Definitions()
     executor = _executor_type()
@@ -507,39 +513,99 @@ def route_rows(
     routes: dict[str, Route] = {}
     notes: list[str] = []
     for row in rows:
-        decision = resolve_agent_type(row, table, _defs=defs)
-        if decision is None:
-            out.append(row)
-            continue
-        current = row.agent_type or executor
-        changed = decision.agent_type != current
-        primary_model = _model_of(
-            decision.agent_type, defs, row.agent_model if not changed else None
-        )
-        if changed:
-            row = row._replace(agent_type=decision.agent_type, agent_model=primary_model)
-        out.append(row)
-        if decision.note:
-            notes.append(decision.note)
-        cls = decision.work_class
-        if cls is None:
-            continue
-        lacking = _missing(agent_tool_range(decision.agent_type, table, _defs=defs), cls.required_tools)
-        if lacking:
-            raise RouteAdmissionError(
-                f"row {row.id}: work class {cls.id} routes to {decision.agent_type}, "
-                f"which lacks {', '.join(lacking)}"
-            )
-        triage = None
-        if decision.triage_agent_type:
-            triage = (decision.triage_agent_type, _model_of(decision.triage_agent_type, defs))
-        routes[row.id] = Route(
-            work_class=cls.id,
-            primary=(decision.agent_type, primary_model),
-            targets=_targets(table, cls, decision.agent_type, primary_model, defs),
-            triage=triage,
-        )
+        if roster is None:
+            new_row, route, note = _route_one(row, table, defs, executor)
+        else:
+            try:
+                new_row, route, note = _route_one(row, table, defs, executor)
+                absent = sorted(
+                    t
+                    for t in (new_row.agent_type, route.triage[0] if route and route.triage else None)
+                    if t and t.startswith(_EXAMPLE_GAME_REPO_PREFIX) and t not in roster
+                )
+                if absent:
+                    raise RouteAdmissionError(f"{', '.join(absent)} is not in the installed example-game-repo roster")
+            except RouteAdmissionError as exc:
+                out.append(row)
+                notes.append(f"drift: row {row.id} stays on {row.agent_type or executor}: {exc}")
+                continue
+        out.append(new_row)
+        if note:
+            notes.append(note)
+        if route is not None:
+            routes[row.id] = route
     return out, routes, notes
+
+
+_EXAMPLE_GAME_REPO_PREFIX = "example-game-repo-control:"
+_PLUGIN_TABLE_CACHE: dict[str, tuple[int, int, RouteTable]] = {}
+
+
+def _plugin_table(
+    repo_root: "str | os.PathLike[str]",
+) -> tuple[Optional[RouteTable], Optional[frozenset], Optional[str]]:
+    """`(table, roster, drift note)` from the installed example-game-repo-control manifest for a UE repo.
+
+    `(None, None, None)` for a non-UE repo or no installed manifest; `(None, None, note)` when the
+    manifest is unreadable or malformed. Never raises.
+    """
+    from coordinator_core.ops.dispatch_emit import ue_route_source
+
+    if not ue_route_source.is_ue_repo(repo_root):
+        return None, None, None
+    path = ue_route_source.example_game_repo_route_table_path()
+    if path is None:
+        return None, None, None
+    root = path.parent.parent if path.parent.name == "routing" else path.parent
+    roster = ue_route_source.example_game_repo_roster(root)
+    try:
+        st = path.stat()
+        key = str(path)
+        cached = _PLUGIN_TABLE_CACHE.get(key)
+        if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
+            return cached[2], roster, None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise RouteTableError(_where(path, f"unreadable or not valid JSON ({exc})")) from exc
+        table = _parse_table(data, path)
+    except (OSError, RouteTableError) as exc:
+        return None, None, f"drift: example-game-repo route table unusable, rows stay on their regular type: {exc}"
+    _PLUGIN_TABLE_CACHE[key] = (st.st_mtime_ns, st.st_size, table)
+    return table, roster, None
+
+
+def _route_one(
+    row: Any, table: RouteTable, defs: _Definitions, executor: str
+) -> tuple[Any, Optional[Route], Optional[str]]:
+    """`(row, route, note)` for one row under `table`; the row is returned as given when unrouted."""
+    decision = resolve_agent_type(row, table, _defs=defs)
+    if decision is None:
+        return row, None, None
+    current = row.agent_type or executor
+    changed = decision.agent_type != current
+    primary_model = _model_of(decision.agent_type, defs, row.agent_model if not changed else None)
+    if changed:
+        row = row._replace(agent_type=decision.agent_type, agent_model=primary_model)
+    cls = decision.work_class
+    if cls is None:
+        return row, None, decision.note
+    lacking = _missing(agent_tool_range(decision.agent_type, table, _defs=defs), cls.required_tools)
+    if lacking:
+        raise RouteAdmissionError(
+            f"row {row.id}: work class {cls.id} routes to {decision.agent_type}, "
+            f"which lacks {', '.join(lacking)}"
+        )
+    triage = None
+    if decision.triage_agent_type:
+        triage = (decision.triage_agent_type, _model_of(decision.triage_agent_type, defs))
+    route = Route(
+        work_class=cls.id,
+        primary=(decision.agent_type, primary_model),
+        targets=_targets(table, cls, decision.agent_type, primary_model, defs),
+        triage=triage,
+    )
+    return row, route, decision.note
 
 
 LOCAL_MD_RELPATH = "coordinator.local.md"

@@ -792,3 +792,54 @@ def test_chain_emit_prompt_declares_session_chat_no_veto():
     script = "\n".join(ask_compose._chain_emit_start_lines(sizing_js="SZ", head="H", anchor="A", run_id="r1"))
     assert EMIT_RELAY_AUTHORITY in script
     assert script.index(EMIT_RELAY_AUTHORITY) < script.index("dispatch.emit")
+
+
+def _js_literal_keys(js: str) -> set[str]:
+    return set(re.findall(r"(\w+):", js))
+
+
+@pytest.mark.parametrize("research", [False, True])
+def test_composed_chain_emit_params_carry_only_accepted_dispatch_emit_keys(research):
+    from coordinator_core.ops.dispatch_emit.op import _unknown_param_refusal
+
+    keys = _js_literal_keys(ask_compose._chain_emit_params_js("SZ", research=research))
+    assert keys >= {"session_id", "target_root"}
+    assert _unknown_param_refusal({k: True for k in keys}) is None
+    assert _unknown_param_refusal({**{k: True for k in keys}, "path": "x"}) is not None
+
+
+def test_m_plus_chain_retries_a_bad_gate_emit_reply_once_with_composed_params():
+    script = ask_compose._m_plus_chain_js(repo_root="R", head="H", anchor="A", run_id="r1")
+    first = script.index("(_gate.chain_emit ??")
+    retry = script.index("if (_why !== null) {")
+    halt = script.index("did not start (")
+    assert first < retry < halt
+    assert script.count("_chainCheck(_ce);") == 2
+    retry_leg = script[retry:halt]
+    composed = ask_compose._chain_emit_params_js("_sizingRel")
+    decl = script.index("const _emitAgent = async () =>")
+    assert decl < first
+    assert script.count("const _emitAgent = async") == 1
+    assert script.count(f"JSON.stringify({composed})") == 1
+    assert script.index(f"JSON.stringify({composed})") > decl
+    assert "dispatch.emit" in script[decl:first]
+    assert "await _emitAgent()" in retry_leg
+    assert script.count("label: 'chain-emit'") <= 1
+
+
+def test_self_run_chain_emit_has_no_second_attempt():
+    script = "\n".join(ask_compose._chain_emit_start_lines(sizing_js="SZ", head="H", anchor="A", run_id="r1"))
+    assert "if (_why !== null) {" not in script
+
+
+def test_hoist_baseline_clears_declares_once_after_the_manifest_marker():
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
+    from coordinator_core.ops.dispatch_emit.wake_digest import _BASELINE_CLEARS_JS
+
+    script = f"head\n{ASK_MANIFEST_MARKER}m.json\n  a({_BASELINE_CLEARS_JS});\n  b({_BASELINE_CLEARS_JS});\n"
+    out = ask_compose._hoist_baseline_clears(script)
+    assert out.count(_BASELINE_CLEARS_JS) == 1
+    assert out.index(f"const _baselineClears = {_BASELINE_CLEARS_JS};") > out.index(ASK_MANIFEST_MARKER)
+    assert "a(_baselineClears);" in out and "b(_baselineClears);" in out
+    single = f"{ASK_MANIFEST_MARKER}m.json\n  a({_BASELINE_CLEARS_JS});\n"
+    assert ask_compose._hoist_baseline_clears(single) == single

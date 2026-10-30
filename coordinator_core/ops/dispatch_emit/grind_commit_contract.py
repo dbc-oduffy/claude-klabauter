@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote, unquote
@@ -76,11 +77,28 @@ RECORD_LEN_FLAG = "record-len"
 RECORD_SHA256_FLAG = "record-sha256"
 DECLARED_LEN_FLAG = "declared-len"
 DECLARED_SHA256_FLAG = "declared-sha256"
-# The drain agent types only this marker; the verb reads the urlenc record from the agent's own
-# transcript (the prompt carries it once between the run's open and close markers).
+# The drain agent types only this marker; the verb reads the urlenc record AND its digest from the
+# agent's own transcript (the prompt carries `<len> <sha256>\n<token>` once between the run's open
+# and close markers), so the agent copies no record length or digest.
 RECORD_FROM_TRANSCRIPT_FLAG = "record-from-transcript"
 RECORD_OPEN_PREFIX = "RUNREC-OPEN-"
 RECORD_CLOSE_PREFIX = "RUNREC-CLOSE-"
+RECORD_SEGMENT_CAUSE = "the transcript segment does not match the digest the script sent beside it"
+_SEGMENT_HEAD_RE = re.compile(r"(\d+) ([0-9a-f]{64})\n")
+
+
+def split_record_segment(candidate: str) -> Optional[tuple[str, str, str]]:
+    """``(token, length, sha256)`` of a transcript segment shaped ``<len> <sha256>\\n<token>``;
+    None when ``candidate`` does not open with that digest line.
+
+    The token is returned whitespace-free: a urlenc token (encodeURIComponent plus the shell-inert
+    escapes) holds none, so any whitespace after the digest line is wrap/indent damage from the
+    transcript, never record bytes. The digest line keeps its strict match; the caller still
+    checks the token against it with ``check_relay``."""
+    m = _SEGMENT_HEAD_RE.match(candidate)
+    if m is None:
+        return None
+    return "".join(candidate[m.end():].split()), m.group(1), m.group(2)
 
 
 def record_markers(run_id: str) -> tuple[str, str]:

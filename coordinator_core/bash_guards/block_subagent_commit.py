@@ -7136,7 +7136,7 @@ def _prompt_sourced_params_admit_leg(
     except (OSError, ValueError):
         return _LEG_PARAMS_PATH
     rid, tok, script = params["run_id"], params["run_token"], params["script_path"]
-    if not (run_token.admits(git_root, rid, tok, script) or run_token.spent_receipt(git_root, rid, tok, script) is not None):
+    if not (run_token.halt_admits(git_root, rid, tok, script) or run_token.spent_receipt(git_root, rid, tok, script) is not None):
         return _LEG_PARAMS_TOKEN
     if from_file:
         return None

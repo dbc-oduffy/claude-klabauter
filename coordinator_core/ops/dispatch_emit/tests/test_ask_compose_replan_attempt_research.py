@@ -17,6 +17,11 @@ def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]
 
 
+@pytest.fixture(autouse=True)
+def _m_plus_arm(m_plus_known_arm):
+    """Only a known M+ arm embeds plan-blitz, so every test here composes as an M+ re-fire."""
+
+
 def _script() -> str:
     return compose_ask_script(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1",
@@ -26,7 +31,7 @@ def _script() -> str:
 
 def _pulled_block() -> str:
     script = _script()
-    return script[script.index("_pulledEntry = ") : script.index("plan-blitz reported no ready plan")]
+    return script[script.index("_pulledEntry = ") : script.index("if (!_planRel) { _halted")]
 
 
 def test_cap_is_one_named_constant_defaulting_to_two():

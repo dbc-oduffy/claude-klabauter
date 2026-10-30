@@ -157,7 +157,8 @@ def test_consume_during_a_claim_leaves_nothing_to_release(tmp_path):
     run_token.consume(repo, "ask-1")
     assert not run_token.release(repo, "ask-1", token, "a.mjs")
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
-    assert list((repo / ".git" / "coordinator-warp-run-tokens").rglob("*.json")) == []
+    assert _tokens_dir_files(repo) == ["retired/ask-1.json"]
+    assert run_token.halt_admits(repo, "ask-1", token, "a.mjs")
 
 
 def test_release_never_overwrites_a_fresh_mint(tmp_path):
@@ -212,7 +213,7 @@ def test_redeem_claims_exactly_once_and_consume_spends_the_claim(tmp_path):
     assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
     run_token.consume(repo, "ask-1")
-    assert list((repo / ".git" / "coordinator-warp-run-tokens").rglob("*.json")) == []
+    assert _tokens_dir_files(repo) == ["retired/ask-1.json"]
 
 
 def test_an_expired_record_admits_nothing(tmp_path, monkeypatch):
@@ -319,7 +320,72 @@ def test_consume_without_landed_or_without_a_record_writes_no_receipt(tmp_path):
     run_token.consume(repo, "ask-1")
     assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") is None
     run_token.consume(repo, "ask-9", landed=_LANDED)
-    assert list((repo / ".git" / "coordinator-warp-run-tokens").rglob("*.json")) == []
+    run_token.consume(repo, "ask-9")
+    assert _tokens_dir_files(repo) == ["retired/ask-1.json"]
+
+
+def test_a_landed_consume_leaves_a_spent_receipt_and_no_retired_one(tmp_path):
+    repo = _repo(tmp_path)
+    token = _landed_run(repo)
+    assert _tokens_dir_files(repo) == ["spent/ask-1.json"]
+    assert not run_token.halt_admits(repo, "ask-1", token, "a.mjs")
+
+
+def _tokens_dir_files(repo):
+    base = repo / ".git" / "coordinator-warp-run-tokens"
+    return sorted(p.relative_to(base).as_posix() for p in base.rglob("*.json"))
+
+
+def test_halt_admits_survives_discard_consume_and_remint(tmp_path):
+    repo = _repo(tmp_path)
+    first = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.discard(repo, "ask-1") is not None
+    assert not run_token.admits(repo, "ask-1", first, "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", first, "a.mjs")
+    second = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", second, "a.mjs")
+    third = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", second, "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", third, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", third, "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", third, "a.mjs")
+    run_token.consume(repo, "ask-1")
+    assert run_token.halt_admits(repo, "ask-1", third, "a.mjs")
+
+
+def test_a_first_mint_clears_a_stale_retired_receipt(tmp_path):
+    repo = _repo(tmp_path)
+    old = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.consume(repo, "ask-1")
+    assert run_token.halt_admits(repo, "ask-1", old, "a.mjs")
+    new = run_token.mint(repo, "ask-1", "a.mjs")
+    assert not run_token.halt_admits(repo, "ask-1", old, "a.mjs")
+    assert _tokens_dir_files(repo) == ["ask-1.json"]
+    assert run_token.halt_admits(repo, "ask-1", new, "a.mjs")
+
+
+def test_halt_admits_refuses_wrong_token_script_malformed_and_expired(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.discard(repo, "ask-1")
+    assert run_token.halt_admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.halt_admits(repo, "ask-1", "f" * 32, "a.mjs")
+    assert not run_token.halt_admits(repo, "ask-1", token, "b.mjs")
+    assert not run_token.halt_admits(repo, "ask-2", token, "a.mjs")
+    assert not run_token.halt_admits(repo, "../x", token, "a.mjs")
+    assert not run_token.halt_admits(repo, "ask-1", "short", "a.mjs")
+    later = time.time() + run_token.TTL_SECONDS + 5
+    monkeypatch.setattr(run_token.time, "time", lambda: later)
+    assert not run_token.halt_admits(repo, "ask-1", token, "a.mjs")
+
+
+def test_halt_admits_reads_the_claimed_record_and_claims_nothing(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.release(repo, "ask-1", token, "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", token, "a.mjs")
 
 
 def test_spent_receipts_are_never_listed_as_held(tmp_path):

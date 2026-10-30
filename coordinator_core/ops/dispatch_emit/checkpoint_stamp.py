@@ -316,6 +316,74 @@ def rows_landed_at_head(repo_root: Path, plan_rel: str, wanted: frozenset) -> fr
     return frozenset().union(*walk.landed.values())
 
 
+def rows_delivered_at_head(repo_root: Path, plan_rel: str, row_writes: Mapping[str, tuple]) -> frozenset:
+    """The rows of ``plan_rel`` whose every ``writes`` path differs at HEAD from the commit that
+    introduced the plan (a path absent there counts as differing): delivery evidence for a
+    hand-landing or ``record_halted_run_landed`` commit, which carries no checkpoint trailer.
+
+    ``row_writes`` is ``{row id: writes paths}``; a row with no writes is never delivered.
+    In-process, one tree pass for all rows. Fails closed (empty) on an unborn HEAD, a plan
+    absent or untracked at HEAD, or an introduction commit older than ``_HEAD_WALK_CAP``.
+    Trap: a peer's edit to a row's only writes path reads as delivery; a row with several
+    writes needs all of them changed."""
+    wanted = {
+        rid: tuple(str(p).replace("\\", "/") for p in paths if isinstance(p, str) and p)
+        for rid, paths in row_writes.items()
+    }
+    wanted = {rid: paths for rid, paths in wanted.items() if paths}
+    if not wanted or not plan_rel:
+        return frozenset()
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.git.rollback_check import ABSENT, _values_along
+
+    head = head_sha(repo_root)
+    if not head:
+        return frozenset()
+    floor = None
+    try:
+        floor = plan_created_floor((Path(repo_root) / plan_rel).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        pass
+    common_dir = resolve_git_common_dir(Path(repo_root))
+    ancestors: list = []
+    sha: Optional[str] = head
+    closed = False
+    while sha is not None and len(ancestors) < _HEAD_WALK_CAP:
+        meta = _walk_commit_meta(common_dir, sha)
+        if meta is None:
+            return frozenset()
+        epoch = meta.get("committer_epoch")
+        if floor is not None and epoch is not None and epoch < floor:
+            closed = True
+            break
+        ancestors.append((len(ancestors) + 1, sha))
+        parents = meta.get("parents") or []
+        sha = parents[0] if parents else None
+        closed = sha is None
+    paths = list(dict.fromkeys([plan_rel, *(p for ps in wanted.values() for p in ps)]))
+    series = _values_along(common_dir, ancestors, paths)
+    plan_series = [v for _s, v in series[plan_rel]]
+    if not plan_series or plan_series[0] is ABSENT or plan_series[0] is None:
+        return frozenset()
+    base_idx = len(plan_series) - 1
+    for i, value in enumerate(plan_series):
+        if value is None:
+            return frozenset()
+        if value is ABSENT:
+            base_idx = i - 1
+            break
+    else:
+        if not closed:
+            return frozenset()
+
+    def _changed(path: str) -> bool:
+        at_head, at_base = series[path][0][1], series[path][base_idx][1]
+        return at_head is not ABSENT and at_head is not None and at_head != at_base
+
+    return frozenset(rid for rid, ps in wanted.items() if all(_changed(p) for p in ps))
+
+
 def inventory_family_landed(
     repo_root: Path,
     inventory_dir_rel: str,

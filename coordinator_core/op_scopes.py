@@ -118,6 +118,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.preuse_bash_dispatch":             "common_dir",
     "hooks.block_workflow_foreign_emission":  "none",
     "hooks.guard_agent_route_admission":      "none",
+    "hooks.guard_ue_specialist_advisory":     "none",
     "hooks.guard_brief_prescribed_method":    "none",
     "hooks.guard_editor_python_direct":       "none",
     "hooks.block_workflow_unmodeled_agent":   "none",

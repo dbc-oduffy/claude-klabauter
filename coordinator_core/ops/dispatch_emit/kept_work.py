@@ -106,21 +106,25 @@ def held_paths(root: Path, rels: Iterable[str]) -> dict[str, str]:
         return {}
     out: dict[str, str] = {}
     heads: Optional[dict] = None
-    for run_id in sorted(run_ids):
-        if halted_hold_release.supersession_reason(root, run_id) is not None:
-            continue
-        try:
-            prints = kept_fingerprints(ask_contract.record_dir(root, run_id))
-        except (OSError, ValueError):
-            continue
-        for rel in wanted.intersection(prints):
-            if rel in out:
+    with halted_hold_release.release_scope():
+        for run_id in sorted(run_ids):
+            if (
+                halted_hold_release.supersession_reason(root, run_id) is not None
+                or halted_hold_release.stale_release(root, run_id) is not None
+            ):
                 continue
-            if heads is None:
-                heads = _head_blob_shas(root, wanted)
-            if _pin_is_stale(root, rel, prints[rel], heads.get(rel)):
+            try:
+                prints = kept_fingerprints(ask_contract.record_dir(root, run_id))
+            except (OSError, ValueError):
                 continue
-            out[rel] = run_id
+            for rel in wanted.intersection(prints):
+                if rel in out:
+                    continue
+                if heads is None:
+                    heads = _head_blob_shas(root, wanted)
+                if _pin_is_stale(root, rel, prints[rel], heads.get(rel)):
+                    continue
+                out[rel] = run_id
     return out
 
 
@@ -195,7 +199,8 @@ def _pulled(blitz: object, plan: str) -> Optional[dict]:
 
 
 def plan_gate(halted: Mapping, root: Path) -> Optional[dict]:
-    """``{plan, plan_sha256, reviews, coverage}`` for a refusal halt whose blitz pulled ``plan``; else None."""
+    """``{plan, plan_sha256, reviews, coverage, plan_scope}`` for a refusal halt whose blitz pulled ``plan``;
+    else None. ``plan_scope`` is ``plan_delta.scope_projection`` of the plan, None when unparsable."""
     if halted.get("halted") != "refusal":
         return None
     plan = halted.get("plan")
@@ -205,14 +210,22 @@ def plan_gate(halted: Mapping, root: Path) -> Optional[dict]:
     if entry is None:
         return None
     try:
-        digest = hashlib.sha256((Path(root) / plan).read_bytes()).hexdigest()
+        raw = (Path(root) / plan).read_bytes()
     except OSError:
         return None
+    # Deferred: plan_delta imports spine_read, which this module's callers do not otherwise load.
+    from coordinator_core.ops.dispatch_emit.plan_delta import scope_projection
+
+    try:
+        scope = scope_projection(raw.decode("utf-8"))
+    except UnicodeDecodeError:
+        scope = None
     return {
         "plan": plan,
-        "plan_sha256": digest,
+        "plan_sha256": hashlib.sha256(raw).hexdigest(),
         "reviews": entry.get("reviews"),
         "coverage": entry.get("coverage"),
+        "plan_scope": scope,
     }
 
 

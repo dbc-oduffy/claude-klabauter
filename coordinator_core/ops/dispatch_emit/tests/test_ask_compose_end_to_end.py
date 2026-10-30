@@ -107,7 +107,7 @@ def test_every_objective_leg_agent_call_is_modeled():
 def test_retest_invariant_call_carries_the_test_runner_pin():
     from coordinator_core.ops.dispatch_emit import emit as _emit
 
-    call = ask_compose._invariant_retest_call(head="H", anchor="A", run_id="run-1")
+    call = ask_compose._invariant_retest_call(head="H", anchor="A", repo_root="REPO", run_id="run-1")
     assert _emit._model_opt(_emit._TEST_AGENT_TYPE) in call
 
 
@@ -129,7 +129,7 @@ def test_in_run_commit_composes_docs_in_the_verify_agent_then_commit_before_the_
     opts = _agent_opts(script, "commit")
     assert "agentType: 'coordinator:git-commit-agent'" in opts and "model: 'haiku'" in opts
     assert "a.runToken" in script and "_RUN_TOKEN = \"" not in script and "_RUN_TOKEN = '" not in script
-    assert not re.search(r"[0-9a-f]{32,}", script)
+    assert not re.search(r"\b[0-9a-f]{32}\b", script)
     assert "run_token: _RUN_TOKEN" in script and "doc_paths" in script.split("phase('commit')")[1]
     # The docs stage edits only the stage's declared doc writes.
     assert "JSON.stringify(_manifest.doc_writes ?? [])" in script
@@ -145,9 +145,16 @@ def _tail(script: str) -> tuple[str, str]:
     return script[start:end], script[end:]
 
 
+def _verdict_def(script: str) -> str:
+    """The hoisted `_verdictText` definition line: the verdict prose the verify and remnant legs share."""
+    start = script.index("  const _verdictText = () =>")
+    return script[start : script.index("\n", start)]
+
+
 def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger():
     script = _compose(in_run_commit=True, **_JUDGE_KW)
     call, after = _tail(script)
+    call += _verdict_def(script)
     assert script.index("phase('Review wave')") < script.rindex("phase('Verify')")
     assert script.count("await agent(") >= 1 and call.count("label: 'verify'") == 1
     assert "await parallel([" not in call and "await parallel([" not in after
@@ -156,7 +163,7 @@ def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger():
     for gone in ("label: 'docs'", "label: 'ledger-check'", "coordinator:criterion-judge", "label: 'test:terminal'"):
         assert gone not in script, gone
     assert "phase('ledger-check')" not in script and "phase('docs')" not in script
-    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "remnant-complete", "remnant-reverify", "remnant-record", "commit"]
+    assert re.findall(r"label: '([^']+)'", after) == ["ledger-fix:", "ledger-reverify", "ledger-recovery-record", "remnant-complete", "remnant-reverify", "remnant-record", "commit", "retest-invariant", "commit"]
     assert "_ledgerBlocking" in after and "halted: 'ledger-check'" in after
 
 
@@ -192,7 +199,7 @@ def test_the_tail_without_a_judge_or_commit_carries_neither_judge_nor_docs_instr
 
 def test_the_verify_prompt_binds_its_write_set_to_the_declared_docs_and_the_note():
     script = _compose(in_run_commit=True, **_JUDGE_KW)
-    call = _tail(script)[0].replace("\\'", "'")
+    call = (_tail(script)[0] + _verdict_def(script)).replace("\\'", "'")
     assert "JSON.stringify(_manifest.doc_writes ?? [])" in call
     assert "Your write set is exactly step 2's declared doc writes and its delivery note" in call
     assert "name that path exactly as its own entry in remaining" in call
@@ -224,13 +231,15 @@ def test_raw_ask_composes_the_ceo_xl_exit_and_regates():
     assert "if (!_progressed) break;" in loop
 
 
-def test_raw_ask_embeds_the_roadmap_arm_and_skips_the_row_phases_on_it():
+def test_raw_ask_roadmap_pick_refuses_naming_the_sizing_refire_and_skips_the_row_phases():
     script = _compose(roadmap_blitz_text=_RB_TEXT)
-    assert "async function roadmapBlitz(" in script
+    assert "phase('roadmap-blitz')" not in script
     branch = script.index("_gate.arm === 'roadmap'")
-    assert branch < script.index("_viaRoadmap = true;") < script.index("phase('roadmap-blitz')")
-    assert script.index("_nextAction = { kind: 'terminal_commit'") < script.index("  if (!_viaRoadmap) {") < script.index(_NO_FOLD)
-    assert "phase('workstream-complete')" not in script and "phase('execute')" not in script.split("_viaRoadmap = true;")[1].split("  if (!_viaRoadmap) {")[0]
+    refusal = script.index("which this script does not embed: resubmit Workflow(", branch)
+    assert branch < script.index("_viaRoadmap = true;") < refusal < script.index("  if (!_viaRoadmap) {") < script.index(_NO_FOLD)
+    assert "args: {sizing: " in script[refusal : refusal + 200]
+    gated = script[branch : script.index("  if (!_viaRoadmap) {")]
+    assert "phase('workstream-complete')" not in gated and "phase('execute')" not in gated
 
 
 def test_existing_s_sizing_composes_no_xl_or_roadmap(tmp_path):
@@ -310,11 +319,13 @@ def test_ledger_verdict_carries_root_read_per_item():
     assert "i.root_read != null" in mapped
 
 
-def test_every_judgment_stage_reads_the_ledger_at_its_start():
+def test_every_judgment_stage_reads_the_ledger_at_its_start(m_plus_known_arm):
     script = _compose()
     view = f"{RECORD_DIR_ROOT}/run-1/requirements.md"
     for label in ("size", "accept", "xl-exit", "plan", "verify"):
         call = script[: script.index(f"label: '{label}'")]
+        if label == "verify":
+            call += _verdict_def(script)
         assert view in call[call.rindex("agent(") :], label
     rows = script[script.index("phase('Execute');", script.index(_NO_FOLD)) :]
     assert view in rows[: rows.index("stallMs")]
@@ -329,7 +340,7 @@ def test_every_judgment_stage_reads_the_ledger_at_its_start():
 def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier():
     script = _compose(in_run_commit=True)
     assert "_ledgerCloses" not in script
-    wave = script[script.index("phase('Review wave')"):script.rindex("phase('Verify')")]
+    wave = script[script.index("phase('Review wave')"):script.rindex("phase('Verify')")].replace(_verdict_def(script), "")
     # Nothing in the review stage (delivery verifier, terminal judge, falsifier) reads the ledger:
     # the verify leg's ledger verdict runs after it as one more gate, at every size.
     assert not re.search(r"_ledger\w*", wave)
@@ -437,7 +448,7 @@ def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshi
     assert out.stdout.strip() == tier, out.stderr
 
 
-def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_guard():
+def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_guard(m_plus_known_arm):
     script = _compose()
     assert "readyOp:" in script
     for entry in ("_ready", "_reready"):
@@ -475,7 +486,7 @@ def test_a_relayed_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing
         assert error in out["manifest"]["error"]
 
 
-def test_the_ready_op_carries_the_stage_reply_schema_so_the_relay_is_typed():
+def test_the_ready_op_carries_the_stage_reply_schema_so_the_relay_is_typed(m_plus_known_arm):
     script = _compose()
     ready = script.split("readyOp: {", 1)[1].split("} } : {})", 1)[0]
     schema = json.loads(ready.split("schema:", 1)[1])

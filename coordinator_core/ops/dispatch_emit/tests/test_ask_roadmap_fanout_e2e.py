@@ -43,7 +43,8 @@ def test_no_waves_execute_or_workstream_complete_leg(repo, which):
 def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which):
     script = _scripts(repo)[which]
     commits = [leg for leg in lr.emitted_legs(script) if leg.label == "commit"]
-    assert len(commits) == 1 and commits[0].model == "haiku"
+    assert len(commits) == {"standalone": 1, "in-run": 2}[which], "in-run adds the post-retest recommit leg"
+    assert {leg.model for leg in commits} == {"haiku"}
     head = (
         f"{FANOUT_RECORD_PARAM}: {{ plans: _ready.map((r) => r.planPath), "
         "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])), "
@@ -94,12 +95,14 @@ def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(r
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import REQUIRED_STR_KEYS
 
     script = _scripts(repo)[which]
-    (call,) = [ln for ln in script.splitlines() if "_terminalCommitParamsBlock({" in ln and "..._nextAction.params" in ln]
-    block = call[call.index("_terminalCommitParamsBlock({"):]
-    assert "script_path: _nextAction.params.script_path ?? ''" in block, "an unknown path is '', never an absent key"
-    for key in REQUIRED_STR_KEYS:
-        assert f"{key}:" in block, key
-    assert block.index("..._nextAction.params") < block.index("script_path:") < block.index("run_id: _runId")
+    calls = [ln for ln in script.splitlines() if "_terminalCommitParamsBlock({" in ln and "..._nextAction.params" in ln]
+    assert len(calls) == {"standalone": 1, "in-run": 2}[which]
+    for call in calls:
+        block = call[call.index("_terminalCommitParamsBlock({"):]
+        assert "script_path: _nextAction.params.script_path ?? ''" in block, "an unknown path is '', never an absent key"
+        for key in REQUIRED_STR_KEYS:
+            assert f"{key}:" in block, key
+        assert block.index("..._nextAction.params") < block.index("script_path:") < block.index("run_id: _runId")
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])

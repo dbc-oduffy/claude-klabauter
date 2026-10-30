@@ -274,6 +274,11 @@ extern char **environ;
 #define DOOR_WRITE_DEADLINE_MS 2000
 #define DOOR_READ_DEADLINE_MS 40000
 
+/* Hook-mode read bound; the twin of door.c's DOOR_HOOK_READ_DEADLINE_MS (see
+ * there for why it sits under DoE hooks.json's `"timeout": 15`). */
+#define DOOR_HOOK_READ_DEADLINE_MS 8000
+#define DOOR_READ_DEADLINE_FOR_MODE_MS (g_door_hook_mode ? DOOR_HOOK_READ_DEADLINE_MS : DOOR_READ_DEADLINE_MS)
+
 
 #define DOOR_RESPONSE_CEILING (16u << 20)
 
@@ -860,11 +865,11 @@ static int write_frame_bounded(int fd, const char *data, size_t len) {
  * `DOOR_READ_DEADLINE_MS` budget spanning the whole line -- not per
  * `recv()`, so a server dribbling one byte at a time cannot walk the door
  * past the ceiling a chunk at a time. */
-static int read_line_bounded(int fd, buf_t *resp) {
+static int read_line_bounded(int fd, buf_t *resp, int deadline_ms) {
     long long started = monotonic_ms();
     char chunk[4096];
     for (;;) {
-        int budget = remaining_ms(started, DOOR_READ_DEADLINE_MS);
+        int budget = remaining_ms(started, deadline_ms);
         if (budget == 0) return READ_DEADLINE;
 
         struct pollfd pfd;
@@ -958,6 +963,29 @@ static int emit_hook_pass_loudly(const char *reason) {
 }
 
 
+/* HOOK-MODE REPO-ROOT PRE-CHECK, entrypoint `hooks.preuse_bash_dispatch` only;
+ * the twin of door.c's block of the same name (see there). Declared here, not
+ * in door_core.h. */
+int door_repo_root_search_precheck_payload(const char *payload, size_t plen, buf_t *out);
+
+#define DOOR_PRECHECK_ENTRYPOINT "hooks.preuse_bash_dispatch"
+static int g_precheck_armed = 0;
+static buf_t g_precheck_env;
+
+static void hook_precheck_prepare(void) {
+    g_precheck_env.len = 0;
+    if (!g_hook_payload || !buf_init(&g_precheck_env, 1024)) return;
+    if (door_repo_root_search_precheck_payload(g_hook_payload, g_hook_payload_len, &g_precheck_env) != 1) {
+        g_precheck_env.len = 0;
+    }
+}
+
+static int emit_precheck_if_matched(void) {
+    if (!g_precheck_armed || g_precheck_env.len == 0) return 0;
+    write_all_fd(STDOUT_FILENO, g_precheck_env.data, g_precheck_env.len);
+    return 1;
+}
+
 static int emit_hook_deny(const char *reason) {
     buf_t out;
     if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
@@ -979,6 +1007,15 @@ static int emit_indeterminate(const char *detail) {
     }
     free(out.data);
     return 1;
+}
+
+/* Every post-delivery failure of the warm read; the twin of door.c's. */
+static int emit_post_delivery_failure(const char *detail) {
+    if (g_precheck_armed) {
+        if (emit_precheck_if_matched()) return 0;
+        return emit_hook_pass_loudly(detail);
+    }
+    return emit_indeterminate(detail);
 }
 
 
@@ -1208,7 +1245,8 @@ static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir
 }
 
 static int hook_fall_through(int argc, char **argv, const char *engine_root) {
-    
+    if (emit_precheck_if_matched()) return 0;
+
     int advisory = door_argv_declares_advisory(argc, (const char *const *)argv);
 
     char script_path[PATH_MAX];
@@ -1420,6 +1458,11 @@ int main(int argc, char **argv) {
     }
 
     
+    if (g_door_hook_mode && argc >= 2 && strcmp(argv[1], DOOR_PRECHECK_ENTRYPOINT) == 0) {
+        g_precheck_armed = 1;
+        hook_precheck_prepare();
+    }
+
     resolve_own_basename();
 
     /* ---- -2. THE INSTALL-CLASS GATE (door_core.h ::
@@ -1812,25 +1855,25 @@ int main(int argc, char **argv) {
     if (!buf_init(&resp, 4096)) {
         close(fd);
         free(engine_root);
-        return emit_indeterminate("out of memory reading the response");
+        return emit_post_delivery_failure("out of memory reading the response");
     }
-    int read_state = read_line_bounded(fd, &resp);
+    int read_state = read_line_bounded(fd, &resp, DOOR_READ_DEADLINE_FOR_MODE_MS);
     close(fd);
 
     if (read_state != READ_GOT_LINE) {
         free(resp.data);
         free(engine_root);
         if (read_state == READ_FAILED) {
-            return emit_indeterminate(
+            return emit_post_delivery_failure(
                 "connection closed or read failed after delivery");
         }
-        
+
         char detail[160];
         snprintf(detail, sizeof(detail),
                  "no response within %us of delivery -- the door stopped "
                  "waiting, the engine did not stop working",
-                 (unsigned)(DOOR_READ_DEADLINE_MS / 1000u));
-        return emit_indeterminate(detail);
+                 (unsigned)(DOOR_READ_DEADLINE_FOR_MODE_MS / 1000u));
+        return emit_post_delivery_failure(detail);
     }
 
     {
@@ -1843,7 +1886,7 @@ int main(int argc, char **argv) {
         long error_code = 0;
         int success = parse_response_envelope(resp.data, line_len, &rf,
                                               &have_error, &error_code);
-        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE) {
+        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE && !g_precheck_armed) {
             write_all_fd(STDOUT_FILENO, resp.data, line_len);
             write_all_fd(STDOUT_FILENO, "\n", 1);
             free(resp.data);
@@ -1872,7 +1915,7 @@ int main(int argc, char **argv) {
             return rc;
         }
         free(engine_root); 
-        return emit_indeterminate(
+        return emit_post_delivery_failure(
             have_error
                 ? "server returned an error that does not prove the op was never dispatched"
                 : "response was not a well-formed success or recognised error envelope"

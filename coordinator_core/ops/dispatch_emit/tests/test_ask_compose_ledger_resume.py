@@ -55,7 +55,7 @@ def test_before_state_unconditional_xs_is_gone(monkeypatch):
 
 def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work(monkeypatch):
     script = _script(monkeypatch)
-    owes = script.index("const _ledgerOwes = _resumeLedger && _gate.arm === 'm_plus'")
+    owes = script.index("const _ledgerOwes = (_resumeLedger && ((_gate.arm === 'm_plus' &&")
     assert ".remaining ?? []).length > 0" in script[owes : owes + 400]
     assert "else if (!_ledgerOwes) { _xsTail = true; }" in script
     leg = script.index("label: 'ledger-replan'")

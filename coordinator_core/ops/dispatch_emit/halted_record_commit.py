@@ -13,7 +13,7 @@ tree puts other runs' hunks in those files; the resumed run re-runs the chunks a
 commit lands them. The reply's ``targeted_tests.check`` still reports a carried verdict.
 The commit carries no ``Lands-Chunks`` trailer and stamps no row coded. No receipt, sizing ship
 or close job runs. The run
-token is only checked (``run_token.admits``), never claimed: no branch, raise or killed op can strand
+token is only checked (``run_token.halt_admits``, which accepts a retired record), never claimed: no branch, raise or killed op can strand
 it, so a halt never spends the token the resumed run's product commit needs.
 
 The request/manifest reads, ledger and kept records, and tree eviction live in
@@ -114,7 +114,7 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
     siblings = sibling_release(worktree_root, run_id, None)
     token = params.get("run_token")
     script_path = params.get("script_path")
-    verified = token is not None and run_token.admits(worktree_root, run_id, token, script_path)
+    verified = token is not None and run_token.halt_admits(worktree_root, run_id, token, script_path)
     _reap_staged_twins(worktree_root, run_id, own=verified)
     if token is not None and not verified:
         refusal = _error(

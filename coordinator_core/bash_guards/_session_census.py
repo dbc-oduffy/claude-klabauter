@@ -224,13 +224,22 @@ def _is_light_poller(row: ProcRow, command_line_of) -> bool:
 def live_heavy_commands(
     roots: Sequence[ProcRow], primitives: ProcessPrimitives, command_line_of=None
 ) -> List[ProcRow]:
-    """roots minus those that have exited since the snapshot and minus light poller scripts.
+    """roots minus those that have exited since the snapshot and minus light poller scripts,
+    each pid once.
 
     The census counts the process-table snapshot; a pid that exited after it, or a python script
     that only polls an API, is not a heavy command.
     """
     read = command_line_of or command_line
-    return [r for r in roots if primitives.alive(r.pid, r.ctime) and not _is_light_poller(r, read)]
+    out: List[ProcRow] = []
+    seen: set = set()
+    for r in roots:
+        if r.pid in seen:
+            continue
+        seen.add(r.pid)
+        if primitives.alive(r.pid, r.ctime) and not _is_light_poller(r, read):
+            out.append(r)
+    return out
 
 
 def _children(rows: Sequence[ProcRow]) -> Dict[int, List[ProcRow]]:

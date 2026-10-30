@@ -1459,6 +1459,7 @@ def _ledger_gate(
         wave_reviews=[w for w in inline_review.get("wave_reviews") or [] if isinstance(w, dict)],
         noted_paths=requirements_ledger.noted_paths(root, run_dir),
         code_paths=code_paths, review_verdicts=review_floor.verdict_count(inline_review, root),
+        note_ids=requirements_ledger.note_ids(run_dir),
     )
     from coordinator_core.ops.dispatch_emit import measured_rev
 

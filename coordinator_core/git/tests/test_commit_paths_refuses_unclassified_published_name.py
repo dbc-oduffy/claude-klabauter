@@ -34,6 +34,10 @@ def _git(repo, *args, check=True):
     )
 
 
+def _field7(repo, ref="HEAD"):
+    return _git(repo, "show", f"{ref}:setup/publish-targets.portable").stdout
+
+
 def _head(repo):
     return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
@@ -65,38 +69,32 @@ def repo(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac2_undeclared_coordinator_core_name_is_refused(repo):
+def test_ac2_undeclared_coordinator_core_name_lands_with_regenerated_field7(repo):
+    (repo / "coordinator_core" / "new_module.py").write_text(
+        "x = 1\n", encoding="utf-8", newline="\n"
+    )
     before = _head(repo)
 
-    with pytest.raises(CommitRefused) as excinfo:
-        gcommit.commit_paths(
-            repo, ["coordinator_core/new_module.py"], "add new module"
-        )
+    out = gcommit.commit_paths(repo, ["coordinator_core/new_module.py"], "add new module")
 
-    msg = str(excinfo.value)
-    assert "new_module.py" in msg
-    assert "claude-klabauter" in msg
-    assert "publish-allowlist-generate.py" in msg
-    assert "publish-targets.portable" in msg
-    assert "publish-allowlist-declarations.yaml" in msg
-    assert _head(repo) == before
+    assert out.sha and _head(repo) != before
+    assert "coordinator_core||DIRECTORY.md,new_module.py,ops\n" in _field7(repo)
+    assert "existing_cli.py" in _field7(repo)
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac3_undeclared_coordinator_bin_name_is_refused(repo):
-    (repo / "coordinator").mkdir()
-    (repo / "coordinator" / "bin").mkdir()
+def test_ac3_undeclared_coordinator_bin_name_lands_with_regenerated_field7(repo):
+    (repo / "coordinator" / "bin").mkdir(parents=True)
+    (repo / "coordinator" / "bin" / "new_cli.py").write_text(
+        "x = 1\n", encoding="utf-8", newline="\n"
+    )
     before = _head(repo)
 
-    with pytest.raises(CommitRefused) as excinfo:
-        gcommit.commit_paths(repo, ["coordinator/bin/new_cli.py"], "add new cli")
+    out = gcommit.commit_paths(repo, ["coordinator/bin/new_cli.py"], "add new cli")
 
-    msg = str(excinfo.value)
-    assert "new_cli.py" in msg
-    assert "claude-klabauter-coordinator-bin" in msg
-    assert "--pending coordinator/bin/new_cli.py" in msg
-    assert _head(repo) == before
+    assert out.sha and _head(repo) != before
+    assert "coordinator/bin||existing_cli.py,new_cli.py\n" in _field7(repo)
 
 
 @pytest.mark.spawns_process
@@ -139,30 +137,54 @@ def test_ac4_regenerated_field7_in_pathspec_commits_and_denied_name_commits(repo
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac5_declared_new_core_file_lands_without_allowlist_regeneration(repo):
+def test_ac5_dirty_worktree_portable_outside_pathspec_is_refused_not_overwritten(repo):
     (repo / "coordinator_core" / "new_module.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
+    peer = _PORTABLE + "# peer edit\n"
+    (repo / "setup" / "publish-targets.portable").write_text(
+        peer, encoding="utf-8", newline="\n"
+    )
     before = _head(repo)
 
-    out = gcommit.commit_paths(
-        repo, ["coordinator_core/new_module.py"], "declared new file, no regeneration"
-    )
+    with pytest.raises(CommitRefused) as excinfo:
+        gcommit.commit_paths(
+            repo, ["coordinator_core/new_module.py"], "carried new file, dirty portable"
+        )
 
-    assert out.sha and _head(repo) != before
+    assert "--pending coordinator_core/new_module.py" in str(excinfo.value)
+    assert _head(repo) == before
+    assert (repo / "setup" / "publish-targets.portable").read_text(encoding="utf-8") == peer
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac5_declared_new_bin_file_lands_at_default_arguments(repo):
+def test_ac5_carried_new_package_lands_with_regenerated_field7(repo):
+    pkg = repo / "coordinator_core" / "new_pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
+    before = _head(repo)
+
+    out = gcommit.commit_paths(
+        repo, ["coordinator_core/new_pkg/__init__.py"], "carried new package"
+    )
+
+    assert out.sha and _head(repo) != before
+    assert "coordinator_core||DIRECTORY.md,new_pkg,ops\n" in _field7(repo)
+    assert _git(repo, "status", "--porcelain", "setup").stdout.strip() == ""
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ac5_carried_new_bin_file_lands_with_regenerated_field7(repo):
     (repo / "coordinator" / "bin").mkdir(parents=True)
     (repo / "coordinator" / "bin" / "new_cli.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
 
-    out = gcommit.commit_paths(repo, ["coordinator/bin/new_cli.py"], "declared new bin")
-
+    out = gcommit.commit_paths(repo, ["coordinator/bin/new_cli.py"], "carried new bin")
     assert out.sha
+    assert "new_cli.py" in _field7(repo)
 
 
 @pytest.mark.spawns_process
@@ -289,12 +311,15 @@ class _SpawnCounter:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac8_zero_spawns_on_the_refusal_path(repo):
+def test_ac8_zero_spawns_on_the_regeneration_path(repo):
+    (repo / "coordinator_core" / "new_module.py").write_text(
+        "x = 1\n", encoding="utf-8", newline="\n"
+    )
     with _SpawnCounter() as counter:
-        with pytest.raises(CommitRefused):
-            gcommit.commit_paths(
-                repo, ["coordinator_core/new_module.py"], "add new module"
-            )
+        out = gcommit.commit_paths(
+            repo, ["coordinator_core/new_module.py"], "add new module"
+        )
+    assert out.sha
     assert counter.argvs == [], f"expected zero spawns, got {counter.argvs}"
 
 
@@ -356,18 +381,24 @@ def test_c6_new_bin_cli_lands_in_one_commit_via_pending(repo):
     ]
 
     gen = _load_generator()
-    # No --pending: the untracked names are invisible to `git ls-files`,
-    # yet the commit carries the files, so it lands.
+    # No --pending: the untracked names are invisible to `git ls-files`, so
+    # the generator's field 7 omits them; landing re-admits them itself.
     (repo / "setup" / "publish-targets.portable").write_text(
         gen.regenerate_portable(repo), encoding="utf-8", newline="\n"
     )
-    assert gcommit.commit_paths(repo, paths, "bin cli without pending").sha
+    out0 = gcommit.commit_paths(repo, paths, "bin cli without pending")
+    assert out0.sha
+    assert "new-tool.cmd,new-tool.py" in _field7(repo)
 
-    (repo / "coordinator" / "bin" / "new-tool.py").write_text(
-        "x = 2\n", encoding="utf-8", newline="\n"
-    )
     (repo / "setup" / "publish-targets.portable").write_text(
         gen.regenerate_portable(repo, tuple(paths[:2])), encoding="utf-8", newline="\n"
+    )
+    (repo / "coordinator" / "bin" / "new-tool2.py").write_text(
+        "x = 1\n", encoding="utf-8", newline="\n"
+    )
+    paths = ["coordinator/bin/new-tool2.py", "setup/publish-targets.portable"]
+    (repo / "setup" / "publish-targets.portable").write_text(
+        gen.regenerate_portable(repo, tuple(paths[:1])), encoding="utf-8", newline="\n"
     )
     out = gcommit.commit_paths(repo, paths, "bin cli with pending")
     assert out.sha

@@ -1067,6 +1067,7 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
     assert "encodeURIComponent(JSON.stringify(_runCostRecord()))" in script
     assert "--record-from-transcript " in script
     assert "--record-urlenc" not in script
+    assert "--record-len" not in script and "--record-sha256" not in script
     assert ".rec'" not in script and "RUNREC-OPEN-" in script and "RUNREC-CLOSE-" in script
     record_fn = script[script.index("function _runCostRecord()"):]
     record_fn = record_fn[: record_fn.index("\n}") ]
@@ -2596,7 +2597,7 @@ await fn(
   { run_stamp: '20261017T000000Z', script_path: 'x.mjs', profile_dir: 'pd', repo_root: '/r', run_token: 'tok' },
   agent, () => {}, () => {}, budget, async (xs) => Promise.all(xs),
 );
-const record = decodeURIComponent(/RUNREC-OPEN-\S+\n(\S+)\nRUNREC-CLOSE-/.exec(ledgerPrompt)[1]);
+const record = decodeURIComponent(/RUNREC-OPEN-\S+\n\d+ [0-9a-f]{64}\n(\S+)\nRUNREC-CLOSE-/.exec(ledgerPrompt)[1]);
 console.log(JSON.stringify({ keys, unlanded_reason_in_record: record.includes('it needs a new run'), landed_sha_in_record: record.includes('abc123') }));
 """
 

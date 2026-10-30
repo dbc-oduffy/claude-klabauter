@@ -621,21 +621,16 @@ def _cap_leg(
             census,
             launch,
         )
-    commands = census_mod.heavy_roots(census.heavy, rows, anchor.pid) if heavy else ()
-    if heavy and len(commands) >= heavy_cap:
-        commands = census_mod.live_heavy_commands(commands, primitives)
-    if heavy and len(commands) >= heavy_cap:
+    commands = (
+        census_mod.live_heavy_commands(census_mod.heavy_roots(census.heavy, rows, anchor.pid), primitives)
+        if heavy
+        else ()
+    )
+    if heavy and len(commands) >= heavy_cap and warn_out is not None:
         pids = ", ".join(str(r.pid) for r in commands)
-        return (
-            _deny_text(
-                LEG_SESSION_CAP,
-                "session holds %d heavy commands (cap %d): pids %s" % (len(commands), heavy_cap, pids),
-                _retry("wait for one to finish"),
-                legacy="Wait for one to finish",
-            ),
-            anchor,
-            census,
-            launch,
+        warn_out.append(
+            "Advisory: this session holds %d live heavy commands (cap %d): pids %s. "
+            "Let one finish if the box feels loaded." % (len(commands), heavy_cap, pids)
         )
     # The snapshot can carry shells that exited after it was taken; revalidate only on the
     # would-deny path so an admit costs nothing extra.
@@ -665,6 +660,39 @@ def _shell_cap_warning(text: str) -> Any:
     )
 
 
+# Executable stems among argv[0..1] of a tree's lead process that mark it as the launch of a
+# lease's class; a class absent here accepts any tree (nothing to verify against). An unreadable
+# command line is not ours: a foreign pid is never claimed on no evidence.
+_CLASS_TOKENS = {
+    "typecheck": ("tsc", "typecheck"),
+    "build": ("build", "next", "vite", "cargo", "rustc", "dotnet", "pnpm", "npm", "make"),
+    "test_tier": ("pytest", "vitest", "jest", "test"),
+    "reindex": ("index",),
+}
+
+
+def _tree_fits_lease(tree, lease) -> bool:
+    """False when the tree's lead command line names nothing of the lease's class: a foreign
+    session's detached job that merely started inside the claim window is not this lease's command."""
+    from coordinator_core.bash_guards import _session_census as census_mod
+
+    tokens = _CLASS_TOKENS.get(lease.heavy_class)
+    if tokens is None:
+        return True
+    lead = min(tree.heavy, key=lambda p: p.ctime)
+    line = census_mod.command_line(lead.pid)
+    if not line:
+        return False
+    exe, arg, *_ = [*line.replace('"', " ").replace("'", " ").split(), "", ""]
+    return any(_argv_stem(w) in tokens for w in (exe, arg))
+
+
+def _argv_stem(arg: str) -> str:
+    """Lowercased basename of one argv word without its extension: `C:/x/pnpm.cjs` -> `pnpm`."""
+    base = arg.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return base.rsplit(".", 1)[0] if "." in base else base
+
+
 def _fold_claimed(census, rows, anchor, chain):
     """census with the session's claimed orphan commands added to heavy.
 
@@ -681,7 +709,9 @@ def _fold_claimed(census, rows, anchor, chain):
     if since is not None:
         trees = census_mod.orphan_trees(rows, since)
         if trees:
-            leases.claim_orphans(trees, ORPHAN_CLAIM_WINDOW_S * ctime_units_per_second())
+            leases.claim_orphans(
+                trees, ORPHAN_CLAIM_WINDOW_S * ctime_units_per_second(), accepts=_tree_fits_lease
+            )
     session = (anchor.pid, anchor.ctime)
     roots = {
         (r.holder_pid, r.holder_ctime)

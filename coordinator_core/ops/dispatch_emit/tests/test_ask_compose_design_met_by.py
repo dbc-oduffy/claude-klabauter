@@ -50,13 +50,18 @@ def test_verify_prompt_defaults_design_met_by_to_the_wave_senior_front_end_sidec
     script = _compose(in_run_commit=True)
     assert "never the harvest output" in DEFAULT_MET_BY_CLAUSE
     marker = "Wave senior-front-end review sidecars: ' + "
-    assert script.count(marker) == 1
-    assert "Default met_by for a design-registry item" in script[:script.index(marker)]
-    tail = script[script.index(marker) + len(marker):][:900]
-    assert "_reviewWave" in tail
-    assert "senior-front-end$/.test(String(w.agent_type" in tail
-    assert "w.sidecar_path.replace(" in tail
-    assert "'none'" in tail
+    # Two verify prompts (main verify and the remnant re-verify) share verdict_parts; both carry it.
+    assert script.count(marker) == 2
+    start = 0
+    for _ in range(2):
+        at = script.index(marker, start)
+        assert "Default met_by for a design-registry item" in script[start:at]
+        tail = script[at + len(marker):][:900]
+        assert "_reviewWave" in tail
+        assert "senior-front-end$/.test(String(w.agent_type" in tail
+        assert "w.sidecar_path.replace(" in tail
+        assert "'none'" in tail
+        start = at + len(marker)
 
 
 def test_ledger_check_downgrades_a_design_row_met_without_met_by():

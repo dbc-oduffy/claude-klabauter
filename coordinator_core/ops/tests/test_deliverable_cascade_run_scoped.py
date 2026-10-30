@@ -161,11 +161,48 @@ def test_cascade_run_handoff_record_with_live_successor_is_refused(tmp_path):
         "---\n\nBody.\n",
         encoding="utf-8",
     )
+    succ_rel = succ.relative_to(repo).as_posix()
     result = cascade_mod.cascade_run(
-        repo, _DID, [rel], "abc1234", repo_root=repo / ".git", plan_path=_PLAN
+        repo, _DID, [rel, succ_rel], "abc1234", repo_root=repo / ".git", plan_path=_PLAN
     )
     assert result["advanced"] == []
     assert "live successor" in result["refused"][0]["reason"]
+
+
+def test_cascade_run_does_not_see_a_successor_outside_the_run(tmp_path):
+    """Leg (b) is run-scoped: a successor not named in `record_rels` is never read."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    cand = _seed_handoff(repo, "20260101-baton.md", deliverable_id=_DID)
+    rel = cand.relative_to(repo).as_posix()
+    succ = repo / "state" / "handoffs" / "20260101-succ.md"
+    succ.write_text(
+        "---\n"
+        'title: "S"\ncreated: 2026-01-01\nbranch: work/test/2026-01-01\nstatus: open\n'
+        f'predecessor: "{rel}"\ndeployment_state: ready_to_fire\ndeliverable_id: dlv-succ-0\n'
+        "---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    result = cascade_mod.cascade_run(
+        repo, _DID, [rel], "abc1234", repo_root=repo / ".git", plan_path=_PLAN
+    )
+    assert [Path(e["path"]).name for e in result["advanced"]] == ["20260101-baton.md"]
+
+
+def test_cascade_run_never_collects_the_handoff_corpus(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    cand = _seed_handoff(repo, "20260101-baton.md", deliverable_id=_DID)
+    rel = cand.relative_to(repo).as_posix()
+
+    def _boom(*a, **k):
+        raise AssertionError("whole-corpus candidate scan")
+
+    monkeypatch.setattr(cascade_mod, "_collect_live_candidates_for_kind", _boom)
+    result = cascade_mod.cascade_run(
+        repo, _DID, [rel], "abc1234", repo_root=repo / ".git", plan_path=_PLAN
+    )
+    assert len(result["advanced"]) == 1
 
 
 def test_cascade_run_refuses_a_record_that_escapes_its_home(tmp_path):

@@ -6,11 +6,15 @@ writes, spawns, or reroutes: a sizing whose route disagrees with its arm is refu
 
 from __future__ import annotations
 
+import copy
 import json
 import re
+import stat
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 import yaml
 
@@ -69,6 +73,26 @@ class SizingHandBack(Exception):
         super().__init__(line)
 
 
+#: The parse memo of the open `sizing_memo()` scope, keyed (path, mtime_ns, size); None outside one.
+_SIZING_MEMO: ContextVar[dict | None] = ContextVar("sizing_memo", default=None)
+
+
+@contextmanager
+def sizing_memo() -> Iterator[None]:
+    """Scope in which `load_sizing` parses a sizing file once per (path, mtime_ns, size).
+
+    Per-call only, never process-wide: the warm engine outlives a submission, and an mtime key
+    alone would serve a stale parse after a same-tick rewrite. Re-entry joins the open scope."""
+    if _SIZING_MEMO.get() is not None:
+        yield
+        return
+    token = _SIZING_MEMO.set({})
+    try:
+        yield
+    finally:
+        _SIZING_MEMO.reset(token)
+
+
 def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     """Read a sizing YAML contained under `<repo_root>/state/sizings/`."""
     root = Path(repo_root)
@@ -78,14 +102,24 @@ def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     p = contained_path(p, [Path(record_homes.home_dir(str(root), "sizings"))])
     if p is None:
         raise SizingFireRefused([f"sizing escapes state/sizings/: {sizing_rel!r}"])
-    if not p.is_file():
+    try:
+        st = p.stat()
+    except OSError:
+        st = None
+    if st is None or not stat.S_ISREG(st.st_mode):
         raise SizingFireRefused([f"sizing-object not found on disk: {sizing_rel}"])
+    memo = _SIZING_MEMO.get()
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    if memo is not None and key in memo:
+        return copy.deepcopy(memo[key])
     try:
         doc = yaml.safe_load(p.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise SizingFireRefused([f"sizing-object is not valid YAML: {exc}"]) from exc
     if not isinstance(doc, dict):
         raise SizingFireRefused(["sizing-object is not a YAML mapping"])
+    if memo is not None:
+        memo[key] = copy.deepcopy(doc)
     return doc
 
 
@@ -259,6 +293,12 @@ def s_plan_path(sizing_rel: str) -> str:
     return f"docs/plans/{stem}.md"
 
 
+def single_dated_plan_edge(plan_rel: str) -> str:
+    """`plan_rel` with a repeated leading `YYYY-MM-DD-` on its file name collapsed to one; inner dates untouched."""
+    head, sep, name = str(plan_rel).replace(chr(92), "/").rpartition("/")
+    return head + sep + re.sub(rf"^({DATE_HEAD_PATTERN})(?:{DATE_HEAD_PATTERN})+", r"\1", name)
+
+
 #: JS twin of `s_plan_path`, built from the same pattern; the planner prompt names its result.
 PLAN_PATH_JS = (
     "const _planPathFor = (rel) => { const s = String(rel).replace(/\\\\/g, '/').split('/').pop()"
@@ -305,6 +345,10 @@ def resumable_plan(
     edge = sizing.get("plan")
     root = Path(repo_root)
     plan_rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_path(sizing_rel) if arm == ARM_S else None)
+    if plan_rel is not None and plan_rel == edge:
+        twin = single_dated_plan_edge(plan_rel)
+        if twin != plan_rel and not (root / plan_rel).is_file():
+            plan_rel = twin
     if plan_rel is None and arm == ARM_XS:
         plan_rel = _xs_halt_spine(root, sizing_rel)
     if plan_rel is None:

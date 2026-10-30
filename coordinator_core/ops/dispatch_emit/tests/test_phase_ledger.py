@@ -66,8 +66,37 @@ def test_derive_reads_kept_json(tmp_path):
     kept = {"chunks": {"C1": {"paths": {}}}, "plan_gate": {"plan": "p.md", "plan_sha256": "ab", "reviews": [1]}}
     (d / "kept.json").write_text(json.dumps(kept), encoding="utf-8")
     got = pl.derive(tmp_path, "run-1")
-    assert set(got) == {"plan", "plan_review", "execute"}
+    assert set(got) == {"plan", "plan_review", "plan_gate_rulings", "execute"}
     assert got["execute"] == {"chunks": ["C1"]}
+    assert got["plan_gate_rulings"] == {"plan": "p.md", "coverage": None}
+
+
+def test_derive_without_reviews_lands_no_rulings(tmp_path):
+    d = tmp_path / "scratch" / "warp" / "run-1"
+    d.mkdir(parents=True)
+    (d / "kept.json").write_text(json.dumps({"plan_gate": {"plan": "p.md"}}), encoding="utf-8")
+    assert set(pl.derive(tmp_path, "run-1")) == {"plan"}
+
+
+def test_cleared_plan_gate_rulings_is_reused_and_execute_onward_reruns():
+    landed = {"plan": {}, "plan_review": {}, "plan_gate_rulings": {"c": 1}, "execute": {"x": 1}}
+    out = pl.resume_phases(landed, "plan_gate", cleared=("plan_gate_rulings",))
+    assert out["reuse"] == ["plan", "plan_review", "plan_gate_rulings"]
+    assert "execute" in out["rerun"] and "commit" in out["rerun"]
+    held = pl.resume_phases(landed, "plan_gate")
+    assert "plan_gate_rulings" in held["rerun"] and "plan_gate_rulings" not in held["reuse"]
+
+
+def test_cleared_names_only_the_halted_phase():
+    landed = {"plan": {}, "plan_review": {}, "plan_gate_rulings": {}, "execute": {"x": 1}}
+    out = pl.resume_phases(landed, "plan_gate", cleared=("execute",))
+    assert "plan_gate_rulings" in out["rerun"]
+    assert "review" in out["rerun"] and "commit" in out["rerun"]
+
+
+def test_halt_phase_keeps_no_refusal_key():
+    assert "refusal" not in pl.HALT_PHASE
+    assert pl.invalidated("refusal") == frozenset(pl.PHASES)
 
 
 def test_derive_malformed_is_empty(tmp_path):

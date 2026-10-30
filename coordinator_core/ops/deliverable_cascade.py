@@ -666,12 +666,18 @@ def _predicate_refusal_sync(
     kind: _KindDescriptor = _HANDOFF_KIND,
     corpus_metas: Optional[Dict[str, dict]] = None,
     caller_session_id: str = "",
+    leg_b_scope: Optional[List[str]] = None,
+    leg_b_metas: Optional[Dict[str, dict]] = None,
 ) -> Optional[str]:
     """`_predicate_refusal` for a caller with no event loop. Same legs, same order.
 
     Only leg (b)'s live-successor check is async (`handoff_children`), so only a
     candidate that reaches leg (b) pays for an event loop; a candidate refused by
     leg (c) or (a), or a kind with no leg (b), never loads asyncio.
+
+    leg_b_scope: when set, leg (b) judges over exactly these absolute handoff
+    paths (`has_live_children_among_records`, with `leg_b_metas`) and reads no
+    other handoff. `None` keeps the corpus-wide leg (b).
     """
     early = _legs_c_a_refusal(candidate_path, fm, repo_root, kind, caller_session_id)
     if early is not None:
@@ -682,7 +688,8 @@ def _predicate_refusal_sync(
 
         children_result = asyncio.run(
             _leg_b_children_result(
-                candidate_path, repo_root, exclude_children_check, kind, corpus_metas
+                candidate_path, repo_root, exclude_children_check, kind, corpus_metas,
+                leg_b_scope, leg_b_metas,
             )
         )
         refusal_b = _leg_b_refusal(children_result)
@@ -759,6 +766,8 @@ async def _leg_b_children_result(
     exclude_children_check: Optional[List[str]],
     kind: _KindDescriptor,
     corpus_metas: Optional[Dict[str, dict]],
+    leg_b_scope: Optional[List[str]] = None,
+    leg_b_metas: Optional[Dict[str, dict]] = None,
 ) -> dict:
     """Leg (b) — has a live successor/continuation. EXEMPT for a kind whose
     descriptor names no successor-edge vocabulary (sizing) — the caller skips
@@ -770,6 +779,7 @@ async def _leg_b_children_result(
     from coordinator_core.ops.handoff_children import (
         CONCLUSION_EDGE_KINDS,
         _handoff_has_live_children,
+        has_live_children_among_records,
         has_live_children_from_metas,
     )
 
@@ -782,6 +792,15 @@ async def _leg_b_children_result(
     # example-cockpit-repo-em-wsc-leg-b-counts-spinoffs-as-live-children.md).
     # Narrowed here explicitly rather than taking the op's archival-shaped
     # default (`_DEFAULT_EDGE_KINDS`).
+    if leg_b_scope is not None:
+        return await has_live_children_among_records(
+            str(candidate_path),
+            repo_root,
+            scope=leg_b_scope,
+            edge_kinds=CONCLUSION_EDGE_KINDS,
+            exclude=list(exclude_children_check) if exclude_children_check else None,
+            metas=leg_b_metas,
+        )
     if corpus_metas is None:
         children_params: Dict[str, Any] = {
             "candidate": str(candidate_path),
@@ -1656,7 +1675,11 @@ def cascade_run(
     `repo_root` is the git COMMON dir (defaults to `<worktree_root>/.git`).
     `plan_path` is the plan the run implemented (the sizing `plan` FK);
     `ship_sha` is the handoff `ship-commit` fallback. Leg (b), the live-successor
-    check, still reads the handoff corpus for a handoff-kind record.
+    check, is run-scoped: it judges over the handoff records in `record_rels`
+    only (`handoff_children.has_live_children_among_records`), reading no other
+    handoff. Tradeoff: a successor baton outside the run that names a run baton
+    as predecessor is not seen here; `cascade_terminal_sync` and the backstop
+    sweep keep the corpus-wide check.
 
     Divergence from `cascade_terminal_sync`: a handoff of ANOTHER deliverable is also admitted when it
     links `plan_path` and every plan it links is implemented (`links_and_all_implemented`). The corpus
@@ -1679,6 +1702,8 @@ def cascade_run(
 
     candidates: List[dict] = []
     unreadable: List[dict] = []
+    leg_b_scope: List[str] = []
+    run_metas: Dict[str, dict] = {}
     for rel in record_rels:
         norm = rel.replace("\\", "/")
         kind = next((k for prefix, k in _RUN_KINDS if norm.startswith(prefix)), None)
@@ -1695,6 +1720,10 @@ def cascade_run(
         if not fm:
             unreadable.append({"path": norm, "reason": "empty or unparseable record"})
             continue
+        if kind is _HANDOFF_KIND:
+            abs_path = os.path.abspath(str(path))
+            leg_b_scope.append(abs_path)
+            run_metas[abs_path] = fm
         artifact_did = fm.get("deliverable_id")
         did_match = bool(deliverable_id) and isinstance(artifact_did, str) and artifact_did.strip() == deliverable_id
         if not did_match and not (
@@ -1711,11 +1740,6 @@ def cascade_run(
         if fm.get(kind.lifecycle_field) in kind.terminal_values:
             continue
         candidates.append({"path": path, "fm": fm, "kind": kind})
-
-    corpus_metas: Optional[Dict[str, dict]] = None
-    if any(c["kind"] is _HANDOFF_KIND for c in candidates):
-        corpus_metas = {}
-        _collect_live_candidates_for_kind(worktree_root, "", kind=_HANDOFF_KIND, metas_out=corpus_metas)
 
     advanced: List[dict] = []
     already_advanced: List[dict] = []
@@ -1741,7 +1765,8 @@ def cascade_run(
                 path, fm, common_dir,
                 exclude_children_check=resolved_this_run,
                 kind=kind,
-                corpus_metas=corpus_metas if kind is _HANDOFF_KIND else None,
+                leg_b_scope=leg_b_scope if kind is _HANDOFF_KIND else None,
+                leg_b_metas=run_metas if kind is _HANDOFF_KIND else None,
                 caller_session_id=caller_session_id,
             )
             if refusal is None:

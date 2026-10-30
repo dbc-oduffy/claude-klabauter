@@ -106,7 +106,7 @@ def test_heavy_calls_spawn_nothing_across_the_classifier_table(no_spawn, monkeyp
     )
     for command in HEAVY_COMMANDS:
         out = _enveloped(guard.check)(_payload(command))
-        assert out is None or "BLOCKED" in out["hookSpecificOutput"]["permissionDecisionReason"], command
+        assert out is None or "BLOCKED" not in str(out), command
 
 
 def test_census_cost_is_measured_on_the_real_process_table(no_spawn):

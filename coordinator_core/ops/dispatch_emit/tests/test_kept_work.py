@@ -41,7 +41,26 @@ def test_plan_gate_prefers_regate_entry(tmp_path):
         "plan_sha256": hashlib.sha256(b"plan").hexdigest(),
         "reviews": ["regate"],
         "coverage": 2,
+        "plan_scope": None,
     }
+
+
+def test_plan_gate_records_scope_projection_of_a_parsable_plan(tmp_path):
+    from coordinator_core.ops.dispatch_emit import plan_delta
+
+    text = "---\ntitle: T\n---\n\n## Tasks\n\n```yaml plan-tasks\n- id: C1\n  writes: [a.py]\n```\n"
+    (tmp_path / "p.md").write_bytes(text.encode("utf-8"))
+    h = {"halted": "refusal", "plan": "p.md", "blitz": {"pulled": [{"planPath": "p.md", "reviews": [], "coverage": 1}]}}
+    gate = k.plan_gate(h, tmp_path)
+    assert gate["plan_scope"] == plan_delta.scope_projection(text)
+    assert gate["plan_scope"]["rows"]["C1"]["writes"] == ["a.py"]
+    assert json.loads(json.dumps(gate)) == gate
+
+
+def test_plan_gate_scope_none_for_undecodable_plan(tmp_path):
+    (tmp_path / "p.md").write_bytes(b"\xff\xfe")
+    h = {"halted": "refusal", "plan": "p.md", "blitz": {"pulled": [{"planPath": "p.md"}]}}
+    assert k.plan_gate(h, tmp_path)["plan_scope"] is None
 
 
 def test_plan_gate_falls_back_and_refuses_other_shapes(tmp_path):

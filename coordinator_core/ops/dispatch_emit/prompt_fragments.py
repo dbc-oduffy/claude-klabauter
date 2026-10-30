@@ -18,6 +18,7 @@ import json
 import re
 from bisect import bisect_right, insort
 from collections import Counter
+from functools import lru_cache
 from itertools import accumulate
 
 #: Module switch: False leaves the script untouched (the baseline the equality pin compares against).
@@ -62,9 +63,7 @@ def _scan(src: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
         while i < n:
             c = src[i]
             if c == "'" or c == '"':
-                j = i + 1
-                while j < n and src[j] != c:
-                    j += 2 if src[j] == "\\" else 1
+                j = string_end(src, i + 1, c)
                 if not in_template_expr:
                     spans.append((i, j + 1))
                 i, prev = j + 1, c
@@ -115,6 +114,9 @@ def _scan(src: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
 
     def template(i: int) -> int:
         while i < n:
+            i = _TEMPLATE_PLAIN.match(src, i).end()
+            if i >= n:
+                break
             c = src[i]
             if c == "\\":
                 i += 2
@@ -130,8 +132,23 @@ def _scan(src: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     return spans, dead
 
 
-def _chunks(content: str) -> list[str]:
+_STRING_BODY = {q: re.compile(r"(?:[^%s\\]+|\\.)*" % q, re.S) for q in "'\""}
+_TEMPLATE_PLAIN = re.compile(r"[^\\`$]*")
+
+
+def string_end(src: str, i: int, quote: str) -> int:
+    """Index of the closing ``quote`` of the string whose body starts at ``i``; ``len(src)`` when unterminated, one past it when a lone backslash ends ``src``."""
+    j = _STRING_BODY[quote].match(src, i).end()
+    return len(src) + 1 if j < len(src) and src[j] != quote else j
+
+
+@lru_cache(maxsize=8192)
+def _chunks(content: str) -> tuple[str, ...]:
     """Split escaped literal content after each '. ' or escaped newline, never inside an escape."""
+    if not content:
+        return ()
+    if "\\" not in content and ". " not in content:
+        return (content,)
     out: list[str] = []
     cur: list[str] = []
     units = _ESC_UNIT.findall(content)
@@ -142,7 +159,7 @@ def _chunks(content: str) -> list[str]:
             cur = []
     if cur:
         out.append("".join(cur))
-    return out
+    return tuple(out)
 
 
 def _single_quoted_content(src: str, s: int, e: int) -> str:
@@ -452,10 +469,9 @@ def _hoist_runs(body: str, first: int) -> tuple[str, str, int]:
     size-budget test runs this on every shape but asserts bytes, not time.
     """
     lits, dead = _scan(body)
-    inside = [False] * (len(body) + 1)
+    inside = bytearray(len(body) + 1)
     for s, e in lits + dead:
-        for k in range(s, e):
-            inside[k] = True
+        inside[s:e] = b"\x01" * (min(e, len(inside)) - s)
     toks = [(s, e) for s, e in lits] + [m.span() for m in _TOKEN_RE.finditer(body) if not inside[m.start()]]
     toks.sort()
     runs: list[list[tuple[int, int]]] = []

@@ -37,7 +37,13 @@ def test_the_verify_prompt_names_the_plans_evidence_sidecar(monkeypatch):
     assert "PLAN_PATH_SLOT_X" not in script
     # One script serves a fresh and a resume_ledger gate: both bind _planRel before the one verify call.
     assert script.index("_planRel = _gate.resume_ledger.plan") < verify
-    assert script.count("row_evidence: ") == 1
+    # Two judges name the sidecar: the verify call and the remnant re-verify that rules the whole run again.
+    assert script.count("row_evidence: ") == 2
+    # Each emission, not just the first, must name the sidecar right after its row_evidence key.
+    at = -1
+    for _ in range(2):
+        at = script.index("row_evidence: ", at + 1)
+        assert _EVIDENCE_JS in script[at : at + 200]
 
 
 def test_without_a_caller_base_the_base_is_head(monkeypatch):

@@ -506,6 +506,7 @@ def _ledger_gate(
         noted_paths=requirements_ledger.noted_paths(worktree_root, run_dir),
         code_paths=code_paths,
         review_verdicts=review_floor.verdict_count(inline_review, sidecar_root or worktree_root),
+        note_ids=requirements_ledger.note_ids(run_dir),
     )
     since_halt: dict = {}
     if resume_ledger is not None:

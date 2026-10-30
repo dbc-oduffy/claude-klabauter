@@ -170,7 +170,7 @@ _CHILD = "REPO/scratch/warp/warp-child.workflow.mjs"
 
 def _chain_stub(scout, decision, verdict, emit, child=None):
     stub = _stub(scout, decision, verdict)
-    stub["chain-emit"] = emit
+    stub["size"] = {**stub["size"], "chain_emit": emit}
     stub["__child"] = child if child is not None else {"arm": "m_plus", "plan": PLAN_PATH}
     return stub
 
@@ -187,10 +187,10 @@ def test_m_pick_chains_into_the_sizing_script_without_a_refire_halt(tmp_path, mo
     assert out["result"]["plan"] == PLAN_PATH and out["result"]["chained_from"] == "run-1"
     assert "halted_by" not in out["result"]
     assert out["seen"]["workflows"] == [_CHILD]
-    assert out["seen"]["labels"] == ["size", "chain-emit"]
+    assert out["seen"]["labels"] == ["size"]
     assert [p for p in out["seen"]["phases"] if p in ("size", "gate", "plan")] == ["size", "gate", "plan"]
-    emit_prompt = out["seen"]["prompts"]["chain-emit"]
-    assert "dispatch.emit" in emit_prompt and rel in emit_prompt
+    size_prompt = out["seen"]["prompts"]["size"]
+    assert "dispatch.emit" in size_prompt and "chain_emit" in size_prompt and '"ask": true' in size_prompt
     replayed = _replayed_decision(out["seen"], _make_repo(tmp_path / "replayed"), monkeypatch, "ceo", capsys, scout)
     assert replayed == {**decision, "write": replayed["write"]}
 
@@ -207,12 +207,50 @@ def test_m_pick_chains_into_the_sizing_script_without_a_refire_halt(tmp_path, mo
 )
 def test_m_pick_halts_naming_the_sizing_refire_only_when_the_chain_cannot_start(tmp_path, monkeypatch, capsys, emit, why):
     scout, decision, verdict, rel = _fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
-    out = _run_script(_script(), _chain_stub(scout, decision, verdict, emit))
+    stub = _chain_stub(scout, decision, verdict, emit)
+    stub["chain-emit"] = emit
+    out = _run_script(_script(), stub)
     halted = out["result"]["halted_by"]
     assert halted["halted"] == "refusal" and halted["sizing"] == rel
     assert why in halted["reason"] and rel in halted["reason"]
     assert "chained_from" not in out["result"]
     assert out["seen"]["workflows"] == []
+    assert out["seen"]["labels"] == ["size", "chain-emit"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_m_pick_chains_on_the_retry_when_the_gate_agents_chain_emit_is_malformed(tmp_path, monkeypatch, capsys):
+    scout, decision, verdict, _rel = _fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
+    stub = _chain_stub(scout, decision, verdict, {"path": "", "run_id": "", "error": "denied"})
+    stub["chain-emit"] = {"path": _CHILD, "run_id": "run-2"}
+    out = _run_script(_script(), stub)
+    assert "halted_by" not in out["result"] and out["seen"]["workflows"] == [_CHILD]
+    assert out["seen"]["labels"] == ["size", "chain-emit"]
+
+
+def test_the_m_plus_chain_emits_in_the_gate_agents_tail_and_only_the_research_split_and_one_retry_keep_a_leg():
+    script = _script()
+    size_leg = next(ln for ln in script.splitlines() if "label: 'size'" in ln)
+    assert "dispatch.emit" in size_leg and "chain_emit" in size_leg
+    assert script.count("label: 'chain-emit'") == 3
+    research = script.index("_halted.halted === 'research'")
+    assert research < script.index("label: 'chain-emit'")
+    assert script.count("const _emitAgent = ") == 1 and script.count("await _emitAgent()") == 1
+    assert script.index("const _emitAgent = ") < script.index("_gate.chain_emit") < script.index("await _emitAgent()")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_m_pick_with_no_pre_emitted_chain_retries_once_then_halts(tmp_path, monkeypatch, capsys):
+    scout, decision, verdict, rel = _fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
+    stub = _stub(scout, decision, verdict)
+    stub["chain-emit"] = {"path": "", "run_id": "", "error": "denied"}
+    out = _run_script(_script(), stub)
+    halted = out["result"]["halted_by"]
+    assert halted["halted"] == "refusal" and halted["sizing"] == rel
+    assert "emit failed: denied" in halted["reason"]
+    assert out["seen"]["labels"] == ["size", "chain-emit"] and out["seen"]["workflows"] == []
 
 
 @pytest.mark.spawns_process

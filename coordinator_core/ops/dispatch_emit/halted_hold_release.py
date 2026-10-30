@@ -33,13 +33,19 @@ RELEASE_CRITERION_MET = "criterion-met-at-head"
 RELEASE_OWNER_NOT_LIVE = "owner-not-live"
 _LEGACY_RELEASE_PHANTOM = "phantom-no-own-hunk-owner-gone"
 RELEASE_WITHHELD_CLEAN = "withheld-clean-at-head"
+RELEASE_STALE_NOT_LIVE = "stale-not-live"
 _RECORDED_RELEASES = frozenset({RELEASE_CRITERION_MET, RELEASE_OWNER_NOT_LIVE, _LEGACY_RELEASE_PHANTOM})
 #: Releases that hold for every committer, so the run can leave the withheld index. The successor and
 #: plan-landing releases are absent: they free the run for one committer only.
 _RUN_INDEPENDENT_RELEASES = _RECORDED_RELEASES | frozenset({
     RELEASE_RECORDED_LANDED, RELEASE_MARKER_SUPERSEDED, RELEASE_SUPERSEDED, RELEASE_SIZING_SHIPPED,
-    RELEASE_KEPT_AT_HEAD, RELEASE_WITHHELD_CLEAN,
+    RELEASE_KEPT_AT_HEAD, RELEASE_WITHHELD_CLEAN, RELEASE_STALE_NOT_LIVE,
 })
+
+#: A halted run that is neither live nor being refired cannot hold a path longer than this. Trap: halt age
+#: is `halted.json` mtime (the run-id stamp is mint time); any rewrite of the marker (a `released` stamp, a
+#: revise) resets the mtime and restarts the bound, which errs toward holding.
+STALE_HOLD_BOUND_SECONDS = 2 * 3600
 
 #: Marker field `{path: {reason, at}}`: the halted run no longer holds those paths. Written only by
 #: `declared_hold_release._release_path`; read by `released_path_reasons` and its consumers.
@@ -340,6 +346,49 @@ def _record(root: Path, run_id: str) -> Path:
     return state["memo"][key]
 
 
+def _held_run_records(root: Path) -> list:
+    """`run_token.held_records(root)`, read once per release scope (each call lists two directories)."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    state = _SCOPE.get()
+    if state is None:
+        return run_token.held_records(root)
+    memo = state.setdefault("held_run_records", {})
+    key = str(root)
+    if key not in memo:
+        memo[key] = run_token.held_records(root)
+    return memo[key]
+
+
+def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optional[str]:
+    """`RELEASE_STALE_NOT_LIVE` when `run_id` is a halted/resumed run with no held run-token record of its
+    own (not live, not mid-commit), none for a run of the same sizing (a refire pending), and a
+    `halted.json` older than `STALE_HOLD_BOUND_SECONDS`; else None. A `refire` next_action alone is not a
+    pending refire. One `os.stat` plus the scope-shared token listing, no spawn; never raises (the hold stands)."""
+    try:
+        from coordinator_core.ops import warp_run_deliverable as wrd
+        from coordinator_core.ops.dispatch_emit import halted_run
+
+        root = Path(root)
+        record = _record(root, run_id)
+        marker = halted_run._read(record)
+        if not marker or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+            return None
+        age = (time.time() if now is None else now) - os.stat(record / halted_run.HALTED_FILE).st_mtime
+        if age <= STALE_HOLD_BOUND_SECONDS:
+            return None
+        sizing = _halted_sizing(root, run_id, marker)
+        for held in _held_run_records(root):
+            if held.get("run_id") == run_id:
+                return None
+            other = held.get("sizing_rel")
+            if sizing and isinstance(other, str) and wrd._norm(other) == sizing:
+                return None
+        return RELEASE_STALE_NOT_LIVE
+    except Exception:  # noqa: BLE001 -- unknown: the hold stands
+        return None
+
+
 def release_reason(
     root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str] = None,
 ) -> Optional[str]:
@@ -375,6 +424,8 @@ def _release_reason(
             return RELEASE_MARKER_SUPERSEDED
         if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
+        if stale_release(root, halted_run_id) is not None:
+            return RELEASE_STALE_NOT_LIVE
         released = marker.get(halted_run.HALT_RELEASED_FIELD)
         if status == halted_run.STATUS_HALTED and isinstance(released, dict):
             reason = released.get("reason")

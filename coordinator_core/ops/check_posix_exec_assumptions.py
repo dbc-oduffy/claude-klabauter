@@ -1238,6 +1238,14 @@ REPO_CONTENT_ROOT = "content_root"
 REPO_EXAMPLE_GAME_WORKBENCH_REPO = "example_game_workbench_repo"
 
 
+_REASON_PRE_COMMIT_HOOK_COPY = (
+    "Admission test: byte-copied POSIX exec target. repo-setup copies this file verbatim to "
+    ".git/hooks/pre-commit and checks line 1 is `#!/usr/bin/env python3` "
+    "(DoE coordinator/skills/repo-setup/residue/mechanics.md). git execs the "
+    "hook by its shebang, so stripping it breaks the hook on every platform."
+)
+
+
 _REASON_BYTE_COPIED_POSIX_TARGET = (
     "Admission test: byte-copied POSIX exec target. coordinator/bin/claude-author.py "
     "is installed by byte copy as an extensionless exec target "
@@ -1246,37 +1254,6 @@ _REASON_BYTE_COPIED_POSIX_TARGET = (
     "coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py. "
     "Dropping the shebang breaks the POSIX leg. Two-leg pair: the Windows leg is "
     "coordinator/bin/claude-author.cmd (and claude-author.ps1)."
-)
-
-_REASON_LAUNCHABILITY_PLATFORM_PARAM_GUARD = (
-    "Admission test: posix_mode_bits two-way discriminator "
-    "(docs/reference/posix-portability-fix-vs-carveout.md), 'Known residual' "
-    "shape. coordinator_core/ceremony_config/launchability.py check() returns "
-    "before `os.access(resolved, os.X_OK)` under `if platform == \"win32\":`, "
-    "where `platform` is an injectable keyword parameter defaulting to "
-    "`sys.platform` so tests drive both legs. `_is_windows_guarded()` "
-    "recognizes only os.name/sys.platform/platform.system() tests, so the "
-    "guard is invisible to it. The X_OK check never runs on Windows."
-)
-
-_REASON_PERCOLATE_DIFF_COMMIT_SKIPIF = (
-    "Admission test: posix_mode_bits two-way discriminator "
-    "(docs/reference/posix-portability-fix-vs-carveout.md), shape (c) "
-    "skipif-decorator gap. The exec-bit asserts in "
-    "coordinator/lib/percolate/tests/test_diff_commit.py sit in tests "
-    "decorated `@posix_only` (`pytest.mark.skipif(os.name == \"nt\", ...)`), "
-    "which `_is_windows_guarded()` cannot see. Those tests are skipped "
-    "outright on Windows, so the flagged construct never executes there."
-)
-
-_REASON_PUBLISH_ROUND_MODES_SKIPIF = (
-    "Admission test: posix_mode_bits two-way discriminator "
-    "(docs/reference/posix-portability-fix-vs-carveout.md), shape (c) "
-    "skipif-decorator gap. The exec-bit asserts in "
-    "coordinator/bin/tests/test_publish_round_lands_source_modes.py sit in "
-    "tests decorated `@_POSIX_ONLY` (`pytest.mark.skipif(os.name == \"nt\", "
-    "...)`), which `_is_windows_guarded()` cannot see, or behind inline "
-    "`if os.name != \"nt\":` chmod guards. They never execute on Windows."
 )
 
 _REASON_SETUP_DIRECT_EXEC = (
@@ -1290,6 +1267,9 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     "env_shebang": {
         REPO_EXAMPLE_GAME_WORKBENCH_REPO: {
             "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
+        },
+        REPO_CONTENT_ROOT: {
+            "coordinator/bin/pre_commit_corpus_artifact_guard.py": _REASON_PRE_COMMIT_HOOK_COPY,
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
@@ -1313,9 +1293,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_CLAUDE_KLABAUTER: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
-            "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
             "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
-            "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
             **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
@@ -1418,9 +1396,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
             "coordinator/bin/tests/test_settings_home_first_read_rungs.py": _REASON_PMB_FIXTURE_CHMOD,
             "coordinator/bin/tests/test_workday_complete_step1_validate.py": _REASON_PMB_FIXTURE_CHMOD,
             "coordinator_core/hooks/support/tests/test_support_state.py": _REASON_PMB_FIXTURE_CHMOD,
-            "coordinator_core/ceremony_config/launchability.py": _REASON_LAUNCHABILITY_PLATFORM_PARAM_GUARD,
-            "coordinator/lib/percolate/tests/test_diff_commit.py": _REASON_PERCOLATE_DIFF_COMMIT_SKIPIF,
-            "coordinator/bin/tests/test_publish_round_lands_source_modes.py": _REASON_PUBLISH_ROUND_MODES_SKIPIF,
         },
     },
     "unresolved_cross_path": {},

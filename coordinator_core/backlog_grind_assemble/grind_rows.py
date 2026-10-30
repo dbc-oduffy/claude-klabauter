@@ -962,9 +962,10 @@ def _first_user_text(path: Path) -> Optional[str]:
     return None
 
 
-def _record_token_from_transcript(open_marker: str, length: str, sha256: str) -> tuple[Optional[str], str]:
+def _record_token_from_transcript(open_marker: str) -> tuple[Optional[str], str]:
     """``(urlenc token, "")`` read from this session's newest agent transcript carrying ``open_marker``
-    whose segment passes the ``check_relay`` gate; else ``(None, refusal)``. Reads first user lines only."""
+    whose segment (``<len> <sha256>\\n<token>``) passes the ``check_relay`` gate against the digest the
+    segment itself carries; else ``(None, refusal)``. Reads first user lines only."""
     from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 
     close_marker = contract.record_close_marker(open_marker)
@@ -992,17 +993,26 @@ def _record_token_from_transcript(open_marker: str, length: str, sha256: str) ->
             f"{contract.RELAY_CORRUPT_HEAD}: --{contract.RECORD_FROM_TRANSCRIPT_FLAG} found no segment "
             f"between {open_marker!r} and {close_marker!r} in {transcript.name}"
         )
-        start = text.find(open_marker)
-        while start != -1:
-            seg_from = start + len(open_marker)
-            end = text.find(close_marker, seg_from)
-            if end != -1:
-                candidate = text[seg_from:end].strip("\r\n")
-                bad = contract.check_relay(contract.RECORD_FROM_TRANSCRIPT_FLAG, candidate, length, sha256)
-                if bad is None:
-                    return candidate, ""
-                refusal = bad
-            start = text.find(open_marker, start + 1)
+        # Trap: the harness indents every line of a computed prompt, so the markers and the segment
+        # lines arrive with leading spaces; match whole stripped lines, never raw offsets.
+        lines = [ln.strip() for ln in text.replace("\r\n", "\n").split("\n")]
+        for i, line in enumerate(lines):
+            if line != open_marker:
+                continue
+            try:
+                end = lines.index(close_marker, i + 1)
+            except ValueError:
+                continue
+            parts = contract.split_record_segment("\n".join(ln for ln in lines[i + 1:end] if ln))
+            if parts is None:
+                continue
+            token, length, sha256 = parts
+            bad = contract.check_relay(
+                contract.RECORD_FROM_TRANSCRIPT_FLAG, token, length, sha256, contract.RECORD_SEGMENT_CAUSE
+            )
+            if bad is None:
+                return token, ""
+            refusal = bad
         return None, refusal
     return None, (
         f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}: no agent transcript of session {session} carries {open_marker!r}"
@@ -1038,7 +1048,8 @@ def cmd_run_record(rest: list[str]) -> int:
 
     `--record-from-transcript <open marker>` reads the urlenc record from the calling session's
     newest agent transcript whose first user line carries the marker (segment up to the paired
-    close marker), gated by `--record-len`/`--record-sha256`; no match is a refusal, never a retype.
+    close marker, shaped `<len> <sha256>\\n<token>`), gated by the digest the segment carries, so
+    the agent types no length or digest; no match is a refusal, never a retype.
 
     `--record-urlenc` and `--declared-urlenc` arrive through an agent's piece-by-piece
     copy, so each must carry its `--*-len`/`--*-sha256` pair; a token that does not match
@@ -1069,7 +1080,7 @@ def cmd_run_record(rest: list[str]) -> int:
         return _usage(
             "usage: grind-row run-record --profile P --run-id T "
             "[--record-file F|- | --record-urlenc E --record-len N --record-sha256 H | "
-            "--record-from-transcript M --record-len N --record-sha256 H] [--queue Q ...] "
+            "--record-from-transcript M] [--queue Q ...] "
             "[--declared-urlenc E --declared-len N --declared-sha256 H] [--decisions-file F] "
             "[--sweep --profile-dir D] --repo-root D"
         )
@@ -1084,15 +1095,13 @@ def cmd_run_record(rest: list[str]) -> int:
             f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}"
         )
     if from_transcript:
-        absent = [f"--{f}" for f in (contract.RECORD_LEN_FLAG, contract.RECORD_SHA256_FLAG) if f not in flags]
-        if absent:
+        typed = [f"--{f}" for f in (contract.RECORD_LEN_FLAG, contract.RECORD_SHA256_FLAG) if f in flags]
+        if typed:
             return _usage(
-                f"grind-row run-record: --{contract.RECORD_FROM_TRANSCRIPT_FLAG} needs {' and '.join(absent)}"
+                f"grind-row run-record: --{contract.RECORD_FROM_TRANSCRIPT_FLAG} reads its digest from the "
+                f"transcript; drop {' and '.join(typed)}"
             )
-        token, refusal = _record_token_from_transcript(
-            flags[contract.RECORD_FROM_TRANSCRIPT_FLAG], flags[contract.RECORD_LEN_FLAG],
-            flags[contract.RECORD_SHA256_FLAG],
-        )
+        token, refusal = _record_token_from_transcript(flags[contract.RECORD_FROM_TRANSCRIPT_FLAG])
         if token is None:
             print(refusal, file=sys.stderr)
             return EXIT_RELAY_CORRUPT if refusal.startswith(contract.RELAY_CORRUPT_HEAD) else EXIT_USAGE

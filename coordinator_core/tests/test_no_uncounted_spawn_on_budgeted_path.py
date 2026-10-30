@@ -1588,6 +1588,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/guard_editor_python_direct.py",
         ("_handler",),
     ),
+    "hooks.guard_ue_specialist_advisory": (
+        "coordinator_core/hooks/guard_ue_specialist_advisory.py",
+        ("_handler",),
+    ),
     "hooks.block_workflow_unmodeled_agent": (
         "coordinator_core/hooks/block_workflow_unmodeled_agent.py",
         ("_handler",),

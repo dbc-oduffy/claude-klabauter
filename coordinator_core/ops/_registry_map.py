@@ -131,6 +131,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.preuse_bash_dispatch":             "coordinator_core.hooks",
     "hooks.block_workflow_foreign_emission":  "coordinator_core.hooks",
     "hooks.guard_agent_route_admission":      "coordinator_core.hooks",
+    "hooks.guard_ue_specialist_advisory":     "coordinator_core.hooks",
     "hooks.guard_brief_prescribed_method":    "coordinator_core.hooks",
     "hooks.guard_editor_python_direct":       "coordinator_core.hooks",
     "hooks.block_workflow_unmodeled_agent":   "coordinator_core.hooks",

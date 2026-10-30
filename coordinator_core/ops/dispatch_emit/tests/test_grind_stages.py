@@ -148,23 +148,23 @@ def _no_console() -> int:
 
 def _record_segment_from_prompt(prompt: str, argv: list) -> str:
     """The verb's transcript read, stood in for: every open-marker occurrence in the prompt yields a
-    candidate up to the next close marker, and the one passing the len/sha256 gate is the record."""
+    candidate up to the next close marker, and the one whose `<len> <sha256>` line matches its token is
+    the record."""
     from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
 
     open_m = argv[argv.index("--record-from-transcript") + 1]
     close_m = open_m.replace("OPEN", "CLOSE", 1)
-    n, h = argv[argv.index("--record-len") + 1], argv[argv.index("--record-sha256") + 1]
     start = 0
     while (i := prompt.find(open_m, start)) != -1:
         s = i + len(open_m)
         j = prompt.find(close_m, s)
         if j == -1:
             break
-        cand = prompt[s:j].strip("\n")
-        if gcc.check_relay("record-urlenc", cand, n, h) is None:
-            return cand
+        parts = gcc.split_record_segment(prompt[s:j].lstrip("\n").rstrip("\n"))
+        if parts is not None and gcc.check_relay("record-urlenc", *parts) is None:
+            return parts[0]
         start = i + 1
-    raise AssertionError("no open-marker candidate passes the len/sha256 gate")
+    raise AssertionError("no open-marker candidate passes the digest gate")
 
 
 def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str, repo_root: str,
@@ -236,7 +236,8 @@ def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str
         return argv
     i = argv.index("--record-from-transcript")
     seg = _record_segment_from_prompt(out.stdout, argv)
-    return argv[:i] + ["--record-urlenc", seg] + argv[i + 2:]
+    n, h = relay_digest(seg)
+    return argv[:i] + ["--record-urlenc", seg, "--record-len", str(n), "--record-sha256", h] + argv[i + 2:]
 
 
 @pytest.mark.spawns_process
@@ -981,9 +982,6 @@ def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path
     dec_tok = argv[argv.index("--declared-urlenc") + 1]
     assert unquote(rec_tok) == record
     assert json.loads(unquote(dec_tok)) == {"paths": declared}
-    n, h = relay_digest(rec_tok)
-    assert argv[argv.index("--record-len") + 1] == str(n)
-    assert argv[argv.index("--record-sha256") + 1] == h
     n, h = relay_digest(dec_tok)
     assert argv[argv.index("--declared-len") + 1] == str(n)
     assert argv[argv.index("--declared-sha256") + 1] == h
@@ -994,7 +992,7 @@ def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path
 
 @pytest.mark.spawns_process
 def test_a_lossy_to_retype_record_is_never_typed_and_lands_byte_identical(tmp_path):
-    """The agent types a marker and two numbers; the record bytes ride the prompt once and the
+    """The agent types only a marker; the record bytes and their digest ride the prompt once and the
     segment the verb reads equals the script's serialisation."""
     from urllib.parse import unquote
 
@@ -1012,6 +1010,7 @@ def test_a_lossy_to_retype_record_is_never_typed_and_lands_byte_identical(tmp_pa
     )
     argv, prompt = raw
     assert "--record-urlenc" not in argv and "--record-file" not in argv
+    assert "--record-len" not in argv and "--record-sha256" not in argv
     assert all(len(a) < 200 for a in argv), "no record bytes in the typed command"
     marker = argv[argv.index("--record-from-transcript") + 1]
     assert marker == f"{gcc.RECORD_OPEN_PREFIX}20261017T161125Z"
@@ -1021,10 +1020,39 @@ def test_a_lossy_to_retype_record_is_never_typed_and_lands_byte_identical(tmp_pa
     assert ".rec " not in prompt
 
 
-def test_ledger_sweep_call_carries_both_digest_flags():
+@pytest.mark.spawns_process
+def test_the_verbs_transcript_read_recovers_the_record_from_a_harness_indented_emitted_prompt(tmp_path, monkeypatch):
+    """The harness indents every prompt line by two spaces; the real verb read, not a stand-in, must still
+    return the script's token (run 20261030T172043Z died on 2 spaces + token + newline + 2 spaces)."""
+    from urllib.parse import unquote
+
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    record = json.dumps({"reason": "café $HOME `y` 100%\nline2 " * 200, "spend": [1, 2]})
+    raw: list = []
+    _emitted_run_record_argv(
+        tmp_path, record=record, declared=["a.py"], decisions="", repo_root=str(tmp_path),
+        profile_dir=str(tmp_path / "profiles"), raw=raw,
+    )
+    argv, prompt = raw
+    marker = argv[argv.index("--record-from-transcript") + 1]
+    indented = "\n".join("  " + ln for ln in prompt.split("\n"))
+    home = tmp_path / "claude-home"
+    transcript = home / "projects" / "p" / "sess-indent" / "subagents" / "workflows" / "w" / "agent-1.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": indented}}) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-indent")
+
+    token, refusal = grind_rows._record_token_from_transcript(marker)
+    assert refusal == "" and unquote(token) == record
+
+
+def test_ledger_sweep_call_types_no_record_digest_but_keeps_the_declared_one():
     call_text = _sweep_call()
-    assert "--record-sha256" in call_text and "--declared-sha256" in call_text
-    assert "--record-len" in call_text and "--declared-len" in call_text
+    assert "--record-sha256" not in call_text and "--record-len" not in call_text
+    assert "_recEnc.length + ' ' + _sha256Ascii(_recEnc)" in call_text
+    assert "--declared-sha256" in call_text and "--declared-len" in call_text
     assert "relayed payload is corrupt" in call_text
 
 

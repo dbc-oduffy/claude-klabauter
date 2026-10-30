@@ -143,3 +143,61 @@ def test_the_loud_pass_names_the_payloads_own_event(door, tmp_path, runtime_base
     if has_hso:
         assert body["hookSpecificOutput"]["hookEventName"] == event
 
+
+_COLD_ALLOWS = (
+    "import json, sys\n"
+    "sys.stdin.read()\n"
+    "print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow'}}))\n"
+)
+
+
+def _run_search(door: Path, root: Path, runtime_base: Path, repo: Path, entrypoint: str) -> subprocess.CompletedProcess:
+    (root / "coordinator" / "bin" / "coordinator-invoke.py").write_text(_COLD_ALLOWS, encoding="utf-8")
+    payload = {
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "cwd": str(repo),
+        "tool_input": {"command": "grep -rIl metahuman_reference . --exclude-dir=.git", "description": "d"},
+    }
+    env = dict(os.environ)
+    env.update(
+        COORDINATOR_DOOR_ENGINE_ROOT=str(root),
+        COORDINATOR_WARM_RUNTIME_BASE=str(runtime_base),
+        COORDINATOR_DOOR_STDIN_MODE="hook",
+    )
+    return subprocess.run(
+        [str(door), entrypoint],
+        input=json.dumps(payload).encode(), capture_output=True, env=env, cwd=str(repo), timeout=60,
+        **no_console_creationflags(),
+    )
+
+
+def test_an_unreachable_engine_still_yields_the_repo_root_search_rewrite(door, tmp_path, runtime_base):
+    root = _make_stub_engine_root(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    proc = _run_search(door, root, runtime_base, repo, "hooks.preuse_bash_dispatch")
+
+    assert proc.returncode == 0
+    hso = _decision(proc)
+    assert "permissionDecision" not in hso
+    assert hso["updatedInput"] == {
+        "command": "git grep -Il metahuman_reference -- ':(exclude,glob)**/.git/**'",
+        "description": "d",
+    }
+    assert "project-rag" in hso["additionalContext"]
+
+
+def test_the_rewrite_is_not_taken_for_another_entrypoint_or_outside_a_repo_root(door, tmp_path, runtime_base):
+    root = _make_stub_engine_root(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    other = _run_search(door, root, runtime_base, repo, "hooks.some_other_hook")
+    assert _decision(other)["permissionDecision"] == "allow"
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    outside = _run_search(door, root, runtime_base, plain, "hooks.preuse_bash_dispatch")
+    assert _decision(outside)["permissionDecision"] == "allow"
+

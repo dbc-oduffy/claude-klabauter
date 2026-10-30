@@ -398,11 +398,97 @@ class TestSessionCapLeg:
             ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(n)
         ]
 
-    def test_at_the_heavy_cap_denies_naming_the_pids(self, host):
+    def _advice(self, out) -> str:
+        hso = out["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow" and "permissionDecisionReason" not in hso
+        return hso["additionalContext"]
+
+    def test_at_the_heavy_cap_admits_with_an_advisory_naming_the_pids(self, host):
         host.rows = self._heavy_rows(2)
+        text = self._advice(_enveloped(guard.check)(_payload("pnpm build")))
+        assert "holds 2 live heavy commands" in text and "300" in text and "301" in text
+
+    def test_a_dead_pid_and_a_foreign_orphan_do_not_fill_the_cap(self, host, monkeypatch):
+        from coordinator_core.bash_guards import _session_census as census_mod
+
+        orphan = [ProcRow(900, 9999, 31, "bash.exe"), ProcRow(901, 900, 32, "node.exe")]
+        host.rows = self._heavy_rows(1) + orphan
+        host.exited = {300}
+        host.config[KEY_SESSION_HEAVY_CAP] = "1"
+        monkeypatch.setattr(
+            census_mod, "command_line", lambda pid: "node other-repo/dist/headless/cli.js texture-sources"
+        )
+        leases.write_lease(
+            LeaseRecord(CLAUDE.pid, CLAUDE.ctime, CLAUDE.pid, CLAUDE.ctime, "test_tier", time.time(), CALLER.ctime)
+        )
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        assert 900 not in {r.holder_pid for r in leases.live_leases()}
+
+    def test_an_orphan_whose_command_names_the_class_is_still_claimed(self, host, monkeypatch):
+        from coordinator_core.bash_guards import _session_census as census_mod
+
+        orphan = [ProcRow(900, 9999, 31, "bash.exe"), ProcRow(901, 900, 32, "node.exe")]
+        host.rows = [CLAUDE, TOOL, CALLER] + orphan
+        monkeypatch.setattr(census_mod, "command_line", lambda pid: "node vitest run tests/x.test.ts")
+        leases.write_lease(
+            LeaseRecord(CLAUDE.pid, CLAUDE.ctime, CLAUDE.pid, CLAUDE.ctime, "test_tier", time.time(), CALLER.ctime)
+        )
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        assert 900 in {r.holder_pid for r in leases.live_leases()}
+
+    def _orphan_claimed(self, host, monkeypatch, heavy_class, line):
+        from coordinator_core.bash_guards import _session_census as census_mod
+
+        orphan = [ProcRow(900, 9999, 31, "bash.exe"), ProcRow(901, 900, 32, "node.exe")]
+        host.rows = [CLAUDE, TOOL, CALLER] + orphan
+        monkeypatch.setattr(census_mod, "command_line", lambda pid: line)
+        leases.write_lease(
+            LeaseRecord(CLAUDE.pid, CLAUDE.ctime, CLAUDE.pid, CLAUDE.ctime, heavy_class, time.time(), CALLER.ctime)
+        )
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        return 900 in {r.holder_pid for r in leases.live_leases()}
+
+    def test_an_unreadable_command_line_is_not_claimed(self, host, monkeypatch):
+        assert not self._orphan_claimed(host, monkeypatch, "test_tier", None)
+
+    def test_a_class_without_tokens_still_claims_any_tree(self, host, monkeypatch):
+        from types import SimpleNamespace
+
+        from coordinator_core.bash_guards import _session_census as census_mod
+
+        monkeypatch.setattr(census_mod, "command_line", lambda pid: "node other/cli.js")
+        tree = SimpleNamespace(heavy=[ProcRow(901, 900, 32, "node.exe")])
+        assert "ue" not in guard._CLASS_TOKENS
+        assert guard._tree_fits_lease(tree, SimpleNamespace(heavy_class="ue"))
+        assert not guard._tree_fits_lease(tree, SimpleNamespace(heavy_class="test_tier"))
+
+    @pytest.mark.parametrize(
+        "cls, line",
+        [
+            ("build", "node ./work/build/cli.js texture-sources"),
+            ("test_tier", "node /home/u/latest/server.js --mode make"),
+            ("test_tier", "python worker.py test"),
+        ],
+    )
+    def test_a_class_word_in_a_path_or_later_arg_is_not_claimed(self, host, monkeypatch, cls, line):
+        assert not self._orphan_claimed(host, monkeypatch, cls, line)
+
+    def test_a_class_word_as_the_executable_or_second_word_is_claimed(self, host, monkeypatch):
+        assert self._orphan_claimed(host, monkeypatch, "build", "./x/pnpm.cjs run build")
+
+    def test_a_pid_reached_twice_is_counted_once(self):
+        from coordinator_core.bash_guards import _session_census as census_mod
+
+        a = ProcRow(44448, 1, 30, "node.exe")
+        twin = ProcRow(44448, 1, 30, "node.exe")
+        prims = _Prims([a], alive_set={(44448, 30)})
+        assert census_mod.live_heavy_commands([a, twin], prims) == [a]
+
+    def test_a_heavy_launch_over_the_cap_is_never_denied_and_writes_its_lease(self, host, tmp_path):
+        host.rows = self._heavy_rows(4)
         out = _enveloped(guard.check)(_payload("pnpm build"))
-        text = _reason(out)
-        assert "session-cap" in text and "300" in text and "301" in text
+        assert "holds 4 live heavy commands" in self._advice(out)
+        assert len(_lease_files(tmp_path)) == 1
 
     def test_under_the_heavy_cap_admits(self, host):
         host.rows = self._heavy_rows(1)
@@ -424,33 +510,33 @@ class TestSessionCapLeg:
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30)
         assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
-    def test_two_separate_chains_at_cap_deny_naming_the_roots(self, host):
+    def test_two_separate_chains_at_cap_advise_naming_the_roots(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
-        text = _reason(_enveloped(guard.check)(_payload("pnpm build")))
-        assert "holds 2 heavy commands" in text and "300" in text and "310" in text
+        text = self._advice(_enveloped(guard.check)(_payload("pnpm build")))
+        assert "holds 2 live heavy commands" in text and "300" in text and "310" in text
         assert "301" not in text and "312" not in text
 
-    def test_three_chains_over_cap_deny(self, host):
+    def test_three_chains_over_cap_advise(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40) + self._chain(320, 50)
-        assert "holds 3 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
+        assert "holds 3 live heavy commands" in self._advice(_enveloped(guard.check)(_payload("pnpm build")))
 
     def test_a_heavy_launcher_above_claude_still_counts_the_sessions_commands(self, host):
         launcher = ProcRow(pid=50, ppid=1, ctime=5, name="npx.exe")
         claude = ProcRow(pid=100, ppid=50, ctime=10, name="claude.exe")
         host.rows = [launcher, claude, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
-        assert "holds 2 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
+        assert "holds 2 live heavy commands" in self._advice(_enveloped(guard.check)(_payload("pnpm build")))
 
     def test_a_heavy_command_that_exited_after_the_snapshot_is_not_counted(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40)
         host.exited = {300, 301}
         assert _enveloped(guard.check)(_payload("pnpm build")) is None
 
-    def test_dead_roots_are_not_named_in_the_cap_deny(self, host):
+    def test_dead_roots_are_not_named_in_the_cap_advisory(self, host):
         host.config = dict(CONFIG, **{KEY_SESSION_HEAVY_CAP: "2"})
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + self._chain(310, 40) + self._chain(320, 50)
         host.exited = {300, 301}
-        text = _reason(_enveloped(guard.check)(_payload("pnpm build")))
-        assert "holds 2 heavy commands" in text and "300" not in text
+        text = self._advice(_enveloped(guard.check)(_payload("pnpm build")))
+        assert "holds 2 live heavy commands" in text and "300" not in text
 
     def test_a_light_poller_script_is_not_counted(self, host, monkeypatch):
         from coordinator_core.bash_guards import _session_census as census_mod
@@ -466,7 +552,7 @@ class TestSessionCapLeg:
         other = [ProcRow(700, 150, 60, "python.exe"), ProcRow(701, 150, 61, "python.exe")]
         host.rows = [CLAUDE, TOOL, CALLER] + self._chain(300, 30) + other
         monkeypatch.setattr(census_mod, "command_line", lambda pid: "python -m pytest tests/x.py")
-        assert "holds 3 heavy commands" in _reason(_enveloped(guard.check)(_payload("pnpm build")))
+        assert "holds 3 live heavy commands" in self._advice(_enveloped(guard.check)(_payload("pnpm build")))
 
     def test_background_shells_over_cap_warn_naming_the_pids(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
@@ -501,12 +587,12 @@ class TestSessionCapLeg:
         host.rows = self._shell_rows(7)
         assert _enveloped(guard.check)(_payload("pnpm build", background=True)) is None
 
-    def test_heavy_background_launch_at_the_heavy_cap_still_denies_with_shells_open(self, host):
+    def test_heavy_background_launch_at_the_heavy_cap_advises_on_heavy_not_shells(self, host):
         host.rows = self._heavy_rows(2) + [
             ProcRow(pid=400 + i, ppid=CLAUDE.pid, ctime=40 + i, name="bash.exe") for i in range(7)
         ]
-        text = _reason(_enveloped(guard.check)(_payload("pnpm build", background=True)))
-        assert "holds 2 heavy commands" in text
+        text = self._advice(_enveloped(guard.check)(_payload("pnpm build", background=True)))
+        assert "holds 2 live heavy commands" in text and "background shells" not in text
 
     def test_foreground_light_command_ignores_shell_count(self, host):
         host.rows = [CLAUDE, TOOL, CALLER] + [
@@ -528,11 +614,6 @@ class TestSessionCapLeg:
         del host.config[KEY_SESSION_HEAVY_CAP]
         out = _enveloped(guard.check)(_payload("pnpm build"))
         assert "unconfigured" in _reason(out)
-
-    def test_a_cap_denied_call_writes_no_lease(self, host, tmp_path):
-        host.rows = self._heavy_rows(2)
-        _enveloped(guard.check)(_payload("pnpm build"))
-        assert _lease_files(tmp_path) == []
 
     def test_admitted_call_narrows_an_earlier_unattributed_lease(self, host, tmp_path):
         assert _enveloped(guard.check)(_payload("pnpm build")) is None
@@ -669,10 +750,9 @@ class TestDenyTextRegister:
         saved = host.config.pop(KEY_FREE_RAM_FLOOR_MB)
         out.append(_enveloped(guard.check)(_payload("pnpm build")))
         host.config[KEY_FREE_RAM_FLOOR_MB] = saved
-        host.rows = [CLAUDE, TOOL, CALLER] + [
-            ProcRow(pid=300 + i, ppid=TOOL.pid, ctime=30 + i, name="node.exe") for i in range(3)
-        ]
+        saved_cap = host.config.pop(KEY_SESSION_HEAVY_CAP)
         out.append(_enveloped(guard.check)(_payload("pnpm build")))
+        host.config[KEY_SESSION_HEAVY_CAP] = saved_cap
         host.rows = None
         out.append(_enveloped(guard.check)(_payload("pnpm build")))
         return [_reason(o) for o in out]
@@ -685,6 +765,13 @@ class TestDenyTextRegister:
         assert len(reasons) == 6 and all(reasons)
         findings = [f for text in reasons for f in lint_message(text, site=GUARD_NAME)]
         assert findings == []
+
+    def test_the_cap_advisory_passes_the_message_register_lint(self, host):
+        lint_message = pytest.importorskip("coordinator_core.message_register.register").lint_message
+
+        host.rows = TestSessionCapLeg()._heavy_rows(2)
+        text = _enveloped(guard.check)(_payload("pnpm build"))["hookSpecificOutput"]["additionalContext"]
+        assert [f for f in lint_message(text, site=GUARD_NAME)] == []
 
     def test_no_deny_carries_an_override_key(self, host):
         for text in self._reasons(host):
@@ -749,11 +836,11 @@ class TestWouldDenyLog:
         assert _enveloped(guard.check)(_payload("pnpm build")) is None
         assert _log_lines(tmp_path) == []
 
-    def test_a_cap_deny_logs_the_census_names(self, host, tmp_path):
+    def test_a_cap_advisory_logs_the_census_names(self, host, tmp_path):
         host.rows = TestSessionCapLeg()._heavy_rows(2)
         _enveloped(guard.check)(_payload("pnpm build"))
         (line,) = _log_lines(tmp_path)
-        assert line["kind"] == "session-cap" and line["census_heavy"] == ["node.exe", "node.exe"]
+        assert line["kind"] == "session-cap-warn" and line["census_heavy"] == ["node.exe", "node.exe"]
 
     def test_a_missing_payload_pid_is_recorded_as_the_guard_process(self, host, tmp_path):
         payload = _payload("pnpm build")
@@ -1069,7 +1156,10 @@ class TestOrphanAttribution:
         return [ProcRow(root_pid, 9999, ctime, "bash.exe"), ProcRow(root_pid + 1, root_pid, ctime + 1, "node.exe")]
 
     def _live(self, monkeypatch, host):
+        from coordinator_core.bash_guards import _session_census as census_mod
+
         monkeypatch.setattr(guard, "_primitives", lambda: _Prims(host.rows, alive_set={(r.pid, r.ctime) for r in host.rows}))
+        monkeypatch.setattr(census_mod, "command_line", lambda pid: "pnpm tsc")
 
     def _open(self, cls, launch):
         leases.write_lease(LeaseRecord(CLAUDE.pid, CLAUDE.ctime, CLAUDE.pid, CLAUDE.ctime, cls, time.time(), launch))
@@ -1085,8 +1175,8 @@ class TestOrphanAttribution:
         self._open("build", 20)
         self._open("build", 21)
         out = _enveloped(guard.check)(_payload("pnpm build"))
-        assert out is not None and "session holds 2 heavy commands" in _reason(out)
-        assert {r.holder_pid for r in leases.live_leases()} == {500, 600}
+        assert out is not None and "holds 2 live heavy commands" in out["hookSpecificOutput"]["additionalContext"]
+        assert {r.holder_pid for r in leases.live_leases()} == {500, 600, CLAUDE.pid}
 
     def test_a_claimed_orphan_chain_counts_once_beside_a_live_command(self, host, monkeypatch):
         chain = [ProcRow(500, 9999, 22, "bash.exe"), ProcRow(501, 500, 23, "pnpm.exe"), ProcRow(502, 501, 24, "node.exe")]

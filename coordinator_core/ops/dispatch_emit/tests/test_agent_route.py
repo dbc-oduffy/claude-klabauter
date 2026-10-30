@@ -83,6 +83,16 @@ def test_absent_table_is_identity(env):
     assert ar.load_route_table(env) is None
 
 
+def test_non_ue_repo_without_table_is_identity_with_plugin_roots_set(env, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ue_route_source
+
+    monkeypatch.setenv("COORDINATOR_PLUGIN_ROOTS", str(env.parent / "home" / ".claude" / "plugins" / "example-game-repo-control"))
+    ue_route_source.clear_caches()
+    rows = [_row(body="ExecutePythonScript")]
+    out, routes, notes = ar.route_rows(rows, env)
+    assert out is rows and routes == {} and notes == []
+
+
 @pytest.mark.parametrize(
     "mutate, field",
     [

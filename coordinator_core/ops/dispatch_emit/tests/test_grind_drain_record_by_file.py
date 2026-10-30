@@ -149,7 +149,10 @@ def test_a_record_lossy_to_retype_lands_byte_identical_with_no_drain_sweep_hand_
 
     prompt = (scratch / "prompt.txt").read_text(encoding="utf-8")
     open_marker, close_marker = contract.record_markers(_RUN_ID)
-    segment = re.search(rf"^{re.escape(open_marker)}\n(\S+)\n{re.escape(close_marker)}", prompt, flags=re.M).group(1)
+    # The open marker is followed by a `<len> <sha256>` digest line, then the record.
+    segment = re.search(
+        rf"^{re.escape(open_marker)}\n\d+ [0-9a-f]{{64}}\n(\S+)\n{re.escape(close_marker)}", prompt, flags=re.M
+    ).group(1)
     assert len(segment) > 10000
     scripted = json.loads(unquote(segment))
     unlanded = [h for h in scripted["handed_back"] if h.get("reason") == _LOSSY or _LOSSY in str(h.get("reason", ""))]

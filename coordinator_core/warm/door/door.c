@@ -840,6 +840,34 @@ static int emit_hook_pass_loudly(const char *reason) {
 }
 
 
+/* HOOK-MODE REPO-ROOT PRE-CHECK, entrypoint `hooks.preuse_bash_dispatch` only.
+ * `door_core.c :: door_repo_root_search_precheck_payload` answers the
+ * repo-root recursive-search rewrite from the payload alone, so a starved or
+ * absent engine cannot drop it. The result is held in `g_precheck_env` and
+ * emitted only when the engine's own answer does not arrive: a busy or absent
+ * pipe (`hook_fall_through`) or a post-delivery failure / deadline
+ * (`emit_post_delivery_failure`). A warm answer in time always wins.
+ * Declared here, not in door_core.h. */
+int door_repo_root_search_precheck_payload(const char *payload, size_t plen, buf_t *out);
+
+#define DOOR_PRECHECK_ENTRYPOINT_W L"hooks.preuse_bash_dispatch"
+static int g_precheck_armed = 0;
+static buf_t g_precheck_env;
+
+static void hook_precheck_prepare(void) {
+    g_precheck_env.len = 0;
+    if (!g_hook_payload || !buf_init(&g_precheck_env, 1024)) return;
+    if (door_repo_root_search_precheck_payload(g_hook_payload, g_hook_payload_len, &g_precheck_env) != 1) {
+        g_precheck_env.len = 0;
+    }
+}
+
+static int emit_precheck_if_matched(void) {
+    if (!g_precheck_armed || g_precheck_env.len == 0) return 0;
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), g_precheck_env.data, g_precheck_env.len);
+    return 1;
+}
+
 static int emit_hook_deny(const char *reason) {
     buf_t out;
     if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
@@ -1045,7 +1073,8 @@ static int write_all(HANDLE h, const char *data, size_t len);
  * stdout still denies, because a hook that did not answer must never read as
  * one that allowed. */
 static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
-    
+    if (emit_precheck_if_matched()) return 0;
+
     int advisory = door_argv_declares_advisory_w(argc, wargv);
 
     wchar_t script_path_w[MAX_PATH * 2];
@@ -1286,6 +1315,15 @@ static int fall_through_and_free(int argc, wchar_t **wargv, wchar_t *engine_root
  * never a fall-through. */
 #define DOOR_READ_DEADLINE_MS 40000
 
+/* Hook-mode read bound. The caller kills a hook at DoE `hooks.json`'s
+ * `"timeout": 15` (observed child budget 12s) and then runs the command
+ * unguarded, so a door still waiting on a starved engine at that point
+ * delivers nothing. This bound sits under both, leaving time to emit the
+ * pre-check's rewrite or the loud pass. DOOR_READ_DEADLINE_MS stays for
+ * every non-hook caller. */
+#define DOOR_HOOK_READ_DEADLINE_MS 8000
+#define DOOR_READ_DEADLINE_FOR_MODE_MS (g_door_hook_mode ? DOOR_HOOK_READ_DEADLINE_MS : DOOR_READ_DEADLINE_MS)
+
 
 static DWORD remaining_ms(ULONGLONG started_ticks, DWORD total_ms) {
     ULONGLONG elapsed = GetTickCount64() - started_ticks;
@@ -1411,6 +1449,18 @@ static int emit_indeterminate(const char *detail) {
     }
     free(out.data);
     return 1;
+}
+
+/* Every post-delivery failure of the warm read. For the pre-checked hook
+ * entrypoint the guard is idempotent, so the answer is the pre-check's
+ * rewrite when it matched, else a loud pass; any other caller keeps the
+ * indeterminate refusal (it may have mutated). */
+static int emit_post_delivery_failure(const char *detail) {
+    if (g_precheck_armed) {
+        if (emit_precheck_if_matched()) return 0;
+        return emit_hook_pass_loudly(detail);
+    }
+    return emit_indeterminate(detail);
 }
 
 /* =========================================================================
@@ -1624,6 +1674,11 @@ int main(void) {
     if (!wargv) {
         if (have_stdin_payload) free(stdin_payload.data);
         return fall_through(1, NULL, NULL);
+    }
+
+    if (g_door_hook_mode && argc >= 2 && wcscmp(wargv[1], DOOR_PRECHECK_ENTRYPOINT_W) == 0) {
+        g_precheck_armed = 1;
+        hook_precheck_prepare();
     }
 
     /* THE ONE RESOLUTION both legs read this image's own name from (C0) --
@@ -2101,11 +2156,11 @@ int main(void) {
     buf_t resp;
     if (!buf_init(&resp, 4096)) {
         CloseHandle(pipe_event); CloseHandle(pipe);
-        return emit_indeterminate("out of memory reading the response");
+        return emit_post_delivery_failure("out of memory reading the response");
     }
     ULONGLONG read_started = GetTickCount64();
     for (;;) {
-        DWORD budget = remaining_ms(read_started, DOOR_READ_DEADLINE_MS);
+        DWORD budget = remaining_ms(read_started, DOOR_READ_DEADLINE_FOR_MODE_MS);
         char chunk[4096];
         DWORD got = 0;
         int state = 0;
@@ -2122,28 +2177,28 @@ int main(void) {
 
         if (got > 0 && !buf_append(&resp, chunk, got)) {
             free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
-            return emit_indeterminate("out of memory reading the response");
+            return emit_post_delivery_failure("out of memory reading the response");
         }
         if (got > 0 && memchr(chunk, '\n', got) != NULL) break;
 
         if (state != 1 || got == 0) {
             free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
             if (state == 1 || state == -1) {
-                return emit_indeterminate(
+                return emit_post_delivery_failure(
                     "connection closed or read failed after delivery");
             }
-            
+
             char detail[160];
             snprintf(detail, sizeof(detail),
                      "no response within %us of delivery -- the door stopped "
                      "waiting, the engine did not stop working",
-                     (unsigned)(DOOR_READ_DEADLINE_MS / 1000u));
-            return emit_indeterminate(detail);
+                     (unsigned)(DOOR_READ_DEADLINE_FOR_MODE_MS / 1000u));
+            return emit_post_delivery_failure(detail);
         }
 
-        if (resp.len > (16u << 20)) { 
+        if (resp.len > (16u << 20)) {
             free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
-            return emit_indeterminate("response exceeded the sanity size ceiling");
+            return emit_post_delivery_failure("response exceeded the sanity size ceiling");
         }
     }
     CloseHandle(pipe_event);
@@ -2158,7 +2213,7 @@ int main(void) {
         int have_error = 0;
         long error_code = 0;
         int success = parse_response_envelope(resp.data, line_len, &rf, &have_error, &error_code);
-        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE) {
+        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE && !g_precheck_armed) {
             HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
             write_all(hout, resp.data, line_len);
             write_all(hout, "\n", 1);
@@ -2189,7 +2244,7 @@ int main(void) {
             goto do_fallback;
         }
         free(engine_root_w); 
-        return emit_indeterminate(
+        return emit_post_delivery_failure(
             have_error
                 ? "server returned an error that does not prove the op was never dispatched"
                 : "response was not a well-formed success or recognised error envelope"

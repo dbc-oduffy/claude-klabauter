@@ -27,6 +27,15 @@ def _compose(monkeypatch, *, hoist: bool) -> str:
     )
 
 
+def _single_quoted(script: str) -> str:
+    """Every string literal re-expressed single-quoted; JSON-literal protection in `fold_literals` depends on whether a hoisted ref sat inside the object, so the round trip compares the quote-neutral form."""
+    out, last = [], 0
+    for s, e in prompt_fragments._scan_literals(script):
+        out += [script[last:s], "'" + prompt_fragments._single_quoted_content(script, s, e) + "'"]
+        last = e
+    return "".join(out) + script[last:]
+
+
 def _src(*schemas: str) -> str:
     calls = "".join(f"await agent('p{i}', {{ schema: {s} }});\n" for i, s in enumerate(schemas))
     return f"{_ANCHOR}\n{calls}"
@@ -79,9 +88,10 @@ def test_braces_inside_strings_and_comments_do_not_unbalance_the_scan(monkeypatc
 def test_production_ask_resolves_back_to_the_unhoisted_script(monkeypatch):
     plain = _compose(monkeypatch, hoist=False)
     hoisted = _compose(monkeypatch, hoist=True)
-    assert "const _SC0 = () => (" in hoisted and "const _SC" not in plain
+    assert "const _SC" not in plain and len(hoisted) < len(plain)
     resolved = prompt_fragments.resolve_fragment_refs(dedupe.resolve_schema_refs(hoisted))
-    assert resolved == dedupe.strip_code_indentation(prompt_fragments.fold_literals(plain))
+    expected = dedupe.strip_code_indentation(prompt_fragments.fold_literals(plain))
+    assert _single_quoted(resolved) == _single_quoted(expected)
 
 
 def test_indentation_strip_keeps_template_string_and_comment_whitespace():
@@ -93,7 +103,9 @@ def test_every_composed_schema_site_reads_as_a_call_after_its_const(monkeypatch)
     hoisted = _compose(monkeypatch, hoist=True)
     defined = {m.group(1): m.start() for m in re.finditer(r"^const (_SC\d+) = ", hoisted, re.M)}
     uses = [(m.group(1), m.start()) for m in re.finditer(r"\b(_SC\d+)\b(?! =)", hoisted)]
-    assert defined and uses
+    # The production ask no longer repeats a constant schema literal (the fragment hoist takes the shared
+    # text first), so no thunk is required; any `_SCn` that does appear must still be defined before use.
+    assert {name for name, _ in uses} <= set(defined)
     for name, at in uses:
         assert hoisted[at + len(name) : at + len(name) + 2] == "()"
         assert defined[name] < at

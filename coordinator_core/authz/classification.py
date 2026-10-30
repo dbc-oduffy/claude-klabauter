@@ -432,6 +432,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.block_workflow_foreign_emission": OpClass.MUTATING,
     # Route-table guard bodies: pure payload evaluation, same envelope class as every hook op.
     "hooks.guard_agent_route_admission": OpClass.MUTATING,
+    "hooks.guard_ue_specialist_advisory": OpClass.MUTATING,
     "hooks.guard_brief_prescribed_method": OpClass.MUTATING,
     "hooks.guard_editor_python_direct": OpClass.MUTATING,
     "hooks.block_workflow_unmodeled_agent": OpClass.MUTATING,
@@ -2575,6 +2576,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
     # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
     "workflow.pending_revisions": OpClass.COMPUTE_ONLY,
+    # workflow.late_rows — COMPUTE_ONLY: two file reads (manifest.json, the ledger); replies the live
+    # ledger items the staged manifest holds no work for (ops/dispatch_emit/requirements_ledger.py). No write.
+    "workflow.late_rows": OpClass.COMPUTE_ONLY,
+    # dispatch.land_verified_remainder — MUTATING: commits a halted run's verified remainder paths
+    # (ops/dispatch_emit/land_remainder.py); the git ref moves.
+    "dispatch.land_verified_remainder": OpClass.MUTATING,
     # plan.claim_register_rows — MUTATING: stamps claimed register ids into the plan's own file
     # (ops/dispatch_emit/revise_absorb.py).
     # DR-208 five-question affirmation (citing plan.claim_register_rows handler):

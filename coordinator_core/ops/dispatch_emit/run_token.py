@@ -22,9 +22,12 @@ with the record; the record names the run's script and a token admits nothing wi
 script; a record older than `TTL_SECONDS` admits nothing. In-process file I/O only: no spawn.
 
 Removal rule: only a landed commit, an ended or refused run, or a sanctioned peer release
-removes a record. `tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
+removes a record; a removal without a landed commit (`consume`, `discard`, a re-`mint`) first
+leaves `retired/<run_id>.json`, which `halt_admits` reads so a halted run's record-only commit
+survives it. `tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
 caller with its condition. This module's own unlinks are the protocol and are outside that walk:
-`mint` unlinks a stale claimed record, a stale spent receipt and a stale escrow, `redeem` unlinks
+`mint` unlinks a stale claimed record, a stale spent receipt, a stale halted receipt, a stale escrow
+and (when no live record is replaced) a stale retired receipt, `redeem` unlinks
 the live record it claims, and `consume` / `discard` unlink their targets and the escrow.
 `sweep_expired_escrows` unlinks escrows older than `TTL_SECONDS`. A receipt is never removed
 otherwise; it ages out by `TTL_SECONDS` and `live_records` / `held_records` (non-recursive) never list it.
@@ -57,6 +60,9 @@ _SPENT = "spent"
 _HALTED = "halted"
 #: Where `escrow` keeps a launcher child's plaintext token for the stage-time twin write.
 _ESCROW = "escrow"
+#: Where a record removed without a landed commit (`consume`, `discard`, a re-`mint`) leaves its
+#: receipt, which `halt_admits` reads; `mint` removes a stale one.
+_RETIRED = "retired"
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
@@ -88,6 +94,7 @@ def _record_path(
     spent: bool = False,
     halted: bool = False,
     escrow: bool = False,
+    retired: bool = False,
 ) -> Optional[Path]:
     if not _RUN_ID_RE.match(run_id or ""):
         return None
@@ -95,7 +102,7 @@ def _record_path(
     if common is None:
         return None
     base = common / _DIR
-    sub = _SPENT if spent else _HALTED if halted else _ESCROW if escrow else _CLAIMED if claimed else None
+    sub = _SPENT if spent else _HALTED if halted else _ESCROW if escrow else _RETIRED if retired else _CLAIMED if claimed else None
     return (base / sub if sub else base) / f"{run_id}.json"
 
 
@@ -153,6 +160,14 @@ def mint(
         "sizing_rel": sizing_rel,
         "kind": kind,
     }
+    # Receipt first: unlinking first would erase the remint case's receipt.
+    replaced = _read(path)
+    if replaced is not None:
+        _write_retired(repo_root, run_id, replaced)
+    else:
+        stale_retired = _record_path(repo_root, run_id, retired=True)
+        if stale_retired is not None:
+            stale_retired.unlink(missing_ok=True)
     for stale in (
         _record_path(repo_root, run_id, claimed=True),
         _record_path(repo_root, run_id, spent=True),
@@ -172,6 +187,22 @@ def mint(
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     _index("index_mint", repo_root, run_id, record["minted_at"])
     return token
+
+
+def _write_retired(repo_root: Path, run_id: str, record: Optional[dict]) -> None:
+    """Leave `retired/<run_id>.json` ({run_id, sha256, script_path, minted_at}) for a record about
+    to be removed without a landed commit. Never raises: a missing receipt only costs the halt admit."""
+    target = _record_path(repo_root, run_id, retired=True)
+    if record is None or target is None:
+        return
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    receipt = {k: record.get(k) for k in ("run_id", "sha256", "script_path", "minted_at")}
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(target, json.dumps(receipt, sort_keys=True).encode("utf-8"), preserve_mode=False)
+    except OSError:
+        pass
 
 
 def _index(fn: str, repo_root: Path, *args) -> None:
@@ -270,6 +301,18 @@ def admits(repo_root: Path, run_id: object, token: object, script_path: object) 
     if not _well_formed(run_id, token, script_path):
         return False
     return _matches(_read(_record_path(repo_root, run_id)), run_id, token, script_path)
+
+
+def halt_admits(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """Read-only: True when `token` and `script_path` match the run's live, claimed or retired
+    record and it is inside `TTL_SECONDS`. For a halted run's record-only commit, which spends
+    nothing; a product commit still needs `admits`. Claims nothing."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    return any(
+        _matches(_read(_record_path(repo_root, run_id, **kind)), run_id, token, script_path)
+        for kind in ({}, {"claimed": True}, {"retired": True})
+    )
 
 
 def redeem(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
@@ -500,8 +543,10 @@ def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> N
 
     `landed` (a dict: sha, rows, paths) first writes the spent receipt `spent_receipt` reads, from
     the claimed record (else the live one). No record to copy, no receipt."""
-    if landed is not None:
-        record = _read(_record_path(repo_root, run_id, claimed=True)) or _read(_record_path(repo_root, run_id))
+    record = _read(_record_path(repo_root, run_id, claimed=True)) or _read(_record_path(repo_root, run_id))
+    if landed is None:
+        _write_retired(repo_root, run_id, record)
+    else:
         spent = _record_path(repo_root, run_id, spent=True)
         if record is not None and spent is not None:
             from coordinator_core.atomic_replace import atomic_write_bytes
@@ -533,6 +578,7 @@ def discard(repo_root: Path, run_id: str) -> Optional[dict]:
     if path is None:
         return None
     record = _read(path)
+    _write_retired(repo_root, run_id, record)
     path.unlink(missing_ok=True)
     held = _record_path(repo_root, run_id, escrow=True)
     if held is not None:

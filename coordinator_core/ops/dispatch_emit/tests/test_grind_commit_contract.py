@@ -25,6 +25,21 @@ def _good() -> dict:
     }
 
 
+def test_split_record_segment_strips_wrap_and_indent_damage_but_digest_still_gates():
+    """Run 20261030T185854Z arrived 9631 chars vs 9626 sent (and 20261030T172043Z 4352 vs 4347): the
+    reader re-joined the transcript's wrapped lines with newlines, adding chars to a token that holds
+    none. The original agent transcripts were not on disk to confirm; whitespace is the inferred cause."""
+    token = "%7B%22a%22%3A1%7D" * 20
+    n, h = gcc.relay_digest(token)
+    wrapped = "\n".join("    " + token[i:i + 37] + " " for i in range(0, len(token), 37))
+    parts = gcc.split_record_segment(f"{n} {h}\n{wrapped}")
+    assert parts == (token, str(n), h)
+    assert gcc.check_relay("record", parts[0], parts[1], parts[2]) is None
+    bad = gcc.split_record_segment(f"{n} {h}\n{wrapped[:-1]}X")
+    assert gcc.check_relay("record", bad[0], bad[1], bad[2]).startswith(gcc.RELAY_CORRUPT_HEAD)
+    assert gcc.split_record_segment(f"{n}  {h}\n{token}") is None
+
+
 def test_reply_keys_are_pinned_and_documented():
     assert gcc.ALREADY_LANDED_KEY == "already_landed"
     assert gcc.UNLANDED_KEY == "unlanded"

@@ -55,6 +55,18 @@ def test_routing_and_post_fix_briefs_ride_separate_calls_chosen_by_the_node(tmp_
     assert script.count(_ROUTING_MARK) == 1
 
 
+def test_post_fix_verify_brief_passes_a_green_run_and_keeps_the_ruling_and_red_fails():
+    from coordinator_core.ops.dispatch_emit import grind_stages
+
+    post = grind_stages.compose_verify_agent_call(label="v", phase_title="V")
+    assert "A green targeted run of the named tests passes the row" in post
+    assert "is not a reason to fail a recoverable fix" in post
+    assert "a recorded `pm_ruling` that rejects the fix" in post
+    assert "Fail on a red or missing run" in post
+    routing = grind_stages.compose_verify_agent_call(label="v", phase_title="V", routing=True)
+    assert "A green targeted run" not in routing
+
+
 def test_pre_fix_verify_failing_twice_is_handed_back_without_undo():
     routing = {
         "triage": {"kind": "triage", "edges": {"bug": "verify-routing"}, "on_fail": None},

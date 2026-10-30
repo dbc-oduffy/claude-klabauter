@@ -201,6 +201,7 @@ from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND
 from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP as _HALTED_ROUTE_OP
 from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY, STAGE_IN_FLIGHT_KEY
 from coordinator_core.ops.dispatch_emit.wake_digest import (
+    _BASELINE_CLEARS_JS,
     CAP_HELPER_JS,
     TERMINAL_COMMIT_CLI_HELPER_JS,
     TERMINAL_COMMIT_CLI_PROPERTY_JS,
@@ -1172,7 +1173,7 @@ def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = 
         "      _halted = { halted: " + json.dumps(HALT_REVIEW_BLOCKED) + ", blocker: " + json.dumps(TEST_BLOCKER) + ", run_id: _runId, "
         "failing: _rvFailing, gaps: _rvGaps, "
         + HALT_PLAN_FIELD + ": (typeof _planRel !== 'undefined' ? _planRel : null), "
-        "items: _claimed.map((id) => ({ id, remaining: ['failing tests block the commit gate for this row; see halt.gaps'], evidence: 'see halt.gaps' })), "
+        "items: _claimed.map((id) => ({ id, remaining: _rvGaps, evidence: _rvGaps[0] })), "
         "slices: _slicesJs, " + SELF_CORRECTION_FIELD + ": _sc, "
         "next_action: _scNa('The refire runs an executor fix leg against these failing tests: ' + _rvGaps.join('; ') + '; ') + "
         + _refire_js(sizing_rel) + " };\n"
@@ -1306,7 +1307,7 @@ def _review_recover_js(
     fix_prompt = _cat(
         f"{head}\n\n{anchor}\n\nHalt-fix leg (review). ",
         *_prompt_parts(halt_fix_prompt("gapsText", "slicesText", "fpText", f"{record_dir}/notes.jsonl")),
-        " Also fix the WARN findings that fall within the ask. A failing assertion of behaviour this run's "
+        " Also resolve the WARN findings that fall within the ask. A failing assertion of behaviour this run's "
         "change deliberately alters is in scope: update that assertion to the new behaviour, even when its "
         "test file sits outside the footprint (list the path; the run records it as a widen via "
         f"`record_widen`, one JSON line {{row, path}} appended to {widen_record}). "
@@ -1382,7 +1383,7 @@ def _criterion_blocker_halt_js(sizing_rel: Optional[str]) -> str:
         "      _halted = { ..._halted, blocker: " + json.dumps(TEST_BLOCKER) + ", failing: _cnFailing, gaps: _cnGaps, "
         "detail: _cnGaps.join('; '), "
         + HALT_PLAN_FIELD + ": _planRel ?? null, "
-        "items: _cnClaimed.map((id) => ({ id, remaining: ['failing tests block the commit gate for this row; see halt.gaps'], evidence: 'see halt.gaps' })), "
+        "items: _cnClaimed.map((id) => ({ id, remaining: _cnGaps, evidence: _cnGaps[0] })), "
         "unapplied_findings: _cnSlices.reduce((n, w) => n + (w.findings - w.applied), 0), slices: _cnSlices, "
         "next_action: 'The refire runs an executor fix leg against these failing tests: ' + _cnGaps.join('; ') + '; ' + "
         + _refire_js(sizing_rel)
@@ -2064,7 +2065,7 @@ def _remnant_complete_js(
         else "const rmDocsWanted = false;"
     )
     judge = (
-        f"if (rv.judge) {fv} = {_emit._JUDGE_VERDICT_RULES_JS}(rv.judge, {_GATED_LIST_JS});" if judged else ""
+        f"if (rv.judge) {fv} = _judgeRules(rv.judge, {_GATED_LIST_JS});" if judged else ""
     )
     return (
         _REMNANT_COMPLETE_JS.replace("__CAP__", str(REMNANT_ATTEMPT_CAP))
@@ -3427,6 +3428,7 @@ def compose_ask_script(
         b.append(f"  let {name} = {'[]' if name == WAVE_NOT_RUN_VAR else 'false' if name == INTEGRATION_NOT_RUN_VAR else 'null'};")
     if judged:
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
+        b.append(f"  const _judgeRules = {_emit._JUDGE_VERDICT_RULES_JS};")
 
     def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel") -> str:
         return (
@@ -3502,7 +3504,7 @@ def compose_ask_script(
         return (
             f" {EMIT_RELAY_AUTHORITY} On an M+ arm with a null halt, also run `{_INVOKE} dispatch.emit '",
             params,
-            "'` once and return its JSON reply as chain_emit ({error: <its text>} on failure); on any other arm none.",
+            "'` once, passing exactly that JSON object with no key added, dropped or renamed, and return its JSON reply as chain_emit ({error: <its text>} on failure); on any other arm none.",
         )
 
     def _chain_emit_params(sizing_js: str) -> str:
@@ -3668,6 +3670,7 @@ def compose_ask_script(
             ) + ")",
         )
         b.append("  const _q = (v) => \"'\" + String(v ?? '').replace(/'/g, \"'\\\\''\") + \"'\";")
+        b.append("  const _reassembleCmdOf = (_asmFields, _path) => " + _assemble_cmd_js("_path") + ";")
         b.append(
             "  const _slugOf = (r) => String(r.name || 'ask').toLowerCase().replace(/[^a-z0-9]+/g, '-')"
             ".replace(/^-+|-+$/g, '').replace(/^" + DATE_HEAD_PATTERN + "/, '') || 'ask';"
@@ -3720,7 +3723,7 @@ def compose_ask_script(
         # through to the halts below.
         values_retry = _cat(
             SCOUT_VALUES_ASSEMBLE_RETRY,
-            "js:(() => { const _asmFields = { ..._scoutedFirst }; return " + _assemble_cmd_js("_sizingPathFor(_scoutedFirst)") + "; })()",
+            "js:_reassembleCmdOf({ ..._scoutedFirst }, _sizingPathFor(_scoutedFirst))",
             scout_closing_tail,
         )
         b.append(
@@ -3738,7 +3741,6 @@ def compose_ask_script(
         )
         b.append("  _gated = _scouted.gated ?? [];")
         b.append("  const _sizingPath = _boundRelOf(_scouted.sizing_path) ? REPO_ROOT + '/' + _scouted.sizing_path : _sizingPathFor(_scouted);")
-        assemble_cmd_js = _assemble_cmd_js("_sizingPath")
         _reword_sizing_js = "_sizingPath.slice(REPO_ROOT.length + 1)"
         reword_closing = (
             "\n\nThen, in order: (1) run exactly this one command, replacing the quoted placeholder "
@@ -3792,7 +3794,7 @@ def compose_ask_script(
             f"&& _asmOut.includes({_lit(REMEDIATION_MARKER)})) {{"
         )
         b.append("    const _asmFields = { ..._scouted, exit_criterion: '<your reworded exit_criterion>' };")
-        b.append(f"    const _reassembleCmd = {assemble_cmd_js};")
+        b.append("    const _reassembleCmd = _reassembleCmdOf(_asmFields, _sizingPath);")
         b.append(
             f"    const _reworded = await {_agent(reword_prompt, label='size-reword', phase='size', agent_type=SIZING_SCOUT_AGENT_TYPE, schema=_REWORD_SCHEMA, run_id=run_id, stage_as='reword', stager=stager)};"
         )
@@ -5166,12 +5168,18 @@ def compose_ask_script(
             _LEDGER_GATED_RULE,
             *((_LEDGER_DOC_WRITES_RULE,) if in_run_commit else ()),
         )
+    verdict_parts = (
+        *verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS,
+        "js:" + _LATE_ROWS_CLAUSE_JS, "js:" + _MEMO_CLOSE_CLAUSE_JS,
+    )
+    b.append("  const _verdictText = () => (" + _cat(*verdict_parts) + ");")
+    verdict_parts = ("js:_verdictText()",)
     verify_call = _verify_call(
         head=head,
         anchor=anchor,
         test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
         docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
-        verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS, "js:" + _LATE_ROWS_CLAUSE_JS, "js:" + _MEMO_CLOSE_CLAUSE_JS),
+        verdict_parts=verdict_parts,
         judged=judged,
         schema=_verify_schema(judge_brief[1] if judged else None),
         run_id=run_id,
@@ -5217,7 +5225,7 @@ def compose_ask_script(
         *(
             [
                 f"    {_emit._FALSIFIER_RESULT_VAR} = (_verify && _verify.judge) ? "
-                f"{_emit._JUDGE_VERDICT_RULES_JS}(_verify.judge, {_GATED_LIST_JS}) : {unjudged};"
+                f"_judgeRules(_verify.judge, {_GATED_LIST_JS}) : {unjudged};"
             ]
             if judged
             else []
@@ -5354,7 +5362,7 @@ def compose_ask_script(
                 head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id,
                 judged=judged, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root),
                 docs_parts=_docs_prompt_parts(run_id=run_id, manifest_rel=manifest_rel) if in_run_commit else (),
-                verdict_parts=(*verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS, "js:" + _LATE_ROWS_CLAUSE_JS, "js:" + _MEMO_CLOSE_CLAUSE_JS),
+                verdict_parts=verdict_parts,
                 schema=_verify_schema(judge_brief[1] if judged else None),
             )
         )
@@ -5682,15 +5690,30 @@ def _chain_emit_start_lines(
         f"'` once and return path and run_id from its JSON reply verbatim. When the command "
         "is denied or fails, return its error text in error, with path and run_id as empty strings. Commit nothing.",
     )
-    emit_expr = emitted_js if emitted_js is not None else "await " + _agent(
+    emit_agent_call = _agent(
         emit_prompt, label="chain-emit", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
         agent_model=_MECHANICAL_MODEL, schema=_CHAIN_EMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+    )
+    emit_expr = emitted_js if emitted_js is not None else "await " + emit_agent_call
+    retry_lines = (
+        [
+            "      if (_why !== null) {",
+            "        const _firstWhy = _why; _why = null; _chainPath = null; _chainRunId = '';",
+            "        try { _ce = await _emitAgent(); _chainCheck(_ce); }",
+            "        catch (e) { _why = _firstWhy + '; retry threw: ' + String(e && e.message ? e.message : e); }",
+            "      }",
+        ]
+        if emitted_js is not None else []
+    )
+    # One declaration: an inlined second copy would be hoisted into a _PFC constant the spliced child never declares.
+    emit_decl_lines = (
+        [f"    const _emitAgent = async () => {emit_agent_call};"] if emitted_js is not None else []
     )
     return [
         "    phase('plan');",
         "    let _why = null; let _chainPath = null; let _chainRunId = '';",
-        "    try {",
-        f"      const _ce = {emit_expr};",
+        *emit_decl_lines,
+        "    const _chainCheck = (_ce) => {",
         "      const _cp = typeof _ce?.path === 'string' ? _ce.path.split(String.fromCharCode(92)).join('/') : '';",
         "      const _warp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/scratch/warp/';",
         "      if (typeof _ce?.error === 'string' && _ce.error !== '') { _why = 'emit failed: ' + _ce.error; }",
@@ -5698,6 +5721,11 @@ def _chain_emit_start_lines(
         "{ _why = 'emit path is not under ' + _warp; }",
         "      else if (typeof _ce?.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_ce.run_id)) { _why = 'emit reply run_id is not a run id'; }",
         "      else { _chainPath = _cp; _chainRunId = _ce.run_id; }",
+        "    };",
+        "    try {",
+        f"      let _ce = {emit_expr};",
+        "      _chainCheck(_ce);",
+        *retry_lines,
         "    } catch (e) { _why = 'emit threw: ' + String(e && e.message ? e.message : e); }",
         "    if (_chainPath) {",
         "      let _chained;",
@@ -5902,6 +5930,18 @@ def composed_fanout(body_lines: Sequence[str]) -> FanoutCost:
     return FanoutCost(units=legs, agents=legs, basis="lower-bound")
 
 
+_BASELINE_CLEARS_FN = "_baselineClears"
+
+
+def _hoist_baseline_clears(script: str) -> str:
+    """Declare the baseline-clears predicate once, right after the manifest marker line, when it recurs."""
+    if script.count(_BASELINE_CLEARS_JS) < 2:
+        return script
+    body = script.replace(_BASELINE_CLEARS_JS, _BASELINE_CLEARS_FN)
+    eol = body.index("\n", body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:eol] + f"const {_BASELINE_CLEARS_FN} = {_BASELINE_CLEARS_JS};\n" + body[eol:]
+
+
 def _finish_script(
     b: list[str], manifest_rel: str, description: str, phase_titles: list[str], chatty: bool = False
 ) -> str:
@@ -5913,6 +5953,7 @@ def _finish_script(
         + "\n".join(b)
         + "\n"
     )
+    script = _hoist_baseline_clears(script)
     script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
     script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)
     if len(script.encode("utf-8")) > _emit._WORKFLOW_SCRIPT_BYTE_CAP:

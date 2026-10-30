@@ -68,6 +68,39 @@ def test_failing_test_blocker_halts_naming_the_executor_fix_leg():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
+def test_criterion_not_met_sibling_emitter_names_the_failing_test_in_remaining():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    own = "coordinator_core/tests/test_x.py"
+    falsifier = {
+        "status": "not_met",
+        "failing": [_NODE],
+        "failing_detail": [{"node_id": _NODE, "message": "AssertionError: tree walk\nsecond line"}],
+    }
+    source = (
+        f"let _halted = null; const _runId = 'r1'; const _sizingRel = {_SIZING!r}; const _planRel = {_PLAN!r};\n"
+        f"const _manifest = {{ ledger_item_ids: ['R1'], review_declared_paths: {json.dumps([own])} }};\n"
+        f"const _reviewWave = []; const _falsifierResult = {json.dumps(falsifier)};\n"
+        + ask_compose._refire_next_action_helper_js(_SIZING)
+        + "\n_halted = { halted: 'criterion_not_met', reason: 'x', sizing: _sizingRel, run_id: _runId };\n"
+        + ask_compose._criterion_blocker_halt_js(_SIZING)
+        + "\nconsole.log(JSON.stringify(_halted));\n"
+    )
+    proc = subprocess.run(
+        [node, "-"], input=source, capture_output=True, text=True, timeout=30, **no_console_creationflags()
+    )
+    assert proc.returncode == 0, proc.stderr
+    halted = json.loads(proc.stdout)
+
+    assert halted["items"] == [
+        {"id": "R1", "remaining": halted["gaps"], "evidence": f"{_NODE}: AssertionError: tree walk"}
+    ]
+    assert "see halt.gaps" not in json.dumps(halted["items"])
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_halt_record_reads_plan_and_items_for_the_ledger_pointer(tmp_path):
     halted = _run([], _reverify())
     (tmp_path / "docs/plans").mkdir(parents=True)

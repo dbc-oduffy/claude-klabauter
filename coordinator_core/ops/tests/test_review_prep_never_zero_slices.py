@@ -164,3 +164,17 @@ def test_test_files_only_with_uncommitted_hunk_on_checkpoint_is_sliced(repo, mon
     diff = "".join(Path(s["diff_path"]).read_text(encoding="utf-8") for s in reply["slices"])
     assert "+def test_y" in diff
     assert reply["excluded"] == []
+
+
+def test_mode_only_range_delta_is_never_a_silent_zero_slice_reply(repo, monkeypatch):
+    # A POSIX exec-bit flip freezes a non-empty diff with no ---/+++ lines; zero slices there must carry an error.
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _git(repo, "update-index", "--chmod=+x", "tracked.py")
+    _git(repo, "commit", "-q", "-m", "chmod\n\nSession-Id: sess-own")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    _stage(repo, ["tracked.py"])
+    _hold(monkeypatch, {})
+    reply = _handler(repo, base=base, head=head)
+    assert Path(reply["whole_diff_path"]).stat().st_size > 0
+    assert reply["slices"] == [] and reply["error"]
+    assert "non-empty frozen diff" in reply["error"]

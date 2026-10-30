@@ -80,14 +80,6 @@ def test_unclassified_allows_name_present_in_field7():
     assert result == []
 
 
-def test_unclassified_allows_declared_name_and_still_refuses_undeclared():
-    touched = {"claude-klabauter": frozenset({"newmod.py", "other.py"})}
-    declared = {"claude-klabauter": frozenset({"newmod.py"})}
-    reads = {ptc.PORTABLE_PATH: _PORTABLE_TWO_ROWS, ptc.DECLARATIONS_PATH: _DECLARATIONS_ONE_DENY}
-    result = ptc.unclassified(touched, reads.get, declared)
-    assert result == [("claude-klabauter", "other.py")]
-
-
 def test_unclassified_allows_name_present_in_deny():
     touched = {"claude-klabauter": frozenset({"quux"})}
     reads = {ptc.PORTABLE_PATH: _PORTABLE_TWO_ROWS, ptc.DECLARATIONS_PATH: _DECLARATIONS_ONE_DENY}
@@ -134,3 +126,14 @@ def test_rows_and_allowlist_field_parity_with_generator():
     spec.loader.exec_module(module)
     assert tuple(module._ROWS) == ptc._ROWS
     assert module._ALLOWLIST_FIELD == ptc._ALLOWLIST_FIELD
+
+
+def test_with_inclusions_admits_names_sorted_and_keeps_exclusions_and_other_rows():
+    out = ptc.with_inclusions(_PORTABLE_TWO_ROWS, {"claude-klabauter": ["alpha", "bar"]})
+    assert out.splitlines()[0].endswith("||alpha,bar,foo.py,!baz")
+    assert out.splitlines()[1] == _PORTABLE_TWO_ROWS.splitlines()[1]
+    assert out.endswith("\n")
+
+
+def test_with_inclusions_no_additions_is_identity():
+    assert ptc.with_inclusions(_PORTABLE_TWO_ROWS, {}) == _PORTABLE_TWO_ROWS

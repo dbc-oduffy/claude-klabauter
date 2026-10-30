@@ -448,16 +448,25 @@ def resolve_plan_edge(
 def _checkpoint_landed(
     repo_root: Path, rel: str, target: Path, rows_by_id: dict, plan_cache: dict
 ) -> frozenset:
-    """Open rows of plan ``rel`` landed by a same-plan checkpoint at HEAD, walked once
+    """Open rows of plan ``rel`` landed at HEAD by a same-plan checkpoint, or delivered by a
+    trailer-less hand-landing (writes changed since the plan was introduced), walked once
     per plan per ``plan_cache``."""
     key = (target, "checkpoint-landed")
     if key not in plan_cache:
-        from coordinator_core.ops.dispatch_emit.checkpoint_stamp import rows_landed_at_head
+        from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+            rows_delivered_at_head,
+            rows_landed_at_head,
+        )
 
         open_ids = frozenset(
             i for i, r in rows_by_id.items() if r.get("disposition", "open") == "open"
         )
-        plan_cache[key] = rows_landed_at_head(repo_root, rel, open_ids)
+        landed = rows_landed_at_head(repo_root, rel, open_ids)
+        rest = {
+            i: w if isinstance(w, list) else ()
+            for i, w in ((i, rows_by_id[i].get("writes")) for i in open_ids - landed)
+        }
+        plan_cache[key] = landed | rows_delivered_at_head(repo_root, rel, rest)
     return plan_cache[key]
 
 

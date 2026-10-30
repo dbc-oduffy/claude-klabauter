@@ -422,6 +422,70 @@ async def has_live_children_from_metas(
     }
 
 
+async def has_live_children_among_records(
+    candidate: str,
+    repo_root: Path,
+    *,
+    scope: Sequence[str],
+    edge_kinds: object = None,
+    exclude: Optional[List[str]] = None,
+    metas: Optional[Dict[str, dict]] = None,
+) -> Dict[str, Any]:
+    """`has_live_children_from_metas` over an explicit record list.
+
+    The live set is `scope` (absolute handoff paths, archive-resident ones
+    dropped), never `_enumerate_live_set`: no path outside `scope` is read, so
+    a successor outside `scope` is not seen. Same containment guard, edge-kind
+    parsing and reply shape (`referenced`, `children`, `exit_code`;
+    `_indeterminate` on error). An empty `scope` answers not-referenced
+    without building an index (`build_reverse_edge_index` raises on an empty
+    live set).
+    """
+    parsed_edge_kinds = _parse_edge_kinds(edge_kinds)
+
+    worktree_root = main_worktree_root(repo_root)
+
+    candidate_abs, candidate_error = _resolve_candidate(
+        candidate, _allowed_candidate_roots(worktree_root)
+    )
+    if candidate_error is not None:
+        return _indeterminate(candidate_error)
+
+    live_paths = [p for p in scope if not _is_archive_resident_path(p)]
+    if not live_paths:
+        return {"referenced": False, "children": [], "exit_code": 1}
+
+    try:
+        index = await asyncio.to_thread(
+            build_reverse_edge_index,
+            live_paths,
+            metas=metas,
+            edge_kinds=parsed_edge_kinds,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _indeterminate(f"unbuildable reverse-edge index: {exc}")
+
+    try:
+        children = reverse_membership(
+            candidate_abs,
+            live_paths,
+            exclude=exclude if exclude else None,
+            edge_kinds=parsed_edge_kinds,
+            index=index,
+        )
+    except (ValueError, TypeError) as exc:
+        return _indeterminate(f"reverse_membership error: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return _indeterminate(f"unexpected error in reverse_membership: {exc}")
+
+    referenced = len(children) > 0
+    return {
+        "referenced": referenced,
+        "children": sorted(children),
+        "exit_code": 0 if referenced else 1,
+    }
+
+
 def _indeterminate(error_msg: str) -> dict:
     return {
         "children": [],

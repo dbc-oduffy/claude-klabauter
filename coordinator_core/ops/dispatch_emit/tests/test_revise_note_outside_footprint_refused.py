@@ -91,7 +91,7 @@ def test_halted_run_refuses_a_note_while_needs_paths_are_uncovered(repo):
     assert "note" not in reply["applied"]
     entry = [r for r in reply["refused"] if r.get("input") == "note"][0]
     assert entry["paths"] == [OUTSIDE] and "add-task" in entry["reason"]
-    assert "sizing `writes`" in entry["reason"]
+    assert "sizing `writes`" not in entry["reason"]
     assert _notes(repo) == []
 
 
