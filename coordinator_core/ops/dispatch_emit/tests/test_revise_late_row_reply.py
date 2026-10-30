@@ -38,6 +38,8 @@ def test_before_verify_the_reply_names_the_pre_verify_leg(tmp_path, monkeypatch)
     out = _revise(_repo(tmp_path), monkeypatch)
     assert "lands_on_refire" not in out and "next" not in out
     assert "pre-verify late-row leg" in out["note"]
+    assert "executor leg" in out["note"] and "no halt and no second fire" in out["note"]
+    assert "never judge" not in out["note"]
     assert "next stage claims" not in json.dumps(out)
 
 
@@ -49,6 +51,7 @@ def test_after_verify_the_reply_says_it_lands_on_refire(tmp_path, monkeypatch):
     out = _revise(root, monkeypatch)
     assert out["ok"] is True and out["lands_on_refire"] is True
     assert out["next"]["kind"] == "refire"
+    assert "never judge" not in out["note"] and "no leg of this run" in out["note"]
     assert "next stage claims" not in json.dumps(out)
 
 

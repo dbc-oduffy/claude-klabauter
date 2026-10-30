@@ -139,7 +139,7 @@ class Item:
 @dataclass(frozen=True)
 class Ledger:
     """The rows a run is judged against: every register row not already ruled deferred/waived.
-    `withheld` (`{id, reason}`) are the rows a `workflow.revise` ruled out of scope: never judged,
+    `withheld` (`{id, reason}`) are the rows a `workflow.revise` ruled out of scope: not judged,
     always carried open."""
 
     items: tuple[Item, ...]
@@ -801,7 +801,7 @@ def render(ledger: Ledger, run_id: str) -> str:
         lines.extend("> " + ln if ln else ">" for ln in item.text.strip().splitlines())
         lines.append("")
     if ledger.withheld:
-        lines.append("## Out of scope (ruled by a revision; never judged, carried open)")
+        lines.append("## Out of scope (ruled by a revision; not judged, carried open)")
         lines.append("")
         lines.extend(f"- {w['id']}: {w['reason']}" for w in ledger.withheld)
         lines.append("")
@@ -1503,7 +1503,7 @@ def judge(
 
     `gated` is the stage manifest's gated chunk ids (`manifest.gated[].id`); None or empty withholds
     nothing. A verdict id naming a gated chunk is a plan row, not a requirement: it is ignored,
-    never judged and never a failure. A `not_met` row whose `withheld_by` is in `gated` passes and is listed open
+    not judged and never a failure. A `not_met` row whose `withheld_by` is in `gated` passes and is listed open
     (`withheld_by <id>`), whatever `all_of_pm_ask` or `essential` say; a `withheld_by` outside
     `gated` fails.
 
@@ -1875,16 +1875,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["lands_on_refire"] = True
         out.update(_refire(ledger.sizing_rel, root, unclaimed_result))
         out["note"] = (
-            "run live, verify already staged: this run's verify and ledger-fix legs never judge this "
-            "revision; " + out["note"].replace("run finished: ", "", 1) + " Fire next.call to land it."
+            "run live, verify already staged: the run's late-row read has passed, so no leg of this run "
+            "executes or reads this revision; " + out["note"].replace("run finished: ", "", 1) + " Fire next.call to land it."
         )
     else:
         if _rows_briefed(dir_):
             out["briefed"] = True
         out["note"] = (
             ("run live, rows already briefed: no row brief reads this revision; " if out.get("briefed") else "run live: ")
-            + "the pre-verify late-row leg claims it before verify, so verify and the ledger-fix leg judge it "
-            "before the commit gate."
+            + "the pre-verify late-row leg re-plans it once and runs one bounded executor leg briefed with only "
+            "that row, then verify and the ledger-fix leg judge it in this run, with no halt and no second fire."
         )
     applied = [f"row {added}"] if added else []
     applied += [k for k in _APPLIED_KEYS if out.get(k)]

@@ -877,6 +877,7 @@ _ADMIT_MANIFEST_JS = (
     "  let _stageRefusal = null;\n"
     "  let _stageOwedEm = null;\n"
     "  let _stageGatedRows = null;\n"
+    "  let _stageBlockingDrops = null;\n"
     "  let _relayGap = null;\n"
     "  let _parked = null;\n"
     "  let _diskHalt = null;\n"
@@ -922,7 +923,9 @@ _ADOPT_STAGE_REPLY_HEAD_JS = (
     "if (Array.isArray(r.owed_em_ids) && r.owed_em_ids.length) _stageOwedEm = { ids: r.owed_em_ids.map(String), "
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; "
     "if (Array.isArray(r.gated_rows) && r.gated_rows.length) _stageGatedRows = { rows: r.gated_rows, "
-    "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
+    "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; "
+    "if (Array.isArray(r.criterion_blocking_drops) && r.criterion_blocking_drops.length) _stageBlockingDrops = "
+    "{ rows: r.criterion_blocking_drops, plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
     f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) _parked = String(r.{PARKED_REPLY_KEY}); return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
     "    let got;\n"
@@ -4751,7 +4754,8 @@ def compose_ask_script(
     )
     b.append(
         "  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt, owed_em_ids: _stageOwedEm?.ids ?? [], "
-        "owed_plan: _stageOwedEm?.plan ?? _stageGatedRows?.plan ?? null, gated_rows: _stageGatedRows?.rows ?? [] }; }"
+        "owed_plan: _stageOwedEm?.plan ?? _stageGatedRows?.plan ?? _stageBlockingDrops?.plan ?? null, "
+        "gated_rows: _stageGatedRows?.rows ?? [], criterion_blocking_drops: _stageBlockingDrops?.rows ?? [] }; }"
     )
     b.append("  if (!_manifest.error) { for (const g of (_manifest.gated ?? [])) { _incompleteChunks.push(g.id); } }")
     b.append("  if (!_manifest.error) { for (const o of (_manifest.owed ?? [])) { _incompleteChunks.push(o.id); } }")
@@ -4781,7 +4785,7 @@ def compose_ask_script(
     )
     b.append(
         "  else if (!_parked && (_manifest.error || (!(_manifest.rows ?? []).length && !_allLanded && !_resumeLedger))) { _halted = { halted: "
-        f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: _manifest.error || 'stage staged no rows', "
+        f"{_lit(HALT_REFUSAL)}, kind: {_lit(HALT_REFUSAL)}, reason: {_blocking_drops_reason_js()} || _manifest.error || 'stage staged no rows', "
         "sizing: _sizingRel, plan: _planRel, run_id: _runId, "
         f"...({_owed_handback_js(sizing_rel)} ? {{ next_action: {_owed_handback_js(sizing_rel)} }} : "
         f"{_all_em_next_action_js(sizing_rel)}) }}; }}"
@@ -4804,6 +4808,7 @@ def compose_ask_script(
     )
     b.append("  let _lateIds = [];")
     b.append("  let _verifyLateIds = [];")
+    b.append("  let _lateLeg = null;")
     b.append(
         "  const _lateRead = async () => {\n"
         f"    try {{ const _r = await {late_read_call}; "
@@ -4900,17 +4905,16 @@ def compose_ask_script(
         "  if (_commitFailures.length) log('Wave commit failures (the terminal commit covers their paths): ' "
         "+ _commitFailures.join('; '));"
     )
-    b.append("  await Promise.all(Object.values(_rows));")
     if late_replan_call:
         # A register row revised in after the plan point: re-plan it once, then run exactly the rows the
         # re-plan added. The stage keeps the executed rows (only_rows names them), so the merged manifest
-        # still covers the whole run for review, tests and the terminal commit.
+        # still covers the whole run for review, tests and the terminal commit. `_lateLeg` closes over
+        # this block's `_rows`/`_rowPrompt`, so the post-execute read and the pre-verify read share it.
         b.append(
-            "  if (!_halted) { _lateIds = await _lateRead(); }\n"
-            "  if (!_halted && _lateIds.length) {\n"
+            "  _lateLeg = async (_ids) => {\n"
             f"    const _lateLedger = {{ blocking: [], {RESUME_LEDGER_REMAINING_FIELD}: {{}}, "
             f"{RESUME_LEDGER_CREDITED_FIELD}: [], {RESUME_LEDGER_NOTES_FIELD}: [], "
-            f"{RESUME_LEDGER_UNCLAIMED_FIELD}: _lateIds, {RESUME_LEDGER_UNSERVED_FIELD}: [] }};\n"
+            f"{RESUME_LEDGER_UNCLAIMED_FIELD}: _ids, {RESUME_LEDGER_UNSERVED_FIELD}: [] }};\n"
             "    const _lateKeep = (_manifest.rows ?? []).map((r) => String(r.id));\n"
             "    const _lateSaved = [_stagedManifest, _relayGap, _diskHalt, _stageRefusal];\n"
             "    _stagedManifest = null; _relayGap = null; _diskHalt = null; _stageRefusal = null;\n"
@@ -4938,8 +4942,14 @@ def compose_ask_script(
             "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });\n"
             "      }\n"
             "      await Promise.allSettled(_lateRows.map((r) => _rows[r.id]));\n"
-            "    } else { log('ledger-late: re-plan staged no row for ' + JSON.stringify(_lateIds) + '; the verify leg rules them'); }\n"
-            "  }\n"
+            "    } else { log('ledger-late: re-plan staged no row for ' + JSON.stringify(_ids) + '; the verify leg rules them'); }\n"
+            "  };"
+        )
+    b.append("  await Promise.all(Object.values(_rows));")
+    if late_replan_call:
+        b.append(
+            "  if (!_halted) { _lateIds = await _lateRead(); }\n"
+            "  if (!_halted && _lateIds.length) { await _lateLeg(_lateIds); }\n"
             "  await Promise.all(Object.values(_rows));"
         )
     # The settled executor replies (their DONE notes), already in hand: no spawn, no file read.
@@ -5122,9 +5132,18 @@ def compose_ask_script(
         "  if (!_halted && _manifest && !_manifest.error) {",
         f"    phase({_lit(ASK_VERIFY_PHASE)});",
         "    " + review_applied,
+        "    _verifyLateIds = await _lateRead();",
+        # Ids the post-execute read did not handle: one bounded re-plan and executor leg, once per run.
+        *(
+            [
+                "    { const _verifyNew = _verifyLateIds.filter((i) => !_lateIds.includes(i));",
+                "      if (_lateLeg && !_halted && _verifyNew.length) { await _lateLeg(_verifyNew); await Promise.all(_verifications); } }",
+            ]
+            if late_replan_call
+            else []
+        ),
         f"    const _testWanted = !!({test_guard});",
         *([f"    const _docsWanted = !!({_DOCS_PRE_TAIL_GUARD});"] if in_run_commit else []),
-        "    _verifyLateIds = await _lateRead();",
         "    let _verify = null;",
         f"    const _runVerify = async () => {{ try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
@@ -5672,6 +5691,33 @@ def _gated_next_action_js(sizing_rel: Optional[str]) -> str:
         ".map((g) => 'coordinator-invoke plan.tasks.mutate {\"verb\":\"clear-gate\",\"plan_path\":' "
         "+ JSON.stringify(_manifest.owed_plan ?? _planRel ?? '') + ',\"id\":' + JSON.stringify(String(g.id)) "
         "+ ',\"owner_repo\":' + JSON.stringify(String(g.owner_repo)) + ',\"evidence\":\"<closure evidence>\"}').join('; ') "
+        f"+ '. Then refire: ' + {_refire_js(sizing_rel)} }} : {_blocking_drops_next_action_js(sizing_rel)})"
+    )
+
+
+def _blocking_drops_reason_js() -> str:
+    """JS expression: the halt reason for a stage refusal carrying `criterion_blocking_drops`, one
+    `<id> (<reason>; fire <predecessor sizing> first)` per row, else null."""
+    return (
+        "((_manifest?.criterion_blocking_drops ?? []).length "
+        "? 'Staging dropped rows the exit criterion needs: ' + _manifest.criterion_blocking_drops"
+        ".map((d) => String(d.id) + ' (' + String(d.reason) + '; fire ' "
+        "+ String(d.predecessor_sizing || d.predecessor_plan || 'its predecessor') + ' first)').join('; ') : null)"
+    )
+
+
+def _blocking_drops_next_action_js(sizing_rel: Optional[str]) -> str:
+    """JS expression: `{next_action}` for a stage refusal carrying `criterion_blocking_drops`, else the
+    no-manifest resume. Names the fire of each distinct predecessor sizing (its plan when the sizing is
+    unknown), then the refire; a refire alone would only repeat the drop."""
+    marker = "\u0000"
+    head, tail = fire_command(marker).split(json.dumps(marker))
+    return (
+        "((_manifest?.criterion_blocking_drops ?? []).length ? { next_action: "
+        "'Staging dropped rows behind an uncoded predecessor; a refire alone drops them again. Fire the predecessor first: ' + "
+        "[...new Set(_manifest.criterion_blocking_drops.map((d) => d.predecessor_sizing "
+        f"? {_lit(head)} + JSON.stringify(String(d.predecessor_sizing)) + {_lit(tail)} "
+        ": 'the sizing that codes ' + String(d.predecessor_plan)))].join('; ') "
         f"+ '. Then refire: ' + {_refire_js(sizing_rel)} }} : {_no_manifest_next_action_js(sizing_rel)})"
     )
 
