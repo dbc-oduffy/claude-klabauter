@@ -580,6 +580,7 @@ def _landing_integrity_gate(
             peer_hunk_gate.refusal_message(peer_holds, run_id or "", worktree_root) if index == 0
             else f"{sibling}: also declared by that unlanded run, whose hunks a path commit cannot split off",
         ))
+    hp_settled: dict = {}
     if run_id and not merge_open:
         # A conflict resolution rewrites hunks by design; a run with no recorded write_baseline
         # has nothing to prove against (the since-base arm's `no-base` case).
@@ -589,6 +590,7 @@ def _landing_integrity_gate(
             hp_advisories: list = []
             findings += hunk_provenance.unproduced_hunks(
                 worktree_root, run_id, contested, own_plan=plan, advisories=hp_advisories,
+                settled=hp_settled,
             )
             if hp_advisories:
                 extra["hunk_provenance_advisory"] = hp_advisories
@@ -632,6 +634,17 @@ def _landing_integrity_gate(
     findings, provenance = _claim_provenance(findings)
     if provenance:
         extra["provenance"] = [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in provenance]
+    if hp_settled:
+        # A non-live peer's hunk never refuses: the commit carries a blob of only this run's hunks.
+        extra["supplied_blobs"] = {p: s["blob"] for p, s in hp_settled.items()}
+        extra.setdefault("provenance", []).extend(
+            {
+                "path": p, "reason": "foreign-hunk-settled",
+                "detail": f"lines {s['lines']} belong to run {s['owner']} (not live): left dirty in the worktree, "
+                "not committed",
+            }
+            for p, s in hp_settled.items()
+        )
     findings, advisory = landing_targeted_tests.split_test_advisory(findings)
     if advisory:
         extra["advisory"] = landing_targeted_tests.advisory_entries(advisory)

@@ -3257,7 +3257,12 @@ def _terminal_commit_inner(
         )
 
     if integrity_extra.get("supplied_blobs"):
-        commit_params["supplied_blobs"] = integrity_extra.pop("supplied_blobs")
+        settled_supplied = integrity_extra.pop("supplied_blobs")
+        commit_params["supplied_blobs"] = {**commit_params.get("supplied_blobs", {}), **settled_supplied}
+        if "expected_content_sha256" in commit_params:
+            commit_params["expected_content_sha256"] = {
+                p: h for p, h in commit_params["expected_content_sha256"].items() if p not in settled_supplied
+            }
 
     landed_now = set(all_paths)
     unlanded = [p for p in obliged_changed if p not in landed_now]

@@ -151,8 +151,30 @@ def _fire_b(root: Path) -> dict:
     return terminal_commit._handler(params, repo_root=root / ".git")
 
 
-def test_b_commit_refuses_a_halted_peers_hunk_it_did_not_produce_and_leaves_it_dirty(repo):
+def test_b_commit_settles_a_halted_peers_unproduced_hunk_and_leaves_it_dirty(repo):
     seed = _git(["rev-parse", "HEAD"], repo)
+
+    out = _fire_b(repo)
+
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert _git(["rev-parse", "HEAD"], repo) != seed
+    landed = _git(["show", f"HEAD:{X}"], repo).replace(_CRLF, chr(10))
+    assert f"x_{B_LINE} = 'B-EDIT'" in landed
+    assert "A-EDIT" not in landed
+    worktree = (repo / X).read_bytes().decode("utf-8")
+    assert f"x_{A_LINE} = 'A-EDIT'" in worktree
+    assert f"x_{B_LINE} = 'B-EDIT'" in worktree
+    assert _git(["status", "--porcelain", "--", X], repo)[:2].strip() == "M"
+    settled = [e for e in out["provenance"] if e["reason"] == "foreign-hunk-settled"]
+    assert [e["path"] for e in settled] == [X], out["provenance"]
+    assert RUN_A in settled[0]["detail"], settled
+
+
+def test_b_commit_still_refuses_a_live_peers_unproduced_hunk(repo):
+    seed = _git(["rev-parse", "HEAD"], repo)
+    (repo / "state" / "warp" / RUN_A / "halted.json").unlink()
+    run_token.mint(repo, RUN_A, "run-a.mjs", session_id="5e1f0000-0000-4000-8000-0000000000a1")
 
     out = _fire_b(repo)
 
@@ -160,10 +182,7 @@ def test_b_commit_refuses_a_halted_peers_hunk_it_did_not_produce_and_leaves_it_d
     assert out["refused"] == "foreign-hunk-unproduced", out
     assert f"probable owner {RUN_A}" in out["error"], out
     assert _git(["rev-parse", "HEAD"], repo) == seed
-    worktree = (repo / X).read_bytes().decode("utf-8")
-    assert f"x_{A_LINE} = 'A-EDIT'" in worktree
-    assert f"x_{B_LINE} = 'B-EDIT'" in worktree
-    assert _git(["status", "--porcelain", "--", X], repo)[:2].strip() == "M"
+    assert f"x_{A_LINE} = 'A-EDIT'" in (repo / X).read_bytes().decode("utf-8")
 
 
 def test_b_commit_lands_a_hunk_on_lines_it_rewrote_itself_without_a_refusal(overlap_repo):

@@ -175,6 +175,54 @@ def test_foreign_doc_without_baseline_is_withheld_not_own(world):
     assert "unreadable" in found[0].detail
 
 
+def _settle(world, monkeypatch, *, non_live: bool, owners=(PEER,)):
+    from coordinator_core.ops.dispatch_emit import co_declared_settle
+
+    seen: dict = {}
+
+    def fake_blob(root, path, head_bytes, hunks):
+        seen["hunks"] = [(h.old_start, h.old_len, h.new_start, h.new_len) for h in hunks]
+        return "b" * 40
+
+    monkeypatch.setattr(co_declared_settle, "settled_blob", fake_blob)
+    monkeypatch.setattr(hp, "_non_live", lambda root, owner: non_live)
+    world.head(_text({}))
+    world.baseline(_text({2: "PEER"}))
+    world.tree(_text({2: "PEER", 8: "OWN"}))
+    world.owner(*owners)
+    settled: dict = {}
+    found = hp.unproduced_hunks(world.root, ME, [PATH], own_plan="plan-a", settled=settled)
+    return found, settled, seen
+
+
+def test_non_live_owner_settles_the_path_to_the_own_hunks(world, monkeypatch):
+    found, settled, seen = _settle(world, monkeypatch, non_live=True)
+    assert found == []
+    assert settled == {PATH: {"blob": "b" * 40, "owner": PEER, "lines": "2"}}
+    assert seen["hunks"] == [(8, 1, 8, 1)]
+
+
+def test_live_owner_keeps_the_finding_and_settles_nothing(world, monkeypatch):
+    found, settled, _seen = _settle(world, monkeypatch, non_live=False)
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert settled == {}
+
+
+def test_one_live_owner_among_non_live_ones_keeps_the_finding(world, monkeypatch):
+    other = "ask-20261024T000000-cccccc"
+    _settle(world, monkeypatch, non_live=True, owners=(PEER, other))
+    monkeypatch.setattr(hp, "_non_live", lambda root, owner: owner == PEER)
+    settled: dict = {}
+    found = hp.unproduced_hunks(world.root, ME, [PATH], own_plan="plan-a", settled=settled)
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED] and settled == {}
+
+
+def test_unknown_owner_is_never_settled(world, monkeypatch):
+    found, settled, _seen = _settle(world, monkeypatch, non_live=True, owners=())
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED]
+    assert settled == {}
+
+
 def test_foreign_hunk_finding_is_provenance_never_a_refusal():
     from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import is_refusal
 
