@@ -2623,7 +2623,9 @@ def _cmd_draft(args: argparse.Namespace) -> int:
         try:
             body_text = sys.stdin.read() if body_file == "-" else Path(body_file).read_text(encoding="utf-8")
         except OSError as exc:
-            print(f"cross-repo-memo draft: cannot read --body-file: {exc}", file=sys.stderr)
+            # Trap: argparse expands `--body "<text>"` to --body-file, so inline text lands here as a path.
+            print(f"cross-repo-memo draft: --body-file takes a file path, or - for stdin; "
+                  f"cannot read {body_file[:60]!r}: {exc.strerror or exc}", file=sys.stderr)
             return 2
         if not body_text.strip():
             print("cross-repo-memo draft: --body-file is empty", file=sys.stderr)

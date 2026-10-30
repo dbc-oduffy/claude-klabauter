@@ -3,6 +3,8 @@ landing gates (co-declared peer hunks, blob drift, owning chunk) and scratch exp
 
 from __future__ import annotations
 
+import json
+
 import hashlib
 
 import pytest
@@ -55,7 +57,7 @@ def _declare_sibling(repo, path: str) -> None:
     run_token.mint(repo, SIBLING, "sibling.mjs", session_id=SELF)
 
 
-def test_a_product_a_sibling_run_co_declares_is_withheld_and_artifacts_still_land(session):
+def test_a_product_a_sibling_run_co_declares_is_only_halt_record_only_and_artifacts_still_land(session):
     repo = session
     _write_record(repo, RUN)
     _product(repo)
@@ -65,7 +67,8 @@ def test_a_product_a_sibling_run_co_declares_is_withheld_and_artifacts_still_lan
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert out["withheld"]["done.py"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED
+    assert out["withheld"] == {"done.py": "halt-record-only"}
+    assert peer_hunk_gate.PEER_HUNKS_CO_DECLARED not in json.dumps(out["withheld"])
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names
     assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names

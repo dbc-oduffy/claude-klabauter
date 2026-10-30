@@ -30,9 +30,10 @@ RELEASE_RECORDED_LANDED = "recorded-landed"
 RELEASE_SIZING_SHIPPED = "sizing-shipped"
 RELEASE_KEPT_AT_HEAD = "kept-at-head"
 RELEASE_CRITERION_MET = "criterion-met-at-head"
-RELEASE_PHANTOM = "phantom-no-own-hunk-owner-gone"
+RELEASE_OWNER_NOT_LIVE = "owner-not-live"
+_LEGACY_RELEASE_PHANTOM = "phantom-no-own-hunk-owner-gone"
 RELEASE_WITHHELD_CLEAN = "withheld-clean-at-head"
-_RECORDED_RELEASES = frozenset({RELEASE_CRITERION_MET, RELEASE_PHANTOM})
+_RECORDED_RELEASES = frozenset({RELEASE_CRITERION_MET, RELEASE_OWNER_NOT_LIVE, _LEGACY_RELEASE_PHANTOM})
 
 #: Marker field `{path: {reason, at}}`: the halted run no longer holds those paths. Written only by
 #: `declared_hold_release._release_path`; read by `released_path_reasons` and its consumers.

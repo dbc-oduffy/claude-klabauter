@@ -26,7 +26,7 @@ def _halt_own(root, run_id: str) -> None:
     )
 
 
-def test_two_halted_runs_withholding_the_same_path_land_it_whole(repo):
+def test_two_halted_runs_withholding_the_same_path_commit_the_record_and_leave_the_path_dirty(repo):
     gate._sizing(repo, gate.SIZING)
     holder = gate._aged(60, "aaaaaa")
     gate._holder(repo, holder, "halted", plan="docs/plans/other.md", withheld={PATH: "peer-held"})
@@ -39,21 +39,21 @@ def test_two_halted_runs_withholding_the_same_path_land_it_whole(repo):
 
     assert out.get("refused") is None, out
     assert out["committed"] is True, out
-    assert PATH in prod._tree(repo)
+    assert PATH not in prod._tree(repo)
 
 
-def test_a_halted_holder_withholding_the_path_against_a_run_it_does_not_hold_refuses_naming_the_route(repo):
+def test_a_halted_holder_withholding_the_path_lands_naming_it_in_provenance(repo):
     gate._sizing(repo, gate.SIZING)
     holder = gate._aged(60, "aaaaaa")
     gate._holder(repo, holder, "halted", plan="docs/plans/other.md", withheld={PATH: "peer-held"})
 
     out, head = gate._land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    text = str(out)
-    assert f"Mutual hold: run {holder} withholds {PATH}" in text, out
-    assert f"dispatch.record_halted_run_landed {{run_id: {holder}" in text, out
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert holder in str(gate._prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), out
+    assert "Mutual hold" not in str(out), out
+    assert prod._git(["rev-parse", "HEAD"], repo).strip() != head
 
 
 def test_a_live_landing_run_is_held_by_a_halted_holder_even_when_the_mirror_view_names_it_first(repo, monkeypatch):
@@ -84,6 +84,7 @@ def test_two_halted_runs_are_mutual_only_when_both_withhold_the_path(repo, monke
     gate._holder(repo, holder, "halted", plan="docs/plans/other.md", withheld={PATH: "peer-held"})
     own = gate._aged(30, "dddddd")
     _halt_own(repo, own)
+    prod._author(repo, PATH, "x = 1" + chr(10))
     monkeypatch.setattr(sibling_claims, "sibling_run_claims", lambda *a, **k: {PATH: own})
 
     assert peer_hunk_gate._mutual_halted_hold(repo, own, holder, PATH) is True
@@ -110,12 +111,14 @@ def test_refusal_message_tails_the_uncapped_hunk_count(repo, monkeypatch):
     assert f"Uncommitted hunks on {PATH} (held by run {holder}; may include your own): @@ -1,1 +1,1 @@ (+3 more)." in text, text
 
 
-def test_a_halted_holder_not_withholding_the_path_names_no_mutual_route(repo):
+def test_a_halted_holder_not_withholding_the_path_lands_and_names_no_mutual_route(repo):
     gate._sizing(repo, gate.SIZING)
     holder = gate._aged(60, "aaaaaa")
     gate._holder(repo, holder, "halted", plan="docs/plans/other.md")
 
     out, _head = gate._land_dirty(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert holder in str(gate._prov(out, peer_hunk_gate.PEER_HUNKS_CO_DECLARED)), out
     assert "Mutual hold" not in str(out), out

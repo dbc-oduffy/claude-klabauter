@@ -177,14 +177,15 @@ def test_recorded_criterion_met_release_frees_halted_only(tmp_path):
     assert hr.release_reason(root, r, None, None) is None
 
 
-def test_recorded_phantom_release_frees_halted_only(tmp_path):
+def test_recorded_owner_not_live_release_frees_halted_only(tmp_path):
     root = _root(tmp_path)
-    record = {"reason": hr.RELEASE_PHANTOM, "sha": "a" * 40}
+    record = {"reason": hr.RELEASE_OWNER_NOT_LIVE, "sha": "a" * 40}
     h, r = _rid("ask", 300, "aaaaaa"), _rid("ask", 200, "bbbbbb")
     _released(root, h, "halted", record)
     _released(root, r, "resumed", record)
-    assert hr.RELEASE_PHANTOM == "phantom-no-own-hunk-owner-gone"
-    assert hr.release_reason(root, h, None, None) == hr.RELEASE_PHANTOM
+    assert hr.RELEASE_OWNER_NOT_LIVE == "owner-not-live"
+    assert hr._LEGACY_RELEASE_PHANTOM == "phantom-no-own-hunk-owner-gone"
+    assert hr.release_reason(root, h, None, None) == hr.RELEASE_OWNER_NOT_LIVE
     assert hr.release_reason(root, r, None, None) is None
 
 

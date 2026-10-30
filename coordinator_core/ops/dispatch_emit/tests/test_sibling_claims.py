@@ -43,6 +43,10 @@ def _declare(repo: Path, run_id: str, *writes: str, **extra) -> Path:
 
 def _halt(rdir: Path, *withheld: str) -> None:
     marker: dict = {"status": "halted"}
+    for p in withheld:
+        target = rdir.parents[2] / p
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("dirty" + chr(10), encoding="utf-8")
     if withheld:
         marker["run_artifacts"] = {"withheld": {p: "left in tree" for p in withheld}}
     (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")
@@ -197,6 +201,9 @@ def _bind(repo: Path, run_id: str, marker: str | None, *, sizing: str = SIZING, 
     (rec / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
     if marker:
         body = {"status": marker, "sizing_rel": sizing, **({"plan": plan} if plan else {})}
+        for p in withheld:
+            (repo / p).parent.mkdir(parents=True, exist_ok=True)
+            (repo / p).write_text("dirty" + chr(10), encoding="utf-8")
         if withheld:
             body["run_artifacts"] = {"withheld": {p: "left in tree" for p in withheld}}
         (rec / "halted.json").write_text(json.dumps(body), encoding="utf-8")
@@ -289,6 +296,9 @@ def _spine_only_halted(repo: Path, path: str, withheld: tuple = ()) -> str:
     rdir.mkdir(parents=True)
     (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/sp.yaml"}), encoding="utf-8")
     marker: dict = {"status": "halted"}
+    for p in withheld:
+        (repo / p).parent.mkdir(parents=True, exist_ok=True)
+        (repo / p).write_text("dirty" + chr(10), encoding="utf-8")
     if withheld:
         marker["run_artifacts"] = {"withheld": {p: "left" for p in withheld}}
     (rdir / "halted.json").write_text(json.dumps(marker), encoding="utf-8")

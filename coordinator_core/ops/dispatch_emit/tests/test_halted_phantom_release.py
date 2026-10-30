@@ -1,4 +1,4 @@
-"""phantom_holders: dead owner and no own hunk in any withheld path."""
+"""phantom_holders: a dead owner releases, hunks or not."""
 
 from __future__ import annotations
 
@@ -17,63 +17,29 @@ def _patch(monkeypatch, owners: dict, live: set):
     monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid in live)
 
 
-def _dirty(calls: list, paths=()):
-    def dirty():
-        calls.append(1)
-        return set(paths)
-
-    return dirty
-
-
-def test_dead_and_clean_is_phantom(monkeypatch, tmp_path: Path):
+def test_dead_owner_is_phantom(monkeypatch, tmp_path: Path):
     _patch(monkeypatch, {H: "s1"}, set())
-    got = hpr.phantom_holders(tmp_path, [H], {H: {PATH}}, _dirty([]), lambda r, p: set(p))
-    assert got == {H}
+    assert hpr.phantom_holders(tmp_path, [H], {H: {PATH}}) == {H}
 
 
-def test_live_owner_is_not_phantom_and_dirty_never_read(monkeypatch, tmp_path: Path):
+def test_live_owner_is_not_phantom(monkeypatch, tmp_path: Path):
     _patch(monkeypatch, {H: "s1"}, {"s1"})
-    calls: list = []
-    got = hpr.phantom_holders(tmp_path, [H], {H: {PATH}}, _dirty(calls), lambda r, p: set())
-    assert got == set()
-    assert calls == []
+    assert hpr.phantom_holders(tmp_path, [H], {H: {PATH}}) == set()
 
 
 def test_unknown_owner_is_not_phantom(monkeypatch, tmp_path: Path):
     _patch(monkeypatch, {}, set())
-    calls: list = []
-    assert hpr.phantom_holders(tmp_path, [H], {H: {PATH}}, _dirty(calls), lambda r, p: set()) == set()
-    assert calls == []
-
-
-def test_dead_dirty_attributed_holds(monkeypatch, tmp_path: Path):
-    _patch(monkeypatch, {H: "s1"}, set())
-    got = hpr.phantom_holders(tmp_path, [H], {H: {PATH}}, _dirty([], {PATH}), lambda r, p: set(p))
-    assert got == set()
-
-
-def test_dead_dirty_not_attributed_is_phantom(monkeypatch, tmp_path: Path):
-    _patch(monkeypatch, {H: "s1"}, set())
-    asked: list = []
-
-    def attributable(rid, paths):
-        asked.append((rid, set(paths)))
-        return set()
-
-    got = hpr.phantom_holders(tmp_path, [H], {H: {PATH}}, _dirty([], {PATH, "other.py"}), attributable)
-    assert got == {H}
-    assert asked == [(H, {PATH})]
+    assert hpr.phantom_holders(tmp_path, [H], {H: {PATH}}) == set()
 
 
 def test_empty_withheld_is_not_phantom(monkeypatch, tmp_path: Path):
     _patch(monkeypatch, {H: "s1"}, set())
-    assert hpr.phantom_holders(tmp_path, [H], {H: set()}, _dirty([]), lambda r, p: set()) == set()
+    assert hpr.phantom_holders(tmp_path, [H], {H: set()}) == set()
 
 
 def test_reader_exception_returns_empty(monkeypatch, tmp_path: Path):
-    _patch(monkeypatch, {H: "s1"}, set())
+    def boom(root, rid):
+        raise RuntimeError("receipt unreadable")
 
-    def boom():
-        raise RuntimeError("status failed")
-
-    assert hpr.phantom_holders(tmp_path, [H], {H: {PATH}}, boom, lambda r, p: set()) == set()
+    monkeypatch.setattr(halted_run, "recorded_emitter", boom)
+    assert hpr.phantom_holders(tmp_path, [H], {H: {PATH}}) == set()

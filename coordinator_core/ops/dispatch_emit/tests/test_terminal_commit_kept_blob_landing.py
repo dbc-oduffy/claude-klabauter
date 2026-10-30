@@ -27,9 +27,9 @@ PEER_TEXT = "x = 2\npeer = 1\n"
 
 def _git(args, cwd: Path, stdin: str | None = None) -> str:
     return subprocess.run(
-        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True, input=stdin,
-        **no_console_creationflags(),
-    ).stdout.strip()
+        ["git", "-C", str(cwd), *args], capture_output=True, check=True,
+        input=None if stdin is None else stdin.encode(), **no_console_creationflags(),
+    ).stdout.decode().strip()
 
 
 @pytest.fixture
@@ -96,15 +96,18 @@ def test_a_recorded_kept_blob_lands_and_the_peer_hunk_stays_in_the_worktree(repo
     assert (repo / PATH).read_text(encoding="utf-8") == PEER_TEXT
 
 
-def test_a_co_declared_path_with_no_recorded_blob_refuses_without_a_path_level_fallback(repo):
+def test_a_co_declared_path_with_no_recorded_blob_lands_whole_naming_the_peer_in_provenance(repo):
     _declare_sibling(repo)
     head = _git(["rev-parse", "HEAD"], repo)
 
     out = _fire(repo)
 
-    assert out["committed"] is False, out
-    assert out["refused"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert [e["reason"] for e in out["provenance"]] == [peer_hunk_gate.PEER_HUNKS_CO_DECLARED], out
+    assert SIBLING in str(out["provenance"]), out
+    assert _git(["rev-parse", "HEAD"], repo) != head
+    assert _git(["show", f"HEAD:{PATH}"], repo) == PEER_TEXT.strip()
     assert (repo / PATH).read_text(encoding="utf-8") == PEER_TEXT
 
 
@@ -122,7 +125,7 @@ def test_a_recorded_blob_missing_from_the_object_store_refuses(repo):
 
 def _record_own_write(repo: Path, text: str) -> None:
     """The run session's latest own write of PATH, as the touch record carries it."""
-    (repo / PATH).write_text(text, encoding="utf-8")
+    (repo / PATH).write_bytes(text.encode())
     sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SELF)
     touch_record.append_event(
         sink, session_id=SELF, agent_id=None, verb="T", path=PATH,

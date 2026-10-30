@@ -9,8 +9,8 @@ is never read) whose status is still unresolved.
 Invariants: in-process file reads only (no spawn), except the
 `halted_criterion_met.met_at_head` reads (a status and a log) when a surviving holder is halted (it is recorded as
 `released` on its marker before its hold is dropped; an error keeps every hold); a halted holder
-whose owner session is not live and whose withheld paths carry no hunk of its own is released first
-(`RELEASE_PHANTOM`, sharing the one status read; no extra spawn); an unreadable
+whose owner session is not live (hunks or not) is released first
+(`RELEASE_OWNER_NOT_LIVE`, sharing the one status read; no extra spawn); an unreadable
 record contributes nothing and nothing raises; two halted runs (both halted, both withholding the
 path) against each other hold nothing (the path lands whole, carrying both), while a live landing
 run is held by a halted holder; a halted run that
@@ -141,8 +141,8 @@ def co_declared_peer_holds(
     a live sibling with no stage manifest is also read through its plan spine's `writes`. A
     fresh-token sibling minted at or after `minted_before=(minted_at, run_id)` is junior and
     claims nothing. Sorted by path. Never raises; a claim read that fails holds every declared wanted
-    path under `UNREADABLE_PEER_CLAIMS`. Side effect: a halted holder that is phantom (owner gone, no
-    own hunk) or whose criterion is met at HEAD gets `released` written to its halt marker and is
+    path under `UNREADABLE_PEER_CLAIMS`. Side effect: a halted holder that is phantom (its owner session
+    is not live, whatever hunk it left) or whose criterion is met at HEAD gets `released` written to its halt marker and is
     dropped from the result."""
     root = Path(worktree_root)
     wanted = sorted({_norm(p) for p in landing_paths if p} - {""})
@@ -264,42 +264,38 @@ def _release_criterion_met(
     root: Path, holds: list, *, landing_run_id: Optional[str] = None, landing_plan: Optional[str] = None,
 ) -> list:
     """`holds` without the halted holders released on the would-refuse path; each release is recorded
-    on its marker (`released`) before its hold is dropped. Two kinds, both read through one shared
-    dirty reader: a phantom holder (owner session not live, no hunk of its own in any withheld path:
-    `RELEASE_PHANTOM`), then a holder whose landing commit is reachable from HEAD with its withheld
-    paths clean (`RELEASE_CRITERION_MET`). Up to two git spawns (one `git status`, one `git log`),
-    only when a halted holder survives the baseline check (the spawns the budgeted-path gate must
-    count). Any error keeps every hold."""
+    on its marker (`released`) before its hold is dropped. Two kinds: a phantom holder (owner session
+    not live, hunks or not: `RELEASE_OWNER_NOT_LIVE`; reads no dirt), then, through one dirty reader, a holder
+    whose landing commit is reachable from HEAD with its withheld paths clean (`RELEASE_CRITERION_MET`).
+    Up to two git spawns (one `git status`, one `git log`) plus `head_sha` when a phantom is found, only
+    when a halted holder exists (the spawns the budgeted-path gate must count). Any error keeps every
+    hold. `landing_run_id` and `landing_plan` are no longer read here (callers still pass them)."""
     try:
         from coordinator_core.git import git_state
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import (
-            halted_criterion_met, halted_hold_release, halted_hunk_attribution, halted_phantom_release,
-            halted_run, sibling_claims,
+            halted_criterion_met, halted_hold_release, halted_phantom_release, halted_run, sibling_claims,
         )
         from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
         halted = sorted({s for _p, s in holds if warp_run_deliverable._halted(root, s)})
         own_withheld = {s: {_norm(p) for p in halted_run.halted_withheld(record_dir(root, s))} for s in halted}
-        halted = [s for s in halted if not _holds_baselined_path(root, s, holds, own_withheld[s])]
         if not halted:
             return holds
-        withheld = set().union(*(own_withheld[s] for s in halted))
-        dirty = sibling_claims._dirty_reader(root, withheld)
         released = set()
-        attr = halted_hunk_attribution.reader(root, landing_run_id, landing_plan=landing_plan)
-        only_withheld = [
-            s for s in halted if all(_norm(p) in own_withheld[s] for p, sib in holds if sib == s)
-        ]
-        phantom = halted_phantom_release.phantom_holders(root, only_withheld, own_withheld, dirty, attr)
+        phantom = halted_phantom_release.phantom_holders(root, halted, own_withheld)
         head = git_state.head_sha(root) if phantom else None
         for run_id in sorted(phantom) if head else ():
-            if halted_run.record_released(record_dir(root, run_id), head, halted_hold_release.RELEASE_PHANTOM):
+            if halted_run.record_released(record_dir(root, run_id), head, halted_hold_release.RELEASE_OWNER_NOT_LIVE):
                 _LOG.info(
-                    "halted run %s released: %s at %s", run_id, halted_hold_release.RELEASE_PHANTOM, head,
+                    "halted run %s released: %s at %s", run_id, halted_hold_release.RELEASE_OWNER_NOT_LIVE, head,
                 )
                 released.add(run_id)
-        remaining = [s for s in halted if s not in released]
+        remaining = [
+            s for s in halted
+            if s not in released and not _holds_baselined_path(root, s, holds, own_withheld[s])
+        ]
+        dirty = sibling_claims._dirty_reader(root, set().union(*(own_withheld[s] for s in remaining))) if remaining else None
         met = halted_criterion_met.met_at_head(root, remaining, dirty) if remaining else {}
         for run_id, sha in met.items():
             if halted_run.record_released(

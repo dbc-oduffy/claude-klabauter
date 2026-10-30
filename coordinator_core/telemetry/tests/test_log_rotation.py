@@ -152,3 +152,30 @@ def test_rotate_on_cadence_checks_once_per_window_then_again(tmp_path: Path, mon
     assert len(calls) == 1
     assert log_rotation.rotate_on_cadence(logs_dir, now=200.0) == 1
     assert len(calls) == 2
+
+
+def test_detached_rotation_never_blocks_the_caller_and_starts_one_sweep_per_window(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import time
+
+    from coordinator_core.telemetry import log_rotation
+
+    release = threading.Event()
+    sweeps = []
+
+    def stalled(logs_dir):
+        sweeps.append(logs_dir)
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(log_rotation, "rotate_all_known_sinks", stalled)
+    monkeypatch.setattr(log_rotation, "_last_checked", {})
+    t0 = time.monotonic()
+    log_rotation.rotate_on_cadence_detached(tmp_path)
+    log_rotation.rotate_on_cadence_detached(tmp_path)
+    assert time.monotonic() - t0 < 1.0
+    release.set()
+    deadline = time.monotonic() + 5
+    while not sweeps and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sweeps == [tmp_path]

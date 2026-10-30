@@ -113,6 +113,8 @@ def test_record_op_latency_rotates_oversized_sinks_at_default_arguments(tmp_path
     from coordinator_core.telemetry import log_rotation
 
     monkeypatch.setattr(log_rotation, "_last_checked", {})
+    # Run the detached sweep inline so the rotate-then-append order is deterministic here.
+    monkeypatch.setattr(log_rotation, "rotate_on_cadence_detached", log_rotation.rotate_on_cadence)
     fake_common_dir = tmp_path / ".git"
     logs = fake_common_dir / "coordinator-sessions" / "logs"
     logs.mkdir(parents=True)

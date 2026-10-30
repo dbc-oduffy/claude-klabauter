@@ -13,6 +13,12 @@ from coordinator_core.ops.dispatch_emit.tests.test_peer_hunk_gate import (  # no
 UNLANDED = [("C1", PATH, "peer-held")]
 
 
+def _dirty(repo):
+    """The halted run's withheld path is left dirty in the tree, so its halt record still withholds it."""
+    (repo / PATH).parent.mkdir(parents=True, exist_ok=True)
+    (repo / PATH).write_bytes(b"x = 1" + bytes([10]))
+
+
 def test_a_released_halted_run_never_holds_its_successor(repo):
     halted = _release_fixture(repo, "superseded")
     held = {PATH: [halted]}
@@ -21,6 +27,7 @@ def test_a_released_halted_run_never_holds_its_successor(repo):
 
 def test_a_halted_run_still_holding_refuses_the_successor(repo):
     halted = _release_fixture(repo, "open")
+    _dirty(repo)
     held = {PATH: [halted]}
     assert spl.sibling_held_product(UNLANDED, held, root=repo, own_run_id=OWN) == [("C1", PATH, [halted])]
 
@@ -47,6 +54,7 @@ def test_a_session_holder_is_not_a_released_run(repo):
 
 def test_gate_releases_the_superseded_predecessor_and_still_refuses_a_different_plan_peer(repo):
     halted = _release_fixture(repo, "open", plan="docs/plans/other.md")
+    _dirty(repo)
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], own_plan="docs/plans/p.md") == [
         (PATH, halted)
     ]
@@ -57,6 +65,7 @@ def test_gate_releases_the_superseded_predecessor_and_still_refuses_a_different_
 
 def test_a_land_only_ask_is_never_held_by_its_own_halted_run(repo):
     halted = _release_fixture(repo, "open")
+    _dirty(repo)
     held = {PATH: [halted]}
     assert spl.sibling_held_product(UNLANDED, held, root=repo, own_run_id=halted) == []
     assert spl.sibling_held_product(UNLANDED, held, root=repo, own_run_id=OWN) == [("C1", PATH, [halted])]

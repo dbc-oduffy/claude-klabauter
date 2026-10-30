@@ -1,4 +1,4 @@
-"""co_declared_peer_holds releases a halted holder whose owner is gone and who has no hunk of its own."""
+"""co_declared_peer_holds releases a halted holder whose owner session is gone, hunks or not."""
 
 from __future__ import annotations
 
@@ -47,6 +47,8 @@ def _receipt(root: Path, run_id: str, session: str = OWNER) -> None:
 def _holder(root: Path, run_id: str, *, baseline: str | None = "0" * 40) -> Path:
     rdir = root / "state" / "warp" / run_id
     rdir.mkdir(parents=True)
+    (root / PATH).parent.mkdir(exist_ok=True)
+    (root / PATH).write_text("dirty\n", encoding="utf-8")
     manifest = {"rows": [{"id": "C1", "writes": [PATH]}], "doc_writes": []}
     if baseline:
         manifest["write_baseline"] = {PATH: baseline}
@@ -88,7 +90,7 @@ def test_phantom_holder_is_released_with_the_head_sha(root, monkeypatch):
     _liveness(monkeypatch, False)
 
     assert _holds(root) == []
-    assert _released(rdir) == {"reason": halted_hold_release.RELEASE_PHANTOM, "sha": _git(root, "rev-parse", "HEAD")}
+    assert _released(rdir) == {"reason": halted_hold_release.RELEASE_OWNER_NOT_LIVE, "sha": _git(root, "rev-parse", "HEAD")}
     assert json.loads((rdir / "halted.json").read_text(encoding="utf-8"))["status"] == "halted"
 
 
@@ -110,16 +112,55 @@ def test_unknown_owner_still_holds(root, monkeypatch):
     assert _released(rdir) is None
 
 
-def test_dead_owner_with_its_own_kept_hunk_still_holds(root, monkeypatch):
+def test_dead_owner_with_its_own_kept_hunk_is_released(root, monkeypatch):
     rdir = _holder(root, H1)
     _receipt(root, H1)
     _liveness(monkeypatch, False)
-    (root / "pkg").mkdir()
     (root / PATH).write_text("hunk\n", encoding="utf-8")
     kept = {"chunks": {"C1": {"paths": {PATH: blob_sha(b"hunk\n")}}}, "plan_gate": None}
     (rdir / "kept.json").write_text(json.dumps(kept), encoding="utf-8")
 
-    assert [s for _p, s in _holds(root)] == [H1]
+    assert _holds(root) == []
+    assert _released(rdir)["reason"] == halted_hold_release.RELEASE_OWNER_NOT_LIVE
+
+
+def _two_path_holder(root: Path, run_id: str, impl: str, tests: str) -> Path:
+    rdir = root / "state" / "warp" / run_id
+    rdir.mkdir(parents=True)
+    for rel in (impl, tests):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("dirty\n", encoding="utf-8")
+    manifest = {
+        "rows": [{"id": "C1", "writes": [impl, tests]}],
+        "doc_writes": [],
+        "write_baseline": {impl: "0" * 40, tests: "0" * 40},
+    }
+    (rdir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    withheld = {impl: "peer-held", tests: "peer-held"}
+    (rdir / "halted.json").write_text(
+        json.dumps({"status": "halted", "run_artifacts": {"withheld": withheld}}), encoding="utf-8"
+    )
+    return rdir
+
+
+def test_non_live_claimant_never_splits_an_implementation_file_from_its_tests(root, monkeypatch):
+    impl, tests = "scripts/run_band_extraction.py", "scripts/tests/test_run_band_extraction.py"
+    rdir = _two_path_holder(root, H1, impl, tests)
+    _receipt(root, H1)
+    _liveness(monkeypatch, False)
+
+    assert peer_hunk_gate.co_declared_peer_holds(root, OWN, [impl, tests], [impl, tests]) == []
+    assert _released(rdir)["reason"] == halted_hold_release.RELEASE_OWNER_NOT_LIVE
+
+
+def test_live_claimant_still_holds_the_implementation_and_its_tests(root, monkeypatch):
+    impl, tests = "scripts/run_band_extraction.py", "scripts/tests/test_run_band_extraction.py"
+    rdir = _two_path_holder(root, H1, impl, tests)
+    _receipt(root, H1)
+    _liveness(monkeypatch, True)
+
+    held = {p for p, _s in peer_hunk_gate.co_declared_peer_holds(root, OWN, [impl, tests], [impl, tests])}
+    assert held == {impl, tests}
     assert _released(rdir) is None
 
 
@@ -140,7 +181,7 @@ def test_land_run_commits_past_a_phantom_holder_and_records_the_release(repo, mo
 
     assert out.get("refused") is None, out
     assert out.get("committed") is True, out
-    assert _released(rdir)["reason"] == halted_hold_release.RELEASE_PHANTOM
+    assert _released(rdir)["reason"] == halted_hold_release.RELEASE_OWNER_NOT_LIVE
     assert prod._git(["show", "HEAD:" + attr.PATH], repo) == attr.B2
 
 
@@ -158,10 +199,11 @@ def test_land_run_commits_past_a_live_owner_holder_naming_it_in_provenance(repo,
     assert _released(rdir) is None
 
 
-def test_land_run_commits_past_a_dead_owner_holder_with_real_hunks_naming_it_in_provenance(repo, monkeypatch):
+def test_land_run_commits_past_a_dead_owner_holder_with_real_hunks_and_records_the_release(repo, monkeypatch):
     out, rdir = _phantom_landing(repo, monkeypatch, live=False, receipt=True, b_landing=attr.B1)
 
     assert out.get("refused") is None, out
     assert out.get("committed") is True, out
-    assert _names_peer_hunks_in_provenance(out), out
-    assert _released(rdir) is None
+    assert _released(rdir)["reason"] == halted_hold_release.RELEASE_OWNER_NOT_LIVE
+    released = _released(rdir)
+    assert len(released["sha"]) == 40 and released["sha"] != out["sha"], (released, out)

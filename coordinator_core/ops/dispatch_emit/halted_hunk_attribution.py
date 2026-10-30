@@ -13,9 +13,7 @@ holder's dirty declared paths that H's own work explains. The rules, first match
 7. anything else: hold.
 
 Invariants: zero spawns (file reads and one index parse); never raises -- any read error holds;
-a path H's halt record withholds is the caller's to hold and is never decided here, except that
-`halted_phantom_release.phantom_holders` asks about a dead-owner holder's withheld dirty paths,
-where a hold still means "keep holding". Stdlib only at
+a path H's halt record withholds is the caller's to hold and is never decided here. Stdlib only at
 module top (the land_run / terminal_commit cold-import pins); every reader is imported lazily.
 """
 
@@ -111,9 +109,7 @@ def reader(
     root: Path, landing_run_id: Optional[str], *, landing_plan: Optional[str] = None,
 ) -> Callable[[str, Iterable[str]], set]:
     """`attributable(halted_run_id, paths) -> set`: the forward-slash `paths` that rules 1-7 hold
-    for the halted run. The caller passes only paths already known dirty and not withheld (the one
-    exception: `halted_phantom_release.phantom_holders` passes a dead-owner holder's withheld dirty
-    paths). The
+    for the halted run. The caller passes only paths already known dirty and not withheld. The
     landing run's baseline, start epoch, index snapshot and checkpoint-landed paths are each read
     at most once per reader, and only when a rule reaches them. Never raises."""
     root = Path(root)

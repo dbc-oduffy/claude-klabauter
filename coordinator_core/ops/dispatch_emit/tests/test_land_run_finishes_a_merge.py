@@ -139,7 +139,7 @@ def test_a_halted_holder_whose_halt_record_is_on_the_merged_branch_does_not_hold
     assert peer_hunk_gate.PEER_HUNKS_CO_DECLARED not in json.dumps(out)
 
 
-def test_a_halted_holder_whose_commits_are_not_on_the_merged_branch_still_holds(repo, monkeypatch):
+def test_a_halted_holder_whose_commits_are_not_on_the_merged_branch_lands_naming_it_in_provenance(repo, monkeypatch):
     ours, theirs = _merging(repo, "unrelated change")
     _resolve(repo)
     _own(repo, ours, theirs)
@@ -147,10 +147,10 @@ def test_a_halted_holder_whose_commits_are_not_on_the_merged_branch_still_holds(
 
     out = prod._land(repo)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert H in json.dumps(out)
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == ours
-    assert (repo / ".git" / "MERGE_HEAD").exists()
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert H in json.dumps([e for e in out["provenance"] if e["reason"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED]), out
+    assert not (repo / ".git" / "MERGE_HEAD").exists()
 
 
 def test_since_base_still_guards_a_path_the_merge_does_not_move(repo):

@@ -424,9 +424,9 @@ def _blob(root, text: str) -> str:
     from coordinator_core.win_portability import no_console_creationflags
 
     return subprocess.run(
-        ["git", "hash-object", "-w", "--stdin"], cwd=str(root), input=text, capture_output=True, text=True,
+        ["git", "hash-object", "-w", "--stdin"], cwd=str(root), input=text.encode(), capture_output=True,
         check=True, **no_console_creationflags(),
-    ).stdout.strip()
+    ).stdout.decode().strip()
 
 
 def test_a_sibling_appending_to_a_per_run_artifact_does_not_block_the_landing(repo, monkeypatch):

@@ -42,8 +42,8 @@ def world(tmp_path, monkeypatch):
     _git(tmp_path, "config", "user.name", "t")
     (tmp_path / "src").mkdir()
     (tmp_path / "docs" / "delivery").mkdir(parents=True)
-    (tmp_path / SRC).write_text(_text(10))
-    (tmp_path / DELIVERY).write_text("head1\nhead2\n")
+    (tmp_path / SRC).write_bytes(_text(10).encode())
+    (tmp_path / DELIVERY).write_bytes("head1\nhead2\n".encode())
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "base")
     baselines: dict = {}
@@ -77,7 +77,7 @@ def test_per_run_artifact_names():
 def test_same_parent_sibling_with_disjoint_hunks_stages_only_own(world):
     world.parent(ME)
     world.parent(SIB)
-    (world.root / SRC).write_text(_text(10, {2: "mine", 9: "theirs"}))
+    (world.root / SRC).write_bytes(_text(10, {2: "mine", 9: "theirs"}).encode())
     world.baseline(ME, SRC, _text(10, {9: "theirs"}))
     world.baseline(SIB, SRC, _text(10, {2: "mine"}))
     stage, still = cds.settle(world.root, ME, [(SRC, SIB)])
@@ -89,7 +89,7 @@ def test_same_parent_sibling_with_disjoint_hunks_stages_only_own(world):
 def test_other_parent_sibling_still_holds(world):
     world.parent(ME)
     world.parent(SIB, "ask-parent-other")
-    (world.root / SRC).write_text(_text(10, {2: "mine", 9: "theirs"}))
+    (world.root / SRC).write_bytes(_text(10, {2: "mine", 9: "theirs"}).encode())
     world.baseline(ME, SRC, _text(10, {9: "theirs"}))
     world.baseline(SIB, SRC, _text(10, {2: "mine"}))
     assert cds.settle(world.root, ME, [(SRC, SIB)]) == ({}, [(SRC, SIB)])
@@ -98,21 +98,21 @@ def test_other_parent_sibling_still_holds(world):
 def test_overlapping_hunks_of_same_parent_sibling_hold(world):
     world.parent(ME)
     world.parent(SIB)
-    (world.root / SRC).write_text(_text(10, {3: "both"}))
+    (world.root / SRC).write_bytes(_text(10, {3: "both"}).encode())
     world.baseline(ME, SRC, _text(10))
     world.baseline(SIB, SRC, _text(10))
     assert cds.settle(world.root, ME, [(SRC, SIB)]) == ({}, [(SRC, SIB)])
 
 
 def test_unreadable_peer_claims_never_settle_even_a_per_run_artifact(world):
-    (world.root / DELIVERY).write_text("head1\nhead2\nmine\n")
+    (world.root / DELIVERY).write_bytes("head1\nhead2\nmine\n".encode())
     world.baseline(ME, DELIVERY, "head1\nhead2\n")
     holds = [(DELIVERY, UNREADABLE_PEER_CLAIMS)]
     assert cds.settle(world.root, ME, holds) == ({}, holds)
 
 
 def test_per_run_artifact_with_a_foreign_parent_sibling_settles_overlapping_appends(world):
-    (world.root / DELIVERY).write_text("head1\nhead2\nmine1\nmine2\ntheirs1\n")
+    (world.root / DELIVERY).write_bytes("head1\nhead2\nmine1\nmine2\ntheirs1\n".encode())
     world.baseline(ME, DELIVERY, "head1\nhead2\n")
     world.baseline(SIB, DELIVERY, "head1\nhead2\nmine1\nmine2\n")
     stage, still = cds.settle(world.root, ME, [(DELIVERY, SIB)])
@@ -121,7 +121,7 @@ def test_per_run_artifact_with_a_foreign_parent_sibling_settles_overlapping_appe
 
 
 def test_settled_blob_carries_only_the_own_inserted_lines(world):
-    (world.root / DELIVERY).write_text("head1\nhead2\nmine1\nmine2\ntheirs1\n")
+    (world.root / DELIVERY).write_bytes("head1\nhead2\nmine1\nmine2\ntheirs1\n".encode())
     world.baseline(ME, DELIVERY, "head1\nhead2\n")
     world.baseline(SIB, DELIVERY, "head1\nhead2\nmine1\nmine2\n")
     stage, _still = cds.settle(world.root, ME, [(DELIVERY, SIB)])
@@ -132,7 +132,7 @@ def test_settled_blob_carries_only_the_own_inserted_lines(world):
 
 
 def test_a_line_both_runs_changed_in_a_per_run_artifact_still_holds(world):
-    (world.root / DELIVERY).write_text("both\nhead2\n")
+    (world.root / DELIVERY).write_bytes("both\nhead2\n".encode())
     world.baseline(ME, DELIVERY, "head1\nhead2\n")
     world.baseline(SIB, DELIVERY, "head1\nhead2\n")
     holds = [(DELIVERY, SIB)]
@@ -140,7 +140,7 @@ def test_a_line_both_runs_changed_in_a_per_run_artifact_still_holds(world):
 
 
 def test_an_unattributed_hunk_in_a_per_run_artifact_holds(world):
-    (world.root / DELIVERY).write_text("head1\nhead2\nstray\n")
+    (world.root / DELIVERY).write_bytes("head1\nhead2\nstray\n".encode())
     world.baseline(ME, DELIVERY, "head1\nhead2\nstray\n")
     world.baseline(SIB, DELIVERY, "head1\nhead2\nstray\n")
     holds = [(DELIVERY, SIB)]

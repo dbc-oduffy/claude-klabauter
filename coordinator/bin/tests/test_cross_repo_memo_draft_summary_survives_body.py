@@ -21,12 +21,15 @@ _ENGINE_ROOT = Path(__file__).resolve().parents[3]
 def _draft(tmp_path: Path, body: str, summary: str | None) -> str:
     sender = tmp_path / "sender_repo"
     sender.mkdir()
+    receiver = tmp_path / "receiver_repo"
+    receiver.mkdir()
     subprocess.run(["git", "init", "-q", str(sender)], check=True, capture_output=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     home = tmp_path / "home"
     (home / "machine-local").mkdir(parents=True)
     (home / "machine-local" / "registry.toml").write_text(
-        f'"repos.sender_repo" = "{sender.as_posix()}"\n"coordinator.feature.cross_repo_memos" = "on"\n',
+        f'"repos.sender_repo" = "{sender.as_posix()}"\n"repos.receiver_repo" = "{receiver.as_posix()}"\n'
+        '"coordinator.feature.cross_repo_memos" = "on"\n',
         encoding="utf-8",
     )
     body_file = tmp_path / "body.md"
@@ -39,7 +42,7 @@ def _draft(tmp_path: Path, body: str, summary: str | None) -> str:
         "COORDINATOR_WARM": "0",
     }
     argv = [sys.executable, str(_BIN / "cross-repo-memo.py"), "draft", "summary-survives",
-            "--to", "sender_repo-em", "--title", "T", "--kind", "ask",
+            "--to", "receiver_repo-em", "--title", "T", "--kind", "ask",
             "--body-file", str(body_file)]
     if summary is not None:
         argv += ["--summary", summary]

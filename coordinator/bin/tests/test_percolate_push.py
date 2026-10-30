@@ -213,6 +213,7 @@ def _run_push(
     reconcile_ok: bool = True,
     reconcile_reason: str = "",
     promote: bool = False,
+    remote_lags: bool = False,
 ):
     dest = str(tmp_path / "dest")
     spy = _SubprocessSpy(
@@ -250,6 +251,7 @@ def _run_push(
         "_reconcile_dest_before_push",
         lambda repo_root, *, out, err: SimpleNamespace(ok=reconcile_ok, reason=reconcile_reason),
     )
+    monkeypatch.setattr(_mod, "_remote_lags_head", lambda dest, branch: remote_lags)
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
 
     argv = ["alpha"]
@@ -322,6 +324,26 @@ def test_nothing_to_push_exits_without_pushing(tmp_path, monkeypatch, capsys):
     assert "nothing to push" in err
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
     assert push_calls == []
+
+
+def test_tracking_ref_in_sync_but_remote_behind_still_pushes(tmp_path, monkeypatch, capsys):
+    # `# branch.ab +0` read off a local tracking ref that matched HEAD while origin lagged.
+    rc, spy, dest = _run_push(tmp_path, monkeypatch, status_stdout=_STATUS_CLEAN_AHEAD_0, remote_lags=True)
+    assert rc == _mod._EXIT_OK
+    assert "already in sync" not in capsys.readouterr().err
+    assert [c for c in spy.calls if c[:1] == ["git"] and c[-1:] == ["push"]]
+
+
+@pytest.mark.parametrize(
+    "ls_remote, expected",
+    [((0, "aaa\trefs/heads/main\n"), False), ((0, "bbb\trefs/heads/main\n"), True),
+     ((0, ""), False), ((128, ""), False)],
+)
+def test_remote_lags_head_compares_remote_tip_to_head(monkeypatch, ls_remote, expected):
+    def fake(cmd, **kwargs):
+        return _completed(*ls_remote) if "ls-remote" in cmd else _completed(0, "aaa\n")
+    monkeypatch.setattr(_mod.subprocess, "run", fake)
+    assert _mod._remote_lags_head("dest", "main") is expected
 
 
 def test_failed_git_status_refuses_rather_than_passing(tmp_path, monkeypatch, capsys):

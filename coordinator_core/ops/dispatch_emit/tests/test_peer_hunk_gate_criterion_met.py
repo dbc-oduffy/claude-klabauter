@@ -68,9 +68,11 @@ def _holds(root: Path) -> list:
     return peer_hunk_gate.co_declared_peer_holds(root, OWN, both, both)
 
 
-def test_met_holder_is_released_recorded_and_never_re_read_while_unmet_holder_holds(root, monkeypatch):
+def test_clean_met_holder_is_freed_unrecorded_and_never_re_read_while_the_dirty_holder_holds(root, monkeypatch):
     r1 = _holder(root, H1)
     r2 = _holder(root, H2, path=PATH2)
+    (root / "pkg").mkdir()
+    (root / PATH2).write_text("hunk" + chr(10), encoding="utf-8")
     sha = _land(root, H1)
     h2_before = (r2 / "halted.json").read_bytes()
     calls = []
@@ -82,9 +84,8 @@ def test_met_holder_is_released_recorded_and_never_re_read_while_unmet_holder_ho
     holds = _holds(root)
 
     assert [s for _p, s in holds] == [H2]
-    assert json.loads((r1 / "halted.json").read_text(encoding="utf-8"))["released"] == {
-        "reason": "criterion-met-at-head", "sha": sha,
-    }
+    assert sha
+    assert "released" not in json.loads((r1 / "halted.json").read_text(encoding="utf-8"))
     assert (r2 / "halted.json").read_bytes() == h2_before
 
     calls.clear()

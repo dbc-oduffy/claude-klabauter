@@ -173,7 +173,7 @@ def test_another_live_holder_lands_with_the_review_advisory(box):
 
 def test_subagent_of_the_live_gem_lands_with_the_review_advisory(box):
     payload = box.payload("global-doctrine/CLAUDE.md", agent_id="agent-1")
-    assert _REVIEW_MARK in _context(guard.check(payload))
+    assert guard.check(payload)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_env_var_claim_admits_nobody_to_the_quiet_path(box, monkeypatch):
@@ -221,7 +221,7 @@ def test_doctrine_advisory_names_the_two_review_checks_and_no_human_route(box, s
     box.state = state
     box.holder_sid = "someone-else"
     target = str(box.doe / "global-doctrine" / "CLAUDE.md")
-    context = _context(guard.check(box.payload(target, sid="caller-2", agent_id="a1")))
+    context = _context(guard.check(box.payload(target, sid="caller-2")))
     assert "byte budget" in context
     assert "no unprompted rewrite" in context
     for forbidden in ("PM", "sentinel", "SendMessage", "coordinator-queue-append"):

@@ -77,15 +77,16 @@ def test_c595ec_shape_dependent_stays_unstarted_after_predecessor_lands(repo):
     )["halted"] == "dependents_unstarted"
 
 
-def test_halted_dependent_owning_hunks_in_the_path_still_holds_it(repo):
+def test_halted_dependent_owning_hunks_in_the_path_lands_naming_it_in_provenance(repo):
     base = _commit_base(repo)
     _halted_dependent(repo, base)
 
     out = _land_predecessor(repo, OTHER_BLOB)
 
-    assert out.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, out
-    assert DEPENDENT in str(out), out
-    assert out.get("committed") is not True
+    assert out.get("refused") is None, out
+    assert out["committed"] is True, out
+    provenance = [e for e in out["provenance"] if e["reason"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED]
+    assert DEPENDENT in str(provenance), out
 
 
 def test_halted_declarer_that_left_the_path_as_staged_does_not_hold_it(repo):

@@ -73,10 +73,9 @@ def test_halted_hold_on_merge_head_ancestry_is_dropped(tmp_path, monkeypatch):
     assert _gate_findings(root, monkeypatch) == []
 
 
-def test_halted_hold_outside_merge_head_ancestry_still_refuses(tmp_path, monkeypatch):
+def test_halted_hold_outside_merge_head_ancestry_is_provenance_never_an_integrity_finding(tmp_path, monkeypatch):
     root = _repo(tmp_path, "unrelated change", P)
-    findings = _gate_findings(root, monkeypatch)
-    assert [f["path"] for f in findings] == [P]
+    assert _gate_findings(root, monkeypatch) == []
 
 
 def test_merge_landing_plan_delegates_with_no_owner(tmp_path, monkeypatch):

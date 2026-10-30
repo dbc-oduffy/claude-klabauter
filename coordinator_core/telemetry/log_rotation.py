@@ -82,6 +82,7 @@ Spec backlink: state/audits/2026-08-15-fleet-degradation-forensics.md
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -224,3 +225,23 @@ def rotate_on_cadence(
         return rotate_all_known_sinks(logs_dir)
     except Exception:
         return 0
+
+
+def rotate_on_cadence_detached(logs_dir: Path) -> None:
+    """``rotate_on_cadence`` on a daemon thread, for a caller on an op's dispatch path.
+
+    Trap: the sweep stats every known sink, and a stalled filesystem held one inline call past
+    the op's 30s budget before the op began (stall dump 2026-10-30, dispatch.land_run). The
+    cadence check stays inline, so an in-window call still costs one dict lookup and spawns nothing."""
+    try:
+        t = time.monotonic()
+        key = str(logs_dir)
+        last = _last_checked.get(key)
+        if last is not None and 0 <= t - last < _CADENCE_SECS:
+            return
+        # Stamped before the thread starts, so concurrent ops in one window start one sweep.
+        _last_checked[key] = t
+        threading.Thread(target=rotate_all_known_sinks, args=(logs_dir,),
+                         name="log-rotation", daemon=True).start()
+    except Exception:
+        pass
