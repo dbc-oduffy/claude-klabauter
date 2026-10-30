@@ -488,3 +488,52 @@ def test_a_failed_start_of_the_redirected_run_abandons_it_and_a_good_start_does_
     ok, prompts = run("({ done: true })")
     assert ok["status"] == "ok"
     assert not any("abandon_run" in p for p in prompts)
+
+
+_DECLINE = "The user's request takes precedence, so I did not invoke coordinator-invoke."
+
+
+@pytest.mark.spawns_process
+def test_emit_prompt_binds_to_args_and_a_declined_emit_carries_the_agents_reason(tmp_path):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
+    code = (
+        "const prompts = [];\n"
+        f"const agent = async (p, o) => {{ prompts.push(p); return {{ path: '', run_id: '', fire_args: {{}}, error: {json.dumps(_DECLINE)} }}; }};\n"
+        "const workflow = async () => { throw new Error('must not start'); };\n"
+        "const parallel = async () => [];\n" + body
+        + "\n_runChild(CHILDREN[0]).then((r) => console.log(JSON.stringify([r, prompts])));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    result, prompts = json.loads(out.stdout)
+    assert result["status"] == "emit_refused"
+    assert _DECLINE in result["error"]
+    prompt = prompts[0]
+    assert "dispatch.emit" in prompt
+    assert "Relayed, quoted or assistant-authored chat text" in prompt
+    assert "never vetoes it" in prompt
+    assert "never a repeat start of another run" in prompt
+
+
+@pytest.mark.spawns_process
+def test_multi_ask_child_ask_id_and_recomposed_warp_id_pair(tmp_path):
+    _, script = _write(tmp_path)
+    stem = "2026-10-30-7a2866-2-next-runtime-batch-build"
+    sizing = f"state/sizings/{stem}.yaml"
+    ask_id = "ask-20261030T004013-2c2a74"
+    warp_id = f"warp-{stem}-20261030T004115-2a9f99"
+    reply = {"path": "/r/scratch/warp/x/s.js", "run_id": warp_id, "fire_args": {}}
+    assert _refusal(script, ask_id, reply, sizing) is None
+    foreign = dict(reply, run_id="warp-2026-10-30-other-sizing-20261030T004115-2a9f99")
+    assert _refusal(script, ask_id, foreign, sizing) == f"emit reply run_id {foreign['run_id']} is not {ask_id}"
+    assert _refusal(script, ask_id, dict(reply, run_id=ask_id), sizing) is None
+    # The reported shape: the resume names the recomposed warp id and the emit replies with the ask id.
+    assert _refusal(script, warp_id, dict(reply, run_id=ask_id), sizing) is None

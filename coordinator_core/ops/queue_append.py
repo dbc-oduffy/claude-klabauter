@@ -1207,6 +1207,37 @@ def write_prepared_entry(prepared: "PreparedEntry") -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Deferral steer (reply-side advisory; the row is always written)
+# ---------------------------------------------------------------------------
+
+_DEFERRAL_SCHEMAS = frozenset({"improvement-queue", "debt-backlog", "bug-backlog"})
+_NAMED_REASON_RE = re.compile(r"\b(tradeoff|other-repo|irreversible|plan-sized)\b", re.IGNORECASE)
+_PLAN_PATH_RE = re.compile(r"(?:^|[\s:(\"'])(?:\S*/)?docs/plans/\S+|\S+\.md\b")
+
+_DEFERRAL_STEER = (
+    "Deferral names no reason (tradeoff | other-repo | irreversible | plan-sized <plan path>). "
+    'Fix it instead: Workflow({name: "coordinator:engine-ask", args: {ask: "<the item, verbatim>"}}).'
+)
+
+
+def _unnamed_deferral_steer(params: dict) -> Optional[str]:
+    """Steer text when an EM deferral schema row names no allowed reason, else None.
+
+    Workers (``created_by_agent`` set) are not steered; an unknown caller is
+    steered. Advisory only: the row is already written.
+    """
+    if params.get("schema") not in _DEFERRAL_SCHEMAS or params.get("created_by_agent"):
+        return None
+    reason = str(params.get("why_blocked") or "")
+    found = {m.lower() for m in _NAMED_REASON_RE.findall(reason)}
+    if not found:
+        return _DEFERRAL_STEER
+    if found == {"plan-sized"} and not _PLAN_PATH_RE.search(reason):
+        return _DEFERRAL_STEER
+    return None
+
+
+# ---------------------------------------------------------------------------
 # JSON-RPC handler
 # ---------------------------------------------------------------------------
 
@@ -1364,4 +1395,7 @@ def _queue_append_handler(
 
     # coordinator_core.ipc's module-level comment above `_SCOPE_TOUCH_PATHS_KEY`).
     result["_scope_touch_paths"] = [result["out_path"]]
+    steer = _unnamed_deferral_steer(params)
+    if steer:
+        result["steer"] = steer
     return result

@@ -360,6 +360,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
         ("_handler",),
     ),
+    # Spawn-free (two file reads), 2026-10-30.
+    "workflow.late_rows": (
+        "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
+        ("_late_rows_handler",),
+    ),
     "hooks.postuse_advisory_dispatch": (
         "coordinator_core/hooks/postuse_advisory_dispatch.py",
         ("_handler",),

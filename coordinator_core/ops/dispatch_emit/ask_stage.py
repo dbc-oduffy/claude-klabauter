@@ -1145,6 +1145,7 @@ def stage(
     waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
     from coordinator_core.ops.dispatch_emit.memo_rows import memo_close_only
 
+    blocking_drops = _criterion_blocking_drops(root, exclusions)
     memo_close = memo_close_only(exclusions, raw_by_id)
     closing_ids = {c["id"] for c in memo_close}
     memo_close_run = bool(memo_close) and not gated and all(o.id in closing_ids for o in owed)
@@ -1169,6 +1170,8 @@ def stage(
             named += "; excluded: " + ", ".join(
                 f"{e['id']} ({e.get('reason')}: {e.get('detail') or ''})" for e in closed
             )
+        if blocking_drops:
+            _record_staging_drops(record, run_id, [{"id": d["id"], "reason": d["reason"]} for d in blocking_drops])
         raise AskStageError(
             f"the spine derives zero dispatchable rows{named}",
             owed_em_ids=[o.id for o in owed],
@@ -1178,6 +1181,18 @@ def stage(
                 for g in gated
                 if g.reason == "external_gate" and g.owner_repo
             ],
+            criterion_blocking_drops=blocking_drops,
+        )
+    if blocking_drops:
+        _record_staging_drops(record, run_id, [{"id": d["id"], "reason": d["reason"]} for d in blocking_drops])
+        raise AskStageError(
+            f"{CRITERION_UNREACHABLE_AT_STAGING}: {plan_posix} cannot reach its exit criterion; unstaged: "
+            + ", ".join(
+                f"{d['id']} ({d['reason']}; fire {d['predecessor_sizing'] or d['predecessor_plan'] or 'its predecessor'} first)"
+                for d in blocking_drops
+            ),
+            plan_path=plan_posix,
+            criterion_blocking_drops=blocking_drops,
         )
 
     context = derive_plan_context(
@@ -1429,6 +1444,57 @@ def stage(
         except LedgerError:
             pass
     return manifest
+
+
+CRITERION_UNREACHABLE_AT_STAGING = "CRITERION-UNREACHABLE-AT-STAGING"
+
+_PREDECESSOR_PLAN_RE = re.compile(r"depends_on_plan (\S+\.md)\b")
+
+
+def _criterion_blocking_drops(root: Path, exclusions: Sequence[Mapping]) -> list[dict]:
+    """`{id, reason, predecessor_plan, predecessor_sizing}` for each row held on an uncoded
+    predecessor plan (`depends_on_plan`) or transitively behind one. `exclusions` is the post-
+    `only_rows` set, so a caller's narrowing never reaches here. One frontmatter read per distinct plan."""
+    roots = {str(e.get("id")): e for e in exclusions if e.get("reason") == "depends_on_plan"}
+    if not roots:
+        return []
+    sizing_by_plan: dict[str, Optional[str]] = {}
+
+    def _plan_and_sizing(root_entry: Mapping) -> tuple[str, Optional[str]]:
+        m = _PREDECESSOR_PLAN_RE.search(str(root_entry.get("detail") or ""))
+        rel = m.group(1) if m else ""
+        if rel and rel not in sizing_by_plan:
+            sizing_by_plan[rel] = _plan_sizing_object(root, rel)
+        return rel, (sizing_by_plan.get(rel) if rel else None)
+
+    out: list[dict] = []
+    for e in exclusions:
+        rid = str(e.get("id"))
+        if rid in roots:
+            root_entry, reason = e, str(e.get("detail") or "depends_on_plan")
+        elif e.get("reason") == "withheld_by_held_dependency" and str(e.get("root")) in roots:
+            root_entry = roots[str(e["root"])]
+            reason = f"withheld behind {e['root']}: {root_entry.get('detail') or 'depends_on_plan'}"
+        else:
+            continue
+        plan, sizing = _plan_and_sizing(root_entry)
+        out.append({"id": rid, "reason": reason, "predecessor_plan": plan, "predecessor_sizing": sizing})
+    return out
+
+
+def _plan_sizing_object(root: Path, plan_rel: str) -> Optional[str]:
+    """The `sizing_object` frontmatter value of the repo plan at `plan_rel`, or None."""
+    path = contained_path(root / plan_rel, [root])
+    if path is None or not path.is_file():
+        return None
+    try:
+        split = split_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if split is None:
+        return None
+    value = read_fm_field_unquoted(split.fm_text, "sizing_object")
+    return value if value and value != "null" else None
 
 
 def _unstaged_row_reasons(
@@ -2032,6 +2098,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             reply["owed_plan"] = exc.plan_path
         if getattr(exc, "gated_rows", None):
             reply["gated_rows"] = exc.gated_rows
+            reply["owed_plan"] = exc.plan_path
+        if getattr(exc, "criterion_blocking_drops", None):
+            reply["criterion_blocking_drops"] = exc.criterion_blocking_drops
             reply["owed_plan"] = exc.plan_path
         return reply
     finally:
