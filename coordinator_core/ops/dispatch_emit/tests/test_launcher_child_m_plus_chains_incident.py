@@ -54,7 +54,7 @@ def _drive(script: str, workflow_results: list, chain_emit: dict, workflow_throw
 
 
 def _good_chain(tmp_path: Path, run_id: str = "ask-r2") -> dict:
-    return {"path": f"{tmp_path.as_posix()}/scratch/warp/{run_id}/c.mjs", "run_id": run_id, "fire_args": {}}
+    return {"path": f"{tmp_path.as_posix()}/scratch/warp/{run_id}.workflow.mjs", "run_id": run_id, "fire_args": {}}
 
 
 def test_child_m_plus_arm_returns_a_hand_off_and_holds_no_start():
@@ -71,7 +71,7 @@ def test_child_m_plus_arm_returns_a_hand_off_and_holds_no_start():
 def test_launcher_emits_and_starts_the_chained_script_in_the_same_run(tmp_path):
     out = _drive(_script(tmp_path), [_CHILD_M_PLUS, {"route": "dispatch", "done": True}], _good_chain(tmp_path))
     assert out["r"] == {"run_id": "ask-r1", "status": "ok", "result": {"route": "dispatch", "done": True, "chained_from": "ask-r1"}}
-    assert [c["scriptPath"] for c in out["calls"]][1] == f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.mjs"
+    assert [c["scriptPath"] for c in out["calls"]][1] == f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs"
     assert [e["label"] for e in out["emits"]] == ["chain-emit-ask-r1"]
     chain_prompt = out["emits"][0]["prompt"]
     assert f'"sizing_path":"{_SIZING}"' in chain_prompt and '"launcher_child":true' in chain_prompt

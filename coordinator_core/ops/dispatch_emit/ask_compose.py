@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.fan_launcher import EMIT_RELAY_AUTHORITY
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     CHAIN_HANDOFF_KEY,
     LAUNCHER_CHILD_EMIT_PARAM,
+    RUN_SCRIPT_SUFFIX,
     STAGE_PENDING_KEY,
     STAGED_INLINE_SLOT,
     STAGED_RESUME_KEY,
@@ -5665,7 +5666,9 @@ def _chain_stage_loop_js() -> str:
         f"      for (let _rd = 0; _why === null && _chained !== null && typeof _chained === 'object' && _chained.{STAGE_PENDING_KEY}; _rd++) {{",
         f"        const _sh = _chained.{STAGE_PENDING_KEY}.handle && _chained.{STAGE_PENDING_KEY}.handle.sha256;",
         "        if (_rd >= 2 || typeof _sh !== 'string' || !/^[0-9a-f]{64}$/.test(_sh)) { _why = 'stage_pending was not resumable'; break; }",
-        f"        const _tp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/' + {_lit(prefix)} + _chainRunId + {_lit(middle)} + _sh + {_lit(suffix)};",
+        f"        const _bn = _chainPath.split('/').pop(); const _rs = {_lit(RUN_SCRIPT_SUFFIX)};",
+        "        if (!_bn.endsWith(_rs) || _bn.length === _rs.length || _bn.indexOf('.staged-') !== -1) { _why = 'stage resume path is not a run script'; break; }",
+        f"        const _tp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/' + {_lit(prefix)} + _bn.slice(0, _bn.length - _rs.length) + {_lit(middle)} + _sh + {_lit(suffix)};",
         "        try { _chained = await workflow({ scriptPath: _tp }); }",
         "        catch (e) { _why = 'stage resume threw: ' + String(e && e.message ? e.message : e); }",
         "      }",
@@ -5703,7 +5706,7 @@ def _chain_emit_start_lines(
     retry_lines = (
         [
             "      if (_why !== null) {",
-            "        const _firstWhy = _why; _why = null; _chainPath = null; _chainRunId = '';",
+            "        const _firstWhy = _why; _why = null; _chainPath = null;",
             "        try { _ce = await _emitAgent(); _chainCheck(_ce); }",
             "        catch (e) { _why = _firstWhy + '; retry threw: ' + String(e && e.message ? e.message : e); }",
             "      }",
@@ -5716,7 +5719,7 @@ def _chain_emit_start_lines(
     )
     return [
         "    phase('plan');",
-        "    let _why = null; let _chainPath = null; let _chainRunId = '';",
+        "    let _why = null; let _chainPath = null;",
         *emit_decl_lines,
         "    const _chainCheck = (_ce) => {",
         "      const _cp = typeof _ce?.path === 'string' ? _ce.path.split(String.fromCharCode(92)).join('/') : '';",
@@ -5725,7 +5728,7 @@ def _chain_emit_start_lines(
         "      else if (_cp.split('/').indexOf('..') !== -1 || _cp.slice(0, _warp.length).toLowerCase() !== _warp.toLowerCase()) "
         "{ _why = 'emit path is not under ' + _warp; }",
         "      else if (typeof _ce?.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_ce.run_id)) { _why = 'emit reply run_id is not a run id'; }",
-        "      else { _chainPath = _cp; _chainRunId = _ce.run_id; }",
+        "      else { _chainPath = _cp; }",
         "    };",
         "    try {",
         f"      let _ce = {emit_expr};",

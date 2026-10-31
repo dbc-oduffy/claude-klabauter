@@ -78,4 +78,4 @@ def test_chain_leg_starts_the_staged_twin_on_stage_pending():
     for part in (prefix, middle, suffix):
         assert part in chain
     assert chain.count("await workflow(") == 1
-    assert "_chainRunId" in chain
+    assert "_chainPath.split('/').pop()" in chain and "_chainRunId" not in chain

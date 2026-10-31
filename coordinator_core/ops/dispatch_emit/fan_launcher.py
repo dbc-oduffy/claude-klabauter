@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     CHAIN_HANDOFF_KEY,
     LAUNCHER_CHILD_EMIT_PARAM,
+    RUN_SCRIPT_SUFFIX,
     STAGE_PENDING_KEY,
     staged_twin_rel,
 )
@@ -106,6 +107,7 @@ const ABANDON_IDS = [];
 const TWIN_PREFIX = __TWIN_PREFIX__;
 const TWIN_MIDDLE = __TWIN_MIDDLE__;
 const TWIN_SUFFIX = __TWIN_SUFFIX__;
+const RUN_SCRIPT_SUFFIX = __RUN_SCRIPT_SUFFIX__;
 
 // Trap: the emit agent re-serializes the reply path, so a Windows path can arrive with each backslash doubled; fold backslashes and runs of separators into single slashes.
 function _normEmitPath(p) {
@@ -183,8 +185,8 @@ async function _abandonAll() {
   }
 }
 
-// Trap: a nested child receives no args and has no file read, so the stage round is a second nested start, not an in-place resume. runId is the run whose script is started: the twin path is built from it, so a chained hop resumes its own twin.
-async function _startLoop(child, runId, firstPath) {
+// Trap: a nested child receives no args and has no file read, so the stage round is a second nested start, not an in-place resume. The twin is named from the started script's stem (the twin writer's run id), never the emit reply run_id: one run can carry two names.
+async function _startLoop(child, firstPath) {
   let scriptPath = firstPath;
   let lastSha = null;
   for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
@@ -208,7 +210,11 @@ async function _startLoop(child, runId, firstPath) {
       return { run_id: child.run_id, status: 'failed', error: 'stage_pending repeated for a handle already supplied' };
     }
     lastSha = sha;
-    const twinRel = TWIN_PREFIX + runId + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+    const base = firstPath.split('/').pop();
+    if (!base.endsWith(RUN_SCRIPT_SUFFIX) || base.length === RUN_SCRIPT_SUFFIX.length || base.indexOf('.staged-') !== -1) {
+      return { run_id: child.run_id, status: 'failed', error: 'stage resume path is not a run script: ' + firstPath };
+    }
+    const twinRel = TWIN_PREFIX + base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length) + TWIN_MIDDLE + sha + TWIN_SUFFIX;
     scriptPath = REPO_ROOT + '/' + twinRel;
   }
   return { run_id: child.run_id, status: 'failed', error: 'stage rounds exhausted' };
@@ -245,7 +251,7 @@ async function _chainHop(child, handoff) {
   }
   const refusal = _emitRefusal(child, emitted, true);
   if (refusal !== null) return fail(refusal);
-  const chained = await _startLoop(child, emitted.run_id, _normEmitPath(emitted.path));
+  const chained = await _startLoop(child, _normEmitPath(emitted.path));
   if (chained.status !== 'ok') return fail(chained.error);
   if (_handoffOf(chained.result) !== null) return fail('the chained run returned a second hand-off');
   const r = chained.result;
@@ -264,7 +270,7 @@ async function _runChild(child, emitted) {
     _abandonRedirect(child, emitted);
     return { run_id: child.run_id, status: 'emit_refused', error: refusal };
   }
-  const first = await _startLoop(child, emitted.run_id, _normEmitPath(emitted.path));
+  const first = await _startLoop(child, _normEmitPath(emitted.path));
   if (first.status !== 'ok') _abandonRedirect(child, emitted);
   const handoff = first.status === 'ok' ? _handoffOf(first.result) : null;
   return handoff === null ? first : _chainHop(child, handoff);
@@ -316,6 +322,7 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild], emitted
         "__TWIN_PREFIX__": lit(prefix),
         "__TWIN_MIDDLE__": lit(middle),
         "__TWIN_SUFFIX__": lit(suffix),
+        "__RUN_SCRIPT_SUFFIX__": lit(RUN_SCRIPT_SUFFIX),
     }
     # One pass: a placeholder-shaped string inside a child's emit_params must stay literal.
     body = re.sub("|".join(values), lambda m: values[m.group(0)], _BODY_JS)

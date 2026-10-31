@@ -19,7 +19,7 @@ def _handoff(reply: dict) -> dict:
 
 
 def _reply(tmp_path, run_id="ask-r2") -> dict:
-    return {"path": f"{tmp_path.as_posix()}/scratch/warp/{run_id}/c.mjs", "run_id": run_id, "ok": True}
+    return {"path": f"{tmp_path.as_posix()}/scratch/warp/{run_id}.workflow.mjs", "run_id": run_id, "ok": True}
 
 
 @pytest.mark.spawns_process

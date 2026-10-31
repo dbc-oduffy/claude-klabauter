@@ -24,6 +24,9 @@ STAGED_INLINE_SLOT = "const _STAGED_INLINE = null;"
 STAGED_RESUME_KEY = "resume"
 STAGED_RESUME_FIELDS = ("arm", "sizing_rel", "plan_rel", "tshirt")
 
+# Every started run script ends with this; its stem is the twin writer's run id, which can differ from the emit reply run_id.
+RUN_SCRIPT_SUFFIX = ".workflow.mjs"
+
 
 def staged_twin_rel(run_id: str, sha256: str) -> str:
     """Repo-relative path of the staged twin; callers validate run_id and sha256 (64 lowercase hex)."""

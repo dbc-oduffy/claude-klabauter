@@ -270,7 +270,7 @@ def test_chain_hop_renders_one_hop_on_the_one_start_site(tmp_path):
     assert f"result.{CHAIN_HANDOFF_KEY}" in script
     assert f"{LAUNCHER_CHILD_EMIT_PARAM}: true" in script
     assert "'chain-emit-' + child.run_id" in script
-    assert "TWIN_PREFIX + runId + TWIN_MIDDLE" in script
+    assert "TWIN_MIDDLE + sha + TWIN_SUFFIX" in script and "TWIN_PREFIX + runId" not in script
     assert "the chained run returned a second hand-off" in script
     assert "Workflow({name: " in script
     assert script.count("workflow(") == 1
@@ -284,7 +284,7 @@ def test_launcher_no_longer_reads_the_sidecar(tmp_path):
     assert "stage_pending repeated for a handle already supplied" in script
 
 
-def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=None, emit_run_id="ask-r1") -> list:
+def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=None, emit_run_id="ask-r1", emit_stem=None) -> list:
     """Run _runChild in node with stubs; returns [result, paths workflow() was started with]."""
     import shutil
     import subprocess
@@ -299,7 +299,7 @@ def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=
         f"const PENDING = {json.dumps(pending)};\n"
         "const calls = [];\n"
         "const labels = [];\n"
-        f"const REPLY = {{ path: {root} + '/scratch/warp/x/s.mjs', run_id: {json.dumps(emit_run_id)}, fire_args: {json.dumps(fire_args or {})}, ...{json.dumps(emit_extra or {})} }};\n"
+        f"const REPLY = {{ path: {root} + '/scratch/warp/' + {json.dumps(emit_stem or emit_run_id)} + '.workflow.mjs', run_id: {json.dumps(emit_run_id)}, fire_args: {json.dumps(fire_args or {})}, ...{json.dumps(emit_extra or {})} }};\n"
         "const agent = async (p, o) => { labels.push(o.label); return REPLY; };\n"
         f"const workflow = async (o) => {{ calls.push(o); return {'true' if repeat else 'calls.length === 1'} ? PENDING : {{ done: true }}; }};\n"
         "const parallel = async () => [];\n"
@@ -310,6 +310,23 @@ def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_the_twin_is_named_from_the_started_script_stem_not_the_reply_run_id(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    sha = "ab" * 32
+    result, calls, _ = _run_child_stage(script, sha, emit_stem="warp-plan-20261031T120809-5a6216")
+    assert result["status"] == "ok" and result["run_id"] == "ask-r1"
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('warp-plan-20261031T120809-5a6216', sha)}"}
+
+
+@pytest.mark.spawns_process
+def test_a_started_path_with_no_run_script_stem_halts_by_name_never_the_reply_run_id(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="x.staged-" + "ab" * 32)
+    assert result["status"] == "failed" and "stage resume path is not a run script" in result["error"]
+    assert len(calls) == 1
 
 
 @pytest.mark.spawns_process
