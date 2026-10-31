@@ -14,9 +14,11 @@ this module.
 
 from __future__ import annotations
 
+import calendar
 import contextlib
 import contextvars
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -42,10 +44,23 @@ _RUN_INDEPENDENT_RELEASES = _RECORDED_RELEASES | frozenset({
     RELEASE_KEPT_AT_HEAD, RELEASE_WITHHELD_CLEAN, RELEASE_STALE_NOT_LIVE,
 })
 
-#: A halted run that is neither live nor being refired cannot hold a path longer than this. Trap: halt age
-#: is `halted.json` mtime (the run-id stamp is mint time); any rewrite of the marker (a `released` stamp, a
-#: revise) resets the mtime and restarts the bound, which errs toward holding.
+#: A halted run that is neither live nor being refired cannot hold a path longer than this, counted from its
+#: run-id mint stamp (`run_id_mint_epoch`); `halted.json` mtime is only the fallback for an unparseable id.
 STALE_HOLD_BOUND_SECONDS = 2 * 3600
+
+_MINT_STAMP = re.compile(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})-[0-9a-f]{6}$")
+
+
+def run_id_mint_epoch(run_id: str) -> Optional[float]:
+    """UTC epoch the run id was minted at (its `YYYYMMDDTHHMMSS-xxxxxx` suffix), or None when the id does not parse."""
+    match = _MINT_STAMP.search(str(run_id))
+    if match is None:
+        return None
+    try:
+        y, mo, d, h, mi, s = (int(g) for g in match.groups())
+        return float(calendar.timegm((y, mo, d, h, mi, s, 0, 0, 0)))
+    except (ValueError, OverflowError):
+        return None
 
 #: Marker field `{path: {reason, at}}`: the halted run no longer holds those paths. Written only by
 #: `declared_hold_release._release_path`; read by `released_path_reasons` and its consumers.
@@ -128,7 +143,7 @@ def record_stamps(root: Path) -> list:
     """`[(run id, minted epoch or None)]` for every record dir, sorted by name: one directory scan and one stamp
     parse per dir, shared by every reader inside a `release_scope` (a dir minted mid-scope is not listed). Empty when the record
     root is unreadable."""
-    from coordinator_core.ops.dispatch_emit import stopped_runs
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     state = _SCOPE.get()
@@ -140,7 +155,7 @@ def record_stamps(root: Path) -> list:
             names = sorted(e.name for e in entries if e.is_dir())
     except OSError:
         return []
-    out = [(n, stopped_runs._stamp_epoch(n)) for n in names]
+    out = [(n, landing_halted_view.stamp(n)) for n in names]
     if state is not None:
         state["stamps"][key] = out
     return out
@@ -151,10 +166,10 @@ def _successor_landed(root: Path, run_id: str, sizing: str) -> bool:
     Inside a `release_scope` the record-dir listing, each dir's `sizing_rel` and landed answer are read once, shared
     by every halted run weighed."""
     from coordinator_core.ops import warp_run_deliverable as wrd
-    from coordinator_core.ops.dispatch_emit import halted_run, run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit import halted_run, landing_halted_view, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
-    own = stopped_runs._stamp_epoch(run_id)
+    own = landing_halted_view.stamp(run_id)
     if own is None or not sizing:
         return False
     base = Path(root) / RECORD_DIR_ROOT
@@ -220,13 +235,38 @@ def blob_scope(root: Path, interest=None):
         if owns:
             state["seen_root"] = str(root)
             state["interest"] = frozenset(interest) if interest else None
+            state["seen"] = _carried_blobs(root, state)
         try:
             yield state
         finally:
             if owns:
+                _carry_blobs(root, state)
                 state["seen_root"] = None
                 state["seen"] = {}
                 state["interest"] = None
+
+
+def _head_of(root: Path) -> Optional[str]:
+    from coordinator_core.git import git_state
+
+    try:
+        return git_state.head_sha(root)
+    except Exception:  # noqa: BLE001 -- no head: nothing carries
+        return None
+
+
+def _carried_blobs(root: Path, state: dict) -> dict:
+    """The blobs an earlier `blob_scope` of this release scope read, while HEAD is still the commit they were
+    read at: the landing's legs open one scope each and share one `cat-file` read of the kept blobs."""
+    head = _head_of(root)
+    kept = state.setdefault("carried_blobs", {}).get(str(root))
+    return dict(kept[1]) if head is not None and kept is not None and kept[0] == head else {}
+
+
+def _carry_blobs(root: Path, state: dict) -> None:
+    head = _head_of(root)
+    if head is not None:
+        state.setdefault("carried_blobs", {})[str(root)] = (head, dict(state["seen"]))
 
 
 def irrelevant(root: Path, record: Path, marker: Optional[dict]) -> bool:
@@ -238,6 +278,14 @@ def irrelevant(root: Path, record: Path, marker: Optional[dict]) -> bool:
     interest = state.get("interest") if state is not None else None
     if not interest or not marker:
         return False
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    return landing_halted_view.shared(
+        "irrelevant", (str(record), interest), lambda: _irrelevant(root, record, marker, interest),
+    )
+
+
+def _irrelevant(root: Path, record: Path, marker: dict, interest) -> bool:
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
         from coordinator_core.ops.dispatch_emit import halted_run, run_ownership, sibling_claims
@@ -293,20 +341,27 @@ def prefetch_kept_blobs(root: Path, runs: list) -> None:
         try:
             plan = _kept_plan(record)
             if plan is not None:
-                specs.extend(_kept_specs(plan[0], plan[1], _base_sha(marker)))
+                specs.extend(_kept_specs(plan[0], plan[1], ""))
         except Exception:  # noqa: BLE001 -- planned again, and held, by kept_at_head_paths
             continue
     state["memo"][("withheld-union", str(root))] = frozenset(union)
     state["memo"].pop(("dirty-withheld", str(root)), None)
+    if union:
+        from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+        landing_halted_view.hint_index(root, union)
     if specs:
         _blob_batch(root, specs)
 
 
 def _withheld_keys(record: Path) -> set:
-    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit import halted_run, landing_halted_view
     from coordinator_core.session.claim_index import _normalize_key
 
-    return {_normalize_key(p) for p in halted_run.halted_withheld_strict(record)}
+    return set(landing_halted_view.shared(
+        "withheld_keys", str(record),
+        lambda: frozenset(_normalize_key(p) for p in halted_run.halted_withheld_strict(record)),
+    ))
 
 
 def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
@@ -318,10 +373,10 @@ def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
         union = state["memo"].get(("withheld-union", str(root)))
         dirty = None
         if union:
-            from coordinator_core.ops.ceremony import commit_companion
+            from coordinator_core.ops.dispatch_emit import landing_halted_view
 
             with contextlib.suppress(Exception):  # unreadable index: each run holds
-                dirty = frozenset(commit_companion.own_left_behind(root, {"-": sorted(union)}, "-", ()))
+                dirty = landing_halted_view.dirty_withheld(root, union)
         state["memo"][key] = dirty
     return state["memo"][key]
 
@@ -363,8 +418,10 @@ def _held_run_records(root: Path) -> list:
 def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optional[str]:
     """`RELEASE_STALE_NOT_LIVE` when `run_id` is a halted/resumed run with no held run-token record of its
     own (not live, not mid-commit), none for a run of the same sizing (a refire pending), and a
-    `halted.json` older than `STALE_HOLD_BOUND_SECONDS`; else None. A `refire` next_action alone is not a
-    pending refire. One `os.stat` plus the scope-shared token listing, no spawn; never raises (the hold stands)."""
+    run-id mint stamp older than `STALE_HOLD_BOUND_SECONDS`; else None. A `refire` next_action alone is not a
+    pending refire. The mint stamp is the clock because any rewrite of `halted.json` (re-arm, checkout) resets
+    its mtime; only an id that does not parse falls back to one `os.stat` of that mtime. Plus the scope-shared
+    token listing, no spawn; never raises (the hold stands)."""
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
         from coordinator_core.ops.dispatch_emit import halted_run
@@ -374,7 +431,10 @@ def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optio
         marker = halted_run._read(record)
         if not marker or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
-        age = (time.time() if now is None else now) - os.stat(record / halted_run.HALTED_FILE).st_mtime
+        clock = run_id_mint_epoch(run_id)
+        if clock is None:
+            clock = os.stat(record / halted_run.HALTED_FILE).st_mtime
+        age = (time.time() if now is None else now) - clock
         if age <= STALE_HOLD_BOUND_SECONDS:
             return None
         sizing = _halted_sizing(root, run_id, marker)
@@ -410,35 +470,25 @@ def release_reason(
 def _release_reason(
     root: Path, halted_run_id: str, committing_run_id: Optional[str], committing_plan: Optional[str],
 ) -> Optional[str]:
+    """The release rules in order. The rules before and after the two committer-dependent ones (successor,
+    plan landing) do not read `committing_run_id`/`committing_plan`, so each is weighed once per halted run
+    per scope (`landing_halted_view.shared`) and every committer variant of the question reuses it."""
     try:
         from coordinator_core.ops import warp_run_deliverable as wrd
-        from coordinator_core.ops.dispatch_emit import halted_run
+        from coordinator_core.ops.dispatch_emit import halted_run, landing_halted_view
         from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_FIELD
 
         root = Path(root)
-        marker = halted_run._read(_record(root, halted_run_id))
-        status = marker.get("status") if marker else None
-        if status == halted_run.STATUS_LANDED:
-            return RELEASE_RECORDED_LANDED
-        if _marker_superseded(marker):
-            return RELEASE_MARKER_SUPERSEDED
+        head = landing_halted_view.shared(
+            "release_head", (str(root), halted_run_id), lambda: _release_head(root, halted_run_id),
+        )
+        if head[0] is not None:
+            return head[0]
+        marker, sizing, status = head[1], head[2], head[3]
         if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
-        if stale_release(root, halted_run_id) is not None:
-            return RELEASE_STALE_NOT_LIVE
-        released = marker.get(halted_run.HALT_RELEASED_FIELD)
-        if status == halted_run.STATUS_HALTED and isinstance(released, dict):
-            reason = released.get("reason")
-            if reason in _RECORDED_RELEASES:
-                return reason
-        sizing = _halted_sizing(root, halted_run_id, marker)
-        sizing_status = wrd.sizing_scalar(root, sizing, "status") if sizing else ""
-        if sizing_status == "superseded":
-            return RELEASE_SUPERSEDED
-        if sizing_status == "shipped":
-            return RELEASE_SIZING_SHIPPED
         if status == halted_run.STATUS_RESUMED:
-            return RELEASE_SUCCESSOR_LANDED if _successor_landed(root, halted_run_id, sizing) else None
+            return RELEASE_SUCCESSOR_LANDED if head[4] else None
         if committing_run_id and sizing:
             other = wrd.record_sizing_rel(root, committing_run_id)
             if other and other == sizing:
@@ -449,12 +499,49 @@ def _release_reason(
         plan = marker.get(HALT_PLAN_FIELD)
         if committing_plan and isinstance(plan, str) and wrd._norm(plan) == wrd._norm(committing_plan):
             return RELEASE_PLAN_LANDING
-        if _kept_at_head(root, _record(root, halted_run_id), marker):
-            return RELEASE_KEPT_AT_HEAD
-        if _withheld_clean(root, _record(root, halted_run_id)):
-            return RELEASE_WITHHELD_CLEAN
+        return landing_halted_view.shared(
+            "release_tail", (str(root), halted_run_id), lambda: _release_tail(root, halted_run_id, marker),
+        )
     except Exception:
         return None
+
+
+def _release_head(root: Path, halted_run_id: str) -> tuple:
+    """`(reason or None, marker, sizing, status, successor_landed)`: the rules that precede the committer-dependent
+    ones. A non-None reason is final."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    marker = halted_run._read(_record(root, halted_run_id))
+    status = marker.get("status") if marker else None
+    if status == halted_run.STATUS_LANDED:
+        return (RELEASE_RECORDED_LANDED, marker, "", status, False)
+    if _marker_superseded(marker):
+        return (RELEASE_MARKER_SUPERSEDED, marker, "", status, False)
+    if status not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+        return (None, marker, "", status, False)
+    if stale_release(root, halted_run_id) is not None:
+        return (RELEASE_STALE_NOT_LIVE, marker, "", status, False)
+    released = marker.get(halted_run.HALT_RELEASED_FIELD)
+    if status == halted_run.STATUS_HALTED and isinstance(released, dict):
+        reason = released.get("reason")
+        if reason in _RECORDED_RELEASES:
+            return (reason, marker, "", status, False)
+    sizing = _halted_sizing(root, halted_run_id, marker)
+    sizing_status = wrd.sizing_scalar(root, sizing, "status") if sizing else ""
+    if sizing_status == "superseded":
+        return (RELEASE_SUPERSEDED, marker, sizing, status, False)
+    if sizing_status == "shipped":
+        return (RELEASE_SIZING_SHIPPED, marker, sizing, status, False)
+    landed = status == halted_run.STATUS_RESUMED and _successor_landed(root, halted_run_id, sizing)
+    return (None, marker, sizing, status, landed)
+
+
+def _release_tail(root: Path, halted_run_id: str, marker: dict) -> Optional[str]:
+    if _kept_at_head(root, _record(root, halted_run_id), marker):
+        return RELEASE_KEPT_AT_HEAD
+    if _withheld_clean(root, _record(root, halted_run_id)):
+        return RELEASE_WITHHELD_CLEAN
     return None
 
 
@@ -462,7 +549,6 @@ def _withheld_clean(root: Path, record: Path) -> bool:
     """True when the halt withholds something and none of its withheld paths is dirty in the worktree.
     Dirtiness is `commit_companion.own_left_behind`'s index-identity test (zero spawn), the one
     `terminal_commit._dirty_held_by_halted_run` applies. Fail-closed: an unreadable record or index holds."""
-    from coordinator_core.ops.ceremony import commit_companion
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
@@ -475,7 +561,9 @@ def _withheld_clean(root: Path, record: Path) -> bool:
             keys = _withheld_keys(record)
             if dirty is not None and keys <= state["memo"][("withheld-union", str(root))]:
                 return not (keys & dirty)
-        return not commit_companion.own_left_behind(root, {"-": withheld}, "-", ())
+        from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+        return not landing_halted_view.dirty_withheld(root, withheld)
     except Exception:  # noqa: BLE001 -- unreadable: the hold stands
         return False
 
@@ -519,18 +607,11 @@ def _held_paths_scoped(
     except Exception:  # noqa: BLE001 -- release unknown: the run still holds
         pass
     try:
-        from coordinator_core.ops import warp_run_deliverable as wrd
-        from coordinator_core.ops.dispatch_emit import halted_run
+        from coordinator_core.ops.dispatch_emit import landing_halted_view
 
-        record = _record(Path(root), halted_run_id)
-        held = frozenset(wrd.halted_withheld_paths(Path(root), halted_run_id)) - set(
-            released_path_reasons(Path(root), halted_run_id)
+        return landing_halted_view.shared(
+            "held_tail", (str(root), halted_run_id), lambda: _held_tail(Path(root), halted_run_id),
         )
-        marker = halted_run._read(record)
-        if held and marker:
-            with contextlib.suppress(Exception):  # unknown: the hold stands
-                held -= {wrd._norm(p) for p in kept_at_head_paths(Path(root), record, marker)}
-        return held
     except Exception as exc:  # noqa: BLE001 -- normalizer unavailable: the raw record still holds
         from coordinator_core.ops.dispatch_emit import halted_run
 
@@ -540,6 +621,21 @@ def _held_paths_scoped(
             p.replace("\\", "/").removeprefix("./")
             for p in halted_run.halted_withheld_strict(_record(Path(root), halted_run_id))
         )
+
+
+def _held_tail(root: Path, halted_run_id: str) -> frozenset:
+    """What the run's record still withholds once the release rules found no reason: its withheld paths minus
+    the per-path releases and those whose kept hunks are at HEAD. Independent of the committing run."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    record = _record(root, halted_run_id)
+    held = frozenset(wrd.halted_withheld_paths(root, halted_run_id)) - set(released_path_reasons(root, halted_run_id))
+    marker = halted_run._read(record)
+    if held and marker:
+        with contextlib.suppress(Exception):  # unknown: the hold stands
+            held -= {wrd._norm(p) for p in kept_at_head_paths(root, record, marker)}
+    return held
 
 
 def _own_paths(root: Path, run_id: str) -> Optional[tuple]:
@@ -674,10 +770,54 @@ def _squash(text: str) -> str:
     return "".join(text.split())
 
 
+_SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _blob_fetch_local(root: Path, specs: list) -> Optional[dict]:
+    """`{spec: bytes | None}` read in process from the object store (`<sha>`, `HEAD:<path>`, `<commit>:<path>`);
+    None when any spec or tree cannot be resolved here, so the caller asks `git cat-file` for the whole batch."""
+    from coordinator_core.git import git_state
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import _read_object
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    common = resolve_git_common_dir(root)
+
+    def blob(sha: str) -> Optional[bytes]:
+        found = _read_object(common, sha)
+        return found[1] if found is not None and found[0] == "blob" else None
+
+    data: dict = {}
+    by_rev: dict = {}
+    for spec in specs:
+        rev, sep, path = spec.partition(":")
+        if not sep:
+            if not _SHA40.match(spec):
+                return None
+            data[spec] = blob(spec)
+        else:
+            by_rev.setdefault(rev, []).append((spec, path))
+    for rev, items in by_rev.items():
+        commit_sha = git_state.head_sha(root) if rev == "HEAD" else rev
+        if not commit_sha or not _SHA40.match(commit_sha):
+            return None
+        found = landing_halted_view.tree_entries(root, commit_sha, [p for _s, p in items])
+        if found is None:
+            return None
+        for spec, path in items:
+            entry = found.get(path)
+            data[spec] = None if entry is None or entry[0] == 0o160000 else blob(entry[1])
+    return data
+
+
 def _blob_fetch(root: Path, specs: list) -> Optional[dict]:
     from coordinator_core.git.run import run_git
 
     specs = list(dict.fromkeys(specs))
+    with contextlib.suppress(Exception):  # unresolvable here: git reads the batch
+        local = _blob_fetch_local(root, specs)
+        if local is not None:
+            return local
     proc = run_git(["cat-file", "--batch"], cwd=str(root), input="".join(s + "\n" for s in specs).encode())
     if proc.returncode != 0:
         return None
@@ -744,7 +884,13 @@ def _kept_specs(paths: list, kept: dict, base_sha: str) -> list:
 
 def _kept_plan(record: Path):
     """`(paths, kept)` for the halt at `record`, or None when nothing is withheld, the record is unreadable, or no
-    withheld path has a kept blob."""
+    withheld path has a kept blob. Read once per `release_scope` (`landing_halted_view`)."""
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    return landing_halted_view.shared("kept_plan", str(record), lambda: _kept_plan_read(record))
+
+
+def _kept_plan_read(record: Path):
     from coordinator_core.ops.dispatch_emit import halted_run, kept_work
 
     try:
@@ -787,7 +933,7 @@ def prefetch_kept_at_head(root: Path, run_ids) -> None:
                 continue
             plan = _kept_plan(record)
             if plan is not None:
-                specs += _kept_specs(plan[0], plan[1], _base_sha(marker))
+                specs += _kept_specs(plan[0], plan[1], "")
         if not specs:
             return
         specs = list(dict.fromkeys(specs))
@@ -852,7 +998,7 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
         return set()
     paths, kept = plan
     base_sha = _base_sha(marker)
-    specs = _kept_specs(paths, kept, base_sha)
+    specs = _kept_specs(paths, kept, "")
     blobs = _scoped_blobs(specs)
     if blobs is _PREFETCH_FAILED:
         return set()
@@ -867,11 +1013,17 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
             continue
         if head == keep or kept_work.checkin_form(root, p, keep) == head:
             released.add(p)
-        elif base_sha and _hunks_present(
-            (blobs[f"{base_sha}:{p}"] or b"").decode("utf-8", "replace"),
-            keep.decode("utf-8", "replace"), head.decode("utf-8", "replace"),
-        ):
-            released.add(p)
+        elif base_sha:
+            # The run-base blob is read only for a path whose kept bytes differ from HEAD.
+            from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+            spec = f"{base_sha}:{p}"
+            base = landing_halted_view.shared("base_blob", (str(root), spec), lambda: _blob_fetch(root, [spec]))
+            if base is not None and _hunks_present(
+                (base[spec] or b"").decode("utf-8", "replace"),
+                keep.decode("utf-8", "replace"), head.decode("utf-8", "replace"),
+            ):
+                released.add(p)
     return released
 
 

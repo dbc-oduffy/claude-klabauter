@@ -15,9 +15,16 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-HALTED = "ask-20261030T102303-977c47"
 SIZING = "state/sizings/s-stale.yaml"
 OLD = hr.STALE_HOLD_BOUND_SECONDS + 600
+
+
+def _mint(age, tail="977c47"):
+    """A run id stamped `age` seconds ago: the stale bound counts from this stamp."""
+    return time.strftime("ask-%Y%m%dT%H%M%S", time.gmtime(time.time() - age)) + "-" + tail
+
+
+HALTED = _mint(OLD)
 
 
 @pytest.fixture
@@ -47,8 +54,9 @@ def test_past_bound_with_refire_next_action_and_no_token_is_released(root):
 
 
 def test_inside_bound_still_holds(root):
-    _halt(root, age=hr.STALE_HOLD_BOUND_SECONDS - 600)
-    assert hr.stale_release(root, HALTED) is None
+    young = _mint(hr.STALE_HOLD_BOUND_SECONDS - 600)
+    _halt(root, age=hr.STALE_HOLD_BOUND_SECONDS - 600, run_id=young)
+    assert hr.stale_release(root, young) is None
 
 
 def test_live_token_of_the_run_holds(root):
@@ -96,9 +104,10 @@ def test_unreadable_marker_holds(root):
 
 
 def test_now_argument_moves_the_clock(root):
-    _halt(root, age=0)
-    assert hr.stale_release(root, HALTED) is None
-    assert hr.stale_release(root, HALTED, now=time.time() + OLD) == hr.RELEASE_STALE_NOT_LIVE
+    fresh = _mint(0)
+    _halt(root, age=0, run_id=fresh)
+    assert hr.stale_release(root, fresh) is None
+    assert hr.stale_release(root, fresh, now=time.time() + OLD) == hr.RELEASE_STALE_NOT_LIVE
 
 
 def test_token_listing_is_read_once_per_scope(root, monkeypatch):

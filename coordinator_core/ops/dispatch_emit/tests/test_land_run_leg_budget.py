@@ -1,5 +1,6 @@
 """Leg-budget pins for `dispatch.land_run`: sibling spines are read once per op, the
-script_read-to-integrity span spawns nothing, and an indexed sibling's claim costs no per-sibling parse.
+script_read-to-integrity span spawns nothing, an indexed sibling's claim costs no per-sibling parse, and
+the halted-hold pass walks the git index once and spawns no git however many halted runs hold.
 Counts, never wall clock (peer load moves wall)."""
 
 from __future__ import annotations
@@ -168,3 +169,71 @@ def test_sizing_stamp_floor_refuses_an_impossible_date(tmp_path) -> None:
 
     assert land_run._sizing_stamp_floor("2026-13-45-x.yaml") == ""
     assert land_run._sizing_stamp_floor("2026-10-29-x.yaml") == "20261028T000000-000000"
+
+
+def _twelve_halted_runs(root) -> tuple:
+    """A real repo with a dirty file per halted run (kept blob not at HEAD, so every run holds)."""
+    import json
+    import subprocess
+    import time
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    def git(*args, stdin=""):
+        return subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, input=stdin,
+            capture_output=True, text=True, check=True, **no_console_creationflags(),
+        ).stdout.strip()
+
+    base_text, kept_text = "x = 1\n", "x = 1\n\n\ndef g():\n    return 2\n"
+    paths = [f"pkg/m{i}.py" for i in range(12)]
+    git("init", "-q")
+    for p in paths:
+        (root / p).parent.mkdir(parents=True, exist_ok=True)
+        (root / p).write_text(base_text, encoding="utf-8")
+    git("add", *paths)
+    git("commit", "-q", "-m", "base")
+    base = git("rev-parse", "HEAD")
+    kept = git("hash-object", "-w", "--stdin", stdin=kept_text)
+    (root / "state/sizings").mkdir(parents=True)
+    (root / "state/sizings/s.yaml").write_text("status: open\n", encoding="utf-8")
+    runs = []
+    for i, p in enumerate(paths):
+        run_id = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(time.time() - 300 - i))}-{i:06x}"
+        rec = root / "state/warp" / run_id
+        rec.mkdir(parents=True)
+        (rec / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8")
+        (rec / "manifest.json").write_text(json.dumps({"rows": [{"writes": [p]}]}), encoding="utf-8")
+        (rec / "halted.json").write_text(json.dumps({
+            "status": "halted", "sizing_rel": "state/sizings/s.yaml", "run_base_sha": base,
+            "run_artifacts": {"withheld": {p: "halt-record-only"}},
+        }), encoding="utf-8")
+        (rec / "kept.json").write_text(json.dumps({"chunks": {"X1": {"paths": {p: kept}}}, "plan_gate": None}), encoding="utf-8")
+        (root / p).write_text(kept_text, encoding="utf-8")
+        runs.append(run_id)
+    return runs, paths
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_halted_hold_pass_costs_one_index_walk_and_no_git_however_many_runs_hold(tmp_path, monkeypatch) -> None:
+    from coordinator_core.git import git_index
+    from coordinator_core.git import run as git_run
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, sibling_claims
+
+    runs, paths = _twelve_halted_runs(tmp_path)
+    walks, spawned, weighed = [], [], []
+    real_walk, real_git, real_head = git_index.parse_index_identity, git_run.run_git, halted_hold_release._release_head
+    monkeypatch.setattr(git_index, "parse_index_identity", lambda *a, **k: (walks.append(1), real_walk(*a, **k))[1])
+    monkeypatch.setattr(git_run, "run_git", lambda args, *a, **k: (spawned.append(list(args)), real_git(args, *a, **k))[1])
+    monkeypatch.setattr(halted_hold_release, "_release_head", lambda root, rid: (weighed.append(rid), real_head(root, rid))[1])
+
+    with halted_hold_release.release_scope():
+        first = sibling_claims.sibling_run_claims(tmp_path, "ask-20991231T000000-ffffff", paths)
+        second = sibling_claims.sibling_run_claims(tmp_path, "ask-20991231T000000-fffffe", paths[:5])
+
+    assert sorted(first) == sorted(paths) and set(first.values()) == set(runs)
+    assert sorted(second) == sorted(paths[:5])
+    assert spawned == []
+    assert len(walks) <= 1
+    assert sorted(weighed) == sorted(runs)

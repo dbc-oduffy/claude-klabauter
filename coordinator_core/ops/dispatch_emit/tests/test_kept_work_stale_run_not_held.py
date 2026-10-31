@@ -14,11 +14,19 @@ from coordinator_core.ops.dispatch_emit.tests._kept_fixture import git, hold_kep
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 REL = "pkg/m.py"
-RUN = "ask-20261030T101400-0b0874"
 PAST = halted_hold_release.STALE_HOLD_BOUND_SECONDS + 600
 
 
-def _repo(tmp_path):
+def _mint(age, tail):
+    """A run id stamped `age` seconds ago: the stale bound counts from this stamp."""
+    return time.strftime("ask-%Y%m%dT%H%M%S", time.gmtime(time.time() - age)) + "-" + tail
+
+
+RUN = _mint(PAST, "0b0874")
+
+
+def _repo(tmp_path, run=None):
+    run = run or RUN
     root = tmp_path / "repo"
     root.mkdir()
     git(root, "init", "-q")
@@ -26,7 +34,7 @@ def _repo(tmp_path):
     (root / REL).write_bytes(b"pinned\n")
     git(root, "add", REL)
     git(root, "commit", "-q", "-m", "x")
-    hold_kept(root, RUN, [REL])
+    hold_kept(root, run, [REL])
     return root
 
 
@@ -37,8 +45,9 @@ def _age(root, seconds):
 
 
 def test_fresh_halt_holds(tmp_path):
-    root = _repo(tmp_path)
-    assert kept_work.held_paths(root, [REL]) == {REL: RUN}
+    young = _mint(300, "0b0874")
+    root = _repo(tmp_path, young)
+    assert kept_work.held_paths(root, [REL]) == {REL: young}
 
 
 def test_halt_past_the_bound_with_no_token_is_not_held(tmp_path):
@@ -57,6 +66,6 @@ def test_halt_past_the_bound_with_its_own_live_token_still_holds(tmp_path):
 def test_stale_run_does_not_hide_a_fresh_peer(tmp_path):
     root = _repo(tmp_path)
     _age(root, PAST)
-    peer = "ask-20261030T223203-bbbbbb"
+    peer = _mint(300, "bbbbbb")
     hold_kept(root, peer, [REL])
     assert kept_work.held_paths(root, [REL]) == {REL: peer}

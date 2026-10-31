@@ -20,6 +20,7 @@ or compiled modules would false-refuse.
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -71,11 +72,23 @@ def _read_text(path: Path) -> Optional[str]:
         return None
 
 
-def _target_bound_names(text: str) -> Optional[Set[str]]:
-    """Module-level bound names of `text`; `None` when it star-imports, defines `__getattr__`, or does not parse."""
+@functools.lru_cache(maxsize=8)
+def _parse(text: str) -> Optional[ast.Module]:
+    """`ast.parse(text)` or `None`; memoised, because one landing text is parsed as importer and as target. Read-only."""
     try:
-        tree = ast.parse(text)
+        return ast.parse(text)
     except (SyntaxError, ValueError):
+        return None
+
+
+@functools.lru_cache(maxsize=64)
+def _target_bound_names(text: str) -> Optional[Set[str]]:
+    """Module-level bound names of `text`; `None` when it star-imports, defines `__getattr__`, or does not parse.
+
+    Memoised on `text`: the returned set is shared, never mutate it.
+    """
+    tree = _parse(text)
+    if tree is None:
         return None
     names: Set[str] = set()
     stack: List[ast.stmt] = list(tree.body)
@@ -118,6 +131,27 @@ def _target_bound_names(text: str) -> Optional[Set[str]]:
             for h in node.handlers:
                 stack.extend(h.body)
     return names
+
+
+class _Names:
+    """Lazy `_target_bound_names(text)`: a column-0 def/class/assignment/import of the name answers
+    without `ast.parse`; only a name that line scan does not find pays for the parse."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def binds(self, name: str) -> Optional[bool]:
+        """True = bound; False = the parse says unbound; None = unknown (star import, `__getattr__`, unparseable)."""
+        n = re.escape(name)
+        if re.search(
+            r"^(?:(?:async[ \t]+)?def|class)[ \t]+%s\b|^%s[ \t]*(?::|=(?!=)|,)"
+            r"|^from\b[^\n]*\bimport\b[^\n]*(?<![.\w])%s\b|^import\b[^\n]*(?<![.\w])%s\b" % (n, n, n, n),
+            self.text,
+            re.MULTILINE,
+        ):
+            return True
+        bound = _target_bound_names(self.text)
+        return None if bound is None else name in bound
 
 
 def _absolute_base(rec: ImportRecord, rel: str) -> Optional[str]:
@@ -175,7 +209,7 @@ class _Closure:
         mods = [base] + [f"{base}.{n}" for n in rec.names if n != "*"]
         return any(self.locate(m, has, pfx) for m in mods for has in (self.post_has, self.worktree_has))
 
-    def post_names(self, target: str, force: bool = False) -> Optional[Set[str]]:
+    def post_names(self, target: str, force: bool = False) -> Optional[_Names]:
         """Names `target` binds once the commit lands; `None` = assume satisfied (or unparseable)."""
         if target in self.gate:
             text = self.landed_text(target) if self.landed_text is not None else _read_text(self.root / target)
@@ -183,7 +217,7 @@ class _Closure:
             text = self.view.head_text(target)
         else:
             return None
-        return None if text is None else _target_bound_names(text)
+        return None if text is None else _Names(text)
 
     def check(self, rel: str, rec: ImportRecord) -> List[LeakFinding]:
         base = _absolute_base(rec, rel)
@@ -202,7 +236,7 @@ class _Closure:
                 return [self._finding(rel, rec, base, base, head_file, "deleted by this commit")]
             return []
         out: List[LeakFinding] = []
-        post_names: Optional[Set[str]] = None
+        post_names: Optional[_Names] = None
         loaded = False
         is_package = post_file.endswith("/__init__.py")
         for name in rec.names:
@@ -219,15 +253,14 @@ class _Closure:
                 if not loaded:
                     post_names, loaded = self.post_names(post_file), True
                 names = post_names
-            if names is None or name in names:
+            if names is None or names.binds(name) is not False:
                 continue
             wt_bound = False
             if post_file in self.gate:
                 wt_bound = False
             else:
                 wt_text = _read_text(self.root / post_file)
-                wt_names = _target_bound_names(wt_text) if wt_text is not None else None
-                wt_bound = wt_names is None or name in wt_names
+                wt_bound = wt_text is None or _Names(wt_text).binds(name) is not False
             reason = "uncommitted in the worktree" if (wt_sub or wt_bound) else "absent from HEAD"
             out.append(self._finding(rel, rec, name, base, wt_sub or post_file, reason))
         return out
@@ -263,12 +296,11 @@ def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFindi
         return None
     wt_sub = bool(is_package and closure.locate(sub, closure.worktree_has, pfx))
     names = closure.post_names(target, force=wt_sub)
-    if names is None or ref.name in names:
+    if names is None or names.binds(ref.name) is not False:
         return None
     if not wt_sub:
         wt_text = _read_text(closure.root / target)
-        wt_names = _target_bound_names(wt_text) if wt_text is not None else None
-        if wt_names is None or ref.name not in wt_names:
+        if wt_text is None or _Names(wt_text).binds(ref.name) is not True:
             return None
     where = closure.locate(sub, closure.worktree_has, pfx) if wt_sub else target
     return LeakFinding(rel, ref.lineno, KIND, f"references {ref.name} from {ref.module}; {where} is uncommitted in the worktree")
@@ -397,9 +429,8 @@ def residue_findings(
     for rel, text in importers:
         if not prefilter.search(_import_text(text)):
             continue
-        try:
-            tree = ast.parse(text)
-        except (SyntaxError, ValueError):
+        tree = _parse(text)
+        if tree is None:
             continue
         records, _ = collect_imports(tree)
         for rec in records:
@@ -461,9 +492,8 @@ def detect(
     parsed: List[Tuple[str, ImportRecord]] = []
     refs: List[Tuple[str, AttrRef]] = []
     for rel in sorted(import_files | attr_files):
-        try:
-            tree = ast.parse(texts[rel])
-        except (SyntaxError, ValueError):
+        tree = _parse(texts[rel])
+        if tree is None:
             continue
         if rel in import_files:
             records, _ = collect_imports(tree)

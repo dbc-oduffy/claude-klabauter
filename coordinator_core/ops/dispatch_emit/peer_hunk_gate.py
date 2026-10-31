@@ -200,10 +200,12 @@ def co_declared_peer_holds(
                             root, run_id, path, indexed,
                         ):
                             holders[path].append(run_id)
-            pairs = [
-                (p, r) for p in wanted if p in holders and p in own
-                for r in sorted(holders[p]) if not _mutual_halted_hold(root, own_run_id, r, p, own_plan)
-            ]
+            contested = [p for p in wanted if p in holders and p in own]
+            mutual = {
+                r: _mutual_halted_holds(root, own_run_id, r, [p for p in contested if r in holders[p]], own_plan)
+                for r in sorted({r for p in contested for r in holders[p]})
+            }
+            pairs = [(p, r) for p in contested for r in sorted(holders[p]) if p not in mutual[r]]
             holds = pairs
             if not holds:
                 return holds
@@ -327,28 +329,40 @@ def _holds_baselined_path(root: Path, run_id: str, holds: list, withheld: set) -
     return any(_norm(p) not in withheld and _norm(p) in baseline for p, s in holds if s == run_id)
 
 
-def _mutual_halted_hold(
-    root: Path, own_run_id: Optional[str], holder: str, path: str, own_plan: Optional[str] = None,
-) -> bool:
-    """True when both `holder` and `own_run_id` are halted and withhold `path`, and the holder's own
-    claim view names `own_run_id` as the path's first claimant: two halted runs holding one path
-    against each other. Landing the path whole carries both runs' hunks (the shared-tree blob), so
-    neither run is superseded; the holder's `dispatch.record_halted_run_landed` follows the landing.
-    A live landing run is never mutual: the holder's hunk is foreign to it."""
+def _mutual_halted_holds(
+    root: Path, own_run_id: Optional[str], holder: str, paths: Iterable[str], own_plan: Optional[str] = None,
+) -> set:
+    """The subset of `paths` on which both `holder` and `own_run_id` are halted and withhold the path,
+    and the holder's own claim view names `own_run_id` as the path's first claimant: two halted runs
+    holding one path against each other. Landing the path whole carries both runs' hunks (the
+    shared-tree blob), so neither run is superseded; the holder's `dispatch.record_halted_run_landed`
+    follows the landing. A live landing run is never mutual: the holder's hunk is foreign to it. The
+    holder's claim view is read once for every surviving path, not once per path."""
     if not own_run_id or holder == own_run_id:
-        return False
+        return set()
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, sibling_claims
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
     if not warp_run_deliverable._halted(root, holder) or not warp_run_deliverable._halted(root, own_run_id):
-        return False
-    if path not in {_norm(w) for w in halted_run.halted_withheld(record_dir(root, own_run_id))}:
-        return False
-    if path not in {_norm(w) for w in halted_hold_release.held_paths(root, holder, own_run_id, own_plan)}:
-        return False
-    mirror = sibling_claims.sibling_run_claims(root, holder, [path])
-    return mirror.get(path) == own_run_id
+        return set()
+    own_withheld = {_norm(w) for w in halted_run.halted_withheld(record_dir(root, own_run_id))}
+    candidates = [p for p in paths if p in own_withheld]
+    if not candidates:
+        return set()
+    held = {_norm(w) for w in halted_hold_release.held_paths(root, holder, own_run_id, own_plan)}
+    candidates = [p for p in candidates if p in held]
+    if not candidates:
+        return set()
+    mirror = sibling_claims.sibling_run_claims(root, holder, candidates)
+    return {p for p in candidates if mirror.get(p) == own_run_id}
+
+
+def _mutual_halted_hold(
+    root: Path, own_run_id: Optional[str], holder: str, path: str, own_plan: Optional[str] = None,
+) -> bool:
+    """`_mutual_halted_holds` for the one `path`."""
+    return path in _mutual_halted_holds(root, own_run_id, holder, [path], own_plan)
 
 
 def _names_path(finding: str, path: str, basename_unique: bool) -> bool:

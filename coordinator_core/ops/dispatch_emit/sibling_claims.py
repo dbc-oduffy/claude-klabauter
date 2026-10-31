@@ -60,19 +60,12 @@ def _read_json(path: Path) -> dict:
 def _in_window_run_ids(root: Path, own_run_id: Optional[str]) -> list:
     """Run ids other than `own_run_id` in the record dir whose stamp is inside the token TTL (an unstamped
     dir is excluded, as `_unlanded_run_ids` never lists a halted run without one), from one scan: the set
-    `halted_hold_release.prefetch_kept_at_head` batches blobs for. Never raises."""
-    from coordinator_core.ops.dispatch_emit import run_token, stopped_runs
-    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    `halted_hold_release.prefetch_kept_at_head` batches blobs for, from `halted_hold_release.record_stamps`. Never raises."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_token
 
     now = time.time()
-    try:
-        with os.scandir(root / RECORD_DIR_ROOT) as entries:
-            names = sorted(e.name for e in entries if e.is_dir())
-    except OSError:
-        return []
     out = []
-    for run_id in names:
-        stamp = stopped_runs._stamp_epoch(run_id)
+    for run_id, stamp in halted_hold_release.record_stamps(root):
         if run_id != own_run_id and stamp is not None and now - stamp <= run_token.TTL_SECONDS:
             out.append(run_id)
     return out
@@ -102,20 +95,14 @@ def _unlanded_run_ids(
     still claim nothing: `_held_extras` narrows it to what it withheld or left dirty. With `covering`, a
     readable halted run that withholds none of those paths is skipped before `release_reason` weighs it."""
     from coordinator_core.ops import warp_run_deliverable
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     now = time.time()
-    try:
-        with os.scandir(root / RECORD_DIR_ROOT) as entries:
-            names = sorted(e.name for e in entries if e.is_dir())
-    except OSError:
-        return []
     found = []
-    for run_id in names:
+    for run_id, stamp in halted_hold_release.record_stamps(root):
         if run_id == own_run_id:
             continue
-        stamp = stopped_runs._stamp_epoch(run_id)
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
             continue
         try:
@@ -125,6 +112,8 @@ def _unlanded_run_ids(
             continue
         if marker is not None and marker.get("status") == halted_run.STATUS_HALTED:
             if covering is not None and not _withholds_any(marker, covering):
+                continue
+            if halted_hold_release.irrelevant(root, root / RECORD_DIR_ROOT / run_id, marker):
                 continue
             if stamp is not None and not halted_hold_release.release_reason(root, run_id, own_run_id, own_plan):
                 found.append(run_id)
@@ -144,16 +133,13 @@ def halted_records(root: Path, own_run_id: Optional[str], covering: Optional[Seq
     """`[(record dir, halt marker)]` for each halted run other than `own_run_id` within the token TTL:
     the runs `_unlanded_run_ids` may weigh through `release_reason`, for `prefetch_kept_blobs`. One
     record-dir scan, file reads only; never raises. With `covering`, only runs withholding one of those paths."""
-    from coordinator_core.ops.dispatch_emit import halted_run, run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     out: list = []
     try:
         now = time.time()
-        with os.scandir(root / RECORD_DIR_ROOT) as entries:
-            names = sorted(e.name for e in entries if e.is_dir())
-        for name in names:
-            stamp = stopped_runs._stamp_epoch(name)
+        for name, stamp in halted_hold_release.record_stamps(root):
             if name == own_run_id or stamp is None or now - stamp > run_token.TTL_SECONDS:
                 continue
             record = root / RECORD_DIR_ROOT / name
@@ -169,7 +155,15 @@ def halted_records(root: Path, own_run_id: Optional[str], covering: Optional[Seq
 def _extra_declared(root: Path, run_id: str) -> set:
     """Paths a run's own records name that the manifest reader does not: `run.json`
     `sizing_rel`, `run-outcome.json` `inline_review.prep.slice_files`, and the manifest's
-    `review_declared_paths`."""
+    `review_declared_paths`. Read once per `release_scope` (`landing_halted_view`)."""
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    return set(landing_halted_view.shared(
+        "extra_declared", (str(root), run_id), lambda: frozenset(_extra_declared_read(root, run_id)),
+    ))
+
+
+def _extra_declared_read(root: Path, run_id: str) -> set:
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, RUN_OUTCOME_FILE, record_dir
 
@@ -279,15 +273,21 @@ def _held_extras(
 
 
 def _dirty_reader(root: Path, wanted: set):
-    """No-arg callable: the `wanted` paths dirty in the tree (tracked-modified or untracked), from
-    one `git status --porcelain` through the shared seam, memoised so every sibling shares it."""
+    """No-arg callable: the `wanted` paths dirty in the tree (tracked-modified or untracked), decided in
+    process by `landing_halted_view.dirty_status`, else from one `git status --porcelain` through the
+    shared seam; memoised so every sibling shares it."""
     cache: list = []
 
     def read() -> set:
         if not cache:
             from coordinator_core.git.run import run_git
+            from coordinator_core.ops.dispatch_emit import landing_halted_view
 
             found: set = set()
+            in_process = landing_halted_view.dirty_status(root, wanted)
+            if in_process is not None:
+                cache.append(in_process)
+                return in_process
             result = run_git(
                 ["-C", str(root), "--literal-pathspecs", "status", "--porcelain", "-z",
                  "--untracked-files=all", "--", *sorted(wanted)],

@@ -54,6 +54,8 @@ the stub.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import os
 import re
 import threading
@@ -370,10 +372,39 @@ def _context_home(root: Path, paths: list[str]) -> Path:
     return root
 
 
+_OVER_CAP = "-byte cap"
+
+
+@contextlib.contextmanager
+def _hoisting(on: bool):
+    """Set `prompt_fragments.HOIST_ENABLED` to `on` for the block, restored on exit."""
+    from coordinator_core.ops.dispatch_emit import prompt_fragments
+
+    prior = prompt_fragments.HOIST_ENABLED
+    prompt_fragments.HOIST_ENABLED = on
+    try:
+        yield
+    finally:
+        prompt_fragments.HOIST_ENABLED = prior
+
+
 def _default_emit(params: dict, repo_root: Path) -> dict:
+    """`dispatch.emit` with fragment hoisting off: hoisting only shrinks the script and costs ~200ms per
+    run of process time. A script then over the Workflow byte cap is re-emitted hoisted."""
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
-    return _dispatch_emit(params, repo_root)
+    try:
+        with _hoisting(False):
+            result = _dispatch_emit(params, repo_root)
+        over = isinstance(result, dict) and _OVER_CAP in str(_no_run_detail(result)) and not result.get("path")
+    except Exception as exc:
+        if _OVER_CAP not in str(exc):
+            raise
+        over = True
+    if not over:
+        return result
+    with _hoisting(True):
+        return _dispatch_emit(params, repo_root)
 
 
 #: Total stall one hook call may absorb across every read it makes; a read past it returns
@@ -386,6 +417,12 @@ _BUDGET: Optional[list] = None  # [ms still unspent] while `evaluate` runs; sing
 
 class _SizingStalled(Exception):
     """The sizing read outlived the stall budget: its ask_parent marker and research block are unknown."""
+
+
+def _in_scope(fn: Callable[[], Any]) -> Callable[[], Any]:
+    """`fn` bound to the calling thread's context, so a worker thread joins the open `sizing_memo` scope."""
+    ctx = contextvars.copy_context()
+    return lambda: ctx.run(fn)
 
 
 def _wait_ms(deadline_ms: Optional[float]) -> float:
@@ -410,9 +447,10 @@ _EMIT_BUDGET_SHARE = 0.8
 class _EmitOverran(Exception):
     """The emit outlived the caller's budget; `message` is the deny text."""
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, minted: bool = False) -> None:
         super().__init__(message)
         self.message = message
+        self.minted = minted
 
 
 def _caller_budget_s() -> float:
@@ -448,7 +486,7 @@ def _emit_within_budget(emit: EmitFn, params: dict, root: Path, budget_s: Option
         except BaseException as exc:  # re-raised on the caller's thread
             box["error"] = exc
 
-    thread = threading.Thread(target=work, daemon=True)
+    thread = threading.Thread(target=_in_scope(work), daemon=True)
     thread.start()
     thread.join(_caller_budget_s() * _EMIT_BUDGET_SHARE if budget_s is None else budget_s)
     if thread.is_alive():
@@ -457,12 +495,83 @@ def _emit_within_budget(emit: EmitFn, params: dict, root: Path, budget_s: Option
             names = ", ".join(minted)
             raise _EmitOverran(
                 f"The submission outran the hook budget after minting run {names}. Do not re-submit: "
-                f"the run exists; reconcile it by id (a re-submit duplicates it)."
+                f"the run exists; reconcile it by id (a re-submit duplicates it).",
+                minted=True,
             )
         raise _EmitOverran("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
     if "error" in box:
         raise box["error"]
     return box["result"]
+
+
+_DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: 'Emits and starts one submission whose emit outran the hook budget' }
+const REPO_ROOT = __REPO_ROOT__;
+const PARAMS = __PARAMS__;
+const INVOKE = __INVOKE__;
+const EMIT_OP = __EMIT_OP__;
+const EMIT_SCHEMA = {
+  type: 'object',
+  required: ['path', 'run_id', 'fire_args'],
+  properties: { path: { type: 'string' }, run_id: { type: 'string' }, fire_args: { type: 'object' }, error: { type: 'string' } },
+};
+const reply = await agent(
+  __AUTHORITY__
+  + ' Run `' + INVOKE + ' ' + EMIT_OP + " '" + PARAMS.replace(/'/g, "'\\''") + "'` once, with the command word exactly as written, and "
+  + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
+  + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
+  + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
+  { label: 'deferred-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
+);
+if (!reply || typeof reply.path !== 'string' || reply.path === '') {
+  return { status: 'emit_refused', error: (reply && reply.error) || 'the deferred emit returned no script path' };
+}
+// Trap: the relay re-serializes the reply path, so a Windows path can arrive with doubled backslashes or repo-relative.
+const norm = reply.path.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+const scriptPath = (norm[0] === '/' || /^[A-Za-z]:\//.test(norm)) ? norm : REPO_ROOT + '/' + norm.replace(/^\.\//, '');
+return await workflow({ scriptPath: scriptPath });
+"""
+
+
+def _write_deferred_script(root: Path, params: dict) -> Path:
+    """A script under `scratch/warp/` that re-runs `dispatch.emit(params)` through an op-relay agent and starts what it emits."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.fan_launcher import _EMIT_OP, _INVOKE, EMIT_RELAY_AUTHORITY
+
+    values = {
+        "__REPO_ROOT__": json.dumps(Path(root).as_posix()),
+        "__PARAMS__": json.dumps(json.dumps(params, default=str, ensure_ascii=True)),
+        "__INVOKE__": json.dumps(_INVOKE),
+        "__EMIT_OP__": json.dumps(_EMIT_OP),
+        "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
+    }
+    script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(re.sub("|".join(values), lambda m: values[m.group(0)], _DEFERRED_JS), encoding="utf-8")
+    return script
+
+
+def _deferred_envelope(root: Path, params: dict, over: _EmitOverran) -> dict:
+    """The taken submission for an emit that outran the hook budget with no run minted.
+
+    The hook process ends when it answers, so the emit cannot finish on its daemon thread; a
+    written script re-runs `dispatch.emit` through an op-relay agent and starts what it emits."""
+    try:
+        script = _write_deferred_script(root, params)
+    except OSError:
+        return _refuse(over.message)
+    defer_id = script.name.split(".")[0]
+    envelope = rewrite_input(
+        "PreToolUse",
+        {"scriptPath": str(script)},
+        f"The emit outran the hook budget before minting a run, so the submission is taken as deferred emit {defer_id}: "
+        "its script emits the run and starts it in the background; the run id arrives with its completion notification, "
+        "your one wake. Do not re-submit. End the turn: no polling, dispatch or verification meanwhile.",
+    )
+    hso = envelope["hookSpecificOutput"]
+    hso["permissionDecision"] = "allow"
+    hso["permissionDecisionReason"] = f"Engine submission: deferred emit {script.name}."
+    return envelope
 
 
 def _budgeted_read(read: Callable[[float], Any]) -> Any:
@@ -511,7 +620,7 @@ def _bounded_call(key: Any, fn: Callable[[], Any], deadline_ms: Optional[float] 
             done.set()
 
     try:
-        threading.Thread(target=work, daemon=True).start()
+        threading.Thread(target=_in_scope(work), daemon=True).start()
     except BaseException:
         with _INFLIGHT_LOCK:
             _INFLIGHT.discard(key)
@@ -765,26 +874,36 @@ def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session
 
     import time
 
-    # One deadline spans every child; an overran emit still runs on its daemon thread, so no further child is emitted.
+    # One deadline spans every child; an overran emit still runs on its daemon thread, so no further child is emitted here.
+    # A child the budget did not reach (or whose emit overran with no run minted) is handed to the launcher as a deferred-emit
+    # script: the launcher starts it like an emitted run, and it emits and starts the child in the background.
     deadline = time.monotonic() + _caller_budget_s() * _EMIT_BUDGET_SHARE
     emitted: list = []
     spent = ""
     for child in children:
+        params = {**child.emit_params, LAUNCHER_CHILD_EMIT_PARAM: True}
         if spent:
-            emitted.append({"error": f"Not emitted: the hook budget was spent. {spent}"})
+            emitted.append(_deferred_child_reply(root, child, params, f"Not emitted: the hook budget was spent. {spent}"))
             continue
         try:
-            reply = _emit_within_budget(
-                _default_emit, {**child.emit_params, LAUNCHER_CHILD_EMIT_PARAM: True}, root,
-                max(deadline - time.monotonic(), 0.0),
-            )
+            reply = _emit_within_budget(_default_emit, params, root, max(deadline - time.monotonic(), 0.0))
         except _EmitOverran as over:
             spent = over.message
-            reply = {"error": over.message}
+            reply = {"error": over.message} if over.minted else _deferred_child_reply(root, child, params, over.message)
         except Exception as exc:  # a refused child is named in the launcher; siblings still start
             reply = {"error": str(exc)}
         emitted.append(reply)
     return write_launcher(root, parent_id, children, session_id, emitted)
+
+
+def _deferred_child_reply(root: Path, child: Any, params: dict, note: str) -> dict:
+    """The launcher's emitted reply for a child whose emit the hook did not finish: a deferred-emit script
+    that mints `child.run_id`; the error reply when the script cannot be written."""
+    try:
+        script = _write_deferred_script(root, params)
+    except OSError:
+        return {"error": note}
+    return {"path": script.relative_to(root).as_posix(), "run_id": child.run_id, "fire_args": {}, "deferred": note}
 
 
 def _default_fanout(params: dict, repo_root: Path) -> dict:
@@ -1323,7 +1442,13 @@ def evaluate(
     global _BUDGET
     _BUDGET = [_READ_DEADLINE_MS]
     try:
-        envelope = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
+        if is_submission(payload):
+            from coordinator_core.ops.dispatch_emit.sizing_fire import sizing_memo
+
+            with sizing_memo():  # the hook's and every child emit's reads of one slice sizing parse it once
+                envelope = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
+        else:
+            envelope = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
     finally:
         _BUDGET = None
     if is_submission(payload):
@@ -1616,7 +1741,7 @@ def _evaluate(
         try:
             result = _emit_within_budget(emit or _default_emit, params, root)
         except _EmitOverran as over:
-            return _refuse(over.message)
+            return _refuse(over.message) if over.minted else _deferred_envelope(root, params, over)
         except Exception as exc:  # the engine's refusal text is the whole message
             return _refuse(f"The engine refused the submission: {_cause(exc)}")
 

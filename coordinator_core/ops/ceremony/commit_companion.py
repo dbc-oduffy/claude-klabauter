@@ -1,7 +1,8 @@
 """Pure helper: which dirty paths the committing session itself holds outside its pathspec.
 
 Takes plain mappings (no claim-substrate import). One index walk, one stat per
-candidate; no subprocess, no directory walk, no cache.
+candidate; no subprocess, no directory walk, no cache beyond a landing's
+`landing_halted_view` index walk (per `release_scope`, keyed on the index file's stat).
 """
 
 from __future__ import annotations
@@ -84,7 +85,9 @@ def own_left_behind(
     if not candidates:
         return []
 
-    tracked = git_index.parse_index_identity(root, wanted=set(candidates))
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    tracked = landing_halted_view.index_identity(root, candidates)
     dirty: List[str] = []
     for p in candidates:
         f = root / p
