@@ -20,6 +20,12 @@ EXAMPLE_GAME_REPO_PLUGIN = "example-game-repo-control"
 MANIFEST_RELPATHS = ("routing/ue-job-shapes.json", "route-table.json")
 _UE_SUFFIXES = (".uproject", ".uplugin")
 _MAX_DEPTH = 3
+# Never home to a .uproject/.uplugin, and in a coordinator repo they hold nearly every entry:
+# walking them cost example-retrieval-repo 6.4 s cold after a warm reload (ask_stage hang, 2026-10-31).
+_WALK_SKIP = SKIP_SEGMENTS | {
+    "scratch", "state", "tasks", "archive", "node_modules", "dist",
+    "Binaries", "Intermediate", "Saved", "DerivedDataCache",
+}
 
 _UE_REPO_CACHE: dict[str, bool] = {}
 _TABLE_PATH_CACHE: dict[tuple[str, str], Optional[Path]] = {}
@@ -44,7 +50,7 @@ def _has_ue_marker(dir_path: str, depth: int) -> bool:
         except OSError:
             continue
         if is_dir:
-            if entry.name not in SKIP_SEGMENTS:
+            if not entry.name.startswith(".") and entry.name not in _WALK_SKIP:
                 subdirs.append(entry.path)
         elif entry.name.endswith(_UE_SUFFIXES):
             return True
@@ -54,7 +60,7 @@ def _has_ue_marker(dir_path: str, depth: int) -> bool:
 
 
 def is_ue_repo(repo_root: str | os.PathLike[str]) -> bool:
-    """True when a `*.uproject` or `*.uplugin` sits within depth 3 of `repo_root` (skip segments excluded)."""
+    """True when a `*.uproject` or `*.uplugin` sits within depth 3 of `repo_root` (dot and `_WALK_SKIP` dirs excluded)."""
     key = os.path.abspath(os.fspath(repo_root))
     cached = _UE_REPO_CACHE.get(key)
     if cached is None:

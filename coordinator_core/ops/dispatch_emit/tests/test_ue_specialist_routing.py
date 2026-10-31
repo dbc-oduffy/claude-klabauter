@@ -163,3 +163,18 @@ def test_repo_owned_table_wins_and_still_raises(world):
     assert out[0].agent_type == SPECIALIST
     with pytest.raises(ar.RouteAdmissionError):
         ar.route_rows([_row(body="unreal thing", agent_type="coordinator:executor")], repo)
+
+
+def test_ue_marker_walk_skips_dot_and_workspace_dirs(tmp_path):
+    """A marker under .git/scratch/state never makes a repo UE, and those trees are never walked."""
+    from coordinator_core.ops.dispatch_emit import ue_route_source
+
+    for d in (".git/x", "scratch/a", "state/b", "Intermediate/c"):
+        (tmp_path / d).mkdir(parents=True)
+        (tmp_path / d / "Game.uproject").write_text("{}", encoding="utf-8")
+    ue_route_source.clear_caches()
+    assert ue_route_source.is_ue_repo(tmp_path) is False
+    (tmp_path / "Plugins" / "P").mkdir(parents=True)
+    (tmp_path / "Plugins" / "P" / "P.uplugin").write_text("{}", encoding="utf-8")
+    ue_route_source.clear_caches()
+    assert ue_route_source.is_ue_repo(tmp_path) is True
