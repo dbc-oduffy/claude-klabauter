@@ -1,8 +1,12 @@
 """In-tree verdict for delivery-note reach claims: a symbol-keyed import-closure scan.
 
 `judge_reach_claims` decides each "`X` reaches `Y`" claim against the tree the commit lands, in
-process and with zero git spawns: one `read_index`, one bytes pass over production code files, and
-(for withheld paths only) `authoring_leaks.HeadView` blob reads.
+process with at most one git spawn: one `read_index`, one `git grep --cached -o -P` that matches the
+definition shapes itself and names the indexed files defining a claimed symbol, bytes reads of the
+landing paths (scanned only on lines naming a symbol), and (for withheld paths only)
+`authoring_leaks.HeadView` blob reads. No other indexed file is read to find definitions; an indexed
+file dirty in the worktree but neither landing nor withheld is matched on its index content.
+Definition shapes are single-line, in both the grep and the landing/withheld scan.
 
 Negative-spec:
   - `unreachable` only when X and Y are both defined in a production file, the import closure from
@@ -83,15 +87,46 @@ def _candidates(name: str) -> list[tuple[Optional[str], Optional[str], Optional[
     return out
 
 
+_DEF_SHAPES = (
+    r"(?:\b" + _DEF_PREFIX + r"\s+{s}\b)",
+    r"(?:^[ \t]*(?:export\s+)?(?:async\s+)?{s}\s*[:=(])",
+    r"(?:\b(?:register\w*|tool|op|command)\s*\(\s*(?:name\s*=\s*)?['\"]{s}['\"])",
+    r"(?:\bname\s*[=:]\s*['\"]{s}['\"])",
+)
+
+
+def _esc(sym: str) -> str:
+    return re.escape(sym.encode()).decode("latin-1")
+
+
 def _def_re(sym: str) -> re.Pattern:
-    s = re.escape(sym.encode()).decode("latin-1")
-    pat = (
-        rf"(?:\b{_DEF_PREFIX}\s+{s}\b)"
-        rf"|(?:^[ \t]*(?:export\s+)?(?:async\s+)?{s}\s*[:=(])"
-        rf"|(?:\b(?:register\w*|tool|op|command)\s*\(\s*(?:name\s*=\s*)?['\"]{s}['\"])"
-        rf"|(?:\bname\s*[=:]\s*['\"]{s}['\"])"
-    )
+    """Definition shapes of one symbol; every shape is confined to one line."""
+    pat = "|".join(shape.replace("{s}", _esc(sym)) for shape in _DEF_SHAPES)
     return re.compile(pat.encode("latin-1"), re.M)
+
+
+def _grep_patterns(syms: Iterable[str]) -> tuple[bytes, re.Pattern]:
+    """(PCRE text for `git grep -P`, regex naming the symbol inside one `-o` match) over `syms`."""
+    alt = "|".join(_esc(s) for s in syms)
+    plain = "|".join(shape.replace("{s}", f"(?:{alt})") for shape in _DEF_SHAPES)
+    named = "|".join(shape.replace("{s}", f"(?P<g{i}>{alt})") for i, shape in enumerate(_DEF_SHAPES))
+    return plain.encode("latin-1"), re.compile(named.encode("latin-1"), re.M)
+
+
+def _line_scan(b: bytes, tok: bytes, pat: re.Pattern) -> bool:
+    """`pat` matched on a line of `b` containing `tok`; other lines are never run through `pat`."""
+    i = b.find(tok)
+    scanned = -1
+    while i != -1:
+        if i >= scanned:
+            start = b.rfind(b"\n", 0, i) + 1
+            end = b.find(b"\n", i)
+            end = len(b) if end == -1 else end
+            if pat.search(b, start, end):
+                return True
+            scanned = end
+        i = b.find(tok, i + 1)
+    return False
 
 
 class _Tree:
@@ -369,13 +404,56 @@ def judge_reach_claims(
     tokens = [(s.encode(), pat, s) for s, pat in syms.items()]
     defs: dict[str, list[str]] = {s: [] for s in syms}
     if tokens:
-        for f in sorted(files):
-            b = tree.bytes(f)
-            present_tokens = [t for t in tokens if t[0] in b]
-            if not present_tokens:
-                tree.cache.pop(f, None)
-                continue
-            for _, pat, s in present_tokens:
-                if pat.search(b):
+        direct = (landing | withheld_only) & files
+        hits = _index_def_hits(root, list(syms))
+        if hits is None:
+            why = "tree index unsearchable (git grep failed)"
+            return tuple(ReachVerdict(c, "undecidable", why) for c in claims)
+        for f, named in hits.items():
+            if f in files and f not in direct:
+                for s in named:
                     defs[s].append(f)
+        for f in direct:
+            b = tree.bytes(f)
+            found = False
+            for tok, pat, s in tokens:
+                if tok in b and _line_scan(b, tok, pat):
+                    defs[s].append(f)
+                    found = True
+            if not found:
+                tree.cache.pop(f, None)
+        for lst in defs.values():
+            lst.sort()
     return tuple(_judge_one(tree, c, defs) for c in claims)
+
+
+def _index_def_hits(root: Path, syms: list[str]) -> Optional[dict[str, set[str]]]:
+    """Indexed code file -> symbols it defines, from one `git grep --cached -o -P` that matches the
+    definition shapes itself; None when git failed.
+
+    Patterns go through stdin (`-f -`) so the Windows argv cap never bounds the symbol count.
+    `-P` needs a git built with PCRE; without it git exits 128 and the judge is `undecidable`, never
+    a wrong verdict.
+    """
+    from coordinator_core.git.run import run_git
+
+    plain, named = _grep_patterns(syms)
+    by_bytes = {s.encode(): s for s in syms}
+    pathspec = [f"*{ext}" for ext in _CODE_EXT]
+    res = run_git(
+        ["-C", str(root), "grep", "--cached", "-a", "-o", "-z", "-P", "-f", "-", "--", *pathspec],
+        input=plain + b"\n",
+    )
+    if res.timed_out or res.returncode not in (0, 1):
+        return None
+    out: dict[str, set[str]] = {}
+    for line in res.stdout_bytes.split(b"\n"):
+        path, sep, text = line.partition(b"\0")
+        if not sep:
+            continue
+        m = named.search(text)
+        if m is not None:
+            sym = by_bytes.get(m.group(m.lastgroup))
+            if sym is not None:
+                out.setdefault(_norm(path.decode("utf-8", "replace")), set()).add(sym)
+    return out

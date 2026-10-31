@@ -30,6 +30,10 @@ every shape decision below:
       ship, so a hot invocation pays at most one directory-walk stat loop
       on a cold cwd and a dict lookup on every call after (same process,
       same cwd, which is the ordinary case for one shim invocation).
+    - Bounded. The line goes through `atomic_append.append_line(droppable=True)`:
+      a stalled disk drops the line after `APPEND_DEADLINE_SECS` instead of
+      holding the shim. A plain synchronous `open(path, "a")` here once held
+      sizing-assemble for the warm engine's whole 30s budget.
     - No lock. `open(path, "a")`'s append-mode write is what POSIX and
       NTFS both guarantee is atomic FOR A SINGLE `write()` SYSCALL sized
       well under the filesystem's atomic-append boundary (a few hundred
@@ -105,8 +109,9 @@ def record_invocation(
         line = json.dumps({"name": name, "ts": ts}, separators=(",", ":")) + "\n"
         path = _series_path(root)
         os.makedirs(path.parent, exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(line)
+        from coordinator_core import atomic_append
+
+        atomic_append.append_line(path, line.encode("utf-8"), droppable=True)
     except Exception:
         pass
 

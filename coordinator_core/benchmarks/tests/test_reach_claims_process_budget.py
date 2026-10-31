@@ -1,7 +1,8 @@
-"""Standing gate: `judge_reach_claims` under the 500ms bar, by process time, with zero spawns.
+"""Standing gate: `judge_reach_claims` under the 500ms bar, by process time, with at most one spawn.
 
 Measures the judge in-process on a tmp_path git repo with CENSUS_FILES production code files, one
-withheld path (HeadView read) and an unreachable plus a reachable claim. Each reading is the min of
+withheld path (HeadView read), two unreachable claims and a reachable claim on the common names
+`main` and `run`, each defined in thousands of files and named in all of them. Each reading is the min of
 `time.process_time()` deltas over SAMPLES (process time, never wall clock). Spawns are counted by
 wrapping `subprocess.Popen` around the measured calls only.
 
@@ -22,11 +23,13 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-CENSUS_FILES = 2739
+CENSUS_FILES = 25000
 SAMPLES = 5
 BUDGET_MS = 500.0
+SPAWN_CEILING = 1
 
-_BODY = "def helper_{i}(x):\n    return x + {i}\n\n\nclass Thing{i}:\n    value = {i}\n" * 20
+_BODY = "def helper_{i}(x):\n    return x + {i}\n\n\nclass Thing{i}:\n    value = {i}\n" * 5
+_COMMON = "\n\ndef run(x):\n    return x\n\n\ndef main():\n    run(1)\n    return main\n"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -43,7 +46,8 @@ def _build_repo(root: Path) -> Path:
         d = repo / "pkg" / f"mod{i % 40}"
         d.mkdir(parents=True, exist_ok=True)
         imp = f"from pkg.mod{i % 40} import file_{i - 40}\n" if i >= 40 and i % 7 == 0 else ""
-        (d / f"file_{i}.py").write_text(imp + _BODY.format(i=i), encoding="utf-8")
+        common = _COMMON if i % 3 == 0 else "\n\ndef caller():\n    run(1)\n    main()\n"
+        (d / f"file_{i}.py").write_text(imp + _BODY.format(i=i) + common, encoding="utf-8")
     (repo / "pkg" / "wired.py").write_text("from pkg.mod1.file_1 import helper_1\n", encoding="utf-8")
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "budget@example.invalid")
@@ -60,6 +64,7 @@ def judge_measurement(tmp_path_factory, request):
     claims = [
         ReachClaim("helper_5", "helper_9", "`helper_5` reaches `helper_9`"),
         ReachClaim("landing_new_fn", "helper_1", "`landing_new_fn` reaches `helper_1`"),
+        ReachClaim("main", "run", "`main` reaches `run`"),
     ]
     spawns = []
     real_popen = subprocess.Popen
@@ -71,23 +76,28 @@ def judge_measurement(tmp_path_factory, request):
 
     subprocess.Popen = _Counting
     try:
-        best_ms, verdicts = float("inf"), ()
+        best_ms, verdicts, max_spawns = float("inf"), (), 0
         for _ in range(SAMPLES):
+            spawns.clear()
             t0 = time.process_time()
             verdicts = judge_reach_claims(
                 repo, claims, landing_paths=["pkg/landing_new.py"],
                 withheld_paths=["pkg/wired.py"],
             )
             best_ms = min(best_ms, (time.process_time() - t0) * 1000)
+            max_spawns = max(max_spawns, len(spawns))
     finally:
         subprocess.Popen = real_popen
-    detail = f"judge_reach_claims, {CENSUS_FILES} files, process_ms: {best_ms:.1f}, spawns: {len(spawns)} (min of {SAMPLES})"
+    detail = (
+        f"judge_reach_claims, {CENSUS_FILES} files, process_ms: {best_ms:.1f}, "
+        f"spawns per call: {max_spawns} (min ms / max spawns of {SAMPLES})"
+    )
     print(f"REACH-CLAIMS-BUDGET {detail}")
-    return {"ms": best_ms, "spawns": len(spawns), "verdicts": verdicts, "detail": detail}
+    return {"ms": best_ms, "spawns": max_spawns, "verdicts": verdicts, "detail": detail}
 
 
-def test_judge_reach_claims_is_under_the_500ms_bar_with_zero_spawns(judge_measurement):
+def test_judge_reach_claims_is_under_the_500ms_bar_with_at_most_one_spawn(judge_measurement):
     m = judge_measurement
-    assert [v.verdict for v in m["verdicts"]] == ["unreachable", "unreachable"], m["detail"]
-    assert m["spawns"] == 0, f"spawn on the scan path: {m['detail']}"
+    assert [v.verdict for v in m["verdicts"]] == ["unreachable", "unreachable", "reachable"], m["detail"]
+    assert m["spawns"] <= SPAWN_CEILING, f"spawn on the scan path: {m['detail']}"
     assert 0 < m["ms"] < BUDGET_MS, f"over the {BUDGET_MS}ms bar: {m['detail']}"

@@ -214,12 +214,79 @@ def test_no_claims_and_unreadable_index(tmp_path):
     assert v.verdict == "undecidable"
 
 
-def test_scan_makes_no_process_spawn(tmp_path, monkeypatch):
+def test_scan_makes_at_most_one_process_spawn(tmp_path, monkeypatch):
     repo = _repo(tmp_path, _R40, commit=True)
+    spawns = []
+    real_popen = subprocess.Popen
 
-    def _boom(*a, **k):
-        raise AssertionError("spawn on the reach-claim scan path")
+    class _Counting(real_popen):
+        def __init__(self, *a, **k):
+            spawns.append(a)
+            super().__init__(*a, **k)
 
-    monkeypatch.setattr(subprocess, "Popen", _boom)
-    monkeypatch.setattr(rct.os, "system", _boom, raising=False)
+    monkeypatch.setattr(subprocess, "Popen", _Counting)
     assert _judge(repo, "project_trace", "load_hookimpl", withheld_paths=["pkg/lib/a.py"]).verdict == "unreachable"
+    assert len(spawns) == 1
+
+
+def test_judge_reads_only_landing_withheld_hit_and_closure_files(tmp_path, monkeypatch):
+    files = dict(_R40)
+    for i in range(30):
+        files[f"decoy/d{i}.py"] = f"def decoy_{i}():\n    return {i}\n"
+    files["decoy/mentions.py"] = "# load_hookimpl is only mentioned, never defined\nx = 1\n"
+    repo = _repo(tmp_path, files, commit=True)
+    (repo / "pkg/tools/fresh.py").write_text("def fresh_tool():\n    return 1\n", encoding="utf-8")
+    reads: list[str] = []
+    real = Path.read_bytes
+
+    def _spy(self):
+        reads.append(self.relative_to(repo).as_posix())
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _spy)
+    v = _judge(repo, "fresh_tool", "load_hookimpl", landing_paths=["pkg/tools/fresh.py"])
+    assert v.verdict == "unreachable", v.why
+    reads = [r for r in reads if not r.startswith(".git/")]
+    assert set(reads) <= {"pkg/tools/fresh.py"}, reads
+
+
+def test_common_name_definitions_come_from_the_grep_not_file_reads(tmp_path, monkeypatch):
+    files = dict(_R40)
+    for i in range(30):
+        files[f"decoy/d{i}.py"] = f"def main():\n    return run({i})\n\n\ndef run(x):\n    return x\n"
+    files["decoy/mention.py"] = "# run is called, main is mentioned\nrun(1)\nx = main\n"
+    repo = _repo(tmp_path, files, commit=True)
+    reads: list[str] = []
+    real = Path.read_bytes
+    monkeypatch.setattr(Path, "read_bytes", lambda self: (reads.append(self.relative_to(repo).as_posix()), real(self))[1])
+    (v,) = judge_reach_claims(repo, [ReachClaim("main", "run", "`main` reaches `run`")])
+    assert v.verdict == "reachable", v.why
+    decoy_reads = sorted({r for r in reads if r.startswith("decoy/")})
+    assert decoy_reads == ["decoy/d0.py"], decoy_reads  # d0 sorts first among main's definers: the closure walk starts there
+
+
+def test_definition_shapes_are_found_by_the_grep_and_non_definitions_are_not(tmp_path):
+    files = {
+        "a/one.py": "def alpha_fn():\n    return 1\n",
+        "a/two.ts": "export const beta_fn = () => 1;\n",
+        "a/three.py": "x = alpha_fn()\n# beta_fn mentioned\n",
+        "a/four.py": "@register_op(\"gamma.op\")\ndef _h():\n    return 1\n",
+    }
+    repo = _repo(tmp_path, files, commit=True)
+    hits = rct._index_def_hits(repo, ["alpha_fn", "beta_fn", "gamma.op"])
+    assert hits == {"a/one.py": {"alpha_fn"}, "a/two.ts": {"beta_fn"}, "a/four.py": {"gamma.op"}}
+
+
+def test_landing_file_with_a_token_but_no_definition_defines_nothing(tmp_path):
+    repo = _repo(tmp_path, _R40, commit=True)
+    (repo / "pkg/tools/fresh.py").write_text("x = fresh_tool\n", encoding="utf-8")
+    v = _judge(repo, "fresh_tool", "load_hookimpl", landing_paths=["pkg/tools/fresh.py"])
+    assert v.verdict == "undecidable"
+
+
+def test_git_grep_failure_is_undecidable_not_a_crash(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, _R40, commit=True)
+    monkeypatch.setattr(rct, "_index_def_hits", lambda root, syms: None)
+    v = _judge(repo, "project_trace", "load_hookimpl")
+    assert v.verdict == "undecidable"
+    assert "git grep" in v.why

@@ -230,11 +230,18 @@ async function _chainHop(child, handoff) {
     status: 'failed',
     error: hop + ' did not complete (' + why + '): resubmit ' + refire,
   });
+  // Trap: a gate agent that already ran dispatch.emit leaves its reply (path, run_id, ok, error) in the hand-off; those keys are never emit params.
+  const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...params } = handoff;
   let emitted;
-  try {
-    emitted = await _emitLeg(child, { ...handoff, __LAUNCHER_PARAM__: true }, 'chain-emit-' + child.run_id);
-  } catch (e) {
-    return fail('emit threw: ' + String(e && e.message ? e.message : e));
+  if (typeof _re === 'string' && _re !== '') return fail('emit failed: ' + _re);
+  if (named(_rp) && named(_rr)) {
+    emitted = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
+  } else {
+    try {
+      emitted = await _emitLeg(child, { ...params, __LAUNCHER_PARAM__: true }, 'chain-emit-' + child.run_id);
+    } catch (e) {
+      return fail('emit threw: ' + String(e && e.message ? e.message : e));
+    }
   }
   const refusal = _emitRefusal(child, emitted, true);
   if (refusal !== null) return fail(refusal);

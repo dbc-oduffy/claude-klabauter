@@ -523,10 +523,15 @@ EXIT_CRITERION_RULES_CLAUSE = (
     " The exit_criterion names no test tier and no tier-valued argument; "
     f"word verification as \"{SUITE_TIER_REMEDIATION}\"."
 )
+#: The chained run's `dispatch.emit` reply as an agent relays it: the two fields the ask script's chain check reads.
+_CHAIN_EMIT_RELAY = {
+    "type": ["object", "null"],
+    "properties": {"path": _STR, "run_id": _STR, "error": _STR},
+}
 _GATE_SCHEMA = _obj(
     ["arm", "halt"],
     {
-        "chain_emit": {"type": ["object", "null"]},
+        "chain_emit": _CHAIN_EMIT_RELAY,
         "arm": {"type": ["string", "null"]},
         "halt": {"type": ["object", "null"]},
         "baton": {"type": ["object", "null"]},
@@ -867,7 +872,7 @@ _REWORD_SCHEMA = _obj(
     },
 )
 #: The scout's closing `test -f` on the sizing file and, on an M+ arm, the chained run's `dispatch.emit` reply.
-_SCOUT_TAIL_PROPS = {"sizing_present": {"type": "boolean"}, "chain_emit": {"type": ["object", "null"]}}
+_SCOUT_TAIL_PROPS = {"sizing_present": {"type": "boolean"}, "chain_emit": _CHAIN_EMIT_RELAY}
 _ASK_SCOUT_SCHEMA = {**ASK_SCOUT_SCHEMA, "properties": {**ASK_SCOUT_SCHEMA["properties"], **_SCOUT_TAIL_PROPS}}
 #: The ask scout's return with its relayed stage reply held to the stage-reply schema.
 _ASK_SCOUT_STAGED_SCHEMA = {
@@ -3504,7 +3509,7 @@ def compose_ask_script(
         return (
             f" {EMIT_RELAY_AUTHORITY} On an M+ arm with a null halt, also run `{_INVOKE} dispatch.emit '",
             params,
-            "'` once, passing exactly that JSON object with no key added, dropped or renamed, and return its JSON reply as chain_emit ({error: <its text>} on failure); on any other arm none.",
+            "'` once, passing exactly that JSON object with no key added, dropped or renamed, and return path and run_id from its JSON reply verbatim as chain_emit ({error: <its text>} on failure); on any other arm none.",
         )
 
     def _chain_emit_params(sizing_js: str) -> str:

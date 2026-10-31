@@ -93,9 +93,26 @@ def test_record_invocation_never_raises_when_series_path_unwritable(tmp_path, mo
     def _boom(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(shim_usage_census, "open", lambda *a, **k: _boom(), raising=False)
+    from coordinator_core import atomic_append
+
+    monkeypatch.setattr(atomic_append, "append_line", lambda *a, **k: _boom())
     # record_invocation must swallow this, not propagate.
     shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path)
+
+
+def test_record_invocation_is_droppable_telemetry_never_an_unbounded_write(tmp_path, monkeypatch):
+    """A stalled disk drops the census line instead of holding the shim it observes."""
+    from coordinator_core import atomic_append
+
+    seen = {}
+
+    def _append(sink, encoded, droppable=False):
+        seen.update(encoded=encoded, droppable=droppable)
+
+    monkeypatch.setattr(atomic_append, "append_line", _append)
+    shim_usage_census.record_invocation("sizing-assemble", repo_root=tmp_path, now=1.0)
+    assert seen["droppable"] is True
+    assert json.loads(seen["encoded"]) == {"name": "sizing-assemble", "ts": 1.0}
 
 
 def test_record_invocation_never_raises_when_repo_root_unresolvable(monkeypatch):
