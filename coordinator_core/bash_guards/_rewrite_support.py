@@ -824,7 +824,18 @@ def _bt_grep_flags_and_operands(tokens: List[str]) -> Optional[Dict[str, Any]]:
     translated = _bt_grep_translate_pattern(pattern, dialect)
     if translated is None:
         return None
-    return {"flags": flags, "pattern": translated, "targets": targets or ["."]}
+    return {"flags": flags, "pattern": translated, "targets": [_bt_native_path(t) for t in targets] or ["."]}
+
+
+def _bt_native_path(target: str) -> str:
+    """Git Bash spells drive paths `/e/x`; the rewrite runs Windows Python, where `/e/x` names
+    nothing and `os.walk` yields nothing -- a silent empty answer, not grep's error. Translate
+    the MSYS drive prefix to its `<drive>:/` form on Windows; elsewhere `/e/x` is a real POSIX path."""
+    if os.name == "nt":
+        m = re.match(r"^/([A-Za-z])(/|$)", target)
+        if m:
+            return "%s:/%s" % (m.group(1).upper(), target[m.end():])
+    return target
 
 
 def _bt_grep_python_rewrite(parsed: Dict[str, Any]) -> str:

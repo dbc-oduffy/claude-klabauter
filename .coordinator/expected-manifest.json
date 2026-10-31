@@ -2262,8 +2262,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "da70ed4050b818dc3a731c8379602f8f25795d8c",
-    "coordinator_core/_engine_stamp": "28cddcd13619aea716ad09bd1b764ac680d06ef2",
+    "coordinator_core/_engine_published_at": "f7d92e81e5d5d82e50271ca8324a61c012c28bfb",
+    "coordinator_core/_engine_stamp": "6eb380a50e7f3db413b016068a7bfb762e629a49",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -2407,7 +2407,7 @@
     "coordinator_core/bash_guards/_ownership_leg_stand_down.py": "40ee4b2dd763d5df08b12e789127141329f57dbd",
     "coordinator_core/bash_guards/_platform_verdict.py": "8e19600f5d15be63e2460896479fc3f0bac824ee",
     "coordinator_core/bash_guards/_process_kill.py": "1c24c4f0326e00d37f75ae30da5ff5ee76b02542",
-    "coordinator_core/bash_guards/_rewrite_support.py": "5406fa1cc3dc4fe6bfe90312b5ed9365396cfe6e",
+    "coordinator_core/bash_guards/_rewrite_support.py": "1290527772bead7fa4d20878665c5e12a1861245",
     "coordinator_core/bash_guards/_sanctioned_remedy.py": "44ddbfab5c6d3086742774b47fe8cecc28b2f24c",
     "coordinator_core/bash_guards/_sentinel_creation_guard.py": "5c0140491070acd8745e50c6bc6a921025808ff8",
     "coordinator_core/bash_guards/_sentinel_removal_guard.py": "c237982a65537b7caa236b5e6a7b023903428078",
@@ -2825,6 +2825,7 @@
     "coordinator_core/bash_guards/tests/test_replay_pf17_xs_heredoc_bypass.py": "01e75fcb83587b2f3241825777b42e6522445027",
     "coordinator_core/bash_guards/tests/test_resolve_plugin_root_loud.py": "25d2d4a7ac581b7fb817a5a3b543ead7bbdab254",
     "coordinator_core/bash_guards/tests/test_reviewer_executor_deny_message_parity.py": "0add10e572ec1db1a0b7c906e557a58f5cc90d4c",
+    "coordinator_core/bash_guards/tests/test_rewrite_grep_msys_drive_path.py": "adb94348d572377a5f9e9bddf6a86c836f64c921",
     "coordinator_core/bash_guards/tests/test_rewrite_repo_root_search.py": "494b42be9882bd2211ee511a1934b2f34796c743",
     "coordinator_core/bash_guards/tests/test_rm_flush_touch_containment.py": "1aa0acb8b4c9ac79ee75330727e851b0019c4299",
     "coordinator_core/bash_guards/tests/test_rm_peer_claim_uncommitted_delta.py": "4b2997a414c95d822d34b425cf58056cee1521c8",
@@ -10491,5 +10492,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "145663ee4e8dce739f99f2beab5382136c664f58"
+  "source_head": "38bf5f5fdeb13bb5dfa95896c06fcdf994cd24f2"
 }
