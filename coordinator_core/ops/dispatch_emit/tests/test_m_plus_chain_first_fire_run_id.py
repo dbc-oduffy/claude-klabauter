@@ -72,7 +72,15 @@ def test_a_relay_schema_declaring_no_fields_halts_the_first_fire(tmp_path, real_
 
 @pytest.mark.spawns_process
 def test_a_genuine_non_start_still_halts_on_the_run_id_check(tmp_path, real_emit_reply):
-    reply = {"path": real_emit_reply["path"], "run_id": ""}
+    reply = {"path": real_emit_reply["path"].replace(".workflow.mjs", ".mjs"), "run_id": real_emit_reply["run_id"]}
     got = _run_m_plus_block(tmp_path, reply)
     assert got["started"] == []
     assert _RUN_ID_REASON in got["out"]["halted"]["reason"]
+
+
+@pytest.mark.spawns_process
+def test_a_mis_copied_run_id_beside_a_fresh_path_starts_the_chained_run(tmp_path, real_emit_reply):
+    reply = {"path": real_emit_reply["path"], "run_id": "run-1"}
+    got = _run_m_plus_block(tmp_path, reply)
+    assert len(got["started"]) == 1 and got["started"][0].endswith(f"{real_emit_reply['run_id']}.workflow.mjs")
+    assert got["out"]["done"] is True

@@ -45,7 +45,7 @@ def lacks_human_acceptance(accepted) -> bool:
 #: Every other route -- shape at any size, pm-decision, roadmap, goal-setting -- and every XL+
 #: size keeps the touchpoints. Appetite is PM-stated only: nothing here infers it, and the
 #: gate takes the route as recorded, never the `xl_exit`-resolved one.
-_SKIP_SIZING_ACCEPTANCE_ROUTES = frozenset({"plan", "dispatch", "spec-dispatch"})
+_SKIP_SIZING_ACCEPTANCE_ROUTES = frozenset({"plan", "dispatch", "spec-dispatch", "research"})
 _SKIP_SIZING_ACCEPTANCE_TSHIRTS = frozenset({"XS", "S", "M", "L"})
 
 #: The `by` every record of a skipped acceptance names: nobody was asked.
@@ -58,10 +58,9 @@ def sizing_acceptance_skipped(route: object, tshirt: object) -> bool:
     return route in _SKIP_SIZING_ACCEPTANCE_ROUTES and tshirt in _SKIP_SIZING_ACCEPTANCE_TSHIRTS
 
 
-#: Modes in which the APM picks a `pm-decision` sizing's XL exit in-run. Only `ceo`: there the PM
-#: delegates direction to the run, and XL/XXL go through to execution without a room; `pm` and
-#: `hands-on` keep the XL+ exit as the PM's.
-XL_EXIT_APM_MODES = ("ceo",)
+#: Modes in which the APM picks a `pm-decision` sizing's XL exit in-run: every interaction mode,
+#: since no human is to pick the exit.
+XL_EXIT_APM_MODES = ("ceo", "pm", "hands-on")
 
 
 def apm_picks_xl_exit(mode: object) -> bool:

@@ -179,8 +179,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             mode = doc.get("interaction_mode")
             if not apm_picks_xl_exit(mode):
                 raise MutateAbort(
-                    f"refusing to record on {p}: interaction_mode {mode!r} keeps the XL exit the PM's; "
-                    "an APM ruling records it only in ceo mode"
+                    f"refusing to record on {p}: interaction_mode {mode!r} is not ceo, pm or hands-on; "
+                    "an APM ruling records the XL exit only in those modes"
                 )
         prior = doc.get("xl_exit")
         if prior == pick:

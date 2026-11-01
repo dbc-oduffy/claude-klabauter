@@ -15,6 +15,14 @@ PM = {"pm_quote": "yes", "on": "2026-10-06", "mode": "pm"}
 APM = {"source": "apm", "apm_ruling": "ruled", "on": "2026-10-06", "mode": "ceo"}
 
 
+def test_research_route_skips_acceptance_at_xs_to_l_only():
+    from coordinator_core.ops.sizing_acceptance import sizing_acceptance_skipped
+
+    assert sizing_acceptance_skipped("research", "L")
+    assert not sizing_acceptance_skipped("research", "XL")
+    assert not sizing_acceptance_skipped("shape", "L")
+
+
 def test_words():
     assert acceptance_words(PM) == "yes"
     assert acceptance_words(APM) == "ruled"

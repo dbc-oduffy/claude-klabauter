@@ -216,17 +216,18 @@ _SEAM_REVIEW_A1_A2 = "review-a1-a2"
 _SEAM_EXECUTE_WAVE = "execute->wave"
 _SEAM_PICKUP_NEXT_MOVE = "pickup->next-move"
 
+#: Terminal owed by a `route: research` sizing, or a legacy sizing carrying a `research` block:
+#: the research skill, or the emitted `pipeline-research-*.workflow.mjs` fire.
+_RESEARCH_TERMINAL = "Skill|Workflow(coordinator:research|pipeline-research-*.workflow.mjs)"
+
 _ROUTE_TERMINAL = {
     "dispatch": "Agent(coordinator:executor)",
     "spec-dispatch": "Skill(coordinator:plan|coordinator:execute-plan)",
     "plan": "Skill|Workflow(coordinator:plan|fire-*.mjs)",
     "shape": "Skill(coordinator:plan)",
     "roadmap": "Skill(coordinator:plan)",
+    "research": _RESEARCH_TERMINAL,
 }
-
-#: Terminal owed by a sizing carrying a `research` block: the research skill, or the emitted
-#: `pipeline-research-*.workflow.mjs` fire. Replaces the route's own terminal for that sizing.
-_RESEARCH_TERMINAL = "Skill|Workflow(coordinator:research|pipeline-research-*.workflow.mjs)"
 
 _REVIEW_NEXT_ACTION = "Agent(<named Opus reviewer>)"
 _EXECUTE_NEXT_ACTION = "Agent|Workflow(coordinator:executor or the emitted plan script)"

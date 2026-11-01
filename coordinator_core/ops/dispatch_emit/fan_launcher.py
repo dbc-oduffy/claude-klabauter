@@ -119,6 +119,13 @@ function _normEmitPath(p) {
   return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : WARP_PREFIX.slice(0, -'scratch/warp/'.length) + s.replace(/^\.\//, '');
 }
 
+// Trap: a relaying agent mis-copies run_id (the ask's own id); the script path's basename is the run id, so never read the relayed one.
+function _pathRunId(p) {
+  if (typeof p !== 'string') return '';
+  const b = p.replace(/\\/g, '/').split('/').pop();
+  return (b.endsWith(RUN_SCRIPT_SUFFIX) && b.indexOf('.staged-') === -1) ? b.slice(0, b.length - RUN_SCRIPT_SUFFIX.length) : '';
+}
+
 // The only foreign run id accepted: the one this emit minted as the redirect for this child's halted run.
 function _isOwnRedirect(child, e) {
   const r = e.__REDIRECT_KEY__;
@@ -142,8 +149,9 @@ function _emitRefusal(child, e, chained) {
   if (!e || typeof e !== 'object') return 'emit reply is not an object';
   if (typeof e.error === 'string' && e.error !== '') return 'emit failed: ' + e.error;
   if (chained) {
-    if (typeof e.run_id !== 'string' || e.run_id === '' || e.run_id === child.run_id) {
-      return 'chain emit reply run_id ' + String(e.run_id) + ' is not a fresh run id';
+    const pathRun = _pathRunId(e.path);
+    if (typeof e.path === 'string' && e.path !== '' && (pathRun === '' || pathRun === child.run_id)) {
+      return 'chain emit reply path run id ' + JSON.stringify(pathRun) + ' is not a fresh run id';
     }
   } else if (e.run_id !== child.run_id && !_isOwnRedirect(child, e) && !_isOwnRecompose(child, e)) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;
   if (typeof e.path !== 'string' || e.path === '') return 'emit reply path is not a non-empty string';
@@ -263,8 +271,8 @@ async function _chainHop(child, handoff) {
   const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...params } = handoff;
   let emitted;
   if (typeof _re === 'string' && _re !== '') return fail('emit failed: ' + _re);
-  if (named(_rp) && named(_rr)) {
-    emitted = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
+  if (named(_rp)) {
+    emitted = { path: _rp, run_id: _pathRunId(_rp), fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
   } else {
     try {
       emitted = await _emitLeg(child, { ...params, __LAUNCHER_PARAM__: true }, 'chain-emit-' + child.run_id);
@@ -274,6 +282,7 @@ async function _chainHop(child, handoff) {
   }
   const refusal = _emitRefusal(child, emitted, true);
   if (refusal !== null) return fail(refusal);
+  emitted = { ...emitted, run_id: _pathRunId(emitted.path) };
   const chained = await _startLoop(child, _normEmitPath(emitted.path));
   if (chained.status !== 'ok') {
     if (!chained.started) _abandonId(emitted.run_id, child.run_id);

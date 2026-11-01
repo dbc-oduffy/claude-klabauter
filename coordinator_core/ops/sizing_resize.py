@@ -91,7 +91,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     from coordinator_core.sizing_assemble import route as _route
 
-    new_route = _route(estimate={"tshirt": tshirt}, scout_evidence=[basis])["route"]
+    sized_route = _route(estimate={"tshirt": tshirt}, scout_evidence=[basis])["route"]
 
     worktree = main_worktree_root(repo_root)
     p = Path(sizing_raw)
@@ -103,7 +103,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not p.is_file():
         return _err(f"sizing-object not found on disk: {sizing_raw}")
 
-    _state: dict = {"applied": False}
+    _state: dict = {"applied": False, "route": sized_route}
 
     def mutate(old_text: str) -> str:
         try:
@@ -116,6 +116,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         status = doc.get("status")
         if status in _TERMINAL:
             raise MutateAbort(f"refusing to resize {p}: status is terminal ({status})")
+
+        new_route = sized_route
+        if doc.get("route") == "research" and doc.get("research"):
+            new_route = "research"
+        _state["route"] = new_route
 
         est = doc.get("estimate")
         est = dict(est) if isinstance(est, dict) else {}
@@ -156,15 +161,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except MutateAbort as exc:
         return _err(str(exc.args[0]) if exc.args else "resize: mutation aborted")
 
+    final_route = _state["route"]
     msg = (
-        f"resized {sizing_raw} to {tshirt}, route {new_route}"
+        f"resized {sizing_raw} to {tshirt}, route {final_route}"
         if _state["applied"]
-        else f"{sizing_raw} already records {tshirt} and route {new_route} — idempotent no-op"
+        else f"{sizing_raw} already records {tshirt} and route {final_route} — idempotent no-op"
     )
     return {
         "exit_code": 0,
         "applied": _state["applied"],
-        "route": new_route,
+        "route": final_route,
         "basis": basis,
         "message": msg,
     }

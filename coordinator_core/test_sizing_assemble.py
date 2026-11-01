@@ -1341,6 +1341,7 @@ def test_vendored_schema_widened_enums_order_exact():
         "roadmap",
         "pm-decision",
         "goal-setting",
+        "research",
     ]
     assert sizing_schema["properties"]["detents"]["items"]["enum"] == [
         "appetite_conform",

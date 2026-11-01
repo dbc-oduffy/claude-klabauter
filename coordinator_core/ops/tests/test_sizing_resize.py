@@ -124,6 +124,35 @@ def test_terminal_status_refuses(repo, status):
     assert path.read_text(encoding="utf-8") == before
 
 
+def _seed_research(repo: Path, *, tshirt: str, with_block: bool) -> Path:
+    path = _seed(repo, tshirt=tshirt, route="research")
+    if with_block:
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + "research:\n  value_class: corpus\n  sources:\n    - repo\n",
+            encoding="utf-8",
+        )
+    return path
+
+
+def test_research_sizing_keeps_research_route_across_resize(repo):
+    path = _seed_research(repo, tshirt="M", with_block=True)
+    res = _run(repo, tshirt="L")
+    assert res["exit_code"] == 0 and res["applied"] is True, res
+    assert res["route"] == "research"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert doc["estimate"]["tshirt"] == "L"
+    assert doc["route"] == "research"
+
+
+def test_research_sizing_without_block_reroutes_per_tshirt(repo):
+    path = _seed_research(repo, tshirt="M", with_block=False)
+    res = _run(repo, tshirt="S")
+    assert res["exit_code"] == 0 and res["applied"] is True, res
+    assert res["route"] == "spec-dispatch"
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["route"] == "spec-dispatch"
+
+
 def test_empty_basis_refuses(repo):
     _seed(repo, tshirt="S", route="spec-dispatch")
     res = _run(repo, tshirt="M", basis="  ")

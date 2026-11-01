@@ -6816,7 +6816,11 @@ def _default_output_path(
         # F8 (klabauter#71): --slug, when supplied, overrides the
         # title-derived slug outright rather than feeding through
         # _slug_from_title's word-boundary truncation.
-        return slug_override if slug_override else _slug_from_title(t)
+        # Trap: a slug copied off a dated stem (a sizing's `2026-11-01-x`) already carries a date;
+        # joined to `today` it doubles (`2026-11-01-2026-11-01-x`), so a leading date is dropped.
+        if slug_override:
+            return re.sub(r"^\d{4}-\d{2}-\d{2}-", "", slug_override) or slug_override
+        return _slug_from_title(t)
 
     if doc_type in ("handoff", "spinoff", "recovery", "goal-seed", "roadmap-seed"):
         slug = _slug(title)

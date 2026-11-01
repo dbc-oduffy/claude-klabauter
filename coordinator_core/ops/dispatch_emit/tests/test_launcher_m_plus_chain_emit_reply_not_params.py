@@ -42,7 +42,7 @@ def test_a_gate_emitted_reply_resumes_its_own_twin_on_stage_pending(tmp_path):
 
 @pytest.mark.spawns_process
 def test_a_reply_without_a_run_still_emits_once_with_no_reply_keys(tmp_path):
-    chain = {"path": f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.mjs", "run_id": "ask-r2", "fire_args": {}}
+    chain = {"path": f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs", "run_id": "ask-r2", "fire_args": {}}
     out = _drive(_script(tmp_path), [_handoff({"ok": True, "path": ""}), {"done": True}], chain)
     assert out["r"]["status"] == "ok", out["r"]
     assert [e["label"] for e in out["emits"]] == ["chain-emit-ask-r1"]
@@ -66,3 +66,19 @@ def test_a_gate_reply_naming_the_childs_own_run_is_refused(tmp_path):
     assert out["r"]["status"] == "failed"
     assert "not a fresh run id" in out["r"]["error"]
     assert len(out["calls"]) == 1
+
+
+@pytest.mark.spawns_process
+def test_a_reply_carrying_the_childs_run_id_beside_a_fresh_path_starts_the_chained_run(tmp_path):
+    reply = {**_reply(tmp_path), "run_id": "ask-r1"}
+    out = _drive(_script(tmp_path), [_handoff(reply), {"route": "dispatch", "done": True}], {"error": "must not be called"})
+    assert out["r"]["status"] == "ok", out["r"]
+    assert out["calls"][1]["scriptPath"] == reply["path"]
+
+
+@pytest.mark.spawns_process
+def test_a_reply_whose_path_is_no_run_script_is_refused_whatever_its_run_id(tmp_path):
+    reply = {"path": f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.mjs", "run_id": "ask-r2", "ok": True}
+    out = _drive(_script(tmp_path), [_handoff(reply)], {})
+    assert out["r"]["status"] == "failed"
+    assert "not a fresh run id" in out["r"]["error"]

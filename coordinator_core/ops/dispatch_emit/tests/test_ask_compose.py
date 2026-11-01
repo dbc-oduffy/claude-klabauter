@@ -858,7 +858,7 @@ def _run_chain_check(repo_root, reply):
     start = lines.index("    const _chainCheck = (_ce) => {")
     check = "\n".join(lines[start:start + lines[start:].index("    };") + 1])
     prog = (
-        f"const REPO_ROOT = {json.dumps(repo_root)}; let _why = null; let _chainPath = null; let _chainRunId = '';\n"
+        f"const REPO_ROOT = {json.dumps(repo_root)}; const _runId = 'parent'; let _why = null; let _chainPath = null; let _chainRunId = '';\n"
         f"{check}\n_chainCheck({json.dumps(reply)});\nconsole.log(JSON.stringify([_chainPath, _why]));"
     )
     out = subprocess.run(
@@ -924,7 +924,7 @@ def test_chain_start_throw_abandons_the_minted_child_run():
     assert window.index("_why = 'start threw: '") < guard_at
     assert "catch (_ae) {}" in window
     assert "_why =" not in window[guard_at:window.index("\n      }")]
-    assert "_chainRunId = _ce.run_id" in body[:catch_at]
+    assert "_chainRunId = _cid" in body[:catch_at]
     assert "_chainRunId = ''" in body[:catch_at]
 
 

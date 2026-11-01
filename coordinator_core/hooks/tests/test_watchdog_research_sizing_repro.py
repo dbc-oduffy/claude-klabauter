@@ -11,7 +11,13 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.sizing_assemble as sa
-from coordinator_core.hooks.watchdog_undischarged_next_move import _RESEARCH_TERMINAL, _handler
+import yaml
+
+from coordinator_core.hooks.watchdog_undischarged_next_move import (
+    _RESEARCH_TERMINAL,
+    _ROUTE_TERMINAL,
+    _handler,
+)
 from coordinator_core.session import machinery_paths, record_homes
 
 _SID = "22222222-3333-4444-5555-666666666666"
@@ -71,7 +77,7 @@ def test_research_class_write_opens_research_terminal_and_fire_discharges(repo, 
         [
             "--tshirt", "M", "--interaction-mode", "pm", "--write", rel, "--json",
             "--research-class", value_class,
-            "--research-source", "notebooklm", "--research-source", "web",
+            "--research-source", "repo", "--research-source", "web",
         ]
     )
     assert code == 0
@@ -80,6 +86,8 @@ def test_research_class_write_opens_research_terminal_and_fire_discharges(repo, 
     opened = _open_sizing_rows(repo)
     assert len(opened) == 1
     assert opened[0]["next_action"] == _RESEARCH_TERMINAL
+    assert opened[0]["next_action"] not in (_ROUTE_TERMINAL[r] for r in ("plan", "dispatch", "spec-dispatch", "shape", "roadmap"))
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["route"] == "research"
 
     fire = {"scriptPath": "scratch/warp/pipeline-research-x-1.workflow.mjs"}
     assert _hook(repo, "PostToolUse", tool_name="Workflow", tool_input=fire) == {}
@@ -87,3 +95,17 @@ def test_research_class_write_opens_research_terminal_and_fire_discharges(repo, 
 
     stop = _hook(repo, "Stop")
     assert "never invoked" not in json.dumps(stop)
+
+
+def test_non_research_m_write_still_opens_plan_terminal(repo) -> None:
+    path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.write_text(_DRAFT, encoding="utf-8")
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    assert sa.main(["--tshirt", "M", "--interaction-mode", "pm", "--write", rel, "--json"]) == 0
+
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["route"] == "plan"
+    assert _hook(repo, "PostToolUse", tool_name="Bash", tool_input={"command": "ls"}) == {}
+    opened = _open_sizing_rows(repo)
+    assert len(opened) == 1
+    assert opened[0]["next_action"] == _ROUTE_TERMINAL["plan"]
+    assert opened[0]["next_action"] != _RESEARCH_TERMINAL

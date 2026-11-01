@@ -211,9 +211,10 @@
         "plan",
         "roadmap",
         "pm-decision",
-        "goal-setting"
+        "goal-setting",
+        "research"
       ],
-      "description": "The room this sizing routes the work into: dispatch=small enough to execute directly, no artifact; spec-dispatch=small enough for a light plan artifact then dispatch, no Opus plan review; shape=problem not yet converged, needs /shape first; plan=decision-weight work needing coordinator:plan; roadmap=initiative-scale, needs roadmap-planning; pm-decision=initiative-scale and not a room by itself — the engine picks no room and the PM chooses among the offered exits (see `xl_exit`); goal-setting=the XXL room, needing coordinator:goal-setting to produce ratified OKRs plus roadmap-seed stubs. `goal-setting` is a resolved room, not a fifth XL exit — XL has four exits and is therefore a PM decision, XXL has exactly one room and is therefore a determinate map. NEGATIVE SPEC, cross-repo load-bearing: `goal-setting` is deliberately EXCLUDED from the engine repo's `nudge_unrouted_sizing._ROUTABLE_ROUTES` (routes whose room an EM may enter without a PM utterance), because `coordinator/skills/goal-setting/SKILL.md` is PM-GATED. Un-gating that skill here reds coordinator/tests/test_goal_setting_pm_gate_is_cross_repo_load_bearing.py, which routes the editor to memo the engine repo and hold the merge — never to relax the assertion."
+      "description": "The room this sizing routes the work into: dispatch=small enough to execute directly, no artifact; spec-dispatch=small enough for a light plan artifact then dispatch, no Opus plan review; shape=problem not yet converged, needs /shape first; plan=decision-weight work needing coordinator:plan; roadmap=initiative-scale, needs roadmap-planning; pm-decision=initiative-scale and not a room by itself — the engine picks no room and the PM chooses among the offered exits (see `xl_exit`); goal-setting=the XXL room, needing coordinator:goal-setting to produce ratified OKRs plus roadmap-seed stubs. `goal-setting` is a resolved room, not a fifth XL exit — XL has four exits and is therefore a PM decision, XXL has exactly one room and is therefore a determinate map. NEGATIVE SPEC, cross-repo load-bearing: `goal-setting` is deliberately EXCLUDED from the engine repo's `nudge_unrouted_sizing._ROUTABLE_ROUTES` (routes whose room an EM may enter without a PM utterance), because `coordinator/skills/goal-setting/SKILL.md` is PM-GATED. Un-gating that skill here reds coordinator/tests/test_goal_setting_pm_gate_is_cross_repo_load_bearing.py, which routes the editor to memo the engine repo and hold the merge — never to relax the assertion. `research` (added after the rooms above) is a research-class sizing (`research:` block) stamped by `sizing-assemble --write --research-*`; it is fired with emit-dispatch-workflow --from-sizing and is not a plan room."
     },
     "detents": {
       "type": "array",
@@ -904,7 +905,8 @@
                       "enum": [
                         "plan",
                         "dispatch",
-                        "spec-dispatch"
+                        "spec-dispatch",
+                        "research"
                       ],
                       "description": "The recorded route the rule held for."
                     },

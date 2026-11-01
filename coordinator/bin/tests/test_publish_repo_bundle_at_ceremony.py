@@ -58,6 +58,35 @@ def test_cli_override_missing_file_skips(tool, tmp_path):
     assert result.startswith("publish-repo-bundle: skipped -- --cli names a file that does not exist")
 
 
+def test_stale_registry_pointer_with_no_installed_cli_is_a_defect(tool, monkeypatch, tmp_path):
+    monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (str(tmp_path / "gone.exe"), None))
+    monkeypatch.setattr(tool, "_installed_cli", lambda: None)
+    result = tool.run("handoff", tmp_path)
+    assert result.startswith("publish-repo-bundle: defect -- registry key names a file that does not exist")
+
+
+def test_stale_registry_pointer_falls_back_to_installed_cli(tool, monkeypatch, tmp_path, fake_cli):
+    monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (str(tmp_path / "gone.exe"), None))
+    monkeypatch.setattr(tool, "_installed_cli", lambda: fake_cli)
+    calls = _calls_recorder(monkeypatch, tool, [(3, "", "lock held")])
+    monkeypatch.setattr(tool, "_git_common_dir", lambda repo_root: None)
+    result = tool.run("handoff", tmp_path)
+    assert "defect" not in result
+    assert calls[0][0] == str(fake_cli)
+
+
+def test_installed_cli_found_on_path(tool, monkeypatch, tmp_path):
+    import sys
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / ("example-retrieval-repo-cli.exe" if sys.platform == "win32" else "example-retrieval-repo-cli")
+    exe.write_text("", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+    assert tool._installed_cli().resolve() == exe.resolve()
+
+
 def test_registry_key_unresolved_skips_where_example_retrieval_repo_is_absent(tool, monkeypatch, tmp_path):
     monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (None, "registry key unset"))
     result = tool.run("handoff", tmp_path)

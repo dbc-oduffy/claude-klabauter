@@ -673,6 +673,11 @@ function _normPath(p) {
   const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
   return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : REPO_ROOT + '/' + s.replace(/^\.\//, '');
 }
+// Trap: a relaying agent mis-copies run_id (the ask's own id); the script path's basename is the run id, so never read the relayed one.
+function _pathRunId(p) {
+  const b = p.replace(/\\/g, '/').split('/').pop();
+  return (b.endsWith(RUN_SCRIPT_SUFFIX) && b.indexOf('.staged-') === -1) ? b.slice(0, b.length - RUN_SCRIPT_SUFFIX.length) : '';
+}
 async function _startLoop(firstPath) {
   let path = firstPath;
   let lastSha = null;
@@ -702,8 +707,8 @@ const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...chainPar
 const _fail = (why) => ({ status: 'failed', run_id: reply.run_id, error: 'the chained run did not complete (' + why + '); the ask run ' + reply.run_id + ' stays resumable' });
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
-if (!_blankPath(_rp) && typeof _rr === 'string' && _rr !== '') {
-  chain = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
+if (!_blankPath(_rp)) {
+  chain = { path: _rp, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
 } else {
   chain = await agent(
     __AUTHORITY__
@@ -715,7 +720,8 @@ if (!_blankPath(_rp) && typeof _rr === 'string' && _rr !== '') {
   );
 }
 if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
-if (typeof chain.run_id !== 'string' || chain.run_id === '' || chain.run_id === reply.run_id) return _fail('chain emit run_id is not a fresh run id');
+const _chainRun = _pathRunId(chain.path);
+if (_chainRun === '' || _chainRun === reply.run_id) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id');
 const chained = await _startLoop(_normPath(chain.path));
 if (!chained.ok) return _fail(chained.error);
 const r = chained.result;

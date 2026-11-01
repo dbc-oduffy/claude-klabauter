@@ -201,6 +201,23 @@ def test_a_research_sizing_routes_to_the_research_fire_not_plan(repo: Path, caps
     assert "Route to" not in reply["next_move"]
 
 
+def test_a_research_sizing_is_written_with_the_research_route_and_validates(repo: Path, capsys) -> None:
+    code, doc = _run(repo, "--research-class", "corpus", "--research-source", "repo")
+    assert code == sa.EXIT_OK
+    assert doc["route"] == "research"
+    assert json.loads(capsys.readouterr().out)["route"] == "research"
+    assert validate_frontmatter(doc, _SCHEMA) == []
+
+
+def test_a_non_research_write_still_routes_plan(repo: Path) -> None:
+    path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.write_text(_DRAFT, encoding="utf-8")
+    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    code = sa.main(["--tshirt", "M", "--interaction-mode", "pm", "--write", rel, "--json"])
+    assert code == sa.EXIT_OK
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["route"] == "plan"
+
+
 def test_amend_research_changes_one_field_and_keeps_the_rest(repo: Path, capsys) -> None:
     _run(repo, "--research-class", "corpus", "--research-source", "repo", "--research-target", "repo=a/b")
     rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()

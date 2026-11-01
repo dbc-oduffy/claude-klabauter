@@ -2532,7 +2532,7 @@ def _em_context_row_ids(repo_root: str, sizing_rel: Optional[str]) -> list[str]:
 
 
 def _xl_exit_open(repo_root: str, sizing_rel: Optional[str]) -> bool:
-    """An existing sizing whose XL exit the APM picks in-run: `pm-decision`, no `xl_exit`, ceo mode."""
+    """An existing sizing whose XL exit the APM picks in-run: `pm-decision`, no `xl_exit`, any interaction mode."""
     if not sizing_rel:
         return False
     from coordinator_core.ops.sizing_acceptance import apm_picks_xl_exit
@@ -3311,7 +3311,7 @@ def compose_ask_script(
     `in_run_commit` composes the docs and commit stages: the run lands its own terminal commit and
     reports the close-job record; without it the EM runs the commit. The run token is read at
     runtime from `args.runToken`; no token bytes are ever emitted.
-    On a raw ask in ceo mode an XL `pm-decision` sizing gets its exit picked in-run by the APM;
+    On a raw ask, in any mode, an XL `pm-decision` sizing gets its exit picked in-run by the APM;
     `roadmap_blitz_text` (or the plugin asset) embeds the roadmap arm that pick can lead to.
     """
     # Deferred: pm_adjudication pulls grind_stages, which a --plan emit must not load.
@@ -4146,8 +4146,8 @@ def compose_ask_script(
         )
         xl_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
-            "phase: xl-exit\n\nYou are the PM's delegate for one XL exit; this sizing runs in ceo mode, "
-            "so nobody escalates to the human here. Read the sizing at ",
+            "phase: xl-exit\n\nYou are the PM's delegate for one XL exit; "
+            "nobody escalates to the human here. Read the sizing at ",
             "js:_sizingRel",
             " (intent, estimate, exit_criterion, research) and pick its exit: 'accept_multi_session' when "
             "the work is one deliverable a single multi-session plan can carry; 'roadmap' when it spans two "
@@ -4193,7 +4193,7 @@ def compose_ask_script(
         b.append("  let _splitSlices = null;")
         b.append("  let _splitFan = null;")
         b.append(
-            # Each round discharges one halt in-run and re-gates: an XL sizing in ceo mode can
+            # Each round discharges one halt in-run and re-gates: an XL sizing can
             # owe both the exit pick and the exit-criterion acceptance. No progress ends the loop.
             f"  for (let _round = 0; _round < 3 && {_NO_RESUME} && _gate.halt; _round++) {{\n"
             "    let _progressed = false;\n"
@@ -5931,8 +5931,10 @@ def _chain_emit_start_lines(
         "      if (typeof _ce?.error === 'string' && _ce.error !== '') { _why = 'emit failed: ' + _ce.error; }",
         "      else if (_cp.split('/').indexOf('..') !== -1 || _cp.slice(0, _warp.length).toLowerCase() !== _warp.toLowerCase()) "
         "{ _why = 'emit path is not under ' + _warp; }",
-        "      else if (typeof _ce?.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_ce.run_id)) { _why = 'emit reply run_id is not a run id'; }",
-        "      else { _chainPath = _cp; _chainRunId = _ce.run_id; }",
+        f"      else {{ const _cb = _cp.split('/').pop(); const _crs = {_lit(RUN_SCRIPT_SUFFIX)};",
+        "        const _cid = (_cb.endsWith(_crs) && _cb.indexOf('.staged-') === -1) ? _cb.slice(0, _cb.length - _crs.length) : '';",
+        "        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_cid) || _cid === _runId) { _why = 'emit reply run_id is not a run id'; }",
+        "        else { _chainPath = _cp; _chainRunId = _cid; } }",
         "    };",
         "    try {",
         f"      let _ce = {emit_expr};",

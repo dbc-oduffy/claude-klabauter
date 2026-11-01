@@ -1,4 +1,4 @@
-"""sizing.record_xl_exit with an APM ruling: admitted only in ceo mode, only for exits that run on."""
+"""sizing.record_xl_exit with an APM ruling: admitted in every interaction mode, only for exits that run on."""
 
 from __future__ import annotations
 
@@ -57,11 +57,18 @@ def test_ceo_mode_records_an_apm_fan_out(tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["pm", "hands-on"])
-def test_other_modes_keep_the_exit_the_pms(tmp_path, mode):
+def test_other_modes_record_the_apm_pick(tmp_path, mode):
     p = _seed_mode(tmp_path, mode)
+    r = _apm(tmp_path)
+    assert r["exit_code"] == 0 and r["applied"] is True, r
+    assert yaml.safe_load(p.read_text(encoding="utf-8"))["xl_exit"] == "accept_multi_session"
+
+
+def test_unknown_mode_still_refuses_the_apm_pick(tmp_path):
+    p = _seed_mode(tmp_path, "bogus")
     before = p.read_text(encoding="utf-8")
     r = _apm(tmp_path)
-    assert r["exit_code"] == 1 and "ceo" in r["error"], r
+    assert r["exit_code"] == 1 and "not ceo, pm or hands-on" in r["error"], r
     assert p.read_text(encoding="utf-8") == before
 
 

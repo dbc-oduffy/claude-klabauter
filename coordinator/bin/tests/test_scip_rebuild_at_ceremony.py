@@ -67,8 +67,48 @@ def test_registry_key_points_at_missing_file_is_a_defect(tool, monkeypatch, tmp_
     monkeypatch.setattr(
         tool, "_resolve_registry_key", lambda key: (str(tmp_path / "does-not-exist.exe"), None)
     )
+    monkeypatch.setattr(tool, "_installed_cli", lambda: None)
     result = tool.run("workstream-complete", tmp_path)
     assert result.startswith("scip-rebuild: defect -- registry key names a file that does not exist")
+
+
+def _fake_installed_cli(directory: Path) -> Path:
+    directory.mkdir()
+    exe = directory / ("example-retrieval-repo-cli.exe" if sys.platform == "win32" else "example-retrieval-repo-cli")
+    exe.write_text("", encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
+
+
+def test_installed_cli_found_on_path(tool, monkeypatch, tmp_path):
+    exe = _fake_installed_cli(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(exe.parent))
+    assert tool._installed_cli().resolve() == exe.resolve()
+
+
+def test_installed_cli_absent_is_none(tool, monkeypatch, tmp_path):
+    (tmp_path / "empty").mkdir()
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setattr(tool.sysconfig, "get_path", lambda *a, **k: str(tmp_path / "empty"))
+    monkeypatch.setattr(tool, "_console_python", lambda: str(tmp_path / "empty" / "python"))
+    monkeypatch.setattr(tool.sys, "executable", str(tmp_path / "empty" / "python"))
+    assert tool._installed_cli() is None
+
+
+def test_stale_registry_pointer_falls_back_to_installed_cli(tool, monkeypatch, tmp_path):
+    installed = _fake_installed_cli(tmp_path / "bin")
+    stale = tmp_path / "gone" / "example-retrieval-repo-cli.exe"
+    monkeypatch.setattr(tool, "_resolve_registry_key", lambda key: (str(stale), None))
+    monkeypatch.setattr(tool, "_installed_cli", lambda: installed)
+    captured = {}
+    monkeypatch.setattr(tool, "_spawn_detached", lambda argv, cwd, log: captured.update(argv=argv) or True)
+    monkeypatch.setattr(tool, "_git_common_dir", lambda repo_root: None)
+    repo_root = tmp_path / "target-repo"
+    repo_root.mkdir()
+    result = tool.run("workstream-complete", repo_root)
+    assert "defect" not in result
+    assert captured["argv"][-1] == str(installed)
+    assert str(stale) in result and str(installed) in result
 
 
 def test_registry_key_unresolved_skips_where_example_retrieval_repo_is_absent(tool, monkeypatch, tmp_path):

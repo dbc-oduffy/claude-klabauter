@@ -441,6 +441,7 @@ ROUTE_ENUM = (
     "roadmap",
     "pm-decision",
     "goal-setting",
+    "research",
 )
 
 FORK_ENUM = ("cut_to_fit", "raise_appetite")
@@ -638,6 +639,8 @@ _LOBBY_CHAINS = {
     "plan": ["plan", "plan review", "execute-plan"],
 }
 
+RESEARCH_FIRE_ENTRY = "fire the research chain: emit-dispatch-workflow --from-sizing <this sizing>"
+
 _ROOM_ENTRY = {
     "shape": "enter coordinator:shape",
     "roadmap": (
@@ -649,6 +652,7 @@ _ROOM_ENTRY = {
         "only when the PM clearly asks to work it hands-on"
     ),
     "pm-decision": "surface the XL exits to the PM; record the pick in xl_exit",
+    "research": RESEARCH_FIRE_ENTRY,
 }
 
 _LIGHT_TERMINAL_TSHIRTS = ("XS", "S")
@@ -2419,13 +2423,16 @@ RESEARCH_STAGES = ("research fire (emit-dispatch-workflow --from-sizing)", "rese
 
 
 def _route_to_research(decision: dict[str, Any], write_path: str) -> None:
-    """Point the reply's chain at the research fire: `route` stays the size's room on disk,
-    but `stages` and `next_move` name the research chain the /research command runs."""
+    """Stamp the research route: `route` becomes "research" (so the written record opens no
+    plan-terminal obligation), and `stages` and `next_move` name the research chain the
+    /research command runs. The size's own room is named in `next_move` only."""
+    size_room = decision["route"]
+    decision["route"] = "research"
     decision["stages"] = {"rows": list(RESEARCH_STAGES), "terminal": RESEARCH_STAGES[-1], "owned_by": "research"}
     decision["next_move"] = (
         f"Research sizing: fire it with `emit-dispatch-workflow --from-sizing {write_path}`, then "
         "run the reply's `next_action` (research.close) on return. Do not route to "
-        f"{decision['route']}: that is the size's room, not this ask's chain."
+        f"{size_room}: that is the size's room, not this ask's chain."
     )
 
 
