@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 
@@ -68,9 +69,10 @@ def test_staged_review_reverify_body_leaves_the_script_and_lands_in_the_sink():
     assert "Re-verify the edits this run" in _compose()
 
 
-def test_both_commit_params_blocks_carry_targeted_tests_verbatim():
+def test_every_commit_params_block_carries_targeted_tests_verbatim():
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
-    assert script.count(_TARGETED_TESTS) == 2
+    # commit stage, its post-retest re-commit, and the halt record
+    assert script.count(_TARGETED_TESTS) == 3
 
 
 def test_halt_block_carries_targeted_tests_outside_the_terminal_commit_conditional():
@@ -109,6 +111,63 @@ def test_reverify_joins_before_self_correction_reads_it():
     early = script.index("if (!_reverifyJoined)")
     assert early < join
     assert script.index("_halted.halted === \"review_blocked\")") > join
+
+
+_SIZING = "state/sizings/x.yaml"
+_OWN = "coordinator_core/tests/test_own.py"
+_OWN_NODE = f"{_OWN}::test_mine"
+_FOREIGN_NODE = "coordinator_core/tests/test_sibling.py::test_theirs"
+
+
+def _run_halt(reverify, declared) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    manifest = {"ledger_item_ids": ["R1"]}
+    if declared is not None:
+        manifest["review_declared_paths"] = declared
+    source = (
+        f"let _halted = null; const _runId = 'r1'; const _sizingRel = {_SIZING!r}; const _planRel = 'docs/plans/p.md';\n"
+        f"const _manifest = {json.dumps(manifest)}; const _reviewWave = [];\n"
+        f"const _reviewReverify = {json.dumps(reverify)};\n"
+        + ask_compose._refire_next_action_helper_js(_SIZING)
+        + "\n"
+        + ask_compose._review_blocked_halt_js(_SIZING)
+        + "\nconsole.log(JSON.stringify({ halted: _halted, reverify: _reviewReverify }));\n"
+    )
+    proc = subprocess.run(
+        [node, "-"], input=source, capture_output=True, text=True, timeout=30, **no_console_creationflags()
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_foreign_only_red_does_not_halt_and_lands_out_of_ask():
+    out = _run_halt({"failing": [_FOREIGN_NODE]}, [_OWN])
+
+    assert out["halted"] is None
+    assert out["reverify"]["out_of_ask"] == [_FOREIGN_NODE]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_own_red_still_halts_and_foreign_red_rides_out_of_ask():
+    out = _run_halt({"failing": [_OWN_NODE, _FOREIGN_NODE]}, [_OWN])
+
+    assert out["halted"]["halted"] == ask_compose.HALT_REVIEW_BLOCKED
+    assert [f["node_id"] for f in out["halted"]["failing"]] == [_OWN_NODE]
+    assert out["reverify"]["out_of_ask"] == [_FOREIGN_NODE]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_no_declared_footprint_keeps_every_red_a_blocker():
+    out = _run_halt({"failing": [_FOREIGN_NODE]}, None)
+
+    assert out["halted"]["halted"] == ask_compose.HALT_REVIEW_BLOCKED
+    assert "out_of_ask" not in out["reverify"]
 
 
 def test_unapplied_reverify_reruns_verify_once():

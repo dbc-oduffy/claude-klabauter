@@ -609,3 +609,46 @@ def test_per_path_legacy_tracked_scratch_untouched_refuses(legacy):
     reply = _legacy_call(root, [s1])
     assert reply["ok"] is False and "scratch/t.log" in reply["error"]
     assert halted_run._read(record)["status"] == halted_run.STATUS_HALTED
+
+
+@pytest.fixture
+def refused(tmp_path):
+    """The example-stats-repo shape: manifest, run.json, run-stage.json, stage-receipt.json, stage-dirt.json; no halted.json."""
+    _git(tmp_path, "init", "-q")
+    record = tmp_path / ask_contract.RECORD_DIR_ROOT / RUN
+    record.mkdir(parents=True)
+    for name in ("manifest.json", "run.json", "stage-receipt.json", "stage-dirt.json"):
+        (record / name).write_text("{}", encoding="utf-8")
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    return tmp_path, record
+
+
+def test_refused_at_nested_chain_start_without_halted_json_closes(refused):
+    root, record = refused
+    reply = _call(root)
+    assert reply["ok"] is True and reply["dispositions"] == {}
+    marker = halted_run._read(record)
+    assert marker["status"] == halted_run.STATUS_CLOSED
+    assert ask_contract.read_run_stage(root, RUN)["stage"] == "halted"
+
+
+@pytest.mark.parametrize("extra", ["kept.json", "withheld-prints.json", "run-baton.json"])
+def test_refused_shape_with_work_record_still_refuses(refused, extra):
+    root, record = refused
+    (record / extra).write_text("{}", encoding="utf-8")
+    assert _call(root)["ok"] is False
+    assert not (record / halted_run.HALTED_FILE).exists()
+
+
+def test_recently_active_unhalted_run_refuses_as_possibly_live(refused):
+    root, record = refused
+    ask_contract.write_run_stage_at(record, "staged")
+    reply = _call(root)
+    assert reply["ok"] is False and "live" in reply["error"]
+    assert not (record / halted_run.HALTED_FILE).exists()
+
+
+def test_unhalted_run_without_stage_receipt_refuses(refused):
+    root, record = refused
+    (record / "stage-receipt.json").unlink()
+    assert _call(root)["ok"] is False

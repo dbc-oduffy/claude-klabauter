@@ -1,9 +1,9 @@
 # Notice
 
 Claude-klabauter
-Copyright 2025-2026 Dónal example-operator
+Copyright 2025-2026 Dónal O'Duffy
 
-This product includes software developed by Dónal example-operator.
+This product includes software developed by Dónal O'Duffy.
 
 ## Licence
 

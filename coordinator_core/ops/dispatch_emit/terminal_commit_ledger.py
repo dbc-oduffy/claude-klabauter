@@ -449,13 +449,15 @@ def downgrade_unlanded_items(verdict: object, unlanded: Sequence, register_rows:
 
     ``unlanded`` is ``(row id, path, reason)`` triples; ``register_rows`` maps a chunk id to the register
     rows it serves. An item's servers are the chunks listing it plus its own ``claimed_by`` ids; an item
-    with no server, or any landed server, is unchanged."""
+    with neither is served by the chunks that list no register row at all (an xs spine mints none);
+    an item with no server, or any landed server, is unchanged."""
     items = verdict.get("items") if isinstance(verdict, dict) else None
     if not isinstance(items, list) or not unlanded:
         return verdict
     paths_of: dict = {}
     for row, path, _reason in unlanded:
         paths_of.setdefault(str(row), []).append(str(path))
+    unattributed = {str(c) for c, regs in register_rows.items() if not regs}
     out: list = []
     changed = False
     for item in items:
@@ -465,6 +467,7 @@ def downgrade_unlanded_items(verdict: object, unlanded: Sequence, register_rows:
         claimed = item.get("claimed_by")
         servers = {str(c) for c, regs in register_rows.items() if str(item.get("id")) in {str(r) for r in regs or ()}}
         servers |= {str(c) for c in ([claimed] if isinstance(claimed, str) else claimed or ())}
+        servers = servers or unattributed
         if not servers or not servers <= set(paths_of):
             out.append(item)
             continue

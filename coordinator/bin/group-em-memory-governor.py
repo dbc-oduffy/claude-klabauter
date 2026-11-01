@@ -694,6 +694,79 @@ def _same_process(pid: int, recorded: object,
     return now is not None and abs(now - float(recorded)) <= START_TIME_TOLERANCE_S
 
 
+_INSTANCE_LOCK_NAME = "group-em-memory-governor.instance.json"
+
+
+def instance_lockfile() -> Path:
+    """The single-instance lock record (pid + start time), separate from the frozen-pid pidfile."""
+    return _managed_dir() / _INSTANCE_LOCK_NAME
+
+
+def instance_holder(lock: Optional[Path],
+                    start_time_fn: Optional[Callable[[int], Optional[float]]] = None) -> Optional[int]:
+    """Pid of the live governor recorded in `lock` (pid exists and its start time matches), else None.
+
+    A missing, malformed, dead-pid or start-time-mismatched record is stale and holds nothing."""
+    if lock is None:
+        return None
+    fn = start_time_fn or process_start_time
+    try:
+        raw = json.loads(Path(lock).read_text(encoding="utf-8"))
+        pid = int(raw["pid"])
+        recorded = raw["start_time"]
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    return pid if _same_process(pid, recorded, fn) else None
+
+
+def acquire_instance_lock(lock: Optional[Path],
+                          start_time_fn: Optional[Callable[[int], Optional[float]]] = None) -> Optional[int]:
+    """Take the instance lock. Returns None when acquired, else the pid of the live holder.
+
+    The record is published by hard link so a concurrent starter never reads a half-written file;
+    a stale record is replaced. An unwritable lock directory never stops the governor.
+
+    Residual race: two starters that both read the same stale record can each unlink and link in
+    turn, so both win. The window is one unlink-to-link gap; the launcher pre-check narrows it.
+    A process whose start time is unreadable records null and is never seen as a holder."""
+    if lock is None:
+        return None
+    fn = start_time_fn or process_start_time
+    me = os.getpid()
+    lock = Path(lock)
+    tmp = lock.with_name(f"{lock.name}.{me}.tmp")
+    try:
+        tmp.write_text(json.dumps({"pid": me, "start_time": fn(me)}), encoding="utf-8")
+        for _ in range(3):
+            try:
+                os.link(tmp, lock)
+                return None
+            except FileExistsError:
+                holder = instance_holder(lock, fn)
+                if holder is not None and holder != me:
+                    return holder
+                lock.unlink(missing_ok=True)
+        return instance_holder(lock, fn)
+    except OSError:
+        return None
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def release_instance_lock(lock: Optional[Path]) -> None:
+    """Remove `lock` when it still names this process; never raises."""
+    if lock is None:
+        return
+    try:
+        if json.loads(Path(lock).read_text(encoding="utf-8")).get("pid") == os.getpid():
+            Path(lock).unlink(missing_ok=True)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def _thaw_one(pidfile: Optional[Path],
                    signal_fn: Callable[[list[int], bool], None] = signal_tree,
                    start_time_fn: Callable[[int], Optional[float]] = process_start_time) -> list[int]:
@@ -894,6 +967,16 @@ def _governor_disk():
     return governor_disk
 
 
+def new_runaways(foot: dict[int, float], flagged: set[int], runaway_mb: float,
+                 self_pid: int) -> dict[int, float]:
+    """Pids newly over `runaway_mb`; `flagged` is pruned to the pids still in `foot`.
+
+    Pruning bounds the set to live pids and lets a reused pid be reported again."""
+    flagged.intersection_update(foot)
+    return {pid: mb for pid, mb in foot.items()
+            if mb >= runaway_mb and pid not in flagged and pid != self_pid}
+
+
 class DiskWatch:
     """Report-only disk episode tracker: owns the previous tick's per-pid byte totals.
 
@@ -1002,8 +1085,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                 reap_orphans(scan, guard_fn(guard_path, scan, time.time()), reap_path, emit, kill_fn,
                              self_pid, rss_fn)
             if args.runaway_mb > 0 and ticks % max(args.runaway_every, 1) == 1 % max(args.runaway_every, 1):
-                over = {pid: mb for pid, mb in footprint_fn().items()
-                        if mb >= args.runaway_mb and pid not in flagged and pid != self_pid}
+                over = new_runaways(footprint_fn(), flagged, args.runaway_mb, self_pid)
                 if over:
                     cmds = {p.pid: p.cmd for p in procs_fn()}
                     for pid, mb in sorted(over.items(), key=lambda kv: -kv[1]):
@@ -1198,9 +1280,25 @@ def main(argv: Optional[list[str]] = None) -> None:
     child_argv = list(sys.argv[1:] if argv is None else argv)
     if "--log" not in child_argv:
         child_argv += ["--log", str(log)]
+    lock = instance_lockfile()
+    holder = instance_holder(lock)
+    if holder is not None:
+        print(f"group-em-memory-governor: already running pid={holder}")
+        sys.exit(0)
     rc = session_detach.ensure_detached("group-em-memory-governor", child_argv, log)
     if rc is not None:
         sys.exit(rc)
+    holder = acquire_instance_lock(lock)
+    if holder is not None:
+        print(f"group-em-memory-governor: already running pid={holder}")
+        sys.exit(0)
+    try:
+        _serve(args, log)
+    finally:
+        release_instance_lock(lock)
+
+
+def _serve(args: argparse.Namespace, log: Path) -> None:
     if args.log is not None:
         # Inline under a launcher, stdout is the launcher's log; a waiter tailing --log would go blind.
         sys.stdout = open_log_or_exit(args.log)

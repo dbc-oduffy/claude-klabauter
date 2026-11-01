@@ -48,6 +48,12 @@ def _inline_marker(monkeypatch):
     monkeypatch.setenv("COORDINATOR_GUARD_DETACHED", "1")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_instance_lock(monkeypatch, tmp_path):
+    # main() takes the instance lock; keep it out of the real managed Temp dir.
+    monkeypatch.setattr(gov, "instance_lockfile", lambda: tmp_path / "instance-lock.json")
+
+
 def _args(**kw):
     base = dict(interval=0, max_pauses=3, resume_after=2, psi_full=10.0, avail_pct=5.0,
                 runaway_mb=0, runaway_every=1)
@@ -1272,3 +1278,108 @@ def test_main_parses_disk_flags_and_passes_disk_sample(monkeypatch):
     assert seen["args"].disk_idle_pct == 5.0 and seen["args"].disk_queue == 4.0
     assert seen["args"].disk_ticks == 1
     assert seen["disk_fn"] is gov._governor_disk().disk_sample
+
+
+def test_runaway_flagged_set_stays_flat_across_many_ticks():
+    flagged: set[int] = set()
+    sizes = []
+    for tick in range(2000):  # one short-lived runaway pid per tick, each gone the next
+        foot = {tick + 1000: 20000.0, 5: 10.0}
+        over = gov.new_runaways(foot, flagged, 12288, self_pid=1)
+        assert list(over) == [tick + 1000]
+        flagged.update(over)
+        sizes.append(len(flagged))
+    assert max(sizes) == 1
+
+
+def test_runaway_pid_is_reported_again_after_it_exits_and_the_pid_is_reused():
+    lines = []
+    feeds = iter([{20: 66560.0}, {20: 66560.0}, {}, {20: 70000.0}])
+    gov.run(_args(runaway_mb=12288), emit=lines.append, sample=lambda: False,
+            procs_fn=lambda: PROCS, signal_fn=lambda *a: None, sleep=lambda s: None,
+            max_ticks=4, footprint_fn=lambda: next(feeds))
+    assert [ln.split()[2] for ln in lines] == ["pid=20", "pid=20"]
+    assert "footprint=66560MB" in lines[0] and "footprint=70000MB" in lines[1]
+
+
+def _write_lock(path, pid, start):
+    path.write_text(json.dumps({"pid": pid, "start_time": start}), encoding="utf-8")
+
+
+def test_second_governor_at_default_args_sees_live_holder_and_exits_without_running(
+        monkeypatch, tmp_path, capsys):
+    lock = tmp_path / "instance-lock.json"
+    _write_lock(lock, 99999, 1.0)  # fake start time for every pid is 1.0: the holder is live
+    monkeypatch.setattr(gov, "run", lambda *a, **k: pytest.fail("run reached beside a live holder"))
+    with pytest.raises(SystemExit) as exc:
+        gov.main([])
+    assert exc.value.code == 0
+    assert "already running pid=99999" in capsys.readouterr().out
+    assert json.loads(lock.read_text())["pid"] == 99999
+
+
+# Covers main() direct and the detach pre-check; engine launchers that spawn this script are not exercised here.
+def test_live_holder_blocks_before_a_detached_relaunch(monkeypatch, tmp_path):
+    import subprocess
+
+    lock = tmp_path / "instance-lock.json"
+    _write_lock(lock, 99999, 1.0)
+    monkeypatch.delenv("COORDINATOR_GUARD_DETACHED", raising=False)
+    monkeypatch.setenv("COORDINATOR_GUARD_FAKE_SESSION", "1")
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("spawned beside a live holder"))
+    with pytest.raises(SystemExit) as exc:
+        gov.main(["--log", str(tmp_path / "g.log")])
+    assert exc.value.code == 0
+
+
+def test_detached_child_exits_when_a_holder_appears_after_the_launcher_check(monkeypatch, tmp_path):
+    lock = tmp_path / "instance-lock.json"
+    monkeypatch.setattr(gov, "run", lambda *a, **k: pytest.fail("run reached beside a live holder"))
+    monkeypatch.setattr(gov, "instance_holder", lambda *_a, **_k: None)
+    monkeypatch.setattr(gov, "acquire_instance_lock", lambda *_a, **_k: 99999)
+    with pytest.raises(SystemExit) as exc:
+        gov.main([])
+    assert exc.value.code == 0
+    assert not lock.exists()
+
+
+@pytest.mark.parametrize("record,start_fn", [
+    ((99999, 500.0), lambda pid: 1.0),   # start-time mismatch: pid reused
+    ((99999, 1.0), lambda pid: None),    # dead pid
+])
+def test_stale_lock_is_taken_over(tmp_path, record, start_fn):
+    lock = tmp_path / "lock.json"
+    _write_lock(lock, *record)
+    assert gov.acquire_instance_lock(lock, start_fn) is None
+    assert json.loads(lock.read_text())["pid"] == gov.os.getpid()
+
+
+def test_live_lock_is_refused_and_left_intact(tmp_path):
+    lock = tmp_path / "lock.json"
+    _write_lock(lock, 99999, 1.0)
+    assert gov.acquire_instance_lock(lock, lambda pid: 1.0) == 99999
+    assert json.loads(lock.read_text())["pid"] == 99999
+    assert not list(tmp_path.glob("lock.json.*.tmp"))
+
+
+def test_malformed_lock_holds_nothing(tmp_path):
+    lock = tmp_path / "lock.json"
+    lock.write_text("{not json", encoding="utf-8")
+    assert gov.instance_holder(lock) is None
+    assert gov.acquire_instance_lock(lock) is None
+
+
+def test_main_takes_the_lock_while_running_and_releases_it_on_exit(monkeypatch, tmp_path):
+    lock = tmp_path / "instance-lock.json"
+    seen = {}
+    monkeypatch.setattr(gov, "run", lambda *a, **k: seen.update(held=json.loads(lock.read_text())["pid"]))
+    gov.main(["--log", str(tmp_path / "g.log")])
+    assert seen["held"] == gov.os.getpid()
+    assert not lock.exists()
+
+
+def test_release_leaves_another_owners_lock(tmp_path):
+    lock = tmp_path / "lock.json"
+    _write_lock(lock, 99999, 1.0)
+    gov.release_instance_lock(lock)
+    assert lock.exists()

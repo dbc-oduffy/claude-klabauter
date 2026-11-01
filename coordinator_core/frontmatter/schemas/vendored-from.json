@@ -84,8 +84,8 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "percolate-store.schema.json": {
-    "blob": "15c5866d03d6ffc0610f0377027c4d133c266b8d",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
+    "blob": "012b7b73862514d4411b206331c05615a7a50f40",
+    "doe_commit": "a2e7507029bdc97c3c03619bd65724efc3f0f4b0"
   },
   "plan-coverage-check.schema.json": {
     "blob": "9f4a4b3f0de7218dd0ea47bf7c422b0fc7290d0d",

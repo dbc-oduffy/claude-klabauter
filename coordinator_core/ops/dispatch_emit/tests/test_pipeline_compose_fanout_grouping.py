@@ -184,6 +184,106 @@ def test_a_large_item_stays_solo():
     assert [len(g) for g in fanout["groups"]] == [2, 1, 1]
 
 
+def _rebuttal_script(*, fanout_group="auto", schema=None, halts=None, extra_stage=None):
+    specialists = Stage(
+        id="specialists", agent_type="general-purpose", model="sonnet", template="specialists.md", schema=None,
+        web_caller=False, depends_on=(), fan_out=FanOut("none"), output="{{scratch_dir}}/specialists.md",
+    )
+    rebuttal = Stage(
+        id="rebuttal", agent_type="coordinator:research-specialist", model="sonnet", template="rebuttal.md",
+        schema=schema, web_caller=False, depends_on=("specialists",),
+        fan_out=FanOut("over", "specialists", "challenged"), output="{{scratch_dir}}/{{item}}-claims.json",
+        halts_unless=halts,
+    )
+    stages = [specialists, rebuttal, *([extra_stage] if extra_stage else [])]
+    manifest = Manifest(
+        pipeline="p", root=Path("m"), flags={}, stages=tuple(stages),
+        templates={
+            "specialists.md": "find things", "rebuttal.md": "rebut {{item}}", "gate.md": "gate",
+        },
+        schemas={"s.json": {"type": "object"}}, sha256="0" * 64,
+    )
+    inputs = PipelineInputs(brief="b.md", subjects=(), scratch_dir="scratch/x", flags={}, lists={})
+    schedule = Schedule(scope={s.id: "pre" for s in stages}, levels={"pre": tuple((s.id,) for s in stages)})
+    return compose_chain_script(
+        [(manifest, inputs, schedule)], run_id="r1", agent_type_host=None, fanout_group=fanout_group,
+    )
+
+
+def _run_rebuttal(script: str, challenged: list[str], tmp_path: Path) -> list[dict]:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    path = tmp_path / "s.js"
+    path.write_text(script, encoding="utf-8")
+    program = (
+        "const src = require('fs').readFileSync(process.argv[2], 'utf8').replace(/^export const meta/m, 'const meta');"
+        "const calls = [];"
+        f"const challenged = {json.dumps(challenged)};"
+        "const agent = async (p, o) => { calls.push({ label: o.label, prompt: p });"
+        " return o.label === 'specialists' ? { challenged } : { ok: true }; };"
+        "const parallel = (thunks) => Promise.all(thunks.map((t) => t()));"
+        "const run = new (Object.getPrototypeOf(async function () {}).constructor)("
+        "'args', 'agent', 'parallel', 'pipeline', 'phase', 'log', src);"
+        "run({}, agent, parallel, null, () => {}, () => {}).then(() => console.log(JSON.stringify(calls)));"
+    )
+    out = subprocess.run(
+        [node, "-", str(path)], input=program, capture_output=True, text=True, timeout=60, **no_console_creationflags(),
+    )
+    assert out.returncode == 0, out.stderr
+    return [c for c in json.loads(out.stdout) if c["label"].startswith("rebuttal")]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_runtime_list_fan_out_runs_as_one_agent_and_split_restores_one_per_item(tmp_path):
+    grouped = _run_rebuttal(_rebuttal_script(), ["a", "b", "c", "d"], tmp_path)
+    assert len(grouped) == 1
+    for slug in ("a", "b", "c", "d"):
+        assert f"scratch/x/{slug}-claims.json" in grouped[0]["prompt"] or f"rebut {slug}" in grouped[0]["prompt"]
+    assert "rebuttal:1, rebuttal:2, rebuttal:3, rebuttal:4" in grouped[0]["prompt"]
+    split = _run_rebuttal(_rebuttal_script(fanout_group="split"), ["a", "b", "c", "d"], tmp_path)
+    assert len(split) == 4 and "groupPromptOf" not in _rebuttal_script(fanout_group="split")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_runtime_list_past_the_cap_is_chunked_and_a_single_item_keeps_its_own_call(tmp_path):
+    nine = [f"q{n}" for n in range(9)]
+    calls = _run_rebuttal(_rebuttal_script(), nine, tmp_path)
+    assert len(calls) == 2
+    assert "rebuttal:1, " in calls[0]["prompt"] and "rebuttal:8" in calls[0]["prompt"]
+    assert "assignments" not in calls[1]["prompt"] and "rebut q8" in calls[1]["prompt"]
+    assert len(_run_rebuttal(_rebuttal_script(), ["only"], tmp_path)) == 1
+    assert _run_rebuttal(_rebuttal_script(), [], tmp_path) == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_runtime_list_stage_with_a_schema_stays_one_agent_per_item(tmp_path):
+    script = _rebuttal_script(schema="s.json")
+    assert "groupPromptOf" not in script
+    assert len(_run_rebuttal(script, ["a", "b", "c", "d"], tmp_path)) == 4
+
+
+def test_a_runtime_list_stage_whose_returns_are_read_stays_ungrouped():
+    gate = Stage(
+        id="gate", agent_type="general-purpose", model="sonnet", template="gate.md", schema=None, web_caller=False,
+        depends_on=("rebuttal",), fan_out=FanOut("none"), output="{{scratch_dir}}/gate.md",
+        when=When("nonempty", "stage.rebuttal.return.hits"),
+    )
+    assert "groupPromptOf" not in _rebuttal_script(extra_stage=gate)
+    assert "groupPromptOf" not in _rebuttal_script(halts="ok")
+
+
+def test_the_runtime_group_helper_is_defined_exactly_when_it_is_called():
+    on = _rebuttal_script()
+    assert on.count("function groupPromptOf(") == 1 and "groupPromptOf(chunk.map" in on
+    assert "function groupPromptOf(" not in _rebuttal_script(fanout_group="split")
+    assert "function groupPromptOf(" not in _compose([_stage("work", items="items")], _ITEMS)
+    assert read_fanout(on)["basis"] == "lower-bound"
+
+
 def test_non_fanned_stages_count_one_each_and_meta_stays_a_pure_literal():
     stages = [_stage("scope"), _stage("work", items="items", depends_on=["scope"])]
     script = _compose(stages, _ITEMS)

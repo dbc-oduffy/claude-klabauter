@@ -8,6 +8,8 @@ owns several members' assignments and ends with one `<ID>: <STATUS> <one line>` 
 
 Constants:
 - `UNITS_PER_AGENT` 2: three scouts over six questions, so a group's wall clock is two small units.
+- `RUNTIME_GROUP_MAX_ITEMS` 8: items one agent may own in a run-time list before its prompt context
+  outweighs one ~31k startup; a longer list is chunked (`RUNTIME_GROUP_JS`).
 - `GROUP_MIN_UNITS` 3: under three units there is nothing to batch.
 - `LARGE_UNIT_BYTES` 16000 (about 4k tokens of prompt): a unit past this does enough work on its
   own to amortise its startup and stays solo.
@@ -31,6 +33,7 @@ from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 FANOUT_GROUP_MODES = ("auto", "split")
 UNITS_PER_AGENT = 2
+RUNTIME_GROUP_MAX_ITEMS = 8
 GROUP_MIN_UNITS = 3
 LARGE_UNIT_BYTES = 16_000
 GROUP_CONTEXT_CAP_BYTES = 24_000
@@ -203,6 +206,16 @@ GROUP_HEADER_TAIL = (
     ". Do each one fully and separately, as if it were your only task. End your reply with exactly one "
     "line per assignment, in the form `<ID>: <STATUS> <one line>` (STATUS is DONE, PARTIAL or BLOCKED), "
     "after all the work.\n\n"
+)
+
+
+#: JS twin of `group_prompt` for a list known only at run time: `groupPromptOf(ids, prompts)`.
+RUNTIME_GROUP_JS = (
+    "function groupPromptOf(ids, prompts) {\n"
+    "  return 'You own ' + ids.length + ' assignments, in this order: ' + ids.join(', ') + "
+    + _js_string_literal(GROUP_HEADER_TAIL)
+    + " + ids.map((id, i) => '=== Assignment ' + id + ' ===\\n' + prompts[i] + '\\n\\n').join('');\n"
+    "}\n"
 )
 
 

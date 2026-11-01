@@ -143,7 +143,7 @@ def test_sidecar_suffixes():
 # ---------------------------------------------------------------------------
 # AC-9: repo_key_to_em_id — central anchor and normal cases (C1)
 #
-# repos.content_root resolves to the manifest-derived canonical central identity
+# repos.claude_unreal_holodeck3 resolves to the manifest-derived canonical central identity
 # (identity.centralReceiverIds[0] == "coordinator-content-repo-em"), NOT the retired
 # "claude-central-em" literal — see _central_canonical_id() in
 # coordinator_registry.py. "claude-central-em" remains a valid receiver alias
@@ -152,7 +152,7 @@ def test_sidecar_suffixes():
 
 
 def test_repo_key_to_em_id_content_root_canonical():
-    assert reg.repo_key_to_em_id("repos.content_root") == "coordinator-content-repo-em"
+    assert reg.repo_key_to_em_id("repos.claude_unreal_holodeck3") == "coordinator-content-repo-em"
 
 
 def test_central_canonical_id():
@@ -160,7 +160,7 @@ def test_central_canonical_id():
 
 
 def test_repo_key_to_em_id_example_retrieval_repo():
-    assert reg.repo_key_to_em_id("repos.project_rag") == "example-retrieval-repo-em"
+    assert reg.repo_key_to_em_id("repos.claude_unreal_holodeck5") == "example-retrieval-repo-em"
 
 
 def test_repo_key_to_em_id_example_game_repo_alias():
@@ -172,13 +172,13 @@ _CONTENT_ROOT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abs
 
 def test_em_id_for_root_content_root_canonical():
     assert reg.em_id_for_root(
-        _CONTENT_ROOT_ROOT, {"repos.content_root": _CONTENT_ROOT_ROOT}
+        _CONTENT_ROOT_ROOT, {"repos.claude_unreal_holodeck3": _CONTENT_ROOT_ROOT}
     ) == "coordinator-content-repo-em"
 
 
 def test_em_id_for_root_none():
     assert reg.em_id_for_root(
-        None, {"repos.content_root": _CONTENT_ROOT_ROOT}
+        None, {"repos.claude_unreal_holodeck3": _CONTENT_ROOT_ROOT}
     ) == "unknown-sender-em"
 
 
@@ -202,7 +202,7 @@ def test_content_root_em_alias_in_central_receiver_ids():
 # C1: codename-free manifest-bootstrap rung ladder — by import, not by reading.
 #
 # The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (REPO_DOE_CLAUDE,
-# repos.content_root) into names no machine has ever set,
+# repos.claude_unreal_holodeck3) into names no machine has ever set,
 # leaving the split-repo layout's manifest bootstrap with zero live rungs and
 # an import-time FileNotFoundError. These tests exercise the module in a
 # fresh subprocess (import-time behavior can't be observed by re-importing an

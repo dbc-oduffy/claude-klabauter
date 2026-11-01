@@ -161,7 +161,8 @@ def check(
     """Return ``(findings, notes)``. Findings are ``landing_integrity.Finding`` with reason
     ``SINCE_BASE_OVERLAP``; notes carry finding-free markers (``walk-capped``, ``unreadable:<path>``)
     the caller surfaces. ``run_id`` is accepted for the pinned signature; a commit whose subject
-    ``ask_contract.halted_run_id`` parses to ``run_id``, or whose ``Halt-Plan`` trailer names ``plan``
+    ``ask_contract.halted_run_id`` parses to ``run_id`` or to a run id of the same sizing lineage
+    (``ask_contract.run_lineage``: a refire's predecessor), or whose ``Halt-Plan`` trailer names ``plan``
     (an earlier run id of the same plan), is the caller's own halt record. ``plan``
     narrows the own-commit test to this run's plan."""
     from coordinator_core.ops.dispatch_emit.landing_integrity import SINCE_BASE_OVERLAP, Finding
@@ -186,8 +187,9 @@ def check(
         newest_first, base_sha = walked
         oldest_first = list(reversed(newest_first))
         chain_walked = True
-    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id, run_lineage
 
+    lineage = run_lineage(run_id)
     halt_plan_re = re.compile(r"^" + re.escape(HALT_PLAN_TRAILER) + r":[ \t]*(\S+)[ \t]*$", re.M)
     own_cache: List[set] = []
 
@@ -209,9 +211,11 @@ def check(
                 if ancestors is None:
                     ancestors = _base_ancestors(common_dir, base_sha)
                 is_own = is_own_commit(message, plan, base_sha, newest_first, ancestors, run_bases)
+            halted = halted_run_id(message.split("\n", 1)[0])
             if (
                 is_own
-                or (run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id)
+                or (run_id is not None and halted == run_id)
+                or (lineage is not None and halted is not None and run_lineage(halted) == lineage)
                 or (plan is not None and _halt_names_plan(message, plan, halt_plan_re))
             ):
                 own.add(sha)

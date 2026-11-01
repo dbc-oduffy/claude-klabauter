@@ -406,8 +406,8 @@ def _settings_home_for_engine_lookup() -> str | None:
     return str(Path(home) / ".coordinator-claude-settings")
 
 
-def _published_engine_from_registry(ml_dir: Path) -> str:
-    """Read `repos.claude_klabauter` from `registry.local.toml` then
+def _published_engine_from_registry(ml_dir: Path, key: str = "") -> str:
+    """Read `repos.claude_klabauter` (or `key`) from `registry.local.toml` then
     `registry.toml`, per-machine local winning on collision -- the same two files
     and the same precedence `_resolve_claude_klabauter._registry_value` walks.
 
@@ -425,7 +425,7 @@ def _published_engine_from_registry(ml_dir: Path) -> str:
     for name in ("registry.local.toml", "registry.toml"):
         try:
             with open(ml_dir / name, "rb") as fh:
-                value = tomllib.load(fh).get(_PUBLISHED_ENGINE_REGISTRY_KEY) or ""
+                value = tomllib.load(fh).get(key or _PUBLISHED_ENGINE_REGISTRY_KEY) or ""
         except (OSError, ValueError):
             continue
         if isinstance(value, str) and value.strip():
@@ -536,6 +536,29 @@ def _resolve_plugin_root(coord_path: str) -> str | None:
             return str(candidate)
     if (coord / ".claude-plugin" / "plugin.json").is_file():
         return str(coord)
+    return None
+
+
+_PLUGIN_ROOT_REGISTRY_KEY = "coordinator.plugin_root"
+
+
+def _plugin_root_override() -> str | None:
+    """`coordinator.plugin_root` from the machine-local registry, when it names a
+    directory carrying the plugin payload marker; else None.
+
+    It decouples the plugin dir from the DoE clone: hooks and skills can load from
+    a synced copy on another drive while `repos.content_root` (and `.coordinator-content-root`)
+    stay on the dev clone, which holds the repo's state/ and git. A value that
+    is not a payload dir is ignored, not fatal: a launch never fails over a
+    stale override; it falls back to `<clone>/coordinator`."""
+    settings_home = _settings_home_for_engine_lookup()
+    if not settings_home:
+        return None
+    ml_override = os.environ.get("MACHINE_LOCAL_REGISTRY_DIR") or ""
+    ml_dir = Path(ml_override) if ml_override else Path(settings_home) / "machine-local"
+    value = _published_engine_from_registry(ml_dir, _PLUGIN_ROOT_REGISTRY_KEY)
+    if value and (Path(value) / "templates" / "bin" / "_machine_local.py").is_file():
+        return value
     return None
 
 
@@ -939,7 +962,7 @@ def main(argv: list[str]) -> int:
     # clone (claude-klabauter#6 / DoE F7) carries it at the clone root itself.
     # Guessing "always append coordinator" resolved every flat clone to a
     # nonexistent directory and failed closed with a misleading "pull" hint.
-    resolved_plugin_root = _resolve_plugin_root(doe_clone)
+    resolved_plugin_root = _plugin_root_override() or _resolve_plugin_root(doe_clone)
     doe_coordinator = resolved_plugin_root if resolved_plugin_root is not None else os.path.join(doe_clone, "coordinator")
     if not os.path.isdir(doe_coordinator):
         sys.stderr.write(

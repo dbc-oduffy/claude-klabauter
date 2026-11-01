@@ -3,7 +3,8 @@ that decide when the engine owes the store maintenance.
 
 `status` answers three questions from a few syscalls: how many packs exist, how many of
 them the multi-pack-index covers, and roughly how many loose objects pile up. Callers
-on the commit route compare it to the `STALE_*` slacks; they never run git here.
+in the detached daily child compare it to the `STALE_*` slacks; they never run git here.
+The commit route (`maybe_refresh`) calls neither `status` nor any directory scan.
 
 Invariants:
   - `status` spawns nothing and imports nothing from the ops surface (cold-start budget);
@@ -32,9 +33,12 @@ STALE_PACK_SLACK = 32
 STALE_LOOSE_SLACK = 512
 #: Minimum seconds between claims of the daily tier by commit-route triggers.
 CLAIM_INTERVAL_S = 3600
-#: Packs under this size are engine per-batch packs (smallest seen 1.7KB); git's own
+#: Packs under this size are engine per-batch packs (1.7KB up to hundreds of KB); git's own
 #: packs are larger and left to `incremental-repack`.
-CONSOLIDATE_SIZE_FLOOR = 64 * 1024
+CONSOLIDATE_SIZE_FLOOR = 1024 * 1024
+#: Bytes one daily pass merges at most, smallest packs first; the rest wait for the next
+#: pass so the child never occupies the box.
+CONSOLIDATE_PASS_BYTES = 128 * 1024 * 1024
 #: Small-pack count the store may carry; past it the daily child merges them all. Each
 #: extra pack costs lookup time and a cache slot, and a few dozen is below any budget.
 CONSOLIDATE_MAX_PACKS = 32
@@ -45,6 +49,9 @@ CONSOLIDATE_GROUP_BYTES = 16 * 1024 * 1024
 #: instead of waiting CLAIM_INTERVAL_S with the MIDX unrefreshed.
 DEFER_RETRIES = 3
 DEFER_RETRY_S = 3.0
+#: 1-minute load per logical CPU at or past which the daily child does no work this claim
+#: interval; the claim stays, so a busy box spawns no further child until it ages out.
+BUSY_CPU_LOAD = 0.85
 
 _SAMPLE_FANOUT = "00"
 _LOOSE_NAME_LEN = 38
@@ -167,14 +174,25 @@ def _fire_daily(repo_root: Path) -> bool:
     return spawn_detached(str(engine), __file__, ["--repo", str(repo_root), "--daily"])
 
 
+def _box_busy() -> bool:
+    """True when the 1-minute CPU load is at or past BUSY_CPU_LOAD. An unreadable load is
+    not busy. Child-only: the Windows read may sleep a sampling gap."""
+    try:
+        from coordinator_core.telemetry import host_sampler
+
+        load = host_sampler.read_load().get("cpu_load")
+    except Exception:  # noqa: BLE001 -- an unreadable load must not block maintenance
+        return False
+    return load is not None and load >= BUSY_CPU_LOAD
+
+
 def maybe_refresh(repo_root, common_dir) -> bool:
-    """Commit-route trigger: when the store owes maintenance (MIDX lag, loose growth, or a
-    stale git_maintenance stamp) and no claim is live, fire the daily tier detached.
+    """Commit-route trigger: when no claim is live, fire the detached daily child, which
+    decides whether anything is owed. The only store access here is the claim file's
+    stat/create; it reads no pack directory, fan-out or liveness stamp.
     True only when this call fired it. Never raises."""
     try:
         repo_root, common_dir = Path(repo_root), Path(common_dir)
-        if not _owes_maintenance(repo_root, common_dir):
-            return False
         if not _claim(common_dir):
             return False
         fired = False
@@ -190,7 +208,8 @@ def maybe_refresh(repo_root, common_dir) -> bool:
 
 
 def _small_packs(pack_dir: Path) -> list[tuple[Path, Path]]:
-    """`(idx, pack)` pairs under CONSOLIDATE_SIZE_FLOOR with no .keep/.promisor sibling."""
+    """`(idx, pack)` pairs under CONSOLIDATE_SIZE_FLOOR with no .keep/.promisor sibling,
+    smallest first."""
     try:
         with os.scandir(pack_dir) as it:
             names = {e.name for e in it}
@@ -202,11 +221,13 @@ def _small_packs(pack_dir: Path) -> list[tuple[Path, Path]]:
         if stem + ".pack" not in names or stem + ".keep" in names or stem + ".promisor" in names:
             continue
         try:
-            if (pack_dir / (stem + ".pack")).stat().st_size < CONSOLIDATE_SIZE_FLOOR:
-                out.append((pack_dir / name, pack_dir / (stem + ".pack")))
+            size = (pack_dir / (stem + ".pack")).stat().st_size
         except OSError:
             continue
-    return out
+        if size < CONSOLIDATE_SIZE_FLOOR:
+            out.append((size, pack_dir / name, pack_dir / (stem + ".pack")))
+    out.sort(key=lambda t: t[0])
+    return [(idx, pack) for _, idx, pack in out]
 
 
 def _unlink_quiet(path: Path) -> bool:
@@ -240,6 +261,7 @@ def consolidate_small_packs(common_dir) -> int:
     group: list[tuple[Path, Path]] = []
     pending: dict = {}
     size = 0
+    total = 0
 
     def flush() -> int:
         nonlocal group, pending, size
@@ -270,9 +292,13 @@ def consolidate_small_packs(common_dir) -> int:
             objs[sha] = (got[0].encode("ascii"), got[1])
         if objs is None:
             continue
+        grown = pack.stat().st_size
+        if total and total + grown > CONSOLIDATE_PASS_BYTES:
+            break
         group.append((idx, pack))
         pending.update(objs)
-        size += pack.stat().st_size
+        size += grown
+        total += grown
         if size >= CONSOLIDATE_GROUP_BYTES:
             removed += flush()
     removed += flush()
@@ -283,8 +309,11 @@ def _run_daily(repo: Path) -> int:
     try:
         from coordinator_core.ops.git_maintenance import run_tier
 
+        common_dir = resolve_git_common_dir(str(repo))
+        if not _owes_maintenance(repo, common_dir) or _box_busy():
+            return 0
         try:
-            consolidate_small_packs(resolve_git_common_dir(str(repo)))
+            consolidate_small_packs(common_dir)
         except Exception as exc:  # noqa: BLE001 -- consolidation must not block the MIDX refresh
             _record_failure(repo, exc)
         for attempt in range(DEFER_RETRIES + 1):

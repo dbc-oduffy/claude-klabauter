@@ -319,6 +319,28 @@ def _repo_root(repo_arg: Optional[str], payload: dict) -> Optional[Path]:
     return Path(top) if top else None
 
 
+def _sizing_home(sizing: str) -> tuple[str, Optional[str], Optional[str]]:
+    """(sizing, repo, refusal) for an absolute sizing path with no `repo`: the repo holding the file is the run root.
+
+    The sizing is made repo-relative so run tokens and halt lookups key on the same path a relative submission uses."""
+    from coordinator_core.git.repo_root import show_toplevel
+
+    top = show_toplevel(str(Path(sizing).parent))
+    if not top:
+        return sizing, None, f"Sizing {sizing} lies in no git repo, so no run root can be derived from it."
+    try:
+        return Path(sizing).resolve().relative_to(Path(top).resolve()).as_posix(), top, None
+    except ValueError:
+        return sizing, top, None
+
+
+def _name_root_tried(text: str, root: Path, sizing_rel: Optional[str]) -> str:
+    """`text` plus the run root tried when the engine could not find the submitted sizing there."""
+    if sizing_rel and "not found on disk" in text:
+        return f"Run root tried: {root}. {text} Pass the sizing's absolute path, or `repo`."
+    return text
+
+
 def _anchor_disagreement(payload: Mapping[str, Any]) -> Optional[tuple[str, str]]:
     """`(anchor, launch)` paths when the session's anchor repo and launch repo differ, else None."""
     from coordinator_core.bash_guards._write_bump_applicability import launch_anchor_disagreement
@@ -625,7 +647,11 @@ const reply = await agent(
   + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
   { label: 'deferred-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
 );
-if (!reply || typeof reply.path !== 'string' || reply.path === '') {
+// Trap: the relay can answer a quoted-empty path (`""` or `''`), which is not the empty string.
+function _blankPath(p) {
+  return typeof p !== 'string' || p.replace(/["'\s]/g, '') === '';
+}
+if (!reply || _blankPath(reply.path)) {
   return { status: 'emit_refused', error: (reply && reply.error) || 'the deferred emit returned no script path' };
 }
 // Trap: the relay re-serializes the reply path, so a Windows path can arrive with doubled backslashes or repo-relative.
@@ -635,20 +661,100 @@ __START__
 """
 
 
+# The start block of a deferred script run at depth 1: the ask is emitted as a launcher child, so an M+ ask hands its
+# chain back (CHAIN_HANDOFF_KEY) instead of calling workflow() from depth 2, and this script starts the chained run.
+# Trap: a launcher-child script holds no workflow() reader, so a stage_pending return is answered with the staged twin.
+_DEFERRED_START_JS = r"""const MAX_STAGE_ROUNDS = __MAX_ROUNDS__;
+const TWIN_PREFIX = __TWIN_PREFIX__;
+const TWIN_MIDDLE = __TWIN_MIDDLE__;
+const TWIN_SUFFIX = __TWIN_SUFFIX__;
+const RUN_SCRIPT_SUFFIX = __RUN_SCRIPT_SUFFIX__;
+function _normPath(p) {
+  const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : REPO_ROOT + '/' + s.replace(/^\.\//, '');
+}
+async function _startLoop(firstPath) {
+  let path = firstPath;
+  let lastSha = null;
+  for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
+    const result = await workflow({ scriptPath: path });
+    const pending = (result !== null && typeof result === 'object') ? result.__PENDING_KEY__ : null;
+    if (!pending) return { ok: true, result: result };
+    if (round >= MAX_STAGE_ROUNDS) return { ok: false, error: 'stage_pending after ' + MAX_STAGE_ROUNDS + ' stage rounds' };
+    const sha = pending.handle && typeof pending.handle === 'object' ? pending.handle.sha256 : undefined;
+    if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) return { ok: false, error: 'stage_pending handle sha256 is not 64 lowercase hex' };
+    if (lastSha === sha) return { ok: false, error: 'stage_pending repeated for a handle already supplied' };
+    lastSha = sha;
+    const base = firstPath.split('/').pop();
+    if (!base.endsWith(RUN_SCRIPT_SUFFIX) || base.length === RUN_SCRIPT_SUFFIX.length || base.indexOf('.staged-') !== -1) {
+      return { ok: false, error: 'stage resume path is not a run script: ' + firstPath };
+    }
+    path = REPO_ROOT + '/' + TWIN_PREFIX + base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length) + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+  }
+  return { ok: false, error: 'stage rounds exhausted' };
+}
+const first = await _startLoop(scriptPath);
+if (!first.ok) return { status: 'failed', run_id: reply.run_id, error: first.error };
+const handoff = (first.result !== null && typeof first.result === 'object') ? first.result.__CHAIN_KEY__ : null;
+if (handoff === null || typeof handoff !== 'object') return first.result;
+// Trap: one hop only. A gate agent that already ran dispatch.emit leaves its reply keys in the hand-off; those are never emit params.
+const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...chainParams } = handoff;
+const _fail = (why) => ({ status: 'failed', run_id: reply.run_id, error: 'the chained run did not complete (' + why + '); the ask run ' + reply.run_id + ' stays resumable' });
+let chain;
+if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
+if (!_blankPath(_rp) && typeof _rr === 'string' && _rr !== '') {
+  chain = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
+} else {
+  chain = await agent(
+    __AUTHORITY__
+    + ' Run `' + INVOKE + ' ' + EMIT_OP + " '" + JSON.stringify({ ...chainParams, __LAUNCHER_PARAM__: true }).replace(/'/g, "'\\''") + "'` once, with the command word exactly as written, and "
+    + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
+    + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
+    + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
+    { label: 'chain-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
+  );
+}
+if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
+if (typeof chain.run_id !== 'string' || chain.run_id === '' || chain.run_id === reply.run_id) return _fail('chain emit run_id is not a fresh run id');
+const chained = await _startLoop(_normPath(chain.path));
+if (!chained.ok) return _fail(chained.error);
+const r = chained.result;
+if (r !== null && typeof r === 'object' && r.__CHAIN_KEY__) return _fail('the chained run returned a second hand-off');
+return (r !== null && typeof r === 'object') ? { ...r, chained_from: reply.run_id } : { chained: r, chained_from: reply.run_id };
+"""
+
+
 def _write_deferred_script(root: Path, params: dict) -> Path:
     """A script under `scratch/warp/` that re-runs `dispatch.emit(params)` through an op-relay agent and starts what it emits."""
     import json
 
     from coordinator_core.ops.dispatch_emit.fan_launcher import (
-        _EMIT_OP, _INVOKE, DEFERRED_EMIT_KEY, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM,
+        _EMIT_OP, _INVOKE, DEFERRED_EMIT_KEY, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM, MAX_STAGE_ROUNDS, _twin_affixes,
     )
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY, RUN_SCRIPT_SUFFIX, STAGE_PENDING_KEY
 
     # A launcher starts this script as its child, and a child cannot call workflow(): it hands the emit back instead.
-    start = (
-        f"return {{ {DEFERRED_EMIT_KEY}: {{ path: scriptPath, run_id: reply.run_id, fire_args: reply.fire_args || {{}} }} }};"
-        if params.get(LAUNCHER_CHILD_EMIT_PARAM) is True
-        else "return await workflow({ scriptPath: scriptPath });"
-    )
+    # Trap: the relay runs `dispatch.emit` over the CLI, which is repo-unkeyed; the in-hook emit got the root
+    # in-process, so a raw ask carries none and the CLI emit refuses "requires repo_root or target_root".
+    if not params.get("target_root"):
+        params = {**params, "target_root": Path(root).as_posix()}
+    if params.get(LAUNCHER_CHILD_EMIT_PARAM) is True:
+        start = f"return {{ {DEFERRED_EMIT_KEY}: {{ path: scriptPath, run_id: reply.run_id, fire_args: reply.fire_args || {{}} }} }};"
+    else:
+        params = {**params, LAUNCHER_CHILD_EMIT_PARAM: True}
+        prefix, middle, suffix = _twin_affixes()
+        start_values = {
+            "__MAX_ROUNDS__": str(MAX_STAGE_ROUNDS),
+            "__TWIN_PREFIX__": json.dumps(prefix),
+            "__TWIN_MIDDLE__": json.dumps(middle),
+            "__TWIN_SUFFIX__": json.dumps(suffix),
+            "__RUN_SCRIPT_SUFFIX__": json.dumps(RUN_SCRIPT_SUFFIX),
+            "__PENDING_KEY__": STAGE_PENDING_KEY,
+            "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
+            "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
+            "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
+        }
+        start = re.sub("|".join(start_values), lambda m: start_values[m.group(0)], _DEFERRED_START_JS)
     values = {
         "__START__": start,
         "__REPO_ROOT__": json.dumps(Path(root).as_posix()),
@@ -1152,6 +1258,32 @@ def _record_skipped_overlap_check(root: Path) -> None:
         pass
 
 
+def _halt_marker_ended(root: Path, run_id: str) -> bool:
+    """True when the run's `halted.json` is halted, landed, superseded or closed; a `resumed` marker is live."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    try:
+        marker = json.loads((ask_contract.record_dir(root, run_id) / halted_run.HALTED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(marker, dict) and marker.get("status") in (
+        halted_run.STATUS_HALTED, halted_run.STATUS_LANDED, halted_run.STATUS_SUPERSEDED, halted_run.STATUS_CLOSED,
+    )
+
+
+def _ended_on_evidence(root: Path, run_id: str) -> bool:
+    """True when the harness's own evidence shows the run ended though it wrote no `halted.json`
+    (a run that refused at the nested-chain start). A run with no live token record reads not ended."""
+    from coordinator_core import warp_live
+
+    for record in warp_live._token_records(root):
+        if record.get("run_id") == run_id:
+            return warp_live.run_ended_on_evidence(root, record)
+    return False
+
+
 def _live_write_overlap_deny(
     root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any], sizing_rel: Optional[str] = None
 ) -> Optional[str]:
@@ -1182,12 +1314,10 @@ def _live_write_overlap_deny(
         return None
     hits = live_run_index.overlaps(writes, index)
     if hits:
-        from coordinator_core.warp_live import _holds_ended_marker
-
-        # The index is pruned in the background; a halted or landed run holds nothing (read per hit only).
+        # The index is pruned in the background; an ended run holds nothing (read per hit only).
         # A fan-out child records its end in sibling-status.json, never halted.json.
         def ended(rid: str) -> bool:
-            return _holds_ended_marker(root, rid) or _status_of(root, rid) in ("halted", "landed")
+            return _halt_marker_ended(root, rid) or _status_of(root, rid) in ("halted", "landed") or _ended_on_evidence(root, rid)
 
         hits = {
             rid: paths
@@ -1514,6 +1644,7 @@ def _resume_route(
     refused_in_backoff = refusal is not None and hrr.in_backoff(stored, time.time())
     if refused_in_backoff:
         return _refuse(refusal), None
+    script_missing = False
     if isinstance(script_rel, str) and script_rel and not call_specific:
         script = root / script_rel
         try:
@@ -1524,8 +1655,11 @@ def _resume_route(
             if refusal is not None:
                 return _refuse(refusal), None
             return None, {"path": str(script), "run_id": halted_id, **_resume_fire_args(root, halted_id, sizing_rel, session_id)}
+        script_missing = refusal is None and on_disk is False
 
-    if (stored is None or refusal is not None) and hrr.claim_recompose(rd, time.time(), hrr.RECOMPOSE_TTL_S):
+    if (stored is None or refusal is not None or script_missing) and hrr.claim_recompose(
+        rd, time.time(), hrr.RECOMPOSE_TTL_S
+    ):
         _spawn_recompose(root, halted_id)
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
@@ -1754,6 +1888,11 @@ def _evaluate(
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
 
+    if sizing_rel is not None and repo_arg is None and Path(sizing_rel).is_absolute():
+        sizing_rel, repo_arg, home_refusal = _sizing_home(sizing_rel)
+        if home_refusal:
+            return _refuse(home_refusal)
+
     disagree = None if (repo_arg and Path(repo_arg).is_absolute()) else _anchor_disagreement(payload)
     if disagree:
         return _refuse(
@@ -1969,7 +2108,7 @@ def _evaluate(
         except _EmitOverran as over:
             return _refuse(over.message) if over.minted or over.stalled else _deferred_envelope(root, params, over)
         except Exception as exc:  # the engine's refusal text is the whole message
-            return _refuse(f"The engine refused the submission: {_cause(exc)}")
+            return _refuse(_name_root_tried(f"The engine refused the submission: {_cause(exc)}", root, sizing_rel))
 
     if isinstance(result, dict):
         _note_minted(result.get("run_id"))
@@ -1980,7 +2119,7 @@ def _evaluate(
             from coordinator_core.ops.dispatch_emit import run_token
 
             run_token.consume(root, str(stale))
-        return _refuse(f"The engine emitted no run: {_no_run_detail(result)}")
+        return _refuse(_name_root_tried(f"The engine emitted no run: {_no_run_detail(result)}", root, sizing_rel))
 
     run_id = result.get("run_id") or Path(script).name
     call_id = payload.get("tool_use_id")

@@ -546,6 +546,21 @@ def _ue_docs_checker(repo_root: str) -> tuple[bool, Optional[str]]:
         raise AskComposeRefused(f"stage agent routing refused: {exc}") from exc
 
 
+def _roster_has_named_wave_entry(fragment: Any) -> bool:
+    """True when a review-wave stage carries an `accepts_signals: named` entry.
+
+    Engine-derived reviewers (routed code reviewer, UE docs-checker) join the wave only through
+    that entry; a roster without it composes without them, never refuses.
+    """
+    stages = ((fragment or {}).get("execute_review") or {}).get("stages") or []
+    return any(
+        isinstance(stage, dict)
+        and stage.get("kind") == "review-wave"
+        and any(isinstance(a, dict) and a.get("accepts_signals") == "named" for a in stage.get("agents") or [])
+        for stage in stages
+    )
+
+
 _ANCHOR_BRIEF_VERSION = "ask-compose-anchor/1"
 #: Plan-stage ledger sentence; the post-commit clause keeps sha/memo acts out of the spine.
 _LEDGER_SERVE_SENTENCE = (
@@ -1180,9 +1195,9 @@ def _test_instruction_js(review_edits_base: str, repo_root: Optional[str] = None
         "js:_runId",
         " and paths [",
         "js:(_manifest.review_declared_paths ?? []).join(', ')",
-        f"]; it returns a candidate commit sha. Run every scoped test target with {MEASURED_REV_ENV} "
-        "set to that sha in the test process environment. If the op refuses, run the tests without it "
-        "and report the refusal as raw evidence. ",
+        f"]; it returns a candidate commit sha. Run every scoped test target in the working tree with "
+        f"{MEASURED_REV_ENV} set to that sha in the test process environment. "
+        "If the op refuses, report the refusal as a red verify result; never fall back to the working tree. ",
         "Run the scoped test targets: [",
         "js:(_manifest.test_targets ?? []).join(', ')",
         "]. "
@@ -1203,11 +1218,15 @@ HALT_DELIVERY_FAIL = "delivery_fail"
 HALT_NOT_CLOSEABLE = "not_closeable"
 HALT_STOP_RULE = "stop_rule"
 
-def _test_blockers_js(src_expr: str, out_prefix: str, own_paths_expr: Optional[str] = None) -> str:
+def _test_blockers_js(
+    src_expr: str, out_prefix: str, own_paths_expr: Optional[str] = None, *, unscoped_when_no_own: bool = False
+) -> str:
     """JS declaring `<out_prefix>Failing` / `<out_prefix>Gaps` from the result object `src_expr`.
 
     Mirrors `review_test_blocker.from_reverify`; with `own_paths_expr` (a JS array of declared paths)
-    it also mirrors `own_diff_blockers`, keeping only node ids whose file part is in that array.
+    it also mirrors `own_diff_blockers`, keeping only node ids whose file part is in that array, and
+    declares `<out_prefix>OutOfAsk` (the sorted node ids that filter dropped). `unscoped_when_no_own`
+    keeps every red when the array is empty: no declared footprint means no basis to call a red foreign.
     Declares `<out_prefix>Src/Excluded/Resolved/Detail/Raw` too: the prefix must be unique per scope.
     """
     p = out_prefix
@@ -1217,7 +1236,15 @@ def _test_blockers_js(src_expr: str, out_prefix: str, own_paths_expr: Optional[s
             "    const " + p + "Norm = (s) => String(s).replace(/\\\\/g, '/').replace(/^(\\.\\/)+/, '');\n"
             "    const " + p + "Own = new Set((" + own_paths_expr + " || []).map(" + p + "Norm));\n"
         )
-    own_filter = (".filter((n) => " + p + "Own.has(" + p + "Norm(n.split('::')[0])))") if own_paths_expr else ""
+    in_own = f"{p}Own.has({p}Norm(n.split('::')[0]))"
+    if unscoped_when_no_own:
+        in_own = f"({p}Own.size === 0 || {in_own})"
+    own_filter = f".filter((n) => {in_own})" if own_paths_expr else ""
+    live = (
+        f"[...new Set((Array.isArray({p}Src?.failing) ? {p}Src.failing : (typeof {p}Src?.failing === 'string' ? [{p}Src.failing] : [])).map(String))]"
+        f".filter((n) => !{p}Resolved && !{p}Excluded.has(n))"
+    )
+    out_of_ask = f"    const {p}OutOfAsk = {live}.filter((n) => !{in_own}).sort();\n" if own_paths_expr else ""
     return (
         f"    const {p}Src = {src_expr};\n"
         + own
@@ -1226,9 +1253,9 @@ def _test_blockers_js(src_expr: str, out_prefix: str, own_paths_expr: Optional[s
         f"    const {p}Detail = new Map();\n"
         f"    const {p}Raw = {p}Src?.{FAILING_DETAIL_FIELD};\n"
         f"    if (Array.isArray({p}Raw)) {{ for (const d of {p}Raw) {{ if (d && d.node_id) {p}Detail.set(String(d.node_id), d.message == null ? '' : String(d.message)); }} }}\n"
-        f"    const {p}Failing = [...new Set((Array.isArray({p}Src?.failing) ? {p}Src.failing : (typeof {p}Src?.failing === 'string' ? [{p}Src.failing] : [])).map(String))]"
-        f".filter((n) => !{p}Resolved && !{p}Excluded.has(n)){own_filter}.sort().map((n) => ({{ node_id: n, message: {p}Detail.get(n) ?? '' }}));\n"
-        f"    const {p}Gaps = {p}Failing.map((t) => t.node_id + ': ' + (t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300));\n"
+        f"    const {p}Failing = {live}{own_filter}.sort().map((n) => ({{ node_id: n, message: {p}Detail.get(n) ?? '' }}));\n"
+        + out_of_ask
+        + f"    const {p}Gaps = {p}Failing.map((t) => t.node_id + ': ' + (t.message.trim().split('\\n')[0] ?? '').trim().slice(0, 300));\n"
     )
 
 
@@ -1248,6 +1275,7 @@ def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = 
     is the post-join pass that also upgrades a slice halt with the re-verify test blockers.
 
     Reds in `_foreignReds` (set by `_reviewRecover`) never reach it; `_selfCorrection` rides on every halt.
+    Reds outside the manifest's declared footprint never halt: they land on `_reviewReverify.out_of_ask`.
     """
     guard = "(!_halted || _halted.halted === " + json.dumps(HALT_REVIEW_BLOCKED) + ")" if after_join else "!_halted"
     reverify_expr = (
@@ -1274,8 +1302,12 @@ def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = 
         + _test_blockers_js(
             reverify_expr,
             "_rv",
+            f"((typeof _manifest !== 'undefined' && _manifest) ? _manifest.{OWN_DIFF_PATHS_FIELD} : null)",
+            unscoped_when_no_own=True,
         )
-        + "    const _slicesJs = _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
+        + "    if (_rvOutOfAsk.length && typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
+        "{ _reviewReverify.out_of_ask = [...new Set([...(Array.isArray(_reviewReverify.out_of_ask) ? _reviewReverify.out_of_ask : []), ..._rvOutOfAsk])].sort(); }\n"
+        "    const _slicesJs = _blockedSlices.map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, "
         "applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));\n"
         "    if (_rvFailing.length) {\n"
         "      const _claimed = (typeof _manifest !== 'undefined' && _manifest?.ledger_item_ids?.length) ? _manifest.ledger_item_ids : [];\n"
@@ -3220,6 +3252,7 @@ def compose_ask_script(
     accept_pending: bool = False,
     preamble: Optional[str] = None,
     em_brief: Optional[EmBrief] = None,
+    em_size: Optional[str] = None,
     stop_after: Optional[str] = None,
     in_run_commit: bool = False,
     ask_source: str = "pm",
@@ -3266,8 +3299,10 @@ def compose_ask_script(
     as on the plan route; it is refused when the script carries an M+ or roadmap branch, whose
     executors this script never prompts. `em_brief` is declared once as `_EM_BRIEF` and prefixes
     every agent prompt the script composes, plan-blitz's included (through `wrap_stage`'s
-    `agent_prefix_var`, which shadows `agent` over the script-level `_askAgent`); the roadmap
-    arm refuses it. A gate verdict's `resume_plan` is staged at S and revises at M+ instead of
+    `agent_prefix_var`, which shadows `agent` over the script-level `_askAgent`) and the roadmap
+    stage's. `em_size` (the EM's stated size) rides each gate command; the gate halts only when it is M or
+    below against an engine XL/XXL. A roadmap pick with no plan-blitz embedded chains into the `{sizing}`
+    script, as an M+ pick does. A gate verdict's `resume_plan` is staged at S and revises at M+ instead of
     authoring. A raw ask sizes through the scout agent, whose closing acts run
     `sizing-assemble --write` and `dispatch.ask_gate`; a gate halt carries the assemble decision's `pm_exit_question`.
     `stop_after=STOP_AFTER_PLAN` ends the script at the plan wave with the single exit
@@ -3304,11 +3339,12 @@ def compose_ask_script(
         repo_root, prompt, writes, reviewer_fallbacks
     )
     reviewers = list(required_reviewers)
-    if code_review_routed and stage_types["code_review"] not in reviewers:
-        reviewers.append(stage_types["code_review"])
     ue_repo, docs_checker_model = _ue_docs_checker(repo_root)
-    if ue_repo and _DOCS_CHECKER_AGENT_TYPE not in reviewers:
-        reviewers.append(_DOCS_CHECKER_AGENT_TYPE)
+    if _roster_has_named_wave_entry(review_roster_fragment):
+        if code_review_routed and stage_types["code_review"] not in reviewers:
+            reviewers.append(stage_types["code_review"])
+        if ue_repo and _DOCS_CHECKER_AGENT_TYPE not in reviewers:
+            reviewers.append(_DOCS_CHECKER_AGENT_TYPE)
     review = parse_execute_review(review_roster_fragment, required_reviewers=reviewers)
 
     intake = _intake_sizing(repo_root, sizing_rel)
@@ -3342,23 +3378,27 @@ def compose_ask_script(
     xl_possible = sized_in_run or xl_open
     rb_fn: str = ""
     rb_phases: list[str] = []
-    if xl_possible and not em_brief:
+    # A roadmap sizing with a brief or an em_size composes in this body, whose gate legs carry both; the standalone roadmap script has neither slot.
+    roadmap_in_body = known_arm == ARM_ROADMAP and bool(em_brief or em_size)
+    if xl_possible or roadmap_in_body:
         from coordinator_core.ops.dispatch_emit import ask_roadmap
-        from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
+        from coordinator_core.ops.dispatch_emit.ask_plan_blitz import _TOP_AGENT_DECL, AskPlanBlitzRefused
 
         try:
             rb_text = roadmap_blitz_text if roadmap_blitz_text is not None else ask_roadmap.load_roadmap_blitz_text()
             rb_fn, rb_phases = ask_roadmap.wrap_roadmap_stage(rb_text)
-        except (AskPlanBlitzRefused, OSError):
-            # Unembedded, an in-run roadmap pick halts naming the `--ask --sizing` re-fire.
+            if em_brief:
+                if _TOP_AGENT_DECL.search(rb_fn):
+                    raise AskPlanBlitzRefused("roadmap-blitz.mjs declares a top-level `agent`; the brief shadow would collide")
+                rb_head, _, rb_rest = rb_fn.partition("\n")
+                rb_fn = f"{rb_head}\nconst agent = (p, o) => _askAgent({EM_BRIEF_VAR} + p, o);\n{rb_rest}"
+        except (AskPlanBlitzRefused, OSError) as exc:
+            if roadmap_in_body:
+                raise AskComposeRefused(f"the roadmap stage cannot be embedded: {exc}") from exc
+            # Unembedded, an in-run roadmap pick chains into the `{sizing}` script like an M+ pick.
             rb_fn, rb_phases = "", []
 
-    if known_arm == ARM_ROADMAP:
-        if em_brief:
-            raise AskComposeRefused(
-                "the roadmap arm takes no EM brief; drop args.brief, args.brief_file and args.context "
-                "(CLI: --brief/--brief-file/--context), or re-submit once the sizing routes to a plan arm"
-            )
+    if known_arm == ARM_ROADMAP and not roadmap_in_body:
         from coordinator_core.ops.dispatch_emit.ask_roadmap import compose_roadmap_script
 
         return compose_roadmap_script(
@@ -3511,6 +3551,8 @@ def compose_ask_script(
 
         b.extend(ROADMAP_DECLS)
         _rb_open, _rb_close = clause_shadow_parts(ROADMAP_STAGE_FN)
+        if em_brief:
+            _rb_open += "\n    const _askAgent = agent;"
         b.extend([_rb_open, rb_fn, _rb_close])
     if em_brief:
         b.append(f"  {brief_decl_js(em_brief)}")
@@ -3562,6 +3604,7 @@ def compose_ask_script(
         return (
             "js:JSON.stringify({ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
+            + (", em_size: " + json.dumps(em_size) if em_size else "")
             + (f", record: {record_js}" if record_js else "")
             + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) })"
         )
@@ -3630,7 +3673,7 @@ def compose_ask_script(
         if blitz_fn:
             return ()
         return (
-            f" {EMIT_RELAY_AUTHORITY} On an M+ arm with a null halt, also run `{_INVOKE} dispatch.emit '",
+            f" {EMIT_RELAY_AUTHORITY} On an M+ or roadmap arm with a null halt, also run `{_INVOKE} dispatch.emit '",
             params,
             "'` once, passing exactly that JSON object with no key added, dropped or renamed, and return path and run_id from its JSON reply verbatim as chain_emit ({error: <its text>} on failure); on any other arm none.",
         )
@@ -3705,6 +3748,7 @@ def compose_ask_script(
             f"{_INVOKE} {OP_ASK_GATE} '"
             f'{{"sizing_path":"{sizing_write_rel}","run_id":"{run_id}","writes":[<your writes>]'
             + (f',"baton":{json.dumps(baton["path"])}' if baton else "")
+            + (f',"em_size":{json.dumps(em_size)}' if em_size else "")
             + (f',"route_override_reason":"{_OVERRIDE_SLOT}"' if has_route_pref else "")
             + (f',"declared_writes":{_declared_json}' if _declared else "")
             + "}'" + _repo_flag(repo_root)
@@ -4897,7 +4941,7 @@ def compose_ask_script(
             chatty=bool((plan_blitz_args or {}).get("chatty")),
         )
 
-    if xl_possible:
+    if xl_possible or roadmap_in_body:
         b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_ROADMAP)}) {{")
         b.append("    _viaRoadmap = true;")
         if rb_fn and blitz_fn:
@@ -4909,13 +4953,14 @@ def compose_ask_script(
                     plan_blitz_args=plan_blitz_args, script_path=script_path,
                 )
             )
-        else:
+        elif launcher_child:
             b.append(
-                f"    _halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to the roadmap arm, "
-                "which this script does not embed: resubmit Workflow({name: \"coordinator:engine-ask\", "
-                "args: {sizing: \"' + _sizingRel + '\"}})', "
+                f"    return {{ {CHAIN_HANDOFF_KEY}: "
+                f"{_chain_emit_params_js('_sizingRel', tail_js=', ...(_gate.chain_emit ?? {})')}, "
                 "sizing: _sizingRel, run_id: _runId };"
             )
+        else:
+            b.append(_m_plus_chain_js(repo_root=repo_root, head=head, anchor=anchor, run_id=run_id, arm=ARM_ROADMAP))
         b.append("  }")
     if judged:
         b.append("  let _falsifierSpec = null;")
@@ -5657,7 +5702,10 @@ def compose_ask_script(
     b.append(
         f"  if (_resumeLedger && _nextAction && _nextAction.params && _gate.{RESUME_LEDGER_KEY}.inline_review "
         f"&& typeof _gate.{RESUME_LEDGER_KEY}.inline_review === 'object') "
-        f"{{ _nextAction.params.inline_review = {{ ..._gate.{RESUME_LEDGER_KEY}.inline_review }}; }}"
+        f"{{ const _cur = _nextAction.params.inline_review || {{}}; "
+        f"_nextAction.params.inline_review = {{ ..._gate.{RESUME_LEDGER_KEY}.inline_review, "
+        f"...(_cur.integration_stem ? {{ integration_stem: _cur.integration_stem }} : {{}}), "
+        f"...(_cur.slices != null ? {{ slices: _cur.slices }} : {{}}) }}; }}"
     )
     # An end that is not closeable and carries no halt would return with neither a commit nor a
     # halted_by; it halts here so the halt-record commit lands the run record.
@@ -5965,19 +6013,21 @@ def _pure_research_chain_js(*, head: str, anchor: str, run_id: str, launcher_chi
     return "\n".join(lines)
 
 
-def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str) -> str:
-    """The in-run M+ leg of a script that embeds no plan-blitz: emit the `{sizing}` script, start it with
-    `workflow({ scriptPath })`, and return its result. The refusal halt survives only for an emit or start failure.
+def _m_plus_chain_js(*, repo_root: str, head: str, anchor: str, run_id: str, arm: str = ARM_M_PLUS) -> str:
+    """The in-run leg of a script that embeds no plan-blitz, for an M+ pick or (`arm`) a roadmap pick: emit
+    the `{sizing}` script, start it with `workflow({ scriptPath })`, and return its result. The refusal halt
+    survives only for an emit or start failure.
 
     The child is a full engine-ask over `_sizingRel`, so plan-blitz lives in its own script, never in this one.
     """
+    arm_name = "the roadmap arm" if arm == ARM_ROADMAP else "M+"
     halt = (
-        f"_halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to M+ and the chained run did not "
+        f"_halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to {arm_name} and the chained run did not "
         "start (' + _why + '): resubmit Workflow({name: \"coordinator:engine-ask\", args: {sizing: \"' + _sizingRel + "
         "'\"}})', sizing: _sizingRel, run_id: _runId };"
     )
     lines = [
-        f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{",
+        f"  if (!_halted && _gate.arm === {_lit(arm)}) {{",
         *_chain_emit_start_lines(
             sizing_js="_sizingRel", head=head, anchor=anchor, run_id=run_id, fallback_extra_js=", sizing: _sizingRel",
             emitted_js="(_gate.chain_emit ?? { error: 'the gate agent returned no emit reply for the chained run' })",

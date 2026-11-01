@@ -39,11 +39,11 @@ schema = 1
 "plugin.mirrors"           = ""
 "publish.targets"          = []
 "repos.dronesim"           = ""
-"repos.project_rag"        = ""
+"repos.claude_unreal_holodeck5"        = ""
 "repos.project_rag_ue_addon" = ""
 "repos.claude_unreal_holodeck" = ""
-"repos.geneva_mvp"         = ""
-"repos.fifa_stats"         = ""
+"repos.claude_unreal_holodeck8"         = ""
+"repos.claude_unreal_holodeck7"         = ""
 "repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
 "repos.project_opticon"    = ""
@@ -54,11 +54,11 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "session-accumulated-must-survive-crash"
-"repos.project_rag"             = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck5"             = "session-accumulated-must-survive-crash"
 "repos.project_rag_ue_addon"    = "session-accumulated-must-survive-crash"
 "repos.claude_unreal_holodeck"  = "session-accumulated-must-survive-crash"
-"repos.geneva_mvp"              = "session-accumulated-must-survive-crash"
-"repos.fifa_stats"              = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck8"              = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck7"              = "session-accumulated-must-survive-crash"
 "repos.fifa_26wcle_data"        = "session-accumulated-must-survive-crash"
 "repos.experiments"             = "session-accumulated-must-survive-crash"
 "repos.project_opticon"         = "session-accumulated-must-survive-crash"
@@ -66,7 +66,7 @@ schema = 1
 """
     )
     (ml_dir / "registry.local.toml").write_text(
-        'schema = 1\n"repos.project_rag" = "/home/user/example-retrieval-repo"\n'
+        'schema = 1\n"repos.claude_unreal_holodeck5" = "/home/user/example-retrieval-repo"\n'
     )
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
@@ -88,8 +88,8 @@ schema = 1
 "repos.dronesim"           = ""
 "repos.project_rag_ue_addon" = ""
 "repos.claude_unreal_holodeck" = ""
-"repos.geneva_mvp"         = ""
-"repos.fifa_stats"         = ""
+"repos.claude_unreal_holodeck8"         = ""
+"repos.claude_unreal_holodeck7"         = ""
 "repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
 "repos.project_opticon"    = ""
@@ -100,11 +100,11 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "session-accumulated-must-survive-crash"
-"repos.project_rag"             = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck5"             = "session-accumulated-must-survive-crash"
 "repos.project_rag_ue_addon"    = "session-accumulated-must-survive-crash"
 "repos.claude_unreal_holodeck"  = "session-accumulated-must-survive-crash"
-"repos.geneva_mvp"              = "session-accumulated-must-survive-crash"
-"repos.fifa_stats"              = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck8"              = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck7"              = "session-accumulated-must-survive-crash"
 "repos.fifa_26wcle_data"        = "session-accumulated-must-survive-crash"
 "repos.experiments"             = "session-accumulated-must-survive-crash"
 "repos.project_opticon"         = "session-accumulated-must-survive-crash"
@@ -112,14 +112,14 @@ schema = 1
 """
     )
     (ml_dir / "registry.local.toml").write_text(
-        'schema = 1\n"repos.project_rag" = "/home/user/example-retrieval-repo"\n'
+        'schema = 1\n"repos.claude_unreal_holodeck5" = "/home/user/example-retrieval-repo"\n'
     )
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
 
     assert rc == 0
     assert "install-surface-completeness defect" in err
-    assert "repos.project_rag" in err
+    assert "repos.claude_unreal_holodeck5" in err
     assert "Offer:" in err
     assert "'repos.dronesim'" not in err
 
@@ -135,11 +135,11 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "idempotent-regeneratable"
-"repos.project_rag"             = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck5"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
-"repos.geneva_mvp"              = "idempotent-regeneratable"
-"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck8"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck7"              = "idempotent-regeneratable"
 "repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.project_opticon"         = "idempotent-regeneratable"
@@ -164,11 +164,11 @@ schema = 1
 "plugin.mirrors"           = ""
 "publish.targets"          = []
 "repos.dronesim"           = ""
-"repos.project_rag"        = ""
+"repos.claude_unreal_holodeck5"        = ""
 "repos.project_rag_ue_addon" = ""
 "repos.claude_unreal_holodeck" = ""
-"repos.geneva_mvp"         = ""
-"repos.fifa_stats"         = ""
+"repos.claude_unreal_holodeck8"         = ""
+"repos.claude_unreal_holodeck7"         = ""
 "repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
 "repos.project_opticon"    = ""
@@ -178,11 +178,11 @@ schema = 1
 # coordinator.python intentionally omitted
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "idempotent-regeneratable"
-"repos.project_rag"             = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck5"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
-"repos.geneva_mvp"              = "idempotent-regeneratable"
-"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck8"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck7"              = "idempotent-regeneratable"
 "repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.project_opticon"         = "idempotent-regeneratable"
@@ -209,11 +209,11 @@ schema = 1
 "plugin.mirrors.coordinator-claude" = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "idempotent-regeneratable"
-"repos.project_rag"             = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck5"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
-"repos.geneva_mvp"              = "idempotent-regeneratable"
-"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck8"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck7"              = "idempotent-regeneratable"
 "repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.project_opticon"         = "idempotent-regeneratable"
@@ -348,11 +348,11 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "idempotent-regeneratable"
-"repos.project_rag"             = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck5"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
-"repos.geneva_mvp"              = "idempotent-regeneratable"
-"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck8"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck7"              = "idempotent-regeneratable"
 "repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.project_opticon"         = "idempotent-regeneratable"
@@ -393,11 +393,11 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "idempotent-regeneratable"
-"repos.project_rag"             = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck5"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
-"repos.geneva_mvp"              = "idempotent-regeneratable"
-"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck8"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck7"              = "idempotent-regeneratable"
 "repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.project_opticon"         = "idempotent-regeneratable"
@@ -422,11 +422,11 @@ schema = 1
 "plugin.mirrors"           = ""
 "publish.targets"          = []
 "repos.dronesim"           = ""
-"repos.project_rag"        = ""
+"repos.claude_unreal_holodeck5"        = ""
 "repos.project_rag_ue_addon" = ""
 "repos.claude_unreal_holodeck" = ""
-"repos.geneva_mvp"         = ""
-"repos.fifa_stats"         = ""
+"repos.claude_unreal_holodeck8"         = ""
+"repos.claude_unreal_holodeck7"         = ""
 "repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
 "repos.project_opticon"    = ""
@@ -438,11 +438,11 @@ schema = 1
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
 "repos.dronesim"                = "idempotent-regeneratable"
-"repos.project_rag"             = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck5"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
 "repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
-"repos.geneva_mvp"              = "idempotent-regeneratable"
-"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck8"              = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck7"              = "idempotent-regeneratable"
 "repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
 "repos.project_opticon"         = "idempotent-regeneratable"
@@ -459,7 +459,7 @@ schema = 1
 
 
 def test_family_prefix_arm_resolves_dotted_key_against_bare_family_entry():
-    assert _key_matches_regen_entry("engine.working_repos.content_root", "engine.working_repos")
+    assert _key_matches_regen_entry("engine.working_repos.claude_unreal_holodeck3", "engine.working_repos")
 
 
 def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary():

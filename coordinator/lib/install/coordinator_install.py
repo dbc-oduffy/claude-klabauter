@@ -23,9 +23,11 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -230,13 +232,20 @@ def _no_console() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+class SpawnFailure(int):
+    """Exit code `run` returns when the command never ran to completion (OSError or timeout).
+
+    Compares equal to 127, so existing `rc != 0` callers are unchanged; `isinstance` tells it from a real exit 127.
+    """
+
+
 def run(argv: list[str], timeout: int = 300) -> tuple[int, str]:
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, timeout=timeout, creationflags=_no_console(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return 127, f"{type(exc).__name__}: {exc}"
+        return SpawnFailure(127), f"{type(exc).__name__}: {exc}"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
@@ -377,8 +386,24 @@ def decision_json(d: Decision) -> dict:
 def resolve_answers(raw: dict, permission_mode: str | None, non_interactive: bool) -> tuple[dict, list[str]]:
     """Merge `raw` over declared defaults. Returns (answers, problems)."""
     decisions = {d.id: d for d in build_decisions(permission_mode)}
-    problems = [f"unknown decision id: {k}" for k in raw if k not in decisions]
+    problems = [f"unknown decision id: {k}" for k in raw if k not in decisions and k not in ("consent", "plan_id")]
     answers: dict = {}
+    risky = {s.id for s in STEPS if s.risky}
+    consent = raw.get("consent", {})
+    if not isinstance(consent, dict):
+        problems.append("consent must be an object of booleans keyed by risky step id")
+        consent = {}
+    for sid, granted in consent.items():
+        if sid not in risky:
+            problems.append(f"consent: {sid!r} is not a risky step ({sorted(risky)})")
+        elif not isinstance(granted, bool):
+            problems.append(f"consent.{sid} must be true or false")
+    answers["consent"] = {k: v for k, v in consent.items() if k in risky and isinstance(v, bool)}
+    if "plan_id" in raw:
+        if isinstance(raw["plan_id"], str) and PLAN_ID_RE.fullmatch(raw["plan_id"]):
+            answers["plan_id"] = raw["plan_id"]
+        else:
+            problems.append("plan_id must match [A-Za-z0-9_-]{1,64}")
     profile = raw.get("machine_profile") or decisions["machine_profile"].default
     for did, d in decisions.items():
         if did in raw:
@@ -401,11 +426,27 @@ def resolve_answers(raw: dict, permission_mode: str | None, non_interactive: boo
 # --------------------------------------------------------------------------- steps
 
 
+STAGES = ("host", "artifact", "load", "self-test", "inspection")
+
+
 @dataclass
 class StepResult:
     status: str
     detail: str = ""
     follow_up: str = ""
+    stage: str = ""  # readiness stage of a FAILED result, one of STAGES
+    retryable: bool = False  # True only when a subprocess invocation failed (non-zero exit, timeout, spawn error)
+
+
+def _fail(stage: str, detail: str, follow_up: str = "", *, retryable: bool = False) -> StepResult:
+    return StepResult(FAILED, detail, follow_up, stage, retryable)
+
+
+def _fail_run(stage: str, rc: int, detail: str, follow_up: str = "") -> StepResult:
+    """FAILED from a `run` result: always an invocation failure, so retryable."""
+    if not follow_up and isinstance(rc, SpawnFailure):
+        follow_up = "the command could not be launched or timed out; check the tool is installed, then retry"
+    return _fail(stage, detail, follow_up, retryable=True)
 
 
 @dataclass
@@ -446,7 +487,7 @@ def _write_json(path: Path, obj: dict) -> None:
 def _machine_local_set(key: str, value: str) -> StepResult:
     fwd = forwarder("machine-local")
     if not fwd:
-        return StepResult(FAILED, "machine-local forwarder absent (run the substrate step first)")
+        return _fail("artifact", "machine-local forwarder absent (run the substrate step first)")
     try:
         from coordinator_core.machine_resolver import registry_get
         current = registry_get(key)
@@ -455,7 +496,7 @@ def _machine_local_set(key: str, value: str) -> StepResult:
     if current == value:
         return StepResult(INHERITED, f"{key} already {value}")
     rc, out = run([fwd, "set", key, value], timeout=30)
-    return StepResult(RAN if rc == 0 else FAILED, f"{key}={value}" if rc == 0 else out)
+    return StepResult(RAN, f"{key}={value}") if rc == 0 else _fail_run("load", rc, out)
 
 
 def step_orientation(ctx: Ctx) -> StepResult:
@@ -483,35 +524,36 @@ def step_system_prereqs(ctx: Ctx) -> StepResult:
             missing.append(f"{item['id']}({item['tier']})")
     hard = [m for m in missing if m.endswith("(hard)")]
     detail = "missing: " + ", ".join(missing) if missing else "all probed prerequisites present"
-    return StepResult(FAILED if hard else RAN, detail,
-                      "install the missing tools; remediation text is in the manifest" if missing else "")
+    follow_up = "install the missing tools; remediation text is in the manifest" if missing else ""
+    return _fail("host", detail, follow_up) if hard else StepResult(RAN, detail, follow_up)
 
 
 def step_engine_root(ctx: Ctx) -> StepResult:
     ok, root = _engine_root()
     if ok:
         return StepResult(INHERITED, f"engine root {root}")
-    return StepResult(FAILED, "engine root does not resolve",
-                      "clone the engine as a sibling of this plugin clone and register it: machine-local set repos.claude_klabauter <path>")
+    return _fail("artifact", "engine root does not resolve",
+                 "clone the engine as a sibling of this plugin clone and register it: machine-local set repos.claude_klabauter <path>")
 
 
 def step_substrate(ctx: Ctx) -> StepResult:
     ok, engine = _engine_root()
     if not ok:
-        return StepResult(FAILED, "engine root does not resolve; substrate not deposited")
+        return _fail("artifact", "engine root does not resolve; substrate not deposited")
     env = dict(os.environ, CLAUDE_PLUGIN_ROOT=str(plugin_root()))
     notes = []
     for name in ("install-substrate.py", "register-coordinator-mirror.py", "check-install-singularity.py"):
         script = Path(engine) / "coordinator" / "lib" / name
         if not script.is_file():
-            return StepResult(FAILED, f"{script} not found")
+            return _fail("artifact", f"{script} not found")
         try:
             proc = subprocess.run(_py(str(script)), capture_output=True, text=True,
                                   timeout=600, env=env, creationflags=_no_console())
         except (OSError, subprocess.TimeoutExpired) as exc:
-            return StepResult(FAILED, f"{name}: {exc}")
+            return _fail("artifact", f"{name}: {exc}", retryable=True)
         if proc.returncode != 0:
-            return StepResult(FAILED, f"{name} exited {proc.returncode}: {(proc.stdout + proc.stderr).strip()[-300:]}")
+            return _fail("artifact", f"{name} exited {proc.returncode}: {(proc.stdout + proc.stderr).strip()[-300:]}",
+                         retryable=True)
         notes.append(name)
     return StepResult(RAN, "ran " + ", ".join(notes))
 
@@ -525,7 +567,7 @@ def step_claude_home_repo(ctx: Ctx) -> StepResult:
     home.mkdir(parents=True, exist_ok=True)
     rc, out = run(["git", "-C", str(home), "init"], timeout=60)
     if rc != 0:
-        return StepResult(FAILED, out)
+        return _fail_run("load", rc, out)
     drift = plugin_root() / "bin" / "check-gitignore-template-drift.py"
     if drift.is_file():
         run(_py(str(drift), "--apply"), timeout=60)
@@ -535,12 +577,12 @@ def step_claude_home_repo(ctx: Ctx) -> StepResult:
 def step_posture(ctx: Ctx) -> StepResult:
     fwd = forwarder("write-identity-file")
     if not fwd:
-        return StepResult(FAILED, "write-identity-file forwarder absent (run the substrate step first)")
+        return _fail("artifact", "write-identity-file forwarder absent (run the substrate step first)")
     home = os.environ.get("CLAUDE_HOME") or str(Path.home())
     argv = [fwd, "--claude-home", home, "--operator-name", str(ctx.answers["operator_name"]),
             "--engagement-posture", str(ctx.answers["posture"])]
     rc, out = run(argv, timeout=60)
-    return StepResult(RAN if rc == 0 else FAILED, f"posture={ctx.answers['posture']}" if rc == 0 else out)
+    return StepResult(RAN, f"posture={ctx.answers['posture']}") if rc == 0 else _fail_run("load", rc, out)
 
 
 _DISPATCH_BY_MODE = {
@@ -585,13 +627,13 @@ def unresolved_placeholders(text: str) -> list[str]:
 def step_claude_md_seed(ctx: Ctx) -> StepResult:
     fwd = forwarder("render-template")
     if not fwd:
-        return StepResult(FAILED, "render-template forwarder absent (run the substrate step first)")
+        return _fail("artifact", "render-template forwarder absent (run the substrate step first)")
     tmpl = plugin_root() / "templates" / "CLAUDE.md.tmpl"
     values = claude_md_values(ctx.answers, ctx.permission_mode)
     missing = [p for p in unresolved_placeholders(tmpl.read_text(encoding="utf-8"))
                if p.strip("{}") not in values]
     if missing:
-        return StepResult(FAILED, f"template placeholders with no value: {missing}")
+        return _fail("inspection", f"template placeholders with no value: {missing}")
     out = claude_dir() / "CLAUDE.md"
     argv = [fwd, str(tmpl), "-o", str(out), "--guard-sentinel", "coordinator:claude-md-seed:v1"]
     argv += [f"{k}={v}" for k, v in values.items()]
@@ -599,9 +641,9 @@ def step_claude_md_seed(ctx: Ctx) -> StepResult:
     if rc == 3:
         return StepResult(INHERITED, "hand-authored CLAUDE.md preserved")
     if rc != 0:
-        return StepResult(FAILED, msg)
+        return _fail_run("load", rc, msg)
     left = unresolved_placeholders(out.read_text(encoding="utf-8"))
-    return StepResult(FAILED, f"unresolved placeholders survive: {left}") if left else \
+    return _fail("inspection", f"unresolved placeholders survive: {left}") if left else \
         StepResult(RAN, "seeded CLAUDE.md from your answers")
 
 
@@ -624,13 +666,13 @@ def step_context7(ctx: Ctx) -> StepResult:
         return StepResult(INHERITED, "context7 already enabled")
     claude = shutil.which("claude")
     if not claude:
-        return StepResult(FAILED, "claude CLI not on PATH")
+        return _fail("load", "claude CLI not on PATH")
     rc, out = run([claude, "plugin", "marketplace", "add", CONTEXT7_MARKETPLACE], timeout=180)
     if rc != 0 and "already" not in out.lower():
-        return StepResult(FAILED, f"marketplace add failed: {out}")
+        return _fail_run("load", rc, f"marketplace add failed: {out}")
     rc, out = run([claude, "plugin", "install", CONTEXT7_PLUGIN], timeout=180)
     if rc != 0:
-        return StepResult(FAILED, out)
+        return _fail_run("load", rc, out)
     ctx.extras.append("context7")
     ctx.next_session.append("context7 loads next session")
     return StepResult(RAN, "marketplace registered, plugin installed")
@@ -656,16 +698,16 @@ def step_notebooklm(ctx: Ctx) -> StepResult:
     uv, nlm = shutil.which("uv"), shutil.which("nlm")
     if not nlm:
         if not uv:
-            return StepResult(FAILED, "uv not on PATH", "install uv, then re-run with notebooklm=install")
+            return _fail("load", "uv not on PATH", "install uv, then re-run with notebooklm=install")
         rc, out = run([uv, "tool", "install", "notebooklm-mcp-cli"], timeout=300)
         if rc != 0:
-            return StepResult(FAILED, out)
+            return _fail_run("load", rc, out)
         nlm = shutil.which("nlm")
     if not nlm:
-        return StepResult(FAILED, "nlm not on PATH after install (open a new shell)")
+        return _fail("load", "nlm not on PATH after install (open a new shell)")
     rc, out = run([nlm, "setup", "add", "claude-code"], timeout=120)
     if rc != 0:
-        return StepResult(FAILED, out)
+        return _fail_run("load", rc, out)
     ctx.extras.append("notebooklm")
     ctx.next_session.append("NotebookLM loads next session")
     return StepResult(RAN, "CLI installed and MCP server registered",
@@ -678,8 +720,8 @@ def step_status_lines(ctx: Ctx) -> StepResult:
     path = claude_dir() / "settings.json"
     doc = _read_json_strict(path)
     if doc is None:
-        return StepResult(FAILED, f"{path} exists but is not a readable JSON object; left untouched",
-                          "fix or remove the file, then re-run")
+        return _fail("inspection", f"{path} exists but is not a readable JSON object; left untouched",
+                     "fix or remove the file, then re-run")
     wanted = {
         "statusLine": {"type": "command", "command": STATUS_LINE_CMD.format(script="statusline.py")},
         "subagentStatusLine": {"type": "command",
@@ -712,12 +754,12 @@ def step_settings_env(ctx: Ctx) -> StepResult:
     if not settings.exists():
         _write_json(settings, {})
     elif _read_json_strict(settings) is None:
-        return StepResult(FAILED, f"{settings} is not a readable JSON object; left untouched",
-                          "fix or remove the file, then re-run")
+        return _fail("inspection", f"{settings} is not a readable JSON object; left untouched",
+                     "fix or remove the file, then re-run")
     rc_c, out_c = run(_py(str(plugin_root() / "lib" / "compaction_defaults.py"),
                        "--apply", str(settings)), timeout=60)
     if rc_c != 0:
-        return StepResult(FAILED, out_c.strip() or "compaction_defaults --apply failed")
+        return _fail_run("load", rc_c, out_c.strip() or "compaction_defaults --apply failed")
     if out_c.strip() == "applied":
         ctx.restart_needed = True
         ctx.next_session.append("40% auto-compact default applies next session")
@@ -728,7 +770,8 @@ def step_settings_env(ctx: Ctx) -> StepResult:
     if rc == 0:
         ctx.restart_needed = True
         ctx.next_session.append("settings env values apply next session")
-    return StepResult(RAN if rc == 0 else FAILED, out.splitlines()[-1] if out else "")
+    detail = out.splitlines()[-1] if out else ""
+    return StepResult(RAN, detail) if rc == 0 else _fail_run("load", rc, detail)
 
 
 def step_hooks_marker(ctx: Ctx) -> StepResult:
@@ -737,7 +780,7 @@ def step_hooks_marker(ctx: Ctx) -> StepResult:
         return StepResult(SKIPPED, "declined by answer")
     fwd = forwarder("gen-settings-hooks")
     if not fwd:
-        return StepResult(FAILED, "gen-settings-hooks forwarder absent (run the substrate step first)")
+        return _fail("artifact", "gen-settings-hooks forwarder absent (run the substrate step first)")
     marker = claude_dir() / ".coordinator-hooks-enabled"
     created = False
     if choice == "create":
@@ -752,7 +795,8 @@ def step_hooks_marker(ctx: Ctx) -> StepResult:
     if "no positive marker" in out.lower():
         return StepResult(SKIPPED, "hook generation off and plugin delivery not detected",
                           "answer hooks_marker=create if hooks are not delivered by the plugin")
-    return StepResult(RAN if rc == 0 else FAILED, out.splitlines()[-1] if out else "")
+    detail = out.splitlines()[-1] if out else ""
+    return StepResult(RAN, detail) if rc == 0 else _fail_run("load", rc, detail)
 
 
 def step_currency(ctx: Ctx) -> StepResult:
@@ -761,9 +805,9 @@ def step_currency(ctx: Ctx) -> StepResult:
     ok, engine = _engine_root()
     script = Path(engine) / "coordinator" / "lib" / "coordinator_currency.py" if ok else None
     if not script or not script.is_file():
-        return StepResult(FAILED, "coordinator_currency.py not found under the engine root")
+        return _fail("artifact", "coordinator_currency.py not found under the engine root")
     rc, out = run(_py(str(script), "write", str(Path.cwd()), str(plugin_root())))
-    return StepResult(RAN if rc == 0 else FAILED, "wrote docs/coordinator-currency.yaml" if rc == 0 else out)
+    return StepResult(RAN, "wrote docs/coordinator-currency.yaml") if rc == 0 else _fail_run("load", rc, out)
 
 
 def _engine_root() -> tuple[bool, str]:
@@ -790,7 +834,7 @@ def step_open_claude_home(ctx: Ctx) -> StepResult:
         subprocess.Popen(argv, creationflags=_no_console(), stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL)
     except OSError as exc:
-        return StepResult(FAILED, str(exc), f"browse to {target}")
+        return _fail("load", str(exc), f"browse to {target}", retryable=True)
     return StepResult(RAN, f"opened {target}")
 
 
@@ -800,6 +844,7 @@ class Step:
     fn: Callable[[Ctx], StepResult]
     implements: tuple = ()
     exempt: str = ""  # reason this step implements no manifest entry
+    risky: bool = False  # mutates beyond the settings home; needs its own consent
 
 
 STEPS: tuple[Step, ...] = (
@@ -808,13 +853,13 @@ STEPS: tuple[Step, ...] = (
     Step("engine_root", step_engine_root, ("direct_deps:claude-klabauter",)),
     Step("substrate", step_substrate, exempt="deposits the settings-home forwarders every later step calls"),
     Step("settings_env", step_settings_env, ("required_local_surfaces:settings-env", "required_env_vars:*")),
-    Step("claude_home_repo", step_claude_home_repo, exempt="prerequisite of the identity file"),
+    Step("claude_home_repo", step_claude_home_repo, exempt="prerequisite of the identity file", risky=True),
     Step("posture", step_posture, exempt="operator choice: recorded in the identity file"),
     Step("claude_md_seed", step_claude_md_seed, exempt="operator file seeded from answers"),
     Step("machine_profile", step_machine_profile, exempt="operator choice: machine-local setting"),
     Step("guard_level", step_guard_level, exempt="operator choice: machine-local setting"),
-    Step("context7", step_context7, ("required_mcp_surfaces:context7",)),
-    Step("notebooklm", step_notebooklm, ("required_mcp_surfaces:notebooklm-mcp",)),
+    Step("context7", step_context7, ("required_mcp_surfaces:context7",), risky=True),
+    Step("notebooklm", step_notebooklm, ("required_mcp_surfaces:notebooklm-mcp",), risky=True),
     Step("status_lines", step_status_lines,
          ("required_local_surfaces:statusline-registration",
           "required_local_surfaces:subagent-statusline-registration")),
@@ -1057,31 +1102,35 @@ def step_plugin_install(ctx: Ctx) -> StepResult:
 
 def step_plugin_update(ctx: Ctx) -> StepResult:
     if not shutil.which("claude"):
-        return StepResult(FAILED, "claude CLI not on PATH", "run: /plugin update coordinator@coordinator-claude")
+        return _fail("load", "claude CLI not on PATH", "run: /plugin update coordinator@coordinator-claude")
     _, _, market = _installed_coordinator()
     market = market or "coordinator-claude"
     rc, out = run(["claude", "plugin", "marketplace", "update", market], timeout=300)
     if rc != 0:
-        return StepResult(FAILED, out[-300:] or "marketplace update failed",
-                          f"run: claude plugin marketplace update {market}")
+        return _fail_run("load", rc, out[-300:] or "marketplace update failed",
+                         f"run: claude plugin marketplace update {market}")
     rc, out = run(["claude", "plugin", "update", f"coordinator@{market}"], timeout=300)
     if rc == 0:
         ctx.restart_needed = True
-    return StepResult(RAN if rc == 0 else FAILED, out[-300:] or "updated",
-                      "" if rc == 0 else "run: /plugin update coordinator@coordinator-claude")
+        return StepResult(RAN, out[-300:] or "updated")
+    return _fail_run("load", rc, out[-300:] or "updated", "run: /plugin update coordinator@coordinator-claude")
 
 
 def step_engine_setup(ctx: Ctx) -> StepResult:
     script, why = _engine_setup_script()
     if script is None:
-        return StepResult(FAILED, why, "clone the engine as a sibling of this plugin clone and register it: machine-local set repos.claude_klabauter <path>")
+        return _fail("load", why, "clone the engine as a sibling of this plugin clone and register it: machine-local set repos.claude_klabauter <path>")
     rc, out = run(_py(str(script)), timeout=600)
-    return StepResult(RAN if rc == 0 else FAILED, out.splitlines()[-1] if out else f"exited {rc}")
+    detail = out.splitlines()[-1] if out else f"exited {rc}"
+    return StepResult(RAN, detail) if rc == 0 else _fail_run("load", rc, detail)
 
 
 def step_engine_check(ctx: Ctx) -> StepResult:
     ok, detail = _engine_check()
-    return StepResult(RAN if ok else FAILED, detail)
+    if ok:
+        return StepResult(RAN, detail)
+    # "exited N" is the no-verdict path: the check crashed or timed out, so a retry can differ.
+    return _fail("self-test", detail, retryable=detail.startswith("engine check exited"))
 
 
 # Who runs each track step. A human step names the exact command the agent hands over; the agent
@@ -1118,9 +1167,45 @@ def mode_policy(mode: str | None) -> dict:
     }
 
 
+PLAN_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def _fresh_plan_id() -> str:
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(3)
+
+
+def _backup_covers() -> list[tuple[str, Path]]:
+    """(backup-relative name, live path) for every file a step writes."""
+    registry = Path(os.environ.get("MACHINE_LOCAL_REGISTRY_DIR") or settings_home() / "machine-local")
+    return [("claude/settings.json", claude_dir() / "settings.json"),
+            ("claude/CLAUDE.md", claude_dir() / "CLAUDE.md"),
+            ("machine-local/registry.local.toml", registry / "registry.local.toml"),
+            ("machine-local/registry.toml", registry / "registry.toml")]
+
+
+def backup_block(plan_id: str) -> dict:
+    return {"plan_id": plan_id, "path": str(settings_home() / "install-backups" / plan_id),
+            "covers": [str(p) for _, p in _backup_covers()]}
+
+
+def take_backup(plan_id: str) -> list[str]:
+    """Copy each existing covered file under the backup path; a file already saved under this
+    plan_id is kept, so a re-apply never overwrites the pre-install copy. Returns the names saved."""
+    root = Path(backup_block(plan_id)["path"])
+    saved = []
+    for name, src in _backup_covers():
+        dest = root / name
+        if src.is_file() and not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            saved.append(name)
+    return saved
+
+
 def build_plan(permission_mode: str | None) -> dict:
     problems = check_manifest_drift()
     return {
+        "backup": backup_block(_fresh_plan_id()),
         "schema": SCHEMA,
         "orientation": ORIENTATION,
         "environment": (env := {"platform": platform.system(), "plugin_root": str(plugin_root()),
@@ -1129,7 +1214,7 @@ def build_plan(permission_mode: str | None) -> dict:
         "mode_policy": mode_policy(permission_mode),
         "decisions": [decision_json(d) for d in build_decisions(permission_mode)],
         "tour": list(TOUR),
-        "steps": [{"id": s.id, "decision": STEP_DECISION.get(s.id),
+        "steps": [{"id": s.id, "decision": STEP_DECISION.get(s.id), "risky": s.risky,
                    "implements": list(s.implements) or [f"exempt: {s.exempt}"]} for s in STEPS],
         "manifest_drift": {"ok": not problems, "problems": problems},
     }
@@ -1141,18 +1226,36 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
     steps: list = [Step(i, TRACK_STEP_FNS[i], exempt="track step")
                    for i in detect_track()["track_steps"] if i in TRACK_STEP_FNS]
     steps += STEPS
+    plan_id = answers.get("plan_id") or _fresh_plan_id()
+    backup = backup_block(plan_id)
+    try:
+        backup["saved"] = take_backup(plan_id)
+    except OSError as exc:
+        backup["saved"] = []
+        results.append({"id": "backup", "status": FAILED, "detail": f"{type(exc).__name__}: {exc}",
+                        "follow_up": "no step ran; fix the backup path and re-run", "stage": "host",
+                        "retryable": False})
+        steps = []
+    consent = answers.get("consent") or {}
     for step in steps:
         if only and step.id not in only:
             continue
+        declined = answers.get(STEP_DECISION.get(step.id, "")) == "skip"
         try:
-            res = step.fn(ctx)
+            if step.risky and not declined and consent.get(step.id) is not True:
+                res = StepResult(SKIPPED, "consent required", f"re-run with consent.{step.id}=true")
+            else:
+                res = step.fn(ctx)
         except Exception as exc:  # a step must never abort the block
-            res = StepResult(FAILED, f"{type(exc).__name__}: {exc}")
-        results.append({"id": step.id, "status": res.status, "detail": res.detail,
-                        "follow_up": res.follow_up})
+            res = _fail("inspection", f"{type(exc).__name__}: {exc}")
+        row = {"id": step.id, "status": res.status, "detail": res.detail, "follow_up": res.follow_up}
+        if res.status == FAILED:
+            row.update(stage=res.stage, retryable=res.retryable)
+        results.append(row)
     counts = {k: sum(1 for r in results if r["status"] == k) for k in (RAN, SKIPPED, INHERITED, FAILED)}
     return {
         "schema": "coordinator-install-result/1",
+        "backup": backup,
         "steps": results,
         "summary": counts,
         "tour": list(TOUR) if answers.get("orientation") == "tour-now" else [],
@@ -1219,7 +1322,28 @@ def walk_decisions(permission_mode: str | None, stdin, stdout, custom: bool) -> 
                 raw[d.id] = picked
                 break
             stdout.write(f"  choose one of: {', '.join(values)}\n")
+    if custom:
+        decisions = {d.id: d for d in build_decisions(permission_mode)}
+        consent: dict = {}
+        for s in STEPS:
+            did = STEP_DECISION.get(s.id)
+            chosen = raw.get(did, decisions[did].default) if did else None
+            if not s.risky or chosen == "skip":
+                continue
+            reply = _ask(f"\nThis step changes things beyond the settings home: {decisions[did].question}\n"
+                         f"> allow {s.id}? [y/N]: ", stdin, stdout)
+            consent[s.id] = (reply or "").lower() in ("y", "yes")
+        if consent:
+            raw["consent"] = consent
     return raw
+
+
+def _stdin_can_answer() -> bool:
+    """A TTY can answer a prompt; a pipe, redirect or erroring `isatty` cannot."""
+    try:
+        return bool(sys.stdin is not None and sys.stdin.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
 
 
 def _load_answers(spec: str | None) -> dict:
@@ -1269,6 +1393,10 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--express and --custom are alternatives")
     if not (args.answers or args.non_interactive or args.express or args.custom):
         ap.error("pass --plan, --express, --custom, --answers <file|json>, --non-interactive, or --i-am-agent")
+    if (args.express or args.custom) and not _stdin_can_answer():
+        print(json.dumps({"error": "stdin is not a terminal; pass --answers <file|json> or --non-interactive"}),
+              file=sys.stderr)
+        return 2
     try:
         if args.express or args.custom:
             raw = walk_decisions(args.permission_mode, sys.stdin, sys.stdout, custom=args.custom)

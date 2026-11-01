@@ -397,7 +397,8 @@ def test_a_standalone_deferred_emit_still_starts_the_run_itself(tmp_path):
     from coordinator_core.ops.dispatch_emit.fan_launcher import DEFERRED_EMIT_KEY
 
     script = hook._write_deferred_script(tmp_path, {"ask": "x"}).read_text(encoding="utf-8")
-    assert "return await workflow({ scriptPath: scriptPath });" in script
+    assert "await workflow({ scriptPath: path })" in script
+    assert "launcher_child" in script
     assert DEFERRED_EMIT_KEY not in script
 
 
@@ -458,6 +459,63 @@ def test_newer_minted_only_shell_hides_no_stopped_run(tmp_path, monkeypatch):
     (shell / "run-stage.json").write_text(json.dumps({"stage": "minted"}), encoding="utf-8")
     env, spawned, emitted, launched = _refire(halted, monkeypatch)
     assert emitted == [] and launched == [[run_id]]
+
+
+def _stored_record_repo(tmp_path, halted_id, *, script_on_disk):
+    """A halted run whose resume record matches its fingerprint and names a stored script."""
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+
+    sizing_rel, plan_rel = "state/sizings/2026-10-29-miss.yaml", "docs/plans/2026-10-29-miss.md"
+    stored_rel = f"scratch/warp/{halted_id}.workflow.mjs"
+    (tmp_path / ".git").mkdir()
+    for rel, text in ((sizing_rel, "schema: sizing-object\n"), (plan_rel, "# plan\n")):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    if script_on_disk:
+        (tmp_path / stored_rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / stored_rel).write_text("// stored\n", encoding="utf-8")
+    rd = tmp_path / RECORD_DIR_ROOT / halted_id
+    write_halt_marker(rd, halted="ledger-check", sizing_rel=sizing_rel, plan_rel=plan_rel, run_base_sha="a" * 40)
+    fp = hrr.fingerprint_for_run(tmp_path, rd, sizing_rel, plan_rel)
+    hrr.write(
+        rd,
+        hrr.build_record(
+            composed_script_rel=stored_rel, hoisted_fragments=[], gate_verdict=None,
+            landed_state_sha=None, fingerprint=fp, resume_plan_rel=plan_rel,
+        ),
+    )
+    payload = {
+        "tool_name": "Workflow", "cwd": str(tmp_path), "session_id": "s1", "tool_use_id": "toolu_x",
+        "tool_input": {"name": _STUB, "args": {"sizing": sizing_rel}},
+    }
+    return payload, stored_rel
+
+
+@pytest.mark.parametrize("script_on_disk", [False, True])
+def test_recompose_spawns_only_when_the_stored_script_is_gone(tmp_path, monkeypatch, script_on_disk):
+    """Both sides: a stored script missing from disk starts the run through the launcher AND spawns the
+    recompose; a present one is served as-is with no recompose."""
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    halted_id = "warp-2026-10-29-miss-20261029T010101-abc123"
+    payload, stored_rel = _stored_record_repo(tmp_path, halted_id, script_on_disk=script_on_disk)
+    spawned: list = []
+    monkeypatch.setattr(hook, "_spawn_recompose", lambda root, run_id: spawned.append(run_id) or True)
+    launcher = tmp_path / "launcher.js"
+    launcher.write_text("//", encoding="utf-8")
+    launched: list = []
+
+    def launch(root, parent_id, children, session_id):
+        launched.append([c.run_id for c in children])
+        return launcher
+
+    env = hook.evaluate(payload, emit=lambda p, r: pytest.fail("plain emit"), launch=launch)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    if script_on_disk:
+        assert env["hookSpecificOutput"]["updatedInput"]["scriptPath"] == str(tmp_path / stored_rel)
+        assert spawned == [] and launched == []
+    else:
+        assert spawned == [halted_id] and launched == [[halted_id]]
 
 
 def test_unbound_run_takes_the_plain_emit(tmp_path, monkeypatch):

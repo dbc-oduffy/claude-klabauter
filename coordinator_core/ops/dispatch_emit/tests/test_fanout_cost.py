@@ -143,6 +143,25 @@ def test_group_prompt_names_members_in_order_and_wraps_each_prompt():
         f.group_prompt(["p0"], ["a", "b"])
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+def test_runtime_group_js_builds_the_same_prompt_as_group_prompt():
+    ids = ["a", "b"]
+    probe = (
+        f.RUNTIME_GROUP_JS
+        + "const ps = ['P0', 'P1'];"
+        + "console.log(JSON.stringify([groupPromptOf(['a','b'], ps),"
+        + f" {f.group_prompt(['ps[0]', 'ps[1]'], ids)}]));"
+    )
+    out = subprocess.run(
+        [shutil.which("node"), "-"], input=probe, capture_output=True, text=True, timeout=30,
+        **no_console_creationflags(),
+    )
+    runtime, static = json.loads(out.stdout)
+    assert runtime == static
+    assert runtime.startswith("You own 2 assignments, in this order: a, b" + f.GROUP_HEADER_TAIL)
+    assert f.RUNTIME_GROUP_MAX_ITEMS == 8
+
+
 def test_pipeline_compose_refuses_unknown_fanout_group():
     _check_fanout_group("auto")
     _check_fanout_group("split")

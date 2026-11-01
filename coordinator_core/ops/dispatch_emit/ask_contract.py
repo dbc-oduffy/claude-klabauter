@@ -64,6 +64,20 @@ ASK_VERIFY_RETURN_KEYS = ("test", "judge", *ASK_VERIFY_LEDGER_KEYS, *ASK_VERIFY_
 OP_ASK_GATE, OP_ASK_STAGE = "dispatch.ask_gate", "dispatch.ask_stage"
 HALT_ROOM, HALT_TOUCHPOINT, HALT_REFUSAL = "room", "touchpoint", "refusal"
 HALT_DEPENDENTS_UNSTARTED = "dependents_unstarted"
+#: Sizing-time halt: an EM-stated size of M or below met an engine size of XL or XXL.
+HALT_MISALIGNED = "misaligned"
+VALID_SIZES = ("XS", "S", "M", "L", "XL", "XXL")
+_EM_SMALL_SIZES = frozenset(VALID_SIZES[:3])
+_ENGINE_LARGE_SIZES = frozenset(VALID_SIZES[4:])
+
+
+def size_misaligned(em_size: Optional[str], engine_tshirt: str) -> bool:
+    """True only when the EM stated M or below and the engine sized XL or XXL; no EM size never halts."""
+    if not isinstance(em_size, str) or not isinstance(engine_tshirt, str):
+        return False
+    return em_size.strip().upper() in _EM_SMALL_SIZES and engine_tshirt.strip().upper() in _ENGINE_LARGE_SIZES
+
+
 HALT_SPLIT = "split"
 HALT_RESEARCH = "research"
 #: Raised by the ask script when an ask_stage refusal starts with design_route.STAGE_REFUSAL_PREFIX;
@@ -588,6 +602,18 @@ def halted_run_id(subject: str) -> str | None:
     if match is None or not safe_id(match.group(1)):
         return None
     return match.group(1)
+
+
+_RUN_STAMP_TAIL_RE = re.compile(r"-\d{8}T\d{6}-[0-9a-f]{6}$")
+
+
+def run_lineage(run_id: str | None) -> str | None:
+    """The sizing lineage of a `warp-<stem>-<stamp>` run id: ``warp-<stem>``, shared by every refire
+    of one sizing. None for an `ask-` id, any id without a stamp tail, or a bare ``warp``. Pure."""
+    if not isinstance(run_id, str) or not run_id.startswith("warp-"):
+        return None
+    stripped = _RUN_STAMP_TAIL_RE.sub("", run_id)
+    return stripped if stripped != run_id and stripped != "warp" else None
 
 
 @dataclass(frozen=True)

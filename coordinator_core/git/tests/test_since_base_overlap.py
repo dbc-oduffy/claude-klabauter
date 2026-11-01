@@ -223,6 +223,30 @@ def test_other_run_halt_record_commit_is_foreign(tmp_path: Path) -> None:
     assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="run-R1")) == 1
 
 
+_REFIRE = "warp-2026-11-01-engine-ask-one-door-all-arms-3542ec-20261101T172352-591218"
+_PREDECESSOR = "warp-2026-11-01-engine-ask-one-door-all-arms-3542ec-20261101T150608-70c743"
+_OTHER_SIZING = "warp-2026-11-01-some-other-sizing-aaaaaa-20261101T150608-70c743"
+
+
+def test_predecessor_halt_record_of_same_sizing_lineage_is_own(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, f"warp: record halted {_PREDECESSOR} run artifacts")
+
+    assert since_base_overlap.check(tmp_path, [PATH], base, run_id=_REFIRE, plan=PLAN) == ([], [])
+    assert since_base_overlap.check(tmp_path, [PATH], base, run_id=_REFIRE) == ([], [])
+
+
+def test_halt_record_of_another_sizing_lineage_is_foreign(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, f"warp: record halted {_OTHER_SIZING} run artifacts")
+
+    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=_REFIRE, plan=PLAN)) == 1
+
+
+def test_ask_run_id_has_no_lineage_so_other_ask_halt_is_foreign(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, "warp: record halted ask-20261101T150608-70c743 run artifacts")
+
+    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id="ask-20261101T172352-591218")) == 1
+
+
 def test_halt_record_commit_without_run_id_is_foreign(tmp_path: Path) -> None:
     base = _halt_record_setup(tmp_path, "warp: record halted run-R1 run artifacts")
 

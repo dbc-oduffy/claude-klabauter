@@ -285,6 +285,43 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
     return reply
 
 
+def _refused_at_stage(root: Path, record: Path, run_id: str) -> Optional[dict]:
+    """The close reply for a run that refused at the nested-chain start (no ``halted.json``), else a refusal.
+
+    Fail-closed: the run-stage record is ``minted``/``staged`` and idle past ``UNLAUNCHED_GRACE_SECONDS``, the
+    stage receipt exists, no kept/withheld-prints/baton file records work, and no live run resumes it. Writes a
+    ``closed`` marker and stamps the run-stage ``halted``."""
+    from datetime import datetime, timezone
+
+    from coordinator_core.ops.dispatch_emit import ask_stage_receipt, halted_run, kept_work
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_BATON_FILE, read_run_stage
+    from coordinator_core.ops.dispatch_emit.halted_hunk_attribution import _iso_epoch
+    from coordinator_core.ops.dispatch_emit.halted_run_landed import _live_successor
+    from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE
+    from coordinator_core.warp_live import UNLAUNCHED_GRACE_SECONDS
+
+    stage = read_run_stage(root, run_id)
+    if not stage or stage.get("stage") not in ("minted", "staged") or not (record / ask_stage_receipt.RECEIPT_NAME).is_file():
+        return _refuse(f"{run_id} has no halt record and no staged-then-refused run record")
+    wrote = [f for f in (kept_work.KEPT_FILE, WITHHELD_PRINTS_FILE, RUN_BATON_FILE) if (record / f).exists()]
+    if wrote:
+        return _refuse(f"{run_id} has no halt record and holds {wrote[0]}; it may have written work")
+    epoch = _iso_epoch(stage.get("last_activity_at"))
+    now = datetime.now(timezone.utc)
+    if epoch is None or now.timestamp() - epoch < UNLAUNCHED_GRACE_SECONDS:
+        return _refuse(f"{run_id} has no halt record and was active within {UNLAUNCHED_GRACE_SECONDS // 60} minutes; it may be live")
+    successor = _live_successor(root, run_id)
+    if successor:
+        return _refuse(f"{run_id} has a live successor {successor}; wait for it or stop it")
+    at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    halted_run._write(record, {
+        "status": halted_run.STATUS_CLOSED, "halted": run_id, "sizing_rel": None,
+        "closed": {"reason": "refused-at-stage: no halt record, nothing written", "at": at},
+    })
+    halted_run.stamp_run_stage_at(record, "halted")
+    return {"ok": True, "run_id": run_id, "evidence": {}, "dispositions": {}, "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix()}
+
+
 @register_op(OP_NAME)
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.close_halted_run_superseded": verify supersession evidence, then close the run."""
@@ -309,7 +346,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except ValueError as exc:
         return _refuse(str(exc))
     if marker is None:
-        return _refuse(f"{run_id} has no halt record")
+        return _refused_at_stage(root, record, run_id)
     status = marker.get("status")
     if status != halted_run.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}; only a halted run closes superseded")

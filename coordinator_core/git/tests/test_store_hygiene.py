@@ -94,11 +94,36 @@ def spawns(monkeypatch):
     return calls
 
 
-def test_not_stale_does_not_spawn(tmp_path, spawns):
+def test_commit_route_trigger_reads_no_store(tmp_path, spawns, monkeypatch):
+    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
+    scans = []
+
+    def tripwire(*a, **k):
+        scans.append(a)
+        raise AssertionError("store read on the commit route")
+
+    with monkeypatch.context() as m:
+        m.setattr(sh, "status", tripwire)
+        m.setattr(sh, "_owes_maintenance", tripwire)
+        m.setattr(os, "scandir", tripwire)
+        first = sh.maybe_refresh(repo, common)
+        second = sh.maybe_refresh(repo, common)
+    assert (first, second) == (True, False)
+    assert scans == [] and len(spawns) == 1
+
+
+def test_young_claim_refuses_without_firing(tmp_path, spawns):
     repo, common = _repo(tmp_path, packs=3)
+    claim = common / "coordinator" / "store-hygiene.claim"
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_bytes(b"")
     assert sh.maybe_refresh(repo, common) is False
     assert spawns == []
-    assert not (common / "coordinator" / "store-hygiene.claim").exists()
+
+
+def test_healthy_store_owes_nothing(tmp_path):
+    repo, common = _repo(tmp_path, packs=3)
+    assert sh._owes_maintenance(repo, common) is False
 
 
 def test_midx_lag_fires_once_per_claim_interval(tmp_path, spawns):
@@ -110,23 +135,63 @@ def test_midx_lag_fires_once_per_claim_interval(tmp_path, spawns):
     assert spawns[0][0][2] == ["--repo", str(repo), "--daily"]
 
 
-def test_loose_growth_alone_fires(tmp_path, spawns):
+def test_midx_lag_is_owed(tmp_path):
+    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
+    _midx(common / "objects" / "pack", 1)
+    assert sh._owes_maintenance(repo, common) is True
+
+
+def test_loose_growth_alone_is_owed(tmp_path):
     repo, common = _repo(tmp_path, packs=1)
     fan = common / "objects" / "00"
     fan.mkdir()
     for i in range(3):
         (fan / f"{i:038x}").write_bytes(b"x")
-    assert sh.maybe_refresh(repo, common) is True
-    assert len(spawns) == 1
+    assert sh._owes_maintenance(repo, common) is True
 
 
-def test_stale_liveness_fires(tmp_path, spawns):
+def test_stale_liveness_is_owed(tmp_path):
     from coordinator_core.ops.ceremony import housekeeping_liveness as hl
 
     repo, common = _repo(tmp_path, packs=1)
     live = hl.liveness_path(str(repo))
     live.write_text(json.dumps({hl.GIT_MAINTENANCE: "2020-01-01T00:00:00Z"}), encoding="utf-8")
-    assert sh.maybe_refresh(repo, common) is True
+    assert sh._owes_maintenance(repo, common) is True
+
+
+def test_daily_child_exits_early_when_nothing_is_owed(tmp_path, monkeypatch):
+    from coordinator_core.ops import git_maintenance as gm
+
+    repo, common = _repo(tmp_path, packs=3)
+    monkeypatch.setattr(sh, "_box_busy", lambda: False)
+    monkeypatch.setattr(gm, "run_tier", lambda r, t: pytest.fail("tier ran with nothing owed"))
+    assert sh._run_daily(repo) == 0
+
+
+def test_daily_child_backs_off_on_a_busy_box_and_keeps_the_claim(tmp_path, monkeypatch):
+    from coordinator_core.ops import git_maintenance as gm
+
+    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
+    _midx(common / "objects" / "pack", 1)
+    claim = common / "coordinator" / "store-hygiene.claim"
+    claim.parent.mkdir(parents=True, exist_ok=True)
+    claim.write_bytes(b"")
+    monkeypatch.setattr(sh, "_box_busy", lambda: True)
+    monkeypatch.setattr(gm, "run_tier", lambda r, t: pytest.fail("tier ran on a busy box"))
+    monkeypatch.setattr(sh, "consolidate_small_packs", lambda c: pytest.fail("consolidated"))
+    assert sh._run_daily(repo) == 0
+    assert claim.exists()
+
+
+def test_box_busy_reads_cpu_load(monkeypatch):
+    from coordinator_core.telemetry import host_sampler
+
+    monkeypatch.setattr(host_sampler, "read_load", lambda: {"cpu_load": sh.BUSY_CPU_LOAD})
+    assert sh._box_busy() is True
+    monkeypatch.setattr(host_sampler, "read_load", lambda: {"cpu_load": 0.1})
+    assert sh._box_busy() is False
+    monkeypatch.setattr(host_sampler, "read_load", lambda: {"cpu_load": None})
+    assert sh._box_busy() is False
 
 
 def test_old_claim_is_reclaimed_and_young_claim_refuses(tmp_path, spawns):
@@ -186,9 +251,10 @@ def _git_fixture(tmp_path, n, real_git=False):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_daily_consolidates_200_engine_packs_and_keeps_every_object(tmp_path):
+def test_daily_consolidates_200_engine_packs_and_keeps_every_object(tmp_path, monkeypatch):
     from coordinator_core.git import git_objects as go
 
+    monkeypatch.setattr(sh, "_box_busy", lambda: False)
     repo, common, shas = _git_fixture(tmp_path, 200, real_git=True)
     assert sh.status(common).pack_count == 200
     assert sh.main(["--repo", str(repo), "--daily"]) == 0
@@ -205,6 +271,50 @@ def test_consolidate_leaves_a_store_at_the_bound_alone(tmp_path):
     _, common, _ = _git_fixture(tmp_path, sh.CONSOLIDATE_MAX_PACKS)
     assert sh.consolidate_small_packs(common) == 0
     assert sh.status(common).pack_count == sh.CONSOLIDATE_MAX_PACKS
+
+
+def _sized_packs(common, n, nbytes):
+    import hashlib
+
+    from coordinator_core.git import git_objects as go
+
+    shas = []
+    for i in range(n):
+        body = os.urandom(nbytes)
+        sha = hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest()
+        go._write_pack(common, {sha: (b"blob", body)})
+        shas.append((sha, body))
+    return shas
+
+
+def test_consolidate_merges_packs_in_the_64kb_to_1mb_band(tmp_path):
+    from coordinator_core.git import git_objects as go
+
+    common = tmp_path / ".git"
+    shas = _sized_packs(common, sh.CONSOLIDATE_MAX_PACKS + 8, 200 * 1024)
+    assert sh.consolidate_small_packs(common) > 0
+    assert sh.status(common).pack_count <= sh.CONSOLIDATE_MAX_PACKS
+    go._PACK_LISTING_CACHE.clear()
+    go._PACK_INDEXES_BY_LISTING.clear()
+    for sha, body in shas:
+        assert go.read_object(common, sha) == ("blob", body)
+
+
+def test_consolidate_leaves_packs_at_or_over_the_floor_alone(tmp_path):
+    common = tmp_path / ".git"
+    _sized_packs(common, sh.CONSOLIDATE_MAX_PACKS + 3, sh.CONSOLIDATE_SIZE_FLOOR)
+    assert sh.consolidate_small_packs(common) == 0
+    assert sh.status(common).pack_count == sh.CONSOLIDATE_MAX_PACKS + 3
+
+
+def test_one_pass_stops_at_the_pass_byte_bound(tmp_path, monkeypatch):
+    common = tmp_path / ".git"
+    n = sh.CONSOLIDATE_MAX_PACKS + 20
+    _sized_packs(common, n, 200 * 1024)
+    monkeypatch.setattr(sh, "CONSOLIDATE_PASS_BYTES", 10 * 200 * 1024)
+    removed = sh.consolidate_small_packs(common)
+    assert removed == 9
+    assert sh.status(common).pack_count == n - 9 + 1
 
 
 def test_consolidate_skips_keep_and_unreadable_packs(tmp_path):
@@ -233,6 +343,8 @@ def test_deferred_tier_retries_then_releases_the_claim(tmp_path, monkeypatch):
         return gm.MaintenanceResult(tier=tier, deferred="index.lock is held")
 
     monkeypatch.setattr(gm, "run_tier", deferred)
+    monkeypatch.setattr(sh, "_owes_maintenance", lambda r, c: True)
+    monkeypatch.setattr(sh, "_box_busy", lambda: False)
     monkeypatch.setattr(sh, "DEFER_RETRY_S", 0)
     assert sh._run_daily(repo) == 0
     assert len(calls) == sh.DEFER_RETRIES + 1
@@ -247,6 +359,8 @@ def test_ran_tier_keeps_the_claim(tmp_path, monkeypatch):
     claim.parent.mkdir(parents=True, exist_ok=True)
     claim.write_bytes(b"")
     monkeypatch.setattr(gm, "run_tier", lambda r, t: gm.MaintenanceResult(tier=t, ran=True))
+    monkeypatch.setattr(sh, "_owes_maintenance", lambda r, c: True)
+    monkeypatch.setattr(sh, "_box_busy", lambda: False)
     assert sh._run_daily(repo) == 0
     assert claim.exists()
 

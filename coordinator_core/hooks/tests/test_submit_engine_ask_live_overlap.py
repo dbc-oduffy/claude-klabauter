@@ -157,3 +157,48 @@ def test_a_fanout_child_halted_in_its_sibling_status_denies_nothing(tmp_path):
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {})
     status.write_text(json.dumps({"status": "halted"}), encoding="utf-8")
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None
+
+
+def _marker(root: Path, run_id: str, status: str) -> None:
+    """Write `halted.json` with `status` into the run's record dir."""
+    import json
+
+    rd = root / "state" / "warp" / run_id
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "halted.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+
+
+def test_superseded_and_closed_markers_release_but_a_resumed_one_stays_live(tmp_path):
+    (tmp_path / ".git").mkdir()
+    run_id = "ask-20261101T173854-9a093a"
+    _live(tmp_path, {run_id: {"pkg/mod.py"}})
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    _marker(tmp_path, run_id, "resumed")
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {})
+    for status in ("superseded", "closed", "halted", "landed"):
+        _marker(tmp_path, run_id, status)
+        assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None, status
+
+
+def test_a_run_that_ended_on_harness_evidence_without_halted_json_denies_nothing(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    (tmp_path / ".git").mkdir()
+    run_id = "ask-20261101T173854-9a093a"
+    _live(tmp_path, {run_id: {"pkg/mod.py"}})
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    record = {"run_id": run_id, "minted_at": 1.0}
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([record]))
+    monkeypatch.setattr(warp_live, "run_ended_on_evidence", lambda root, rec: False)
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {})
+    monkeypatch.setattr(warp_live, "run_ended_on_evidence", lambda root, rec: True)
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None
+
+
+def test_a_run_with_no_token_record_and_no_marker_stays_live(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    (tmp_path / ".git").mkdir()
+    _live(tmp_path, {"run-a": {"pkg/mod.py"}})
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([]))
+    assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})

@@ -313,3 +313,109 @@ def test_under_cap_and_other_errors_are_not_re_emitted(monkeypatch, tmp_path):
     with pytest.raises(ValueError):
         mod._default_emit({}, tmp_path)
     assert seen == [False]
+
+
+def test_deferred_script_carries_target_root_for_the_repo_unkeyed_cli(tmp_path):
+    # The relay runs dispatch.emit over the CLI, which has no repo key: without target_root a raw ask refuses.
+    import json
+    import re
+
+    script = mod._write_deferred_script(tmp_path, {"ask": "build the thing", "session_id": ""})
+    literal = re.search(r"^const PARAMS = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
+    assert json.loads(json.loads(literal))["target_root"] == tmp_path.as_posix()
+
+
+_NODE_HARNESS = """
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8').replace(/^export const meta[^\\n]*\\n/, '');
+const cfg = JSON.parse(process.argv[3]);
+const calls = [];
+const agent = async (prompt) => { calls.push({ agent: prompt }); return cfg.replies.shift(); };
+const workflow = async (o) => { calls.push({ workflow: o }); return cfg.results.shift(); };
+const run = new (Object.getPrototypeOf(async function () {}).constructor)('agent', 'workflow', src);
+run(agent, workflow).then((out) => console.log(JSON.stringify({ out, calls })));
+"""
+
+
+def _run_deferred(tmp_path, params, replies, results):
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    script = mod._write_deferred_script(tmp_path, params)
+    harness = tmp_path / "harness.js"
+    harness.write_text(_NODE_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        [node, str(harness), str(script), json.dumps({"replies": replies, "results": results})],
+        capture_output=True, text=True, timeout=30, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(proc.stdout)
+
+
+def _reply(path="scratch/warp/ask-1.workflow.mjs", run_id="ask-1"):
+    return {"path": path, "run_id": run_id, "fire_args": {}}
+
+
+def test_default_deferred_script_emits_the_ask_as_a_launcher_child(tmp_path):
+    import json
+    import re
+
+    script = mod._write_deferred_script(tmp_path, {"ask": "build the thing", "session_id": ""})
+    literal = re.search(r"^const PARAMS = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
+    assert json.loads(json.loads(literal))["launcher_child"] is True
+
+
+@pytest.mark.spawns_process
+def test_default_deferred_script_hops_the_chain_at_depth_one(tmp_path):
+    handoff = {"chain": {"ask": "do it", "sizing_path": "state/sizings/s.yaml"}, "run_id": "ask-1"}
+    got = _run_deferred(
+        tmp_path, {"ask": "build the thing", "session_id": ""},
+        replies=[_reply(), _reply("scratch/warp/chain-2.workflow.mjs", "chain-2")],
+        results=[handoff, {"done": True}],
+    )
+    starts = [c["workflow"]["scriptPath"] for c in got["calls"] if "workflow" in c]
+    assert [Path(s).name for s in starts] == ["ask-1.workflow.mjs", "chain-2.workflow.mjs"]
+    chain_emit = [c["agent"] for c in got["calls"] if "agent" in c][1]
+    assert '"launcher_child":true' in chain_emit
+    assert got["out"] == {"done": True, "chained_from": "ask-1"}
+
+
+@pytest.mark.spawns_process
+def test_default_deferred_script_returns_a_plain_result_without_a_hop(tmp_path):
+    got = _run_deferred(tmp_path, {"ask": "x", "session_id": ""}, replies=[_reply()], results=[{"done": 1}])
+    assert got["out"] == {"done": 1}
+    assert len([c for c in got["calls"] if "workflow" in c]) == 1
+
+
+@pytest.mark.spawns_process
+def test_a_second_hand_off_from_the_chained_run_fails_the_hop(tmp_path):
+    handoff = {"chain": {"ask": "do it"}}
+    got = _run_deferred(
+        tmp_path, {"ask": "x", "session_id": ""},
+        replies=[_reply(), _reply("scratch/warp/chain-2.workflow.mjs", "chain-2")],
+        results=[handoff, handoff],
+    )
+    assert got["out"]["status"] == "failed" and "second hand-off" in got["out"]["error"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("blank", ["","   ", '""', "''", ' "" '])
+@pytest.mark.parametrize("child", [False, True])
+def test_blank_reply_path_is_emit_refused_without_starting_a_workflow(tmp_path, blank, child):
+    params = {"ask": "x", "session_id": ""}
+    if child:
+        params["launcher_child"] = True
+    got = _run_deferred(tmp_path, params, replies=[_reply(path=blank)], results=[])
+    assert got["out"]["status"] == "emit_refused"
+    assert not [c for c in got["calls"] if "workflow" in c]
+
+
+@pytest.mark.spawns_process
+def test_launcher_child_deferred_script_still_hands_the_emit_back(tmp_path):
+    got = _run_deferred(tmp_path, {"ask": "x", "session_id": "", "launcher_child": True}, replies=[_reply()], results=[])
+    assert got["out"]["deferred_emit_pending"]["run_id"] == "ask-1"
+    assert not [c for c in got["calls"] if "workflow" in c]

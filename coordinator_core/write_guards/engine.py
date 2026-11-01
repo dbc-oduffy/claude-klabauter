@@ -529,6 +529,18 @@ def evaluate(
         key=lambda g: g.priority,
     )
     if held is not None and not aggregate:
+        # A demoted hard-deny advisory must not shadow an advisory-class guard
+        # that returns a deny envelope (guard_doctrine_surface_edits floor deny).
+        from coordinator_core.machine_profile import is_deny_envelope
+
+        for g in advisories:
+            out = _run_check(g, payload)
+            if out is not None and is_deny_envelope(out):
+                try:
+                    _record_advisory_fire(g.name, payload.get("session_id") or "", payload.get("cwd"))
+                except Exception:
+                    pass
+                return out
         return held
     if aggregate:
         fired: List[Dict[str, Any]] = [held] if held is not None else []

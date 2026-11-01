@@ -52,6 +52,8 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
 from coordinator_core.ops.dispatch_emit.agent_sidecar import sidecar_clause_js
 from coordinator_core.ops.dispatch_emit.fanout_cost import (
     FANOUT_GROUP_MODES,
+    RUNTIME_GROUP_JS,
+    RUNTIME_GROUP_MAX_ITEMS,
     FanoutCost,
     Unit,
     group_prompt,
@@ -327,6 +329,7 @@ def _stage_expression(
     agent_type_host: str | None,
     group_sizes: Sequence[int] = (),
     final: bool = False,
+    runtime_group: bool = False,
 ) -> str:
     finish = ""
     if final:
@@ -361,19 +364,44 @@ def _stage_expression(
         )
     else:
         items = _source_list(stage, scope, stages, schedule)
-        fill = f"withItem({prompt}, item)" if _uses_item(stage, manifest) else prompt
-        if not _has_item(stage.output):
-            fill += f" + fanTrailer(item, i + 1, items.length, {output})"
-        call = _agent_call(stage, manifest, inputs, agent_type_host, fill, item_label, "item", finish)
-        expr = (
-            "(async () => {\n"
-            f"      const items = {items};\n"
-            "      if (items.length === 0) return [];\n"
-            f"{_roster_guard(stage)}"
-            f"      return {fan}(items, (item, i) =>\n"
-            f"        {call}{size});\n"
-            "    })()"
-        )
+
+        def fill_at(index: str) -> str:
+            text = f"withItem({prompt}, item)" if _uses_item(stage, manifest) else prompt
+            if not _has_item(stage.output):
+                text += f" + fanTrailer(item, {index} + 1, items.length, {output})"
+            return text
+
+        if runtime_group:
+            n = RUNTIME_GROUP_MAX_ITEMS
+            stage_id = _js_string_literal(f"{stage.id}:")
+            members = f"chunk.map((item, j) => {fill_at('(i + j)')})"
+            ids = f"chunk.map((_, j) => {stage_id} + (i + j + 1))"
+            both = f"(chunk.length === 1 ? {fill_at('i')} : groupPromptOf({ids}, {members}))"
+            call = _agent_call(stage, manifest, inputs, agent_type_host, both, item_label, "item", finish)
+            expr = (
+                "(async () => {\n"
+                f"      const items = {items};\n"
+                "      if (items.length === 0) return [];\n"
+                "      const chunks = [];\n"
+                f"      for (let c = 0; c < items.length; c += {n}) chunks.push(items.slice(c, c + {n}));\n"
+                f"      return {fan}(chunks, (chunk, k) => {{\n"
+                f"        const i = k * {n};\n"
+                "        const item = chunk[0];\n"
+                f"        return {call};\n"
+                f"      }}{size});\n"
+                "    })()"
+            )
+        else:
+            call = _agent_call(stage, manifest, inputs, agent_type_host, fill_at("i"), item_label, "item", finish)
+            expr = (
+                "(async () => {\n"
+                f"      const items = {items};\n"
+                "      if (items.length === 0) return [];\n"
+                f"{_roster_guard(stage)}"
+                f"      return {fan}(items, (item, i) =>\n"
+                f"        {call}{size});\n"
+                "    })()"
+            )
     empty = "[]" if fanned else "null"
     if stage.when is not None and stage.when.kind != WHEN_FLAG:
         condition = _when_condition(stage, scope, stages, schedule)
@@ -403,6 +431,7 @@ def _level_lines(
     segment: tuple[str, str] | None = None,
     group_sizes: Mapping[str, Sequence[int]] | None = None,
     final_stage: tuple[str, str] | None = None,
+    fanout_group: str = "auto",
 ) -> list[str]:
     target = _RETURN_NAME[scope]
     lines: list[str] = []
@@ -413,6 +442,7 @@ def _level_lines(
             _stage_expression(
                 stages[i], scope, manifest, inputs, stages, schedule, agent_type_host, (group_sizes or {}).get(i, ()),
                 final_stage == (scope, i),
+                _runtime_grouped(stages[i], manifest, fanout_group),
             )
             for i in level
         ]
@@ -572,8 +602,8 @@ def _unit_ids(prefix: str, slugs: Sequence[str | None]) -> list[str]:
     return out
 
 
-def _groupable(stage: Stage, manifest: Manifest) -> bool:
-    """An emit-time fan-out stage whose agents can share a prompt: no schema, no roster type, and
+def _shares_prompt(stage: Stage, manifest: Manifest) -> bool:
+    """A fan-out stage whose agents can share a prompt: no schema, no roster type, and
     nothing reads its returns (another stage's `when` or `over` source, its own halts)."""
     if stage.schema is not None or stage.agent_type_from is not None or stage.produces_brief:
         return False
@@ -584,6 +614,21 @@ def _groupable(stage: Stage, manifest: Manifest) -> bool:
         and ((other.when is not None and other.when.stage == stage.id) or other.fan_out.source == stage.id)
         for other in manifest.stages
     )
+
+
+def _groupable(stage: Stage, manifest: Manifest) -> bool:
+    """An emit-time fan-out stage whose agents can share a prompt."""
+    return stage.fan_out.emit_time and _shares_prompt(stage, manifest)
+
+
+def _runtime_groupable(stage: Stage, manifest: Manifest) -> bool:
+    """A fan-out over a run-time list whose agents can share a prompt."""
+    return stage.fan_out.kind == FAN_OUT_OVER and not stage.fan_out.emit_time and _shares_prompt(stage, manifest)
+
+
+def _runtime_grouped(stage: Stage, manifest: Manifest, fanout_group: str) -> bool:
+    """Whether the composed script gives a run-time list one agent per `RUNTIME_GROUP_MAX_ITEMS` items."""
+    return fanout_group == "auto" and _runtime_groupable(stage, manifest)
 
 
 Segment = tuple[Manifest, PipelineInputs, Schedule]
@@ -741,9 +786,9 @@ def _segment(
     if not chained:
         body.append("const results = [];")
     body.append("")
-    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage)
+    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group)
     body += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
-    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes, final_stage=final_stage)
+    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group)
     body += [
         f"    results.push({{ subject: s.subject, returns: ret{tag} }});",
         "  } catch (err) {",
@@ -752,7 +797,7 @@ def _segment(
         "}",
         "",
     ]
-    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage)
+    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group)
     for scope in (SCOPE_PRE, SCOPE_POST):
         if schedule.levels.get(scope):
             body.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});")
@@ -835,6 +880,8 @@ def compose_chain_script(
         out += ["", _IN_CHUNKS]
     if any(s.fan_out.emit_time or _uses_item(s, m) for m, s in fanned):
         out += ["", _WITH_ITEM]
+    if any(_runtime_grouped(s, m, fanout_group) for m, s in fanned):
+        out += ["", RUNTIME_GROUP_JS.rstrip("\n")]
     out += ["", _PRODUCED, "", _FAN_TRAILER, ""]
     if scoped:
         out += ["const results = [];", "const segment_halts = [];", ""]
