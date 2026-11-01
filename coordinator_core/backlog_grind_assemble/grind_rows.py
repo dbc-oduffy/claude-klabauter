@@ -115,6 +115,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -474,6 +475,42 @@ def _resolve_schema_path(schema: str, repo_root: Path) -> Path:
     return repo_root / schema
 
 
+_TRADEOFF_TRUE_RE = re.compile(r"has_tradeoff\W{0,4}true\b", re.IGNORECASE)
+
+
+def _unruled_tradeoff_refusal(fm_text: str, evidence_file: str, repo_root: Path) -> str | None:
+    """Refusal text when the row carries no `pm_ruling` but the stage's triage evidence
+    (`<item>.verify.md`, sibling of the `<item>.done.md` evidence file) records
+    `has_tradeoff` true: a needs-judgment row stays open for the adjudicator. `None` otherwise."""
+    try:
+        fm = schema_validate.parse_yaml(fm_text)
+    except Exception:
+        return None
+    ruling = fm.get("pm_ruling") if isinstance(fm, dict) else None
+    if isinstance(ruling, str):
+        if ruling.strip():
+            return None
+    elif ruling not in (None, [], {}):
+        return None
+    evidence = Path(evidence_file)
+    if not evidence.is_absolute():
+        evidence = repo_root / evidence
+    name = evidence.name
+    if not name.endswith(".done.md"):
+        return None
+    triage = evidence.with_name(name[: -len(".done.md")] + ".verify.md")
+    try:
+        triage_text = triage.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if _TRADEOFF_TRUE_RE.search(triage_text) is None:
+        return None
+    return (
+        "row carries no pm_ruling and its triage evidence records a tradeoff (needs-judgment); "
+        "it stays open for the adjudicator"
+    )
+
+
 def cmd_close(rest: list[str]) -> int:
     flags = _parse_flags(
         rest,
@@ -562,6 +599,11 @@ def cmd_close(rest: list[str]) -> int:
             print(f"grind-row close: {row_path} carries no parseable frontmatter", file=sys.stderr)
             return EXIT_REFUSAL
         fm_text = split.fm_text
+
+    refusal = _unruled_tradeoff_refusal(fm_text, flags["evidence-file"], repo_root)
+    if refusal is not None:
+        print(f"grind-row close: {refusal}", file=sys.stderr)
+        return EXIT_REFUSAL
 
     for field_name, value in [(status_field, status_value)] + [(f, _stamp_value(f)) for f in stamp_fields]:
         fm_text = (

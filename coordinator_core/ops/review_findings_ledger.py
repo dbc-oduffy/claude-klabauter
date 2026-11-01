@@ -815,13 +815,21 @@ def targets_add(
 
 def plan_targets(plan_path: Path, root: Optional[Path] = None) -> List[str]:
     """The plan file (repo-relative to `root` when given), then the union of its spine's declared `writes`, in row order, de-duplicated.
-    A row whose `writes` is UNDECLARED raises LedgerError naming the row."""
+    A row whose `writes` is UNDECLARED raises LedgerError naming the row, unless it is held by an `epistemic-premise` edge (skipped)."""
     from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, SpineReadError, read_spine
 
     try:
         rows = read_spine(plan_path)
     except (SpineReadError, ValueError, OSError) as exc:
         raise LedgerError(f"--from-plan {plan_path}: {exc}") from exc
+    def _premise_held(row) -> bool:
+        return any(
+            isinstance(e, dict) and e.get("gate_kind") == "epistemic-premise"
+            for e in (row.depends_on or ())
+        )
+
+    # An epistemic-premise row has no surface until its premise lands; dispatch.emit holds it too.
+    rows = [row for row in rows if not (row.writes is UNDECLARED and _premise_held(row))]
     undeclared = [row.id for row in rows if row.writes is UNDECLARED]
     if undeclared:
         raise LedgerError(

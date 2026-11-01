@@ -394,6 +394,40 @@ class TestNamingReconciliationEndToEnd:
         assert verdict["tool_use_count"] == 0
 
 
+class TestSubagentHandbackNotCounted:
+    @staticmethod
+    def _handback_line() -> str:
+        content = [{"type": "tool_use", "name": "SubagentHandback", "input": {"message": "report"}}]
+        return json.dumps({"type": "assistant", "message": {"role": "assistant", "content": content}})
+
+    def _record(self, tmp_path: Path, lines: list[str], sid: str) -> dict:
+        from coordinator_core.hooks.subagent_zero_tool_use import _handler
+        ctx = _ctx(tmp_path)
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text("\n".join(lines) + "\n")
+        _run(_handler(
+            {
+                "session_id": sid,
+                "agent_id": "agent-handback",
+                "agent_type": "executor",
+                "agent_transcript_path": str(transcript),
+                "hook_event_name": "SubagentStop",
+            },
+            repo_root=ctx.repo_root,
+        ))
+        return json.loads(_store_path(tmp_path, sid).read_text().strip())
+
+    def test_handback_only_transcript_records_zero(self, tmp_path: Path) -> None:
+        record = self._record(tmp_path, [self._handback_line()], "sess-handback-only")
+        assert record["tool_use_count"] == 0
+
+    def test_real_tool_calls_still_count_alongside_handback(self, tmp_path: Path) -> None:
+        record = self._record(
+            tmp_path, [_assistant_line(2), self._handback_line()], "sess-handback-mixed"
+        )
+        assert record["tool_use_count"] == 2
+
+
 # ---------------------------------------------------------------------------
 # Registration quad
 # ---------------------------------------------------------------------------

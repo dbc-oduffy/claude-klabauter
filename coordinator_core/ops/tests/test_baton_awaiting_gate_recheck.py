@@ -58,6 +58,21 @@ def test_unknown_holder_leaves_a_placeholder_and_nothing_is_written(tmp_path):
     assert before == {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
 
 
+def test_plan_path_beyond_landed_shas_is_unparsed_and_not_met(tmp_path):
+    note = (
+        "gate_notes: Run after coordinator-content-repo:docs/plans/2026-09-11-closeout.md has landed; "
+        "join half met (abc1234, abc5678).\n"
+    )
+    _h(tmp_path, "p", note)
+    _h(tmp_path, "q", "gate_notes: landed in abc1234\n")
+    rows = {x["handoff_id"]: x for x in op._handler({}, tmp_path)["rows"]}
+    p, q = rows["hnd-p-aaaaaa"], rows["hnd-q-aaaaaa"]
+    assert all(c["met"] for c in p["checks"]) and len(p["checks"]) == 2
+    assert p["machine_condition_met"] is not True
+    assert p["unparsed_conditions"] == ["coordinator-content-repo:docs/plans/2026-09-11-closeout.md"]
+    assert q["machine_condition_met"] is True and q["unparsed_conditions"] == []
+
+
 def test_landed_resolves_abbreviated_loose_objects_without_a_spawn(tmp_path, monkeypatch):
     monkeypatch.undo()
     obj = tmp_path / ".git" / "objects" / "ab"

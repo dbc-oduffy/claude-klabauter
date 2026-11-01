@@ -219,8 +219,14 @@ def _refresh_fingerprint(
         return
 
 
+# Auto-mode subagents (harness 2.1.271+) deliver their report via this tool call;
+# it is delivery, not work, so it must not lift a toolless agent off zero.
+_NON_WORK_TOOLS = frozenset({"SubagentHandback"})
+
+
 def _count_tool_use_blocks(transcript_path: str) -> int | None:
     """Return the verified tool_use content-block count, or None on UNKNOWN.
+    `SubagentHandback` blocks are excluded (`_NON_WORK_TOOLS`).
 
     UNKNOWN covers: the file does not exist, is not a regular file, or cannot be
     opened/read for any OSError reason. A present-but-empty or all-malformed
@@ -257,7 +263,11 @@ def _count_tool_use_blocks(transcript_path: str) -> int | None:
         if not isinstance(content, list):
             continue
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "tool_use"
+                and block.get("name") not in _NON_WORK_TOOLS
+            ):
                 count += 1
     return count
 

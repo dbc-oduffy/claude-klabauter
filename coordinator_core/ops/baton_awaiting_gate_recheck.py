@@ -17,8 +17,10 @@ awaiting / waiting on / blocked on" in the gate prose (``inferred``), else None.
 ``checks`` are the machine-checkable items: each ``blocked_by`` id (met when that
 baton is ``shipped``) and each commit sha cited in the gate prose (met when it
 names an object in this repo; a sha absent here is unverifiable and excluded).
-``machine_condition_met`` is True when every check is met, False when any
-``blocked_by`` baton is not shipped, None when nothing is machine-checkable.
+``unparsed_conditions`` lists doc/plan paths the gate prose names that no check covers.
+``machine_condition_met`` is True when every check is met and nothing is unparsed,
+False when any check is unmet, None when nothing is machine-checkable or an
+unparsed condition remains.
 
 Negative-spec:
   - Writes nothing and spawns nothing: cited shas resolve against the loose objects
@@ -45,6 +47,7 @@ _SHA_RE = re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b")
 _HOLDER_RE = re.compile(
     r"(?:gated on|awaiting|waiting on|blocked on)\s+([A-Za-z][\w-]*)", re.IGNORECASE
 )
+_DOC_REF_RE = re.compile(r"(?<![\w/.-])(?:[\w.-]+:)?[\w.-]+(?:/[\w.-]+)+\.md\b")
 _GATE_TEXT_FIELDS = ("gate_dependency", "gate_notes", "blocking_notes")
 
 
@@ -145,8 +148,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             if sha in landed:
                 checks.append({"kind": "sha", "ref": sha, "met": True, "state": "landed"})
         since = _parked_since(fm)
+        unparsed = list(dict.fromkeys(_DOC_REF_RE.findall(text)))
         if any(not c["met"] for c in checks):
             met: Optional[bool] = False
+        elif unparsed:
+            met = None
         else:
             met = True if checks else None
         row = {
@@ -159,6 +165,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "parked_days": (today - since).days if since else None,
             "checks": checks,
             "machine_condition_met": met,
+            "unparsed_conditions": unparsed,
         }
         row["memo_draft"] = _draft(holder, row)
         rows.append(row)

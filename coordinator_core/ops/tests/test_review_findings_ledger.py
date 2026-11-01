@@ -470,6 +470,25 @@ def test_plan_targets_fails_loud_naming_an_undeclared_row(tmp_path):
         m.plan_targets(plan)
 
 
+def test_plan_targets_skips_an_undeclared_row_held_by_an_epistemic_premise_gate(tmp_path):
+    extra = (
+        "- id: C\n  title: c\n  surface: s\n"
+        "  depends_on:\n    - {chunk: A, gate_kind: epistemic-premise}\n"
+    )
+    plan = _plan(tmp_path, extra)
+    assert m.plan_targets(plan) == [plan.as_posix(), "x/a.py", "x/b.py", "y/c.py"]
+
+
+def test_plan_targets_still_refuses_an_undeclared_row_with_only_a_non_premise_edge(tmp_path):
+    extra = (
+        "- id: C\n  title: c\n  surface: s\n"
+        "  depends_on:\n    - {chunk: A, gate_kind: build}\n"
+    )
+    plan = _plan(tmp_path, extra)
+    with pytest.raises(m.LedgerError, match="C"):
+        m.plan_targets(plan)
+
+
 def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path, capsys):
     (tmp_path / ".git").mkdir()
     plan = _plan(tmp_path)

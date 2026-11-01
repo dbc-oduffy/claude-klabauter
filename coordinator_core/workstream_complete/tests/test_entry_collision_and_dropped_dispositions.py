@@ -53,6 +53,15 @@ def test_second_close_with_different_title_is_a_collision(monkeypatch, tmp_path)
     assert code != 0
 
 
+def test_own_accomplished_scaffold_title_is_not_a_collision(tmp_path):
+    entry = tmp_path / "entry.md"
+    entry.write_text('---\ntitle: "Accomplished: Close WS1"\n---\nbody\n', encoding="utf-8")
+    assert ws_apply._entry_title_collision(entry, "Close WS1", "PLACEHOLDER") is None
+    assert ws_apply._entry_title_collision(entry, "Accomplished: Close WS1", "PLACEHOLDER") is None
+    other = ws_apply._entry_title_collision(entry, "Close WS4", "PLACEHOLDER")
+    assert other and "collision" in other
+
+
 def test_entry_filename_has_no_doubled_date():
     path = cce.resolve_entry_path("/repo", "sid-abc123", "2026-10-13-run-close-ws1")
     name = path.replace("\\", "/").rsplit("/", 1)[1]

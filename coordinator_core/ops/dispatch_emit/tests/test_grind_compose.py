@@ -1874,7 +1874,7 @@ def _forced_line(script: str) -> str:
 
 
 def test_targeted_runner_non_bug_profile_keeps_agent_verdict_on_no_runner():
-    assert '["failed", "refused"]' in _forced_line(_compose(targeted_runner=True))
+    assert '["failed", "refused", "passed-on-foreign-uncommitted"]' in _forced_line(_compose(targeted_runner=True))
 
 
 def test_targeted_runner_verify_forces_fail_on_runner_failure_outcomes():
@@ -1883,7 +1883,7 @@ def test_targeted_runner_verify_forces_fail_on_runner_failure_outcomes():
     bug = dataclasses.replace(_fixture_profile(), name="bug")
     script = _compose(targeted_runner=True, profile=bug)
     verify = script[script.index("async function _verifyCall"): script.index("async function _terminalCommitCall")]
-    assert '["failed", "refused", "no-runner"]' in _forced_line(script)
+    assert '["failed", "refused", "no-runner", "passed-on-foreign-uncommitted"]' in _forced_line(script)
     assert "outcome: 'fail'" in verify and "tests_failing_ids" in verify
     assert "reason: JSON.stringify(_result.output)" in verify
 

@@ -229,6 +229,13 @@ class PdhDiskReader:
         self._check(self._pdh.PdhCollectQueryData(self._query), "PdhCollectQueryData")
         return build_disk_stats(self._array(self._idle), self._array(self._queue))
 
+    def close(self) -> None:
+        """Release the PDH query and its counters; safe to call twice."""
+        query, self._query = self._query, None
+        if query is not None:
+            self._pdh.PdhCloseQuery.argtypes = [self._ct.c_void_p]
+            self._pdh.PdhCloseQuery(query)
+
 
 _reader: Optional[PdhDiskReader] = None
 
@@ -240,7 +247,12 @@ def _windows_sample() -> tuple[list[DiskStat], dict[int, int]]:
             _reader = PdhDiskReader()
         stats = _reader.read()
     except Exception:
-        _reader = None  # rebuild next tick rather than hold a broken query
+        stale, _reader = _reader, None  # rebuild next tick rather than hold a broken query
+        if stale is not None:
+            try:
+                stale.close()
+            except Exception:
+                pass
         raise
     return stats, parse_io_bytes(_nt_process_buffer())
 

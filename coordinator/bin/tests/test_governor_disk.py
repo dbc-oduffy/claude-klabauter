@@ -232,6 +232,22 @@ def test_cmdline_of_is_empty_when_the_process_is_gone(monkeypatch):
     assert gd.cmdline_of(1) == ""
 
 
+def test_windows_sample_closes_the_reader_it_drops_on_a_fault(monkeypatch):
+    closed = []
+
+    class Reader:
+        def read(self):
+            raise OSError("pdh fault")
+
+        def close(self):
+            closed.append(1)
+
+    monkeypatch.setattr(gd, "_reader", Reader())
+    with pytest.raises(OSError):
+        gd._windows_sample()
+    assert closed == [1] and gd._reader is None
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="pdh.dll and ntdll")
 def test_live_windows_sample_reports_disks_and_this_pids_io():
     import os

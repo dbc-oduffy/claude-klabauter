@@ -87,5 +87,7 @@ def bounded_js(call_expr: str, budget_s: int, label: str) -> str:
 def group_slice_prefix(sidecar_key: str, index: int, base: str) -> str:
     """The one spelling of a group's review.prep slice prefix and its reverify calls. `base` is
     the diff base the frozen diff holds (first 12 chars), so a re-emit over another base never
-    reuses an earlier frozen diff; the same base spells the same prefix."""
-    return f"{sidecar_key}.g{index}-{base[:12]}"
+    reuses an earlier frozen diff; the same base spells the same prefix. The `-prep` tail marks it
+    run-keyed to review.freeze_diff: a resumed run whose worktree moved re-freezes over its own
+    earlier attempt (shelved), while a generic id still refuses a peer's content."""
+    return f"{sidecar_key}.g{index}-{base[:12]}-prep"

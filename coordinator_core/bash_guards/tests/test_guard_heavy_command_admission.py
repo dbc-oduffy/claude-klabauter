@@ -287,6 +287,24 @@ class TestScopedCarveOut:
         assert out is not None and "identity" in _reason(out)
 
 
+class TestLikenessSpecialistPytest:
+    CMDS = [
+        "cd tools/likeness-prototype && python -m pytest -q tests/test_conform_keypoints.py 2>&1 | tail -8",
+        "python -m pytest",
+    ]
+
+    @pytest.mark.parametrize("cmd", CMDS)
+    def test_likeness_specialist_is_admitted(self, host, cmd):
+        payload = _payload(cmd, agent_id="deadbeef0123", agent_type="example-game-repo-control:ue-metahuman-likeness-specialist")
+        assert _enveloped(guard.check)(payload) is None
+
+    def test_unlisted_neighbour_agent_stays_refused_for_a_bare_tier_run(self, host):
+        out = _enveloped(guard.check)(
+            _payload("python -m pytest", agent_id="deadbeef0123", agent_type="example-game-repo-control:ue-other-specialist")
+        )
+        assert out is not None and "identity" in _reason(out)
+
+
 class TestXdistPytest:
     CMD = "python -m pytest -n 4 coordinator_core/bash_guards/tests/test_host_probe.py"
 

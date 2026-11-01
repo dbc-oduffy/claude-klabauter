@@ -221,6 +221,54 @@ class TestDigestRefusal:
         assert exit_code == grind_rows.EXIT_MANIFEST_STALE
 
 
+class TestUnruledTradeoffRefusal:
+    """A needs-judgment row (triage records a tradeoff) with no pm_ruling is never closed."""
+
+    @staticmethod
+    def _close(fx, tmp_path, evidence: Path, digest: str):
+        return grind_rows.main(
+            [
+                "close",
+                "--profile-dir", str(fx["profile_dir"]),
+                "--profile", "bug",
+                "--row", fx["row_rel"],
+                "--digest", digest,
+                "--verdict", "fix",
+                "--evidence-file", str(evidence),
+                "--closed-by", "fix",
+                "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(tmp_path),
+            ]
+        )
+
+    @staticmethod
+    def _evidence(tmp_path, triage_text: str) -> Path:
+        ev = tmp_path / "evidence"
+        ev.mkdir(exist_ok=True)
+        (ev / "bug-1.verify.md").write_text(triage_text, encoding="utf-8")
+        done = ev / "bug-1.done.md"
+        done.write_text("Declined per pm_ruling.", encoding="utf-8")
+        return done
+
+    def test_unruled_tradeoff_row_stays_open_and_unstamped(self, close_fixture, tmp_path):
+        done = self._evidence(tmp_path, "- Verdict: fix.\n- has_tradeoff: true (a vs b)\n- ruling_on_tradeoff = no-ruling\n")
+        assert self._close(close_fixture, tmp_path, done, close_fixture["digest"]) == grind_rows.EXIT_REFUSAL
+        assert close_fixture["row_path"].read_text(encoding="utf-8") == close_fixture["row_text"]
+        assert not (tmp_path / "archive").exists()
+
+    def test_ruled_tradeoff_row_still_closes(self, close_fixture, tmp_path):
+        ruled = close_fixture["row_text"].replace("title:", "pm_ruling: accept the tradeoff\ntitle:")
+        close_fixture["row_path"].write_text(ruled, encoding="utf-8", newline="\n")
+        done = self._evidence(tmp_path, "- has_tradeoff: true (a vs b)\n")
+        assert self._close(close_fixture, tmp_path, done, _sha256(ruled)) == grind_rows.EXIT_OK
+        assert not close_fixture["row_path"].exists()
+
+    def test_unruled_row_without_tradeoff_still_closes(self, close_fixture, tmp_path):
+        done = self._evidence(tmp_path, "- has_tradeoff: false.\n")
+        assert self._close(close_fixture, tmp_path, done, close_fixture["digest"]) == grind_rows.EXIT_OK
+        assert not close_fixture["row_path"].exists()
+
+
 class TestUntouchedFormattingPreservedByteForByte:
     def test_untouched_title_field_and_body_survive_byte_for_byte(self, close_fixture, tmp_path):
         exit_code = grind_rows.main(
@@ -1478,6 +1526,10 @@ class TestRunRecordLandsTheRunsBookkeeping:
 
     def test_plain_bookkeeping_spawns_no_git_process(self, repo, capsys, monkeypatch):
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
+        from coordinator_core.git import store_hygiene
+
+        # The commit route's detached daily-tier launch is counted by test_store_hygiene.
+        monkeypatch.setattr(store_hygiene, "maybe_refresh", lambda *a, **k: False)
 
         self._sweep_and_append(repo)
         capsys.readouterr()
@@ -1736,6 +1788,10 @@ class TestRunRecordLandsTheRunsBookkeeping:
 
     def test_the_widened_land_set_spawns_no_git_process(self, repo, capsys, monkeypatch):
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
+        from coordinator_core.git import store_hygiene
+
+        # The commit route's detached daily-tier launch is counted by test_store_hygiene.
+        monkeypatch.setattr(store_hygiene, "maybe_refresh", lambda *a, **k: False)
 
         self._write(repo, "state/sizings/s.yaml", "size: s\n", claim=False)
         extra = self._widened_extra(repo, ["state/sizings/s.yaml"])

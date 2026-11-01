@@ -341,3 +341,40 @@ def test_resolve_roster_unaffected_by_agents_roster_refactor(tmp_path: Path) -> 
     assert isinstance(roster, frozenset)
     assert "coordinator:executor" in roster
     assert "Explore" in roster
+
+
+def test_downgrade_advisory_names_sonnet_sibling_reroute_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_pins(
+        monkeypatch,
+        {
+            "coordinator:plan-author": {
+                "model": "opus",
+                "sonnet-sibling": "plan-author-residue",
+                "_source_path": "x",
+            }
+        },
+    )
+    envelope = mod.check(_agent_payload("coordinator:plan-author", model="sonnet"))
+    assert envelope is not None
+    text = envelope["hookSpecificOutput"]["additionalContext"]
+    assert "coordinator:plan-author-residue" in text
+    assert "strictly cheaper" not in text
+
+
+def test_downgrade_advisory_without_sibling_keeps_existing_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_pins(monkeypatch, {"coordinator:executor": {"model": "sonnet", "_source_path": "x"}})
+    envelope = mod.check(_agent_payload("coordinator:executor", model="haiku"))
+    text = envelope["hookSpecificOutput"]["additionalContext"]
+    assert "coordinator:executor pins model: sonnet -- this dispatch passed the strictly cheaper model: haiku." in text
+
+
+def test_resolve_model_pins_exposes_sonnet_sibling_from_frontmatter(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "coordinator" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "plan-author.md").write_text(
+        "---\nname: plan-author\nmodel: opus\nsonnet-sibling: plan-author-residue\n---\nbody\n",
+        encoding="utf-8",
+    )
+    pins, reason = unenumerated_mod.resolve_model_pins(content_root=str(tmp_path), home=str(tmp_path / "nohome"))
+    assert reason is None
+    assert pins["coordinator:plan-author"]["sonnet-sibling"] == "plan-author-residue"

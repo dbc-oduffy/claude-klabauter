@@ -315,6 +315,37 @@ def test_resolve_cc_root_bare_directory_is_unresolved(tmp_path, monkeypatch):
     assert refresh_roadmap_callout._resolve_cc_root() == ""
 
 
+def test_resolve_cc_root_ignores_nonexistent_env_root(tmp_path, monkeypatch):
+    content_root = tmp_path / "content-clone"
+    (content_root / "coordinator").mkdir(parents=True)
+    _seed_content_pointer(tmp_path, monkeypatch, content_root)
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "old-checkout" / "coordinator"))
+    assert refresh_roadmap_callout._resolve_cc_root() == str(content_root / "coordinator")
+    assert "ignored" in refresh_roadmap_callout._cc_root_origin()
+
+
+def test_resolve_cc_root_keeps_existing_env_root(tmp_path, monkeypatch):
+    content_root = tmp_path / "content-clone"
+    (content_root / "coordinator").mkdir(parents=True)
+    _seed_content_pointer(tmp_path, monkeypatch, content_root)
+    live = tmp_path / "live"
+    live.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(live))
+    assert refresh_roadmap_callout._resolve_cc_root() == str(live)
+    assert refresh_roadmap_callout._cc_root_origin() == "CLAUDE_PLUGIN_ROOT env"
+
+
+def test_untrusted_root_error_names_origin(tmp_path, capsys, monkeypatch):
+    _make_stub_index(tmp_path, "test-roadmap-a", CALLOUT_BODY)
+    live = tmp_path / "live"
+    live.mkdir()
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(live))
+    monkeypatch.setattr(refresh_roadmap_callout, "_is_trusted_root", lambda _r: False)
+    rc = main(["test-roadmap-a", "--root", str(tmp_path)])
+    assert rc == 1
+    assert "read from CLAUDE_PLUGIN_ROOT env" in capsys.readouterr().err
+
+
 def test_multi_id_processes_all_when_one_fails(tmp_path, capsys):
     rc = main(["bad/id", "road-a", "road-b", "--root", str(tmp_path)])
     captured = capsys.readouterr()

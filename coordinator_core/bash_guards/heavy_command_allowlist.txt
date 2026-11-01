@@ -11,3 +11,4 @@ game-dev:staff-game-dev
 coordinator:test-runner
 coordinator:exit-criterion-falsifier
 Example-game-repo-control:ue-infra-engineer
+Example-game-repo-control:ue-metahuman-likeness-specialist

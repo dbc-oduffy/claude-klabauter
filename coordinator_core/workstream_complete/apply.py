@@ -933,7 +933,14 @@ def _entry_title_collision(entry: Path, decided_title: Any, placeholder: str) ->
     except OSError:
         return None
     current = str(fm.get("title") or "").strip()
-    if not current or placeholder in current or current == wanted:
+    from coordinator_core.ops.coordinator_complete_entry import _ACCOMPLISHED_PREFIX as scaffold_prefix
+
+    if (
+        not current
+        or placeholder in current
+        or current == wanted
+        or current == scaffold_prefix + wanted
+    ):
         return None
     return (
         f"completion entry collision: {entry.name} already carries title {current!r}, "

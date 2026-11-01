@@ -252,11 +252,32 @@ def _deny_reason(subagent_type: str, source_path: str, violations: "list[tuple[s
     )
 
 
-def _advisory_context(subagent_type: str, source_path: str, advisories: "list[tuple[str, str, str]]") -> str:
-    lines = [
-        f"{subagent_type} pins {axis}: {pin_value} -- this dispatch passed the strictly cheaper {axis}: {passed_value}."
-        for axis, pin_value, passed_value in advisories
-    ]
+def _reroute_target(subagent_type: str, sibling: Optional[str]) -> Optional[str]:
+    """Agent type the pin reroute sends a sonnet downgrade to, same namespace."""
+    if not sibling:
+        return None
+    namespace, sep, _stem = subagent_type.partition(":")
+    return f"{namespace}:{sibling}" if sep else sibling
+
+
+def _advisory_context(
+    subagent_type: str,
+    source_path: str,
+    advisories: "list[tuple[str, str, str]]",
+    sibling: Optional[str] = None,
+) -> str:
+    target = _reroute_target(subagent_type, sibling)
+    lines = []
+    for axis, pin_value, passed_value in advisories:
+        if axis == "model" and passed_value == "sonnet" and target:
+            lines.append(
+                f"{subagent_type} pins model: {pin_value} -- this dispatch passed model: sonnet, "
+                f"which is rerouted to {target}; {subagent_type} itself will not run."
+            )
+        else:
+            lines.append(
+                f"{subagent_type} pins {axis}: {pin_value} -- this dispatch passed the strictly cheaper {axis}: {passed_value}."
+            )
     return (
         " ".join(lines)
         + f" (pin resolved from: {source_path}) Advisory only -- a downward "
@@ -330,7 +351,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         )
 
     if advisories:
-        return allow_advisory("PreToolUse", _advisory_context(subagent_type, source_path, advisories))
+        return allow_advisory(
+            "PreToolUse",
+            _advisory_context(subagent_type, source_path, advisories, entry.get("sonnet-sibling")),
+        )
 
     return None
 

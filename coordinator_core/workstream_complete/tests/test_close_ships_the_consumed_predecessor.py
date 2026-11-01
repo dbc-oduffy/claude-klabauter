@@ -339,6 +339,34 @@ def test_ship_sha_skips_a_merge_the_session_performed(tmp_path):
     assert entry["args"][-2:] == ["--sha", "work"]
 
 
+def _fleet_commit(sha: str, sid: str) -> SessionCommit:
+    return SessionCommit(
+        sha, ("0" * 40,), 0, "2026-10-13T00:00:00+00:00",
+        "fleet: archive 1 terminal sizing-object(s) [fleet.archive_terminal_sizings]",
+        (sid,), "", (),
+    )
+
+
+def test_ship_sha_skips_a_trailered_fleet_archive_commit(tmp_path):
+    _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)
+    gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
+    history = _history(gate, _commit("work", gate.sid), _fleet_commit("fleetsha", gate.sid))
+
+    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
+
+    assert entry["args"][-2:] == ["--sha", "work"]
+
+
+def test_ship_sha_is_omitted_when_the_only_own_commit_is_a_fleet_archive(tmp_path):
+    _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)
+    gate = _gate(PREDECESSOR_CONSUMED, consumed_handoff_paths=("state/handoffs/foo.md",))
+    history = _history(gate, _fleet_commit("fleetsha", gate.sid))
+
+    (entry,) = _ship_directives(wsc.build_directives(gate, {}, tmp_path, history=history))
+
+    assert entry["args"] == ["ship-handoff", "state/handoffs/foo.md", "--no-archive"]
+
+
 @pytest.mark.parametrize("kind", ["no-history", "unresolved", "no-own-commit"])
 def test_ship_sha_is_omitted_when_the_session_owns_no_commit(tmp_path, kind):
     _write_ac_handoff(tmp_path, "state/handoffs/foo.md", _AC_BODY)

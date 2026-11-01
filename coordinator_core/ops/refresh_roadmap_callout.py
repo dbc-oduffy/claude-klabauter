@@ -123,12 +123,25 @@ def _resolve_cc_root() -> str:
     existing empty-string branch is what handles it.
     """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
-    if env_root:
+    if env_root and os.path.isdir(env_root):
         return env_root
     content_root = content_root_for(read_content_root())
     if content_root is None:
         return ""
     return str(content_root)
+
+
+def _cc_root_origin() -> str:
+    """Name where `_resolve_cc_root` read the root from, for error text."""
+    env_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    if env_root and os.path.isdir(env_root):
+        return "CLAUDE_PLUGIN_ROOT env"
+    if env_root:
+        return (
+            f"content-root pointer (CLAUDE_PLUGIN_ROOT env '{env_root}' is not a "
+            "directory and was ignored)"
+        )
+    return "content-root pointer"
 
 
 _SELF_COMMIT_CALLER_LABEL = "refresh-roadmap-callout.py:self-commit"
@@ -224,7 +237,8 @@ def _refresh_one(roadmap_id: str, root_arg: str, self_commit: bool) -> int:
     cc_root = _resolve_cc_root()
     if not _is_trusted_root(cc_root):
         print(
-            f"ERROR: coordinator root '{cc_root}' outside trusted prefix — refusing to "
+            f"ERROR: coordinator root '{cc_root}' (read from {_cc_root_origin()}) "
+            "outside trusted prefix — refusing to "
             "source; re-run coordinator:install (or set COORDINATOR_PLUGIN_ROOT_TRUSTED=1 "
             "for a sanctioned --plugin-dir spike)",
             file=sys.stderr,

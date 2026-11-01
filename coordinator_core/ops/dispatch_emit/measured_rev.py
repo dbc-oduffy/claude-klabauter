@@ -156,6 +156,11 @@ def _handler(params: dict, repo_root: Path | None = None) -> Dict[str, Any]:
     if not isinstance(run_id, str) or not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         return {"error": "params.run_id (str) and params.paths (list of str) are required", "refused": "measured-rev"}
     try:
+        # The op is "common_dir"-scoped, so IPC hands over the .git directory; measuring needs the worktree.
+        if repo_root is not None:
+            from coordinator_core.lifecycle import main_worktree_root
+
+            repo_root = main_worktree_root(repo_root)
         return measured_rev(run_id, paths, repo_root)
     except (OSError, ValueError) as exc:
         return {"error": str(exc), "refused": "measured-rev"}

@@ -112,6 +112,25 @@ def test_unanchored_pattern_still_skips_comment_and_heredoc(tmp_path, command):
     assert _bash(tmp_path, command, pattern=UNANCHORED) == {}
 
 
+def _shell(tmp_path, tool, command):
+    _repo(tmp_path, _editor(bash_patterns=[ANCHORED]))
+    return g.evaluate(_payload(tmp_path, tool, tool_input={"command": command}))
+
+
+def test_powershell_launch_yields_same_advisory_as_bash(tmp_path):
+    ps = _shell(tmp_path, "PowerShell", UE_CMD)
+    assert ps != {}
+    assert ps == _shell(tmp_path, "Bash", UE_CMD)
+
+
+def test_powershell_benign_command_is_untouched(tmp_path):
+    assert _shell(tmp_path, "PowerShell", "Get-ChildItem") == {}
+
+
+def test_unlisted_tool_with_launch_command_is_untouched(tmp_path):
+    assert _shell(tmp_path, "Read", UE_CMD) == {}
+
+
 def test_bash_leg_at_strict_is_advisory_never_deny(tmp_path):
     out = _bash(tmp_path, UE_CMD, level="strict")
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
@@ -133,13 +152,14 @@ def test_bash_only_table_ignores_other_tools(tmp_path):
     assert g.evaluate(_payload(tmp_path, UE_TOOL)) == {}
 
 
-def test_strict_denies(tmp_path, monkeypatch):
+def test_strict_mcp_leg_is_advisory_not_deny(tmp_path, monkeypatch):
+    """A non-deny_registry guard never denies: apply_guard_level resolves strict to an advisory."""
     from coordinator_core import machine_profile
 
     monkeypatch.setattr(machine_profile, "guard_level", lambda name: "strict")
     _repo(tmp_path, _editor("strict", tool_names=[UE_TOOL]))
     out = g.evaluate(_payload(tmp_path, UE_TOOL))
-    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert "editor_python.preferred_agent_type" in json.dumps(out)
 
 

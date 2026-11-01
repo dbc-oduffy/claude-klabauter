@@ -383,6 +383,34 @@ def _reclose_params(root: Path, params: object) -> Optional[dict]:
     return out
 
 
+def _recorded_rejudge_met(root: Path, plan_rel: str, terminal_sha: str) -> Optional[dict]:
+    """The ``met`` criterion (with its record as ``sidecar``) of the newest ``criterion-rejudge`` or
+    delivery-verdict record bound to the plan and recorded after the terminal commit, else None.
+    Never raises."""
+    try:
+        from datetime import datetime
+
+        import yaml
+
+        from coordinator_core.frontmatter.primitives import split_frontmatter
+        from coordinator_core.git.run import git_out
+        from coordinator_core.ops.dispatch_emit.verdict_supersession import latest_criterion_record
+
+        text = _read_rel(root, plan_rel)
+        split = split_frontmatter(text.replace("\r\n", "\n")) if text is not None else None
+        plan_id = str((yaml.safe_load(split.fm_text) or {}).get("plan_id") or "") if split else ""
+        stamp = git_out(["-C", str(root), "log", "-1", "--format=%cI", terminal_sha])
+        if not plan_id or not stamp:
+            return None
+        found = latest_criterion_record(root, plan_id, datetime.fromisoformat(stamp.strip()))
+        verdict = found["criterion"] if found else None
+        if verdict and verdict.get("status") == "met" and str(verdict.get("observation") or "").strip():
+            return {**verdict, "sidecar": found["record_path"]}
+        return None
+    except Exception:  # noqa: BLE001 -- no re-judge read leaves the held verdict standing
+        return None
+
+
 def _reclose(root: Path, reclose: dict) -> dict:
     """Answer a repeat call for a run whose landing receipt sha is on HEAD: ``already_landed``.
 
@@ -414,7 +442,11 @@ def _reclose(root: Path, reclose: dict) -> dict:
             f"terminal_sha {sha!r} is absent or not an ancestor of HEAD. Land the run's terminal commit first.",
             refused="terminal-commit-not-landed",
         )
-    _requeue_close(root, {}, key=stem, criterion=reclose.get("criterion"))
+    criterion = reclose.get("criterion")
+    standing = criterion if isinstance(criterion, dict) else record.get("criterion")
+    if not isinstance(standing, dict) or standing.get("status") != "met":
+        criterion = _recorded_rejudge_met(root, plan, sha) or criterion
+    _requeue_close(root, {}, key=stem, criterion=criterion)
     refreshed = run_close._load(root, stem) or record
     held = refreshed.get("criterion")
     reply: dict = {

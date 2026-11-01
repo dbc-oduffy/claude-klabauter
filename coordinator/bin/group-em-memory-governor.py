@@ -201,10 +201,14 @@ def descendants(root: int, procs: list[Proc]) -> list[int]:
     for p in procs:
         kids.setdefault(p.ppid, []).append(p.pid)
     out, stack = [], [root]
+    seen = {root}  # Trap: a stale ppid after pid reuse makes a cycle; an unguarded walk then grows without bound
     while stack:
         pid = stack.pop()
         out.append(pid)
-        stack.extend(kids.get(pid, []))
+        for kid in kids.get(pid, []):
+            if kid not in seen:
+                seen.add(kid)
+                stack.append(kid)
     return out
 
 
@@ -1257,6 +1261,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                     help="a disk at or over this queue length counts as saturated (report only)")
     ap.add_argument("--disk-ticks", type=int, default=1,
                     help="consecutive saturated samples before one DISK line is emitted")
+    ap.add_argument("--no-disk", action="store_true",
+                    help="never sample disk (no DISK / DISK-STAT lines, no PDH query)")
     ap.add_argument("--log", type=Path, default=None,
                     help="log the detached governor appends to (default <settings home>/scratch/governor.log)")
     ap.add_argument("--reap-log", type=Path, default=None,
@@ -1310,7 +1316,7 @@ def _serve(args: argparse.Namespace, log: Path) -> None:
         reap_path=args.reap_log or log.parent / "governor-reaps.jsonl",
         trim_log_path=log.parent / "governor-trims.jsonl", pidfile=default_pidfile(), avail_fn=avail_gib, rss_fn=tree_rss_mb,
         retention_fn=spawn_retention_if_due, scratch_fn=scratch_over_budget,
-        disk_fn=_governor_disk().disk_sample,
+        disk_fn=None if args.no_disk else _governor_disk().disk_sample,
         shortfall_fn=lambda: shortfall_mb(args.avail_pct))
 
 

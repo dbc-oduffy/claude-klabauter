@@ -4297,6 +4297,84 @@ def test_git_apply_writing_forms_deny(cmd):
     assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+_GOOD_PATCH = "diff --git a/pkg/a.py b/pkg/a.py\n--- a/pkg/a.py\n+++ b/pkg/a.py\n@@ -1 +1 @@\n-x\n+y\n"
+
+
+@pytest.fixture
+def apply_repo(tmp_path):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch" / "ok.patch").write_text(_GOOD_PATCH, encoding="utf-8")
+    (tmp_path / "scratch" / "dotdot.patch").write_text(
+        _GOOD_PATCH.replace("a/pkg/a.py", "a/../../evil.py").replace("b/pkg/a.py", "b/../../evil.py"),
+        encoding="utf-8",
+    )
+    (tmp_path / "scratch" / "abs.patch").write_text(
+        "--- a//etc/passwd\n+++ b//etc/passwd\n@@ -1 +1 @@\n-x\n+y\n", encoding="utf-8"
+    )
+    (tmp_path / "scratch" / "garbage.patch").write_text("not a patch\n", encoding="utf-8")
+    (tmp_path / "scratch" / "big.patch").write_text(
+        _GOOD_PATCH + "#" * (guard._APPLY_PATCH_MAX_BYTES + 1), encoding="utf-8"
+    )
+    return tmp_path
+
+
+def _apply_check(repo, cmd):
+    payload = _payload(cmd, agent_type="coordinator:executor")
+    payload["cwd"] = str(repo)
+    return _enveloped(guard.check)(payload)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git apply scratch/ok.patch",
+        "git apply --whitespace=nowarn -p1 scratch/ok.patch",
+        "git apply --check scratch/ok.patch",
+        "git apply --stat scratch/ok.patch",
+        "git apply --numstat scratch/ok.patch",
+        "git apply -p0 --directory=sub scratch/ok.patch",
+    ],
+)
+def test_git_apply_in_repo_patch_allowed(apply_repo, cmd):
+    assert _apply_check(apply_repo, cmd) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git apply --index scratch/ok.patch",
+        "git apply --cached scratch/ok.patch",
+        "git apply --3way scratch/ok.patch",
+        "git apply -3 scratch/ok.patch",
+        "git apply --reject scratch/ok.patch",
+        "git apply --unsafe-paths scratch/ok.patch",
+        "git apply --directory=../outside scratch/ok.patch",
+        "git apply --directory=/abs scratch/ok.patch",
+        "git apply scratch/dotdot.patch",
+        "git apply scratch/abs.patch",
+        "git apply scratch/garbage.patch",
+        "git apply scratch/missing.patch",
+        "git apply ../outside.patch",
+        "git apply -",
+        "git apply",
+        "git -C /elsewhere apply scratch/ok.patch",
+        "cp /tmp/evil.patch scratch/ok.patch && git apply scratch/ok.patch",
+        "echo x; git apply scratch/ok.patch",
+        "git apply scratch/big.patch",
+    ],
+)
+def test_git_apply_excluded_forms_deny(apply_repo, cmd):
+    result = _apply_check(apply_repo, cmd)
+    assert result is not None
+    assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_git_apply_does_not_open_merge(apply_repo):
+    result = _apply_check(apply_repo, "git merge feature")
+    assert result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 # ---- process-kill by explicit PID owned by the calling agent ----
 
 _EXEC = "coordinator:executor"

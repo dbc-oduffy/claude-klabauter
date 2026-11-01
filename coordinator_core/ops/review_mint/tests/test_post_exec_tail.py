@@ -62,9 +62,53 @@ def test_bounded_js_escapes_label():
 
 def test_group_slice_prefix_names_the_range_it_freezes():
     a, b = "a" * 40, "b" * 40
-    assert pet.group_slice_prefix("k", 0, a) == f"k.g0-{'a' * 12}"
+    assert pet.group_slice_prefix("k", 0, a) == f"k.g0-{'a' * 12}-prep"
     assert pet.group_slice_prefix("k", 0, a) == pet.group_slice_prefix("k", 0, a)
     assert pet.group_slice_prefix("k", 0, a) != pet.group_slice_prefix("k", 0, b)
+
+
+def _git(root, *args):
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
+
+
+def test_group_prefix_refreezes_over_its_own_prior_attempt_but_a_generic_id_still_refuses(tmp_path):
+    from coordinator_core.ops import review_freeze_diff as rfd
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "t@t.example")
+    _git(root, "config", "user.name", "t")
+    (root / "a.py").write_text("x = 1\n", encoding="utf-8")
+    _git(root, "add", "a.py")
+    _git(root, "commit", "-q", "-m", "seed")
+    base = _head(root)
+
+    gid = pet.group_slice_prefix("k", 0, base)
+    generic = "k.g0-generic"
+    (root / "a.py").write_text("x = 2\n", encoding="utf-8")
+    assert rfd._freeze_diff_worktree(root, base, gid, ["a.py"])["error"] is None
+    assert rfd._freeze_diff_worktree(root, base, generic, ["a.py"])["error"] is None
+
+    (root / "a.py").write_text("x = 3\n", encoding="utf-8")
+    assert rfd._freeze_diff_worktree(root, base, gid, ["a.py"])["error"] is None
+    assert list((root / "state" / "review-trail" / "diffs").glob(f"{gid}.attempt1.diff"))
+    assert "already names a frozen diff" in rfd._freeze_diff_worktree(root, base, generic, ["a.py"])["error"]
+
+
+def _head(root):
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(root), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
 
 
 def test_budget_exceeds_invocation_budget_when_importable():

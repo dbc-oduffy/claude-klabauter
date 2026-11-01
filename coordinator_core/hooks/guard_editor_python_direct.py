@@ -1,14 +1,16 @@
 """coordinator_core.hooks.guard_editor_python_direct — PreToolUse (any tool) op.
 
-Warns the main loop when it calls an editor-Python tool, or launches editor Python from Bash,
-directly; the call belongs to the route table's `editor_python.preferred_agent_type`.
+Warns the main loop when it calls an editor-Python tool, or launches editor Python from a
+shell tool, directly; the call belongs to the route table's `editor_python.preferred_agent_type`.
 
-Fires when `tool_name` is in `editor_python.tool_names`, or when `tool_name == "Bash"` and a
-simple command of `tool_input.command` matches a compiled `editor_python.bash_patterns` regex.
+Fires when `tool_name` is in `editor_python.tool_names`, or when `tool_name` is `Bash` or
+`PowerShell` and a simple command of `tool_input.command` matches a compiled
+`editor_python.bash_patterns` regex (the bash tokenizer reads both shells' commands).
 The command goes through `_command_tokenizer.resolve_command_positions` (heredoc bodies and
 comments dropped, wrappers peeled); each non-UNRESOLVED command is matched as its joined tokens,
-never the raw string. The MCP leg returns an advisory at `warn` and a deny through
-`apply_guard_level` at `strict`; the Bash leg is an advisory at every level. Subagent calls
+never the raw string. The MCP leg returns an advisory at `warn` and routes a deny through
+`apply_guard_level` at `strict`, which resolves it to an advisory for a guard outside the
+deny registry; the shell leg is an advisory at every level. Subagent calls
 (truthy `agent_id`) are never touched.
 
 Fail-open: no table, no `editor_python`, no repo root, a malformed table, or any internal error
@@ -28,6 +30,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
 
 GUARD_NAME = "guard-editor-python-direct"
+_SHELL_TOOLS = ("Bash", "PowerShell")
 
 
 def _message(trigger: str) -> str:
@@ -86,13 +89,13 @@ def _evaluate(params: dict, repo_root) -> dict:
     trigger = None
     if tool_name in editor.tool_names:
         trigger = tool_name
-    elif tool_name == "Bash":
+    elif tool_name in _SHELL_TOOLS:
         tool_input = params.get("tool_input")
         command = tool_input.get("command") if isinstance(tool_input, Mapping) else None
         if isinstance(command, str) and editor.bash_patterns and _bash_hit(command, editor):
             # Warn-only at every `level`: recall is ~78%, so a deny (which apply_guard_level
             # would keep on an author box at strict) would block on a classifier known to miss.
-            return allow_advisory("PreToolUse", _message("This Bash launch"))
+            return allow_advisory("PreToolUse", _message("This shell launch"))
     if trigger is None:
         return no_advisory()
 

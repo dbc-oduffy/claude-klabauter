@@ -662,6 +662,26 @@ def test_a_failed_commit_is_reported_and_defers_the_report(tmp_path, roadmap, mo
     assert reply["gate_report_state"] == "deferred-untracked"
 
 
+def test_untracked_path_strings_defer_the_report_without_crashing(tmp_path, roadmap, monkeypatch):
+    from coordinator_core.roadmap import gate_v2
+
+    monkeypatch.setattr(bs, "_commit_paths", lambda *a: {"committed": False, "error": "peer hold"})
+    handoffs = tmp_path / "state" / "handoffs"
+    monkeypatch.setattr(
+        gate_v2,
+        "compute_gate_report",
+        lambda root, **k: {
+            "batons": [],
+            "waves": [],
+            "untracked": [p.relative_to(tmp_path).as_posix() for p in handoffs.glob("*roadmap-*.md")],
+        },
+    )
+    reply = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert reply["gate_report_path"] is None
+    assert reply["gate_report_state"] == "deferred-untracked"
+    assert reply["untracked_stubs"]
+
+
 def test_each_sized_baton_gets_its_own_linked_sizing_object(tmp_path, roadmap):
     import yaml
 

@@ -4433,10 +4433,15 @@ def _newest_owned_sha(history: "Optional[_session_history.SessionHistory]") -> O
     TRAP: never HEAD. On a shared branch HEAD is routinely a peer's commit, and a ship stamp
     naming it attributes the deliverable to work this session never did. None lets
     `ship-handoff` derive the sha from the baton's own scope instead.
+
+    TRAP: a `fleet: ` commit (an engine archive sweep) can carry this session's trailer yet is
+    never the deliverable; it is skipped.
     """
     if history is None or not history.resolved:
         return None
-    shas = [c.sha for c in history.own if not c.is_merge]
+    shas = [
+        c.sha for c in history.own if not c.is_merge and not c.subject.startswith("fleet: ")
+    ]
     return shas[-1] if shas else None
 
 

@@ -1725,7 +1725,95 @@ _LEGACY_REMOTE_READONLY = frozenset({"-v", "show", "get-url"})
 #: `git apply` flags that only report on a patch, and those that make it write.
 _APPLY_REPORT_FLAGS = frozenset({"--check", "--stat", "--numstat", "--summary"})
 _APPLY_WRITE_FLAGS = frozenset({"--apply", "--index", "--cached", "--3way", "-3", "--reject", "--intent-to-add", "-N", "--unsafe-paths"})
+#: Flags a worktree-only `git apply` may carry; every other flag refuses.
+_APPLY_PLAIN_FLAGS = frozenset({
+    "--check", "--stat", "--numstat", "--summary", "--apply", "-v", "--verbose", "-q", "--quiet",
+    "-R", "--reverse", "--recount", "--inaccurate-eof", "--allow-empty", "--binary", "-z",
+    "--unidiff-zero", "--ignore-space-change", "--ignore-whitespace", "--no-add",
+})
+_APPLY_VALUE_FLAG_RE = re.compile(r"^(?:--whitespace=[a-z-]+|--(?:exclude|include)=.+|-C\d+|-p\d+)$")
+_APPLY_PATCH_MAX_BYTES = 4 * 1024 * 1024
+_APPLY_NAME_LINE_RE = re.compile(
+    r"^(?:--- |\+\+\+ |rename (?:from|to) |copy (?:from|to) |diff --git )(.*)$"
+)
+_APPLY_CHAIN_RE = re.compile(r"[;|\n`]|&&|\$\(")
+_APPLY_DOTDOT_RE =re.compile(r"(?:^|[/\s])\.\.(?:[/\s]|$)")
 
+
+def _apply_name_escapes(raw: str, strip: int) -> bool:
+    """True when a patch header name can land outside the repo root (stripped or not)."""
+    name = raw.split("\t")[0].strip().replace("\\", "/")
+    if name == "/dev/null" or not name:
+        return False
+    if name.startswith(('"', "/")) or _APPLY_DOTDOT_RE.search(name) or re.match(r"^[A-Za-z]:", name):
+        return True
+    parts = name.split("/")
+    if len(parts) > strip:
+        stripped = "/".join(parts[strip:])
+        if stripped.startswith("/") or re.match(r"^[A-Za-z]:", stripped):
+            return True
+    return False
+
+
+def _apply_worktree_refusal(seg: str, remaining: List[str]) -> Optional[str]:
+    """None when a worktree `git apply` is admitted, else the refusal reason.
+
+    Admitted: only `_APPLY_PLAIN_FLAGS`/`--directory=<in-repo>` flags, patch operands that are
+    readable files inside the repo root, and every path a patch header names resolving inside
+    the root. No index, 3way, reject or unsafe-paths form; unparseable input refuses.
+    """
+    ctx = _SP_CTX.get()
+    if ctx is None or ctx[2] or re.search(r"(?:^|\s)git\s+(?:\S+\s+)*?(?:-C|-c|--git-dir|--work-tree)\b", seg):
+        return "worktree apply needs a resolvable cwd and no cd/-C/--git-dir"
+    root = _repo_root_of(Path(ctx[0]))
+    if root is None:
+        return "worktree apply needs a repo cwd"
+    if _APPLY_CHAIN_RE.search(_RAW_CMD.get()):
+        return "chained command could rewrite the patch after it is inspected"
+    real_root = os.path.realpath(str(root))
+    strip = 1
+    prefix = ""
+    patches: List[str] = []
+    for tok in remaining:
+        if tok.startswith("-") and tok != "-":
+            if tok in _APPLY_PLAIN_FLAGS or _APPLY_VALUE_FLAG_RE.match(tok):
+                if tok.startswith("-p"):
+                    strip = int(tok[2:])
+                continue
+            if tok.startswith("--directory="):
+                prefix = tok[len("--directory="):].replace("\\", "/")
+                if not prefix or prefix.startswith("/") or re.match(r"^[A-Za-z]:", prefix) or _APPLY_DOTDOT_RE.search(prefix):
+                    return "--directory outside the repo"
+                continue
+            return f"flag {tok} not admitted (index/3way/reject/unsafe-paths stay denied)"
+        patches.append(tok)
+    if not patches or "-" in patches:
+        return "needs a patch file operand"
+    for patch in patches:
+        full = os.path.realpath(patch if os.path.isabs(patch) else os.path.join(ctx[0], patch))
+        try:
+            inside = os.path.commonpath([full, real_root]) == real_root
+        except ValueError:
+            inside = False
+        if not inside:
+            return "patch file outside the repo root"
+        try:
+            if os.path.getsize(full) > _APPLY_PATCH_MAX_BYTES:
+                return "patch file too large to inspect"
+            text = Path(full).read_bytes().decode("utf-8", "replace")
+        except OSError:
+            return "patch file unreadable"
+        names = 0
+        for line in text.splitlines():
+            m = _APPLY_NAME_LINE_RE.match(line)
+            if not m:
+                continue
+            names += 1
+            if _apply_name_escapes(m.group(1), strip):
+                return "patch names a path outside the repo root"
+        if not names:
+            return "patch has no recognizable file headers"
+    return None
 _SAFE_VERB_RE = re.compile(
     r"\b(?:add|commit|status|log|diff|show|fetch|cherry-pick|cherry(?![-\w])|rev-parse|rev-list|"
     r"ls-files|describe)\b"
@@ -2905,13 +2993,15 @@ def _evaluate_git_segment_anchored(
     remaining_text = " ".join(remaining)
 
     if subcmd == "apply":
-        # Report-only forms write nothing. A worktree apply needs the dispatch's
-        # declared write set to scope it, which no hook can read yet.
+        # Report-only forms write nothing.
         if any(t in _APPLY_REPORT_FLAGS for t in remaining) and not any(
             t in _APPLY_WRITE_FLAGS or t.startswith("--directory") for t in remaining
         ):
             return None
-        return "git apply (writes the shared worktree)"
+        refusal = _apply_worktree_refusal(seg, remaining)
+        if refusal is None:
+            return None
+        return f"git apply ({refusal})"
 
     if subcmd == "worktree":
         second = remaining[0] if remaining else None

@@ -463,6 +463,11 @@ def _write_sizing(
     return rel
 
 
+def _untracked_path(row: Any) -> Optional[str]:
+    """The path of one ``untracked`` entry; ``gate_v2`` emits bare path strings."""
+    return row.get("path") if isinstance(row, dict) else row
+
+
 def _ignored_untracked_hint(repo_root: Path, paths: List[str]) -> Optional[List[str]]:
     """The untracked ``paths`` a gitignore rule covers, read in process; ``None`` on any gap so
     commit_v2 asks git itself."""
@@ -537,7 +542,7 @@ def _freeze_gate_report(
     if unfoldable_small:
         report["unfoldable_small"] = sorted(unfoldable_small)
     staged = set(stub_paths)
-    untracked = [row["path"] for row in report.get("untracked") or [] if row.get("path") in staged]
+    untracked = [p for p in (_untracked_path(row) for row in report.get("untracked") or []) if p in staged]
     if untracked:
         return {
             "gate_report_path": None,

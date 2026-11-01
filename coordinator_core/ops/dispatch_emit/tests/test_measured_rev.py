@@ -249,3 +249,11 @@ def test_unmeasurable_reach_is_a_typed_refusal_and_writes_no_record(repo, monkey
         mr.measured_rev("run-reach", ["edit.txt"], repo_root=repo)
     assert not measured_rev_record_path(repo, "run-reach").exists()
     assert mr._handler({"run_id": "run-reach", "paths": ["edit.txt"]}, repo)["refused"] == "measured-rev"
+
+
+def test_handler_measures_the_worktree_when_ipc_passes_the_git_dir(repo):
+    """IPC keys this common_dir op on `.git`; the handler must still find HEAD and measure the worktree."""
+    (repo / "edit.txt").write_bytes(b"new\n")
+    out = mr._handler({"run_id": "run-gitdir", "paths": ["edit.txt"]}, repo / ".git")
+    assert "error" not in out, out
+    assert out["base_sha"] == _git(repo, "rev-parse", "HEAD").strip()

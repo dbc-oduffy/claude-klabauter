@@ -1292,6 +1292,70 @@ def test_runaway_flagged_set_stays_flat_across_many_ticks():
     assert max(sizes) == 1
 
 
+def test_descendants_terminates_on_a_ppid_cycle_and_a_self_parent():
+    cyc = [P(1, 2, 1, 1, "a"), P(2, 1, 1, 1, "b"), P(3, 3, 1, 1, "c"), P(4, 3, 1, 1, "d")]
+    assert sorted(gov.descendants(1, cyc)) == [1, 2]
+    assert sorted(gov.descendants(3, cyc)) == [3, 4]
+
+
+def test_tick_loop_with_disk_and_reaping_retains_nothing_across_many_ticks(tmp_path):
+    import gc
+    import tracemalloc
+
+    gd = gov._governor_disk()
+    # A reapable search tree whose parent chain loops back on itself (stale ppid after pid reuse).
+    procs = [P(100, 101, 3000, 10, "bash.exe -c grep -r foo / | grep -v bar"),
+             P(101, 100, 3000, 700, "grep -r foo /"), P(5, 5, 60, 1, "self.exe")]
+    n = [0]
+
+    def disk_fn():
+        n[0] += 1
+        hot = n[0] % 2
+        return ([gd.DiskStat("0 C:", 0.0 if hot else 90.0, 12.0 if hot else 0.0)],
+                {777: n[0] << 28, 5: n[0]})
+
+    seen = {"DISK": 0, "REAPED": 0}  # counters, not a line list: the test's own sink must not grow
+
+    def emit(line):
+        for kind in seen:
+            if line.startswith(f"GOVERNOR {kind}"):
+                seen[kind] += 1
+
+    clock = [0.0]
+
+    def run_ticks(k):
+        gov.run(_args(runaway_mb=100.0), emit=emit, sample=lambda: False,
+                scan_fn=lambda: procs, procs_fn=lambda: procs, footprint_fn=lambda: {5: 1.0},
+                signal_fn=lambda *a: None, kill_fn=lambda pids: None,
+                sleep=lambda s: clock.__setitem__(0, clock[0] + 10), max_ticks=k,
+                reap_path=tmp_path / "reaps.jsonl", guard_path=None, disk_fn=disk_fn,
+                clock=lambda: clock[0])
+
+    run_ticks(60)  # warm-up
+    seen.update(DISK=0, REAPED=0)
+    gc.collect()
+    tracemalloc.start()
+    try:
+        before = tracemalloc.take_snapshot()
+        run_ticks(3000)
+        gc.collect()
+        after = tracemalloc.take_snapshot()
+    finally:
+        tracemalloc.stop()
+    grown = sum(s.size_diff for s in after.compare_to(before, "filename")
+                if "group-em-memory-governor" in s.traceback[0].filename
+                or "governor_disk" in s.traceback[0].filename)
+    assert seen["DISK"] > 0 and seen["REAPED"] > 0
+    assert grown < 64 * 1024
+
+
+def test_no_disk_flag_makes_no_disk_sampler_call(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(gov, "run", lambda args, **kw: seen.update(args=args, **kw))
+    gov.main(["--no-disk", "--log", str(tmp_path / "g.log")])
+    assert seen["args"].no_disk is True and seen["disk_fn"] is None
+
+
 def test_runaway_pid_is_reported_again_after_it_exits_and_the_pid_is_reused():
     lines = []
     feeds = iter([{20: 66560.0}, {20: 66560.0}, {}, {20: 70000.0}])
