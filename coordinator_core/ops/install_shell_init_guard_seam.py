@@ -6,7 +6,7 @@ Port source: coordinator/commands/install.md (coordinator-content-repo repo) Ste
 the two literal bash fences at lines 932 and 950 of the source doc.
 
 Purpose (unchanged from the doc): resolve `claude-klabauter`'s root
-(`REPO_CLAUDE_KLABAUTER` env override, then `machine-local get
+(`REPO_PROJECT_MAKIMA` env override, then `machine-local get
 Repos.claude_klabauter`), and — only if `<claude_klabauter_root>/bin/shell-init-guard.py`
 exists and is readable — write an idempotent, sentinel-guarded block into
 the operator's interactive rc (selected from the SHELL env var: zsh picks
@@ -131,18 +131,18 @@ def _running_engine_root() -> str:
 
 
 def resolve_claude_klabauter_clone() -> str:
-    """Tier 1: REPO_CLAUDE_KLABAUTER env. Tier 2: the running engine tree.
+    """Tier 1: REPO_PROJECT_MAKIMA env. Tier 2: the running engine tree.
     Tier 3: the direct-registry reader
     (`machine_resolver.registry_get`) -- no `machine-local` CLI subprocess.
 
     Converted 2026-08-16 (C7b): the module's own test suite
     (`coordinator_core/ops/test_install_shell_init_guard_seam.py`) already
-    isolated every test from the operator's real `REPO_CLAUDE_KLABAUTER`
+    isolated every test from the operator's real `REPO_PROJECT_MAKIMA`
     resolution via an explicit env override; it now additionally seeds a
     scratch machine-local registry FILE so the one test that relies on
     tier-2 falling through (`test_graceful_skip_when_claude_klabauter_not_resolvable`)
     cannot read the operator's REAL registry either."""
-    env_override = os.environ.get("REPO_CLAUDE_KLABAUTER", "")
+    env_override = os.environ.get("REPO_PROJECT_MAKIMA", "")
     if env_override:
         return env_override
     running = _running_engine_root()
@@ -239,7 +239,7 @@ def main(argv: List[str]) -> int:
     if not claude_klabauter_clone:
         print(
             "shell_init_guard: skipped (claude-klabauter not registered — "
-            "set REPO_CLAUDE_KLABAUTER or machine-local repos.claude_klabauter)"
+            "set REPO_PROJECT_MAKIMA or machine-local repos.claude_klabauter)"
         )
         return 0
 

@@ -36,7 +36,6 @@ Spec backlink: docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md, chunk 
 """
 from __future__ import annotations
 
-import bisect
 import binascii
 import hashlib
 import mmap
@@ -358,7 +357,7 @@ def _read_loose_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]
     return otype.decode("ascii", errors="replace"), payload
 
 
-_PACK_LISTING_CACHE: "dict[str, tuple[Optional[tuple[int, int]], list[tuple[Path, Path]]]]" = {}
+_PACK_LISTING_CACHE: "dict[str, tuple[Optional[tuple[int, int]], _PackListing]]" = {}
 
 
 def _pack_dir_generation(pack_dir: Path) -> Optional[tuple[int, int]]:
@@ -391,16 +390,32 @@ def _temp_pair_is_complete(idx_path: Path, pack_path: Path) -> bool:
         return False
 
 
-def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple[Path, Path]]:
-    """Lists `(idx_path, pack_path)` pairs under `objects/pack/`, cached per
-    `common_dir` -- see `_PACK_LISTING_CACHE` above for why that is safe in
-    the warm long-running engine this module sits in.
+class _PackListing(Sequence):
+    """The `(idx_path, pack_path)` pairs under one `objects/pack/`, in name order, each pair's
+    `Path`s built on first access; `order` ranks positions newest `.idx` first and `names` holds the
+    `.idx` file names, both taken by the scan that built the listing (building ~6000 `Path`s
+    for a lookup that touches a few packs is the cost this avoids)."""
 
-    `revalidate=True`, the default and what every caller outside this module
-    gets, stats the pack directory and rebuilds when the pack set has
-    changed, so no caller ever sees a stale pack set. A caller whose answer
-    cannot be changed by a newly-arrived pack passes `revalidate=False` to
-    skip even that one stat."""
+    __slots__ = ("_pack_dir", "names", "order", "_pairs")
+
+    def __init__(self, pack_dir: Path, names: list[str], mtimes: list[int]) -> None:
+        self._pack_dir = pack_dir
+        self.names = names
+        self.order = sorted(range(len(names)), key=mtimes.__getitem__, reverse=True)
+        self._pairs: dict[int, tuple[Path, Path]] = {}
+
+    def __len__(self) -> int:
+        return len(self.names)
+
+    def __getitem__(self, i):  # type: ignore[override]
+        pair = self._pairs.get(i)
+        if pair is None:
+            name = self.names[i]
+            pair = self._pairs[i] = (self._pack_dir / name, self._pack_dir / (name[:-4] + ".pack"))
+        return pair
+
+
+def _pack_listing(common_dir: Path, *, revalidate: bool = True) -> _PackListing:
     key = str(common_dir)
     pack_dir = common_dir / "objects" / "pack"
     cached = _PACK_LISTING_CACHE.get(key)
@@ -412,11 +427,17 @@ def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple
             return cached[1]
     else:
         generation = _pack_dir_generation(pack_dir)
-    result: list[tuple[Path, Path]] = []
+    kept: list[str] = []
+    kept_mtimes: list[int] = []
     if generation is not None:
+        names: set[str] = set()
+        mtimes: dict[str, int] = {}
         try:
             with os.scandir(pack_dir) as it:
-                names = {e.name for e in it}
+                for e in it:
+                    names.add(e.name)
+                    if e.name.endswith(".idx"):
+                        mtimes[e.name] = e.stat().st_mtime_ns
         except OSError:
             names = set()
         for name in sorted(n for n in names if n.endswith(".idx")):
@@ -425,12 +446,27 @@ def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple
                 continue
             if name.startswith(".") and not (name.startswith(".tmp-") and _temp_pair_is_complete(pack_dir / name, pack_dir / pack_name)):
                 continue
-            result.append((pack_dir / name, pack_dir / pack_name))
+            kept.append(name)
+            kept_mtimes.append(mtimes.get(name, 0))
+    result = _PackListing(pack_dir, kept, kept_mtimes)
     _PACK_LISTING_CACHE[key] = (generation, result)
     _PACK_INDEXES_BY_LISTING.pop(key, None)
     _LOOKUP_SOURCES.pop(key, None)
     _LAST_HIT_PACK.pop(key, None)
     return result
+
+
+def _iter_pack_files(common_dir: Path, *, revalidate: bool = True) -> list[tuple[Path, Path]]:
+    """Lists `(idx_path, pack_path)` pairs under `objects/pack/`, cached per
+    `common_dir` -- see `_PACK_LISTING_CACHE` above for why that is safe in
+    the warm long-running engine this module sits in.
+
+    `revalidate=True`, the default and what every caller outside this module
+    gets, stats the pack directory and rebuilds when the pack set has
+    changed, so no caller ever sees a stale pack set. A caller whose answer
+    cannot be changed by a newly-arrived pack passes `revalidate=False` to
+    skip even that one stat."""
+    return list(_pack_listing(common_dir, revalidate=revalidate))
 
 
 _PACK_INDEXES_BY_LISTING: "dict[str, list[tuple[Path, Path, _PackIndex]]]" = {}
@@ -440,21 +476,9 @@ _PACK_INDEXES_BY_LISTING: "dict[str, list[tuple[Path, Path, _PackIndex]]]" = {}
 _LAST_HIT_PACK: "dict[str, int]" = {}
 
 
-def _newest_first(listing: list[tuple[Path, Path]]) -> list[tuple[Path, Path]]:
-    """`listing` ordered by `.idx` mtime, newest first, from one directory scan.
-    A walk reads recent commits, which sit in recently written packs."""
-    if len(listing) < 2:
-        return listing
-    try:
-        with os.scandir(listing[0][0].parent) as it:
-            mtimes = {e.name: e.stat().st_mtime_ns for e in it if e.name.endswith(".idx")}
-    except OSError:
-        return listing
-    return sorted(listing, key=lambda pair: mtimes.get(pair[0].name, 0), reverse=True)
-
-
 class _LazyPackIndexes(Sequence):
-    """The pack set, newest first, each `.idx` parsed on first access.
+    """The pack set, newest first (a walk reads recent commits, which sit in recently written
+    packs), each `.idx` parsed on first access.
 
     Trap: an entry's index is `None` when its `.idx` is unparseable; only
     iteration skips those, positional access returns them, so a caller
@@ -462,30 +486,32 @@ class _LazyPackIndexes(Sequence):
     costs ~90ms on a 1800-pack repo, and a lookup that hits a recent pack
     never needs the rest."""
 
-    __slots__ = ("_listing", "_parsed")
+    __slots__ = ("_listing", "_order", "_parsed")
 
-    def __init__(self, listing: list[tuple[Path, Path]]) -> None:
-        self._listing = _newest_first(listing)
+    def __init__(self, listing: _PackListing) -> None:
+        self._listing = listing
+        self._order = listing.order
         self._parsed: dict[int, Optional[_PackIndex]] = {}
 
     def __len__(self) -> int:
-        return len(self._listing)
+        return len(self._order)
 
     def names(self) -> "dict[str, int]":
         """`.idx` file name -> position, without parsing any index."""
-        return {pair[0].name: i for i, pair in enumerate(self._listing)}
+        names = self._listing.names
+        return {names[j]: i for i, j in enumerate(self._order)}
 
     def pack_path(self, i: int) -> Path:
-        return self._listing[i][1]
+        return self._listing[self._order[i]][1]
 
     def __getitem__(self, i):  # type: ignore[override]
-        idx_path, pack_path = self._listing[i]
+        idx_path, pack_path = self._listing[self._order[i]]
         if i not in self._parsed:
             self._parsed[i] = _parse_pack_index(idx_path)
         return idx_path, pack_path, self._parsed[i]
 
     def __iter__(self):
-        for i in range(len(self._listing)):
+        for i in range(len(self._order)):
             entry = self[i]
             if entry[2] is not None:
                 yield entry
@@ -495,7 +521,7 @@ def _pack_indexes(
     common_dir: Path, *, revalidate: bool = True
 ) -> Sequence[tuple[Path, Path, "Optional[_PackIndex]"]]:
     key = str(common_dir)
-    listing = _iter_pack_files(common_dir, revalidate=revalidate)
+    listing = _pack_listing(common_dir, revalidate=revalidate)
     cached = _PACK_INDEXES_BY_LISTING.get(key)
     if cached is not None:
         return cached
@@ -679,12 +705,21 @@ def _midx_find(midx: _Midx, target: bytes) -> Optional[tuple[int, int]]:
 #: one merged sorted table answers for all of them.
 _UNCOVERED_LAZY_MAX = 8
 
+#: Past `_UNCOVERED_LAZY_MAX`, a source's first `_PROBES_BEFORE_MERGE` lookups probe only the
+#: `_PROBE_NEWEST` newest uncovered packs (recent objects sit there, and a few lookups never repay
+#: parsing hundreds of indexes); a miss there, or the next lookup, builds the merged table.
+_PROBE_NEWEST = 64
+_PROBES_BEFORE_MERGE = 32
+
 
 class _LookupSource:
     """Where a sha lives, for one pack listing: the MIDX, then the packs the
     MIDX does not name (newer than it)."""
 
-    __slots__ = ("indexes", "midx", "midx_pos", "uncovered", "_merged")
+    __slots__ = ("indexes", "midx", "midx_pos", "uncovered", "_merged", "_probes")
+
+    #: Merged-table value: `(position << 32) | entry number`; the pack offset is read on a hit only.
+    _ENTRY_BITS = 32
 
     def __init__(self, common_dir: Path, indexes: "_LazyPackIndexes") -> None:
         self.indexes = indexes
@@ -697,20 +732,23 @@ class _LookupSource:
             self.midx_pos = [names.get(n) for n in self.midx.names]
             covered = set(self.midx.names)
             self.uncovered = sorted(i for n, i in names.items() if n not in covered)
-        self._merged: "Optional[tuple[list[bytes], list[tuple[int, int]]]]" = None
+        self._merged: "Optional[dict[bytes, int]]" = None
+        self._probes = 0
 
-    def _merged_table(self) -> "tuple[list[bytes], list[tuple[int, int]]]":
+    def _merged_table(self) -> "dict[bytes, int]":
+        """sha -> `(position << 32) | entry number` over every uncovered pack; the lowest position
+        (newest pack) wins a sha held by several, as the sorted-table bisect it replaces did."""
         if self._merged is None:
-            entries: list = []
-            for i in self.uncovered:
+            table: dict = {}
+            for i in reversed(self.uncovered):
                 pidx = self.indexes[i][2]
                 if pidx is None:
                     continue
-                shas, offs = pidx.shas, pidx.offsets
-                for j in range(len(shas) // 20):
-                    entries.append((shas[j * 20 : j * 20 + 20], i, offs[j]))
-            entries.sort(key=lambda e: (e[0], e[1]))
-            self._merged = ([e[0] for e in entries], [(e[1], e[2]) for e in entries])
+                shas = pidx.shas
+                count = len(shas) // 20
+                base = i << self._ENTRY_BITS
+                table.update(zip([shas[k : k + 20] for k in range(0, count * 20, 20)], range(base, base + count)))
+            self._merged = table
         return self._merged
 
     def find(self, key: str, sha_hex: str, target: bytes) -> Optional[tuple[int, int]]:
@@ -719,8 +757,12 @@ class _LookupSource:
             hit = _midx_find(self.midx, target)
             if hit is not None and hit[0] < len(self.midx_pos) and self.midx_pos[hit[0]] is not None:
                 return self.midx_pos[hit[0]], hit[1]
-        if len(self.uncovered) <= _UNCOVERED_LAZY_MAX:
-            order = self.uncovered
+        lazy = len(self.uncovered) <= _UNCOVERED_LAZY_MAX
+        probing = not lazy and self._merged is None and self._probes < _PROBES_BEFORE_MERGE
+        if lazy or probing:
+            order = self.uncovered if lazy else self.uncovered[:_PROBE_NEWEST]
+            if probing:
+                self._probes += 1
             last = _LAST_HIT_PACK.get(key)
             if last is not None and last in order:
                 order = [last] + [i for i in order if i != last]
@@ -732,12 +774,13 @@ class _LookupSource:
                 if offset is not None:
                     _LAST_HIT_PACK[key] = i
                     return i, offset
+            if lazy:
+                return None
+        packed = self._merged_table().get(target)
+        if packed is None:
             return None
-        shas, locs = self._merged_table()
-        k = bisect.bisect_left(shas, target)
-        if k < len(shas) and shas[k] == target:
-            return locs[k]
-        return None
+        i = packed >> self._ENTRY_BITS
+        return i, self.indexes[i][2].offsets[packed & ((1 << self._ENTRY_BITS) - 1)]
 
 
 _LOOKUP_SOURCES: "dict[str, _LookupSource]" = {}

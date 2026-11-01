@@ -438,10 +438,10 @@ def _composed_digest(ledger_js: str) -> dict:
         "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewReverify=null, _reviewPrep={slices:[1]}, _reviewWave=[], "
         "_deliveryVerdict=null, _deliveryNotRun=null, _waveNotRun=[], _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
         "_sizingRel='s', _planRel=null, _resumeLedger=false, REPO_ROOT='/r', _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
-        f"_stoppedBy=[], _blockedChunks=[], _recoveryWithheld=[], _docs=null, _commit=null, _refireNextAction=() => {{}}, _haltNextActionText=() => '', _terminalCommitParamsBlock=(p) => JSON.stringify(p), _falsifierResult=null, _falsifierSpec=null, _memoCloseOnly=false, _preHaltCredit=false, log=() => {{}}; let _nextAction=null; const _ledger={ledger_js};\n"
+        f"_stoppedBy=[], _rows={{}}, _haltedByHold=false, _consumedReturns={{}}, _alreadyDelivered=null, _blockedChunks=[], _recoveryWithheld=[], _docs=null, _commit=null, _refireNextAction=() => {{}}, _haltNextActionText=() => '', _terminalCommitParamsBlock=(p) => JSON.stringify(p), _falsifierResult=null, _falsifierSpec=null, _memoCloseOnly=false, _preHaltCredit=false, log=() => {{}}; let _nextAction=null; const _ledger={ledger_js};\n"
     )
     body = script[start:stop].replace("  return { arm:", "  const _out = { arm:", 1)
-    prog = f"(() => {{\n{stubs}{body}\nconsole.log(JSON.stringify(_out));\n}})();"
+    prog = f"(async () => {{\n{stubs}{body}\nconsole.log(JSON.stringify(_out));\n}})();"
     run = subprocess.run([node, "-"], input=prog, capture_output=True, text=True, **no_console_creationflags())
     assert run.returncode == 0, run.stderr
     return json.loads(run.stdout)

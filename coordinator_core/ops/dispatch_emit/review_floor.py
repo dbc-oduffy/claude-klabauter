@@ -102,18 +102,48 @@ def _sidecar_exists(sidecar: object, root: Path) -> bool:
         return False
 
 
+def _integration_names(sidecar: object, integration_stem: object, root: Path) -> bool:
+    """True when the review-wave integration record `<integration_stem>.md`, beside the reviewer's
+    `sidecar` path, exists and names that sidecar's stem under `integrated_from`. The record is
+    engine-written after the wave, so it vouches for a reviewer whose own sidecar file is gone."""
+    if not (isinstance(sidecar, str) and sidecar.strip() and isinstance(integration_stem, str)
+            and integration_stem.strip()):
+        return False
+    try:
+        side = Path(sidecar.strip().replace("\\", "/"))
+        record = (Path(root) / side).parent / f"{integration_stem.strip()}.md"
+        if not record.is_file():
+            return False
+        text = record.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    _, sep, rest = text.partition("integrated_from:")
+    if not sep:
+        return False
+    listed = []
+    for line in rest.splitlines()[1:]:
+        if not line.startswith("- "):
+            break
+        listed.append(line[2:].strip().strip("'\""))
+    return side.stem in listed
+
+
 def verdict_count(inline_review: object, root: Path) -> int:
     """Wave reviews with a non-empty string `verdict` AND a `sidecar_path` resolving (relative to
-    `root`, or absolute) to an existing file; a bare relayed verdict is not a code reviewer."""
+    `root`, or absolute) to an existing file, or named by the run's integration record
+    (`inline_review["integration_stem"]`) when that file is gone; a bare relayed verdict is not a
+    code reviewer."""
     if not isinstance(inline_review, Mapping):
         return 0
     reviews = inline_review.get("wave_reviews")
     if not isinstance(reviews, Sequence) or isinstance(reviews, (str, bytes)):
         return 0
+    stem = inline_review.get("integration_stem")
     return sum(
         1 for r in reviews
         if isinstance(r, Mapping) and isinstance(r.get("verdict"), str) and r["verdict"].strip()
-        and _sidecar_exists(r.get("sidecar_path"), root)
+        and (_sidecar_exists(r.get("sidecar_path"), root)
+             or _integration_names(r.get("sidecar_path"), stem, root))
     )
 
 

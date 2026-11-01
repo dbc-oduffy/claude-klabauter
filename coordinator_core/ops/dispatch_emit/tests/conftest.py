@@ -84,6 +84,17 @@ REVIEW_KW = {
 }
 
 
+def write_run_scripts(root, *run_ids: str) -> None:
+    """Write `scratch/warp/<run_id>.workflow.mjs` for each run id under `root`.
+
+    The staged-twin write refuses a run manifest whose launcher script is absent, and the
+    engine emits the script before staging; a fixture that stages a run does the same."""
+    warp = root / "scratch" / "warp"
+    warp.mkdir(parents=True, exist_ok=True)
+    for run_id in run_ids:
+        (warp / f"{run_id}.workflow.mjs").write_text("export const meta = { name: 'x' }\nreturn 1;\n", encoding="utf-8")
+
+
 def execute_section(script: str) -> str:
     """The emitted script up to its review wave, for assertions about the
     execute phase that the review wave's own agents would otherwise satisfy."""

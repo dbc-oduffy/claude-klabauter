@@ -106,9 +106,9 @@ def test_table_value_equal_to_the_default_is_not_routed(tmp_path):
     assert GAME not in _compose(repo_root=root, **_named_fragment())
 
 
-def test_review_routing_with_inline_comment_refuses(tmp_path):
-    with pytest.raises(AskComposeRefused):
-        _compose(repo_root=_repo(tmp_path, review_routing=f"{GAME} # note"))
+def test_review_routing_inline_comment_is_yaml_and_routes(tmp_path):
+    root = _repo(tmp_path, review_routing=f"{GAME} # note")
+    assert GAME in _compose(repo_root=root, **_named_fragment())
 
 
 def test_unrouted_code_review_leaves_the_wave_unchanged(tmp_path):
@@ -125,6 +125,126 @@ def test_malformed_route_table_refuses_compose(tmp_path):
     (tmp_path / ".claude" / "route-table.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(AskComposeRefused):
         _compose(repo_root=str(tmp_path))
+
+
+_CLAUDE_DIR_LIST = (
+    "---\n"
+    "review_routing:\n"
+    "  - paths: ['control/plugin/**', '**/*.Build.cs']\n"
+    f"    reviewer: {GAME}\n"
+    "---\n"
+)
+
+
+def _claude_dir_repo(tmp_path):
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "coordinator.local.md").write_text(_CLAUDE_DIR_LIST, encoding="utf-8")
+    return str(tmp_path)
+
+
+def test_claude_dir_path_glob_routes_plan_review_and_code_review_for_matching_writes(
+    monkeypatch, tmp_path
+):
+    root = _claude_dir_repo(tmp_path)
+    writes = ("control/plugin/X/Foo.cpp",)
+    script = _presized(monkeypatch, arm="m_plus", repo_root=root, writes=writes, **_named_fragment())
+    assert f"agentType: '{GAME}'" in _plan_review_opts(script)
+    assert "coordinator:code-reviewer" in script
+    types, _models, routed = ask_compose._resolve_stage_agents(root, "x", writes)
+    assert types["plan_review"] == types["code_review"] == GAME
+    assert routed
+
+
+def test_claude_dir_path_glob_non_matching_writes_keep_the_defaults(monkeypatch, tmp_path):
+    root = _claude_dir_repo(tmp_path)
+    writes = ("docs/readme.md",)
+    script = _presized(monkeypatch, arm="m_plus", repo_root=root, writes=writes, **_named_fragment())
+    assert GAME not in script
+    assert "agentType: 'coordinator:staff-eng'" in _plan_review_opts(script)
+    _types, _models, routed = ask_compose._resolve_stage_agents(root, "x", writes)
+    assert not routed
+
+
+def test_claude_dir_path_glob_raw_prompt_naming_a_path_routes_without_writes(tmp_path):
+    root = _claude_dir_repo(tmp_path)
+    routed = _compose(
+        repo_root=root, prompt="fix the crash in control/plugin/X/Foo.cpp", **_named_fragment()
+    )
+    assert GAME in routed
+    assert "coordinator:code-reviewer" in routed
+    assert GAME not in _compose(repo_root=root, prompt="fix the crash", **_named_fragment())
+
+
+def test_claude_dir_path_glob_uninstalled_reviewer_refuses(monkeypatch, tmp_path):
+    def missing(agent_type, defs, override=None):
+        raise agent_route.RouteAdmissionError(f"{agent_type} is not installed")
+
+    monkeypatch.setattr(agent_route, "_model_of", missing)
+    root = _claude_dir_repo(tmp_path)
+    with pytest.raises(AskComposeRefused):
+        _compose(repo_root=root, writes=("control/plugin/X/Foo.cpp",))
+
+
+DOCS = "coordinator:docs-checker"
+
+
+@pytest.fixture
+def _ue_cache():
+    from coordinator_core.ops.dispatch_emit import ue_route_source
+
+    ue_route_source.clear_caches()
+    yield
+    ue_route_source.clear_caches()
+
+
+def _ue_declared_repo(tmp_path, extra=""):
+    (tmp_path / "coordinator.local.md").write_text(
+        f"---\nproject_type: unreal-engine\n{extra}---\n", encoding="utf-8"
+    )
+    return str(tmp_path)
+
+
+def test_declared_ue_repo_routes_sid_and_docs_checker(monkeypatch, tmp_path, _ue_cache):
+    root = _ue_declared_repo(tmp_path)
+    script = _m_plus(monkeypatch, root)
+    assert f"agentType: '{GAME}'" in _plan_review_opts(script)
+    assert "label: 'plan-docs-check'" in script and f"agentType: '{DOCS}'" in script
+    types, _models, routed = ask_compose._resolve_stage_agents(root, "x", ())
+    assert types["plan_review"] == types["code_review"] == GAME and routed
+    wave = _compose(repo_root=root, **_named_fragment())
+    assert GAME in wave and DOCS in wave and "coordinator:code-reviewer" in wave
+
+
+def test_ue_marker_repo_routes_sid(tmp_path, _ue_cache):
+    (tmp_path / "Game.uproject").write_text("{}", encoding="utf-8")
+    types, _m, routed = ask_compose._resolve_stage_agents(str(tmp_path), "x", ())
+    assert types["code_review"] == GAME and routed
+
+
+def test_ue_default_yields_to_review_routing(tmp_path, _ue_cache):
+    root = _ue_declared_repo(tmp_path, "review_routing: coordinator:apm\n")
+    types, _m, _r = ask_compose._resolve_stage_agents(root, "x", ())
+    assert types["plan_review"] == types["code_review"] == "coordinator:apm"
+
+
+def test_ue_default_yields_to_stage_agents_table(tmp_path, _ue_cache):
+    root = _repo(tmp_path, stage_agents={"plan_review": "coordinator:apm"})
+    (tmp_path / "coordinator.local.md").write_text(
+        "---\nproject_type: unreal-engine\n---\n", encoding="utf-8"
+    )
+    types, _m, _r = ask_compose._resolve_stage_agents(root, "x", ())
+    assert types["plan_review"] == "coordinator:apm"
+    assert types["code_review"] == GAME
+
+
+def test_non_ue_repo_gets_no_docs_checker(monkeypatch, tmp_path, _ue_cache):
+    root = _repo(tmp_path)
+    script = _m_plus(monkeypatch, root)
+    assert DOCS not in script and "plan-docs-check" not in script
+    assert DOCS not in _compose(repo_root=root, **_named_fragment())
+    (tmp_path / "coordinator.local.md").write_text("---\nproject_type: web\n---\n", encoding="utf-8")
+    ask_compose._ue_route_source.clear_caches()
+    assert ask_compose._resolve_stage_agents(root, "x", ())[0]["code_review"] == "coordinator:code-reviewer"
 
 
 def test_pinned_type_passes_no_model_and_scans_nothing(tmp_path, _model):

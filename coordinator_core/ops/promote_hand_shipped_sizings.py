@@ -26,14 +26,17 @@ from typing import Dict, List
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.warp_run_deliverable import (
     RECONCILED_FILE,
+    SUBMISSION_FILE,
     RunRecord,
     _norm,
-    run_records,
+    _read_json,
+    declared_writes,
+    record_sizing_rel,
     sizing_scalar,
     write_reconciled,
 )
 from coordinator_core.session.declared_writes import declare_write
-from coordinator_core.session.record_homes import home_dir
+from coordinator_core.ops.fleet.terminal_sizing_drain import SizingScan, read_record, scan_sizings
 from coordinator_core.warm.entry_seam import reentrant_dispatch
 
 import coordinator_core.ops.sizing_ship  # noqa: F401 -- registers "sizing.ship"
@@ -122,22 +125,38 @@ def run(repo_root: Path) -> Dict[str, object]:
     lines: List[str] = counters["lines"]  # type: ignore[assignment]
     candidates: List[tuple] = []
     run_sizings = set()
-    for record in run_records(root):
-        if record.sizing_rel:
-            run_sizings.add(_norm(record.sizing_rel))
-        if record.reconciled or not record.sizing_rel or record.submitted_at <= 0:
+    scan = scan_sizings(root)
+    for run_dir, submission in _submissions(root):
+        sizing_rel = submission.get("sizing_rel")
+        sizing_rel = _norm(sizing_rel) if isinstance(sizing_rel, str) else ""
+        sizing_rel = sizing_rel or record_sizing_rel(root, run_dir.name)
+        if sizing_rel:
+            run_sizings.add(_norm(sizing_rel))
+        submitted_at = submission.get("submitted_at")
+        submitted_at = float(submitted_at) if isinstance(submitted_at, (int, float)) else 0.0
+        if not sizing_rel or submitted_at <= 0:
             continue
-        if sizing_scalar(root, record.sizing_rel, "status") not in _SHIPPABLE:
+        sizing = scan.records.get(_norm(sizing_rel)) or read_record(root, sizing_rel)
+        if sizing is None or sizing.status not in _SHIPPABLE or not sizing.deliverable_id:
             continue
-        deliverable_id = sizing_scalar(root, record.sizing_rel, "deliverable_id")
-        if not deliverable_id:
+        if (run_dir / RECONCILED_FILE).is_file():
             continue
+        session_id = submission.get("session_id")
+        record = RunRecord(
+            run_id=run_dir.name,
+            session_id=session_id if isinstance(session_id, str) else "",
+            submitted_at=submitted_at,
+            sizing_rel=sizing_rel,
+            writes=declared_writes(run_dir),
+            reconciled=False,
+        )
+        deliverable_id = sizing.deliverable_id
         if not record.writes:
             counters["no_declared_writes"] += 1
             lines.append(f"{_PROG}: run {record.run_id} declares no writes; not promoted")
             continue
         candidates.append((record, deliverable_id))
-    runless = _runless_sizings(root, run_sizings)
+    runless = _runless_sizings(root, run_sizings, scan)
     counters["candidates"] = len(candidates) + len(runless)
     if not candidates and not runless:
         return counters
@@ -180,16 +199,30 @@ def run(repo_root: Path) -> Dict[str, object]:
     return counters
 
 
-def _runless_sizings(root: Path, run_sizings: set) -> List[tuple]:
+def _submissions(root: Path):
+    """`(run_dir, submission.json dict)` per run dir under `scratch/warp`, in name order. Reads the
+    submission only: a run's declared writes and `reconciled.json` cost a read each and only a
+    shippable-sizing run needs them."""
+    try:
+        run_dirs = sorted(p for p in (root / RUN_DIR_ROOT).iterdir() if p.is_dir())
+    except OSError:
+        return
+    for run_dir in run_dirs:
+        yield run_dir, _read_json(run_dir / SUBMISSION_FILE)
+
+
+def _runless_sizings(root: Path, run_sizings: set, scan: SizingScan) -> List[tuple]:
     """`(sizing_rel, deliverable_id, mtime)` for each shippable sizing no warp run references."""
     found: List[tuple] = []
-    for path in sorted(Path(home_dir(str(root), "sizings")).glob("*.yaml")):
-        rel = _norm(path.relative_to(root).as_posix())
-        if rel in run_sizings or sizing_scalar(root, rel, "status") not in _SHIPPABLE:
+    for rel, sizing in scan.records.items():
+        rel = _norm(rel)
+        if rel in run_sizings or sizing.status not in _SHIPPABLE or not sizing.deliverable_id:
             continue
-        deliverable_id = sizing_scalar(root, rel, "deliverable_id")
-        if deliverable_id:
-            found.append((rel, deliverable_id, path.stat().st_mtime))
+        try:
+            mtime = (root / rel).stat().st_mtime
+        except OSError:
+            continue
+        found.append((rel, sizing.deliverable_id, mtime))
     return found
 
 

@@ -28,17 +28,24 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import 
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import (  # noqa: F401
     DLV,
     PLAN,
+    RUN,
     _git,
     _write,
     repo,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_product_changes import (
     B,
-    _composed,
+    _composed as _composed_for_run2,
     _terminal,
 )
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+
+def _composed(root) -> dict:
+    """The resume param naming the halted predecessor `RUN`: a refire inherits scope from the predecessor's manifest,
+    and the fence withholds only paths that scope does not cover (the refire's own `RUN2` rows declare `B`)."""
+    return {**_composed_for_run2(root), "run_id": RUN}
 
 
 def _stage_refire(root, *, change_in: bool, change_out: bool) -> str:

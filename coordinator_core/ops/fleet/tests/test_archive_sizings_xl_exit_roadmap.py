@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.git_native import GitResult
-from coordinator_core.ops.fleet import archive_sizings
+from coordinator_core.ops.fleet import archive_sizings, terminal_sizing_drain
 from coordinator_core.ops.fleet.tests.archive_git_free_seam import (
     patched_disposition_seam,
     run,
@@ -250,7 +250,7 @@ def test_citer_corpus_is_not_walked_unless_a_roadmap_exit_asks(
     def boom(_root):
         raise AssertionError("citer corpus walked for a non-roadmap sweep")
 
-    monkeypatch.setattr(archive_sizings, "_build_citer_index", boom)
+    monkeypatch.setattr(terminal_sizing_drain, "_build_citer_index", boom)
     preview_result, _ = _preview(worktree)
 
     assert [c["id"] for c in preview_result["candidates"]] == [
@@ -268,9 +268,9 @@ def test_citer_index_prefilter_skips_files_that_never_name_sizing_object(
     _write_plan(worktree, "docs/plans/cites.md", "approved", "state/sizings/x.yaml")
 
     parsed: list = []
-    real = archive_sizings.parse_frontmatter_field
+    real = terminal_sizing_drain.parse_frontmatter_field
     monkeypatch.setattr(
-        archive_sizings, "parse_frontmatter_field",
+        terminal_sizing_drain, "parse_frontmatter_field",
         lambda p, k: parsed.append(Path(p).name) or real(p, k),
     )
     index = archive_sizings._build_citer_index(worktree)

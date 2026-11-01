@@ -40,6 +40,9 @@ def repo(_bare_repo, monkeypatch):
     monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
     _put(_bare_repo, tshirt="M", route="plan", accepted=ACCEPTED, plan=PLAN_REL)
     _plan(_bare_repo, {"C1": "open"})
+    script = _bare_repo / "scratch" / "warp" / f"{RUN}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("// run script without an inline slot\n", encoding="utf-8")
     rl.start(_bare_repo, RUN)
     rl.bind(_bare_repo, RUN, REL, ask_text="the first ask")
     return _bare_repo
@@ -100,7 +103,7 @@ def test_a_row_revised_before_verify_is_late_unioned_into_verify_and_judged(repo
 def test_pre_verify_late_ids_run_one_bounded_executor_leg_before_the_verify_leg():
     script = _compose()
     assert script.count("_lateLeg = async (_ids) =>") == 1
-    read = script.index("_verifyLateIds = await _lateRead();")
+    read = script.index("_verifyLateIds = await _lateRead(true);")
     leg = script.index("await _lateLeg(_verifyNew);")
     verify = script.index("const _runVerify = ")
     assert read < leg < verify
@@ -146,9 +149,9 @@ def _run_composed_late_legs(reads, tmp_path):
     if node is None:
         pytest.skip("node not on PATH")
     script = _compose()
-    read = _between(script, "const _lateRead = async () => {", r"\n\s*};")
+    read = _between(script, "const _lateRead = async (_final) => {", r"\n\s*};")
     leg = _between(script, "_lateLeg = async (_ids) => {", r"\n\s*};")
-    verify = _between(script, "_verifyLateIds = await _lateRead();", r"await Promise\.all\(_verifications\); \} \}")
+    verify = _between(script, "_verifyLateIds = await _lateRead(true);", r"await Promise\.all\(_verifications\); \} \}")
     body = "\n".join([
         read, leg,
         "_lateIds = await _lateRead(); if (_lateIds.length) { await _lateLeg(_lateIds); }",
@@ -183,9 +186,9 @@ def test_no_late_row_runs_no_extra_leg(tmp_path):
 def test_a_row_revised_after_verify_lands_on_refire_and_the_refire_stages_both_rows(repo):
     manifest = _stage(repo)
     r2 = _revise(repo, "also cover Windows")["item"]
-    prompts = record_dir(repo, RUN) / "prompts"
-    prompts.mkdir(parents=True, exist_ok=True)
-    (prompts / "verify.md").write_text("verify", encoding="utf-8")
+    read = rl._late_rows_handler({"run_id": RUN, "verify_read": True}, repo_root=repo)
+    assert read == {"late_rows": [r2]}
+    assert rl.verify_staged(record_dir(repo, RUN))
 
     out = _revise(repo, "and cover macOS")
     r3 = out["item"]
@@ -195,6 +198,7 @@ def test_a_row_revised_after_verify_lands_on_refire_and_the_refire_stages_both_r
 
     refire = ask_gate._handler({"sizing_path": REL, "run_id": "refire1", "writes": ["pkg/C1.py"]}, repo)
     assert refire["halt"] is None, refire
+    (repo / "scratch" / "warp" / "refire1.workflow.mjs").write_text("// run script without an inline slot\n", encoding="utf-8")
     params = {"run_id": "refire1", "plan_path": PLAN_REL, "writes": ["pkg/C1.py"], "commit_sizing_path": REL}
     reply = ask_stage._handler(params, repo)
     assert reply.get("manifest_handle"), reply

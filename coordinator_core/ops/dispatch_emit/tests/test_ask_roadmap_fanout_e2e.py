@@ -67,7 +67,7 @@ def test_the_commit_gate_carries_no_roadmap_exclusion(repo, which):
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
 def test_waves_come_from_the_stage_reply_and_a_missing_field_halts_by_name(repo, which):
     script = _scripts(repo)[which]
-    assert "const _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);" in script
+    assert "let _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);" in script
     assert "roadmap-blitz stage reply carries no waves" in script
     assert script.index("_rb?.stage?.waves") < script.index("waveIndex: w.index")
 

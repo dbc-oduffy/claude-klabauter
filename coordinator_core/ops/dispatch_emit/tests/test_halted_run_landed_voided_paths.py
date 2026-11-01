@@ -142,7 +142,7 @@ def test_foreign_repo_qualifier_stays_owed(tmp_path, monkeypatch):
 def test_registered_foreign_qualifier_resolving_to_the_run_root_is_own(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.machine_resolver.registry_get",
-        lambda key: str(tmp_path) if key == "repos.content_root" else None,
+        lambda key: str(tmp_path) if key == "repos.doe_claude" else None,
     )
     assert hrl._own_tree_path(tmp_path, "coordinator-content-repo:wiki/a.md") == "wiki/a.md"
     assert hrl._own_tree_path(tmp_path, "other-repo:wiki/a.md") is None

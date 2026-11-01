@@ -51,7 +51,7 @@ a duplicate lesson-outbox/central-queue entry.
    `LESSON_PROMOTE_OUTBOX_ROOT`-forces-legacy gate mirroring
    coordinator-queue-append's pre-existing `QUEUE_APPEND_OUTPUT_ROOT` one, so
    the override is honoured regardless of native-seam state — closing that
-   escape hatch. `REPO_CONTENT_ROOT` (the ambient ammo behind
+   escape hatch. `REPO_DOE_CLAUDE` (the ambient ammo behind
    `content_root()`'s rung 1b) is also typically exported in a login shell on
    a provisioned machine and must be stripped for real machine-local-rung
    isolation.
@@ -108,9 +108,9 @@ _SUBPROCESS_TIMEOUT_SECS = 30
 # Env var names the machine-local reader (both coordinator_registry.py's and
 # cli_shared.py's copies) and content_root()/claude_klabauter_root() honour — stripped
 # together everywhere this suite needs a genuinely-unresolved-except-via-stub
-# baseline. See module docstring finding (2) re: REPO_CONTENT_ROOT.
+# baseline. See module docstring finding (2) re: REPO_DOE_CLAUDE.
 _ENV_VARS_TO_STRIP_FOR_MACHINE_LOCAL_ISOLATION = (
-    "REPO_CONTENT_ROOT",
+    "REPO_DOE_CLAUDE",
     "CLAUDE_KLABAUTER_ROOT",
     _ENGINE_ROOT_VAR,
 )
@@ -434,7 +434,7 @@ def main() -> int:
     before_q = set(os.listdir(real_queue_dir)) if os.path.isdir(real_queue_dir) else set()
     before_l = set(os.listdir(real_lessons_dir)) if os.path.isdir(real_lessons_dir) else set()
 
-    real_content_lessons_dir = os.environ.get("REPO_CONTENT_ROOT")
+    real_content_lessons_dir = os.environ.get("REPO_DOE_CLAUDE")
     before_content_l: set[str] = set()
     if real_content_lessons_dir:
         real_content_lessons_dir = os.path.normpath(

@@ -635,7 +635,7 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # one read the quarantine would otherwise break outright: the content-root
     # pointer that `coordinator_registry`'s import-time manifest bootstrap
     # resolves through (see `_capture_real_content_root` above for the mechanism).
-    # Seeded as a FILE inside the quarantine, not as a `REPO_CONTENT_ROOT` env
+    # Seeded as a FILE inside the quarantine, not as a `REPO_DOE_CLAUDE` env
     # override: the env route outranks the machine-local registry in the
     # ratified DR-071 precedence and would silently mask the rung a test is
     # exercising, whereas the pointer file sits at the same rung a real install
@@ -1063,7 +1063,7 @@ _OWN_LIVE_STATE_DIRS = (
 )
 
 def _resolve_live_doe_lessons_outbox():
-    root = (os.environ.get("REPO_CONTENT_ROOT") or "").strip()
+    root = (os.environ.get("REPO_DOE_CLAUDE") or "").strip()
     if not root:
         # Load coordinator_registry BY LOCATION, and do not leave
         # `coordinator/bin/lib` on `sys.path`. An earlier version inserted it at
@@ -1124,7 +1124,7 @@ def _no_live_state_corpus_writes(request):
                 f"{request.node.nodeid} -- a write-root rung was not neutralized. "
                 f"Set the seam's isolation root (QUEUE_APPEND_OUTPUT_ROOT / "
                 f"LESSON_PROMOTE_OUTBOX_ROOT, dir must EXIST), strip "
-                f"REPO_CONTENT_ROOT / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "
+                f"REPO_DOE_CLAUDE / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "
                 f"warm-served CLI never receives any of them.",
                 pytrace=False,
             )

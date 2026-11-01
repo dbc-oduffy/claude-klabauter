@@ -9,8 +9,8 @@ import pytest
 from coordinator_core import content_root as cr
 from coordinator_core.machine_resolver import registry_get
 
-LEGACY_KEY = "repos.content_root"  # private-name-ok: compat-fallback
-LEGACY_ENGINE_KEY = "engine.working_repos.content_root"  # private-name-ok: compat-fallback
+LEGACY_KEY = "repos.doe_claude"  # private-name-ok: compat-fallback
+LEGACY_ENGINE_KEY = "engine.working_repos.doe_claude"  # private-name-ok: compat-fallback
 LEGACY_POINTER = ".coordinator-content-root"  # private-name-ok: compat-fallback
 
 

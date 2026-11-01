@@ -39,6 +39,10 @@ Both modes write a write-once pre-review snapshot beside the sidecar (``review.r
 path -> sha256) and one blob per distinct hash holding the bytes frozen. The reply names the manifest
 as ``pre_review_manifest`` (outside ``_STORED_KEYS``, like ``reviewed_sha256``).
 
+With ``run_id`` the handler also adds ``undeclared_edits``: paths dirty now with bytes the run's
+``stage-dirt.json`` (``stage_dirt_snapshot``) did not hold, covered by no declared path and held by no
+live peer. They join ``paths``, and the reply and sidecar list them as ``undeclared_edits``.
+
 Optional ``group_index`` / ``group_count`` (both or neither) narrow the reply's ``slices`` to the
 one contiguous balanced group at ``group_index`` of ``min(slices, group_count)`` groups, the split
 ``execute_review._GROUP_SLICES_JS`` applies; every other field is the whole-run reply. Without
@@ -393,6 +397,7 @@ def _stored_reply(
     if "reviewed_sha256" in fm:
         reply["reviewed_sha256"] = fm["reviewed_sha256"]
     reply["peer_held"] = fm.get("peer_held") or []
+    reply["undeclared_edits"] = fm.get("undeclared_edits") or []
     return reply
 
 
@@ -511,9 +516,12 @@ def review_prep(
     group_count: Optional[int] = None,
     run_id: str = "",
     live_runs: Optional[Mapping[str, LiveRun]] = None,
+    undeclared_edits: Sequence[str] = (),
 ) -> dict:
     """Freeze, partition and claim-check one run's diff once per ``slice_prefix``; see the module
-    docstring. With ``live_runs``, a path another live run withholds or claims stays in review and is
+    docstring. ``undeclared_edits`` names the members of ``paths`` that no row declared and that
+    changed since the stage dirt snapshot; the reply and sidecar carry them as ``undeclared_edits``.
+    With ``live_runs``, a path another live run withholds or claims stays in review and is
     listed in ``peer_held``; the peer-hunks gate settles it at commit. The handler derives ``live_runs``
     from halted runs' withheld sets (``land_run.foreign_halted_withheld``) when ``params.run_id`` is
     given and ``params.live_runs`` is not. ``excluded`` lists each declared path not reviewed with its
@@ -577,7 +585,7 @@ def review_prep(
         try:
             return served() or _compute(
                 repo_root, base, paths, slice_prefix, plan_path, head, session, share, sidecar, peer_bases(),
-                excluded, peer_held,
+                excluded, peer_held, list(undeclared_edits),
             )
         finally:
             try:
@@ -619,6 +627,7 @@ def _compute(
     peer_bases: Optional[dict] = None,
     excluded: Optional[List[dict]] = None,
     peer_held: Optional[List[str]] = None,
+    undeclared_edits: Optional[List[str]] = None,
 ) -> dict:
     if peer_bases is None:
         peer_bases = _peer_bases(repo_root, base, head, paths, session, plan_path)
@@ -637,6 +646,7 @@ def _compute(
         whole_diff_sidecars=whole_sidecars,
         excluded=list(excluded or []),
         peer_held=list(peer_held or []),
+        undeclared_edits=list(undeclared_edits or []),
         error=None,
     )
 
@@ -867,6 +877,7 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         **({"declared_sha256": result["declared_sha256"]} if "declared_sha256" in result else {}),
         "peer_bases": result.get("peer_bases", {}),
         "peer_held": result.get("peer_held", []),
+        "undeclared_edits": result.get("undeclared_edits", []),
         "head": head or None,
         "paths": paths,
     }
@@ -914,6 +925,22 @@ def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, o
     return resolved
 
 
+def undeclared_edits_for_run(repo_root: Path, run_id: str, declared: Sequence[str], session_id: str = "") -> List[str]:
+    """Paths changed since the run's stage dirt snapshot that none of ``declared`` covers and no live
+    peer holds (``run_write_set._without_peer_held``). Empty without a snapshot; spawns no git
+    unless a candidate survives to the peer-hold check."""
+    from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.run_write_set import _without_peer_held
+
+    try:
+        record = record_dir(repo_root, run_id)
+    except ValueError:
+        return []
+    found = stage_dirt_snapshot.undeclared_edits(repo_root, record, declared)
+    return list(_without_peer_held(repo_root, found, session_id, run_id)) if found else []
+
+
 @register_op("review.prep")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "review.prep". Params: ``base`` (str sha), exactly one of ``paths`` (list[str]) and
@@ -943,7 +970,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             )
         except ValueError as exc:
             return _fail(str(exc))
+        undeclared = undeclared_edits_for_run(repo_root, run_id, paths, str(params.get("session_id") or ""))
+        paths = [*paths, *undeclared]
     else:
+        undeclared = []
         if leg is not None:
             return _fail("review.prep leg is accepted only with run_id")
         if not isinstance(paths, list):
@@ -984,4 +1014,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         group_count=group_count,
         run_id=run_id,
         live_runs=live_runs,
+        undeclared_edits=undeclared,
     )

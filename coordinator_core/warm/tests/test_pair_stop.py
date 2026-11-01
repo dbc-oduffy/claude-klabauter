@@ -173,7 +173,7 @@ class _Pipe:
         self.released.set()
 
 
-def test_unanswered_ask_is_not_asked_and_terminates_directly(tmp_path, monkeypatch):
+def test_unanswered_ask_is_retried_then_graced_then_terminated(tmp_path, monkeypatch):
     root = tmp_path / "mirror"
     w = _World()
     srv = w.add(40, "python.exe", [sys.executable, _script(root, SRV)])
@@ -181,13 +181,39 @@ def test_unanswered_ask_is_not_asked_and_terminates_directly(tmp_path, monkeypat
         breadcrumb, "read_breadcrumb", lambda r=None: {"pid": 40, "pipe": "p", "stable_pid_start_epoch": 1}
     )
     monkeypatch.setattr(pair_stop, "stable_pid_alive", lambda pid, stored_start_epoch="": srv.alive)
-    monkeypatch.setattr(pair_stop, "_ASK_READ_DEADLINE_SECS", 0.05)
-    monkeypatch.setattr(pair_stop, "_ASK_CONFIRM_GRACE_SECS", 30.0)
-    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(None))
+    monkeypatch.setattr(pair_stop, "_confirm_grace_secs", lambda: 0.2)
+    asks = []
+
+    def ask(pipe):
+        asks.append(pipe)
+        return False
+
     started = pair_stop.time.monotonic()
-    result = pair_stop.stop_warm_pair(root, psutil_module=w)
-    assert pair_stop.time.monotonic() - started < 5.0
+    result = pair_stop.stop_warm_pair(root, psutil_module=w, ask_server=ask)
+    assert asks == ["p", "p"]
+    assert pair_stop.time.monotonic() - started >= 0.2
     assert ("terminate", 40) in w.log and result.ok()
+
+
+def test_unanswered_ask_is_not_terminated_while_server_exits_within_grace(tmp_path, monkeypatch):
+    root = tmp_path / "mirror"
+    w = _World()
+    srv = w.add(40, "python.exe", [sys.executable, _script(root, SRV)])
+    monkeypatch.setattr(
+        breadcrumb, "read_breadcrumb", lambda r=None: {"pid": 40, "pipe": "p", "stable_pid_start_epoch": 1}
+    )
+    monkeypatch.setattr(pair_stop, "stable_pid_alive", lambda pid, stored_start_epoch="": srv.alive)
+    monkeypatch.setattr(pair_stop, "_confirm_grace_secs", lambda: 5.0)
+    threading.Timer(0.1, lambda: setattr(srv, "alive", False)).start()
+    result = pair_stop.stop_warm_pair(root, psutil_module=w, ask_server=lambda _pipe: False)
+    assert w.log == [] and result.ok()
+
+
+def test_confirm_grace_derives_from_the_drain_ceiling():
+    from coordinator_core.warm import lifecycle
+
+    assert pair_stop._confirm_grace_secs() == lifecycle._drain_ceiling_secs() + pair_stop._CONFIRM_GRACE_MARGIN_SECS
+    assert pair_stop._confirm_grace_secs() > lifecycle._drain_ceiling_secs()
 
 
 def test_answered_ask_is_asked(monkeypatch):
@@ -269,16 +295,53 @@ def test_cmdline_case_and_separator_folding(tmp_path):
 FD = ("coordinator_core", "warm", "front_door.py")
 
 
-def test_terminate_order_is_supervisor_front_door_server(tmp_path, monkeypatch):
+def test_order_is_supervisor_then_server_asked_then_front_door_asked(tmp_path, monkeypatch):
+    from coordinator_core.warm import front_door
+
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     root = tmp_path / "mirror"
     w = _World()
-    w.add(30, "python.exe", [sys.executable, _script(root, SRV)])
-    w.add(20, "python.exe", [sys.executable, _script(root, FD)])
+    srv = w.add(30, "python.exe", [sys.executable, _script(root, SRV)])
+    door = w.add(20, "python.exe", [sys.executable, _script(root, FD)])
     w.add(10, "python.exe", [sys.executable, _script(root, SUP)])
-    result = pair_stop.stop_warm_pair(root, psutil_module=w)
-    assert [pid for kind, pid in w.log if kind == "terminate"] == [10, 20, 30]
+    monkeypatch.setattr(
+        breadcrumb, "read_breadcrumb", lambda r=None: {"pid": 30, "pipe": "p", "stable_pid_start_epoch": 1}
+    )
+    monkeypatch.setattr(front_door, "read_discovery", lambda r=None: {"pid": 20, "port": 1})
+    monkeypatch.setattr(
+        pair_stop,
+        "stable_pid_alive",
+        lambda pid, stored_start_epoch="": {30: srv.alive, 20: door.alive}.get(pid, False),
+    )
+    events = []
+
+    def ask_server(pipe):
+        events.append(("ask_server", [k for k, _ in w.log]))
+        srv.alive = False
+        return True
+
+    def ask_door(record):
+        events.append(("ask_door", [k for k, _ in w.log], srv.alive))
+        door.alive = False
+        return True
+
+    result = pair_stop.stop_warm_pair(root, psutil_module=w, ask_server=ask_server, ask_front_door=ask_door)
+    assert events == [("ask_server", ["terminate"]), ("ask_door", ["terminate"], False)]
+    assert [pid for kind, pid in w.log if kind == "terminate"] == [10]
     assert result.ok() and {p.role for p in result.stopped} == {"supervisor", "front_door", "server"}
+
+
+def test_front_door_terminated_only_when_its_ask_fails(tmp_path, monkeypatch):
+    from coordinator_core.warm import front_door
+
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
+    root = tmp_path / "mirror"
+    w = _World()
+    door = w.add(20, "python.exe", [sys.executable, _script(root, FD)])
+    monkeypatch.setattr(front_door, "read_discovery", lambda r=None: {"pid": 20, "port": 1})
+    monkeypatch.setattr(pair_stop, "stable_pid_alive", lambda pid, stored_start_epoch="": door.alive)
+    result = pair_stop.stop_warm_pair(root, psutil_module=w, ask_front_door=lambda _rec: False)
+    assert ("terminate", 20) in w.log and result.ok()
 
 
 def test_stubborn_front_door_is_a_rendered_survivor(tmp_path, monkeypatch):
@@ -460,3 +523,48 @@ def test_access_denied_process_is_skipped(tmp_path):
 
     bad.cmdline = boom
     assert pair_stop.find_pair_processes(tmp_path, psutil_module=w) == []
+
+
+def test_probe_lists_access_denied_pids_and_signals_nothing(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    w.add(40, "python.exe", [sys.executable, _script(root, SRV)])
+    locked = w.add(41, "python.exe", [sys.executable, _script(root, SUP)])
+
+    def denied():
+        raise _AccessDenied()
+
+    original = w.Process
+    w.Process = lambda pid: denied() if pid == 41 else original(pid)
+    assert pair_stop.probe_pair_terminable(root, psutil_module=w) == [(41, "supervisor", "access denied")]
+    assert w.log == [] and locked.alive
+
+
+def test_probe_is_empty_when_every_pid_is_signalable(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    w.add(42, "python.exe", [sys.executable, _script(root, SRV)])
+    assert pair_stop.probe_pair_terminable(root, psutil_module=w) == []
+
+
+def test_late_unaided_exit_settles_before_the_survivor_read(tmp_path, monkeypatch):
+    root = tmp_path / "mirror"
+    w = _World()
+    ghost = pair_stop.PairProcess(pid=50, role="server", cmdline="")
+    reads = []
+
+    def find(engine_root, *, psutil_module=None):
+        reads.append(1)
+        return [ghost] if len(reads) == 3 else []
+
+    polls = []
+
+    def gone(pid, *, psutil_module=None):
+        polls.append(pid)
+        return len(polls) > 1
+
+    monkeypatch.setattr(pair_stop, "find_pair_processes", find)
+    monkeypatch.setattr(pair_stop, "_pid_gone", gone)
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert result.ok(), result.render_survivors()
+    assert len(reads) >= 4

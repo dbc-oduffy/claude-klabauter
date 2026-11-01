@@ -203,11 +203,15 @@ import os
 import re
 import sys
 import time
+import threading
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Optional, TextIO
+from typing import Any, Callable, Iterable, Mapping, Optional, TextIO
 
 from coordinator_core.group_em import box_load
+from coordinator_core.group_em import box_registry
+from coordinator_core.group_em import remote_identity
+from coordinator_core.group_em import remote_roster
 from coordinator_core.group_em import idle_report
 from coordinator_core.group_em import obligations
 from coordinator_core import memo_corpus
@@ -312,7 +316,7 @@ def _peer_repo_root(peer: dict[str, Any], default: str, box_wide: bool) -> str:
     is under `default` already.
     """
     cwd = peer.get("cwd")
-    if not box_wide or not isinstance(cwd, str) or not cwd:
+    if peer.get("remote") or not box_wide or not isinstance(cwd, str) or not cwd:
         return default
     here = os.path.abspath(cwd)
     while True:
@@ -322,6 +326,35 @@ def _peer_repo_root(peer: dict[str, Any], default: str, box_wide: bool) -> str:
         if parent == here:
             return default
         here = parent
+
+
+_refresh_thread: Optional[threading.Thread] = None
+
+
+def kick_remote_refresh(directory: Any = None) -> Optional[threading.Thread]:
+    """Start `remote_roster.refresh` on a daemon thread when `refresh_due` says so; never on the tick.
+
+    One refresh at a time: a still-running thread is returned instead of a second start.
+    Nothing raises into the caller, and a `remote_roster` without both functions is a no-op.
+    """
+    global _refresh_thread
+    due, refresh = (getattr(remote_roster, n, None) for n in ("refresh_due", "refresh"))
+    if not callable(due) or not callable(refresh):
+        return None
+    if _refresh_thread is not None and _refresh_thread.is_alive():
+        return _refresh_thread
+    base = directory if directory is not None else box_registry._group_em_dir()
+
+    def _run() -> None:
+        try:
+            if due(base):
+                refresh(base)
+        except Exception:
+            pass
+
+    _refresh_thread = threading.Thread(target=_run, name="remote-roster-refresh", daemon=True)
+    _refresh_thread.start()
+    return _refresh_thread
 
 
 def _measure_snapshot_ms(repo_root: str, box_wide: bool = False) -> tuple[float, list]:
@@ -352,8 +385,12 @@ def _current_agents(
     caller_session_id: Optional[str],
     group_em_session_id: Optional[str] = None,
     box_wide: bool = False,
+    snapshot: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
     """This tick's repo-filtered (or, `box_wide`, whole-box) peer set, with the watch's own side excluded.
+
+    `snapshot` is the tick's one `read_pass.read_remote_snapshot()`: remote boxes' rows
+    are merged from it so the rows and the reachability the GONE guard reads agree.
 
     Sourced from `read_pass.fetch_live_agents` (-> `peer_roster.build_roster`,
     already case-folded `cwd` containment -- see that module's `_normalize_path`)
@@ -381,7 +418,52 @@ def _current_agents(
     exclude = [caller_session_id]
     if group_em_session_id is not None and group_em_session_id != caller_session_id:
         exclude.append(group_em_session_id)
-    return read_pass.live_peers(repo_root, exclude, box_wide)
+    return read_pass.live_peers(repo_root, exclude, box_wide, snapshot=snapshot)
+
+
+def _watch_key(peer: Mapping[str, Any], local_id: str) -> Optional[str]:
+    """The key a peer is diffed under: the bare session id on the local box, `<box_id>:<session_id>` elsewhere.
+
+    The bare form is `remote_identity.parse_key`'s local spelling, so prior maps written
+    before cross-box identity existed already read as local.
+    """
+    session_id = peer.get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    box_id = peer.get("box_id")
+    if not box_id or box_id == local_id:
+        return session_id
+    key = peer.get("peerKey")
+    return key if isinstance(key, str) and key else remote_identity.peer_key(box_id, session_id)
+
+
+def _canonical_keys(prior: Optional[Mapping[str, Any]], local_id: str) -> dict[str, Any]:
+    """`prior` re-keyed so a local box's sessions are bare ids whichever spelling was persisted."""
+    out: dict[str, Any] = {}
+    for key, value in (prior or {}).items():
+        box_id, session_id = remote_identity.parse_key(key, local_id)
+        out[session_id if box_id == local_id else key] = value
+    return out
+
+
+def _box_of(key: str, local_id: str) -> str:
+    return remote_identity.parse_key(key, local_id)[0]
+
+
+def _held_boxes(
+    prev: Mapping[str, Any], snapshot: Mapping[str, Mapping[str, Any]], local_id: str
+) -> frozenset:
+    """Remote boxes holding a prior session whose snapshot is unreadable this tick or missing.
+
+    A box that cannot be read says nothing about its sessions, so the differ must not
+    read their absence as departure.
+    """
+    held = set(read_pass.unreachable_boxes(snapshot))
+    for key in prev:
+        box_id = _box_of(key, local_id)
+        if box_id != local_id and box_id not in snapshot:
+            held.add(box_id)
+    return frozenset(held)
 
 
 def _classify_all(
@@ -389,13 +471,15 @@ def _classify_all(
     agents: Iterable[dict[str, Any]],
     now: Optional[datetime] = None,
     box_wide: bool = False,
+    local_id: Optional[str] = None,
 ) -> dict[str, dict[str, Any]]:
+    local_id = local_id if local_id is not None else box_registry.local_box_id()
     verdicts: dict[str, dict[str, Any]] = {}
     for peer in agents:
-        session_id = peer.get("sessionId")
-        if not isinstance(session_id, str) or not session_id:
+        key = _watch_key(peer, local_id)
+        if key is None:
             continue
-        verdicts[session_id] = read_pass.classify_peer(
+        verdicts[key] = read_pass.classify_peer(
             _peer_repo_root(peer, repo_root, box_wide), peer, now=now
         )
     return verdicts
@@ -409,8 +493,20 @@ def transitions(prev: dict[str, bool], cur: dict[str, bool]) -> list[str]:
     )
 
 
-def gone(prev: dict[str, bool], cur: dict[str, bool]) -> list[str]:
-    return sorted(session_id for session_id in prev if session_id not in cur)
+def gone(
+    prev: dict[str, bool],
+    cur: dict[str, bool],
+    held_boxes: frozenset = frozenset(),
+    local_id: Optional[str] = None,
+) -> list[str]:
+    """Keys in `prev` and not `cur`, except sessions of a box in `held_boxes` (its read was broken this tick)."""
+    if held_boxes and local_id is None:
+        local_id = box_registry.local_box_id()
+    return sorted(
+        key
+        for key in prev
+        if key not in cur and not (held_boxes and _box_of(key, local_id) in held_boxes)
+    )
 
 
 def _obligation_summary(repo_root: str, session_id: str) -> str:
@@ -599,8 +695,12 @@ def _parked_line(
     cwd: Optional[str],
     now: datetime,
     name: Optional[str] = None,
+    remote: bool = False,
 ) -> str:
     """Compose one PARKED line -- observed evidence, framed as evidence.
+
+    `remote`: `session_id` is a `<box_id>:<session_id>` key and every local read (receiver
+    state, transcript, ledger) is skipped, since those files are on another box.
 
     `caller_session_id` was accepted but never
     read in this body (Pyright: reportUnusedVariable-adjacent, unused param);
@@ -627,13 +727,18 @@ def _parked_line(
     (`coordinator-content-repo docs/wiki/session-facade.md`, amended 2b6df17e6c, via
     claude-klabauter-a9).
     """
-    stamped_age = _stamped_age_seconds(repo_root, session_id, now)
-    transcript_idle = _transcript_idle_seconds(
-        repo_root, session_id, cwd, now, activity_epoch=verdict.get("activity_epoch")
-    )
-    obligations_summary = _obligation_summary(repo_root, session_id)
     reason = verdict.get("reason")
-    waiting_on, gated = _waiting_on(session_id, cwd or repo_root)
+    if remote:
+        stamped_age = transcript_idle = None
+        obligations_summary = "unknown"
+        waiting_on, gated = "unknown", False
+    else:
+        stamped_age = _stamped_age_seconds(repo_root, session_id, now)
+        transcript_idle = _transcript_idle_seconds(
+            repo_root, session_id, cwd, now, activity_epoch=verdict.get("activity_epoch")
+        )
+        obligations_summary = _obligation_summary(repo_root, session_id)
+        waiting_on, gated = _waiting_on(session_id, cwd or repo_root)
     who = f"{name} [{session_id}]" if name else str(session_id)
     if gated:
         remedy = _REMEDY_GATED
@@ -785,6 +890,7 @@ def _refuse_if_already_armed(
 
 
 def _declination(session_id: str, gate: str, reason: str) -> dict[str, Any]:
+    """`session_id` is the diff key: a bare id locally, `<box_id>:<session_id>` for a remote peer."""
     return {"session_id": session_id, "name": None, "gate": gate, "reason": reason}
 
 
@@ -850,18 +956,35 @@ def poll_once(
     if group_em_session_id is None:
         group_em_session_id = caller_session_id
 
+    local_id = box_registry.local_box_id()
+    snapshot = read_pass.read_remote_snapshot()
+    prev_parked = _canonical_keys(prev_parked, local_id)
+    prev_names = _canonical_keys(prev_names, local_id) if prev_names is not None else None
+    held = _held_boxes(prev_parked, snapshot, local_id)
+
     agents = _current_agents(
-        repo_root, caller_session_id, group_em_session_id, box_wide=box_wide
+        repo_root, caller_session_id, group_em_session_id, box_wide=box_wide, snapshot=snapshot
     )
-    agents_by_id = {
-        a.get("sessionId"): a for a in agents if isinstance(a.get("sessionId"), str)
-    }
-    verdicts = _classify_all(repo_root, agents, now=now, box_wide=box_wide)
+    agents_by_id = {}
+    for a in agents:
+        key = _watch_key(a, local_id)
+        if key is not None:
+            agents_by_id[key] = a
+    verdicts = _classify_all(repo_root, agents, now=now, box_wide=box_wide, local_id=local_id)
     cur_parked = {sid: bool(v.get("candidate")) for sid, v in verdicts.items()}
     peer_notes = {
         sid: {"name": agents_by_id.get(sid, {}).get("name"), "last_seen": now_epoch}
         for sid in cur_parked
     }
+    # A box whose snapshot could not be read this tick says nothing about its sessions:
+    # carry each at its prior value so the differ sees no departure and the next
+    # tick diffs against the last good read of that box.
+    for key, parked_before in prev_parked.items():
+        if key not in cur_parked and _box_of(key, local_id) in held:
+            cur_parked[key] = parked_before
+            carried = (prev_names or {}).get(key)
+            if carried is not None:
+                peer_notes[key] = dict(carried)
     # A re-park on an unchanged waiting_on+next is a handled park, not news. The
     # last EMITTED signature rides in peer_notes across unparked ticks so a park
     # cycle on the same wait stays quiet; any change re-emits.
@@ -886,7 +1009,7 @@ def poll_once(
         if box_wide
         else os.path.basename(os.path.abspath(str(repo_root))) or str(repo_root)
     )
-    for session_id in gone(prev_parked, cur_parked):
+    for session_id in gone(prev_parked, cur_parked, held, local_id):
         if session_id in (caller_session_id, group_em_session_id):
             continue
         prior = (prev_names or {}).get(session_id) or {}
@@ -913,7 +1036,8 @@ def poll_once(
             )
             continue
         peer = agents_by_id.get(session_id, {})
-        if _recent_contact(
+        is_remote = bool(peer.get("remote"))
+        if not is_remote and _recent_contact(
             repo_root,
             group_em_session_id,
             _holder_name(agents, group_em_session_id),
@@ -933,6 +1057,7 @@ def poll_once(
             peer.get("cwd"),
             now,
             name=peer.get("name"),
+            remote=is_remote,
         )
         sig = _park_signature(line)
         if sig is not None and sig == peer_notes.get(session_id, {}).get("parked_sig"):
@@ -1246,6 +1371,10 @@ def until_event(
     waited = 0.0
     while max_iterations is None or iterations < max_iterations:
         buffer = io.StringIO()
+        try:
+            kick_remote_refresh()
+        except Exception:
+            pass
         tick_once(
             repo_root,
             caller_session_id=caller_session_id,
@@ -1398,6 +1527,7 @@ def main(
         declinations: list = []
         tick_now = datetime.now(timezone.utc)
         try:
+            kick_remote_refresh()
             cur_parked, declinations, peer_notes, cur_inbox_open = poll_once(
                 repo_root,
                 caller_session_id,
@@ -1469,6 +1599,79 @@ def main(
         sleep_fn(interval)
 
 
+REMOTE_ADMISSION_TAIL_BYTES = 65536
+
+
+def _open_runs(admission_file: str) -> Optional[list]:
+    """START lines with no later END for the same (session_id, run), from a bounded tail; None if unreadable."""
+    try:
+        with open(admission_file, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            start = max(0, size - REMOTE_ADMISSION_TAIL_BYTES)
+            fh.seek(start)
+            raw = fh.read()
+    except OSError:
+        return None
+    lines = raw.split(b"\n")
+    if start > 0:
+        lines = lines[1:]
+    open_runs: dict = {}
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        key = (rec.get("session_id"), rec.get("run"))
+        if rec.get("phase") == "START":
+            open_runs[key] = rec
+        elif rec.get("phase") == "END":
+            open_runs.pop(key, None)
+    return list(open_runs)
+
+
+def remote_box_rows(directory=None) -> list:
+    """Per registered non-local box: its heartbeat liveness and open runs (START without END, last 64 KiB).
+
+    Rows are {box_id, session_id, run, live, reachable}; a box with no open run yields one row with
+    session_id/run None. ``reachable`` is False when its heartbeat record cannot be read. Never raises,
+    and never feeds `_current_agents`: an unreachable box must not report peers gone.
+    """
+    from pathlib import Path
+
+    from coordinator_core.group_em import box_heartbeat
+
+    rows: list = []
+    try:
+        boxes = box_registry.read_boxes(directory)
+        local = box_registry.local_box_id()
+    except Exception:
+        return rows
+    for box in boxes:
+        box_id = box.get("box_id")
+        if box_id in (box_registry.LOCAL_BOX_ID, local):
+            continue
+        try:
+            beat = box_heartbeat.read(box)
+            reachable = beat.get("age_s") is not None
+            admission = Path(box["root"]) / "state" / "group-em" / "box" / "admission.jsonl"
+            runs = _open_runs(str(admission)) if reachable else None
+        except Exception:
+            beat, reachable, runs = {"live": False}, False, None
+        live = bool(beat.get("live"))
+        if not reachable or not runs:
+            rows.append(
+                {"box_id": box_id, "session_id": None, "run": None, "live": live, "reachable": reachable}
+            )
+            continue
+        for session_id, run in runs:
+            rows.append(
+                {"box_id": box_id, "session_id": session_id, "run": run, "live": live, "reachable": True}
+            )
+    return rows
+
+
 def box_census(repo_root: str, liveness: dict) -> Optional[dict]:
     """Live sessions on the whole box, by repo, against what the watch subscribes.
 
@@ -1512,7 +1715,7 @@ def box_census(repo_root: str, liveness: dict) -> Optional[dict]:
                 name = top.name if top else "unknown"
                 others[name] = others.get(name, 0) + 1
         subscribed = liveness.get("subscribed_peers") or 0
-        return {
+        census = {
             "live": total,
             "repo_live": in_repo,
             "repo_subscribed": subscribed,
@@ -1521,6 +1724,10 @@ def box_census(repo_root: str, liveness: dict) -> Optional[dict]:
         }
     except Exception:
         return None
+    remote = remote_box_rows()
+    if remote:
+        census["remote_boxes"] = remote
+    return census
 
 
 def box_line(census: Optional[dict]) -> str:
@@ -1528,11 +1735,23 @@ def box_line(census: Optional[dict]) -> str:
     if census is None:
         return "  Box population: unreadable -- unwatched sessions unknown."
     others = census["other_repos"]
-    return (
+    line = (
         f"  Subscribed {census['repo_subscribed']}/{census['repo_live']} in this repo; "
         f"box: {census['live']} live sessions ({sum(others.values())} in "
         f"{len(others)} other repos), {census['unwatched']} unwatched."
     )
+    by_box: dict = {}
+    for row in census.get("remote_boxes") or []:
+        by_box.setdefault(row["box_id"], []).append(row)
+    for box_id, rows in by_box.items():
+        if not rows[0].get("reachable", True):
+            line += f"\n  box {box_id}: unreachable"
+            continue
+        runs = [r for r in rows if r.get("session_id") or r.get("run")]
+        state = "live" if rows[0].get("live") else "stale"
+        detail = "; ".join(f"{r.get('session_id')} {r.get('run')}" for r in runs) or "no open runs"
+        line += f"\n  box {box_id}: {state}, {len(runs)} open run(s): {detail}"
+    return line
 
 
 def _cli(argv: "list[str] | None" = None) -> int:

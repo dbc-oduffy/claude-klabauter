@@ -154,6 +154,30 @@ def test_converges_against_seam_check(root):
     assert _fix(root, names)["edges_added"] == []
 
 
+def test_order_hint_reverses_the_path_order_direction(root):
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    b = _plan(root, "b", _row("R1", "[x.py]"))
+    r = _fix(root, [a, b], order=[b, a])
+    assert r["edges_added"] == [{"plan": a, "chunk": "R1", "depends_on": {"plan": b, "chunk": "R1"}, "path": "x.py"}]
+    assert r["files"] == [a] and r["converged"] is True
+    pset = {n: plan_seam_check._Plan(n, root) for n in (a, b)}
+    assert not [f for f in plan_seam_check._collision_findings(pset, {"named_set": True, "hubs": set()}) if f["path"]]
+
+
+def test_order_hint_naming_only_one_member_keeps_path_order(root):
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    b = _plan(root, "b", _row("R1", "[x.py]"))
+    r = _fix(root, [a, b], order=[a])
+    assert r["edges_added"][0]["plan"] == b and r["edges_added"][0]["depends_on"]["plan"] == a
+    assert _fix(root, [a, b], order=[b, a])["edges_added"] == []
+
+
+def test_order_must_be_a_list_of_strings(root):
+    a = _plan(root, "a", _row("R1", "[x.py]"))
+    with pytest.raises(ValueError):
+        _fix(root, [a], order="a")
+
+
 def test_params_validated(root):
     a = _plan(root, "a", _row("R1", "[x.py]"))
     with pytest.raises(ValueError):

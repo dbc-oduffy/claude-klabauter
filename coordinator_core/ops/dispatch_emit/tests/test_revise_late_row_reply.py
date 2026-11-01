@@ -45,9 +45,7 @@ def test_before_verify_the_reply_names_the_pre_verify_leg(tmp_path, monkeypatch)
 
 def test_after_verify_the_reply_says_it_lands_on_refire(tmp_path, monkeypatch):
     root = _repo(tmp_path)
-    prompts = record_dir(root, RUN) / "prompts"
-    prompts.mkdir()
-    (prompts / "verify.md").write_text("verify", encoding="utf-8")
+    (record_dir(root, RUN) / rl.VERIFY_READ_MARKER).write_text("1", encoding="utf-8")
     out = _revise(root, monkeypatch)
     assert out["ok"] is True and out["lands_on_refire"] is True
     assert out["next"]["kind"] == "refire"

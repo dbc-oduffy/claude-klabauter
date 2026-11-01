@@ -477,7 +477,7 @@ class PreparedSplice:
         token = f"{os.getpid()}-{threading.get_ident()}-{next(_TOKENS)}"
         self._token = token
         with _HOLDERS_GUARD:
-            _HOLDERS[token] = threading.current_thread()
+            _HOLDERS[token] = _Holder()
         self._owner_path.write_text(
             json.dumps({"pid": os.getpid(), "token": token}), encoding="utf-8"
         )
@@ -517,9 +517,28 @@ class PreparedSplice:
         except Exception:  # noqa: BLE001 -- interpreter teardown
             pass
 
+    def held(self) -> bool:
+        """False once an acquirer reclaimed this lock (the dispatch was abandoned); the files
+        then belong to the successor and `publish()` refuses."""
+        with _HOLDERS_GUARD:
+            return self._token is not None and self._token in _HOLDERS
+
+    def _begin_publish(self) -> bool:
+        with _HOLDERS_GUARD:
+            holder = _HOLDERS.get(self._token) if self._token is not None else None
+            if holder is None:
+                return False
+            holder.publishing = True
+            return True
+
     def publish(self) -> None:
         # Abort only on failure: after a successful rename the lock path is free, and a peer may
         # already hold a fresh `index.lock` there that `abort()` would delete.
+        if not self._begin_publish():
+            self.abort()
+            raise IndexWriteError(
+                "index.lock was reclaimed after the dispatch was abandoned; index not written"
+            )
         try:
             self._release_owner()
             self._publish()
@@ -536,8 +555,29 @@ class PreparedSplice:
 
 _OWNER_SUFFIX = ".owner"
 _TOKENS = itertools.count(1)
-_HOLDERS: Dict[str, threading.Thread] = {}
 _HOLDERS_GUARD = threading.Lock()
+
+
+class _Holder:
+    """A live in-process lock holder. `publishing` is set under `_HOLDERS_GUARD` by the holder's
+    own `publish()`; from then on no reaper may take the lock, because the rename is under way."""
+
+    def __init__(self) -> None:
+        self.thread = threading.current_thread()
+        self.abandon = dispatch_abandon.ACTIVE.get()
+        self.publishing = False
+
+    def reapable(self) -> bool:
+        """True when this holder will never complete its splice: its thread finished, or the
+        dispatcher told it the op timed out and it has not begun the publish rename."""
+        if self.publishing:
+            return False
+        return not self.thread.is_alive() or (
+            self.abandon is not None and self.abandon.is_set()
+        )
+
+
+_HOLDERS: Dict[str, _Holder] = {}
 
 
 def _owner_path(lock_path: Path) -> Path:
@@ -585,7 +625,9 @@ def _recover_dead_writer(lock_path: Path) -> bool:
     if pid == os.getpid():
         with _HOLDERS_GUARD:
             holder = _HOLDERS.get(token)
-        gone = holder is None or not holder.is_alive()
+            gone = holder is None or holder.reapable()
+            if gone:
+                _HOLDERS.pop(token, None)
     else:
         gone = _pid_gone(pid)
     if not gone:
@@ -597,8 +639,6 @@ def _recover_dead_writer(lock_path: Path) -> bool:
         os.replace(owner, claimed)
     except OSError:
         return False
-    with _HOLDERS_GUARD:
-        _HOLDERS.pop(token, None)
     try:
         claimed.unlink()
     except OSError:

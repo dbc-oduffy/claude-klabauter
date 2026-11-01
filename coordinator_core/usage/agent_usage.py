@@ -59,12 +59,30 @@ def agent_meta(run_dir: str, agent_id: str, transcript: Optional[str]) -> dict:
     return {}
 
 
-def _messages(path: str) -> list[dict]:
-    """Assistant usage messages, one per (message.id, requestId), last row wins."""
+def _errored_ids(raw: str) -> set:
+    """tool_use ids whose tool_result block on this transcript line has is_error true."""
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        return set()
+    msg = event.get("message") if isinstance(event, dict) else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(content, list):
+        return set()
+    return {b.get("tool_use_id") for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error")}
+
+
+def _messages(path: str, failed: Optional[set] = None) -> list[dict]:
+    """Assistant usage messages, one per (message.id, requestId), last row wins.
+
+    When `failed` is given, tool_use ids of errored tool_results are added to it."""
     latest: dict[Any, dict] = {}
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             for n, raw in enumerate(handle):
+                if failed is not None and '"is_error"' in raw and '"tool_result"' in raw:
+                    failed |= _errored_ids(raw)
                 parsed = usage_line(raw, n)
                 if parsed is not None:
                     key, model, usage, _speed = parsed
@@ -78,15 +96,15 @@ def _messages(path: str) -> list[dict]:
     return list(latest.values())
 
 
-def _tool_uses(raw: str, n: int) -> dict[Any, tuple[str, Optional[str]]]:
-    """{tool_use id: (name, input.file_path)} of one transcript line's tool_use blocks."""
+def _tool_uses(raw: str, n: int) -> dict[Any, tuple[str, Optional[str], Optional[str]]]:
+    """{tool_use id: (name, input.file_path, input.command)} of one transcript line's tool_use blocks."""
     try:
         event = json.loads(raw)
     except ValueError:
         return {}
     msg = event.get("message") if isinstance(event, dict) else None
     content = msg.get("content") if isinstance(msg, dict) else None
-    out: dict[Any, tuple[str, Optional[str]]] = {}
+    out: dict[Any, tuple[str, Optional[str], Optional[str]]] = {}
     if not isinstance(content, list):
         return out
     for i, block in enumerate(content):
@@ -94,9 +112,27 @@ def _tool_uses(raw: str, n: int) -> dict[Any, tuple[str, Optional[str]]]:
             continue
         inp = block.get("input")
         path = inp.get("file_path") if isinstance(inp, dict) else None
+        cmd = inp.get("command") if isinstance(inp, dict) else None
         out[block.get("id") or ("line", n, i)] = (
-            str(block.get("name") or ""), path if isinstance(path, str) else None)
+            str(block.get("name") or ""), path if isinstance(path, str) else None,
+            cmd[:64] if isinstance(cmd, str) else None)
     return out
+
+
+_SEARCH_TOOLS = frozenset({"Grep", "Glob"})
+_SEARCH_COMMANDS = frozenset({"grep", "rg", "find"})
+
+
+def _is_search(name: str, command: Optional[str]) -> bool:
+    """Grep, Glob, or a Bash command whose first word is grep/rg/find.
+
+    Deliberately narrow: `git grep` and composed commands are not counted."""
+    if name in _SEARCH_TOOLS:
+        return True
+    if name != "Bash" or not command:
+        return False
+    words = command.split(None, 1)
+    return bool(words) and words[0] in _SEARCH_COMMANDS
 
 
 def _norm_path(path: str) -> str:
@@ -127,20 +163,31 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
     row: dict[str, Any] = {
         "agent_id": agent_id, "label": label, "model": None, "speed": None,
         **_zero(), "unpriced": False, "unpriced_tokens": 0,
-        "tool_calls": 0, "rag_calls": 0, "peak_context": 0, "max_same_file_reads": 0,
+        "tool_calls": 0, "rag_calls": 0, "search_calls": 0, "rag_failed": 0, "rag_fallback": 0,
+        "peak_context": 0, "max_same_file_reads": 0,
     }
     priced = 0
     models: dict[str, int] = {}
     reads: dict[str, int] = {}
-    for m in (_messages(path) if path else []):
+    failed: set = set()
+    messages = _messages(path, failed) if path else []
+    rag_failed_seen = False
+    for m in messages:
         usage = m["usage"]
         row["peak_context"] = max(row["peak_context"], sum(
             _num(usage, f) for f in
             ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")))
-        for name, fp in m["tools"].values():
+        for tid, (name, fp, cmd) in m["tools"].items():
             row["tool_calls"] += 1
+            if _is_search(name, cmd):
+                row["search_calls"] += 1
+                if rag_failed_seen:
+                    row["rag_fallback"] += 1
             if isinstance(name, str) and name.startswith("mcp__project-rag__"):
                 row["rag_calls"] += 1
+                if tid in failed:
+                    row["rag_failed"] += 1
+                    rag_failed_seen = True
             if name == "Read" and fp:
                 k = _norm_path(fp)
                 reads[k] = reads.get(k, 0) + 1
@@ -200,4 +247,9 @@ def scan_run(run_dir: str) -> dict[str, Any]:
         _add(rbucket, tokens, a["usd"])
         _add(total, tokens, a["usd"])
         total["unpriced_tokens"] += a["unpriced_tokens"]
+    searching = sum(1 for a in agents if a["search_calls"] or a["rag_calls"])
+    rag_agents = sum(1 for a in agents if a["rag_calls"])
+    total["rag_uptake"] = {"searching_agents": searching, "rag_agents": rag_agents,
+                           "fallback_agents": sum(1 for a in agents if a["rag_fallback"]),
+                           "ratio": rag_agents / searching if searching else None}
     return {"agents": agents, "by_model": by_model, "by_role": by_role, "run_total": total}

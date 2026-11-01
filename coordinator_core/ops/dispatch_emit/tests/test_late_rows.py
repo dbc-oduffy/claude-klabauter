@@ -72,11 +72,19 @@ def test_late_rows_op_declares_a_repo_scope():
     assert OP_KEY_SCOPE.get(OP_LATE_ROWS) == "common_dir"
 
 
-def test_verify_staged_follows_the_prompt_file(tmp_path):
-    dir_ = tmp_path / "run"
-    (dir_ / "prompts").mkdir(parents=True)
-    assert rl.verify_staged(dir_) is False
-    (dir_ / "prompts" / "ledger-fix.md").write_text("x", encoding="utf-8")
-    assert rl.verify_staged(dir_) is False
+def test_verify_staged_follows_the_verify_leg_read_not_the_prompt_files(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    dir_ = record_dir(root, RUN)
+    (dir_ / "prompts").mkdir(parents=True, exist_ok=True)
     (dir_ / "prompts" / "verify.md").write_text("x", encoding="utf-8")
+    assert rl.verify_staged(dir_) is False
+    rl._late_rows_handler({"run_id": RUN}, repo_root=root)
+    assert rl.verify_staged(dir_) is False
+    rl._late_rows_handler({"run_id": RUN, "verify_read": True}, repo_root=root)
     assert rl.verify_staged(dir_) is True
+
+
+def test_late_rows_op_is_classified_mutating():
+    from coordinator_core.authz.classification import OpClass, OP_CLASSIFICATION
+
+    assert OP_CLASSIFICATION[OP_LATE_ROWS] is OpClass.MUTATING

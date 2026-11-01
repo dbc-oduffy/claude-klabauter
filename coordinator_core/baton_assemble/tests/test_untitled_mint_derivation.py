@@ -135,13 +135,28 @@ class TestSessionSizingDerivation(_GitRepoFixture):
         slug = _resolve_session_sizing_slug(self.root)
         self.assertIsNone(slug)
 
-    def test_sizing_precedes_title_in_standalone_derivation(self) -> None:
+    def test_title_precedes_sizing_in_standalone_derivation(self) -> None:
         session_id = "44444444-4444-4444-4444-444444444444"
-        self._commit_sizing("2026-08-10-the-sizing-slug-wins.yaml", session_id)
+        self._commit_sizing("2026-08-10-the-sizing-slug-loses.yaml", session_id)
         self._set_session_env(COORDINATOR_SESSION_ID=session_id)
         path = _compute_fresh_output_path(
             "", root=self.root, title="A totally different title"
         )
+        self.assertIn("a-totally-different-title", Path(path).stem)
+        self.assertNotIn("the-sizing-slug-loses", Path(path).stem)
+
+    def test_sizing_wins_when_no_title(self) -> None:
+        session_id = "77777777-7777-7777-7777-777777777777"
+        self._commit_sizing("2026-08-10-the-sizing-slug-wins.yaml", session_id)
+        self._set_session_env(COORDINATOR_SESSION_ID=session_id)
+        path = _compute_fresh_output_path("", root=self.root, title=None)
+        self.assertIn("the-sizing-slug-wins", Path(path).stem)
+
+    def test_unsluggable_title_falls_back_to_sizing(self) -> None:
+        session_id = "88888888-8888-8888-8888-888888888888"
+        self._commit_sizing("2026-08-10-the-sizing-slug-wins.yaml", session_id)
+        self._set_session_env(COORDINATOR_SESSION_ID=session_id)
+        path = _compute_fresh_output_path("", root=self.root, title="!!!")
         self.assertIn("the-sizing-slug-wins", Path(path).stem)
 
     def test_multiple_sizings_same_session_picks_most_recent(self) -> None:

@@ -223,6 +223,77 @@ def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
     assert "DR-326" in err and "DR-331" in err
 
 
+def test_no_pipe_under_held_marker_spawns_nothing_and_returns_within_drain_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time
+
+    from coordinator_core.warm import breadcrumb
+
+    def _raise_enoent(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
+    )
+    monkeypatch.setattr(breadcrumb, "should_spawn", lambda engine_root=None, **kw: True)
+    with breadcrumb.hold_publish_marker(client._engine_clone_root(), holder="t"):
+        started = time.monotonic()
+        assert client.try_warm_dispatch(_MSG) is None
+        elapsed = time.monotonic() - started
+    assert spawns == [], "a held publish marker must suppress the spawn even if should_spawn says yes"
+    assert elapsed < breadcrumb.DRAIN_WAIT_SECS + 1.0
+
+
+def test_no_pipe_waits_out_a_marker_released_inside_the_drain_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from coordinator_core.warm import breadcrumb
+
+    opens = []
+
+    def _enoent_then_serve(pipe):
+        opens.append(pipe)
+        if len(opens) == 1:
+            raise FileNotFoundError(2, "no such pipe")
+        return _FakePipe()
+
+    monkeypatch.setattr(client, "_open_pipe", _enoent_then_serve)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
+    )
+    with breadcrumb.hold_publish_marker(client._engine_clone_root(), holder="t") as path:
+        timer = threading.Timer(0.1, path.unlink)
+        timer.start()
+        try:
+            response = client.try_warm_dispatch(_MSG)
+        finally:
+            timer.join()
+    assert response is not None, "a caller queued behind the copy is served, not failed"
+    assert len(opens) == 2
+    assert spawns == []
+
+
+def test_no_pipe_with_no_marker_still_spawns_after_the_drain_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_enoent(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
+    )
+    assert client.try_warm_dispatch(_MSG) is None
+    assert len(spawns) == 1
+
+
 def _drive_one_cold_dispatch(monkeypatch: pytest.MonkeyPatch, exc: Exception) -> None:
     from coordinator_core.warm import skew
 

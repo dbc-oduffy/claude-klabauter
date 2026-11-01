@@ -65,6 +65,37 @@ def test_flow_subtypes(tmp_path):
     assert _decl(tmp_path, "---\nproject_subtypes: [a, 'unreal']\n---\n") is True
 
 
+def test_unreal_engine_type_and_subtype(tmp_path):
+    assert _decl(tmp_path, "---\nproject_type: unreal-engine\n---\n") is True
+    assert _decl(tmp_path, "---\nproject_subtypes: [unreal-engine]\n---\n") is True
+    assert _decl(tmp_path, "---\nproject_type: unreal-engine-tools\n---\n") is False
+
+
+def test_is_ue_repo_declared_or_marker(tmp_path):
+    from coordinator_core.ops.dispatch_emit import ue_route_source
+
+    ue_route_source.clear_caches()
+    declared = tmp_path / "declared"
+    declared.mkdir()
+    (declared / "coordinator.local.md").write_text(
+        "---\nproject_type: unreal-engine\n---\n", encoding="utf-8"
+    )
+    marker = tmp_path / "marker"
+    (marker / "Game").mkdir(parents=True)
+    (marker / "Game" / "G.uproject").write_text("{}", encoding="utf-8")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "coordinator.local.md").write_text(
+        "---\nproject_type: general\n---\n", encoding="utf-8"
+    )
+    try:
+        assert ue_route_source.is_ue_repo(declared) is True
+        assert ue_route_source.is_ue_repo(marker) is True
+        assert ue_route_source.is_ue_repo(plain) is False
+    finally:
+        ue_route_source.clear_caches()
+
+
 def test_general_is_false(tmp_path):
     body = "---\nproject_type: general\nproject_subtypes: []\n---\n"
     assert _decl(tmp_path, body) is False

@@ -162,6 +162,31 @@ def _hunk_aware_clear(root: Path, paths: list, credited: set) -> set:
     return set(candidates) - _residue_conflicts(root, candidates)
 
 
+CRLF, LF = bytes([13, 10]), bytes([10])
+
+
+def _eol_only_residue(root: Path, path: str) -> bool:
+    """True when the working file differs from its index blob by CRLF-vs-LF alone and ``core.autocrlf`` is not
+    ``true``: a line-ending rewrite is a peer's change there, though the withheld-hold test calls it clean."""
+    from coordinator_core.git import git_index
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.ceremony import commit_companion
+
+    try:
+        entry = git_index.parse_index_identity(root, {path}).get(path)
+        if entry is None:
+            return False
+        data = (root / path).read_bytes()
+        if commit_companion._blob_sha(data) == entry.sha:
+            return False
+        if commit_companion._blob_sha(data.replace(CRLF, LF)) != entry.sha:
+            return False
+        cfg = run_git(["--no-optional-locks", "-C", str(root), "config", "--get", "core.autocrlf"])
+        return not (cfg.ok and cfg.stdout.strip().lower() == "true")
+    except Exception:  # noqa: BLE001 -- undecided: leave the hold verdict to holds_path
+        return False
+
+
 def _peer_holder(root: Path, declared: set, credited: set) -> Optional[tuple[str, str]]:
     """``(path, holder)`` of the first declared path a halted run outside *credited* still holds.
 
@@ -184,7 +209,7 @@ def _peer_holder(root: Path, declared: set, credited: set) -> Optional[tuple[str
             continue
         entry = idx._parse(idx._dir(root) / name)
         for path in entry.paths if entry else ():
-            if path in declared and holds_path(root, holder, path, None):
+            if path in declared and (holds_path(root, holder, path, None) or _eol_only_residue(root, path)):
                 try:
                     prints = (ask_contract.record_dir(root, holder) / WITHHELD_PRINTS_FILE).exists()
                 except (OSError, ValueError):

@@ -59,7 +59,9 @@ def test_usage_json_written_and_total_returned(tmp_path, monkeypatch):
     assert {a["agent_id"] for a in body["agents"]} == {"w1", "c1"}
     total = body["run_total"]
     assert total["total_tokens"] == 1500 and total["usd"] > 0
-    assert reply == {"usage_total": {"total_tokens": 1500, "usd": total["usd"]}}
+    assert total["rag_uptake"] == {"searching_agents": 0, "rag_agents": 0, "fallback_agents": 0, "ratio": None}
+    assert reply == {"usage_total": {"total_tokens": 1500, "usd": total["usd"],
+                                     "rag_uptake": total["rag_uptake"]}}
 
 
 def test_ambiguous_run_dir_writes_nothing_and_does_not_fail(tmp_path, monkeypatch):

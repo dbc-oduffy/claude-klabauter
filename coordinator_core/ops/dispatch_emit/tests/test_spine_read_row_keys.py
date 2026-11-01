@@ -88,6 +88,28 @@ def test_disjoint_parallel_absent_defaults_false(tmp_path):
     assert read_spine(tmp_path / PLAN_REL)[0].disjoint_parallel is False
 
 
+def test_em_run_with_needs_slot_is_a_known_key_and_reads_without_warning(tmp_path, caplog):
+    _plan(tmp_path, "  em_run: true\n  needs_slot: true\n")
+    with caplog.at_level(logging.WARNING):
+        rows = read_spine(tmp_path / PLAN_REL)
+    assert [r.id for r in rows] == ["C1"]
+    assert not any("em_run" in r.getMessage() for r in caplog.records)
+
+
+def test_em_run_passes_the_mise_prep_spine_check():
+    from coordinator_core.ops.dispatch_emit import spine_read
+
+    plan = (
+        "---\ndeliverable_id: dlv-keys-abc123\n---\n# Keys\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: P1\n  title: row\n  change_kind: code-edit\n  surface: pkg/a.py\n"
+        "  writes:\n    - pkg/a.py\n  em_run: true\n  needs_slot: true\n```\n"
+    )
+    result = spine_read.load_rows_memo(plan)
+    unknown = sorted(k for r in result.rows for k in r if k not in KNOWN_ROW_KEYS)
+    assert unknown == []
+    assert "em_run" in KNOWN_ROW_KEYS
+
+
 def test_exports_for_readiness_consumers():
     assert ROW_KEY_ALIASES["model"] == "agent_model"
     assert {"model", "agent_model", "effort"} <= KNOWN_ROW_KEYS

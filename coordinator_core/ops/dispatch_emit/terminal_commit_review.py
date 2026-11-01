@@ -125,7 +125,8 @@ def _recorded_fingerprints(
     an exact tie goes to the session write. When the review wave applied fixes
     (``fixes_integrated_at``: epoch the wave's integration was recorded), a reviewed path whose
     bytes were last written no later than that moment, after the newest session write, is declared
-    at those bytes; a later change keeps the older expectation and refuses. A path the wave's own
+    at those bytes; a later change keeps the older expectation and refuses, unless the wave's
+    ledger rows (``wave_paths.fix_rows``) show the later bytes carry the applied fix. A path the wave's own
     record lists (``wave_paths``) counts as reviewed when no stored hash names it. A path whose
     newest session event postdates the review (``fixes_integrated_at`` when set, else
     ``reviewed_at``) and whose file mtime is no earlier than that event is declared at its current
@@ -155,6 +156,9 @@ def _recorded_fingerprints(
                 settled = target.stat().st_mtime <= fixes_integrated_at
             except OSError:
                 settled = False
+            if not settled:
+                rows = getattr(wave_paths, "fix_rows", {}).get(p)
+                settled = bool(rows) and _carries_applied_fix(target, rows)
             post_fix = touch_record.compute_content_hash(target) if settled else None
             if post_fix:
                 out[p] = post_fix
@@ -180,22 +184,70 @@ def _recorded_fingerprints(
     return out
 
 
-def _review_write_events(worktree_root: Path, review_writes: Optional[dict]) -> dict:
+REVIEW_RECORD_AGENT = "review-record"
+
+
+def _reverify_finished_at(worktree_root: Path, inline_review: object) -> Optional[float]:
+    """Epoch the re-verify step finished: the newest mtime of the files its record names
+    (``sidecar_path``, ``record``); None when the record names none that resolve."""
+    block = inline_review.get("reverify") if isinstance(inline_review, dict) else None
+    if not isinstance(block, dict):
+        return None
+    stamps: list = []
+    for key in ("sidecar_path", "record"):
+        rel = block.get(key)
+        if isinstance(rel, str) and rel:
+            try:
+                stamps.append((worktree_root / rel).stat().st_mtime)
+            except OSError:
+                continue
+    return max(stamps) if stamps else None
+
+
+def _review_write_events(
+    worktree_root: Path, review_writes: Optional[dict], inline_review: object = None
+) -> dict:
     """``{path: (sha256, epoch)}`` of the newest hashed write event, in the sink of the agent
     ``review_writes`` names for that path, per path of ``review_writes``; one sink walk per
     distinct agent. A path whose agent's newest write is hashless, or whose sink is unreadable,
-    has no entry."""
+    has no entry. A path recorded by the re-verify record (``REVIEW_RECORD_AGENT``, which has no
+    sink) is declared at its current bytes, stamped with the file's mtime. When the record carries
+    ``edited_sha256`` ({path: sha256}) for the path, those bytes must equal the recorded hash and
+    the mtime is not consulted; otherwise the mtime must be no later than the re-verify step's
+    finish. A later change has no entry and keeps refusing."""
     if not review_writes:
         return {}
     from coordinator_core.session import core, touch_record
 
+    out: dict = {}
+    recorded = {p for p, a in review_writes.items() if a == REVIEW_RECORD_AGENT}
+    finished = _reverify_finished_at(worktree_root, inline_review) if recorded else None
+    block = inline_review.get("reverify") if isinstance(inline_review, dict) else None
+    hashes = block.get("edited_sha256") if isinstance(block, dict) else None
+    hashes = hashes if isinstance(hashes, dict) else {}
+    for p in recorded:
+        recorded_hash = hashes.get(p)
+        if not isinstance(recorded_hash, str) or not recorded_hash:
+            recorded_hash = None
+        if recorded_hash is None and finished is None:
+            continue
+        target = worktree_root / p
+        try:
+            mtime = target.stat().st_mtime
+        except OSError:
+            continue
+        if recorded_hash is None and mtime > finished:
+            continue
+        digest = touch_record.compute_content_hash(target)
+        if digest and (recorded_hash is None or digest == recorded_hash):
+            out[p] = (digest, mtime)
     hub = core.sessions_dir(str(worktree_root))
     if not hub:
-        return {}
+        return out
     by_agent: dict = {}
     for path, agent_id in review_writes.items():
-        by_agent.setdefault(agent_id, set()).add(path)
-    out: dict = {}
+        if agent_id != REVIEW_RECORD_AGENT:
+            by_agent.setdefault(agent_id, set()).add(path)
     for agent_id, paths in by_agent.items():
         newest: dict = {}
         try:
@@ -250,6 +302,7 @@ def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> tuple:
             continue
     paths: set = set()
     wave_stamps: list = []
+    fix_rows: dict = {}
     listed = inline_review.get("wave_sidecar_paths")
     for w in listed if isinstance(listed, list) else []:
         if isinstance(w, str) and w:
@@ -257,6 +310,10 @@ def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> tuple:
             if done_at is not None:
                 wave_stamps.append(done_at)
                 paths.update(fixed)
+                for f, rows in _reviewer_fix_rows(worktree_root / w).items():
+                    fix_rows.setdefault(f, []).extend(rows)
+    # The cutoff is the integration record's mtime, else the reviewer's stamp; the applier can write
+    # after either, so the ledger rows let a later write that carries the fix stand as delivery.
     if stamps:
         at, newest = max(stamps, key=lambda s: s[0])
         paths.update(_wave_slice_files(newest))
@@ -264,12 +321,19 @@ def _fixes_integrated_at(worktree_root: Path, inline_review: object) -> tuple:
         at = max(wave_stamps)
     else:
         return None, frozenset()
-    return at, frozenset(paths)
+    wave = _WavePaths(paths)
+    wave.fix_rows = fix_rows
+    return at, wave
 
 
 _VERIFIED_AT_RE = re.compile(r"^findings_ledger:.*?\bverified_at:\s*['\"]?([0-9T:.\-]+Z?)", re.MULTILINE)
 
 _LEDGER_BLOCK_RE = re.compile(r"^## Findings Ledger\b.*?^```json\s*\n(.*?)\n```", re.MULTILINE | re.DOTALL)
+
+
+# A whole-second ``verified_at`` truncates the finish: a fix written later in that same second
+# carries a larger mtime, so the stamp covers the second it names.
+_WHOLE_SECOND_SPAN = 1.0 - 1e-6
 
 
 def _reviewer_applied_fixes(sidecar: Path) -> tuple:
@@ -286,12 +350,19 @@ def _reviewer_applied_fixes(sidecar: Path) -> tuple:
     done_at = _epoch_of(stamp.group(1) if stamp else None)
     if done_at is None:
         return None, frozenset()
+    if "." not in stamp.group(1):
+        done_at += _WHOLE_SECOND_SPAN
+    return done_at, frozenset(f for f, _ in _applied_fix_rows(text))
+
+
+def _applied_fix_rows(text: str) -> list:
+    """``[(file, row)]`` for each verified, unsuspended ledger row that changed text."""
     block = _LEDGER_BLOCK_RE.search(text)
     try:
         rows = json.loads(block.group(1)) if block else []
     except ValueError:
         rows = []
-    fixed = set()
+    out = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or row.get("verified") is not True:
             continue
@@ -299,8 +370,45 @@ def _reviewer_applied_fixes(sidecar: Path) -> tuple:
             continue
         f = row.get("file")
         if isinstance(f, str) and f:
-            fixed.add(f.replace("\\", "/"))
-    return done_at, frozenset(fixed)
+            out.append((f.replace("\\", "/"), row))
+    return out
+
+
+class _WavePaths(frozenset):
+    """The wave's fixed paths; ``fix_rows`` maps a ledger-named path to its ``(before, after)`` pairs,
+    the applier's expected change, which a write after the reviewer's ``verified_at`` must show."""
+
+    fix_rows: dict
+
+
+def _reviewer_fix_rows(sidecar: Path) -> dict:
+    """``{path: [(before, after), ...]}`` of the applied ledger rows of a reviewer's sidecar."""
+    try:
+        text = sidecar.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    out: dict = {}
+    for f, row in _applied_fix_rows(text):
+        b, a = row.get("before"), row.get("after")
+        out.setdefault(f, []).append((b if isinstance(b, str) else "", a if isinstance(a, str) else ""))
+    return out
+
+
+def _carries_applied_fix(target: Path, rows: Sequence) -> bool:
+    """True when ``target`` shows every row's change: its ``after`` text present, or its ``before``
+    text absent for a pure removal. A foreign rewrite lacking the fix does not qualify."""
+    try:
+        body = target.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    except (OSError, UnicodeDecodeError):
+        return False
+    for before, after in rows:
+        after, before = after.replace("\r\n", "\n"), before.replace("\r\n", "\n")
+        if after:
+            if after not in body:
+                return False
+        elif before in body:
+            return False
+    return bool(rows)
 
 
 def _wave_slice_files(sidecar: Path) -> frozenset:

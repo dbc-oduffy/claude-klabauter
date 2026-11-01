@@ -34,7 +34,7 @@ def test_holder_repo_root_unset_repos_key_raises(monkeypatch):
     )
     with pytest.raises(RuntimeError) as exc:
         holder_repo_root()
-    assert "repos.example_store_repo" in str(exc.value)
+    assert "repos.delphi_store" in str(exc.value)
 
 
 def test_holder_repo_root_not_cloned_raises_distinct_message(monkeypatch, tmp_path):
@@ -48,7 +48,7 @@ def test_holder_repo_root_not_cloned_raises_distinct_message(monkeypatch, tmp_pa
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(absent),
+                "repos.delphi_store": str(absent),
             }
         ),
     )
@@ -99,7 +99,7 @@ def test_write_root_for_none_returns_holder_root(monkeypatch, tmp_path):
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(holder_dir),
+                "repos.delphi_store": str(holder_dir),
             }
         ),
     )
@@ -144,7 +144,7 @@ def test_write_root_for_named_repo_unset_raises_and_does_not_fall_through_to_hol
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(holder_dir),
+                "repos.delphi_store": str(holder_dir),
                 "repo_slug.acme/unregistered_project": "unregistered_project",
             }
         ),
@@ -179,7 +179,7 @@ def test_write_root_for_named_repo_not_cloned_raises_distinct_message_and_no_fal
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(holder_dir),
+                "repos.delphi_store": str(holder_dir),
                 "repo_slug.acme/uncloned_project": "uncloned_project",
                 "repos.uncloned_project": str(absent_owner),
                 "repo_slug.acme/unregistered_project": "unregistered_project",
@@ -224,7 +224,7 @@ def test_person_write_with_no_owning_repo_lands_in_holder_as_ordinary_none_case(
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(holder_dir),
+                "repos.delphi_store": str(holder_dir),
             }
         ),
     )
@@ -250,7 +250,7 @@ def test_item_write_with_owning_repo_lands_in_that_repo_not_the_holder(
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(holder_dir),
+                "repos.delphi_store": str(holder_dir),
                 "repo_slug.acme/item_owner": "item_owner",
                 "repos.item_owner": str(owner_dir),
             }
@@ -294,7 +294,7 @@ def test_write_root_for_non_member_slug_refused_not_routed_to_holder(
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(holder_dir),
+                "repos.delphi_store": str(holder_dir),
             }
         ),
     )
@@ -326,7 +326,7 @@ def test_write_root_for_slug_index_unset_message_distinct_from_repos_key_unset_m
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(holder_dir),
+                "repos.delphi_store": str(holder_dir),
                 "repo_slug.acme/repos_key_unset": "repos_key_unset",
             }
         ),
@@ -361,7 +361,7 @@ def test_write_root_for_none_arm_raises_if_holder_root_equals_caller_repo_root(
         _fake_registry(
             {
                 "tracker.holder_repo": "example_store_repo",
-                "repos.example_store_repo": str(same_dir),
+                "repos.delphi_store": str(same_dir),
             }
         ),
     )

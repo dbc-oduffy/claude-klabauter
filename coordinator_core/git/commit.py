@@ -1983,6 +1983,14 @@ def commit_paths(
     # pre-commit bytes under a moved HEAD reads as staged deletions of every added path, and
     # only the lock holder can write it. A busy lock is therefore a pre-ref refusal.
     prepared = _prepare_index_splice(repo, index_updates, merge_view)
+    # The splice build is the slow part of the lock window: a thread abandoned during it frees
+    # its own lock here, or learns an acquirer already reclaimed it, instead of moving the ref.
+    if dispatch_abandon.is_abandoned() or not prepared.held():
+        prepared.abort()
+        raise CommitRefused(
+            "dispatch timed out before the ref update -- nothing committed; "
+            "the commit object is unreferenced. Safe to retry."
+        )
     try:
         moved = cas_ref(ref_gitdir, ref, old_head, commit_sha,
                         reflog_committer=f"{name} <{email}>",

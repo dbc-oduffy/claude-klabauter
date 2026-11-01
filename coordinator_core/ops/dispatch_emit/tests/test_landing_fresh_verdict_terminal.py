@@ -56,6 +56,12 @@ def _land(root):
     return land_run._integrity(root, {"targeted_tests": RECORDED_FAIL}, [], [], None, RUN, None)
 
 
+def _assert_advisory_only(out):
+    """A test-evidence finding is provenance, never a refusal (landing_refusal_kinds)."""
+    assert "refused" not in out
+    assert [a["reason"] for a in out["advisory"]] == [landing_targeted_tests.TARGETED_TESTS_FAILED]
+
+
 def test_fresh_pass_clears_recorded_no_baseline_fail(repo):
     _fresh(repo, "pass")
     out = _terminal(repo)
@@ -65,11 +71,19 @@ def test_fresh_pass_clears_recorded_no_baseline_fail(repo):
     assert _land(repo) == []
 
 
-def test_stale_fresh_verdict_still_refuses_and_names_retest(repo):
+def test_head_moved_does_not_stale_a_fresh_verdict(repo):
+    """Freshness is the covered files' hashes, whatever HEAD is now."""
     _fresh(repo, "pass", head="0" * 40)
     out = _terminal(repo)
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
-    assert "--retest-targeted" in out["integrity"][0]["detail"]
+    assert "refused" not in out
+    assert out["targeted_tests_check"] == "pass-on-retest"
+
+
+def test_stale_fresh_verdict_stays_advisory_and_names_retest(repo):
+    _fresh(repo, "stale")
+    out = _terminal(repo)
+    _assert_advisory_only(out)
+    assert "--retest-targeted" in out["advisory"][0]["detail"]
     assert "retested_tests" not in out
     assert [f.reason for f in _land(repo)] == [landing_targeted_tests.TARGETED_TESTS_FAILED]
 
@@ -77,12 +91,12 @@ def test_stale_fresh_verdict_still_refuses_and_names_retest(repo):
 def test_changed_covered_file_is_stale(repo):
     _fresh(repo, "pass")
     (repo / "t.py").write_text("x = 2\n", encoding="utf-8")
-    assert _terminal(repo)["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
+    _assert_advisory_only(_terminal(repo))
 
 
 def test_fresh_fail_refuses(repo):
     _fresh(repo, "fail")
     out = _terminal(repo)
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
+    _assert_advisory_only(out)
     assert out["targeted_tests_check"] == "failed"
     assert [f.reason for f in _land(repo)] == [landing_targeted_tests.TARGETED_TESTS_FAILED]

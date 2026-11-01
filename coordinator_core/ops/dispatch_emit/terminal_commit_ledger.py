@@ -443,6 +443,62 @@ def _write_note_verdicts(
         return
 
 
+def downgrade_unlanded_items(verdict: object, unlanded: Sequence, register_rows: dict) -> object:
+    """``verdict`` with every ``met`` item served only by Row-Unlanded chunks read ``partial`` and the
+    unlanded path appended to its ``remaining``; the same object back when nothing changes.
+
+    ``unlanded`` is ``(row id, path, reason)`` triples; ``register_rows`` maps a chunk id to the register
+    rows it serves. An item's servers are the chunks listing it plus its own ``claimed_by`` ids; an item
+    with no server, or any landed server, is unchanged."""
+    items = verdict.get("items") if isinstance(verdict, dict) else None
+    if not isinstance(items, list) or not unlanded:
+        return verdict
+    paths_of: dict = {}
+    for row, path, _reason in unlanded:
+        paths_of.setdefault(str(row), []).append(str(path))
+    out: list = []
+    changed = False
+    for item in items:
+        if not isinstance(item, dict) or item.get("status") != "met":
+            out.append(item)
+            continue
+        claimed = item.get("claimed_by")
+        servers = {str(c) for c, regs in register_rows.items() if str(item.get("id")) in {str(r) for r in regs or ()}}
+        servers |= {str(c) for c in ([claimed] if isinstance(claimed, str) else claimed or ())}
+        if not servers or not servers <= set(paths_of):
+            out.append(item)
+            continue
+        remaining = [str(r) for r in item.get("remaining") or []] if isinstance(item.get("remaining"), list) else []
+        for server in sorted(servers):
+            remaining += [p for p in paths_of[server] if p not in remaining]
+        out.append({**item, "status": "partial", "remaining": remaining})
+        changed = True
+    return {**verdict, "items": out} if changed else verdict
+
+
+def rewrite_note_verdicts(
+    note_abs: Path, ledger_verdict: object, inline_review: object, sidecar_root: Path,
+) -> None:
+    """Render ``## Verdicts`` into the delivery note, replacing an existing section in place and
+    appending one when absent, so the note carries exactly one. Never raises."""
+    if not isinstance(inline_review, dict):
+        return
+    try:
+        text = note_abs.read_text(encoding="utf-8")
+        section = _verdicts_section(ledger_verdict, inline_review, sidecar_root)
+        match = re.search(r"^## Verdicts[ \t]*$", text, re.MULTILINE)
+        if match is None:
+            new = text.rstrip("\n") + "\n\n" + section
+        else:
+            tail = re.search(r"^## (?!#)", text[match.end():], re.MULTILINE)
+            after = text[match.end() + tail.start():] if tail else ""
+            new = text[:match.start()] + section + ("\n" + after if after else "")
+        if new != text:
+            note_abs.write_text(new, encoding="utf-8", newline="\n")
+    except (OSError, ValueError):
+        return
+
+
 def _awaiting_operator(open_rows: Sequence[dict]) -> list:
     """``[{id, row, command}]`` for each open ledger row classified ``awaiting_operator``."""
     return [{"id": r["id"], "row": r["row"], "command": r["command"]} for r in open_rows if "command" in r]

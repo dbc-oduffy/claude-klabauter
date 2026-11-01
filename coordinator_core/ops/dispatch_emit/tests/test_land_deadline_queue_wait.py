@@ -59,7 +59,8 @@ def test_halt_reply_declares_queue_wait_and_leg_ledger_defaults():
     assert reply["legs"] == []
 
 
-def test_halt_reports_each_started_leg_elapsed(clock):
+def test_halt_reports_each_started_leg_elapsed(clock, monkeypatch):
+    monkeypatch.setattr(land_deadline, "_cpu", lambda: clock.now * 0.01)
     with pytest.raises(land_deadline.LandDeadlineExceeded) as info:
         with land_deadline.scope(budget_secs=10.0):
             land_deadline.check("a")
@@ -73,6 +74,11 @@ def test_halt_reports_each_started_leg_elapsed(clock):
         {"leg": land_deadline.SCOPE_LEG, "elapsed_secs": 0.0},
         {"leg": "a", "elapsed_secs": 4.0},
         {"leg": "b", "elapsed_secs": 7.0},
+    ]
+    assert reply["leg_costs"] == [
+        {"leg": land_deadline.SCOPE_LEG, "elapsed_secs": 0.0, "process_time_ms": 0.0, "spawns": 0},
+        {"leg": "a", "elapsed_secs": 4.0, "process_time_ms": 40.0, "spawns": 0},
+        {"leg": "b", "elapsed_secs": 7.0, "process_time_ms": 70.0, "spawns": 0},
     ]
 
 

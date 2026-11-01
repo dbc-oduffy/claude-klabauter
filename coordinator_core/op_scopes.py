@@ -66,6 +66,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.taskstop_launch_recorder":        "none",
     "hooks.taskstop_reaper":                 "none",
     "hooks.nudge_unauthorized_handoff":      "none",
+    "hooks.idle_compact_advisory":           "none",
     "hooks.nudge_named_agent_report_delivery": "none",
     "hooks.postuse_advisory_dispatch":       "none",
     "hooks.nudge_autonomous_askuserquestion": "none",
@@ -90,6 +91,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.stop_dispatch": "none",
     "hooks.workflow_stall_stop": "none",
     "hooks.context_pressure_precompact":     "none",
+    "hooks.idle_compact_advisory":           "none",
     "hooks.postusefailure_cross_repo_memo_remediate": "none",
     "hooks.postuse_subagent_compaction_warning": "none",
     "hooks.nudge_cross_repo_cwd_boundary":   "none",
@@ -326,6 +328,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.seam_record":                      "common_dir",
     "plan.seam_fix":                         "common_dir",
     "plan.overlap_edges":                    "common_dir",
+    "plan.apply_mechanical_repairs":         "common_dir",
     "seam.mint_batons":                      "common_dir",
     "goal.match_candidates":                 "common_dir",
     "goal.close_day":                        "common_dir",
@@ -582,6 +585,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.admission_post":                 "none",
     "groupem.slot_grant":                     "none",
     "groupem.slot_check":                     "none",
+    "groupem.box_register":                   "none",
+    "groupem.box_place":                      "none",
+    "groupem.box_send":                       "none",
+    "groupem.box_roster":                     "none",
     "workstream_complete.stand_down_watchers": "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly
@@ -770,6 +777,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.land_run — MUTATING: lands a run's product and record in one scoped commit via
     # git.commit.commit_paths; the caller's own worktree, never a params override.
     "dispatch.land_run":                        "common_dir",
+    # dispatch.land_credited — MUTATING: commits a run's credited paths via git.commit.commit_paths (CAS ref move);
+    # the caller's own worktree, never a params override.
+    "dispatch.land_credited":                   "common_dir",
     # dispatch.land_verified_remainder — MUTATING: commits a halted run's verified remainder under its run id.
     "dispatch.land_verified_remainder":         "common_dir",
     # dispatch.write_receipt — MUTATING: one atomic stage receipt under state/warp/<run_id>/receipts.
@@ -803,7 +813,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.adopt_orphaned_run":              "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
-    # workflow.late_rows — reads the caller's worktree run ledger; scope lets --repo supply repo_root.
+    # workflow.late_rows — reads the caller's worktree run ledger (verify_read stamps its marker); scope lets --repo supply repo_root.
     "workflow.late_rows":                       "common_dir",
     # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the
     # caller's own worktree's sizing and plan.

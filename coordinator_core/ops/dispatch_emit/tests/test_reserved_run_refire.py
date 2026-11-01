@@ -162,6 +162,51 @@ def test_e_a_real_token_whose_task_ended_settles_halted_and_rebinds(tmp_path, mo
     assert json.loads((root / status_rel("r1")).read_text())["status"] == "running"
 
 
+def _timed_out_hook_bind(tmp_path, monkeypatch, *, fired):
+    """The timed-out hook's sequence: the emit minted r1's token and bound it (status running);
+    `fired` adds the submission record and launch record a started launcher leaves."""
+    root = _real_token_run(tmp_path, monkeypatch, "")
+    if not fired:
+        from coordinator_core import warp_live
+
+        warp_live._submission_path(root, "r1").unlink(missing_ok=True)
+        for rec in (tmp_path / "managed").glob("workflow-run-*.json"):
+            rec.unlink()
+    return root
+
+
+def test_a_retry_adopts_a_bound_run_no_launcher_ever_started(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    root = _timed_out_hook_bind(tmp_path, monkeypatch, fired=False)
+    assert not (warp_live._submission_path(root, "r1")).exists()
+    op._bind_reserved_run(root, "r1", "p1", _SIZING_REL)
+    assert json.loads((root / status_rel("r1")).read_text())["status"] == "running"
+    assert (root / "scratch/warp/r1").is_dir()
+
+
+def test_a_retry_still_refuses_a_bound_run_whose_launcher_started(tmp_path, monkeypatch):
+    root = _timed_out_hook_bind(tmp_path, monkeypatch, fired=True)
+    with pytest.raises(ValueError, match="already bound"):
+        op._bind_reserved_run(root, "r1", "p1", _SIZING_REL)
+
+
+def test_an_unfired_bind_without_the_sizing_or_for_another_run_is_refused(tmp_path, monkeypatch):
+    root = _timed_out_hook_bind(tmp_path, monkeypatch, fired=False)
+    with pytest.raises(ValueError, match="already bound"):
+        op._bind_reserved_run(root, "r1", "p1")
+    (root / status_rel("r1")).write_text(json.dumps({"run_id": "other", "status": "running"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="already bound"):
+        op._bind_reserved_run(root, "r1", "p1", _SIZING_REL)
+
+
+def test_a_landed_bind_is_never_adopted(tmp_path, monkeypatch):
+    root = _timed_out_hook_bind(tmp_path, monkeypatch, fired=False)
+    _status(root, "landed")
+    with pytest.raises(ValueError, match="already bound"):
+        op._bind_reserved_run(root, "r1", "p1", _SIZING_REL)
+
+
 def test_g_a_corrupt_status_with_a_live_task_is_refused_by_name(tmp_path, monkeypatch):
     root = _real_token_run(tmp_path, monkeypatch, "")
     (root / status_rel("r1")).write_text("not json", encoding="utf-8")

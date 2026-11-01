@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.bash_guards import _dc_rewrites, dispatch_checks
 from coordinator_core.bash_guards import guard_grep_via_bash as guard
@@ -496,3 +498,103 @@ class TestClassifyCommandPreTokenizedInput:
         )
         out = sc.classify_command("ignored", tokens=["grep", "-rn", "x", "."])
         assert out.tokens == ["grep", "-rn", "x", "."]
+
+
+class TestProjectRagRecommendation:
+    """Recommend example-retrieval-repo only where the local verdict file lists the repo; never a deny."""
+
+    @staticmethod
+    def _repo(tmp_path, monkeypatch, served, name="servedrepo", reachable=True, age_s=0):
+        import json
+        import os
+        import time
+
+        repo = tmp_path / name
+        (repo / ".git").mkdir(parents=True)
+        state = tmp_path / "lad" / "project-rag" / "state"
+        state.mkdir(parents=True)
+        verdict = state / "rag-nudge-server.json"
+        verdict.write_text(
+            json.dumps({"reachable": reachable, "sources": ["ServedRepo", "other"] if served else ["other"]}),
+            encoding="utf-8",
+        )
+        if age_s:
+            old = time.time() - age_s
+            os.utime(verdict, (old, old))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lad"))
+        return repo
+
+    @staticmethod
+    def _text(cmd, repo):
+        payload = _payload(cmd)
+        payload["cwd"] = str(repo)
+        record = guard.check(payload, host_is_windows=False)
+        return record, (envelope_of(record) if record is not None else None)
+
+    def test_served_whole_repo_grep_recommends_example_retrieval_repo(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch, served=True)
+        record, env = self._text("grep -r foo .", repo)
+        assert record is not None and record.verdict_kind == "advisory"
+        text = str(env)
+        for name in ("project_semantic_search", "project_symbol", "project_referencers", "ToolSearch"):
+            assert name in text
+
+    def test_unserved_repo_gets_no_recommendation(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch, served=False)
+        record, _env = self._text("grep -r foo .", repo)
+        assert record is None
+
+    def test_unreachable_or_stale_verdict_is_not_served(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch, served=True, reachable=False)
+        assert self._text("grep -r foo .", repo)[0] is None
+        repo = self._repo(tmp_path / "b", monkeypatch, served=True, age_s=3 * 3600)
+        assert self._text("grep -r foo .", repo)[0] is None
+
+    def test_scoped_search_is_not_recommended_even_when_served(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch, served=True)
+        assert self._text("grep -rn TODO src/", repo)[0] is None
+
+    def test_gnu_only_advisory_gains_the_hint_only_when_served(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch, served=True)
+        record, env = self._text("grep -Pn TODO src/ | wc -l", repo)
+        assert "project_semantic_search" in str(env)
+        repo = self._repo(tmp_path / "c", monkeypatch, served=False)
+        record, env = self._text("grep -Pn TODO src/ | wc -l", repo)
+        assert record is not None and "project-rag" not in str(env)
+
+    def test_never_a_deny_and_no_network_or_subprocess(self, tmp_path, monkeypatch):
+        import socket
+        import subprocess
+
+        def boom(*a, **k):
+            raise AssertionError("hot path must not touch network or subprocess")
+
+        repo = self._repo(tmp_path, monkeypatch, served=True)
+        monkeypatch.setattr(socket, "socket", boom)
+        monkeypatch.setattr(subprocess, "Popen", boom)
+        for cmd in ("grep -r foo .", "grep -Pn TODO src/ | wc -l"):
+            record, _env = self._text(cmd, repo)
+            assert record is not None and record.verdict_kind == "advisory"
+
+    @pytest.mark.parametrize("cmd", ["grep -R foo .", "grep -r foo", "grep -rn foo"])
+    def test_capital_r_and_bare_target_forms_are_recommended(self, tmp_path, monkeypatch, cmd):
+        repo = self._repo(tmp_path, monkeypatch, served=True)
+        record, env = self._text(cmd, repo)
+        assert record is not None and record.verdict_kind == "advisory"
+        assert "project_semantic_search" in str(env)
+
+    def test_chain_at_served_repo_root_still_names_example_retrieval_repo(self, tmp_path, monkeypatch):
+        """Through the production entrypoint, `rewrite-repo-root-search` claims the command
+        before this guard; the served-repo answer must still point at example-retrieval-repo."""
+        import json
+
+        from coordinator_core.bash_guards import dispatch
+
+        repo = self._repo(tmp_path, monkeypatch, served=True)
+        payload = _payload("grep -r foo .")
+        payload["cwd"] = str(repo)
+        out = dispatch.evaluate_payload_json(json.dumps(payload))
+        assert out is not None
+        text = json.dumps(out)
+        assert "permissionDecision\": \"deny" not in text
+        assert "project_semantic_search" in text

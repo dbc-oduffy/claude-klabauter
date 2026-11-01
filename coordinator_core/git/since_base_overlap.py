@@ -173,37 +173,51 @@ def check(
     notes: List[str] = []
     if not head or not base_sha:
         return findings, notes
-    walked = _chain_to_base(common_dir, head, base_sha)
-    if walked is None:
-        notes.append(NOTE_WALK_CAPPED)
-        return findings, notes
-    newest_first, base_sha = walked
-    if not newest_first:
-        return findings, notes
+    # The first-parent chain is read only once a path has a removed line to attribute; a landing
+    # that drops nothing never pays the commit walk.
+    newest_first: List[str] = []
+    oldest_first: List[str] = []
+    chain_walked = False
+    if len(base_sha) != 40:
+        walked = _chain_to_base(common_dir, head, base_sha)
+        if walked is None:
+            notes.append(NOTE_WALK_CAPPED)
+            return findings, notes
+        newest_first, base_sha = walked
+        oldest_first = list(reversed(newest_first))
+        chain_walked = True
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
 
     halt_plan_re = re.compile(r"^" + re.escape(HALT_PLAN_TRAILER) + r":[ \t]*(\S+)[ \t]*$", re.M)
-    run_bases: Tuple[str, ...] = ()
-    if run_id and plan is not None:
-        from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
+    own_cache: List[set] = []
 
-        run_bases = tuple(closing_bases(root, run_id, {}))
-    own = set()
-    ancestors: Optional[List[str]] = None
-    for sha in newest_first:
-        message = (commit_meta(common_dir, sha) or {}).get("message", "")
-        is_own = is_own_commit(message, plan, base_sha, newest_first, (), run_bases)
-        if not is_own and plan is not None and _BASE_RE.search(message):
-            if ancestors is None:
-                ancestors = _base_ancestors(common_dir, base_sha)
-            is_own = is_own_commit(message, plan, base_sha, newest_first, ancestors, run_bases)
-        if (
-            is_own
-            or (run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id)
-            or (plan is not None and _halt_names_plan(message, plan, halt_plan_re))
-        ):
-            own.add(sha)
-    oldest_first = list(reversed(newest_first))
+    def own_commits() -> set:
+        """The run's own commits, computed once on the first path that reaches the version walk."""
+        if own_cache:
+            return own_cache[0]
+        run_bases: Tuple[str, ...] = ()
+        if run_id and plan is not None:
+            from coordinator_core.ops.dispatch_emit.landing_integrity import closing_bases
+
+            run_bases = tuple(closing_bases(root, run_id, {}))
+        own = set()
+        ancestors: Optional[List[str]] = None
+        for sha in newest_first:
+            message = (commit_meta(common_dir, sha) or {}).get("message", "")
+            is_own = is_own_commit(message, plan, base_sha, newest_first, (), run_bases)
+            if not is_own and plan is not None and _BASE_RE.search(message):
+                if ancestors is None:
+                    ancestors = _base_ancestors(common_dir, base_sha)
+                is_own = is_own_commit(message, plan, base_sha, newest_first, ancestors, run_bases)
+            if (
+                is_own
+                or (run_id is not None and halted_run_id(message.split("\n", 1)[0]) == run_id)
+                or (plan is not None and _halt_names_plan(message, plan, halt_plan_re))
+            ):
+                own.add(sha)
+        own_cache.append(own)
+        return own
+
     for path in paths:
         try:
             raw = (root / path).read_bytes()
@@ -232,6 +246,14 @@ def check(
         ]
         if not tracked:
             continue
+        if not chain_walked:
+            walked = _chain_to_base(common_dir, head, base_sha)
+            if walked is None:
+                notes.append(NOTE_WALK_CAPPED)
+                return findings, notes
+            newest_first, base_sha = walked
+            oldest_first = list(reversed(newest_first))
+            chain_walked = True
         versions: List[Tuple[str, object]] = []
         prev: object = base_blob
         for sha in oldest_first:
@@ -244,6 +266,7 @@ def check(
         if len(versions) > VERSIONS_PER_PATH_CAP:
             notes.append(NOTE_WALK_CAPPED)
             continue
+        own = own_commits()
         removed_by: Dict[str, int] = {}
         cur = head_lines
         unreadable = False

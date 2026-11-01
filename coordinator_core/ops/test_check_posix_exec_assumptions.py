@@ -39,8 +39,8 @@ from coordinator_core.ops.check_posix_exec_assumptions import (  # noqa: E402
     EXEMPTIONS,
     IMPLICIT_ENCODING_CLASSES,
     PREFIX_EXCLUDABLE_CLASSES,
-    REPO_CONTENT_ROOT,
-    REPO_CLAUDE_KLABAUTER,
+    REPO_DOE_CLAUDE,
+    REPO_PROJECT_MAKIMA,
     REPORT_ONLY_CLASSES,
     TIER_A_CLASSES,
     assert_baseline_not_grown,
@@ -1781,7 +1781,7 @@ def test_exemption_granted_for_one_repo_still_applies_in_that_repo(tmp_path):
 
     result = scan(claude_klabauter_like)
 
-    assert repo_key_for_root(claude_klabauter_like) == REPO_CLAUDE_KLABAUTER
+    assert repo_key_for_root(claude_klabauter_like) == REPO_PROJECT_MAKIMA
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER not in result["env_shebang"]
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER not in result["mode_100755"]
     assert "coordinator/scripts/control.py" in result["env_shebang"]
@@ -1838,7 +1838,7 @@ def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted():
     result = scan(_REPO_ROOT)
 
     for cls, per_repo in EXEMPTIONS.items():
-        for relpath in per_repo.get(REPO_CLAUDE_KLABAUTER, {}):
+        for relpath in per_repo.get(REPO_PROJECT_MAKIMA, {}):
             assert relpath not in result[cls], (
                 f"{relpath} is exempted for claude_klabauter in class {cls} but "
                 "appears in this repo's own scan -- the exemption was lost"
@@ -1931,7 +1931,7 @@ def test_prefix_exclusion_hides_a_preserved_tree_from_every_non_tier_a_class(tmp
 
     result = scan(repo)
 
-    assert repo_key_for_root(repo) == REPO_CLAUDE_KLABAUTER
+    assert repo_key_for_root(repo) == REPO_PROJECT_MAKIMA
     for cls in PREFIX_EXCLUDABLE_CLASSES:
         assert inside not in result[cls], f"{inside} leaked into class {cls}"
 
@@ -1949,7 +1949,7 @@ def test_prefix_exclusion_does_not_swallow_a_similarly_named_sibling_path(tmp_pa
     assert outside in result["env_shebang"]
     assert outside in result["posix_path_assumption"]
     assert outside in result["implicit_encoding"]
-    assert not is_prefix_excluded(outside, REPO_CLAUDE_KLABAUTER)
+    assert not is_prefix_excluded(outside, REPO_PROJECT_MAKIMA)
 
 
 def test_prefix_exclusion_never_suppresses_tier_a_checkout_breakers(tmp_path):
@@ -1999,7 +1999,7 @@ def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_pat
 
     result = scan(repo)
 
-    assert repo_key_for_root(repo) == REPO_CONTENT_ROOT
+    assert repo_key_for_root(repo) == REPO_DOE_CLAUDE
     for name in (
         "block_subagent_commit.py",
         "block_subagent_destructive_action.py",
@@ -2040,7 +2040,7 @@ def test_stale_prefix_check_is_green_when_the_preserved_tree_exists(tmp_path):
     or this positive control would false-fire the moment a second grant
     (e.g. the frozen-fixture-bytes prefixes) is added."""
     repo = _repo_with_preserved_tree(tmp_path, "claude-klabauter", _CLAUDE_KLABAUTER_PREFIX)
-    for prefix in EXEMPT_PREFIXES.get(REPO_CLAUDE_KLABAUTER, {}):
+    for prefix in EXEMPT_PREFIXES.get(REPO_PROJECT_MAKIMA, {}):
         if prefix == _CLAUDE_KLABAUTER_PREFIX:
             continue
         target = repo / prefix / "specimen.py"
@@ -2122,7 +2122,7 @@ def test_real_tree_mirror_native_files_are_prefix_excluded():
 
     result = scan(_REPO_ROOT)
     for relpath in tracked:
-        assert is_prefix_excluded(relpath, REPO_CLAUDE_KLABAUTER)
+        assert is_prefix_excluded(relpath, REPO_PROJECT_MAKIMA)
         for cls in PREFIX_EXCLUDABLE_CLASSES:
             assert relpath not in result[cls]
 
@@ -2288,7 +2288,7 @@ def test_is_prefix_excluded_backward_compatible_without_root():
     """Every pre-existing call site (this suite's own EXEMPT_PREFIXES tests
     among them) calls `is_prefix_excluded(relpath, repo_key)` with no `root`
     -- that must keep answering from the in-code EXEMPT_PREFIXES alone."""
-    assert is_prefix_excluded("dist/mirror-native/thing.py", REPO_CLAUDE_KLABAUTER)
+    assert is_prefix_excluded("dist/mirror-native/thing.py", REPO_PROJECT_MAKIMA)
 
 
 def test_check_no_stale_exempt_prefixes_flags_stale_file_based_prefix(tmp_path):

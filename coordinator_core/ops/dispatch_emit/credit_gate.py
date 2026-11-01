@@ -94,6 +94,18 @@ def without_withheld(regraded: Mapping[str, str], withheld_ids: Iterable[str]) -
     return {cid: why for cid, why in regraded.items() if cid not in barred}
 
 
+def post_commit_only_ids(declared: Mapping[str, Sequence[str]]) -> frozenset[str]:
+    """Ids of writes-empty chunks (their only act follows the commit), when a product chunk declares paths.
+
+    ``declared`` maps every request chunk to its declared paths and prefixes. A writes-empty row
+    holds nothing to strand, so it never gates the commit of a path-bearing product row; with no
+    such product row the set is empty and the gate judges every chunk as before.
+    """
+    if not any(paths for cid, paths in declared.items() if cid not in BOOKKEEPING_CHUNK_IDS):
+        return frozenset()
+    return frozenset(cid for cid, paths in declared.items() if not paths)
+
+
 def no_credited_landing(
     stranded_ids: AbstractSet[str],
     contributing_ids: AbstractSet[str],

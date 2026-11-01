@@ -23,7 +23,10 @@ def test_measured_rev_instruction_precedes_the_scoped_test_instruction():
         assert previous_scoped < rev_at < scoped_at
         previous_scoped = scoped_at
     assert f"{MEASURED_REV_ENV} set to that sha in the test process environment" in script
-    assert "If the op refuses, run the tests without it and report the refusal as raw evidence" in script
+    assert "export_dir" not in script and "export: true" not in script
+    assert "in the working tree with" in script
+    assert "report the refusal as a red verify result; never fall back to the working tree" in script
+    assert "run the tests without it" not in script
 
 
 def test_the_instruction_passes_the_run_id_and_the_manifest_writes():

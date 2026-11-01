@@ -121,15 +121,17 @@ def _tree(root: Path) -> list:
     return sorted(_git(["show", "--name-only", "--format=", "HEAD"], root).split())
 
 
-def test_own_checkpointed_path_also_declared_by_an_unlanded_sibling_is_refused_co_declared(repo):
+def test_own_checkpointed_path_also_declared_by_an_unlanded_sibling_lands_with_co_declared_provenance(repo):
+    """DR-474: a co-declaration is provenance, never a refusal; the run's own checkpointed path lands."""
     base, _ = _scenario(repo, checkpointed=(P,), declared_by_senior=(P, Q))
-    head = _git(["rev-parse", "HEAD"], repo)
 
     out = _land(repo, base)
 
-    assert out["committed"] is False, out
-    assert out["refused"] == "peer-hunks-co-declared"
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert out["committed"] is True, out
+    assert out["refused"] is None
+    assert P in _tree(repo)
+    assert Q not in _tree(repo)
+    assert [(e["path"], e["reason"]) for e in out["provenance"]] == [(P, "peer-hunks-co-declared")]
 
 
 def test_incident_replay_own_checkpointed_path_lands_and_unchecked_declaration_still_holds(repo):

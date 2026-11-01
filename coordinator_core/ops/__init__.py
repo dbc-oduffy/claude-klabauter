@@ -171,6 +171,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_discharge_landed", 'registers "handoff.discharge_landed"'),
     ("coordinator_core.ops.dispatch_emit.terminal_commit", 'registers "dispatch.terminal_commit"'),
     ("coordinator_core.ops.dispatch_emit.land_run", 'registers "dispatch.land_run"'),
+    ("coordinator_core.ops.dispatch_emit.land_credited", 'registers "dispatch.land_credited"'),
     ("coordinator_core.ops.dispatch_emit.land_remainder", 'registers "dispatch.land_verified_remainder"'),
     ("coordinator_core.ops.dispatch_emit.stage_receipts", 'registers "dispatch.write_receipt"'),
     ("coordinator_core.ops.ceremony.close_background", 'registers "close.background"'),
@@ -225,6 +226,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "coordinator_core.ops.plan_repin_register",
         'registers "plan.repin_register" (2026-10-16, re-pins one plan\'s '
         '`register_claims.pins` behind a clear premise-check)',
+    ),
+    (
+        "coordinator_core.ops.plan_apply_mechanical_repairs",
+        'registers "plan.apply_mechanical_repairs"',
     ),
     ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
     (
@@ -466,6 +471,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.group_em_box_hold", 'registers "groupem.box_hold"'),
     ("coordinator_core.ops.group_em_admission_post", 'registers "groupem.admission_post"'),
     ("coordinator_core.ops.group_em_slot_grant", 'registers "groupem.slot_grant", "groupem.slot_check"'),
+    ("coordinator_core.ops.group_em_box_federation", 'registers "groupem.box_register", "groupem.box_place", "groupem.box_send", "groupem.box_roster"'),
     ("coordinator_core.ops.watcher_stand_down", 'registers "workstream_complete.stand_down_watchers"'),
     ("coordinator_core.ops.session_work_state", 'registers "session.work_state"'),
     ("coordinator_core.ops.session_artifact_owner", 'registers "session.artifact_owner"'),

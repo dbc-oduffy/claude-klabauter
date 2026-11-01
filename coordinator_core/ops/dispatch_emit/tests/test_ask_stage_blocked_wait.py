@@ -13,6 +13,7 @@ import yaml
 from coordinator_core import locked_write
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.ops.dispatch_emit import ask_stage
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests._size_l_plan import (
     RELAYED_DIRTY_FILES,
     SIZING_REL,
@@ -36,6 +37,7 @@ def _fixture(tmp_path, monkeypatch, *, unclaimed_row: bool = False):
     repo_root, plan_rel, run_id = build_size_l_plan(
         root, rows=TWENTY_SIX_ROWS, dirty_files=RELAYED_DIRTY_FILES, session_id=SESSION_ID
     )
+    write_run_scripts(repo_root, run_id)
     if unclaimed_row:
         sizing_path = repo_root / SIZING_REL
         sizing = yaml.safe_load(sizing_path.read_text(encoding="utf-8"))

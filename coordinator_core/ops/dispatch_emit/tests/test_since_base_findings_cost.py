@@ -51,6 +51,15 @@ def test_tree_entry_ignores_a_needle_inside_sha_bytes(monkeypatch, tmp_path):
     assert rollback_check._tree_entry(tmp_path, "t", "real") == (0o100644, fake_sha)
 
 
+def test_tree_entry_resolves_name_embedding_a_mode_exactly(monkeypatch, tmp_path):
+    entries = [(b"100644", b"100644 foo", _sha("evil")), (b"100644", b"foo", _sha("good"))]
+    trees = {"t": _tree(entries)}
+    monkeypatch.setattr(rollback_check, "read_object", _fake_read(trees))
+    monkeypatch.setattr(rollback_check, "_ENTRY_CACHE", {})
+    assert rollback_check._tree_entry(tmp_path, "t", "foo") == (0o100644, _sha("good"))
+    assert rollback_check._tree_entry(tmp_path, "t", "100644 foo") == (0o100644, _sha("evil"))
+
+
 def test_ancestors_not_read_when_no_stamped_base(monkeypatch):
     calls = []
     monkeypatch.setattr(since_base_overlap, "_base_ancestors", lambda *a: calls.append(a) or [])

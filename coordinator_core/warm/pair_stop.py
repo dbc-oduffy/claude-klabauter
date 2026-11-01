@@ -1,7 +1,8 @@
 """Stop the warm supervisor, front door and server for one engine root, then verify by command line.
 
-Order is supervisor, front door, then server: a live supervisor can respawn a server that was
-just stopped. A final cmdline sweep decides success; whatever it still finds is a survivor.
+Order is supervisor, server, then front door: a live supervisor can respawn a server that was
+just stopped, and the server and door are asked to drain in-flight work before any is signalled.
+A final cmdline sweep decides success; whatever it still finds is a survivor.
 """
 
 from __future__ import annotations
@@ -32,12 +33,21 @@ _ROLE_SCRIPTS = {
 # in a later pass, not missed by a single one.
 _RESWEEP_DEADLINE_SECS = 15.0
 
+# Bounded settle before the survivor read: a boot refused by a marker exits unaided.
+_SETTLE_SECS = 1.0
+
 _ASK_READ_DEADLINE_SECS = 2.0
 _TERMINATE_GRACE_SECS = 5.0
 _TERMINATE_POLL_INTERVAL_SECS = 0.1
 
-# Sized above warm.lifecycle's drain ceiling: a graceful ask is answered by a drain, not an exit.
-_ASK_CONFIRM_GRACE_SECS = 40.0
+# Added to warm.lifecycle's drain ceiling: a graceful ask is answered by a drain, not an exit.
+_CONFIRM_GRACE_MARGIN_SECS = 5.0
+
+
+def _confirm_grace_secs() -> float:
+    from coordinator_core.warm import lifecycle
+
+    return lifecycle._drain_ceiling_secs() + _CONFIRM_GRACE_MARGIN_SECS
 
 # A deliberately wrong token: warm.server._serve_line evicts (drain and exit) on any mismatch.
 _STOP_REQUEST_TOKEN = "warm-engine-stop-requested-0000"
@@ -256,6 +266,46 @@ def _terminate_with_reason(pid: int, *, psutil_module=None) -> Optional[str]:
     return None if not proc.is_running() else "still running after terminate and kill"
 
 
+def _pid_gone(pid: int, *, psutil_module=None) -> bool:
+    """True iff the pid no longer names a running process; AccessDenied is not gone."""
+    psutil = psutil_module
+    if psutil is None:
+        import psutil
+
+    try:
+        return not psutil.Process(pid).is_running()
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.AccessDenied:
+        return False
+
+
+def probe_pair_terminable(
+    engine_root: Path, *, psutil_module=None
+) -> list[tuple[int, str, str]]:
+    """(pid, role, why) of each pair process of `engine_root` psutil cannot signal; signals nothing.
+
+    Trap: reads only (Process, is_running); never terminate()/kill().
+    """
+    psutil = psutil_module
+    if psutil is None:
+        import psutil
+
+    engine_root = Path(engine_root)
+    pair = find_pair_processes(engine_root, psutil_module=psutil)
+    servers = {p.pid for p in pair if p.role == ROLE_SERVER}
+    pair += _pool_children(servers, psutil_module=psutil)
+    blocked: list[tuple[int, str, str]] = []
+    for p in pair:
+        try:
+            psutil.Process(p.pid).is_running()
+        except psutil.AccessDenied:
+            blocked.append((p.pid, p.role, "access denied"))
+        except psutil.NoSuchProcess:
+            continue
+    return blocked
+
+
 def _terminate_pid(pid: int, *, psutil_module=None) -> bool:
     return _terminate_with_reason(pid, psutil_module=psutil_module) is None
 
@@ -324,9 +374,11 @@ def stop_warm_pair(
     *,
     psutil_module=None,
     ask_server: Optional[Callable[[str], bool]] = None,
+    ask_front_door: Optional[Callable[[Optional[dict]], bool]] = None,
 ) -> PairStopResult:
-    """Stop the supervisor, then the front door, then the server, of `engine_root`; return who
-    stopped and who survived.
+    """Stop the supervisor, then the server (asked, drained), then the front door (asked,
+    drained), of `engine_root`; return who stopped and who survived. A pid is signalled only
+    after its ask went unanswered or its drain grace ran out.
 
     Trap: a pid is signalled only when a verified record (pid plus birth instant) or the exact
     cmdline match identified it; the cmdline match is the identification the old breadcrumb-only
@@ -335,6 +387,7 @@ def stop_warm_pair(
     from coordinator_core.warm import front_door, supervisor
 
     ask = ask_server if ask_server is not None else _ask_server_to_stop
+    ask_door = ask_front_door if ask_front_door is not None else front_door.ask_front_door_to_stop
     engine_root = Path(engine_root)
     before = find_pair_processes(engine_root, psutil_module=psutil_module)
     seen: dict[int, PairProcess] = {p.pid: p for p in before}
@@ -344,13 +397,6 @@ def stop_warm_pair(
     if disc is not None:
         sup_pids.setdefault(disc[0], "")
     for pid in sup_pids:
-        _terminate_pid(pid, psutil_module=psutil_module)
-
-    fd_pids: dict[int, str] = {p.pid: p.cmdline for p in before if p.role == ROLE_FRONT_DOOR}
-    fd_disc = _record_pid(front_door.read_discovery(engine_root))
-    if fd_disc is not None:
-        fd_pids.setdefault(fd_disc[0], "")
-    for pid in fd_pids:
         _terminate_pid(pid, psutil_module=psutil_module)
 
     crumb = breadcrumb.read_breadcrumb(engine_root)
@@ -364,10 +410,31 @@ def stop_warm_pair(
     if verified is not None:
         pid, epoch_str = verified
         pipe = crumb.get("pipe") if isinstance(crumb, dict) else None
-        asked = isinstance(pipe, str) and ask(pipe)
-        gone = asked and _wait_for_pid_gone(pid, epoch_str, deadline_secs=_ASK_CONFIRM_GRACE_SECS)
+        gone = False
+        if isinstance(pipe, str):
+            # An unanswered ask is not a refusal: the server may be mid-request. Ask twice, then
+            # wait the grace while it is alive, and signal only after. No pipe means no ask was
+            # made, so there is no drain to wait for.
+            if not ask(pipe):
+                ask(pipe)
+            gone = _wait_for_pid_gone(pid, epoch_str, deadline_secs=_confirm_grace_secs())
         if not gone:
             _terminate_pid(pid, psutil_module=psutil_module)
+
+    fd_pids: dict[int, str] = {p.pid: p.cmdline for p in before if p.role == ROLE_FRONT_DOOR}
+    fd_record = front_door.read_discovery(engine_root)
+    fd_disc = _record_pid(fd_record)
+    if fd_disc is not None:
+        fd_pids.setdefault(fd_disc[0], "")
+    for pid in fd_pids:
+        if (
+            fd_disc is not None
+            and pid == fd_disc[0]
+            and ask_door(fd_record)
+            and _wait_for_pid_gone(pid, fd_disc[1], deadline_secs=_confirm_grace_secs())
+        ):
+            continue
+        _terminate_pid(pid, psutil_module=psutil_module)
 
     failures: dict[int, str] = {}
     order = {ROLE_SUPERVISOR: 0, ROLE_FRONT_DOOR: 1, ROLE_SERVER: 2, ROLE_POOL_CHILD: 3}
@@ -382,6 +449,11 @@ def stop_warm_pair(
         for cpid in child_pids:
             targets.setdefault(cpid, ROLE_POOL_CHILD)
         child_pids.clear()
+        targets = {
+            pid: role
+            for pid, role in targets.items()
+            if not _pid_gone(pid, psutil_module=psutil_module)
+        }
         fresh = sorted(
             (pid for pid in targets if pid not in failures),
             key=lambda pid: (order.get(targets[pid], 9), pid),
@@ -390,18 +462,21 @@ def stop_warm_pair(
             break
         for pid in fresh:
             reason = _terminate_with_reason(pid, psutil_module=psutil_module)
-            if reason is None:
-                # Confirmed gone; a pid still enumerated afterwards is a stale entry, not a new server.
-                failures.setdefault(pid, "respawned or still present after sweep")
-            else:
+            if reason is not None:
                 failures[pid] = reason
         if time.monotonic() >= deadline:
             break
 
-    survivors = tuple(
-        find_pair_processes(engine_root, psutil_module=psutil_module)
-        + _pool_children(server_pids, psutil_module=psutil_module)
-    )
+    settle_until = time.monotonic() + _SETTLE_SECS
+    while True:
+        found = find_pair_processes(engine_root, psutil_module=psutil_module) + _pool_children(
+            server_pids, psutil_module=psutil_module
+        )
+        live = [p for p in found if not _pid_gone(p.pid, psutil_module=psutil_module)]
+        if not live or time.monotonic() >= settle_until:
+            break
+        time.sleep(_TERMINATE_POLL_INTERVAL_SECS)
+    survivors = tuple(live)
     survivor_pids = {p.pid for p in survivors}
     stopped = tuple(p for pid, p in seen.items() if pid not in survivor_pids)
 

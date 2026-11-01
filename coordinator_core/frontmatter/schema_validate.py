@@ -7258,6 +7258,21 @@ def _apply_default_match_mode(parsed: dict) -> None:
         parsed['match_mode'] = 'whole-document-yaml'
 
 
+# applies_to glob -> extra glob routed to the same schema. Alias entries carry
+# `alias: True` so type->glob enumeration keeps the primary glob.
+_ARCHIVE_GLOB_ALIASES: dict[str, str] = {
+    'state/sizings/*.yaml': 'archive/sizings/*/*.yaml',
+}
+
+
+def _register_applies_to_glob(schemas: dict[str, Any], applies_to: str, name: str) -> None:
+    """Append the _byGlob entry for applies_to, plus its archive alias if one is mapped."""
+    schemas['_byGlob'].append({'glob': applies_to, 'schemaName': name})
+    alias = _ARCHIVE_GLOB_ALIASES.get(applies_to)
+    if alias is not None:
+        schemas['_byGlob'].append({'glob': alias, 'schemaName': name, 'alias': True})
+
+
 def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
     """Load all *.yaml and *.schema.json schema files from schemas_dir.
 
@@ -7295,7 +7310,7 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
                     f'schema "{name}": applies_to must be a string glob pattern, got {kind}. '
                     'To cover multiple locations, use a brace-expansion glob or register separate schema files.'
                 )
-            schemas['_byGlob'].append({'glob': parsed['applies_to'], 'schemaName': name})
+            _register_applies_to_glob(schemas, parsed['applies_to'], name)
 
         kind_values: list[str] = []
         kinds_field = parsed.get('kinds')
@@ -7342,7 +7357,7 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
         _apply_default_match_mode(parsed)
 
         if isinstance(parsed.get('applies_to'), str) and parsed.get('applies_to'):
-            schemas['_byGlob'].append({'glob': parsed['applies_to'], 'schemaName': name})
+            _register_applies_to_glob(schemas, parsed['applies_to'], name)
 
         json_kind_values: list[str] = []
         raw_kinds_arr = parsed.get('x-kinds') if isinstance(parsed.get('x-kinds'), list) else (
@@ -7483,6 +7498,8 @@ def build_type_to_glob(schemas_dir: str | Path) -> dict[str, str]:
     for entry in schemas['_byGlob']:
         schema_name = entry['schemaName']
         glob = entry['glob']
+        if entry.get('alias'):
+            continue
         if schema_name == 'lesson-entry':
             continue
         query_type = _SCHEMA_NAME_TO_QUERY_TYPE.get(schema_name, schema_name)

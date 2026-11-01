@@ -65,6 +65,25 @@ def test_warm_error_envelope_carries_the_served_stderr():
     assert _REASON in str(excinfo.value)
 
 
+def test_reasonless_refusal_names_op_specific_fields_and_timeout_hint():
+    result = {"exit_code": 1, "failed": [], "emit_status": "timed out after 30s", "applied": False}
+
+    message = cc_invoke.mutation_refusal_message("memo.send", result)
+
+    assert "emit_status='timed out after 30s'" in message
+    assert "applied=False" in message
+    assert "timed-out or stalled leg" in message
+
+
+def test_reason_bearing_refusal_has_no_fields_dump():
+    result = {"exit_code": 1, "failed": [], "reason": _REASON, "applied": False}
+
+    message = cc_invoke.mutation_refusal_message("memo.send", result)
+
+    assert _REASON in message
+    assert "result fields:" not in message
+
+
 def test_warm_error_dict_result_reaches_the_sink():
     sink: list = []
     envelope = {"result": {"exit_code": 1}}

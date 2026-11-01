@@ -57,7 +57,7 @@ def _resolve_content_root_for_tests() -> str:
     settings-home-anchored -- a test overriding CLAUDE_HOME to a throwaway dir
     (to prove CLAUDE_HOME is unused for project scope, e.g.) collaterally
     breaks that fallback too. Resolving it once here and forwarding it as an
-    explicit REPO_CONTENT_ROOT env override (coordinator_registry.py's own rung 1b
+    explicit REPO_DOE_CLAUDE env override (coordinator_registry.py's own rung 1b
     override) keeps the manifest read working without touching what the test
     actually asserts on.
     """
@@ -845,7 +845,7 @@ def test_project_scope_still_writes_cwd_relative() -> None:
             return
         env = {"CLAUDE_HOME": claude_home_dir, "COORDINATOR_ENGINE_ROOT": fake_claude_klabauter_root}
         if _CONTENT_ROOT_FOR_TESTS:
-            env["REPO_CONTENT_ROOT"] = _CONTENT_ROOT_FOR_TESTS
+            env["REPO_DOE_CLAUDE"] = _CONTENT_ROOT_FOR_TESTS
 
         result = _run_cli(
             _improvement_queue_required_args(),

@@ -177,7 +177,7 @@ def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror
         env["CLAUDE_HOME"] = claude_home
         # No .pop() here: env is
         # a from-scratch dict built by _base_env(), which never populates
-        # REPO_CONTENT_ROOT in the first place (unlike os.environ.copy()).
+        # REPO_DOE_CLAUDE in the first place (unlike os.environ.copy()).
 
         result = _run_registry_import_subprocess(env)
         assert result.returncode == 0, f"stderr:\n{result.stderr}"

@@ -301,13 +301,8 @@ _POST_SIZE_PROMPT_DETENT = "post_size_prompt_pending"
 _TAIL_WINDOW_BYTES = 200_000
 
 _CORRECTION_TEXT = (
-    "[guard] This turn closed on a PM-handoff the PM would not recognise by "
-    "its own nouns -- an unnecessary stop costs context and PM attention "
-    "neither gets back. Drive it as far as you can yourself and re-close "
-    "having resolved it, or state the genuine PM-altitude question plainly "
-    "if one remains. A physical act only the operator can do (dashboard "
-    "click, sign-in) is no hand-up: put it on its own line starting "
-    "`Hands-on task:` or `Operator action:`.\n"
+    "[guard] Stop hands the PM nothing actionable: finish it, or ask the real "
+    "question. Operator acts: `Hands-on task:` or `Operator action:` line.\n"
 )
 
 _SIZING_TOPIC_PATTERNS = [

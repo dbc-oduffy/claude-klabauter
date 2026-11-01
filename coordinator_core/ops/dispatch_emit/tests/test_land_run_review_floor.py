@@ -106,8 +106,11 @@ def _stage(root: Path, path: str) -> str:
     return run_token.mint(root, RUN, f"{RUN}.mjs", session_id=SELF)
 
 
-def _land(root: Path, token: str, path: str, verdicts: int, *, with_sidecar: bool = True) -> dict:
+def _land(root: Path, token: str, path: str, verdicts: int, *, with_sidecar: bool = True,
+          record_names_lost: bool = False) -> dict:
     reviews = []
+    if record_names_lost:
+        _write(root, "scratch/reviews/rev-stem.md", "---\nintegrated_from:\n- missing0\n---\n")
     for i in range(verdicts):
         entry = {"verdict": "APPROVED"}
         if with_sidecar:
@@ -171,6 +174,17 @@ def test_a_verdict_without_an_existing_sidecar_file_lands_with_the_floor_note(re
 
     assert out.get("committed") is True, out
     assert "Review-Floor-Note: review: 0 verdicts" in _message(repo)
+
+
+def test_a_lost_sidecar_named_by_the_integration_record_still_counts_in_the_trailers(repo):
+    token = _stage(repo, CODE)
+
+    out = _land(repo, token, CODE, verdicts=1, with_sidecar=False, record_names_lost=True)
+
+    assert out.get("committed") is True, out
+    message = _message(repo)
+    assert "Ledger-Receipt: review: 1 verdicts" in message
+    assert "Review-Floor-Note: review: 0 verdicts" not in message
 
 
 def test_a_repo_relative_sidecar_is_counted_from_an_unrelated_cwd(repo, tmp_path, monkeypatch):

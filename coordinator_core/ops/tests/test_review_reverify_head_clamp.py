@@ -164,7 +164,8 @@ def test_created_path_a_commit_tracks_is_restored_to_head_never_unlinked(repo):
     repo.write({"tests/test_new.py": b"def test_n():\n    assert False\n"})
     repo.arm({"tests/test_new.py": "a1"})
     repo.members("a1", "tests/test_new.py")
-    out = repo.revert(base, ["tests/test_new.py::test_n"])
+    row = {"id": "F1", "file": "tests/test_new.py", "before": "assert True", "after": "assert False"}
+    out = repo.revert(base, ["tests/test_new.py::test_n"], [row])
     assert out["error"] is None
     assert [(e["path"], e["action"], e["source"]) for e in out["reverted"]] == [
         ("tests/test_new.py", "restored", "head")

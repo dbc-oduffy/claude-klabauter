@@ -176,10 +176,10 @@ def _isolated_harvest_env(tmpdir: str) -> dict[str, str]:
     env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
     env["COORDINATOR_WARM"] = "0"
     # Avoid any ambient content-root override or CLAUDE_KLABAUTER_ROOT bleeding writes
-    # out of the isolated tmpdir. REPO_CONTENT_ROOT is exported in a login
+    # out of the isolated tmpdir. REPO_DOE_CLAUDE is exported in a login
     # shell on a provisioned machine — strip it alongside the registry override.
     env.pop("MACHINE_LOCAL_REPOS_CONTENT_ROOT", None)
-    env.pop("REPO_CONTENT_ROOT", None)
+    env.pop("REPO_DOE_CLAUDE", None)
     env.pop("CLAUDE_KLABAUTER_ROOT", None)
     return env
 

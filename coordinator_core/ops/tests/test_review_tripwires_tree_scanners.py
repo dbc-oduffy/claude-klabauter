@@ -1,4 +1,4 @@
-"""tree_scanners selects tracked tests that walk an ancestor directory of a created path."""
+"""tree_scanners selects tracked tests that walk the own directory of a created path."""
 
 from __future__ import annotations
 
@@ -9,9 +9,15 @@ WALKER = 'from pathlib import Path\nfor p in Path("pkg_core").rglob("*.py"):\n  
 CREATED = "pkg_core/sub/new.py"
 
 
-def test_walker_of_ancestor_is_selected(tmp_path):
-    repo = _repo(tmp_path, {"tests/test_walk.py": WALKER})
+def test_walker_of_own_directory_is_selected(tmp_path):
+    body = WALKER.replace("pkg_core", "pkg_core/sub")
+    repo = _repo(tmp_path, {"tests/test_walk.py": body})
     assert rt.tree_scanners(repo, [CREATED]) == ["tests/test_walk.py"]
+
+
+def test_walker_of_shallower_ancestor_is_not_selected(tmp_path):
+    repo = _repo(tmp_path, {"tests/test_walk.py": WALKER})
+    assert rt.tree_scanners(repo, [CREATED]) == []
 
 
 def test_walker_of_unrelated_dir_is_not_selected(tmp_path):
@@ -37,14 +43,11 @@ def test_literal_equal_to_created_path_itself_is_not_an_ancestor(tmp_path):
     assert rt.tree_scanners(repo, [CREATED]) == []
 
 
-def test_intermediate_ancestor_and_sorted_output(tmp_path):
-    repo = _repo(
-        tmp_path,
-        {
-            "tests/test_b.py": WALKER.replace("pkg_core", "pkg_core/sub"),
-            "tests/test_a.py": WALKER,
-        },
-    )
+def test_many_shallow_walkers_excluded_and_output_sorted(tmp_path):
+    own = WALKER.replace("pkg_core", "pkg_core/sub")
+    files = {f"tests/test_shallow_{i}.py": WALKER for i in range(20)}
+    files.update({"tests/test_b.py": own, "tests/test_a.py": own})
+    repo = _repo(tmp_path, files)
     assert rt.tree_scanners(repo, [CREATED]) == ["tests/test_a.py", "tests/test_b.py"]
 
 

@@ -8,6 +8,14 @@ import pytest
 
 from coordinator_core.ops.test_warp_run_deliverable_halted_claims import HALTED_ID, _claims, _record
 
+
+@pytest.fixture(autouse=True)
+def _no_stale_release(monkeypatch):
+    """HALTED_ID is minted 2026-10-19; the wall-clock stale bound would release it (see the sibling `repo` fixture)."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    monkeypatch.setattr(halted_hold_release, "stale_release", lambda *a, **k: None)
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 

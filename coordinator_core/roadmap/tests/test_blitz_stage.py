@@ -453,6 +453,31 @@ def test_an_already_frozen_report_is_still_returned(tmp_path, roadmap):
     assert [[b["id"] for b in w["batons"]] for w in reply["waves"]] == [["b1"]]
 
 
+def _freeze(tmp_path, report):
+    frozen = tmp_path / "state" / "plan-blitz" / "rm-test" / "wave-1.gate-report.json"
+    frozen.parent.mkdir(parents=True)
+    frozen.write_text(json.dumps(report), encoding="utf-8")
+    return frozen.relative_to(tmp_path).as_posix()
+
+
+def test_op_reads_the_waves_of_an_already_frozen_report_without_staging(tmp_path):
+    from coordinator_core.ops.roadmap_blitz_stage import _handler
+
+    rel = _freeze(tmp_path, {"batons": [{"id": "b1", "path": "p1"}, {"id": "b2", "path": "p2"}], "waves": [["b1"], ["b2"]]})
+    reply = _handler({"read_gate_report": rel}, repo_root=tmp_path / ".git")
+    assert reply["gate_report_state"] == "already-frozen" and reply["gate_report_path"] == rel
+    assert [[b["id"] for b in w["batons"]] for w in reply["waves"]] == [["b1"], ["b2"]]
+    assert not (tmp_path / "state" / "handoffs").exists()
+
+
+def test_op_read_of_a_gate_report_refuses_a_missing_or_foreign_path(tmp_path):
+    from coordinator_core.ops.roadmap_blitz_stage import _handler
+
+    for bad in ("state/plan-blitz/none/wave-1.gate-report.json", "../x/wave-1.gate-report.json", "state/other.json"):
+        with pytest.raises(ValueError):
+            _handler({"read_gate_report": bad}, repo_root=tmp_path / ".git")
+
+
 def test_rerun_duplicates_no_stub(tmp_path, roadmap):
     first = bs.stage_roadmap(tmp_path, str(roadmap))
     files_before = sorted(p.name for p in (tmp_path / "state" / "handoffs").iterdir())
@@ -460,6 +485,30 @@ def test_rerun_duplicates_no_stub(tmp_path, roadmap):
     assert sorted(p.name for p in (tmp_path / "state" / "handoffs").iterdir()) == files_before
     assert all(s["created"] is False for s in second["stubs"])
     assert [s["stub_id"] for s in second["stubs"]] == [s["stub_id"] for s in first["stubs"]]
+
+
+def test_refire_over_skeletal_stubs_decides_to_fill_them(tmp_path, roadmap):
+    first = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert first["fill_stubs"]["decision"] == "fill-skeletal"
+    second = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert all(s["created"] is False and s["fill"] == "skeletal" for s in second["stubs"])
+    assert second["fill_stubs"]["decision"] == "fill-skeletal"
+    assert sorted(second["fill_stubs"]["skeletal_paths"]) == sorted(s["path"] for s in second["stubs"])
+
+
+def test_refire_over_filled_stubs_counts_them_filled(tmp_path, roadmap):
+    first = bs.stage_roadmap(tmp_path, str(roadmap))
+    for s in first["stubs"]:
+        path = tmp_path / s["path"]
+        text = path.read_text(encoding="utf-8")
+        assert "PLACEHOLDER — replace with one-line stub summary" in text
+        path.write_text(
+            text.replace("PLACEHOLDER — replace with one-line stub summary (≤140 chars)", "Real summary"),
+            encoding="utf-8",
+        )
+    second = bs.stage_roadmap(tmp_path, str(roadmap))
+    assert all(s["created"] is False and s["fill"] == "filled" for s in second["stubs"])
+    assert second["fill_stubs"] == {"decision": "already-filled", "skeletal_paths": []}
 
 
 def test_cycle_is_refused(tmp_path, roadmap):

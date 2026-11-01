@@ -1006,10 +1006,10 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/hooks/auto_push.py:1338` | PROSE-ONLY | `# cross-repo/archive/2026-07-25-claude-klabauter-em-cockpit-publish-use-a-github-action-not-a-claude-klabauter-directive.md).` |
 | `coordinator_core/hooks/check_claude_md_size.py:13` | PROSE-ONLY | `coordinator-claude-depends-on-claude-klabauter direction the tri-plane split` |
 | `coordinator_core/hooks/foreign_path_filter.py:12` | - | `"repos.claude_klabauter",` |
-| `coordinator_core/hooks/oss_operative_strings.py:44` | PROSE-ONLY | `(`CLAUDE_KLABAUTER_ROOT`, `REPO_CLAUDE_KLABAUTER`, `repos.claude_klabauter`,` |
+| `coordinator_core/hooks/oss_operative_strings.py:44` | PROSE-ONLY | `(`CLAUDE_KLABAUTER_ROOT`, `REPO_PROJECT_MAKIMA`, `repos.claude_klabauter`,` |
 | `coordinator_core/hooks/oss_operative_strings.py:45` | PROSE-ONLY | ``plugin.mirrors.claude-klabauter.source_path`) is operative regardless of` |
 | `coordinator_core/hooks/oss_operative_strings.py:276` | - | `"claude-klabauter",` |
-| `coordinator_core/hooks/oss_operative_strings.py:387` | PROSE-ONLY | `(`CLAUDE_KLABAUTER_ROOT`, `REPO_CLAUDE_KLABAUTER`, `repos.claude_klabauter`,` |
+| `coordinator_core/hooks/oss_operative_strings.py:387` | PROSE-ONLY | `(`CLAUDE_KLABAUTER_ROOT`, `REPO_PROJECT_MAKIMA`, `repos.claude_klabauter`,` |
 | `coordinator_core/hooks/oss_operative_strings.py:388` | PROSE-ONLY | ``plugin.mirrors.claude-klabauter.source_path`);` |
 | `coordinator_core/hooks/oss_operative_strings.py:413` | PROSE-ONLY | `# `mirrors-claude-klabauter-path`) also falls into this branch and` |
 | `coordinator_core/hooks/repin_cloud_engine_root.py:7` | PROSE-ONLY | `Design agreed on claude-klabauter#67 (comments 5785027514, 5785078234) between` |
@@ -1394,7 +1394,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/ops/install_shell_init_guard_seam.py:128` | PROSE-ONLY | `engine's guard, not whichever clone `repos.claude_klabauter` still names."""` |
 | `coordinator_core/ops/install_shell_init_guard_seam.py:151` | - | `value = _machine_resolver.registry_get("repos.claude_klabauter")` |
 | `coordinator_core/ops/install_shell_init_guard_seam.py:241` | - | `"shell_init_guard: skipped (claude-klabauter not registered — "` |
-| `coordinator_core/ops/install_shell_init_guard_seam.py:242` | - | `"set REPO_CLAUDE_KLABAUTER or machine-local repos.claude_klabauter)"` |
+| `coordinator_core/ops/install_shell_init_guard_seam.py:242` | - | `"set REPO_PROJECT_MAKIMA or machine-local repos.claude_klabauter)"` |
 | `coordinator_core/ops/list_week_changelog.py:81` | - | `return _machine_local_get("repos.claude_klabauter")` |
 | `coordinator_core/ops/measure_token_envelope.py:28` | PROSE-ONLY | `- claude-klabauter `coordinator_core.bash_guards.dispatch_checks.check_validate_commit`` |
 | `coordinator_core/ops/memo/tests/test_memo_transition_unit.py:1223` | PROSE-ONLY | `to: "claude-klabauter-em"` |
@@ -1594,7 +1594,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:43` | - | `clone = tmp_path / "claude-klabauter"` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:231` | PROSE-ONLY | `(bug fix, 2026-08-22: all three printed "claude-klabauter not found")."""` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:240` | - | `"shell_init_guard: skipped (claude-klabauter not registered — "` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:241` | - | `"set REPO_CLAUDE_KLABAUTER or machine-local repos.claude_klabauter)"` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:241` | - | `"set REPO_PROJECT_MAKIMA or machine-local repos.claude_klabauter)"` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:252` | - | `empty_clone = tmp_path / "claude-klabauter-empty"` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:272` | - | `clone = tmp_path / "claude-klabauter-unreadable"` |
 | `coordinator_core/ops/test_probe_fresh_repo_noop.py:6` | PROSE-ONLY | `against claude-klabauter's own working tree, and never via a mutating git` |
@@ -2188,7 +2188,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/write_guards/block_oss_mirror_memo_delivery.py:14` | PROSE-ONLY | `The sanctioned ``cross-repo-memo`` CLI (``claude-klabauter` |
 | `coordinator_core/write_guards/block_unauthorized_claude_md_write.py:97` | PROSE-ONLY | `this guard is ENGINE-resident (``claude-klabauter` |
 | `coordinator_core/write_guards/block_unauthorized_claude_md_write.py:209` | PROSE-ONLY | `#: repo does not sit at ``$HOME/claude-klabauter`` every rung misses. The reader` |
-| `coordinator_core/write_guards/block_unauthorized_claude_md_write.py:214` | - | `'PYTHONPATH="${REPO_CLAUDE_KLABAUTER:-${CLAUDE_KLABAUTER_ROOT:-$HOME/claude-klabauter}}" '` |
+| `coordinator_core/write_guards/block_unauthorized_claude_md_write.py:214` | - | `'PYTHONPATH="${REPO_PROJECT_MAKIMA:-${CLAUDE_KLABAUTER_ROOT:-$HOME/claude-klabauter}}" '` |
 | `coordinator_core/write_guards/block_unauthorized_claude_md_write.py:237` | PROSE-ONLY | `is exported or where the repo sits at ``$HOME/claude-klabauter``. On a host` |
 | `coordinator_core/write_guards/block_unauthorized_claude_md_write.py:267` | PROSE-ONLY | ```repos.claude_klabauter``) and falls back silently. Anything else means this` |
 | `coordinator_core/write_guards/bump_out_of_repo_tool_write.py:678` | PROSE-ONLY | `this, a POSIX-absolute MSYS path (`/x/claude-klabauter/scratch/t.txt`) gets` |
@@ -3197,7 +3197,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator/bin/draft-plan-aging.py:60` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/edit-live-hook.py:13` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/emit-artifact-shape-contract.py:137` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
-| `coordinator/bin/emit-artifact-shape-contract.py:221` | - | `"re-run with CLAUDE_KLABAUTER_ROOT / COORDINATOR_ENGINE_ROOT / REPO_CLAUDE_KLABAUTER "` |
+| `coordinator/bin/emit-artifact-shape-contract.py:221` | - | `"re-run with CLAUDE_KLABAUTER_ROOT / COORDINATOR_ENGINE_ROOT / REPO_PROJECT_MAKIMA "` |
 | `coordinator/bin/emit-wave-fire.py:1886` | - | `"`review-findings-ledger` may fail CLAUDE_KLABAUTER_ROOT resolution inside a "` |
 | `coordinator/bin/ensure-vscode-readonly.py:41` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/execute-plan-assemble.py:52` | - | `claude_klabauter_root = require_dispatch_engine_on_path()  # noqa: F841` |
@@ -3770,11 +3770,11 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator/bin/repo-setup-args-and-register.py:99` | - | `if str(_CLAUDE_KLABAUTER_ROOT) not in sys.path:` |
 | `coordinator/bin/repo-setup-args-and-register.py:100` | - | `sys.path.insert(0, str(_CLAUDE_KLABAUTER_ROOT))` |
 | `coordinator/bin/repo-setup-args-and-register.py:242` | - | `def _resolve_claude_klabauter_root_for_exec_summary(settings_home: "str \| None") -> "str \| None":` |
-| `coordinator/bin/repo-setup-args-and-register.py:257` | - | `return os.environ.get("REPO_CLAUDE_KLABAUTER") or coordinator_engine_root_env(__name__)` |
+| `coordinator/bin/repo-setup-args-and-register.py:257` | - | `return os.environ.get("REPO_PROJECT_MAKIMA") or coordinator_engine_root_env(__name__)` |
 | `coordinator/bin/repo-setup-args-and-register.py:291` | - | `claude_klabauter_root = _resolve_claude_klabauter_root_for_exec_summary(args.settings_home)` |
 | `coordinator/bin/repo-setup-args-and-register.py:292` | - | `if claude_klabauter_root:` |
 | `coordinator/bin/repo-setup-args-and-register.py:293` | - | `fallback = os.path.join(claude_klabauter_root, "coordinator", "bin", "generate-exec-summary.py")` |
-| `coordinator/bin/repo-setup-args-and-register.py:301` | - | `"REPO_CLAUDE_KLABAUTER/COORDINATOR_ENGINE_ROOT) — exec-summary "` |
+| `coordinator/bin/repo-setup-args-and-register.py:301` | - | `"REPO_PROJECT_MAKIMA/COORDINATOR_ENGINE_ROOT) — exec-summary "` |
 | `coordinator/bin/repo-setup-args-and-register.py:391` | - | `help="Resolve (and optionally run) generate-exec-summary.py via the coordinator-root/claude-klabauter-sibling fallback ladder",` |
 | `coordinator/bin/review-brightline-gate.py:49` | - | `claude_klabauter_root = require_dispatch_engine_on_path()` |
 | `coordinator/bin/review-brightline-gate.py:59` | - | `print(f"review-brightline-gate.py: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)` |
@@ -4255,7 +4255,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator/bin/tests/test_repo_setup_args_and_register.py:163` | - | `claude_klabauter_gen_dir.mkdir(parents=True)` |
 | `coordinator/bin/tests/test_repo_setup_args_and_register.py:164` | - | `claude_klabauter_gen = claude_klabauter_gen_dir / "generate-exec-summary.py"` |
 | `coordinator/bin/tests/test_repo_setup_args_and_register.py:165` | - | `claude_klabauter_gen.write_text("# stub\n")` |
-| `coordinator/bin/tests/test_repo_setup_args_and_register.py:170` | - | `with mock.patch.dict(os.environ, {"REPO_CLAUDE_KLABAUTER": claude_klabauter_tmp}, clear=False):` |
+| `coordinator/bin/tests/test_repo_setup_args_and_register.py:170` | - | `with mock.patch.dict(os.environ, {"REPO_PROJECT_MAKIMA": claude_klabauter_tmp}, clear=False):` |
 | `coordinator/bin/tests/test_repo_setup_args_and_register.py:177` | - | `self.assertEqual(buf[0], str(claude_klabauter_gen))` |
 | `coordinator/bin/tests/test_require_dispatch_engine_on_path.py:23` | - | `claude_klabauter_root = resolve()` |
 | `coordinator/bin/tests/test_require_dispatch_engine_on_path.py:24` | - | `if claude_klabauter_root not in sys.path:` |
@@ -5347,7 +5347,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/benchmarks/tests/test_commit_path_process_budget.py:300` | - | `base.setdefault("COORDINATOR_ENGINE_ROOT", _CLAUDE_KLABAUTER_ROOT)` |
 | `coordinator_core/ceremony_common/_phantom_sweep_providers.py:240` | - | `"claude_klabauter_bin": "/fake/settings-home/bin",` |
 | `coordinator_core/ceremony_common/_phantom_sweep_providers.py:241` | - | `"claude_klabauter_root": "/fake/claude-klabauter-live-root",` |
-| `coordinator_core/conftest.py:1084` | - | `f"REPO_CONTENT_ROOT / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "` |
+| `coordinator_core/conftest.py:1084` | - | `f"REPO_DOE_CLAUDE / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "` |
 | `coordinator_core/contract/cockpit_schema/emit_conformance_fixture.py:380` | - | `help="Schema directory to target. Defaults to claude-klabauter's vendored bundle; "` |
 | `coordinator_core/contract/emit_memo_schema.py:283` | - | `"pre-2026-07-24 corpus and not yet emitted by claude-klabauter's memo_send — "` |
 | `coordinator_core/contract/emit_memo_schema.py:316` | - | `"extension, not (yet) emitted by claude-klabauter's memo_send."` |
@@ -6090,7 +6090,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/message_register/_codename_classes.py:261` | - | `"migrate-state-to-claude-klabauter.sh": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:277` | - | `"claude_klabauter": RENAME,` |
 | `coordinator_core/message_register/_codename_classes.py:313` | - | `_PINNED_FAMILY_ROOTS = frozenset({"contentroot", "doeclaude_klabauter", "projectclaude_klabauter"})` |
-| `coordinator_core/message_register/_codename_classes.py:531` | - | `ids = ("content_root", "claude_klabauter", "project_rag", "example_game_workbench_repo")` |
+| `coordinator_core/message_register/_codename_classes.py:531` | - | `ids = ("content_root", "claude_klabauter", "project_rag", "claude_unreal_holodeck")` |
 | `coordinator_core/op_budget_suspension.py:634` | - | `"SUPERSEDED 2026-09-02 -- claude-klabauter owns the v2 and is building it. "` |
 | `coordinator_core/op_budget_suspension.py:641` | - | `"JOB survives; only claude-klabauter\'s ownership of it does not. Job was "` |
 | `coordinator_core/op_budget_suspension.py:652` | - | `"operator asking a question on demand. The corpus is claude-klabauter\'s own "` |
@@ -6129,12 +6129,12 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/ops/check_posix_exec_assumptions.py:886` | - | `"from claude-klabauter alone. Nothing here is executed, imported, or installed by "` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:887` | - | `"claude-klabauter or by anything claude-klabauter installs; the only runtime these files ever "` |
 | `coordinator_core/ops/check_posix_exec_assumptions.py:891` | - | `"claude-klabauter may fix — they are LOAD-BEARING AT THE DESTINATION: the harness's "` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:1234` | - | `REPO_CLAUDE_KLABAUTER = "claude_klabauter"` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:1261` | - | `REPO_CLAUDE_KLABAUTER: {` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:1272` | - | `REPO_CLAUDE_KLABAUTER: {` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:1281` | - | `REPO_CLAUDE_KLABAUTER: {` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:1312` | - | `REPO_CLAUDE_KLABAUTER: {` |
-| `coordinator_core/ops/check_posix_exec_assumptions.py:1451` | - | `REPO_CLAUDE_KLABAUTER: {` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:1234` | - | `REPO_PROJECT_MAKIMA = "claude_klabauter"` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:1261` | - | `REPO_PROJECT_MAKIMA: {` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:1272` | - | `REPO_PROJECT_MAKIMA: {` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:1281` | - | `REPO_PROJECT_MAKIMA: {` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:1312` | - | `REPO_PROJECT_MAKIMA: {` |
+| `coordinator_core/ops/check_posix_exec_assumptions.py:1451` | - | `REPO_PROJECT_MAKIMA: {` |
 | `coordinator_core/ops/check_weekly_staleness.py:74` | - | `from coordinator_core._claude_klabauter_root import _machine_local_get` |
 | `coordinator_core/ops/check_weekly_staleness.py:98` | - | `def _claude_klabauter_root() -> Optional[str]:` |
 | `coordinator_core/ops/check_weekly_staleness.py:172` | - | `claude_klabauter_root = _claude_klabauter_root()` |
@@ -6251,7 +6251,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/ops/install_health_run.py:727` | - | `if entry.path in declared_scripts or os.path.relpath(entry.path, claude_klabauter_root) in declared_scripts:` |
 | `coordinator_core/ops/install_meta_repo_precommit_hook.py:692` | - | `"or coordinator/bin/remove-claude-klabauter-precommit-hook.py if this gate was retired",` |
 | `coordinator_core/ops/install_shell_init_guard_seam.py:133` | - | `def resolve_claude_klabauter_clone() -> str:` |
-| `coordinator_core/ops/install_shell_init_guard_seam.py:145` | - | `env_override = os.environ.get("REPO_CLAUDE_KLABAUTER", "")` |
+| `coordinator_core/ops/install_shell_init_guard_seam.py:145` | - | `env_override = os.environ.get("REPO_PROJECT_MAKIMA", "")` |
 | `coordinator_core/ops/install_shell_init_guard_seam.py:201` | - | `"# Graceful no-op if claude-klabauter absent or python3 missing: the -f check + eval's 2>/dev/null +\n"` |
 | `coordinator_core/ops/install_shell_init_guard_seam.py:203` | - | `"# -f, not -x: the guard is interpreter-invoked and ships 100644 like the rest of claude-klabauter's bin/.\n"` |
 | `coordinator_core/ops/install_shell_init_guard_seam.py:236` | - | `claude_klabauter_clone = resolve_claude_klabauter_clone()` |
@@ -6318,32 +6318,32 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/ops/setup_seed_health_ledger.py:120` | - | `if claude_klabauter_root:` |
 | `coordinator_core/ops/setup_seed_health_ledger.py:121` | - | `return os.path.join(claude_klabauter_root, "state")` |
 | `coordinator_core/ops/test_check_claude_klabauter_doctor_sentinel.py:11` | - | `from coordinator_core.ops import check_claude_klabauter_doctor_sentinel as mod` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:43` | - | `REPO_CLAUDE_KLABAUTER,` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:43` | - | `REPO_PROJECT_MAKIMA,` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1743` | - | `_EXEMPTED_IN_CLAUDE_KLABAUTER = "coordinator/bin/plan-tasks-resolve"` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1757` | - | `exec_paths = (_EXEMPTED_IN_CLAUDE_KLABAUTER, "coordinator/scripts/control.py")` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1772` | - | `assert _EXEMPTED_IN_CLAUDE_KLABAUTER in result["env_shebang"]` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1773` | - | `assert _EXEMPTED_IN_CLAUDE_KLABAUTER in result["mode_100755"]` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1782` | - | `result = scan(claude_klabauter_like)` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1784` | - | `assert repo_key_for_root(claude_klabauter_like) == REPO_CLAUDE_KLABAUTER` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1784` | - | `assert repo_key_for_root(claude_klabauter_like) == REPO_PROJECT_MAKIMA` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1785` | - | `assert _EXEMPTED_IN_CLAUDE_KLABAUTER not in result["env_shebang"]` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1786` | - | `assert _EXEMPTED_IN_CLAUDE_KLABAUTER not in result["mode_100755"]` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1841` | - | `for relpath in per_repo.get(REPO_CLAUDE_KLABAUTER, {}):` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1841` | - | `for relpath in per_repo.get(REPO_PROJECT_MAKIMA, {}):` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1843` | - | `f"{relpath} is exempted for claude_klabauter in class {cls} but "` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1885` | - | `_CLAUDE_KLABAUTER_PREFIX = "dist/mirror-native/"` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1930` | - | `inside = f"{_CLAUDE_KLABAUTER_PREFIX}nested/check-thing.py"` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1934` | - | `assert repo_key_for_root(repo) == REPO_CLAUDE_KLABAUTER` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1934` | - | `assert repo_key_for_root(repo) == REPO_PROJECT_MAKIMA` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1945` | - | `outside = f"{_CLAUDE_KLABAUTER_PREFIX.rstrip('/')}-scratch/check-thing.py"` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1952` | - | `assert not is_prefix_excluded(outside, REPO_CLAUDE_KLABAUTER)` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:1952` | - | `assert not is_prefix_excluded(outside, REPO_PROJECT_MAKIMA)` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1962` | - | `long_rel = _CLAUDE_KLABAUTER_PREFIX + "/".join(["preserved-deep-directory-segment"] * 7) + ".txt"` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1977` | - | `sibling = _repo_with_preserved_tree(tmp_path, "some-unrelated-sibling", _CLAUDE_KLABAUTER_PREFIX)` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:1978` | - | `inside = f"{_CLAUDE_KLABAUTER_PREFIX}nested/check-thing.py"` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:2029` | - | `assert _CLAUDE_KLABAUTER_PREFIX in msg` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:2043` | - | `for prefix in EXEMPT_PREFIXES.get(REPO_CLAUDE_KLABAUTER, {}):` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:2043` | - | `for prefix in EXEMPT_PREFIXES.get(REPO_PROJECT_MAKIMA, {}):` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:2044` | - | `if prefix == _CLAUDE_KLABAUTER_PREFIX:` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:2100` | - | `["git", "-C", str(_REPO_ROOT), "ls-files", _CLAUDE_KLABAUTER_PREFIX],` |
 | `coordinator_core/ops/test_check_posix_exec_assumptions.py:2106` | - | `assert tracked, f"{_CLAUDE_KLABAUTER_PREFIX} has no tracked files -- prefix is stale"` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:2125` | - | `assert is_prefix_excluded(relpath, REPO_CLAUDE_KLABAUTER)` |
-| `coordinator_core/ops/test_check_posix_exec_assumptions.py:2291` | - | `assert is_prefix_excluded("dist/mirror-native/thing.py", REPO_CLAUDE_KLABAUTER)` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:2125` | - | `assert is_prefix_excluded(relpath, REPO_PROJECT_MAKIMA)` |
+| `coordinator_core/ops/test_check_posix_exec_assumptions.py:2291` | - | `assert is_prefix_excluded("dist/mirror-native/thing.py", REPO_PROJECT_MAKIMA)` |
 | `coordinator_core/ops/test_completion_ops.py:287` | - | `_register_repos(monkeypatch, tmp_path, content_root=sibling, claude_klabauter=repo)` |
 | `coordinator_core/ops/test_completion_ops.py:348` | - | `_register_repos(monkeypatch, tmp_path, content_root=sibling, claude_klabauter=repo)` |
 | `coordinator_core/ops/test_detect_onboarding_offer.py:60` | - | `def _fake_claude_klabauter_root(tmp_path, monkeypatch):` |
@@ -6363,35 +6363,35 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/ops/test_doc_content_verify.py:389` | - | `sibling_checkers=[lambda token: (claude_klabauter_root / token).exists()],` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:38` | - | `def claude_klabauter_clone(tmp_path: Path) -> Path:` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:74` | - | `capsys, monkeypatch, tmp_path, claude_klabauter_clone` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:76` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:76` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:92` | - | `capsys, monkeypatch, tmp_path, claude_klabauter_clone` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:94` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:94` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:96` | - | `guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:113` | - | `capsys, monkeypatch, tmp_path, claude_klabauter_clone` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:115` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:115` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:128` | - | `guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:143` | - | `capsys, monkeypatch, tmp_path, claude_klabauter_clone` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:147` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:147` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:149` | - | `guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:172` | - | `capsys, monkeypatch, tmp_path, claude_klabauter_clone` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:174` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:174` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:186` | - | `assert str(claude_klabauter_clone / "bin" / "shell-init-guard.py") in text` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:191` | - | `def test_running_engine_outranks_the_registry(monkeypatch, tmp_path, claude_klabauter_clone):` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:195` | - | `monkeypatch.setattr(seam, "_running_engine_root", lambda: str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:196` | - | `assert seam.resolve_claude_klabauter_clone() == str(claude_klabauter_clone)` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:200` | - | `capsys, monkeypatch, tmp_path, claude_klabauter_clone` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:202` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:202` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:304` | - | `def test_non_executable_guard_still_installs(capsys, monkeypatch, tmp_path, claude_klabauter_clone):` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:309` | - | `guard = claude_klabauter_clone / "bin" / "shell-init-guard.py"` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:317` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:317` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:330` | - | `def test_seam_never_consults_the_execute_bit(monkeypatch, tmp_path, claude_klabauter_clone):` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:333` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:333` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:349` | - | `def test_rc_created_fresh_when_absent(monkeypatch, tmp_path, claude_klabauter_clone):` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:351` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:351` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:364` | - | `capsys, monkeypatch, tmp_path, claude_klabauter_clone` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:366` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:366` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_install_shell_init_guard_seam.py:378` | - | `def test_mutation_switch_refuses_the_rewrite_and_leaves_the_rc(capsys, monkeypatch, tmp_path, claude_klabauter_clone):` |
-| `coordinator_core/ops/test_install_shell_init_guard_seam.py:379` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))` |
+| `coordinator_core/ops/test_install_shell_init_guard_seam.py:379` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))` |
 | `coordinator_core/ops/test_migrate_state_to_claude_klabauter.py:23` | - | `from coordinator_core.ops import migrate_state_to_claude_klabauter as mstm  # noqa: E402` |
 | `coordinator_core/ops/test_migrate_state_to_claude_klabauter.py:36` | - | `def _run(argv, claude_home: Path, claude_klabauter_root: Path, monkeypatch, capsys):` |
 | `coordinator_core/ops/test_migrate_state_to_claude_klabauter.py:47` | - | `monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(claude_klabauter_root))` |
@@ -6453,13 +6453,13 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/ops/tests/test_doctor.py:35` | - | `_CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]` |
 | `coordinator_core/ops/tests/test_doctor.py:36` | - | `_DOCTOR = _CLAUDE_KLABAUTER_ROOT / "coordinator" / "bin" / "doctor.py"` |
 | `coordinator_core/ops/tests/test_doctor.py:90` | - | `_CLAUDE_KLABAUTER_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py",` |
-| `coordinator_core/ops/tests/test_doctor.py:142` | - | `REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),` |
+| `coordinator_core/ops/tests/test_doctor.py:142` | - | `REPO_PROJECT_MAKIMA=str(_CLAUDE_KLABAUTER_ROOT),` |
 | `coordinator_core/ops/tests/test_doctor.py:143` | - | `COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),` |
-| `coordinator_core/ops/tests/test_doctor.py:797` | - | `REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),` |
+| `coordinator_core/ops/tests/test_doctor.py:797` | - | `REPO_PROJECT_MAKIMA=str(_CLAUDE_KLABAUTER_ROOT),` |
 | `coordinator_core/ops/tests/test_doctor.py:798` | - | `COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),` |
 | `coordinator_core/ops/tests/test_doctor_cost_budget.py:18` | - | `_CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]` |
 | `coordinator_core/ops/tests/test_doctor_cost_budget.py:36` | - | `_CLAUDE_KLABAUTER_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py",` |
-| `coordinator_core/ops/tests/test_doctor_cost_budget.py:42` | - | `monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(_CLAUDE_KLABAUTER_ROOT))` |
+| `coordinator_core/ops/tests/test_doctor_cost_budget.py:42` | - | `monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(_CLAUDE_KLABAUTER_ROOT))` |
 | `coordinator_core/ops/tests/test_doctor_cost_budget.py:43` | - | `monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_CLAUDE_KLABAUTER_ROOT))` |
 | `coordinator_core/ops/tests/test_group_em_enter.py:532` | - | `claude_klabauter_root = Path(__file__).resolve().parents[3]` |
 | `coordinator_core/ops/tests/test_group_em_enter.py:533` | - | `claude_klabauter_store_glob = list(` |
@@ -6784,21 +6784,21 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/tests/test_engine_root_conformance.py:8` | PROSE-ONLY | ```coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::` |
 | `coordinator_core/tests/test_engine_root_conformance.py:9` | PROSE-ONLY | `resolve_claude_klabauter_root_with_class()``, and` |
 | `coordinator_core/tests/test_engine_root_conformance.py:22` | PROSE-ONLY | `(resolve_claude_klabauter_root_with_class, _resolve_live_working_tree,` |
-| `coordinator_core/tests/test_engine_root_conformance.py:33` | PROSE-ONLY | `table): claude-klabauter's live-tree ladder has NO ``REPO_CLAUDE_KLABAUTER`` rung — its` |
-| `coordinator_core/tests/test_engine_root_conformance.py:36` | PROSE-ONLY | `checks ``LIVE_TREE_ENV_VARS = (REPO_CLAUDE_KLABAUTER, COORDINATOR_ENGINE_ROOT)``` |
-| `coordinator_core/tests/test_engine_root_conformance.py:38` | PROSE-ONLY | `REPO_CLAUDE_KLABAUTER); it reads the retired CLAUDE_KLABAUTER_ROOT at that rung solely to` |
+| `coordinator_core/tests/test_engine_root_conformance.py:33` | PROSE-ONLY | `table): claude-klabauter's live-tree ladder has NO ``REPO_PROJECT_MAKIMA`` rung — its` |
+| `coordinator_core/tests/test_engine_root_conformance.py:36` | PROSE-ONLY | `checks ``LIVE_TREE_ENV_VARS = (REPO_PROJECT_MAKIMA, COORDINATOR_ENGINE_ROOT)``` |
+| `coordinator_core/tests/test_engine_root_conformance.py:38` | PROSE-ONLY | `REPO_PROJECT_MAKIMA); it reads the retired CLAUDE_KLABAUTER_ROOT at that rung solely to` |
 | `coordinator_core/tests/test_engine_root_conformance.py:76` | - | `"claude-klabauter carries no CI lane where this suite runs rather than skips "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:120` | PROSE-ONLY | ```Path(__file__).resolve().parents[3].parent / _CLAUDE_KLABAUTER_SIBLING_DIR_NAME``` |
 | `coordinator_core/tests/test_engine_root_conformance.py:129` | - | `sibling = Path(mr.__file__).resolve().parents[3].parent / mr._CLAUDE_KLABAUTER_SIBLING_DIR_NAME` |
 | `coordinator_core/tests/test_engine_root_conformance.py:134` | - | `"{cid}: claude-klabauter's live-tree ladder "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:135` | - | `"(coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py::_resolve_claude_klabauter_root) has "` |
-| `coordinator_core/tests/test_engine_root_conformance.py:136` | - | `"NO REPO_CLAUDE_KLABAUTER rung — its rung 0 reads COORDINATOR_ENGINE_ROOT "` |
-| `coordinator_core/tests/test_engine_root_conformance.py:141` | - | `"LIVE_TREE_ENV_VARS = (REPO_CLAUDE_KLABAUTER, COORDINATOR_ENGINE_ROOT) first. "` |
-| `coordinator_core/tests/test_engine_root_conformance.py:144` | - | `"COORDINATOR_ENGINE_ROOT-only short-circuit rung, not REPO_CLAUDE_KLABAUTER. "` |
+| `coordinator_core/tests/test_engine_root_conformance.py:136` | - | `"NO REPO_PROJECT_MAKIMA rung — its rung 0 reads COORDINATOR_ENGINE_ROOT "` |
+| `coordinator_core/tests/test_engine_root_conformance.py:141` | - | `"LIVE_TREE_ENV_VARS = (REPO_PROJECT_MAKIMA, COORDINATOR_ENGINE_ROOT) first. "` |
+| `coordinator_core/tests/test_engine_root_conformance.py:144` | - | `"COORDINATOR_ENGINE_ROOT-only short-circuit rung, not REPO_PROJECT_MAKIMA. "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:163` | - | `"ClaudeKlabauterResolutionError. RE-AMENDED 2026-08-29: that in turn is now stale "` |
-| `coordinator_core/tests/test_engine_root_conformance.py:172` | PROSE-ONLY | `# `REPO_CLAUDE_KLABAUTER` with `COORDINATOR_ENGINE_ROOT: null`, and claude-klabauter reads` |
+| `coordinator_core/tests/test_engine_root_conformance.py:172` | PROSE-ONLY | `# `REPO_PROJECT_MAKIMA` with `COORDINATOR_ENGINE_ROOT: null`, and claude-klabauter reads` |
 | `coordinator_core/tests/test_engine_root_conformance.py:178` | PROSE-ONLY | `# failure text. `strict=True` keeps this honest: give claude-klabauter a` |
-| `coordinator_core/tests/test_engine_root_conformance.py:179` | PROSE-ONLY | `# `REPO_CLAUDE_KLABAUTER` rung and these XPASS and fail loudly.` |
+| `coordinator_core/tests/test_engine_root_conformance.py:179` | PROSE-ONLY | `# `REPO_PROJECT_MAKIMA` rung and these XPASS and fail loudly.` |
 | `coordinator_core/tests/test_engine_root_conformance.py:190` | - | `"ClaudeKlabauterResolutionError. RE-AMENDED 2026-08-29: that in turn is now stale "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:205` | - | `"ClaudeKlabauterResolutionError. RE-AMENDED 2026-08-29: that in turn is now stale "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:220` | - | `"ClaudeKlabauterResolutionError. RE-AMENDED 2026-08-29: that in turn is now stale "` |
@@ -6806,7 +6806,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/tests/test_engine_root_conformance.py:240` | - | `"ClaudeKlabauterResolutionError. RE-AMENDED 2026-08-29: that in turn is now stale "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:249` | - | `"entrypoints raise ClaudeKlabauterResolutionError instead of resolving the live tree.",` |
 | `coordinator_core/tests/test_engine_root_conformance.py:254` | - | `"entrypoints raise ClaudeKlabauterResolutionError instead of resolving the live tree.",` |
-| `coordinator_core/tests/test_engine_root_conformance.py:260` | - | `"(<OTHER_REPO>) rather than REPO_CLAUDE_KLABAUTER's, so neither raises — but "` |
+| `coordinator_core/tests/test_engine_root_conformance.py:260` | - | `"(<OTHER_REPO>) rather than REPO_PROJECT_MAKIMA's, so neither raises — but "` |
 | `coordinator_core/tests/test_engine_root_conformance.py:267` | - | `"coordinator-engine-root-beats-claude-klabauter-live-root-when-both-set": _NO_ENV_RUNGS_REASON_TEMPLATE.format(` |
 | `coordinator_core/tests/test_engine_root_conformance.py:268` | - | `cid="coordinator-engine-root-beats-claude-klabauter-live-root-when-both-set"` |
 | `coordinator_core/tests/test_engine_root_conformance.py:274` | - | `"waived. (The case id predates CLAUDE_KLABAUTER_ROOT's retirement; the fixture case "` |
@@ -6838,7 +6838,7 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/tests/test_engine_root_two_tier.py:15` | - | `_SHIM_PATH = _REPO_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py"` |
 | `coordinator_core/tests/test_engine_root_two_tier.py:20` | PROSE-ONLY | `a SEPARATE load from `claude_klabauter_root._load_shim()`'s own module-scope` |
 | `coordinator_core/tests/test_engine_root_two_tier.py:23` | - | `spec = importlib.util.spec_from_file_location("_test_resolve_claude_klabauter_shim", _SHIM_PATH)` |
-| `coordinator_core/tests/test_engine_root_two_tier.py:33` | - | `monkeypatch.delenv("REPO_CLAUDE_KLABAUTER", raising=False)` |
+| `coordinator_core/tests/test_engine_root_two_tier.py:33` | - | `monkeypatch.delenv("REPO_PROJECT_MAKIMA", raising=False)` |
 | `coordinator_core/tests/test_engine_root_two_tier.py:35` | - | `claude_klabauter_root._reset_shim_cache()` |
 | `coordinator_core/tests/test_engine_root_two_tier.py:36` | - | `claude_klabauter_root._reset_gate_memo()` |
 | `coordinator_core/tests/test_engine_root_two_tier.py:38` | - | `claude_klabauter_root._reset_shim_cache()` |

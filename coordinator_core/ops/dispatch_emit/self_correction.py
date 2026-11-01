@@ -149,13 +149,16 @@ def classify_reds(
     foreign: Iterable[str] | None = None,
     pre_existing: Iterable[str] | None = None,
     reverted: Iterable[Mapping[str, Any]] | None = None,
+    passed_at_base: Iterable[str] | None = None,
 ) -> RedSplit:
     """Split failing node ids into the run's own and foreign reds.
 
     Owned: the id's file is in `own_paths`, or the id is in `reverted[].tests`, or it is in `caused`
-    and not in `foreign`. Everything else is foreign; `unverified` are the foreign ids that no list
+    and not in `foreign`, or it is in `passed_at_base` and not in `pre_existing` (green at base,
+    red with the diff). Everything else is foreign; `unverified` are the foreign ids that no list
     proves foreign. With `caused` and `reverted` both None only write-set membership counts.
     """
+    base_s = {_posix(i) for i in passed_at_base or ()}
     own = {_posix(p) for p in own_paths or ()}
     caused_s = None if caused is None else {_posix(i) for i in caused}
     foreign_s = {_posix(i) for i in foreign or ()}
@@ -165,6 +168,8 @@ def classify_reds(
     for raw in failing or ():
         nid = _posix(raw)
         if _file_of(nid) in own or (reverted_s is not None and nid in reverted_s):
+            owned.add(nid)
+        elif nid in base_s and nid not in pre_s:
             owned.add(nid)
         elif caused_s is not None and nid in caused_s and nid not in foreign_s:
             owned.add(nid)
@@ -221,10 +226,12 @@ const classifyReds = (failing, ownPaths, opts) => {
   const foreignS = new Set((o.foreign || []).map(px));
   const preS = new Set((o.pre_existing || []).map(px));
   const revertedS = o.reverted == null ? null : new Set(o.reverted.flatMap((r) => (r.tests || []).map(px)));
+  const baseS = new Set((o.passed_at_base || []).map(px));
   const owned = new Set(), foreign = new Set(), unverified = new Set();
   for (const raw of failing || []) {
     const id = px(raw);
     if (own.has(id.split('::')[0]) || (revertedS !== null && revertedS.has(id))) owned.add(id);
+    else if (baseS.has(id) && !preS.has(id)) owned.add(id);
     else if (causedS !== null && causedS.has(id) && !foreignS.has(id)) owned.add(id);
     else {
       foreign.add(id);

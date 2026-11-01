@@ -195,6 +195,52 @@ def test_record_with_a_null_script_is_never_admitted(tmp_path):
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
 
 
+def test_a_cancelled_gate_before_the_write_mints_nothing(tmp_path):
+    repo = _repo(tmp_path)
+    gate = run_token.WriteGate()
+    assert gate.cancel() == "idle"
+    reset = run_token.WRITE_GATE.set(gate)
+    try:
+        with pytest.raises(run_token.RecordWriteCancelled):
+            run_token.mint(repo, "ask-1", "a.mjs")
+    finally:
+        run_token.WRITE_GATE.reset(reset)
+    assert not list((repo / ".git" / "coordinator-warp-run-tokens").glob("*"))
+
+
+def test_a_gate_cancelled_during_the_write_publishes_nothing_and_removes_its_temp_file(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    gate = run_token.WriteGate()
+    monkeypatch.setattr(run_token.os, "fdopen", _cancel_then(gate, run_token.os.fdopen))
+    reset = run_token.WRITE_GATE.set(gate)
+    try:
+        with pytest.raises(run_token.RecordWriteCancelled):
+            run_token.mint(repo, "ask-1", "a.mjs")
+    finally:
+        run_token.WRITE_GATE.reset(reset)
+    assert not list((repo / ".git" / "coordinator-warp-run-tokens").glob("*"))
+
+
+def _cancel_then(gate, real_fdopen):
+    def fdopen(*args, **kwargs):
+        assert gate.cancel() == "writing"  # the record write is in flight when the caller gives up
+        return real_fdopen(*args, **kwargs)
+
+    return fdopen
+
+
+def test_a_cancel_after_the_commit_does_not_take_and_the_record_stands(tmp_path):
+    repo = _repo(tmp_path)
+    gate = run_token.WriteGate()
+    reset = run_token.WRITE_GATE.set(gate)
+    try:
+        token = run_token.mint(repo, "ask-1", "a.mjs")
+    finally:
+        run_token.WRITE_GATE.reset(reset)
+    assert gate.cancel() == "committed"
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+
+
 def test_remint_after_redeem_redeems_once_more(tmp_path):
     repo = _repo(tmp_path)
     first = run_token.mint(repo, "ask-1", "a.mjs")
@@ -307,11 +353,12 @@ def test_an_expired_receipt_answers_nothing(tmp_path, monkeypatch):
     assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") is None
 
 
-def test_a_remint_removes_the_receipt(tmp_path):
+def test_a_remint_keeps_the_receipt_for_the_landed_token_only(tmp_path):
     repo = _repo(tmp_path)
     token = _landed_run(repo)
-    run_token.mint(repo, "ask-1", "a.mjs")
-    assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") is None
+    fresh = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") is not None
+    assert run_token.spent_receipt(repo, "ask-1", fresh, "a.mjs") is None
 
 
 def test_consume_without_landed_or_without_a_record_writes_no_receipt(tmp_path):
@@ -351,6 +398,116 @@ def test_halt_admits_survives_discard_consume_and_remint(tmp_path):
     assert run_token.halt_admits(repo, "ask-1", third, "a.mjs")
     run_token.consume(repo, "ask-1")
     assert run_token.halt_admits(repo, "ask-1", third, "a.mjs")
+
+
+def test_the_retired_receipt_keeps_every_earlier_held_digest(tmp_path):
+    repo = _repo(tmp_path)
+    first = run_token.mint(repo, "ask-1", "a.mjs")
+    second = run_token.mint(repo, "ask-1", "a.mjs")
+    third = run_token.mint(repo, "ask-1", "a.mjs", carry_prior=True)
+    fourth = run_token.mint(repo, "ask-1", "a.mjs")
+    for held in (first, second, third, fourth):
+        assert run_token.halt_admits(repo, "ask-1", held, "a.mjs")
+    assert not run_token.admits(repo, "ask-1", third, "a.mjs")
+    run_token.discard(repo, "ask-1")
+    for held in (first, second, third, fourth):
+        assert run_token.halt_admits(repo, "ask-1", held, "a.mjs")
+
+
+def test_the_retired_chain_is_bounded_and_script_scoped(tmp_path):
+    repo = _repo(tmp_path)
+    tokens = [run_token.mint(repo, "ask-1", "a.mjs") for _ in range(run_token.MAX_PRIOR + 3)]
+    assert run_token.halt_admits(repo, "ask-1", tokens[-1], "a.mjs")
+    assert run_token.halt_admits(repo, "ask-1", tokens[-2], "a.mjs")
+    assert not run_token.halt_admits(repo, "ask-1", tokens[0], "a.mjs")
+    assert not run_token.halt_admits(repo, "ask-1", tokens[-2], "b.mjs")
+    run_token.mint(repo, "ask-2", "a.mjs")
+    other = run_token.mint(repo, "ask-2", "b.mjs")
+    assert not run_token.halt_admits(repo, "ask-2", other, "a.mjs")
+
+
+def test_a_carry_prior_remint_keeps_the_params_file_and_a_plain_one_drops_it(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    repo = _repo(tmp_path)
+    run_token.mint(repo, "ask-1", "a.mjs")
+    params = chan.params_path(repo, "ask-1")
+    params.parent.mkdir(parents=True, exist_ok=True)
+    params.write_text("{}", encoding="utf-8")
+    run_token.mint(repo, "ask-1", "a.mjs", carry_prior=True)
+    assert params.exists()
+    run_token.mint(repo, "ask-1", "a.mjs")
+    assert not params.exists()
+    params.write_text("{}", encoding="utf-8")
+    run_token.mint(repo, "ask-1", "b.mjs", carry_prior=True)
+    assert not params.exists()
+
+
+def test_a_plain_remint_removes_stale_land_params(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    repo = _repo(tmp_path)
+    run_token.mint(repo, "ask-1", "a.mjs")
+    land = chan.land_params_path(repo, "ask-1")
+    land.parent.mkdir(parents=True, exist_ok=True)
+    land.write_text("{}", encoding="utf-8")
+    run_token.mint(repo, "ask-1", "a.mjs", carry_prior=True)
+    assert land.exists()
+    run_token.mint(repo, "ask-1", "a.mjs")
+    assert not land.exists()
+
+
+def test_readmit_restores_a_retired_token_that_then_redeems_and_consumes(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.consume(repo, "ask-1")
+    assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.readmit_reviewed(repo, "ask-1", token, "a.mjs")
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.readmit_reviewed(repo, "ask-1", token, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    run_token.consume(repo, "ask-1", landed={"sha": "abc"})
+    assert run_token.spent_receipt(repo, "ask-1", token, "a.mjs") == {"sha": "abc"}
+    assert not run_token.readmit_reviewed(repo, "ask-1", token, "a.mjs")
+    assert not run_token.is_live(repo, "ask-1")
+
+
+def test_readmit_keeps_a_carried_prior_digest_admitted(tmp_path):
+    repo = _repo(tmp_path)
+    first = run_token.mint(repo, "ask-1", "a.mjs")
+    second = run_token.mint(repo, "ask-1", "a.mjs", carry_prior=True)
+    run_token.consume(repo, "ask-1")
+    assert run_token.readmit_reviewed(repo, "ask-1", first, "a.mjs")
+    assert run_token.redeem(repo, "ask-1", first, "a.mjs")
+    assert second != first
+
+
+def test_readmit_refuses_when_a_live_claimed_or_spent_record_exists(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.consume(repo, "ask-1")
+    other = run_token.mint(repo, "ask-1", "a.mjs")
+    assert not run_token.readmit_reviewed(repo, "ask-1", token, "a.mjs")
+    assert run_token.readmit_reviewed(repo, "ask-1", other, "a.mjs") is False
+    assert run_token.redeem(repo, "ask-1", other, "a.mjs")
+    assert not run_token.readmit_reviewed(repo, "ask-1", other, "a.mjs")
+    run_token.consume(repo, "ask-1", landed={"sha": "abc"})
+    assert not run_token.readmit_reviewed(repo, "ask-1", other, "a.mjs")
+
+
+def test_readmit_refuses_stale_mismatched_and_malformed(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    run_token.consume(repo, "ask-1")
+    assert not run_token.readmit_reviewed(repo, "ask-1", "0" * 32, "a.mjs")
+    assert not run_token.readmit_reviewed(repo, "ask-1", token, "b.mjs")
+    assert not run_token.readmit_reviewed(repo, "ask-1", "short", "a.mjs")
+    assert not run_token.readmit_reviewed(repo, "../x", token, "a.mjs")
+    assert not run_token.readmit_reviewed(repo, "ask-2", token, "a.mjs")
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + run_token.TTL_SECONDS + 5)
+    assert not run_token.readmit_reviewed(repo, "ask-1", token, "a.mjs")
+    assert not run_token.is_live(repo, "ask-1")
 
 
 def test_a_first_mint_clears_a_stale_retired_receipt(tmp_path):

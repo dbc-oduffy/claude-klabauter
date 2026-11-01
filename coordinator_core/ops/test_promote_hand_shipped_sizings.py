@@ -192,6 +192,19 @@ def test_hand_shipped_zero_candidates_spawns_nothing(repo, monkeypatch):
     assert spawns == []
 
 
+def test_reconciled_and_nonshippable_runs_cost_no_spawn_and_no_per_record_read(repo, monkeypatch):
+    _sizing(repo, status="shipped")
+    for i in range(300):
+        _run_dir(repo, f"rec{i}", reconciled=(i % 2 == 0))
+    spawns, reads = [], []
+    monkeypatch.setattr(subject, "run_git", lambda *a, **k: spawns.append(a))
+    monkeypatch.setattr(subject, "sizing_scalar", lambda *a, **k: reads.append(a) or "")
+    monkeypatch.setattr(subject, "read_record", lambda *a, **k: reads.append(a))
+    counters = subject.run(repo)
+    assert counters["candidates"] == 0 and counters["promoted"] == 0
+    assert spawns == [] and reads == []
+
+
 def _age_sizing(repo):
     stamp = time.time() - 3600
     os.utime(repo / SIZING, (stamp, stamp))

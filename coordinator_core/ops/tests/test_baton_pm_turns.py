@@ -296,3 +296,47 @@ def test_prompt_containing_a_notice_prefix_mid_text_is_recorded(tmp_path, monkey
     assert PT.append_turn(text, session_id="sid-mid")["turn"] == 0
     assert PT.read_turns(session_id="sid-mid")["text"] == text
     assert PT.read_turns(session_id="sid-mid")["count"] == 1
+
+
+def _inject_log(tmp_path, monkeypatch, *records):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    from coordinator_core.idle_compact import contract
+    log = contract.injection_log_path()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+
+
+def _rec(sid, run_id, age_s, action="injected"):
+    from datetime import datetime, timedelta, timezone
+    ts = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"ts": ts, "run_id": run_id, "session_id": sid, "pid": 1, "action": action, "reason": ""}
+
+
+def test_fresh_injected_compact_is_marked_once_and_ignored_as_pm_evidence(tmp_path, monkeypatch):
+    sdir = _session(tmp_path, monkeypatch, "sid-inj")
+    _inject_log(tmp_path, monkeypatch, _rec("sid-inj", "run-1", 5))
+    PT.append_turn("please ship the thing now", session_id="sid-inj")
+    assert PT.append_turn("/compact", session_id="sid-inj")["turn"] == 1
+    lines = [json.loads(x) for x in (sdir / PT.PM_TURNS_FILENAME).read_text().splitlines()]
+    assert lines[1]["injected"] == {"by": "idle-compact-watcher", "run_id": "run-1"}
+    assert PT.verify_pm_ask("/compact", session_id="sid-inj")["verdict"] == "unmatched"
+    # consumed: a second /compact (typed by the human) is not marked
+    PT.append_turn("/compact", session_id="sid-inj")
+    lines = [json.loads(x) for x in (sdir / PT.PM_TURNS_FILENAME).read_text().splitlines()]
+    assert "injected" not in lines[2]
+    assert [t["turn"] for t in PT.read_turns(session_id="sid-inj", all_turns=True)["turns"]] == [0, 2]
+    assert PT.verify_pm_ask("/compact", session_id="sid-inj")["verdict"] == "matched"
+
+
+def test_compact_without_fresh_injection_record_is_unmarked(tmp_path, monkeypatch):
+    sdir = _session(tmp_path, monkeypatch, "sid-old")
+    _inject_log(tmp_path, monkeypatch,
+                _rec("sid-old", "stale", 600),
+                _rec("other", "run-x", 1),
+                _rec("sid-old", "skipped", 1, action="skipped"))
+    PT.append_turn("/compact", session_id="sid-old")
+    assert "injected" not in json.loads((sdir / PT.PM_TURNS_FILENAME).read_text().splitlines()[0])
+    PT.append_turn("not a compact", session_id="sid-old")
+    _inject_log(tmp_path, monkeypatch, _rec("sid-old", "run-2", 1))
+    PT.append_turn("hello there friend", session_id="sid-old")
+    assert "injected" not in json.loads((sdir / PT.PM_TURNS_FILENAME).read_text().splitlines()[-1])

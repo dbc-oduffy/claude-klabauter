@@ -61,13 +61,24 @@ def test_briefed_live_revise_before_verify_names_the_late_row_leg_and_writes_no_
 
 def test_live_revise_after_verify_staged_lands_on_refire(tmp_path, monkeypatch):
     root = _repo(tmp_path, "M")
-    (record_dir(root, RUN) / "prompts").mkdir()
-    (record_dir(root, RUN) / "prompts" / "verify.md").write_text("verify", encoding="utf-8")
+    rl._late_rows_handler({"run_id": RUN, "verify_read": True}, repo_root=root)
     monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
     out = rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
     assert out["ok"] is True and out["run_live"] is True and out["lands_on_refire"] is True
     assert out["next"]["kind"] == "refire" and "refire" in out["note"]
     assert "next stage claims" not in json.dumps(out)
+
+
+def test_live_revise_with_every_prompt_staged_but_no_verify_read_is_read_by_the_run(tmp_path, monkeypatch):
+    root = _repo(tmp_path, "M")
+    prompts = record_dir(root, RUN) / "prompts"
+    prompts.mkdir()
+    for name in ("verify.md", "verify-2.md", "scout.md"):
+        (prompts / name).write_text("p", encoding="utf-8")
+    monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
+    out = rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
+    assert out["run_live"] is True and "lands_on_refire" not in out
+    assert "late-row leg" in out["note"]
 
 
 def test_test_blockers_js_excludes_designed_red_nodes():

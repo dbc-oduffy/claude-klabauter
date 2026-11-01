@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import _handler, stage
 from coordinator_core.ops.dispatch_emit.ask_stage_blocks import AskStageError
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
 
 def read_stage_reply(root, reply: dict) -> dict:
@@ -68,6 +69,7 @@ def repo(tmp_path):
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
+    write_run_scripts(tmp_path, "r1", "r2", "r3", "x1run", "spine", "gitrun")
     return tmp_path
 
 

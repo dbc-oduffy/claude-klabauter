@@ -1350,11 +1350,11 @@ def test_registry_repo_roots_skips_slugs_urls_and_non_strings(monkeypatch, tmp_p
         ghi,
         "_merged_flat_registry",
         lambda: {
-            "repos.example_stats_repo": str(tmp_path / "fifa"),
-            "repos.example_stats_repo.publish_repo": "owner/repo",
+            "repos.fifa_stats": str(tmp_path / "fifa"),
+            "repos.fifa_stats.publish_repo": "owner/repo",
             "repos.remote": "https://example.com/x/y",
             "repos.flag": True,
         },
     )
 
-    assert [key for key, _ in ghi._registry_repo_roots("")] == ["repos.example_stats_repo"]
+    assert [key for key, _ in ghi._registry_repo_roots("")] == ["repos.fifa_stats"]

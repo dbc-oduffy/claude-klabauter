@@ -769,8 +769,11 @@ def _entry_test(
 # ---------------------------------------------------------------------------
 
 
-def _directives() -> list[dict[str, Any]]:
+def _directives(sizing_drain: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The ceremony's unconditional CLI steps: d3, d4, d5.
+
+    `sizing_drain` is the counters of the in-process terminal-sizing drain `brief()` ran
+    (`workstream_complete.drain_terminal_sizings`); d5 carries them under `drain`.
 
     C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-wrote.md
     § C5): the former `safe-commit-offer` directive (step 1) is GONE from this list —
@@ -826,6 +829,10 @@ def _directives() -> list[dict[str, Any]]:
     # `build_terminal_sizing_sweep_directive`'s own docstring.
     d5 = build_terminal_sizing_sweep_directive()
     d5["id"] = "d5"
+    if sizing_drain is not None:
+        from coordinator_core.workstream_complete import apply_sizing_drain
+
+        apply_sizing_drain(d5, sizing_drain)
     directives.append(d5)
     return directives
 
@@ -1646,7 +1653,12 @@ def brief(worktree_root: Path | None = None, *, commit: bool = False) -> dict[st
                 )
             )
 
-    directives = _directives()
+    sizing_drain = None
+    if commit:
+        from coordinator_core.workstream_complete import drain_terminal_sizings
+
+        sizing_drain = drain_terminal_sizings(root)
+    directives = _directives(sizing_drain)
     run_close_gate = _run_close_gate(root, common_dir, sid, directives)
 
     envelope = build_envelope(

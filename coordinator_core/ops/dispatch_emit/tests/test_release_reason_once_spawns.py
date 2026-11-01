@@ -1,5 +1,5 @@
 """One sibling claim pass over three halted runs with kept work: release_reason's body runs once per run and
-git is spawned at most twice (one batched cat-file prefetch plus the shared status read)."""
+git is spawned at most twice (blobs are read in process; a batched cat-file is only the fallback)."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def test_claim_pass_over_three_halted_runs_spawns_at_most_two_git(tmp_path, monk
     assert sorted(claims) == sorted(PATHS)  # every run still holds: the pass is not trivially empty
     assert set(claims.values()) == set(halted)
     cat_files = [c for c in spawns if "cat-file" in c]
-    assert len(cat_files) == 1
+    assert len(cat_files) <= 1  # blobs read in process (_blob_fetch_local); cat-file is only the fallback
     assert len(spawns) <= 2, spawns
     for run_id in halted:
         assert bodies.count(run_id) <= 2, (run_id, bodies)  # at most one per distinct (committing plan) key

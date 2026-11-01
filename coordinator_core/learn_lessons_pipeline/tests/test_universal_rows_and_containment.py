@@ -214,7 +214,7 @@ def test_23c_lesson_promote_prints_a_repo_relative_outbox_path(tmp_path):
     (content_root / "state" / "lessons-outbox").mkdir(parents=True)
 
     env = {**os.environ, "COORDINATOR_CONTENT_ROOT": str(content_root)}
-    env.pop("REPO_CONTENT_ROOT", None)
+    env.pop("REPO_DOE_CLAUDE", None)
 
     result = subprocess.run(
         [

@@ -114,6 +114,52 @@ def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypa
     _no_grant_records(repo)
 
 
+def _seed_busy_box(root: Path, *, rows: int, agents: int, events: int) -> None:
+    """An open-row queue and a session whose spawned agents each left a touch record."""
+    from coordinator_core.session import touch_record
+
+    queue = root / "state" / "bug-backlog"
+    for i in range(rows):
+        (queue / f"row-{i}.yaml").write_text(
+            f"id: row-{i}\nstatus: open\nseverity: P1\ntags: [t-{i % 7}]\nsurface: pkg/mod_{i}.py\n", encoding="utf-8"
+        )
+    agents_dir = root / ".git" / "coordinator-sessions" / ".agents"
+    for a in range(agents):
+        agent_dir = agents_dir / f"a{a:04d}"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("sess-blitz\n", encoding="utf-8")
+        lines = b"".join(
+            touch_record.encode_line(
+                session_id="sess-blitz",
+                agent_id=f"a{a:04d}",
+                verb="T",
+                path=f"state/bug-backlog/row-{(a + e) % rows}.yaml" if e % 2 else f"pkg/f{a}_{e}.py",
+            )
+            for e in range(events)
+        )
+        (agent_dir / "touch-record.jsonl").write_bytes(lines)
+
+
+def test_submission_on_a_busy_box_stays_inside_the_hook_process_budget(repo, monkeypatch):
+    import time
+
+    _seed_busy_box(repo, rows=235, agents=3200, events=4)
+    target_ms = load_manifest()["overrides"]["hooks.submit_bug_blitz"]["target_ms"]
+    _call(repo, {"targets": "red-set"}, run_id="20261015T110000Z")  # imports and record folds paid once, as a warm engine has; the bound is warm-engine, fake parse/mint only
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        started = time.process_time()
+        env = _call(repo, {"targets": "red-set"})
+        elapsed_ms = (time.process_time() - started) * 1000
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    assert len(decisions[mod.BASELINE_DIRTY_KEY]) == 235, "the claim scan did not see the seeded agents"
+    assert len(spawns) == 0, [s.argv for s in spawns]
+    assert elapsed_ms < target_ms, f"{elapsed_ms:.0f}ms process time"
+
+
 def test_rewritten_args_carry_a_run_token_that_admits(repo):
     from coordinator_core.ops.dispatch_emit import run_token
 
@@ -356,6 +402,48 @@ def test_non_workflow_tool_is_a_no_op(repo):
     payload = _payload(repo, {"targets": "x"})
     payload["tool_name"] = "Bash"
     assert mod.evaluate(payload) == mod.no_advisory()
+
+
+def test_a_long_refusal_leads_with_cause_and_log_path_and_logs_the_whole_reason(repo):
+    from coordinator_core.hooks.submit_engine_ask import REFUSAL_LOG_REL
+
+    cause = "no failing tests parsed from red-set " + "x" * 400
+
+    def parse(spec):
+        raise ValueError(cause)
+
+    env = _call(repo, {"targets": "red-set"}, parse=parse)
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "no failing tests parsed" in _reason(env)[:280]
+    assert REFUSAL_LOG_REL in _reason(env)[:280]
+    logged = [json.loads(l) for l in (repo / REFUSAL_LOG_REL).read_text(encoding="utf-8").splitlines()]
+    assert cause in logged[-1]["refusal"]
+    assert "Submit shape" in logged[-1]["refusal"]
+
+
+def test_a_short_refusal_is_unchanged_and_still_logged(repo):
+    from coordinator_core.hooks.submit_engine_ask import REFUSAL_LOG_REL
+
+    env = _call(repo, {})
+    assert "REFUSAL_LOG" not in _reason(env) and REFUSAL_LOG_REL not in _reason(env)
+    assert "targets is required." in _reason(env)
+    assert (repo / REFUSAL_LOG_REL).is_file()
+
+
+def test_pytest_node_id_targets_file_is_accepted_at_default_args(repo):
+    (repo / "red.txt").write_text(
+        "tests/test_x.py::test_a\ntests/test_x.py::test_b[a b]\n", encoding="utf-8"
+    )
+    minted: list = []
+
+    def mint(root, run_id, tests, *, target_ref):
+        minted.extend(tests)
+        return ["TF-0"]
+
+    env = _call(repo, {"targets": "red.txt"}, resolve=None, parse=None, mint=mint)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert {(t.file, t.name) for t in minted} >= {("tests/test_x.py", "test_a"), ("tests/test_x.py", "test_b[a b]")}, minted
 
 
 def test_real_parser_mints_a_bare_test_file_target_as_a_file_level_row(repo):

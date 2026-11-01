@@ -16,7 +16,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
 )
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
-from coordinator_core.ops.dispatch_emit.shipped_claims import NOT_DECLARED, ROW_GRADE_OWED, SHIPPED_CLAIM_REFUSED
+from coordinator_core.ops.dispatch_emit.shipped_claims import ROW_GRADE_OWED, SHIPPED_CLAIM_REFUSED
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import repo  # noqa: F401  (fixture)
 
@@ -91,44 +91,41 @@ def test_a_claim_on_a_file_a_halted_sibling_withholds_commits_and_names_the_owne
     assert spawned == []
 
 
-def test_a_claim_on_a_partial_rows_own_file_names_the_grade_decision_then_lands_once_credited(repo):  # noqa: F811
+def _recorded(out: dict, code: str) -> dict:
+    """The one provenance entry a landing recorded for `code`; shipped-claim findings never refuse."""
+    hits = [e for e in out.get("provenance", []) if e["reason"] == code]
+    assert len(hits) == 1, out
+    return hits[0]
+
+
+def test_a_claim_on_a_partial_rows_own_file_records_the_grade_decision_and_still_lands(repo):  # noqa: F811
     _two_row_run(repo)
     _note(repo, _LANDING, _PARTIAL_FILE)
     prod._record_dir(repo)
-    head = prod._git(["rev-parse", "HEAD"], repo).strip()
     token = run_token.mint(repo, prod.RUN, prod.SCRIPT, session_id=prod.SELF)
 
     out = prod._land(repo, incomplete_chunks=["C3"], run_token=token)
 
-    assert out["committed"] is False and out["refused"] == ROW_GRADE_OWED, out
-    err = out["error"]
+    assert out["committed"] is True and out["refused"] is None, out
+    err = _recorded(out, ROW_GRADE_OWED)["detail"]
     assert "C3" in err and _PARTIAL_FILE in err and "credit_chunks" in err and "optional test" in err, err
     assert out["shipped_claims"]["row_grade_owed"][0]["chunk"] == "C3"
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
-
-    prod._write(
-        repo, f"{RECORD_DIR_ROOT}/{prod.RUN}/credit.jsonl",
-        json.dumps({"chunk": "C3", "evidence": "edits verified", "at": "2026-10-24T00:00:00Z"}) + "\n",
-    )
-    again = prod._land(repo, incomplete_chunks=["C3"], run_token=token)
-
-    assert again["committed"] is True, again
-    assert _PARTIAL_FILE in prod._tree(repo)
 
 
-def test_a_declared_file_the_landing_withholds_still_refuses_unbacked_with_source_and_reason(repo):  # noqa: F811
+def test_a_declared_file_the_landing_withholds_records_unbacked_with_source_and_reason(repo):  # noqa: F811
     prod._author(repo, _LANDING, "X = 1\n")
     prod._ask_script(repo, _LANDING)
     _note(repo, _LANDING)
 
     out = prod._land(repo, withhold_paths=[{"path": _LANDING, "reason": "peer owns this"}])
 
-    assert out["committed"] is False and out["refused"] == SHIPPED_CLAIM_REFUSED, out
-    assert "What shipped" in out["error"] and "peer owns this" in out["error"], out["error"]
+    assert out["refused"] is None, out
+    detail = _recorded(out, SHIPPED_CLAIM_REFUSED)["detail"]
+    assert "What shipped" in detail and "peer owns this" in detail, detail
     assert "peer_owned" not in out["shipped_claims"]
 
 
-def test_an_unlanded_file_no_row_declares_refuses_unbacked_naming_the_missing_row(repo):  # noqa: F811
+def test_an_unlanded_file_no_row_declares_is_dropped_foreign_not_refused(repo):  # noqa: F811
     prod._author(repo, _LANDING, "X = 1\n")
     prod._write(repo, _PEER_FILE, "P = 1\n")
     prod._ask_script(repo, _LANDING)
@@ -136,17 +133,18 @@ def test_an_unlanded_file_no_row_declares_refuses_unbacked_naming_the_missing_ro
 
     out = prod._land(repo)
 
-    assert out["committed"] is False and out["refused"] == SHIPPED_CLAIM_REFUSED, out
-    assert "What shipped" in out["error"] and _PEER_FILE in out["error"], out["error"]
-    assert NOT_DECLARED in out["error"], out["error"]
+    assert out["committed"] is True and out["refused"] is None, out
+    assert out["shipped_claims"]["dropped_foreign"] == [_PEER_FILE], out["shipped_claims"]
+    assert not out.get("provenance"), out
 
 
-def test_a_held_chunks_declared_file_refuses_unbacked_naming_the_held_chunk(repo):  # noqa: F811
+def test_a_held_chunks_declared_file_records_unbacked_naming_the_held_chunk(repo):  # noqa: F811
     _two_row_run(repo)
     _note(repo, _LANDING, _PARTIAL_FILE)
     prod._record_dir(repo)
 
     out = prod._land(repo, held=[{"chunk": "C3", "reason": "waiting"}])
 
-    assert out["committed"] is False and out["refused"] == SHIPPED_CLAIM_REFUSED, out
-    assert "What shipped" in out["error"] and "held chunk C3" in out["error"], out["error"]
+    assert out["refused"] is None, out
+    detail = _recorded(out, SHIPPED_CLAIM_REFUSED)["detail"]
+    assert "What shipped" in detail and "held chunk C3" in detail, detail

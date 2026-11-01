@@ -75,6 +75,7 @@ Bookkeeping hook ops (pcore-08, D1) — write .git/coordinator-sessions/ session
 
 Bookkeeping hook op (W4b) — writes the PreCompact sentinel + state snapshot to tempdir:
     context_pressure_precompact — compaction sentinel + state file; MUTATING
+    idle_compact_advisory       — UserPromptSubmit advisory naming a watcher-injected /compact
 
 Zero-tool-use detection ops (cross-repo coordinator-content-repo contract, Stage 1 write / Stage 2 read).
 Naming note: the store holds one record per verified tool-use count, not only zero —
@@ -161,6 +162,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.track_dispatched_agents",
     "coordinator_core.hooks.agent_postuse_dispatch",
     "coordinator_core.hooks.context_pressure_precompact",
+    "coordinator_core.hooks.idle_compact_advisory",
     "coordinator_core.hooks.postusefailure_cross_repo_memo_remediate",
     "coordinator_core.hooks.postuse_subagent_compaction_warning",
     "coordinator_core.hooks.nudge_cross_repo_cwd_boundary",

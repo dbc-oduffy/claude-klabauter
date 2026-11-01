@@ -168,7 +168,8 @@ def _record_segment_from_prompt(prompt: str, argv: list) -> str:
 
 
 def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str, repo_root: str,
-                             profile_dir: str, queue_dirs=("q",), raw: list | None = None) -> list:
+                             profile_dir: str, queue_dirs=("q",), raw: list | None = None,
+                             profile: str = "p1") -> list:
     """The `grind-row run-record` argv the op-runner's Bash calls deliver to the verb.
 
     The sweep prompt is evaluated by node (the Workflow runtime's stand-in), every fenced block is
@@ -189,7 +190,7 @@ def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str
     if probe.stdout.strip() != "ok":
         pytest.skip("bash not runnable")
     sweep = grind_stages.compose_ledger_sweep_call(
-        label="s", phase_title="p", profile="p1", queue_dirs=list(queue_dirs),
+        label="s", phase_title="p", profile=profile, queue_dirs=list(queue_dirs),
         run_id_js="RUN_ID", record_js="REC", declared_js="DECLARED", decisions_js="DEC",
     )
     script = (
@@ -264,6 +265,39 @@ def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
     assert grind_rows.main(argv) == grind_rows.EXIT_OK
     target = tmp_path / "state" / "queue-grind" / "p1" / "runs" / "20261017T161125Z.json"
     assert json.loads(target.read_text(encoding="utf-8")) == record
+
+
+@pytest.mark.spawns_process
+def test_bug_profile_emitted_run_record_call_passes_the_clis_flag_validation(tmp_path, monkeypatch):
+    """Run 20261030T234623Z died stage-dead because its emitted call typed --record-len/--record-sha256
+    beside --record-from-transcript, which the CLI refuses; the bug-profile call as emitted now is
+    accepted and writes state/queue-grind/bug/runs/<run>.json."""
+    import io
+
+    from coordinator_core.backlog_grind_assemble import grind_rows
+
+    record = {"profile": "bug", "run_id": "20261017T161125Z", "counts": {}, "spend": {}, "handed_back": [], "halted": False}
+    raw: list = []
+    _emitted_run_record_argv(
+        tmp_path, record=json.dumps(record), declared=[], decisions="", repo_root=str(tmp_path),
+        profile_dir=str(tmp_path / "profiles"), queue_dirs=(), profile="bug", raw=raw,
+    )
+    argv, prompt = raw
+    assert "--record-from-transcript" in argv
+    assert "--record-len" not in argv and "--record-sha256" not in argv
+    home = tmp_path / "claude-home"
+    transcript = home / "projects" / "p" / "sess-bug" / "subagents" / "workflows" / "w" / "agent-1.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-bug")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    monkeypatch.setattr(grind_rows, "_declare_under_repo_root", lambda *_a: None)
+
+    assert grind_rows.main(argv) == grind_rows.EXIT_OK
+    target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20261017T161125Z.json"
+    written = json.loads(target.read_text(encoding="utf-8"))
+    assert {k: written[k] for k in record} == record
 
 
 def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path, monkeypatch, capsys):

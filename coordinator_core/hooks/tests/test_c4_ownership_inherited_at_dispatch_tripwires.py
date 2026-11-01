@@ -640,6 +640,12 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
             "coordinator_core/ops/dispatch_emit/land_run.py",
             "_peer_held",
         ),
+        # dispatch.land_credited holds: the bounded form of the same peer-claim read; a slow or raising
+        # lookup holds nothing, and a hit only leaves a credited path out of the landing, never adds one.
+        (
+            "coordinator_core/ops/dispatch_emit/land_credited_holds.py",
+            "_bounded_lookup._run",
+        ),
         (
             "coordinator_core/ops/dispatch_emit/reverify_delivery.py",
             "_claim_held",
@@ -695,6 +701,26 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
         (
             "coordinator_core/ops/dispatch_emit/terminal_commit.py",
             "_claims_before_landing",
+        ),
+        # Report-only owner join: maps a path to the live run of a peer claimant for the caller's
+        # report. Never raises (any failure returns {}); never refuses or widens a pathspec.
+        (
+            "coordinator_core/authoring_leaks/run_owner.py",
+            "owning_runs",
+        ),
+        # Lookup-cost benchmark: times `claim_index.lookup` itself. Read-only measurement; it never
+        # refuses a land or widens a pathspec.
+        (
+            "coordinator_core/benchmarks/claim_index_lookup_cost.py",
+            "run",
+        ),
+        (
+            "coordinator_core/benchmarks/claim_index_lookup_cost.py",
+            "measure_lookup",
+        ),
+        (
+            "coordinator_core/benchmarks/claim_index_lookup_cost.py",
+            "measure_concurrent.run",
         ),
         # Claim-lookup spike: reads the lookup's recorded kinds to pick the liveness-probe holders.
         # A benchmark; read-only, never refuses a land or widens a pathspec.
@@ -765,7 +791,7 @@ _EXPECTED_CLAIM_INDEX_ANSWER_CALL_SITES = frozenset(
         # to a pathspec.
         (
             "classify_paths",
-            "coordinator_core/ops/dispatch_emit/terminal_commit.py",
+            "coordinator_core/ops/dispatch_emit/terminal_commit_refusals.py",
             "_peer_held",
         ),
         # dispatch.land_run fanout mode: same role as terminal_commit._peer_held above -- sets aside

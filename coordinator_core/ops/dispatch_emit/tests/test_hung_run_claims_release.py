@@ -5,6 +5,7 @@ still withholds them."""
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,7 +54,15 @@ def _peer(repo: Path, *, stage: str | None, age: float = 0.0) -> Path:
     run_token.mint(repo, "run-peer", "peer.mjs", session_id=PEER)
     if stage:
         write_run_stage_at(peer, stage, now=_stamp(age))
+    _age_files(peer, age)
     return peer
+
+
+def _age_files(directory: Path, age: float) -> None:
+    """Back-date every file in `directory` so only an explicit launcher write reads as fresh."""
+    when = time.time() - age
+    for entry in directory.iterdir():
+        os.utime(entry, (when, when))
 
 
 def _paths(repo: Path):
@@ -67,6 +76,24 @@ def test_a_peer_stale_at_minted_releases_its_paths_and_is_halted(repo):
     marker = json.loads((peer / "halted.json").read_text(encoding="utf-8"))
     assert marker["halted"] == warp_run_deliverable.ABANDONED_AT_MINTED
     assert "minted" in marker["reason"]
+
+
+def test_a_stale_stamp_with_fresh_launcher_artifact_is_live_and_not_halted(repo):
+    peer = _peer(repo, stage="minted", age=warp_run_deliverable.MINTED_STALE_SECONDS + 600)
+    (peer / "resume.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="no reviewable paths"):
+        _paths(repo)
+    assert not (peer / "halted.json").exists()
+
+
+def test_a_stale_stamp_with_fresh_scratch_run_dir_write_is_live(repo):
+    peer = _peer(repo, stage="minted", age=warp_run_deliverable.MINTED_STALE_SECONDS + 600)
+    scratch = repo / warp_run_deliverable.RUN_DIR_ROOT / "run-peer"
+    scratch.mkdir(parents=True)
+    (scratch / "submission.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="no reviewable paths"):
+        _paths(repo)
+    assert not (peer / "halted.json").exists()
 
 
 def test_a_peer_with_recent_activity_at_minted_still_withholds(repo):

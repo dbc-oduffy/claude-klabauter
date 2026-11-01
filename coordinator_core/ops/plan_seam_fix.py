@@ -11,6 +11,8 @@ Wire params:
     plans (list[str], required) — repo-relative ``docs/plans/*.md`` paths, at least one.
         Only collisions between members of this set are fixed (``named_set`` semantics).
     dry_run (bool, default false) — compute and reply; open nothing for write.
+    order (list[str], optional) — plan paths, earliest first (a roadmap's blocked_by order). A
+        colliding pair whose members both appear is ordered by it; any other pair keeps path order.
 
 Reply:
     {"edges_added": [{"plan", "chunk", "depends_on": {"plan", "chunk"}, "path"}],
@@ -84,6 +86,15 @@ GATE_KIND = "output-consumption-runtime"
 CYCLE_CLASS = "seam-fix-cycle"
 
 
+def _parse_order(params: dict) -> Dict[str, int]:
+    raw = params.get("order")
+    if raw is None:
+        return {}
+    if not isinstance(raw, list) or not all(isinstance(p, str) for p in raw):
+        raise ValueError("order must be a list of plan paths, earliest first")
+    return {posixpath.normpath(p.replace("\\", "/")): i for i, p in reversed(list(enumerate(raw)))}
+
+
 def _parse_params(params: dict, root: Path) -> Tuple[List[str], bool]:
     plans_raw = params.get("plans")
     if not isinstance(plans_raw, list) or not plans_raw or not all(
@@ -154,13 +165,20 @@ def _reaches(graph: Dict[str, set], src: str, dst: str) -> bool:
     return False
 
 
-def _collision_pairs(pset: Dict[str, _Plan], hubs: set, root: Path) -> List[Tuple[str, str, str]]:
-    """Distinct (later plan, earlier plan, path), sorted, over the named-set collisions."""
+def _collision_pairs(
+    pset: Dict[str, _Plan], hubs: set, root: Path, order: Optional[Dict[str, int]] = None
+) -> List[Tuple[str, str, str]]:
+    """Distinct (later plan, earlier plan, path), sorted, over the named-set collisions.
+    ``order`` ranks plans (lower is earlier); a pair whose members carry different ranks follows
+    them, every other pair follows path order."""
     pairs = set()
     for f in _collision_findings(pset, {"named_set": True, "hubs": hubs, "root": root, "outside": {}, "edge_cache": {}}):
         other, path = f["counterpart_plan"], f["path"]
         if f["class"] == COLLISION and other and path and other in pset and f["plan"] in pset:
             earlier, later = sorted((f["plan"], other))
+            ra, rb = (order or {}).get(earlier), (order or {}).get(later)
+            if ra is not None and rb is not None and ra > rb:
+                earlier, later = later, earlier
             pairs.add((later, earlier, path))
     rank = {n: i for i, n in enumerate(sorted({t[1] for t in pairs}, key=lambda n: [-ord(ch) for ch in n]))}
     return sorted(pairs, key=lambda t: (t[0], rank[t[1]], t[2]))
@@ -246,10 +264,12 @@ def _reach_masks(graph: Dict[str, set], bit: Dict[str, int]) -> Dict[str, int]:
     return reach
 
 
-def derive_edges(pset: Dict[str, _Plan], hubs: set, root: Path) -> EdgeDerivation:
+def derive_edges(
+    pset: Dict[str, _Plan], hubs: set, root: Path, order: Optional[Dict[str, int]] = None
+) -> EdgeDerivation:
     """The one write-overlap ordering derivation: opens no file, spawns nothing.
-    ``graph`` is the in-set plan graph after the added edges."""
-    pairs = _collision_pairs(pset, hubs, root)
+    ``graph`` is the in-set plan graph after the added edges. ``order``: see ``_collision_pairs``."""
+    pairs = _collision_pairs(pset, hubs, root, order)
 
     graph = _plan_edges(pset)
     bit = {rel: 1 << i for i, rel in enumerate(graph)}
@@ -296,9 +316,10 @@ def derive_edges(pset: Dict[str, _Plan], hubs: set, root: Path) -> EdgeDerivatio
 
 def _fix(params: dict, root: Path) -> dict:
     plans, dry_run = _parse_params(params, root)
+    order = _parse_order(params)
     pset: Dict[str, _Plan] = {rel: _Plan(rel, root) for rel in plans}
     hubs = _declared_append_hubs(root)
-    derived = derive_edges(pset, hubs, root)
+    derived = derive_edges(pset, hubs, root, order)
     pairs, graph, per_plan = derived.pairs, derived.graph, derived.per_plan
     edges_added, skipped = derived.edges_added, derived.skipped_cycles
 
@@ -316,7 +337,7 @@ def _fix(params: dict, root: Path) -> dict:
             edges_added = [e for e in edges_added if e["plan"] not in failed]
             skipped_plans = [{"plan": rel, "detail": detail} for rel, detail in failed.items()]
         fresh = {rel: _Plan(rel, root) for rel in plans}
-        converged = not _collision_pairs(fresh, hubs, root)
+        converged = not _collision_pairs(fresh, hubs, root, order)
     else:
         converged = all(
             _reaches(graph, a, b) or _reaches(graph, b, a) for a, b, _ in pairs

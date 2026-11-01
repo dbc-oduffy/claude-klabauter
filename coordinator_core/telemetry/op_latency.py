@@ -500,6 +500,30 @@ def note_observed_process_ms(process_ms: Optional[float]) -> None:
         pass
 
 
+_made_parents: set = set()
+
+
+def _ensure_parent(parent: Path) -> bool:
+    """True once ``parent`` exists; False when the makedirs overran the append deadline.
+
+    Steady state is a set lookup, no disk call. A miss runs makedirs under
+    ``bounded_io.run_bounded`` so a wedged disk drops the line instead of holding
+    the handler thread.
+    """
+    if parent in _made_parents:
+        return True
+    from coordinator_core import bounded_io
+
+    def _make() -> bool:
+        os.makedirs(parent, exist_ok=True)
+        return True
+
+    if not bounded_io.run_bounded(key=str(parent), fn=_make, default=False):
+        return False
+    _made_parents.add(parent)
+    return True
+
+
 def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
     try:
         if os.environ.get(_DISABLE_ENV) == "1":
@@ -544,7 +568,8 @@ def _write_entry(entry: dict, repo_root: Optional[Path]) -> None:
         encoded = line.encode("utf-8")
 
         try:
-            os.makedirs(sink.parent, exist_ok=True)
+            if not _ensure_parent(sink.parent):
+                return
         except OSError:
             return
 

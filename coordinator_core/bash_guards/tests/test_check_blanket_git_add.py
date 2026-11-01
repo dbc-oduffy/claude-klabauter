@@ -446,7 +446,7 @@ def test_hazard_registry_repo_roots_reads_repos_star_keys(monkeypatch, tmp_path)
     fake_sibling = tmp_path / "some-fleet-sibling-checkout"
     (reg_dir / "registry.toml").write_text(
         "\"repos.claude_klabauter\" = '%s'\n"
-        '"repos.example-sim-repo" = ""\n'
+        '"repos.dronesim" = ""\n'
         '"not_a_repo_key" = "/should/not/appear"\n' % str(fake_sibling)
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))

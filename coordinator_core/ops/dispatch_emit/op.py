@@ -741,9 +741,27 @@ def _resume_commit_retry(root: Optional[Path], plan_path: str) -> dict:
     return {"commit_retry": retry, "resume_run_base": base}
 
 
-def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
+def _unfired_bind(status: Path, root: Path, run_id: str, sizing_rel: Optional[str]) -> bool:
+    """True when `status` is this run's own `running` bind and no run is live on `sizing_rel`: an
+    earlier emit (a timed-out hook's) bound the id and nothing fired it. File reads only."""
+    if not sizing_rel:
+        return False
+    try:
+        prior = json.loads(status.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_RUNNING
+
+    if not isinstance(prior, dict) or prior.get("status") != STATUS_RUNNING or prior.get("run_id") != run_id:
+        return False
+    return warp_live.live_run_for_sizing(root, sizing_rel) is None
+
+
+def _bind_reserved_run(root: Path, run_id: str, parent_id: str, sizing_rel: Optional[str] = None) -> None:
     """Copy the parent record into the run's own record dir, then mark the run `running`; the
-    exclusive status create is the bind, so a second bind of one id is refused. The first bind
+    exclusive status create is the bind, so a second bind of one id is refused unless the run is
+    halted or its earlier bind never fired (`_unfired_bind`, needs `sizing_rel`). The first bind
     also records HEAD as the run base, write-once, so a rebind keeps it."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
         STATUS_RUNNING, parent_record_rel, run_parent_copy_rel, status_rel,
@@ -756,7 +774,7 @@ def _bind_reserved_run(root: Path, run_id: str, parent_id: str) -> None:
     try:
         claimed_write.create_exclusive(status, record)
     except FileExistsError:
-        if not _halted(status):
+        if not _halted(status) and not _unfired_bind(status, root, run_id, sizing_rel):
             raise ValueError(f"dispatch.emit reserved_run_id {run_id!r} is already bound to a run") from None
         claimed_write.replace_text(status, record)
     parent = root / parent_record_rel(parent_id)
@@ -817,7 +835,7 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
 
     root = Path(ask_ctx["root"])
     if ask_ctx.get("reserved_parent"):
-        _bind_reserved_run(root, ask_ctx["run_id"], ask_ctx["reserved_parent"])
+        _bind_reserved_run(root, ask_ctx["run_id"], ask_ctx["reserved_parent"], ask_ctx.get("sizing_rel"))
     if ask_ctx.get("rebound"):
         from coordinator_core.ops.dispatch_emit.halted_run import mark_resumed
 
@@ -840,6 +858,15 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
             ask_text=None if relayed else prompt, relayed_text=prompt if relayed else None,
         )
     return None
+
+
+def _preminted_ask_run_id(value: Any) -> str:
+    """The raw-ask run id the submit hook minted before answering; refuses any other shape."""
+    from coordinator_core.ops.dispatch_emit.run_token import is_ask_run_id
+
+    if not is_ask_run_id(value):
+        raise ValueError(f"dispatch.emit preminted_run_id {value!r} is not an ask-<stamp>-<hex6> run id")
+    return value
 
 
 def _script_path_under(guarded_path: Path, root: str) -> Optional[str]:
@@ -1071,6 +1098,7 @@ _PARAM_FIELDS = (
     Field("all_of_pm_ask", "bool"),
     Field("launcher_child", "bool"),
     Field("abandon_run", "str"),
+    Field("chained_from", "str"),
     Field("required_reviewers", "str_list"),
     Field("hold_rows", "str_list"),
     Field("hold_reason", "str"),
@@ -1091,7 +1119,7 @@ _UNTYPED_PARAM_KEYS = frozenset({
     "scout_mode", "scout_questions", "lanes", "lane_count", "hot_files", "resume_missing",
     "cloud_spawn", "cross_repo_approved", "reserved_run_id", "chatty", "max_rows", "skip_landed",
     "landed_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
-    "_caller_cwd",
+    "_caller_cwd", "preminted_run_id",
 })
 
 
@@ -1946,10 +1974,36 @@ def _anchor_relative_paths(params: dict, repo_root: Optional[Path] = None) -> di
     }
 
 
+def _chained_child_never_started(root: Path, rdir: Path, run: dict, chained_from: Any) -> bool:
+    """A minted-only run `chained_from` names as its parent: the parent's record dir exists and its
+    run record binds the child's sizing. `chained_from` is caller-supplied, so it is verified here."""
+    from coordinator_core.ops.dispatch_emit import halted_run as _hr
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as _rl
+    from coordinator_core.ops.dispatch_emit import run_token as _rt
+
+    if not isinstance(chained_from, str) or not chained_from or not rdir.is_dir() or not _hr._is_shell(rdir):
+        return False
+    try:
+        pdir = record_dir(root, chained_from)
+    except ValueError:
+        return False
+    if not pdir.is_dir() or pdir == rdir:
+        return False
+    child_sizing = run.get("sizing_rel")
+    if not isinstance(child_sizing, str) or not child_sizing:
+        child_sizing = next(
+            (r.get("sizing_rel") for r in _rt.live_records(root) if r.get("run_id") == rdir.name), None
+        )
+    parent_sizing = (_rl.read_run(pdir) or {}).get("sizing_rel")
+    return isinstance(child_sizing, str) and bool(child_sizing) and child_sizing == parent_sizing
+
+
 def _abandon_run(params: dict, repo_root: Optional[Path]) -> dict:
     """Close a run nothing is driving: a recomposed refire shell (`resumed_from` + minted-only stage),
-    or a stalled run whose unclaimed run token names the caller's session. Closing a run also
-    releases its token. Any other run is left untouched (`abandoned: False`)."""
+    a minted-only run `chained_from` names as a parent on the same sizing, or a stalled run whose
+    unclaimed run token names the caller's session, or any named run still at `minted` with no live
+    token and no halt marker (nothing launched). Closing a run also releases its token. Any other
+    run is left untouched (`abandoned: False`)."""
     from coordinator_core.ops.dispatch_emit import halted_run as _hr
     from coordinator_core.ops.dispatch_emit import requirements_ledger as _rl
     from coordinator_core.ops.dispatch_emit import run_token as _rt
@@ -1965,12 +2019,23 @@ def _abandon_run(params: dict, repo_root: Optional[Path]) -> dict:
     owned = bool(session) and any(
         r.get("run_id") == run_id and r.get("session_id") == session for r in _rt.live_records(root)
     )
-    live = shell or (owned and rdir.is_dir() and (_hr.read_strict_run(rdir) or {}).get("status") != _hr.STATUS_CLOSED)
+    chained = not shell and _chained_child_never_started(root, rdir, run, params.get("chained_from"))
+    minted_only = (
+        not shell and not chained and rdir.is_dir() and _hr._is_shell(rdir) and not _rt.is_live(root, run_id)
+    )
+    live = shell or chained or minted_only or (
+        owned and rdir.is_dir() and (_hr.read_strict_run(rdir) or {}).get("status") != _hr.STATUS_CLOSED
+    )
     if live:
         _hr._write(rdir, {
             "status": _hr.STATUS_CLOSED,
             "closed": {
-                "reason": "refire-start-failed" if shell else "stalled-run-abandoned",
+                "reason": (
+                    "refire-start-failed" if shell
+                    else "chained-child-never-started" if chained
+                    else "minted-only-run-abandoned" if minted_only
+                    else "stalled-run-abandoned"
+                ),
                 "at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             },
         })
@@ -1996,15 +2061,18 @@ def _emit_list(params: dict, repo_root: Optional[Path]) -> dict:
     if not isinstance(items, list):
         return {"error": "dispatch.emit params.emits must be a list of single-form params objects"}
     envelope = {k: params[k] for k in _EMITS_ENVELOPE_KEYS if k in params}
+    from coordinator_core.ops.dispatch_emit.sizing_fire import sizing_memo
+
     replies: list = []
-    for i, item in enumerate(items):
-        if not isinstance(item, dict) or "emits" in item:
-            replies.append({"error": f"dispatch.emit params.emits[{i}] must be a single-form params object"})
-            continue
-        try:
-            replies.append(_dispatch_emit({**envelope, **item}, repo_root))
-        except Exception as exc:
-            replies.append({"error": f"{type(exc).__name__}: {exc}"})
+    with sizing_memo():
+        for i, item in enumerate(items):
+            if not isinstance(item, dict) or "emits" in item:
+                replies.append({"error": f"dispatch.emit params.emits[{i}] must be a single-form params object"})
+                continue
+            try:
+                replies.append(_dispatch_emit({**envelope, **item}, repo_root))
+            except Exception as exc:
+                replies.append({"error": f"{type(exc).__name__}: {exc}"})
     return {"replies": replies}
 
 
@@ -2382,6 +2450,8 @@ def _dispatch_emit_body(
                     pm_turn_recorded = recorded.get("turn") if recorded.get("ok") else None
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
+        if not sizing_rel and params.get("preminted_run_id") is not None:
+            run_id = _preminted_ask_run_id(params["preminted_run_id"])
         reserved_parent = None
         rebound = False
         output_redirect = None
@@ -2829,7 +2899,7 @@ def _dispatch_emit_body(
         try:
             ask_run_token = _run_token.mint(
                 Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path or "",
-                session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"],
+                session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"], carry_prior=True,
             )
         except (OSError, ValueError):
             # No git dir to hold the record, or no repo-relative script to bind it to: the run

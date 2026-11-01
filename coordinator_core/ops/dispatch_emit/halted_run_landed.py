@@ -90,6 +90,17 @@ def _withheld(marker: dict) -> list:
     return [b for b in blocking if isinstance(b, str)] if isinstance(blocking, list) else []
 
 
+def _met_by_rows(marker: dict) -> list:
+    """Register-row ids ``met_by`` may name: ``_withheld(marker)`` plus a ledger-check halt's ``blocking_items`` / ``items`` ids."""
+    rows = _withheld(marker)
+    if marker.get("halted") == "ledger-check":
+        for key in ("blocking_items", "items"):
+            seq = marker.get(key)
+            if isinstance(seq, list):
+                rows.extend(i["id"] for i in seq if isinstance(i, dict) and isinstance(i.get("id"), str))
+    return rows
+
+
 def _review_record(root: Path, run_id: str, session_id: Optional[str]) -> Optional[str]:
     """Repo-relative posix path of the run's review sidecar, or None when none resolves.
 
@@ -630,7 +641,7 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
     marker = halted_run._read(record_dir)
     if marker is None:
         return f"met_by needs {run_id}'s halt record; none is readable"
-    blocking = _withheld(marker)
+    blocking = _met_by_rows(marker)
     for row, sha in met_by.items():
         if row not in blocking:
             return f"met_by row {row} is not a blocking row of {run_id}"

@@ -73,6 +73,27 @@ def test_dirt_edited_path_is_not_flagged(tmp_path):
     assert wb.pre_existing_dirt(tmp_path, base, ["a.py"]) == []
 
 
+def _crlf_worktree(tmp_path, monkeypatch, head_sha):
+    from coordinator_core.git import git_state
+    from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+
+    (tmp_path / "a.py").write_bytes(b"x\r\ny\r\n")
+    base = wb.capture(tmp_path, ["a.py"])
+    monkeypatch.setattr(git_state, "head_blobs", lambda root, cand: {"a.py": (0o100644, head_sha(blob_sha))})
+    monkeypatch.setattr(wb, "checkin_form", lambda root, rel, data: data.replace(b"\r\n", b"\n"))
+    return base
+
+
+def test_dirt_crlf_worktree_equal_to_head_in_checkin_form_is_not_flagged(tmp_path, monkeypatch):
+    base = _crlf_worktree(tmp_path, monkeypatch, lambda blob_sha: blob_sha(b"x\ny\n"))
+    assert wb.pre_existing_dirt(tmp_path, base, ["a.py"]) == []
+
+
+def test_dirt_crlf_worktree_differing_from_head_in_checkin_form_is_flagged(tmp_path, monkeypatch):
+    base = _crlf_worktree(tmp_path, monkeypatch, lambda blob_sha: blob_sha(b"other\n"))
+    assert wb.pre_existing_dirt(tmp_path, base, ["a.py"]) == ["a.py"]
+
+
 def test_zero_spawns(tmp_path, monkeypatch):
     def boom(*a, **k):
         raise AssertionError("spawn")

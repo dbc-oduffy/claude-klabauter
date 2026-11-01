@@ -152,6 +152,8 @@ def build_report(journal_path: str) -> dict:
             for key in (*TOKEN_FIELDS, "total_tokens", "usd", "unpriced", "speed"):
                 row[key] = scanned[key]
             row["model"] = scanned["model"] or row["model"]
+            for key in ("rag_calls", "rag_failed", "rag_fallback", "search_calls"):
+                row[key] = scanned[key]
         rows.append(row)
     over = [r for r in rows
             if r["label"].startswith(EXECUTOR_LABEL_PREFIX)
@@ -288,6 +290,18 @@ def render(report: dict) -> str:
     lines.append(f"run total: {total.get('total_tokens', 0)} tok, {_usd(total.get('usd'))}"
                  + (f" ({total['unpriced_tokens']} tok unpriced, * rows)"
                     if total.get("unpriced_tokens") else ""))
+    uptake = total.get("rag_uptake")
+    if uptake:
+        ratio = uptake.get("ratio")
+        lines.append(f"rag uptake: {uptake['rag_agents']}/{uptake['searching_agents']} searching agent(s)"
+                     + (f" ({ratio:.0%})" if ratio is not None else "")
+                     + f", {uptake.get('fallback_agents', 0)} fell back to grep")
+        for r in report["rows"]:
+            if not r.get("rag_calls") and not r.get("search_calls"):
+                continue
+            lines.append(f"  {r['label']}: rag={r.get('rag_calls', 0)} failed={r.get('rag_failed', 0)}"
+                         f" search={r.get('search_calls', 0)}"
+                         + (f" fallback={r['rag_fallback']}" if r.get("rag_fallback") else ""))
     for model, b in sorted((report.get("by_model") or {}).items()):
         lines.append(f"  {model}: {b['agents']} agent(s), {b['total_tokens']} tok, {_usd(b['usd'])}")
     lines.append("")

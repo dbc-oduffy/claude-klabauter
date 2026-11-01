@@ -703,17 +703,18 @@ def _drift_findings(pset, ctx, tree: _Tree, touched: list, landed_head: str) -> 
                 rel, DRIFT_CLASS, True,
                 f"{raw} was promised by a landed row of {promiser} and is absent from the tree",
                 counterpart=promiser, path=raw, row=row_id))
+    declared_paths, declared_prefixes = _paths_and_prefixes([r for p in pset.values() for r in p.live_rows])
     for rel, plan in pset.items():
         for row in plan.live_rows:
             if (rel, row.id) in landed:
                 continue
-            row_writes, row_prefixes = _paths_and_prefixes([row])
             row_reads = {_normalize_path(p) for p in (row.reads or ()) if isinstance(p, str) and p}
             row_head = {_normalize_path(p) for p in (row.reads_at_head or ()) if isinstance(p, str) and p}
             for tnorm, traw in touched_norm.items():
-                if tnorm in land_paths or any(a in land_prefixes for a in _ancestors_or_self(tnorm)):
+                if (tnorm in land_paths or any(a in land_prefixes for a in _ancestors_or_self(tnorm))
+                        or _hits(tnorm, declared_paths, declared_prefixes)):
                     continue
-                blocking_hit = _hits(tnorm, row_writes | row_reads, row_prefixes)
+                blocking_hit = _hits(tnorm, row_reads, set())
                 head_hit = _hits(tnorm, row_head, set())
                 if blocking_hit or head_hit:
                     findings.append(_finding(

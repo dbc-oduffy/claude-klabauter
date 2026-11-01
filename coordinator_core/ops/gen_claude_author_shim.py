@@ -297,7 +297,7 @@ def main(argv: List[str]) -> int:
 
     ``--graceful-skip-unresolved`` exits 0 with a ``skipped`` row (instead of
     attempting the write) when ``repos.content_root`` cannot be resolved via
-    ``REPO_CONTENT_ROOT``/``machine-local`` — mirrors the install.md chain-order
+    ``REPO_DOE_CLAUDE``/``machine-local`` — mirrors the install.md chain-order
     guard that used to live in the doc's own ``elif -n "${DOE_CLONE:-}"``
     branch. Has no effect under --check-only (its own validation contract is
     unchanged).
@@ -357,7 +357,7 @@ def main(argv: List[str]) -> int:
             i += 1
 
     if graceful_skip_unresolved and not check_only:
-        env_override = os.environ.get("REPO_CONTENT_ROOT", "")
+        env_override = os.environ.get("REPO_DOE_CLAUDE", "")
         doe_resolved = bool(env_override)
         if not doe_resolved:
             from coordinator_core.machine_resolver import registry_get as _registry_get

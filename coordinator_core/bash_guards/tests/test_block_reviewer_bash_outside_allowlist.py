@@ -1611,11 +1611,11 @@ def test_py_suffix_lookalike_double_extension_denies(monkeypatch):
 
 
 def test_env_assignment_prefix_allows_sanctioned_pytest(monkeypatch):
-    _allow("REPO_CLAUDE_KLABAUTER=/tmp/empty python3 -m pytest coordinator/tests/t.py", monkeypatch)
+    _allow("REPO_PROJECT_MAKIMA=/tmp/empty python3 -m pytest coordinator/tests/t.py", monkeypatch)
 
 
 def test_bare_env_prefix_allows_sanctioned_pytest(monkeypatch):
-    _allow("env REPO_CLAUDE_KLABAUTER=/tmp/empty python3 -m pytest coordinator/tests/t.py", monkeypatch)
+    _allow("env REPO_PROJECT_MAKIMA=/tmp/empty python3 -m pytest coordinator/tests/t.py", monkeypatch)
 
 
 def test_multiple_assignments_and_env_stack_allow(monkeypatch):
@@ -1623,11 +1623,11 @@ def test_multiple_assignments_and_env_stack_allow(monkeypatch):
 
 
 def test_env_assignment_prefix_allows_tier_a_git(monkeypatch):
-    _allow("REPO_CLAUDE_KLABAUTER=/tmp/empty git log --oneline -5", monkeypatch)
+    _allow("REPO_PROJECT_MAKIMA=/tmp/empty git log --oneline -5", monkeypatch)
 
 
 def test_env_prefix_does_not_admit_a_denied_binary(monkeypatch):
-    _deny("REPO_CLAUDE_KLABAUTER=/tmp/empty rm -rf /", monkeypatch)
+    _deny("REPO_PROJECT_MAKIMA=/tmp/empty rm -rf /", monkeypatch)
 
 
 def test_env_prefix_does_not_admit_inline_code(monkeypatch):

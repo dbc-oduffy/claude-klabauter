@@ -164,6 +164,64 @@ def test_superseded_scan_reads_every_earlier_record_for_an_undated_sizing(tmp_pa
     assert _handed_to_parser(tmp_path, monkeypatch, undated) == ["warp-old-20261020T100000-111111"]
 
 
+def _commit(root, files: dict) -> None:
+    """Point ``.git/HEAD`` at a fresh commit holding ``files``; written in-process, no git spawn."""
+    from coordinator_core.git import git_objects
+
+    gitdir = root / ".git"
+    entries = {rel: (0o100644, git_objects.write_object(gitdir, b"blob", data.encode())) for rel, data in files.items()}
+    tree = git_objects.build_tree(gitdir, entries)
+    parent = (gitdir / "refs" / "heads" / "main")
+    lines = [f"tree {tree}"]
+    if parent.exists():
+        lines.append(f"parent {parent.read_text().strip()}")
+    lines += ["author t <t@t> 1 +0000", "committer t <t@t> 1 +0000", "", "m", ""]
+    sha = git_objects.write_object(gitdir, b"commit", "\n".join(lines).encode())
+    parent.parent.mkdir(parents=True, exist_ok=True)
+    parent.write_text(sha + "\n")
+    (gitdir / "HEAD").write_text("ref: refs/heads/main\n")
+
+
+def _git_repo(root) -> None:
+    (root / ".git").mkdir(exist_ok=True)
+    _commit(root, {"a/x.py": "a/x.py", "a/b/y.py": "a/b/y.py", "c/z.py": "c/z.py"})
+
+
+def test_head_tree_directories_are_read_once_across_path_sets(tmp_path, monkeypatch) -> None:
+    from coordinator_core.git import git_state
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    _git_repo(tmp_path)
+    land_run._HEAD_SPINES.clear()
+    loaded: list = []
+    real = git_state.read_tree_spine
+
+    def spy(repo, paths, **kw):
+        loaded.append(list(paths))
+        return real(repo, paths, **kw)
+
+    monkeypatch.setattr(git_state, "read_tree_spine", spy)
+
+    first = land_run._head_entries(tmp_path, ["a/x.py", "a/b/y.py"])
+    again = land_run._head_entries(tmp_path, ["a/x.py", "a/b/y.py", "a/b/new.py", "gone/q.py"])
+    other = land_run._head_entries(tmp_path, ["c/z.py"])
+
+    assert loaded == [["a/x.py", "a/b/y.py"], ["c/z.py"]]
+    assert set(first) == {"a/x.py", "a/b/y.py"} and set(again) == set(first) and set(other) == {"c/z.py"}
+    assert land_run._head_entries(tmp_path, ["a/x.py", "c/z.py"]) == git_state.head_blobs(tmp_path, ["a/x.py", "c/z.py"])
+
+
+def test_head_entries_keys_on_head_so_a_new_commit_is_re_read(tmp_path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    _git_repo(tmp_path)
+    land_run._HEAD_SPINES.clear()
+    before = land_run._head_entries(tmp_path, ["a/x.py"])
+    _commit(tmp_path, {"a/x.py": "changed"})
+
+    assert land_run._head_entries(tmp_path, ["a/x.py"])["a/x.py"] != before["a/x.py"]
+
+
 def test_sizing_stamp_floor_refuses_an_impossible_date(tmp_path) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 

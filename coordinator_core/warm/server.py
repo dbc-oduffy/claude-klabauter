@@ -267,6 +267,17 @@ UNTRUSTED_CALLER_ERROR = -32003
 # this process simply is not the one that can answer it.
 SETTINGS_HOME_MISMATCH_ERROR = -32008
 
+# The publish's graceful stop ask (`pair_stop._ask_server_to_stop`); its token is deliberately skewed.
+_STOP_PROBE_METHOD = "engine.stop_probe"
+
+# `ipc.ENTRYPOINT_NOT_WARM_LOADABLE_ERROR`: provably undispatched, so the door runs the CLI cold.
+_ENTRYPOINT_NOT_WARM_LOADABLE_ERROR = -32007
+
+# Entrypoints that stop this engine and wait for its exit. Served in a pool worker they wait on
+# a drain that waits on them, until the 30s budget ends -32004; refused before dispatch so the
+# caller runs them cold.
+_SELF_STOPPING_ENTRYPOINTS = frozenset({"warm-engine-stop"})
+
 # DISPATCH KEY TOMBSTONED -- `dispatch_ack.AckStore.admit` refused this key:
 # it is already in the store (admitted, stamped, or tombstoned), or it is at
 # or below the store's `low_water_ns`/before its `boot_ns`. Distinct from
@@ -2065,7 +2076,7 @@ def _store_poll(params: Mapping) -> Optional[dict]:
     """The poll answered from this process's `AckStore`, optionally waiting
     (clamped to `_POOL_RESULT_DEADLINE_SECS`) for the stamp. None when `params`
     carries no usable key."""
-    key = params.get("key")
+    key = params.get("key") or params.get("dispatch_key")
     if not isinstance(key, str) or not key:
         return None
     wait_secs = _clamped_wait_secs(params)
@@ -2094,6 +2105,14 @@ def _door_poll_argv(method: Any, params: Any) -> Optional[list]:
     if params.get("entrypoint") or not isinstance(argv, list) or not argv:
         return None
     return argv if argv[0] == _REQUEST_STATUS_METHOD else None
+
+
+def _is_self_stopping_entrypoint(method: Any, params: Any) -> bool:
+    return (
+        method == "invoke.from_argv"
+        and isinstance(params, Mapping)
+        and params.get("entrypoint") in _SELF_STOPPING_ENTRYPOINTS
+    )
 
 
 def _is_from_argv_result(value: Any) -> bool:
@@ -2258,8 +2277,14 @@ def _serve_line(
         return
 
     # A publish swap window: refuse (no eviction, no drain, no exit record) so the caller goes
-    # cold and parks; eviction proceeds after the round. Ordered after the trust check.
-    if engine_root is not None and _engine_landing.swap_in_progress(engine_root):
+    # cold and parks; eviction proceeds after the round. Ordered after the trust check. The
+    # publish's own stop ask (engine.stop_probe, deliberately skewed token) takes the skew
+    # eviction below: respond, close listener, drain, exit.
+    if (
+        engine_root is not None
+        and msg.get("method") != _STOP_PROBE_METHOD
+        and _engine_landing.swap_in_progress(engine_root)
+    ):
         _write_and_release(skew.build_skew_response(request_id, server_sha, client_token))
         return
 
@@ -2334,6 +2359,23 @@ def _serve_line(
         record_invocation(True)
         _write_and_release(
             {"jsonrpc": "2.0", "id": request_id, "result": _door_poll_reply(door_poll_argv)}
+        )
+        return
+
+    if _is_self_stopping_entrypoint(method, msg.get("params")):
+        record_invocation(True)
+        _write_and_release(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": _ENTRYPOINT_NOT_WARM_LOADABLE_ERROR,
+                    "message": (
+                        "invoke.from_argv: this entrypoint stops the engine that would serve "
+                        "it; not dispatched, run it cold"
+                    ),
+                },
+            }
         )
         return
 

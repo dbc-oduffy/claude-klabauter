@@ -166,6 +166,7 @@ from coordinator_core.ops.dispatch_emit.self_correction import (
 #: Pull or re-plan attempts on one plan before the run dispatches research instead of another round. The only place n is written.
 REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
+from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
@@ -201,6 +202,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import PA
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP, RECONCILE_CLAUSE as LAND_RUN_RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP as _HALTED_ROUTE_OP
 from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY, STAGE_IN_FLIGHT_KEY
+from coordinator_core.ops.dispatch_emit.stage_task_hijack import HIJACK_HALT_REASON, hijack_test_js
 from coordinator_core.ops.dispatch_emit.wake_digest import (
     _BASELINE_CLEARS_JS,
     CAP_HELPER_JS,
@@ -436,6 +438,7 @@ _COMMIT_AGENT_TYPE = _emit._COMMIT_AGENT_TYPE
 _PLAN_REVIEW_AGENT_TYPE = "coordinator:staff-eng"
 _PLAN_REVIEW_EFFORT = "low"
 _CODE_REVIEW_AGENT_TYPE = "coordinator:code-reviewer"
+_DOCS_CHECKER_AGENT_TYPE = "coordinator:docs-checker"
 _STAGE_DEFAULTS = {
     "plan": _PLAN_AUTHOR_AGENT_TYPE,
     "plan_review": _PLAN_REVIEW_AGENT_TYPE,
@@ -443,8 +446,58 @@ _STAGE_DEFAULTS = {
 }
 
 
+_SIDECAR_CHECKED_STAGES = ("plan_review", "code_review")
+
+
+def _sidecar_policy_label() -> str:
+    """The policy file `load_policy()` reads, for a refusal or fallback message."""
+    import os
+
+    from coordinator_core.subagent_sandbox import engine as _sandbox
+
+    env = os.environ.get(_sandbox.POLICY_ENV_VAR)
+    if env:
+        return env
+    default = _sandbox._resolve_default_policy_path()
+    return str(default) if default else "subagent-sandbox-policy.yaml"
+
+
+def _apply_sidecar_eligibility(types: dict[str, str], fallback_notes: Optional[list[str]]) -> dict[str, str]:
+    """`types` with each plan_review/code_review agent outside the policy's `report_sidecar` set swapped for its stage default.
+
+    An ineligible agent has no findings ledger, so `plan.readiness_verdict` could not read its reply.
+    An empty policy (absent or unreadable file) checks nothing. A stage default that is also
+    ineligible raises `AskComposeRefused` naming the agent and the policy. Each swap appends one
+    line to `fallback_notes`.
+    """
+    from coordinator_core.subagent_sandbox import engine as _sandbox
+
+    policy = _sandbox.load_policy()
+    if policy.is_empty:
+        return types
+    out = dict(types)
+    for stage in _SIDECAR_CHECKED_STAGES:
+        agent = out[stage]
+        if agent in policy.report_sidecar:
+            continue
+        default = _STAGE_DEFAULTS[stage]
+        label = _sidecar_policy_label()
+        if default == agent or default not in policy.report_sidecar:
+            raise AskComposeRefused(
+                f"{stage} agent {agent} is not report_sidecar-eligible under policy {label}; "
+                f"stage default {default} is not eligible either"
+            )
+        out[stage] = default
+        if fallback_notes is not None:
+            fallback_notes.append(
+                f"{stage}: routed agent {agent} is not report_sidecar-eligible under policy {label}; "
+                f"fell back to {default}"
+            )
+    return out
+
+
 def _resolve_stage_agents(
-    repo_root: str, prompt: Optional[str], writes: Sequence[str]
+    repo_root: str, prompt: Optional[str], writes: Sequence[str], fallback_notes: Optional[list[str]] = None
 ) -> tuple[dict[str, str], dict[str, Optional[str]], bool]:
     """`(agent type, agent_model, code_review is routed)` per stage for this repo.
 
@@ -454,12 +507,17 @@ def _resolve_stage_agents(
     `agent_model` is `None` for a type `emit._AGENT_MODELS` pins; a routed type outside it is
     read from its definition, which is scanned only then. A malformed route table or
     `review_routing` raises `AskComposeRefused`.
+
+    A plan_review/code_review agent the report_sidecar policy does not list falls back to its
+    stage default, one line per swap appended to `fallback_notes`; see `_apply_sidecar_eligibility`.
     """
     try:
         resolved = _agent_route.resolve_stage_agents(
             repo_root, ask_text=prompt or "", writes=writes, defaults=_STAGE_DEFAULTS
         )
-        types = {stage: agent for stage, (agent, _src) in resolved.items()}
+        types = _apply_sidecar_eligibility(
+            {stage: agent for stage, (agent, _src) in resolved.items()}, fallback_notes
+        )
         models: dict[str, Optional[str]] = {}
         defs: Optional[Any] = None
         for stage, agent in types.items():
@@ -473,7 +531,27 @@ def _resolve_stage_agents(
     return types, models, types["code_review"] != _CODE_REVIEW_AGENT_TYPE
 
 
+def _ue_docs_checker(repo_root: str) -> tuple[bool, Optional[str]]:
+    """`(is UE repo, docs-checker agent_model)`; the model is `None` for a non-UE repo or a type `emit._AGENT_MODELS` pins.
+
+    A UE repo's plan-review and code-review waves each carry a `coordinator:docs-checker` leg.
+    """
+    if not _ue_route_source.is_ue_repo(repo_root):
+        return False, None
+    if _DOCS_CHECKER_AGENT_TYPE in _emit._AGENT_MODELS:
+        return True, None
+    try:
+        return True, _agent_route._model_of(_DOCS_CHECKER_AGENT_TYPE, _agent_route._Definitions())
+    except _agent_route.RouteAdmissionError as exc:
+        raise AskComposeRefused(f"stage agent routing refused: {exc}") from exc
+
+
 _ANCHOR_BRIEF_VERSION = "ask-compose-anchor/1"
+#: Plan-stage ledger sentence; the post-commit clause keeps sha/memo acts out of the spine.
+_LEDGER_SERVE_SENTENCE = (
+    " Every ledger item is one the plan's rows must serve; quote each in the row that serves it."
+    " A sha reply or memo after the commit is carried by the ledger's post_commit_acts and is never a plan row."
+)
 #: Inserted ahead of the readiness-op sentence in the review and revise prompts.
 _ANCHOR_PREMISES_SENTENCE = (
     "Declare `anchor_premises:` in the plan's frontmatter: each premise the route rests on "
@@ -605,6 +683,7 @@ _FALSIFIER_PROP = {"falsifier": {"type": ["object", "null"]}}
 _SPINE_REVIEW_SCHEMA = _obj(
     ["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_REVIEW_SIGNALS_PROP}
 )
+_DOCS_CHECK_SCHEMA = _obj(["verdict"], {"verdict": _STR, "plan_rel": _STR})
 _XL_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
     {
@@ -1042,13 +1121,37 @@ _AGENT_DEFS_HELPER_JS = (
 )
 
 
+_BRIEF_CLAUSE_VAR = "_BRIEF_CLAUSE"
+#: Prefixes the precedence clause onto a prompt that does not already carry it (matched by its head).
+_CLAUSED_JS = (
+    f"((q) => q.includes({_BRIEF_CLAUSE_VAR}.slice(0, 60)) ? q : {_BRIEF_CLAUSE_VAR} + '\\n\\n' + q)"
+)
+
+
+def brief_clause_decl_js() -> str:
+    """Script-level declarations `clause_shadowed` and `_ledger_shadowed` read; emit once, before either."""
+    return f"  const {_BRIEF_CLAUSE_VAR} = {_lit(_emit._BRIEF_PRECEDENCE_CLAUSE)};\n  const _clauseOuterAgent = agent;"
+
+
+def clause_shadow_parts(name: str) -> tuple[str, str]:
+    """(open, close) lines around an `async function <name>` so it is defined inside a scope whose
+    `agent` prefixes the precedence clause onto every library prompt that lacks it. The function
+    stays its own script element between them (the hoister keys on it). Needs `brief_clause_decl_js`."""
+    return (
+        f"  const {name} = (() => {{\n"
+        f"    const agent = (p, o) => _clauseOuterAgent({_CLAUSED_JS}(p), o);",
+        f"    return {name};\n"
+        "  })();",
+    )
+
+
 def _ledger_shadowed(blitz_fn: str, *, em_brief: bool) -> str:
     """`planBlitz` defined inside a scope whose `agent` prefixes the ledger clause, so every
     plan-blitz prompt reads the requirements ledger first. An EM-brief shadow inside the function
     calls `_askAgent`, rebound here to the ledger-prefixed agent: the brief and the ledger compose."""
     rebind = "    const _askAgent = agent;\n" if em_brief else ""
     return (
-        "  const _outerAgent = agent;\n"
+        f"  const _outerAgent = (p, o) => _clauseOuterAgent({_CLAUSED_JS}(p), o);\n"
         f"  const {_PLAN_BLITZ_FN} = (() => {{\n"
         f"    const agent = (p, o) => _outerAgent({_DESIGN_PREFIX_JS} + {_LEDGER_PREFIX_VAR} + {_AGENT_DEFS_FN}() + p, o);\n"
         f"{rebind}{blitz_fn}\n"
@@ -1215,7 +1318,7 @@ _REVIEW_RECOVER_JS = r"""
         for (const f of found) if (!flaky.some((x) => x.node_id === f.node_id)) flaky.push(f);
         failing = failing.filter((n) => !fids.has(_hfPosix(n)));
       }
-      const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { pre_existing: rv?.pre_existing ?? [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
+      const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { pre_existing: rv?.pre_existing ?? [], passed_at_base: rv?.passed_at_base ?? [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
       const detail = new Map();
       for (const d of (Array.isArray(rv?.failing_detail) ? rv.failing_detail : [])) if (d && d.node_id) detail.set(_hfPosix(d.node_id), String(d.message ?? ''));
       const ownedTxt = split.owned.map((n) => n + ': ' + ((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300));
@@ -1407,7 +1510,12 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
     return (
         "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
         "&& _testResult.status && _testResult.status !== 'not_run' "
-        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())) "
+        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim()) "
+        "&& !(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object' "
+        "&& _reviewReverify.status_after === 'pass' "
+        "&& (() => { const _l = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
+        "const _x = new Set([..._l(_reviewReverify.pre_existing), ..._l(_reviewReverify.kept)]); "
+        "return !_l(_reviewReverify.failing).some((n) => !_x.has(n)); })())) "
         "{ const _rvh = (typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
         "? _reviewReverify : {}; "
         "const _rvl = (v) => (Array.isArray(v) ? v : (typeof v === 'string' ? [v] : [])).map(String); "
@@ -1454,7 +1562,7 @@ def _wave_tests_green_js(
         "    let r = null;\n"
         "    try {\n"
         "      r = await agent(\n"
-        f"        {brief}'Run and report on the scoped test target(s) for the wave ' + n + ' checkpoint: ' + "
+        f"        {_js_string_literal(_emit._BRIEF_PRECEDENCE_CLAUSE + chr(10) * 2)} + {brief}'Run and report on the scoped test target(s) for the wave ' + n + ' checkpoint: ' + "
         "scope.join(', ') + '. ' + "
         f"{_js_string_literal(_emit._test_runner_clause(repo_root))} + {sidecar},\n"
         f"        {{ label: 'verify:wave-' + n, phase: {phase}, agentType: {agent_type}, "
@@ -2616,7 +2724,7 @@ def _reviewer_row_js(anchor: str, label_prefix: str, run_id: str) -> list[str]:
     returned `DONE:` line.
     Trap: the read-only reviewer never holds the Write; the verify agent does."""
     prompt = _cat(
-        f"{anchor}\n\n", "Your brief is the file ", "js:r.brief_path",
+        f"{_emit._BRIEF_PRECEDENCE_CLAUSE}\n\n{anchor}\n\n", "Your brief is the file ", "js:r.brief_path",
         " -- read it completely, then execute it as written.", "js:" + _row_sidecar_js(run_id, label_prefix),
     )
     report = (
@@ -3191,10 +3299,16 @@ def compose_ask_script(
         from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
 
         review_roster_fragment, review_stage_schemas = _load_review_inputs(EMIT_ROUTE_PLAN)
-    stage_types, stage_models, code_review_routed = _resolve_stage_agents(repo_root, prompt, writes)
+    reviewer_fallbacks: list[str] = []
+    stage_types, stage_models, code_review_routed = _resolve_stage_agents(
+        repo_root, prompt, writes, reviewer_fallbacks
+    )
     reviewers = list(required_reviewers)
     if code_review_routed and stage_types["code_review"] not in reviewers:
         reviewers.append(stage_types["code_review"])
+    ue_repo, docs_checker_model = _ue_docs_checker(repo_root)
+    if ue_repo and _DOCS_CHECKER_AGENT_TYPE not in reviewers:
+        reviewers.append(_DOCS_CHECKER_AGENT_TYPE)
     review = parse_execute_review(review_roster_fragment, required_reviewers=reviewers)
 
     intake = _intake_sizing(repo_root, sizing_rel)
@@ -3268,12 +3382,17 @@ def compose_ask_script(
     manifest_rel = f"{record_dir}/manifest.json"
     anchor = _ANCHOR_CLAUSE.format(root=repo_root)
     brief_prefix = f"{_emit._SHARED_PATH_MARKER_DELIM}{EM_BRIEF_VAR}{_emit._SHARED_PATH_MARKER_DELIM}" if em_brief else ""
-    head = brief_prefix + _AGENT_DEFS_MARKER + _emit._BRIEF_PRECEDENCE_CLAUSE
+    _rag_line = _emit._example_retrieval_repo_brief_line(repo_root)
+    head = brief_prefix + _AGENT_DEFS_MARKER + _emit._BRIEF_PRECEDENCE_CLAUSE + (f"\n\n{_rag_line}" if _rag_line else "")
     session_tail = _emit._dispatching_session_id_paragraph(session_id)
     _ue_clause = ue_engine_facts_clause(repo_root)
     ue_block = f"\n\n{_ue_clause}" if _ue_clause else ""
     _notes_text = _run_notes.brief_block(list(carried_notes)).rstrip("\n")
     notes_block = f"\n\n{_notes_text}" if _notes_text else ""
+    if reviewer_fallbacks:
+        notes_block += "\n\n## Reviewer routing fallback (name it in your run report)\n\n" + "\n".join(
+            f"- {line}" for line in reviewer_fallbacks
+        )
     agent_type = _emit._EXECUTOR_AGENT_TYPE
 
     def prompt_of(*lines_and_exprs: str) -> str:
@@ -3385,11 +3504,14 @@ def compose_ask_script(
     b.append("  let _recoveryWithheld = [];")
     b.append("  let _ledgerSc = null;")
     b.append(_AGENT_DEFS_HELPER_JS)
+    if rb_fn or blitz_fn:
+        b.append(brief_clause_decl_js())
     if rb_fn:
-        from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_DECLS
+        from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_DECLS, ROADMAP_STAGE_FN
 
         b.extend(ROADMAP_DECLS)
-        b.append(rb_fn)
+        _rb_open, _rb_close = clause_shadow_parts(ROADMAP_STAGE_FN)
+        b.extend([_rb_open, rb_fn, _rb_close])
     if em_brief:
         b.append(f"  {brief_decl_js(em_brief)}")
         b.append("  const _askAgent = agent;")
@@ -4312,7 +4434,7 @@ def compose_ask_script(
         "instruction into a row. The sizing's pm_verbatims outrank any in-repo memo or doctrine. "
         "Return its repo-relative path as plan_rel."
         + ledger_clause
-        + " Every ledger item is one the plan's rows must serve; quote each in the row that serves it."
+        + _LEDGER_SERVE_SENTENCE
         + prior_work_block
         + (
             " Read the sizing's `scout_evidence` entries, if it has any, before deriving the spine."
@@ -4369,7 +4491,7 @@ def compose_ask_script(
             + ", ".join(sorted(signal_selects))
             + ") and return them as review_signals."
             + ledger_clause,
-            " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
+            _LEDGER_SERVE_SENTENCE,
             *(plan_falsifier_parts if fold_falsifier else ()),
             *(
                 stage_fold(" When the final verdict is `ready`, also stage the plan:")
@@ -4385,6 +4507,21 @@ def compose_ask_script(
         )
         b.append("    let _spineFallback = null;")
         b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
+        if ue_repo:
+            docs_check_prompt = _cat(
+                f"{head}\n\n{anchor}\n\n",
+                "Docs-check the spine plan at ",
+                "js:_gate.spine_plan",
+                ": verify every Unreal Engine API, class, module and behavior claim it makes against the "
+                "engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE with "
+                "Edit -- never scaffold a new plan, never change its path. Return its repo-relative path as "
+                "plan_rel and `verdict` ok or corrected.",
+            )
+            docs_call = _agent(
+                docs_check_prompt, label="plan-docs-check", phase="plan", agent_type=_DOCS_CHECKER_AGENT_TYPE,
+                agent_model=docs_checker_model, schema=_DOCS_CHECK_SCHEMA, run_id=run_id,
+            )
+            b.append(f"      await {docs_call};")
         b.append(f"      const _spineReview = await {review_call};")
         if fold_falsifier:
             b.append("      _planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);")
@@ -4528,7 +4665,7 @@ def compose_ask_script(
             "\n\nGate report (read it first):\n",
             "js:String(_pulledEntry.prepGateReport ?? '(none)')",
             ledger_clause,
-            " Every ledger item is one the plan's rows must serve; quote each in the row that serves it.",
+            _LEDGER_SERVE_SENTENCE,
             *(
                 stage_fold(
                     " When the final verdict is `ready` and pull_class is `mechanical`, also stage the plan:"
@@ -4829,7 +4966,7 @@ def compose_ask_script(
     # stages no rows, only owed/gated ones, and joins the verify-and-commit tail.
     b.append(
         "  if (!_manifest.error && !(_manifest.rows ?? []).length && Array.isArray(_gate.resume_rows) "
-        "&& ((_manifest.owed ?? []).length || (_manifest.gated ?? []).length)) "
+        "&& (!_gate.resume_rows.length || (_manifest.owed ?? []).length || (_manifest.gated ?? []).length)) "
         "{ _allLanded = true; _xsTail = true; }"
     )
     # `_allLanded` is set too: it is the flag the pinned refusal-halt condition already honors.
@@ -4857,7 +4994,7 @@ def compose_ask_script(
     late_read_prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run `{_INVOKE} {OP_LATE_ROWS} '",
-        "js:JSON.stringify({ run_id: _runId })",
+        "js:JSON.stringify(_final ? { run_id: _runId, verify_read: true } : { run_id: _runId })",
         f"'{_repo_flag(repo_root)}` once and return the {LATE_ROWS_FIELD} array of its JSON reply as "
         f"{LATE_ROWS_FIELD}. Commit nothing.",
     )
@@ -4871,7 +5008,7 @@ def compose_ask_script(
     b.append("  let _verifyLateIds = [];")
     b.append("  let _lateLeg = null;")
     b.append(
-        "  const _lateRead = async () => {\n"
+        "  const _lateRead = async (_final) => {\n"
         f"    try {{ const _r = await {late_read_call}; "
         f"return (Array.isArray(_r?.{LATE_ROWS_FIELD}) ? _r.{LATE_ROWS_FIELD} : [])"
         ".filter((s) => typeof s === 'string' && s.trim()); }\n"
@@ -4906,7 +5043,7 @@ def compose_ask_script(
     )
     b.append("  if (_manifest.fanout) log('Fanout: ' + JSON.stringify(_manifest.fanout));")
     row_prompt = _cat(
-        f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(preamble)}{ue_block}\n\n{anchor}\n\n",
+        f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(_emit._with_example_retrieval_repo_line(preamble, repo_root))}{ue_block}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
         f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause}{notes_block}{session_tail}",
@@ -5199,7 +5336,7 @@ def compose_ask_script(
         "  if (!_halted && _manifest && !_manifest.error) {",
         f"    phase({_lit(ASK_VERIFY_PHASE)});",
         "    " + review_applied,
-        "    _verifyLateIds = await _lateRead();",
+        "    _verifyLateIds = await _lateRead(true);",
         # Ids the post-execute read did not handle: one bounded re-plan and executor leg, once per run.
         *(
             [
@@ -5702,11 +5839,26 @@ def _chain_emit_start_lines(
         emit_prompt, label="chain-emit", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
         agent_model=_MECHANICAL_MODEL, schema=_CHAIN_EMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
+    abandon_params = (
+        "JSON.stringify({ abandon_run: _chainRunId, chained_from: _runId })"
+        ".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")"
+    )
+    abandon_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n{EMIT_RELAY_AUTHORITY} ",
+        f"Run `{_INVOKE} dispatch.emit '",
+        "js:" + abandon_params,
+        "'` once and return its JSON reply's error text in error when the command is denied or fails, "
+        "else empty strings for path and run_id. Commit nothing.",
+    )
+    abandon_agent_call = _agent(
+        abandon_prompt, label="chain-abandon", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=_CHAIN_EMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+    )
     emit_expr = emitted_js if emitted_js is not None else "await " + emit_agent_call
     retry_lines = (
         [
             "      if (_why !== null) {",
-            "        const _firstWhy = _why; _why = null; _chainPath = null;",
+            "        const _firstWhy = _why; _why = null; _chainPath = null; _chainRunId = '';",
             "        try { _ce = await _emitAgent(); _chainCheck(_ce); }",
             "        catch (e) { _why = _firstWhy + '; retry threw: ' + String(e && e.message ? e.message : e); }",
             "      }",
@@ -5719,16 +5871,20 @@ def _chain_emit_start_lines(
     )
     return [
         "    phase('plan');",
-        "    let _why = null; let _chainPath = null;",
+        "    let _why = null; let _chainPath = null; let _chainRunId = '';",
         *emit_decl_lines,
         "    const _chainCheck = (_ce) => {",
-        "      const _cp = typeof _ce?.path === 'string' ? _ce.path.split(String.fromCharCode(92)).join('/') : '';",
-        "      const _warp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/scratch/warp/';",
+        "      const _root = REPO_ROOT.split(String.fromCharCode(92)).join('/').replace(/\\/+$/, '');",
+        "      const _warp = _root + '/scratch/warp/';",
+        "      let _cp = typeof _ce?.path === 'string' ? _ce.path.trim().split(String.fromCharCode(92)).join('/') : '';",
+        "      const _msys = /^\\/([A-Za-z])\\/(.*)$/.exec(_cp);",
+        "      if (_msys && /^[A-Za-z]:\\//.test(_root)) { _cp = _msys[1] + ':/' + _msys[2]; }",
+        "      else if (_cp !== '' && _cp[0] !== '/' && !/^[A-Za-z]:\\//.test(_cp)) { _cp = _root + '/' + _cp.replace(/^(\\.\\/)+/, ''); }",
         "      if (typeof _ce?.error === 'string' && _ce.error !== '') { _why = 'emit failed: ' + _ce.error; }",
         "      else if (_cp.split('/').indexOf('..') !== -1 || _cp.slice(0, _warp.length).toLowerCase() !== _warp.toLowerCase()) "
         "{ _why = 'emit path is not under ' + _warp; }",
         "      else if (typeof _ce?.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_ce.run_id)) { _why = 'emit reply run_id is not a run id'; }",
-        "      else { _chainPath = _cp; }",
+        "      else { _chainPath = _cp; _chainRunId = _ce.run_id; }",
         "    };",
         "    try {",
         f"      let _ce = {emit_expr};",
@@ -5738,7 +5894,10 @@ def _chain_emit_start_lines(
         "    if (_chainPath) {",
         "      let _chained;",
         "      try { _chained = await workflow({ scriptPath: _chainPath }); }",
-        "      catch (e) { _why = 'start threw: ' + String(e && e.message ? e.message : e); }",
+        "      catch (e) {",
+        "        _why = 'start threw: ' + String(e && e.message ? e.message : e);",
+        f"        if (_chainRunId !== '') {{ try {{ await {abandon_agent_call}; }} catch (_ae) {{}} }}",
+        "      }",
         _chain_stage_loop_js(),
         "      if (_why === null) { return (_chained !== null && typeof _chained === 'object') "
         f"? {{ ..._chained, chained_from: _runId{return_extra_js} }} : {{ chained: _chained, chained_from: _runId{fallback_extra_js} }}; }}",
@@ -6162,7 +6321,7 @@ def _append_docs_and_commit(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "
         "already_landed: _commit?.already_landed ?? null, "
         "error: _commit?.error ?? null, blob_drift: _commit?.blob_drift ?? null, "
-        "plan: _planRel ?? null, sizing: _sizingRel ?? null }; " + _NO_CHANGE_HALT_JS +
+        "plan: _planRel ?? null, sizing: _sizingRel ?? null }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") +
         "if (_incompleteChunks.length === 0) { _nextAction.params.halted = _halted; _reviseAndRefire = null; } "
         f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"
     )
@@ -6197,7 +6356,7 @@ def roadmap_commit_lines(
         f"    try {{ _commit = await {call}; }} catch (e) {{ _haltOnUsageLimit(e); }}",
         "    if (!_halted && !(_commit && _commit.committed === true)) { _halted = { halted: 'commit', "
         "refused: _commit?.refused ?? null, error: _commit?.error ?? null, "
-        "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; " + _NO_CHANGE_HALT_JS + "}",
+        "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") + "}",
         "  }",
     ]
 
@@ -6340,10 +6499,38 @@ def _append_split_stage(b: list[str]) -> None:
     )
 
 
+def _hijack_text_js(reply: str) -> str:
+    """`const _hjT`: the `refused` and `error` text of the stage reply `reply`, joined for the hijack test."""
+    return (
+        f"const _hjT = [{reply}?.refused, {reply}?.error]"
+        ".map((v) => typeof v === 'string' ? v : (v == null ? '' : JSON.stringify(v))).join(' ').slice(0, 1000);"
+    )
+
+
+def _hijack_halt_js(reply: str) -> str:
+    """Re-type a `halted: 'commit'` halt as `HALT_REFUSAL` with a `stage-task-hijacked` reason when the
+    `reply` stage's refusal text declines its task for a relayed/user line; any other refusal is untouched."""
+    return (
+        "if (_halted && _halted.halted === 'commit') { "
+        + _hijack_text_js(reply)
+        + " if ("
+        + hijack_test_js("_hjT")
+        + f") _halted = {{ ..._halted, halted: {HALT_REFUSAL!r}, reason: '{HIJACK_HALT_REASON}: ' + _hjT }}; }} "
+    )
+
+
 def _append_halt_record_commit(b: list[str]) -> None:
     """The halt's record-only commit stage, composed only for a run that minted a token
-    (`_RUN_TOKEN`) and skipped once a product commit landed."""
+    (`_RUN_TOKEN`) and skipped once a product commit landed. A hijacked reply gains a `hijacked`
+    key; its reader is whoever consumes the script return's `halt_commit` field (the EM), no code."""
     b.append("  if (_halted && _RUN_TOKEN && !(_commit && _commit.committed === true)) {")
     b.append("    phase('commit');")
     b.append("    try { _haltCommit = await _commitHaltRecord(); } catch (e) { _haltOnUsageLimit(e); }")
+    b.append(
+        "    if (_haltCommit && typeof _haltCommit === 'object') { "
+        + _hijack_text_js("_haltCommit")
+        + " if ("
+        + hijack_test_js("_hjT")
+        + f") _haltCommit = {{ ..._haltCommit, hijacked: '{HIJACK_HALT_REASON}: ' + _hjT }}; }}"
+    )
     b.append("  }")

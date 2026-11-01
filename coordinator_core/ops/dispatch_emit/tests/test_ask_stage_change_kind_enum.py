@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.spine_read import (
     InvalidChangeKindError,
     change_kind_members,
@@ -45,6 +46,7 @@ def test_stage_refuses_non_member_naming_row_and_field(tmp_path, bad):
 
 def test_stage_accepts_member(tmp_path):
     _repo(tmp_path, "code-edit")
+    write_run_scripts(tmp_path, "r1")
     reply = _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path)
     assert "error" not in reply
 

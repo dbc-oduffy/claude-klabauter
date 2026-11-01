@@ -41,7 +41,7 @@ Negative-spec:
       from a long-lived process (e.g. a future op) where implicit env mutation on
       import-time-adjacent calls would be a surprising side effect. Callers that need
       the shell's idempotency-gate behavior opt in explicitly.
-      A sibling content-root resolver once exported `REPO_CONTENT_ROOT` to
+      A sibling content-root resolver once exported `REPO_DOE_CLAUDE` to
       os.environ on every successful resolution; that was retired on
       2026-07-21 because the export leaked interpreter-global state across
       tests and into every subprocess child's inherited env. Its

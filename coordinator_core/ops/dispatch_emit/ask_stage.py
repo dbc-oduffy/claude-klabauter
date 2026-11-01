@@ -2,7 +2,7 @@
 
 Working files land under `RUN_DIR_ROOT/<run_id>/`: `briefs/<row>.md` (the plan route's row prompt) and
 `commit-request.txt` (the `render_marker` line, empty when no row declares a path). Run records land
-under `ask_contract.record_dir`: the minted spine, `pm-intent.md` and `manifest.json` (a `StageManifest` plus `head_sha`, ASCII JSON written by `reply_sidecar.write_reply`; the op replies the `reply_sidecar.handle_for` handle over it, never the manifest). In-process file writes only; no git, no subprocess, so the
+under `ask_contract.record_dir`: the minted spine, `pm-intent.md` and `manifest.json` (a `StageManifest` plus `head_sha`, ASCII JSON written by `reply_sidecar.write_reply`; the op replies the `reply_sidecar.handle_for` handle over it, never the manifest) and `stage-dirt.json` (`stage_dirt_snapshot`: the tree's dirt at stage, read by review prep). In-process file writes only; no git, no subprocess, so the
 op holds the 500ms bar. Trap: unlike `compose_script`, the per-row pathspec is not
 gitignore-filtered, because that filter spawns git.
 """
@@ -1119,6 +1119,9 @@ def stage(
         rows, exclusions, retired_resume, dropped_landed = _only_rows(
             rows, exclusions, frozenset(only_rows), resume_snap
         )
+    ran_premises: dict[str, str] = {}
+    if only_rows is not None:
+        rows, ran_premises = _settle_ran_premises(rows, raw_by_id, root, plan_posix, run_id)
     if ledger_resume and only_rows is not None:
         _refuse_reminted_em_rows(plan_path, raw_by_id, frozenset(only_rows))
     check_unschedulable_rows(rows, raw_by_id)
@@ -1336,6 +1339,8 @@ def stage(
     dropped_rows: tuple[dict[str, str], ...] = ()
     if only_rows is not None:
         dropped_rows = _unstaged_row_reasons(
+            root=root,
+            ran_premises=ran_premises,
             raw_by_id=raw_by_id,
             parse_exclusions=parse.exclusions,
             staged={r.id for r in manifest_rows},
@@ -1423,6 +1428,9 @@ def stage(
         _record_staging_drops(record, run_id, dropped_rows)
     payload = manifest_payload(root, manifest)
     reply_sidecar.write_reply(root, record / "manifest.json", payload)
+    from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot
+
+    stage_dirt_snapshot.write_snapshot(root, record)
     from coordinator_core.ops.dispatch_emit import live_run_writes
 
     live_run_writes.index_stage(root, run_id, payload, time.time())
@@ -1499,6 +1507,8 @@ def _plan_sizing_object(root: Path, plan_rel: str) -> Optional[str]:
 
 def _unstaged_row_reasons(
     *,
+    root: Path,
+    ran_premises: Mapping[str, str],
     raw_by_id: Mapping[str, Mapping],
     parse_exclusions: Sequence[Mapping],
     staged: set,
@@ -1520,6 +1530,8 @@ def _unstaged_row_reasons(
         if not reason and rid in excl:
             e = excl[rid]
             reason = " ".join(str(x) for x in (e.get("reason"), e.get("detail")) if x)
+        if not reason and rid in ran_premises:
+            reason = f"premise already ran in a prior leg ({ran_premises[rid]}); not re-run"
         if not reason:
             reason = _held_behind_reason(raw, raw_by_id, resume_snap)
         if not reason and resume_snap is None:
@@ -1538,8 +1550,76 @@ def _unstaged_row_reasons(
     return tuple(dropped)
 
 
+def _run_started_at(root: Path, run_id: str) -> float:
+    """Earliest mtime among the run record's files, 0.0 when the record is absent."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        return min((p.stat().st_mtime for p in record_dir(root, run_id).iterdir() if p.is_file()), default=0.0)
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _premise_report_in_prior_leg(root: Path, plan_posix: str, pred: str, run_started: float) -> str:
+    """The repo-relative DONE report of premise row `pred` written since this run's record began, else
+    ``""``. A writes-nothing premise lands no commit and stays `open`, so the report is the only proof it
+    ran. A refire sets the report aside as `<id>.prior.md`, so both spellings count. Two bounded file
+    reads, no git spawn."""
+    live = _dispatch_report_path(plan_posix, pred)
+    for rel in (live, live[: -len(".md")] + ".prior.md"):
+        try:
+            path = root / rel
+            if path.stat().st_mtime < run_started:
+                continue
+            text = path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+        if _DELIVERED_REPORT_RE.search(text) and not _UNDELIVERED_REPORT_RE.search(text):
+            return rel
+    return ""
+
+
+def _settle_ran_premises(
+    rows: list, raw_by_id: Mapping[str, Mapping], root: Path, plan_posix: str, run_id: str
+) -> tuple[list, dict[str, str]]:
+    """`(rows, {premise id: report})` for a refire: a writes-nothing premise row that already finished in
+    a prior leg is dropped from `rows` (it stays `open` forever, so keeping it re-runs it every leg and
+    holds its dependents behind it) and every epistemic-premise edge onto it is stripped."""
+    ran: dict[str, str] = {}
+    started: Optional[float] = None
+    ids = {r.id for r in rows}
+    for row in rows:
+        for edge in row.depends_on:
+            pred = edge.get("chunk") if isinstance(edge, Mapping) else None
+            if (
+                not isinstance(edge, Mapping)
+                or edge.get("gate_kind") != EPISTEMIC_PREMISE
+                or pred in ran
+                or pred not in ids
+                or raw_by_id.get(pred, {}).get("writes") != []
+            ):
+                continue
+            started = _run_started_at(root, run_id) if started is None else started
+            report = _premise_report_in_prior_leg(root, plan_posix, str(pred), started)
+            if report:
+                ran[str(pred)] = report
+    if not ran:
+        return rows, ran
+
+    def _strip(row):
+        edges = [
+            e for e in row.depends_on
+            if not (isinstance(e, Mapping) and e.get("gate_kind") == EPISTEMIC_PREMISE and e.get("chunk") in ran)
+        ]
+        return row._replace(depends_on=edges) if len(edges) != len(row.depends_on) else row
+
+    return [_strip(r) for r in rows if r.id not in ran], ran
+
+
 def _held_behind_reason(
-    raw: Mapping, raw_by_id: Mapping[str, Mapping], resume_snap: Optional[resume_snapshot.Snapshot]
+    raw: Mapping,
+    raw_by_id: Mapping[str, Mapping],
+    resume_snap: Optional[resume_snapshot.Snapshot],
 ) -> str:
     """`held behind <id> (<gate_kind>)` when the row carries a runtime-order edge onto a predecessor
     that is itself unfinished (dispatchable and not landed per the snapshot), else ``""``."""
@@ -1654,9 +1734,10 @@ def _stage_write_baseline(
     an in-process object read (one `git cat-file --batch --filters` only for conversions it cannot
     reproduce); a failed lookup raises `RefireBaselineError`."""
     prior: Mapping = {}
-    base = halted_run_base(record) if record is not None else None
+    source = _baseline_source(root, record)
+    base = halted_run_base(source) if source is not None else None
     if base:
-        recorded = (_recorded_manifest(record) or {}).get("write_baseline")
+        recorded = (_recorded_manifest(source) or {}).get("write_baseline")
         if isinstance(recorded, Mapping):
             prior = recorded
     paths: list[str] = []
@@ -1676,6 +1757,37 @@ def _stage_write_baseline(
             root, _write_baseline.capture(root, missing), sizing_rel, record.name if record is not None else ""
         )
     return {p: prior[p] if p in prior else fresh[p] for p in wanted if p in prior or p in fresh}
+
+
+def _baseline_source(root: Path, record: Optional[Path]) -> Optional[Path]:
+    """The record whose baseline a refire inherits: `record` itself when it holds a halted base, else
+    the OLDEST `resumed_from` predecessor holding one (None: no refire).
+
+    Trap: the oldest wins, never the nearest. An intermediate pass baselined against the tree the
+    first pass already edited, so only the first pass's baseline still sees that edit as written work.
+    The walk is cycle-safe, capped at `CARRIED_HOP_CAP` hops, and ends quietly on a bad link."""
+    if record is None:
+        return None
+    if halted_run_base(record):
+        return record
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    found: Optional[Path] = None
+    visited = {record.name}
+    cur = record
+    for _ in range(rl.CARRIED_HOP_CAP):
+        prev = (rl.read_run(cur) or {}).get(rl.RESUMED_FROM_FIELD)
+        if not (isinstance(prev, str) and prev not in visited):
+            break
+        try:
+            cur = record_dir(root, prev)
+        except ValueError:
+            break
+        visited.add(prev)
+        if halted_run_base(cur):
+            found = cur
+    return found
 
 
 class RefireBaselineError(AskStageError):

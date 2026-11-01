@@ -14,7 +14,7 @@ from coordinator_core.ops.dispatch_emit.plugin_review_overlay import (
     _plugin_name,
     installed_plugin_roots,
 )
-from coordinator_core.ue_project_detection import SKIP_SEGMENTS
+from coordinator_core.ue_project_detection import SKIP_SEGMENTS, declared_ue
 
 EXAMPLE_GAME_REPO_PLUGIN = "example-game-repo-control"
 MANIFEST_RELPATHS = ("routing/ue-job-shapes.json", "route-table.json")
@@ -23,7 +23,7 @@ _MAX_DEPTH = 3
 # Never home to a .uproject/.uplugin, and in a coordinator repo they hold nearly every entry:
 # walking them cost example-retrieval-repo 6.4 s cold after a warm reload (ask_stage hang, 2026-10-31).
 _WALK_SKIP = SKIP_SEGMENTS | {
-    "scratch", "state", "tasks", "archive", "node_modules", "dist",
+    "scratch", "tasks", "archive", "node_modules", "state", "dist",
     "Binaries", "Intermediate", "Saved", "DerivedDataCache",
 }
 
@@ -60,11 +60,11 @@ def _has_ue_marker(dir_path: str, depth: int) -> bool:
 
 
 def is_ue_repo(repo_root: str | os.PathLike[str]) -> bool:
-    """True when a `*.uproject` or `*.uplugin` sits within depth 3 of `repo_root` (dot and `_WALK_SKIP` dirs excluded)."""
+    """True when `repo_root`'s coordinator.local.md declares UE, or a `*.uproject`/`*.uplugin` sits within depth 3 (dot and `_WALK_SKIP` dirs excluded)."""
     key = os.path.abspath(os.fspath(repo_root))
     cached = _UE_REPO_CACHE.get(key)
     if cached is None:
-        cached = _UE_REPO_CACHE[key] = _has_ue_marker(key, 0)
+        cached = _UE_REPO_CACHE[key] = declared_ue(key) is True or _has_ue_marker(key, 0)
     return cached
 
 

@@ -358,7 +358,7 @@ def _outbox_root() -> str:
             f"an OSS publish-mirror install ({resolved_content_root!r}) — the private "
             f"coordinator content repo is unresolvable via env/registry. Remediation: "
             f"run 'machine-local set repos.content_root /path/to/the-coordinator-doctrine-repo' "
-            f"or set REPO_CONTENT_ROOT=/path/to/the-coordinator-doctrine-repo before invoking this CLI."
+            f"or set REPO_DOE_CLAUDE=/path/to/the-coordinator-doctrine-repo before invoking this CLI."
         )
     return os.path.join(resolved_content_root, "state", "lessons-outbox")
 
@@ -440,7 +440,7 @@ def _validate_target_wiki(
         )
         print(
             "  Remediation: run 'machine-local set repos.content_root /path/to/the-coordinator-doctrine-repo'\n"
-            "  or set REPO_CONTENT_ROOT=/path/to/the-coordinator-doctrine-repo before invoking this CLI.\n"
+            "  or set REPO_DOE_CLAUDE=/path/to/the-coordinator-doctrine-repo before invoking this CLI.\n"
             "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
             file=sys.stderr,
         )
@@ -825,7 +825,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(
                 "  Remediation: run 'machine-local set repos.content_root /path/to/the-coordinator-doctrine-repo'\n"
-                "  or set REPO_CONTENT_ROOT=/path/to/the-coordinator-doctrine-repo before invoking this CLI.\n"
+                "  or set REPO_DOE_CLAUDE=/path/to/the-coordinator-doctrine-repo before invoking this CLI.\n"
                 "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )
@@ -936,7 +936,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(
                 "  Remediation: run 'machine-local set repos.content_root /path/to/the-coordinator-doctrine-repo'\n"
-                "  or set REPO_CONTENT_ROOT=/path/to/the-coordinator-doctrine-repo before invoking this CLI.\n"
+                "  or set REPO_DOE_CLAUDE=/path/to/the-coordinator-doctrine-repo before invoking this CLI.\n"
                 "  Reference: plugins/coordinator-claude/coordinator/docs/wiki/machine-local-registry.md §4c",
                 file=sys.stderr,
             )

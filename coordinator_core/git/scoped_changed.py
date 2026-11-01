@@ -33,8 +33,10 @@ worktree file in scope, a literal naming a directory, an executable-bit
 disagreement between index and worktree (core.filemode is not read), a case
 -only disagreement between worktree and index names, an unreadable HEAD, a
 racily-clean entry (entry mtime not older than the index file), a stat
-mismatch `content_hash` declines to settle, and a directory walk beyond
-`max_dirs`.
+mismatch `content_hash` declines to settle, and a walk of more than
+`max_dirs` UNTRACKED directories. Tracked directories are scanned free: the
+index parse already paid for them, so the walk scales with the untracked
+surface and not with the size of a tracked run-record root.
 
 Negative-spec: no process-lifetime cache; no `git` spawn; no second index
 parser (`git_index.parse_index_identity` does the walk).
@@ -42,6 +44,7 @@ parser (`git_index.parse_index_identity` does the walk).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat as _stat
 import sys
@@ -78,6 +81,11 @@ class ScopedChange(NamedTuple):
     tracked_dirs: FrozenSet[str]
 
 
+def _is_junction(de: "os.DirEntry") -> bool:
+    probe = getattr(de, "is_junction", None)
+    return probe is not None and probe()
+
+
 class _Gap(Exception):
     pass
 
@@ -104,8 +112,55 @@ def _join(d: str, name: str) -> str:
     return f"{d}/{name}" if d else name
 
 
+def _index_tree_shas(
+    entries: Dict[str, IndexFlaggedIdentity], root_dir: str
+) -> Tuple[Dict[str, str], Dict[str, Tuple[List[str], List[str]]]]:
+    """Git tree shas the index implies for `root_dir` and every directory under it,
+    plus `{dir: (file paths, subdirectory paths)}`. Valid only when `entries` holds
+    every index entry under `root_dir`."""
+    files_in: Dict[str, List[str]] = {}
+    dirs_in: Dict[str, Set[str]] = {}
+    lead = root_dir + "/"
+    for p in entries:
+        if not p.startswith(lead):
+            continue
+        d = p.rpartition("/")[0]
+        files_in.setdefault(d, []).append(p)
+        while d != root_dir:
+            parent = d.rpartition("/")[0]
+            kids = dirs_in.setdefault(parent, set())
+            if d in kids:
+                break
+            kids.add(d)
+            d = parent
+    shas: Dict[str, str] = {}
+    layout: Dict[str, Tuple[List[str], List[str]]] = {}
+    sha1 = hashlib.sha1
+    fromhex = bytes.fromhex
+    for d in sorted(set(files_in) | set(dirs_in), key=lambda x: -x.count("/")):
+        parts: List[Tuple[bytes, bytes]] = []
+        fs = files_in.get(d, [])
+        for f in fs:
+            e = entries[f]
+            name = f.rpartition("/")[2].encode("utf-8", "surrogateescape")
+            parts.append((name, b"%o %s\0%s" % (e.mode, name, fromhex(e.sha))))
+        subs = sorted(dirs_in.get(d, ()))
+        for sd in subs:
+            name = sd.rpartition("/")[2].encode("utf-8", "surrogateescape")
+            parts.append((name + b"/", b"40000 %s\0%s" % (name, fromhex(shas[sd]))))
+        parts.sort()
+        body = b"".join([b for _, b in parts])
+        shas[d] = sha1(b"tree %d\0" % len(body) + body).hexdigest()
+        layout[d] = (fs, subs)
+    return shas, layout
+
+
 def _head_scope(
-    root: Path, literals: Sequence[str], roots: Sequence[str], glob_dirs: Sequence[str]
+    root: Path,
+    literals: Sequence[str],
+    roots: Sequence[str],
+    glob_dirs: Sequence[str],
+    entries: Optional[Dict[str, IndexFlaggedIdentity]] = None,
 ) -> Dict[str, Tuple[int, str]]:
     spine_paths = list(literals)
     spine_paths += [_join(g, "x") for g in glob_dirs]
@@ -134,19 +189,28 @@ def _head_scope(
             continue
         if e[0] != _TREE:
             raise _Gap("root is a file in HEAD")
-        stack = [(r, e[1])]
+        index_shas, layout = _index_tree_shas(entries, r) if entries else ({}, {})
+        stack = [(r, e[1], False)]
         while stack:
-            prefix, sha = stack.pop()
+            prefix, sha, same = stack.pop()
+            if not same and index_shas.get(prefix) == sha:
+                same = True
+            if same:
+                fs, subs = layout.get(prefix, ([], []))
+                for f in fs:
+                    out[f] = (entries[f].mode, entries[f].sha)
+                stack.extend((sd, sha, True) for sd in subs)
+                continue
             obj = _read_object(common, sha)
             if obj is None or obj[0] != "tree":
                 raise _Gap("HEAD tree unreadable")
-            entries = _parse_tree_entries(obj[1])
-            if entries is None:
+            tree = _parse_tree_entries(obj[1])
+            if tree is None:
                 raise _Gap("HEAD tree corrupt")
-            for name, (mode, esha) in entries.items():
+            for name, (mode, esha) in tree.items():
                 path = f"{prefix}/{name}"
                 if mode == _TREE:
-                    stack.append((path, esha))
+                    stack.append((path, esha, False))
                 else:
                     out[path] = (mode, esha)
     for mode, _ in out.values():
@@ -245,7 +309,7 @@ def _scoped(
                 break
             tracked_dirs.add(q)
 
-    head = _head_scope(root, literals, roots, globs)
+    head = _head_scope(root, literals, roots, globs, entries)
     changed: Set[str] = set()
     for p, e in scoped.items():
         h = head.get(p)
@@ -277,14 +341,19 @@ def _scoped(
             raise _Gap("case-only directory disagreement with the index")
         candidates[rel + "/"] = None
 
+    root_s = str(root)
+
     def scan(d: str):
-        budget[0] -= 1
-        if budget[0] < 0:
-            raise _Gap("directory walk budget")
+        if d not in tracked_dirs:
+            budget[0] -= 1
+            if budget[0] < 0:
+                raise _Gap("directory walk budget")
         try:
-            return list(os.scandir(root / d if d else root))
+            return list(os.scandir(f"{root_s}/{d}" if d else root_s))
         except FileNotFoundError:
             return []
+
+    is_junction = _is_junction
 
     def classify(de: "os.DirEntry", rel: str, d: str) -> Optional[bool]:
         """True directory, False file; raises on shapes that are gaps."""
@@ -292,7 +361,7 @@ def _scoped(
             if d == "":
                 return None
             raise _Gap("nested .git")
-        if de.is_symlink() or getattr(de, "is_junction", lambda: False)():
+        if de.is_symlink() or is_junction(de):
             raise _Gap("symlink or junction in the worktree")
         return de.is_dir(follow_symlinks=False)
 
@@ -300,12 +369,16 @@ def _scoped(
         stack = [start]
         while stack:
             d = stack.pop()
+            prefix = d + "/" if d else ""
             for de in scan(d):
-                rel = _join(d, de.name)
-                kind = classify(de, rel, d)
-                if kind is None:
+                name = de.name
+                rel = prefix + name
+                if name == ".git" or de.is_symlink():
+                    classify(de, rel, d)
                     continue
-                if kind:
+                if de.is_dir(follow_symlinks=False):
+                    if is_junction(de):
+                        classify(de, rel, d)
                     if rel in tracked_dirs:
                         stack.append(rel)
                         continue

@@ -36,7 +36,7 @@ def test_gen_settings_hooks_remediation_does_not_name_content_root(tmp_path: Pat
 
 def test_gen_settings_hooks_usage_text_keeps_functional_env_key():
     usage = gen_settings_hooks._usage_text()
-    assert "REPO_CONTENT_ROOT" in usage
+    assert "REPO_DOE_CLAUDE" in usage
     assert "repos.content_root" in usage
 
 

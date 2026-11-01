@@ -17,6 +17,7 @@ from coordinator_core.session import record_homes
 
 # Repo-relative POSIX form: it is also a git pathspec and a rel-path prefix.
 SIZINGS_DIR = PurePath(record_homes.home_dir("", "sizings")).as_posix()
+ARCHIVE_SIZINGS_DIR = "archive/sizings"
 TERMINAL_STATUSES = frozenset({"shipped", "declined", "superseded", "closed", "delivered"})
 
 _DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
@@ -94,65 +95,108 @@ def match_sizings(worktree_root: Path, baton_rels: list[str]) -> list[dict]:
         batons.append({"rel": rel, "did": fm.get("deliverable_id", ""), "slugs": slugs})
 
     sizing_dir = root / SIZINGS_DIR
+    archive_dir = root / ARCHIVE_SIZINGS_DIR
     info_cache: dict[str, dict[str, str]] = {}
 
-    def info(name: str) -> dict[str, str]:
-        if name not in info_cache:
-            info_cache[name] = _top_level(
-                _read_head(sizing_dir / name), ("baton", "status", "deliverable_id")
+    def info(rel: str) -> dict[str, str]:
+        if rel not in info_cache:
+            info_cache[rel] = _top_level(
+                _read_head(root / rel), ("baton", "status", "deliverable_id")
             )
-        return info_cache[name]
+        return info_cache[rel]
 
-    def acceptable(name: str, baton_rel: str) -> bool:
-        i = info(name)
-        if i.get("status", "") in TERMINAL_STATUSES:
+    def acceptable(rel: str, baton_rel: str, archived: bool) -> bool:
+        i = info(rel)
+        # An archived sizing is terminal by construction; the baton link still gates it.
+        if not archived and i.get("status", "") in TERMINAL_STATUSES:
             return False
         linked = _norm(i.get("baton", ""))
         return linked in ("", baton_rel)
 
-    dids = sorted({b["did"] for b in batons if b["did"]})
-    by_did: dict[str, list[str]] = {}
-    if dids:
+    def grep_by_did(pathspec: str, dids: list[str]) -> dict[str, list[str]]:
+        found: dict[str, list[str]] = {}
+        if not dids:
+            return found
         args = ["grep", "-l", "--untracked", "-F"]
         for d in dids:
             args += ["-e", d]
-        args += ["--", SIZINGS_DIR]
+        args += ["--", pathspec]
         res = run_git(args, cwd=str(root))
         if res.returncode == 0:
             for line in res.stdout.splitlines():
-                name = Path(_norm(line.strip())).name
-                if not name.endswith(".yaml"):
+                rel = _norm(line.strip())
+                if not rel.endswith(".yaml"):
                     continue
-                did = info(name).get("deliverable_id", "")
+                did = info(rel).get("deliverable_id", "")
                 if did in dids:
-                    by_did.setdefault(did, []).append(name)
+                    found.setdefault(did, []).append(rel)
+        return found
 
-    stems: list[tuple[str, set[str]]] | None = None
+    def scan_stems(directories: list[Path]) -> list[tuple[str, set[str]]]:
+        stems: list[tuple[str, set[str]]] = []
+        for d in directories:
+            if not d.is_dir():
+                continue
+            with os.scandir(d) as it:
+                stems += [
+                    (_norm(os.path.relpath(e.path, root)), _slug_variants(Path(e.name).stem))
+                    for e in it
+                    if e.name.endswith(".yaml")
+                ]
+        return stems
+
+    def archive_dirs() -> list[Path]:
+        if not archive_dir.is_dir():
+            return []
+        with os.scandir(archive_dir) as it:
+            return [Path(e.path) for e in it if e.is_dir()]
+
+    dids = sorted({b["did"] for b in batons if b["did"]})
+    hot_by_did = grep_by_did(SIZINGS_DIR, dids)
+    arch_by_did: dict[str, list[str]] | None = None
+    hot_stems: list[tuple[str, set[str]]] | None = None
+    arch_stems: list[tuple[str, set[str]]] | None = None
+
+    def pick(
+        b: dict,
+        by_did: dict[str, list[str]],
+        stems: list[tuple[str, set[str]]] | None,
+        archived: bool,
+    ) -> tuple[list[str], str]:
+        cands = sorted(r for r in by_did.get(b["did"], []) if acceptable(r, b["rel"], archived))
+        if cands or not b["slugs"] or stems is None:
+            return cands, "deliverable_id"
+
+        def contradicts(r: str) -> bool:
+            theirs = info(r).get("deliverable_id", "")
+            return bool(b["did"] and theirs and theirs != b["did"])
+
+        return (
+            sorted(
+                r
+                for r, v in stems
+                if v & b["slugs"] and acceptable(r, b["rel"], archived) and not contradicts(r)
+            ),
+            "title",
+        )
+
     out: list[dict] = []
     for b in batons:
-        cands = sorted(n for n in by_did.get(b["did"], []) if acceptable(n, b["rel"]))
-        basis = "deliverable_id"
-        if not cands and b["slugs"]:
-            if stems is None:
-                stems = []
-                if sizing_dir.is_dir():
-                    with os.scandir(sizing_dir) as it:
-                        stems = [
-                            (e.name, _slug_variants(Path(e.name).stem))
-                            for e in it
-                            if e.name.endswith(".yaml")
-                        ]
-            def contradicts(n: str, d: str = b["did"]) -> bool:
-                theirs = info(n).get("deliverable_id", "")
-                return bool(d and theirs and theirs != d)
-
-            cands = sorted(
-                n
-                for n, v in stems
-                if v & b["slugs"] and acceptable(n, b["rel"]) and not contradicts(n)
-            )
-            basis = "title"
-        rels = [f"{SIZINGS_DIR}/{n}" for n in cands]
+        if b["slugs"] and hot_stems is None:
+            hot_stems = scan_stems([sizing_dir])
+        cands, basis = pick(b, hot_by_did, hot_stems, False)
+        archived = False
+        if not cands:
+            # Hot-dir miss only: the baton's sizing may have been archived.
+            if arch_by_did is None:
+                arch_by_did = grep_by_did(ARCHIVE_SIZINGS_DIR, dids) if archive_dir.is_dir() else {}
+            if b["slugs"] and arch_stems is None:
+                arch_stems = scan_stems(archive_dirs())
+            cands, basis = pick(b, arch_by_did, arch_stems, True)
+            archived = True
+        # Cite in the state/sizings/<name> form that resolve_sizing_citation resolves.
+        # No de-dup: one basename filed in two months is ambiguous, as the resolver treats it.
+        rels = sorted(f"{SIZINGS_DIR}/{Path(c).name}" for c in cands) if archived else cands
         if len(rels) == 1:
             out.append({"baton": b["rel"], "sizing": rels[0], "basis": basis, "candidates": rels})
         elif rels:

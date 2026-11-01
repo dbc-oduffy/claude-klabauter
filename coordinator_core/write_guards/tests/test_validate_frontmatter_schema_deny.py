@@ -8,7 +8,7 @@ registry manifest) — skipped entirely when absent, mirroring the advisory
 sibling's suite and the coordinator_core.testing.content_root convention.
 
 `read_content_root` is monkeypatched to the resolved sibling root for
-every test (rather than relying on REPO_CONTENT_ROOT / machine-local at test
+every test (rather than relying on REPO_DOE_CLAUDE / machine-local at test
 time) so the suite is deterministic regardless of this machine's registry
 state.
 

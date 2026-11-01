@@ -97,6 +97,64 @@ def test_normal_append_registers_nothing(tmp_path):
     assert str(tmp_path / "s.jsonl") not in atomic_append.stalled_sinks()
 
 
+def _wedge_one_sink(monkeypatch, slow):
+    gate = threading.Event()
+
+    def write(fd, data):
+        name = threading.current_thread().name
+        if name.startswith("atomic-append-writer") and slow in name:
+            gate.wait(10)
+        return _real_write(fd, data)
+
+    monkeypatch.setattr(atomic_append.os, "write", write)
+    monkeypatch.setattr(atomic_append, "_force_async", True)
+    monkeypatch.setattr(atomic_append, "_queue", None)
+    return gate
+
+
+def _settle():
+    deadline = time.monotonic() + 3
+    while (atomic_append.in_flight_sinks() or atomic_append.stalled_sinks()) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    atomic_append.flush(2)
+
+
+@pytest.mark.deliberate_wall_clock(reason="retained rows to a wedged sink must not starve a healthy sink, then land on release")
+def test_retained_rows_held_while_wedged_and_land_on_release(tmp_path, monkeypatch):
+    slow = tmp_path / "slow.jsonl"
+    gate = _wedge_one_sink(monkeypatch, str(slow))
+    try:
+        for i in range(4):
+            atomic_append.append_line_bounded(slow, f"r{i}\n".encode(), retain=True)
+        good = tmp_path / "good.jsonl"
+        atomic_append.append_line_bounded(good, b"g\n", retain=True)
+        atomic_append.flush(1.0)
+        assert good.read_bytes() == b"g\n"
+    finally:
+        gate.set()
+    _settle()
+    assert sorted(slow.read_bytes().split()) == [b"r0", b"r1", b"r2", b"r3"]
+    assert not atomic_append._held
+
+
+@pytest.mark.deliberate_wall_clock(reason="rows past _RETAIN_MAX are dropped with one stderr count line")
+def test_retained_rows_past_cap_are_dropped_and_counted(tmp_path, monkeypatch, capsys):
+    slow = tmp_path / "slow.jsonl"
+    monkeypatch.setattr(atomic_append, "_RETAIN_MAX", 2)
+    gate = _wedge_one_sink(monkeypatch, str(slow))
+    try:
+        for i in range(6):
+            atomic_append.append_line_bounded(slow, f"r{i}\n".encode(), retain=True)
+        atomic_append.flush(1.0)
+    finally:
+        gate.set()
+    _settle()
+    assert len(slow.read_bytes().split()) == 3
+    err = capsys.readouterr().err
+    assert err.count("retained lines dropped") == 1
+    assert "3 retained lines dropped" in err
+
+
 @pytest.mark.deliberate_wall_clock(reason="the drain worker must keep serving healthy sinks while one sink is blocked")
 def test_drain_worker_not_starved_by_blocked_sink(tmp_path, blocked_write, monkeypatch):
     monkeypatch.setattr(atomic_append, "_force_async", True)

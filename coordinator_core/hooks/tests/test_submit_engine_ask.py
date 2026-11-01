@@ -5,6 +5,7 @@ script, and the main loop's `Agent(sizing-scout)` is denied naming that call."""
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -959,8 +960,14 @@ def test_op_door_answers_the_wrapped_payload(tmp_path, monkeypatch):
     emit = _Emit()
     monkeypatch.setattr(mod, "_default_emit", emit)
     out = mod._handler({"payload": _payload(root, {"ask": "a"})})
-    assert _hso(out)["permissionDecision"] == "allow"
-    assert emit.calls
+    hso = _hso(out)
+    assert hso["permissionDecision"] == "allow"
+    assert emit.calls == []  # a plain ask premints and defers its emit into the run
+    run_id = re.search(r"run (ask-\S+?),", hso["permissionDecisionReason"]).group(1)
+    assert run_token._record_path(root, run_id).is_file()  # the premint marker
+    script = Path(hso["updatedInput"]["scriptPath"])
+    body = script.read_text(encoding="utf-8")
+    assert re.search(rf'preminted_run_id\\*"\s*:\s*\\*"{run_id}', body)  # the deferred emit adopts the minted id
 
 
 # --- warp_live: liveness ends with the harness's terminal notification --------------------

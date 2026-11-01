@@ -152,6 +152,24 @@ def _ready(text: str) -> Any:
     return ReadyCommand(text=text)
 
 
+_EXAMPLE_RETRIEVAL_REPO_HINT = (
+    "example-retrieval-repo serves this repo: use project_semantic_search, project_symbol, "
+    "project_referencers (via ToolSearch) for content lookups; grep is fine for literal text."
+)
+
+
+def _example_retrieval_repo_hint(payload: Optional[Dict[str, Any]] = None) -> str:
+    """The example-retrieval-repo recommendation sentence when a local signal shows the payload's
+    repo is served, else ''. File read only; never raises."""
+    try:
+        from coordinator_core.bash_guards._rag_serving import serves_repo
+
+        cwd = (payload or {}).get("cwd") or None
+        return _EXAMPLE_RETRIEVAL_REPO_HINT if serves_repo(cwd) else ""
+    except Exception:  # noqa: BLE001 -- a recommendation never turns a bug into a failure
+        return ""
+
+
 def _override(name: str, payload: Optional[Dict[str, Any]] = None) -> bool:
     """Inline-per-call env read -- NEVER hoist to module scope: each call site
     calls `_override("COORDINATOR_ALLOW_X", payload=...)` fresh, matching bash

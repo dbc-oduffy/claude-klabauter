@@ -567,11 +567,11 @@ class TestResolveSelfEmId:
     def test_matches_aliased_registered_repo(self, tmp_path, monkeypatch):
         self_repo = tmp_path / "example-game-workbench-repo"
         self_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"example_game_workbench_repo": self_repo})
+        claude_home = _make_claude_home(tmp_path, {"claude_unreal_holodeck": self_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            aliases=[{"shortname": "example-game-repo", "registryKey": "example_game_workbench_repo"}],
+            aliases=[{"shortname": "example-game-repo", "registryKey": "claude_unreal_holodeck"}],
         )
 
         assert resolve_self_em_id(self_repo) == "example-game-repo-em"

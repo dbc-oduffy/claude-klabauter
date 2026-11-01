@@ -64,15 +64,31 @@ class Snapshot:
     """One scoped ``git status`` read of the worktree: ``changed`` (modified, added,
     untracked, deleted or unmerged) and ``ignored`` (untracked and gitignored; an
     ignored directory is one entry with a trailing ``/``). It answers only for paths
-    it ``covers``: a requested literal path, or a path at or under a requested root."""
+    it ``covers``: a requested literal path, or a path at or under a requested root.
 
-    __slots__ = ("changed", "ignored", "literals", "roots")
+    A spawned read over roots or scope specs leaves ``ignored`` unread: ``ignored_among``
+    asks ``git check-ignore`` about the given paths only, and ``ignored`` reads the full
+    ``--ignored=matching`` status on first access."""
 
-    def __init__(self, changed: set, ignored: list, literals: set, roots: list) -> None:
+    __slots__ = ("changed", "_ignored", "literals", "roots", "_worktree_root", "_specs")
+
+    def __init__(
+        self, changed: set, ignored: Optional[list], literals: set, roots: list,
+        worktree_root: Optional[Path] = None, specs: Optional[list] = None,
+    ) -> None:
         self.changed = changed
-        self.ignored = ignored
+        self._ignored = ignored
         self.literals = literals
         self.roots = roots
+        self._worktree_root = worktree_root
+        self._specs = specs
+
+    @property
+    def ignored(self) -> list:
+        if self._ignored is None:
+            parsed = _spawn_status(self._worktree_root, self._specs, True)
+            self._ignored = parsed[1] if parsed is not None else []
+        return self._ignored
 
     def covers(self, path: str) -> bool:
         return path in self.literals or any(path == r or path.startswith(r + "/") for r in self.roots)
@@ -87,9 +103,54 @@ class Snapshot:
         return {p for p in self.changed if any(p == s or p.startswith(under) for s, under in bounds)}
 
     def ignored_among(self, paths: list) -> list:
+        if self._ignored is None:
+            probed = self._check_ignore(paths)
+            if probed is not None:
+                return probed
         dirs = [e for e in self.ignored if e.endswith("/")]
         files = set(self.ignored)
         return [p for p in paths if p in files or any(p.startswith(d) for d in dirs)]
+
+    def _check_ignore(self, paths: list) -> Optional[list]:
+        """The ``paths`` git ignores and does not track, or None when the probe failed."""
+        if not paths:
+            return []
+        result = run_git(
+            ["-C", str(self._worktree_root), "--no-optional-locks", "check-ignore", "-z", "--stdin"],
+            binary=True, input=b"\0".join(p.encode("utf-8", "surrogateescape") for p in paths) + b"\0",
+        )
+        if result.returncode not in (0, 1):
+            return None
+        hit = {raw.decode("utf-8", "surrogateescape") for raw in result.stdout_bytes.split(b"\0") if raw}
+        return [p for p in paths if p in hit]
+
+
+def _spawn_status(worktree_root: Path, specs: list, with_ignored: bool) -> Optional[tuple]:
+    """``(changed, ignored)`` from one ``git status`` spawn, or None when git failed."""
+    argv = [
+        "-C", str(worktree_root), "--no-optional-locks", "status",
+        "--porcelain=v2", "-z", "--no-renames", "--untracked-files=all",
+    ]
+    if with_ignored:
+        argv.append("--ignored=matching")
+    result = run_git([*argv, "--", *specs], binary=True)
+    if not result.ok:
+        return None
+    changed: set = set()
+    ignored: list = []
+    for raw in result.stdout_bytes.split(b"\0"):
+        if len(raw) < 3:
+            continue
+        kind = raw[:1]
+        fields = {b"1": 8, b"u": 10, b"?": 1, b"!": 1}.get(kind)
+        if fields is None:
+            continue
+        path = raw.split(b" ", fields)[fields].decode("utf-8", "surrogateescape")
+        if kind == b"!":
+            ignored.append(path)
+        else:
+            changed.add(path)
+    return changed, ignored
 
 
 def worktree_snapshot(
@@ -109,31 +170,13 @@ def worktree_snapshot(
         local = None
     if local is not None:
         return Snapshot(local[0], local[1], set(literals), roots)
-    result = run_git(
-        [
-            "-C", str(worktree_root), "--no-optional-locks", "status",
-            "--porcelain=v2", "-z", "--no-renames", "--untracked-files=all",
-            "--ignored=matching", "--", *specs,
-        ],
-        binary=True,
-    )
-    if not result.ok:
+    broad = bool(roots or scope_specs)
+    parsed = _spawn_status(worktree_root, specs, not broad)
+    if parsed is None:
         return None
-    changed: set = set()
-    ignored: list = []
-    for raw in result.stdout_bytes.split(b"\0"):
-        if len(raw) < 3:
-            continue
-        kind = raw[:1]
-        fields = {b"1": 8, b"u": 10, b"?": 1, b"!": 1}.get(kind)
-        if fields is None:
-            continue
-        path = raw.split(b" ", fields)[fields].decode("utf-8", "surrogateescape")
-        if kind == b"!":
-            ignored.append(path)
-        else:
-            changed.add(path)
-    return Snapshot(changed, ignored, set(literals), roots)
+    if broad:
+        return Snapshot(parsed[0], None, set(literals), roots, worktree_root, specs)
+    return Snapshot(parsed[0], parsed[1], set(literals), roots)
 
 
 def record_dir_changes(worktree_root: Path, record_dir_rel: str, changed: set) -> tuple[list, list]:

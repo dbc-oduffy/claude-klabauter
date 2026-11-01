@@ -148,7 +148,7 @@ def _installed_cli_names(bin_dir: Path) -> "set[str]":
 
 # `coordinator_registry` raises at IMPORT time (not just when `content_root()` is
 # called) when its manifest is unresolvable via any rung of its own
-# REPO_CONTENT_ROOT-env / machine-local-registry ladder — the
+# REPO_DOE_CLAUDE-env / machine-local-registry ladder — the
 # realistic version of persona 3 (a claude-klabauter developer with no
 # coordinator-content-repo sibling clone and no machine-local registry entry) hits exactly
 # this. A bare `import` would turn that into a collection ERROR for this

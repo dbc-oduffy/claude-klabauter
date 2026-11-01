@@ -558,3 +558,61 @@ def test_abandon_run_needs_no_plan_path_for_a_plan_less_run(tmp_path):
 
     assert out["abandoned"] is True
     assert halted_run._read(rdir)["status"] == halted_run.STATUS_CLOSED
+
+
+def _stale_run_with_journal(root: Path, home: Path, monkeypatch, *, journal_age: float) -> str:
+    """A 0a07cc-shaped run: stale records and run-stage, owning-session journal naming the run."""
+    from coordinator_core.group_em.idle_report import projects_dir_for
+
+    run_id = "warp-live-20261001T000000-aaaaaa"
+    session = "11111111-2222-3333-4444-555555555555"
+    old = ar.TOKENLESS_QUIET_SECONDS + 600
+    _record(root, run_id, age=old)
+    stage = root / "state" / "warp" / run_id / "run-stage.json"
+    stage.write_text(
+        json.dumps({"stage": "review", "session_id": session, "last_activity_at": "2020-01-01T00:00:00Z"}),
+        encoding="utf-8",
+    )
+    os.utime(stage, (time.time() - old, time.time() - old))
+    wf = Path(projects_dir_for(str(root), str(home))) / session / "workflows"
+    wf.mkdir(parents=True)
+    journal = wf / "wf_1.json"
+    journal.write_text(json.dumps({"run": run_id}), encoding="utf-8")
+    os.utime(journal, (time.time() - journal_age, time.time() - journal_age))
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(home))
+    return run_id
+
+
+def test_run_with_fresh_owning_workflow_journal_but_stalled_stage_is_reaped(bare, tmp_path, monkeypatch):
+    run_id = _stale_run_with_journal(bare, tmp_path / "home", monkeypatch, journal_age=60)
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [run_id]
+
+
+def test_run_with_fresh_own_stage_activity_is_skipped_live_workflow(bare, tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+
+    from coordinator_core.session import liveness
+
+    run_id = _stale_run_with_journal(bare, tmp_path / "home", monkeypatch, journal_age=60)
+    stage = bare / "state" / "warp" / run_id / "run-stage.json"
+    data = json.loads(stage.read_text(encoding="utf-8"))
+    data["last_activity_at"] = datetime.now(timezone.utc).isoformat()
+    stage.write_text(json.dumps(data), encoding="utf-8")
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: True)
+
+    out = _reap(bare)
+
+    assert out["reaped"] == []
+    assert {"run_id": run_id, "reason": "live-workflow"} in out["skipped"]
+    assert not _committed_names(bare) & {f"state/warp/{run_id}/ask.md"}
+
+
+def test_run_with_stale_owning_workflow_journal_is_still_reaped(bare, tmp_path, monkeypatch):
+    run_id = _stale_run_with_journal(bare, tmp_path / "home", monkeypatch, journal_age=7200)
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [run_id]

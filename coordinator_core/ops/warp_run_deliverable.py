@@ -158,6 +158,8 @@ def _halted(root: Path, run_id: str) -> bool:
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
+        if halted_run.fresh_index_entry(record_dir(root, run_id)) is not None:
+            return True
         marker = halted_run.read_strict_run(record_dir(root, run_id))
     except halted_run.UnreadableHaltRecord:
         return True
@@ -275,10 +277,35 @@ def _stamp_epoch(value: object) -> Optional[float]:
     return parsed.timestamp()
 
 
+def _freshest_run_artifact_epoch(root: Path, run_id: str) -> Optional[float]:
+    """Newest mtime among the entries of the run's record dir and scratch run dir, plus the mtime of
+    each subdirectory there (a file added under it bumps it); `halted.json` and `run-stage.json` (the
+    stamp is read separately) excluded. A launcher that drives a child's stages leaves its writes
+    here while the child's own `run-stage.json` stays at `minted`. None when neither dir is
+    readable. Stat calls only."""
+    import os
+
+    newest: Optional[float] = None
+    for base in (record_dir(root, run_id), Path(root) / RUN_DIR_ROOT / run_id):
+        try:
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    if entry.name in ("halted.json", "run-stage.json"):
+                        continue
+                    mtime = entry.stat().st_mtime
+                    if newest is None or mtime > newest:
+                        newest = mtime
+        except OSError:
+            continue
+    return newest
+
+
 def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bool:
-    """True when the run's `run-stage.json` reads `minted` with `last_activity_at` (else
-    `started_at`) older than `MINTED_STALE_SECONDS`. An absent or malformed stage record, any other
-    stage, or no parseable stamp is not stale. One file read."""
+    """True when the run's `run-stage.json` reads `minted` with its freshest activity older than
+    `MINTED_STALE_SECONDS`. Freshest activity is the later of the stage stamp (`last_activity_at`,
+    else `started_at`) and the newest artifact the launcher left in the run's record/scratch dirs
+    (`_freshest_run_artifact_epoch`). An absent or malformed stage record, any other stage, or no
+    parseable stamp is not stale."""
     import time
 
     from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
@@ -291,6 +318,9 @@ def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bo
         seen = _stamp_epoch(stage.get("started_at"))
     if seen is None:
         return False
+    artifact = _freshest_run_artifact_epoch(root, run_id)
+    if artifact is not None and artifact > seen:
+        seen = artifact
     return (time.time() if now is None else now) - seen > MINTED_STALE_SECONDS
 
 
@@ -509,6 +539,23 @@ def halted_run_write_claims(
         )
 
 
+def _index_clear(root: Path, run_id: str, wanted: set) -> bool:
+    """True when `run_id`'s fresh `halted_withheld_index` entry shows neither its withheld paths nor its
+    declared footprint cover any of `wanted`, and it left no `commit-request.txt` (the footprint the entry
+    does not carry): such a run claims none of them, so its marker is never opened. Absent, stale or
+    covering entries are False, and the caller reads the marker."""
+    from coordinator_core.ops.dispatch_emit import halted_run, run_ownership
+
+    try:
+        rdir = record_dir(root, run_id)
+        entry = halted_run.fresh_index_entry(rdir)
+        if entry is None or (root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE).exists():
+            return False
+    except (OSError, ValueError):
+        return False
+    return not any(run_ownership._covers(w, c) for w in (*entry.paths, *entry.declared) for c in wanted)
+
+
 def _halted_claims(
     root: Path, wanted: set, names: list, exclude_run: Optional[str], moment: float, own_plan: Optional[str],
     dirty, attributable, halted_hold_release, stopped_runs,
@@ -525,6 +572,8 @@ def _halted_claims(
         stamp = stopped_runs._stamp_epoch(run_id)
         if stamp is None or moment - stamp > run_token.TTL_SECONDS:
             continue
+        if _index_clear(root, run_id, wanted):
+            continue
         if _halted(root, run_id):
             halted_ids.append(run_id)
     plans = []
@@ -539,7 +588,8 @@ def _halted_claims(
     halted_hold_release.prefetch_kept_blobs(root, plans)
     for run_id in halted_ids:
         try:
-            halted_run.read_strict_run(record_dir(root, run_id))
+            if halted_run.fresh_index_entry(record_dir(root, run_id)) is None:
+                halted_run.read_strict_run(record_dir(root, run_id))
         except halted_run.UnreadableHaltRecord as exc:
             for path in wanted:
                 claims.setdefault(path, set()).add(exc.reason)

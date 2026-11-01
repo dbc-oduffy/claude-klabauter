@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+from coordinator_core.ue_project_detection import LOCAL_MD_RELPATHS
 
 ROUTE_TABLE_RELPATH = ".claude/route-table.json"
 
@@ -608,40 +609,105 @@ def _route_one(
     return row, route, decision.note
 
 
-LOCAL_MD_RELPATH = "coordinator.local.md"
-_REVIEW_ROUTING_RE = re.compile(r"^review_routing\s*:\s*(.*?)\s*$")
 _PLUGIN_AGENT_RE = re.compile(r"^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
 _REVIEW_ROUTED_STAGES = ("plan_review", "code_review")
+#: Plan and code reviewer of a UE repo when nothing more specific routes the stage.
+UE_STAFF_REVIEWER = "game-dev:staff-game-dev"
+_FILE_SUFFIX_RE = re.compile(r"\.[A-Za-z0-9]+$")
+_TOKEN_EDGE = "\"'()[]{}<>,;:."
 
 
-def read_review_routing(repo_root: "str | os.PathLike[str]") -> Optional[str]:
-    """`review_routing` from the frontmatter of `<repo>/coordinator.local.md`, or `None`.
-
-    `None` for an absent file, no frontmatter, an absent key or a blank value. Raises
-    `RouteTableError` when the value is not a `plugin:agent` string.
-    """
-    path = Path(repo_root) / LOCAL_MD_RELPATH
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
+def _frontmatter_block(text: str) -> Optional[str]:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return None
-    for line in lines[1:]:
+    for i, line in enumerate(lines[1:], start=1):
         if line.strip() == "---":
-            return None
-        m = _REVIEW_ROUTING_RE.match(line)
-        if m is None:
+            return "\n".join(lines[1:i])
+    return None
+
+
+def _routing_value(path: Path) -> Any:
+    """The raw `review_routing` value of one candidate file, `None` when it does not carry the key."""
+    try:
+        block = _frontmatter_block(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+    if block is None or "review_routing" not in block:
+        return None
+    import yaml
+
+    try:
+        data = yaml.safe_load(block)
+    except yaml.YAMLError as exc:
+        raise RouteTableError(_where(path, f"frontmatter is not valid YAML: {exc}")) from exc
+    if not isinstance(data, dict):
+        return None
+    value = data.get("review_routing")
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def _glob_hits(norm_writes: Sequence[str], pattern: str) -> bool:
+    # fnmatch's `**/` needs a `/`, so a root-level file would miss a `**/x` pattern; try the remainder too.
+    pats = (pattern, pattern[3:]) if pattern.startswith("**/") else (pattern,)
+    return any(fnmatch.fnmatchcase(w, p) for p in pats for w in norm_writes)
+
+
+def _path_tokens(text: str) -> list[str]:
+    """Whitespace/backtick-split tokens of `text` that look like paths: contain `/` or end in a suffix."""
+    out: list[str] = []
+    for raw in re.split(r"[\s`]+", text):
+        tok = raw.lstrip("\"'([{<").rstrip(_TOKEN_EDGE)
+        if tok and ("/" in tok or _FILE_SUFFIX_RE.search(tok)):
+            out.append(tok)
+    return out
+
+
+def read_review_routing(
+    repo_root: "str | os.PathLike[str]", writes: Sequence[str] = ()
+) -> Optional[str]:
+    """`review_routing` from the frontmatter of `<repo>/.claude/coordinator.local.md`, else of
+    `<repo>/coordinator.local.md` (`LOCAL_MD_RELPATHS`); the first file carrying a non-blank key wins.
+
+    Scalar form: a `plugin:agent` string, returned whatever `writes` is. List form: entries
+    `{paths: [glob], reviewer: plugin:agent}`; returns the reviewer of the first entry whose glob
+    matches any of `writes` (matched as `match_work_class` matches), `None` when none does or
+    `writes` is empty. `None` for an absent file, no frontmatter, an absent key or a blank value.
+    Raises `RouteTableError` for a malformed value.
+    """
+    norm = [_posix(w) for w in writes]
+    for rel in LOCAL_MD_RELPATHS:
+        path = Path(repo_root) / rel
+        value = _routing_value(path)
+        if value is None:
             continue
-        value = m.group(1)
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        if not value or value == "null":
-            return None
-        if not _PLUGIN_AGENT_RE.match(value):
-            raise RouteTableError(_where(path, f"review_routing must be a plugin:agent string, got {value!r}"))
-        return value
+        if isinstance(value, str):
+            if not _PLUGIN_AGENT_RE.match(value):
+                raise RouteTableError(_where(path, f"review_routing must be a plugin:agent string, got {value!r}"))
+            return value
+        if not isinstance(value, list):
+            raise RouteTableError(
+                _where(path, f"review_routing must be a plugin:agent string or a list, got {value!r}")
+            )
+        hit: Optional[str] = None
+        for i, entry in enumerate(value):
+            at = f"review_routing[{i}]"
+            if not isinstance(entry, dict):
+                raise RouteTableError(_where(path, f"{at} must be a mapping with paths and reviewer"))
+            paths, reviewer = entry.get("paths"), entry.get("reviewer")
+            if (
+                not isinstance(paths, list)
+                or not paths
+                or not all(isinstance(p, str) and p for p in paths)
+            ):
+                raise RouteTableError(_where(path, f"{at}.paths must be a non-empty list of strings"))
+            if not isinstance(reviewer, str) or not _PLUGIN_AGENT_RE.match(reviewer):
+                raise RouteTableError(_where(path, f"{at}.reviewer must be a plugin:agent string, got {reviewer!r}"))
+            if hit is None and any(_glob_hits(norm, p) for p in paths):
+                hit = reviewer
+        return hit
     return None
 
 
@@ -653,14 +719,22 @@ def resolve_stage_agents(
     defaults: dict[str, str],
 ) -> dict[str, tuple[str, str]]:
     """Per stage in `STAGES`: `(agent_type, source)` with source `work-class:<id>`, `table`,
-    `review_routing` or `default`.
+    `review_routing`, `ue-default` or `default`.
 
     Order: first work class carrying `stage_agents[stage]` that matches `writes` or `ask_text`, then
     the table's `stage_agents[stage]`, then `review_routing` (plan_review and code_review only), then
-    `defaults[stage]`. Model resolution is the caller's (`_model_of`).
+    `UE_STAFF_REVIEWER` for a UE repo (plan_review and code_review only), then `defaults[stage]`.
+    Model resolution is the caller's (`_model_of`).
+
+    `review_routing` is read from `.claude/coordinator.local.md` then `coordinator.local.md`, in its
+    scalar or path-glob list form (see `read_review_routing`). The list form matches `writes`; when
+    `writes` is empty it matches the path-like tokens of `ask_text` instead.
     """
     table = load_route_table(repo_root)
-    review = read_review_routing(repo_root)
+    review = read_review_routing(repo_root, writes or _path_tokens(ask_text))
+    from coordinator_core.ops.dispatch_emit import ue_route_source
+
+    ue = ue_route_source.is_ue_repo(repo_root)
     out: dict[str, tuple[str, str]] = {}
     for stage in STAGES:
         resolved: Optional[tuple[str, str]] = None
@@ -676,6 +750,8 @@ def resolve_stage_agents(
                 resolved = (table.stage_agents[stage], "table")
         if resolved is None and review is not None and stage in _REVIEW_ROUTED_STAGES:
             resolved = (review, "review_routing")
+        if resolved is None and stage in _REVIEW_ROUTED_STAGES and ue:
+            resolved = (UE_STAFF_REVIEWER, "ue-default")
         out[stage] = resolved or (defaults[stage], "default")
     return out
 

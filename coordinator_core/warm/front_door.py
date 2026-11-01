@@ -140,6 +140,9 @@ __all__ = [
     "door_health_payload",
     "is_own_door_health_payload",
     "probe_existing_holder",
+    "STOP_PATH",
+    "STOP_ASK_TIMEOUT_SECS",
+    "ask_front_door_to_stop",
     "elect_front_door",
     "DISCOVERY_FILENAME",
     "SPAWN_DEBOUNCE_SECS",
@@ -341,6 +344,64 @@ def probe_existing_holder(
     if not is_own_door_health_payload(payload):
         return None
     return payload
+
+
+#: Local-only stop entry: POST here makes the door stop accepting, drain its
+#: in-flight relays, then exit (`lifecycle.begin_shutdown`).
+STOP_PATH = "/warm/stop"
+
+_LOOPBACK_PEERS = ("127.0.0.1", "::1")
+
+#: Budget for the stop ask: the door answers before it drains, so this bounds
+#: the ask, not the drain.
+STOP_ASK_TIMEOUT_SECS = 2.0
+
+
+def ask_front_door_to_stop(
+    record: Optional[dict],
+    *,
+    timeout: float = STOP_ASK_TIMEOUT_SECS,
+    opener: Any = None,
+) -> bool:
+    """POST the stop ask to the door `record` (its discovery record) names.
+
+    True iff the holder answered 2xx with a conforming door payload
+    (`is_own_door_health_payload`) and `stopping: true`; the caller then waits
+    for the pid to exit. False on a missing port, a refusal, a foreign
+    answer or any transport failure -- the caller's cue to signal the pid.
+    Sends the door credential (`door_credential.read_secret`); the door
+    refuses an ask without it. Never raises. `opener` is a `urllib.request.urlopen`-shaped seam.
+    """
+    import urllib.request
+
+    if not isinstance(record, dict):
+        return False
+    port = record.get("port")
+    if not isinstance(port, int):
+        return False
+    body = json.dumps({"pid": record.get("pid")}).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    secret = door_credential.read_secret()
+    if secret:
+        headers[door_credential.CREDENTIAL_HEADER] = secret
+    request = urllib.request.Request(
+        f"http://{bind_host()}:{port}{STOP_PATH}",
+        data=body,
+        method="POST",
+        headers=headers,
+    )
+    open_url = opener if opener is not None else urllib.request.urlopen
+    try:
+        with open_url(request, timeout=timeout) as resp:
+            status = getattr(resp, "status", None)
+            if status is None:
+                status = resp.getcode()
+            if not (200 <= int(status) < 300):
+                return False
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 -- an ask must never raise, see docstring
+        return False
+    return is_own_door_health_payload(payload) and payload.get("stopping") is True
 
 
 def _apply_exclusivity(sock: socket.socket) -> None:
@@ -1165,9 +1226,16 @@ class _FrontDoorContext:
     demonstrates, rather than a second shutdown shape being invented then.
     """
 
-    def __init__(self, *, httpd: Any, engine_root: Optional[Path]) -> None:
+    def __init__(
+        self,
+        *,
+        httpd: Any,
+        engine_root: Optional[Path],
+        exit_fn: Any = os._exit,
+    ) -> None:
         self.httpd = httpd
         self.engine_root = engine_root
+        self.exit_fn = exit_fn
         self.in_flight = InFlightCounter()
         self.dials = DialCounter(engine_root=engine_root)
         self.door_key = self._boot_credential()
@@ -1223,6 +1291,7 @@ class _FrontDoorContext:
             close_listener=self.close_listener,
             in_flight_count=self.in_flight,
             ctx_shutdown=self.ctx_shutdown,
+            exit_fn=self.exit_fn,
         )
 
 
@@ -1289,7 +1358,54 @@ def _make_handler(ctx: "_FrontDoorContext"):
             self.end_headers()
             self.wfile.write(body)
 
+        def _answer_stop(self) -> None:
+            """The local-only stop entry (`STOP_PATH`). Refuses a non-loopback
+            peer, a missing or wrong door credential, and a body naming
+            another pid; otherwise answers
+            `stopping: true` and starts the drain-then-exit sequence on its own
+            thread, so the reply is on the wire before the listener closes."""
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            raw = self.rfile.read(length) if length > 0 else b""
+            if self.client_address[0] not in _LOOPBACK_PEERS:
+                self._answer({"stopping": False, "reason": "not_local"}, status=403)
+                return
+            try:
+                asked = json.loads(raw.decode("utf-8")) if raw else {}
+            except (ValueError, UnicodeDecodeError):
+                asked = {}
+            presented = door_credential.credential_from_headers(self.headers)
+            if not door_credential.verify(presented, ctx.door_key):
+                self._answer({"stopping": False, "reason": "credential_invalid"}, status=403)
+                return
+            pid = asked.get("pid") if isinstance(asked, dict) else None
+            if pid != os.getpid():
+                self._answer({"stopping": False, "reason": "pid_mismatch"}, status=409)
+                return
+            self._answer({**door_health_payload(), "stopping": True})
+            threading.Thread(target=ctx.stop, name="front-door-stop", daemon=False).start()
+
         def do_POST(self) -> None:  # noqa: N802 -- stdlib-mandated name
+            """Count the whole relay as in flight, so a stop ask drains it.
+
+            `enter`/`exit`, not `with`: `InFlightCounter` exposes those names
+            rather than the context-manager protocol, and this is the counter
+            `warm.lifecycle` polls to know a drain has finished. The count opens
+            before the body is read, so a relay `begin_shutdown` finds mid-read
+            is drained too.
+            """
+            if self.path.rstrip("/") == STOP_PATH:
+                self._answer_stop()
+                return
+            ctx.in_flight.enter()
+            try:
+                self._relay()
+            finally:
+                ctx.in_flight.exit()
+
+        def _relay(self) -> None:
             """Authenticate, resolve, forward -- in that order, and the order
             is the point (AC17).
 
@@ -1337,16 +1453,9 @@ def _make_handler(ctx: "_FrontDoorContext"):
                 self._answer(front_door_routing.unroutable_response(resolution, event))
                 return
 
-            # `enter`/`exit`, not `with`: `InFlightCounter` exposes those
-            # names rather than the context-manager protocol, and this is the
-            # counter `warm.lifecycle` polls to know a drain has finished.
-            ctx.in_flight.enter()
-            try:
-                forwarded = front_door_routing.forward_request(
-                    resolution, self.path, body
-                )
-            finally:
-                ctx.in_flight.exit()
+            forwarded = front_door_routing.forward_request(
+                resolution, self.path, body
+            )
             if forwarded is None:
                 # The route resolved but the hop did not land. Reported as the
                 # no-listener fact rather than a fifth vocabulary: from the

@@ -13,6 +13,7 @@ from typing import Any, Optional
 REPAIR_CITATION = "premise-citation-corrected"
 REPAIR_FALSIFIER = "uncheckable-to-falsifier-row"
 REPAIR_REGISTER_PIN = "register-pin-missing"
+REPAIR_REGISTER_UNCLAIMED = "register-rows-unclaimed"
 
 _CORRECTED = re.compile(r"(?i)\bcorrected\s*:\s*(?:`([^`]+)`|(\S+))")
 _TRAILING = ".,;:)]}\"'"
@@ -40,13 +41,21 @@ def convertible(row: Any) -> bool:
     return isinstance(row, dict) and row.get("verdict") == "UNCHECKABLE"
 
 
-def falsifier_task(anchor_id: str, claim: str, next_id: str) -> dict:
+def falsifier_task(anchor_id: str, claim: str, next_id: str, register_rows: Optional[list] = None) -> dict:
     """A plan-tasks row that restates ``claim`` as an execution-time check.
 
     ``performer: em`` is load-bearing: an executor row that writes nothing and runs a check is
-    refused by prep_gate's test-runner-out-of-role-row finding.
+    refused by prep_gate's test-runner-out-of-role-row finding. ``register_rows`` (a claimed id
+    when the plan carries ``register_claims``) keeps prep_gate's register-citations check passing.
     """
     claim = " ".join(str(claim).split())
+    row = _falsifier_row(anchor_id, claim, next_id)
+    if register_rows:
+        row["register_rows"] = list(register_rows)
+    return row
+
+
+def _falsifier_row(anchor_id: str, claim: str, next_id: str) -> dict:
     return {
         "id": next_id,
         "title": f"Execution-time falsifier for premise {anchor_id}",

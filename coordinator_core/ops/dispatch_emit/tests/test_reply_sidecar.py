@@ -21,8 +21,15 @@ def _manifest(rows: int = 40) -> dict:
     }
 
 
+def _plain_script(root, run_id="run1"):
+    script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("export const meta = { name: 'x' }\nreturn 1;\n", encoding="utf-8")
+
+
 @pytest.fixture
 def sidecar(tmp_path):
+    _plain_script(tmp_path)
     path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
     handle = rs.write_reply(tmp_path, path, _manifest())
     return tmp_path, path, handle
@@ -264,9 +271,40 @@ def test_write_reply_and_handle_for_leave_the_staged_twin_beside_a_slotted_scrip
     assert twin.is_file()
 
 
-def test_write_reply_without_a_script_leaves_no_twin(sidecar):
-    root, _, handle = sidecar
-    assert not list(root.glob("scratch/warp/*staged*"))
+def test_write_reply_refuses_by_name_when_the_twin_cannot_be_written(tmp_path):
+    twin_rel = _slotted_script(tmp_path)
+    path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
+    handle = rs.write_reply(tmp_path, path, _manifest())
+    twin = tmp_path / twin_rel("run1", handle["sha256"])
+    twin.unlink()
+    twin.mkdir()
+    with pytest.raises(rs.ReplySidecarError, match="staged twin write failed"):
+        rs.write_reply(tmp_path, path, _manifest())
+    with pytest.raises(rs.ReplySidecarError, match="staged twin write failed"):
+        rs.handle_for(tmp_path, path)
+
+
+def test_write_reply_for_a_slotless_script_writes_with_no_twin_and_no_refusal(tmp_path):
+    _plain_script(tmp_path)
+    path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
+    handle = rs.write_reply(tmp_path, path, _manifest())
+    assert path.is_file() and handle["path"].endswith("manifest.json")
+    assert not list(tmp_path.glob("scratch/warp/*staged*"))
+
+
+def test_write_reply_for_a_non_run_sidecar_needs_no_script(tmp_path):
+    path = tmp_path / "scratch" / "other" / "x.json"
+    handle = rs.write_reply(tmp_path, path, _manifest())
+    assert path.is_file() and handle["path"] == "scratch/other/x.json"
+
+
+def test_write_reply_and_handle_for_without_a_run_script_refuse_by_name(tmp_path):
+    path = tmp_path / "state" / "warp" / "runx" / "manifest.json"
+    with pytest.raises(rs.ReplySidecarError, match="staged twin write failed: run script 'runx.workflow.mjs' is absent"):
+        rs.write_reply(tmp_path, path, _manifest())
+    with pytest.raises(rs.ReplySidecarError, match="staged twin write failed"):
+        rs.handle_for(tmp_path, path)
+    assert not list(tmp_path.glob("scratch/warp/*staged*"))
 
 
 def test_check_relay_default_cause_unchanged():

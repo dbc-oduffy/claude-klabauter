@@ -219,6 +219,7 @@ KNOWN_ROW_KEYS = frozenset({
     "memo_kind", "delivered_via", "case_against", "kind", "pm_approved", "pm_approved_by",
     "pm_disposition", "receipt", "blocked_on", "host", "appends", "falsifier_review_of",
     "satisfies", "verification_runs", "done_when", "disjoint_parallel", "premise_close",
+    "em_run",
 })
 
 def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bool) -> Optional[dict]:

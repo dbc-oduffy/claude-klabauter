@@ -19,6 +19,7 @@ from typing import Callable, Iterator, Mapping, Sequence
 import yaml
 
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
     LEDGER_HALT_KIND,
@@ -93,20 +94,41 @@ def sizing_memo() -> Iterator[None]:
         _SIZING_MEMO.reset(token)
 
 
+_ARCHIVE_SIZINGS_SUBDIR = ("archive", "sizings")
+
+
+def _regular_stat(p: Path):
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return st if stat.S_ISREG(st.st_mode) else None
+
+
 def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
-    """Read a sizing YAML contained under `<repo_root>/state/sizings/`."""
+    """Read a sizing YAML under `<repo_root>/state/sizings/`, else its archived copy.
+
+    A miss at the hot path resolves through `resolve_sizing_citation` into `archive/sizings/`;
+    an archived sizing is terminal, so this is a read-only path.
+    """
     root = Path(repo_root)
     p = Path(sizing_rel)
     if not p.is_absolute():
         p = root / p
-    p = contained_path(p, [Path(record_homes.home_dir(str(root), "sizings"))])
+    hot_home = Path(record_homes.home_dir(str(root), "sizings"))
+    archive_home = root.joinpath(*_ARCHIVE_SIZINGS_SUBDIR)
+    requested = p
+    p = contained_path(requested, [hot_home, archive_home])
     if p is None:
         raise SizingFireRefused([f"sizing escapes state/sizings/: {sizing_rel!r}"])
-    try:
-        st = p.stat()
-    except OSError:
-        st = None
-    if st is None or not stat.S_ISREG(st.st_mode):
+    st = _regular_stat(p)
+    if st is None:
+        archived = resolve_sizing_citation(root, record_homes.record_path(str(root), "sizings", p.name))
+        archived = contained_path(archived, [archive_home]) if archived is not None else None
+        if archived is not None:
+            p = archived
+            st = _regular_stat(p)
+    if st is None:
         raise SizingFireRefused([f"sizing-object not found on disk: {sizing_rel}"])
     memo = _SIZING_MEMO.get()
     key = (str(p), st.st_mtime_ns, st.st_size)

@@ -32,9 +32,9 @@ CONTENT_ROOT_KEY = "repos.content_root"
 POINTER_NAME = ".coordinator-content-root"
 
 # compat-fallback: names read only so pre-rename boxes keep resolving.
-_LEGACY_KEY = "repos.content_root"  # private-name-ok: compat-fallback
+_LEGACY_KEY = "repos.doe_claude"  # private-name-ok: compat-fallback
 _LEGACY_POINTER = ".coordinator-content-root"  # private-name-ok: compat-fallback
-_LEGACY_ENGINE_KEY = "engine.working_repos.content_root"  # private-name-ok: compat-fallback
+_LEGACY_ENGINE_KEY = "engine.working_repos.doe_claude"  # private-name-ok: compat-fallback
 ENGINE_CONTENT_ROOT_KEY = "engine.working_repos.content_root"
 
 

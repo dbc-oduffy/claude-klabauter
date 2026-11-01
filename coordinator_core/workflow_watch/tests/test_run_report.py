@@ -114,9 +114,30 @@ def test_split_model_usd_and_run_total_rendered(tmp_path):
     assert abs(report["run_total"]["usd"] - 0.0246) < 1e-9
     text = run_report.render(report)
     assert "run total: 4020 tok, $0.0246" in text
+    assert report["run_total"]["rag_uptake"] == {
+        "searching_agents": 0, "rag_agents": 0, "fallback_agents": 0, "ratio": None}
+    assert "rag uptake: 0/0 searching agent(s)" in text
     assert "claude-opus-5-5: 1 agent(s)" in text
     for col in ("cache_r", "cache_w", "est_$"):
         assert col in text
+
+
+def test_report_lists_per_agent_rag_use_and_fallback(tmp_path):
+    def write(agent_id, blocks):
+        event = {"type": "assistant", "timestamp": "2026-10-16T10:00:00Z", "requestId": "r",
+                 "message": {"id": "m", "model": "claude-opus-5-5",
+                             "usage": _usage(1, 0, 0, 1), "content": blocks}}
+        (tmp_path / f"agent-{agent_id}.jsonl").write_text(json.dumps(event) + "\n", encoding="utf-8")
+
+    write("g", [{"type": "tool_use", "id": "t1", "name": "Grep", "input": {}}])
+    write("r", [{"type": "tool_use", "id": "t1", "name": "mcp__project-rag__project_symbol", "input": {}}])
+    report = run_report.build_report(_journal(tmp_path, [("g", "plain"), ("r", "ragger")]))
+    rows = {r["label"]: r for r in report["rows"]}
+    assert rows["plain"]["rag_calls"] == 0 and rows["plain"]["search_calls"] == 1
+    assert rows["ragger"]["rag_calls"] == 1
+    text = run_report.render(report)
+    assert "plain: rag=0 failed=0 search=1" in text
+    assert "ragger: rag=1 failed=0 search=0" in text
 
 
 def test_forty_agent_report_is_fast_and_spawns_nothing(tmp_path, monkeypatch):

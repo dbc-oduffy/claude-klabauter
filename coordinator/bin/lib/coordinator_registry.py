@@ -31,14 +31,14 @@ Shared identity-resolution functions (canonical, importable by all 4 CLIs):
   _same_path(a, b)                               — internal path-equality helper, importable by the CLIs that need direct comparison
 
 Shared state-root resolver (canonical, importable by all doctrine CLIs):
-  content_root()                     — coordinator content repo root (env REPO_CONTENT_ROOT
+  content_root()                     — coordinator content repo root (env REPO_DOE_CLAUDE
                                         FIRST, so the documented override is a real override;
                                         THEN machine-local repos.content_root (the canonical
                                         anchor), THEN the codename-free rungs: content-root
                                         pointer → marketplace cache → flat plugin layout →
                                         CLAUDE_PLUGIN_ROOT (normalized, state/-gated) →
                                         registry live_path (normalized, state/-gated) → raise.
-                                        REPO_CONTENT_ROOT is the documented override (ambient,
+                                        REPO_DOE_CLAUDE is the documented override (ambient,
                                         shell-exported by the engine repo's install surface).
                                         The codename-free ladder must rank BELOW the registry
                                         per DR-071 — see content_root()'s own docstring.
@@ -324,7 +324,7 @@ def _load_manifest() -> dict:
     """
     _manifest_path = _MANIFEST_PATH_DEFAULT
     if not os.path.exists(_manifest_path):
-        _doe = os.environ.get("REPO_CONTENT_ROOT", "").strip()
+        _doe = os.environ.get("REPO_DOE_CLAUDE", "").strip()
         if not _doe:
             _doe = _mlir_registry_get("repos.content_root") or ""
         if not _doe:
@@ -378,9 +378,9 @@ def _load_manifest() -> dict:
     except FileNotFoundError as _e:
         raise FileNotFoundError(
             f"coordinator_registry: manifest not found at {_manifest_path!r}, and no "
-            "REPO_CONTENT_ROOT-resolvable candidate located one either. "
+            "REPO_DOE_CLAUDE-resolvable candidate located one either. "
             "This is an install-integrity failure — ensure the coordinator plugin is "
-            "fully installed, or set REPO_CONTENT_ROOT to the schemas-hosting repo's root."
+            "fully installed, or set REPO_DOE_CLAUDE to the schemas-hosting repo's root."
         ) from _e
     except json.JSONDecodeError as _e:
         raise ValueError(
@@ -538,9 +538,9 @@ def em_id_for_root(root: str | None, repo_key_paths: dict[str, str]) -> str:
 
 # CONCERN-BOUNDARY: content_root() (state-root axis) is INDEPENDENT of
 
-# Env var for REPO_CONTENT_ROOT override — the documented, ambient name. Every
-# hatch. Guard form: os.environ.get(_REPO_CONTENT_ROOT_ENV, "").strip() — non-empty string wins.
-_REPO_CONTENT_ROOT_ENV = "REPO_CONTENT_ROOT"
+# Env var for REPO_DOE_CLAUDE override — the documented, ambient name. Every
+# hatch. Guard form: os.environ.get(_REPO_DOE_CLAUDE_ENV, "").strip() — non-empty string wins.
+_REPO_DOE_CLAUDE_ENV = "REPO_DOE_CLAUDE"
 
 # _REGISTRY_MACHINE_LOCAL_IMPL_ENV is defined earlier, ahead of the manifest
 # _REGISTRY_CLAUDE_HOME_ENV constant was deleted here: dead since
@@ -548,7 +548,7 @@ _REPO_CONTENT_ROOT_ENV = "REPO_CONTENT_ROOT"
 
 
 class _DoeUnresolvable(RuntimeError):
-    """Raised when the content root cannot be resolved via env var (REPO_CONTENT_ROOT)
+    """Raised when the content root cannot be resolved via env var (REPO_DOE_CLAUDE)
     or machine-local registry.
 
     Callers in the doctrine central write loop catch this and degrade gracefully
@@ -577,7 +577,7 @@ def content_root() -> str:
 
     Resolution chain — Review: staff-eng MAJOR-4 put the explicit env-var
     override rung FIRST, ahead of the codename-free rungs, restoring
-    "REPO_CONTENT_ROOT is the documented override" as true fact (an
+    "REPO_DOE_CLAUDE is the documented override" as true fact (an
     operator's stated intent cannot be present by accident; ambient
     file/registry state must not outrank it).
 
@@ -589,8 +589,8 @@ def content_root() -> str:
     scrubbed plugin cache) silently outranked the registry's correctly
     registered content tree.
 
-      1.  REPO_CONTENT_ROOT env var — the documented, ambient override name every
-          coordinator_core referent binds (see _REPO_CONTENT_ROOT_ENV above). If
+      1.  REPO_DOE_CLAUDE env var — the documented, ambient override name every
+          coordinator_core referent binds (see _REPO_DOE_CLAUDE_ENV above). If
           non-empty, trusted as-is.
       2.  machine-local get repos.content_root — the DR-071 canonical,
           authoritative coordinator-root anchor. Delegates to the §4c
@@ -652,7 +652,7 @@ def content_root() -> str:
     Spec backlink: coordinator-content-repo:pln-gate-2-w2-3-live-caller-switch-3e51cf § C1
     Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
     """
-    override = os.environ.get(_REPO_CONTENT_ROOT_ENV, "").strip()
+    override = os.environ.get(_REPO_DOE_CLAUDE_ENV, "").strip()
     if override:
         return override
 
@@ -689,5 +689,5 @@ def content_root() -> str:
 
     raise _DoeUnresolvable(
         "repos.content_root not set in machine-local registry and "
-        "REPO_CONTENT_ROOT env var not set"
+        "REPO_DOE_CLAUDE env var not set"
     )

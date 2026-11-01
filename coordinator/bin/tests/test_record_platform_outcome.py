@@ -174,7 +174,7 @@ def _setup_surface(tmp_path):
 def _run_cli(surface_root, *, surface: str, command: str, exit_code: int) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["MACHINE_LOCAL_REPOS_CONTENT_ROOT"] = surface_root
-    env["REPO_CONTENT_ROOT"] = surface_root
+    env["REPO_DOE_CLAUDE"] = surface_root
     env["COORDINATOR_MACHINE"] = "test-machine"
     # Isolate the machine-local registry rung so a real developer machine's
     # coordinator.machine_slug can never leak in and override COORDINATOR_MACHINE
@@ -266,10 +266,10 @@ def test_content_root_unresolvable_errors_cleanly(tmp_path) -> None:
     surface_root, _surface_sha = _setup_surface(tmp_path)
     env = dict(os.environ)
     env.pop("MACHINE_LOCAL_REPOS_CONTENT_ROOT", None)
-    # REPO_CONTENT_ROOT is an ambient alias the registry also checks — left set,
+    # REPO_DOE_CLAUDE is an ambient alias the registry also checks — left set,
     # it resolves the real clone regardless of the MACHINE_LOCAL_IMPL stub
     # below, defeating the "fully unresolvable" premise this test exists to cover.
-    env.pop("REPO_CONTENT_ROOT", None)
+    env.pop("REPO_DOE_CLAUDE", None)
     stub = str(tmp_path / "_machine_local_stub.py")
     with open(stub, "w", encoding="utf-8") as fh:
         fh.write("import sys\nsys.exit(1)\n")
@@ -280,7 +280,7 @@ def test_content_root_unresolvable_errors_cleanly(tmp_path) -> None:
     # MACHINE_LOCAL_IMPL stub above. Left ambient, a real dev box's
     # content-root pointer file resolves the real clone and defeats the
     # "fully unresolvable" premise this test exists to cover, exactly like
-    # the REPO_CONTENT_ROOT leak the comment above already guards against.
+    # the REPO_DOE_CLAUDE leak the comment above already guards against.
     env["CLAUDE_HOME"] = str(tmp_path / "no-such-claude-home")
     # COORDINATOR_SETTINGS_HOME wins settings_home()'s FIRST rung, ahead of
     # CLAUDE_HOME entirely — an ambient value (present in every real

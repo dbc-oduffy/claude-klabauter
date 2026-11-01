@@ -799,6 +799,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "spawn-census": frozenset({"self_location"}),
     "spawn-trace-capture.py": frozenset({"self_location"}),
     "standup.py": frozenset({"env_first"}),
+    "survey-consume-gate.py": frozenset({"self_location"}),
     "sweep-terminal-handoffs.py": frozenset({"env_first"}),
     "sweep-terminal-sizings.py": frozenset({"env_first"}),
     "tests/test_cc_invoke_provenance_hardening.py": frozenset({"env_first"}),
@@ -812,6 +813,7 @@ _RESOLVER_FAMILY_BY_FILE = {
     "triage-plan-candidates.py": frozenset({"env_first"}),
     "validate-fast-and-packageability.py": frozenset({"self_location"}),
     "verify-publish-targets-portable-sync.py": frozenset({"self_location"}),
+    "warm-read-load-probe.py": frozenset({"self_location"}),
     "waste-signal.py": frozenset({"self_location"}),
     "whats-next.py": frozenset({"env_first"}),
     # FAMILY CHANGED 2026-09-22, deliberately, per this map's own contract: both

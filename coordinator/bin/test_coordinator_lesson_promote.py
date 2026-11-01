@@ -34,7 +34,7 @@ def _run_cli(args: list[str], env: dict[str, str | None] | None = None) -> subpr
 
     A None value in `env` UNSETS that key for the child process rather than
     setting it to the empty string — load-bearing for ambient vars like
-    REPO_CONTENT_ROOT (exported into every login shell per the install surface):
+    REPO_DOE_CLAUDE (exported into every login shell per the install surface):
     an explicitly-empty-string override is NOT equivalent to "absent" for every
     downstream consumer (the real `machine-local` binary treats them
     differently), so a real absence must be a real dict-key removal.
@@ -382,7 +382,7 @@ def test_multiline_body_roundtrip() -> None:
 
 # `_force_doe_unresolvable_env()` used to live here — DELETED 2026-08-25, and
 # deliberately not replaced. It claimed to make content_root() raise
-# _DoeUnresolvable by unsetting REPO_CONTENT_ROOT and pointing
+# _DoeUnresolvable by unsetting REPO_DOE_CLAUDE and pointing
 # MACHINE_LOCAL_IMPL at a nonexistent script. That was true when the registry
 # rung spawned the `machine-local` CLI; it reads the registry in-process now,
 # and five codename-free rungs have since been added below it. The helper
@@ -566,7 +566,7 @@ def test_doe_unresolvable_during_validation_exits_three() -> None:
                 cli_mod, "content_root",
                 side_effect=cli_mod._DoeUnresolvable(
                     "repos.content_root not set in machine-local registry and "
-                    "REPO_CONTENT_ROOT env var not set"
+                    "REPO_DOE_CLAUDE env var not set"
                 ),
             ),
             _mock.patch.object(
@@ -643,7 +643,7 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
         _mock.patch.object(
             cli_mod, "_write_entry",
             side_effect=cli_mod._DoeUnresolvable(
-                "repos.content_root not set in machine-local registry and REPO_CONTENT_ROOT env var not set"
+                "repos.content_root not set in machine-local registry and REPO_DOE_CLAUDE env var not set"
             ),
         ),
         _mock.patch("sys.stderr", captured_err),
@@ -698,7 +698,7 @@ def test_native_route_carries_the_validated_content_root() -> None:
         _mock.patch("sys.stdout", _io.StringIO()),
     ):
         env.pop("LESSON_PROMOTE_OUTBOX_ROOT", None)
-        env.pop("REPO_CONTENT_ROOT", None)
+        env.pop("REPO_DOE_CLAUDE", None)
         rc = cli_mod.main([
             "--title", "some title",
             "--body", "some body",

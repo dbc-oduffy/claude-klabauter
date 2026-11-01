@@ -1030,7 +1030,7 @@ def resolve_cutover_schema(
     root = Path(doe_repo_path) if doe_repo_path is not None else resolve_doe_repo_path()
     if root is None:
         raise CutoverSchemaResolutionError(
-            "coordinator-content-repo sibling clone could not be resolved (REPO_CONTENT_ROOT / "
+            "coordinator-content-repo sibling clone could not be resolved (REPO_DOE_CLAUDE / "
             "registry repos.content_root / pointer files all absent) — cannot read "
             f"{_CUTOVER_SCHEMA_REPO_RELATIVE_PATH} at ref {ref!r}."
         )

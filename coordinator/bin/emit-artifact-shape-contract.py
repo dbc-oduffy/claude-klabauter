@@ -82,7 +82,7 @@ def _resolve_coordinator_root() -> str:
     artifact-shape-contract/ (default output).
 
     CLAUDE_PLUGIN_ROOT wins verbatim if set. Otherwise resolves via
-    coordinator_registry.content_root() (env REPO_CONTENT_ROOT -> machine-local
+    coordinator_registry.content_root() (env REPO_DOE_CLAUDE -> machine-local
     repos.content_root -> raise) and returns <content_root()>/coordinator.
 
     Does NOT derive from this script's own __file__ location — see this module's
@@ -106,7 +106,7 @@ def _resolve_coordinator_root() -> str:
         print(
             f"emit-artifact-shape-contract: cannot resolve the coordinator doctrine repo root ({exc}). "
             "Set repos.content_root in the machine-local registry, or set the "
-            "REPO_CONTENT_ROOT env var, or set CLAUDE_PLUGIN_ROOT directly.",
+            "REPO_DOE_CLAUDE env var, or set CLAUDE_PLUGIN_ROOT directly.",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -218,7 +218,7 @@ def _assert_resolved_engine_is_this_source() -> "str | None":
         f"(CONTRACT_VERSION={resolved_version!r})\n"
         "emitting from the resolved tree would publish its stale content and "
         "OSS-sanitized spec references with a zero exit.\n"
-        "re-run with CLAUDE_KLABAUTER_ROOT / COORDINATOR_ENGINE_ROOT / REPO_CLAUDE_KLABAUTER "
+        "re-run with CLAUDE_KLABAUTER_ROOT / COORDINATOR_ENGINE_ROOT / REPO_PROJECT_MAKIMA "
         "pointed at this repo, or publish the engine first."
     )
 

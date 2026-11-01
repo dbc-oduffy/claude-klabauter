@@ -346,6 +346,15 @@ def build_steering(session_id: str, cwd: str, typed: str = "") -> str:
             "(coordinator):", "(coordinator; the PM's instructions above take precedence):"
         )
     try:
+        from coordinator_core.hooks.idle_compact_advisory import fresh_injection_run_id
+
+        injected_run = fresh_injection_run_id(session_id)
+    except Exception:
+        injected_run = None
+    if injected_run:
+        lines.insert(0, f"Idle-injected compaction (watcher run {_one_line(injected_run, 80)}): "
+                        "preserve in-flight engine-ask run ids.")
+    try:
         baton, turns = _journal_paths(session_id, cwd)
     except Exception:
         baton, turns = None, None

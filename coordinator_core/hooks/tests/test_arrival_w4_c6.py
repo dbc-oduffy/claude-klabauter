@@ -54,7 +54,7 @@ def test_import_is_fast():
 
 
 def test_env_var_shape_is_operative():
-    assert ops.is_identifier_shape_operative("REPO_CONTENT_ROOT", sibling_names=("coordinator-content-repo",))
+    assert ops.is_identifier_shape_operative("REPO_DOE_CLAUDE", sibling_names=("coordinator-content-repo",))
 
 
 def test_dotted_registry_key_shape_is_operative():

@@ -11,7 +11,7 @@ elsewhere in this tree; see the `orient-assemble brief` envelope-schema
 conformance test).
 
 `read_content_root` is monkeypatched to the resolved sibling root for
-every test (rather than relying on REPO_CONTENT_ROOT / machine-local at test
+every test (rather than relying on REPO_DOE_CLAUDE / machine-local at test
 time) so the suite is deterministic regardless of this machine's registry
 state.
 
@@ -571,7 +571,7 @@ class TestOwnInboxIsDenySiblingTerritory:
 
     def test_own_inbox_misplacement_yields_none(self):
         # Uses the real coordinator-content-repo checkout as both cwd (repo root) and the
-        # REPO_CONTENT_ROOT-resolved central path, so the guard's
+        # REPO_DOE_CLAUDE-resolved central path, so the guard's
         # this-repo-is-central branch engages. No file is ever opened for a
         # Write payload's own content (see _memo_guards_decision), so this
         # never touches disk.

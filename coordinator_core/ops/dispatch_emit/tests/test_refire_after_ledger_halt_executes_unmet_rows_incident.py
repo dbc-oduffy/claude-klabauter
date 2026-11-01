@@ -27,7 +27,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
-from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
 from coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_resumes_incident import (
@@ -128,6 +128,7 @@ def test_the_composed_resume_script_runs_a_remaining_work_leg_before_the_verify(
 
 def test_land_run_refuses_met_on_an_unchanged_tree_and_passes_after_a_declared_edit(repo):  # noqa: F811
     halt_sha = _halted_repo(repo)
+    write_run_scripts(repo, REFIRE_RUN)
     resume = ask_gate._handler({"sizing_path": REL, "run_id": REFIRE_RUN}, repo)["resume_ledger"]
     rl.start(repo, REFIRE_RUN)
     rl.bind(repo, REFIRE_RUN, REL)
@@ -184,6 +185,7 @@ def _unlanded_halted_repo(repo):
 
 def test_unlanded_gate_names_the_never_landed_row_and_stages_only_it(repo):  # noqa: F811
     _unlanded_halted_repo(repo)
+    write_run_scripts(repo, REFIRE_RUN)
     reply = ask_gate._handler({"sizing_path": REL, "run_id": REFIRE_RUN}, repo)
     assert reply.get("halt") is None, reply
     resume = reply["resume_ledger"]
@@ -211,6 +213,7 @@ def test_unlanded_composed_script_sets_ledger_exec_ahead_of_the_execute_phase(re
 
 def test_unlanded_land_run_still_refuses_met_on_an_unchanged_tree(repo):  # noqa: F811
     halt_sha = _unlanded_halted_repo(repo)
+    write_run_scripts(repo, REFIRE_RUN)
     resume = ask_gate._handler({"sizing_path": REL, "run_id": REFIRE_RUN}, repo)["resume_ledger"]
     rl.start(repo, REFIRE_RUN)
     rl.bind(repo, REFIRE_RUN, REL)

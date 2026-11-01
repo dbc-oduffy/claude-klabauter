@@ -66,6 +66,39 @@ def test_main_dispatches_inbox_verb(tmp_path, monkeypatch, capsys):
     assert mod.main(["inbox"]) == 2
 
 
+def test_inbox_lists_stranded_after_open_and_counts_them(tmp_path, monkeypatch, capsys):
+    mod = _load()
+    inbox = tmp_path / "state" / "cross-repo" / "inbox"
+    inbox.mkdir(parents=True)
+    _memo(inbox, "2026-01-02-b", "open", "sender-b", "Pending thing")
+    _memo(inbox, "2026-01-01-a", "actioned", "sender-a", "Done thing")
+    monkeypatch.setattr(mod, "_current_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(mod, "_stranded_inbox_rows", lambda root: [
+        ("stranded", "sender-z", "2025-12-31-z", "Far thing [on origin/work/x/2026-10-29]")])
+
+    assert mod._cmd_inbox(argparse.Namespace()) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("open  sender-b")
+    assert lines[1].startswith("actioned  sender-a")
+    assert lines[2] == "stranded  sender-z  2025-12-31-z  :: Far thing [on origin/work/x/2026-10-29]"
+    assert lines[3] == "3 memo(s), 1 open, 1 stranded"
+
+
+def test_inbox_with_only_stranded_memos_is_not_empty(tmp_path, monkeypatch, capsys):
+    mod = _load()
+    monkeypatch.setattr(mod, "_current_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(mod, "_stranded_inbox_rows", lambda root: [
+        ("stranded", "?", "m", "t [on origin/work/x/y]")])
+    assert mod._cmd_inbox(argparse.Namespace()) == 0
+    out = capsys.readouterr().out
+    assert "no inbound memos" not in out
+    assert "1 memo(s), 0 open, 1 stranded" in out
+
+
+def test_stranded_rows_empty_outside_a_git_repo(tmp_path):
+    assert _load()._stranded_inbox_rows(str(tmp_path)) == []
+
+
 def test_inbox_is_a_registered_verb():
     mod = _load()
     assert "inbox" in mod._SUBCOMMAND_VERBS

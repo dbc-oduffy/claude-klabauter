@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 
 from coordinator_core._hook_envelope import deny
 from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
@@ -30,10 +31,25 @@ _NON_PRODUCT_TOP_DIRS = ("state", ".coordinator-local")
 #: engine's life. Halted is not cached: a refire resumes the same id and makes it live again.
 _LANDED: set = set()
 
+#: Seconds a run's landed/halted verdict is reused before its markers are read again. A refired
+#: run reads live again once its entry ages out.
+VERDICT_WINDOW_S = 2.0
+
+#: Seconds one `live_run_ids` scan may spend before it stops and answers "no live run".
+SCAN_BUDGET_S = 0.25
+
+#: `(root, engine run id)` -> `(monotonic stamp, skip)`; `skip` is landed-or-halted.
+_VERDICTS: dict = {}
+
+
+def _now() -> float:
+    return time.monotonic()
+
 
 def live_run_ids(session_id: str, root: str) -> list:
     """Engine run ids this session launched that are neither halted nor landed. Empty on an empty
-    id or any read failure: the record fails open."""
+    id, any read failure, or a scan past `SCAN_BUDGET_S`: the record fails open. Each run's
+    markers are read at most once per `VERDICT_WINDOW_S`."""
     if not session_id:
         return []
     try:
@@ -43,6 +59,7 @@ def live_run_ids(session_id: str, root: str) -> list:
         from coordinator_core.ops import warp_run_deliverable as wrd
 
         live = []
+        deadline = _now() + SCAN_BUDGET_S
         engine_ids = _engine_run_id_map(session_id)
         for run_id in flag_em_poll_in_flight.session_workflow_run_ids(session_id):
             engine_id = engine_ids.get(run_id, run_id)
@@ -52,10 +69,19 @@ def live_run_ids(session_id: str, root: str) -> list:
                 key = (os.path.normcase(os.path.abspath(root)), engine_id)
                 if key in _LANDED:
                     continue
-                if wrd._landed(Path(root), engine_id):
-                    _LANDED.add(key)
-                    continue
-                if wrd._halted(Path(root), engine_id):
+                stamp = _now()
+                if stamp > deadline:
+                    return []
+                cached = _VERDICTS.get(key)
+                if cached is not None and stamp - cached[0] < VERDICT_WINDOW_S:
+                    skip = cached[1]
+                else:
+                    if wrd._landed(Path(root), engine_id):
+                        _LANDED.add(key)
+                        continue
+                    skip = bool(wrd._halted(Path(root), engine_id))
+                    _VERDICTS[key] = (stamp, skip)
+                if skip:
                     continue
             live.append(engine_id)
         return live

@@ -43,7 +43,7 @@ harmless: the sentinel simply is not there either way.
 
 Everything else is unchanged: the mirror direction (TRACKED -> LIVE, never
 the reverse), the OSS-clobber gate (`.coordinator-dev-repo`, fail CLOSED on
-any uncertainty), the rules-dir copy-in-only/never-prune contract, and the
+any uncertainty), the rules-dir copy-in contract (it prunes only `RETIRED_RULE_NAMES`), and the
 fail-loud-on-real-failure / silent-when-already-synced contract.
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C5
@@ -153,8 +153,41 @@ def _tracked_rules_files(repo_root: Path) -> "list[Path]":
         return []
 
 
+#: Rule files the consolidated rules doc replaced; every global-doctrine
+#: installer prunes them from `~/.claude/rules/` so no box double-loads them.
+RETIRED_RULE_NAMES = (
+    "context7.md",
+    "fleet-friction-reporting.md",
+    "workstation-install-verdict.md",
+    "cloud-preboot-verdict.md",
+)
+
+
+def prune_retired_rules(
+    rules_dir: Path, check_only: bool = False, failed: "Optional[list[str]]" = None
+) -> "list[str]":
+    """Delete each `RETIRED_RULE_NAMES` file present in `rules_dir`; return the
+    names found. Under `check_only` nothing is deleted. A failed unlink is
+    not raised; its name is appended to `failed` when given."""
+    pruned: "list[str]" = []
+    for name in RETIRED_RULE_NAMES:
+        target = rules_dir / name
+        if not target.is_file():
+            continue
+        if not check_only:
+            try:
+                target.unlink()
+            except OSError:
+                if failed is not None:
+                    failed.append(name)
+                continue
+        pruned.append(name)
+    return pruned
+
+
 #: Superseded rules files removed by explicit name (never pattern) from the live
 #: and published rules dirs, only while the tracked dir no longer holds the name.
+#: Both names are also in `RETIRED_RULE_NAMES`, whose live-dir prune ignores the tracked gate.
 _RETIRED_RULES_FILES = ("context7.md", "fleet-friction-reporting.md")
 
 
@@ -255,6 +288,12 @@ def evaluate(payload: dict):
     notes: "list[str]" = []
 
     if session_start_mode:
+        prune_failed: "list[str]" = []
+        pruned = prune_retired_rules(_live_rules_dir(), failed=prune_failed)
+        if pruned:
+            notes.append(f"pruned retired rules {', '.join(pruned)}")
+        if prune_failed:
+            notes.append(f"could not delete retired rules {', '.join(prune_failed)}")
         tracked = _tracked_path(repo_root)
         if tracked.is_file():
             _derive_live_copy(tracked, _live_path(), notes)

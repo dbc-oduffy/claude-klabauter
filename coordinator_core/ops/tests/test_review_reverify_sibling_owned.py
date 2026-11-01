@@ -136,11 +136,14 @@ def test_end_to_end_the_parametrize_id_resolves_against_a_slashed_path_dir(world
     assert out["sibling_owned"] == [PARAM_NODE]
 
 
-def test_end_to_end_removing_the_halt_record_makes_it_a_blocker_again(world, monkeypatch):
+def test_end_to_end_removing_the_halt_record_leaves_it_foreign_red_evidence(world, monkeypatch):
+    """Dirty-vs-HEAD out-of-footprint cause with no claiming record: not sibling-owned, but shared-tree
+    contamination (`foreign_red`), which `from_reverify` does not count as a blocker."""
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     out = _derived(root, TRACE)
-    assert out["sibling_owned"] == [] and out["unattributed"] == [PARAM_NODE]
+    assert out["sibling_owned"] == [] and out["unattributed"] == []
+    assert out["foreign_red"] == {PARAM_NODE: [SIBLING_FILE]}
 
 
 def test_end_to_end_an_unreadable_halt_record_makes_it_a_blocker(world, monkeypatch):
@@ -197,7 +200,7 @@ def _git(root, *args):
 def _put(root, rel, text):
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_bytes(text.encode("utf-8"))  # write_text would CRLF on Windows and read dirty versus the LF blob
 
 
 @pytest.fixture
@@ -247,9 +250,10 @@ def test_reported_shape_is_sibling_owned_with_a_real_halt_record(real_world):
 
 
 @pytest.mark.spawns_process
-def test_reported_shape_blocks_without_a_claiming_halt_record(real_world):
+def test_reported_shape_is_not_sibling_owned_without_a_claiming_halt_record(real_world):
     root, head = real_world
-    assert _real(root, head)["unattributed"] == [REAL_NODE]
+    out = _real(root, head)
+    assert out["sibling_owned"] == [] and out["foreign_red"] == {REAL_NODE: [SIBLING_FILE]}
     _halt(root, {"some/other.py": "halt-record-only"})
     assert _real(root, head)["sibling_owned"] == []
 

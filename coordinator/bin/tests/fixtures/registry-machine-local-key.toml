@@ -1,6 +1,6 @@
 # Test fixture: machine-local-key conditional consumers for bin/snippet-registry.
 # Used by test-snippet-registry-conditional.bats (Tests 1-4).
-# Schema: v2. Two machine-local-key conditionals for repos.example_game_workbench_repo,
+# Schema: v2. Two machine-local-key conditionals for repos.claude_unreal_holodeck,
 # mirroring the original shape that the live registry carried before the 2026-06-19
 # migration to file-exists-only.
 schema_version = 2
@@ -19,9 +19,9 @@ consumers = [
 [[snippet.reviewer-calibration.conditional_consumer]]
 path           = "coordinator/agents/staff-eng.md"
 condition_type = "machine-local-key"
-condition_key  = "repos.example_game_workbench_repo"
+condition_key  = "repos.claude_unreal_holodeck"
 
 [[snippet.reviewer-calibration.conditional_consumer]]
 path           = "game-dev/agents/staff-game-dev.md"
 condition_type = "machine-local-key"
-condition_key  = "repos.example_game_workbench_repo"
+condition_key  = "repos.claude_unreal_holodeck"

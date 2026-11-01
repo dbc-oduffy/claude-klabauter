@@ -34,14 +34,14 @@ budgeted-op-spawn-trace.md` § 5): a prior version of this test substituted
 real spawn — the fakes' own bodies, which is where any subprocess would
 actually happen, never ran. This version calls the REAL `content_root()` /
 `_claude_klabauter_root()` (no substitution) with every resolver env override
-(`REPO_CONTENT_ROOT`/`CLAUDE_KLABAUTER_ROOT`/`QUEUE_APPEND_OUTPUT_ROOT`/
+(`REPO_DOE_CLAUDE`/`CLAUDE_KLABAUTER_ROOT`/`QUEUE_APPEND_OUTPUT_ROOT`/
 `LESSON_PROMOTE_OUTBOX_ROOT`) explicitly cleared — the steady state on an
 installed machine where none of those overrides is set — and counts real
 `subprocess.run` calls via a global patch on the `subprocess` module object
 (catches every module's `subprocess.run(...)`, not just one function
 reference). Clearing the env overrides is required for hermeticity: with
 them ambiently set (as this repo's own dev environment has
-`REPO_CONTENT_ROOT` set), `content_root()`'s rung 1b would short-circuit before
+`REPO_DOE_CLAUDE` set), `content_root()`'s rung 1b would short-circuit before
 ever reaching its `machine-local get repos.content_root` spawn, undercounting
 the steady-state figure this budget exists to protect.
 
@@ -88,7 +88,7 @@ def _manifest_spawn_budget() -> dict:
 
 
 _ENV_OVERRIDES_TO_CLEAR = (
-    "REPO_CONTENT_ROOT",
+    "REPO_DOE_CLAUDE",
     "CLAUDE_KLABAUTER_ROOT",
     "QUEUE_APPEND_OUTPUT_ROOT",
     "LESSON_PROMOTE_OUTBOX_ROOT",
@@ -106,7 +106,7 @@ def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch) 
     Calls the REAL `content_root()`/`_claude_klabauter_root()` (no substitution) with
     every resolver env override cleared — the steady state on an installed
     machine (see module docstring's HONEST-COUNTER FIX). This machine's own
-    dev environment has `REPO_CONTENT_ROOT` set ambiently, which would
+    dev environment has `REPO_DOE_CLAUDE` set ambiently, which would
     short-circuit `content_root()` before its spawning rung; clearing it here is
     what makes the count observe the real spawn instead of skipping it.
     """

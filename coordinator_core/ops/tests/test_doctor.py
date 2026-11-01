@@ -139,7 +139,7 @@ def _run_doctor(checkout: Path, *args: str) -> subprocess.CompletedProcess:
         env=dict(
             os.environ,
             MACHINE_LOCAL_REPOS_CONTENT_ROOT=str(checkout),
-            REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),
+            REPO_PROJECT_MAKIMA=str(_CLAUDE_KLABAUTER_ROOT),
             COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
             # Empty machine-local registry: the git-hook currency layer otherwise
             # reads this machine's real registered clones.
@@ -794,7 +794,7 @@ def test_a_healthy_install_exits_zero_and_a_double_delivered_hook_exits_one(chec
         env=dict(
             os.environ,
             MACHINE_LOCAL_REPOS_CONTENT_ROOT=str(checkout),
-            REPO_CLAUDE_KLABAUTER=str(_CLAUDE_KLABAUTER_ROOT),
+            REPO_PROJECT_MAKIMA=str(_CLAUDE_KLABAUTER_ROOT),
             COORDINATOR_ENGINE_ROOT=str(_CLAUDE_KLABAUTER_ROOT),
             COORDINATOR_SETTINGS_HOME=str(checkout.parent / "settings-home"),
             MACHINE_LOCAL_REGISTRY_DIR=str(checkout.parent / "settings-home" / "machine-local"),

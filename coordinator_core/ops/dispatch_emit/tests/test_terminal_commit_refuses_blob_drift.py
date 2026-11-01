@@ -81,7 +81,8 @@ def _review(repo: Path, reviewed: dict, at: float) -> None:
         "agent_type": "engine:prep-freeze", "plan_id": "p", "share_dir": "x", "run_base_sha": BASE,
         "verdict": "OK", "basis": "worktree", "whole_diff_path": "d", "product_files": len(reviewed),
         "foreign_claims": [], "slices": [{"id": "s", "files": sorted(reviewed)}],
-        "whole_diff_sidecars": {}, "sidecar_path": "x", "head": None, "paths": sorted(reviewed),
+        "whole_diff_sidecars": {}, "excluded": [],
+        "sidecar_path": "x", "head": None, "paths": sorted(reviewed),
         "recorded_at": datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         "reviewed_sha256": reviewed,
     }

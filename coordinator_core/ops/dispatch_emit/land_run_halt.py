@@ -412,26 +412,41 @@ def _live_run_ids(repo_root: Path) -> list:
 
 def _superseded_candidates(root: Path, run_id: str, sizing_rel: Optional[str]) -> list:
     """Names of earlier-stamped record dirs that could be this run's superseded predecessors:
-    ``warp-<sizing stem>-*`` and ``ask-*`` dirs with a stamp below this run's. One directory name
-    scan, no per-run read; ``run_artifacts.superseded_runs`` then filters them by ``run.json``."""
+    ``warp-<sizing stem>-*`` and ``ask-*`` dirs with a stamp in ``[sizing creation day - 1, this run's)``
+    (a run cannot bind a sizing before it exists). One directory name scan; an ``ask-*`` dir is kept
+    only when its ``run.json`` names the sizing, so the read count follows the sizing's age, never the
+    record-dir corpus. ``run_artifacts.superseded_runs`` then filters them by ``run.json``."""
     import os
     from pathlib import PurePosixPath
 
+    from coordinator_core.ops.dispatch_emit.land_run import _sizing_stamp_floor
     from coordinator_core.ops.dispatch_emit.run_artifacts import _STAMP_TAIL
 
     mine = _STAMP_TAIL.search(run_id)
     if mine is None or not sizing_rel:
         return []
-    prefixes = (f"warp-{PurePosixPath(sizing_rel).stem}-", "ask-")
+    sizing_path = PurePosixPath(sizing_rel)
+    warp_prefix = f"warp-{sizing_path.stem}-"
+    needle = sizing_path.name.encode("utf-8")
+    floor = _sizing_stamp_floor(sizing_path.name)
+    base = root / RECORD_DIR_ROOT
     names = []
     try:
-        with os.scandir(root / RECORD_DIR_ROOT) as it:
+        with os.scandir(base) as it:
             for entry in it:
-                if not entry.name.startswith(prefixes) or entry.name == run_id:
+                if not entry.name.startswith((warp_prefix, "ask-")) or entry.name == run_id:
                     continue
                 tail = _STAMP_TAIL.search(entry.name)
-                if tail and tail.group(0) < mine.group(0) and entry.is_dir():
-                    names.append(entry.name)
+                if not tail or not floor <= tail.group(0) < mine.group(0) or not entry.is_dir():
+                    continue
+                if not entry.name.startswith(warp_prefix) and needle.isascii():
+                    try:
+                        raw = (base / entry.name / "run.json").read_bytes()
+                    except OSError:
+                        continue
+                    if needle not in raw:
+                        continue
+                names.append(entry.name)
     except OSError:
         return []
     return sorted(names)

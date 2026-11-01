@@ -133,10 +133,102 @@ def unparseable_py(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:
             source = (Path(worktree_root) / rel).read_bytes()
         except OSError:
             continue
-        found = _parse_finding(rel, source)
+        found = _cached_parse_finding(worktree_root, rel, source)
         if found:
             out.append(found)
     return out
+
+
+_VERDICT_DIR = "coordinator-parse-verdicts"
+_VERDICT_KEEP = 256
+_VERDICT_MAX = 512
+
+
+def _git_common_dir(worktree_root: Path) -> Optional[Path]:
+    """The repo's common git dir read from ``.git`` on disk (no spawn); None when not a checkout."""
+    try:
+        dot = Path(worktree_root) / ".git"
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            gitdir = Path(text[7:].strip())
+            if not gitdir.is_absolute():
+                gitdir = dot.parent / gitdir
+            common = gitdir / "commondir"
+            if common.is_file():
+                gitdir = gitdir / common.read_text(encoding="utf-8").strip()
+            return gitdir
+        return dot if dot.is_dir() else None
+    except OSError:
+        return None
+
+
+def _verdict_path(worktree_root: Path, source: bytes) -> Optional[Path]:
+    """Verdict file for ``(sha256(source), python major.minor)``: the grammar is part of the verdict."""
+    import hashlib
+    import sys
+
+    common = _git_common_dir(worktree_root)
+    if common is None:
+        return None
+    key = f"{hashlib.sha256(source).hexdigest()}-py{sys.version_info[0]}{sys.version_info[1]}"
+    return common / _VERDICT_DIR / key
+
+
+def _read_verdict(path: Path) -> Optional[tuple]:
+    """``("ok", "")`` / ``("bad", detail)`` from a verdict file; None (a miss) when absent or malformed."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and data.get("ok") is True:
+        return ("ok", "")
+    if isinstance(data, dict) and data.get("ok") is False and isinstance(data.get("detail"), str):
+        return ("bad", data["detail"])
+    return None
+
+
+def _write_verdict(path: Path, found: Optional[Finding]) -> None:
+    """Atomic best-effort record; evicts the oldest entries past ``_VERDICT_MAX``. Never raises."""
+    import os
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = {"ok": True} if found is None else {"ok": False, "detail": found.detail}
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(body), encoding="utf-8")
+        os.replace(tmp, path)
+        names = os.listdir(path.parent)
+        if len(names) > _VERDICT_MAX:
+            aged = []
+            for n in names:
+                try:
+                    aged.append(((path.parent / n).stat().st_mtime, n))
+                except OSError:
+                    continue
+            aged.sort()
+            for _, n in aged[: len(aged) - _VERDICT_KEEP]:
+                try:
+                    (path.parent / n).unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def _cached_parse_finding(worktree_root: Path, rel: str, source: bytes) -> Optional[Finding]:
+    """``_parse_finding`` memoised on disk by sha256(bytes)+interpreter version under the git common dir,
+    so a later process parses nothing a producer already parsed. A missing or malformed entry is a miss."""
+    path = _verdict_path(worktree_root, source)
+    if path is None:
+        return _parse_finding(rel, source)
+    hit = _read_verdict(path)
+    if hit is not None:
+        return None if hit[0] == "ok" else Finding(rel, PY_UNPARSEABLE, hit[1])
+    found = _parse_finding(rel, source)
+    _write_verdict(path, found)
+    return found
 
 
 def _parse_finding(rel: str, source: bytes) -> Optional[Finding]:
@@ -174,7 +266,7 @@ def unparseable_py_at(worktree_root: Path, rev: str, paths: Sequence[str]) -> li
         if len(header) != 3 or header[1] != b"blob":
             continue
         size = int(header[2])
-        found = _parse_finding(rel, data[pos : pos + size])
+        found = _cached_parse_finding(worktree_root, rel, data[pos : pos + size])
         pos += size + 1
         if found:
             out.append(found)
@@ -576,4 +668,7 @@ def since_base_findings(
     from coordinator_core.git import since_base_overlap
 
     land_deadline.check("landing_integrity.since_base_findings")
-    return list(since_base_overlap.find_overlaps(worktree_root, paths, base_sha, run_id=run_id, plan=plan))
+    unique = list(dict.fromkeys(paths))
+    if not unique:
+        return []  # the commit walk to base is the cost; no declared path, no walk
+    return list(since_base_overlap.find_overlaps(worktree_root, unique, base_sha, run_id=run_id, plan=plan))

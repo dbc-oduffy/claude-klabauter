@@ -1053,12 +1053,14 @@ def test_reap_logs_rss_from_rss_fn_read_before_the_kill(tmp_path):
 
 
 def _spi_buffer(entries, base=0x10000):
-    """A fixture SystemProcessInformation x64 buffer: (pid, ppid, create_filetime, wss_bytes, name)."""
+    """A fixture SystemProcessInformation x64 buffer: (pid, ppid, create_filetime, wss_bytes, name[, (read, write)])."""
     import struct
-    entry_len = 256
+    entry_len = 288
     buf = bytearray(entry_len * len(entries))
-    for i, (pid, ppid, create, wss, name) in enumerate(entries):
+    for i, (pid, ppid, create, wss, name, *rest) in enumerate(entries):
         off = i * entry_len
+        read, write = rest[0] if rest else (0, 0)
+        struct.pack_into("<QQQ", buf, off + 232, read, write, 777)  # Other* must not leak in
         raw = name.encode("utf-16-le")
         name_off = off + 160
         buf[name_off:name_off + len(raw)] = raw
@@ -1179,3 +1181,94 @@ def test_empty_cmdline_with_image_name_and_absent_parent_is_reaped_whole(tmp_pat
     assert sorted(r["reason"] for r in recs) == ["owner-gone", "owner-gone"]
     assert gov._exe(P(1, 0, 1, 1, "", "")) == ""
     assert _reap_run([P(9, 4242, 60, 5, "", "")], tmp_path)[1] == []
+
+
+# ---- report-only disk signal wiring ----
+
+def _disk_run(samples, emit_to, disk_args=None, paused_probe=None):
+    gd = gov._governor_disk()
+    it = iter(samples)
+
+    def disk_fn():
+        item = next(it)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    signals = []
+    gov.run(_args(**(disk_args or {})), emit=emit_to.append, sample=lambda: False,
+            procs_fn=lambda: [], signal_fn=lambda pids, stop: signals.append((pids, stop)),
+            sleep=lambda s: None, max_ticks=len(samples), disk_fn=disk_fn)
+    return gd, signals
+
+
+def _hot(b):
+    gd = sys.modules["governor_disk"]
+    return ([gd.DiskStat("1 E:", 0.0, 12.0), gd.DiskStat("0 C:", 90.0, 0.0)], {777: b, 5: 10})
+
+
+def test_disk_saturation_emits_one_line_with_writer_pid_and_cmd_then_stays_silent(monkeypatch):
+    gd = gov._governor_disk()
+    monkeypatch.setattr(gd, "cmdline_of", lambda pid: "python writer.py --big" if pid == 777 else "")
+    out: list[str] = []
+    _disk_run([_hot(0), _hot(500 << 20), _hot(900 << 20), _hot(1300 << 20)], out)
+    disk = [l for l in out if l.startswith("GOVERNOR DISK ")]
+    assert len(disk) == 1
+    assert "pid=777" in disk[0] and "cmd=python writer.py --big" in disk[0] and "disk=1 E:" in disk[0]
+    assert len([l for l in out if l.startswith("GOVERNOR DISK-STAT")]) == 2
+
+
+def test_disk_idle_samples_emit_nothing_and_rearm_after_recovery(monkeypatch):
+    gd = gov._governor_disk()
+    monkeypatch.setattr(gd, "cmdline_of", lambda pid: "w")
+    calm = ([gd.DiskStat("0 C:", 90.0, 0.0)], {777: 0})
+    out: list[str] = []
+    _disk_run([calm, calm], out)
+    assert out == []
+    _disk_run([_hot(0), _hot(1 << 30), calm, _hot(2 << 30)], out)
+    assert len([l for l in out if l.startswith("GOVERNOR DISK pid")]) == 2
+
+
+def test_disk_signal_never_pauses_anything(monkeypatch):
+    gd = gov._governor_disk()
+    monkeypatch.setattr(gd, "cmdline_of", lambda pid: "w")
+    out: list[str] = []
+    _, signals = _disk_run([_hot(0), _hot(1 << 30)], out)
+    assert signals == []
+    assert not any(l.startswith("GOVERNOR PAUSED") for l in out)
+
+
+def test_disk_fn_raising_never_stops_the_loop(monkeypatch):
+    gd = gov._governor_disk()
+    monkeypatch.setattr(gd, "cmdline_of", lambda pid: "w")
+    out: list[str] = []
+    _disk_run([RuntimeError("pdh"), _hot(0), OSError("x"), _hot(1 << 30)], out)
+    assert len([l for l in out if l.startswith("GOVERNOR DISK pid")]) == 1
+
+
+def test_disk_unsupported_host_prints_one_line(monkeypatch):
+    out: list[str] = []
+    _disk_run([None, None, None], out)
+    assert out == ["GOVERNOR DISK unsupported on this host"]
+
+
+def test_disk_thresholds_come_from_args(monkeypatch):
+    gd = gov._governor_disk()
+    monkeypatch.setattr(gd, "cmdline_of", lambda pid: "w")
+    mild = ([gd.DiskStat("d", 20.0, 6.0)], {1: 0})
+    mild2 = ([gd.DiskStat("d", 20.0, 6.0)], {1: 1 << 30})
+    out: list[str] = []
+    _disk_run([mild, mild2], out)
+    assert out == []
+    _disk_run([mild, mild2], out, disk_args=dict(disk_idle_pct=25.0, disk_queue=5.0))
+    assert any(l.startswith("GOVERNOR DISK pid=1") for l in out)
+
+
+def test_main_parses_disk_flags_and_passes_disk_sample(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(gov, "run", lambda args, **kw: seen.update(args=args, **kw))
+    gov.main(["--log", str(Path(__file__).parent / "unused.log")])
+    monkeypatch.undo()
+    assert seen["args"].disk_idle_pct == 5.0 and seen["args"].disk_queue == 4.0
+    assert seen["args"].disk_ticks == 1
+    assert seen["disk_fn"] is gov._governor_disk().disk_sample

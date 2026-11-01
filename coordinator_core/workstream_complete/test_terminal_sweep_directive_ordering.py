@@ -69,3 +69,73 @@ def test_terminal_sweeps_are_last_in_the_main_pass_then_post_close(tmp_path: Pat
     # The post-close pass runs no gate check, so a held-back directive may
     # never depend on a judgment point or claim to be already satisfied.
     assert all(d["depends_on"] is None and not d["already_satisfied"] for d in post_close)
+
+
+def test_workstream_close_runs_the_sizing_drain_in_process(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops.fleet import terminal_sizing_drain
+
+    seen: list = []
+
+    def fake_drain(root, *, dry_run=False):
+        seen.append((Path(root), dry_run))
+        return {"acted": [{"id": "a"}], "candidates": [{}], "skipped": [], "failed": [], "scan_skipped": []}
+
+    monkeypatch.setattr(terminal_sizing_drain, "drain", fake_drain)
+    directives = wsc.build_directives(_gate(), {}, tmp_path, drain_sizings=True)
+
+    sizing = next(d for d in directives if d["id"] == "d-sweep-terminal-sizings")
+    assert seen == [(tmp_path, False)]
+    assert sizing["drain"]["archived"] == 1 and sizing["already_satisfied"] is True
+
+
+def test_workstream_close_survives_a_drain_fault(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops.fleet import terminal_sizing_drain
+
+    def boom(root, *, dry_run=False):
+        raise RuntimeError("drain exploded")
+
+    monkeypatch.setattr(terminal_sizing_drain, "drain", boom)
+    directives = wsc.build_directives(_gate(), {}, tmp_path, drain_sizings=True)
+
+    sizing = next(d for d in directives if d["id"] == "d-sweep-terminal-sizings")
+    assert "drain exploded" in sizing["drain"]["error"]
+    assert sizing["already_satisfied"] is False
+
+
+def test_brief_cli_passes_commit_and_brief_threads_it_to_the_drain(tmp_path: Path, monkeypatch) -> None:
+    seen: dict = {}
+
+    def fake_brief(decisions=None, repo_root=None, *, commit=False):
+        seen["commit"] = commit
+        raise wsc.TransportFailure("stop after capture")
+
+    monkeypatch.setattr(wsc, "brief", fake_brief)
+    wsc._main_brief([])
+    assert seen == {"commit": True}
+
+
+def test_brief_drains_only_under_commit(tmp_path: Path, monkeypatch) -> None:
+    captured: list = []
+    real_build = wsc.build_directives
+
+    def spy_build(*a, **kw):
+        captured.append(kw.get("drain_sizings"))
+        return real_build(*a, **{**kw, "drain_sizings": False})
+
+    monkeypatch.setattr(wsc, "build_directives", spy_build)
+    for flag in (True, False):
+        wsc.brief({"stage_paths": []}, repo_root=tmp_path, commit=flag)
+    assert captured == [True, False]
+
+
+def test_default_build_directives_does_not_drain(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops.fleet import terminal_sizing_drain
+
+    def forbidden(root, *, dry_run=False):
+        raise AssertionError("a read-only brief must not drain")
+
+    monkeypatch.setattr(terminal_sizing_drain, "drain", forbidden)
+    directives = wsc.build_directives(_gate(), {}, tmp_path)
+
+    sizing = next(d for d in directives if d["id"] == "d-sweep-terminal-sizings")
+    assert "drain" not in sizing and sizing["already_satisfied"] is not True

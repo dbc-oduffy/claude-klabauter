@@ -30,17 +30,22 @@ def _ledger_open(monkeypatch):
     monkeypatch.setattr(land_run, "_ledger_gate", lambda *a, **k: (None, None, []))
 
 
-def test_an_untracked_shipped_file_refuses_with_head_unmoved_and_the_token_redeemable(repo):  # noqa: F811
+def _recorded(out: dict, code: str) -> list[dict]:
+    return [e for e in out.get("provenance", []) if e["reason"] == code]
+
+
+def test_an_untracked_shipped_file_lands_the_rest_and_is_dropped_foreign_not_refused(repo):  # noqa: F811
     _stage(repo, f"## What shipped\n\n- `{_LANDING}`\n- `{_STRAY}`\n", stray=True)
     token = run_token.mint(repo, prod.RUN, prod.SCRIPT, session_id=prod.SELF)
     head = prod._git(["rev-parse", "HEAD"], repo).strip()
 
     out = prod._land(repo, run_token=token)
 
-    assert out["committed"] is False and out["refused"] == SHIPPED_CLAIM_REFUSED, out
-    assert out["shipped_claims"]["unbacked"], out
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
-    assert run_token.admits(repo, prod.RUN, token, prod.SCRIPT)
+    assert out["committed"] is True and out["refused"] is None, out
+    assert out["shipped_claims"]["unbacked"] == [], out
+    assert out["shipped_claims"]["dropped_foreign"] == [_STRAY], out
+    assert prod._git(["rev-parse", "HEAD"], repo).strip() != head
+    assert _LANDING in prod._tree(repo) and _STRAY not in prod._tree(repo)
 
 
 def test_the_landed_twin_lands_and_reports_checked(repo):  # noqa: F811
@@ -81,9 +86,12 @@ def test_a_halt_record_only_withhold_on_a_met_runs_product_lands_it(repo):  # no
     assert _LANDING in prod._tree(repo)
 
 
-def test_a_content_withhold_on_a_shipped_path_still_refuses(repo):  # noqa: F811
+def test_a_content_withhold_on_a_shipped_path_records_the_unbacked_claim_as_provenance(repo):  # noqa: F811
     _stage(repo, f"## What shipped\n\n- `{_LANDING}`\n")
 
     out = prod._land(repo, withhold_paths=[{"path": _LANDING, "reason": "peer owns this"}])
 
-    assert out["refused"] == SHIPPED_CLAIM_REFUSED, out
+    assert out["refused"] is None, out
+    assert _LANDING not in prod._tree(repo)
+    entries = _recorded(out, SHIPPED_CLAIM_REFUSED)
+    assert len(entries) == 1 and "peer owns this" in entries[0]["detail"], out

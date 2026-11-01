@@ -342,8 +342,52 @@ def test_unsafe_scope_paths_gate(tmp_path):
 
 def test_directory_walk_budget_gates(tmp_path):
     repo = _repo(tmp_path, _BASE)
+    _write(repo, "r/u1/f.txt")
+    _write(repo, "r/u2/f.txt")
     assert scoped_changed_detail(repo, [], ["r"], [], max_dirs=1) is None
-    assert scoped_changed_detail(repo, [], ["r"], [], max_dirs=2) is not None
+    assert scoped_changed_detail(repo, [], ["r"], [], max_dirs=3) is not None
+
+
+def test_tracked_directories_do_not_spend_the_walk_budget(tmp_path):
+    repo = _repo(tmp_path, _BASE)
+    detail = scoped_changed_detail(repo, [], ["r"], [], max_dirs=0)
+    assert detail is not None and detail.changed == set()
+
+
+def _count_detail_calls(monkeypatch):
+    import coordinator_core.git.scoped_changed as sc
+
+    calls = []
+    real = sc.scoped_changed_detail
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs.get("extra_prefixes", ()))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(sc, "scoped_changed_detail", spy)
+    return calls
+
+
+def test_ignored_dir_under_a_requested_root_reads_the_index_once(tmp_path, monkeypatch):
+    from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
+
+    repo = _repo(tmp_path, {**_BASE, ".gitignore": "cache/\n"})
+    _write(repo, "r/cache/a.txt")
+    calls = _count_detail_calls(monkeypatch)
+    res = scoped_worktree_status(repo, [], ["r"], [])
+    assert res is not None and "r/cache/" in res[1]
+    assert len(calls) == 1
+
+
+def test_ignored_dir_outside_every_requested_prefix_reloads_its_tracked_dirs(tmp_path, monkeypatch):
+    from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
+
+    repo = _repo(tmp_path, {**_BASE, ".gitignore": "cache/\n"})
+    _write(repo, "cache/a.txt")
+    calls = _count_detail_calls(monkeypatch)
+    res = scoped_worktree_status(repo, ["cache/a.txt"], [], [])
+    assert res is not None and res[1] == ["cache/"]
+    assert len(calls) == 2 and list(calls[1]) == ["cache"]
 
 
 def test_symlink_in_worktree_gates(tmp_path):
@@ -412,3 +456,25 @@ def test_combined_ask_shaped_request_matches_git(tmp_path):
         ["r"],
         ["d", ""],
     )
+
+
+def test_root_with_matching_head_subtree_is_clean_and_staged_nested_change_is_seen(tmp_path):
+    files = dict(_BASE)
+    files["r/deep/more/w.txt"] = "w\n"
+    repo = _repo(tmp_path, files)
+    assert _check(repo, [], ["r"], [])[0] == set()
+    _write(repo, "r/deep/more/w.txt", "staged w\n")
+    time.sleep(0.05)
+    _git(repo, "add", "r/deep/more/w.txt")
+    time.sleep(0.05)
+    changed, _ = _check(repo, [], ["r"], [])
+    assert changed == {"r/deep/more/w.txt"}
+
+
+def test_root_staged_delete_and_add_under_matching_siblings(tmp_path):
+    repo = _repo(tmp_path, _BASE)
+    _git(repo, "rm", "-q", "--cached", "r/deep/y.txt")
+    _write(repo, "r/new/n.txt", "n\n")
+    _git(repo, "add", "r/new/n.txt")
+    changed, _ = _check(repo, [], ["r"], [])
+    assert changed == {"r/deep/y.txt", "r/new/n.txt"}

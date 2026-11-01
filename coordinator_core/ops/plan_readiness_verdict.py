@@ -77,6 +77,7 @@ from coordinator_core.ops import (
     _anchor_check,
     _anchor_premise,
     _own_run_premise,
+    _premise_repair,
     readiness_declared_absent,
 )
 from coordinator_core.ops._major_finding_answer import unanswered
@@ -399,7 +400,8 @@ def _carry_rows(repo_root: Path, plan_rel: str) -> list:
     return record["rows"] if record else []
 
 
-REGISTER_ROWS_UNCLAIMED_KIND = "register-rows-unclaimed"
+REGISTER_ROWS_UNCLAIMED_KIND = _premise_repair.REPAIR_REGISTER_UNCLAIMED
+_REGISTER_APPLIER_KINDS = frozenset({REGISTER_ROWS_UNCLAIMED_KIND, _premise_repair.REPAIR_REGISTER_PIN})
 MAJOR_FINDING_KIND = "major-finding-needs-fix-row"
 
 
@@ -455,6 +457,24 @@ def _split_unmapped_anchors(findings: list, entries: Any, census: Any) -> tuple:
             continue
         repairs.append(_repair("anchor-premise-unchecked", f"#{index}", instruction))
     return kept, repairs
+
+
+def _uncheckable_repairs(converted: list, entries: Any) -> List[dict]:
+    """One falsifier-row repair per UNCHECKABLE anchor, carrying the plan's full claim (the finding
+    cuts it)."""
+    claims = {
+        str(e.get("id")).strip(): e.get("claim")
+        for e in entries if isinstance(e, dict) and isinstance(e.get("claim"), str)
+    } if isinstance(entries, list) else {}
+    out = []
+    for anchor_id, cut in converted:
+        claim = claims.get(anchor_id) or cut
+        out.append(_repair(
+            _premise_repair.REPAIR_FALSIFIER, anchor_id,
+            f"no check could settle anchor {anchor_id} at prep time: add a falsifier row to the spine "
+            f"that tests it at execution time, and drop it from anchor_premises. Claim: {claim}",
+        ))
+    return out
 
 
 def _row_outranks_match(verdicts: list, anchors: list, rows: list) -> list:
@@ -554,11 +574,11 @@ def readiness_verdict(
             continue
         if cls.get("mechanical") and cls.get("repair"):
             repairs.append(_repair(str(cls.get("kind") or name), name, cls["repair"]))
-        elif cls.get("kind") == REGISTER_ROWS_UNCLAIMED_KIND:
+        elif cls.get("kind") in _REGISTER_APPLIER_KINDS:
             repairs.append(_repair(
-                REGISTER_ROWS_UNCLAIMED_KIND, name,
-                "re-plan in-run and claim the unclaimed register rows (claim_register_rows): "
-                + str(cls.get("detail") or ""),
+                str(cls["kind"]), name,
+                "run plan.apply_mechanical_repairs to claim the unclaimed register rows and "
+                "re-pin the plan's register_claims: " + str(cls.get("detail") or ""),
             ))
         else:
             entry = f"{name}:{cls.get('kind') or cls.get('status')}"
@@ -601,6 +621,13 @@ def readiness_verdict(
         if _clear(review.get("verdict")):
             continue
         if _ledger_verdict(review) and _rows_clear(read):
+            continue
+        if (
+            premise_rows
+            and review.get("reviewer") == _PREMISE_REVIEWER
+            and str(review.get("verdict")).strip().upper() == "INCOMPLETE"
+        ):
+            # Its findings are the premise rows; judged below, pulls only if a row blocks.
             continue
         judgment.append(f"{review.get('reviewer')}: {review.get('verdict')!r}")
         judgment_source.append("review")
@@ -652,12 +679,21 @@ def readiness_verdict(
             elif absent is not None:
                 absent_notes.append(f"{absent[0]} -> {absent[1]}")
             else:
+                corrected = _premise_repair.corrected_citation(row)
+                if corrected is not None:
+                    repairs.append(_repair(
+                        _premise_repair.REPAIR_CITATION, row["citation"],
+                        f"replace {row['citation']} with {corrected}",
+                    ))
+                    continue
                 premise_blocking.append(f"{_PREMISE_REVIEWER}: {row['verdict']} {row['citation'][:200]}")
         elif row["verdict"] == "UNCHECKABLE":
             uncheckable += 1
     anchor_findings, refused = _anchor_premise.split_screen_refused(anchor_findings or [])
     anchor_findings, anchor_repairs = _split_unmapped_anchors(anchor_findings, anchor_entries, census)
     repairs.extend(anchor_repairs)
+    anchor_findings, converted = _anchor_premise.split_convertible(anchor_findings)
+    repairs.extend(_uncheckable_repairs(converted, anchor_entries))
     blocking_findings += len(premise_blocking) + len(anchor_findings or [])
     counts = f"needs an agent: {blocking_findings} blocking, {advisory_findings} advisory: "
     # Anchor findings are budgeted before premise rows: the reason is cut at _INSTRUCTION_MAX,

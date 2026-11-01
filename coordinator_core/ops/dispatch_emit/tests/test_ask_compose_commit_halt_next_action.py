@@ -91,6 +91,17 @@ def test_resume_ledger_inline_review_replaces_the_empty_review():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 @pytest.mark.spawns_process
+def test_resume_ledger_review_without_stem_takes_the_current_waves_stem_and_slices():
+    recorded = {"tests": ["t"], "criterion": "c", "reverify": True}
+    got = _drive(
+        _line(_RESUME_PREFIX), resume=True, gate={"resume_ledger": {"inline_review": recorded}},
+        na={"kind": "terminal_commit", "op": OP_NAME, "params": {"inline_review": _IR}},
+    )
+    assert got["na"]["params"]["inline_review"] == {**recorded, "integration_stem": "stem", "slices": 1}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
 def test_no_recorded_review_leaves_the_computed_one():
     got = _drive(_line(_RESUME_PREFIX), resume=True, gate={"resume_ledger": {}})
     assert got["na"]["params"]["inline_review"] == _IR

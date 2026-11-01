@@ -52,6 +52,11 @@ def test_revise_prompt_runs_the_readiness_verdict_op_with_pull_values():
     assert "re-run the op with the plan alone" in block
 
 
+def test_mechanical_legs_run_the_applier_before_any_hand_edit():
+    script = _script("run-c")
+    assert script.count("plan.apply_mechanical_repairs") >= 2
+
+
 def test_mechanical_or_none_ready_reply_is_accepted_without_a_reblitz():
     block = _pulled_block()
     assert "_revised?.pull_class === 'none'" in block

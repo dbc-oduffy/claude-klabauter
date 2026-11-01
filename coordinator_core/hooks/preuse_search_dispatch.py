@@ -19,8 +19,9 @@ permission decision), both fail open to `no_advisory()`:
 
 "Answers for this repo" means a `.project-rag/graph.db` found walking up from
 the search root (`tool_input.path`, else `cwd`), via the same walk
-`example_retrieval_repo_detect` uses. An MCP server being
-configured is not enough; a repo without an index adds nothing to the call.
+`example_retrieval_repo_detect` uses, or a `graph.db` under the settings home's
+`example-retrieval-repo/indexes/<repo-name>/root/` for the enclosing git repo. An MCP server
+being configured is not enough; a repo without an index adds nothing to the call.
 
 Hot path: fires on every Grep/Glob, so the budget is file stats only — no git
 spawn, no staleness probe (the advisory names `project_staleness_check`
@@ -173,11 +174,39 @@ def _search_root(params: dict, tool_input: dict) -> Optional[str]:
     return root if os.path.isdir(root) else cwd
 
 
+_REPO_WALK_LEVELS = 8
+
+
+def _settings_indexed_repo_root(search_root: str) -> Optional[str]:
+    """Repo root whose index lives under the settings home
+    (`example-retrieval-repo/indexes/<repo-name, '-'->'_'>/root/graph.db`, the layout
+    `symbol_knowledge.leg.index_graph_db` reads). Stats only: the walk stops at the
+    first `.git` entry."""
+    from coordinator_core._settings_home import settings_home
+
+    try:
+        indexes = settings_home() / "project-rag" / "indexes"
+    except Exception:
+        return None
+    d = search_root
+    for _ in range(_REPO_WALK_LEVELS):
+        if os.path.exists(os.path.join(d, ".git")):
+            slug = os.path.basename(d).replace("-", "_")
+            if slug and os.path.isfile(indexes / slug / "root" / "graph.db"):
+                return d
+            return None
+        parent = os.path.dirname(d)
+        if not parent or parent == d:
+            break
+        d = parent
+    return None
+
+
 def _indexed_repo_root(search_root: str) -> Optional[str]:
     rag_dir = find_example_retrieval_repo_dir(search_root)
-    if not rag_dir or not os.path.isfile(os.path.join(rag_dir, "graph.db")):
-        return None
-    return os.path.dirname(rag_dir)
+    if rag_dir and os.path.isfile(os.path.join(rag_dir, "graph.db")):
+        return os.path.dirname(rag_dir)
+    return _settings_indexed_repo_root(search_root)
 
 
 _STRUCTURAL_INDEX = os.path.join(".structural-index", "symbols.ndjson")

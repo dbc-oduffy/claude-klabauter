@@ -126,6 +126,24 @@ def split_screen_refused(findings: list) -> tuple[list, list[tuple[str, str]]]:
     return kept, refused
 
 
+_UNCHECKABLE_FINDING = re.compile(r"anchor-premise-UNCHECKABLE: (\S+) -- (.*)", re.DOTALL)
+
+
+def split_convertible(findings: list) -> tuple[list, list[tuple[str, str]]]:
+    """(findings that still block, (anchor id, claim) per UNCHECKABLE anchor). An UNCHECKABLE anchor
+    is a premise no check could settle at prep time; it converts to an execution-time falsifier row
+    instead of blocking readiness."""
+    kept: list = []
+    converted: list[tuple[str, str]] = []
+    for finding in findings:
+        match = _UNCHECKABLE_FINDING.fullmatch(finding) if isinstance(finding, str) else None
+        if match:
+            converted.append((match.group(1), match.group(2)))
+        else:
+            kept.append(finding)
+    return kept, converted
+
+
 def unjudged(reason: str) -> str:
     return f"anchor-premises-unjudged: {reason}"
 

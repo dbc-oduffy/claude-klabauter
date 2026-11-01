@@ -101,9 +101,9 @@ from coordinator_core.reconcile.handoff_corpus import (  # noqa: E402
 REPO_KEYS: Tuple[Tuple[str, str], ...] = (
     ("repos.content_root", "coordinator-content-repo"),
     ("repos.claude_klabauter", "claude-klabauter"),
-    ("repos.example_cockpit_repo", "example-cockpit-repo"),
+    ("repos.project_opticon", "example-cockpit-repo"),
     ("repos.project_rag", "project-rag"),
-    ("repos.example_market_data_repo", "example-market-data-repo"),
+    ("repos.market_intelligence", "example-market-data-repo"),
 )
 
 PRE_C4_SHA = "578c47d3"

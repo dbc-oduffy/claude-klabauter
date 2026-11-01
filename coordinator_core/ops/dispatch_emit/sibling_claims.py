@@ -83,6 +83,60 @@ def _withholds_any(marker: dict, covering: Sequence[str]) -> bool:
     return any(run_ownership._covers(w, c) for w in withheld for c in covering)
 
 
+def index_clear_runs(root: Path, covering: Optional[Sequence[str]]) -> frozenset:
+    """Run ids whose `halted_withheld_index` entry names withheld paths, none of them covering `covering`:
+    those runs withhold nothing of the landing, so their marker is never opened. Read once per scope, one
+    small file per in-window run. A run with no entry, a declared-only entry, or an unreadable entry is
+    absent (its marker is read), and an unreadable index yields the empty set. Never raises."""
+    if not covering:
+        return frozenset()
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    wanted = tuple(sorted({_norm(c) for c in covering if c}))
+    return landing_halted_view.shared("index_clear", (str(root), wanted), lambda: _index_clear_read(Path(root), wanted))
+
+
+def _index_clear_read(root: Path, wanted: tuple) -> frozenset:
+    from coordinator_core.ops.dispatch_emit import landing_halted_view, run_ownership, run_token
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    try:
+        index = idx._dir(root)
+        if not (index / idx.SENTINEL).exists():
+            idx.rebuild(root)
+        now = time.time()
+        clear = set()
+        for name in os.listdir(index):
+            if not name.endswith(".json"):
+                continue
+            run_id = name[: -len(".json")]
+            stamp = landing_halted_view.stamp(run_id)
+            if stamp is None or now - stamp > run_token.TTL_SECONDS:
+                continue
+            entry = idx._parse(index / name)
+            if entry is not None and entry.paths and not any(
+                run_ownership._covers(w, c) for w in entry.paths for c in wanted
+            ):
+                clear.add(run_id)
+        return frozenset(clear)
+    except Exception:  # noqa: BLE001 -- index unreadable: every marker is read
+        return frozenset()
+
+
+def _indexed_halt_marker(record: Path) -> Optional[dict]:
+    """A stand-in halt marker (status and withheld paths only) for a run with a fresh index entry, else None:
+    the caller reads `halted.json`. Trap: carries no other marker field."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    entry = halted_run.fresh_index_entry(record)
+    if entry is None:
+        return None
+    return {
+        "status": halted_run.STATUS_HALTED,
+        halted_run.HALT_RUN_ARTIFACTS_FIELD: {"withheld": {p: "" for p in entry.paths}},
+    }
+
+
 def _unlanded_run_ids(
     root: Path, own_run_id: Optional[str], own_plan: Optional[str] = None, minted_before: Optional[tuple] = None,
     covering: Optional[Sequence[str]] = None,
@@ -93,20 +147,24 @@ def _unlanded_run_ids(
     `halted_hold_release.release_reason` frees (against `own_run_id`/`own_plan`), and a resumed run
     whose successor landed or whose sizing is superseded, is not listed. A listed halted run may
     still claim nothing: `_held_extras` narrows it to what it withheld or left dirty. With `covering`, a
-    readable halted run that withholds none of those paths is skipped before `release_reason` weighs it."""
+    readable halted run that withholds none of those paths is skipped before `release_reason` weighs it, and a run
+    whose index entry shows that (`index_clear_runs`) is skipped without opening its marker."""
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     now = time.time()
     found = []
+    clear = index_clear_runs(root, covering)
     for run_id, stamp in halted_hold_release.record_stamps(root):
-        if run_id == own_run_id:
+        if run_id == own_run_id or run_id in clear:
             continue
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
             continue
         try:
-            marker = halted_run.read_strict_run(root / RECORD_DIR_ROOT / run_id)
+            marker = _indexed_halt_marker(root / RECORD_DIR_ROOT / run_id)
+            if marker is None:
+                marker = halted_run.read_strict_run(root / RECORD_DIR_ROOT / run_id)
         except halted_run.UnreadableHaltRecord:
             found.append(run_id)
             continue
@@ -139,8 +197,9 @@ def halted_records(root: Path, own_run_id: Optional[str], covering: Optional[Seq
     out: list = []
     try:
         now = time.time()
+        clear = index_clear_runs(root, covering)
         for name, stamp in halted_hold_release.record_stamps(root):
-            if name == own_run_id or stamp is None or now - stamp > run_token.TTL_SECONDS:
+            if name == own_run_id or name in clear or stamp is None or now - stamp > run_token.TTL_SECONDS:
                 continue
             record = root / RECORD_DIR_ROOT / name
             marker = halted_run._read(record)
@@ -386,7 +445,7 @@ def sibling_run_claims(
                         freed = spine_all & own
                         if freed:
                             try:
-                                withheld = warp_run_deliverable.halted_withheld_paths(root, run_id)
+                                withheld = halted_hold_release.held_paths(root, run_id, own_run_id, own_plan)
                             except halted_run.UnreadableHaltRecord as exc:
                                 for path in sorted(freed):
                                     claims.setdefault(path, run_id)

@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import op
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RECORD_DIR_ROOT, RELAYED_ASK_FILE
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 
 _DRAFT = """schema: sizing-object
 intent: "Ship the thing"
@@ -227,6 +228,7 @@ def test_a_slice_holding_its_assigned_rows_seeds_nothing_more(repo):
 
 def test_stage_binds_a_ledger_bearing_run_only(repo):
     _put(repo)
+    write_run_scripts(repo, "noledger", "ledgered")
     stage(repo, run_id="noledger", sizing_rel=REL, writes=["pkg/a.py"])
     assert rr.read_register((repo / REL).read_text(encoding="utf-8")) is None
     run_dir = rl.start(repo, "ledgered")

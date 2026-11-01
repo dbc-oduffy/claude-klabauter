@@ -54,6 +54,32 @@ def test_referencer_written_by_row_in_another_wave_is_added():
     assert "pkg/tests/test_a.py" in a.writes
 
 
+_GOLDEN_LINE = (
+    'pkg/tests/test_a.py:_GOLDEN_PATH = Path(__file__).parent / "fixtures" / "x-fixture.golden.mjs"\n'
+)
+GOLDEN = "pkg/tests/fixtures/x-fixture.golden.mjs"
+
+
+def test_row_gets_the_golden_its_covering_test_names():
+    grep = _grep("pkg/tests/test_a.py:from pkg.sub.mod import f\n" + _GOLDEN_LINE)
+    [[row]] = widen_waves([[_row("A", [MOD])]], grep)
+    assert row.writes == [MOD, "pkg/tests/test_a.py", GOLDEN]
+    assert len(grep.calls) == 1
+
+
+def test_golden_named_by_a_test_not_covering_the_module_is_not_added():
+    grep = _grep("pkg/tests/test_a.py:from pkg.sub import other\n" + _GOLDEN_LINE)
+    waves = [[_row("A", [MOD])]]
+    assert widen_waves(waves, grep) == waves
+
+
+def test_golden_another_same_wave_row_writes_is_not_added():
+    grep = _grep("pkg/tests/test_a.py:from pkg.sub.mod import f\n" + _GOLDEN_LINE)
+    [[a, b]] = widen_waves([[_row("A", [MOD]), _row("B", [GOLDEN])]], grep)
+    assert a.writes == [MOD, "pkg/tests/test_a.py"]
+    assert b.writes == [GOLDEN]
+
+
 def test_no_modules_means_no_grep_and_no_change():
     grep = _grep("x")
     waves = [[_row("A", ["pkg/tests/test_a.py", "doc.md"])]]

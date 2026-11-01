@@ -180,7 +180,7 @@ from coordinator_core.warm import push_cadence
 from coordinator_core.ops.fleet._common import (
     build_act_result,
     build_dry_run_result,
-    build_setup_error_result,
+    build_setup_error_result as _build_base_setup_error_result,
     main_worktree_root,
 )
 from coordinator_core.ops.fleet._memo_anchor import (
@@ -217,6 +217,20 @@ _HEADS_PREFIX = "refs/heads/"
 # for "this send could not resolve its own session id" — a memo that cannot
 # name its sender must SAY SO, never omit the field silently.
 _SENT_BY_UNRESOLVED = "unresolved"
+
+
+def build_setup_error_result(mode, dry_run, reason: str) -> dict:
+    """The shared exit_code:1 setup-error envelope plus a `reason` field.
+
+    The base envelope carries its reason only on stderr / the warm diagnostic
+    side-channel, either of which can be dropped before the caller's refusal
+    text is built. `reason` is a field `cc_invoke.route_mutation` already reads,
+    so it rides the transport with the envelope. Existing envelope fields are
+    unchanged.
+    """
+    result = _build_base_setup_error_result(mode, dry_run, reason)
+    result["reason"] = reason
+    return result
 
 
 def _resolve_sent_by(fm: dict) -> str:
@@ -699,7 +713,8 @@ def _compose_delivered_content(
             sent_by=sent_by,
         )
     except ValueError as exc:
-        return None, f"memo.send: {exc}"
+        text = str(exc)
+        return None, text if text.startswith("memo.send:") else f"memo.send: {text}"
 
     if cc is not None:
         content = _stamp_cc(content, cc)

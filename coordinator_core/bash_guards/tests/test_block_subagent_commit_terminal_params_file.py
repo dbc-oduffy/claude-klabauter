@@ -417,3 +417,42 @@ def test_a_refusal_off_the_canonical_path_leaves_no_note(repo):
 def test_the_diagnosis_without_a_note_keeps_the_generic_cause(repo):
     text = chan.missing_file_diagnosis(str(chan.params_path(repo, _RUN)))
     assert "never written" in text and "did not run or refused" in text
+
+
+@pytest.mark.parametrize("tail", [" 2>&1", " --dry-run"])
+def test_an_argv_with_a_redirect_or_extra_flag_is_denied_but_its_params_file_is_written(repo, tail):
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token}
+    verdict = _check(_emitted_argv(repo) + tail, _transcript(repo, params))
+    assert verdict is not None
+    assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8")) == params
+
+
+@pytest.mark.parametrize("tail", [" 2>&1", " --dry-run", " | tail -5", " && echo x"])
+def test_an_argv_with_a_redirect_flag_or_second_segment_and_an_unminted_token_writes_nothing(repo, tail):
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "never-minted"}
+    assert _check(_emitted_argv(repo) + tail, _transcript(repo, params)) is not None
+    assert not chan.params_path(repo, _RUN).exists()
+
+
+def test_a_carry_prior_remint_with_the_params_file_missing_is_rewritten_from_the_prompt(repo):
+    held = run_token.mint(repo, _RUN, _SCRIPT, carry_prior=True)
+    tp = _transcript(repo, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": held})
+    run_token.mint(repo, _RUN, _SCRIPT, carry_prior=True)
+    chan.params_path(repo, _RUN).unlink(missing_ok=True)
+    assert _check(_emitted_argv(repo), tp) is None
+    assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8"))["run_token"] == held
+
+
+def test_a_large_commit_stage_prompt_still_writes_the_params_file(repo):
+    """edfee4: the spawn prompt record was ~71KB, over the params-file read cap."""
+    token = run_token.mint(repo, _RUN, _SCRIPT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token}
+    tp = _transcript(repo, params)
+    with open(tp, encoding="utf-8") as fh:
+        record = json.loads(fh.readline())
+    record["message"]["content"] = "x" * (chan.READ_CAP_BYTES + 7000) + "\n" + record["message"]["content"]
+    with open(tp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+    assert _check(_emitted_argv(repo), tp) is None
+    assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8")) == params

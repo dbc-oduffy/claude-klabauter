@@ -21,7 +21,7 @@ failure: it never got a chance to answer `--help` before DoE-clone
 resolution ran unconditionally first and failed. Fixed by answering
 `--help`/`-h` directly, ahead of any clone/registry resolution -- see
 `claude-author.py`'s `_USAGE` and the module header. The dedicated test class
-below exercises the registry-absent condition explicitly (`REPO_CONTENT_ROOT`
+below exercises the registry-absent condition explicitly (`REPO_DOE_CLAUDE`
 unset, `CLAUDE_AUTHOR_MACHINE_LOCAL_BIN` pointed at a nonexistent path), since
 that is the exact publish-sandbox shape the gate failure reproduced.
 
@@ -565,7 +565,7 @@ class TestClaudeAuthorHelp(unittest.TestCase):
         import os
 
         env = dict(os.environ)
-        env.pop("REPO_CONTENT_ROOT", None)
+        env.pop("REPO_DOE_CLAUDE", None)
         # Simulate the publish sandbox: machine-local unresolvable, so any
         # rung that actually reaches the registry would fail loud rather
         # than silently succeeding via a real local registry on this box.

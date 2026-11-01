@@ -72,3 +72,24 @@ def test_derived_summary_passes_send_cap(tmp_path):
     summary = _summary_of(text)
     assert 0 < len(summary) <= 240
     assert schema_validate._memo_cf_summary_length_cap({"summary": summary}) is None
+
+
+def test_derived_summary_with_quotes_and_backticks_passes_send_cap(tmp_path):
+    body = ('`cross-repo-memo draft x --title "..." --body-file "a.md"` derived ' + 'word ' * 40
+            + 'and "quoted" ends here. Tail sentence.\n')
+    text = _draft(tmp_path, body, None)
+    raw = re.search(r"^summary: \"(.*)\"$", text, re.MULTILINE).group(1)
+    assert 0 < len(raw) <= 240
+    assert schema_validate._memo_cf_summary_length_cap({"summary": raw}) is None
+
+
+def test_lib_derive_summary_measures_escaped_form():
+    sys.path.insert(0, str(_BIN / "lib"))
+    try:
+        from memo_compose import _derive_summary
+    finally:
+        sys.path.remove(str(_BIN / "lib"))
+    derived = _derive_summary('"' * 200 + " tail")
+    assert len(derived) + derived.count('"') + derived.count("\\") <= 240
+    assert derived.endswith("…")
+    assert _derive_summary("short line") == "short line"

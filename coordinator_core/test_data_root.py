@@ -119,10 +119,10 @@ def test_codename_free_ladder_reaches_both_twins_via_real_delegation(tmp_path, m
 
     # read_content_root() is NOT stubbed — it IS the ladder this test
     # proves engine-side gets "for free" via delegation (per C2's finding:
-    # this module needs no ladder of its own). The REPO_CONTENT_ROOT env
+    # this module needs no ladder of its own). The REPO_DOE_CLAUDE env
     # override is cleared so it does not short-circuit ahead of the
     # ladder this test targets.
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setattr(dr_mod, "_colocated_root", lambda: colocated_core_miss)
 
     if str(_BIN_LIB_DIR) not in sys.path:

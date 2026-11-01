@@ -135,8 +135,10 @@ def _tree(repo: Path, *, substrate: bool = False) -> None:
     _request(repo, {"C1": _FOOTPRINT, "C2": ["pkg/live.py"], "C3": ["a.py"]})
 
 
-def _drive(monkeypatch, replies: dict, *, items=None, manifest=None) -> dict:
-    return loop._run(loop._script(monkeypatch), items=items or [_R5_OPEN], replies=replies, manifest=manifest or _DISK)
+def _drive(monkeypatch, replies: dict, *, items=None, manifest=None, test=None) -> dict:
+    return loop._run(
+        loop._script(monkeypatch), items=items or [_R5_OPEN], replies=replies, manifest=manifest or _DISK, test=test,
+    )
 
 
 def test_r43_fixed_in_one_attempt_lands_all_three_chunks(monkeypatch, repo):  # noqa: F811
@@ -227,7 +229,10 @@ def _replay_432570(monkeypatch, repo: Path, tmp_path: Path, **stage_emits) -> di
     manifest = json.loads(copy.read_text(encoding="utf-8"))
     item = {**halted["blocking_items"][0], "status": "not_met", "essential": True}
 
-    out = _drive(monkeypatch, {}, items=[item], manifest=manifest)
+    # A recorded manifest names test targets, so the verify stage owes a test verdict; without one the run halts
+    # test_verdict_empty before the ledger loop this replay exists to exercise.
+    ran = {"status": "passed", "tests_run": 1, "tests_failed": 0, "sidecar_path": "scratch/replay-tests.json"}
+    out = _drive(monkeypatch, {}, items=[item], manifest=manifest, test=ran)
 
     assert _fix_calls(out) == []
     assert (out["result"]["halted_by"] or {}).get("halted") != "ledger-check", out["result"]["halted_by"]

@@ -1233,9 +1233,9 @@ _REASON_HASATTR_FCHMOD_FEATURE_GUARD = (
 #: `repos.<key>` machine-local registry vocabulary (== `repo_key_for_root`
 #: of that repo's canonical clone directory), named here so a typo in a
 #: nested key is a NameError at import rather than a silently-inert grant.
-REPO_CLAUDE_KLABAUTER = "claude_klabauter"
-REPO_CONTENT_ROOT = "content_root"
-REPO_EXAMPLE_GAME_WORKBENCH_REPO = "example_game_workbench_repo"
+REPO_PROJECT_MAKIMA = "claude_klabauter"
+REPO_DOE_CLAUDE = "content_root"
+REPO_CLAUDE_UNREAL_HOLODECK = "claude_unreal_holodeck"
 
 
 _REASON_PRE_COMMIT_HOOK_COPY = (
@@ -1265,13 +1265,13 @@ _REASON_SETUP_DIRECT_EXEC = (
 
 EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     "env_shebang": {
-        REPO_EXAMPLE_GAME_WORKBENCH_REPO: {
+        REPO_CLAUDE_UNREAL_HOLODECK: {
             "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
         },
-        REPO_CONTENT_ROOT: {
+        REPO_DOE_CLAUDE: {
             "coordinator/bin/pre_commit_corpus_artifact_guard.py": _REASON_PRE_COMMIT_HOOK_COPY,
         },
-        REPO_CLAUDE_KLABAUTER: {
+        REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
             "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
             "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
@@ -1279,26 +1279,26 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
     },
     "extensionless_exec": {
-        REPO_EXAMPLE_GAME_WORKBENCH_REPO: {
+        REPO_CLAUDE_UNREAL_HOLODECK: {
             "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
         },
-        REPO_CLAUDE_KLABAUTER: {
+        REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
             **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
     "mode_100755": {
-        REPO_EXAMPLE_GAME_WORKBENCH_REPO: {
+        REPO_CLAUDE_UNREAL_HOLODECK: {
             "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
         },
-        REPO_CLAUDE_KLABAUTER: {
+        REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
             "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
             **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
     "path_separator": {
-        # C2 (2026-08-14): all REPO_CLAUDE_KLABAUTER path_separator entries
+        # C2 (2026-08-14): all REPO_PROJECT_MAKIMA path_separator entries
         # struck -- C1 dropped this class's three detection arms and added no
         # replacement, so `_scan_python_file` never calls `_record("path_separator",
         # ...)` and nothing in this module can produce a path_separator finding
@@ -1307,7 +1307,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         # for the false-positive measurement that drove the arm removal, and this
         # module's own docstring (L106) for the decision to retain the class name
         # as an empty BLOCKING slot rather than delete it outright.
-        # the two REPO_CONTENT_ROOT entries formerly here
+        # the two REPO_DOE_CLAUDE entries formerly here
         # (coordinator/bin/stable-suite-run.py,
         # coordinator/tests/test_cc_root_source_guard.py) exempted a class
         # that can no longer fire in ANY repo: C1 dropped path_separator's
@@ -1315,14 +1315,14 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         # claude-klabauter), so _scan_python_file never calls
         # _record("path_separator", ...) for any repo_key, coordinator-content-repo
         # included -- the identical dead-letter rationale C2's own comment
-        # above used to strike the 148 REPO_CLAUDE_KLABAUTER rows. Struck by
+        # above used to strike the 148 REPO_PROJECT_MAKIMA rows. Struck by
         # the same rationale rather than left for coordinator-content-repo's own test
         # tier to notice, since check_no_stale_exemptions is repo-scoped
         # and a claude-klabauter gate run can never flag another repo's
         # entries (see that function's own docstring).
     },
     "posix_mode_bits": {
-        REPO_CLAUDE_KLABAUTER: {
+        REPO_PROJECT_MAKIMA: {
             "coordinator_core/hooks/test_em_report_altitude.py": _REASON_CHMOD_DIR_GAP,
             "coordinator_core/ops/test_install_meta_repo_precommit_hook_install_all.py": _REASON_CHMOD_EXEC_FOR_SH,
             "coordinator_core/bash_guards/tests/test_write_bump_session_start.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,
@@ -1461,14 +1461,14 @@ _FROZEN_FIXTURE_BYTES_REASON = (
 )
 
 EXEMPT_PREFIXES: Dict[str, Dict[str, str]] = {
-    REPO_CLAUDE_KLABAUTER: {
+    REPO_PROJECT_MAKIMA: {
         "dist/mirror-native/": _MIRROR_NATIVE_DESTINATION_REASON,
         "coordinator_core/percolate/tests/fixtures/doe-golden/": _FROZEN_FIXTURE_BYTES_REASON,
         "coordinator_core/percolate/tests/fixtures/doe-input-tree/": _FROZEN_FIXTURE_BYTES_REASON,
         "coordinator_core/publish/tests/fixtures/golden-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
         "coordinator_core/publish/tests/fixtures/input-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
     },
-    REPO_CONTENT_ROOT: {
+    REPO_DOE_CLAUDE: {
         "state/review-trail/diffs/m8-baseline/": _M8_REVIEW_TRAIL_SNAPSHOT_REASON,
     },
 }

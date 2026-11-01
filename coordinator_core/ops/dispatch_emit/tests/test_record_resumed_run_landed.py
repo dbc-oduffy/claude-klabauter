@@ -48,6 +48,8 @@ def _successor(root: Path, base: str, resumed_from: str = RID) -> None:
     d = root / base / SUCC
     d.mkdir(parents=True, exist_ok=True)
     (d / rl.RUN_FILE).write_text(json.dumps({rl.RESUMED_FROM_FIELD: resumed_from}), encoding="utf-8")
+    # A dir with no progress record is a minted-only shell, which _live_successor reads as not running.
+    (d / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
 
 
 def test_resumed_with_no_successor_lands(repo):

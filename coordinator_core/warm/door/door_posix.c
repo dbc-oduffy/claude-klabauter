@@ -1142,7 +1142,40 @@ static int resolve_fallback_script(const char *engine_root, char *script_path) {
 
 #define DOOR_SPAWN_DEBOUNCE_SECS 2.0
 
+/* PUBLISH DRAIN GATE -- mirrors `warm/breadcrumb.py :: publish_marker_held` /
+ * `wait_for_publish_release`. While `<svc_dir>/publish.marker` is fresh
+ * (mtime within `PUBLISH_MARKER_MAX_AGE_SECS`) this door spawns no warm
+ * server and queues behind it for at most `DOOR_DRAIN_WAIT_MS`
+ * (`breadcrumb.DRAIN_WAIT_SECS`), then retries the socket once. Stat only: no
+ * spawn, no unlink, no holder-pid probe. Any error reads "not held". */
+#define DOOR_PUBLISH_MARKER_MAX_AGE_SECS 3600.0
+#define DOOR_DRAIN_WAIT_MS 500
+#define DOOR_DRAIN_POLL_MS 20
+
+static int door_publish_marker_held(const char *svc_dir) {
+    char marker[PATH_MAX];
+    int n = snprintf(marker, sizeof(marker), "%s/publish.marker", svc_dir);
+    if (n < 0 || (size_t)n >= sizeof(marker)) return 0;
+    struct stat st;
+    if (stat(marker, &st) != 0) return 0;
+    double age = difftime(time(NULL), st.st_mtime);
+    return age > -DOOR_PUBLISH_MARKER_MAX_AGE_SECS && age < DOOR_PUBLISH_MARKER_MAX_AGE_SECS;
+}
+
+/* 1 iff the marker was held on entry and released within the wait budget (the
+ * caller retries the socket once); 0 if not held or still held at deadline. */
+static int door_drain_publish_hold(const char *svc_dir) {
+    if (!door_publish_marker_held(svc_dir)) return 0;
+    long long started = monotonic_ms();
+    for (;;) {
+        (void)poll(NULL, 0, DOOR_DRAIN_POLL_MS);
+        if (!door_publish_marker_held(svc_dir)) return 1;
+        if (monotonic_ms() - started >= DOOR_DRAIN_WAIT_MS) return 0;
+    }
+}
+
 static void door_maybe_spawn_server(const char *engine_root, const char *svc_dir) {
+    if (door_publish_marker_held(svc_dir)) return;
     char lock_path[PATH_MAX];
     if (snprintf(lock_path, sizeof(lock_path), "%s/warm.json.boot.lock", svc_dir) < 0) {
         return;
@@ -1606,6 +1639,7 @@ int main(int argc, char **argv) {
     int fd = -1;
     char chosen_dir[PATH_MAX];
     chosen_dir[0] = '\0';
+    char chosen_sock[sizeof(((struct sockaddr_un *)0)->sun_path)];
     for (int i = 0; i < base_count && fd < 0; i++) {
         char sock_dir[PATH_MAX];
         char sock_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
@@ -1619,7 +1653,12 @@ int main(int argc, char **argv) {
         if (!dir_not_substitutable(warm_dir)) continue;
         if (!dir_is_private(sock_dir)) continue;
         snprintf(chosen_dir, sizeof(chosen_dir), "%s", sock_dir);
+        snprintf(chosen_sock, sizeof(chosen_sock), "%s", sock_path);
         fd = connect_socket(sock_path);
+    }
+    if (fd < 0 && g_connect_no_server && chosen_dir[0] != '\0' &&
+        door_drain_publish_hold(chosen_dir)) {
+        fd = connect_socket(chosen_sock);
     }
     if (fd < 0) {
         /* RESPAWN ON MISS -- the no-server branch only. `g_connect_no_server`

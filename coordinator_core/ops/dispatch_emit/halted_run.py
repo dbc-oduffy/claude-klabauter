@@ -402,8 +402,29 @@ def _withheld_of(marker: Optional[dict]) -> dict:
     return {k: v for k, v in raw.items() if isinstance(k, str)} if isinstance(raw, dict) else {}
 
 
+def fresh_index_entry(record_dir: Path):
+    """The `halted_withheld_index` entry of the run owning `record_dir` (`<root>/<RECORD_DIR_ROOT>/<run>`)
+    while it is fresh against the marker (`halted_withheld_index.fresh_entry`), else None: the caller
+    opens `halted.json`. None for a dir outside that layout."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+
+    rd = Path(record_dir)
+    try:
+        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
+    except IndexError:
+        return None
+    if root / RECORD_DIR_ROOT / rd.name != rd:
+        return None
+    return idx.fresh_entry(root, rd.name)
+
+
 def halted_withheld_strict(record_dir: Path) -> dict:
-    """`halted_withheld` over the strict read: empty when the marker is absent, `UnreadableHaltRecord` when corrupt."""
+    """`halted_withheld` over the strict read: empty when the marker is absent, `UnreadableHaltRecord` when corrupt.
+    A run with a fresh `halted_withheld_index` entry (`fresh_index_entry`) is answered without opening its
+    marker: `{path: ""}`. Trap: the reasons are empty on that path; a caller needing them reads the marker."""
+    entry = fresh_index_entry(record_dir)
+    if entry is not None:
+        return {p: "" for p in entry.paths}
     return _withheld_of(read_strict_run(record_dir))
 
 

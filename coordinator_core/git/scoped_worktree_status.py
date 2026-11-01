@@ -80,7 +80,10 @@ def scoped_worktree_status(
     if ignored is None:
         return None
     tops = [e[:-1] for e in ignored if e.endswith("/")]
-    if tops:
+    prefixes = tuple(p + "/" for p in all_roots + glob_dirs if p)
+    if "" not in glob_dirs and any(
+        t not in all_roots and t not in glob_dirs and not t.startswith(prefixes) for t in tops
+    ):
         detail = scoped_changed_detail(
             root, literals, all_roots, glob_dirs, extra_prefixes=tops, descend=descend
         )

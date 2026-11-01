@@ -241,7 +241,7 @@ def cmd_whoami_status(args: argparse.Namespace) -> int:
 
 def _resolve_claude_klabauter_root_for_exec_summary(settings_home: "str | None") -> "str | None":
     """Native mirror of the skill's claude-klabauter-live-root lookup used only by the
-    exec-summary generator: REPO_CLAUDE_KLABAUTER, falling back to
+    exec-summary generator: REPO_PROJECT_MAKIMA, falling back to
     COORDINATOR_ENGINE_ROOT (via the accessor). No pointer-file fallback:
     absence fails loudly rather than falling back to a live-tree pointer
     (PM ruling — no consumer of the published build has a claude-klabauter checkout,
@@ -254,7 +254,7 @@ def _resolve_claude_klabauter_root_for_exec_summary(settings_home: "str | None")
     _bootstrap_engine()
     from coordinator_core.engine_root import coordinator_engine_root_env
 
-    return os.environ.get("REPO_CLAUDE_KLABAUTER") or coordinator_engine_root_env(__name__)
+    return os.environ.get("REPO_PROJECT_MAKIMA") or coordinator_engine_root_env(__name__)
 
 
 def cmd_resolve_exec_summary_generator(args: argparse.Namespace) -> int:
@@ -262,7 +262,7 @@ def cmd_resolve_exec_summary_generator(args: argparse.Namespace) -> int:
 
         _cc_gen="$_cc_root/bin/generate-exec-summary.py"
         if [ ! -f "$_cc_gen" ]; then
-          _cc_claude_klabauter="${REPO_CLAUDE_KLABAUTER:-${COORDINATOR_ENGINE_ROOT:-}}"
+          _cc_claude_klabauter="${REPO_PROJECT_MAKIMA:-${COORDINATOR_ENGINE_ROOT:-}}"
           [ -n "$_cc_claude_klabauter" ] && _cc_gen="$_cc_claude_klabauter/coordinator/bin/generate-exec-summary.py"
         fi
 
@@ -298,7 +298,7 @@ def cmd_resolve_exec_summary_generator(args: argparse.Namespace) -> int:
         print(
             "[repo-setup-args-and-register] generate-exec-summary.py unresolvable "
             "(checked coordinator/bin/ and the engine sibling via "
-            "REPO_CLAUDE_KLABAUTER/COORDINATOR_ENGINE_ROOT) — exec-summary "
+            "REPO_PROJECT_MAKIMA/COORDINATOR_ENGINE_ROOT) — exec-summary "
             "generation skipped",
             file=sys.stderr,
         )

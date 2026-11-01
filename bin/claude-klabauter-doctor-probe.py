@@ -2368,7 +2368,7 @@ def _run_probe_vendored_schema_drift(claude_klabauter_root: Path | None) -> _Pro
                 status=_INFO,
                 detail=summary,
                 remediation=(
-                    "Optional: check out the coordinator-content-repo sibling repo (or set REPO_CONTENT_ROOT) "
+                    "Optional: check out the coordinator-content-repo sibling repo (or set REPO_DOE_CLAUDE) "
                     "to enable the vendored-schema drift watch on this machine."
                 ),
                 required=False,

@@ -3760,7 +3760,7 @@ class TestDriftCheck:
         """
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(_HANDOFF_SCHEMA, _DOE_REPO)  # should not raise
+        _check_vendored_against_doe('handoff', _HANDOFF_SCHEMA)  # should not raise
 
         vendored = json.loads(_HANDOFF_SCHEMA.read_text(encoding='utf-8'))
         doe_result = subprocess.run(
@@ -4446,8 +4446,22 @@ _QUEUE_SCHEMA_PINS = {
 # Exit path: once DoE vendors 3.20.0, delete this entry and run
 # bin/claude-klabauter-revendor-schema.py plan-tasks so it returns to a plain byte-pin.
 _QUEUE_SCHEMA_AHEAD_PINS: dict = {
+    'handoff': {
+        'doe_ref': "86eb0e39a7ca45ceb432de9b3d828d9078f91d3e",
+        'reason': (
+            "claude-klabauter-first handoff 11.2.0 widens the `gate_cleared_by` item pattern to "
+            "admit `pm-turn:<session_id>#<turn>` beside hex SHAs; DoE's copy is 11.1.0 "
+            "and its own vendor of 11.2.0 is pending"
+        ),
+        'provenance': "claude-klabauter plan 2026-10-30-human-gate-clear-verb C1",
+        'exempt_paths': frozenset({
+            ('properties', 'gate_cleared_by', 'items', 'pattern'),
+            ('properties', 'gate_cleared_by', 'description'),
+        }),
+        'local_shape_hash': "239df7e4ecebe04ed5909f79d6eefeba99ae8810e2e73e9361fb56fa184e6229",
+    },
     'sizing-object': {
-        'doe_ref': "8e14712c0cdfb022f27597acbf7f6ce0da2f5c97",
+        'doe_ref': "4468a045eab3cd7d4ba8da59d3cb7cca7acbe196",
         'reason': (
             "claude-klabauter 1.49.0 merges DoE HEAD's top-level `writes` and keeps the "
             "L `mechanically_uniform` field added by run 04b5ef, which DoE lacks; "
@@ -4458,10 +4472,10 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
             ('properties', 'xl_exit', 'description'),
             ('x-bump-note',),
         }),
-        'local_shape_hash': "c00f59f234fb8dd235ec6a2f2495250429136c0d92771481dee96eefc3d2778f",
+        'local_shape_hash': "8aadeabeaadbebb988d1e3d5704180ae31f674d77c150da62c6583a76ccb7b59",
     },
     'plan-tasks': {
-        'doe_ref': "7af1b4d3bf2257d018f152300fb060f5dd2b950b",
+        'doe_ref': "0626984094477e6c8f848f75c99d0f067a61e4c6",
         'reason': (
             "claude-klabauter-first plan-tasks 3.20.0 admits signoff history on apm, g-em and uhura "
             "records and adds the pm_signoff_record history arm; DoE's copy is still 3.19.0 "
@@ -4477,8 +4491,10 @@ _QUEUE_SCHEMA_AHEAD_PINS: dict = {
             ('$defs', 'signoff', 'allOf', 2, 'then', 'properties', 'history'),
             ('$defs', 'signoff', 'description'),
             ('$defs', 'signoff', 'properties', 'history', 'description'),
+            ('x-bump-note',),
+            ('x-bump-class',),
         }),
-        'local_shape_hash': "722f1910d3b40bfd57f86b8865aecf680977c931dbff23e49e7e49179a26e505",
+        'local_shape_hash': "ffff6e9a88b7109c9ec36992ff30a043f75979813f9251035d7b3000c840dbfb",
     },
 }
 
@@ -7501,6 +7517,28 @@ class TestCfReadyToFireNoUnresolvedBlockedBy:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'blocked_by' for e in errors)
 
+    @pytest.mark.parametrize('item', [
+        'abcdef1',
+        'pm-turn:4d47f5c4-9b93-49c0-bbbf-a67e580e5bc0#12',
+    ])
+    def test_gate_cleared_by_item_form_accepted(self, item):
+        fm = _valid_handoff(gate_cleared_by=[item])
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any('gate_cleared_by' in e['field'] for e in errors)
+
+    @pytest.mark.parametrize('item', [
+        'pm-turn:sess#',
+        'pm-turn:#3',
+        'pm-turn:sess#x',
+        'pm-turn:sess 1#3',
+        'pm-turn:sess#3 ',
+        'stub-1',
+    ])
+    def test_gate_cleared_by_item_form_rejected(self, item):
+        fm = _valid_handoff(gate_cleared_by=[item])
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any('gate_cleared_by' in e['field'] for e in errors)
+
     def test_awaiting_gate_with_blocked_by_still_ok(self):
         """This rule only guards ready_to_fire -- awaiting_gate keeps
         blocked_by as its own valid gate-naming field (C3)."""
@@ -8256,3 +8294,41 @@ class TestTreeWalkResultCache:
 
         plan.write_text('no frontmatter at all\n', encoding='utf-8')
         assert self._walk(tmp_path, capsys)['violations'] != first['violations']
+
+
+class TestArchiveSizingsGlobAlias:
+    """archive/sizings/YYYY-MM/<id>.yaml routes to the same schema as state/sizings/<id>.yaml."""
+
+    _ARCHIVED = 'archive/sizings/2026-08/2026-08-06-example.yaml'
+    _HOT = 'state/sizings/2026-08-06-example.yaml'
+
+    def test_json_schema_loader_path_selects_sizing_object(self):
+        schemas = load_schemas(_SCHEMAS_DIR)
+        for path in (self._ARCHIVED, self._HOT):
+            matched = match_schema(path, None, schemas)
+            assert matched is not None and matched['schemaName'] == 'sizing-object', path
+
+    def test_yaml_loader_path_selects_schema(self, tmp_path):
+        (tmp_path / 'sizing-object.yaml').write_text(
+            'schema: sizing-object\napplies_to: state/sizings/*.yaml\nrequired: []\n', encoding='utf-8')
+        schemas = load_schemas(tmp_path)
+        globs = [(e['glob'], e['schemaName']) for e in schemas['_byGlob']]
+        assert ('state/sizings/*.yaml', 'sizing-object') in globs
+        assert ('archive/sizings/*/*.yaml', 'sizing-object') in globs
+        matched = match_schema(self._ARCHIVED, None, schemas)
+        assert matched is not None and matched['schemaName'] == 'sizing-object'
+
+    def test_unrelated_archive_path_unmatched(self):
+        schemas = load_schemas(_SCHEMAS_DIR)
+        matched = match_schema('archive/sizings/2026-08/sub/x.yaml', None, schemas)
+        assert matched is None or matched['schemaName'] != 'sizing-object'
+
+    def test_list_applies_to_still_fails_loud(self, tmp_path):
+        (tmp_path / 'bad.yaml').write_text(
+            'schema: bad\napplies_to:\n  - state/sizings/*.yaml\n', encoding='utf-8')
+        with pytest.raises(ValueError, match='applies_to must be a string'):
+            load_schemas(tmp_path)
+
+    def test_type_to_glob_keeps_primary_glob(self):
+        from coordinator_core.frontmatter.schema_validate import build_type_to_glob
+        assert build_type_to_glob(_SCHEMAS_DIR)['sizing-object'] == 'state/sizings/*.yaml'

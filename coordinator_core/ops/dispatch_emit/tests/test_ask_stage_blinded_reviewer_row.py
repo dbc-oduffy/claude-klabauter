@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import emit, falsifier_integrity_phase as fip
 from coordinator_core.ops.dispatch_emit.ask_compose import SKILL_WEIGHT_MARKER
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
 PLAN_REL = "docs/plans/2026-10-15-host.md"
@@ -62,6 +63,7 @@ def _rubric(tmp_path_factory, monkeypatch):
 def _repo(tmp_path: Path, host: str, reviewed: str = _REVIEWED) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
+    write_run_scripts(tmp_path, "r1")
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "inst.py").write_text("print('ok')\n", encoding="utf-8", newline="\n")
     (tmp_path / PLAN_REL).write_text(host, encoding="utf-8", newline="\n")

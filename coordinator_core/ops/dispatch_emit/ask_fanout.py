@@ -36,18 +36,22 @@ Negative spec:
   - Only an explicit `source: pm` item carries the session's recorded PM turn; when the session records
     none the submission is refused before any write. The log is read once, and only for a pm item.
   - Does NOT call the `sizing.intake_mint` handler (it refuses a second mint for one PM turn).
-  - Does NOT spawn a process (no git); every write goes through `session.claimed_write`.
+  - Does NOT spawn a process (no git). Records are staged under STAGING_REL and published by rename once
+    all are written, so a fan-out cut off mid-write leaves nothing under the sizings or parent homes.
   - Does NOT fire anything: it returns the fire calls, the caller fires them.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import threading
 import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 import yaml
 
@@ -80,6 +84,7 @@ from coordinator_core.ops.sizing_intake_contract import (
     with_em_context,
 )
 from coordinator_core.session import claimed_write
+from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 from coordinator_core.warp_fire import fire_command
@@ -388,15 +393,103 @@ def _fan_out_mode(parent: Mapping, params: Mapping) -> str:
     return mode.strip()
 
 
-def fanout(params: dict, root: Path) -> dict:
+STAGING_REL = ".coordinator-local/fanout-staging"
+FANOUT_ABORTED = "The submission was not taken: the fan-out outran the hook budget and wrote nothing. Re-submit."
+
+
+class FanoutLedger:
+    """Every path a fan-out may have created, removable by a thread other than the writer.
+
+    The writer `claim`s a path before writing it and `verify`s after; `rollback` from any thread closes the
+    ledger and unlinks every claimed path without waiting on the writer, and a write landing after the close
+    is unlinked by the writer's own `verify`. `commit` seals the ledger so a later `rollback` removes nothing.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._paths: list[Path] = []
+        self._dirs: list[Path] = []
+        self._closed = False
+        self._committed = False
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    @property
+    def committed(self) -> bool:
+        return self._committed
+
+    def claim(self, path: Path) -> None:
+        with self._lock:
+            if self._closed:
+                raise _Refused(FANOUT_ABORTED)
+            self._paths.append(path)
+
+    def claim_dir(self, directory: Path) -> None:
+        """A directory removed (when empty) on rollback."""
+        with self._lock:
+            if self._closed:
+                raise _Refused(FANOUT_ABORTED)
+            self._dirs.append(directory)
+
+    def verify(self, path: Path) -> None:
+        if self._closed:
+            path.unlink(missing_ok=True)
+            raise _Refused(FANOUT_ABORTED)
+
+    def commit(self) -> None:
+        with self._lock:
+            if self._closed:
+                raise _Refused(FANOUT_ABORTED)
+            self._committed = True
+
+    def rollback(self) -> bool:
+        """Close and remove everything claimed; False when the fan-out had already committed."""
+        with self._lock:
+            if self._committed:
+                return False
+            self._closed = True
+            paths, dirs = list(self._paths), list(self._dirs)
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass  # a writer blocked inside the write holds the file open; its own verify unlinks it
+        for directory in dirs:
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        return True
+
+
+def _stage_text(target: Path, text: str) -> None:
+    """Write `text` to a new staging file; nothing under a record home exists until publish."""
+    fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    try:
+        view = memoryview(text.encode("utf-8"))
+        while view:
+            view = view[os.write(fd, view):]
+    finally:
+        os.close(fd)
+
+
+def fanout(
+    params: dict, root: Path, abort: Optional[Callable[[], bool]] = None, ledger: Optional[FanoutLedger] = None
+) -> dict:
     """Partition, mint and write one multi-ask submission; see the module docstring.
+
+    `abort`, when given, is polled between writes of the asks arm; once true every file this call
+    created is removed and the call refuses with `FANOUT_ABORTED`. A `ledger` lets another thread
+    roll the writes back at once instead of waiting for the next poll.
 
     Returns the frozen reply keys (`parent_id`, `runs`) plus `ready` (`[{run_id, sizing}]`, the runs
     firable now, submission order) and `fire` (one `Workflow` call string per ready run, same order).
     A refusal returns `{exit_code: 1, applied: False, error}` having written nothing.
     """
     try:
-        return _fanout(params, Path(root))
+        return _fanout(params, Path(root), abort, ledger)
     except _Refused as exc:
         return _err(str(exc))
 
@@ -529,7 +622,9 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
     }
 
 
-def _fanout(params: Mapping, root: Path) -> dict:
+def _fanout(
+    params: Mapping, root: Path, abort: Optional[Callable[[], bool]] = None, ledger: Optional[FanoutLedger] = None
+) -> dict:
     confirm = params.get("confirm_split", False)
     if not isinstance(confirm, bool):
         raise _Refused("confirm_split must be a boolean")
@@ -639,17 +734,51 @@ def _fanout(params: Mapping, root: Path) -> dict:
         for i, sl in enumerate(slices)
     )
 
-    for rel, text in records:
-        target = worktree / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            claimed_write.create_exclusive(target, text)
-        except FileExistsError as exc:
-            raise _Refused(f"sizing already exists: {rel}") from exc
+    ledger = ledger or FanoutLedger()
     parent_path = worktree / contract.parent_record_rel(parent_id)
-    parent_path.parent.mkdir(parents=True, exist_ok=True)
-    record_json = contract.ParentRecord(parent_id, runs, confirm).to_json()
-    claimed_write.create_exclusive(parent_path, json.dumps(record_json, indent=2) + "\n")
+
+    def _check_abort() -> None:
+        if abort is not None and abort():
+            raise _Refused(FANOUT_ABORTED)
+
+    def _stage(target: Path, text: str) -> None:
+        _check_abort()
+        ledger.claim(target)
+        _stage_text(target, text)
+        ledger.verify(target)
+
+    stage_dir = worktree / STAGING_REL / parent_id
+    try:
+        ledger.claim_dir(stage_dir.parent)
+        ledger.claim_dir(stage_dir)
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        staged: list[tuple[Path, Path]] = []
+        for n, (rel, text) in enumerate(records):
+            staged.append((stage_dir / f"{n}.yaml", worktree / rel))
+            _stage(staged[-1][0], text)
+        staged.append((stage_dir / "parent.json", parent_path))
+        record_json = contract.ParentRecord(parent_id, runs, confirm).to_json()
+        _stage(staged[-1][0], json.dumps(record_json, indent=2) + "\n")
+        ledger.claim_dir(parent_path.parent)
+        for src, dest in staged:
+            _check_abort()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            ledger.claim(dest)
+            if dest.exists():
+                raise _Refused(f"already exists: {dest.name}")
+            os.replace(src, dest)
+            ledger.verify(dest)
+            declare_write(str(dest))
+        _check_abort()
+        ledger.commit()
+    except BaseException:
+        ledger.rollback()
+        raise
+    shutil.rmtree(stage_dir, ignore_errors=True)
+    try:
+        stage_dir.parent.rmdir()
+    except OSError:
+        pass
     turn_no = turns[-1].get("turn") if turns else None
     if sid and isinstance(turn_no, int) and not isinstance(turn_no, bool):
         baton_pm_turns.mark_sized_through(turn_no, session_id=sid, cwd=cwd)

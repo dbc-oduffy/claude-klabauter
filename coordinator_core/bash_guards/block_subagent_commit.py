@@ -7203,6 +7203,37 @@ def _prefixed_params_file_value(cmd_for_scan: str) -> Optional[str]:
     return path
 
 
+def _loose_params_file_value(cmd_for_scan: str) -> Optional[str]:
+    """The `--params-file <abs path>` of a run-token op segment whose shape `_prefixed_params_file_value` rejects, else None.
+
+    Covers a redirect or extra flag beside the params file in the one segment: `apply_guard_level`
+    can demote the shape's deny, the op then reads the file, and the strict extractor never wrote it.
+    Trap: only the file write is widened; the shape verdict is unchanged, and the write still
+    needs the canonical path plus a token `halt_admits` accepts. A command of more than one
+    segment (pipe, `&&`, `;`) never qualifies, and the path must be absolute.
+    """
+    tokens = _tokenize_full_command(cmd_for_scan)
+    if tokens is None:
+        return None
+    found: Set[str] = set()
+    segments = [s for s in _segments_from_tokens(tokens) if s]
+    if len(segments) != 1:
+        return None
+    seg = segments[0]
+    if not _token_matches_binary(seg[0], _COORDINATOR_INVOKE_BINARY):
+        return None
+    op_idx = _first_positional_after_invoke_module(seg, 1)
+    if op_idx is None or seg[op_idx] not in _RUN_TOKEN_OPS:
+        return None
+    rest = seg[op_idx + 1:]
+    for i, tok in enumerate(rest[:-1]):
+        value = rest[i + 1]
+        if tok == "--params-file" and value != "-" and not value.startswith("-"):
+            found.add(value)
+    only = next(iter(found)) if len(found) == 1 else None
+    return only if only is not None and os.path.isabs(only) else None
+
+
 def _typed_repo_operand(cmd_for_scan: str) -> Optional[str]:
     """The trailing `--repo <root>` operand of the command's last segment, else None."""
     tokens = _tokenize_full_command(cmd_for_scan)
@@ -7481,6 +7512,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 params_leg = _prompt_sourced_params_admit(
                     typed_params_file, token_root, _spawn_transcript(payload)
                 )
+            elif git_root and not (payload_legs or heredoc_stdin_import_hit):
+                loose_file = _loose_params_file_value(cmd_for_scan)
+                if loose_file is not None:
+                    _prompt_sourced_params_admit(loose_file, git_root, _spawn_transcript(payload))
             may_commit, ownership_reason = _git_commit_agent_may_commit(
                 cmd_for_scan, git_root, session_id, cwd
             )

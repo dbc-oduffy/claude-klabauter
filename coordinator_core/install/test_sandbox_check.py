@@ -78,19 +78,19 @@ def test_run_missing_executable_converts_to_synthetic_rc_127_not_an_exception():
 
 
 # ---------------------------------------------------------------------------
-# resolve_doe_clone — REPO_CONTENT_ROOT precedence over machine-local
+# resolve_doe_clone — REPO_DOE_CLAUDE precedence over machine-local
 # ---------------------------------------------------------------------------
 
 
 def test_resolve_doe_clone_prefers_env_var(monkeypatch):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", "/tmp/fake-doe-clone")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/tmp/fake-doe-clone")
     clone, resolved = resolve_doe_clone()
     assert resolved is True
     assert clone == "/tmp/fake-doe-clone"
 
 
 def test_resolve_doe_clone_returns_unresolved_when_nothing_available(monkeypatch):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir-xyz")
     monkeypatch.setattr(sandbox_check, "migrate_legacy_config", lambda: None)
     monkeypatch.setattr(sandbox_check.machine_resolver, "registry_get", lambda key: "")
@@ -100,11 +100,11 @@ def test_resolve_doe_clone_returns_unresolved_when_nothing_available(monkeypatch
 
 
 def test_ac10_resolve_doe_clone_reads_seeded_registry_in_process_before_cli_spawn(monkeypatch, tmp_path):
-    """AC10: with REPO_CONTENT_ROOT unset, a seeded scratch registry, and
+    """AC10: with REPO_DOE_CLAUDE unset, a seeded scratch registry, and
     `_run` monkeypatched to raise, resolve_doe_clone() returns the registered
     root and (value, True) — the in-process registry rung must resolve
     without ever reaching the CLI-spawn fallback."""
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
     def _boom(*a, **kw):
         raise AssertionError("resolve_doe_clone must not spawn the CLI when the registry rung resolves")
@@ -122,7 +122,7 @@ def test_ac10_resolve_doe_clone_reads_seeded_registry_in_process_before_cli_spaw
 
 
 def test_ac10_resolve_doe_clone_reaches_cli_spawn_when_registry_empty(monkeypatch, tmp_path):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
@@ -147,7 +147,7 @@ def test_ac10_resolve_doe_clone_reaches_cli_spawn_when_registry_empty(monkeypatc
 
 
 def test_ac4b_resolve_doe_clone_normalizes_msys_mount_form_registry_value(monkeypatch, tmp_path):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir(parents=True, exist_ok=True)
@@ -168,7 +168,7 @@ def test_resolve_doe_clone_migrates_an_upgrade_box_that_carries_only_the_legacy_
     """An upgrade box has a legacy-named pointer and no `repos.content_root`:
     the check must resolve it through `migrate_legacy_config`, never by
     reading the legacy name itself, and leave the new pointer behind."""
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     settings_home = tmp_path / "settings-home"
     machine_local = settings_home / "machine-local"
@@ -208,7 +208,7 @@ def test_main_help_exits_zero(capsys):
 
 
 def test_main_unknown_argument_exits_transport_code(monkeypatch):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     rc = main(["--totally-unknown-flag"])
     assert rc == 3
 
@@ -273,7 +273,7 @@ def fake_doe_clone(tmp_path: Path) -> Path:
 
 
 def test_run_all_full_pass_against_synthetic_fake_clone_no_crash(fake_doe_clone: Path, monkeypatch):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
     coordinator_root = str(fake_doe_clone / "coordinator")
 
     r, sandbox = run_all(coordinator_root_override=coordinator_root)
@@ -379,7 +379,7 @@ def flat_mirror_clone(tmp_path: Path) -> Path:
 def test_flat_mirror_clone_reports_unevaluable_not_a_pass_equivalent_skip(
     flat_mirror_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat_mirror_clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
 
     r, _sandbox = run_all()
 
@@ -398,7 +398,7 @@ def test_flat_mirror_clone_failures_name_the_layout_as_the_cause(
     Verdict is deliberately UNCHANGED (still FAIL) — only the diagnosis is
     fixed; turning these green on a flat host would be the silent oracle
     rewrite this check exists to prevent."""
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat_mirror_clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
 
     r, _sandbox = run_all()
 
@@ -412,7 +412,7 @@ def test_flat_mirror_clone_failures_name_the_layout_as_the_cause(
 def test_flat_mirror_f8_setup_names_the_missing_oracle_input_not_a_clone_build_failure(
     flat_mirror_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(flat_mirror_clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
 
     r, _sandbox = run_all()
 
@@ -441,7 +441,7 @@ def test_cold_bare_path_is_host_shaped_not_posix_only(monkeypatch):
 def test_cold_tier_probes_the_binary_the_resolver_actually_spawns(
     fake_doe_clone: Path, monkeypatch
 ):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe_clone))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
 
     r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
 

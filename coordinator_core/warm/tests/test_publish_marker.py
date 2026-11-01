@@ -234,3 +234,50 @@ def test_extra_liveness_false_branch_gated_by_marker(root, monkeypatch):
     with breadcrumb.hold_publish_marker(root, holder="t"):
         assert decide() is False
     assert decide() is True
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.slept = 0.0
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, secs):
+        self.slept += secs
+        self.now += secs
+
+
+def test_drain_wait_secs_is_under_the_load_norm():
+    assert 0 < breadcrumb.DRAIN_WAIT_SECS <= 0.5
+
+
+def test_wait_returns_true_at_once_when_nothing_is_held(root):
+    fake = _FakeClock()
+    assert breadcrumb.wait_for_publish_release(root, sleep=fake.sleep, clock=fake.clock) is True
+    assert fake.slept == 0
+
+
+def test_wait_times_out_false_and_is_clamped_to_drain_wait(root):
+    fake = _FakeClock()
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+        got = breadcrumb.wait_for_publish_release(root, 30.0, sleep=fake.sleep, clock=fake.clock)
+        assert path.exists(), "the waiter must never unlink the marker"
+    assert got is False
+    assert fake.slept <= breadcrumb.DRAIN_WAIT_SECS + 1e-9
+
+
+def test_wait_returns_true_when_marker_released_mid_wait(root):
+    fake = _FakeClock()
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+
+        def release_on_first_sleep(secs):
+            fake.sleep(secs)
+            path.unlink()
+
+        got = breadcrumb.wait_for_publish_release(
+            root, sleep=release_on_first_sleep, clock=fake.clock
+        )
+    assert got is True
+    assert fake.slept < breadcrumb.DRAIN_WAIT_SECS

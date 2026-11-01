@@ -2684,7 +2684,7 @@ def test_upgrade_install_migrates_legacy_pointer_and_key_to_content_root(
 
     clone = _coordinator_claude_clone(tmp_path)
     legacy_pointer = ".coordinator-content-root"  # private-name-ok: upgrade-box fixture
-    legacy_key = "repos.content_root"  # private-name-ok: upgrade-box fixture
+    legacy_key = "repos.doe_claude"  # private-name-ok: upgrade-box fixture
     (content_root_box / legacy_pointer).write_text(str(clone) + "\n", encoding="utf-8")
     (content_root_box / "registry.local.toml").write_text(
         f"\"{legacy_key}\" = '{clone}'\n", encoding="utf-8"

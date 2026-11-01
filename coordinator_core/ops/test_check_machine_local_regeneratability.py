@@ -38,31 +38,31 @@ schema = 1
 "coordinator.python"       = ""
 "plugin.mirrors"           = ""
 "publish.targets"          = []
-"repos.example-sim-repo"           = ""
+"repos.dronesim"           = ""
 "repos.project_rag"        = ""
 "repos.project_rag_ue_addon" = ""
-"repos.example_game_workbench_repo" = ""
-"repos.example_repo"         = ""
-"repos.example_stats_repo"         = ""
-"repos.example_league_data_repo"   = ""
+"repos.claude_unreal_holodeck" = ""
+"repos.geneva_mvp"         = ""
+"repos.fifa_stats"         = ""
+"repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
-"repos.example_cockpit_repo"    = ""
-"repos.example-os-repo"           = ""
+"repos.project_opticon"    = ""
+"repos.delphios"           = ""
 
 [regeneratability]
 "coordinator.python"           = "idempotent-regeneratable"
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "session-accumulated-must-survive-crash"
+"repos.dronesim"                = "session-accumulated-must-survive-crash"
 "repos.project_rag"             = "session-accumulated-must-survive-crash"
 "repos.project_rag_ue_addon"    = "session-accumulated-must-survive-crash"
-"repos.example_game_workbench_repo"  = "session-accumulated-must-survive-crash"
-"repos.example_repo"              = "session-accumulated-must-survive-crash"
-"repos.example_stats_repo"              = "session-accumulated-must-survive-crash"
-"repos.example_league_data_repo"        = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck"  = "session-accumulated-must-survive-crash"
+"repos.geneva_mvp"              = "session-accumulated-must-survive-crash"
+"repos.fifa_stats"              = "session-accumulated-must-survive-crash"
+"repos.fifa_26wcle_data"        = "session-accumulated-must-survive-crash"
 "repos.experiments"             = "session-accumulated-must-survive-crash"
-"repos.example_cockpit_repo"         = "session-accumulated-must-survive-crash"
-"repos.example-os-repo"                = "session-accumulated-must-survive-crash"
+"repos.project_opticon"         = "session-accumulated-must-survive-crash"
+"repos.delphios"                = "session-accumulated-must-survive-crash"
 """
     )
     (ml_dir / "registry.local.toml").write_text(
@@ -85,30 +85,30 @@ schema = 1
 "coordinator.python"       = ""
 "plugin.mirrors"           = ""
 "publish.targets"          = []
-"repos.example-sim-repo"           = ""
+"repos.dronesim"           = ""
 "repos.project_rag_ue_addon" = ""
-"repos.example_game_workbench_repo" = ""
-"repos.example_repo"         = ""
-"repos.example_stats_repo"         = ""
-"repos.example_league_data_repo"   = ""
+"repos.claude_unreal_holodeck" = ""
+"repos.geneva_mvp"         = ""
+"repos.fifa_stats"         = ""
+"repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
-"repos.example_cockpit_repo"    = ""
-"repos.example-os-repo"           = ""
+"repos.project_opticon"    = ""
+"repos.delphios"           = ""
 
 [regeneratability]
 "coordinator.python"           = "idempotent-regeneratable"
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "session-accumulated-must-survive-crash"
+"repos.dronesim"                = "session-accumulated-must-survive-crash"
 "repos.project_rag"             = "session-accumulated-must-survive-crash"
 "repos.project_rag_ue_addon"    = "session-accumulated-must-survive-crash"
-"repos.example_game_workbench_repo"  = "session-accumulated-must-survive-crash"
-"repos.example_repo"              = "session-accumulated-must-survive-crash"
-"repos.example_stats_repo"              = "session-accumulated-must-survive-crash"
-"repos.example_league_data_repo"        = "session-accumulated-must-survive-crash"
+"repos.claude_unreal_holodeck"  = "session-accumulated-must-survive-crash"
+"repos.geneva_mvp"              = "session-accumulated-must-survive-crash"
+"repos.fifa_stats"              = "session-accumulated-must-survive-crash"
+"repos.fifa_26wcle_data"        = "session-accumulated-must-survive-crash"
 "repos.experiments"             = "session-accumulated-must-survive-crash"
-"repos.example_cockpit_repo"         = "session-accumulated-must-survive-crash"
-"repos.example-os-repo"                = "session-accumulated-must-survive-crash"
+"repos.project_opticon"         = "session-accumulated-must-survive-crash"
+"repos.delphios"                = "session-accumulated-must-survive-crash"
 """
     )
     (ml_dir / "registry.local.toml").write_text(
@@ -121,7 +121,7 @@ schema = 1
     assert "install-surface-completeness defect" in err
     assert "repos.project_rag" in err
     assert "Offer:" in err
-    assert "'repos.example-sim-repo'" not in err
+    assert "'repos.dronesim'" not in err
 
 
 def test_full_coverage_no_unclassified_warning(tmp_path, capsys, monkeypatch):
@@ -134,16 +134,16 @@ schema = 1
 "coordinator.python"           = "idempotent-regeneratable"
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.dronesim"                = "idempotent-regeneratable"
 "repos.project_rag"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
-"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
-"repos.example_repo"              = "idempotent-regeneratable"
-"repos.example_stats_repo"              = "idempotent-regeneratable"
-"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
+"repos.geneva_mvp"              = "idempotent-regeneratable"
+"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
-"repos.example_cockpit_repo"         = "idempotent-regeneratable"
-"repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.project_opticon"         = "idempotent-regeneratable"
+"repos.delphios"                = "idempotent-regeneratable"
 "repos.claude_klabauter"        = "idempotent-regeneratable"
 """
     )
@@ -163,30 +163,30 @@ schema = 1
 "coordinator.python"       = ""
 "plugin.mirrors"           = ""
 "publish.targets"          = []
-"repos.example-sim-repo"           = ""
+"repos.dronesim"           = ""
 "repos.project_rag"        = ""
 "repos.project_rag_ue_addon" = ""
-"repos.example_game_workbench_repo" = ""
-"repos.example_repo"         = ""
-"repos.example_stats_repo"         = ""
-"repos.example_league_data_repo"   = ""
+"repos.claude_unreal_holodeck" = ""
+"repos.geneva_mvp"         = ""
+"repos.fifa_stats"         = ""
+"repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
-"repos.example_cockpit_repo"    = ""
-"repos.example-os-repo"           = ""
+"repos.project_opticon"    = ""
+"repos.delphios"           = ""
 
 [regeneratability]
 # coordinator.python intentionally omitted
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.dronesim"                = "idempotent-regeneratable"
 "repos.project_rag"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
-"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
-"repos.example_repo"              = "idempotent-regeneratable"
-"repos.example_stats_repo"              = "idempotent-regeneratable"
-"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
+"repos.geneva_mvp"              = "idempotent-regeneratable"
+"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
-"repos.example_cockpit_repo"         = "idempotent-regeneratable"
-"repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.project_opticon"         = "idempotent-regeneratable"
+"repos.delphios"                = "idempotent-regeneratable"
 """
     )
 
@@ -208,16 +208,16 @@ schema = 1
 "coordinator.python"           = "idempotent-regeneratable"
 "plugin.mirrors.coordinator-claude" = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.dronesim"                = "idempotent-regeneratable"
 "repos.project_rag"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
-"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
-"repos.example_repo"              = "idempotent-regeneratable"
-"repos.example_stats_repo"              = "idempotent-regeneratable"
-"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
+"repos.geneva_mvp"              = "idempotent-regeneratable"
+"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
-"repos.example_cockpit_repo"         = "idempotent-regeneratable"
-"repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.project_opticon"         = "idempotent-regeneratable"
+"repos.delphios"                = "idempotent-regeneratable"
 """
     )
 
@@ -234,25 +234,25 @@ def test_repos_key_ladder_resolved_suppresses_finding(tmp_path, capsys, monkeypa
 schema = 1
 
 [regeneratability]
-"repos.example-sim-repo" = "session-accumulated-must-survive-crash"
+"repos.dronesim" = "session-accumulated-must-survive-crash"
 """
     )
     (ml_dir / "registry.local.toml").write_text(
-        'schema = 1\n"repos.example-sim-repo" = "/home/user/example-sim-repo"\n'
+        'schema = 1\n"repos.dronesim" = "/home/user/example-sim-repo"\n'
     )
 
     bin_dir = claude_dir / "bin"
     write_fake_machine_local(
         bin_dir,
         "import sys\n"
-        "print('{\"repos.example-sim-repo\": \"/home/user/example-sim-repo\"}')\n"
+        "print('{\"repos.dronesim\": \"/home/user/example-sim-repo\"}')\n"
         "sys.exit(0)\n",
     )
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
 
     assert rc == 0
-    assert "repos.example-sim-repo" not in err
+    assert "repos.dronesim" not in err
 
 
 def test_repos_key_ladder_snapshot_missing_key_falls_through(tmp_path, capsys, monkeypatch):
@@ -262,11 +262,11 @@ def test_repos_key_ladder_snapshot_missing_key_falls_through(tmp_path, capsys, m
 schema = 1
 
 [regeneratability]
-"repos.example-sim-repo" = "session-accumulated-must-survive-crash"
+"repos.dronesim" = "session-accumulated-must-survive-crash"
 """
     )
     (ml_dir / "registry.local.toml").write_text(
-        'schema = 1\n"repos.example-sim-repo" = "/home/user/example-sim-repo"\n'
+        'schema = 1\n"repos.dronesim" = "/home/user/example-sim-repo"\n'
     )
 
     bin_dir = claude_dir / "bin"
@@ -276,7 +276,7 @@ schema = 1
 
     assert rc == 0
     assert "install-surface-completeness defect" in err
-    assert "repos.example-sim-repo" in err
+    assert "repos.dronesim" in err
 
 
 def test_repos_key_missing_ladder_binary_falls_through_safely(tmp_path, capsys, monkeypatch):
@@ -286,18 +286,18 @@ def test_repos_key_missing_ladder_binary_falls_through_safely(tmp_path, capsys, 
 schema = 1
 
 [regeneratability]
-"repos.example-sim-repo" = "session-accumulated-must-survive-crash"
+"repos.dronesim" = "session-accumulated-must-survive-crash"
 """
     )
     (ml_dir / "registry.local.toml").write_text(
-        'schema = 1\n"repos.example-sim-repo" = "/home/user/example-sim-repo"\n'
+        'schema = 1\n"repos.dronesim" = "/home/user/example-sim-repo"\n'
     )
 
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
 
     assert rc == 0
     assert "install-surface-completeness defect" in err
-    assert "repos.example-sim-repo" in err
+    assert "repos.dronesim" in err
 
 
 # ---------------------------------------------------------------------------
@@ -347,16 +347,16 @@ schema = 1
 "coordinator.python"           = "idempotent-regeneratable"
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.dronesim"                = "idempotent-regeneratable"
 "repos.project_rag"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
-"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
-"repos.example_repo"              = "idempotent-regeneratable"
-"repos.example_stats_repo"              = "idempotent-regeneratable"
-"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
+"repos.geneva_mvp"              = "idempotent-regeneratable"
+"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
-"repos.example_cockpit_repo"         = "idempotent-regeneratable"
-"repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.project_opticon"         = "idempotent-regeneratable"
+"repos.delphios"                = "idempotent-regeneratable"
 "repos.claude_klabauter"        = "idempotent-regeneratable"
 """
     )
@@ -392,16 +392,16 @@ schema = 1
 "coordinator.python"           = "idempotent-regeneratable"
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.dronesim"                = "idempotent-regeneratable"
 "repos.project_rag"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
-"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
-"repos.example_repo"              = "idempotent-regeneratable"
-"repos.example_stats_repo"              = "idempotent-regeneratable"
-"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
+"repos.geneva_mvp"              = "idempotent-regeneratable"
+"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
-"repos.example_cockpit_repo"         = "idempotent-regeneratable"
-"repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.project_opticon"         = "idempotent-regeneratable"
+"repos.delphios"                = "idempotent-regeneratable"
 "repos.claude_klabauter"        = "idempotent-regeneratable"
 """
     )
@@ -421,32 +421,32 @@ schema = 1
 "coordinator.python"       = ""
 "plugin.mirrors"           = ""
 "publish.targets"          = []
-"repos.example-sim-repo"           = ""
+"repos.dronesim"           = ""
 "repos.project_rag"        = ""
 "repos.project_rag_ue_addon" = ""
-"repos.example_game_workbench_repo" = ""
-"repos.example_repo"         = ""
-"repos.example_stats_repo"         = ""
-"repos.example_league_data_repo"   = ""
+"repos.claude_unreal_holodeck" = ""
+"repos.geneva_mvp"         = ""
+"repos.fifa_stats"         = ""
+"repos.fifa_26wcle_data"   = ""
 "repos.experiments"        = ""
-"repos.example_cockpit_repo"    = ""
-"repos.example-os-repo"           = ""
+"repos.project_opticon"    = ""
+"repos.delphios"           = ""
 "repos.claude_klabauter"   = ""
 
 [regeneratability]
 "coordinator.python"           = "idempotent-regeneratable"
 "plugin.mirrors"                = "idempotent-regeneratable"
 "publish.targets"               = "idempotent-regeneratable"
-"repos.example-sim-repo"                = "idempotent-regeneratable"
+"repos.dronesim"                = "idempotent-regeneratable"
 "repos.project_rag"             = "idempotent-regeneratable"
 "repos.project_rag_ue_addon"    = "idempotent-regeneratable"
-"repos.example_game_workbench_repo"  = "idempotent-regeneratable"
-"repos.example_repo"              = "idempotent-regeneratable"
-"repos.example_stats_repo"              = "idempotent-regeneratable"
-"repos.example_league_data_repo"        = "idempotent-regeneratable"
+"repos.claude_unreal_holodeck"  = "idempotent-regeneratable"
+"repos.geneva_mvp"              = "idempotent-regeneratable"
+"repos.fifa_stats"              = "idempotent-regeneratable"
+"repos.fifa_26wcle_data"        = "idempotent-regeneratable"
 "repos.experiments"             = "idempotent-regeneratable"
-"repos.example_cockpit_repo"         = "idempotent-regeneratable"
-"repos.example-os-repo"                = "idempotent-regeneratable"
+"repos.project_opticon"         = "idempotent-regeneratable"
+"repos.delphios"                = "idempotent-regeneratable"
 # repos.claude_klabauter intentionally omitted
 """
     )

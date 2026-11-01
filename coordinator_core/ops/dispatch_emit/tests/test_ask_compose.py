@@ -843,3 +843,94 @@ def test_hoist_baseline_clears_declares_once_after_the_manifest_marker():
     assert "a(_baselineClears);" in out and "b(_baselineClears);" in out
     single = f"{ASK_MANIFEST_MARKER}m.json\n  a({_BASELINE_CLEARS_JS});\n"
     assert ask_compose._hoist_baseline_clears(single) == single
+
+
+def _run_chain_check(repo_root, reply):
+    """Evaluate the composed `_chainCheck` under node against `reply`; returns (_chainPath, _why)."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    lines = ask_compose._chain_emit_start_lines(sizing_js="S", head="H", anchor="A", run_id="r1")
+    start = lines.index("    const _chainCheck = (_ce) => {")
+    check = "\n".join(lines[start:start + lines[start:].index("    };") + 1])
+    prog = (
+        f"const REPO_ROOT = {json.dumps(repo_root)}; let _why = null; let _chainPath = null; let _chainRunId = '';\n"
+        f"{check}\n_chainCheck({json.dumps(reply)});\nconsole.log(JSON.stringify([_chainPath, _why]));"
+    )
+    out = subprocess.run(
+        [node, "-e", prog], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+_WIN_ROOT = "Z:\\proj"  # abs-path-ok: fake root fixture
+_W = "Z:/proj"  # abs-path-ok: fake root fixture
+_Wl = "z:/proj"  # abs-path-ok: fake root fixture
+_POSIX_ROOT = "/home/u/proj"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "root,path,expected",
+    [
+        (_WIN_ROOT, f"{_W}/scratch/warp/r1/s.workflow.mjs", f"{_W}/scratch/warp/r1/s.workflow.mjs"),
+        (_WIN_ROOT, "scratch/warp/r1/s.workflow.mjs", f"{_W}/scratch/warp/r1/s.workflow.mjs"),
+        (_WIN_ROOT, "./scratch/warp/r1/s.workflow.mjs", f"{_W}/scratch/warp/r1/s.workflow.mjs"),
+        (_WIN_ROOT, "scratch\\warp\\r1\\s.workflow.mjs", f"{_W}/scratch/warp/r1/s.workflow.mjs"),
+        (_WIN_ROOT, _Wl.replace("/", "\\") + "\\scratch\\warp\\r1\\s.workflow.mjs", f"{_Wl}/scratch/warp/r1/s.workflow.mjs"),
+        (_WIN_ROOT, "/z/proj/scratch/warp/r1/s.workflow.mjs", f"{_Wl}/scratch/warp/r1/s.workflow.mjs"),
+        (_POSIX_ROOT, "/home/u/proj/scratch/warp/r1/s.workflow.mjs", "/home/u/proj/scratch/warp/r1/s.workflow.mjs"),
+        (_POSIX_ROOT, "scratch/warp/r1/s.workflow.mjs", "/home/u/proj/scratch/warp/r1/s.workflow.mjs"),
+    ],
+)
+def test_chain_check_resolves_relative_and_differently_formed_emit_paths(root, path, expected):
+    assert _run_chain_check(root, {"path": path, "run_id": "r1"}) == [expected, None]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "root,path",
+    [
+        (_WIN_ROOT, "scratch/warp/../../evil.mjs"),
+        (_WIN_ROOT, "../scratch/warp/r1/s.mjs"),
+        (_WIN_ROOT, "scratch/other/r1/s.mjs"),
+        (_WIN_ROOT, "Y:/proj/scratch/warp/r1/s.mjs"),  # abs-path-ok: fake drive
+        (_WIN_ROOT, "/tmp/scratch/warp/r1/s.mjs"),
+        (_WIN_ROOT, ""),
+        (_POSIX_ROOT, "/etc/scratch/warp/r1/s.mjs"),
+        (_POSIX_ROOT, "/home/u/proj/scratch/warp/../x.mjs"),
+    ],
+)
+def test_chain_check_still_refuses_outside_warp_and_parent_segment_paths(root, path):
+    chain_path, why = _run_chain_check(root, {"path": path, "run_id": "r1"})
+    assert chain_path is None
+    assert why.startswith("emit path is not under ")
+
+
+def test_chain_start_throw_abandons_the_minted_child_run():
+    lines = ask_compose._chain_emit_start_lines(sizing_js="S", head="H", anchor="A", run_id="r1")
+    body = "\n".join(lines)
+    catch_at = body.index("_why = 'start threw: '")
+    stage_loop_at = body.index("stage_pending", catch_at)
+    window = body[catch_at:stage_loop_at]
+    assert "abandon_run" in window
+    guard_at = window.index("if (_chainRunId !== '')")
+    assert guard_at < window.index("abandon_run")
+    assert window.index("_why = 'start threw: '") < guard_at
+    assert "catch (_ae) {}" in window
+    assert "_why =" not in window[guard_at:window.index("\n      }")]
+    assert "_chainRunId = _ce.run_id" in body[:catch_at]
+    assert "_chainRunId = ''" in body[:catch_at]
+
+
+def test_rag_first_line_reaches_the_stage_head_and_row_prompt_only_when_served(monkeypatch):
+    marker = "RAG-FIRST-LINE-SENTINEL"
+    monkeypatch.setattr(ask_compose._emit, "_example_retrieval_repo_brief_line", lambda root: marker)
+    assert marker in _compose()
+    monkeypatch.setattr(ask_compose._emit, "_example_retrieval_repo_brief_line", lambda root: None)
+    assert marker not in _compose()

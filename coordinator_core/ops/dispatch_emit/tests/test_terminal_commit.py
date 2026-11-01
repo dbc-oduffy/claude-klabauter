@@ -581,9 +581,11 @@ def test_all_clean_request_is_nothing_to_commit_without_error(repo):
 
 # The rollback gate's window-boundary rev-parse (rollback_check._git_series, f36f41d9d1) is the
 # one spawn on the ungated path; a short-history repo then falls back in-process, so no log
-# follows. A gated repo adds the status snapshot. Any further spawn joined the hot path.
+# follows. A gated repo adds the status snapshot and its one batched check-ignore over the
+# landing paths (Snapshot.ignored_among; the snapshot leaves the full --ignored read unspawned).
+# Any further spawn joined the hot path.
 _EXPECTED_SPAWNS = 1
-_GATED_SPAWNS = 2
+_GATED_SPAWNS = 3
 
 
 def _forty_path_request(repo, gated: bool):
@@ -643,7 +645,7 @@ def test_process_time_and_spawns_on_a_40_path_request(repo):
     assert spawn_count == _EXPECTED_SPAWNS, f"expected {_EXPECTED_SPAWNS} spawns, saw {spawn_count}"
 
 
-def test_a_gated_repo_still_spawns_the_status_snapshot_once(repo):
+def test_a_gated_repo_spawns_the_status_snapshot_and_one_check_ignore(repo):
     spawn_count = _forty_path_request(repo, gated=True)
     assert spawn_count == _GATED_SPAWNS, f"expected {_GATED_SPAWNS} spawns, saw {spawn_count}"
 

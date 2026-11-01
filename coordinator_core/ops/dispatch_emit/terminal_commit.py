@@ -1112,6 +1112,49 @@ def _fire_index_refresh(repo_root: Optional[Path]) -> None:
         pass
 
 
+def _deadline_reply(exc: BaseException) -> dict:
+    """The named halt a deadline-ended terminal commit answers: nothing committed, the leg ledger
+    attached, safe to re-fire."""
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    reply = land_deadline.halt_reply(exc)
+    reply["error"] = (
+        f"land-deadline: leg {exc.leg} did not start inside the terminal commit's budget; "
+        "nothing committed, nothing staged. Re-fire the terminal commit."
+    )
+    return reply
+
+
+def _entry_head(repo_root: Optional[Path]) -> Optional[str]:
+    if repo_root is None:
+        return None
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.lifecycle import main_worktree_root
+
+    try:
+        return head_sha(main_worktree_root(repo_root), fresh=True)
+    except (OSError, ValueError):
+        return None
+
+
+def _paths_committed_since(worktree_root: Path, entry_head: Optional[str], paths: Sequence[str]) -> list:
+    """The ``paths`` a commit after ``entry_head`` changed. Reads HEAD from disk (no spawn) and
+    spawns one ``git diff`` only when HEAD moved; an unreadable HEAD or diff answers ``[]`` (no
+    claim of a race)."""
+    if not entry_head or not paths:
+        return []
+    from coordinator_core.git.git_state import head_sha
+
+    now = head_sha(worktree_root, fresh=True)
+    if not now or now == entry_head:
+        return []
+    res = run_git(["-C", str(worktree_root), "diff", "--name-only", "-z", entry_head, now])
+    if res.returncode != 0:
+        return []
+    changed = {p for p in res.stdout.split("\0") if p}
+    return [p for p in paths if p in changed]
+
+
 @register_op("dispatch.terminal_commit")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
@@ -1268,9 +1311,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``no-judge-verdict``, ``task-output-run-mismatch``.
     """
     from coordinator_core.git.call_io_scope import call_io_scope
+    from coordinator_core.ops.dispatch_emit import land_deadline
 
     with call_io_scope():
-        reply = _handler_body(params, repo_root)
+        try:
+            with land_deadline.scope():
+                reply = _handler_body(params, repo_root)
+        except land_deadline.LandDeadlineExceeded as exc:
+            reply = _deadline_reply(exc)
     if isinstance(reply, dict) and reply.get("committed") and reply.get("sha"):
         _fire_index_refresh(repo_root)
     return reply
@@ -1518,13 +1566,19 @@ def _terminal_commit(
     every other return, and an exception raised before commit_v2 landed one, releases it."""
     from coordinator_core.ops.dispatch_emit import halted_hold_release
 
-    token_state: dict = {}
+    token_state: dict = {"entry_head": _entry_head(repo_root)}
     try:
         with halted_hold_release.release_scope():
             reply = _terminal_commit_inner(
                 params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx, token_state
             )
     except BaseException:
+        unwind = token_state.pop("unwind", None)
+        if unwind is not None and not token_state.get("landed"):
+            try:
+                unwind()
+            except Exception:  # noqa: BLE001 -- the original exception is the answer
+                pass
         _settle_token(token_state, landed=bool(token_state.get("landed")))
         raise
     _settle_token(token_state, landed=bool(token_state.get("landed")))
@@ -2655,6 +2709,7 @@ def _terminal_commit_inner(
             sibling_claims_seen.update(fresh)
             sibling_claims.update(sc.sibling_run_claims(
                 worktree_root, sibling_claim_run_id, fresh, own_plan=request.plan_path,
+                own_declared=declared_writes,
             ))
         return sibling_claims
 
@@ -2790,8 +2845,12 @@ def _terminal_commit_inner(
     landed_ids |= _own_evidence_append_chunks(
         worktree_root, request, set(stranded) - set(wh_chunks), final_paths_set, changed
     )
+    post_commit_only = credit_gate.post_commit_only_ids(
+        {c.id: [*c.paths, *c.prefixes] for c in request.chunks}
+    )
     if credit_gate.no_credited_landing(
-        set(stranded) - set(wh_chunks), {c.id for c in contributing_chunks + contributing_partial}, landed_ids
+        set(stranded) - set(wh_chunks) - post_commit_only,
+        {c.id for c in contributing_chunks + contributing_partial}, landed_ids,
     ):
         if close_ctx is not None:
             close_ctx.clear()
@@ -3152,6 +3211,8 @@ def _terminal_commit_inner(
         except (ValueError, OSError):
             pass
 
+    token_state["unwind"] = lambda: (_unstamp_landed(), _remove(worktree_root, receipt_paths))
+
     reread_artifacts: list[str] = []
     if session_id is not None:
         commit_params["session_id"] = session_id
@@ -3165,7 +3226,7 @@ def _terminal_commit_inner(
             excluded={*receipt_paths, allowlist_path, bookkeeping_record_path, note_committed},
             reviewed=reviewed_bytes, reviewed_at=reviewed_at,
             fixes_integrated_at=fixes_at, wave_paths=wave_paths,
-            review_events=_review_write_events(worktree_root, review_writes),
+            review_events=_review_write_events(worktree_root, review_writes, inline_review),
             run_started_at=_run_started_at(worktree_root, art_run_id),
         )
         if note_committed and note_committed not in deleted_paths:
@@ -3390,6 +3451,16 @@ def _terminal_commit_inner(
             _unstamp_landed()
             _remove(worktree_root, receipt_paths)
             return _unclaimed_refusal(recorded_pc, unclaimed)
+
+    raced = _paths_committed_since(worktree_root, token_state.get("entry_head"), _overlap_paths)
+    if raced:
+        _unstamp_landed()
+        _remove(worktree_root, receipt_paths)
+        return _error(
+            f"landing refused head-moved: HEAD moved since this call began and its commits changed "
+            f"{raced[0]}; nothing committed, nothing staged. Re-fire the terminal commit.",
+            refused="head-moved", moved_paths=raced,
+        )
 
     def _attempt():
         return commit_v2(commit_params, repo_root)

@@ -7,6 +7,10 @@ against the M/L band, run audit-roadmap, and freeze the gate report plan-blitz
 consumes.
 
 Wire params:
+    read_gate_report (str, optional) — a repo-relative ``.../wave-1.gate-report.json``; when given
+                                    the op only reads that frozen report and replies
+                                    {gate_report_path, gate_report_state, waves}; nothing is staged
+                                    and no other param is read.
     roadmap      (str, required) — the roadmap directory under ``state/roadmap/`` or
                                     any file in it (OVERVIEW.md, clusters.md).
     edges_path   (str, optional) — an edges file (``A <- B`` lines) that overrides
@@ -56,7 +60,7 @@ from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
-from coordinator_core.roadmap.blitz_stage import BlitzStageRefused, stage_roadmap
+from coordinator_core.roadmap.blitz_stage import BlitzStageRefused, frozen_waves, stage_roadmap
 
 GENERATES: list = []
 
@@ -117,6 +121,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "roadmap.blitz_stage" handler. See module docstring."""
     if repo_root is None:
         raise ValueError("roadmap.blitz_stage requires a resolved repo_root")
+    read_report = _optional_str(params, "read_gate_report")
+    if read_report is not None:
+        try:
+            return frozen_waves(Path(main_worktree_root(repo_root)), read_report)
+        except BlitzStageRefused as exc:
+            raise ValueError(str(exc)) from exc
     roadmap = _optional_str(params, "roadmap")
     if roadmap is None:
         raise ValueError("roadmap is required")

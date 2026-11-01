@@ -40,6 +40,13 @@ def test_the_verify_prompt_names_the_lifecycle_acts(monkeypatch):
     assert "post_commit_acts from (commit, sha_reply, sha_memo, baton_archive, plan_implemented, bug_close)" in script
 
 
+def test_the_plan_brief_keeps_post_commit_acts_out_of_the_spine(monkeypatch):
+    script = _script(monkeypatch).replace("\\'", "'")
+    clause = "is carried by the ledger's post_commit_acts and is never a plan row."
+    assert script.count(clause) >= 1
+    assert script.count(clause) == script.count("quote each in the row that serves it.")
+
+
 def _blocking(script: str, items: list[dict]) -> list[dict]:
     start = script.index("const _postCommitActs")
     anchor = script.index("const _ledgerBlocking")

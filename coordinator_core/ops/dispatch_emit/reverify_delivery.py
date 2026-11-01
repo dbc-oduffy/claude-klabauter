@@ -231,6 +231,8 @@ def _tests_prompt(
         "--from-task-output <file> --isolated-export`, then `emit-dispatch-workflow --retest-targeted "
         "--poll --from-task-output <file>` until it is no longer running. "
         "Report the record's `export` and `live` results. "
+        "If the export leg is refused or fails, return status `error` naming it; never report the `live` "
+        "working-tree result in its place. "
         "Never build an export yourself: no git read-tree or checkout-index. "
         "Report raw evidence; do not gate. "
         + (

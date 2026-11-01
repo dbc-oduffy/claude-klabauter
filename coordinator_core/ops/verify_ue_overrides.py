@@ -2,8 +2,8 @@
 coordinator_core.ops.verify_ue_overrides — plain module, no registered op.
 
 Purpose: walks the machine-local-registered UE-context directories
-(repos.example_game_workbench_repo, repos.project_rag, optional
-repos.example-sim-repo) and asserts each carries the expected UE plugin override keys in its
+(repos.claude_unreal_holodeck, repos.project_rag, optional
+repos.dronesim) and asserts each carries the expected UE plugin override keys in its
 .claude/settings.json enabledPlugins object. Exits 0 on success, 1 with diagnostic
 output on failure. This is a MANUAL diagnostic — per docs/wiki/per-project-plugin-
 gating.md § verify-ue-overrides.sh, it is never auto-invoked by any ceremony (its peer
@@ -16,9 +16,9 @@ CLI subprocess, no PATH/settings-home/legacy-home/co-located-binary resolution
 ladder.
 
 machine-local keys consumed (must be set in registry.local.toml):
-    repos.example_game_workbench_repo  — root of the example-game-workbench-repo repo
+    repos.claude_unreal_holodeck  — root of the example-game-workbench-repo repo
     repos.project_rag             — root of the example-retrieval-repo repo
-    repos.example-sim-repo                — root of the example-sim-repo UE project (optional; skipped
+    repos.dronesim                — root of the example-sim-repo UE project (optional; skipped
                                      if unset on this machine)
 
 If a required key is not set, this fails loud with a remediation hint — a missing
@@ -37,7 +37,7 @@ Negative-spec (faithfully reproduced bash-oracle behavior — do NOT "fix" mid-p
     - A missing resolved directory is a hard FAIL (not a silent skip) — the old bash
       shape silently continued past a stale/wrong registry path; this port keeps the
       fail-loud replacement behavior, not the original silent-continue.
-    - example-sim-repo is optional: `repos.example-sim-repo` unset on this machine means it is simply
+    - example-sim-repo is optional: `repos.dronesim` unset on this machine means it is simply
       omitted from the walked dir list, not a failure.
 
 Spec backlink: docs/plans/2026-05-20-coordinator-doctor-wiki.md § Chunk 10 (MISSED-2:
@@ -75,9 +75,9 @@ _EITHER_VENDOR_GAME_DEV = (
 )
 
 _UE_CONTEXT_REPO_KEYS = (
-    "repos.example_game_workbench_repo",
+    "repos.claude_unreal_holodeck",
     "repos.project_rag",
-    "repos.example-sim-repo",
+    "repos.dronesim",
 )
 
 
@@ -147,7 +147,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     # WITHOUT reaching around the redaction, which is a publish contract this
     # module has no business subverting.
     #
-    # `repos.example-sim-repo` was already optional on exactly this reasoning; the
+    # `repos.dronesim` was already optional on exactly this reasoning; the
     # other two now match it. What is NOT optional is the global-settings
     # assertion below -- that invariant is machine-independent, it is the drift
     # this check exists to catch, and it runs whether or not any UE repo is

@@ -50,6 +50,7 @@ from coordinator_core.bash_guards._rewrite_support import (
     _crlf_strip,
     _offer,
     _override,
+    _example_retrieval_repo_hint,
 )
 from coordinator_core.bash_guards._shape_classifier import (
     Shape as _BT_Shape,
@@ -151,6 +152,14 @@ def check_grep_via_bash_rewrite(
         return None  # `... | grep ...` -- the upstream command already did work
     if not any(_bt_token_matches_binary(tokens[0], b) for b in _GREP_FAMILY_BINARIES_BT):
         return None
+    rag_hint = _example_retrieval_repo_hint(payload) if (payload or {}).get("cwd") else ""
+    if rag_hint:
+        return _alt_record(
+            "advisory", "grep-via-bash-rewrite",
+            rag_hint,
+            (_offer("example-retrieval-repo project_semantic_search ...", "the query"),),
+            em_text=rag_hint,
+        )
     parsed = _bt_grep_flags_and_operands(tokens)
     if parsed is None:
         return None

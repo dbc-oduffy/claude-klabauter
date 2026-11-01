@@ -26,6 +26,11 @@ from coordinator_core.group_em import watch
 REPO_ROOT = "/repo/root"
 
 
+@pytest.fixture(autouse=True)
+def _no_real_remote_snapshot(monkeypatch):
+    monkeypatch.setattr(watch.read_pass, "read_remote_snapshot", lambda directory=None: {})
+
+
 def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
     """The ARMED label tracks --repo-root, and a hardcoded repo name is the defect.
 
@@ -2719,3 +2724,193 @@ def test_cli_batch_seconds_reaches_until_event(tmp_path):
     with mock.patch.object(watch, "until_event", return_value=0) as ue:
         watch._cli(["--repo-root", str(tmp_path), "--until-event", "--batch-seconds", "45"])
     assert ue.call_args.kwargs["batch_seconds"] == 45.0
+
+
+def _remote_box(tmp_path, name, *, beat=True, lines=()):
+    """Register a loopback remote box under tmp_path/primary; returns the primary registry dir."""
+    from coordinator_core.group_em import box_heartbeat, box_registry
+
+    primary = tmp_path / "primary" / "state" / "group-em"
+    root = tmp_path / name
+    box_registry.register(root, {"cpu": 1}, directory=primary)
+    if beat:
+        box_heartbeat.stamp(root)
+    if lines:
+        adm = root / "state" / "group-em" / "box" / "admission.jsonl"
+        adm.parent.mkdir(parents=True, exist_ok=True)
+        adm.write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+    return primary
+
+
+def test_remote_box_rows_open_runs_are_start_without_end(tmp_path):
+    primary = _remote_box(
+        tmp_path,
+        "b2",
+        lines=[
+            {"phase": "START", "session_id": "s1", "run": "r1"},
+            {"phase": "START", "session_id": "s2", "run": "r2"},
+            {"phase": "END", "session_id": "s1", "run": "r1"},
+        ],
+    )
+    rows = watch.remote_box_rows(primary)
+    assert [(r["session_id"], r["run"], r["live"]) for r in rows] == [("s2", "r2", True)]
+
+
+def test_remote_box_rows_unreachable_box_renders_unreachable_not_gone(tmp_path):
+    primary = _remote_box(tmp_path, "b3", beat=False)
+    rows = watch.remote_box_rows(primary)
+    assert len(rows) == 1 and rows[0]["reachable"] is False
+    census = {
+        "live": 0, "repo_live": 0, "repo_subscribed": 0, "other_repos": {}, "unwatched": 0,
+        "remote_boxes": rows,
+    }
+    assert f"box {rows[0]['box_id']}: unreachable" in watch.box_line(census)
+
+
+def test_remote_box_rows_bounded_tail_drops_partial_first_line(tmp_path):
+    pad = {"phase": "START", "session_id": "old", "run": "x" * 200}
+    lines = [pad] * 400 + [{"phase": "START", "session_id": "new", "run": "r"}]
+    primary = _remote_box(tmp_path, "b4", lines=lines)
+    rows = watch.remote_box_rows(primary)
+    assert any(r["session_id"] == "new" for r in rows)
+
+
+def test_box_line_unchanged_without_remote_boxes():
+    census = {"live": 1, "repo_live": 1, "repo_subscribed": 1, "other_repos": {}, "unwatched": 0}
+    assert "\n" not in watch.box_line(census)
+
+
+# ---------------------------------------------------------------------------
+# cross-box sessions: <box_id>:<session_id> identity and the per-box broken-read guard
+# ---------------------------------------------------------------------------
+
+_XBOX_NOW = datetime(2026, 10, 31, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _xbox_snapshot(**boxes):
+    return {
+        box: {
+            "reachable": reachable,
+            "sessions": [
+                {"session_id": sid, "name": f"n-{sid}", "cwd": "/far", "status": "busy", "address": f"pid-{pid}"}
+                for sid, pid in sessions
+            ],
+        }
+        for box, (reachable, sessions) in boxes.items()
+    }
+
+
+def _xbox_poll(prev_parked, snapshot, prev_names=None, local=("peer-1",)):
+    emitted = []
+    agents = [_agent(sid, "busy") for sid in local]
+    with mock.patch.object(watch.read_pass, "fetch_live_agents", return_value=agents), mock.patch.object(
+        watch.read_pass, "read_remote_snapshot", lambda directory=None: snapshot
+    ), mock.patch.object(watch.read_pass, "read_receiver_state", return_value=None), mock.patch.object(
+        watch.box_registry, "local_box_id", return_value="boxA"
+    ), mock.patch.object(watch.read_pass.box_registry, "local_box_id", return_value="boxA"):
+        result = watch.poll_once(
+            REPO_ROOT,
+            "waker-1",
+            prev_parked,
+            now=_XBOX_NOW,
+            emit=emitted.append,
+            group_em_session_id="group-em-1",
+            prev_names=prev_names,
+        )
+    return result, emitted
+
+
+def test_remote_session_is_keyed_box_colon_session():
+    (parked, decl, notes, _io), emitted = _xbox_poll({}, _xbox_snapshot(boxB=(True, [("s9", 11)])))
+    assert parked == {"peer-1": False, "boxB:s9": False}
+    assert notes["boxB:s9"]["name"] == "n-s9"
+    assert any(d["session_id"] == "boxB:s9" for d in decl)
+    assert emitted == []
+
+
+def test_unreachable_box_emits_no_gone_and_carries_its_sessions_forward():
+    prior_note = {"name": "n-s9", "last_seen": 1.0}
+    (parked, _d, notes, _io), emitted = _xbox_poll(
+        {"peer-1": False, "boxB:s9": False},
+        _xbox_snapshot(boxB=(False, [])),
+        prev_names={"boxB:s9": prior_note},
+    )
+    assert emitted == []
+    assert parked["boxB:s9"] is False
+    assert notes["boxB:s9"] == prior_note
+
+
+def test_box_with_no_snapshot_file_emits_no_gone():
+    (parked, _d, _n, _io), emitted = _xbox_poll({"peer-1": False, "boxB:s9": False}, {})
+    assert emitted == []
+    assert "boxB:s9" in parked
+
+
+def test_session_gone_from_a_readable_box_is_reported_by_key():
+    (parked, _d, _n, _io), emitted = _xbox_poll(
+        {"peer-1": False, "boxB:s9": False},
+        _xbox_snapshot(boxB=(True, [("s2", 5)])),
+        prev_names={"boxB:s9": {"name": "n-s9", "last_seen": _XBOX_NOW.timestamp() - 60}},
+    )
+    assert "boxB:s9" not in parked
+    assert len(emitted) == 1 and emitted[0].startswith("GONE session=n-s9 [boxB:s9]")
+
+
+def test_same_key_with_a_changed_pid_emits_no_gone():
+    before = _xbox_snapshot(boxB=(True, [("s9", 111)]))
+    after = _xbox_snapshot(boxB=(True, [("s9", 222)]))
+    (parked, _d, notes, _io), _e = _xbox_poll({}, before)
+    (parked2, _d2, _n2, _io2), emitted = _xbox_poll(parked, after, prev_names=notes)
+    assert emitted == []
+    assert set(parked2) == set(parked)
+
+
+@pytest.mark.parametrize("persisted_key", ["peer-1", "boxA:peer-1"])
+def test_persisted_prior_state_reads_as_the_local_box(persisted_key):
+    (parked, _d, _n, _io), emitted = _xbox_poll({persisted_key: False}, {})
+    assert emitted == []
+    assert parked == {"peer-1": False}
+
+
+def test_gone_spares_only_the_held_boxes_keys():
+    prev = {"a": False, "boxB:s1": False, "boxC:s2": False}
+    assert watch.gone(prev, {}, frozenset({"boxB"}), "boxA") == ["a", "boxC:s2"]
+    assert watch.gone(prev, {}) == ["a", "boxB:s1", "boxC:s2"]
+
+
+def test_remote_parked_line_reads_no_local_state():
+    with mock.patch.object(watch, "_waiting_on", side_effect=AssertionError("transcript")), mock.patch.object(
+        watch, "_stamped_age_seconds", side_effect=AssertionError("receiver state")
+    ), mock.patch.object(watch, "_obligation_summary", side_effect=AssertionError("ledger")):
+        line = watch._parked_line(
+            REPO_ROOT, "boxB:s9", {"reason": "r"}, "/far", _XBOX_NOW, name="n-s9", remote=True
+        )
+    assert line.startswith("PARKED session=n-s9 [boxB:s9]")
+
+
+def test_kick_remote_refresh_runs_refresh_when_due_and_never_inline(monkeypatch):
+    calls = []
+    monkeypatch.setattr(watch.remote_roster, "refresh_due", lambda d: calls.append(("due", d)) or True, raising=False)
+    monkeypatch.setattr(watch.remote_roster, "refresh", lambda d: calls.append(("refresh", d)), raising=False)
+    monkeypatch.setattr(watch, "_refresh_thread", None)
+    thread = watch.kick_remote_refresh("dir")
+    thread.join(5)
+    assert calls == [("due", "dir"), ("refresh", "dir")]
+
+
+def test_kick_remote_refresh_skips_refresh_when_not_due_and_survives_failure(monkeypatch):
+    calls = []
+    monkeypatch.setattr(watch, "_refresh_thread", None)
+    monkeypatch.setattr(watch.remote_roster, "refresh_due", lambda d: False, raising=False)
+    monkeypatch.setattr(watch.remote_roster, "refresh", lambda d: calls.append(d), raising=False)
+    watch.kick_remote_refresh("dir").join(5)
+    assert calls == []
+    monkeypatch.setattr(watch, "_refresh_thread", None)
+    monkeypatch.setattr(watch.remote_roster, "refresh_due", mock.Mock(side_effect=RuntimeError("x")), raising=False)
+    watch.kick_remote_refresh("dir").join(5)
+
+
+def test_kick_remote_refresh_is_a_noop_without_refresh_support(monkeypatch):
+    monkeypatch.setattr(watch, "_refresh_thread", None)
+    monkeypatch.delattr(watch.remote_roster, "refresh", raising=False)
+    assert watch.kick_remote_refresh("dir") is None

@@ -339,7 +339,7 @@ def test_remove_shim_strips_matching_legacy_block(tmp_path, monkeypatch):
     bashrc.write_text(
         "some prior line\n"
         "# --- coordinator maximalist launch ---\n"
-        f'claude() {{ REPO_CONTENT_ROOT="{expected_repo}" command bash "{expected_bin}" "$@"; }}\n'
+        f'claude() {{ REPO_DOE_CLAUDE="{expected_repo}" command bash "{expected_bin}" "$@"; }}\n'
         "# --- end coordinator maximalist launch ---\n"
         "some trailing line\n",
         encoding="utf-8",
@@ -996,7 +996,7 @@ def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monke
 
 def test_resolve_coordinator_root_raises_when_unresolvable(tmp_path, monkeypatch):
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
@@ -1019,7 +1019,7 @@ def test_resolve_coordinator_root_env_override(tmp_path):
 
 
 def test_resolve_coordinator_root_repo_content_root_nested_dev_clone(tmp_path, monkeypatch):
-    """A dev-clone-shaped `REPO_CONTENT_ROOT` (content nested under
+    """A dev-clone-shaped `REPO_DOE_CLAUDE` (content nested under
     `<repo>/coordinator`, carrying the machine-local marker) resolves to
     that nested dir -- unchanged dev-tree behavior."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
@@ -1029,14 +1029,14 @@ def test_resolve_coordinator_root_repo_content_root_nested_dev_clone(tmp_path, m
     nested = repo / "coordinator"
     (nested / "templates" / "bin").mkdir(parents=True)
     (nested / "templates" / "bin" / "_machine_local.py").write_text("")
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
 
     assert _shared.resolve_coordinator_root() == str(nested)
 
 
 def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_path, monkeypatch):
     """claude-klabauter#6 / DoE F7: a flat OSS/marketplace-shaped
-    `REPO_CONTENT_ROOT` (content directly at the repo root, no `coordinator/`
+    `REPO_DOE_CLAUDE` (content directly at the repo root, no `coordinator/`
     subdir) must resolve to the repo root itself, decided by the same
     machine-local marker probe -- never by guessing a fixed subpath."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
@@ -1045,7 +1045,7 @@ def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_pat
     repo = tmp_path / "flat-clone"
     (repo / "templates" / "bin").mkdir(parents=True)
     (repo / "templates" / "bin" / "_machine_local.py").write_text("")
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
 
     assert _shared.resolve_coordinator_root() == str(repo)
 
@@ -1057,7 +1057,7 @@ def test_resolve_coordinator_root_content_root_pointer_rung_uses_userprofile(tmp
     rather than degrading to a cwd-relative pointer path when CLAUDE_HOME/HOME
     are both unset."""
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)

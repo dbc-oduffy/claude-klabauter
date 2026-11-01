@@ -37,6 +37,101 @@ def test_null_byte_source_is_a_finding(tmp_path):
     assert [f.reason for f in li.unparseable_py(tmp_path, ["n.py"])] == [li.PY_UNPARSEABLE]
 
 
+def _count_parses(monkeypatch):
+    calls = []
+    real = li.ast.parse
+
+    def counting(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(li.ast, "parse", counting)
+    return calls
+
+
+def _repo(tmp_path):
+    (tmp_path / ".git").mkdir()
+    return tmp_path
+
+
+def test_verdict_cache_cold_and_warm_still_find_and_second_call_parses_nothing(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    _w(tmp_path, "bad.py", "def (\n")
+    _w(tmp_path, "ok.py", "x = 1\n")
+    calls = _count_parses(monkeypatch)
+    cold = li.unparseable_py(tmp_path, ["bad.py", "ok.py"])
+    assert len(calls) == 2
+    warm = li.unparseable_py(tmp_path, ["bad.py", "ok.py"])
+    assert len(calls) == 2
+    assert [(f.path, f.reason, f.detail) for f in cold] == [(f.path, f.reason, f.detail) for f in warm]
+    assert [f.reason for f in warm] == [li.PY_UNPARSEABLE]
+
+
+def test_verdict_cache_hit_serves_a_bad_verdict_without_parsing(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    _w(tmp_path, "bad.py", "def (\n")
+    li.unparseable_py(tmp_path, ["bad.py"])
+    monkeypatch.setattr(li, "_parse_finding", lambda rel, src: pytest.fail("parsed"))
+    assert li._cached_parse_finding(tmp_path, "bad.py", b"def (\n").reason == li.PY_UNPARSEABLE
+
+
+def test_changed_bytes_miss(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    _w(tmp_path, "m.py", "def (\n")
+    assert li.unparseable_py(tmp_path, ["m.py"])
+    _w(tmp_path, "m.py", "x = 1\n")
+    calls = _count_parses(monkeypatch)
+    assert li.unparseable_py(tmp_path, ["m.py"]) == []
+    assert len(calls) == 1
+
+
+def test_corrupt_or_wrong_shape_verdict_is_a_miss_never_a_pass(tmp_path):
+    _repo(tmp_path)
+    src = b"def (\n"
+    (tmp_path / "bad.py").write_bytes(src)
+    path = li._verdict_path(tmp_path, src)
+    path.parent.mkdir(parents=True)
+    for junk in ("{not json", '{"ok": "yes"}', '{"ok": false}', "[]", ""):
+        path.write_text(junk, encoding="utf-8")
+        assert [f.reason for f in li.unparseable_py(tmp_path, ["bad.py"])] == [li.PY_UNPARSEABLE]
+
+
+def test_verdict_key_carries_the_python_version(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    here = li._verdict_path(tmp_path, b"x = 1\n")
+    import sys
+
+    monkeypatch.setattr(sys, "version_info", (3, 99, 0))
+    assert li._verdict_path(tmp_path, b"x = 1\n") != here
+
+
+def test_no_git_dir_means_no_cache_and_still_parses(tmp_path):
+    _w(tmp_path, "bad.py", "def (\n")
+    assert li._verdict_path(tmp_path, b"def (\n") is None
+    assert [f.reason for f in li.unparseable_py(tmp_path, ["bad.py"])] == [li.PY_UNPARSEABLE]
+
+
+def test_worktree_gitfile_resolves_to_the_common_dir(tmp_path):
+    common = tmp_path / "main" / ".git"
+    wt_git = common / "worktrees" / "w"
+    wt_git.mkdir(parents=True)
+    (wt_git / "commondir").write_text("../..\n", encoding="utf-8")
+    wt = tmp_path / "w"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {wt_git}\n", encoding="utf-8")
+    assert (li._git_common_dir(wt) / "x").resolve() == (common / "x").resolve()
+
+
+def test_verdict_store_is_bounded(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    monkeypatch.setattr(li, "_VERDICT_MAX", 5)
+    monkeypatch.setattr(li, "_VERDICT_KEEP", 2)
+    for i in range(8):
+        li.unparseable_py(tmp_path, [_w(tmp_path, f"f{i}.py", f"x = {i}\n") or f"f{i}.py"])
+    store = tmp_path / ".git" / li._VERDICT_DIR
+    assert len(list(store.iterdir())) <= 5
+
+
 def test_run_base_resolver_order(tmp_path):
     assert li.run_base_for(tmp_path, "r1", {}) is None
     _w(tmp_path, "scratch/warp/r1/run-base", C + "\n")

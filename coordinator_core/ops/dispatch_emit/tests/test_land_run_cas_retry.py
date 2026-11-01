@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+
 import pytest
 
 from coordinator_core.git import commit as git_commit
 from coordinator_core.git import ref_cas_retry
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.dispatch_emit import land_run, run_token
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as base
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import (  # noqa: F401 -- fixture
@@ -23,6 +27,30 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import (  # 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
+def _peer_commit(root, rel: str, text: str, message: str) -> None:
+    """Commit ``text`` at ``rel`` onto HEAD through plumbing and a scratch index.
+
+    The landing holds ``index.lock`` across ``cas_ref``, so a porcelain ``git add`` from inside
+    the CAS hook exits 128; a scratch index leaves the live one untouched.
+    """
+    env = {**os.environ, "GIT_INDEX_FILE": str(root / ".git" / "peer-index")}
+
+    def run(args, stdin=None):
+        return subprocess.run(
+            ["git", *args], cwd=str(root), env=env, input=stdin, capture_output=True, text=True,
+            check=True, **no_console_creationflags(),
+        ).stdout.strip()
+
+    head = run(["rev-parse", "HEAD"])
+    run(["read-tree", head])
+    blob = run(["hash-object", "-w", "--stdin"], stdin=text)
+    run(["update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}"])
+    tree = run(["write-tree"])
+    commit = run(["commit-tree", tree, "-p", head, "-m", message])
+    run(["update-ref", "HEAD", commit, head])
+    (root / ".git" / "peer-index").unlink()
+
+
 def _lose_first_cas(monkeypatch, root, peer_rel: str, times: int = 1) -> list:
     """Make the first ``times`` ref CAS calls fail after a peer commit lands on ``peer_rel``."""
     real = git_commit.cas_ref
@@ -31,9 +59,8 @@ def _lose_first_cas(monkeypatch, root, peer_rel: str, times: int = 1) -> list:
     def fake(*args, **kwargs):
         if len(peers) < times:
             peers.append(None)
-            _write(root, peer_rel, "peer\n" if len(peers) == 1 else f"peer{len(peers)}\n")
-            _git(["add", peer_rel], root)
-            _git(["commit", "-q", "-m", f"peer {len(peers)}"], root)
+            _peer_commit(root, peer_rel, "peer\n" if len(peers) == 1 else f"peer{len(peers)}\n",
+                         f"peer {len(peers)}")
             return False
         return real(*args, **kwargs)
 
@@ -113,4 +140,4 @@ def test_the_run_token_refusal_names_the_tokenless_recovery(repo):
     out = _land(repo, run_token=token + "x")
 
     assert out["refused"] == "run-token"
-    assert "task_output_path" in out["error"]
+    assert "--from-task-output" in out["error"]

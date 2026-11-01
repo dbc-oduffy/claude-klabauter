@@ -165,6 +165,19 @@ def test_repo_owned_table_wins_and_still_raises(world):
         ar.route_rows([_row(body="unreal thing", agent_type="coordinator:executor")], repo)
 
 
+def test_stage_agents_fall_back_to_sid_in_ue_repo_only(world):
+    repo, _ = world
+    defaults = {"plan": "p:a", "plan_review": "c:staff-eng", "code_review": "c:code-reviewer"}
+    out = ar.resolve_stage_agents(repo, ask_text="x", defaults=defaults)
+    assert out["plan_review"] == (ar.UE_STAFF_REVIEWER, "ue-default")
+    assert out["code_review"] == (ar.UE_STAFF_REVIEWER, "ue-default")
+    assert out["plan"] == ("p:a", "default")
+    (repo / "Game.uproject").unlink()
+    _clear()
+    out = ar.resolve_stage_agents(repo, ask_text="x", defaults=defaults)
+    assert out["plan_review"] == ("c:staff-eng", "default")
+
+
 def test_ue_marker_walk_skips_dot_and_workspace_dirs(tmp_path):
     """A marker under .git/scratch/state never makes a repo UE, and those trees are never walked."""
     from coordinator_core.ops.dispatch_emit import ue_route_source

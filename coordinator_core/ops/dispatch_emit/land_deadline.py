@@ -19,13 +19,14 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator, Optional
 
+from coordinator_core.telemetry import spawn_counter
+
 #: Seconds one land_run may spend before its next leg halts; well under the 30s op budget.
 LAND_BUDGET_SECS = 10.0
 
 #: Seconds past `LAND_BUDGET_SECS` that only the `RESERVED_LEGS`, and every leg checked once one has
 #: started in the scope, may start in, so a reviewed landing is not refused by a deadline its optional
-#: legs spent. Outer clamps (dispatcher, server window)
-#: bound both deadlines and stay authoritative.
+#: legs spent. Outer clamps (dispatcher, server window) bound both deadlines and stay authoritative.
 RESERVE_SECS = 3.0
 
 #: Final name segments of the legs that draw on the reserve (`land_run.integrity`, `*.commit`).
@@ -39,6 +40,10 @@ SCOPE_LEG = "land_deadline.scope_entry"
 #: Monotonic clock seam; tests substitute a fake clock so nothing sleeps.
 _now = time.monotonic
 
+#: Per-thread CPU clock seam for a leg's `process_time_ms`; children's CPU is invisible to it, which
+#: is why `spawns` is recorded beside it. Tests substitute a fake.
+_cpu = time.thread_time
+
 _DEADLINE: ContextVar[Optional[float]] = ContextVar("land_run_deadline", default=None)
 
 #: Seconds the request waited for a pool worker before the handler ran; declared by `set_queue_wait`.
@@ -47,7 +52,8 @@ _QUEUE_WAIT: ContextVar[float] = ContextVar("land_run_queue_wait", default=0.0)
 #: Deadline for the reserved legs (>= `_DEADLINE`); None when unbound.
 _HARD: ContextVar[Optional[float]] = ContextVar("land_run_hard_deadline", default=None)
 
-#: Per-scope ledger of started legs as `(leg, start)`; None outside a scope.
+#: Per-scope ledger of started legs as `(leg, wall_start, cpu_start, spawns_at_start)`; None outside
+#: a scope.
 _LEGS: ContextVar[Optional[list]] = ContextVar("land_run_legs", default=None)
 
 #: The server's result window (seconds from submit) the request ran under; None when unbound.
@@ -129,11 +135,13 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
     ceiling_token = _CEILING.set(ceiling)
     # Seeded with the scope's own entry: without it, time before the first `check` (imports, token
     # redemption) is in no leg, and a first-leg halt reports `legs: []` (75f803).
-    legs_token = _LEGS.set([(SCOPE_LEG, _now())])
+    spawn_token = spawn_counter.bind_scope()
+    legs_token = _LEGS.set([_ledger_entry(SCOPE_LEG, _now())])
     try:
         yield
     finally:
         _LEGS.reset(legs_token)
+        spawn_counter.reset_scope(spawn_token)
         _CEILING.reset(ceiling_token)
         _BOUND_BY.reset(bound_token)
         _HARD.reset(hard_token)
@@ -179,7 +187,19 @@ def check(leg: str) -> None:
         raise LandDeadlineExceeded(leg, _legs_elapsed(now), by[1] if reserved else by[0])
     ledger = _LEGS.get()
     if ledger is not None:
-        ledger.append((leg, now))
+        ledger.append(_ledger_entry(leg, now))
+
+
+def mark(leg: str) -> None:
+    """Record `leg` as started without ever refusing: names a span of the ledger so a halt's
+    `leg_costs` attributes the time before the next `check` to it. A no-op outside a scope."""
+    ledger = _LEGS.get()
+    if ledger is not None:
+        ledger.append(_ledger_entry(leg, _now()))
+
+
+def _ledger_entry(leg: str, now: float) -> tuple:
+    return (leg, now, _cpu(), spawn_counter.scope_spawns())
 
 
 def _is_reserved(leg: str) -> bool:
@@ -191,17 +211,29 @@ def _is_reserved(leg: str) -> bool:
 def _reserved_leg_open() -> bool:
     """True once a reserved leg has started in this scope: the integrity leg stays open until the
     commit, so every leg checked after it draws on the reserve."""
-    return any(_is_reserved(name) for name, _ in (_LEGS.get() or []))
+    return any(_is_reserved(entry[0]) for entry in (_LEGS.get() or []))
 
 
 def _legs_elapsed(now: float) -> list:
-    """Each started leg's elapsed: its start to the next leg's start, the last to `now`."""
+    """Each started leg's cost: its start to the next leg's start, the last to `now`. Entries carry
+    `leg`, wall `elapsed_secs`, thread-CPU `process_time_ms` and `spawns` made in the scope."""
     ledger = _LEGS.get() or []
-    ends = [start for _, start in ledger[1:]] + [now]
+    ends = [entry[1:] for entry in ledger[1:]] + [(now, _cpu(), spawn_counter.scope_spawns())]
     return [
-        {"leg": name, "elapsed_secs": max(0.0, end - start)}
-        for (name, start), end in zip(ledger, ends)
+        {
+            "leg": name,
+            "elapsed_secs": max(0.0, end_wall - wall),
+            "process_time_ms": round(max(0.0, end_cpu - cpu) * 1000.0, 1),
+            "spawns": max(0, end_spawns - spawns),
+        }
+        for (name, wall, cpu, spawns), (end_wall, end_cpu, end_spawns) in zip(ledger, ends)
     ]
+
+
+def leg_costs() -> list:
+    """The current scope's started legs as `[{leg, elapsed_secs, process_time_ms, spawns}]`, the
+    last leg costed up to now; empty outside a scope."""
+    return _legs_elapsed(_now())
 
 
 def halt_reply(exc: LandDeadlineExceeded) -> dict:
@@ -217,5 +249,6 @@ def halt_reply(exc: LandDeadlineExceeded) -> dict:
         "leg": exc.leg,
         "queue_wait_secs": _QUEUE_WAIT.get(),
         "bound_by": exc.bound_by,
-        "legs": list(exc.legs),
+        "legs": [{"leg": e["leg"], "elapsed_secs": e["elapsed_secs"]} for e in exc.legs],
+        "leg_costs": list(exc.legs),
     }

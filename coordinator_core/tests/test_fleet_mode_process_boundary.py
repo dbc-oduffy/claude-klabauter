@@ -366,7 +366,7 @@ _RED_BAND_PCT = 95.0
 # state; none may arrive from whatever the parent pytest process holds.
 _HOOK_STEERING_ENV = (
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-    "REPO_CLAUDE_KLABAUTER",
+    "REPO_PROJECT_MAKIMA",
     "COORDINATOR_ENGINE_ROOT",
     "CLAUDE_PROJECT_DIR",
     "CLAUDE_HOME",

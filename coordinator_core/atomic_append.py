@@ -57,6 +57,10 @@ _registry_lock = threading.Lock()
 _writers: "dict[str, queue.SimpleQueue]" = {}
 _in_flight: "dict[str, int]" = {}
 _stalled: "dict[str, float]" = {}
+#: Max retained lines held in memory across all stalled sinks; past it a line is dropped and counted.
+_RETAIN_MAX = 256
+_held: "dict[str, list[bytes]]" = {}
+_held_dropped: "dict[str, int]" = {}
 
 
 def _open_append_fd_windows(path: str) -> int:
@@ -109,7 +113,32 @@ def _open_append_fd_windows(path: str) -> int:
 _FRESH_SINK_YIELDS = 5
 
 
-def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False) -> None:
+def _hold_locked(sink_str: str, encoded: bytes) -> None:
+    """Park ``encoded`` until ``sink_str``'s writer returns; caller holds ``_registry_lock``."""
+    if sum(len(v) for v in _held.values()) >= _RETAIN_MAX:
+        _held_dropped[sink_str] = _held_dropped.get(sink_str, 0) + 1
+    else:
+        _held.setdefault(sink_str, []).append(encoded)
+
+
+def _release_held(sink_str: str, held: "list[bytes]", dropped: int) -> None:
+    """Re-enqueue lines held for a recovered sink; a full drain queue drops and counts them."""
+    q = _queue
+    for encoded in held:
+        try:
+            if q is None:
+                raise queue.Full
+            q.put_nowait((sink_str, encoded, True))
+        except queue.Full:
+            dropped += 1
+    if dropped:
+        try:
+            sys.stderr.write(f"atomic_append: {dropped} retained lines dropped for stalled sink: {sink_str}\n")
+        except Exception:
+            pass
+
+
+def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False, *, hold: bool = False) -> None:
     """Atomically append ``encoded`` (already newline-terminated) to ``sink``.
 
     A single write of one pre-encoded line, using the platform's genuinely
@@ -136,11 +165,17 @@ def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False) -> 
     line names it, and the line is dropped without raising; later droppable
     calls to that sink drop at once until its writer returns. An error raised
     inside the deadline is re-raised here.
+
+    ``hold=True`` (with ``droppable``) is for the drain worker: a line arriving while
+    the sink is already stalled is parked in memory, bounded by ``_RETAIN_MAX``, and
+    re-enqueued when the sink's writer returns.
     """
     sink_str = str(sink)
     job = _Job(encoded)
     with _registry_lock:
         if droppable and sink_str in _stalled:
+            if hold:
+                _hold_locked(sink_str, encoded)
             return
         w = _writers.get(sink_str)
         if w is None:
@@ -217,6 +252,8 @@ def _writer_loop(sink_str: str, w: "queue.SimpleQueue") -> None:
             continue
         with _registry_lock:
             _in_flight[sink_str] = _in_flight.get(sink_str, 0) + 1
+        held: "list[bytes]" = []
+        dropped = 0
         try:
             _write_once(sink_str, job.encoded)
         except Exception as exc:
@@ -229,7 +266,11 @@ def _writer_loop(sink_str: str, w: "queue.SimpleQueue") -> None:
                     _in_flight[sink_str] -= 1
                 if w.empty():
                     _stalled.pop(sink_str, None)
+                    held = _held.pop(sink_str, [])
+                    dropped = _held_dropped.pop(sink_str, 0)
             job.done.set()
+        if held or dropped:
+            _release_held(sink_str, held, dropped)
 
 
 def in_flight_sinks() -> "tuple[str, ...]":
@@ -257,8 +298,9 @@ def _drain_worker(q: "queue.Queue") -> None:
     while True:
         sink, encoded, retain = q.get()
         try:
-            # A retained line (an op's completion row) waits out a wedged sink; the rest drop.
-            append_line(sink, encoded, droppable=not retain)
+            # Never waits past APPEND_DEADLINE_SECS: a retained line (an op's completion row)
+            # arriving at a stalled sink is held in memory, bounded; the rest drop.
+            append_line(sink, encoded, droppable=True, hold=retain)
         except Exception:
             pass
         finally:
@@ -292,8 +334,9 @@ def append_line_bounded(sink: "Path | str", encoded: bytes, retain: bool = False
 
     For telemetry on an op's critical path: a stalled ``CreateFileW`` (AV
     minifilter, contended sink) must delay only the writer thread. A full queue
-    drops the line. A ``retain`` line is never dropped to a stalled sink; any
-    other is ``append_line``'s ``droppable``. Never raises.
+    drops the line. A ``retain`` line arriving at a stalled sink waits in memory
+    (bounded by ``_RETAIN_MAX``, dropped and counted past it) until the sink's
+    writer returns; any other is ``append_line``'s ``droppable``. Never raises.
     """
     try:
         if "pytest" in sys.modules and not _force_async:

@@ -96,7 +96,8 @@ def test_commits_index_blobs_keeps_peer_hunk_and_splits_full_from_partial(repo):
     assert spent < PROCESS_BUDGET_SECS
     assert _git(repo, "show", "HEAD:a") == "staged a\n"
     assert (repo / "a").read_text(encoding="utf-8") == "staged a\npeer hunk\n"
-    assert _git(repo, "rev-parse", "HEAD").strip() == out["sha"]
+    # HEAD is the landed-record commit the op stacks on its own combined commit.
+    assert _git(repo, "rev-parse", "HEAD~1").strip() == out["sha"]
     assert [r["run_id"] for r in out["landed"]] == ["R-full"]
     assert out["partial"] == [{"run_id": "R-part", "missing": ["c"]}]
     assert _marker(repo, "R-full")["status"] == halted_run.STATUS_LANDED
@@ -132,6 +133,8 @@ def test_refuses_declared_path_a_peer_run_holds(repo):
     _halt(repo, "R", ["a"])
     _halt(repo, "peer", ["a"])
     _stage(repo, "a", "x\n")
+    # A peer's withheld path with a clean worktree is released (withheld-clean-at-head); dirt makes it hold.
+    (repo / "a").write_text("x\npeer hunk\n", encoding="utf-8")
     head = _git(repo, "rev-parse", "HEAD")
     out = _call(repo, paths=["a"], run_ids=["R"], message="m")
     assert not out["ok"] and "peer" in out["error"]

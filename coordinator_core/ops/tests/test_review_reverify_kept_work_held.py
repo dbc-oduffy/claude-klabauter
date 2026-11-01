@@ -68,7 +68,8 @@ def test_held_tracked_created_path_keeps_its_bytes_and_names_the_run(world, monk
 def test_unheld_tracked_created_path_is_still_restored_to_head(world, monkeypatch):
     root, _orig, _ = world
     base = _seed(root, monkeypatch, commit_new=True)
-    out = _run(root, base, [f"{NEW}::test_n"])
+    sidecars = _ledger(monkeypatch, _row("F1", NEW, "assert True", "assert False"))
+    out = _run(root, base, [f"{NEW}::test_n"], sidecars=sidecars)
     assert [(e["path"], e["action"], e["source"]) for e in out["reverted"]] == [(NEW, "restored", "head")]
     assert (root / NEW).read_bytes() == NEW_HEAD
 

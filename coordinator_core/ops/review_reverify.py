@@ -49,9 +49,12 @@ path is rewritten as its current bytes with each applied finding on it inverted 
 every other byte, executor hunks included, is untouched. A finding that cannot be inverted, and an
 implicated path with no applied finding, go to ``kept`` with a reason and write nothing. A created
 path is removed by moving its bytes to ``<snapshot>/removed/<path>`` (``kept_at`` in the entry),
-never unlinked; one tracked at HEAD is restored to HEAD's bytes. A created path whose writing
-agent also wrote a foreign path, or wrote nothing in this run's surface (manifest paths, the
-snapshot share dir, a path naming the slice prefix), is foreign. Before
+never unlinked; one tracked at HEAD is restored to HEAD's bytes only if an applied finding names it
+(no ``sidecars`` means none does). A created path no run finding names is another run's dirt: it
+goes to ``kept`` and its tests to ``unattributed``, bytes untouched. Every restore or findings
+rewrite first copies the current bytes to ``<snapshot>/reverted/<path>``; the entry's ``kept_at`` names that stash.
+A created path whose writing agent also wrote a foreign path, or wrote nothing in this run's
+surface (manifest paths, the snapshot share dir, a path naming the slice prefix), is foreign. Before
 anything is written, the revert (tripwire-named paths included) refuses (``error``, nothing written,
 the whole call) when it would remove a top-level symbol that a committed file in the run's surface
 (manifest paths plus paths changed anchor..HEAD) still uses. An id implicating nothing is
@@ -70,6 +73,9 @@ re-ran, but not in ``failing_at_base``, implicates no review edit: its hunks are
 ``unattributed``. An id this record already lists in a ``reverted`` entry's ``tests`` and that is
 passed again in revert mode still fails after its revert: it is ``pre_existing``, never reverted
 twice. An id no closed probe re-ran is never honoured as ``failing_before``.
+Optional ``base_export_path`` names a saved baseline_export output: its ``FAILED``/``ERROR`` ids join
+``failing_at_base`` when its trailing JSON line has ``export`` "ok" and ``runner_exit`` 0, 1 or 4. A missing or invalid file sets ``base_unmeasured`` and moves the
+``unattributed`` ids to ``unmeasured``: not pre_existing (they still block), not the run's own. File read only.
 Optional ``run_key`` names a run whose ``owned_red.jsonl`` ids join ``failing_at_base``: a failing id
 recorded there (and not in ``failing_at_base``) is reported in the ``owned_red`` bucket, never reverted or
 ``unattributed``.
@@ -127,6 +133,7 @@ MUTATES = [
 _MANIFEST = "manifest.json"
 _RECORD = "reverify.json"
 _REMOVED = "removed"
+_STASHED = "reverted"
 _MACHINERY_PREFIXES = (".coordinator-local/", "state/")
 
 
@@ -505,6 +512,37 @@ def _load_record(record: Path) -> dict:
     return data
 
 
+_BASE_EXIT_OK = (0, 1, 4)
+_RED_LINE = re.compile(r"^(?:FAILED|ERROR)\s+(\S.*?)(?:\s+-\s.*)?$")
+
+
+def _read_base_export(repo_root: Path, raw: str) -> Optional[Set[str]]:
+    """``failing_at_base`` parsed from a baseline_export output file, or ``None``
+    when the file is unreadable or its trailing JSON line is not ``export`` "ok" with ``runner_exit``
+    in {0, 1, 4}."""
+    path = Path(raw)
+    if not path.is_absolute():
+        path = repo_root / path
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    tail = next((ln.strip() for ln in reversed(lines) if ln.strip()), "")
+    try:
+        result = json.loads(tail).get("baseline_export")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(result, dict) or result.get("export") != "ok" or result.get("runner_exit") not in _BASE_EXIT_OK:
+        return None
+    red: Set[str] = set()
+    for line in lines:
+        text = line.strip()
+        hit = _RED_LINE.match(text)
+        if hit:
+            red.add(hit.group(1))
+    return red
+
+
 def _walked_created(repo_root: Path, test_file: str, created: List[str]) -> Set[str]:
     """Created paths lying under a directory the tree-scanning test walks."""
     try:
@@ -557,6 +595,23 @@ def _current(repo_root: Path, rel: str) -> bytes:
         return (repo_root / rel).read_bytes()
     except OSError:
         return b""
+
+
+def _stash(repo_root: Path, snapshot_dir: Path, rel: str, target: Path) -> Optional[str]:
+    """Copy ``target``'s current bytes to ``<snapshot>/reverted/<rel>`` (a numbered sibling when one
+    exists) before a rewrite; the repo-relative stash path, ``None`` when there is no file to keep."""
+    try:
+        data = target.read_bytes()
+    except FileNotFoundError:
+        return None
+    dest = snapshot_dir / _STASHED / rel
+    n = 0
+    while dest.exists():
+        n += 1
+        dest = snapshot_dir / _STASHED / f"{rel}.{n}"
+    atomic_write_bytes(dest, data)
+    declare_write(dest)
+    return _rel(str(dest), repo_root)
 
 
 def _refs(refs) -> List[dict]:
@@ -715,6 +770,7 @@ def review_reverify(
     cause_files: Optional[Dict[str, List[str]]] = None,
     failing_output: Optional[Dict[str, str]] = None,
     run_key: str = "",
+    base_export_path: str = "",
 ) -> dict:
     """List the review edits since the snapshot, or (``failing`` given) invert the findings those
     tests implicate; ``probe`` opens or closes the pre-review probe. See the module docstring."""
@@ -785,6 +841,7 @@ def review_reverify(
         return out
 
     ids = [str(i) for i in failing if isinstance(i, str) and i.strip()]
+    base_unmeasured = False
     created_set = set(created)
     side = list(sidecars or [])
     record_path = snapshot_dir / _RECORD
@@ -793,6 +850,12 @@ def review_reverify(
     if revert:
         vouched = {str(i) for i in failing_before or []} & probe_io.closed_rerun(snapshot_dir)
         explicit_base = {str(i) for i in failing_at_base or []}
+        if base_export_path:
+            measured = _read_base_export(repo_root, base_export_path)
+            if measured is None:
+                base_unmeasured = True
+            else:
+                explicit_base |= measured
         owned: Set[str] = set()
         if run_key:
             try:
@@ -806,10 +869,12 @@ def review_reverify(
         owned_red = sorted(n for n in ids if n in owned and n not in explicit_base and n not in prior_red)
         not_base_red = sorted(n for n in ids if n in vouched and n not in at_base and n not in prior_red)
         skip = set(pre_existing) | set(owned_red) | set(not_base_red)
+        base_measured = (failing_at_base is not None or bool(base_export_path)) and not base_unmeasured
+        base_green = {n for n in ids if base_measured and n not in skip}
     else:
-        pre_existing, owned_red, not_base_red, skip = [], [], [], set()
+        pre_existing, owned_red, not_base_red, skip, base_green = [], [], [], set(), set()
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
-    foreign_node = {n for n in ids if n not in skip and _node_file(n) in foreign_set}
+    foreign_node = {n for n in ids if n not in skip and n not in base_green and _node_file(n) in foreign_set}
     implication = _implication(repo_root, [n for n in ids if n not in skip and n not in foreign_node], edited, created)
     implicated: Dict[str, List[str]] = {}
     unattributed: List[str] = []
@@ -827,7 +892,7 @@ def review_reverify(
             implicated.setdefault(target, []).append(node)
         if not targets and node not in already:
             unattributed.append(node)
-        if not targets and _sibling_caused(repo_root, node, sibling_py):
+        if not targets and node not in base_green and _sibling_caused(repo_root, node, sibling_py):
             foreign_ids.append(node)
 
     if probe == "open":
@@ -839,7 +904,16 @@ def review_reverify(
     from coordinator_core.ops.dispatch_emit import kept_work
 
     held = kept_work.held_paths(repo_root, implicated)
+    fenced: Set[str] = set()
+    footprint = set(edited) | created_set
     for rel in sorted(implicated):
+        if rel not in footprint or rel in foreign_set:
+            fenced.add(rel)
+            kept.append({
+                "path": rel, "tests": sorted(set(implicated[rel])),
+                "findings": [{"sidecar": None, "id": None, "reason": "outside-run-footprint"}],
+            })
+            continue
         if rel in held:
             kept.append({
                 "path": rel, "tests": sorted(set(implicated[rel])),
@@ -850,6 +924,13 @@ def review_reverify(
             entry = view.head_map.get(rel)
             if entry is None:
                 plan[rel] = (None, "snapshot")
+                continue
+            if not applied_rows(repo_root, side, rel):
+                fenced.add(rel)
+                kept.append({
+                    "path": rel, "tests": sorted(set(implicated[rel])),
+                    "findings": [{"sidecar": None, "id": None, "reason": "no-run-finding-names-path"}],
+                })
                 continue
             blob = _blob(repo_root, entry)
             if blob is None:
@@ -874,13 +955,19 @@ def review_reverify(
             plan[rel] = (inv.data, "findings")
             refs_by_rel[rel] = inv.reverted
 
+    for node, targets in implication.items():
+        if targets and targets <= fenced and node not in unattributed and node not in already:
+            unattributed.append(node)
     unattributed.extend(n for n in not_base_red if n not in unattributed)
-    candidates = [n for n in unattributed if n not in not_base_red]
+    candidates = [n for n in unattributed if n not in not_base_red and n not in base_green]
     if cause_files is None and candidates:
         cause_files = _derive_cause_files(repo_root, candidates, failing_output)
     sibling_owned, foreign_red = _sibling_owned(repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path)
     if sibling_owned or foreign_red:
         unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]
+    unmeasured: List[str] = []
+    if base_unmeasured:
+        unmeasured, unattributed = sorted(set(unattributed)), []
     refusal = _orphaned_importer(repo_root, plan, edited, created) or _dangling(repo_root, view, manifest, plan)
     if refusal:
         return _fail(refusal, True)
@@ -910,6 +997,10 @@ def review_reverify(
             kept_at = _rel(str(dest), repo_root)
             action = "removed"
         else:
+            try:
+                kept_at = _stash(repo_root, snapshot_dir, rel, target)
+            except OSError:
+                return _fail(f"could not stash {rel} before reverting", True)
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_bytes(target, data)
             action = "reverted-findings" if source == "findings" else "restored"
@@ -952,9 +1043,11 @@ def review_reverify(
         "foreign_red": foreign_red,
         "kept": kept,
         "foreign": foreign_ids,
+        "passed_at_base": sorted(base_green),
         "index_residue": index_residue,
         "record": _rel(str(record_path), repo_root),
         "error": None,
+        **({"base_unmeasured": base_unmeasured, "unmeasured": unmeasured} if base_export_path else {}),
     }
 
 
@@ -986,6 +1079,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     failing_at_base = params.get("failing_at_base")
     if failing_at_base is not None and not isinstance(failing_at_base, list):
         return _fail("review.reverify failing_at_base must be a list of node ids", revert, shape)
+    base_export_path = params.get("base_export_path")
+    if base_export_path is not None and not isinstance(base_export_path, str):
+        return _fail("review.reverify base_export_path must be a path string", revert, shape)
+    base_export_path = base_export_path or ""
     if sidecars is not None and not isinstance(sidecars, list):
         return _fail("review.reverify sidecars must be a list of paths", revert, shape)
     cause_files = params.get("cause_files")
@@ -1011,4 +1108,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         run_id=str(params.get("run_id") or ""),
         plan_path=str(params.get("plan_path") or ""),
         run_key=str(params.get("run_key") or ""),
+        base_export_path=base_export_path,
     )

@@ -365,6 +365,42 @@ def test_real_launcher_script_carries_every_child_and_maps_each_result(tmp_path,
     assert "CHILDREN.map((child, i)" in text and "child threw" in text
 
 
+def _spent_budget_launch(tmp_path, monkeypatch):
+    """`_default_launch` with the emit budget spent: every child is handed to the launcher as a deferred-emit script."""
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+
+    def overran(*args, **kwargs):
+        raise hook._EmitOverran("spent")
+
+    monkeypatch.setattr(hook, "_emit_within_budget", overran)
+    ready = _two_children(tmp_path)[:1]
+    children = [LaunchChild(run_id=r.run_id, sizing_rel=r.slice_sizing, emit_params={"sizing": r.slice_sizing}) for r in ready]
+    launcher = hook._default_launch(tmp_path, "resume-x-abcdef", children, _SESSION)
+    deferred = sorted((tmp_path / "scratch" / "warp").glob("defer-*.workflow.mjs"))
+    assert len(deferred) == 1
+    return launcher.read_text(encoding="utf-8"), deferred[0].read_text(encoding="utf-8")
+
+
+def test_a_launcher_started_deferred_emit_never_nests_workflow_and_the_launcher_starts_what_it_emits(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.fan_launcher import DEFERRED_EMIT_KEY
+
+    launcher, child = _spent_budget_launch(tmp_path, monkeypatch)
+    assert "workflow(" not in child
+    assert f"{DEFERRED_EMIT_KEY}: {{ path: scriptPath" in child
+    assert "launcher_child" in child
+    assert f"result.{DEFERRED_EMIT_KEY}" in launcher and launcher.count("await workflow(") == 1
+
+
+def test_a_standalone_deferred_emit_still_starts_the_run_itself(tmp_path):
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit.fan_launcher import DEFERRED_EMIT_KEY
+
+    script = hook._write_deferred_script(tmp_path, {"ask": "x"}).read_text(encoding="utf-8")
+    assert "return await workflow({ scriptPath: scriptPath });" in script
+    assert DEFERRED_EMIT_KEY not in script
+
+
 # A run that stopped at plan-blitz leaves run.json bound to its sizing but, historically, no halted.json.
 
 

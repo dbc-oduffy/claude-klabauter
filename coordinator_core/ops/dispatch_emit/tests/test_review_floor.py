@@ -93,6 +93,28 @@ def test_verdict_count_requires_a_sidecar_file(tmp_path):
     assert rf.verdict_count(review, tmp_path) == 1
 
 
+def _wave_with_lost_sidecar(tmp_path, listed):
+    d = tmp_path / ".coordinator-local" / "subagent-share" / "sess"
+    d.mkdir(parents=True)
+    (d / "run.review-wave-bookkeeping.md").write_text(
+        "---\nintegrated_from:\n- " + listed + "\nslices: 1\n---\n", encoding="utf-8")
+    rel = ".coordinator-local/subagent-share/sess/2026-10-30-codereview-slice-x.md"
+    return {"integration_stem": "run.review-wave-bookkeeping",
+            "wave_reviews": [{"verdict": "WARN", "sidecar_path": rel}]}
+
+
+def test_verdict_count_credits_a_lost_sidecar_the_integration_record_names(tmp_path):
+    review = _wave_with_lost_sidecar(tmp_path, "2026-10-30-codereview-slice-x")
+    assert rf.verdict_count(review, tmp_path) == 1
+
+
+def test_verdict_count_refuses_a_lost_sidecar_the_integration_record_does_not_name(tmp_path):
+    review = _wave_with_lost_sidecar(tmp_path, "2026-10-30-codereview-slice-other")
+    assert rf.verdict_count(review, tmp_path) == 0
+    review.pop("integration_stem")
+    assert rf.verdict_count(review, tmp_path) == 0
+
+
 def test_verdict_count_bare_verdict_is_zero(tmp_path):
     assert rf.verdict_count({"wave_reviews": [{"verdict": "x"}]}, tmp_path) == 0
 

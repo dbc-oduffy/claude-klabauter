@@ -342,6 +342,16 @@ def _sizing_path(run_id: str, scouted: Mapping[str, Any], row_id: str) -> str:
     return f"state/sizings/{d[:4]}-{d[4:6]}-{d[6:8]}-{_slug(scouted.get('name')) or 'sizing'}-{_slug(row_id) or 'row'}.yaml"
 
 
+#: `grind_size_chain.SKIP_MESSAGE`: the chain exits 0 having written no sizing; a test pins the equality.
+SIZE_SKIPPED_MESSAGE = "size skipped: a superseded predecessor already carries route-to-plan"
+_SIZE_SKIPPED_HAND_BACK = "; no sizing was written, fire the ask: "
+
+
+def _size_skipped_reason(row_id: str, path: str, intent: str) -> str:
+    """The baton reason for a size chain that skipped: no sizing path, the ask to fire instead. Twin: the `_toSize` loop."""
+    return f"{SIZE_SKIPPED_MESSAGE}{_SIZE_SKIPPED_HAND_BACK}Resolve backlog row {row_id} ({path}): {intent}"
+
+
 #: The params block rides the spawn transcript's computed-task record, which `read_spawn_prompt` caps at
 #: `READ_CAP_BYTES`. The transcript stores the prompt JSON-escaped, so the budget is measured on the
 #: twice-encoded params, less room for the prompt's own text. Over it, the rows are handed back, never
@@ -472,6 +482,7 @@ def run_admission(
     run_close_sink: Optional[list] = None,
     undo_paths_sink: Optional[list] = None,
     pm_rulings: Optional[Mapping[str, str]] = None,
+    repo_root: Optional[Path] = None,
 ) -> dict:
     """Drive the admission policy over ``batches`` (``(batch_id,
     [row_id, ...])`` pairs, in queue order).
@@ -518,6 +529,11 @@ def run_admission(
     scout's ``{tshirt, intent, name, exit_code, ...}`` (or ``{}`` for a refusal), ``exit_code``
     being its closing sizing chain's. A ``verify`` that fails a row's final verification also
     carries ``"undo": {"outcome", "reason"}``.
+
+    ``repo_root``, when given, makes a size call with exit 0 hand back a size-step failure
+    naming the sizing path when that file is absent under it; ``None`` skips the check. No
+    production caller passes it and the rendered script cannot run this check, so the emitted
+    handback still trusts exit 0.
 
     Downstream-first, one admitted batch's row work fully drains before the
     next admission decision -- this reference scheduler never holds more
@@ -758,13 +774,17 @@ def run_admission(
         return all(rows[rid].done for rid in batch.row_ids)
 
     def _triage_batch(batch: _Batch) -> None:
-        result = _record_call("triage", batch.batch_id)
         batch.triaged = True
         seen: set[str] = set()
         to_size: list[Row] = []
-        for rec in result or []:
-            if rec["row"] not in batch.row_ids:
-                continue
+
+        def _ingest(result: Any, scope: Sequence[str]) -> None:
+            for rec in result or []:
+                _ingest_record(rec, scope)
+
+        def _ingest_record(rec: dict, scope: Sequence[str]) -> None:
+            if rec["row"] not in scope:
+                return
             row = rows[rec["row"]]
             seen.add(rec["row"])
             by_triage_check["triaged"] += 1
@@ -779,7 +799,7 @@ def run_admission(
             )
             if action == ("handback", "baton"):
                 to_size.append(row)
-                continue
+                return
             if action[0] == "handback":
                 by_triage_check["triage_handback"] += 1
             if tradeoff and action == ("handback", "repeat-refused"):
@@ -794,10 +814,16 @@ def run_admission(
                     _handback_row(row, action[1], f"triage verdict {rec['verdict']!r}")
                 else:
                     _apply_route(row, action, f"triage verdict {rec['verdict']!r}")
-        for rid in batch.row_ids:
-            row = rows[rid]
-            if rid not in seen and not row.done and row.node is None:
-                _handback(row, "stage-dead", "triage never returned a record for this row")
+
+        def _unreturned() -> list[str]:
+            return [rid for rid in batch.row_ids if rid not in seen and not rows[rid].done and rows[rid].node is None]
+
+        _ingest(_record_call("triage", batch.batch_id), batch.row_ids)
+        missing = _unreturned()
+        if missing:
+            _ingest(_record_call("triage", batch.batch_id), missing)
+        for rid in _unreturned():
+            _handback(rows[rid], "stage-dead", "triage never returned a record for this row")
         for row in to_size:
             _size_row(row)
 
@@ -821,9 +847,15 @@ def run_admission(
             by_triage_check["size_confirmed"] += 1
         row.done = True
         intent = scouted.get("intent", "")
-        if scouted.get("exit_code") == 0:
-            row.sizing_path = _sizing_path(run_id, scouted, row.row_id)
-            _handback(row, "baton", f"sized at {row.sizing_path}: {intent}")
+        if scouted.get("exit_code") == 0 and SIZE_SKIPPED_MESSAGE in str(scouted.get("stdout") or ""):
+            _handback(row, "baton", _size_skipped_reason(row.row_id, row.path, intent))
+        elif scouted.get("exit_code") == 0:
+            sizing = _sizing_path(run_id, scouted, row.row_id)
+            if repo_root is not None and not (Path(repo_root) / sizing).is_file():
+                _handback(row, "baton", f"{intent} (size step failed: exit 0 but no sizing file at {sizing})")
+            else:
+                row.sizing_path = sizing
+                _handback(row, "baton", f"sized at {sizing}: {intent}")
         else:
             _handback(row, "baton", f"{intent} (size step failed: {size_fail_reason(scouted)})")
 
@@ -1472,6 +1504,30 @@ def _manifest_const(manifest: Manifest) -> str:
         + ";"
     )
 
+def _with_sizing_exists_check(size_raw: str) -> str:
+    """Append the sizing-file existence check to the size scout's prompt expression.
+
+    The scout, not the script, can see the disk: after a zero-exit chain it runs ``test -f`` on the
+    absolute sizing path and returns a failing exit_code, so the baton never names an absent file.
+    Twin: ``run_admission``'s ``repo_root`` check. Needs ``row`` in scope at the call site."""
+    marker = ", { label:"
+    at = size_raw.rfind(marker)
+    if at < 0:
+        raise ValueError(f"grind_compose._with_sizing_exists_check: unexpected composer output shape: {size_raw[:40]!r}")
+    clause = (
+        " + " + json.dumps(
+            "\n\nWhen that command exits 0 and its stdout is not " + json.dumps(SIZE_SKIPPED_MESSAGE)
+            + ", run this as a second Bash call, replacing <name> as above: `test -f "
+        )
+        + r" + _shq(REPO_ROOT.replace(/\/+$/, '') + '/' + _sizingPathFor('<name>', row.rowId)) + "
+        + json.dumps(
+            "`. If it fails, return exit_code 1 and stderr 'exit 0 but no sizing file at ' followed by that path; "
+            "otherwise return the chain's exit code as stated."
+        )
+    )
+    return size_raw[:at] + clause + size_raw[at:]
+
+
 def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", tail: Optional[str] = None) -> str:
     prefix = "  await agent("
     suffix = ");"
@@ -1872,6 +1928,7 @@ def compose_grind_script(
         agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
         retry_js="retry",
     )
+    size_raw = _with_sizing_exists_check(size_raw)
     lines.append("async function _sizeCall(row, retry) {\n" + _indent_block(_capture(size_raw, "size"), "  ") + "\n}")
 
     if has_close_node:
@@ -2100,47 +2157,50 @@ def compose_grind_script(
         "  const batch = BATCHES.find((b) => b.id === batchState.id);\n"
         "  const rowsMeta = batch.rows.map((r) => "
         "({ row_id: r, path: (QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r) || {}).path }));\n"
-        "  const _out = await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, batch.rows));\n"
         "  batchState.triaged = true;\n"
         "  const _seen = new Set();\n"
         "  const _toSize = [];\n"
-        "  for (const rec of (_out.rows || [])) {\n"
-        "    const recRow = _normalizeRowRef(rowsMeta, rec.row);\n"
-        "    if (!batch.rows.includes(recRow)) continue;\n"
-        "    const row = _rows[recRow];\n"
-        "    if (!row) continue;\n"
-        "    _seen.add(recRow);\n"
-        "    row.evidence = rec.evidence || '';\n"
-        "    row.fixPlan = rec.fix_plan || '';\n"
-        "    if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; }\n"
-        "    _byTriageCheck.triaged += 1;\n"
-        "    row.origin = `triage:${rec.verdict}`;\n"
-        "    const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
-        "    const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff, row.pmRuling, rec.ruling_on_tradeoff);\n"
-        "    if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"
-        "    if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }\n"
-        "    if (tradeoff && route.kind === 'handback' && route.value === 'repeat-refused') { _byTriageCheck.repeat_refused += 1; applyRoute(row, recRow, route, REPEAT_REFUSED_HEAD + row.pmRuling, tradeoff, row.pmRuling); }\n"
-        "    else if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { await _handBackRow(recRow, 'needs-judgment', `triage reported a tradeoff: ${tradeoff}`, tradeoff); }\n"
-        "    else {\n"
-        "      if (tradeoff) { _byTriageCheck.ruled_tradeoff += 1; }\n"
-        "      if (route.kind === 'handback' && PM_BOUND_TYPES.includes(route.value)) { await _handBackRow(recRow, route.value, `triage verdict ${rec.verdict}`); }\n"
-        "      else { applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }\n"
+        "  const _ingest = async (_out, _scope) => {\n"
+        "    for (const rec of (_out.rows || [])) {\n"
+        "      const recRow = _normalizeRowRef(rowsMeta, rec.row);\n"
+        "      if (!_scope.includes(recRow)) continue;\n"
+        "      const row = _rows[recRow];\n"
+        "      if (!row) continue;\n"
+        "      _seen.add(recRow);\n"
+        "      row.evidence = rec.evidence || '';\n"
+        "      row.fixPlan = rec.fix_plan || '';\n"
+        "      if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; }\n"
+        "      _byTriageCheck.triaged += 1;\n"
+        "      row.origin = `triage:${rec.verdict}`;\n"
+        "      const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
+        "      const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff, row.pmRuling, rec.ruling_on_tradeoff);\n"
+        "      if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"
+        "      if (route.kind === 'handback') { _byTriageCheck.triage_handback += 1; }\n"
+        "      if (tradeoff && route.kind === 'handback' && route.value === 'repeat-refused') { _byTriageCheck.repeat_refused += 1; applyRoute(row, recRow, route, REPEAT_REFUSED_HEAD + row.pmRuling, tradeoff, row.pmRuling); }\n"
+        "      else if (tradeoff && route.kind === 'handback' && route.value === 'needs-judgment') { await _handBackRow(recRow, 'needs-judgment', `triage reported a tradeoff: ${tradeoff}`, tradeoff); }\n"
+        "      else {\n"
+        "        if (tradeoff) { _byTriageCheck.ruled_tradeoff += 1; }\n"
+        "        if (route.kind === 'handback' && PM_BOUND_TYPES.includes(route.value)) { await _handBackRow(recRow, route.value, `triage verdict ${rec.verdict}`); }\n"
+        "        else { applyRoute(row, recRow, route, `triage verdict ${rec.verdict}`); }\n"
+        "      }\n"
         "    }\n"
-        "  }\n"
-        "  for (const staleRef of (_out.stale || [])) {\n"
-        "    const staleId = _normalizeRowRef(rowsMeta, staleRef);\n"
-        "    if (!batch.rows.includes(staleId)) continue;\n"
-        "    const row = _rows[staleId];\n"
-        "    if (!row || row.done || _seen.has(staleId)) continue;\n"
-        "    _seen.add(staleId);\n"
-        "    row.done = true;\n"
-        "    _handBack(staleId, 'manifest-stale', 'grind-row check reported this row stale/vanished');\n"
-        "  }\n"
-        "  for (const r of batch.rows) {\n"
-        "    if (!_seen.has(r) && !_rows[r].done && !_rows[r].node) {\n"
-        "      _rows[r].done = true;\n"
-        "      _handBack(r, 'stage-dead', 'triage never returned a record for this row');\n"
+        "    for (const staleRef of (_out.stale || [])) {\n"
+        "      const staleId = _normalizeRowRef(rowsMeta, staleRef);\n"
+        "      if (!_scope.includes(staleId)) continue;\n"
+        "      const row = _rows[staleId];\n"
+        "      if (!row || row.done || _seen.has(staleId)) continue;\n"
+        "      _seen.add(staleId);\n"
+        "      row.done = true;\n"
+        "      _handBack(staleId, 'manifest-stale', 'grind-row check reported this row stale/vanished');\n"
         "    }\n"
+        "  };\n"
+        "  const _unreturned = () => batch.rows.filter((r) => !_seen.has(r) && !_rows[r].done && !_rows[r].node);\n"
+        "  await _ingest(await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, batch.rows)), batch.rows);\n"
+        "  const _missing = _unreturned();\n"
+        "  if (_missing.length) { await _ingest(await _issue(batchState.id, '', () => _triageCall(batchState.id, batchState.batchKey, _missing)), _missing); }\n"
+        "  for (const r of _unreturned()) {\n"
+        "    _rows[r].done = true;\n"
+        "    _handBack(r, 'stage-dead', 'triage never returned a record for this row');\n"
         "  }\n"
         "  for (const rid of _toSize) {\n"
         "    const row = _rows[rid];\n"
@@ -2162,7 +2222,8 @@ def compose_grind_script(
         "    if (!_belowFloor) { _byTriageCheck.size_confirmed += 1; }\n"
         "    row.done = true;\n"
         "    const _intent = scouted.intent || '';\n"
-        "    if (scouted.exit_code === 0) { row.sizingPath = _sizingPath(scouted, rid); _handBack(rid, 'baton', 'sized at ' + row.sizingPath + ': ' + _intent); }\n"
+        "    if (scouted.exit_code === 0 && String(scouted.stdout || '').includes(" + json.dumps(SIZE_SKIPPED_MESSAGE) + ")) { _handBack(rid, 'baton', " + json.dumps(SIZE_SKIPPED_MESSAGE + _SIZE_SKIPPED_HAND_BACK) + " + 'Resolve backlog row ' + rid + ' (' + row.path + '): ' + _intent); }\n"
+        "    else if (scouted.exit_code === 0) { row.sizingPath = _sizingPath(scouted, rid); _handBack(rid, 'baton', 'sized at ' + row.sizingPath + ': ' + _intent); }\n"
         "    else { _handBack(rid, 'baton', _intent + ' (size step failed: ' + _sizeFailReason(scouted) + ')'); }\n"
         "  }\n"
         "}"

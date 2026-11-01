@@ -605,8 +605,13 @@ def _compute_fresh_output_path(
       1. `artifact_path`'s own basename (the plan/predecessor a non-empty
          `artifact_path` names) -- handled by the `stem` branch below, not
          this list; this list only ever runs when that branch is empty.
-      2. THIS SESSION's own `state/sizings/*.yaml` sizing object, via
-         `_resolve_session_sizing_slug` -- NEW. Sizing is the EM's first
+      2. `title` (the caller-supplied `--title`, the same value that sets
+         the record's title/handoff_id): a non-empty `_title_slug` wins over
+         the sizing slug below, so the filename follows the title with no
+         extra flag. Slugging detail: the "title detail" paragraph below.
+      3. THIS SESSION's own `state/sizings/*.yaml` sizing object, via
+         `_resolve_session_sizing_slug` -- consulted only when no title (or
+         an unsluggable one) is given. Sizing is the EM's first
          move on a fresh ask (`coordinator:sizing` routes before plan/
          shape/dispatch), so a session's own sizing object frequently
          exists before any plan or handoff does, and the "genuinely
@@ -614,7 +619,7 @@ def _compute_fresh_output_path(
          usually not sourceless at all -- see that function's own
          docstring for the authorship-not-adjacency discriminator and the
          multiple-sizings-per-session tiebreak.
-      3. `title` (the caller-supplied `--title`, already threaded to d1's
+      (title detail, tier 2) `title` (already threaded to d1's
          own `--title=` flag) -- the ONLY OTHER caller-supplied naming
          signal available here (2026-08-04 break-class fix: `Path("").stem`
          is `""`, and the old unconditional `f"{date_str}-{slug}.md"`
@@ -646,10 +651,10 @@ def _compute_fresh_output_path(
          literal `"untitled"` was a defect (two same-day standalone
          handoffs collided on one path) and not merely inelegant.
 
-    Tier 2 (session sizing) needs `root` to run `git log`; when `root` is
+    Tier 3 (session sizing) needs `root` to run `git log`; when `root` is
     `None` (the same "no root in scope" callers named in this function's
     own `root` paragraph below), it is skipped and derivation falls straight
-    through to tier 3/4 -- unchanged behaviour for those callers, not a
+    through to tier 4 -- unchanged behaviour for those callers, not a
     regression, since none of them exercised the standalone-empty-
     `artifact_path` shape this whole ordered list only ever applies to.
     """
@@ -658,13 +663,12 @@ def _compute_fresh_output_path(
         slug = re.sub(r"^\d{4}-\d{2}-\d{2}_\d{6}_", "", stem)
         slug = re.sub(r"^\d{4}-\d{2}-\d{2}-", "", slug)
     else:
-        sizing_slug = _resolve_session_sizing_slug(root) if root is not None else None
-        if sizing_slug:
-            slug = sizing_slug
-        elif title:
-            slug = _title_slug(title) or _mint_last_resort_slug()
+        title_slug = _title_slug(title) if title else ""
+        if title_slug:
+            slug = title_slug
         else:
-            slug = _mint_last_resort_slug()
+            sizing_slug = _resolve_session_sizing_slug(root) if root is not None else None
+            slug = sizing_slug or _mint_last_resort_slug()
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     candidate = _repo_rel_handoff_path(f"{date_str}-{slug}.md")
     if root is None:
@@ -878,6 +882,29 @@ def _resume_recorded_successor_path(predecessor: str, root: Path) -> Optional[st
     if normalized.as_posix().startswith("state/handoffs/") or (root / normalized).is_file():
         return recorded
     return None
+
+
+def _replay_target_authored_elsewhere(
+    target: str, root: Path, session_id: Optional[str] = None
+) -> bool:
+    """True iff the existing replay target carries an `authoring_session`
+    naming a session other than this run's. d1 must not claim, as "a prior
+    attempt of this same run", a baton a different run scaffolded. A target
+    with no `authoring_session` (scaffolded before the stamp existed), an
+    unreadable one, or no resolvable current session is not foreign: the
+    predecessor-side `continued_into` record remains the resume evidence.
+    """
+    path = Path(target.replace("\\", "/"))
+    if not path.is_absolute():
+        path = root / path
+    if not path.is_file():
+        return False
+    try:
+        authored_by = (_fm_field(_read_frontmatter(path), "authoring_session") or "").strip()
+    except (OSError, UnicodeDecodeError):
+        return False
+    current = session_id or _resolve_current_session_id()
+    return bool(authored_by and current and authored_by != current)
 
 
 def _resolve_current_session_id() -> Optional[str]:
@@ -3117,6 +3144,8 @@ def resolve_lineage(
         # `_normalize_artifact_path` threading already follows.
         if lineage["predecessor"]:
             _resumed = _resume_recorded_successor_path(lineage["predecessor"], root)
+            if _resumed and _replay_target_authored_elsewhere(_resumed, root, session_id):
+                _resumed = None
             if _resumed:
                 lineage["output_path"] = _resumed
                 lineage["resumed_successor"] = _resumed
@@ -3839,6 +3868,7 @@ def _build_directives(
     root: Optional[Path] = None,
     decisions: Optional[dict[str, Any]] = None,
     predecessor_canonical_kind: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     # `predecessor_
     # canonical_kind`, when supplied, is `brief()`'s own already-computed
@@ -4452,6 +4482,27 @@ def _build_directives(
                         "already_satisfied": False,
                     }
                 )
+            # d8 -- after d6 (the order rule above): the session's handoff
+            # claim follows the baton this run mints. Convergent on replay
+            # (`follow_handoff_claim` reports an already-moved claim as done).
+            _new_claim = Path(successor_path).name
+            for _i, _held in enumerate(
+                _held_claims_leading_to(
+                    session_id,
+                    root,
+                    [Path(p).name for p in all_predecessors],
+                    _new_claim,
+                )
+            ):
+                directives.append(
+                    {
+                        "id": "d8" if _i == 0 else f"d8-{_i + 1}",
+                        "cli": "session-claim-cli",
+                        "args": ["follow-handoff-claim", session_id, _held, _new_claim],
+                        "depends_on": ["d1"],
+                        "already_satisfied": False,
+                    }
+                )
     else:  # spinoff
         # d3 -- STAMPS the five origin_* provenance fields onto d1's
         # already-minted artifact (Option A, ratified 2026-07-27); it no
@@ -4779,6 +4830,69 @@ def _emit(decision_object: dict[str, Any], exit_code: int) -> BriefResult:
     return BriefResult(decision_object, exit_code)
 
 
+_LEAF_WALK_MAX_HOPS = 32
+
+
+def _follow_continued_to_leaf(basename: str, root: Path) -> str:
+    """The basename of the live leaf baton `basename` was continued into.
+
+    A claim ledger entry outlives the baton's succession: once the held baton
+    is `deployment_state: continued`, its `continued_into` names the baton
+    that carries the work. Follows that chain (live or archived copies) and
+    returns the first baton not itself continued. Stops at, and returns, the
+    last baton it could read when a link is unreadable, unresolvable, or
+    cyclic -- today's behaviour, never a guess. Bounded by
+    `_LEAF_WALK_MAX_HOPS`; read-only.
+    """
+    from coordinator_core.ops.resolve_swept_baton import _find_first_match
+
+    def _locate(name: str) -> Optional[Path]:
+        live = root / "state" / "handoffs" / name
+        return live if live.is_file() else _find_first_match(root, name)
+
+    current = basename
+    seen = {current}
+    for _ in range(_LEAF_WALK_MAX_HOPS):
+        located = _locate(current)
+        if located is None:
+            return current
+        try:
+            fm = _read_frontmatter(located)
+        except (OSError, UnicodeDecodeError):
+            return current
+        if _fm_field(fm, "deployment_state") != "continued":
+            return current
+        recorded = (_fm_field(fm, "continued_into") or "").strip()
+        nxt = recorded.replace("\\", "/").rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+        if not nxt.endswith(".md") or nxt in seen or _locate(nxt) is None:
+            return current
+        seen.add(nxt)
+        current = nxt
+    return current
+
+
+def _held_claims_leading_to(
+    session_id: Optional[str], root: Optional[Path], predecessor_basenames: list[str], minted: str
+) -> list[str]:
+    """Handoff-claim basenames `session_id` holds whose live leaf is one of
+    `predecessor_basenames` (or already `minted`, on a replay) -- the claims a
+    successor mint must move onto itself. The held claim can be an ancestor of
+    the predecessor: predecessor resolution follows `continued_into` to the
+    leaf, the claim ledger does not."""
+    if not session_id or root is None or not minted:
+        return []
+    from coordinator_core.session.claims import list_claims_by_session
+
+    wanted = {*predecessor_basenames, minted}
+    return sorted(
+        basename
+        for class_, basename in list_claims_by_session(session_id, cwd=str(root))
+        if class_ == "handoff-claims"
+        and basename != minted
+        and _follow_continued_to_leaf(basename, root) in wanted
+    )
+
+
 def _resolve_held_handoff_for_session(
     root: Path, *, allow_standalone: bool = False, session_id: Optional[str] = None
 ) -> tuple[Optional[str], list[str], bool]:
@@ -4997,7 +5111,7 @@ def _resolve_held_handoff_for_session(
             "ledger -- pass the predecessor path explicitly."
         )
     if len(held_handoffs) == 1:
-        return "state/handoffs/" + held_handoffs[0], [], False
+        return "state/handoffs/" + _follow_continued_to_leaf(held_handoffs[0], root), [], False
 
     sessions_dir = _session_core.sessions_dir(str(root))
     _SENTINEL = "￿"
@@ -5076,8 +5190,13 @@ def _resolve_held_handoff_for_session(
         ordering[i][:3] == ordering[i + 1][:3] for i in range(len(ordering) - 1)
     )
 
-    primary = "state/handoffs/" + ordered_basenames[0]
-    additional = ["state/handoffs/" + basename for basename in ordered_basenames[1:]]
+    leaves: list[str] = []
+    for basename in ordered_basenames:
+        leaf = _follow_continued_to_leaf(basename, root)
+        if leaf not in leaves:
+            leaves.append(leaf)
+    primary = "state/handoffs/" + leaves[0]
+    additional = ["state/handoffs/" + basename for basename in leaves[1:]]
     return primary, additional, degraded
 
 
@@ -5664,6 +5783,7 @@ def brief(
         root=root,
         decisions=decisions,
         predecessor_canonical_kind=_predecessor_canonical_kind,
+        session_id=session_id,
     )
     # Backstop invariant (fail loud, not silent): no computed directive may
     # write its output over the input artifact just read for lineage. See

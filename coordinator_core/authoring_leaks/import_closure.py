@@ -182,6 +182,13 @@ class _Closure:
         self.gate = gate
         self.view = view
         self.landed_text = landed_text
+        self._wt_texts: Dict[str, Optional[str]] = {}
+
+    def worktree_text(self, rel: str) -> Optional[str]:
+        """Worktree text of ``rel``, read once per closure: one read per declared path, not per imported name."""
+        if rel not in self._wt_texts:
+            self._wt_texts[rel] = _read_text(self.root / rel)
+        return self._wt_texts[rel]
 
     def worktree_has(self, path: str) -> bool:
         if self.landed_text is not None and path in self.gate:
@@ -212,7 +219,7 @@ class _Closure:
     def post_names(self, target: str, force: bool = False) -> Optional[_Names]:
         """Names `target` binds once the commit lands; `None` = assume satisfied (or unparseable)."""
         if target in self.gate:
-            text = self.landed_text(target) if self.landed_text is not None else _read_text(self.root / target)
+            text = self.landed_text(target) if self.landed_text is not None else self.worktree_text(target)
         elif force or self.view.worktree_differs(target):
             text = self.view.head_text(target)
         else:
@@ -259,7 +266,7 @@ class _Closure:
             if post_file in self.gate:
                 wt_bound = False
             else:
-                wt_text = _read_text(self.root / post_file)
+                wt_text = self.worktree_text(post_file)
                 wt_bound = wt_text is None or _Names(wt_text).binds(name) is not False
             reason = "uncommitted in the worktree" if (wt_sub or wt_bound) else "absent from HEAD"
             out.append(self._finding(rel, rec, name, base, wt_sub or post_file, reason))
@@ -299,7 +306,7 @@ def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFindi
     if names is None or names.binds(ref.name) is not False:
         return None
     if not wt_sub:
-        wt_text = _read_text(closure.root / target)
+        wt_text = closure.worktree_text(target)
         if wt_text is None or _Names(wt_text).binds(ref.name) is not True:
             return None
     where = closure.locate(sub, closure.worktree_has, pfx) if wt_sub else target
@@ -509,6 +516,8 @@ def detect(
         needed.update(_module_files(ref.module, pfx))
         needed.update(_module_files(f"{ref.module}.{ref.name}", pfx))
     closure = _Closure(root, gate, HeadView(root, needed), landed_text)
+    if landed_text is None:
+        closure._wt_texts.update(texts)
     findings: List[LeakFinding] = []
     for rel, rec in parsed:
         findings.extend(closure.check(rel, rec))
@@ -541,3 +550,21 @@ def _annotate_owners(root: Path, findings: List[LeakFinding]) -> List[LeakFindin
             f = out[i]
             out[i] = LeakFinding(f.path, f.line, f.kind, f"{f.detail}; owned by live run {run_id}")
     return out
+
+
+_SYMBOL_TARGET = re.compile(r"; (\S+\.py) is uncommitted in the worktree$")
+
+
+def withheld_symbol_pairs(root: Path, findings: Iterable[Tuple[str, str]]) -> Dict[str, str]:
+    """``{importer: target}`` for ``(path, detail)`` findings whose target ``.py`` is tracked in HEAD and
+    modified in the worktree: the landing reads a name only that uncommitted file defines. A wholly
+    untracked target and a target another live run owns (detail suffix) are not pairs."""
+    found: Dict[str, str] = {}
+    for path, detail in findings:
+        m = _SYMBOL_TARGET.search(detail or "")
+        if path and m:
+            found[path] = m.group(1)
+    if not found:
+        return {}
+    view = HeadView(Path(root), set(found.values()))
+    return {imp: tgt for imp, tgt in found.items() if view.in_head(tgt)}

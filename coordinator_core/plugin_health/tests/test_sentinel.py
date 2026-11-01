@@ -246,7 +246,7 @@ def test_p9_nonzero_rc_reports_amber(tmp_path, monkeypatch):
     # reaches the published engine as a placeholder no registry can hold. The
     # message points at the CLI, which names the real key at runtime.
     assert "verify-ue-overrides.py" in note.message
-    assert "example_game_workbench_repo" not in note.message
+    assert "claude_unreal_holodeck" not in note.message
 
 
 def test_p9_main_raising_routes_to_inconclusive_never_silent_green(tmp_path, monkeypatch):
@@ -1011,13 +1011,13 @@ def test_default_manifest_path_coordinator_bin_root_override_still_wins(monkeypa
 
 def test_run_triage_end_to_end_resolves_manifest_without_content_root(monkeypatch, tmp_path):
     """End-to-end: `_run("triage", "")` must not hard-fail at the selector even
-    when the content-root ladder is entirely unresolvable (REPO_CONTENT_ROOT unset,
+    when the content-root ladder is entirely unresolvable (REPO_DOE_CLAUDE unset,
     COORDINATOR_BIN_ROOT unset, read_content_root() patched to None) and
     DOCTOR_PROBES_MANIFEST is not set -- the exact repro from the bug report
     (`python3 -m coordinator_core.plugin_health.sentinel --triage` exiting 3
     with "selector error: inconclusive: manifest not found")."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("DOCTOR_PROBES_MANIFEST", raising=False)
     monkeypatch.setattr(S, "read_content_root", lambda: None)
     stdout_lines, stderr_lines, exit_code = S._run("triage", "")
@@ -1152,7 +1152,7 @@ def test_subset_mode_labels_inconclusive_probe_separately_from_failing(monkeypat
     to return inconclusive(...) directly, so this exercises `_run`'s
     rendering logic against exactly that note shape."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setattr(S, "read_content_root", lambda: None)
     monkeypatch.setenv("DOCTOR_PROBES_MANIFEST", str(
         Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "doctor-probes.toml"
@@ -1179,7 +1179,7 @@ def test_subset_mode_separates_a_genuine_failure_from_a_concurrent_inconclusive(
     pins that a genuine failure keeps its own label and does not absorb an
     unrelated inconclusive id, in either direction."""
     monkeypatch.delenv("COORDINATOR_BIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setattr(S, "read_content_root", lambda: None)
     monkeypatch.setenv("DOCTOR_PROBES_MANIFEST", str(
         Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "doctor-probes.toml"

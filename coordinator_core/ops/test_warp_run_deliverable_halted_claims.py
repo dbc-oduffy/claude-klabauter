@@ -20,8 +20,13 @@ JOB = "tools/runpod-jobs/job.py"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
+    # stale_release reads the wall clock against the run-id mint stamp: fixed 2026-10-19 ids would
+    # all release as stale-not-live once real time passes them by STALE_HOLD_BOUND_SECONDS.
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    monkeypatch.setattr(halted_hold_release, "stale_release", lambda *a, **k: None)
     return tmp_path
 
 

@@ -3434,22 +3434,24 @@ def _own_path_claims(
         except OSError:
             entries = []
         for entry in entries:
-            try:
-                with open(os.path.join(entry.path, "em-session-id.txt"), "r", encoding="utf-8") as fh:
-                    if fh.readline().strip() != sid:
-                        continue
-            except OSError:
+            owner, conclusive = touch_record.agent_owner_sid(entry.path)
+            if not conclusive or owner != sid:
                 continue
             sinks.append((os.path.join(entry.path, _TOUCH_RECORD_FILENAME), _normalize_agent_touched_entry))
     held: Set[str] = set()
+    memo: Dict[Tuple[Callable[[str], Optional[str]], str], Optional[str]] = {}
     for sink, normalize in sinks:
-        lines, degraded = _read_touch_record_as_legacy_lines(sink)
+        # The folded claim map is already last-verb-wins per path: its T survivors are the held paths.
+        claims, degraded, _reasons = touch_record._read_stream_claims(sink)
         if degraded:
             continue
-        for raw in project_self_scope(lines):
-            if not raw or raw.endswith("/"):
+        for raw, event in claims.items():
+            if event.verb != touch_record.VERB_TOUCH or not raw or raw.endswith("/"):
                 continue
-            norm = normalize(raw)
+            memo_key = (normalize, raw)
+            if memo_key not in memo:
+                memo[memo_key] = normalize(raw)
+            norm = memo[memo_key]
             if norm and not norm.endswith("/"):
                 held.add(norm)
     return sorted(held)

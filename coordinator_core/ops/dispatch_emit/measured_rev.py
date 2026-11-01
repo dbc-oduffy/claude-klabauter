@@ -3,6 +3,7 @@ drift check that tells a landing gate whether the recorded measurement still hol
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, Sequence
@@ -22,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     MEASURED_REV_RECORD,
     measured_rev_record_path,
 )
+from coordinator_core.ops.dispatch_emit.test_reach import foreign_dirt, reach_paths, seeds_for_landing
 
 _GLOB_CHARS = frozenset("*?[")
 _TREE_MODE = 0o40000
@@ -43,11 +45,18 @@ def _normalise(raw: str) -> str:
     return rel
 
 
+def _blob_sha(data: bytes) -> str:
+    digest = hashlib.sha1(b"blob %d\0" % len(data))
+    digest.update(data)
+    return digest.hexdigest()
+
+
 def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None = None) -> Dict[str, Any]:
     """Params `run_id`, `paths`; returns a dict keyed by `MEASURED_REV_KEYS`
-    (`sha`, `base_sha`, `paths`, `removed`, `blobs`). Moves no ref, writes no index,
+    (`sha`, `base_sha`, `paths`, `removed`, `blobs`, `tree`) plus `reach_dirt`: tracked
+    paths the landing set's tests can read, outside the set, that differ from HEAD. Moves no ref, writes no index,
     spawns nothing. The record is replaced per run_id: pass the run's whole write set in one
-    call. Raises `MeasuredRevRefused` for no HEAD, a path outside the repo, a
+    call. Raises `MeasuredRevRefused` for no HEAD, an unmeasurable test reach, a path outside the repo, a
     directory, glob or submodule path, or an unsupported checkin filter. `repo_root`
     defaults to the current directory."""
     root = Path(repo_root) if repo_root is not None else Path.cwd()
@@ -56,13 +65,9 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     if base is None:
         raise MeasuredRevRefused("no HEAD commit to measure against")
     rels = sorted({_normalise(p) for p in paths})
-    from coordinator_core.ops.dispatch_emit.landing_integrity import unparseable_py
+    from coordinator_core.ops.dispatch_emit import land_deadline
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _cached_parse_finding
 
-    broken = unparseable_py(root, rels)
-    if broken:
-        raise MeasuredRevRefused(
-            "measured-rev refused: py-unparseable: " + "; ".join(f"{f.path} {f.detail}" for f in broken)
-        )
     spine = read_tree_spine(root, rels)
     if spine is None:
         raise MeasuredRevRefused("HEAD's tree spine could not be read")
@@ -72,6 +77,7 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     written: list[str] = []
     removed: list[str] = []
     blobs: Dict[str, str] = {}
+    broken = []
     with object_batch():
         for rel in rels:
             target = root / rel
@@ -91,17 +97,30 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
                     assembled[rel] = _ABSENT
                 continue
             try:
-                data = commit._checkin_bytes(root, rel, target.read_bytes())
+                raw = target.read_bytes()
+                if rel.endswith(".py"):
+                    land_deadline.check("measured_rev.parse")
+                    found = _cached_parse_finding(root, rel, raw)
+                    if found:
+                        broken.append(found)
+                data = commit._checkin_bytes(root, rel, raw)
             except commit.FilterUnsupported as exc:
                 raise MeasuredRevRefused(str(exc)) from exc
             except OSError as exc:
                 raise MeasuredRevRefused(f"{rel} is unreadable: {exc}") from exc
-            sha = write_object(gitdir, b"blob", data)
+            if head_entry is not None and head_entry[1] == _blob_sha(data):
+                sha = head_entry[1]
+            else:
+                sha = write_object(gitdir, b"blob", data)
             mode = head_entry[0] if head_entry is not None else commit._mode_for(target)
             assembled[rel] = (mode, sha)
             written.append(rel)
             blobs[rel] = sha
 
+        if broken:
+            raise MeasuredRevRefused(
+                "measured-rev refused: py-unparseable: " + "; ".join(f"{f.path} {f.detail}" for f in broken)
+            )
         filled = _synthesize_absent_spine_dirs(spine, assembled)
         if filled is None:
             raise MeasuredRevRefused("a written path's parent collides with a non-directory in HEAD")
@@ -115,7 +134,13 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
         cand = write_object(gitdir, b"commit", body.encode("utf-8", "surrogateescape"))
         flush_object_batch()
 
-    result = {"sha": cand, "base_sha": base, "paths": written, "removed": removed, "blobs": blobs}
+    result = {
+        "sha": cand, "base_sha": base, "paths": written, "removed": removed, "blobs": blobs, "tree": root_tree,
+    }
+    try:
+        result["reach_dirt"] = foreign_dirt(root, reach_paths(root, seeds_for_landing(root, rels)), rels)
+    except Exception as exc:  # noqa: BLE001 -- an unmeasurable reach is a typed refusal, never a record without it
+        raise MeasuredRevRefused(f"the landing set's test reach could not be measured: {exc}") from exc
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
     return result
@@ -123,8 +148,10 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
 
 @register_op(MEASURED_REV_OP)
 def _handler(params: dict, repo_root: Path | None = None) -> Dict[str, Any]:
-    """JSON-RPC "dispatch.measured_rev": params `run_id` (str) and `paths` (list[str]);
-    replies the `MEASURED_REV_KEYS` dict, or `{error, refused: "measured-rev"}` on a refusal."""
+    """JSON-RPC "dispatch.measured_rev": params `run_id` (str) and `paths` (list[str]); replies
+    the `MEASURED_REV_KEYS` dict, or `{error, refused: "measured-rev"}` on a refusal. Verify runs
+    in the worktree, where the write set's blobs are the recorded ones by construction and
+    `measured_rev_drift` backstops later change; no tree is exported."""
     run_id, paths = params.get("run_id"), params.get("paths")
     if not isinstance(run_id, str) or not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
         return {"error": "params.run_id (str) and params.paths (list of str) are required", "refused": "measured-rev"}

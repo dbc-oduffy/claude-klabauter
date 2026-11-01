@@ -542,8 +542,17 @@ def _sizing_path(root: Path, sizing_rel: str) -> Path:
 
     archived = resolve_sizing_citation(root, sizing_rel)
     if archived is not None and archived.is_file():
-        contained = contained_path(archived, [Path(root) / "archive" / "sizings"])
+        archive_root = Path(root) / "archive" / "sizings"
+        contained = contained_path(archived, [archive_root])
         if contained is not None:
+            # Trap: the citation resolver's month stat-probe wins before it counts copies, so a
+            # writer here would silently pick one of several same-basename archive records.
+            copies = [p for p in archive_root.rglob(archived.name) if p.is_file()]
+            if len(copies) > 1:
+                raise LedgerRefused(
+                    f"sizing {sizing_rel!r} matches {len(copies)} archived records; "
+                    "remove the duplicate under archive/sizings before writing"
+                )
             return contained
     raise LedgerRefused(f"sizing {sizing_rel!r} is not a file under the sizings home or the sizings archive")
 
@@ -1999,7 +2008,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         refused.append({"input": "build_only", "reason": "the bound sizing holds no research block to remove"})
     if warnings:
         out["warning"] = " ".join(warnings)
-    if not live:
+    if not live and _sizing_shipped(root, ledger.sizing_rel):
+        out["note"] = "run closes: the sizing is shipped, every row is credited, and no refire is owed."
+    elif not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
     elif verify_staged(dir_):
         out["lands_on_refire"] = True
@@ -2059,23 +2070,39 @@ def late_rows(repo_root: Path, run_id: str) -> list[str]:
     return [i.id for i in ledger.items if i.id not in held]
 
 
+VERIFY_READ_MARKER = "verify-late-read"
+
+
 def verify_staged(dir_: Path) -> bool:
-    """True once the run's verify prompt (`prompts/verify.md`, stage_as="verify") is on disk: a row
-    revised after that is judged by no verify leg of this run."""
-    return (dir_ / "prompts" / "verify.md").is_file()
+    """True once the run's verify leg has made its late-row read (`verify-late-read` in the run dir,
+    written by `workflow.late_rows` with `verify_read: true`): a row revised after that is judged by no
+    verify leg of this run. The prompt files are all on disk from mint, so they carry no such signal."""
+    return (dir_ / VERIFY_READ_MARKER).is_file()
 
 
 @register_op(OP_LATE_ROWS)
 def _late_rows_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """JSON-RPC "workflow.late_rows" (COMPUTE_ONLY): params `run_id`. Replies `{late_rows: [id]}`;
-    a refused request replies `{"error": str}`."""
+    """JSON-RPC "workflow.late_rows" (MUTATING only for `verify_read`): params `run_id`, optional
+    `verify_read` (the verify leg's read; stamps `verify-late-read` before reading, so a revise landing
+    after the read answers lands_on_refire). Replies `{late_rows: [id]}`; a refused request replies
+    `{"error": str}`."""
     if repo_root is None:
         return {"error": f"{OP_LATE_ROWS} requires repo_root"}
-    refusal = validate_params(OP_LATE_ROWS, params, (Field("run_id", "nonempty_str", required=True),), strict=True)
+    refusal = validate_params(
+        OP_LATE_ROWS, params,
+        (Field("run_id", "nonempty_str", required=True), Field("verify_read", "bool")), strict=True,
+    )
     if refusal is not None:
         return refusal
     try:
-        return {LATE_ROWS_FIELD: late_rows(main_worktree_root(Path(repo_root)), params["run_id"])}
+        root = main_worktree_root(Path(repo_root))
+        if params.get("verify_read"):
+            from coordinator_core.atomic_replace import atomic_write_bytes
+
+            dir_ = run_dir(root, params["run_id"])
+            if dir_.is_dir():
+                atomic_write_bytes(dir_ / VERIFY_READ_MARKER, b"1\n", preserve_mode=False)
+        return {LATE_ROWS_FIELD: late_rows(root, params["run_id"])}
     except LedgerRefused as exc:
         return {"error": str(exc)}
 
@@ -2144,13 +2171,27 @@ def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str
     return (edge, missing) if missing else (None, [])
 
 
+def _sizing_shipped(root: Path, sizing_rel: Optional[str]) -> bool:
+    """True when the sizing's status is `shipped`: the fire gate refuses it, so no refire may be named.
+    A revise that adds a row reopens the sizing to `routed` before this reads."""
+    if not sizing_rel:
+        return False
+    import yaml
+
+    try:
+        doc = yaml.safe_load(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
+    except (LedgerRefused, OSError, yaml.YAMLError):
+        return False
+    return isinstance(doc, dict) and doc.get("status") == "shipped"
+
+
 def _refire(
     sizing_rel: Optional[str], root: Optional[Path] = None,
     unclaimed: Optional[tuple[Optional[str], list[str]]] = None, halted: bool = False,
 ) -> dict:
     """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
     will. `halted` words the note for a halted run, whose resume would replay its stages. When the sizing's plan omits
-    register rows, `next.replans` names them: the refire's ledger re-plan leg claims them (M+ arm only)."""
+    register rows, `next.replans` names them: the refire's ledger re-plan leg claims them (any arm)."""
     from coordinator_core.warp_fire import fire_command
 
     plan_rel, missing = unclaimed or (_unclaimed_rows(root, sizing_rel) if root is not None else (None, []))

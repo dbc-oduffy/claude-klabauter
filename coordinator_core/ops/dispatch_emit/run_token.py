@@ -24,9 +24,10 @@ script; a record older than `TTL_SECONDS` admits nothing. In-process file I/O on
 Removal rule: only a landed commit, an ended or refused run, or a sanctioned peer release
 removes a record; a removal without a landed commit (`consume`, `discard`, a re-`mint`) first
 leaves `retired/<run_id>.json`, which `halt_admits` reads so a halted run's record-only commit
-survives it. `tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
+survives it; `readmit_reviewed` is the only retired->live path, and only while no live, claimed or spent record exists.
+`tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
 caller with its condition. This module's own unlinks are the protocol and are outside that walk:
-`mint` unlinks a stale claimed record, a stale spent receipt, a stale halted receipt, a stale escrow
+`mint` unlinks a stale claimed record, a stale halted receipt, a stale escrow
 and (when no live record is replaced) a stale retired receipt, `redeem` unlinks
 the live record it claims, and `consume` / `discard` unlink their targets and the escrow.
 `sweep_expired_escrows` unlinks escrows older than `TTL_SECONDS`. A receipt is never removed
@@ -35,12 +36,14 @@ otherwise; it ages out by `TTL_SECONDS` and `live_records` / `held_records` (non
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import hmac
 import json
 import os
 import re
 import secrets
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -63,8 +66,57 @@ _ESCROW = "escrow"
 #: Where a record removed without a landed commit (`consume`, `discard`, a re-`mint`) leaves its
 #: receipt, which `halt_admits` reads; `mint` removes a stale one.
 _RETIRED = "retired"
+#: Digests of earlier tokens a `carry_prior` re-mint keeps admitting, newest first, and how many.
+_PRIOR = "prior"
+MAX_PRIOR = 7
+#: The record fields every receipt (retired, spent, halted) copies from the record it replaces.
+_RECEIPT_KEYS = ("run_id", "sha256", "script_path", "minted_at", _PRIOR)
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,200}$")
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+class RecordWriteCancelled(Exception):
+    """`mint` was cancelled by its `WriteGate` before the record was published; nothing was minted."""
+
+
+class WriteGate:
+    """Lets a caller that abandons a `mint` thread keep it from publishing its record later.
+
+    `mint` calls `begin` before the record write and `commit` after it, just ahead of the publishing
+    replace; `cancel` (the caller, on its own thread) wins unless `commit` already ran. Every
+    transition is a flag flip under one lock with no I/O inside it, so `cancel` never waits on a
+    stalled disk."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._state = "idle"
+
+    def begin(self) -> bool:
+        with self._lock:
+            if self._state == "cancelled":
+                return False
+            self._state = "writing"
+            return True
+
+    def commit(self) -> bool:
+        with self._lock:
+            if self._state == "cancelled":
+                return False
+            self._state = "committed"
+            return True
+
+    def cancel(self) -> str:
+        """The state the mint was in: "writing" (record write in flight), "idle" (not reached), or
+        "committed" (record published; the cancel did not take)."""
+        with self._lock:
+            state = self._state
+            if state != "committed":
+                self._state = "cancelled"
+            return state
+
+
+#: The gate of the emit running in this context; `mint` honours it. Unset outside the submit hook.
+WRITE_GATE: "contextvars.ContextVar[Optional[WriteGate]]" = contextvars.ContextVar("run_token_write_gate", default=None)
 
 
 def _common_dir(repo_root: Path) -> Optional[Path]:
@@ -125,6 +177,18 @@ def _fresh(record: dict) -> bool:
     return isinstance(minted, (int, float)) and time.time() - minted <= TTL_SECONDS
 
 
+_ASK_RUN_ID_RE = re.compile(r"^ask-\d{8}T\d{6}-[0-9a-f]{6}$")
+
+
+def new_ask_run_id() -> str:
+    """A fresh raw-ask run id, `ask-<YYYYmmddTHHMMSS>-<hex6>`."""
+    return f"ask-{time.strftime('%Y%m%dT%H%M%S')}-{secrets.token_hex(3)}"
+
+
+def is_ask_run_id(value: object) -> bool:
+    return isinstance(value, str) and _ASK_RUN_ID_RE.match(value) is not None
+
+
 def mint(
     repo_root: Path,
     run_id: str,
@@ -133,6 +197,8 @@ def mint(
     session_id: Optional[str] = None,
     sizing_rel: Optional[str] = None,
     kind: str = "ask",
+    marker: bool = False,
+    carry_prior: bool = False,
 ) -> str:
     """Write the run's record and return the token. Raises ValueError when no git dir resolves,
     the run id is malformed, `script_path` is empty or `kind` is not one of `KINDS`: an unbound
@@ -141,7 +207,18 @@ def mint(
     `session_id` and `sizing_rel` (None for a raw ask until its gate binds the sizing it minted,
     `bind_sizing`) let `run_owns_sizing` tell an in-flight run's sizing from an abandoned one.
     `kind` ("ask" raw-ask run, "grind" queue-grind run) is recorded as `"kind"`; a record without
-    it reads as "ask"."""
+    it reads as "ask". Raises `RecordWriteCancelled` when the context's `WRITE_GATE` was cancelled
+    before the record published.
+
+    `carry_prior=True` is a re-emit of a run id that may already be running (a resume or refire
+    onto the same id): when the live record it replaces is fresh and names the same script, the
+    replaced digests stay admitted on the new record, so the token a running script already holds
+    does not die with the re-mint. Still one record, so still one landed commit. Default False: a
+    re-mint retires every earlier token.
+
+    `marker=True` is the submit hook's pre-answer mint of a brand-new run id: one record write through
+    the `WRITE_GATE`, no prior-record read, no stale-twin sweep, no live-index update. The run's own
+    emit re-mints the id in full."""
     if not isinstance(script_path, str) or not script_path.strip():
         raise ValueError("run token: script_path is required")
     if kind not in KINDS:
@@ -160,8 +237,18 @@ def mint(
         "sizing_rel": sizing_rel,
         "kind": kind,
     }
-    # Receipt first: unlinking first would erase the remint case's receipt.
+    if marker:
+        _publish_record(path, json.dumps(record, sort_keys=True))
+        return token
+    # Receipt first: unlinking first would erase the remint case's receipt. The spent receipt stays:
+    # it matches only the landed token's digest, so a re-mint still answers that token already_landed.
     replaced = _read(path)
+    if (
+        carry_prior and replaced is not None and _fresh(replaced)
+        and replaced.get("script_path") == script_path and isinstance(replaced.get("sha256"), str)
+    ):
+        earlier = [d for d in (replaced.get(_PRIOR) or ()) if isinstance(d, str)]
+        record[_PRIOR] = [replaced["sha256"], *earlier][:MAX_PRIOR]
     if replaced is not None:
         _write_retired(repo_root, run_id, replaced)
     else:
@@ -170,23 +257,47 @@ def mint(
             stale_retired.unlink(missing_ok=True)
     for stale in (
         _record_path(repo_root, run_id, claimed=True),
-        _record_path(repo_root, run_id, spent=True),
         _record_path(repo_root, run_id, halted=True),
         _record_path(repo_root, run_id, escrow=True),
     ):
         if stale is not None:
             stale.unlink(missing_ok=True)
     # A params file left by the prior mint carries its token; a no-prompt-block land_run would
-    # read it back and be refused as "spent, expired or not the one minted". Deferred: the
-    # channel module imports this one.
-    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as _chan
+    # read it back and be refused as "spent, expired or not the one minted". A carry_prior record
+    # still admits that token, so its params file stays. Deferred: the channel module imports this one.
+    if not record.get(_PRIOR):
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as _chan
 
-    stale_params = _chan.params_path(repo_root, run_id)
-    if stale_params is not None:
-        stale_params.unlink(missing_ok=True)
-    path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        for stale_params in (_chan.params_path(repo_root, run_id), _chan.land_params_path(repo_root, run_id)):
+            if stale_params is not None:
+                stale_params.unlink(missing_ok=True)
+    _publish_record(path, json.dumps(record, sort_keys=True))
     _index("index_mint", repo_root, run_id, record["minted_at"])
     return token
+
+
+def _publish_record(path: Path, text: str) -> None:
+    """Write `text` to a sibling temp file and replace `path` with it, unless the context's `WriteGate`
+    was cancelled meanwhile: a write that outlives its abandoned caller leaves no record, only a
+    removed temp file. Raises `RecordWriteCancelled` then."""
+    from coordinator_core.atomic_replace import _replace_with_retry
+
+    gate = WRITE_GATE.get()
+    if gate is not None and not gate.begin():
+        raise RecordWriteCancelled(path.stem)
+    fd, tmp = tempfile.mkstemp(prefix=".mint.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        if gate is not None and not gate.commit():
+            raise RecordWriteCancelled(path.stem)
+        _replace_with_retry(tmp, str(path))
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _write_retired(repo_root: Path, run_id: str, record: Optional[dict]) -> None:
@@ -197,12 +308,36 @@ def _write_retired(repo_root: Path, run_id: str, record: Optional[dict]) -> None
         return
     from coordinator_core.atomic_replace import atomic_write_bytes
 
-    receipt = {k: record.get(k) for k in ("run_id", "sha256", "script_path", "minted_at")}
+    receipt = {k: record.get(k) for k in _RECEIPT_KEYS if record.get(k) is not None}
+    chain = _retired_chain(record, _read(target))
+    if chain:
+        receipt[_PRIOR] = chain
+    else:
+        receipt.pop(_PRIOR, None)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_bytes(target, json.dumps(receipt, sort_keys=True).encode("utf-8"), preserve_mode=False)
     except OSError:
         pass
+
+
+def _retired_chain(record: dict, earlier: Optional[dict]) -> list[str]:
+    """The digests a retired receipt keeps admitting besides its own `sha256`, newest first and at
+    most `MAX_PRIOR`: the record's `_PRIOR`, then the earlier receipt's own digest and `_PRIOR`.
+    An earlier receipt is folded in only while fresh and naming the same script, so one overwrite
+    never drops a token the run still holds."""
+    own = record.get("sha256")
+    chain = [d for d in (record.get(_PRIOR) or ()) if isinstance(d, str)]
+    if earlier is not None and _fresh(earlier) and earlier.get("script_path") == record.get("script_path"):
+        chain.append(earlier.get("sha256"))
+        chain.extend(earlier.get(_PRIOR) or ())
+    seen: set[str] = set()
+    kept: list[str] = []
+    for digest in chain:
+        if isinstance(digest, str) and digest != own and digest not in seen:
+            seen.add(digest)
+            kept.append(digest)
+    return kept[:MAX_PRIOR]
 
 
 def _index(fn: str, repo_root: Path, *args) -> None:
@@ -284,7 +419,9 @@ def _matches(record: Optional[dict], run_id: object, token: object, script_path:
     recorded_script = record.get("script_path")
     if not isinstance(recorded_script, str) or not recorded_script or script_path != recorded_script:
         return False
-    return hmac.compare_digest(str(record.get("sha256") or ""), _digest(str(token)))
+    want = _digest(str(token))
+    admitted = [record.get("sha256"), *(record.get(_PRIOR) or ())]
+    return any(isinstance(d, str) and hmac.compare_digest(d, want) for d in admitted)
 
 
 def _well_formed(run_id: object, token: object, script_path: object) -> bool:
@@ -313,6 +450,42 @@ def halt_admits(repo_root: Path, run_id: object, token: object, script_path: obj
         _matches(_read(_record_path(repo_root, run_id, **kind)), run_id, token, script_path)
         for kind in ({}, {"claimed": True}, {"retired": True})
     )
+
+
+def readmit_reviewed(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+    """Restore the run's retired receipt to a live record so `redeem` can claim it. True only for
+    the caller that created the live record.
+
+    Requires no live, claimed or spent record for the run (any token) and a retired receipt that
+    `_matches`, so at most one commit lands per token. The caller decides the review is recorded.
+    Trap: the receipt keeps only `_RECEIPT_KEYS`, so the record has no session_id, sizing_rel or
+    kind and `session_holds_run` never matches it; the redeem that follows claims it at once.
+    Removes nothing."""
+    if not _well_formed(run_id, token, script_path):
+        return False
+    live = _record_path(repo_root, run_id)
+    paths = (
+        live,
+        _record_path(repo_root, run_id, claimed=True),
+        _record_path(repo_root, run_id, spent=True),
+        _record_path(repo_root, run_id, retired=True),
+    )
+    if any(p is None for p in paths) or any(p.exists() for p in paths[:3]):
+        return False
+    receipt = _read(paths[3])
+    if not _matches(receipt, run_id, token, script_path):
+        return False
+    record = {k: receipt.get(k) for k in _RECEIPT_KEYS if receipt.get(k) is not None}
+    record["readmitted_at"] = time.time()
+    try:
+        live.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(live, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except OSError:
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(record, fh, sort_keys=True)
+    _index("index_mint", repo_root, run_id, record["minted_at"])
+    return True
 
 
 def redeem(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
@@ -516,7 +689,7 @@ def note_halt_landing(repo_root: Path, run_id: object, token: object, script_pat
         return
     from coordinator_core.atomic_replace import atomic_write_bytes
 
-    receipt = {k: record.get(k) for k in ("run_id", "sha256", "script_path", "minted_at")}
+    receipt = {k: record.get(k) for k in _RECEIPT_KEYS if record.get(k) is not None}
     receipt["landed"] = landed
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -551,7 +724,7 @@ def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> N
         if record is not None and spent is not None:
             from coordinator_core.atomic_replace import atomic_write_bytes
 
-            receipt = {k: record.get(k) for k in ("run_id", "sha256", "script_path", "minted_at")}
+            receipt = {k: record.get(k) for k in _RECEIPT_KEYS if record.get(k) is not None}
             receipt["landed"] = landed
             try:
                 spent.parent.mkdir(parents=True, exist_ok=True)

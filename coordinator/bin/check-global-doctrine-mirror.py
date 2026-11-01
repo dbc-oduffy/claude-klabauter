@@ -92,7 +92,7 @@ Environment:
     CLAUDE_HOME -- overrides the `~/.claude` resolution root (defaults to
                    `$HOME/.claude`), matching the convention documented in
                    `coordinator/bin/count-distill-backlog.py`.
-    REPO_CONTENT_ROOT -- overrides the coordinator doctrine repo root that
+    REPO_DOE_CLAUDE -- overrides the coordinator doctrine repo root that
                    owns `global-doctrine/` (see _repo_root()). Consulted via
                    the shared coordinator_registry.content_root() resolver
                    (env var -> machine-local repos.content_root -> raise);
@@ -182,7 +182,7 @@ def _repo_root() -> str:
     resolution to regain the old two-hops-up shape -- that is precisely
     what caused this break.
 
-    Resolves via content_root() (REPO_CONTENT_ROOT env ->
+    Resolves via content_root() (REPO_DOE_CLAUDE env ->
     machine-local repos.content_root -> raise). Fails loud (sys.exit(1)) if
     content_root() cannot resolve: this is a gate/probe script, not a
     never-block hook, so an unresolvable content root must not silently
@@ -197,7 +197,7 @@ def _repo_root() -> str:
         sys.stderr.write(
             f"{PROG}: cannot resolve the coordinator doctrine repo root ({exc}). Set "
             "repos.content_root in the machine-local registry, or set the "
-            "REPO_CONTENT_ROOT env var.\n"
+            "REPO_DOE_CLAUDE env var.\n"
         )
         sys.exit(1)
 

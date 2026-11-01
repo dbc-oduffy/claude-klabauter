@@ -329,7 +329,7 @@ def test_unrecognized_argument_exits_two(capsys):
 
 def test_main_requires_plugin_root_and_doe_clone_env(monkeypatch):
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     rc = maximalist.main([])
     assert rc == 1
 
@@ -1965,7 +1965,7 @@ def test_msys_mount_form_doe_clone_is_normalized_before_every_downstream_use(stu
     where it comes back as the MSYS mount form `/x/coordinator-content-repo`. Every consumer
     downstream of here is a native-Windows process that reads a leading `/x/` as
     drive-relative `C:\x\coordinator-content-repo`, so the form has to be repaired ONCE at
-    ingest — before the REPO_CONTENT_ROOT env overlay handed to child phases and
+    ingest — before the REPO_DOE_CLAUDE env overlay handed to child phases and
     before the `repos.content_root` registry seed that the trust anchor later
     reads back.
     """

@@ -8,6 +8,11 @@ import pytest
 from coordinator_core.hooks import preuse_search_dispatch as m
 
 
+@pytest.fixture(autouse=True)
+def _isolated_settings_home(tmp_path_factory, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path_factory.mktemp("settings-home")))
+
+
 def _ctx(envelope: dict) -> str:
     return (envelope.get("hookSpecificOutput") or {}).get("additionalContext") or ""
 
@@ -219,6 +224,38 @@ def test_outline_and_config_key_shapes(indexed_repo, pattern, shape_text):
 @pytest.mark.parametrize("pattern", ["TODO:", "Note:", "a:"])
 def test_prose_markers_are_not_config_keys(indexed_repo, pattern):
     assert "config key" not in _ctx(m._handler(_payload(indexed_repo, pattern=pattern)))
+
+
+def _settings_index(monkeypatch, tmp_path_factory, repo_name):
+    home = tmp_path_factory.mktemp("settings-index")
+    root = home / "project-rag" / "indexes" / repo_name.replace("-", "_") / "root"
+    root.mkdir(parents=True)
+    (root / "graph.db").write_bytes(b"")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+
+
+def test_worker_gets_advisory_once_for_out_of_repo_index(tmp_path_factory, monkeypatch):
+    repo = tmp_path_factory.mktemp("work") / "my-repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "pkg").mkdir()
+    _settings_index(monkeypatch, tmp_path_factory, "my-repo")
+    sid = str(uuid.uuid4())
+    first = m._handler(_payload(repo, pattern="some text", session_id=sid, agent_id="w1", path=str(repo / "pkg")))
+    assert "this repo has a code index" in _ctx(first)
+    assert "permissionDecision" not in (first.get("hookSpecificOutput") or {})
+    second = m._handler(_payload(repo, pattern="other", session_id=sid, agent_id="w1"))
+    assert _ctx(second) == ""
+    assert "permissionDecision" not in (second.get("hookSpecificOutput") or {})
+    assert "this repo has a code index" in _ctx(
+        m._handler(_payload(repo, pattern="other", session_id=sid, agent_id="w2"))
+    )
+
+
+def test_out_of_repo_index_for_other_repo_is_silent(tmp_path_factory, monkeypatch):
+    repo = tmp_path_factory.mktemp("work") / "my-repo"
+    (repo / ".git").mkdir(parents=True)
+    _settings_index(monkeypatch, tmp_path_factory, "another-repo")
+    assert m._handler(_payload(repo, pattern="some text", agent_id="w1")) == m.no_advisory()
 
 
 def test_structural_index_named_only_when_present(indexed_repo):

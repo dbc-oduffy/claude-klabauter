@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 
 typedef struct {
@@ -1194,10 +1195,13 @@ static int pc_envelope(buf_t *out, const char *new_cmd, size_t new_len, const ch
     return ok;
 }
 
+static int pc_repo_served(const char *cwd);
+
 int door_repo_root_search_precheck(const char *cmd, size_t len, const char *cwd_utf8, buf_t *out) {
     buf_t nc;
     if (!buf_init(&nc, 64)) return -1;
     int r = pc_rewrite(cmd, len, cwd_utf8, &nc);
+    if (r == 1 && pc_repo_served(cwd_utf8)) r = 0;
     if (r == 1) {
         size_t mark = out->len;
         if (!pc_envelope(out, nc.data, nc.len, NULL, 0)) { out->len = mark; r = -1; }
@@ -1230,6 +1234,98 @@ static int pc_obj_next(cursor_t *c, buf_t *key, const char **vs, const char **ve
 
 static int pc_key_is(const buf_t *key, const char *name) {
     return key->len == strlen(name) && memcmp(key->data, name, key->len) == 0;
+}
+
+/* Mirrors `_example_retrieval_repo_serving.serves_repo` for a cwd that is a repo root (the precheck only
+ * rewrites there): the per-box `rag-nudge-server.json` verdict must be fresh (<= 30 min), have
+ * `"reachable": true`, and list the cwd's directory name (ASCII case-insensitive) in `sources`.
+ * Any read or parse failure is "not served", so the rewrite proceeds. One stat plus one read. */
+#define PC_VERDICT_MAX_AGE_S 1800
+#define PC_VERDICT_MAX_BYTES 65536
+
+static int pc_verdict_path(char *dst, size_t cap) {
+    const char *local = getenv("LOCALAPPDATA");
+    int n;
+    if (local && local[0]) {
+        n = snprintf(dst, cap, "%s/example-retrieval-repo/state/rag-nudge-server.json", local);
+    } else {
+        const char *home = getenv("USERPROFILE");
+        if (!home || !home[0]) home = getenv("HOME");
+        if (!home || !home[0]) return 0;
+        n = snprintf(dst, cap, "%s/.project-rag/state/rag-nudge-server.json", home);
+    }
+    return n > 0 && (size_t)n < cap;
+}
+
+static int pc_names_equal_ci(const char *a, size_t an, const char *b, size_t bn) {
+    if (an != bn) return 0;
+    for (size_t i = 0; i < an; i++) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+        if (x != y) return 0;
+    }
+    return 1;
+}
+
+static int pc_repo_served(const char *cwd) {
+    if (!cwd || !cwd[0]) return 0;
+    size_t end = strlen(cwd);
+    while (end > 1 && (cwd[end - 1] == '/' || cwd[end - 1] == '\\')) end--;
+    size_t start = end;
+    while (start > 0 && cwd[start - 1] != '/' && cwd[start - 1] != '\\') start--;
+    if (end == start) return 0;
+
+    char path[1024];
+    if (!pc_verdict_path(path, sizeof path)) return 0;
+    PC_STAT_STRUCT st;
+    if (PC_STAT(path, &st) != 0) return 0;
+    double age = difftime(time(NULL), st.st_mtime);
+    if (age < 0 || age > PC_VERDICT_MAX_AGE_S) return 0;
+    if (st.st_size <= 0 || st.st_size > PC_VERDICT_MAX_BYTES) return 0;
+
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    size_t cap = (size_t)st.st_size;
+    char *data = (char *)malloc(cap);
+    size_t got = data ? fread(data, 1, cap, f) : 0;
+    fclose(f);
+    if (!data || got == 0) { free(data); return 0; }
+
+    int reachable = 0, served = 0;
+    buf_t key, name;
+    if (!buf_init(&key, 32) || !buf_init(&name, 32)) {
+        free(key.data); free(name.data); free(data);
+        return 0;
+    }
+    cursor_t c = { data, data + got };
+    skip_ws(&c);
+    if (c.p < c.end && *c.p == '{') {
+        c.p++;
+        const char *vs, *ve;
+        int pr;
+        while ((pr = pc_obj_next(&c, &key, &vs, &ve)) == 1) {
+            if (pc_key_is(&key, "reachable")) {
+                reachable = (ve - vs == 4 && memcmp(vs, "true", 4) == 0);
+            } else if (pc_key_is(&key, "sources") && *vs == '[') {
+                cursor_t sub = { vs + 1, ve };
+                for (;;) {
+                    skip_ws(&sub);
+                    if (sub.p >= sub.end || *sub.p == ']') break;
+                    if (*sub.p == ',') { sub.p++; continue; }
+                    if (*sub.p == '"') {
+                        name.len = 0;
+                        if (!parse_json_string(&sub, &name)) break;
+                        if (pc_names_equal_ci(name.data, name.len, cwd + start, end - start)) served = 1;
+                    } else if (!skip_json_value(&sub)) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    free(key.data); free(name.data); free(data);
+    return reachable && served;
 }
 
 int door_repo_root_search_precheck_payload(const char *payload, size_t plen, buf_t *out) {
@@ -1290,6 +1386,7 @@ int door_repo_root_search_precheck_payload(const char *payload, size_t plen, buf
     }
     if (!buf_append(&cwd, "", 1)) { r = -1; goto out; }
     r = pc_rewrite(cmd.data, cmd.len, cwd.len > 1 ? cwd.data : NULL, &nc);
+    if (r == 1 && pc_repo_served(cwd.data)) r = 0;
     if (r == 1) {
         size_t mark = out->len;
         if (!pc_envelope(out, nc.data, nc.len, others.data, others.len)) { out->len = mark; r = -1; }

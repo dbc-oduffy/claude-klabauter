@@ -60,7 +60,7 @@ _loader.exec_module(_cli_mod)
 @pytest.fixture(autouse=True)
 def _clear_ambient_resolution_env(monkeypatch):
     for var in (
-        "REPO_CONTENT_ROOT",
+        "REPO_DOE_CLAUDE",
         _cli_mod._OUTBOX_ROOT_ENV,
         _cli_mod._WIKI_ROOT_ENV,
     ):

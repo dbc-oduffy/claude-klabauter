@@ -24,10 +24,96 @@ from coordinator_core.session import receiver_state
 
 
 REPO_ROOT = "/repo/root"
+_REAL_READ_REMOTE_SNAPSHOT = read_pass.read_remote_snapshot
 
 
 def _agent(session_id="peer-1", status="idle", cwd=REPO_ROOT):
     return {"sessionId": session_id, "status": status, "cwd": cwd}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_remote_snapshot(monkeypatch):
+    monkeypatch.setattr(read_pass, "read_remote_snapshot", lambda directory=None: {})
+
+
+def _snapshot(**boxes):
+    """`{box_id: (reachable, [(session_id, status)])}` as `remote_roster.read_snapshot` shapes it."""
+    return {
+        box: {
+            "reachable": reachable,
+            "sessions": [
+                {"session_id": sid, "name": f"n-{sid}", "cwd": "/far/repo", "status": status, "address": f"n-{sid}"}
+                for sid, status in sessions
+            ],
+        }
+        for box, (reachable, sessions) in boxes.items()
+    }
+
+
+def _live_peers(snapshot, local_agents=None, **kwargs):
+    local = local_agents if local_agents is not None else [_agent("peer-1", "busy")]
+    with mock.patch.object(read_pass, "fetch_live_agents", return_value=local), mock.patch.object(
+        read_pass.box_registry, "local_box_id", return_value="boxA"
+    ):
+        return read_pass.live_peers(REPO_ROOT, snapshot=snapshot, **kwargs)
+
+
+def test_live_peers_merges_remote_rows_keyed_by_box_and_session():
+    peers = _live_peers(_snapshot(boxB=(True, [("s9", "busy")])))
+    by_key = {p["peerKey"]: p for p in peers}
+    assert set(by_key) == {"boxA:peer-1", "boxB:s9"}
+    assert by_key["boxA:peer-1"]["box_id"] == "boxA"
+    remote = by_key["boxB:s9"]
+    assert (remote["box_id"], remote["sessionId"], remote["remote"]) == ("boxB", "s9", True)
+    assert remote["address"] == "n-s9"
+
+
+def test_live_peers_can_leave_remote_rows_out():
+    peers = _live_peers(_snapshot(boxB=(True, [("s9", "busy")])), include_remote=False)
+    assert [p["peerKey"] for p in peers] == ["boxA:peer-1"]
+
+
+def test_unreachable_box_contributes_no_rows_and_is_named_unreachable():
+    snap = _snapshot(boxB=(False, []), boxC=(True, [("c1", "idle")]))
+    assert {p["peerKey"] for p in _live_peers(snap)} == {"boxA:peer-1", "boxC:c1"}
+    assert read_pass.unreachable_boxes(snap) == frozenset({"boxB"})
+
+
+def test_remote_row_without_a_session_id_is_skipped():
+    snap = {"boxB": {"reachable": True, "sessions": [{"session_id": "", "status": "busy"}, {"status": "busy"}]}}
+    assert read_pass.remote_peer_rows(snap) == []
+
+
+def test_classify_remote_uses_snapshot_status_and_reads_no_local_state():
+    rows = {r["sessionId"]: r for r in read_pass.remote_peer_rows(_snapshot(boxB=(True, [("b1", "busy"), ("i1", "idle"), ("w1", "weird")])))}
+    with mock.patch.object(read_pass, "read_receiver_state", side_effect=AssertionError("local read")), mock.patch.object(
+        read_pass, "reduce_transcript_tail", side_effect=AssertionError("local transcript")
+    ):
+        busy = read_pass.classify_peer(REPO_ROOT, rows["b1"])
+        idle = read_pass.classify_peer(REPO_ROOT, rows["i1"])
+        odd = read_pass.classify_peer(REPO_ROOT, rows["w1"])
+    assert (busy["state"], busy["source"], busy["peerKey"]) == (read_pass.STATE_PRODUCING, "remote", "boxB:b1")
+    assert idle["state"] == read_pass.STATE_UNKNOWN and idle["candidate"] is False
+    assert odd["reason"] == "unrecognized-status:weird" and odd["candidate"] is False
+
+
+def test_read_remote_snapshot_degrades_to_empty_on_failure(tmp_path):
+    with mock.patch.object(read_pass.remote_roster, "read_snapshot", side_effect=RuntimeError("x")):
+        assert _REAL_READ_REMOTE_SNAPSHOT(tmp_path) == {}
+
+
+def test_read_remote_snapshot_reads_the_directory_it_is_given(tmp_path):
+    (tmp_path / "remote-roster").mkdir()
+    (tmp_path / "remote-roster" / "boxB.json").write_text(
+        json.dumps({"box_id": "boxB", "fetched_at": 1000.0, "ok": True, "sessions": [{"session_id": "s1"}]}),
+        encoding="utf-8",
+    )
+    with mock.patch("time.time", return_value=1010.0), mock.patch.object(
+        read_pass.box_registry, "local_box_id", return_value="boxA"
+    ):
+        snap = _REAL_READ_REMOTE_SNAPSHOT(tmp_path)
+    assert snap["boxB"]["reachable"] is True
+    assert snap["boxB"]["sessions"][0]["session_id"] == "s1"
 
 
 def test_reader_leg_used_when_record_present():

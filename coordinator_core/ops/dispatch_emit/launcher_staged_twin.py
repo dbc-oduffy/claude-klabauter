@@ -129,11 +129,16 @@ def ensure_twin(
     refuse: Callable[[str], Exception],
 ) -> str | None:
     """Leave the staged twin for a launcher child's manifest; return its repo-relative path when the
-    twin on disk now holds the body, else None (any other sidecar, a standalone run, no slot).
+    twin on disk now holds the body, else None (any other sidecar, a standalone run: no script or no slot).
 
-    ``refuse`` builds the exception raised when the twin exceeds ``max_bytes`` (passed in so this module
-    never imports ``reply_sidecar``). No write when the twin on disk is already identical. The run's
-    escrowed token (if live) is inlined as ``runToken`` into the twin only.
+    ``refuse`` builds the exception raised when the twin exceeds ``max_bytes`` or cannot be left on disk
+    (unreadable script, several slots, uncontained target, write OSError; message starts
+    ``staged twin write failed``); passed in so this module never imports ``reply_sidecar``.
+    No write when the twin on disk is already identical. The run's escrowed token (if live) is inlined
+    as ``runToken`` into the twin only.
+
+    Trap: a run manifest whose run script is absent is refused; None means only "not a run manifest" or
+    "script without an inline slot", never a missing script.
     """
     run_id = manifest_run_id(sidecar_rel)
     if run_id is None:
@@ -144,11 +149,15 @@ def ensure_twin(
     script = Path(root) / _RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
     try:
         lines = script.read_bytes().decode("utf-8").splitlines(keepends=True)
-    except (OSError, UnicodeDecodeError):
-        return None
+    except FileNotFoundError as exc:
+        raise refuse(f"staged twin write failed: run script {script.name!r} is absent") from exc
+    except (OSError, UnicodeDecodeError) as exc:
+        raise refuse(f"staged twin write failed: run script {script.name!r} is unreadable: {exc}") from exc
     slots = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == _nested.STAGED_INLINE_SLOT]
-    if len(slots) != 1:
+    if not slots:
         return None
+    if len(slots) != 1:
+        raise refuse(f"staged twin write failed: run script {script.name!r} has {len(slots)} inline slots, not one")
     payload = {"handle": dict(handle), "text": raw.decode("ascii")}
     resume = _resume_block(Path(root), run_id)
     if resume is not None:
@@ -165,17 +174,21 @@ def ensure_twin(
     twin_rel = _nested.staged_twin_rel(run_id, sha)
     target = _path_guard.contained_path(Path(root) / twin_rel, [Path(root) / _RUN_DIR_ROOT])
     if target is None:
-        return None
+        raise refuse(f"staged twin write failed: {twin_rel!r} is outside {_RUN_DIR_ROOT}/")
     try:
         if target.read_bytes() == body:
             return Path(twin_rel).as_posix()
     except OSError:
         pass
-    target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     try:
+        target.parent.mkdir(parents=True, exist_ok=True)
         tmp.write_bytes(body)
         os.replace(tmp, target)
+        if target.read_bytes() != body:
+            raise OSError("twin on disk differs from the body written")
+    except OSError as exc:
+        raise refuse(f"staged twin write failed: {twin_rel!r}: {exc}") from exc
     finally:
         tmp.unlink(missing_ok=True)
     return Path(twin_rel).as_posix()

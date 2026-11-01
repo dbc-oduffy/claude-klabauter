@@ -46,6 +46,15 @@ def test_write_halt_marker_schedules_the_producer_through_the_spawner_seam(repo,
     assert calls == [(repo, RUN)]
 
 
+def test_the_stored_script_is_a_top_level_run_that_keeps_its_stage_reader(repo, monkeypatch):
+    """The hook returns the stored script as the emit result (a top-level start), never as a launcher child, so it
+    keeps the one-level `workflow()` stage reader a launcher child must not hold."""
+    _halt(repo, monkeypatch)
+    stored = hrr.read(record_dir(repo, RUN), 1000) or hrb.build(repo, RUN)
+    script = (repo / stored["composed_script_rel"]).read_text(encoding="utf-8")
+    assert "workflow({ scriptPath: reader })" in script
+
+
 def test_a_halt_without_a_sizing_schedules_nothing(repo, monkeypatch):
     calls = []
     monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda root, run_id: calls.append(run_id))

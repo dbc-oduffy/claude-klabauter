@@ -137,6 +137,53 @@ def _precheck(selftest: Path, cwd: Path, cmd: str):
     return json.loads(rest)["hookSpecificOutput"]
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_rag_verdict(tmp_path, monkeypatch):
+    """Point the verdict lookup at an empty dir so the box's real verdict never leaks in."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "no-verdict"))
+
+
+def _write_verdict(tmp_path: Path, sources, reachable=True, age_s: float = 0) -> None:
+    state = tmp_path / "no-verdict" / "project-rag" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    verdict = state / "rag-nudge-server.json"
+    verdict.write_text(json.dumps({"reachable": reachable, "sources": sources}), encoding="utf-8")
+    if age_s:
+        stamp = time.time() - age_s
+        os.utime(verdict, (stamp, stamp))
+
+
+def test_a_served_repo_declines_the_rewrite_so_the_python_advisory_runs(selftest, repo, tmp_path):
+    assert _precheck(selftest, repo, "grep -rn foo .") is not None
+    _write_verdict(tmp_path, ["other", repo.name.upper()])
+    assert _precheck(selftest, repo, "grep -rn foo .") is None
+    payload = _payload("grep -rn foo .", repo)
+    assert _payload_precheck(selftest, payload) is None
+
+
+@pytest.mark.parametrize(
+    ("sources", "reachable", "age_s"),
+    [
+        pytest.param(["someone-else"], True, 0, id="repo-not-listed"),
+        pytest.param(None, True, 0, id="near-miss-name"),
+        pytest.param(["{REPO}"], False, 0, id="unreachable"),
+        pytest.param(["{REPO}"], True, 3600, id="stale"),
+    ],
+)
+def test_an_unserved_repo_still_gets_the_git_grep_rewrite(selftest, repo, tmp_path, sources, reachable, age_s):
+    sources = [s.replace("{REPO}", repo.name) for s in sources] if sources else [repo.name + "-x"]
+    _write_verdict(tmp_path, sources, reachable=reachable, age_s=age_s)
+    hso = _precheck(selftest, repo, "grep -rn foo .")
+    assert hso is not None and hso["updatedInput"]["command"] == "git grep -n foo"
+
+
+def test_a_malformed_verdict_reads_as_not_served(selftest, repo, tmp_path):
+    state = tmp_path / "no-verdict" / "project-rag" / "state"
+    state.mkdir(parents=True)
+    (state / "rag-nudge-server.json").write_text('{"reachable": true, "sources": [', encoding="utf-8")
+    assert _precheck(selftest, repo, "grep -rn foo .") is not None
+
+
 def _python_rewrite(cmd: str, cwd: Path):
     rec = leg.check({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(cwd)})
     if rec is not None and rec.verdict_kind == "rewrite":

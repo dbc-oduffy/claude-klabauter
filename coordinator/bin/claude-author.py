@@ -55,7 +55,7 @@
 #   0. --content-root <path> / --content-root=<path> argv flag (alias: _ROOT_FLAG_ALIAS) (highest — explicit
 #      caller override, consumed, never forwarded to claude). Argv seam per
 #      DoE DR-087 — lets the DoE shim pass a pointer-derived root through
-#      argv instead of injecting it into the REPO_CONTENT_ROOT rung-1
+#      argv instead of injecting it into the REPO_DOE_CLAUDE rung-1
 #      authority slot (a value that CAN diverge from the registry). A
 #      missing value, an explicitly-empty value (either form), or a value
 #      that itself looks like a flag (starts with "--") all fail loud with
@@ -63,7 +63,7 @@
 #      --content-root is repeated (either form, in any combination), the LAST
 #      occurrence wins — same last-wins convention as most CLI argv parsers;
 #      not itself validated as an error.
-#   1. REPO_CONTENT_ROOT env var (explicit operator override)
+#   1. REPO_DOE_CLAUDE env var (explicit operator override)
 #   2. machine-local get repos.content_root  (registry — CANONICAL)
 #   2.5. machine-local get plugin.mirrors.coordinator-claude.live_path
 #        (registry — FALLBACK; plan C6/AC9 registry-namespace collision
@@ -546,7 +546,7 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
     if cli_content_root:
         return cli_content_root
 
-    repo_content_root = os.environ.get("REPO_CONTENT_ROOT", "")
+    repo_content_root = os.environ.get("REPO_DOE_CLAUDE", "")
     if repo_content_root:
         return repo_content_root
 
@@ -697,7 +697,7 @@ def _resolve_doe_clone(cli_content_root: str = "") -> str | None:
     # emitted after the fallback rung has also been exhausted.
     if ml_get_failed:
         sys.stderr.write("claude-author: machine-local get repos.content_root failed\n")
-        sys.stderr.write("  Remediation: set REPO_CONTENT_ROOT=<path>, or python3 <engine-clone>/scripts/setup.py\n")
+        sys.stderr.write("  Remediation: set REPO_DOE_CLAUDE=<path>, or python3 <engine-clone>/scripts/setup.py\n")
     else:
         sys.stderr.write(
             "claude-author: repos.content_root and plugin.mirrors.coordinator-claude.live_path "
@@ -1046,7 +1046,7 @@ def main(argv: list[str]) -> int:
     # Negative-spec, per DR-087, and unchanged by the correction: this must never
     # be derived from the settings-home `.coordinator-content-root` pointer that
     # `claude-author-shim.sh.tmpl` reads. That pointer is a demoted mirror, and
-    # exporting from it promotes it to rung-1 `REPO_CONTENT_ROOT` authority. It is
+    # exporting from it promotes it to rung-1 `REPO_DOE_CLAUDE` authority. It is
     # also simply the wrong repo now -- it names the consumer clone.
     #
     # `setdefault` for the same reason as the line above: an operator who

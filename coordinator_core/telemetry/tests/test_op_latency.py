@@ -1020,3 +1020,47 @@ def test_completion_row_survives_a_stalled_sink_started_row_drops(tmp_path, monk
     assert b'{"kind":"started","corr_id":"b"}' not in lines
 
 
+@pytest.mark.deliberate_wall_clock(reason="a wedged makedirs must return the handler inside the append deadline")
+def test_blocked_sink_parent_makedirs_does_not_hold_the_handler(tmp_path, monkeypatch):
+    import threading
+
+    from coordinator_core import atomic_append, bounded_io
+    from coordinator_core.telemetry import op_latency
+
+    common_dir = tmp_path / ".git"
+    parent = common_dir / "coordinator-sessions" / "logs"
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+    monkeypatch.setattr(op_latency, "_made_parents", set())
+    monkeypatch.setattr(bounded_io, "_stalled", {})
+    monkeypatch.setattr(bounded_io, "_inflight", {})
+
+    gate = threading.Event()
+    calls = []
+    real_makedirs = os.makedirs
+
+    def makedirs(path, *args, **kwargs):
+        if Path(path) == parent:
+            calls.append(path)
+            gate.wait(10)
+        return real_makedirs(path, *args, **kwargs)
+
+    monkeypatch.setattr(op_latency.os, "makedirs", makedirs)
+    try:
+        t0 = time.perf_counter()
+        record_op_latency(op="ping", t_start=1.0, elapsed_ms=1.0, outcome="ok", repo_root=tmp_path)
+        assert time.perf_counter() - t0 < atomic_append.APPEND_DEADLINE_SECS + 0.3
+        assert not (parent / "op-latency.jsonl").exists()
+        assert parent not in op_latency._made_parents
+    finally:
+        gate.set()
+    deadline = time.time() + 3
+    while bounded_io._inflight and time.time() < deadline:
+        time.sleep(0.01)
+
+    record_op_latency(op="ping", t_start=2.0, elapsed_ms=1.0, outcome="ok", repo_root=tmp_path)
+    assert parent in op_latency._made_parents
+    calls.clear()
+    record_op_latency(op="ping", t_start=3.0, elapsed_ms=1.0, outcome="ok", repo_root=tmp_path)
+    assert calls == []
+
+

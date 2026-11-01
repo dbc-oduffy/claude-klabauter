@@ -356,7 +356,7 @@ def resolve_cockpit_repo_path() -> Optional[Path]:
     Ladder (first rung that yields a directory wins), mirroring
     `resolve_doe_repo_path`'s shape:
       1. REPO_EXAMPLE_COCKPIT_REPO env var — operator/caller override.
-      2. registry `repos.example_cockpit_repo` (`coordinator_core.machine_resolver.registry_get`).
+      2. registry `repos.project_opticon` (`coordinator_core.machine_resolver.registry_get`).
 
     Returns None when neither rung resolves to an existing directory — the
     honest "cockpit clone not present on this machine" answer. Never raises.
@@ -372,7 +372,7 @@ def resolve_cockpit_repo_path() -> Optional[Path]:
         candidates.append(env_root)
 
     try:
-        registry_root = registry_get("repos.example_cockpit_repo") or ""
+        registry_root = registry_get("repos.project_opticon") or ""
     except Exception:
         registry_root = ""
     if registry_root:
@@ -566,7 +566,7 @@ def resolve_doe_repo_path() -> Optional[Path]:
     """Best-effort resolution of the coordinator-content-repo sibling clone root — no subprocess.
 
     Ladder (first rung that yields a directory containing `coordinator/schemas/` wins):
-      1. REPO_CONTENT_ROOT env var — the operator/caller override honoured fleet-wide.
+      1. REPO_DOE_CLAUDE env var — the operator/caller override honoured fleet-wide.
       2. `coordinator_core.content_root.read_content_root()` — registry-first
          (`repos.content_root`), then pointer file, with its own legacy read-through
          (see that module's docstring). This already IS the reset-safe,
@@ -596,7 +596,7 @@ def resolve_doe_repo_path() -> Optional[Path]:
     """
     candidates: list[Path] = []
 
-    env_root = os.environ.get("REPO_CONTENT_ROOT", "").strip()
+    env_root = os.environ.get("REPO_DOE_CLAUDE", "").strip()
     if env_root:
         candidates.append(Path(env_root))
 
@@ -636,7 +636,7 @@ def scan_vendored_schema_drift(
         doe_repo_path (str | None): the DoE clone root actually used, if resolved.
         cockpit_repo_path (str | None): the example-cockpit-repo clone root actually
             used, if resolved — via resolve_cockpit_repo_path() (REPO_EXAMPLE_COCKPIT_REPO
-            env var, then registry `repos.example_cockpit_repo`). Additive key (2026-08-19,
+            env var, then registry `repos.project_opticon`). Additive key (2026-08-19,
             C7 — the `*.vendor.ts`-vs-cockpit-HEAD parallel comparison described
             below). None whenever no cockpit clone resolved on this machine; the two
             repo-path keys resolve independently, so one being None does not imply
@@ -810,8 +810,8 @@ def _scan(
             "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
             "summary": (
                 "No sibling schema-source clone resolved on this machine (checked "
-                "REPO_CONTENT_ROOT, the content-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
-                "registry repos.example_cockpit_repo key) — vendored drift is not determinable "
+                "REPO_DOE_CLAUDE, the content-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
+                "registry repos.project_opticon key) — vendored drift is not determinable "
                 "here."
             ),
         }
@@ -885,7 +885,7 @@ def _scan(
                 "schema": source_path.name,
                 "detail": (
                     "No sibling example-cockpit-repo clone resolved on this machine (checked "
-                    "REPO_EXAMPLE_COCKPIT_REPO and the registry repos.example_cockpit_repo key) — "
+                    "REPO_EXAMPLE_COCKPIT_REPO and the registry repos.project_opticon key) — "
                     "drift could not be determined."
                 ),
             })

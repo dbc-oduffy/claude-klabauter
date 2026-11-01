@@ -37,6 +37,35 @@ def _run(consumer: bool) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+def test_act_path_calls_drain_once_without_candidate_ids_and_prints_counters(tmp_path):
+    mod = _load()
+    import lib  # noqa: F401
+    import repo_identity
+    from coordinator_core.ops.fleet import terminal_sizing_drain
+
+    calls: list = []
+
+    def fake_drain(root, *, dry_run=False):
+        calls.append((Path(root), dry_run))
+        return {"acted": [{"id": "a"}, {"id": "b"}], "candidates": [{}, {}], "skipped": [], "failed": [],
+                "scan_skipped": [{"id": "state/sizings/x.yaml", "reason": "forward-plan-not-terminal"}]}
+
+    out = io.StringIO()
+    with unittest.mock.patch.object(
+        repo_identity, "resolve_checked_repo_root", return_value=(str(tmp_path), {"verdict": "OK"})
+    ), unittest.mock.patch.object(mod, "_ensure_claude_klabauter_on_path", return_value="."), \
+            unittest.mock.patch.object(mod, "_stamp_archive_sweeps_liveness"), \
+            unittest.mock.patch("coordinator_core.git.repo_root.git_common_dir", return_value=str(tmp_path / ".git")), \
+            unittest.mock.patch.object(terminal_sizing_drain, "drain", fake_drain), \
+            contextlib.redirect_stdout(out):
+        rc = mod.main([])
+
+    assert rc == 0
+    assert calls == [(tmp_path, False)]
+    assert "2 terminal sizings archived" in out.getvalue()
+    assert "forward-plan-not-terminal" in out.getvalue()
+
+
 def test_consumer_mismatch_is_a_stdout_warning():
     _rc, out, err = _run(consumer=True)
     assert f"warning: {_MESSAGE}" in out

@@ -31,7 +31,7 @@ def _registry(tmp_path: Path, monkeypatch, key: str) -> Path:
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
     monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     return target
 
 
@@ -39,9 +39,9 @@ def _registry(tmp_path: Path, monkeypatch, key: str) -> Path:
     "stored,asked",
     [
         ("content_root", "repos.content_root"),
-        ("content_root", "repos.content_root"),  # private-name-ok: upgrade-box fixture
+        ("content_root", "repos.doe_claude"),  # private-name-ok: upgrade-box fixture
         ("content_root", "repos.content_root"),
-        ("content_root", "repos.content_root"),  # private-name-ok: upgrade-box fixture
+        ("content_root", "repos.doe_claude"),  # private-name-ok: upgrade-box fixture
     ],
 )
 def test_get_falls_back_across_the_key_pair(ml, tmp_path, monkeypatch, stored, asked):

@@ -154,8 +154,11 @@ import hashlib
 import json
 import os
 import time
+from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core._settings_home import settings_home
+from coordinator_core.group_em import box_registry, node_transport, remote_identity, remote_roster
 from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session import peer_roster
@@ -518,11 +521,46 @@ def _suppressed(session_id, why, reason=None, obligations=None, remaining=None, 
     }
 
 
+def _resolve_remote(
+    box_id: str, sid: str, snapshot_dir: Optional[str], local_id: Optional[str]
+) -> Optional[str]:
+    if not machinery_paths.safe_session_id(sid):
+        return None
+    try:
+        base = Path(snapshot_dir) if snapshot_dir else settings_home() / "state" / "group-em"
+        snap = remote_roster.read_snapshot(base, local_id=local_id).get(box_id)
+    except Exception:
+        return None
+    if not snap or not snap.get("reachable"):
+        return None
+    sessions = snap.get("sessions") or []
+    resolved = None
+    for s in sessions:
+        if s.get("session_id") == sid:
+            name = s.get("name")
+            resolved = name if isinstance(name, str) and name else None
+            break
+    if resolved is None:
+        return None
+    holders = {s.get("session_id") for s in sessions if s.get("name") == resolved}
+    holders.discard(None)
+    return None if len(holders) > 1 else resolved
+
+
 def resolve_addressee(
     repo_root: str,
     peer_session_id: str,
     build_roster: Optional[Callable[..., list]] = None,
+    snapshot_dir: Optional[str] = None,
+    local_id: Optional[str] = None,
 ) -> Optional[str]:
+    """Live name of ``peer_session_id``, or None; a ``<box_id>:<sid>`` key resolves through that
+    box's remote snapshot under ``snapshot_dir`` (default ``<settings-home>/state/group-em``)."""
+    if isinstance(peer_session_id, str) and remote_identity.SEP in peer_session_id:
+        box_id, sid = remote_identity.parse_key(peer_session_id, local_id)
+        if box_id != (local_id if local_id is not None else box_registry.local_box_id()):
+            return _resolve_remote(box_id, sid, snapshot_dir, local_id)
+        peer_session_id = sid
     if not machinery_paths.safe_session_id(peer_session_id):
         return None
     roster_fn = build_roster if build_roster is not None else peer_roster.build_roster
@@ -576,6 +614,38 @@ def resolve_addressee(
     if len(holders) > 1:
         return None
     return resolved
+
+
+def send_to_peer(
+    peer_key: str,
+    text: str,
+    from_session: Optional[str] = None,
+    directory: Optional[Path] = None,
+    local_id: Optional[str] = None,
+    runner: Any = None,
+) -> dict[str, Any]:
+    """Deliver ``text`` to the box-qualified ``<box_id>:<sid>`` through ``node_transport.select``.
+
+    Returns the transport reply (``{ok, reply}`` / ``{ok: False, reason}``); never raises. A bare
+    or local-box key is not routed here (``{ok: False, reason: "local_addressee"}``): local peers
+    are reached by name via ``resolve_addressee``. ``from_session`` is handed to the transport so
+    the receiver can rewrite ``from`` into its own namespace.
+    """
+    try:
+        if not isinstance(peer_key, str) or remote_identity.SEP not in peer_key:
+            return {"ok": False, "reason": "local_addressee"}
+        box_id, sid = remote_identity.parse_key(peer_key, local_id)
+        if box_id == (local_id if local_id is not None else box_registry.local_box_id()):
+            return {"ok": False, "reason": "local_addressee"}
+        if not machinery_paths.safe_session_id(sid):
+            return {"ok": False, "reason": "bad_session"}
+        box = next((b for b in box_registry.read_boxes(directory) if b["box_id"] == box_id), None)
+        if box is None:
+            return {"ok": False, "reason": "unknown_box"}
+        transport = node_transport.select(box, directory, runner)
+        return transport.send(box, sid, text, from_session)
+    except Exception as exc:  # noqa: BLE001 -- a send failure is a reply, never a raise
+        return {"ok": False, "reason": f"send_failed:{type(exc).__name__}:{exc}"}
 
 
 def _declinations(

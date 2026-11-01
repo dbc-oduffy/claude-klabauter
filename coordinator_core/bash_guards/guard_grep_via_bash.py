@@ -219,6 +219,7 @@ from coordinator_core.bash_guards._rewrite_support import (
     _GREP_FAMILY_BINARIES_BT as _GREP_FAMILY_BINARIES,
     _bt_grep_flags_and_operands as _grep_flags_and_operands,
     _bt_grep_python_rewrite as _grep_python_rewrite,
+    _example_retrieval_repo_hint,
 )
 from coordinator_core.guard_messages.alternative_record import (
     AdaptableOffer,
@@ -408,14 +409,19 @@ def _composed_advisory(
         _SHAPE_NAME,
         evidence,
     )
+    hint = _example_retrieval_repo_hint(payload)
     return AlternativeRecord(
         verdict_kind="advisory",
         guard_name="grep-via-bash-guard",
         summary="BASH-SPAWN ADVISORY: %s" % lede,
         em_text=_em_stamped(
             "BASH-SPAWN ADVISORY: %s Else, Explore or general-purpose "
-            "subagent. %s"
-            % (lede, operator_override_note(_OVERRIDE_ENV_VAR, payload=payload))
+            "subagent. %s%s"
+            % (
+                lede,
+                operator_override_note(_OVERRIDE_ENV_VAR, payload=payload),
+                " " + hint if hint else "",
+            )
         ),
         members=(
             AdaptableOffer(
@@ -427,6 +433,33 @@ def _composed_advisory(
                 authorize_what="running it as written",
             ),
             Override(env_var=_OVERRIDE_ENV_VAR),
+        ),
+    )
+
+
+def _example_retrieval_repo_advisory(
+    tokens: list, payload: Optional[Dict[str, Any]]
+) -> Optional[AlternativeRecord]:
+    """Advisory recommending example-retrieval-repo for a single-segment recursive grep over the
+    whole working tree (`grep -r PAT` / `grep -r PAT .`), only when a local signal shows
+    example-retrieval-repo serves the repo. None otherwise; never a deny."""
+    segments = _segments_from_tokens_with_pipe_flag(tokens)
+    parsed = _grep_flags_and_operands(segments[0][0])
+    if parsed is None or "r" not in parsed["flags"] or parsed["targets"] != ["."]:
+        return None
+    hint = _example_retrieval_repo_hint(payload)
+    if not hint:
+        return None
+    return AlternativeRecord(
+        verdict_kind="advisory",
+        guard_name="grep-via-bash-guard",
+        summary=hint,
+        em_text=_em_stamped(hint),
+        members=(
+            AdaptableOffer(
+                template="search via example-retrieval-repo",
+                what_to_adapt="the query",
+            ),
         ),
     )
 
@@ -458,7 +491,7 @@ def _evaluate_grep_via_bash_match(
     """
     rewrite, _reason = _substitutable_rewrite(classification.tokens)
     if rewrite is not None:
-        return None
+        return _example_retrieval_repo_advisory(classification.tokens, payload)
     if not _has_gnu_only_construct(classification.tokens):
         return None
     match = classification.primary

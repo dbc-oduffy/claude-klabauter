@@ -97,7 +97,7 @@ def _sibling_content_root_probe() -> str:
 
 
 def _resolve_content_root_for_tests() -> str:
-    """Best-effort coordinator-content-repo sibling root, forwarded as REPO_CONTENT_ROOT to every
+    """Best-effort coordinator-content-repo sibling root, forwarded as REPO_DOE_CLAUDE to every
     spawned CLI invocation in this file, AND pinned into this process's own
     `os.environ` (see below `_CONTENT_ROOT_FOR_TESTS` bootstrap) so any in-process
     import of `coordinator_registry` resolves too.
@@ -107,7 +107,7 @@ def _resolve_content_root_for_tests() -> str:
     COORDINATOR_SETTINGS_HOME-anchored -- every test in this file points those
     at an isolated tmpdir for fixture isolation, which collaterally starves
     that fallback too. Resolving it once here and forwarding it as an
-    explicit REPO_CONTENT_ROOT override (coordinator_registry.py's own rung-1b override)
+    explicit REPO_DOE_CLAUDE override (coordinator_registry.py's own rung-1b override)
     keeps the manifest read working without touching what each test actually
     asserts on. Mirrors coordinator/bin/test_coordinator_queue_append.py's
     helper of the same name.
@@ -132,11 +132,11 @@ def _resolve_content_root_for_tests() -> str:
 _CONTENT_ROOT_FOR_TESTS = _resolve_content_root_for_tests()
 # Pinned into THIS process's environ (not just forwarded per-subprocess) so
 # any in-process import of `coordinator_registry` sees the same override
-# coordinator_registry.py's own rung-1b (`REPO_CONTENT_ROOT` env) already honors,
+# coordinator_registry.py's own rung-1b (`REPO_DOE_CLAUDE` env) already honors,
 # rather than raising FileNotFoundError before any subprocess is even
-# spawned. `setdefault` respects an operator's own pre-set REPO_CONTENT_ROOT.
+# spawned. `setdefault` respects an operator's own pre-set REPO_DOE_CLAUDE.
 if _CONTENT_ROOT_FOR_TESTS:
-    os.environ.setdefault("REPO_CONTENT_ROOT", _CONTENT_ROOT_FOR_TESTS)
+    os.environ.setdefault("REPO_DOE_CLAUDE", _CONTENT_ROOT_FOR_TESTS)
 
 
 def _load_dispatcher_module():
@@ -155,9 +155,9 @@ def _python() -> str:
 
 
 def _with_content_root(env: dict[str, str]) -> dict[str, str]:
-    """Forward REPO_CONTENT_ROOT into a test env dict unless the caller already set it."""
-    if "REPO_CONTENT_ROOT" not in env and _CONTENT_ROOT_FOR_TESTS:
-        env = {**env, "REPO_CONTENT_ROOT": _CONTENT_ROOT_FOR_TESTS}
+    """Forward REPO_DOE_CLAUDE into a test env dict unless the caller already set it."""
+    if "REPO_DOE_CLAUDE" not in env and _CONTENT_ROOT_FOR_TESTS:
+        env = {**env, "REPO_DOE_CLAUDE": _CONTENT_ROOT_FOR_TESTS}
     # The isolated registry reads as a consumer box, where memos default off.
     return {"MACHINE_LOCAL_COORDINATOR_FEATURE_CROSS_REPO_MEMOS": "on", **env}
 
@@ -506,7 +506,7 @@ def _make_mock_machine_local_keys_and_get(tmpdir: str, key_paths: dict) -> str:
 # absent registry key; read_registry_repos() treats both identically per its
 # own docstring: "an empty string means declared but unset — not a hit") is
 # unconditionally UNKNOWN RECEIVER, hard-refused exit 1. Confirmed via direct
-# probe against the real memo.draft op (declared-empty repos.example-sim-repo key):
+# probe against the real memo.draft op (declared-empty repos.dronesim key):
 # exit 1, "route_mutation: op='memo.draft' refused", not exit 0 + WARNING.
 
 
@@ -951,7 +951,7 @@ def test_compose_open_without_editor() -> None:
         env_with_no_editor["CLAUDE_HOME"] = claude_home
         env_with_no_editor["EDITOR"] = ""
         if _CONTENT_ROOT_FOR_TESTS:
-            env_with_no_editor["REPO_CONTENT_ROOT"] = _CONTENT_ROOT_FOR_TESTS
+            env_with_no_editor["REPO_DOE_CLAUDE"] = _CONTENT_ROOT_FOR_TESTS
 
         result = subprocess.run(
             [_python(), _script_path(), "compose", topic, "--open"],

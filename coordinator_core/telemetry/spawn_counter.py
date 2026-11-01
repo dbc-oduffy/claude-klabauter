@@ -108,8 +108,15 @@ Spec backlink: state/handoffs/2026-08-25_roadmap-the-meter-02.md
 from __future__ import annotations
 
 import sys
+from contextvars import ContextVar, Token
+from typing import Optional
 
 _spawns = 0
+
+#: One-cell counter bound by `bind_scope`; the audit hook bumps it beside `_spawns`, so a bound
+#: scope counts only spawns made in its own context, never a peer thread's. Does not propagate into
+#: a pool worker unless the submit copies the context.
+_scope_cell: ContextVar[Optional[list]] = ContextVar("spawn_counter_scope", default=None)
 
 _COUNTED_EVENTS = frozenset({"subprocess.Popen", "os.system"})
 
@@ -145,10 +152,28 @@ def audit_hook_installed() -> bool:
     return _hook_installed
 
 
+def bind_scope() -> Token:
+    """Start a scope-bound spawn count at zero for this context; pass the token to `reset_scope`."""
+    return _scope_cell.set([0])
+
+
+def reset_scope(token: Token) -> None:
+    _scope_cell.reset(token)
+
+
+def scope_spawns() -> int:
+    """Spawns counted in the bound scope so far; 0 outside a scope."""
+    cell = _scope_cell.get()
+    return cell[0] if cell else 0
+
+
 def _count_spawn_event(event: str, _args: tuple) -> None:
     global _spawns
     if event in _COUNTED_EVENTS:
         _spawns += 1
+        cell = _scope_cell.get()
+        if cell is not None:
+            cell[0] += 1
 
 
 def _install() -> None:

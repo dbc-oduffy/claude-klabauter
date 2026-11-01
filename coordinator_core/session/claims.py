@@ -1692,6 +1692,45 @@ def relocate_handoff_claim(
     return relocate_artifact_claim("handoff", old_basename, new_basename, baton_repo_root, cwd=cwd)
 
 
+def follow_handoff_claim(
+    sid: str,
+    old_basename: str,
+    new_basename: str,
+    cwd: Optional[str] = None,
+) -> bool:
+    """Move ``sid``'s handoff claim from ``old_basename`` onto
+    ``new_basename`` -- the baton it just minted as the old one's successor --
+    so ``list_claims_by_session(sid)`` names the live baton, not its
+    superseded predecessor. Never touches a claim ``sid`` does not hold.
+
+    True iff afterwards ``sid`` holds ``new_basename`` and no longer holds
+    ``old_basename``. False (no mutation) when ``sid`` holds no claim on
+    ``old_basename`` and none on ``new_basename`` either, when ``new_basename``
+    is claimed by another session, or when the claim base is unresolvable.
+    When ``sid`` already holds ``new_basename`` the stale ``old_basename``
+    claim is dropped (and an absent ``old_basename`` is already converged).
+    """
+    if not (sid and old_basename and new_basename) or old_basename == new_basename:
+        return False
+    base = _claim_base("handoff", "", cwd)
+    if base is None:
+        return False
+    claims_dir = Path(base) / "handoff-claims"
+    old_dir = claims_dir / old_basename
+    new_dir = claims_dir / new_basename
+    if not old_dir.is_dir():
+        # A replay after the move landed: converged, not a refusal.
+        return new_dir.is_dir() and _read_claim_field(new_dir, "session_id") == sid
+    if _read_claim_field(old_dir, "session_id") != sid:
+        return False
+    if new_dir.is_dir():
+        if _read_claim_field(new_dir, "session_id") != sid:
+            return False
+        shutil.rmtree(old_dir, ignore_errors=True)
+        return not old_dir.exists()
+    return relocate_artifact_claim("handoff", old_basename, new_basename, "", cwd=cwd)
+
+
 def _read_claim_field(claim_dir: Path, field: str) -> str:
     """Read a single-line claim metadata file (``pid`` / ``session_id``),
     stripped, or ``""`` if absent/unreadable (mirrors ``cat ... || echo ""``)."""

@@ -180,7 +180,7 @@ class TestEnumerationMode:
         holo_repo.mkdir()
         claude_home = _make_claude_home(
             tmp_path,
-            {"gadget_repo": str(rag_repo), "example_game_workbench_repo": str(holo_repo)},
+            {"gadget_repo": str(rag_repo), "claude_unreal_holodeck": str(holo_repo)},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -195,7 +195,7 @@ class TestEnumerationMode:
 
         receivers = _receivers(result["candidates"])
         ids = {c["repo_key"] for c in receivers}
-        assert ids == {"repos.gadget_repo", "repos.example_game_workbench_repo"}
+        assert ids == {"repos.gadget_repo", "repos.claude_unreal_holodeck"}
         for c in receivers:
             assert c["resolved"] is True
             assert c["target_inbox"].endswith(os.path.join("cross-repo", "inbox"))

@@ -30,7 +30,7 @@ def _load_shim_for_test():
 @pytest.fixture(autouse=True)
 def _reset_wrapper_memos(monkeypatch):
     # A live-tree override in the invoking shell outranks every rung under test.
-    monkeypatch.delenv("REPO_CLAUDE_KLABAUTER", raising=False)
+    monkeypatch.delenv("REPO_PROJECT_MAKIMA", raising=False)
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     claude_klabauter_root._reset_shim_cache()
     claude_klabauter_root._reset_gate_memo()

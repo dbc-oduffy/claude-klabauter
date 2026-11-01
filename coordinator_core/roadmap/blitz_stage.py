@@ -608,6 +608,58 @@ def _waves_of(report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     ]
 
 
+_SUMMARY_RE = re.compile(r"^summary:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+
+
+def _is_skeletal(repo_root: Path, rel: str) -> bool:
+    """True when the stub's frontmatter ``summary`` is still the scaffold's PLACEHOLDER (or
+    absent/unreadable): fill has not written it. A summary the planner replaced is filled."""
+    try:
+        head = (repo_root / rel).read_text(encoding="utf-8", errors="replace")[:6000]
+    except OSError:
+        return True
+    found = _SUMMARY_RE.search(head)
+    value = found.group(1).strip("'\"").strip() if found else ""
+    return not value or value.upper().startswith("PLACEHOLDER")
+
+
+def _fill_stubs_of(repo_root: Path, stubs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The fill-stubs decision, taken from the stubs on disk. A stub whose summary the planner
+    replaced counts as filled; a skeletal one (new, or left so by an earlier fill) is re-filled.
+    Marks each stub row ``fill`` and names the decision, so a refire over filled stubs is
+    ``already-filled`` and fill has nothing to write."""
+    skeletal: List[str] = []
+    for stub in stubs:
+        skeletal_now = _is_skeletal(repo_root, stub["path"])
+        stub["fill"] = "skeletal" if skeletal_now else "filled"
+        if skeletal_now:
+            skeletal.append(stub["path"])
+    return {"decision": "fill-skeletal" if skeletal else "already-filled", "skeletal_paths": skeletal}
+
+
+def frozen_waves(repo_root: Path, gate_report_path: str) -> Dict[str, Any]:
+    """The waves of an existing frozen gate report, read without staging anything.
+    ``gate_report_path`` is the repo-relative ``.../wave-1.gate-report.json`` a stage reply named;
+    a path that is absolute, climbs out, is not a gate report or is not a file is refused."""
+    parts = gate_report_path.replace("\\", "/").split("/")
+    if (
+        gate_report_path.startswith(("/", "\\"))
+        or (len(gate_report_path) > 1 and gate_report_path[1] == ":")
+        or ".." in parts
+        or parts[-1] != GATE_REPORT_NAME
+    ):
+        raise BlitzStageRefused(f"gate_report_path is not a repo-relative {GATE_REPORT_NAME}: {gate_report_path}")
+    target = Path(repo_root) / gate_report_path
+    if not target.is_file():
+        raise BlitzStageRefused(f"no frozen gate report at {gate_report_path}")
+    report = json.loads(target.read_text(encoding="utf-8"))
+    return {
+        "gate_report_path": gate_report_path,
+        "gate_report_state": "already-frozen",
+        "waves": _waves_of(report),
+    }
+
+
 def _record_approval(repo_root: Path, approval: Dict[str, Any], trail_dir: str) -> Dict[str, str]:
     """Write ``<trail_dir>/approval.json`` once; a resume finds and returns the first record."""
     rel = f"{trail_dir.rstrip('/')}/approval.json"
@@ -889,6 +941,7 @@ def stage_roadmap(
         **approval_fields,
         "waves": _waves_of(gate_report),
         "held": _held_of(repo_root, gate_report, stubs),
+        "fill_stubs": _fill_stubs_of(repo_root, stubs),
         "stubs": stubs,
         "numbering": numbering,
         "cluster_numbering": cluster_numbering,

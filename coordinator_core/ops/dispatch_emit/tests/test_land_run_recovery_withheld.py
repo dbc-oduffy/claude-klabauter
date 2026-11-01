@@ -168,20 +168,21 @@ def test_an_out_of_footprint_fix_path_the_record_names_withholds_its_importer(re
     assert "pkg/user.py" not in base._names(repo, out["sha"])
 
 
-def test_an_import_of_a_path_no_withheld_chunk_owns_still_refuses(repo):
+def test_an_import_of_a_path_no_withheld_chunk_owns_is_recorded_as_provenance_not_refused(repo):
     _package(repo)
     base._write(repo, "pkg/orphan.py", "O = 1\n")
     base._write(repo, "pkg/user.py", "from pkg.orphan import O\n")
     base._write(repo, "c.py", "c\n")
     _chunks(repo, {"C1": ["a.py"], "C2": ["pkg/user.py"], "C3": ["c.py"]})
     _record(repo, {"C3": _exhausted()})
-    head = base._git(repo, "rev-parse", "HEAD")
 
     out = _call(repo, **{lr.RECOVERY_WITHHELD_PARAM: ["C3"]})
 
-    assert out.get("committed") is not True, out
-    assert "import-closure-untracked" in str(out), out
-    assert base._git(repo, "rev-parse", "HEAD") == head
+    assert out["committed"] is True, out
+    names = base._names(repo, out["sha"])
+    assert "pkg/user.py" in names and "pkg/orphan.py" not in names and "c.py" not in names
+    assert any(e["reason"] == "import-closure-untracked" and e["path"] == "pkg/user.py" for e in out["provenance"]), out
+    assert out["recovery"]["withheld"] == {"C3": "recovery-cap-exhausted (2 attempts): test_x still red"}
 
 
 def test_a_held_only_run_lands_no_product_and_the_reply_still_names_the_recovery(repo):

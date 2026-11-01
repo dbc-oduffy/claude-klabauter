@@ -110,12 +110,12 @@ def test_queue_types():
 
 
 def test_repo_aliases():
-    assert reg.REPO_ALIASES == {"example_game_workbench_repo": "example-game-repo"}
+    assert reg.REPO_ALIASES == {"claude_unreal_holodeck": "example-game-repo"}
 
 
 def test_receiver_em_aliases():
     # Inverse of REPO_ALIASES.
-    assert reg.RECEIVER_EM_ALIASES == {"example-game-repo": "example_game_workbench_repo"}
+    assert reg.RECEIVER_EM_ALIASES == {"example-game-repo": "claude_unreal_holodeck"}
 
 
 def test_central_receiver_ids():
@@ -164,7 +164,7 @@ def test_repo_key_to_em_id_example_retrieval_repo():
 
 
 def test_repo_key_to_em_id_example_game_repo_alias():
-    assert reg.repo_key_to_em_id("repos.example_game_workbench_repo") == "example-game-repo-em"
+    assert reg.repo_key_to_em_id("repos.claude_unreal_holodeck") == "example-game-repo-em"
 
 
 _CONTENT_ROOT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -190,7 +190,7 @@ def test_em_id_for_root_basename_fallback():
 def test_em_id_for_root_registered_non_central_loop_step_3():
     fake_example_game_repo_root = "/nonexistent/fake-example-game-repo-for-test"
     assert reg.em_id_for_root(
-        fake_example_game_repo_root, {"repos.example_game_workbench_repo": fake_example_game_repo_root}
+        fake_example_game_repo_root, {"repos.claude_unreal_holodeck": fake_example_game_repo_root}
     ) == "example-game-repo-em"
 
 
@@ -201,12 +201,12 @@ def test_content_root_em_alias_in_central_receiver_ids():
 # ---------------------------------------------------------------------------
 # C1: codename-free manifest-bootstrap rung ladder — by import, not by reading.
 #
-# The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (REPO_CONTENT_ROOT,
+# The OSS depersonalize scrub rewrites WIRE IDENTIFIERS (REPO_DOE_CLAUDE,
 # repos.content_root) into names no machine has ever set,
 # leaving the split-repo layout's manifest bootstrap with zero live rungs and
 # an import-time FileNotFoundError. These tests exercise the module in a
 # fresh subprocess (import-time behavior can't be observed by re-importing an
-# already-imported module) with REPO_CONTENT_ROOT unset, covering both
+# already-imported module) with REPO_DOE_CLAUDE unset, covering both
 # the pointer-present and pointer-unreachable cases.
 #
 # Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1
@@ -235,11 +235,11 @@ def _run_import_subprocess(env: dict) -> subprocess.CompletedProcess:
 
 
 def test_bootstrap_import_succeeds_with_pointer_present():
-    """Case (a): REPO_CONTENT_ROOT unset, real ambient pointer/registry
+    """Case (a): REPO_DOE_CLAUDE unset, real ambient pointer/registry
     state left intact — import must succeed via a codename-free rung (or the
     co-located rung, if this checkout happens to be co-located)."""
     env = dict(os.environ)
-    env.pop("REPO_CONTENT_ROOT", None)
+    env.pop("REPO_DOE_CLAUDE", None)
     result = _run_import_subprocess(env)
     assert result.returncode == 0, (
         f"expected import to succeed with pointer/registry state present; "
@@ -249,7 +249,7 @@ def test_bootstrap_import_succeeds_with_pointer_present():
 
 
 def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachable():
-    """Case (b): REPO_CONTENT_ROOT unset AND HOME/CLAUDE_HOME/
+    """Case (b): REPO_DOE_CLAUDE unset AND HOME/CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no LIVE rung
     can resolve, proving the file rungs are load-bearing (not merely present)
     rather than accidentally passing on ambient state. Must NOT delete or
@@ -266,7 +266,7 @@ def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachab
     for the fallback rung's own dedicated coverage."""
     with tempfile.TemporaryDirectory() as _empty_home:
         env = dict(os.environ)
-        env.pop("REPO_CONTENT_ROOT", None)
+        env.pop("REPO_DOE_CLAUDE", None)
         env.pop("CLAUDE_PLUGIN_ROOT", None)
         env["HOME"] = _empty_home
         env["CLAUDE_HOME"] = _empty_home
@@ -387,7 +387,7 @@ def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment(
 # C1D: content_root() gets the same codename-free rung ladder, in-process via
 # monkeypatch (not a subprocess — content_root() runs at CALL time, not import
 # time, so isolating just its own rungs from the ambient machine's real
-# REPO_CONTENT_ROOT/registry state is enough; the module import at the
+# REPO_DOE_CLAUDE/registry state is enough; the module import at the
 # top of this file already proved import-time behavior above).
 #
 # Spec backlink: pln-the-published-engine-resolves-ae0bf7 § C1D
@@ -402,7 +402,7 @@ def _clear_content_root_env(monkeypatch):
     codename rungs' pointer/marketplace-cache/registry helpers to '' / None,
     so a test can install exactly the one rung under test.
 
-    REPO_CONTENT_ROOT now runs FIRST in
+    REPO_DOE_CLAUDE now runs FIRST in
     content_root(), ahead of the codename-free rungs, so they must be cleared
     here too (this function already did) for the codename-rung tests below
     to observe their own rung rather than short-circuiting on the reordered
@@ -412,7 +412,7 @@ def _clear_content_root_env(monkeypatch):
     that could accidentally resolve on a dev box with a real marketplace
     install; stub it like every other rung so isolation holds.
     """
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: "")
     monkeypatch.setattr(reg, "_mp_marketplace_cache_rung", lambda: "")
@@ -507,12 +507,12 @@ def test_content_root_rejects_foreign_plugin_root_over_explicit_override(monkeyp
     CLAUDE_PLUGIN_ROOT set to a DIFFERENT plugin's root (no
     .claude-plugin/plugin.json under it, since it belongs to a foreign
     plugin's content, not the plugin root itself) must NOT be accepted, and
-    an explicit correct REPO_CONTENT_ROOT override must win instead."""
+    an explicit correct REPO_DOE_CLAUDE override must win instead."""
     with _tempfile.TemporaryDirectory() as _foreign_root, _tempfile.TemporaryDirectory() as _correct_root:
         os.makedirs(os.path.join(_correct_root, "state"), exist_ok=True)
         _clear_content_root_env(monkeypatch)
         monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _foreign_root)
-        monkeypatch.setenv("REPO_CONTENT_ROOT", _correct_root)
+        monkeypatch.setenv("REPO_DOE_CLAUDE", _correct_root)
         assert reg.content_root() == _correct_root
 
 
@@ -549,20 +549,20 @@ def test_content_root_rejects_live_path_content_root_without_git(monkeypatch):
 
 def test_content_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch):
     _clear_content_root_env(monkeypatch)
-    monkeypatch.setenv("REPO_CONTENT_ROOT", "/fake/coordinator-content-repo")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "/fake/coordinator-content-repo")
     assert reg.content_root() == "/fake/coordinator-content-repo"
 
 
 def test_content_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
     """With a
-    live content-root pointer AND an explicit REPO_CONTENT_ROOT
+    live content-root pointer AND an explicit REPO_DOE_CLAUDE
     override both present, the explicit override must win (it is an
     operator's stated intent and cannot be present by accident); ambient
     pointer-file state must not outrank it."""
     with _tempfile.TemporaryDirectory() as _pointer_root, _tempfile.TemporaryDirectory() as _override_root:
         _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: _pointer_root)
-        monkeypatch.setenv("REPO_CONTENT_ROOT", _override_root)
+        monkeypatch.setenv("REPO_DOE_CLAUDE", _override_root)
         assert reg.content_root() == _override_root
 
 

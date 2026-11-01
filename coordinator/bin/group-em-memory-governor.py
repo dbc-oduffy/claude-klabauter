@@ -885,6 +885,48 @@ def fire_cache_trim(bin_dir: Path) -> Optional[str]:
     return fire_box_cache_trim()
 
 
+def _governor_disk():
+    """The sibling governor_disk module, importable however this script was loaded."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import governor_disk  # type: ignore
+    return governor_disk
+
+
+class DiskWatch:
+    """Report-only disk episode tracker: owns the previous tick's per-pid byte totals.
+
+    Never pauses, kills or blocks; `tick` returns the lines to emit (empty outside an episode)."""
+
+    def __init__(self, args: argparse.Namespace, disk_fn: Callable[[], object]) -> None:
+        self._gd = _governor_disk()
+        self._fn = disk_fn
+        self._idle = getattr(args, "disk_idle_pct", self._gd.IDLE_MAX_PCT)
+        self._queue = getattr(args, "disk_queue", self._gd.QUEUE_MIN)
+        self._episode = self._gd.DiskEpisode(ticks=max(getattr(args, "disk_ticks", 1), 1))
+        self._prev: dict[int, int] = {}
+        self._unsupported = False
+
+    def tick(self) -> list[str]:
+        sampled = self._fn()
+        if sampled is None:
+            if self._unsupported:
+                return []
+            self._unsupported = True
+            return ["GOVERNOR DISK unsupported on this host"]
+        stats, cur = sampled
+        baseline, self._prev = self._prev, cur
+        if not baseline:
+            return []  # the first sample only sets the byte baseline: a writer cannot be ranked yet
+        top = self._gd.top_by_bytes(baseline, cur)
+        hot = any(self._gd.saturated(s, self._idle, self._queue) for s in stats)
+        if not self._episode.observe(hot):
+            return []
+        cmds = {pid: self._gd.cmdline_of(pid) for pid, _ in top[:1]}
+        return self._gd.format_disk_lines(stats, top, cmds, self._idle, self._queue)
+
+
 def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         sample: Optional[Callable[[], bool]] = None, procs_fn: Callable[[], list[Proc]] = snapshot_procs,
         signal_fn: Callable[[list[int], bool], None] = signal_tree,
@@ -903,6 +945,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         avail_fn: Optional[Callable[[], Optional[float]]] = None,
         retention_fn: Optional[Callable[[], object]] = None,
         scratch_fn: Optional[Callable[[], "dict[str, int]"]] = None,
+        disk_fn: Optional[Callable[[], object]] = None,
         trim_fn: Optional[Callable[[], Optional[str]]] = None,
         shortfall_fn: Optional[Callable[[], float]] = None,
         cache_gib_fn: Optional[Callable[[], Optional[float]]] = None,
@@ -920,6 +963,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
     paused: list[tuple[Proc, list[int]]] = []
     flagged: set[int] = set()
     scratch_flagged: set[str] = set()
+    disk_watch = DiskWatch(args, disk_fn) if disk_fn is not None else None
     calm = crit_streak = ticks = 0
     gave_up = False
     low_gib: Optional[float] = None
@@ -947,6 +991,12 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                                      f"size={nbytes / 1024 ** 3:.1f}GiB")
                     except Exception:  # a report failure never stops the governor
                         pass
+            if disk_watch is not None:
+                try:
+                    for line in disk_watch.tick():
+                        emit(line)
+                except Exception:  # a report failure never stops the governor
+                    pass
             if reap_path is not None and ticks % REAP_EVERY == 1 % REAP_EVERY:
                 scan = scan_fn()  # light snapshot: the full one costs seconds of process time
                 reap_orphans(scan, guard_fn(guard_path, scan, time.time()), reap_path, emit, kill_fn,
@@ -1119,6 +1169,12 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--runaway-mb", type=float, default=12288.0,
                     help="footprint that flags one process as a runaway; 0 disables")
     ap.add_argument("--runaway-every", type=int, default=6, help="samples between footprint reads")
+    ap.add_argument("--disk-idle-pct", type=float, default=5.0,
+                    help="a disk at or under this idle %% counts as saturated (report only)")
+    ap.add_argument("--disk-queue", type=float, default=4.0,
+                    help="a disk at or over this queue length counts as saturated (report only)")
+    ap.add_argument("--disk-ticks", type=int, default=1,
+                    help="consecutive saturated samples before one DISK line is emitted")
     ap.add_argument("--log", type=Path, default=None,
                     help="log the detached governor appends to (default <settings home>/scratch/governor.log)")
     ap.add_argument("--reap-log", type=Path, default=None,
@@ -1156,6 +1212,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         reap_path=args.reap_log or log.parent / "governor-reaps.jsonl",
         trim_log_path=log.parent / "governor-trims.jsonl", pidfile=default_pidfile(), avail_fn=avail_gib, rss_fn=tree_rss_mb,
         retention_fn=spawn_retention_if_due, scratch_fn=scratch_over_budget,
+        disk_fn=_governor_disk().disk_sample,
         shortfall_fn=lambda: shortfall_mb(args.avail_pct))
 
 

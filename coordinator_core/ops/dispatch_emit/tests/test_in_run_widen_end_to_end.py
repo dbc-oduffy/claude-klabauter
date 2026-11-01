@@ -107,8 +107,9 @@ def test_3_a_review_leg_adjacent_test_edit_is_backed_by_the_recorded_widen(tmp_p
     refusal, _ = shipped_gate(root, note, own_paths={"pkg/mod.py"}, widened=widened, owners=owners)
     assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED) and asked == []
 
-    refusal, _ = shipped_gate(root, note, own_paths={"pkg/mod.py"}, owners=lambda paths: {})
-    assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED)
+    # Without the recorded widen the claim is undeclared and untracked: dropped as foreign, not refused.
+    refusal, reply = shipped_gate(root, note, own_paths={"pkg/mod.py"}, owners=lambda paths: {})
+    assert refusal is None and reply["dropped_foreign"] == [adjacent]
 
 
 def test_4_an_s_sizing_reported_l_mid_planning_continues(tmp_path):

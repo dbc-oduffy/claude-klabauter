@@ -64,7 +64,7 @@ def is_submission(payload: Mapping[str, Any]) -> bool:
 
 
 def _refuse(text: str) -> dict:
-    return deny("PreToolUse", f"{text}\nSubmit shape: Workflow({{name: \"{SUBMIT_NAME}\", {_ARGS_SHAPE}}}).")
+    return deny("PreToolUse", f"{text}\nInstead: Submit shape: Workflow({{name: \"{SUBMIT_NAME}\", {_ARGS_SHAPE}}}).")
 
 
 def _check_args(args: Any) -> tuple[Optional[dict], Optional[str]]:
@@ -236,7 +236,26 @@ def evaluate(
     resolve: Optional[ResolveFn] = None,
     run_id: Optional[str] = None,
 ) -> dict:
-    """The PreToolUse envelope for a Workflow call: the fire rewrite for a submission, else nothing."""
+    """The PreToolUse envelope for a Workflow call: the fire rewrite for a submission, else nothing.
+
+    A deny is logged whole and leads with its cause (`submit_engine_ask._durable_refusal`)."""
+    envelope = _evaluate(payload, parse=parse, mint=mint, emit=emit, resolve=resolve, run_id=run_id)
+    if not is_submission(payload):
+        return envelope
+    from coordinator_core.hooks.submit_engine_ask import _durable_refusal
+
+    return _durable_refusal(payload, envelope)
+
+
+def _evaluate(
+    payload: Mapping[str, Any],
+    *,
+    parse: Optional[ParseTargets],
+    mint: Optional[MintRows],
+    emit: Optional[EmitFn],
+    resolve: Optional[ResolveFn],
+    run_id: Optional[str],
+) -> dict:
     if not is_submission(payload):
         return no_advisory()
     if payload.get("agent_id"):

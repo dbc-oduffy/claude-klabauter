@@ -11,7 +11,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional
 
-from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, fingerprint
+from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, checkin_form, fingerprint
 
 NO_CHANGE_REFUSAL = "no-change"
 
@@ -86,8 +86,9 @@ def pre_existing_dirt(
     """Claimed paths that are foreign dirt: present in the tree, unchanged since ``baseline``, and
     not in ``own_written`` (paths the run's earlier passes or checkpoint commits wrote). An absent
     path is never dirt; ``unwritten`` still counts it, for the no-change refusal. A path whose bytes
-    equal HEAD's blob has no diff to land (another run committed it), so it is never dirt either;
-    HEAD is read in-process (``head_blobs``), no git spawn."""
+    equal HEAD's blob, raw or in checkin form (a CRLF worktree file under ``core.autocrlf``), has no
+    diff to land (another run committed it), so it is never dirt either; HEAD is read in-process
+    (``head_blobs``), no git spawn."""
     own = set(own_written)
     cand = [p for p in unwritten(root, baseline, paths) if p not in own and fingerprint(root, p) is not None]
     if not cand:
@@ -95,7 +96,19 @@ def pre_existing_dirt(
     from coordinator_core.git.git_state import head_blobs
 
     head = head_blobs(root, cand)
-    return [p for p in cand if p not in head or head[p][1] != fingerprint(root, p)]
+    return [p for p in cand if p not in head or not _equals_head(root, p, head[p][1])]
+
+
+def _equals_head(root: Path, rel: str, head_sha: str) -> bool:
+    """True when ``rel``'s raw bytes, or their checkin form, hash to ``head_sha``."""
+    try:
+        data = (Path(root) / rel).read_bytes()
+    except OSError:
+        return False
+    if blob_sha(data) == head_sha:
+        return True
+    form = checkin_form(root, rel, data)
+    return form is not None and blob_sha(form) == head_sha
 
 
 #: Record-dir file mapping each path a halt withheld to the blob id its bytes had at the halt.
@@ -126,6 +139,34 @@ def predecessor_withheld(root: Path, sizing_rel: Optional[str], run_dir: Path) -
             if p not in newest or stamp > newest[p][0]:
                 newest[p] = (stamp, entry.prints.get(p))
     return frozenset(p for p, (_, print_) in newest.items() if print_ is not None and print_ == fingerprint(root, p))
+
+
+def predecessor_wrote(root: Path, run_dir: Path, baseline: Mapping[str, Optional[str]]) -> frozenset[str]:
+    """Paths a ``resumed_from`` predecessor of ``run_dir`` wrote, read from its stage manifest alone:
+    a path the predecessor baselined whose fingerprint at this run's stage (``baseline``) differs
+    from the predecessor's own. Covers a predecessor that halted at commit with no withheld record
+    and an empty review slice. A path the predecessor never baselined, or left as it found it, is
+    not credited. Trap: a foreign edit between the predecessor's stage and this run's stage on a
+    path the predecessor baselined is indistinguishable from the predecessor's write."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+    if not baseline or not safe_id(run_dir.name):
+        return frozenset()
+    out: set[str] = set()
+    for prev in _resumed_chain(root, run_dir.name):
+        try:
+            data = json.loads((record_dir(root, prev) / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        before = data.get("write_baseline") if isinstance(data, dict) else None
+        if not isinstance(before, dict):
+            continue
+        for p in _clean_paths(before):
+            if p in baseline and p in before and baseline[p] != before[p]:
+                out.add(p)
+    return frozenset(out)
 
 
 def exclude_halted_withheld(

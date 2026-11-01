@@ -54,6 +54,7 @@ def test_the_tests_brief_runs_retest_targeted_isolated_export_and_reports_both_r
     assert "--retest-targeted" in step and "--isolated-export" in step and "--poll" in step
     assert "`export` and `live`" in step
     assert "Never build an export yourself" in step
+    assert "never report the `live` working-tree result in its place" in step
 
 
 def test_the_test_runner_sidecar_clause_does_not_reach_the_merged_prompt():

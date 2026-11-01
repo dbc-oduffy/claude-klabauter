@@ -499,7 +499,7 @@ class TestDoeCloneAbsent:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Ladder rungs that do not carry coordinator/schemas/ are rejected, not returned."""
-        monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
+        monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "does-not-exist"))
         monkeypatch.setattr(
             "coordinator_core.frontmatter.schema_drift_watch.read_content_root",
             lambda: str(tmp_path / "also-not-there"),
@@ -513,7 +513,7 @@ class TestDoeCloneAbsent:
     def test_env_override_wins_when_valid(
         self, fake_doe: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("REPO_CONTENT_ROOT", str(fake_doe))
+        monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe))
         assert resolve_doe_repo_path() == fake_doe
 
 

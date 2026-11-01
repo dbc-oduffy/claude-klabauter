@@ -5,6 +5,8 @@ Pure: the one `git grep` that finds the referencers is run by the caller
 row of the same wave writes is never added to this row (two writers of one
 file in one wave); it appears under "outside your writes" in the row's
 tests-exercising section instead, so the executor's PARTIAL cites it.
+A `*.golden.*` fixture a covering test names is widened the same way, so the
+byte-compared golden is regenerated with its generator.
 """
 from __future__ import annotations
 
@@ -80,6 +82,25 @@ def parse_grep(output: str) -> list:
     return pairs
 
 
+#: Grep alternative for a line naming a golden fixture file (`<stem>.golden.<ext>`).
+GOLDEN_GREP = r"[A-Za-z0-9_-]+\.golden\.[A-Za-z0-9]+"
+_GOLDEN_RX = re.compile(GOLDEN_GREP)
+
+
+def goldens_of(test: str, pairs: Sequence[tuple]) -> list:
+    """Repo-relative golden fixtures `test` names: beside the test, or under its `fixtures/`
+    when the naming line mentions it."""
+    base = test.replace("\\", "/").rpartition("/")[0]
+    found = set()
+    for t, text in pairs:
+        if t != test:
+            continue
+        for m in _GOLDEN_RX.finditer(text):
+            sub = "fixtures/" if "fixtures" in text else ""
+            found.add("/".join(p for p in (base, f"{sub}{m.group(0)}") if p))
+    return sorted(found)
+
+
 def referencers(paths: Sequence[str], pairs: Sequence[tuple]) -> dict:
     """module path -> sorted test files whose matched line imports it."""
     out = {}
@@ -89,7 +110,7 @@ def referencers(paths: Sequence[str], pairs: Sequence[tuple]) -> dict:
     return out
 
 
-def widen_row(row, wave_rows: Sequence, by_module: dict) -> Widened:
+def widen_row(row, wave_rows: Sequence, by_module: dict, pairs: Sequence[tuple] = ()) -> Widened:
     own = set(row.writes) if row.writes is not UNDECLARED else set()
     peers = {
         w
@@ -103,6 +124,11 @@ def widen_row(row, wave_rows: Sequence, by_module: dict) -> Widened:
             if test in own or test in added or test in excluded:
                 continue
             (excluded if test in peers else added).append(test)
+        for test in by_module.get(module, ()):
+            for golden in goldens_of(test, pairs):
+                if golden in own or golden in added or golden in excluded:
+                    continue
+                (excluded if golden in peers else added).append(golden)
     return Widened(tuple(added), tuple(excluded))
 
 
@@ -123,6 +149,8 @@ def widen_waves(waves: list, run_grep) -> list:
     parts = [p for p in (grep_pattern(modules), dispatch_row_lint.exercising_pattern(sources)) if p]
     if not parts:
         return waves
+    if modules:
+        parts.append(GOLDEN_GREP)
     pattern = "|".join(parts)
     output = run_grep(pattern, TEST_PATHSPECS)
     if not output:
@@ -133,7 +161,7 @@ def widen_waves(waves: list, run_grep) -> list:
     for wave in waves:
         new_wave = []
         for row in wave:
-            w = widen_row(row, wave, by_module)
+            w = widen_row(row, wave, by_module, pairs)
             writes = [*row.writes, *w.writes] if w.writes else row.writes
             exercising = sorted(
                 {t for s in _exercising_sources(row) for t in dispatch_row_lint.tests_exercising(s, pairs)}

@@ -249,12 +249,12 @@ def resolve_doe_clone(explicit: Optional[str] = None) -> Path:
     """Resolve the DoE clone the fixture lives in.
 
     Mirrors ``doe_drift``'s resolution rather than inventing a second one: an
-    explicit path wins, then ``REPO_CONTENT_ROOT``, then a sibling directory beside
+    explicit path wins, then ``REPO_DOE_CLAUDE``, then a sibling directory beside
     this repo.
     """
     if explicit:
         return Path(explicit).resolve()
-    env = os.environ.get("REPO_CONTENT_ROOT")
+    env = os.environ.get("REPO_DOE_CLAUDE")
     if env:
         return Path(env).resolve()
     sibling = Path(__file__).resolve().parents[3].parent / "coordinator-content-repo"

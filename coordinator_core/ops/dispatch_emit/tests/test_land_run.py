@@ -133,6 +133,18 @@ def test_foreign_halted_withheld_corrupt_halt_marker_holds_every_wanted_path(tmp
     assert held == {"x.py": "unreadable-halt-record", "y.py": "unreadable-halt-record"}
 
 
+def test_foreign_halted_withheld_corrupt_marker_with_clear_index_entry_is_not_opened(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    run_dir = _recent_run_dir(tmp_path, "bbbbbb")
+    (run_dir / "halted.json").write_text("{not json", encoding="utf-8")
+    halted_withheld_index.add_run(tmp_path, run_dir.name, ["other.txt"])
+    assert land_run.foreign_halted_withheld(tmp_path, "run-a", None, ["x.py"]) == {}
+    (run_dir / "halted.json").write_text("{not json", encoding="utf-8")
+    halted_withheld_index.add_run(tmp_path, run_dir.name, ["x.py"])
+    assert land_run.foreign_halted_withheld(tmp_path, "run-a", None, ["x.py"]) == {"x.py": "unreadable-halt-record"}
+
+
 def test_foreign_halted_withheld_non_object_halt_marker_holds(tmp_path):
     (_recent_run_dir(tmp_path, "bbbbbb") / "halted.json").write_text("[1]", encoding="utf-8")
     assert land_run.foreign_halted_withheld(tmp_path, "run-a", None, ["x.py"]) == {"x.py": "unreadable-halt-record"}

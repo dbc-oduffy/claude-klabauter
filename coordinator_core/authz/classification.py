@@ -189,6 +189,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.suggest_sonnet_research": OpClass.COMPUTE_ONLY,
     "hooks.nudge_em_code_dispatch": OpClass.COMPUTE_ONLY,
     "hooks.nudge_unauthorized_handoff": OpClass.COMPUTE_ONLY,
+    # hooks.idle_compact_advisory — COMPUTE_ONLY: reads the prompt and one injection record, returns an advisory envelope; writes nothing.
+    "hooks.idle_compact_advisory": OpClass.COMPUTE_ONLY,
     # hooks.nudge_named_agent_report_delivery — COMPUTE_ONLY on the same five-question
     # checklist, and the strictest case of it in this group: the op performs NO file I/O
     # whatsoever (not even the read-only existence checks the three above do). It reads
@@ -928,6 +930,21 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     #            docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C8
     "handoff.transition": OpClass.MUTATING,
+    # handoff.human_gate_clear — MUTATING: clears the human gate_evidence legs of one
+    # state/handoffs/*.md file on a validated PM citation, stamps gate_cleared_by, commits it.
+    # DR-208 five-question affirmation (citing ops/handoff_human_gate_clear.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      locked_rmw rewrites the handoff; commit_paths writes one commit for that file.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The handoff file and the lock sidecar.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      state/handoffs/*.md is shared across EM sessions; the git ref moves.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The stamped file and the new commit.
+    # Authority: docs/decisions/DR-266 (gate-recheck stays the evidence re-resolver);
+    #            docs/plans/2026-10-30-human-gate-clear-verb.md § C2
+    "handoff.human_gate_clear": OpClass.MUTATING,
     # handoff.stamp — MUTATING: in-place frontmatter mutation of a single
     # state/handoffs/*.md file (inserts shipped_in: <SHA> field).
     # DR-208 five-question affirmation (citing ops/handoff_stamp.py):
@@ -1355,6 +1372,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "plan.backfill_warp_executing": OpClass.MUTATING,
     # plan.repin_register — MUTATING: rewrites `register_claims.pins` on ONE docs/plans/*.md, gated on a clear premise-check.
     "plan.repin_register": OpClass.MUTATING,
+    # plan.apply_mechanical_repairs — MUTATING: applies a readiness reply's mechanical_repairs to ONE docs/plans/*.md in one locked_rmw.
+    "plan.apply_mechanical_repairs": OpClass.MUTATING,
     # plan.cross_plan_gate — COMPUTE_ONLY: reads one plan plus the predecessor plans
     # its depends_on_plan edges name and RETURNS whether they are satisfied.
     #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
@@ -2358,6 +2377,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The commit sha, the ref move and the close-job record persist across the box.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.land_run": OpClass.MUTATING,
+    # dispatch.land_credited — MUTATING: commits a run's credited paths via a CAS ref move and writes a receipt.
+    "dispatch.land_credited": OpClass.MUTATING,
     # close.background — MUTATING: pays a run's queued close legs off the critical path
     # (ops/ceremony/close_background.py). DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
@@ -2576,9 +2597,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
     # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
     "workflow.pending_revisions": OpClass.COMPUTE_ONLY,
-    # workflow.late_rows — COMPUTE_ONLY: two file reads (manifest.json, the ledger); replies the live
-    # ledger items the staged manifest holds no work for (ops/dispatch_emit/requirements_ledger.py). No write.
-    "workflow.late_rows": OpClass.COMPUTE_ONLY,
+    # workflow.late_rows — MUTATING: replies the live ledger items the staged manifest holds no work for
+    # (ops/dispatch_emit/requirements_ledger.py); with verify_read it first stamps the run dir's
+    # verify-late-read marker (workflow.revise reads it to answer lands_on_refire).
+    # DR-208 five-question affirmation (citing workflow.late_rows handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      One marker file in the run's record dir; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      verify-late-read, under the record dir resolved by record_dir's containment check.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      workflow.revise on the live run reads the marker.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "workflow.late_rows": OpClass.MUTATING,
     # dispatch.land_verified_remainder — MUTATING: commits a halted run's verified remainder paths
     # (ops/dispatch_emit/land_remainder.py); the git ref moves.
     "dispatch.land_verified_remainder": OpClass.MUTATING,
@@ -2862,6 +2894,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.box_hold -- MUTATING: writes or removes
     # <settings-home>/state/group-em/box/hold.json.
     "groupem.box_hold": OpClass.MUTATING,
+    # session.landing_hold -- MUTATING: writes or removes
+    # <worktree>/.coordinator-local/landing-hold/<session_id>.json; clear replays the deferred
+    # landings as commits.
+    "session.landing_hold": OpClass.MUTATING,
     # groupem.admission_post -- MUTATING: appends a line to
     # <settings-home>/state/group-em/box/admission.jsonl.
     "groupem.admission_post": OpClass.MUTATING,
@@ -2870,6 +2906,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "groupem.slot_grant": OpClass.MUTATING,
     # groupem.slot_check -- COMPUTE_ONLY: reads one grant record; writes nothing.
     "groupem.slot_check": OpClass.COMPUTE_ONLY,
+    # groupem.box_register / box_place / box_send -- MUTATING: write a registry row, a placement
+    # record, or an inbox line under a settings-home. box_roster -- COMPUTE_ONLY: reads only.
+    "groupem.box_register": OpClass.MUTATING,
+    "groupem.box_place": OpClass.MUTATING,
+    "groupem.box_send": OpClass.MUTATING,
+    "groupem.box_roster": OpClass.COMPUTE_ONLY,
     # workstream_complete.stand_down_watchers -- MUTATING: kills this session's
     # attributed watcher trees and removes the Group EM holder record.
     "workstream_complete.stand_down_watchers": OpClass.MUTATING,

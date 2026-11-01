@@ -18,7 +18,7 @@ def _root(tmp_path):
 
 
 def _residue(monkeypatch, paths):
-    monkeypatch.setattr(hhr, "residue_paths", lambda root, run_id: frozenset(paths))
+    monkeypatch.setattr(hhr, "residue_paths", lambda root, run_id, **_kw: frozenset(paths))
 
 
 def test_a_halted_peers_path_selects_no_invariant(tmp_path, monkeypatch):

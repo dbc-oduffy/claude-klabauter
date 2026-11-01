@@ -132,7 +132,6 @@ REGISTER: tuple[LegDecl, ...] = (
         "revises the plan against its review; spawned only when a pull's review found the plan unsaveable (PIVOT, ABORT, premise-failure REJECTED)",
         _TIER_AUTHORS_PLAN,
     ),
-    _floor("ask", "plan-prep-gate", "runs the plan prep gate op once and relays its verdict; no agent precedes it"),
     _earns("ask", "plan-prep-repair", "edits the refused plan in place against the gate's findings", _TIER_AUTHORS_PLAN),
     _earns("ask", "plan-patch", "applies a pulled plan's mechanical readiness repairs in place when its review did not find it unsaveable; no re-plan, no second blitz"),
     _earns("ask", "work:", "executes one row"),
@@ -160,19 +159,44 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "retest-invariant", "re-runs the invariant's scoped test command and reports its status"),
     _floor(
         "ask", "blitz-stage-read",
-        "stages when readyOp did not run and returns the stage op's reply (a manifest handle), only when plan-blitz "
-        "did not run readyOp; no judgment agent precedes it",
+        "arm: the plan-blitz arm whose readyOp never ran; the only agents before it are plan-blitz's own, which "
+        "return inside the plugin-owned planBlitz, so none can carry the stage op",
     ),
     _floor(
-        "ask", "xs-plan-stage",
-        "stages the existing plan an XS sizing's plan edge names and returns the stage op's reply (a manifest "
-        "handle), only when the gate's resume_plan is set; no judgment agent follows the gate before it",
+        "ask", "already-delivered-close",
+        "arm: a review whose prep found no slices after an executor reported an already-delivered sha; the prep "
+        "agent's own reply decides that the close op runs, and the op records the run landed",
     ),
-    _floor("ask", "already-delivered-close", "runs the halted-route close op for an already-delivered ask and returns its reply; no agent precedes it"),
-    _floor("ask", "sizing-probe", "runs `test -f` on the sizing file and returns present true or false"),
-    _floor("ask", "late-rows-read", "runs the late-rows op once and returns its array; the re-plan judgment is the ledger-late leg"),
-    _floor("ask", "chain-emit", "runs dispatch.emit for the M+ chain and returns its path and run_id"),
-    _floor("ask", "gate", "runs the gate op where no agent precedes it; a preceding size agent absorbs it"),
+    _floor(
+        "ask", "late-rows-read",
+        "arm: the reads after the execute loop and before verify; the execute loop's row agents run in parallel, "
+        "so no single agent is last, and the re-plan judgment is the ledger-late leg",
+    ),
+    _floor(
+        "ask", "chain-emit",
+        "arm: the research-split chain, whose sibling sizing is minted by the xl-exit split fanout and known only "
+        "from the halt after the gate; an M+ chain emits in the gate agent's tail",
+    ),
+    _floor(
+        "ask", "chain-abandon",
+        "arm: the research-split chain's abandon of an emitted sibling run when the chain check fails; runs only "
+        "after the chain-emit relay, whose reply names the run to abandon, and no judgment agent follows it",
+    ),
+    _floor(
+        "ask", "seam-fix",
+        "arm: the roadmap arm's plan.seam_fix over the ready plans; the plan-blitz agents before it return inside "
+        "the plugin-owned planBlitz, so none can carry the op",
+    ),
+    _floor(
+        "ask", "frozen-waves",
+        "arm: the roadmap arm's refill of lost waves from the frozen gate report; the stage reply it repairs is an "
+        "agent relay, so no judgment agent can carry the read",
+    ),
+    _floor(
+        "ask", "gate",
+        "arm: an existing sizing, whose first leg it is; a raw ask's scout runs the gate in its tail, and an XS "
+        "sizing with no writes reads its footprint first because the gate's input is that agent's reply",
+    ),
     _floor("ask", "commit", _COMMIT_FLOOR),
     _floor("ask", "halt-commit", _COMMIT_FLOOR),
     _floor("ask", "commit:wave-", _COMMIT_FLOOR),
@@ -207,7 +231,13 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("grind", "verify-agent", "runs the row's tests and reports"),
     _earns("grind", "adjudicate", "the APM adjudicates a held row"),
     _floor("grind", "verify-op", "verify runs on an agent with no Edit/Write so the fix agent cannot launder the gate and absorbs the undo op and every non-landing row's undo"),
-    _floor("grind", "ledger-sweep:drain", "the drain runs after every row, no agent precedes it; absorbs the run-record op"),
+    _floor(
+        "grind", "ledger-sweep:drain",
+        "arm: the run close, in a `finally` after every stage; rows run in parallel batches so no single row agent "
+        "is last, the last agent on a run with post stages is a commit leg the commit guard confines to its own "
+        "type, and a throwing or agentless run still needs the sweep; absorbs the run-record op; stays on "
+        "general-purpose because its prompt runs an ordered multi-command chain, not the one command op-relay relays",
+    ),
     _floor("grind", "commit", _COMMIT_FLOOR),
     _floor("grind", "review-fix-commit", _COMMIT_FLOOR),
     *_review_legs("grind", prep=_earns("grind", "review:coordinator:review-prep", "multi-step review prep")),
@@ -257,7 +287,6 @@ _NON_JUDGMENT: dict[tuple[str, str], tuple[Disposition, str]] = {
     ),
     ("ask", "gate"): (Disposition.FLOOR, "the gate op where no agent precedes it, and the values arm of size-retry"),
     ("ask", "blitz-stage-read"): (Disposition.FLOOR, "stage op relay with no preceding judgment agent"),
-    ("ask", "xs-plan-stage"): (Disposition.FLOOR, "stage op relay with no judgment agent between the gate and it"),
     ("ask", "commit"): (Disposition.FLOOR, _COMMIT_FLOOR),
     ("ask", "halt-commit"): (Disposition.FLOOR, _COMMIT_FLOOR),
     ("ask", "commit:wave-"): (Disposition.FLOOR, _COMMIT_FLOOR),

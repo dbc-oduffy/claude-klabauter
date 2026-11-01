@@ -3958,7 +3958,7 @@ class TestCompareEventsCausalOrderAC8ReadEventsUnaffected:
 
 _COCKPIT_SKIP_REASON = (
     "cockpit conformance fixture unresolvable: registry key "
-    "'repos.example_cockpit_repo' did not resolve a clone with "
+    "'repos.project_opticon' did not resolve a clone with "
     "docs/reference/tracker-well-formedness-vectors.json — "
     "skipping the live conformance check (not a failure; "
     "claude-klabauter's suite must not depend on a peer repo being present on this box)"
@@ -3974,7 +3974,7 @@ def _cockpit_conformance_vectors_path():
     """
     from coordinator_core.machine_resolver import registry_get
 
-    cockpit_root = registry_get("repos.example_cockpit_repo")
+    cockpit_root = registry_get("repos.project_opticon")
     if not cockpit_root:
         return None
     path = Path(cockpit_root) / "docs" / "reference" / "tracker-well-formedness-vectors.json"
@@ -4046,7 +4046,7 @@ class TestWellFormednessConformanceAgainstCockpitOracle:
 
         with pytest.raises(pytest.skip.Exception) as exc_info:
             _require_conformance_vectors_path()
-        assert "repos.example_cockpit_repo" in str(exc_info.value)
+        assert "repos.project_opticon" in str(exc_info.value)
 
 
 class TestAC4NoVendoredPredicateOrRuntimeCrossRepoRead:
@@ -4150,8 +4150,8 @@ class TestAC4NoVendoredPredicateOrRuntimeCrossRepoRead:
         # `machine_resolver.registry_get(...)` and an aliased
         # `mr.registry_get(...)`, neither of which is an `ast.Name` callee.
         synthetic = (
-            "machine_resolver.registry_get('repos.example_cockpit_repo')\n"
-            "mr.registry_get('repos.example_cockpit_repo')\n"
+            "machine_resolver.registry_get('repos.project_opticon')\n"
+            "mr.registry_get('repos.project_opticon')\n"
         )
         tree = ast.parse(synthetic)
         offenders = self._registry_lookup_calls(tree)

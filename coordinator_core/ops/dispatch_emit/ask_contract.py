@@ -461,7 +461,7 @@ def halted_record_message(run_id: str, halted: dict) -> str:
 MEASURED_REV_OP = "dispatch.measured_rev"
 MEASURED_REV_ENV = "COORDINATOR_MEASURED_REV"
 MEASURED_REV_RECORD = "measured-rev.json"
-MEASURED_REV_KEYS = ("sha", "base_sha", "paths", "removed", "blobs")
+MEASURED_REV_KEYS = ("sha", "base_sha", "paths", "removed", "blobs", "tree")
 
 
 def measured_rev_record_path(repo_root: Path, run_id: str) -> Path:

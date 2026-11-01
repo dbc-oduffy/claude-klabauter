@@ -33,8 +33,8 @@ def unproduced_hunks(
     Never raises: a read failure is a finding, except on a path the run's own record produced
     (its write_baseline names it, or it is a run-own artifact): there the unattributable read is
     appended to `advisories` as `{"path", "detail"}` and yields no finding. DR-467: a path the run
-    never baselined stays a finding. Trap: a peer write landing after this run's stage
-    inside the run's own delta span is indistinguishable here."""
+    neither baselined nor declared in its manifest rows stays a finding. Trap: a peer write
+    landing after this run's stage inside the run's own delta span is indistinguishable here."""
     from coordinator_core.ops.dispatch_emit.landing_targeted_tests import Finding
 
     out: list = []
@@ -122,16 +122,32 @@ def _is_run_own_artifact(root: Path, run_id: str, path: str) -> bool:
     return run_artifact_ownership.own_artifact_paths(root, run_id).covers(path)
 
 
+def _declares(root: Path, run_id: str, path: str) -> bool:
+    """The run's manifest `rows[].writes` names `path`; a run with no baseline for it still owns
+    the edits it declared. False on any read failure."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+        rows = hha._manifest(root, run_id).get("rows")
+        for row in rows if isinstance(rows, list) else ():
+            writes = row.get("writes") if isinstance(row, dict) else None
+            if any(isinstance(w, str) and hha._norm(w) == path for w in writes or ()):
+                return True
+        return False
+    except Exception:  # noqa: BLE001 -- unknown is not declared
+        return False
+
+
 def _run_produced(root: Path, run_id: str, path: str) -> bool:
-    """The run's own record produced `path`: its write_baseline names it, or it is a run-own artifact.
-    False on any read failure (unknown is not attributable)."""
+    """The run's own record produced `path`: its write_baseline names it, its manifest declares it,
+    or it is a run-own artifact. False on any read failure (unknown is not attributable)."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
 
         base = hha._baseline(root, run_id)
         if base is not None and path in base:
             return True
-        return _is_run_own_artifact(root, run_id, path)
+        return _declares(root, run_id, path) or _is_run_own_artifact(root, run_id, path)
     except Exception:  # noqa: BLE001 -- unknown stays a finding
         return False
 

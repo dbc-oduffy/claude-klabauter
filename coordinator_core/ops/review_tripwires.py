@@ -205,24 +205,21 @@ _LITERAL_RE = re.compile(rb"""(["'])([^"'\n]{1,%d})\1""" % _MAX_LITERAL)
 def walked_created(data: bytes, created: Sequence[str]) -> List[str]:
     """The `created` paths a test module's bytes walk: the bytes hold a walk primitive
     (`rglob(`, `os.walk(`, `.glob(`, `iterdir(`, `ls-files`) and a quoted literal that,
-    normalised, equals a proper ancestor directory of the path. "", "." never count."""
+    normalised, equals the path's own directory. Shallower ancestors never count: a
+    repo-root literal such as the package name would select nearly every walker.
+    "", "." never count."""
     if not any(w in data for w in _WALK_PRIMITIVES):
         return []
     lits = {
         _norm(m.group(2).decode("utf-8", "replace")).rstrip("/") for m in _LITERAL_RE.finditer(data)
     } - {"", "."}
-    hit = []
-    for c in created:
-        parts = _norm(c).split("/") if c else []
-        if any("/".join(parts[:i]) in lits for i in range(1, len(parts))):
-            hit.append(c)
-    return hit
+    return [c for c in created if c and _norm(c).rpartition("/")[0] in lits]
 
 
 def tree_scanners(
     repo_root: Path, created: Sequence[str], *, exclude: Collection[str] = ()
 ) -> List[str]:
-    """Sorted tracked test modules that walk an ancestor directory of a created path
+    """Sorted tracked test modules that walk the own directory of a created path
     (`walked_created`). Same candidate set and failure mode as `literal_namers`."""
     paths = [c for c in created if c]
     if not paths:

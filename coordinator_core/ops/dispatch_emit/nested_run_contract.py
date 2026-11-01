@@ -24,8 +24,27 @@ STAGED_INLINE_SLOT = "const _STAGED_INLINE = null;"
 STAGED_RESUME_KEY = "resume"
 STAGED_RESUME_FIELDS = ("arm", "sizing_rel", "plan_rel", "tshirt")
 
-# Every started run script ends with this; its stem is the twin writer's run id, which can differ from the emit reply run_id.
+
+# Suffix of an emitted run script; the JS readers splice this constant rather than restate it.
 RUN_SCRIPT_SUFFIX = ".workflow.mjs"
+
+
+def twin_run_id(script_rel: str) -> str | None:
+    """Run id the staged twin is written under, from the started script path.
+
+    The twin writer reads ``<run_id>.workflow.mjs``, so this stem IS the writer's run id. None when
+    the basename lacks the suffix or is a staged twin itself.
+
+    Python reference for the stem rule the generated JS (`fan_launcher._startLoopRun`,
+    `ask_compose._chain_stage_loop_js`) restates inline; it has no other production caller.
+    """
+    base = script_rel.replace("\\", "/").rsplit("/", 1)[-1]
+    if not base.endswith(RUN_SCRIPT_SUFFIX):
+        return None
+    stem = base[: -len(RUN_SCRIPT_SUFFIX)]
+    if not stem or ".staged-" in stem:
+        return None
+    return stem
 
 
 def staged_twin_rel(run_id: str, sha256: str) -> str:

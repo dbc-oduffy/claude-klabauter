@@ -18,7 +18,11 @@ Axes:
                               hot path calls it
   warm.status.read            `telemetry.warm_rate()`, the reader behind the orientation warm line
 
-There is no `warm.status` op; "the warm status surface" is the last three rows together.
+  op_latency.wedged_sink      (`--op-latency-wedged`) one op through `ipc.dispatch_message` with the
+                              op-latency sink's writes and parent `os.makedirs` wedged; handler-thread
+                              waits only
+
+There is no `warm.status` op; "the warm status surface" is the three `warm.status.*` rows together.
 
 Slow-disk injection is in-process and portable: `locked_write.held_lock` charges the delay before
 delegating (a delay past the caller's `timeout` charges the timeout and raises `LockTimeout`, as a
@@ -436,6 +440,15 @@ def run_axes(
 IDLE_CONDITIONS = ("concurrent-landings", "held-index-lock", "stalled-sink")
 IDLE_AXIS = "land_run.idle-wait"
 CONCURRENT_LANDINGS = 3
+WEDGED_SINK_AXIS = "op_latency.wedged_sink"
+WEDGED_SINK_CONDITION = "wedged"
+WEDGE_S = 30.0
+NOOP_OP = "bench.op_latency_noop"
+
+
+def _is_sink_parent(name) -> bool:
+    parts = Path(os.fspath(name)).parts
+    return "coordinator-sessions" in parts and "logs" in parts
 
 
 def _leg_label(frame) -> str:
@@ -460,6 +473,17 @@ class WaitMeter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.events: list = []
+        self._threads: list = []
+
+    def for_thread(self, ident: int) -> "WaitMeter":
+        """A meter holding only the waits taken on thread `ident`."""
+        out = WaitMeter()
+        with self._lock:
+            for event, thread in zip(self.events, self._threads):
+                if thread == ident:
+                    out.events.append(event)
+                    out._threads.append(thread)
+        return out
 
     def leg(self, skip: tuple = ()) -> str:
         frame = sys._current_frames().get(threading.get_ident())
@@ -473,6 +497,7 @@ class WaitMeter:
     def add(self, seam: str, wait_ms: float, leg: str) -> None:
         with self._lock:
             self.events.append((seam, wait_ms, leg))
+            self._threads.append(threading.get_ident())
 
     @property
     def total_ms(self) -> float:
@@ -508,11 +533,13 @@ class _VirtualTime:
 
 
 @contextmanager
-def idle_wait_seams(meter: WaitMeter, *, stall_sinks: bool):
+def idle_wait_seams(meter: WaitMeter, *, stall_sinks: bool, wedge_makedirs: bool = False):
     """Seams for the three idle-wait waits: the atomic_append job wait (every `_Job.done.wait`),
     the index splice backoff (virtual: nothing sleeps), and the terminal_commit claim poll (the
     wall time inside `_redeem_or_answer`, an upper bound on its poll). `stall_sinks` also blocks
-    every sink's `_write_once` until the context closes."""
+    every sink's `_write_once` until the context closes. `wedge_makedirs` charges `WEDGE_S` to
+    the meter, tagged with the calling leg, for every `os.makedirs` under a
+    `coordinator-sessions/logs` parent, then delegates; nothing sleeps."""
     from coordinator_core import atomic_append
     from coordinator_core.git import commit
     from coordinator_core.ops.dispatch_emit import terminal_commit
@@ -548,15 +575,25 @@ def idle_wait_seams(meter: WaitMeter, *, stall_sinks: bool):
         finally:
             meter.add("claim_poll", (time.perf_counter() - t0) * 1000.0, leg)
 
+    real_makedirs = os.makedirs
+
+    def wedged_makedirs(name, *a, **k):
+        if _is_sink_parent(name):
+            meter.add("sink_makedirs", WEDGE_S * 1000.0, meter.leg())
+        return real_makedirs(name, *a, **k)
+
     atomic_append._Job = _TimedJob
     commit.time = _VirtualTime(meter)
     terminal_commit._redeem_or_answer = redeem
     if stall_sinks:
         atomic_append._write_once = blocked
+    if wedge_makedirs:
+        os.makedirs = wedged_makedirs
     try:
         yield
     finally:
         release.set()
+        os.makedirs = real_makedirs
         atomic_append._Job, atomic_append._write_once = real_job, real_write
         commit.time, terminal_commit._redeem_or_answer = real_time, real_redeem
         deadline = time.monotonic() + 1.0
@@ -617,6 +654,56 @@ def run_idle_wait(workdir: Path, tracked: int, chain: int, attribute: bool) -> l
     return rows
 
 
+def run_op_latency_wedged(workdir: Path, attribute: bool = False) -> Row:
+    """One trivial registered op driven through `ipc.dispatch_message` at default arguments with
+    every op-latency sink disk call wedged (the sink's `_write_once` blocks; `os.makedirs` of its
+    parent is charged `WEDGE_S`). The queued path is the one measured. `injected_wait_ms` sums
+    only the waits taken on the dispatching thread, the one `record_op_started` and
+    `record_op_latency` run on; `longest_wait_leg` names the call holding it. `process_time_ms`
+    is the whole process's, so drain-thread CPU is included."""
+    import asyncio
+
+    from coordinator_core import atomic_append, ipc
+
+    declare_benchmark_origin()
+    _bind_session()
+    repo = workdir / "op-latency-wedged"
+    repo.mkdir(parents=True)
+    _git(["init", "-q", "-b", "main"], repo)
+    msg = {"jsonrpc": "2.0", "id": 1, "method": NOOP_OP, "params": {}, "_origin_worktree": str(repo)}
+
+    async def handler(params, ctx=None, repo_root=None):
+        return {"ok": True}
+
+    meter = WaitMeter()
+    handler_thread = threading.get_ident()
+    response: dict = {}
+
+    def call() -> None:
+        response.update(asyncio.run(ipc.dispatch_message(msg)))
+
+    saved = (atomic_append._force_async, atomic_append._queue, ipc._unstamped_dispatch_allowed,
+             ipc._REGISTRY.get(NOOP_OP))
+    atomic_append._force_async, atomic_append._queue = True, None
+    ipc.allow_unstamped_dispatch()
+    ipc._REGISTRY[NOOP_OP] = handler
+    try:
+        with idle_wait_seams(meter, stall_sinks=True, wedge_makedirs=True):
+            row = measure(WEDGED_SINK_AXIS, WEDGED_SINK_CONDITION, call, None, attribute=attribute)
+    finally:
+        atomic_append._force_async, atomic_append._queue, ipc._unstamped_dispatch_allowed = saved[:3]
+        if saved[3] is None:
+            ipc._REGISTRY.pop(NOOP_OP, None)
+        else:
+            ipc._REGISTRY[NOOP_OP] = saved[3]
+    mine = meter.for_thread(handler_thread)
+    row.injected_wait_ms = mine.total_ms
+    row.sync_points = {seam: round(ms, 3) for seam, ms in mine.by_seam.items()}
+    row.longest_wait_ms, row.longest_wait_leg = mine.longest
+    row.outcome = "ok" if "result" in response else f"error:{response.get('error')}"[:60]
+    return row
+
+
 def render_idle_wait(rows: list) -> str:
     out = [f"{'condition':20} {'process_ms':>10} {'wait_ms':>9} {'bar':>5}  longest-wait leg  (ms)  seams  outcome"]
     for r in rows:
@@ -652,10 +739,16 @@ def main(argv: list) -> int:
         "--conditions", choices=("slow-disk", "idle-wait"), default="slow-disk",
         help="idle-wait: land_run under concurrent landings, a held index.lock and stalled sinks",
     )
+    ap.add_argument(
+        "--op-latency-wedged", action="store_true",
+        help="one op through ipc.dispatch_message with every op-latency sink disk call wedged",
+    )
     args = ap.parse_args(argv)
     workdir = Path(tempfile.mkdtemp(prefix="lrsd-", dir=args.dir))
     try:
-        if args.conditions == "idle-wait":
+        if args.op_latency_wedged:
+            rows = [run_op_latency_wedged(workdir, args.attribute)]
+        elif args.conditions == "idle-wait":
             rows = run_idle_wait(workdir, args.tracked, args.chain, args.attribute)
         else:
             rows = run_axes(
@@ -665,7 +758,7 @@ def main(argv: list) -> int:
         shutil.rmtree(workdir, ignore_errors=True)
     if args.json:
         print(json.dumps([asdict(r) for r in rows], indent=1))
-    elif args.conditions == "idle-wait":
+    elif args.op_latency_wedged or args.conditions == "idle-wait":
         print(render_idle_wait(rows))
     else:
         print(render(rows))

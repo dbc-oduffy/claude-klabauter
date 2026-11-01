@@ -23,13 +23,16 @@ def repo(tmp_path, monkeypatch):
     managed.mkdir()
     monkeypatch.setattr(warp_live, "managed_tempdir", lambda: managed)
     monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: managed / name)
+    # ensure_twin refuses a run manifest whose run script is absent; a slotless script is the no-twin path.
+    (tmp_path / "scratch" / "warp").mkdir(parents=True)
+    (tmp_path / "scratch" / "warp" / "mine.workflow.mjs").write_text("// run script\n", encoding="utf-8")
     return tmp_path
 
 
 def _live_peer(root, run_id, writes):
     run_token.mint(root, run_id, SCRIPT, session_id=None)
     d = root / "scratch" / "warp" / run_id
-    d.mkdir(parents=True)
+    d.mkdir(parents=True, exist_ok=True)
     (d / "manifest.json").write_text(json.dumps({"rows": [{"id": "P1", "writes": writes}]}), encoding="utf-8")
 
 

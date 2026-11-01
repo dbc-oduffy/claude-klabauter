@@ -68,6 +68,23 @@ def test_legal_partial_wave_does_not_refuse():
     assert cg.no_credited_landing({"C1", "C2"}, {"docs"}, {"C0"}) is False
 
 
+def test_post_commit_only_ids_exempts_writes_empty_row_beside_a_product_row():
+    assert cg.post_commit_only_ids({"C1": ["a.py"], "C2": []}) == {"C2"}
+    assert cg.post_commit_only_ids({"C1": ["a.py"], "C2": [], "docs": ["d.md"]}) == {"C2"}
+
+
+def test_post_commit_only_ids_empty_without_a_product_row():
+    assert cg.post_commit_only_ids({"C2": []}) == frozenset()
+    assert cg.post_commit_only_ids({"C2": [], "docs": ["d.md"]}) == frozenset()
+
+
+def test_writes_bearing_stranded_row_still_gates():
+    ids = cg.post_commit_only_ids({"C1": ["a.py"], "C2": []})
+    assert "C1" not in ids
+    assert cg.no_credited_landing({"C1", "C2"} - ids, {"docs"}, set()) is True
+    assert cg.no_credited_landing({"C2"} - ids, {"docs"}, set()) is False
+
+
 def test_nothing_stranded_never_refuses():
     assert cg.no_credited_landing(set(), {"docs"}, set()) is False
 

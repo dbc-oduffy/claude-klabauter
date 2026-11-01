@@ -23,6 +23,8 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "launch this mint submitted has terminal evidence (run ended)"),
     ("hooks/submit_engine_ask.py", "_evaluate"): (
         2, "unlaunched run refused at submission, or the emit of this call's own run failed"),
+    ("hooks/submit_engine_ask.py", "_premint_deferred_envelope"): (
+        1, "premint's deferred script could not be written, so the run never started"),
     ("ops/dispatch_emit/abandoned_runs.py", "_handler"): (
         1, "reaped idle run with no live holder (abandoned)"),
     ("ops/dispatch_emit/op.py", "_abandon_run"): (

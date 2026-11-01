@@ -27,11 +27,11 @@ resolved as: role key -> `repos.<that key>` -> filesystem path. The role key
 says WHICH repo holds; the existing `repos.*` family (already registry-
 managed) says WHERE that repo is. This fleet's seeded value is
 `example_store_repo`, resolving (as of this seeding) to whatever path
-`machine-local get repos.example_store_repo` reports on this machine.
+`machine-local get repos.delphi_store` reports on this machine.
 
 Rejected alternative, recorded so a reviewer need not re-derive it:
 `repos.tracker_holder = '<path>'` — one fewer hop, but duplicates a path
-already under registry management (`repos.example_store_repo`) as a second source
+already under registry management (`repos.delphi_store`) as a second source
 of truth, and turns "is the holder the same repo as example_store_repo?" into a
 string comparison between two independently-drifting path values instead of
 an identity check on one registry key.

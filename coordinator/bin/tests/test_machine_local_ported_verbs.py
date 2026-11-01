@@ -347,10 +347,10 @@ def test_store_check_emits_each_finding_type(tmp_path):
         + '[stores.o_orphan]\npath = "<ROOT>"\nowner = "ghost_repo"\npurpose = "p"\n'
         + '[stores.o_noowner]\npath = "<ROOT>"\npurpose = "p"\n'
         + '[stores.i_nopurpose]\npath = "<ROOT>"\nowner = "example_stats_repo"\n'
-        + '[stores.i_both]\npath = "<ROOT>"\npath_key = "repos.example_stats_repo"\n'
+        + '[stores.i_both]\npath = "<ROOT>"\npath_key = "repos.fifa_stats"\n'
         'owner = "example_stats_repo"\npurpose = "p"\n'
         + '[stores.i_neither]\nowner = "example_stats_repo"\npurpose = "p"\n'
-        + '[stores.i_peer]\npath_key = "repos.example_stats_repo"\nowner = "example_stats_repo"\npurpose = "p"\n'
+        + '[stores.i_peer]\npath_key = "repos.fifa_stats"\nowner = "example_stats_repo"\npurpose = "p"\n'
         + '[stores.d_dead]\npath = "<ROOT>"\nowner = "example_stats_repo"\npurpose = "p"\n'
         'dependents = ["<ROOT>/no-such-file.json"]\n'
     )
@@ -433,7 +433,7 @@ def test_relocate_unknown_name_rc2(tmp_path):
     assert _local(sandbox) == before
 
 
-@pytest.mark.parametrize("peer_key", ["repos.example_stats_repo", "stores.other.path", "publish.mirrors.m",
+@pytest.mark.parametrize("peer_key", ["repos.fifa_stats", "stores.other.path", "publish.mirrors.m",
                                       "external_workspaces.w.path"])
 def test_relocate_forbidden_path_key_refused_registry_untouched(tmp_path, peer_key):
     local = (

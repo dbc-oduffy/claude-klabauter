@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit import ask_gate, resume_snapshot
 from coordinator_core.ops.dispatch_emit.ask_contract import LedgerHalt, ResumePlan
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage_handler
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan  # noqa: F401
@@ -132,6 +133,7 @@ def test_ledger_resume_snapshot_leaves_ledger_path_staging_unchanged(tmp_path):
     plan = tmp_path / "docs/plans/p.md"
     plan.parent.mkdir(parents=True)
     plan.write_text(f"---\ntitle: p\n---\n\n# p\n\n## Tasks\n\n```yaml plan-tasks\n{rows}```\n", encoding="utf-8", newline="\n")
+    write_run_scripts(tmp_path, "r1")
     params = {"run_id": "r1", "plan_path": "docs/plans/p.md", "only_rows": ["C1"]}
     before = read_stage_reply(tmp_path, stage_handler(params, repo_root=tmp_path))
     resume_snapshot.write(tmp_path, "r1", "docs/plans/p.md", ["C2"], ["C1"], held=HELD)

@@ -869,3 +869,18 @@ def test_irrelevant_false_for_a_run_with_no_manifest_declaration(tmp_path):
     _run_id, rec, marker = _interest_run(root, ())
     with hr.blob_scope(root, interest={"a.py"}):
         assert hr.irrelevant(root, rec, marker) is False
+
+
+def test_history_walk_reads_versions_in_process_and_refuses_a_span_past_the_cap(tmp_path, monkeypatch):
+    _git(tmp_path, "init", "-q")
+    for n in range(4):
+        _write(tmp_path / "a.py", f"v{n}\n")
+        _git(tmp_path, "add", "a.py")
+        _git(tmp_path, "commit", "-q", "-m", f"c{n}")
+    base = _git(tmp_path, "rev-parse", "HEAD~3")
+    blobs = hr._history_blobs(tmp_path, base, ["a.py"])
+    assert blobs["a.py"] == [_git(tmp_path, "rev-parse", f"HEAD~{i}:a.py") for i in range(3)]
+    monkeypatch.setattr(hr, "_HISTORY_COMMITS", 2)
+    with pytest.raises(ValueError):
+        hr._history_blobs(tmp_path, base, ["a.py"])
+    assert hr._landed_in_history(tmp_path, base, {"a.py": ("v0\n", b"v1\n")}) == set()

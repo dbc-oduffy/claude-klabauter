@@ -19,7 +19,7 @@ top-20 per span to `attribution`.
 
     python coordinator_core/benchmarks/land_run_leg_budget_profile.py [--siblings N] [--tracked N]
         [--chain N] [--json] [--attribute]
-    python coordinator_core/benchmarks/land_run_leg_budget_profile.py --real-record <run_id> [--json]
+    python coordinator_core/benchmarks/land_run_leg_budget_profile.py --real-record <run_id> [--halted-scale K] [--cold-parse] [--json]
 
 `--live-siblings N` runs the measured land_run in its own process while N sibling processes land
 their own runs (own session, run, plan, path, checkpoint commit) in the same fixture tree at the
@@ -32,7 +32,11 @@ then profiles per leg (cProfile top-20 in each leg row), not per `read_to_integr
 
     python coordinator_core/benchmarks/land_run_leg_budget_profile.py --live-siblings 6 [--json]
 
-`--real-record` replays a recorded run's land_run params in a throwaway `--shared` clone of the
+`build_halted_shape_fixture(tmp_path, stack)` builds the d26504 landing shape (7 product `.py` under
+`coordinator_core/ops/dispatch_emit` plus a `docs/research` `.md`, peer-dirty paths alongside).
+
+`--real-record` replays a recorded run's land_run params (rebuilt from `run-outcome.json`, the
+manifest and `run-base` when `terminal-commit-params.json` is absent) in a throwaway `--shared` clone of the
 repo (its `state/warp` and `scratch/warp` record copied in) and stops at the `land_run.commit` leg
 boundary by raising `StopBeforeCommit`: nothing is committed, and the live tree is only read.
 Rows then carry a per-leg table (`legs`) and `land_deadline_halt`. The code under test is the tree
@@ -53,6 +57,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -70,6 +75,10 @@ from coordinator_core.benchmarks.land_run_slow_disk_profile import (  # noqa: E4
     DEFAULT_TRACKED,
     OFF_CHAIN_BASE,
     OWN_LINES,
+    PATH_P,
+    PLAN,
+    RUN_ID,
+    SCRIPT,
     SELF,
     _bind_session,
     _git,
@@ -519,6 +528,13 @@ def _spawn_worker(tag: str, root: Path, base: str, sync: Path, attribute: bool) 
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
+def _spawn_workers(tags: list, root: Path, base: str, sync: Path, attribute: bool) -> dict:
+    """Launch every worker concurrently from one pool; the simultaneous launch is the measured subject."""
+    with ThreadPoolExecutor(max_workers=len(tags)) as pool:
+        launched = pool.map(lambda tag: _spawn_worker(tag, root, base, sync, attribute), tags)
+        return dict(zip(tags, launched))
+
+
 def _result_of(tag: str, proc: subprocess.Popen):
     out, err = proc.communicate(timeout=WORKER_WAIT_SECS)
     for line in reversed(out.splitlines()):
@@ -539,7 +555,7 @@ def run_live(workdir: Path, live: int, siblings: int, tracked: int, chain: int, 
         sync = workdir / "sync"
         sync.mkdir()
         tags = ["m"] + [f"s{i}" for i in range(live)]
-        procs = {tag: _spawn_worker(tag, root, base, sync, attribute) for tag in tags}
+        procs = _spawn_workers(tags, root, base, sync, attribute)
         try:
             give_up = time.monotonic() + WORKER_WAIT_SECS
             while not all((sync / f"ready-{tag}").exists() for tag in tags):
@@ -566,13 +582,79 @@ def _result_stderr(procs: dict, tags: list) -> str:
     return "; ".join(procs[t].communicate()[1].strip()[-300:] for t in tags)
 
 
+HALTED_SHAPE_PY = tuple(f"coordinator_core/ops/dispatch_emit/halted_shape_m{i}.py" for i in range(7))
+HALTED_SHAPE_DOC = "docs/research/halted-shape-finding.md"
+HALTED_SHAPE_PEER_DIRTY = ("peer/dirty_a.txt", "peer/dirty_b.txt", "tracked/d00/s0/f000000.txt")
+
+
+def build_halted_shape_fixture(tmp_path: Path, stack: ExitStack, *, tracked: int = 50, chain: int = 10) -> dict:
+    """The shape of the halted run `ask-20261030T235004-d26504`, as a clean landing: seven product
+    `.py` files under `coordinator_core/ops/dispatch_emit` plus one `docs/research/*.md`, all
+    uncommitted and touched by the run's session and named by the emitted script's one chunk, on a
+    tree that also carries peer-dirty paths the session never touched. Returns
+    `{root, base, run_id, script, paths, peer_dirty}`; land it with `profile_land(root, base,
+    attribute=False, legs=True)`."""
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+    from coordinator_core.session import scope as session_scope
+    from coordinator_core.session import touch_record
+
+    root, base = build_land_fixture(tmp_path, mode="clean", tracked=tracked, chain=chain, stack=stack)
+    paths = [*HALTED_SHAPE_PY, HALTED_SHAPE_DOC]
+    sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF)
+    for i, rel in enumerate(paths):
+        _write(root, rel, f"# halted shape {i}\n" if rel.endswith(".md") else f'"""Halted-shape module {i}."""\n\nVALUE_{i} = {i}\n')
+        session_scope.touch(SELF, rel, cwd=str(root))
+        touch_record.append_event(
+            sink, session_id=SELF, agent_id=None, verb="T", path=rel,
+            content_hash=touch_record.compute_content_hash(root / rel), kind="w",
+        )
+    for rel in HALTED_SHAPE_PEER_DIRTY:
+        _write(root, rel, f"peer dirt {rel}\n")
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=(PATH_P, *paths)),), plan_path=PLAN)
+    _write(root, SCRIPT, "// emitted\n" + render_marker(request) + "\n")
+    return {"root": root, "base": base, "run_id": RUN_ID, "script": SCRIPT, "paths": paths, "peer_dirty": list(HALTED_SHAPE_PEER_DIRTY)}
+
+
+def _json_of(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def reconstructed_recorded(source_root: Path, run_id: str) -> dict:
+    """What `terminal-commit-params.json` would hold, rebuilt from the run record when that file is
+    absent: the emitted script path, `doc_writes` from the manifest, and `run-outcome.json`."""
+    state = source_root / "state" / "warp" / run_id
+    outcome = _json_of(state / "run-outcome.json")
+    if not outcome:
+        raise FileNotFoundError(f"{run_id}: no terminal-commit-params.json and no state/warp/{run_id}/run-outcome.json to rebuild from")
+    return {
+        "script_path": f"scratch/warp/{run_id}.workflow.mjs",
+        "doc_paths": _json_of(state / "manifest.json").get("doc_writes") or [],
+        "run_outcome": outcome,
+    }
+
+
+def record_run_base(source_root: Path, run_id: str) -> str:
+    """The run's base sha: `scratch/warp/<run>/run-base`, else `halted.json` `run_base_sha`, else the
+    manifest `head_sha`."""
+    marker = source_root / "scratch" / "warp" / run_id / "run-base"
+    if marker.is_file() and marker.read_text(encoding="utf-8").strip():
+        return marker.read_text(encoding="utf-8").strip()
+    state = source_root / "state" / "warp" / run_id
+    return _json_of(state / "halted.json").get("run_base_sha") or _json_of(state / "manifest.json")["head_sha"]
+
+
 def real_record_params(source_root: Path, run_id: str) -> dict:
     """The product-mode `dispatch.land_run` params recorded for `run_id` in `scratch/warp/<run>/
-    terminal-commit-params.json`, minus the halt envelope and the run token (a replay claims no token)."""
-    recorded = json.loads((source_root / "scratch" / "warp" / run_id / "terminal-commit-params.json").read_text(encoding="utf-8"))
+    terminal-commit-params.json`, minus the halt envelope and the run token (a replay claims no token).
+    A run with no such file is rebuilt by `reconstructed_recorded` and based at `record_run_base`."""
+    params_file = source_root / "scratch" / "warp" / run_id / "terminal-commit-params.json"
+    if params_file.is_file():
+        recorded = json.loads(params_file.read_text(encoding="utf-8"))
+        base = json.loads((source_root / "state" / "warp" / run_id / "manifest.json").read_text(encoding="utf-8"))["head_sha"]
+    else:
+        recorded = reconstructed_recorded(source_root, run_id)
+        base = record_run_base(source_root, run_id)
     outcome = recorded["run_outcome"]
-    manifest = json.loads((source_root / "state" / "warp" / run_id / "manifest.json").read_text(encoding="utf-8"))
-    base = manifest["head_sha"]
     review = dict(outcome["inline_review"])
     review["prep"] = {**(review.get("prep") or {}), "run_base_sha": base}
     return {
@@ -584,7 +666,9 @@ def real_record_params(source_root: Path, run_id: str) -> dict:
 
 
 def seed_real_record(source_root: Path, clone: Path, run_id: str) -> None:
-    """Copy the run's `state/warp` and `scratch/warp` record, plus the halt-withheld index and its built sentinel."""
+    """Copy the run's `state/warp` and `scratch/warp` record, the halt-withheld index and its built
+    sentinel, and each path the run's `halted.json` withheld that the live worktree still holds (the
+    shared dirty tree the run saw: present in the clone, uncommitted)."""
     from coordinator_core.ops.dispatch_emit.halted_withheld_index import INDEX_DIR
 
     for rel in (f"state/warp/{run_id}", f"scratch/warp/{run_id}", INDEX_DIR):
@@ -595,11 +679,98 @@ def seed_real_record(source_root: Path, clone: Path, run_id: str) -> None:
         if src.is_file():
             (clone / "scratch" / "warp").mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, clone / "scratch" / "warp" / name)
+    withheld = _json_of(source_root / "state" / "warp" / run_id / "halted.json").get("run_artifacts", {}).get("withheld") or {}
+    for rel in withheld:
+        if (source_root / rel).is_file():
+            (clone / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_root / rel, clone / rel)
 
 
-def run_real_record(run_id: str, source_root: Path, attribute: bool) -> list:
-    """Replay `run_id`'s land_run in a throwaway clone of `source_root`, stopping before the commit leg."""
-    from coordinator_core.benchmarks.isolated_clone import fresh_git_clone
+def enter_record_fixture(stack: ExitStack, source_root: Path, params: dict, *, prefix: str, label: str) -> Path:
+    """Enter a `record_fixture_repo` of the run's `doc_paths` (the committed base) on `stack`, point
+    `params`' base shas at its commit, and set the committer identity. The record, script and withheld
+    paths are then seeded uncommitted by `seed_real_record`, as the run left them."""
+    from coordinator_core.benchmarks.isolated_clone import record_fixture_repo
+
+    clone = stack.enter_context(record_fixture_repo(source_root, params.get("doc_paths") or [], prefix=prefix, label=label))
+    head = run_git(["rev-parse", "HEAD"], cwd=str(clone))
+    if not head.ok:
+        raise RuntimeError(f"git rev-parse HEAD failed in {clone}")
+    sha = head.stdout.strip()
+    params["run_base_sha"] = sha
+    params["inline_review"]["prep"]["run_base_sha"] = sha
+    for key, value in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+        if not run_git(["config", key, value], cwd=str(clone)).ok:
+            raise RuntimeError(f"git config {key} failed in {clone}")
+    return clone
+
+
+def in_window_halted_runs(clone: Path) -> list:
+    """Run ids under `clone/state/warp` whose `halted.json` is a `halted` marker younger than
+    `run_token.TTL_SECONDS` (by the run-id stamp the landing gates read, else the marker's mtime)."""
+    from coordinator_core.ops.dispatch_emit import halted_run, run_token, stopped_runs
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    base = clone / RECORD_DIR_ROOT
+    if not base.is_dir():
+        return []
+    now = time.time()
+    out = []
+    for entry in sorted(os.scandir(base), key=lambda e: e.name):
+        marker_file = Path(entry.path) / halted_run.HALTED_FILE
+        if not entry.is_dir() or not marker_file.is_file():
+            continue
+        marker = halted_run._read(Path(entry.path))  # private to the landing gates, as is _stamp_epoch below: rename in lockstep
+        if marker is None or marker.get("status") != halted_run.STATUS_HALTED:
+            continue
+        stamp = stopped_runs._stamp_epoch(entry.name)
+        if stamp is None:
+            stamp = marker_file.stat().st_mtime
+        if now - stamp <= run_token.TTL_SECONDS:
+            out.append(entry.name)
+    return out
+
+
+def scale_halted_runs(clone: Path, scale: int) -> int:
+    """Copy each in-window halted run `scale - 1` times inside `clone` as `<run>-x<k>` (k from 2): its
+    record dir with fresh mtimes and its halt-withheld index entry with a fresh `at_ns`. Writes only
+    under `clone`. Returns the in-window halted count after scaling (`scale` times the original)."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.halted_withheld_index import INDEX_DIR
+
+    if scale < 1:  # no test yet: belongs in test_land_run_leg_budget_profile.py
+        raise ValueError(f"--halted-scale must be >= 1, got {scale}")
+    runs = in_window_halted_runs(clone)
+    for run in runs:
+        for k in range(2, scale + 1):
+            twin = f"{run}-x{k}"
+            shutil.copytree(clone / RECORD_DIR_ROOT / run, clone / RECORD_DIR_ROOT / twin, copy_function=shutil.copy, dirs_exist_ok=True)
+            entry = clone / INDEX_DIR / f"{run}.json"
+            if entry.is_file():
+                body = _json_of(entry)
+                body["at_ns"] = time.time_ns()
+                (clone / INDEX_DIR / f"{twin}.json").write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    return len(runs) * scale
+
+
+def seed_parse_verdicts(clone: Path) -> int:
+    """Fill the clone's parse-verdict cache for each dirty `.py` the way the run's earlier producers
+    (`measured_rev`, `review_prep`) do over the same bytes, before the timed land. Returns the `.py`
+    count parsed; the parse itself is not part of any timed leg."""
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    status = run_git(["status", "--porcelain", "-z", "--untracked-files=all"], cwd=str(clone))
+    if not status.ok:
+        raise RuntimeError(f"git status failed in {clone}")
+    dirty = [e[3:] for e in status.stdout.split("\0") if len(e) > 3 and e[3:].endswith(".py")]
+    landing_integrity.unparseable_py(clone, dirty)
+    return len(dirty)
+
+
+def run_real_record(run_id: str, source_root: Path, attribute: bool, halted_scale: int = 1, seed_verdicts: bool = True) -> list:
+    """Replay `run_id`'s land_run in a throwaway clone of `source_root`, stopping before the commit leg.
+    `halted_scale` K multiplies the clone's in-window halted runs (`scale_halted_runs`).
+    `seed_verdicts` False leaves the parse-verdict cache cold: the landing parses every changed `.py` itself."""
     from coordinator_core.ops.dispatch_emit import land_run
     from coordinator_core.session import core as session_core
 
@@ -607,11 +778,10 @@ def run_real_record(run_id: str, source_root: Path, attribute: bool) -> list:
     _bind_session()
     params = real_record_params(source_root, run_id)
     with ExitStack() as stack:
-        clone = stack.enter_context(fresh_git_clone(source_root, prefix="lrrr", label="land_run real-record"))
-        for key, value in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
-            if not run_git(["config", key, value], cwd=str(clone)).ok:
-                raise RuntimeError(f"git config {key} failed in {clone}")
+        clone = enter_record_fixture(stack, source_root, params, prefix="lrrr", label="land_run real-record")
         seed_real_record(source_root, clone, run_id)
+        halted_in_window = scale_halted_runs(clone, halted_scale)
+        seeded = seed_parse_verdicts(clone) if seed_verdicts else 0
         session_core.init(SELF, cwd=str(clone))
 
         def call(root: Path, _base: str) -> dict:
@@ -621,6 +791,9 @@ def run_real_record(run_id: str, source_root: Path, attribute: bool) -> list:
         rows = profile_land(clone, params["run_base_sha"], attribute=attribute, call=call, stop_before_commit=True, legs=True)
     for row in rows:
         row.attribution["run_id"] = run_id
+    rows[0].attribution["halted_in_window"] = halted_in_window
+    rows[0].attribution["halted_scale"] = halted_scale
+    rows[0].attribution["parse_verdicts_seeded_py"] = seeded
     return rows
 
 
@@ -659,12 +832,14 @@ def main(argv: list) -> int:
     ap.add_argument("--dir", default=None)
     ap.add_argument("--real-record", default=None, metavar="RUN_ID", help="replay a recorded run read-only, stopping before the commit leg")
     ap.add_argument("--source-repo", default=str(_REPO), help="repo whose HEAD and run record --real-record clones")
+    ap.add_argument("--halted-scale", type=int, default=1, metavar="K", help="with --real-record: multiply the clone's in-window halted runs K-fold")
+    ap.add_argument("--cold-parse", action="store_true", help="with --real-record: skip seeding the parse-verdict cache (the landing parses every changed .py)")
     args = ap.parse_args(argv)
     if args.worker:
         return _worker(args.worker, Path(args.worker_root), args.worker_base, Path(args.worker_sync), args.attribute)
     siblings = args.siblings if args.siblings is not None else (0 if args.live_siblings else DEFAULT_SIBLINGS)
     if args.real_record:
-        rows = run_real_record(args.real_record, Path(args.source_repo), args.attribute)
+        rows = run_real_record(args.real_record, Path(args.source_repo), args.attribute, args.halted_scale, not args.cold_parse)
     else:
         workdir = Path(tempfile.mkdtemp(prefix="lrlb-", dir=args.dir))
         try:

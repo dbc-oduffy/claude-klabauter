@@ -130,7 +130,7 @@ Negative-spec (faithful bash-oracle reproduction, NOT a fix):
     :func:`coordinator_core.install._shared.resolve_coordinator_root`,
     which is a strict SUPERSET of the bash oracle's own resolution order.
     The bash oracle only tried the registry's content-root key then
-    ``$REPO_CONTENT_ROOT`` before failing loud; the shared helper additionally
+    ``$REPO_DOE_CLAUDE`` before failing loud; the shared helper additionally
     tries an explicit ``$COORDINATOR_ROOT`` env var first and the
     content-root pointer files (via ``content_root.read_content_root``)
     before failing loud. Every input that resolved under the bash oracle
@@ -351,7 +351,7 @@ def _usage_text() -> str:
         "  -h, --help                Show this help\n"
         "\n"
         "Environment:\n"
-        "  REPO_CONTENT_ROOT           Fallback if the registry's repos.content_root is unset\n"
+        "  REPO_DOE_CLAUDE           Fallback if the registry's repos.content_root is unset\n"
         "\n"
         "Exit codes:\n"
         "  0  success (including operator-kill-switch no-op)\n"

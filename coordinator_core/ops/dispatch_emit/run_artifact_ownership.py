@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.session.record_homes import home_dir
 
 
@@ -29,12 +31,14 @@ class OwnArtifacts:
     delivery_note: str = ""
     # Speculative: no production consumer yet; set so a caller can tell a corrupt parent copy from a missing one.
     corrupt_parents: tuple[str, ...] = ()
+    # `<plan stem>.evidence.yaml` beside each plan the run names; the criterion-evidence stage writes it.
+    plan_evidence: frozenset[str] = frozenset()
 
     def covers(self, rel: str) -> bool:
-        """True for the run's sizings, its delivery note, or anything under its record dir."""
+        """True for the run's sizings, plan evidence, delivery note, or anything under its record dir."""
         if not rel:
             return False
-        if rel in self.sizings or (self.delivery_note and rel == self.delivery_note):
+        if rel in self.sizings or rel in self.plan_evidence or (self.delivery_note and rel == self.delivery_note):
             return True
         return bool(self.record_prefix) and rel.startswith(self.record_prefix)
 
@@ -66,8 +70,36 @@ def _own_slice_sizing(root: Path, run_id: str) -> tuple[str, tuple[str, ...]]:
     return "", tuple(corrupt)
 
 
+_PLAN_EDGE = re.compile(r"^plan:[ \t]*[\"']?([^\"'\r\n#]+?)[\"']?[ \t]*(?:#.*)?$", re.MULTILINE)
+
+
+def _plan_evidence(root: Path, run_id: str, sizings: set[str]) -> frozenset[str]:
+    """Evidence paths beside the run's plan: halted.json's `plan` and each sizing's top-level `plan:` edge."""
+    plans: set[str] = set()
+    try:
+        halted = json.loads((record_dir(root, run_id) / "halted.json").read_text(encoding="utf-8"))
+        if isinstance(halted, dict) and isinstance(halted.get("plan"), str):
+            plans.add(halted["plan"])
+    except (OSError, ValueError):
+        pass
+    for rel in sizings:
+        try:
+            match = _PLAN_EDGE.search((root / rel).read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if match:
+            plans.add(match.group(1))
+    out: set[str] = set()
+    for plan in plans:
+        pp = PurePosixPath(plan.strip().replace("\\", "/"))
+        if pp.is_absolute() or ".." in pp.parts or not pp.name:
+            continue
+        out.add(str(pp.with_name(pp.stem + ".evidence.yaml")))
+    return frozenset(out)
+
+
 def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
-    """The sizing(s), record prefix and delivery note *run_id* owns; empty for an unsafe id."""
+    """The sizing(s), plan evidence, record prefix and delivery note *run_id* owns; empty for an unsafe id."""
     if not isinstance(run_id, str) or not safe_id(run_id):
         return OwnArtifacts()
     root = Path(root)
@@ -75,6 +107,7 @@ def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
     sizings = {rel for rel in (warp_run_deliverable.record_sizing_rel(root, run_id), slice_rel) if rel}
     return OwnArtifacts(
         sizings=frozenset(sizings),
+        plan_evidence=_plan_evidence(root, run_id, sizings),
         corrupt_parents=corrupt,
         record_prefix=f"{_warp_home()}/{run_id}/",
         delivery_note=f"docs/delivery/{run_id}.md",

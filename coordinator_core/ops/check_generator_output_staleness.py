@@ -89,7 +89,7 @@ Coordinator-content-repo@a0d10df52 (`coordinator/hooks/hooks.json`'s
 
 `resolve_peer_repo_path` imitates the order
 `coordinator_core.frontmatter.schema_drift_watch.resolve_doe_repo_path`
-already uses (REPO_CONTENT_ROOT env var, then the fleet registry's
+already uses (REPO_DOE_CLAUDE env var, then the fleet registry's
 `repos.content_root` entry, then the durable pointer file, then the legacy
 pointer file — all folded into
 `coordinator_core.content_root.read_content_root`'s own ladder) —
@@ -302,7 +302,7 @@ def resolve_peer_repo_path() -> Optional[Path]:
     """Best-effort resolution of the coordinator-content-repo sibling clone root.
 
     Imitates `coordinator_core.frontmatter.schema_drift_watch
-    .resolve_doe_repo_path`'s ladder (REPO_CONTENT_ROOT env var, then
+    .resolve_doe_repo_path`'s ladder (REPO_DOE_CLAUDE env var, then
     `read_content_root()`'s registry/durable-file/legacy-file rungs)
     without importing that module. Returns None when no candidate directory
     contains `PEER_REPO_SENTINEL` (the artifact this leg actually consumes,
@@ -314,7 +314,7 @@ def resolve_peer_repo_path() -> Optional[Path]:
     """
     candidates: list[Path] = []
 
-    env_root = os.environ.get("REPO_CONTENT_ROOT", "").strip()
+    env_root = os.environ.get("REPO_DOE_CLAUDE", "").strip()
     if env_root:
         candidates.append(Path(env_root))
 

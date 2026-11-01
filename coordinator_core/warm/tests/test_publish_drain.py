@@ -259,3 +259,38 @@ def test_a_skew_eviction_does_not_kill_in_flight_or_late_requests(short_tmp_path
     assert [r["id"] for r in late] == ["late-0", "late-1", "late-2"]
     assert in_flight_response == {"jsonrpc": "2.0", "id": "in-flight", "result": "served"}
     assert answered_before_exit == [True]
+
+
+class _StopVersionState(_FakeVersionState):
+    def is_skewed(self, client_token: str) -> bool:
+        return client_token != "current"
+
+
+def _serve_in_swap_window(monkeypatch, method: str, token: str):
+    monkeypatch.setattr(server._engine_landing, "swap_in_progress", lambda root: True)
+    written, events = [], []
+    server._serve_line(
+        (json.dumps({"jsonrpc": "2.0", "id": "x", "method": method, "params": {}, "_engine_token": token}) + "\n").encode(),
+        write=written.append,
+        version_state=_StopVersionState(),
+        server_sha="deadbeef",
+        close_listener=lambda: events.append("close"),
+        drain=lambda: events.append("drain"),
+        release_in_flight=lambda: events.append("release"),
+        record_exit=lambda reason, detail=None: events.append("exit-record"),
+        engine_root=Path("."),
+    )
+    return written, events
+
+
+def test_stop_ask_inside_a_swap_window_evicts_and_drains(monkeypatch) -> None:
+    written, events = _serve_in_swap_window(monkeypatch, "engine.stop_probe", "warm-engine-stop-requested-0000")
+    assert len(written) == 1
+    assert "close" in events and "drain" in events and "exit-record" in events
+
+
+def test_other_traffic_inside_a_swap_window_is_still_refused_without_eviction(monkeypatch) -> None:
+    written, events = _serve_in_swap_window(monkeypatch, "ping", "post-publish")
+    assert len(written) == 1
+    assert json.loads(written[0])["error"]["code"] == server.skew.ENGINE_SKEW
+    assert events == ["release"]

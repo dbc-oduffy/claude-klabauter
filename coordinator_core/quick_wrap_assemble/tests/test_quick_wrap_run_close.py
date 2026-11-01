@@ -143,6 +143,84 @@ def _git(repo: Path, *args: str) -> None:
     )
 
 
+def test_d5_carries_the_drain_counters_and_is_satisfied_only_by_a_clean_drain():
+    clean = _by_id(_directives({"archived": 3, "candidates": 3, "skipped": 0, "failed": 0, "scan_skipped": 1}))["d5"]
+    assert clean["drain"]["archived"] == 3
+    assert clean["already_satisfied"] is True
+    assert clean["cli"] == "sweep-terminal-sizings"
+
+    errored = _by_id(_directives({"error": "RuntimeError: boom"}))["d5"]
+    assert errored["already_satisfied"] is False
+    failed = _by_id(_directives({"archived": 1, "failed": 2}))["d5"]
+    assert failed["already_satisfied"] is False
+
+    bare = _by_id(_directives())["d5"]
+    assert "drain" not in bare and bare["already_satisfied"] is False
+
+
+def _seeded_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "seed")
+    return repo
+
+
+def test_brief_runs_the_drain_in_process_and_reports_its_counters(tmp_path, monkeypatch):
+    from coordinator_core.ops.fleet import terminal_sizing_drain
+
+    repo = _seeded_repo(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", SID)
+    seen: list = []
+
+    def fake_drain(root, *, dry_run=False):
+        seen.append((Path(root), dry_run))
+        return {"acted": [{"id": "x"}, {"id": "y"}], "candidates": [{}, {}], "skipped": [], "failed": [],
+                "scan_skipped": [{"id": "z"}]}
+
+    monkeypatch.setattr(terminal_sizing_drain, "drain", fake_drain)
+    envelope = brief(repo, commit=True)
+
+    d5 = {d["id"]: d for d in envelope["directives"]}["d5"]
+    assert seen == [(repo, False)]
+    assert d5["drain"] == {"archived": 2, "candidates": 2, "skipped": 0, "failed": 0, "scan_skipped": 1}
+
+
+def test_a_drain_fault_is_advisory_and_never_fails_the_close(tmp_path, monkeypatch):
+    from coordinator_core.ops.fleet import terminal_sizing_drain
+
+    repo = _seeded_repo(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", SID)
+
+    def boom(root, *, dry_run=False):
+        raise RuntimeError("drain exploded")
+
+    monkeypatch.setattr(terminal_sizing_drain, "drain", boom)
+    envelope = brief(repo, commit=True)
+
+    d5 = {d["id"]: d for d in envelope["directives"]}["d5"]
+    assert "drain exploded" in d5["drain"]["error"]
+    assert d5["already_satisfied"] is False
+
+
+def test_brief_without_commit_does_not_drain(tmp_path, monkeypatch):
+    from coordinator_core.ops.fleet import terminal_sizing_drain
+
+    repo = _seeded_repo(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", SID)
+    monkeypatch.setattr(
+        terminal_sizing_drain, "drain",
+        lambda *a, **k: pytest.fail("a no-commit brief must not mutate state/sizings"),
+    )
+    envelope = brief(repo, commit=False)
+
+    assert "drain" not in {d["id"]: d for d in envelope["directives"]}["d5"]
+
+
 @pytest.mark.spawns_process
 def test_brief_carries_gate_and_discharged_by_and_leaves_close_ledger_shape(tmp_path, monkeypatch):
     repo = tmp_path / "repo"

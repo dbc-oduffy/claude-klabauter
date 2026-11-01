@@ -368,6 +368,9 @@ _TYPE_TO_GLOB: dict[str, str] = {
     # computes the routing fields; the sizing skill persists them). `.yaml`
     # whole-file frontmatter, same shape as bug/debt/improvement/lesson/goal.
     'sizing-object':    'state/sizings/*.yaml',
+    # sizing-object-archived: terminal sizings sharded out of the hot
+    # state/sizings directory into archive/sizings/<shard>/*.yaml.
+    'sizing-object-archived': 'archive/sizings/*/*.yaml',
     # spike-result: same "schema-recognised with a live producer already landed"
     # precedent as goal/sizing-object/cutover. The glob is the RELOCATED home,
     # not state/handoffs/ — DoE's spike-verdict-records-stable-evidence-home
@@ -446,7 +449,7 @@ _TYPE_TO_GLOB: dict[str, str] = {
 # Query types whose files are `.yaml` whole-file frontmatter (no `---` fences) —
 # port of query-records.js's `path.extname(file) === '.yaml'` branch
 # (bin/query-records.js:1400-1410).
-_YAML_WHOLE_FILE_TYPES: frozenset[str] = frozenset({'bug', 'debt', 'improvement', 'lesson', 'goal', 'sizing-object', 'priority-intent', 'priority-ledger'})
+_YAML_WHOLE_FILE_TYPES: frozenset[str] = frozenset({'bug', 'debt', 'improvement', 'lesson', 'goal', 'sizing-object', 'sizing-object-archived', 'priority-intent', 'priority-ledger'})
 
 # Query types whose glob has a wildcard DIRECTORY component (not just a wildcard
 # filename) — `_collect_files` routes these through the generic segment walker
@@ -459,7 +462,7 @@ _YAML_WHOLE_FILE_TYPES: frozenset[str] = frozenset({'bug', 'debt', 'improvement'
 # see that function's docstring.
 _WILDCARD_DIR_TYPES: frozenset[str] = frozenset({
     'roadmap', 'completion', 'handoff-archived', 'cutover', 'completion-receipt',
-    'delivery-verdict',
+    'delivery-verdict', 'sizing-object-archived',
 })
 
 # Synthetic types: one source FILE yields N records (one `## Session Ledger`

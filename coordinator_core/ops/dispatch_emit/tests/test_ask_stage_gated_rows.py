@@ -106,7 +106,7 @@ def test_gated_row_without_a_registry_entry_has_empty_owner_root(tmp_path, monke
 
 def test_aliased_owner_resolves_through_the_alias_key(tmp_path, monkeypatch):
     _patch_registry(
-        monkeypatch, {"repos.example_game_workbench_repo": "HOLO/ROOT"}, {"example-game-repo": "example_game_workbench_repo"}
+        monkeypatch, {"repos.claude_unreal_holodeck": "HOLO/ROOT"}, {"example-game-repo": "claude_unreal_holodeck"}
     )
     reply = _stage(tmp_path, _plan(_owned_gate("example-game-repo")))
     assert reply["gated"][0]["owner_root"] == "HOLO/ROOT"

@@ -1514,20 +1514,66 @@ static int door_ensure_dir_recursive_w(wchar_t *path) {
     return CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *clone_hash) {
+/* PUBLISH DRAIN GATE -- mirrors `warm/breadcrumb.py :: publish_marker_held` /
+ * `wait_for_publish_release`. A publisher holds `<svc_dir>\publish.marker`
+ * for the copy window; while it is fresh (mtime within
+ * `PUBLISH_MARKER_MAX_AGE_SECS`) this door spawns no warm server and queues
+ * behind it for at most `DOOR_DRAIN_WAIT_MS` (`breadcrumb.DRAIN_WAIT_SECS`),
+ * then retries the pipe once. Stat only: no spawn, no unlink, no holder-pid
+ * liveness probe (a crashed publisher's marker costs a missing-pipe caller
+ * the bounded wait until it ages out). Any error reads "not held". */
+#define DOOR_PUBLISH_MARKER_W L"publish.marker"
+#define DOOR_PUBLISH_MARKER_MAX_AGE_SECS 3600.0
+#define DOOR_DRAIN_WAIT_MS 500
+#define DOOR_DRAIN_POLL_MS 20
+
+static int door_svc_dir_w(wchar_t *out, size_t cap, const char *clone_hash) {
     wchar_t base[MAX_PATH];
     DWORD n = GetEnvironmentVariableW(L"COORDINATOR_WARM_RUNTIME_BASE", base, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) {
         n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-        if (n == 0 || n >= MAX_PATH) return; 
+        if (n == 0 || n >= MAX_PATH) return 0;
     }
 
     wchar_t clone_hash_w[17];
     for (int i = 0; i < 16; i++) clone_hash_w[i] = (wchar_t)(unsigned char)clone_hash[i];
     clone_hash_w[16] = L'\0';
 
+    return swprintf(out, cap, L"%s\\coordinator\\warm\\%s", base, clone_hash_w) >= 0;
+}
+
+static int door_publish_marker_held_w(const wchar_t *svc_dir) {
+    wchar_t marker[MAX_PATH * 2 + 32];
+    if (swprintf(marker, MAX_PATH * 2 + 32, L"%s\\" DOOR_PUBLISH_MARKER_W, svc_dir) < 0) return 0;
+    WIN32_FILE_ATTRIBUTE_DATA info;
+    if (!GetFileAttributesExW(marker, GetFileExInfoStandard, &info)) return 0;
+    ULARGE_INTEGER ft;
+    ft.LowPart = info.ftLastWriteTime.dwLowDateTime;
+    ft.HighPart = info.ftLastWriteTime.dwHighDateTime;
+    double mtime = (double)(ft.QuadPart - 116444736000000000ULL) / 10000000.0;
+    double age = (double)time(NULL) - mtime;
+    return age > -DOOR_PUBLISH_MARKER_MAX_AGE_SECS && age < DOOR_PUBLISH_MARKER_MAX_AGE_SECS;
+}
+
+/* 1 iff the marker was held on entry and released within the wait budget (the
+ * caller retries the pipe once); 0 if it was not held or is still held at the
+ * deadline. */
+static int door_drain_publish_hold(const char *clone_hash) {
     wchar_t svc_dir[MAX_PATH * 2];
-    if (swprintf(svc_dir, MAX_PATH * 2, L"%s\\coordinator\\warm\\%s", base, clone_hash_w) < 0) return;
+    if (!door_svc_dir_w(svc_dir, MAX_PATH * 2, clone_hash)) return 0;
+    if (!door_publish_marker_held_w(svc_dir)) return 0;
+    ULONGLONG deadline = GetTickCount64() + DOOR_DRAIN_WAIT_MS;
+    for (;;) {
+        Sleep(DOOR_DRAIN_POLL_MS);
+        if (!door_publish_marker_held_w(svc_dir)) return 1;
+        if (GetTickCount64() >= deadline) return 0;
+    }
+}
+
+static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *clone_hash) {
+    wchar_t svc_dir[MAX_PATH * 2];
+    if (!door_svc_dir_w(svc_dir, MAX_PATH * 2, clone_hash)) return;
+    if (door_publish_marker_held_w(svc_dir)) return;
     if (!door_ensure_dir_recursive_w(svc_dir)) return;
 
     wchar_t lock_path[MAX_PATH * 2 + 32];
@@ -1850,6 +1896,12 @@ int main(void) {
      * allowed to stop waiting. ---- */
     HANDLE pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+    DWORD pipe_err = (pipe == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    if (pipe_err == ERROR_FILE_NOT_FOUND && door_drain_publish_hold(clone_hash)) {
+        pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                           OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+        pipe_err = (pipe == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
+    }
     if (pipe == INVALID_HANDLE_VALUE) {
         /* RESPAWN ON MISS -- the no-server branch only. ERROR_FILE_NOT_FOUND
          * is the exact Windows counterpart of `warm/client.py`'s
@@ -1861,7 +1913,7 @@ int main(void) {
          * cold fall-through below, and never changes this call's own
          * verdict or exit code -- see `door_maybe_spawn_server`'s own
          * docstring for the full contract. */
-        if (GetLastError() == ERROR_FILE_NOT_FOUND) {
+        if (pipe_err == ERROR_FILE_NOT_FOUND) {
             door_maybe_spawn_server(engine_root_w, clone_hash);
         }
         return fall_through_and_free(argc, wargv, engine_root_w);

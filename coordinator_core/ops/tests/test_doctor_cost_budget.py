@@ -38,8 +38,8 @@ def healthy_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     config = tmp_path / "claude-config"
     config.mkdir()
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(root))
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(_CLAUDE_KLABAUTER_ROOT))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(root))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(_CLAUDE_KLABAUTER_ROOT))
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_CLAUDE_KLABAUTER_ROOT))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(home / "machine-local"))

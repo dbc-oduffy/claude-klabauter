@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit import emit as _emit
 from coordinator_core.ops.dispatch_emit.compose_size import cap_refusal, component_sizes
 from coordinator_core.ops.dispatch_emit.fanout_cost import with_fanout
 from coordinator_core.ops.dispatch_emit.halt_refire import refire_next_action_js
+from coordinator_core.ops.dispatch_emit.stage_task_hijack import HIJACK_HALT_REASON, hijack_test_js
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     FANOUT_RECORD_PARAM,
     HALT_PLAN_FIELD,
@@ -32,12 +33,14 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
 )
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME as LAND_RUN_OP
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import (
+    STAGE_FN as PLAN_BLITZ_STAGE_FN,
     AskPlanBlitzRefused,
     _meta_span,
     _TITLE,
     strip_comment_lines,
 )
 
+STAGE_OP = "roadmap.blitz_stage"
 ROADMAP_STAGE_FN = "roadmapBlitz"
 ROADMAP_BLITZ_SOURCE = ("workflows", "roadmap-blitz.mjs")
 
@@ -83,10 +86,14 @@ NO_READY_LITERAL ="plan-blitz reported no ready plan"
 
 def no_ready_reason_js(pulled_js: str) -> str:
     """JS expression: the no-ready literal, then `: ` and the string `reason` of each entry of
-    `pulled_js` joined by `; `; the bare literal when none carries one."""
+    `pulled_js` joined by `; `; the bare literal when none carries one. When a pulled reason is a
+    stage-task hijack (`hijack_test_js`), the expression is `stage-task-hijacked: ...: <that reason>`."""
+    reasons = f"({pulled_js} ?? []).map((p) => p && p.reason).filter((r) => typeof r === 'string' && r)"
+    hijacked = f"(r) => {hijack_test_js('r')}"
+    plain = f"('{NO_READY_LITERAL}' + {reasons}.reduce((a, r) => a ? a + '; ' + r : ': ' + r, ''))"
     return (
-        f"('{NO_READY_LITERAL}' + (({pulled_js} ?? []).map((p) => p && p.reason).filter((r) => typeof r === 'string' && r)"
-        ".reduce((a, r) => a ? a + '; ' + r : ': ' + r, '')))"
+        f"({reasons}.some({hijacked}) ? '{HIJACK_HALT_REASON}: plan-blitz agent declined its task for a relayed/user line: '"
+        f" + {reasons}.find({hijacked}) : {plain})"
     )
 
 #: The run's one commit: lands the planning record, then fans the ready plans out as sibling runs.
@@ -103,6 +110,93 @@ def roadmap_next_action_js(script_path: Optional[str] = None, interaction_mode: 
         "waves: Object.fromEntries(_ready.map((r) => [r.planPath, r.wave])), "
         f"{mode}{PARENT_SIZING_KEY}: _sizingRel, {NOT_FIRED_KEY}: _unfired }} }} }}"
     )
+
+
+SEAM_FIX_PHASE = "seam-fix"
+SEAM_FIX_OP = "plan.seam_fix"
+
+_SEAM_FIX_SCHEMA = {
+    "type": "object",
+    "required": ["converged"],
+    "properties": {
+        "edges_added": {"type": "array"},
+        "skipped_cycles": {"type": "array"},
+        "skipped_plans": {"type": "array"},
+        "converged": {"type": "boolean"},
+        "error": {"type": ["string", "null"]},
+    },
+}
+
+
+def _seam_fix_lines(repo_root: str, run_id: str, halt: Callable[[str], str]) -> list[str]:
+    """One `plan.seam_fix` relay over the distinct ready plan paths (wave order, then plan-blitz order,
+    which is the blocked_by order the waves were computed from); skipped when fewer than two plans
+    could collide. A refusal, a cycle, a skipped plan or non-convergence halts with the reason."""
+    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+
+    head = _emit._BRIEF_PRECEDENCE_CLAUSE
+    anchor = ac._ANCHOR_CLAUSE.format(root=repo_root)
+    prompt = ac._cat(
+        f"{head}\n\n{anchor}\n\n",
+        f"Run `{ac._INVOKE} {SEAM_FIX_OP} '",
+        "js:JSON.stringify({ plans: _sfPlans, order: _sfPlans, dry_run: false })",
+        f"'{ac._repo_flag(repo_root)}` once and return its JSON reply verbatim "
+        '(or {"error": ...} when it refuses). Commit nothing.',
+    )
+    call = ac._agent(
+        prompt, label="seam-fix", phase=SEAM_FIX_PHASE, agent_type=ac._OP_RELAY_AGENT_TYPE,
+        agent_model=ac._MECHANICAL_MODEL, schema=_SEAM_FIX_SCHEMA, effort=ac._MECHANICAL_EFFORT,
+        run_id=run_id,
+    )
+    why = (
+        "'plan.seam_fix over the ready plans: ' + (_sf?.error ? 'refused: ' + _sf.error"
+        " : (_sf?.skipped_cycles ?? []).length ? 'cycle ' + JSON.stringify(_sf.skipped_cycles)"
+        " : (_sf?.skipped_plans ?? []).length ? 'plan not written ' + JSON.stringify(_sf.skipped_plans)"
+        " : 'collisions remain after the fix')"
+    )
+    return [
+        "  const _sfPlans = [...new Set(_ready.map((r) => r.planPath).filter((p) => typeof p === 'string' && p))];",
+        "  if (!_halted && _sfPlans.length > 1) {",
+        f"    phase({ac._lit(SEAM_FIX_PHASE)});",
+        f"    const _sf = await {call};",
+        "    if (!_sf || _sf.error || (_sf.skipped_cycles ?? []).length || (_sf.skipped_plans ?? []).length || _sf.converged !== true) { "
+        + halt(why) + " }",
+        "  }",
+    ]
+
+
+READ_GATE_REPORT_PARAM = "read_gate_report"
+
+_FROZEN_WAVES_SCHEMA = {
+    "type": "object",
+    "properties": {"waves": {"type": "array"}, "error": {"type": ["string", "null"]}},
+}
+
+
+def _frozen_waves_lines(repo_root: str, run_id: str) -> list[str]:
+    """When the stage reply (an agent's relay of the op) lost its waves, one `roadmap.blitz_stage`
+    read of the frozen gate report at `_rb.gate_report_path` refills `_waves` from the engine's own
+    computation; skipped when the reply already carried them."""
+    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+
+    prompt = ac._cat(
+        f"{_emit._BRIEF_PRECEDENCE_CLAUSE}\n\n{ac._ANCHOR_CLAUSE.format(root=repo_root)}\n\n",
+        f"Run `{ac._INVOKE} {STAGE_OP} '",
+        f"js:JSON.stringify({{ {READ_GATE_REPORT_PARAM}: _rb.gate_report_path }})",
+        f"'{ac._repo_flag(repo_root)}` once and return its JSON reply verbatim "
+        '(or {"error": ...} when it refuses). Commit nothing.',
+    )
+    call = ac._agent(
+        prompt, label="frozen-waves", phase="roadmap-blitz", agent_type=ac._OP_RELAY_AGENT_TYPE,
+        agent_model=ac._MECHANICAL_MODEL, schema=_FROZEN_WAVES_SCHEMA, effort=ac._MECHANICAL_EFFORT,
+        run_id=run_id,
+    )
+    return [
+        "  if (!_waves.length && _rb?.gate_report_path) {",
+        f"    const _fw = await {call};",
+        "    _waves = [...(_fw?.waves ?? [])].sort((a, c) => a.index - c.index);",
+        "  }",
+    ]
 
 
 def roadmap_stage_lines(
@@ -145,7 +239,8 @@ def roadmap_stage_lines(
         f"  if (!_rb || !_rb.gate_report_path) {{ {halt(chr(39) + 'roadmap-blitz returned no gate_report_path' + chr(39))} }}",
         "  }",
         "  if (!_halted) {",
-        "  const _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);",
+        "  let _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);",
+        *_frozen_waves_lines(repo_root, run_id),
         "  if (!_waves.length) { " + halt("'roadmap-blitz stage reply carries no waves'") + " }",
         "  let _ran = 0;",
         "  const _bid = (x) => (x && typeof x === 'object') ? (x.batonId ?? x.baton ?? x.id ?? null) : x;",
@@ -182,6 +277,7 @@ def roadmap_stage_lines(
         "  }",
         "  if (!_halted && !_ready.length) { " + plan_halt(no_ready_reason_js("_pulled")) + " }",
         "  }",
+        *_seam_fix_lines(repo_root, run_id, halt),
         f"  if (!_halted) {{ _nextAction = {roadmap_next_action_js(script_path, interaction_mode)}; }}",
     ]
 
@@ -242,8 +338,9 @@ def compose_roadmap_script(
         ac._halt_record_commit_fn(
             head=head, anchor=anchor, script_path=script_path, repo_root=repo_root, run_id=run_id,
         ),
-        rb_fn,
-        plan_blitz_fn,
+        ac.brief_clause_decl_js(),
+        *_shadowed_stage(ROADMAP_STAGE_FN, rb_fn),
+        *(_shadowed_stage(PLAN_BLITZ_STAGE_FN, plan_blitz_fn) if plan_blitz_fn else []),
         "  phase('gate');",
         f"  const _gate = await {agent(gate_prompt, label='gate', phase='gate', agent_type=ac._MECHANICAL_AGENT_TYPE, agent_model=ac._MECHANICAL_MODEL, effort=ac._MECHANICAL_EFFORT, schema=ac._GATE_SCHEMA, run_id=run_id)};",
         "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
@@ -284,8 +381,15 @@ def compose_roadmap_script(
     return script
 
 
+def _shadowed_stage(name: str, fn_text: str) -> list[str]:
+    from coordinator_core.ops.dispatch_emit.ask_compose import clause_shadow_parts
+
+    opened, closed = clause_shadow_parts(name)
+    return [opened, fn_text, closed]
+
+
 def roadmap_phase_titles(rb_phases: list[str], plan_blitz_phases: list[str]) -> list[str]:
-    titles = ["gate", "roadmap-blitz", *rb_phases, *plan_blitz_phases, "commit"]
+    titles = ["gate", "roadmap-blitz", *rb_phases, *plan_blitz_phases, SEAM_FIX_PHASE, "commit"]
     seen: list[str] = []
     return [t for t in titles if not (t in seen or seen.append(t))]
 

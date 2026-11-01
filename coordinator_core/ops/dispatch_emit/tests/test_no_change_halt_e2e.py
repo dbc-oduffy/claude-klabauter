@@ -92,6 +92,7 @@ def test_an_edited_path_lands(repo):  # noqa: F811
     out = _call(repo, ZERO_SLICE)
     assert out["committed"] is True, out
     assert "a.py" in _git(repo, "show", "--name-only", "--format=", out["sha"]).split()
+    assert "foreign-hunk-unproduced" not in json.dumps(out)
 
 
 def test_a_met_item_on_unwritten_paths_refuses_pre_existing_dirt(repo):  # noqa: F811

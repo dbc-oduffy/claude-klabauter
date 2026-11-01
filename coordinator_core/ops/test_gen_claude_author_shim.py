@@ -378,7 +378,7 @@ def test_claude_home_override_used_for_shim_dest_not_legacy_detector(
 
 
 def test_graceful_skip_unresolved_exits_zero_with_skip_row(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setenv("PATH", "")  # no machine-local resolvable
     rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path))])
     assert rc == 0
@@ -387,7 +387,7 @@ def test_graceful_skip_unresolved_exits_zero_with_skip_row(tmp_path, monkeypatch
 
 
 def test_graceful_skip_unresolved_noop_when_resolved(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path))
     rc = main(["--graceful-skip-unresolved", "--template", str(_make_template(tmp_path))])
     assert rc == 0
     assert "claude_shim: installed (" in capsys.readouterr().out

@@ -167,7 +167,7 @@ class TestResolveExecSummaryGenerator(unittest.TestCase):
             args = parser.parse_args(
                 ["resolve-exec-summary-generator", "--coordinator-root", coord_tmp]
             )
-            with mock.patch.dict(os.environ, {"REPO_CLAUDE_KLABAUTER": claude_klabauter_tmp}, clear=False):
+            with mock.patch.dict(os.environ, {"REPO_PROJECT_MAKIMA": claude_klabauter_tmp}, clear=False):
                 buf = []
                 with mock.patch(
                     "builtins.print", side_effect=lambda *a, **k: buf.append(" ".join(str(x) for x in a))
@@ -193,7 +193,7 @@ class TestResolveExecSummaryGenerator(unittest.TestCase):
             with mock.patch.dict(os.environ, {"CLAUDE_HOME": home_tmp}, clear=False), mock.patch.object(
                 _er, "_self_located_root", lambda: None
             ), mock.patch.object(_er.shutil, "which", lambda _n: None):
-                os.environ.pop("REPO_CLAUDE_KLABAUTER", None)
+                os.environ.pop("REPO_PROJECT_MAKIMA", None)
                 os.environ.pop("CLAUDE_KLABAUTER_ROOT", None)
                 os.environ.pop("COORDINATOR_ENGINE_ROOT", None)
                 _er._reset_root_memo()

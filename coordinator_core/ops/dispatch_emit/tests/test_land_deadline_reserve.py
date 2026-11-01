@@ -135,7 +135,10 @@ def test_a_first_leg_halt_attributes_the_time_before_it_to_scope_entry(clock):
         clock.now += BUDGET + 1.0
         with pytest.raises(land_deadline.LandDeadlineExceeded) as exc:
             land_deadline.check("land_run.script_read")
-    assert exc.value.legs == [{"leg": land_deadline.SCOPE_LEG, "elapsed_secs": BUDGET + 1.0}]
+    assert len(exc.value.legs) == 1
+    leg = exc.value.legs[0]
+    assert leg["leg"] == land_deadline.SCOPE_LEG and leg["elapsed_secs"] == BUDGET + 1.0
+    assert {"process_time_ms", "spawns"} <= set(leg)
 
 
 def test_no_deadline_bound_is_a_noop():

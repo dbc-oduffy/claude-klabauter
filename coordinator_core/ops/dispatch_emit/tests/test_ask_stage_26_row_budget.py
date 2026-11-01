@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.ops.dispatch_emit import ask_stage
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests._size_l_plan import (
     RELAYED_DIRTY_FILES,
     TWENTY_SIX_ROWS,
@@ -23,9 +24,11 @@ def _fixture(tmp_path, monkeypatch):
     isolate_launch_dirs(monkeypatch, tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
-    return build_size_l_plan(
+    repo_root, plan_rel, run_id = build_size_l_plan(
         root, rows=TWENTY_SIX_ROWS, dirty_files=RELAYED_DIRTY_FILES, session_id=SESSION_ID
     )
+    write_run_scripts(repo_root, run_id)
+    return repo_root, plan_rel, run_id
 
 
 def test_26_row_dirty_stage_under_the_brightline(tmp_path, monkeypatch):

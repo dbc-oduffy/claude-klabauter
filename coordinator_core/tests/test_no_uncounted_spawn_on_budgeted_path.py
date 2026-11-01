@@ -316,6 +316,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/op.py",
         ("_dispatch_emit",),
     ),
+    # Spawn-free on landing (batched in-process plumbing commit, no run_git), 2026-10-31.
+    "fleet.archive_terminal_sizings": (
+        "coordinator_core/ops/fleet/archive_sizings.py",
+        ("_archive_terminal_sizings",),
+    ),
     "canvas.harvest": (
         "coordinator_core/ops/canvas_harvest.py",
         ("_handler",),
@@ -491,6 +496,15 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/plan_mise_prep_probe.py",
         ("_certify_handler",),
     ),
+    # Enrolled 2026-10-31: each measures an EMPTY function-granular reachable spawn set.
+    "hooks.idle_compact_advisory": (
+        "coordinator_core/hooks/idle_compact_advisory.py",
+        ("_handler",),
+    ),
+    "plan.apply_mechanical_repairs": (
+        "coordinator_core/ops/plan_apply_mechanical_repairs.py",
+        ("_handler",),
+    ),
     "plan.overlap_edges": (
         "coordinator_core/ops/plan_overlap_edges.py",
         ("_handler",),
@@ -618,6 +632,22 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "groupem.slot_check": (
         "coordinator_core/ops/group_em_slot_grant.py",
         ("_groupem_slot_check",),
+    ),
+    "groupem.box_register": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_box_register",),
+    ),
+    "groupem.box_place": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_box_place",),
+    ),
+    "groupem.box_send": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_box_send",),
+    ),
+    "groupem.box_roster": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_box_roster",),
     ),
     "workstream_complete.stand_down_watchers": (
         "coordinator_core/ops/watcher_stand_down.py",
@@ -2879,10 +2909,6 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
-    "fleet.archive_terminal_sizings": (
-        ("coordinator_core/git/run.py", "run_git", "git", 0),
-        ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
-    ),
     "fleet.migrate_handoff_vocabulary": (
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
@@ -3007,7 +3033,6 @@ _CLUSTER_D3_OPEN_ENTRYPOINTS: dict[str, tuple[str, str]] = {
     "fleet.archive_paper_trail": ("coordinator_core/ops/fleet/archive_paper_trail.py", "_handler"),
     "fleet.archive_queue_entry": ("coordinator_core/ops/fleet/archive_queue_entry.py", "_handler"),
     "fleet.archive_release_accumulator": ("coordinator_core/ops/fleet/archive_release_accumulator.py", "_handler"),
-    "fleet.archive_terminal_sizings": ("coordinator_core/ops/fleet/archive_sizings.py", "_archive_terminal_sizings"),
     "fleet.migrate_handoff_vocabulary": ("coordinator_core/ops/fleet/migrate_handoff_vocabulary.py", "_handler"),
     "fleet.prune_closed_bugs": ("coordinator_core/ops/fleet/prune_bugs.py", "_handler"),
     "fleet.reap_integrated_findings": ("coordinator_core/ops/fleet/reap_integrated_findings.py", "_handler"),
@@ -3134,9 +3159,11 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
     # 60 -> 59 (2026-10-12): `orientation.regenerate_cache` no longer reaches `repo_root.py::_spawn_rev_parse`.
     # 59 -> 60 (2026-10-13): new op `completion.stamp_releases` reaches `git/run.py::run_git`: +1.
     # 60 -> 60 (2026-10-14): `completion.stamp_releases` replaced by `release.write_index` (same run_git site): net 0.
-    assert total_pairs == 60, (
+    # 60 -> 58 (2026-10-31): `fleet.archive_terminal_sizings` rebuilt onto a batched plumbing
+    # commit and no longer reaches `run_git` or `_git._invoke`: -2.
+    assert total_pairs == 58, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "60 measured 2026-10-14 (completion.stamp_releases -> release.write_index: run_git); 60 measured 2026-10-13 (+1 completion.stamp_releases: run_git); 59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
+        "58 measured 2026-10-31 (fleet.archive_terminal_sizings rebuilt, -2); 60 measured 2026-10-14 (completion.stamp_releases -> release.write_index: run_git); 60 measured 2026-10-13 (+1 completion.stamp_releases: run_git); 59 measured 2026-10-12 (-1 orientation.regenerate_cache: _spawn_rev_parse); 60 measured 2026-10-08 (+1 research.close: run_git); 59 measured 2026-10-08 (+1 review.reachability: run_git; 56 on 2026-10-03, +2 review.partition_slices: run_git and _git._invoke). 59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
         "one. Twelve of the sixteen did not already reach run_git, so their row was renamed "
         "at constant count. The other FOUR -- fleet.archive_completed_handoffs, "
@@ -7380,7 +7407,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "fleet.archive_paper_trail": 3,
     "fleet.archive_queue_entry": 3,
     "fleet.archive_release_accumulator": 3,
-    "fleet.archive_terminal_sizings": 3,
     # 8 -> 9, 2026-10-09: bash guard `deploy-dirty-tree` adds one `git status --porcelain`
     # (session_facts._dirty_paths), reached ONLY when the command resolves to a deploy shape.
     # 5 -> 6, 2026-10-29: `spawn_detached` via `halted_run._schedule_resume_build` (reach-only on a
@@ -7711,6 +7737,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # executed 2 spawns, 156-188ms process (measured 2026-10-29). `run_git`: the batched
     # `_dirty_in_write_set` status, one spawn over the whole write set.
     "dispatch.land_verified_remainder": 2,
+    # Two reach-only sites through `commit_paths` (`rollback_check._git`, `detect_rollback` stays False);
+    # the op executes 0 spawns (land_credited_profile, C1: `commit_paths` 0 spawns at both scales).
+    "dispatch.land_credited": 2,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

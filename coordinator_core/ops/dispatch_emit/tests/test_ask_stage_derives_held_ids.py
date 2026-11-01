@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit.ask_stage import derive_held_ids, stage, without_held_rows
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 
 PLAN_REL = "docs/plans/p.md"
 RUN = "r1"
@@ -21,6 +22,7 @@ def _row(rid: str, kind: str = "doc-edit") -> str:
 
 def _plan(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir(exist_ok=True)
+    write_run_scripts(tmp_path, RUN)
     plan = tmp_path / PLAN_REL
     plan.parent.mkdir(parents=True, exist_ok=True)
     rows = _row("A1") + _row("A2") + _row("A3") + _row("A4", "verification")

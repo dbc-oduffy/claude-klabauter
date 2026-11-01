@@ -58,7 +58,7 @@ SUPERSEDED 2026-08-19 — Check 1 no longer iterates ``COORDINATOR_OWNED_KEYS``.
 Negative-spec (do NOT "fix" while porting):
     - The bash oracle's ``COORDINATOR_OWNED_KEYS`` list is reproduced verbatim
       (13 keys, post the 2026-06-30 F5 reconciliation — no ``repos.coordinator_claude``,
-      includes ``repos.example_league_data_repo`` / ``repos.example_cockpit_repo`` / ``repos.example-os-repo``).
+      includes ``repos.fifa_26wcle_data`` / ``repos.project_opticon`` / ``repos.delphios``).
       Do NOT "helpfully" resync this against the live registry.toml — any drift is a
       separate reconciliation change, not something this port should silently absorb.
       EXCEPTION (docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md AC8, chunk C6b):
@@ -67,7 +67,7 @@ Negative-spec (do NOT "fix" while porting):
       it is claude-klabauter-owned and belongs on the canonical list. This is the one reviewed,
       authorized reconciliation edit; it does not reopen the list to further drift-sync.
       SECOND EXCEPTION (PM correction to fleet-env re-resolve e765c6d7d2, 2026-09-18):
-      ``repos.example_league_data_repo`` is retired from the canonical list — the repo it named
+      ``repos.fifa_26wcle_data`` is retired from the canonical list — the repo it named
       is deleted, so the key can never again be a live, classifiable coordinator-owned
       entry. Reviewed, authorized reconciliation edit, same footing as the
       ``claude_klabauter`` addition above; it does not reopen the list to further
@@ -145,15 +145,15 @@ COORDINATOR_OWNED_KEYS: List[str] = [
     "coordinator.python",
     "plugin.mirrors",
     "publish.targets",
-    "repos.example-sim-repo",
+    "repos.dronesim",
     "repos.project_rag",
     "repos.project_rag_ue_addon",
-    "repos.example_game_workbench_repo",
-    "repos.example_repo",
-    "repos.example_stats_repo",
+    "repos.claude_unreal_holodeck",
+    "repos.geneva_mvp",
+    "repos.fifa_stats",
     "repos.experiments",
-    "repos.example_cockpit_repo",
-    "repos.example-os-repo",
+    "repos.project_opticon",
+    "repos.delphios",
     "repos.claude_klabauter",
 ]
 
@@ -310,7 +310,7 @@ COORDINATOR_OWNED_NAMESPACES: List[str] = [
 
 def _declared_owned_keys(ml_dir: Path) -> List[str]:
     """Coordinator-owned keys actually DECLARED in the tracked registry files —
-    the dotted top-level table names (``repos.example-sim-repo``, ``publish.targets``)
+    the dotted top-level table names (``repos.dronesim``, ``publish.targets``)
     whose first segment is a coordinator-owned namespace.
 
     Derived rather than hardcoded, because a hardcoded key list cannot survive

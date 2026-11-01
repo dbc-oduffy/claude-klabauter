@@ -75,7 +75,7 @@ def test_cli_sender_identity_resolves_to_the_canonical_em_id(
     # module reads its manifest through at IMPORT time. Name the real root on
     # the documented override rung so the redirect costs a registry, not an
     # install-integrity failure.
-    monkeypatch.setenv("REPO_CONTENT_ROOT", _CONTENT_ROOT)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", _CONTENT_ROOT)
     lib_dir = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
     if lib_dir not in sys.path:
         sys.path.insert(0, lib_dir)

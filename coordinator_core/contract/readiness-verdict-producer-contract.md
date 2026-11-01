@@ -95,6 +95,9 @@ blocking finding:
 - `anchor-premise-malformed-row: rows[<i>] (not a mapping)`: a passed `premise.rows` entry is not a
   mapping; `<i>` is its 0-based index.
 - `anchor-premise-<VERDICT>: <id>`: the verdict is `UNRESOLVED`, `CONTRADICTED` or `UNCHECKABLE`.
+  An `UNCHECKABLE` anchor (`anchor-premise-UNCHECKABLE: <id> -- <claim>`) is no finding: it is a
+  `mechanical_repairs` entry of kind `uncheckable-to-falsifier-row` targeting `<id>` and carrying the
+  plan's full claim, converting it to an execution-time falsifier row. `CONTRADICTED` still blocks.
 
 **Verdict source.** A passed `premise.rows` entry with `anchor: <id>` wins. Otherwise a row in the
 plan's premise-carry file (`premise-carry-contract.md` § 2) with `anchor: <id>` counts only while

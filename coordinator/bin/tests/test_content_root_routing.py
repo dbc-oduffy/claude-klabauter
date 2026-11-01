@@ -1,7 +1,7 @@
 """test_content_root_routing.py — C1 routing tests for content_root() + central writes.
 
 Tests (AC1, AC2 from gate2-w23-state-seam-caller-switch.md):
-  AC1-pos   content_root() returns the REPO_CONTENT_ROOT env override when set.
+  AC1-pos   content_root() returns the REPO_DOE_CLAUDE env override when set.
   AC1-pos   coordinator-lesson-promote._outbox_root() resolves under $(content_root)/state/lessons-outbox.
   AC1-pos   coordinator-queue-append._output_path() central branch resolves under the claude-klabauter data home.
   AC2-cold  coordinator-lesson-promote invoked cold (no registered content root, no env override):
@@ -100,7 +100,7 @@ def test_content_root_returns_env_override(tmp_path):
     """content_root() trusts the env override as-is (§4b idempotency parity)."""
     fake_root = "/fake/content-root"
     with unittest.mock.patch.dict(
-        os.environ, _isolated_env(tmp_path, REPO_CONTENT_ROOT=fake_root), clear=True
+        os.environ, _isolated_env(tmp_path, REPO_DOE_CLAUDE=fake_root), clear=True
     ):
         result = _reg.content_root()
     assert result == fake_root
@@ -110,7 +110,7 @@ def test_content_root_strips_empty_env(tmp_path):
     """content_root() ignores an empty override (empty string is not a valid override)."""
     with (
         unittest.mock.patch.dict(
-            os.environ, _isolated_env(tmp_path, REPO_CONTENT_ROOT=""), clear=True
+            os.environ, _isolated_env(tmp_path, REPO_DOE_CLAUDE=""), clear=True
         ),
         unittest.mock.patch.object(_reg, "_registry_machine_local_get", return_value="/ml/root"),
     ):
@@ -146,7 +146,7 @@ def test_outbox_root_under_content_state(tmp_path):
     """_outbox_root() returns $(content_root)/state/lessons-outbox when the override is set."""
     fake_content = "/fake/content"
     with unittest.mock.patch.dict(
-        os.environ, _isolated_env(tmp_path, REPO_CONTENT_ROOT=fake_content), clear=True
+        os.environ, _isolated_env(tmp_path, REPO_DOE_CLAUDE=fake_content), clear=True
     ):
         result = _lesson_cli._outbox_root()
     assert result == os.path.join(fake_content, "state", "lessons-outbox")
@@ -353,7 +353,7 @@ _MINIMAL_LESSON_ARGV = [
 _COLD_REMEDIATION_TOKENS = (
     "content root",
     "content_root",
-    "REPO_CONTENT_ROOT",
+    "REPO_DOE_CLAUDE",
     "claude_klabauter",
     "claude-klabauter",
     "engine root",

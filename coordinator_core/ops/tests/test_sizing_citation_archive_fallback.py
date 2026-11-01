@@ -47,15 +47,40 @@ def test_live_wins_over_an_archived_namesake(tmp_path: Path):
     assert resolve_sizing_citation(tmp_path, _CITED) == live.resolve()
 
 
+def test_month_dir_probe_resolves_without_rglob(tmp_path: Path, monkeypatch):
+    archived = _write(
+        tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY
+    )
+
+    def _boom(self, pattern):
+        raise AssertionError("rglob must not run when the month dir holds the file")
+
+    monkeypatch.setattr(Path, "rglob", _boom)
+    assert resolve_sizing_citation(tmp_path, _CITED) == archived.resolve()
+
+
+def test_misfiled_month_falls_back_to_rglob(tmp_path: Path):
+    archived = _write(
+        tmp_path, "archive/sizings/2026-07/2026-08-01-example.yaml", _SIZING_BODY
+    )
+    assert resolve_sizing_citation(tmp_path, _CITED) == archived.resolve()
+
+
 def test_neither_path_resolves_returns_none(tmp_path: Path):
     (tmp_path / "archive" / "sizings" / "2026-08").mkdir(parents=True)
     assert resolve_sizing_citation(tmp_path, _CITED) is None
 
 
 def test_ambiguous_archive_match_refuses(tmp_path: Path):
-    for month in ("2026-07", "2026-08"):
+    for month in ("2026-06", "2026-07"):
         _write(tmp_path, f"archive/sizings/{month}/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) is None
+
+
+def test_month_dir_hit_wins_over_a_misfiled_namesake(tmp_path: Path):
+    hit = _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
+    _write(tmp_path, "archive/sizings/2026-07/2026-08-01-example.yaml", _SIZING_BODY)
+    assert resolve_sizing_citation(tmp_path, _CITED) == hit.resolve()
 
 
 def test_traversal_outside_the_root_refuses(tmp_path: Path):
@@ -95,7 +120,7 @@ def test_gate_still_fails_when_the_record_resolves_nowhere(tmp_path: Path, capsy
 
 
 def test_gate_still_fails_on_an_ambiguous_archive_match(tmp_path: Path, capsys):
-    for month in ("2026-07", "2026-08"):
+    for month in ("2026-06", "2026-07"):
         _write(tmp_path, f"archive/sizings/{month}/2026-08-01-example.yaml", _SIZING_BODY)
     _write_plan(tmp_path)
     rc = main(["--root", str(tmp_path)])

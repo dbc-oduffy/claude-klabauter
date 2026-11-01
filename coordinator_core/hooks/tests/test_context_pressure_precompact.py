@@ -243,6 +243,43 @@ def test_steering_falls_back_to_static_rules_without_journal(tmp_path):
     assert cpp.build_steering(SESSION, str(tmp_path)) == cpp._STEERING_RULES
 
 
+def _log_injection(tmp_path, monkeypatch, sid, age_s, action="injected", run_id="run-77"):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    from coordinator_core.idle_compact.contract import injection_log_path
+
+    path = injection_log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ts = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).isoformat()
+    path.write_text(json.dumps({"ts": ts, "run_id": run_id, "session_id": sid, "pid": 1,
+                                "action": action, "reason": "r"}) + "\n", encoding="utf-8")
+
+
+def test_steering_prepends_idle_injection_line_when_fresh(tmp_path, monkeypatch):
+    _log_injection(tmp_path, monkeypatch, SESSION, 5)
+    text = cpp.build_steering(SESSION, str(tmp_path))
+    assert text.startswith("Idle-injected compaction (watcher run run-77)")
+    assert "preserve in-flight engine-ask run ids" in text
+    assert cpp._STEERING_RULES in text
+    assert len(text) <= cpp._STEERING_CHAR_CAP
+
+
+@pytest.mark.parametrize("age_s,action,sid", [
+    (3600, "injected", SESSION), (5, "skipped", SESSION), (5, "injected", "other-session"),
+])
+def test_steering_omits_idle_injection_line_when_stale_skipped_or_other(
+        tmp_path, monkeypatch, age_s, action, sid):
+    _log_injection(tmp_path, monkeypatch, sid, age_s, action=action)
+    assert cpp.build_steering(SESSION, str(tmp_path)) == cpp._STEERING_RULES
+
+
+def test_steering_typed_precedence_survives_idle_line(tmp_path, monkeypatch):
+    _log_injection(tmp_path, monkeypatch, SESSION, 5)
+    text = cpp.build_steering(SESSION, str(tmp_path), typed="focus")
+    assert "the PM's instructions above take precedence" in text
+
+
 def test_steering_survives_corrupt_baton(tmp_path):
     repo, sdir = _session_repo(tmp_path, SESSION)
     (sdir / "baton.json").write_text("{nope", encoding="utf-8")

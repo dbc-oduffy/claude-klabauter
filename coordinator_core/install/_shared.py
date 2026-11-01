@@ -256,7 +256,7 @@ def resolve_coordinator_root(
         2. ``content_root.read_content_root()`` — registry ``repos.content_root``,
            the content-root pointer files and their compat fallbacks ->
            ``_repo_to_coordinator_content_root(<repo>)``.
-        3. ``REPO_CONTENT_ROOT`` env var -> ``_repo_to_coordinator_content_root(<repo>)``.
+        3. ``REPO_DOE_CLAUDE`` env var -> ``_repo_to_coordinator_content_root(<repo>)``.
 
     Rungs 2-3 each resolve a ``repos.content_root``-shaped REPO root first, then
     decide nested-vs-flat CONTENT root by marker via
@@ -281,15 +281,15 @@ def resolve_coordinator_root(
         if content_root:
             root = _repo_to_coordinator_content_root(_strip_trailing_sep(content_root))
 
-    if not root and os.environ.get("REPO_CONTENT_ROOT"):
-        root = _repo_to_coordinator_content_root(_strip_trailing_sep(os.environ["REPO_CONTENT_ROOT"]))
+    if not root and os.environ.get("REPO_DOE_CLAUDE"):
+        root = _repo_to_coordinator_content_root(_strip_trailing_sep(os.environ["REPO_DOE_CLAUDE"]))
 
     if not root or not os.path.isdir(root):
         msg = [
             "uninstall-legs: cannot determine which hook paths are "
             "coordinator-owned — resolve coordinator root or pass --coordinator-root",
             "  Tried: COORDINATOR_ROOT env, content root (registry repos.content_root,",
-            "         content-root pointer), REPO_CONTENT_ROOT env.",
+            "         content-root pointer), REPO_DOE_CLAUDE env.",
         ]
         if root:
             msg.append(f"  Resolved candidate does not exist on disk: {root}")

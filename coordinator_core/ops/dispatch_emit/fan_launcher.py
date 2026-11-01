@@ -30,6 +30,9 @@ GENERATES = []
 # S1 verdict: a run adopts one stage in practice; a second round is the cap, never a loop.
 MAX_STAGE_ROUNDS = 2
 
+# Result key of a launcher-started deferred-emit script: it hands the emitted reply to the launcher, which starts the run.
+DEFERRED_EMIT_KEY = "deferred_emit_pending"
+
 _RUN_SENTINEL = "\x00run\x00"
 _SHA_SENTINEL = "\x00sha\x00"
 
@@ -172,7 +175,7 @@ async function _emitLeg(child, emitParams, label) {
 // A recomposed run this emit minted that nothing started is closed engine-side, all in one leg after the children settle; the engine leaves a run that already progressed.
 async function _abandonAll() {
   if (ABANDON_IDS.length === 0) return;
-  const params = JSON.stringify({ emits: ABANDON_IDS.map((id) => ({ abandon_run: id })) }).replace(/'/g, "'\\''");
+  const params = JSON.stringify({ emits: ABANDON_IDS.map((e) => ({ ...e })) }).replace(/'/g, "'\\''");
   try {
     await agent(
       'Your whole task is the command below; its arguments are your only authority. '
@@ -187,14 +190,34 @@ async function _abandonAll() {
 
 // Trap: a nested child receives no args and has no file read, so the stage round is a second nested start, not an in-place resume. The twin is named from the started script's stem (the twin writer's run id), never the emit reply run_id: one run can carry two names.
 async function _startLoop(child, firstPath) {
+  const state = { started: false };
+  const out = await _startLoopRun(child, firstPath, state);
+  return { ...out, started: state.started };
+}
+
+async function _startLoopRun(child, firstPath, state) {
   let scriptPath = firstPath;
   let lastSha = null;
+  let deferredDone = false;
   for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
     let result;
     try {
       result = await workflow({ scriptPath: scriptPath });
+      state.started = true;
     } catch (e) {
       return { run_id: child.run_id, status: 'failed', error: String(e && e.message ? e.message : e) };
+    }
+    // Trap: a deferred-emit child cannot start a nested run; it hands back the emitted script and this loop starts it, without spending a stage round.
+    const deferred = (result !== null && typeof result === 'object') ? result.__DEFERRED_KEY__ : null;
+    if (deferred) {
+      if (deferredDone) return { run_id: child.run_id, status: 'failed', error: 'a deferred emit handed back a second deferred emit' };
+      const why = _emitRefusal(child, deferred, false);
+      if (why !== null) return { run_id: child.run_id, status: 'emit_refused', error: why };
+      deferredDone = true;
+      firstPath = _normEmitPath(deferred.path);
+      scriptPath = firstPath;
+      round--;
+      continue;
     }
     const pending = (result !== null && typeof result === 'object') ? result.__PENDING_KEY__ : null;
     if (!pending) return { run_id: child.run_id, status: 'ok', result: result };
@@ -252,7 +275,10 @@ async function _chainHop(child, handoff) {
   const refusal = _emitRefusal(child, emitted, true);
   if (refusal !== null) return fail(refusal);
   const chained = await _startLoop(child, _normEmitPath(emitted.path));
-  if (chained.status !== 'ok') return fail(chained.error);
+  if (chained.status !== 'ok') {
+    if (!chained.started) _abandonId(emitted.run_id, child.run_id);
+    return fail(chained.error);
+  }
   if (_handoffOf(chained.result) !== null) return fail('the chained run returned a second hand-off');
   const r = chained.result;
   const tagged = (r !== null && typeof r === 'object') ? { ...r, chained_from: child.run_id } : { chained: r, chained_from: child.run_id, sizing: sizing };
@@ -261,7 +287,13 @@ async function _chainHop(child, handoff) {
 
 function _abandonRedirect(child, emitted) {
   if (emitted === null || typeof emitted !== 'object' || !(_isOwnRedirect(child, emitted) || _isOwnRecompose(child, emitted))) return;
-  if (ABANDON_IDS.indexOf(emitted.run_id) === -1) ABANDON_IDS.push(emitted.run_id);
+  _abandonId(emitted.run_id, null);
+}
+
+// ABANDON_IDS entries are {abandon_run, chained_from?}; chained_from names the parent of a never-started chained child.
+function _abandonId(runId, chainedFrom) {
+  if (ABANDON_IDS.some((e) => e.abandon_run === runId)) return;
+  ABANDON_IDS.push(chainedFrom === null ? { abandon_run: runId } : { abandon_run: runId, chained_from: chainedFrom });
 }
 
 async function _runChild(child, emitted) {
@@ -273,7 +305,8 @@ async function _runChild(child, emitted) {
   const first = await _startLoop(child, _normEmitPath(emitted.path));
   if (first.status !== 'ok') _abandonRedirect(child, emitted);
   const handoff = first.status === 'ok' ? _handoffOf(first.result) : null;
-  return handoff === null ? first : _chainHop(child, handoff);
+  const { started: _started, ...firstOut } = first;
+  return handoff === null ? firstOut : _chainHop(child, handoff);
 }
 
 async function _startAll() {
@@ -317,6 +350,7 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild], emitted
         "__REDIRECT_KEY__": OUTPUT_PATH_REDIRECT_KEY,
         "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
         "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
+        "__DEFERRED_KEY__": DEFERRED_EMIT_KEY,
         "__REFIRE_HEAD__": lit(refire_head),
         "__REFIRE_TAIL__": lit(refire_tail),
         "__TWIN_PREFIX__": lit(prefix),

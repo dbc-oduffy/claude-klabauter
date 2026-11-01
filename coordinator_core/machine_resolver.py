@@ -238,8 +238,8 @@ def _env_override_key(key: str) -> str:
 
 # compat-fallback: the content-root key and its pre-rename name answer for each other.
 _CONTENT_ROOT_KEY_PAIR = {
-    "repos.content_root": "repos.content_root",  # private-name-ok: compat-fallback
-    "repos.content_root": "repos.content_root",  # private-name-ok: compat-fallback
+    "repos.content_root": "repos.doe_claude",  # private-name-ok: compat-fallback
+    "repos.doe_claude": "repos.content_root",  # private-name-ok: compat-fallback
 }
 
 
@@ -767,7 +767,7 @@ def canonical_repo_key_for_root(root, repo_key_paths: dict) -> Optional[str]:
     Several registry keys legitimately point at one repo: a repo carries its
     canonical key plus any receive-only alias under which siblings may address
     it (`repos.claude_klabauter` alongside `repos.example_orchestration_hub_repo`,
-    `repos.example-sim-repo` alongside `repos.example_sim_repo_md`). Every caller that turns a
+    `repos.dronesim` alongside `repos.dronesim_md`). Every caller that turns a
     path back into an identity — a memo's `from:` line above all — must pick the
     same key for the same repo, on every machine, whatever order the registry
     happens to enumerate.

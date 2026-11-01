@@ -326,7 +326,7 @@ def test_vendored_parent_offset_freshly_regenerated_reads_fresh(tmp_path, monkey
     _write_vendored_artifact(repo, "coordinator/hooks/hooks.json", parent_sha, dirty=False)
     _commit_all(repo, "regenerate hooks.json only, stamp names the parent commit")
 
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
     pair = cgos.VendoredPair(
         artifact="coordinator/hooks/hooks.json",
         sources=("coordinator/hooks/scripts",),
@@ -393,7 +393,7 @@ def test_vendored_dirty_tree_reads_indeterminate_not_fresh(tmp_path, monkeypatch
     _write_vendored_artifact(repo, "coordinator/hooks/hooks.json", head_sha, dirty=True)
     _commit_all(repo, "regenerate hooks.json, dirty tree at emit time")
 
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
     pair = cgos.VendoredPair(
         artifact="coordinator/hooks/hooks.json",
         sources=("coordinator/hooks/scripts",),
@@ -421,7 +421,7 @@ def test_vendored_incident_replay_emitter_commit_unregenerated_is_stale(tmp_path
     _write_source(repo, "coordinator/hooks/scripts/emit_effective_delivery.py", "v2 -- emitter fix\n")
     _commit_all(repo, "emitter fix lands, hooks.json not regenerated")
 
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
     pair = cgos.VendoredPair(
         artifact="coordinator/hooks/hooks.json",
         sources=("coordinator/hooks/scripts",),
@@ -458,7 +458,7 @@ def test_vendored_fix_and_regenerate_in_one_commit_is_fresh(tmp_path, monkeypatc
     _write_vendored_artifact(repo, "coordinator/hooks/hooks.json", new_head, dirty=False)
     _commit_all(repo, "fix emitter and regenerate hooks.json in one commit")
 
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(repo))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
     pair = cgos.VendoredPair(
         artifact="coordinator/hooks/hooks.json",
         sources=("coordinator/hooks/scripts",),
@@ -469,13 +469,13 @@ def test_vendored_fix_and_regenerate_in_one_commit_is_fresh(tmp_path, monkeypatc
 
 
 def test_resolve_peer_repo_path_absent_clone_is_none(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "does-not-exist"))
     monkeypatch.setattr(cgos, "read_content_root", lambda: "")
     assert cgos.resolve_peer_repo_path() is None
 
 
 def test_compute_vendored_staleness_unresolvable_peer_is_indeterminate(tmp_path, monkeypatch):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "does-not-exist"))
     monkeypatch.setattr(cgos, "read_content_root", lambda: "")
     results = cgos.compute_vendored_staleness()
     assert all(entry["verdict"] == Verdict.INDETERMINATE for entry in results.values())
@@ -487,7 +487,7 @@ def test_compute_all_staleness_merges_local_and_vendored_keys(tmp_path, monkeypa
     _write_source(local_repo, "gen/lib.py", "v1\n")
     _commit_all(local_repo, "initial")
 
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path / "does-not-exist"))
     monkeypatch.setattr(cgos, "read_content_root", lambda: "")
     results = cgos.compute_all_staleness(local_repo)
     assert any(key.startswith("coordinator-content-repo:") or key == "<coordinator-content-repo clone unresolved>" for key in results)

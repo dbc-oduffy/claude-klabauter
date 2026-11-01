@@ -35,8 +35,8 @@ CLASS = "advisory-rewrite"
 MATCHERS = COMMAND_TOOL_NAMES
 LEG_ID = "rewrite-repo-root-search"
 
-ADVISORY = "use `git grep` (tracked files only) or the Grep tool"
-REWRITE_NOTE = "Repo-root search rewritten to `git grep`: it now covers tracked files only; use the Grep tool for untracked paths."
+ADVISORY = "use `git grep` (tracked files only) or the Grep tool; for content lookups use example-retrieval-repo (project_semantic_search)"
+REWRITE_NOTE = "Repo-root search rewritten to `git grep` (tracked files only); for content lookups use example-retrieval-repo (project_semantic_search), for untracked paths the Grep tool."
 
 _PRE_FILTER_RE = re.compile(r"\b(?:find|rg|grep|egrep|fgrep)\b")
 _COMPLEX_RE = re.compile(r"[<>$`()]")
@@ -232,6 +232,7 @@ def check(payload: Dict[str, Any]) -> Any:
 
 
 def _check(payload: Dict[str, Any], tool_input: Dict[str, Any], cmd: str) -> Any:
+    from coordinator_core.bash_guards._rewrite_support import _example_retrieval_repo_hint
     from coordinator_core.bash_guards.block_drive_root_new_dir_bash_write import _effective_cwd
     from coordinator_core.guard_messages.alternative_record import (
         AdaptableOffer,
@@ -262,6 +263,16 @@ def _check(payload: Dict[str, Any], tool_input: Dict[str, Any], cmd: str) -> Any
         last = e
     if not (rewrote or advised):
         return None
+    rag_hint = _example_retrieval_repo_hint(payload) if payload.get("cwd") else ""
+    if rag_hint:
+        text = f"{rag_hint} Repo-root search walks untracked scratch and data trees."
+        return AlternativeRecord(
+            verdict_kind="advisory",
+            summary=text,
+            members=(AdaptableOffer(template="example-retrieval-repo project_semantic_search ...", what_to_adapt="the query"),),
+            guard_name=LEG_ID,
+            em_text=text,
+        )
     new_cmd = "".join(pieces) + cmd[last:] if pieces else cmd
     if rewrote:
         text = REWRITE_NOTE + ("" if not advised else f" Other repo-root searches here: {ADVISORY}.")
@@ -279,7 +290,7 @@ def _check(payload: Dict[str, Any], tool_input: Dict[str, Any], cmd: str) -> Any
     return AlternativeRecord(
         verdict_kind="advisory",
         summary=text,
-        members=(AdaptableOffer(template="git grep or the Grep tool", what_to_adapt="the query"),),
+        members=(AdaptableOffer(template="example-retrieval-repo project_semantic_search, git grep or the Grep tool", what_to_adapt="the query"),),
         guard_name=LEG_ID,
         em_text=text,
     )

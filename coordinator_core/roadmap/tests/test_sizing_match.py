@@ -113,6 +113,49 @@ def test_batch_of_three_is_one_git_spawn(repo, monkeypatch):
     assert [o["basis"] for o in out] == ["deliverable_id"] * 3
 
 
+def _archived(repo: Path, month: str, name: str, body: str) -> str:
+    d = repo / "archive/sizings" / month
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.yaml").write_text(body, encoding="utf-8")
+    return f"state/sizings/{name}.yaml"
+
+
+def test_archived_sizing_found_by_deliverable_id_in_hot_form(repo):
+    b = _baton(repo, "2026-10-22-thing", did="dlv-aaa")
+    cite = _archived(repo, "2026-10", "2026-10-22-a", "status: shipped\ndeliverable_id: dlv-aaa\n")
+    r = sm.match_sizings(repo, [b])[0]
+    assert (r["sizing"], r["basis"], r["candidates"]) == (cite, "deliverable_id", [cite])
+
+
+def test_archived_sizing_found_by_title(repo):
+    b = _baton(repo, "2026-10-22-liveness-reader-closeout")
+    cite = _archived(repo, "2026-10", "2026-10-22-liveness-reader-closeout-1a2b3c", "status: shipped\n")
+    r = sm.match_sizings(repo, [b])[0]
+    assert (r["sizing"], r["basis"]) == (cite, "title")
+
+
+def test_hot_hit_wins_over_archive(repo):
+    b = _baton(repo, "2026-10-22-thing", did="dlv-aaa")
+    s = _sizing(repo, "2026-10-22-live", "status: routed\ndeliverable_id: dlv-aaa\n")
+    _archived(repo, "2026-10", "2026-10-22-old", "status: shipped\ndeliverable_id: dlv-aaa\n")
+    assert sm.match_sizings(repo, [b])[0]["sizing"] == s
+
+
+def test_archived_sizing_linked_to_other_baton_rejected(repo):
+    b = _baton(repo, "2026-10-22-thing", did="dlv-aaa")
+    _archived(repo, "2026-10", "2026-10-22-a",
+              'status: shipped\nbaton: "state/handoffs/other.md"\ndeliverable_id: dlv-aaa\n')
+    assert sm.match_sizings(repo, [b])[0]["basis"] == "none"
+
+
+def test_two_archived_hits_are_ambiguous(repo):
+    b = _baton(repo, "2026-10-22-thing", did="dlv-aaa")
+    _archived(repo, "2026-09", "2026-09-01-a", "status: shipped\ndeliverable_id: dlv-aaa\n")
+    _archived(repo, "2026-10", "2026-10-01-b", "status: shipped\ndeliverable_id: dlv-aaa\n")
+    r = sm.match_sizings(repo, [b])[0]
+    assert r["basis"] == "ambiguous" and len(r["candidates"]) == 2
+
+
 def test_stamp_inserts_after_status_and_is_idempotent(repo):
     s = _sizing(repo, "2026-10-22-a", "name: x\nstatus: routed  # c\nintent: y\n")
     r = sm.stamp_sizing_baton(repo, s, "state/handoffs/b.md")

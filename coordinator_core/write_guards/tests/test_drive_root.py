@@ -114,6 +114,26 @@ def test_deny_reason_names_scratch_and_leaks_nothing():
     assert not any(tok.startswith((os.sep, "/")) and len(tok) > 1 for tok in text.split())
 
 
+def _pin(monkeypatch, value):
+    from coordinator_core.session import general_work_scope as gws
+
+    monkeypatch.setattr(gws, "general_work_root", lambda: value)
+
+
+def test_pinned_general_work_root_is_exempt(world, monkeypatch):
+    root, _ = world
+    _pin(monkeypatch, str(root / "_general-work"))
+    assert dr.new_top_level_entry(str(root / "_general-work" / "a" / "f.txt"), None) is None
+    assert dr.new_top_level_entry(str(root / "_general-work"), None) is None
+    assert dr.new_top_level_entry(str(root / "other" / "f.txt"), None) == "other"
+
+
+def test_unset_or_unreadable_pin_exempts_nothing(world, monkeypatch):
+    root, _ = world
+    _pin(monkeypatch, None)
+    assert dr.new_top_level_entry(str(root / "_general-work" / "f"), None) == "_general-work"
+
+
 def test_scope_equals_enforcement(world):
     root, home = world
     in_scope = [

@@ -11,7 +11,7 @@ asserts the resulting thin-``~/.claude`` + cloned-DoE shape. Validates Tier 1 (f
 install-surface-completeness contract; Tier 2 (running-in-Claude-Code) is
 printed as a DEFERRED manual-gate banner, unchanged in spirit from the oracle.
 
-FAMILY-I (fresh-install surface): on a cold machine ``REPO_CONTENT_ROOT`` /
+FAMILY-I (fresh-install surface): on a cold machine ``REPO_DOE_CLAUDE`` /
 ``repos.content_root`` may be unresolvable — every unresolved-clone branch below
 degrades to a SKIP with actionable remediation text, never a hard crash, and
 :func:`main` prints a dedicated engine-root-resolution remediation block if
@@ -293,7 +293,7 @@ def _layout_note(clone: str) -> str:
         return (
             " [cause: the resolved clone is a FLAT published-mirror layout — its surfaces sit at "
             "the clone root, so the maximalist <clone>/coordinator/... form this assertion expects "
-            "cannot exist here. Point REPO_CONTENT_ROOT at the maximalist authoring clone, or pass "
+            "cannot exist here. Point REPO_DOE_CLAUDE at the maximalist authoring clone, or pass "
             "--coordinator-root <clone-root>.]"
         )
     if layout == CLONE_LAYOUT_UNKNOWN:
@@ -350,7 +350,7 @@ def _python_launch(script: str, *args: str) -> List[str]:
 
 
 def resolve_doe_clone() -> Tuple[str, bool]:
-    """Order: ``REPO_CONTENT_ROOT`` env, then ``migrate_legacy_config()`` (an
+    """Order: ``REPO_DOE_CLAUDE`` env, then ``migrate_legacy_config()`` (an
     upgrade box carrying only a legacy-named pointer or key gains
     ``repos.content_root``; a no-op otherwise, spawns nothing), then an
     in-process ``machine_resolver.registry_get("repos.content_root")`` read,
@@ -370,7 +370,7 @@ def resolve_doe_clone() -> Tuple[str, bool]:
     would silently poison every downstream check that validates against it,
     so its result is passed through ``native_path_form`` (the drive/MSYS
     repair) before being returned."""
-    doe_clone = os.environ.get("REPO_CONTENT_ROOT", "")
+    doe_clone = os.environ.get("REPO_DOE_CLAUDE", "")
     if doe_clone:
         return doe_clone, True
 
@@ -433,7 +433,7 @@ def _usage_text() -> str:
         "  -h, --help               Show this usage.\n"
         "\n"
         "Environment:\n"
-        "  REPO_CONTENT_ROOT  Path to the resolved clone (primary resolution override).\n"
+        "  REPO_DOE_CLAUDE  Path to the resolved clone (primary resolution override).\n"
         "                   Falls back to: an in-process registry read (repos.content_root),\n"
         "                   then machine-local get repos.content_root.\n"
         "                   At least one must be set for the clone checks to run.\n"
@@ -495,7 +495,7 @@ def _tier1_filesystem_shape(
                     f"assertion below is UNEVALUABLE against this clone, not passing."
                 )
                 r.info(
-                    "  Remediation: point REPO_CONTENT_ROOT (or repos.content_root) at the maximalist "
+                    "  Remediation: point REPO_DOE_CLAUDE (or repos.content_root) at the maximalist "
                     "authoring clone, or pass --coordinator-root <clone-root> for a flat mirror."
                 )
     else:
@@ -553,7 +553,7 @@ def _tier1_filesystem_shape(
             **os.environ,
             "CLAUDE_HOME": sandbox,
             "COORDINATOR_SETTINGS_HOME": os.path.join(sandbox, ".coordinator-claude-settings"),
-            "REPO_CONTENT_ROOT": doe_clone,
+            "REPO_DOE_CLAUDE": doe_clone,
         }
         rc, err, status = _call_gen_settings_hooks(sandbox_settings, env)
         if rc == 0:
@@ -636,7 +636,7 @@ def _tier1_filesystem_shape(
         env = {
             **os.environ,
             "CLAUDE_HOME": sandbox,
-            "REPO_CONTENT_ROOT": doe_clone,
+            "REPO_DOE_CLAUDE": doe_clone,
         }
         cp = _run(_python_launch(wrapper_src, "--dry-run"), env=env)
         dryrun_err = os.path.join(sandbox, "dryrun-err.txt")
@@ -679,7 +679,7 @@ def _tier1_filesystem_shape(
             r.bad(f"F5 regression setup broken: siblings unexpectedly present in {f5_dir}")
         else:
             r.ok(f"F5 regression setup: standalone dir has claude-author ALONE (no siblings): {f5_dir}")
-            env = {**os.environ, "REPO_CONTENT_ROOT": doe_clone}
+            env = {**os.environ, "REPO_DOE_CLAUDE": doe_clone}
             env.pop("CLAUDE_HOME", None)
             cp = _run(_python_launch(f5_wrapper, "--dry-run"), env=env)
             f5_err = os.path.join(sandbox, "f5-dryrun-err.txt")
@@ -741,7 +741,7 @@ def _call_gen_settings_hooks(out_path: str, env: Dict[str, str]) -> Tuple[int, s
     ``cross-repo/inbox/2026-07-20-claude-central-em-sandbox-check-doe-fix-blocks-deletion-correction.md``).
     ``generate()`` resolves ``coordinator_root`` via
     :func:`coordinator_core.install._shared.resolve_coordinator_root`, which
-    reads ``CLAUDE_HOME`` / ``REPO_CONTENT_ROOT`` / ``COORDINATOR_ROOT`` from
+    reads ``CLAUDE_HOME`` / ``REPO_DOE_CLAUDE`` / ``COORDINATOR_ROOT`` from
     process environment — there is no subprocess env dict to hand across
     anymore, so this overlays ``env`` onto the current process's
     ``os.environ`` for the duration of the call and restores the prior
@@ -986,7 +986,7 @@ def _tier1c_publish_repo_parity(
     os.makedirs(pub_home, exist_ok=True)
     pub_settings = os.path.join(pub_home, "settings.json")
     Path(pub_settings).write_text("{}", encoding="utf-8", newline="\n")
-    env2 = {**os.environ, "CLAUDE_HOME": pub_home, "REPO_CONTENT_ROOT": pub_clone}
+    env2 = {**os.environ, "CLAUDE_HOME": pub_home, "REPO_DOE_CLAUDE": pub_clone}
     rc2, err2, status_pub = _call_gen_settings_hooks(pub_settings, env2)
     if rc2 == 0:
         r.ok(f"F8: gen_settings_hooks.generate() succeeded against publish clone ({status_pub})")
@@ -1020,7 +1020,7 @@ def _tier1c_publish_repo_parity(
             else:
                 r.bad("F8: settings.json hook commands do NOT reference the publish clone's coordinator/hooks/ path")
             if any(_path_mentioned(os.path.join(doe_clone, "coordinator", "hooks") + "/", c) for c in pub_hook_cmds):
-                r.bad("F8: settings.json hook commands leak the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_settings_hooks (ignores REPO_CONTENT_ROOT)")
+                r.bad("F8: settings.json hook commands leak the real $RESOLVED_CLONE path — clone-hardcoding bug in gen_settings_hooks (ignores REPO_DOE_CLAUDE)")
             else:
                 r.ok("F8: settings.json hook commands do NOT leak the real $RESOLVED_CLONE path (no clone-hardcoding)")
     else:
@@ -1158,7 +1158,7 @@ def run_all(
 
     doe_clone, doe_clone_resolved = resolve_doe_clone()
     if not doe_clone_resolved:
-        r.bad("repos.content_root not resolved (set REPO_CONTENT_ROOT or seed via machine-local set repos.content_root)")
+        r.bad("repos.content_root not resolved (set REPO_DOE_CLAUDE or seed via machine-local set repos.content_root)")
         r.info("Skipping clone-dependent checks.")
     else:
         r.info(f"clone resolved: {doe_clone}")

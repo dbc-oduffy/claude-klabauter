@@ -421,6 +421,74 @@ def test_review_routing_absent_cases_return_none(env):
     assert ar.read_review_routing(env) == "a:b"
 
 
+_LIST_ROUTING = (
+    "---\nreview_routing:\n"
+    "  - paths: ['control/plugin/**', '**/*.Build.cs']\n"
+    f"    reviewer: {GAME}\n"
+    "  - paths: ['docs/**']\n"
+    "    reviewer: x:docs-reviewer\n"
+    "---\n"
+)
+
+
+def _claude_local_md(repo, body):
+    (repo / ".claude").mkdir(exist_ok=True)
+    (repo / ".claude" / "coordinator.local.md").write_text(body, encoding="utf-8")
+
+
+def test_review_routing_claude_dir_preferred_over_root(env):
+    _local_md(env, "---\nreview_routing: root:reviewer\n---\n")
+    assert ar.read_review_routing(env) == "root:reviewer"
+    _claude_local_md(env, "---\nreview_routing: claude:reviewer\n---\n")
+    assert ar.read_review_routing(env) == "claude:reviewer"
+    _claude_local_md(env, "---\nother: 1\n---\n")
+    assert ar.read_review_routing(env) == "root:reviewer"
+
+
+def test_review_routing_list_form_matches_writes(env):
+    _claude_local_md(env, _LIST_ROUTING)
+    assert ar.read_review_routing(env, ["control/plugin/Source/X.cpp"]) == GAME
+    assert ar.read_review_routing(env, ["docs/a.md"]) == "x:docs-reviewer"
+    assert ar.read_review_routing(env, ["src/other.py"]) is None
+    assert ar.read_review_routing(env) is None
+
+
+def test_review_routing_double_star_matches_root_level_file(env):
+    _claude_local_md(env, _LIST_ROUTING)
+    assert ar.read_review_routing(env, ["Foo.Build.cs"]) == GAME
+    assert ar.read_review_routing(env, ["Source/Foo.Build.cs"]) == GAME
+
+
+def test_review_routing_scalar_ignores_writes(env):
+    _claude_local_md(env, f"---\nreview_routing: {GAME}\n---\n")
+    assert ar.read_review_routing(env, ["anything.txt"]) == GAME
+
+
+def test_stage_agents_list_form_routes_by_writes_and_ask_tokens(env):
+    _claude_local_md(env, _LIST_ROUTING)
+    out = _stages(env, writes=["control/plugin/A.cpp"])
+    assert out["code_review"] == (GAME, "review_routing")
+    out = _stages(env, ask="please fix `control/plugin/A.cpp`, then ship")
+    assert out["plan_review"] == (GAME, "review_routing")
+    assert _stages(env, ask="refactor the thing")["code_review"] == (_DEFAULTS["code_review"], "default")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "review_routing:\n  - just-a-string\n",
+        "review_routing:\n  - paths: []\n    reviewer: a:b\n",
+        "review_routing:\n  - paths: ['x/**']\n    reviewer: nocolon\n",
+        "review_routing:\n  - paths: ['x/**']\n",
+        "review_routing: 5\n",
+    ],
+)
+def test_malformed_review_routing_list_raises(env, body):
+    _claude_local_md(env, f"---\n{body}---\n")
+    with pytest.raises(ar.RouteTableError, match="review_routing"):
+        ar.read_review_routing(env, ["x/a.cpp"])
+
+
 def test_unknown_stage_agents_key_raises(env):
     _write(env, _table(stage_agents={"planning": GAME}))
     with pytest.raises(ar.RouteTableError, match="stage_agents"):

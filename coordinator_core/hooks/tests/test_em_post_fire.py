@@ -22,6 +22,55 @@ def _runs(monkeypatch, value):
     monkeypatch.setattr(flag_em_poll_in_flight, "session_workflow_run_ids", fake)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_verdicts():
+    pf._VERDICTS.clear()
+    yield
+    pf._VERDICTS.clear()
+
+
+def _clock(monkeypatch, start=1000.0):
+    t = [start]
+    monkeypatch.setattr(pf, "_now", lambda: t[0])
+    return t
+
+
+def test_markers_are_read_once_per_window_and_a_refire_is_live_after_it(monkeypatch, tmp_path):
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    t = _clock(monkeypatch)
+    reads = []
+    halted = {"run-h": True}
+    monkeypatch.setattr(wrd, "_landed", lambda root, rid: False)
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid: reads.append(rid) or halted.get(rid, False))
+    _runs(monkeypatch, ["run-h", "run-l"])
+    for _ in range(5):
+        assert pf.live_run_ids("s1", str(tmp_path)) == ["run-l"]
+    assert sorted(reads) == ["run-h", "run-l"]
+    halted["run-h"] = False
+    t[0] += pf.VERDICT_WINDOW_S + 0.1
+    assert pf.live_run_ids("s1", str(tmp_path)) == ["run-h", "run-l"]
+    assert reads.count("run-h") == 2
+
+
+def test_scan_past_the_time_budget_stops_and_fails_open(monkeypatch, tmp_path):
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    t = _clock(monkeypatch)
+    reads = []
+
+    def slow_halted(root, rid):
+        reads.append(rid)
+        t[0] += pf.SCAN_BUDGET_S + 0.1
+        return False
+
+    monkeypatch.setattr(wrd, "_landed", lambda root, rid: False)
+    monkeypatch.setattr(wrd, "_halted", slow_halted)
+    _runs(monkeypatch, ["run-1", "run-2", "run-3"])
+    assert pf.live_run_ids("s1", str(tmp_path)) == []
+    assert reads == ["run-1"]
+
+
 def test_guard_name_is_not_a_floor_guard():
     assert pf.GUARD_NAME == "block-em-post-fire-product-write"
     assert pf.GUARD_NAME not in mp.FLOOR_GUARDS
@@ -78,6 +127,7 @@ def test_post_fire_deny_gates_the_engine_route_on_a_live_run(monkeypatch, tmp_pa
     env = mod._post_fire_deny("s1", path, root)
     assert pf._POST_FIRE_DENY in _text(env)
     monkeypatch.setattr(wrd, "_halted", lambda r, rid: True)
+    pf._VERDICTS.clear()
     assert mod._post_fire_deny("s1", path, root) is None
 
 

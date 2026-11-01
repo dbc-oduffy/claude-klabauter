@@ -8,7 +8,7 @@ second append); and the graceful skip when no claude-klabauter guard script is
 resolvable (or not executable).
 
 Never touches a real rc file — every rc path in this suite is under
-tmp_path, and REPO_CLAUDE_KLABAUTER is set explicitly per test so resolution
+tmp_path, and REPO_PROJECT_MAKIMA is set explicitly per test so resolution
 never falls through to the operator's real machine-local registry.
 
 Converted 2026-08-16 (C7b): `resolve_claude_klabauter_clone`'s tier-2 rung now reads
@@ -52,7 +52,7 @@ def claude_klabauter_clone(tmp_path: Path) -> Path:
 def _isolate_env(monkeypatch, tmp_path):
     """Never let resolution fall through to the real machine-local registry
     or the real $SHELL/$HOME — every test sets what it needs explicitly."""
-    monkeypatch.delenv("REPO_CLAUDE_KLABAUTER", raising=False)
+    monkeypatch.delenv("REPO_PROJECT_MAKIMA", raising=False)
     monkeypatch.delenv("COORDINATOR_SHIM_RC", raising=False)
     # Status rows gain a "PowerShell NOT covered" suffix on native Windows
     # (nt without MSYSTEM); pin the Git Bash shape so the literal-row
@@ -73,7 +73,7 @@ def _isolate_env(monkeypatch, tmp_path):
 def test_check_only_reports_would_install_and_does_not_mutate(
     capsys, monkeypatch, tmp_path, claude_klabauter_clone
 ):
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")
 
@@ -91,7 +91,7 @@ def test_check_only_reports_would_install_and_does_not_mutate(
 def test_check_only_when_sentinel_already_present_reports_ready(
     capsys, monkeypatch, tmp_path, claude_klabauter_clone
 ):
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")
     rc_path.write_text(f"# pre-existing content\n\n{seam._render_block(guard_src)}\n")
@@ -112,7 +112,7 @@ def test_check_only_when_sentinel_already_present_reports_ready(
 def test_live_run_writes_sentinel_block_and_preserves_prior_content(
     capsys, monkeypatch, tmp_path, claude_klabauter_clone
 ):
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\nexport FOO=bar\n")
 
@@ -144,7 +144,7 @@ def test_legacy_begin_only_block_is_replaced_not_duplicated(
 ):
     """The pre-C6 BEGIN-only block tests `-x` on a 100644 guard, so it never
     ran; it is replaced by the current block and the rc's other content stays."""
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     guard_src = str(claude_klabauter_clone / "bin" / "shell-init-guard.py")
     rc_path.write_text(
@@ -171,7 +171,7 @@ def test_legacy_begin_only_block_is_replaced_not_duplicated(
 def test_block_naming_another_engine_clone_is_rewritten_to_the_resolved_one(
     capsys, monkeypatch, tmp_path, claude_klabauter_clone
 ):
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     other = str(tmp_path / "other-engine" / "bin" / "shell-init-guard.py")
     rc_path.write_text(f"# keep\n\n{seam._render_block(other)}\n", newline="\n")
@@ -199,7 +199,7 @@ def test_running_engine_outranks_the_registry(monkeypatch, tmp_path, claude_klab
 def test_live_run_is_idempotent_on_second_invocation(
     capsys, monkeypatch, tmp_path, claude_klabauter_clone
 ):
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")
 
@@ -238,7 +238,7 @@ def test_graceful_skip_when_claude_klabauter_not_resolvable(capsys, tmp_path):
     out = capsys.readouterr().out
     assert (
         "shell_init_guard: skipped (claude-klabauter not registered — "
-        "set REPO_CLAUDE_KLABAUTER or machine-local repos.claude_klabauter)"
+        "set REPO_PROJECT_MAKIMA or machine-local repos.claude_klabauter)"
     ) in out
     # No mutation — graceful no-op leaves the rc file untouched.
     assert rc_path.read_text() == "# pre-existing content\n"
@@ -251,7 +251,7 @@ def test_graceful_skip_when_guard_script_missing(capsys, monkeypatch, tmp_path):
     present."""
     empty_clone = tmp_path / "claude-klabauter-empty"
     empty_clone.mkdir()
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(empty_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(empty_clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")
 
@@ -274,7 +274,7 @@ def test_graceful_skip_when_guard_script_not_readable(capsys, monkeypatch, tmp_p
     guard = clone / "bin" / "shell-init-guard.py"
     guard.write_text("#!/usr/bin/env python3\nprint('')\n")
     guard.chmod(0o644)
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")
 
@@ -314,7 +314,7 @@ def test_non_executable_guard_still_installs(capsys, monkeypatch, tmp_path, clau
     # test actually guards, on every platform.
     if sys.platform != "win32":
         assert not os.access(guard, os.X_OK)
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# pre-existing content\n")
 
@@ -330,7 +330,7 @@ def test_non_executable_guard_still_installs(capsys, monkeypatch, tmp_path, clau
 def test_seam_never_consults_the_execute_bit(monkeypatch, tmp_path, claude_klabauter_clone):
     """Fails loudly if any future edit re-introduces an X_OK probe on the
     guard path, at either the install gate or anywhere else in `main()`."""
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / ".bashrc"
     real_access = seam.os.access
     x_ok_probes = []
@@ -348,7 +348,7 @@ def test_seam_never_consults_the_execute_bit(monkeypatch, tmp_path, claude_klaba
 
 def test_rc_created_fresh_when_absent(monkeypatch, tmp_path, claude_klabauter_clone):
     """rc_path doesn't exist yet — a genuinely fresh operator env."""
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     rc_path = tmp_path / "new-rc-file"
     assert not rc_path.exists()
 
@@ -363,7 +363,7 @@ def test_rc_created_fresh_when_absent(monkeypatch, tmp_path, claude_klabauter_cl
 def test_native_windows_status_row_discloses_powershell_gap(
     capsys, monkeypatch, tmp_path, claude_klabauter_clone
 ):
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     monkeypatch.delenv("MSYSTEM", raising=False)
     rc_path = tmp_path / ".bashrc"
 
@@ -376,7 +376,7 @@ def test_native_windows_status_row_discloses_powershell_gap(
 
 
 def test_mutation_switch_refuses_the_rewrite_and_leaves_the_rc(capsys, monkeypatch, tmp_path, claude_klabauter_clone):
-    monkeypatch.setenv("REPO_CLAUDE_KLABAUTER", str(claude_klabauter_clone))
+    monkeypatch.setenv("REPO_PROJECT_MAKIMA", str(claude_klabauter_clone))
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     rc_path = tmp_path / ".bashrc"
     rc_path.write_text("# keep\n")

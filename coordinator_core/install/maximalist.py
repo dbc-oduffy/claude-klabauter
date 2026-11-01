@@ -9,10 +9,10 @@ ONE re-runnable command. The DoE-side polyglot trampoline (same filename,
 with zero functional benefit", since ``README.md``/``INSTALL.md``/the
 packageability manifest's ``programmatic_entry_point`` hardcode
 ``coordinator/scripts/install-maximalist.sh`` verbatim) self-resolves
-``CLAUDE_PLUGIN_ROOT``/``REPO_CONTENT_ROOT`` from its own on-disk location with
+``CLAUDE_PLUGIN_ROOT``/``REPO_DOE_CLAUDE`` from its own on-disk location with
 no plugin-registration dependency of its own, exports them into
 ``os.environ`` (mirroring the bash oracle's own ``export
-CLAUDE_PLUGIN_ROOT``/``export REPO_CONTENT_ROOT``) — but THIS module (the
+CLAUDE_PLUGIN_ROOT``/``export REPO_DOE_CLAUDE``) — but THIS module (the
 orchestration body it imports) is claude-klabauter-resident post-port (DR-047), so
 the real precondition to reach ``main()`` here is: claude-klabauter cloned AND
 ``repos.claude_klabauter`` registered via machine-local, OR ``CLAUDE_KLABAUTER_ROOT``
@@ -624,7 +624,7 @@ def _environ_patched(env: Dict[str, str]):
     """Temporarily overlay ``env`` onto ``os.environ`` for an in-process phase.
 
     The orchestrator builds a per-install ``env`` dict (CLAUDE_PLUGIN_ROOT,
-    REPO_CONTENT_ROOT, CHECK_ONLY, PATH, ...) that subprocess phases receive via
+    REPO_DOE_CLAUDE, CHECK_ONLY, PATH, ...) that subprocess phases receive via
     ``env=``. In-process phases read ``os.environ`` directly, so a phase ported
     off a subprocess must see the same variables or its resolution order
     silently changes. Restores the prior environment on exit, including
@@ -1627,7 +1627,7 @@ def _run_body(
     # node / py.exe consumers as drive-relative `C:\x\coordinator-content-repo` (doubled
     # drive), which is how `repos.content_root` and the content-root pointer came
     # to hold an unresolvable path. Normalizing once HERE covers every downstream
-    # derivation in one place -- the REPO_CONTENT_ROOT env overlay handed to child
+    # derivation in one place -- the REPO_DOE_CLAUDE env overlay handed to child
     # phases, the `.coordinator-dev-repo` sentinel probe, and the
     # `machine-local set repos.content_root` seed. No-op off Windows and on
     # already-native paths.
@@ -1635,7 +1635,7 @@ def _run_body(
 
     env = dict(os.environ)
     env["CLAUDE_PLUGIN_ROOT"] = coord_root
-    env["REPO_CONTENT_ROOT"] = doe_clone
+    env["REPO_DOE_CLAUDE"] = doe_clone
     env["CHECK_ONLY"] = "1" if check_only else ""
     if check_only or non_interactive:
         env["COORDINATOR_NON_INTERACTIVE"] = "1"
@@ -1786,12 +1786,12 @@ def _run_body(
                     print("repos.content_root: retired the paired spelling naming the same clone")
             else:
                 print(
-                    "WARN: machine-local set repos.content_root failed -- REPO_CONTENT_ROOT env override still in effect for this run",
+                    "WARN: machine-local set repos.content_root failed -- REPO_DOE_CLAUDE env override still in effect for this run",
                     file=sys.stderr,
                 )
         else:
             print(
-                "NOTE: machine-local not yet on PATH in this shell -- REPO_CONTENT_ROOT env override covers this run; "
+                "NOTE: machine-local not yet on PATH in this shell -- REPO_DOE_CLAUDE env override covers this run; "
                 "open a new shell and re-run to persist the registry key.",
                 file=sys.stderr,
             )
@@ -1996,7 +1996,7 @@ def _run_body(
         try:
             # The generator resolves the coordinator root and the default --out
             # from the environment; run it under the same env the subprocess
-            # form received (REPO_CONTENT_ROOT / PATH / CLAUDE_PLUGIN_ROOT) so
+            # form received (REPO_DOE_CLAUDE / PATH / CLAUDE_PLUGIN_ROOT) so
             # resolution order is unchanged by going in-process.
             with _environ_patched(env):
                 hooks_status = generate()
@@ -2321,10 +2321,10 @@ def main(argv: List[str]) -> int:
         return 0
 
     coord_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    doe_clone = os.environ.get("REPO_CONTENT_ROOT")
+    doe_clone = os.environ.get("REPO_DOE_CLAUDE")
     if not coord_root or not doe_clone:
         print(
-            "install-maximalist: CLAUDE_PLUGIN_ROOT and REPO_CONTENT_ROOT must both be set "
+            "install-maximalist: CLAUDE_PLUGIN_ROOT and REPO_DOE_CLAUDE must both be set "
             "by the caller (the DoE-side trampoline self-resolves and exports both before "
             "invoking this module).",
             file=sys.stderr,

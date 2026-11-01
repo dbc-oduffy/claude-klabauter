@@ -117,7 +117,7 @@ def test_read_spawn_prompt_rejects_unreadable_shapes(tmp_path):
     bad.write_text("not json\n", encoding="utf-8")
     assert ch.read_spawn_prompt(str(bad)) is None
     big = d / "big.jsonl"
-    big.write_text(json.dumps(_record("x" * (ch.READ_CAP_BYTES + 10))) + "\n", encoding="utf-8")
+    big.write_text(json.dumps(_record("x" * (ch.PROMPT_RECORD_CAP_BYTES + 10))) + "\n", encoding="utf-8")
     assert ch.read_spawn_prompt(str(big)) is None
     nonstr = d / "nonstr.jsonl"
     nonstr.write_text(json.dumps(_record([{"type": "text"}])) + "\n", encoding="utf-8")
@@ -155,8 +155,15 @@ def test_block_inside_the_relay_record_is_never_returned(tmp_path):
 
 
 def test_relay_with_over_cap_second_record_returns_none(tmp_path):
-    f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record("x" * (ch.READ_CAP_BYTES + 10))))
+    f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record("x" * (ch.PROMPT_RECORD_CAP_BYTES + 10))))
     assert ch.read_spawn_prompt(str(f)) is None
+
+
+def test_a_prompt_past_the_params_file_cap_still_yields_its_block(tmp_path):
+    prompt = "x" * (ch.READ_CAP_BYTES + 7000) + "\n" + _indent(ch.render_params_block(PARAMS))
+    assert len(json.dumps(_record(prompt))) > ch.READ_CAP_BYTES
+    f = _spawn_file(tmp_path, _record(prompt))
+    assert ch.prompt_params(ch.read_spawn_prompt(str(f))) == PARAMS
 
 
 def test_third_record_is_never_read(tmp_path):
@@ -180,6 +187,59 @@ def test_materialize_writes_ascii_json_equal_to_input_and_replaces(tmp_path):
     raw.decode("ascii")
     assert json.loads(raw) == params
     assert [p.name for p in target.parent.iterdir()] == [ch.PARAMS_FILE_NAME]
+
+
+def _product(run_id="ask-1"):
+    return {**PARAMS, "run_id": run_id, "inline_review": {"verdict": "approved"}}
+
+
+def test_product_materialize_records_land_params_and_a_halt_leaves_them(tmp_path):
+    target = ch.params_path(tmp_path, "ask-1")
+    assert ch.land_params_path(tmp_path, "ask-1") == target.with_name(ch.LAND_PARAMS_FILE_NAME)
+    product = _product()
+    assert ch.materialize(target, product)
+    land = ch.land_params_path(tmp_path, "ask-1")
+    recorded = land.read_bytes()
+    assert recorded == target.read_bytes()
+    assert ch.recorded_land_params(tmp_path, "ask-1") == product
+    halted = {**PARAMS, "run_id": "ask-1", "halted_by": "engine-stop", "consumed_returns": []}
+    assert ch.materialize(target, halted)
+    assert json.loads(target.read_bytes()) == halted
+    assert land.read_bytes() == recorded
+    halted_with_review = {**halted, "inline_review": {"verdict": "x"}}
+    assert ch.materialize(target, halted_with_review)
+    assert land.read_bytes() == recorded
+
+
+def test_a_params_write_without_inline_review_records_no_land_params(tmp_path):
+    target = ch.params_path(tmp_path, "ask-1")
+    assert ch.materialize(target, {**PARAMS, "run_id": "ask-1"})
+    assert not ch.land_params_path(tmp_path, "ask-1").exists()
+    assert ch.materialize(target, {**PARAMS, "run_id": "ask-1", "inline_review": "no"})
+    assert not ch.land_params_path(tmp_path, "ask-1").exists()
+
+
+def test_a_failed_sibling_write_does_not_flip_materialize(tmp_path):
+    target = ch.params_path(tmp_path, "ask-1")
+    target.parent.mkdir(parents=True)
+    target.with_name(ch.LAND_PARAMS_FILE_NAME).mkdir()
+    assert ch.materialize(target, _product()) is True
+    assert ch.recorded_land_params(tmp_path, "ask-1") is None
+
+
+def test_recorded_land_params_refuses_mismatch_missing_review_and_garbage(tmp_path):
+    assert ch.recorded_land_params(tmp_path, "ask-1") is None
+    assert ch.recorded_land_params(tmp_path, "../x") is None
+    land = ch.land_params_path(tmp_path, "ask-1")
+    land.parent.mkdir(parents=True)
+    land.write_text(json.dumps(_product("ask-2")), encoding="utf-8")
+    assert ch.recorded_land_params(tmp_path, "ask-1") is None
+    land.write_text(json.dumps({**PARAMS, "run_id": "ask-1"}), encoding="utf-8")
+    assert ch.recorded_land_params(tmp_path, "ask-1") is None
+    land.write_text(json.dumps({**_product(), "run_token": 3}), encoding="utf-8")
+    assert ch.recorded_land_params(tmp_path, "ask-1") is None
+    land.write_text("not json", encoding="utf-8")
+    assert ch.recorded_land_params(tmp_path, "ask-1") is None
 
 
 def test_materialize_returns_false_when_parent_is_a_file(tmp_path):

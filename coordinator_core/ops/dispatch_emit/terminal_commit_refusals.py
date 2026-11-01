@@ -586,11 +586,17 @@ def _landing_integrity_gate(
         # has nothing to prove against (the since-base arm's `no-base` case).
         from coordinator_core.ops.dispatch_emit import halted_hunk_attribution, hunk_provenance
 
-        if halted_hunk_attribution._baseline(worktree_root, run_id) is not None:
+        hp_base = halted_hunk_attribution._baseline(worktree_root, run_id)
+        if hp_base is not None:
+            from coordinator_core.ops.dispatch_emit import write_baseline
+
+            # A path the run left byte-identical to its baseline holds no hunk the run could own
+            # or disown: the pre-existing-dirt gates judge it, not the foreign-hunk check.
+            untouched = set(write_baseline.unwritten(worktree_root, hp_base, contested))
             hp_advisories: list = []
             findings += hunk_provenance.unproduced_hunks(
-                worktree_root, run_id, contested, own_plan=plan, advisories=hp_advisories,
-                settled=hp_settled,
+                worktree_root, run_id, [p for p in contested if p not in untouched], own_plan=plan,
+                advisories=hp_advisories, settled=hp_settled,
             )
             if hp_advisories:
                 extra["hunk_provenance_advisory"] = hp_advisories
@@ -745,11 +751,13 @@ def _pre_existing_dirt_refusal(
     prior = frozenset()
     if run_dir is not None:
         from coordinator_core.ops.dispatch_emit.plan_residue import own_plan_residue
-        from coordinator_core.ops.dispatch_emit.write_baseline import predecessor_withheld
+        from coordinator_core.ops.dispatch_emit.write_baseline import predecessor_withheld, predecessor_wrote
 
         prior = _prior_pass_written(worktree_root, run_dir) | predecessor_withheld(
             worktree_root, _cited_sizing(worktree_root, plan_rel), run_dir
-        ) | own_plan_residue(worktree_root, run_dir)
+        ) | own_plan_residue(worktree_root, run_dir) | predecessor_wrote(
+            worktree_root, run_dir, manifest.write_baseline
+        )
     from coordinator_core.ops.dispatch_emit import terminal_commit as _tc
 
     failures: list = []

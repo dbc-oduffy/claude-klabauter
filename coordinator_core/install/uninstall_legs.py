@@ -891,7 +891,7 @@ def uninstall_remove_shim() -> bool:
             expected_claude_bin = f"{home}/X/coordinator-content-repo/coordinator/bin/claude-author"
             expected_repo = f"{home}/X/coordinator-content-repo"
             expected_line = (
-                f'claude() {{ REPO_CONTENT_ROOT="{expected_repo}" command bash '
+                f'claude() {{ REPO_DOE_CLAUDE="{expected_repo}" command bash '
                 f'"{expected_claude_bin}" "$@"; }}'
             )
 
@@ -2073,7 +2073,7 @@ def orchestrate_uninstall(argv: Optional[List[str]] = None) -> int:
         return fail_loud(
             "settings.json generated hooks (surface #2)",
             "Resolve coordinator root explicitly (COORDINATOR_ROOT env, machine-local "
-            "repos.content_root, REPO_CONTENT_ROOT env, or the content-root pointer "
+            "repos.content_root, REPO_DOE_CLAUDE env, or the content-root pointer "
             "under ${CLAUDE_HOME:-$HOME}/.claude) and re-run.",
         )
 
@@ -2158,7 +2158,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invoked directly, bypassing the coordinator-uninstall.sh wrapper that
     # normally exports it) must not silently degrade ml_set/resolve_machine_local_cli
     # to PATH-only resolution. resolve_coordinator_root() carries the same
-    # self-locating fallback chain (content root -> REPO_CONTENT_ROOT
+    # self-locating fallback chain (content root -> REPO_DOE_CLAUDE
     # env) already used elsewhere in this module for the
     # analogous CLAUDE.local.md render seam.
     plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")

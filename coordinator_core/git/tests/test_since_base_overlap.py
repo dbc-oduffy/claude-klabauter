@@ -247,6 +247,84 @@ def test_unreachable_base_is_a_note_not_a_finding(tmp_path: Path) -> None:
     assert findings == [] and notes == [since_base_overlap.NOTE_WALK_CAPPED]
 
 
+def _count_meta_reads_after_chain_walk(monkeypatch) -> List[str]:
+    real_chain = since_base_overlap._chain_to_base
+    real_meta = since_base_overlap.commit_meta
+    state = {"walking": False}
+    reads: List[str] = []
+
+    def chain(*args, **kwargs):
+        state["walking"] = True
+        try:
+            return real_chain(*args, **kwargs)
+        finally:
+            state["walking"] = False
+
+    def meta(common_dir, sha):
+        if not state["walking"]:
+            reads.append(sha)
+        return real_meta(common_dir, sha)
+
+    monkeypatch.setattr(since_base_overlap, "_chain_to_base", chain)
+    monkeypatch.setattr(since_base_overlap, "commit_meta", meta)
+    return reads
+
+
+def test_clean_landing_reads_no_commit_metadata_beyond_the_chain_walk(tmp_path: Path, monkeypatch) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    for n in range(30):
+        repo.commit({PATH: _join(base_lines), f"other{n}.txt": "x\n"}, f"unrelated {n}")
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    repo.land(_join(foreign_lines) + "own = 1\n")
+    reads = _count_meta_reads_after_chain_walk(monkeypatch)
+
+    findings, notes = since_base_overlap.check(tmp_path, [PATH], base, run_id="R1", plan=PLAN)
+
+    assert (findings, notes) == ([], []) and reads == []
+
+
+def test_landing_that_drops_no_line_never_walks_the_chain(tmp_path: Path, monkeypatch) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    repo.commit({PATH: _join(base_lines) + "foreign = 1\n"}, "foreign")
+    repo.land(_join(base_lines) + "foreign = 1\n" + "own = 1\n")
+    walks: List[tuple] = []
+    real_chain = since_base_overlap._chain_to_base
+    monkeypatch.setattr(since_base_overlap, "_chain_to_base", lambda *a: walks.append(a) or real_chain(*a))
+
+    assert since_base_overlap.check(tmp_path, [PATH], base, run_id="R1", plan=PLAN) == ([], [])
+    assert walks == []
+
+
+def test_landing_that_drops_a_line_walks_the_chain_once(tmp_path: Path, monkeypatch) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    repo.land(_join(base_lines))
+    walks: List[tuple] = []
+    real_chain = since_base_overlap._chain_to_base
+    monkeypatch.setattr(since_base_overlap, "_chain_to_base", lambda *a: walks.append(a) or real_chain(*a))
+
+    findings, _notes = since_base_overlap.check(tmp_path, [PATH, PATH], base)
+
+    assert len(findings) == 2 and len(walks) == 1
+
+
+def test_dropping_landing_reads_commit_metadata_for_the_chain(tmp_path: Path, monkeypatch) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    repo.land(_join(base_lines))
+    reads = _count_meta_reads_after_chain_walk(monkeypatch)
+
+    findings, _notes = since_base_overlap.check(tmp_path, [PATH], base)
+
+    assert len(findings) == 1 and reads != []
+
+
 def test_module_cannot_spawn() -> None:
     assert not hasattr(since_base_overlap, "subprocess")
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -15,8 +16,11 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
-RUN = "ask-20261015T000000-aaaaaa"
-PEER_RUN = "ask-20261015T000001-bbbbbb"
+# Minted now: a halted run older than halted_hold_release.STALE_HOLD_BOUND_SECONDS holds nothing, so a fixed
+# date would turn the held_paths assertions red once the calendar passes it.
+_MINT = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+RUN = f"ask-{_MINT}-aaaaaa"
+PEER_RUN = f"ask-{_MINT}-bbbbbb"
 LEDGER = {"halted": "ledger-check", "reason": "row R1 open"}
 PASSING = {"targeted_tests": {"status": "pass", "tests_failed": 0, "baseline": None}}
 

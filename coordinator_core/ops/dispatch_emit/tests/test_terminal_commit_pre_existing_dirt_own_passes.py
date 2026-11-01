@@ -70,6 +70,29 @@ def test_path_an_earlier_pass_recorded_as_written_is_not_dirt(tmp_path, monkeypa
     assert tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN, run_dir) is None
 
 
+def _commit_halted_pair(root):
+    """The 9bcc0b shape: predecessor halted at commit, empty slice, null run_base_sha, one withheld path."""
+    pred = root / "state" / "warp" / "ask-20261031T093417-9bcc0b"
+    pred.mkdir(parents=True)
+    (pred / "run-outcome.json").write_text(
+        json.dumps({"inline_review": {"prep": {"slice_files": [], "run_base_sha": None}}})
+    )
+    (pred / "halted.json").write_text(json.dumps({"run_artifacts": {"withheld": {"w.py": "blob"}}}))
+    (pred / "manifest.json").write_text(json.dumps({"write_baseline": {"edited.py": "blob-before"}}))
+    cur = root / "state" / "warp" / "warp-x-9bcc0b-20261031T105107-63fb98"
+    cur.mkdir(parents=True)
+    (cur / "run.json").write_text(json.dumps({"resumed_from": pred.name}))
+    return cur
+
+
+def test_edit_of_a_commit_halted_earlier_pass_is_not_dirt_but_foreign_still_is(tmp_path, monkeypatch):
+    m = _manifest(tmp_path, ["edited.py", "foreign.py"])
+    _own(monkeypatch, set())
+    cur = _commit_halted_pair(tmp_path)
+    out = tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN, cur)
+    assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"
+
+
 def test_foreign_dirt_beside_a_prior_pass_path_still_refuses(tmp_path, monkeypatch):
     m = _manifest(tmp_path, ["prior.py", "foreign.py"])
     _own(monkeypatch, set())

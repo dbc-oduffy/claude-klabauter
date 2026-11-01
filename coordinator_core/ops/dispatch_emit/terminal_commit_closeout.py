@@ -446,7 +446,8 @@ def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) ->
         target.parent.mkdir(parents=True, exist_ok=True)
         replace_text(target, json.dumps(body, indent=2, sort_keys=True) + "\n")
         total = scan["run_total"]
-        return {"usage_total": {"total_tokens": total["total_tokens"], "usd": total["usd"]}}
+        return {"usage_total": {"total_tokens": total["total_tokens"], "usd": total["usd"],
+                                "rag_uptake": total["rag_uptake"]}}
     except Exception as exc:  # noqa: BLE001 -- usage is a report, never a commit gate
         return {"usage_total": None, "usage_reason": f"usage scan failed: {exc!r}"}
 

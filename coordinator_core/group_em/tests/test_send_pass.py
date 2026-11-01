@@ -741,3 +741,132 @@ def test_resolve_addressee_raises_on_the_wrong_build_roster(tmp_path):
         send_pass.resolve_addressee(
             str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: dict_rows
         )
+
+
+def _write_snapshot(directory, box_id, sessions, fetched_at=None, ok=True):
+    import time
+
+    d = directory / "remote-roster"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / (box_id + ".json")).write_text(
+        json.dumps(
+            {
+                "box_id": box_id,
+                "fetched_at": time.time() if fetched_at is None else fetched_at,
+                "ok": ok,
+                "sessions": sessions,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _remote(tmp_path, key, **kw):
+    return send_pass.resolve_addressee(
+        str(tmp_path), key, snapshot_dir=str(tmp_path), local_id="here", **kw
+    )
+
+
+def test_resolve_addressee_remote_key_resolves_to_snapshot_name(tmp_path):
+    _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
+    assert _remote(tmp_path, "mac1:s1") == "alpha"
+
+
+def test_resolve_addressee_remote_ambiguous_name_refused(tmp_path):
+    _write_snapshot(
+        tmp_path,
+        "mac1",
+        [{"session_id": "s1", "name": "alpha"}, {"session_id": "s2", "name": "alpha"}],
+    )
+    assert _remote(tmp_path, "mac1:s1") is None
+
+
+def test_resolve_addressee_remote_unknown_box_stale_or_absent_session_refused(tmp_path):
+    _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
+    _write_snapshot(tmp_path, "old", [{"session_id": "s1", "name": "a"}], fetched_at=1.0)
+    assert _remote(tmp_path, "nope:s1") is None
+    assert _remote(tmp_path, "old:s1") is None
+    assert _remote(tmp_path, "mac1:zzz") is None
+
+
+def test_resolve_addressee_local_prefixed_key_and_bare_sid_use_local_roster(tmp_path):
+    rows = [_FakeRow("peer-sid", "local-name")]
+    _write_snapshot(tmp_path, "mac1", [{"session_id": "peer-sid", "name": "remote-name"}])
+    roster = lambda repo_root=None: rows
+    assert (
+        send_pass.resolve_addressee(
+            str(tmp_path), "peer-sid", build_roster=roster,
+            snapshot_dir=str(tmp_path), local_id="here",
+        )
+        == "local-name"
+    )
+    assert (
+        send_pass.resolve_addressee(
+            str(tmp_path), "here:peer-sid", build_roster=roster,
+            snapshot_dir=str(tmp_path), local_id="here",
+        )
+        == "local-name"
+    )
+
+
+class _SpyTransport:
+    def __init__(self):
+        self.calls = []
+
+    def send(self, box, to_session, text, from_session=None):
+        self.calls.append((box["box_id"], to_session, text, from_session))
+        return {"ok": True, "reply": {"sent": True}}
+
+
+def _peer(tmp_path, monkeypatch, transport=None):
+    from coordinator_core.group_em import box_registry, node_transport
+
+    box_registry.register(
+        tmp_path / "peer-home", {"x": 1}, directory=tmp_path, box_id="mac1", transport=transport
+    )
+    spy = _SpyTransport()
+    seen = []
+
+    def _select(box, directory=None, runner=None):
+        seen.append(box["box_id"])
+        return spy
+
+    monkeypatch.setattr(node_transport, "select", _select)
+    return spy, seen
+
+
+def test_send_to_peer_routes_remote_key_through_seam_with_from_session(tmp_path, monkeypatch):
+    spy, seen = _peer(tmp_path, monkeypatch)
+    res = send_pass.send_to_peer(
+        "mac1:s1", "hi", from_session="me", directory=tmp_path, local_id="here"
+    )
+    assert res["ok"] is True
+    assert seen == ["mac1"]
+    assert spy.calls == [("mac1", "s1", "hi", "me")]
+
+
+def test_send_to_peer_local_bare_and_prefixed_keys_are_not_routed(tmp_path, monkeypatch):
+    spy, seen = _peer(tmp_path, monkeypatch)
+    for key in ("s1", "here:s1"):
+        res = send_pass.send_to_peer(key, "hi", directory=tmp_path, local_id="here")
+        assert res == {"ok": False, "reason": "local_addressee"}
+    assert seen == [] and spy.calls == []
+
+
+def test_send_to_peer_refuses_unknown_box_and_unsafe_session(tmp_path, monkeypatch):
+    spy, _ = _peer(tmp_path, monkeypatch)
+    nobox = send_pass.send_to_peer("nope:s1", "hi", directory=tmp_path, local_id="here")
+    assert nobox == {"ok": False, "reason": "unknown_box"}
+    bad = send_pass.send_to_peer("mac1:../x", "hi", directory=tmp_path, local_id="here")
+    assert bad == {"ok": False, "reason": "bad_session"}
+    assert spy.calls == []
+
+
+def test_send_to_peer_unknown_transport_kind_replies_not_ok_never_raises(tmp_path):
+    from coordinator_core.group_em import box_registry
+
+    box_registry.register(
+        tmp_path / "p", {"x": 1}, directory=tmp_path, box_id="mac1", transport={"kind": "carrier"}
+    )
+    res = send_pass.send_to_peer("mac1:s1", "hi", directory=tmp_path, local_id="here")
+    assert res["ok"] is False and "carrier" in res["reason"]

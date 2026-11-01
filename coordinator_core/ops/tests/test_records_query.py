@@ -1088,7 +1088,7 @@ class TestNewTypeGlobCoverage:
             "health-status", "decision-guide", "completion",
             "decision", "review", "lesson", "handoff-ledger", "research-claim",
             "goal", "research-synthesis", "gap-report", "coverage-audit",
-            "archived-memo", "sizing-object", "cutover",
+            "archived-memo", "sizing-object", "sizing-object-archived", "cutover",
             "subtractive-adjudication-record", "completion-receipt",
             "priority-intent", "priority-ledger", "spike-result",
             "spine", "delivery-verdict", "ruling",
@@ -1110,6 +1110,25 @@ class TestNewTypeGlobCoverage:
         assert _TYPE_TO_GLOB["gap-report"] == "docs/research/*-gap-report.md"
         assert _TYPE_TO_GLOB["coverage-audit"] == "docs/research/*-coverage-audit.md"
         assert _TYPE_TO_GLOB["cutover"] == "state/roadmap/**/cutovers/*.md"
+        assert _TYPE_TO_GLOB["sizing-object-archived"] == "archive/sizings/*/*.yaml"
+
+
+class TestSizingObjectArchivedType:
+    def test_archived_sizing_resolves_and_hot_does_not_leak(self, tmp_path: Path):
+        hot = tmp_path / "state" / "sizings"
+        arch = tmp_path / "archive" / "sizings" / "2026-10"
+        hot.mkdir(parents=True)
+        arch.mkdir(parents=True)
+        body = 'schema: sizing-object\nid: "%s"\nstatus: shipped\n'
+        (hot / "a.yaml").write_text(body % "hot-one", encoding="utf-8")
+        (arch / "b.yaml").write_text(body % "old-one", encoding="utf-8")
+        archived = _collect_files(tmp_path, "sizing-object-archived")
+        live = _collect_files(tmp_path, "sizing-object")
+        assert [Path(f).name for f in archived] == ["b.yaml"]
+        assert [Path(f).name for f in live] == ["a.yaml"]
+        rec = _load_record(archived[0], tmp_path, "sizing-object-archived")
+        assert rec is not None
+        assert rec["frontmatter"]["id"] == "old-one"
 
 
 class TestGoalTypeCollectsAndParses:

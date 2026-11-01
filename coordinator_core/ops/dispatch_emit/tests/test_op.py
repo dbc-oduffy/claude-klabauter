@@ -599,3 +599,40 @@ def test_dispatch_emit_research_route_refuses_an_unsafe_topic_slug_and_writes_no
     with pytest.raises(PipelineEmitRefused):
         _dispatch_emit({"from_sizing": rel, "topic_slug": "Bad Slug"}, repo)
     assert {p for p in repo.rglob("*") if p.is_file()} == before
+
+
+def test_list_form_emit_runs_every_element_inside_one_sizing_memo_scope_and_closes_it(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import op as emit_op
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    seen: list = []
+
+    def element(_params, repo_root=None, **_kw):
+        seen.append(sizing_fire._SIZING_MEMO.get())
+        return {"ok": True}
+
+    real = emit_op._dispatch_emit
+    monkeypatch.setattr(emit_op, "_dispatch_emit", element)
+    try:
+        reply = emit_op._emit_list({"emits": [{"a": 1}, {"a": 2}]}, None)
+    finally:
+        monkeypatch.setattr(emit_op, "_dispatch_emit", real)
+    assert reply == {"replies": [{"ok": True}, {"ok": True}]}
+    assert len(seen) == 2 and seen[0] is not None and seen[0] is seen[1]
+    assert sizing_fire._SIZING_MEMO.get() is None
+
+
+def test_single_form_emit_opens_no_sizing_memo_scope(monkeypatch):
+    from coordinator_core.ops.dispatch_emit import op as emit_op
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    seen: list = []
+
+    def body(_params, _repo_root, **_kw):
+        seen.append(sizing_fire._SIZING_MEMO.get())
+        return {"ok": True}
+
+    monkeypatch.setattr(emit_op, "_unknown_param_refusal", lambda _p: None)
+    monkeypatch.setattr(emit_op, "_dispatch_emit_body", body)
+    assert emit_op._dispatch_emit({"a": 1}, None) == {"ok": True}
+    assert seen == [None]

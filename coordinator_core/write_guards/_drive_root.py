@@ -148,6 +148,21 @@ def _new_top_level_entry(
             if hit is None:
                 return None
         root, name = hit
-        return None if os.path.lexists(nt.join(root, name)) else name
+        cand = nt.join(root, name)
+        if os.path.lexists(cand) or _is_pinned_general_work(nt, cand):
+            return None
+        return name
     except Exception:
         return None
+
+
+def _is_pinned_general_work(nt, cand: str) -> bool:
+    """True when `cand` is the pinned general-work root or an ancestor of it. Reads the registry only on the would-flag path; unset or unreadable exempts nothing."""
+    from coordinator_core.session import general_work_scope
+
+    pinned = general_work_scope.general_work_root()
+    if not pinned:
+        return False
+    pn = nt.normcase(nt.normpath(pinned))
+    cn = nt.normcase(nt.normpath(cand))
+    return pn == cn or pn.startswith(cn + nt.sep)

@@ -1312,6 +1312,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     plan_writes = plan_rows_serving(root / plan_rel, resume_out.get("blocking") or [])
                 except PlanRowsUnreadable as exc:
                     raise AskStageError(str(exc)) from exc
+                plan_writes = [
+                    *plan_writes,
+                    *(w for w in _staged_rows_writes(root, plan_rel, only_rows) if w not in plan_writes),
+                ]
                 resume_out[RESUME_LEDGER_LEG_FIELD] = remaining_leg_plan(
                     resume_out.get(RESUME_LEDGER_REMAINING_FIELD) or {},
                     resume_out.get(RESUME_LEDGER_NOTES_FIELD) or [],
@@ -1423,6 +1427,30 @@ def _release_stale_receipt(
     if missing:
         ask_stage_receipt.write_gate(record, reply_sidecar.handle_for(root, record / ask_stage_receipt.MANIFEST_NAME))
     return missing
+
+
+def _staged_rows_writes(root: Path, plan_rel: str, row_ids: Sequence[str]) -> list[str]:
+    """Declared `writes` of the plan rows a ledger resume stages, so a row added since the halt that
+    serves no blocking id still joins the ledger leg's footprint. Unreadable plan: no paths."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
+
+    try:
+        loaded = load_rows_memo((root / plan_rel).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return []
+    if loaded.status is not LocateStatus.LOCATED:
+        return []
+    want = set(row_ids)
+    out: list[str] = []
+    for row in loaded.rows:
+        if not isinstance(row, dict) or row.get("id") not in want:
+            continue
+        declared = row.get("writes") or []
+        for w in [declared] if isinstance(declared, str) else declared:
+            if isinstance(w, str) and w not in out:
+                out.append(w)
+    return out
 
 
 def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str]:

@@ -39,7 +39,9 @@ READ-ONLY, by construction: every function in THIS module only reads
 disk/git state. Mutating actions are returned as `directives[]` entries
 naming an existing atomic CLI (see CONSUMES_MANIFEST below) — this module
 never shells out to a mutating verb, never writes a file, and never runs
-`git fetch`/`git commit`. The MUTATING half lives entirely in
+`git fetch`/`git commit`. ONE exception: `drain_terminal_sizings`, called from
+`build_directives` only under `drain_sizings=True` (`brief(commit=True)`, the real CLI), archives terminal sizings
+in-process (never raises; its fault is advisory). The MUTATING half otherwise lives entirely in
 `coordinator_core.workstream_complete.apply` (C4), never here.
 
 Consumes manifest (orchestrates, reimplements none) — see CONSUMES_MANIFEST
@@ -1650,6 +1652,55 @@ def _consumed_handoff_ship_paths(
     return paths
 
 
+def drain_terminal_sizings(repo_root: Path) -> dict[str, Any]:
+    """Run the terminal-sizing drain in-process and return its counters.
+
+    Advisory by contract: any failure comes back as `{"error": ...}` and never raises, so a
+    drain fault cannot fail a close. Safe inside a running event loop (runs on a worker thread).
+    """
+    try:
+        import asyncio
+        import threading
+
+        from coordinator_core.ops.fleet.terminal_sizing_drain import drain
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            result = drain(Path(repo_root))
+        else:
+            box: dict[str, Any] = {}
+
+            def _work() -> None:
+                try:
+                    box["result"] = drain(Path(repo_root))
+                except Exception as exc:  # noqa: BLE001 — re-raised on the caller's side
+                    box["error"] = exc
+
+            worker = threading.Thread(target=_work)
+            worker.start()
+            worker.join()
+            if "error" in box:
+                raise box["error"]
+            result = box["result"]
+        return {
+            "archived": len(result.get("acted", [])),
+            "candidates": len(result.get("candidates", [])),
+            "skipped": len(result.get("skipped", [])),
+            "failed": len(result.get("failed", [])),
+            "scan_skipped": len(result.get("scan_skipped", [])),
+        }
+    except Exception as exc:  # noqa: BLE001 — a drain fault is advisory, never a close failure
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def apply_sizing_drain(directive: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    """Attach the drain's counters to its sweep directive; a clean in-process drain satisfies it."""
+    directive["drain"] = report
+    directive["already_satisfied"] = "error" not in report and not report.get("failed")
+    return directive
+
+
 def build_directives(
     gate: SessionShapeGate,
     decisions: dict[str, Any],
@@ -1657,6 +1708,7 @@ def build_directives(
     governing_plan: Optional[directives_lessons_plan.GoverningPlan] = None,
     history: "Optional[_session_history.SessionHistory]" = None,
     partition_mandatory: bool = False,
+    drain_sizings: bool = False,
 ) -> list[dict[str, Any]]:
     """Assembles the FULL mechanical directive spine — Convert #2's
     original Step 2.4/2.9/2.67/3 core plus every submodule's contribution
@@ -1975,7 +2027,12 @@ def build_directives(
     # Emitted immediately after the handoff drain, for the identical
     # last-in-list reasoning. See
     # `build_terminal_sizing_sweep_directive`'s own docstring.
-    directives.append(directives_session_hygiene.build_terminal_sizing_sweep_directive())
+    # The drain mutates; `brief(commit=True)` passes `drain_sizings`, else the
+    # directive stays unsatisfied and `sweep-terminal-sizings.py` performs it.
+    sizing_directive = directives_session_hygiene.build_terminal_sizing_sweep_directive()
+    if drain_sizings:
+        apply_sizing_drain(sizing_directive, drain_terminal_sizings(repo_root))
+    directives.append(sizing_directive)
 
     # -- Post-close steps --
     # Listed last and held back by `apply` until its close commit and push
@@ -5072,9 +5129,17 @@ def _sanitize_commit_count_scope(raw: str) -> str:
     return _COMMIT_COUNT_SCOPE_UNSAFE_RE.sub("", raw)[:_COMMIT_COUNT_SCOPE_MAX_LEN]
 
 
-def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] = None) -> Mapping[str, Any]:
+def brief(
+    decisions: Optional[dict[str, Any]] = None,
+    repo_root: Optional[Path] = None,
+    *,
+    commit: bool = False,
+) -> Mapping[str, Any]:
     """Computes the `/workstream-complete` decision object for the current
-    (or a caller-supplied) repo root. Read-only throughout; mutates nothing.
+    (or a caller-supplied) repo root. Read-only throughout; mutates nothing,
+    except that `commit=True` (passed only by the real `brief` CLI, `_main_brief`)
+    runs the terminal-sizing drain in-process. `apply`'s recompute and every
+    probe call leave `commit` False and never drain.
     Raises `TransportFailure` on a repo-root or bin-module resolution
     failure — callers (the CLI `main`) degrade that to `EXIT_TRANSPORT_FAIL`.
     """
@@ -5364,6 +5429,7 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         governing_plan=governing_plan,
         history=history,
         partition_mandatory=bool(review_scale_decision.partition_mandatory),
+        drain_sizings=commit,
     )
 
     # A PERMISSIVE SCALE NEEDS COMPLETE ATTRIBUTION: incomplete attribution
@@ -5972,7 +6038,7 @@ def _main_brief(rest: list[str]) -> int:
 
     decisions = merge_plan_flag(decisions, plan_arg) or {}
     try:
-        decision_object = brief(decisions)
+        decision_object = brief(decisions, commit=True)
     except SessionIdentityUnresolved as exc:
         # Ahead of the TransportFailure arm and of the structural backstop
         # below, both of which would swallow this into a message telling the

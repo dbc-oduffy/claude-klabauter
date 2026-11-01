@@ -313,6 +313,17 @@ def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=
 
 
 @pytest.mark.spawns_process
+def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    sha = "ab" * 32
+    result, calls, _ = _run_child_stage(script, sha)
+    assert result["status"] == "ok"
+    root = tmp_path.as_posix()
+    assert calls[1] == {"scriptPath": f"{root}/{staged_twin_rel('ask-r1', sha)}"}
+    assert all(set(c) == {"scriptPath"} for c in calls)
+
+
+@pytest.mark.spawns_process
 def test_the_twin_is_named_from_the_started_script_stem_not_the_reply_run_id(tmp_path):
     _, script = _write(tmp_path, ids=("ask-r1",))
     sha = "ab" * 32
@@ -327,17 +338,6 @@ def test_a_started_path_with_no_run_script_stem_halts_by_name_never_the_reply_ru
     result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="x.staged-" + "ab" * 32)
     assert result["status"] == "failed" and "stage resume path is not a run script" in result["error"]
     assert len(calls) == 1
-
-
-@pytest.mark.spawns_process
-def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path):
-    _, script = _write(tmp_path, ids=("ask-r1",))
-    sha = "ab" * 32
-    result, calls, _ = _run_child_stage(script, sha)
-    assert result["status"] == "ok"
-    root = tmp_path.as_posix()
-    assert calls[1] == {"scriptPath": f"{root}/{staged_twin_rel('ask-r1', sha)}"}
-    assert all(set(c) == {"scriptPath"} for c in calls)
 
 
 @pytest.mark.spawns_process
@@ -684,3 +684,50 @@ def test_emit_leg_prompt_carries_the_shared_no_veto_sentence(tmp_path):
     assert json.dumps(fl.EMIT_RELAY_AUTHORITY, ensure_ascii=True) in script
     assert "__RELAY_AUTHORITY__" not in script
     assert "No session chat, user turns included" in fl.EMIT_RELAY_AUTHORITY
+
+
+def _run_start_loop_under_node(tmp_path, workflow_results, parent="ask-parent"):
+    """Cut the launcher's start loop from the rendered script and run it under node with a scripted `workflow`.
+
+    Returns (loop result, scriptPaths started in order)."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    child = _children("ask-r1")[0]
+    text = fl.write_launcher(tmp_path, parent, [child], "sess-1", _replies("ask-r1")).read_text(encoding="utf-8")
+    body = text[text.index("const REPO_ROOT"):text.index("function _handoffOf")]
+    prog = "\n".join([
+        "const started = []; const _results = " + json.dumps(workflow_results) + ";",
+        "const workflow = async ({ scriptPath }) => { started.push(scriptPath); return _results.shift(); };",
+        body,
+        "(async () => { const out = await _startLoop(CHILDREN[0], REPO_ROOT + '/scratch/warp/ask-r1.workflow.mjs');"
+        " console.log(JSON.stringify([out, started])); })();",
+    ])
+    out = subprocess.run(
+        [node, "-e", prog], capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+def _deferred(tmp_path, name="ask-r1", run_id="ask-r1"):
+    return {fl.DEFERRED_EMIT_KEY: {"path": f"{tmp_path.as_posix()}/scratch/warp/{name}.workflow.mjs", "run_id": run_id, "fire_args": {}}}
+
+
+@pytest.mark.spawns_process
+def test_the_start_loop_starts_a_handed_back_deferred_emit_without_spending_a_stage_round(tmp_path):
+    out, started = _run_start_loop_under_node(tmp_path, [_deferred(tmp_path, "ask-r1-b"), {"done": True}])
+    assert out["status"] == "ok" and out["result"] == {"done": True}
+    assert [s.rsplit("/", 1)[-1] for s in started] == ["ask-r1.workflow.mjs", "ask-r1-b.workflow.mjs"]
+
+
+@pytest.mark.spawns_process
+def test_the_start_loop_refuses_a_second_deferred_emit_and_an_out_of_tree_one(tmp_path):
+    out, started = _run_start_loop_under_node(tmp_path, [_deferred(tmp_path, "a"), _deferred(tmp_path, "b")], "ask-p1")
+    assert out["status"] == "failed" and "second deferred emit" in out["error"] and len(started) == 2
+    bad = {fl.DEFERRED_EMIT_KEY: {"path": "/elsewhere/x.workflow.mjs", "run_id": "ask-r1", "fire_args": {}}}
+    out, started = _run_start_loop_under_node(tmp_path, [bad], "ask-p2")
+    assert out["status"] == "emit_refused" and len(started) == 1

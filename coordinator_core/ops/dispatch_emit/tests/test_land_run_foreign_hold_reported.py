@@ -25,7 +25,7 @@ HOLDER_SIZING = "state/sizings/20260101-halted-holder.yaml"  # a shared sizing m
 def test_a_path_held_by_a_halted_foreign_run_is_named_in_both_withheld_maps(repo, monkeypatch):
     monkeypatch.setattr(
         land_run, "foreign_halted_withheld",
-        lambda root, run_id, plan_rel, paths: {p: HOLDER for p in paths if p == CODE},
+        lambda root, run_id, plan_rel, paths, holders_out=None: {p: HOLDER for p in paths if p == CODE},
     )
     monkeypatch.setattr(land_run, "_halted_only_release", lambda *a, **k: None)
 

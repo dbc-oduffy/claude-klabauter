@@ -833,6 +833,25 @@ def _heavy_tree_repo_root_setup(
     return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
 
+def _example_retrieval_repo_serving_setup(served: bool):
+    """A git repo at `scratch_dir` plus a example-retrieval-repo verdict file that lists (or omits) it."""
+
+    def setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
+        import json
+
+        (scratch_dir / ".git").mkdir(exist_ok=True)
+        state = scratch_dir.parent / (scratch_dir.name + "-lad") / "project-rag" / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        sources = [scratch_dir.name] if served else ["unrelated"]
+        (state / "rag-nudge-server.json").write_text(
+            json.dumps({"reachable": True, "sources": sources}), encoding="utf-8"
+        )
+        mp.setenv("LOCALAPPDATA", str(state.parent.parent))
+        return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
+
+    return setup
+
+
 def _perforce_submit_armed_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -2227,6 +2246,24 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "grep-via-bash-guard",
+        "grep-via-bash-guard-example-retrieval-repo-served-fire",
+        "grep -r foo .",
+        True,
+        _REWRITE,
+        False,
+        setup=_example_retrieval_repo_serving_setup(True),
+    ),
+    CorpusRow(
+        "grep-via-bash-guard",
+        "grep-via-bash-guard-example-retrieval-repo-unserved-control",
+        "grep -r foo .",
+        False,
+        _REWRITE,
+        False,
+        setup=_example_retrieval_repo_serving_setup(False),
+    ),
+    CorpusRow(
         "powershell-via-bash-guard",
         "powershell-via-bash-guard-fire",
         'powershell.exe -NoProfile -Command "$p=Get-Process -Id 44448 -EA '
@@ -2514,6 +2551,17 @@ def _wg_completion_monolith_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> D
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": "archive/completed/2026-08.md", "content": "x"},
+    }
+
+
+def _wg_published_engine_mirror_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    mirror = scratch_dir / "published-engine-mirror"
+    mirror.mkdir(parents=True, exist_ok=True)
+    mp.setattr("coordinator_core.engine_root.published_engine_mirror_path", lambda: str(mirror))
+    mp.setattr("coordinator_core.engine_root.engine_source_root", lambda: None)
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(mirror / "coordinator_core" / "mod_x.py"), "content": "x = 1\n"},
     }
 
 
@@ -3454,6 +3502,10 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "block_cross_repo_agent_write", "fire", True, _wg_cross_repo_agent_write_fire
     ),
     WriteGuardRow("block_cross_repo_agent_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_published_engine_mirror_write", "fire", True, _wg_published_engine_mirror_write_fire
+    ),
+    WriteGuardRow("block_published_engine_mirror_write", "control", False, _wg_benign),
     WriteGuardRow("nudge_authoring_leak", "fire", True, _wg_authoring_leak_fire),
     WriteGuardRow("nudge_authoring_leak", "control", False, _wg_benign),
     WriteGuardRow("block_consumed_handoff_edit", "fire", True, _wg_consumed_handoff_fire),

@@ -17,6 +17,13 @@ mirrors its shape deliberately: live always wins, the archive probe fires only
 on a miss at the literal path, and an ambiguous multi-match is treated exactly
 like no match rather than guessed at.
 
+The archive miss path first stats `archive/sizings/<YYYY-MM>/<basename>` (month
+from the basename's date prefix, `archive_sizings._derive_yyyy_mm`) and only on
+a miss falls to the unique-match `rglob`. KNOWN LIMIT: the archive op files a
+destination collision as `<stem>--<deliverable_id>.yaml`
+(`archive_sizings._suffixed_dst`); neither the probe nor the basename `rglob`
+finds that file, and no stem glob is attempted here.
+
 NEGATIVE SPEC — READ-ONLY, AND NEVER A REWRITE: this module resolves a
 citation; it never edits a plan, a sizing, or a schema. Widening the readers
 is the whole fix — a mechanism that rewrote citing plans would have to rewrite
@@ -30,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops.fleet.archive_sizings import _derive_yyyy_mm
 
 _ARCHIVE_SIZINGS_SUBDIR = ("archive", "sizings")
 
@@ -41,6 +49,11 @@ def _archive_sizings_fallback(repo_root: Path, cited: str) -> Optional[Path]:
     basename = os.path.basename(cited.replace("\\", "/"))
     if not basename:
         return None
+    month = _derive_yyyy_mm(basename)
+    if month is not None:
+        probe = archive_root / month / basename
+        if probe.is_file():
+            return probe
     matches = sorted(p for p in archive_root.rglob(basename) if p.is_file())
     if len(matches) != 1:
         return None

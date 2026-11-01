@@ -103,6 +103,40 @@ def test_met_by_row_that_is_not_blocking_refuses_naming_the_row(halted):
     assert not out["ok"] and "R9" in out["error"] and "not a blocking row" in out["error"]
 
 
+def _ledger_halt_repo(tmp_path, **marker_keys):
+    _git(tmp_path, "init", "-q")
+    _commit(tmp_path, "before")
+    marker = tmp_path / "state" / "warp" / SOLO / "halted.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(
+        json.dumps({"status": "halted", "halted": "ledger-check", "sizing_rel": None, **marker_keys}), encoding="utf-8",
+    )
+    _git(tmp_path, "add", "--", "state")
+    _git(tmp_path, "commit", "-q", "-m", "halt")
+    after = _commit(tmp_path, "after")
+    return tmp_path, marker, after
+
+
+@pytest.mark.parametrize("key", ["blocking_items", "items"])
+def test_ledger_check_blocking_item_row_accepts_met_by(tmp_path, key):
+    root, marker, after = _ledger_halt_repo(tmp_path, **{key: [{"id": "R1", "remaining": [], "evidence": ""}]})
+    out = _call(root, sha=after, met_by={"R1": after})
+    assert out["ok"], out
+    assert json.loads(marker.read_text(encoding="utf-8"))["met_by"] == {"R1": after}
+
+
+def test_ledger_check_halt_still_refuses_a_row_it_did_not_block_on(tmp_path):
+    root, marker, after = _ledger_halt_repo(tmp_path, blocking_items=[{"id": "R1"}])
+    out = _call(root, sha=after, met_by={"R9": after})
+    assert not out["ok"] and "R9" in out["error"] and "not a blocking row" in out["error"]
+
+
+def test_non_ledger_halt_items_do_not_widen_met_by(tmp_path):
+    root, marker, after = _ledger_halt_repo(tmp_path, halted="commit", items=[{"id": "R1"}])
+    out = _call(root, sha=after, met_by={"R1": after})
+    assert not out["ok"] and "not a blocking row" in out["error"]
+
+
 @pytest.mark.parametrize(
     "met_by", ["abc1234", ["x"], {"R1": 5}, {"R1": "NOTHEX"}, {"": "abcd"}],
 )

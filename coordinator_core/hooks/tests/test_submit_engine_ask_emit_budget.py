@@ -105,6 +105,107 @@ def test_overrun_after_a_run_was_minted_still_refuses_and_names_it(repo, monkeyp
     assert "ask-20261029T200000-e3414a" in hso["permissionDecisionReason"]
 
 
+def _stall_record_write(monkeypatch):
+    """Stall the run record's temp-file creation until released; `done` is set when the stalled write returns."""
+    import tempfile
+    import threading
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    release, entered, done = threading.Event(), threading.Event(), threading.Event()
+    real_mkstemp = tempfile.mkstemp
+
+    def stalled(*args, **kwargs):
+        if str(kwargs.get("prefix", "")).startswith(".mint."):
+            entered.set()
+            release.wait(30)
+        return real_mkstemp(*args, **kwargs)
+
+    real_publish = run_token._publish_record
+
+    def publish(path, text):
+        try:
+            real_publish(path, text)
+        finally:
+            done.set()
+
+    monkeypatch.setattr(run_token.tempfile, "mkstemp", stalled)
+    monkeypatch.setattr(run_token, "_publish_record", publish)
+    return release, entered, done
+
+
+def test_stalled_record_write_refuses_naming_the_disk_and_leaves_no_late_run(repo, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "2.5")
+    release, entered, done = _stall_record_write(monkeypatch)
+    try:
+        env = mod.evaluate(real._payload(repo, {"ask": "build the thing", "source": "relayed"}))
+        assert entered.is_set()
+    finally:
+        release.set()
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", env
+    reason = hso["permissionDecisionReason"]
+    assert "disk is stalled" in reason and "re-submitting is safe" in reason
+    assert done.wait(10)  # the stalled write has now returned
+    token_dir = repo / ".git" / "coordinator-warp-run-tokens"
+    assert not list(token_dir.glob("*.json")) and not list(token_dir.glob(".mint.*"))
+    assert not list((repo / "scratch" / "warp").glob("defer-*"))  # no deferred emit onto the stalled disk
+
+
+def test_default_ask_answers_with_a_run_id_before_any_bulk_io_on_a_slow_disk(repo):
+    import re
+
+    from coordinator_core.benchmarks.submit_slow_disk_profile import Charger
+
+    charger = Charger(repo, 2.0)
+    with charger.active():
+        start = time.process_time()
+        env = mod.evaluate(real._payload(repo, {"ask": "build the thing", "source": "relayed"}))
+        spent_ms = (time.process_time() - start) * 1000.0
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", env
+    found = re.search(r"\bask-\d{8}T\d{6}-[0-9a-f]{6}\b", hso["additionalContext"])
+    assert found, hso["additionalContext"]
+    assert charger.waited_ms + spent_ms < 0.8 * mod._caller_budget_s() * 1000.0, charger.report()
+    assert not [s for s in charger.report() if s["bulk"]], charger.report()
+    assert (repo / ".git" / "coordinator-warp-run-tokens" / f"{found.group(0)}.json").is_file()
+    assert not (repo / "scratch" / "warp" / found.group(0)).exists()  # the prompts are the run's own emit, later
+
+
+def test_unwritable_deferred_script_refuses_and_drops_the_minted_marker(repo, monkeypatch):
+    def fail(root, params):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mod, "_write_deferred_script", fail)
+    env = mod.evaluate(real._payload(repo, {"ask": "build the thing", "source": "relayed"}))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
+    token_dir = repo / ".git" / "coordinator-warp-run-tokens"
+    assert not list(token_dir.glob("ask-*.json"))
+
+
+def test_deferred_emit_adopts_the_minted_run_id_and_refuses_another_shape(repo):
+    rid = "ask-20261031T120000-abcdef"
+    params = {"ask": "build the thing", "ask_source": "relayed", "session_id": "", "preminted_run_id": rid}
+    result = mod._default_emit(params, repo)
+    assert result["run_id"] == rid and Path(result["path"]).name == f"{rid}.workflow.mjs"
+    with pytest.raises(ValueError, match="preminted_run_id"):
+        mod._default_emit({**params, "preminted_run_id": "ask-../escape"}, repo)
+
+
+def test_ask_with_a_brief_file_keeps_its_synchronous_emit(repo):
+    (repo / "brief.md").write_text("BRIEF-FILE", encoding="utf-8")
+    env = mod.evaluate(real._payload(repo, {"ask": "build the thing", "source": "relayed", "brief_file": "brief.md"}))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert not list((repo / "scratch" / "warp").glob("defer-*"))
+
+
+def test_non_stalled_emit_mints_its_record(repo, monkeypatch):
+    real._put_sizing(repo)
+    env = mod.evaluate(real._payload(repo, {"sizing": real.REL}))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert list((repo / ".git" / "coordinator-warp-run-tokens").glob("*.json"))
+
+
 def _fan_children():
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 

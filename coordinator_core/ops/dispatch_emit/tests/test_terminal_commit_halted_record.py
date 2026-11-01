@@ -33,6 +33,8 @@ def repo(tmp_path):
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
+    # Real repos ignore .coordinator-local/; the halt path writes its withheld index there.
+    (root / ".git" / "info" / "exclude").write_text(".coordinator-local/\n", encoding="utf-8")
     (root / "docs").mkdir()
     (root / "docs" / "guide.md").write_text("seed\n", encoding="utf-8")
     (root / "product.py").write_text("x = 1\n", encoding="utf-8")

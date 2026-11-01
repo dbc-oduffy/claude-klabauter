@@ -652,6 +652,44 @@ def _pushed_range_diagnostic(push_outcome: PushOutcome) -> str:
     )
 
 
+#: A local tracking-ref lock older than this is abandoned: git holds a ref lock
+#: for milliseconds, so an old one has no live holder. Age is the liveness test;
+#: no process enumeration.
+_STALE_LOCAL_REF_LOCK_SECS = 120.0
+
+_LOCAL_REF_LOCK_PAT = re.compile(r"Unable to create '([^']+\.lock)': File exists")
+
+
+def _local_ref_lock_path(stderr: str) -> Optional[str]:
+    """Return the lock path git names in a local `cannot lock ref` failure, forward-slashed."""
+    m = _LOCAL_REF_LOCK_PAT.search(stderr or "")
+    return m.group(1).replace("\\", "/") if m else None
+
+
+def _remove_stale_local_ref_lock(root: Path, stderr: str, *, now: Optional[float] = None) -> bool:
+    """Remove the single lock named in `stderr` iff it is a stale file under this repo's `refs/`.
+
+    One stat and one unlink; a fresh lock, a path outside `<common-dir>/refs`,
+    a non-`.lock` name or a directory is left untouched (returns False).
+    """
+    named = _local_ref_lock_path(stderr)
+    if named is None:
+        return False
+    try:
+        refs_dir = (git_common_dir(root) / "refs").resolve()
+        lock = Path(named).resolve()
+        lock.relative_to(refs_dir)
+        st = lock.stat()
+        if not lock.is_file():
+            return False
+        if (time.time() if now is None else now) - st.st_mtime < _STALE_LOCAL_REF_LOCK_SECS:
+            return False
+        lock.unlink()
+    except (OSError, ValueError, RuntimeError):
+        return False
+    return True
+
+
 def _is_push_reject(reason: str, err_class: Optional[str] = None) -> bool:
     """True iff `reason` classifies as a rebase-recoverable push reject.
 
@@ -1528,6 +1566,7 @@ def push_with_retry(
     # arm below. A second attempt could only repeat a refusal git already gave
     # for a reason `--set-upstream` does not address.
     set_upstream_attempted = False
+    stale_lock_recovered = False
 
     deadline = None if budget_secs is None else time.monotonic() + float(budget_secs)
 
@@ -1662,6 +1701,15 @@ def push_with_retry(
                 last_indeterminate = True
             last_reason = f"{reason} (publish declined: {publish_detail})"
             break
+
+        if (
+            err_class == "ref-lock"
+            and not stale_lock_recovered
+            and attempt < _PUSH_MAX_RETRIES - 1
+            and _remove_stale_local_ref_lock(root, push_result.stderr)
+        ):
+            stale_lock_recovered = True
+            continue
 
         if err_class == "ref-lock":
             # `exit_code=0` is load-bearing, not an oversight -- a ref-lock

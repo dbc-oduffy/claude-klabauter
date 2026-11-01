@@ -39,6 +39,80 @@ def _snapshot(repo):
     return sorted(p.relative_to(repo).as_posix() for p in repo.rglob("*") if p.is_file() and "hub" not in p.parts)
 
 
+@pytest.mark.parametrize("trip_after", list(range(9)))
+def test_abort_mid_write_removes_every_file_the_call_created(repo, trip_after):
+    before = _snapshot(repo)
+    polls = iter(range(100))
+    out = mod.fanout(
+        {"session_id": SID, "asks": [{"ask": f"fix {n}", "label": n, "writes": [f"pkg/{n}.py"]} for n in "abc"]},
+        repo,
+        lambda: next(polls) >= trip_after,
+    )
+    assert out["exit_code"] == 1 and "not taken" in out["error"], out
+    assert _snapshot(repo) == before
+    assert not list(repo.glob("scratch/warp/ask-parent-*"))
+
+
+def test_rollback_while_a_stage_write_is_blocked_leaves_nothing_in_the_record_homes(repo, monkeypatch):
+    import threading
+
+    ledger = mod.FanoutLedger()
+    entered, release = threading.Event(), threading.Event()
+    real_write = os.write
+
+    def blocked(fd, data):
+        entered.set()
+        release.wait(10)
+        return real_write(fd, data)
+
+    monkeypatch.setattr(mod.os, "write", blocked)
+    box = []
+    worker = threading.Thread(
+        target=lambda: box.append(mod.fanout({"session_id": SID, "asks": [{"ask": "a"}, {"ask": "b"}]}, repo, None, ledger))
+    )
+    worker.start()
+    assert entered.wait(5)
+    assert ledger.rollback() is True
+    assert not list((repo / "state").rglob("*.yaml")) and not list(repo.glob("scratch/warp/ask-parent-*"))
+    release.set()
+    worker.join(10)
+    assert "not taken" in box[0]["error"]
+    assert not list((repo / "state").rglob("*.yaml")) and not list(repo.rglob(".coordinator-local/**/*.yaml"))
+
+
+def test_ledger_rollback_removes_claimed_files_and_a_late_write(tmp_path):
+    ledger = mod.FanoutLedger()
+    early, late = tmp_path / "a.yaml", tmp_path / "b.yaml"
+    early.write_text("x")
+    ledger.claim(early)
+    ledger.claim(late)  # claimed, write still in flight when the rollback lands
+    assert ledger.rollback() is True
+    assert not early.exists()
+    late.write_text("y")  # the in-flight write lands after the close
+    with pytest.raises(mod._Refused):
+        ledger.verify(late)
+    assert not late.exists()
+    with pytest.raises(mod._Refused):
+        ledger.claim(tmp_path / "c.yaml")
+
+
+def test_committed_ledger_rolls_back_nothing(tmp_path):
+    ledger = mod.FanoutLedger()
+    kept = tmp_path / "a.yaml"
+    kept.write_text("x")
+    ledger.claim(kept)
+    ledger.commit()
+    assert ledger.rollback() is False
+    assert kept.exists()
+
+
+def test_abort_never_firing_writes_as_before(repo):
+    out = mod.fanout(
+        {"session_id": SID, "asks": [{"ask": "fix a", "label": "a", "writes": ["pkg/a.py"]}]}, repo, lambda: False
+    )
+    assert out["exit_code"] == 0 and len(out["ready"]) == 1
+
+
 def test_disjoint_pair_is_two_ready_runs_with_the_frozen_reply(repo):
     out = _go(repo, {"asks": [
         {"ask": "fix a", "label": "a", "writes": ["pkg/a.py"]},

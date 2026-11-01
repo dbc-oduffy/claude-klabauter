@@ -379,13 +379,32 @@ def test_a_landed_row_reported_by_its_minted_inventory_id_still_counts_as_landed
     assert not [f for f in r["findings"] if "no landed row declared" in f["detail"]]
 
 
-def test_an_unlanded_row_hitting_a_touched_path_is_still_drift(tmp_path, git):
+def test_an_unlanded_row_writing_a_touched_path_is_not_drift(tmp_path, git):
     root = _root(tmp_path)
     a = _plan(root, "a", _row("A1", "[x/a.py]"))
     b = _plan(root, "b", _row("B1", "[x/z.py]"))
     git.touched = ["x/z.py"]
     r = _wb(root, [a, b], [(a, "chunk-a.A1")])
-    assert r["verdict"] == "DRIFT"
+    assert r["verdict"] == "CLEAN", r["findings"]
+
+
+def test_unlanded_writer_and_its_consumer_on_a_touched_path_raise_no_drift(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[a.py]") + _row("C1", "[x/w.py]") + _row("C3", "[c3.py]", "[x/w.py]"))
+    git.touched = ["x/w.py"]
+    git.landed.add("x/w.py")
+    r = _wb(root, [a], [(a, "A1")])
+    assert not [f for f in r["findings"] if f["class"] == "drifted-contract"], r["findings"]
+
+
+def test_a_touched_path_no_row_writes_is_still_drift(tmp_path, git):
+    root = _root(tmp_path)
+    a = _plan(root, "a", _row("A1", "[a.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]", extra="  reads: [hot.py]\n"))
+    git.touched = ["hot.py"]
+    r = _wb(root, [a, b], [(a, "A1")])
+    hits = [f for f in r["findings"] if f["class"] == "drifted-contract"]
+    assert r["verdict"] == "DRIFT" and [(f["row"], f["path"], f["blocking"]) for f in hits] == [("B1", "hot.py", True)]
 
 
 def test_drift_asks_the_landed_head_not_head(tmp_path, git):
@@ -437,7 +456,7 @@ def test_archived_dependency_that_does_not_write_it_leaves_the_export_unpromised
 def test_drift_clause_two_still_checks_a_plan_that_has_landed_a_row(tmp_path, git):
     root = _root(tmp_path)
     a = _plan(root, "a", _row("A1", "[a.py]"))
-    b = _plan(root, "b", _row("B1", "[b.py]") + _row("B2", "[hot.py]"))
+    b = _plan(root, "b", _row("B1", "[b.py]") + _row("B2", "[b2.py]", extra="  reads: [hot.py]\n"))
     git.touched = ["hot.py"]
     r = _wb(root, [a, b], [(a, "A1"), (b, "B1")])
     hits = [f for f in r["findings"] if f["class"] == "drifted-contract"]
@@ -511,8 +530,8 @@ def test_drift_undeclared_touch_on_remaining_write_and_reads_at_head(tmp_path, g
     b = _plan(root, "b", _row("B1", "[hot.py]"))
     git.touched = ["hot.py", "a.py"]
     r = _wb(root, [a, b], [(a, "A1")])
-    assert r["verdict"] == "DRIFT" and r["per_plan"] == {a: "CLEAN", b: "DRIFT"}
-    assert [f["path"] for f in r["findings"] if f["class"] == "drifted-contract"] == ["hot.py"]
+    assert r["verdict"] == "CLEAN" and r["per_plan"] == {a: "CLEAN", b: "CLEAN"}
+    assert not [f for f in r["findings"] if f["class"] == "drifted-contract"]
     c = _plan(root, "c", _row("C1", "[c.py]", extra="  reads_at_head: [hot.py]\n"))
     r = _wb(root, [a, c], [(a, "A1")])
     f = [x for x in r["findings"] if x["class"] == "drifted-contract"]

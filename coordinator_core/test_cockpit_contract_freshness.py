@@ -322,26 +322,26 @@ def test_unexpected_exception_anywhere_degrades_to_unknown_never_raises(monkeypa
 
 
 def test_env_root_ladder_nonexistent_content_root_fails_hard_registry_never_consulted(monkeypatch, tmp_path):
-    """An explicit REPO_CONTENT_ROOT that does not exist is a directive,
+    """An explicit REPO_DOE_CLAUDE that does not exist is a directive,
     not a hint — resolution fails (UNKNOWN) rather than falling through to the
     machine-local registry."""
     bad_path = str(tmp_path / "does-not-exist")
-    monkeypatch.setenv("REPO_CONTENT_ROOT", bad_path)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", bad_path)
 
     def _registry_spy():
-        raise AssertionError("registry must never be consulted when REPO_CONTENT_ROOT is set but invalid")
+        raise AssertionError("registry must never be consulted when REPO_DOE_CLAUDE is set but invalid")
 
     monkeypatch.setattr(ccf, "read_content_root", _registry_spy)
 
     entry = ccf.compute_cockpit_contract_freshness()
 
     assert entry["verdict"] == "UNKNOWN"
-    assert "REPO_CONTENT_ROOT" in entry["reason"]
+    assert "REPO_DOE_CLAUDE" in entry["reason"]
     assert repr(bad_path) in entry["reason"]
 
 
 def test_env_root_ladder_content_root_valid_dir_wins(monkeypatch, tmp_path):
-    monkeypatch.setenv("REPO_CONTENT_ROOT", str(tmp_path))
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(tmp_path))
 
     resolved = ccf._resolve_content_root_local()
 
@@ -349,9 +349,9 @@ def test_env_root_ladder_content_root_valid_dir_wins(monkeypatch, tmp_path):
 
 
 def test_env_root_ladder_empty_content_root_is_treated_as_unset(monkeypatch, tmp_path):
-    """An empty-string REPO_CONTENT_ROOT is UNSET, not a directive — the
+    """An empty-string REPO_DOE_CLAUDE is UNSET, not a directive — the
     registry ladder still gets to answer."""
-    monkeypatch.setenv("REPO_CONTENT_ROOT", "")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", "")
     monkeypatch.setattr(ccf, "read_content_root", lambda: str(tmp_path))
 
     resolved = ccf._resolve_content_root_local()
@@ -360,7 +360,7 @@ def test_env_root_ladder_empty_content_root_is_treated_as_unset(monkeypatch, tmp
 
 
 def test_env_root_ladder_env_unset_consults_registry(monkeypatch, tmp_path):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
 
     calls = []
 
@@ -377,7 +377,7 @@ def test_env_root_ladder_env_unset_consults_registry(monkeypatch, tmp_path):
 
 
 def test_env_root_ladder_unresolved_registry_returns_none(monkeypatch):
-    monkeypatch.delenv("REPO_CONTENT_ROOT", raising=False)
+    monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setattr(ccf, "read_content_root", lambda: "")
 
     assert ccf._resolve_content_root_local() is None

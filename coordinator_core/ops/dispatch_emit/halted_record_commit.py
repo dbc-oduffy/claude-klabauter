@@ -117,6 +117,18 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
     verified = token is not None and run_token.halt_admits(worktree_root, run_id, token, script_path)
     _reap_staged_twins(worktree_root, run_id, own=verified)
     if token is not None and not verified:
+        spent = _spent_landing(worktree_root, run_id, token, script_path)
+        if spent is not None:
+            from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
+
+            reply = {
+                "committed": True, "sha": spent["sha"], ALREADY_LANDED_KEY: True,
+                "paths": list(spent.get("paths") or []), "record_dir": record_dir_rel,
+                "halted": halted.get("halted"),
+            }
+            if siblings is not None:
+                reply["siblings"] = siblings
+            return reply
         refusal = _error(
             "params.run_token does not match a live, unspent token minted for params.run_id and "
             "this script (a token admits one landed commit)",
@@ -135,6 +147,23 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
 
         reply["push"] = run_push.nudge_push(worktree_root, repo_root)
     return reply
+
+
+def _spent_landing(worktree_root: Path, run_id: str, token: object, script_path: object) -> Optional[dict]:
+    """The landed receipt (spent or halt) a token that no longer admits still matches, when its sha
+    is on HEAD: the run has nothing left to land. None otherwise (a wrong token never matches).
+    Trap: the answer stages nothing, so the run's halted record stays uncommitted."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.terminal_commit_reconcile import landed_on_head
+
+    for landed in (
+        run_token.spent_receipt(worktree_root, run_id, token, script_path),
+        run_token.halt_landing(worktree_root, run_id, token, script_path),
+    ):
+        sha = landed.get("sha") if landed else None
+        if isinstance(sha, str) and landed_on_head(worktree_root, sha):
+            return landed
+    return None
 
 
 def _reconcile_landing(
@@ -553,8 +582,14 @@ def _land(
         # run never produced (or no baseline to tell) is withheld, never landed with the peer's hunk.
         from coordinator_core.ops.dispatch_emit import hunk_provenance
 
+        # A land-only declaration owns its marker paths; one the run never baselined has no provenance
+        # to check, so it is not re-withheld (a baselined one is still checked).
+        from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
+
+        baseline = halted_hunk_attribution._baseline(worktree_root, run_id) or {}
         unproduced = hunk_provenance.unproduced_hunks(
-            worktree_root, run_id, product, own_plan=halt_plan if isinstance(halt_plan, str) else None,
+            worktree_root, run_id, [p for p in product if p not in land_only or p in baseline],
+            own_plan=halt_plan if isinstance(halt_plan, str) else None,
         )
         withheld.update({f.path: hunk_provenance.FOREIGN_HUNK_UNPRODUCED for f in unproduced})
         product = [p for p in product if p not in withheld]

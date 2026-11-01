@@ -99,6 +99,69 @@ def log_path(sid: str, cwd: Optional[str] = None) -> Optional[Path]:
     return sdir / PM_TURNS_FILENAME if sdir is not None else None
 
 
+#: An injected ``/compact`` is attributed to the watcher only within this age of its log record.
+INJECTED_FRESH_SECS = 120
+#: Bytes read from the end of the injection log; the newest record is near the tail.
+_INJECTION_LOG_TAIL_BYTES = 65536
+INJECTED_BY = "idle-compact-watcher"
+
+
+def _tail_lines(path: Path, nbytes: int) -> List[bytes]:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - nbytes))
+            data = fh.read()
+    except OSError:
+        return []
+    lines = data.split(b"\n")
+    return lines[1:] if size > nbytes else lines
+
+
+def _fresh_unconsumed_injection(sid: str, existing: bytes) -> Optional[str]:
+    """Run id of the injection log's newest ``injected`` record for ``sid`` when it is under
+    ``INJECTED_FRESH_SECS`` old and no turn already in ``existing`` carries that run id."""
+    from datetime import datetime, timezone
+
+    from coordinator_core.idle_compact import contract
+
+    try:
+        log = contract.injection_log_path()
+    except Exception:
+        return None
+    if not log.is_file():
+        return None
+    for raw in reversed(_tail_lines(log, _INJECTION_LOG_TAIL_BYTES)):
+        try:
+            rec = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("session_id") != sid \
+                or rec.get("action") != "injected":
+            continue
+        run_id = rec.get("run_id")
+        try:
+            ts = datetime.fromisoformat(str(rec.get("ts")).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+        except ValueError:
+            return None
+        if not isinstance(run_id, str) or not run_id or age > INJECTED_FRESH_SECS:
+            return None
+        for line in existing.split(b"\n"):
+            try:
+                entry = json.loads(line.decode("utf-8"))
+            except ValueError:
+                continue
+            inj = entry.get("injected") if isinstance(entry, dict) else None
+            if isinstance(inj, dict) and inj.get("run_id") == run_id:
+                return None
+        return run_id
+    return None
+
+
 def append_turn(prompt: str, session_id: Optional[str] = None,
                 cwd: Optional[str] = None,
                 referent: Optional[dict] = None) -> dict:
@@ -134,6 +197,10 @@ def append_turn(prompt: str, session_id: Optional[str] = None,
             record = {"turn": turn, "ts": core.now_iso(), "prompt": prompt}
             if cleaned is not None:
                 record["referent"] = cleaned
+            if prompt.strip() == "/compact":
+                run_id = _fresh_unconsumed_injection(sid, existing)
+                if run_id:
+                    record["injected"] = {"by": INJECTED_BY, "run_id": run_id}
             line = json.dumps(record, ensure_ascii=False)
             with open(path, "ab") as fh:
                 fh.write(f"{prefix}{line}\n".encode("utf-8"))
@@ -151,6 +218,7 @@ def append_turn(prompt: str, session_id: Optional[str] = None,
 
 
 def _load(path: Path) -> List[Dict[str, Any]]:
+    """Human turns only: a turn carrying ``injected`` is the watcher's, never PM evidence."""
     try:
         raw = path.read_bytes()
     except OSError:
@@ -164,7 +232,8 @@ def _load(path: Path) -> List[Dict[str, Any]]:
         except ValueError:
             continue
         if isinstance(entry, dict) and isinstance(entry.get("turn"), int) \
-                and isinstance(entry.get("prompt"), str):
+                and isinstance(entry.get("prompt"), str) \
+                and not entry.get("injected"):
             turns.append(entry)
     return turns
 

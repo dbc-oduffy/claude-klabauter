@@ -15,6 +15,8 @@ from coordinator_core.resolve_validation_cmd import _extract_frontmatter
 
 SKIP_SEGMENTS: frozenset[str] = frozenset({"tests", "fixtures"})
 
+UE_DECLARED_VALUES: frozenset[str] = frozenset({"unreal", "unreal-engine"})
+
 _KEY_RE = re.compile(r"^(project_type|project_subtypes)\s*:\s*(.*)$")
 
 
@@ -41,14 +43,24 @@ def _flow_items(raw: str) -> list[str]:
     return [s for s in (_scalar(p) for p in inner.split(",")) if s]
 
 
-def declared_ue(root: str | os.PathLike) -> bool | None:
-    """Whether `<root>/coordinator.local.md` frontmatter declares UE.
+LOCAL_MD_RELPATHS: tuple[str, ...] = (".claude/coordinator.local.md", "coordinator.local.md")
 
-    None: file missing/unreadable or neither project_type nor project_subtypes
-    set. True: project_type is `unreal` or `unreal` is in project_subtypes.
-    False: any other declaration.
+
+def declared_ue(root: str | os.PathLike) -> bool | None:
+    """Whether `<root>/.claude/coordinator.local.md`, else `<root>/coordinator.local.md`, declares UE.
+
+    The first file carrying a project_type/project_subtypes declaration wins.
+    None: no file readable or none declares either key. True: project_type or a
+    project_subtypes entry is `unreal` or `unreal-engine`. False: any other declaration.
     """
-    path = Path(root) / "coordinator.local.md"
+    for rel in LOCAL_MD_RELPATHS:
+        verdict = _declared_ue_in(Path(root) / rel)
+        if verdict is not None:
+            return verdict
+    return None
+
+
+def _declared_ue_in(path: Path) -> bool | None:
     try:
         if not path.is_file():
             return None
@@ -82,4 +94,4 @@ def declared_ue(root: str | os.PathLike) -> bool | None:
                 i += 1
     if not values:
         return None
-    return "unreal" in values
+    return any(v in UE_DECLARED_VALUES for v in values)

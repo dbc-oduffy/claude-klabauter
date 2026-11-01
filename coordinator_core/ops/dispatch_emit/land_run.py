@@ -3,8 +3,10 @@
 ``land_run`` is the successor of the run-end commit op. The landing set is closed, in three kinds:
 (i) the declared writes of every credited row that differ from HEAD, with the files a row's own report
 claims under its declared prefix; (ii) ``run_artifacts.candidate_paths`` (the run's record dir and what
-it authored); (iii) the record dirs of superseded predecessor runs. Nothing else enters: no tree scan,
-no prefix expansion, no peer's dirt. Differences from HEAD are read in process from the object store,
+it authored); (iii) the record dirs of superseded predecessor runs; (iv) a product file in the run's stored
+review-prep whole diff (``reviewed_sha256``) that no credited row declares, a pure-shrink edit included,
+which passes the same holds as a declared path and is otherwise named in ``withheld``. Nothing else
+enters: no tree scan, no prefix expansion, no peer's dirt. Differences from HEAD are read in process from the object store,
 and the commit is ``git.commit.commit_paths`` (zero spawns, a CAS ref move).
 
 A credited row's changed declared path either lands or is named: a peer-held, never-commit,
@@ -62,6 +64,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RESUME_LEDGER_EM_DISCHARGED_FIELD,
     RUN_DIR_ROOT,
     TERMINAL_RESUME_LEDGER_PARAM,
+    measured_rev_record_path,
     read_run_outcome,
     record_dir,
     UNCHANGED_SINCE_HALT_REASON,
@@ -76,7 +79,7 @@ from coordinator_core.ops.dispatch_emit.refire_inherited_scope import (
     inherited_scope,
     withheld_of as _withheld_of,
 )
-from coordinator_core.ops.dispatch_emit import land_deadline, review_floor
+from coordinator_core.ops.dispatch_emit import land_deadline, land_leg_record, landing_halted_view, review_floor
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 
 _PARAM_FIELDS = (
@@ -234,9 +237,22 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
     budget = float("inf") if mode == "halted" else None
     try:
         with land_deadline.scope(budget_secs=budget):
-            return _dispatch_mode(mode, root, repo_root, params)
+            reply = _dispatch_mode(mode, root, repo_root, params)
+            if mode == "product" and isinstance(reply, dict) and reply.get("committed") is True:
+                land_leg_record.write(
+                    root, params.get("run_id"), outcome=land_leg_record.OUTCOME_LANDED,
+                    leg=None, bound_by=None, legs=land_deadline.leg_costs(),
+                )
+            return reply
     except land_deadline.LandDeadlineExceeded as exc:
-        return land_deadline.halt_reply(exc)
+        reply = land_deadline.halt_reply(exc)
+        rel = land_leg_record.write(
+            root, params.get("run_id"), outcome=land_leg_record.OUTCOME_HALT,
+            leg=exc.leg, bound_by=exc.bound_by, legs=reply["leg_costs"],
+        )
+        if rel:
+            reply["leg_record"] = rel
+        return reply
 
 
 def _dispatch_mode(mode: str, root: Path, repo_root: Path, params: dict) -> dict:
@@ -288,10 +304,12 @@ def with_run_session(repo_root: Path, params: dict) -> dict:
     return {**params, "session_id": session} if session else params
 
 
-def params_from_task_output(path_raw: str, repo_root: Optional[Path] = None) -> dict:
+def params_from_task_output(path_raw: str, repo_root: Optional[Path] = None, run_id: Optional[str] = None) -> dict:
     """``next_action.params`` out of a Workflow task-output file, bare or ``{result}``-wrapped.
 
-    With ``repo_root`` the params gain the run's ``session_id`` (``with_run_session``).
+    A launcher envelope (``runs``) yields the digest of the run ``run_id`` selects; ``run_id`` may be
+    omitted only when the envelope holds one run. With ``repo_root`` the params gain the run's
+    ``session_id`` (``with_run_session``).
     Raises ValueError naming the file when no ``next_action.params`` dict is found."""
     path = Path(path_raw)
     try:
@@ -300,6 +318,10 @@ def params_from_task_output(path_raw: str, repo_root: Optional[Path] = None) -> 
         raise ValueError(f"cannot read params.task_output_path {path_raw!r}: {exc}") from exc
     if isinstance(data, dict) and "next_action" not in data and isinstance(data.get("result"), dict):
         data = data["result"]
+    if isinstance(data, dict) and "next_action" not in data and isinstance(data.get("runs"), list):
+        from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _launcher_run_digest
+
+        data = _launcher_run_digest(data, path_raw, run_id)
     action = data.get("next_action") if isinstance(data, dict) else None
     found = action.get("params") if isinstance(action, dict) else None
     if not isinstance(found, dict):
@@ -764,6 +786,10 @@ def _redeem_or_answer(root: Path, run_id: object, token: str, script_path: objec
 
     if run_token.redeem(root, run_id, token, script_path):
         return None
+    if _readmitted_reviewed(root, run_id, token, script_path) and run_token.redeem(
+        root, run_id, token, script_path
+    ):
+        return None
     landed = already_landed_reply(root, run_id, token, script_path)
     if landed is not None:
         return landed
@@ -775,11 +801,21 @@ def _redeem_or_answer(root: Path, run_id: object, token: str, script_path: objec
         )
     return _error(
         "params.run_token does not match a live, unspent token minted for params.run_id and this "
-        "script (a token admits one landed commit); a run that ended with its commit unlanded is "
-        "recovered by a tokenless EM call: the invoke CLI's --from-task-output <the run's task-output file>, "
-        "which sets params.task_output_path",
+        "script (a token admits one landed commit). A run cut after review: pass params.run_id with "
+        "--from-task-output <the run's task-output file>; its recorded land params are used",
         refused="run-token",
     )
+
+
+def _readmitted_reviewed(root: Path, run_id: object, token: str, script_path: object) -> bool:
+    """True when the run's recorded land params carry this token and script and its retired
+    receipt was restored to a live record, ready for one more `redeem`."""
+    from coordinator_core.ops.dispatch_emit import run_token, terminal_commit_params_channel
+
+    recorded = terminal_commit_params_channel.recorded_land_params(root, run_id)
+    if recorded is None or recorded.get("run_token") != token or recorded.get("script_path") != script_path:
+        return False
+    return run_token.readmit_reviewed(root, run_id, token, script_path)
 
 
 # ---- in-process tree reads --------------------------------------------------------------------
@@ -790,11 +826,8 @@ def _worktree_blob(root: Path, rel: str) -> Optional[str]:
     filter cannot be reproduced (it then counts as differing); None when the file is absent."""
     from coordinator_core.git.commit import FilterUnsupported, _checkin_bytes
 
-    target = root / rel
-    if not target.is_file():
-        return None
     try:
-        data = target.read_bytes()
+        data = (root / rel).read_bytes()
     except OSError:
         return None
     try:
@@ -804,15 +837,32 @@ def _worktree_blob(root: Path, rel: str) -> Optional[str]:
     return hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest()
 
 
+_HEAD_SPINES = landing_halted_view._SPINES
+
+
+def _head_entries(root: Path, paths: Sequence[str]) -> dict:
+    """``{path: (mode, sha)}`` for ``paths`` in HEAD's tree, same answer as ``git_state.head_blobs``.
+    HEAD's directory trees are kept per ``(root, HEAD sha)`` and a call reads only the directories
+    no earlier call of the landing loaded, so a tree is read and parsed once however many path sets
+    ask. Falls back to ``head_blobs`` when HEAD or a tree is unreadable."""
+    from coordinator_core.git.git_state import head_blobs, head_sha
+
+    wanted = list(dict.fromkeys(p for p in paths if p))
+    if not wanted:
+        return {}
+    head = head_sha(root)
+    found = landing_halted_view.tree_entries(root, head, wanted) if head is not None else None
+    return head_blobs(root, wanted) if found is None else found
+
+
 def _dirty_among(root: Path, paths: Sequence[str]) -> tuple[set, set, dict]:
     """``(changed, ignored, head)``: ``changed`` are the literals differing from HEAD (present with
     other bytes, absent from HEAD, or tracked and gone); ``ignored`` the changed untracked ones a
     gitignore pattern covers; ``head`` the HEAD ``{path: (mode, sha)}`` entries."""
-    from coordinator_core.git.git_state import head_blobs
     from coordinator_core.git.ignore_match import IgnoreMatcher
 
     literals = list(dict.fromkeys(p for p in paths if p))
-    head = head_blobs(root, literals)
+    head = _head_entries(root, literals)
     changed: set = set()
     for p in literals:
         if (root / p).is_dir():
@@ -1030,7 +1080,6 @@ def _work_since_halt(root: Path, base: str, declared: Sequence[str], withheld: d
     bytes, so it reads unchanged against ``base`` while it is the work to land); ``"unchanged"``
     otherwise; None when a tree object cannot be read."""
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_state import head_blobs
 
     common = resolve_git_common_dir(root)
     for p in declared:
@@ -1039,28 +1088,35 @@ def _work_since_halt(root: Path, base: str, declared: Sequence[str], withheld: d
             return None
         if moved:
             return "changed"
+    return "withheld-pending" if _withheld_pending(root, declared, withheld) else "unchanged"
+
+
+def _withheld_pending(root: Path, declared: Sequence[str], withheld: dict) -> bool:
+    """True when a declared path the halt withheld is dirty against HEAD. Independent of the halt
+    base, so a caller can answer it before resolving the base."""
     pending = [p for p in declared if p in withheld]
     if not pending:
-        return "unchanged"
-    head = head_blobs(root, pending)
+        return False
+    head = _head_entries(root, pending)
     for p in pending:
         now = _worktree_blob(root, p)
         entry = head.get(p)
         if now is None:
             if entry is not None:
-                return "withheld-pending"
+                return True
         elif entry is None or now == _FILTERED or now != entry[1]:
-            return "withheld-pending"
-    return "unchanged"
+            return True
+    return False
 
 
 UNREADABLE_HALT_RECORD = "unreadable-halt-record"
 
 
-def _read_markers_strict(root: Path, exclude_run: Optional[str]) -> None:
-    """Read every in-TTL sibling record dir's `halted.json` strictly; ValueError on a corrupt or
+def _read_markers_strict(root: Path, exclude_run: Optional[str], skip: frozenset = frozenset()) -> None:
+    """Read every in-TTL sibling record dir's `halted.json` strictly, bar the run ids in `skip` (runs whose
+    index entry already shows they withhold none of the landing); ValueError on a corrupt or
     unreadable one (absent is fine). `_unlanded_run_ids` cannot list such a run, so it is scanned here.
-    Cost: one scandir plus one read per in-TTL record dir, per call; unmeasured against the 500ms bar."""
+    Cost: one scandir plus one read per in-TTL record dir outside `skip`, per call."""
     import os
     import time
 
@@ -1088,13 +1144,21 @@ def _read_markers_strict(root: Path, exclude_run: Optional[str]) -> None:
         return
     for name in names:
         stamp = _stamp_epoch(name)
-        if name == exclude_run or (stamp is not None and now - stamp > run_token.TTL_SECONDS):
+        if name == exclude_run or name in skip or (stamp is not None and now - stamp > run_token.TTL_SECONDS):
             continue
         halted_run.read_strict(base / name)
 
 
-def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optional[str], paths: Sequence[str]) -> dict:
+# `minted_before` no token-only run precedes: `_unlanded_run_ids` lists halted runs alone, as `foreign_halted_withheld` keeps only those.
+_NO_SENIOR_TOKEN_RUN = (float("-inf"), "")
+
+
+def foreign_halted_withheld(
+    root: Path, run_id: Optional[str], plan_rel: Optional[str], paths: Sequence[str],
+    holders_out: Optional[dict] = None,
+) -> dict:
     """`{path: holding run id}` for each of `paths` another still-held halted run withholds.
+    `holders_out`, when given, receives `{path: [every holding run id]}` for the returned paths.
 
     A landing run's own declaration never overrides this: the other run's hunks sit in the path. A halted
     run the landing releases (`halted_hold_release`) holds nothing; `_unlanded_run_ids` already drops it.
@@ -1111,11 +1175,13 @@ def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optiona
 
         from coordinator_core.ops.dispatch_emit import halted_hold_release
 
-        _read_markers_strict(root, run_id)
+        _read_markers_strict(root, run_id, sibling_claims.index_clear_runs(root, wanted))
         # One batched cat-file for the kept blobs of halted runs withholding a wanted path: unscoped, release_reason spawns git per run.
         with halted_hold_release.blob_scope(root):
             halted_hold_release.prefetch_kept_blobs(root, sibling_claims.halted_records(root, run_id, wanted))
-            unlanded = list(sibling_claims._unlanded_run_ids(root, run_id, plan_rel, covering=wanted))
+            unlanded = list(sibling_claims._unlanded_run_ids(
+                root, run_id, plan_rel, minted_before=_NO_SENIOR_TOKEN_RUN, covering=wanted,
+            ))
             # held_paths frees a withheld path whose kept hunks are already at HEAD (hand-committed).
             live = {
                 rid: run_ownership.LiveRun(withheld=halted_hold_release.held_paths(root, rid, run_id, plan_rel))
@@ -1125,11 +1191,12 @@ def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optiona
         if not any(r.withheld for r in live.values()):
             return {}
         out: dict = {}
+        every: dict = {}
         for p in wanted:
             for rid in sorted(live):
                 if run_ownership.owns_path(run_id or "", p, {rid: live[rid]}) == run_ownership.FOREIGN_WITHHELD:
-                    out[p] = rid
-                    break
+                    every.setdefault(p, []).append(rid)
+                    out.setdefault(p, rid)
         if out:
             # A phantom or criterion-met holder is released here, before its withhold is applied.
             from coordinator_core.ops.dispatch_emit import peer_hunk_gate
@@ -1138,9 +1205,21 @@ def foreign_halted_withheld(root: Path, run_id: Optional[str], plan_rel: Optiona
                 root, sorted(out.items()), landing_run_id=run_id, landing_plan=plan_rel,
             ))
             out = {p: rid for p, rid in out.items() if (p, rid) in kept}
+        if holders_out is not None:
+            holders_out.update({p: every[p] for p in out})
         return out
     except (OSError, ValueError):  # a hold that cannot be computed holds
         return {p: UNREADABLE_HALT_RECORD for p in wanted}
+
+
+def _merge_in_progress(root: Path) -> bool:
+    """A merge commit cannot carry own-hunk staging, so a narrowed halted hold is not attempted over one."""
+    try:
+        from coordinator_core.git.git_dir import resolve_git_dir
+
+        return (resolve_git_dir(root) / "MERGE_HEAD").exists()
+    except Exception:  # noqa: BLE001 -- unknown keeps the whole-path hold
+        return True
 
 
 def _halted_only_release(
@@ -1295,6 +1374,14 @@ def _unchanged_since_halt(
         return []
     paths, stage_head = _manifest_declared(manifest_abs)
     paths = [p for p in paths if p not in exclude]
+    # Withheld work pending against HEAD clears every row whatever the chain base is, so the
+    # base's `git log` walk is skipped; a resume with no base candidate still resolves it below.
+    from coordinator_core.ops.dispatch_emit.halt_baseline import _sha
+
+    if paths and (stage_head or _sha(resume.get("since_sha")) or _sha(resume.get("halt_sha"))) and _withheld_pending(
+        root, paths, _withheld_of(root, resume)
+    ):
+        return []
     base, source = _halt_base(root, resume, plan_rel, stage_head)
     if post_commit and base is not None:
         from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import verified_post_commit_credit
@@ -1483,6 +1570,7 @@ def _ledger_gate(
         from coordinator_core.ops.dispatch_emit.write_baseline import (
             pre_existing_dirt,
             predecessor_withheld,
+            predecessor_wrote,
             prior_pass_written,
             unwritten,
         )
@@ -1497,7 +1585,9 @@ def _ledger_gate(
             """Credit from earlier passes and same-sizing halts; read only once a path shows as dirt."""
             if not prior_credit:
                 prior_credit.append(
-                    prior_pass_written(root, run_dir) | predecessor_withheld(root, _cited_sizing(root, plan_rel), run_dir)
+                    prior_pass_written(root, run_dir)
+                    | predecessor_withheld(root, _cited_sizing(root, plan_rel), run_dir)
+                    | predecessor_wrote(root, run_dir, baseline)
                 )
             return prior_credit[0]
 
@@ -1510,15 +1600,17 @@ def _ledger_gate(
             writes = {w for r in claimed for w in r.get("writes") or [] if isinstance(w, str)}
             if not writes:
                 continue
-            try:
-                own = own_checkpoint_paths.checkpoint_landed_paths(
-                    root, plan_rel, base if isinstance(base, str) else None, sorted(writes),
-                )
-            except Exception:  # noqa: BLE001 -- unreadable history proves no own pass
-                own = frozenset()
             if len(unwritten(root, baseline, writes)) != len(writes):
                 continue
-            foreign = pre_existing_dirt(root, baseline, writes, own)
+            foreign = pre_existing_dirt(root, baseline, writes, frozenset())
+            if foreign:
+                try:
+                    own = own_checkpoint_paths.checkpoint_landed_paths(
+                        root, plan_rel, base if isinstance(base, str) else None, sorted(writes),
+                    )
+                except Exception:  # noqa: BLE001 -- unreadable history proves no own pass
+                    own = frozenset()
+                foreign = pre_existing_dirt(root, baseline, writes, own) if own else foreign
             if foreign:
                 foreign = pre_existing_dirt(root, baseline, writes, {*own, *prior()})
             if foreign:
@@ -1657,7 +1749,7 @@ def _reviewed_files(inline_review: dict, *, need_pass: bool) -> Optional[set]:
 def _grade(
     root: Path, request, incomplete: set, inline_review: dict, ledger, verdict: object, held: set,
     artifacts, record_dir_rel: Optional[str], run_dir: Optional[Path], sizing_rel: Optional[str],
-    cache: dict,
+    cache: dict, manifest=None,
 ) -> dict:
     """``{chunk id: reason}`` for incomplete chunks the run's own evidence clears: ``outside-footprint``
     (the executor's ``gate-blocker: outside-footprint`` line, every file in a passed review's slices),
@@ -1712,6 +1804,38 @@ def _grade(
                 known.append(chunk.id)
         for cid, evidence in credit_gate.credit_regradable(known, credits, held).items():
             out[cid] = f"credited: {evidence}"[:_UNDONE_CAP]
+    if ledger is not None:
+        for cid in _writes_empty_ledger_met(root, request, incomplete, verdict, held, manifest):
+            out.setdefault(cid, reason)
+    return out
+
+
+def _writes_empty_ledger_met(root: Path, request, incomplete: set, verdict: object, held: set, manifest) -> list:
+    """Incomplete rows that write nothing (a verification row) whose every register row the ledger marks
+    ``met`` with ``met_by`` evidence: the ledger is the only judge of such a row, so it is complete."""
+    if manifest is None or not isinstance(verdict, dict):
+        return []
+    items = verdict.get("items")
+    met = {
+        str(i["id"]) for i in (items if isinstance(items, list) else [])
+        if isinstance(i, dict) and i.get("status") == "met" and i.get("id") is not None and i.get("met_by")
+    }
+    if not met:
+        return []
+    rows = {r.id: r for r in manifest.rows}
+    out: list = []
+    for chunk in request.chunks:
+        row = rows.get(chunk.id)
+        if (
+            chunk.id not in incomplete or chunk.id in held or row is None or chunk.paths or chunk.prefixes
+            or row.writes or row.kept_from or row.adopts_stranded or not row.register_rows
+            or not set(row.register_rows) <= met
+        ):
+            continue
+        text = _read_rel(root, chunk.report) if chunk.report else None
+        if text is not None and _BLOCKED_REPORT_RE.search(text):
+            continue
+        out.append(chunk.id)
     return out
 
 
@@ -1982,109 +2106,22 @@ def _peer_held(
 # ---- blob drift -------------------------------------------------------------------------------
 
 
-_VERIFIED_AT_RE = re.compile(r"^findings_ledger:.*?\bverified_at:\s*['\"]?([0-9T:.\-]+Z?)", re.MULTILINE)
-_LEDGER_BLOCK_RE = re.compile(r"^## Findings Ledger\b.*?^```json\s*\n(.*?)\n```", re.MULTILINE | re.DOTALL)
+from coordinator_core.ops.dispatch_emit.terminal_commit_review import (  # noqa: E402 -- the single own-fix helper copy
+    _epoch_of,
+    _fixes_integrated_at,
+    _reviewer_applied_fixes,
+    _wave_slice_files,
+)
 
 
-def _epoch_of(stamp: object) -> Optional[float]:
-    if not isinstance(stamp, str):
-        return None
-    from datetime import datetime, timezone
-
-    try:
-        parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)).timestamp()
+CHANGED_AFTER_REVIEW = "changed-after-review"
 
 
-def _reviewer_applied_fixes(sidecar: Path) -> tuple:
-    """``(completed_epoch, fixed_paths)`` from a wave reviewer's sidecar: its ``findings_ledger``
-    ``verified_at`` and the ``file`` of each verified row that changed text."""
-    try:
-        text = sidecar.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None, frozenset()
-    stamp = _VERIFIED_AT_RE.search(text.split("\n---", 2)[0] if text.startswith("---") else "")
-    done_at = _epoch_of(stamp.group(1) if stamp else None)
-    if done_at is None:
-        return None, frozenset()
-    block = _LEDGER_BLOCK_RE.search(text)
-    try:
-        rows = json.loads(block.group(1)) if block else []
-    except ValueError:
-        rows = []
-    fixed = set()
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict) or row.get("verified") is not True:
-            continue
-        if row.get("status") in ("suspended", "rejected") or not (row.get("before") or row.get("after")):
-            continue
-        f = row.get("file")
-        if isinstance(f, str) and f:
-            fixed.add(f.replace("\\", "/"))
-    return done_at, frozenset(fixed)
+def _changed_after_review(root: Path, rel: str, reviewed_hash: object) -> bool:
+    """True when the worktree bytes of a reviewed path no longer match its ``reviewed_sha256`` entry."""
+    from coordinator_core.session import touch_record
 
-
-def _wave_slice_files(sidecar: Path) -> frozenset:
-    """``prep.slice_files`` of the wave's integration record: the paths the wave reviewed."""
-    import yaml
-
-    from coordinator_core.frontmatter.primitives import split_frontmatter
-
-    try:
-        split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
-        fm = yaml.safe_load(split.fm_text) if split else None
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
-        return frozenset()
-    prep = fm.get("prep") if isinstance(fm, dict) else None
-    files = prep.get("slice_files") if isinstance(prep, dict) else None
-    return frozenset(f for f in files if isinstance(f, str)) if isinstance(files, list) else frozenset()
-
-
-def _fixes_integrated_at(root: Path, inline_review: object) -> tuple:
-    """``(epoch, reviewed_paths)``: when the review wave's integration was recorded and the paths its
-    fixes may have touched; ``(None, frozenset())`` when the wave applied no fixes or its record does
-    not resolve."""
-    if not isinstance(inline_review, dict):
-        return None, frozenset()
-    fixes = inline_review.get("fixes")
-    if not (isinstance(fixes, int) and not isinstance(fixes, bool) and fixes > 0):
-        return None, frozenset()
-    integration = inline_review.get("integration")
-    sidecar = integration.get("sidecar") if isinstance(integration, dict) else None
-    candidates: list = []
-    if isinstance(sidecar, str) and sidecar:
-        candidates.append(root / sidecar)
-    stem = inline_review.get("integration_stem")
-    if isinstance(stem, str) and stem and "/" not in stem and "\\" not in stem:
-        try:
-            candidates.extend((root / ".coordinator-local" / "subagent-share").glob(f"*/{stem}.md"))
-        except OSError:
-            pass
-    stamps: list = []
-    for c in candidates:
-        try:
-            stamps.append((c.stat().st_mtime, c))
-        except OSError:
-            continue
-    paths: set = set()
-    wave_stamps: list = []
-    listed = inline_review.get("wave_sidecar_paths")
-    for w in listed if isinstance(listed, list) else []:
-        if isinstance(w, str) and w:
-            done_at, fixed = _reviewer_applied_fixes(root / w)
-            if done_at is not None:
-                wave_stamps.append(done_at)
-                paths.update(fixed)
-    if stamps:
-        at, newest = max(stamps, key=lambda s: s[0])
-        paths.update(_wave_slice_files(newest))
-    elif wave_stamps:
-        at = max(wave_stamps)
-    else:
-        return None, frozenset()
-    return at, frozenset(paths)
+    return isinstance(reviewed_hash, str) and touch_record.compute_content_hash(root / rel) != reviewed_hash
 
 
 def _recorded_fingerprints(
@@ -2092,60 +2129,15 @@ def _recorded_fingerprints(
     reviewed: Optional[dict], reviewed_at: Optional[float], fixes_integrated_at: Optional[float],
     wave_paths: frozenset, review_events: Optional[dict] = None, run_started_at: Optional[float] = None,
 ) -> dict:
-    """``{path: sha256}`` the run expects each candidate path to carry; one batched sink read.
-    A session event older than ``run_started_at`` is another run's touch and is no expectation.
+    """``{path: sha256}`` the run expects each candidate path (of ``carried``) to carry: the single
+    ``terminal_commit_review._recorded_fingerprints`` with no deleted paths."""
+    from coordinator_core.ops.dispatch_emit.terminal_commit_review import _recorded_fingerprints as single
 
-    Per path the newer of the session's last recorded write and the run's newest review supplies the
-    hash (a tie goes to the session write). After a fix-applying wave a reviewed path settled before
-    the integration is declared at its current bytes; a path the session wrote after the review, with
-    a file mtime no earlier than that write, is declared at its current bytes. ``review_events``
-    (``{path: (sha256, epoch)}``, ``_review_write_events``) is a review fix-pass agent's own newest
-    write: it supplies the hash for a path whose session event is older or absent, so a later foreign
-    edit still refuses. A path with no usable event carries no entry."""
-    from coordinator_core.session import touch_record
-
-    wanted = [p for p in dict.fromkeys(candidates) if p in set(carried) and p not in excluded]
-    if not wanted:
-        return {}
-    seen = touch_record.last_seen_events(session_id, wanted, root)
-    if run_started_at is not None:
-        seen = {p: (None if e is not None and e[1] < run_started_at else e) for p, e in seen.items()}
-    reviewed = reviewed if reviewed_at is not None and isinstance(reviewed, dict) else {}
-    out: dict = {}
-    for p in wanted:
-        event = seen.get(p)
-        review_hash = reviewed.get(p)
-        if (review_hash or p in wave_paths) and fixes_integrated_at is not None and (
-            event is None or fixes_integrated_at > event[1]
-        ):
-            target = root / p
-            try:
-                settled = target.stat().st_mtime <= fixes_integrated_at
-            except OSError:
-                settled = False
-            post_fix = touch_record.compute_content_hash(target) if settled else None
-            if post_fix:
-                out[p] = post_fix
-                continue
-        anchor = fixes_integrated_at if fixes_integrated_at is not None else reviewed_at
-        if event is not None and anchor is not None and event[1] > anchor:
-            target = root / p
-            try:
-                written_after = target.stat().st_mtime >= event[1]
-            except OSError:
-                written_after = False
-            current = touch_record.compute_content_hash(target) if written_after else None
-            if current:
-                out[p] = current
-                continue
-        if review_hash and (event is None or reviewed_at > event[1]):
-            out[p] = review_hash
-        elif event is not None and event[0]:
-            out[p] = event[0]
-        agent_event = (review_events or {}).get(p)
-        if agent_event is not None and agent_event[0] and (event is None or agent_event[1] > event[1]):
-            out[p] = agent_event[0]
-    return out
+    return single(
+        root, session_id, candidates, carried, (), excluded=excluded, reviewed=reviewed,
+        reviewed_at=reviewed_at, fixes_integrated_at=fixes_integrated_at, wave_paths=wave_paths,
+        review_events=review_events, run_started_at=run_started_at,
+    )
 
 
 def _submitted_at(root: Path, run_id: Optional[str]) -> Optional[float]:
@@ -2348,6 +2340,19 @@ def _launch_close_job(root: Path, key: str, batons: list, memo: Optional[str]) -
     )
 
 
+def _close_job_run_base(root: Path, prep_base: object, run_id: Optional[str]) -> Optional[str]:
+    """The 40-hex base the close-job record carries: the review prep's ``run_base_sha``, else the base the
+    run's first bind recorded. None when neither is a full sha."""
+    if isinstance(prep_base, str) and _SHA40.fullmatch(prep_base):
+        return prep_base
+    if not run_id:
+        return None
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import recorded_run_base
+
+    recorded = recorded_run_base(root, run_id)
+    return recorded if isinstance(recorded, str) and _SHA40.fullmatch(recorded) else None
+
+
 def _close_job(root: Path, ctx: dict) -> dict:
     """Write the run's close-job record, launch the job, and return ``{leg: LegResult}`` for each
     leg: queued ones as the record reads them, preset ones ``not-applicable``."""
@@ -2514,15 +2519,45 @@ def _land_product(root: Path, repo_root: Path, params: dict, token_state: dict) 
     return _with_peer_drift(root, reply)
 
 
+_PLAIN_REF = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+")
+
+
+def _peer_ref_present(root: Path, drift_mod) -> bool:
+    """False only when the peer-publish ref is a plain ``remote/branch`` name that no loose ref
+    file or ``packed-refs`` line carries, so the ``git rev-list`` could only fail (no drift). Any
+    other shape, or a reftable store, answers True and leaves the probe to git. Zero spawns."""
+    _, common = drift_mod._git_dirs(Path(root))
+    ref = drift_mod._configured_ref(Path(root)) or drift_mod.DEFAULT_PEER_PUBLISH_REF
+    if common is None or not _PLAIN_REF.fullmatch(ref) or (common / "reftable").exists():
+        return True
+    names = [f"refs/remotes/{ref}", f"refs/heads/{ref}", f"refs/tags/{ref}", f"refs/{ref}"]
+    if any((common / n).is_file() for n in names):
+        return True
+    try:
+        packed = (common / "packed-refs").read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    wanted = set(names)
+    return any(line.rsplit(" ", 1)[-1] in wanted for line in packed if line and line[0] not in "#^")
+
+
 def _with_peer_drift(root: Path, reply: dict) -> dict:
     """Attach ``peer_publish_drift`` and a fold note when HEAD lacks commits on the peer-publish ref.
 
     Surface only, never a refusal; a failed probe leaves the reply untouched.
     """
     try:
-        from coordinator_core.percolate.peer_publish_drift import peer_publish_drift
+        # Dynamic on purpose: the percolate package is withheld from the OSS mirror, and a static
+        # import here makes every bin CLI reaching land_run a publish-deny (publish-allowlist-generate
+        # --verify-bin-deny). The ImportError on a clone is absorbed by the except below.
+        import importlib
 
-        drift = peer_publish_drift(root)
+        drift_mod = importlib.import_module("coordinator_core.percolate.peer_publish_drift")
+        if not _peer_ref_present(root, drift_mod):
+            return reply
+        drift = drift_mod.peer_publish_drift(root)
     except Exception:
         return reply
     if drift is None:
@@ -2532,6 +2567,71 @@ def _with_peer_drift(root: Path, reply: dict) -> dict:
         "peer_publish_drift": {"ref": drift.ref, "missing": drift.missing, "sample": list(drift.sample)},
         "peer_publish_drift_note": f"HEAD lacks {drift.missing} commit(s) on {drift.ref}; fold with: git merge {drift.ref}",
     }
+
+
+LANDING_TREE_DIFFERS = "landing-tree-differs-from-measured"
+VERIFY_REACH_DIRTY = "verify-reach-dirty"
+
+
+def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str]) -> dict:
+    """Dirty tracked paths the landing set's tests can read, outside the landing set: the record's
+    ``reach_dirt`` unioned with a land-time check. Peer holds are not subtracted."""
+    from coordinator_core.ops.dispatch_emit.test_reach import foreign_dirt, reach_paths, seeds_for_landing
+
+    landing = {*product, *deleted}
+    recorded = record.get("reach_dirt") if isinstance(record.get("reach_dirt"), dict) else {}
+    dirt = {p: b for p, b in recorded.items() if isinstance(p, str) and p not in landing}
+    dirt.update(foreign_dirt(root, reach_paths(root, seeds_for_landing(root, landing)), landing))
+    return dirt
+
+
+def _measured_record(root: Path, run_id: Optional[str]) -> Optional[dict]:
+    """The run's measured-rev record; None when it has none, ``{"unreadable": True}`` when it will not parse."""
+    if not run_id:
+        return None
+    try:
+        record = measured_rev_record_path(root, run_id)
+    except ValueError:
+        return None
+    if not record.is_file():
+        return None
+    try:
+        data = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"unreadable": True}
+    return data if isinstance(data, dict) else {"unreadable": True}
+
+
+def _measured_strs(record: Optional[dict], key: str) -> list:
+    value = record.get(key) if record else None
+    return [p for p in value if isinstance(p, str)] if isinstance(value, list) else []
+
+
+def _measured_mismatch(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str], settled: dict) -> list:
+    """Paths where the product changes a commit would introduce (``product`` path -> blob, ``deleted``
+    removals) differ from the record's ``blobs``/``removed``. A record path the commit omits counts
+    unless HEAD already holds the recorded blob."""
+    from coordinator_core.git.commit import checkin_blob_sha
+
+    blobs = record.get("blobs") if isinstance(record.get("blobs"), dict) else {}
+    removed = set(_measured_strs(record, "removed"))
+    head = _head_entries(root, [*blobs, *removed])
+    landing, gone = set(product), set(deleted)
+    differing = {p for p in landing if blobs.get(p) != (settled.get(p) or checkin_blob_sha(root, p))}
+    differing |= {p for p in gone if p not in removed}
+    differing |= {
+        p for p, blob in blobs.items()
+        if p not in landing and p not in gone and (head.get(p) or (None, None))[1] != blob
+    }
+    differing |= {p for p in removed if p not in gone and p in head}
+    return sorted(differing)
+
+
+def _reap_measured_export(root: Path, run_id: Optional[str]) -> None:
+    if run_id and safe_id(run_id):
+        import shutil
+
+        shutil.rmtree(root / "scratch" / "measured-rev" / run_id, ignore_errors=True)
 
 
 def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token_state: dict) -> dict:
@@ -2563,11 +2663,19 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
         try:
             params = {
-                **params_from_task_output(params["task_output_path"], root),
+                **params_from_task_output(params["task_output_path"], root, params.get("run_id")),
                 **{k: v for k, v in params.items() if k != "task_output_path"},
             }
         except ValueError as exc:
-            return _error(str(exc))
+            from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel
+
+            recorded = terminal_commit_params_channel.recorded_land_params(root, params.get("run_id"))
+            if recorded is None:
+                note = "" if isinstance(params.get("run_id"), str) else (
+                    "; pass run_id to recover from the run's recorded land params"
+                )
+                return _error(str(exc) + note)
+            params = {**recorded, **{k: v for k, v in params.items() if k != "task_output_path"}}
     if isinstance(params, dict) and not params.get("script_path"):
         from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
         from coordinator_core.ops.dispatch_emit.halted_record_commit import commit_halted_record
@@ -2858,7 +2966,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     sizing_for_credit = cited_sizing or (next(iter(artifacts.by_class.get("sizing", ())), None) if artifacts else None)
     regraded = _grade(
         root, request, incomplete, inline_review, ledger, params.get("ledger_verdict"), held_now, artifacts,
-        record_dir_rel, ask_run_dir, sizing_for_credit, cache,
+        record_dir_rel, ask_run_dir, sizing_for_credit, cache, manifest,
     )
     incomplete -= set(regraded)
     held_ids = held_now
@@ -2944,6 +3052,17 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         recorded += [
             p for p in fence.get("breach") or () if p not in owner and p not in inherited and p not in recorded
         ]
+    recorded += [
+        p for p in reviewed_bytes
+        if isinstance(p, str) and p not in owner and p not in inherited and p not in recorded
+    ]
+    measured_run = ask_run_dir.name if ask_run_dir is not None else None
+    measured = _measured_record(root, measured_run)
+    measured_carries = {*_measured_strs(measured, "paths"), *_measured_strs(measured, "removed")}
+    recorded += [
+        p for p in _measured_strs(measured, "paths") if p not in owner and p not in inherited and p not in recorded
+    ]
+    unmeasured: list = []
     recorded_pc = _recorded_post_checkpoint(
         root, [art_run_id, _resumed_review_source(root, inline_review, rid, session_id)[0]], ask_run_dir,
     )
@@ -2951,7 +3070,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if bookkeeping_path:
         literals.append(bookkeeping_path)
     literals.extend(recorded_pc)
+    land_deadline.mark("land_run.dirty_scan")
     changed, ignored, _head = _dirty_among(root, literals)
+    land_deadline.mark("land_run.superseded_scan")
     superseded: tuple = ()
     if artifacts is not None and sizing_for_credit:
         superseded, extra_changed = _superseded(root, art_run_id, sizing_for_credit, artifacts, run_token)
@@ -2994,13 +3115,25 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
 
     footprint_breach = set(fence.get("breach") or ())
     declared_changed = [p for p in declared if p in changed and p not in ignored]
-    foreign_held = foreign_halted_withheld(root, art_run_id, request.plan_path, declared_changed)
+    land_deadline.mark("land_run.foreign_withheld_scan")
+    foreign_holders: dict = {}
+    foreign_held = foreign_halted_withheld(root, art_run_id, request.plan_path, declared_changed, foreign_holders)
+    land_deadline.mark("land_run.halted_release_scan")
     own_seniority = _own_run_seniority(root, rid, script_path)
     auto_landed_holders = _halted_only_release(
         root, art_run_id or sibling_run_id, request.plan_path, foreign_held, declared, own_seniority,
     )
     if auto_landed_holders:
         foreign_held = {}
+    # A halted holder keeps only its own hunks: the landing's hunks that overlap none of them land.
+    halted_clear: dict = {}  # path -> (clear hunks, holder id, some hunk stays withheld)
+    if foreign_held and not _merge_in_progress(root):
+        from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+        for p, (hunks, partial) in halted_hold_release.hunks_clear_of_holders(
+            root, {p: foreign_holders[p] for p in foreign_held if p in foreign_holders},
+        ).items():
+            halted_clear[p] = (hunks, foreign_held.pop(p), partial)
     own_halt_reason = _withheld_of(root, params.get(TERMINAL_RESUME_LEDGER_PARAM) or {}) if inherited else {}
 
     def _own_inherited(p: str) -> bool:
@@ -3018,8 +3151,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             withhold_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
         elif p in foreign_held:
             withhold_reason[p] = f"withheld by {foreign_held[p]}"
-        elif p in footprint_breach and not _own_inherited(p):
+        elif p in footprint_breach and not _own_inherited(p) and p not in measured_carries:
             withhold_reason[p] = OUTSIDE_ROW_FOOTPRINT
+            if measured is not None:
+                unmeasured.append(p)
     recorded_reason: dict = {}  # recorded (chunk-less) path -> reason it stays out
     recorded_changed = [
         p for p in recorded if p in changed and p not in ignored and (root / p).exists()
@@ -3031,10 +3166,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             recorded_reason[p] = "sibling-repo"
         elif p in em_withheld and em_withheld[p] not in SELF_APPLIED_WITHHOLDS:
             recorded_reason[p] = REVIEW_CARRIED_REASON if p in carried_paths else "withheld"
-        elif p in footprint_breach:
+        elif p in footprint_breach and p not in measured_carries:
             recorded_reason[p] = OUTSIDE_ROW_FOOTPRINT
+            if measured is not None:
+                unmeasured.append(p)
         elif p in reverted:
             recorded_reason[p] = "reverted"
+        elif p in reviewed_bytes and _changed_after_review(root, p, reviewed_bytes[p]):
+            recorded_reason[p] = CHANGED_AFTER_REVIEW
     candidates = [p for p in declared_changed if p not in withhold_reason]
     candidates += [p for p in recorded_changed if p not in recorded_reason and p not in candidates]
     art_present = [p for p in (art_landable.present if art_landable else ()) if p not in candidates]
@@ -3103,6 +3242,21 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     paths = list(dict.fromkeys([*candidates, *art_present]))
     deleted = sorted(set(deleted) | set(art_deleted))
     paths = [p for p in paths if p not in deleted]
+    if unmeasured:
+        held_now = _peer_held(
+            root, unmeasured, session_id, rid, script_path,
+            plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
+            minted_before=own_seniority, self_sessions=_firing_sessions(root, rid, session_id),
+        )
+        unmeasured = [p for p in dict.fromkeys(unmeasured) if p not in held_now]
+    if unmeasured:
+        _reap_measured_export(root, measured_run)
+        return _error(
+            f"landing refused: {', '.join(unmeasured)} changed outside the declared writes and the run's "
+            "measured-rev record does not carry it, so the commit would differ from the tree that was tested. "
+            "Re-run dispatch.measured_rev over the landing set and re-verify, or revert the path",
+            refused=LANDING_TREE_DIFFERS, paths=unmeasured,
+        )
     if (
         bookkeeping_path and not product_only and bookkeeping_path not in paths
         and bookkeeping_path not in process_withheld
@@ -3193,6 +3347,24 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         withheld_product = shared_path_landing.withheld_product_paths(unlanded)
         if withheld_product:
             ledger_met = None
+    ledger_partial: dict = {}
+    if unlanded and isinstance(params.get("ledger_verdict"), dict):
+        from coordinator_core.ops.dispatch_emit import terminal_commit_ledger as _tcl
+
+        served = {r.id: tuple(r.register_rows) for r in manifest.rows} if manifest is not None else {}
+        downgraded = _tcl.downgrade_unlanded_items(params["ledger_verdict"], unlanded, served)
+        if downgraded is not params["ledger_verdict"]:
+            ledger_partial = {
+                str(new["id"]): list(new.get("remaining") or [])
+                for old, new in zip(params["ledger_verdict"]["items"], downgraded["items"]) if old is not new
+            }
+            if ledger_met:
+                met_ids = _ledger_met_ids(downgraded)
+                ledger_met = ("ledger-met: " + ", ".join(met_ids))[:_UNDONE_CAP] if met_ids else None
+            if ask_run_dir is not None:
+                _tcl.rewrite_note_verdicts(
+                    root / DELIVERY_NOTE_DIR / f"{ask_run_dir.name}.md", downgraded, inline_review, root,
+                )
 
     # A review that applied fixes anchors its trailer on the plan path even when the product matches HEAD.
     fixes_anchor = bool(inline_review.get("fixes")) and bool(request.plan_path) and bool(_review_trailer(record_abs))
@@ -3214,6 +3386,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             }
 
     # ---- receipts, integrity, drift expectations
+    land_deadline.mark("land_run.receipts")
     from datetime import datetime, timezone
 
     from coordinator_core.git.git_state import head_sha
@@ -3247,12 +3420,23 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         findings = _integrity(
             root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
             own_declared=declared, session_id=session_id, minted_before=own_seniority,
-            deleted_notes=deleted_notes, released_holders=frozenset(auto_landed_holders or ()),
+            deleted_notes=deleted_notes,
+            released_holders=frozenset(auto_landed_holders or ()) | {h for _hunks, h, _p in halted_clear.values()},
             settled=settled_stage,
         )
     except land_deadline.LandDeadlineExceeded:
         _remove(root, receipt_paths)
         raise
+    for p, (hunks, holder, _partial) in list(halted_clear.items()):
+        if p not in paths:
+            continue
+        if p in settled_stage:  # a second staging claim on the path: the holder's hold stands whole
+            paths.remove(p)
+            withhold_reason[p] = f"withheld by {holder}"
+            foreign_held[p] = holder
+            del halted_clear[p]
+            continue
+        settled_stage[p] = hunks
     if foreign_held:
         from coordinator_core.ops.dispatch_emit import landing_integrity as li, peer_hunk_gate
 
@@ -3275,6 +3459,21 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     from coordinator_core.ops.dispatch_emit import landing_integrity as _li_claims
 
     findings, claim_provenance = _li_claims.split_claim_provenance(findings)
+    carried_targets, tests_without_source = _carry_withheld_symbol_targets(
+        root, claim_provenance, paths, deleted,
+        barred={*held_paths, *em_withheld, *withhold_reason, *art_withheld, *art_dropped, *recorded_reason},
+        session_id=session_id, rid=rid, script_path=script_path, plan_rel=request.plan_path,
+        run_base=run_base, minted_before=own_seniority, own_run_ids=(rid, sibling_run_id),
+    )
+    paths.extend(carried_targets)
+    if tests_without_source:
+        paths[:] = [p for p in paths if p not in tests_without_source]
+        claim_provenance = [
+            f for f in claim_provenance
+            if not (f.reason == _li_claims.IMPORT_CLOSURE_UNTRACKED and f.path in tests_without_source)
+        ]
+        withhold_reason.update(tests_without_source)
+        named_out.update(tests_without_source)
     if findings:
         _remove(root, receipt_paths)
         first = findings[0]
@@ -3495,6 +3694,74 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             _remove(root, receipt_paths)
             return _error(f"own-hunk staging refused: {exc}", refused="own-hunk-stage-refused")
 
+    unclaimed_base = {
+        p: b for p, b in (manifest.write_baseline if manifest is not None else {}).items()
+        if b is not None and p in commit_set and p not in settled_blobs and (root / p).is_file()
+    }
+    if unclaimed_base:
+        from coordinator_core.ops.dispatch_emit import own_hunk_stage, unclaimed_dirt_stage
+
+        try:
+            diffs = own_hunk_stage.read_diff(root, list(unclaimed_base))
+            own_blobs, own_refusals = unclaimed_dirt_stage.own_only_blobs(
+                root, str(sibling_run_id or rid), list(unclaimed_base), unclaimed_base,
+            )
+            moved = own_hunk_stage.check_head_unchanged(root, diffs)
+        except own_hunk_stage.OwnHunkRefused as exc:
+            _remove(root, receipt_paths)
+            return _error(f"own-hunk staging refused: {exc}", refused="own-hunk-stage-refused")
+        if moved is not None:
+            _remove(root, receipt_paths)
+            return _error(
+                f"{moved} moved in HEAD while its own hunks were staged; re-fire the landing",
+                refused="own-hunk-head-moved",
+            )
+        if own_refusals:
+            _remove(root, receipt_paths)
+            return _error(
+                "own-hunk staging refused: "
+                + "; ".join(f"{p} ({run or 'unattributed'}): {header}" for p, run, header in own_refusals),
+                refused="own-hunk-stage-refused",
+            )
+        if own_blobs and merge_plan is not None:
+            _remove(root, receipt_paths)
+            return _error(
+                f"own-hunk staging cannot ride a merge commit: {', '.join(sorted(own_blobs))}",
+                refused="own-hunk-stage-refused",
+            )
+        settled_blobs = {**settled_blobs, **own_blobs}
+
+    if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
+        non_product = {*art_present, *receipt_paths, bookkeeping_path}
+        differing = (
+            ["measured-rev.json (unreadable)"] if measured.get("unreadable") else _measured_mismatch(
+                root, measured, [p for p in commit_set if p not in non_product],
+                [p for p in commit_deleted if p not in set(art_deleted)], settled_blobs,
+            )
+        )
+        if differing:
+            _remove(root, receipt_paths)
+            _reap_measured_export(root, measured_run)
+            return _error(
+                f"landing refused: the product changes this commit would introduce differ from the measured-rev "
+                f"record at {', '.join(differing)}. Re-run dispatch.measured_rev over the landing set and re-verify",
+                refused=LANDING_TREE_DIFFERS, paths=differing,
+            )
+        reach_dirt = (
+            {} if measured.get("unreadable") else _verify_reach_dirt(
+                root, measured, [p for p in commit_set if p not in non_product],
+                [p for p in commit_deleted if p not in set(art_deleted)],
+            )
+        )
+        if reach_dirt:
+            _remove(root, receipt_paths)
+            _reap_measured_export(root, measured_run)
+            return _error(
+                f"landing refused: the verified tests can read {', '.join(sorted(reach_dirt))}, dirty against "
+                f"HEAD outside the landing set. Revert or land them, then re-run dispatch.measured_rev and re-verify",
+                refused=VERIFY_REACH_DIRTY, paths=sorted(reach_dirt),
+            )
+
     try:
         land_deadline.check("land_run.commit")
     except land_deadline.LandDeadlineExceeded:
@@ -3584,6 +3851,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             return _error(f"{type(exc).__name__}: {exc}", refused="commit")
 
     sha = outcome.sha
+    _reap_measured_export(root, measured_run)
     review_gap: list = []
     declared_left: dict = {}
     review_code = list(manifest.review_code_paths) if manifest is not None else []
@@ -3597,6 +3865,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 p: "declared write left dirty after the commit, neither landed nor withheld"
                 for p in sorted(gap_dirty)
                 if p in declared_writes and p not in set(review_code) and p not in named_out
+                and not (p in halted_clear and p in settled_stage)  # the holder's hunks stay by design
             }
         except Exception:  # noqa: BLE001 -- the commit stands; an unreadable store reports no gap
             review_gap = []
@@ -3665,6 +3934,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["targeted_tests_note"] = "; ".join(deleted_notes)
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
+    expanded = sorted(
+        p for p in paths
+        if p in measured_carries and p not in inherited and (p in footprint_breach or p not in owner)
+    )
+    if expanded:
+        reply["scope_expanded"] = expanded
     if withheld_product:
         reply[shared_path_landing.LEDGER_WITHHELD_PRODUCT] = withheld_product
         reply["exit_criterion_not_stamped"] = (
@@ -3672,11 +3947,20 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         )
     reply.update(recovery_reply)
     foreign_named = {p: withhold_reason[p] for p in foreign_held if p in withhold_reason}
-    if declared_left or foreign_named:
-        reply["withheld"] = {**(reply.get("withheld") or {}), **foreign_named, **declared_left}
+    foreign_named.update({
+        p: f"withheld by {holder}" for p, (_h, holder, partial) in halted_clear.items()
+        if partial and p in settled_stage
+    })
+    if declared_left or foreign_named or tests_without_source:
+        reply["withheld"] = {
+            **(reply.get("withheld") or {}), **foreign_named, **tests_without_source, **declared_left,
+        }
     reply[contract.REPLY_CREDITED_CHUNKS] = sorted(set(credited_ids) & (set(regraded) | {c.id for c in credited_absent}))
     if recorded_changed:
         landed_now = set(paths)
+        stale_reviewed = {p: r for p, r in recorded_reason.items() if r == CHANGED_AFTER_REVIEW}
+        if stale_reviewed:
+            reply["withheld"] = {**(reply.get("withheld") or {}), **stale_reviewed}
         reply["resume_recorded"] = {
             "landed": sorted(p for p in recorded_changed if p in landed_now),
             "withheld": dict(sorted(recorded_reason.items())),
@@ -3695,6 +3979,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     criterion = inline_review.get("criterion")
     if isinstance(criterion, dict) and criterion.get("status"):
         reply["criterion_status"] = "not_met" if unlanded_rows or review_gap else criterion["status"]
+    if ledger_partial:
+        reply["ledger_partial"] = ledger_partial
     if objective_gate is not None:
         reply["objective_gate"] = {k: objective_gate[k] for k in ("outcome", "exit_reason", "unmet_axes", "summary")}
     reasons = _incomplete_reasons(
@@ -3787,7 +4073,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             "key": own_close_key(sibling_run_id, PurePosixPath(script_path.replace("\\", "/")).stem),
             "sibling_run_id": sibling_run_id,
             "presets": presets, "plan_rel": request.plan_path, "session_id": session_id, "sha": sha,
-            "review_receipt": review_record, "run_base_sha": run_base if isinstance(run_base, str) and _SHA40.fullmatch(run_base) else None,
+            "review_receipt": review_record, "run_base_sha": _close_job_run_base(root, run_base, sibling_run_id),
             "criterion": (
                 {**criterion, "status": "not_met"} if isinstance(criterion, dict) and (unlanded_rows or review_gap)
                 else criterion if isinstance(criterion, dict) else None
@@ -3961,12 +4247,14 @@ def _superseded(root: Path, run_id: str, sizing_rel: str, artifacts, run_token) 
     needle = sizing_rel.replace("\\", "/").rsplit("/", 1)[-1].encode("utf-8")
     floor = _sizing_stamp_floor(needle.decode("utf-8", "replace"))
     candidates: list = []
+    base = f"{root}{os.sep}{RECORD_DIR_ROOT}{os.sep}"
     for n in listing:
         tail = run_artifacts._STAMP_TAIL.search(n)
         if tail is None or tail.group(0) >= mine or tail.group(0) < floor:
             continue
         try:
-            raw = (root / RECORD_DIR_ROOT / n / "run.json").read_bytes()
+            with open(f"{base}{n}{os.sep}run.json", "rb") as fh:
+                raw = fh.read()
         except OSError:
             continue
         if needle in raw or not needle.isascii():
@@ -4012,6 +4300,60 @@ def _land_merge_artifacts(root: Path, artifacts: dict, message: str, merge_sha: 
     except Exception as exc:  # noqa: BLE001 -- the merge already landed; report, never raise
         return {"committed": False, "error": f"{type(exc).__name__}: {exc}"}
     return {"committed": True, "sha": out.sha}
+
+
+def _carry_withheld_symbol_targets(
+    root: Path, provenance: Sequence, paths: Sequence[str], deleted: Sequence[str], *, barred: Collection,
+    session_id, rid, script_path, plan_rel, run_base, minted_before, own_run_ids: Sequence,
+) -> tuple:
+    """``(carry, dropped)``. ``carry``: each uncommitted ``.py`` a landed file reads a name from (the
+    withheld-symbol pair), so the commit never leaves HEAD calling a name only the worktree defines.
+    A target another run withholds, a peer holds, or the landing already carries or removes stays out
+    and its provenance entry remains the record. ``dropped`` maps a landing test whose target stays
+    out (withheld, held or barred) to ``TEST_WITHOUT_SOURCE: <target>``; the caller removes it from the
+    landing. A non-test importer keeps its provenance entry and lands."""
+    from coordinator_core.authoring_leaks import import_closure
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_integrity as li
+
+    pairs = import_closure.withheld_symbol_pairs(
+        root, [(f.path, f.detail) for f in provenance if f.reason == li.IMPORT_CLOSURE_UNTRACKED],
+    )
+    if not pairs:
+        return [], {}
+    halted = halted_withheld_index.withheld_by_path(root)
+    own = {str(r) for r in own_run_ids if r}
+    out_of_landing = {
+        t for t in set(pairs.values())
+        if t not in paths and t not in deleted and (root / t).is_file()
+    }
+    free = sorted(
+        t for t in out_of_landing
+        if t not in barred and not (t in halted and str(halted[t]) not in own)
+    )
+    held = _peer_held(
+        root, free, session_id, rid, script_path, plan_rel=plan_rel,
+        run_base=run_base if isinstance(run_base, str) else None, minted_before=minted_before,
+    ) if free else {}
+    carry = [t for t in free if not held.get(t)]
+    stays_out = out_of_landing - set(carry)
+    dropped = {
+        imp: f"{TEST_WITHOUT_SOURCE}: {tgt}"
+        for imp, tgt in sorted(pairs.items())
+        if tgt in stays_out and _is_test_path(imp)
+    }
+    return carry, dropped
+
+
+TEST_WITHOUT_SOURCE = "test-without-source"
+
+
+def _is_test_path(rel: str) -> bool:
+    """True for ``test_*.py``, ``*_test.py`` and any ``.py`` under a ``tests`` directory."""
+    parts = rel.split("/")
+    name = parts[-1]
+    return name.endswith(".py") and (
+        name.startswith("test_") or name.endswith("_test.py") or "tests" in parts[:-1]
+    )
 
 
 def _integrity(

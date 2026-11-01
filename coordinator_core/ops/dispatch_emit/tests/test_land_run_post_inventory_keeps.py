@@ -88,14 +88,32 @@ def test_p3_a_fresh_retest_pass_clears_a_recorded_failure(repo):
     assert "a.py" in _tree(repo)
 
 
-def test_p3_control_a_stale_retest_leaves_the_recorded_failure_refusing(repo):
+def _recorded_failures(out: dict) -> list[dict]:
+    return [e for e in out.get("provenance", []) if e["reason"] == landing_targeted_tests.TARGETED_TESTS_FAILED]
+
+
+def test_p3_a_retest_pass_at_a_moved_head_with_unchanged_covered_files_clears_the_failure(repo):
     _author(repo, "a.py", "a = 1\n")
     _declare(repo, [("C1", ["a.py"])])
     _fresh_verdict(repo, head="0" * 40)
 
     out = _land(repo, targeted_tests=_RECORDED_FAIL)
 
+    assert out["committed"] is True and out["refused"] is None, out
+    assert "a.py" in _tree(repo)
+    assert _recorded_failures(out) == []
+
+
+def test_p3_control_a_covered_file_change_keeps_the_recorded_failure_refusing(repo):
+    _author(repo, "a.py", "a = 1\n")
+    _declare(repo, [("C1", ["a.py"])])
+    _fresh_verdict(repo, head=_git(["rev-parse", "HEAD"], repo).strip())
+    _author(repo, "a.py", "a = 2\n")
+
+    out = _land(repo, targeted_tests=_RECORDED_FAIL)
+
     assert out["committed"] is False and out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED, out
+    assert "a.py" not in _tree(repo)
 
 
 # ---- P11: a held chunk's sole-declared path is never staged ---------------------------------------

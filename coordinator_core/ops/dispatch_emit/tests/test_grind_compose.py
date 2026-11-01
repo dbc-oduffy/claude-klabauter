@@ -564,7 +564,7 @@ def _agent_stub(script_by_kind, budget):
     return _agent
 
 
-def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_tokens=None):
+def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_tokens=None, repo_root=None):
     routing, triage_node = _fixture_routing()
     budget = _StubBudgetSpender(total=budget_tokens)
     agent_fn = _agent_stub(script_by_kind, budget)
@@ -576,6 +576,7 @@ def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_
         max_agent_calls=max_agent_calls,
         budget=budget,
         agent=agent_fn,
+        repo_root=repo_root,
     )
     return result, budget
 
@@ -1059,6 +1060,52 @@ def test_triage_rows_omitted_from_result_hand_back_stage_dead_not_stranded():
     assert any(h["row"] == "r0" and h["type"] == "stage-dead" for h in result["handed_back"])
 
 
+def _omitting_triage(verdicts, omit_on_calls):
+    """A triage stub that drops `omit` rows on the first `omit_on_calls` calls, then answers fully."""
+    calls = []
+
+    def _triage(bid):
+        calls.append(bid)
+        rows = ["r0", "r1"] if len(calls) > omit_on_calls else ["r0"]
+        return [{"row": rid, **verdicts[rid]} for rid in rows]
+
+    return _triage, calls
+
+
+def test_triage_rows_omitted_then_returned_by_the_retry_route_by_verdict_not_stage_dead():
+    triage, calls = _omitting_triage(_all_fix_batches(["r0", "r1"]), omit_on_calls=1)
+    script_by_kind = {
+        "triage": triage,
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "pass"},
+        "commit": lambda _unit: {"committed": True, "sha": "abc"},
+    }
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
+    assert len(calls) == 2
+    assert not any(h["type"] == "stage-dead" for h in result["handed_back"])
+    assert ("fix", "r1") in result["call_log"]
+
+
+def test_triage_row_still_absent_after_the_one_retry_hands_back_stage_dead():
+    triage, calls = _omitting_triage(_all_fix_batches(["r0", "r1"]), omit_on_calls=99)
+    script_by_kind = {
+        "triage": triage,
+        "fix": lambda rid: {"outcome": "done"},
+        "verify": lambda rid: {"outcome": "pass"},
+        "commit": lambda _unit: {"committed": True, "sha": "abc"},
+    }
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
+    assert len(calls) == 2
+    assert [h["row"] for h in result["handed_back"] if h["type"] == "stage-dead"] == ["r1"]
+
+
+def test_emitted_triage_batch_retries_unreturned_rows_once_before_stage_dead():
+    golden = _GOLDEN_PATH.read_text(encoding="utf-8")
+    stage = golden[golden.index("async function _triageBatch"):golden.index("async function _closeBatch")]
+    assert stage.count("_triageCall(") == 2
+    assert stage.index("_missing") < stage.index("'stage-dead'")
+
+
 def test_drain_commit_is_handed_the_run_cost_record_body():
     """The drain agent writes runs/<run-id>.json; it must be given the body
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
@@ -1444,6 +1491,88 @@ def test_scout_at_plan_weight_hands_back_baton_naming_the_sizing():
     assert hand["reason"].startswith("sized at state/sizings/")
     assert hand["reason"].endswith("-scout-name-r0.yaml: intent M")
     assert result["by_triage_check"]["size_confirmed"] == 1
+
+
+def _size_baton(tmp_path, *, write_sizing):
+    scripts = {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("M", exit_code=0)}
+    sizing = gc._sizing_path("20260101T000000Z", {"name": "Scout Name"}, "r0")
+    if write_sizing:
+        (tmp_path / sizing).parent.mkdir(parents=True)
+        (tmp_path / sizing).write_text("x", encoding="utf-8")
+    result, _ = _run([("b0", ["r0"])], scripts, repo_root=tmp_path)
+    return sizing, result, next(h for h in result["handed_back"] if h["row"] == "r0")
+
+
+def test_exit_zero_without_a_sizing_file_hands_back_a_size_step_failure(tmp_path):
+    sizing, result, hand = _size_baton(tmp_path, write_sizing=False)
+    assert "sized at" not in hand["reason"]
+    assert hand["reason"] == f"intent M (size step failed: exit 0 but no sizing file at {sizing})"
+    assert result["by_triage_check"]["size_confirmed"] == 1
+
+
+def test_exit_zero_with_a_sizing_file_still_names_it(tmp_path):
+    sizing, _, hand = _size_baton(tmp_path, write_sizing=True)
+    assert hand["reason"] == f"sized at {sizing}: intent M"
+
+
+def _skipped_scout():
+    return _scout("M", exit_code=0, stdout="size skipped: a superseded predecessor already carries route-to-plan\n")
+
+
+def test_skip_message_is_the_size_chains_own():
+    from coordinator_core.backlog_grind_assemble import grind_size_chain
+
+    assert gc.SIZE_SKIPPED_MESSAGE == grind_size_chain.SKIP_MESSAGE
+
+
+def test_skipped_size_chain_baton_names_no_sizing_and_carries_the_ask():
+    result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _skipped_scout()})
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["type"] == "baton"
+    assert "sized at" not in hand["reason"] and "state/sizings/" not in hand["reason"]
+    assert "fire the ask: Resolve backlog row r0 (" in hand["reason"] and hand["reason"].endswith("): intent M")
+
+
+def test_a_written_size_chain_baton_still_names_its_sizing():
+    scout = _scout("M", exit_code=0, stdout="wrote state/sizings/x.yaml\n")
+    result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: scout})
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["reason"].startswith("sized at state/sizings/") and "fire the ask" not in hand["reason"]
+
+
+def test_handed_back_baton_named_action_fires_through_dispatch_emit(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_compose
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.delenv("DELIVERABLE_ID", raising=False)
+    monkeypatch.setattr(
+        ask_compose, "_read_plan_blitz", lambda: "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
+    )
+
+    result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _skipped_scout()})
+    reason = next(h for h in result["handed_back"] if h["row"] == "r0")["reason"]
+    ask = reason.split("fire the ask: ", 1)[1]
+    fired = _dispatch_emit({"ask": ask, "repo_root": str(tmp_path)}, repo_root=tmp_path)
+    assert fired.get("run_id") and list((tmp_path / RUN_DIR_ROOT).glob("*.workflow.mjs"))
+
+    absent = gc._sizing_path("20261030T234623Z", {"name": "x"}, "r0")
+    with pytest.raises(SizingFireRefused, match="sizing-object not found on disk"):
+        _dispatch_emit({"sizing_path": absent, "repo_root": str(tmp_path)}, repo_root=tmp_path)
+
+
+def test_emitted_script_hands_back_the_ask_when_the_size_chain_skipped():
+    script = _compose()
+    to_size = script[script.index("let scouted = await _issue(batchState.id, rid, () => _sizeCall(row));"):]
+    to_size = to_size[:to_size.index("async function _closeBatch")]
+    assert json.dumps(gc.SIZE_SKIPPED_MESSAGE) in to_size
+    assert json.dumps(gc.SIZE_SKIPPED_MESSAGE + gc._SIZE_SKIPPED_HAND_BACK) in to_size
+    assert "'Resolve backlog row ' + rid + ' (' + row.path + '): ' + _intent" in to_size
 
 
 def test_nonzero_assemble_exit_is_a_baton_naming_the_exit_code():
@@ -2778,3 +2907,13 @@ def test_fix_target_reached_through_verify_nodes_is_found_and_ambiguity_refused(
 def test_below_floor_size_collapse_only_for_a_row_whose_own_verdict_reaches_fix():
     script = _compose()
     assert "_ownTarget === SIZE_FIX_TARGET" in script
+
+
+def test_emitted_size_call_makes_the_scout_check_the_sizing_file_exists():
+    script = _compose()
+    start = script.index("async function _sizeCall(row, retry)")
+    call = script[start : script.index("\n}", start)]
+    check = r"_shq(REPO_ROOT.replace(/\/+$/, '') + '/' + _sizingPathFor('<name>', row.rowId))"
+    assert "test -f " in call and check in call
+    assert gc.SIZE_SKIPPED_MESSAGE in call
+    assert call.index(check) < call.index("label:")

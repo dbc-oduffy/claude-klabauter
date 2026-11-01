@@ -43,6 +43,66 @@ def test_foreign_session_run_is_untouched(tmp_path):
     assert run_token.is_live(tmp_path, RUN)
 
 
+PARENT = "ask-20261029T000000-bbbbbb"
+
+
+def _chained(tmp_path, *, child_stage="minted", child_sizing=SIZING, parent_sizing=SIZING, parent_dir=True):
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "sub").mkdir()
+    rdir = tmp_path / "state" / "warp" / RUN
+    rdir.mkdir(parents=True)
+    (rdir / "run-stage.json").write_text(json.dumps({"stage": child_stage}), encoding="utf-8")
+    run_token.mint(tmp_path, RUN, "scratch/w.mjs", session_id="other", sizing_rel=child_sizing)
+    if parent_dir:
+        pdir = tmp_path / "state" / "warp" / PARENT
+        pdir.mkdir(parents=True)
+        (pdir / "run.json").write_text(json.dumps({"sizing_rel": parent_sizing}), encoding="utf-8")
+    return rdir
+
+
+def _closed(rdir):
+    return (rdir / halted_run.HALTED_FILE).exists()
+
+
+def test_minted_only_chained_child_is_closed(tmp_path):
+    rdir = _chained(tmp_path)
+    out = _abandon(tmp_path, session_id="s1", chained_from=PARENT)
+    assert out["abandoned"] is True
+    closed = json.loads((rdir / halted_run.HALTED_FILE).read_text(encoding="utf-8"))
+    assert closed["closed"]["reason"] == "chained-child-never-started"
+    assert not run_token.is_live(tmp_path, RUN)
+
+
+def test_chained_child_without_chained_from_is_untouched(tmp_path):
+    rdir = _chained(tmp_path)
+    assert _abandon(tmp_path, session_id="s1")["abandoned"] is False
+    assert not _closed(rdir)
+
+
+def test_chained_child_past_minted_is_untouched(tmp_path):
+    rdir = _chained(tmp_path, child_stage="staged")
+    assert _abandon(tmp_path, session_id="s1", chained_from=PARENT)["abandoned"] is False
+    assert not _closed(rdir)
+    assert run_token.is_live(tmp_path, RUN)
+
+
+def test_chained_from_missing_parent_is_untouched(tmp_path):
+    rdir = _chained(tmp_path, parent_dir=False)
+    assert _abandon(tmp_path, session_id="s1", chained_from=PARENT)["abandoned"] is False
+    assert not _closed(rdir)
+
+
+def test_chained_from_parent_on_other_sizing_is_untouched(tmp_path):
+    rdir = _chained(tmp_path, parent_sizing="state/sizings/other.yaml")
+    assert _abandon(tmp_path, session_id="s1", chained_from=PARENT)["abandoned"] is False
+    assert not _closed(rdir)
+    assert run_token.is_live(tmp_path, RUN)
+
+
+def test_chained_from_is_an_accepted_param():
+    assert op._unknown_param_refusal({"abandon_run": RUN, "chained_from": PARENT}) is None
+
+
 def test_no_root_raises(tmp_path):
     with pytest.raises(ValueError):
         op._abandon_run({"abandon_run": RUN, "session_id": "s1"}, None)

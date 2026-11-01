@@ -401,5 +401,6 @@ def test_a_landed_run_is_not_reread_and_a_halted_one_can_resume(repo, monkeypatc
     _fire(monkeypatch, ["ask-landed-1", "ask-halted-1"])
     assert _em_post_fire.live_run_ids(SID, str(repo)) == []
     halted["ask-halted-1"] = False
+    _em_post_fire._VERDICTS.clear()
     assert _em_post_fire.live_run_ids(SID, str(repo)) == ["ask-halted-1"]
     assert landed_reads.count("ask-landed-1") == 1

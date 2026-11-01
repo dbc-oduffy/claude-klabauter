@@ -100,7 +100,7 @@ from coordinator_core.git_scope import (
 )
 from coordinator_core.content_root import read_content_root
 
-_CONTENT_ROOT_ENV = "REPO_CONTENT_ROOT"
+_CONTENT_ROOT_ENV = "REPO_DOE_CLAUDE"
 
 _LS_REMOTE_TIMEOUT_SECONDS = 5
 
@@ -177,12 +177,12 @@ def _unknown(checked_at: str, reason: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _resolve_content_root_local() -> Optional[Path]:
-    """REPO_CONTENT_ROOT env -> `content_root.read_content_root()`
+    """REPO_DOE_CLAUDE env -> `content_root.read_content_root()`
     (registry and pointer reads, bootstrap-safe: no subprocess).
 
     Precedence is strict and NON-FALLTHROUGH: an explicit env override is a
     DIRECTIVE, not a hint.
-        1. REPO_CONTENT_ROOT set (non-empty after `.strip()`) -> that
+        1. REPO_DOE_CLAUDE set (non-empty after `.strip()`) -> that
            is the answer. If it does not resolve to an existing directory,
            resolution FAILS (raises `_FreshnessProbeError` naming the var
            and the bad path) — the registry is NEVER consulted.
@@ -410,7 +410,7 @@ def _compute(checked_at: str) -> dict[str, Any]:
         return _unknown(
             checked_at,
             "no DoE clone resolvable on this machine (checked "
-            "REPO_CONTENT_ROOT and the machine-local repos.content_root "
+            "REPO_DOE_CLAUDE and the machine-local repos.content_root "
             "registry) — freshness check skipped; this is the expected, "
             "zero-network path on a consumer machine with no DoE clone",
         )

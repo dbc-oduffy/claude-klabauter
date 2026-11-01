@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.git import call_io_scope
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
@@ -61,9 +62,17 @@ def _run_file(repo_root: Path, run_id: str) -> Path:
     return _dir(repo_root) / f"{run_id}.json"
 
 
-def _parse(file: Path) -> Optional[RunEntry]:
+_PARSED = "halt-index-entry"
+
+
+def _parse(file) -> Optional[RunEntry]:
+    """The entry in `file`, parsed once per open `call_io_scope`; `_store` and `remove_run` drop it."""
+    return call_io_scope.memo(_PARSED, os.fspath(file), lambda: _parse_file(file))
+
+
+def _parse_file(file) -> Optional[RunEntry]:
     try:
-        data = json.loads(file.read_text(encoding="utf-8"))
+        data = json.loads(Path(file).read_bytes().decode("utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(data, dict):
@@ -86,6 +95,7 @@ def _parse(file: Path) -> Optional[RunEntry]:
 
 def _store(repo_root: Path, run_id: str, entry: RunEntry) -> None:
     """Write `entry`, or drop the file when it holds neither paths nor declared."""
+    call_io_scope.invalidate(_PARSED)
     if not entry.paths and not entry.declared:
         remove_run(repo_root, run_id)
         return
@@ -152,6 +162,7 @@ def record_declared(
 
 def remove_run(repo_root: Path, run_id: str) -> None:
     """Drop the run's entry; absent is a no-op."""
+    call_io_scope.invalidate(_PARSED)
     try:
         _run_file(repo_root, run_id).unlink()
     except OSError:
@@ -231,6 +242,29 @@ def entries(repo_root: Path) -> dict:
             if entry is not None:
                 out[name[: -len(".json")]] = entry
     return out
+
+
+def fresh_entry(repo_root: Path, run_id: str) -> Optional[RunEntry]:
+    """The run's entry when it names withheld paths and `halted.json` has not been rewritten since the
+    entry was written (marker mtime < `at_ns`), so the marker still reads `halted` with those paths.
+    None on a missing sentinel, entry or marker, or a rewritten marker: the caller opens the marker.
+    Trap: never proof a marker is readable by anything but its own parse; a corrupt marker with a
+    fresh entry is answered from the entry."""
+    if not safe_id(run_id):
+        return None
+    root = os.fspath(repo_root)
+    index = os.path.join(root, INDEX_DIR)
+    try:
+        if not call_io_scope.memo(_PARSED, "sentinel:" + index, lambda: os.path.exists(os.path.join(index, SENTINEL))):
+            return None
+        entry = _parse(os.path.join(index, run_id + ".json"))
+        if entry is None or not entry.paths:
+            return None
+        if os.stat(os.path.join(root, RECORD_DIR_ROOT, run_id, HALTED_FILE)).st_mtime_ns >= entry.at_ns:
+            return None
+        return entry
+    except (OSError, ValueError):
+        return None
 
 
 def run_ids(repo_root: Path) -> list[str]:

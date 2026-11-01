@@ -834,10 +834,15 @@ def test_contradicted_anchor_row_is_exactly_one_blocking_finding(tmp_path):
 def test_anchor_verdict_ignores_corrects_and_declared_absent(tmp_path):
     corrects = f"corrects:\n  - citation: {_R32}\n    fixed_by: C1\n"
     common = _anchor_plan(tmp_path, corrects + _AP1)
-    for verdict in ("CONTRADICTED", "UNRESOLVED", "UNCHECKABLE"):
+    for verdict in ("CONTRADICTED", "UNRESOLVED"):
         reply = _op_reply(common, [_row(verdict, citation=_R32, anchor="AP1")])
         assert reply["verdict"] == "judgment"
         assert _anchor_rulings(reply)[0].startswith(f"anchor-premise-{verdict}: AP1")
+    reply = _op_reply(common, [_row("UNCHECKABLE", citation=_R32, anchor="AP1")])
+    assert (reply["verdict"], reply["pull_class"]) == ("pulled", "mechanical")
+    assert reply["blocking"] == []
+    (repair,) = reply["mechanical_repairs"]
+    assert (repair["kind"], repair["target"]) == ("uncheckable-to-falsifier-row", "AP1")
 
 
 def test_non_anchor_uncheckable_row_still_only_a_note(tmp_path):
@@ -1177,3 +1182,44 @@ def test_major_finding_answered_by_a_live_fix_row_stays_ready(monkeypatch):
     row = _major_row(answered_by={"kind": "fix-row", "row": "R1"})
     out = _major_verdict(monkeypatch, [row], [{"id": "R1", "disposition": "open"}])
     assert out["verdict"] == "ready"
+
+
+_LIBCLANG06_ROWS = [
+    {"verdict": "RESOLVES", "citation": "state/sizings/x.yaml", "questionClass": 1, "evidence": "file exists"},
+    {
+        "verdict": "UNCHECKABLE", "citation": "python -m pytest tests/staged_extraction_raw/ -q",
+        "questionClass": 4, "evidence": "tests/staged_extraction_raw is plan-created, absent at the ref",
+    },
+    {
+        "verdict": "CONTRADICTED", "citation": "ops/runpod-bands/launch.py ~687-748, archive_argv",
+        "questionClass": 2,
+        "evidence": "grep -c = 0. corrected: ops/runpod-bands/band_job.py (L1_ARCHIVE, archive_argv)",
+    },
+    {
+        "verdict": "UNCHECKABLE", "citation": "APM two-drive storage ruling", "questionClass": 5,
+        "evidence": "no ruling found. convertible: execution-time falsifier row",
+    },
+]
+_INCOMPLETE_REVIEW = [{"reviewer": "premise-check", "verdict": "INCOMPLETE"}]
+
+
+def test_incomplete_premise_check_with_only_repair_class_rows_repairs_not_pulls():
+    out = op.readiness_verdict(
+        _gate(PASS, verdict="PREPPED"), None, _INCOMPLETE_REVIEW, None, _LIBCLANG06_ROWS,
+    )
+    assert out["pull_class"] == "mechanical"
+    assert out["blocking"] == [] and out["rulings"] == []
+    assert [r["kind"] for r in out["mechanical_repairs"]] == ["premise-citation-corrected"]
+
+
+def test_incomplete_premise_check_with_a_scope_row_still_pulls():
+    rows = _LIBCLANG06_ROWS + [{"verdict": "CONTRADICTED", "citation": "the scope claim", "questionClass": 1}]
+    out = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, _INCOMPLETE_REVIEW, None, rows)
+    assert out["verdict"] == "judgment"
+    assert out["blocking"] == ["premise-check: CONTRADICTED the scope claim"]
+
+
+def test_incomplete_premise_check_review_without_rows_still_pulls():
+    out = op.readiness_verdict(_gate(PASS, verdict="PREPPED"), None, _INCOMPLETE_REVIEW, None, None)
+    assert out["verdict"] == "judgment"
+    assert out["pull_class"] == "none"

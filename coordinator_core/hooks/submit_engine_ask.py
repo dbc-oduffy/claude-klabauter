@@ -412,7 +412,7 @@ def _default_emit(params: dict, repo_root: Path) -> dict:
 _READ_DEADLINE_MS = 300.0
 _INFLIGHT: set = set()
 _INFLIGHT_LOCK = threading.Lock()
-_BUDGET: Optional[list] = None  # [ms still unspent] while `evaluate` runs; single-threaded per hook call
+_BUDGET: Optional[list] = None  # [ms still unspent] while `evaluate` runs; an orphaned worker may outlive the reset to None
 
 
 class _SizingStalled(Exception):
@@ -442,15 +442,17 @@ def _charge(started: float) -> None:
 #: and denies with no run id, so the hook answers on its own at `_EMIT_BUDGET_SHARE` of it.
 _CALLER_BUDGET_S = 12.0
 _EMIT_BUDGET_SHARE = 0.8
+_FANOUT_TAIL_GRACE_S = 0.25
 
 
 class _EmitOverran(Exception):
     """The emit outlived the caller's budget; `message` is the deny text."""
 
-    def __init__(self, message: str, minted: bool = False) -> None:
+    def __init__(self, message: str, minted: bool = False, stalled: bool = False) -> None:
         super().__init__(message)
         self.message = message
         self.minted = minted
+        self.stalled = stalled
 
 
 def _caller_budget_s() -> float:
@@ -459,6 +461,81 @@ def _caller_budget_s() -> float:
     except ValueError:
         return _CALLER_BUDGET_S
     return value if value > 0 else _CALLER_BUDGET_S
+
+
+#: Fraction of the caller budget by which `evaluate` answers whatever it is doing; the emit join
+#: ends earlier (`_EMIT_BUDGET_SHARE`), and the minted-run scan at the answer gets `_SCAN_GRACE_S`.
+_ANSWER_SHARE = 0.85
+_SCAN_GRACE_S = 0.8
+_EMIT_FLOOR_S = 0.25
+_CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted"}
+
+
+def _emit_join_s() -> float:
+    """The emit join: the emit share of the caller budget measured from the call's start, so work
+    before the emit shortens it (never below `_EMIT_FLOOR_S`)."""
+    import time
+
+    full = _caller_budget_s() * _EMIT_BUDGET_SHARE
+    call = _CALL.get()
+    if call is None:
+        return full
+    return max(_EMIT_FLOOR_S, min(full, call["t0"] + full - time.monotonic()))
+
+
+def _note_root(root: Path) -> None:
+    call = _CALL.get()
+    if call is not None and root not in call["roots"]:
+        call["roots"].append(root)
+
+
+def _note_minted(run_id: Any) -> None:
+    call = _CALL.get()
+    if call is not None and isinstance(run_id, str) and run_id not in call["minted"]:
+        call["minted"].append(run_id)
+
+
+def _minted_since_start(call: dict) -> Optional[list]:
+    """Runs this call minted: those it reported plus any run dir under its roots created since it began.
+    None when the directory read stalled past `_SCAN_GRACE_S`."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+
+    found: list = list(call["minted"])
+
+    def scan() -> None:
+        for root in list(call["roots"]):
+            try:
+                with os.scandir(root / RECORD_DIR_ROOT) as it:
+                    for e in it:
+                        stage = os.path.join(e.path, RUN_STAGE_FILE)
+                        try:
+                            if e.is_dir() and os.stat(stage).st_mtime >= call["wall0"] - 1.0 and e.name not in found:
+                                found.append(e.name)
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+
+    thread = threading.Thread(target=scan, daemon=True)
+    thread.start()
+    thread.join(_SCAN_GRACE_S)
+    return None if thread.is_alive() else sorted(found)
+
+
+def _answer_overran(call: dict) -> dict:
+    """The deny for a call still running at the answer deadline: names every run it minted."""
+    minted = _minted_since_start(call)
+    if minted:
+        return _refuse(
+            f"The submission outran the hook budget after minting run {', '.join(minted)}. Do not re-submit: "
+            "the run exists; reconcile it by id (a re-submit duplicates it)."
+        )
+    if minted is None:
+        return _refuse(
+            "The submission outran the hook budget and the disk is stalled, so whether a run was minted is unknown. "
+            "List recent runs under state/warp before re-submitting."
+        )
+    return _refuse("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
 
 
 def _run_dirs(root: Path) -> set:
@@ -471,13 +548,17 @@ def _run_dirs(root: Path) -> set:
         return set()
 
 
-def _emit_within_budget(emit: EmitFn, params: dict, root: Path, budget_s: Optional[float] = None) -> dict:
+def _emit_within_budget(
+    emit: EmitFn, params: dict, root: Path, budget_s: Optional[float] = None, scan: bool = True
+) -> dict:
     """`emit(params, root)`, or `_EmitOverran` naming any run it minted once the emit budget is spent.
 
     The emit keeps running on a daemon thread; the caller kills the process at its own budget, so
-    the answer must land first or the caller denies with no run id and the EM re-submits."""
+    the answer must land first or the caller denies with no run id and the EM re-submits.
+    `scan=False` skips the `state/warp` directory walk: the emit writes only a run-token record, which
+    the write gate alone reports."""
     # Trap: a concurrent submission's run minted in the window is named as ours; over-naming is the safe side of "do not re-submit".
-    before = _run_dirs(root)
+    before = _run_dirs(root) if scan else set()
     box: dict = {}
 
     def work() -> None:
@@ -486,16 +567,38 @@ def _emit_within_budget(emit: EmitFn, params: dict, root: Path, budget_s: Option
         except BaseException as exc:  # re-raised on the caller's thread
             box["error"] = exc
 
-    thread = threading.Thread(target=_in_scope(work), daemon=True)
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    gate = run_token.WriteGate()
+
+    def gated() -> None:
+        run_token.WRITE_GATE.set(gate)
+        work()
+
+    thread = threading.Thread(target=_in_scope(gated), daemon=True)
     thread.start()
-    thread.join(_caller_budget_s() * _EMIT_BUDGET_SHARE if budget_s is None else budget_s)
+    thread.join(_emit_join_s() if budget_s is None else budget_s)
     if thread.is_alive():
-        minted = sorted(_run_dirs(root) - before)
+        minted = sorted(_run_dirs(root) - before) if scan else []
         if minted:
             names = ", ".join(minted)
             raise _EmitOverran(
                 f"The submission outran the hook budget after minting run {names}. Do not re-submit: "
                 f"the run exists; reconcile it by id (a re-submit duplicates it).",
+                minted=True,
+            )
+        # The cancel keeps the abandoned thread from publishing its record after this answer.
+        cancelled_in = gate.cancel()
+        if cancelled_in == "writing":
+            raise _EmitOverran(
+                "The submission was refused: the disk is stalled, so the run record could not be written within the hook "
+                "budget. Nothing was minted and no run will appear later; re-submitting is safe once the disk recovers.",
+                stalled=True,
+            )
+        if cancelled_in == "committed":  # the record published between the scan above and the cancel
+            raise _EmitOverran(
+                "The submission outran the hook budget as its run was minted. Do not re-submit: "
+                "the run exists; reconcile it by listing runs (a re-submit duplicates it).",
                 minted=True,
             )
         raise _EmitOverran("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
@@ -528,7 +631,7 @@ if (!reply || typeof reply.path !== 'string' || reply.path === '') {
 // Trap: the relay re-serializes the reply path, so a Windows path can arrive with doubled backslashes or repo-relative.
 const norm = reply.path.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
 const scriptPath = (norm[0] === '/' || /^[A-Za-z]:\//.test(norm)) ? norm : REPO_ROOT + '/' + norm.replace(/^\.\//, '');
-return await workflow({ scriptPath: scriptPath });
+__START__
 """
 
 
@@ -536,9 +639,18 @@ def _write_deferred_script(root: Path, params: dict) -> Path:
     """A script under `scratch/warp/` that re-runs `dispatch.emit(params)` through an op-relay agent and starts what it emits."""
     import json
 
-    from coordinator_core.ops.dispatch_emit.fan_launcher import _EMIT_OP, _INVOKE, EMIT_RELAY_AUTHORITY
+    from coordinator_core.ops.dispatch_emit.fan_launcher import (
+        _EMIT_OP, _INVOKE, DEFERRED_EMIT_KEY, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM,
+    )
 
+    # A launcher starts this script as its child, and a child cannot call workflow(): it hands the emit back instead.
+    start = (
+        f"return {{ {DEFERRED_EMIT_KEY}: {{ path: scriptPath, run_id: reply.run_id, fire_args: reply.fire_args || {{}} }} }};"
+        if params.get(LAUNCHER_CHILD_EMIT_PARAM) is True
+        else "return await workflow({ scriptPath: scriptPath });"
+    )
     values = {
+        "__START__": start,
         "__REPO_ROOT__": json.dumps(Path(root).as_posix()),
         "__PARAMS__": json.dumps(json.dumps(params, default=str, ensure_ascii=True)),
         "__INVOKE__": json.dumps(_INVOKE),
@@ -549,6 +661,59 @@ def _write_deferred_script(root: Path, params: dict) -> Path:
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(re.sub("|".join(values), lambda m: values[m.group(0)], _DEFERRED_JS), encoding="utf-8")
     return script
+
+
+def _premintable(params: dict, sizing_rel: Optional[str], asks: Optional[list], supersedes: Optional[str]) -> bool:
+    """A plain raw ask: no sizing, fan-out or supersession, whose emit has nothing to reserve or resume."""
+    return (
+        isinstance(params.get("ask"), str)
+        and sizing_rel is None
+        and asks is None
+        and not supersedes
+        and "reserved_run_id" not in params
+        and "ask_brief_file" not in params  # the emit reads the file; a missing one is refused before the run
+    )
+
+
+def _premint_marker(params: dict, root: Path) -> dict:
+    """Mint the run id and publish its run-token marker (the one record write before the answer).
+    A marker whose deferred script never runs is reaped by the token TTL."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    run_id = run_token.new_ask_run_id()
+    run_token.mint(
+        root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
+        session_id=params.get("session_id") or None, marker=True,
+    )
+    return {"run_id": run_id}
+
+
+def _premint_deferred_envelope(root: Path, params: dict, run_id: str) -> dict:
+    """The allow answer for a raw ask whose run id is minted: the emit (prompts, script, receipt) and the
+    run both start from a written script, so no bulk read or write precedes the answer."""
+    deferred = {**params, "preminted_run_id": run_id}
+    try:
+        script = _write_deferred_script(root, deferred)
+    except OSError:
+        try:
+            from coordinator_core.ops.dispatch_emit import run_token
+
+            run_token.discard(root, run_id)
+        except OSError:
+            pass
+        return _refuse("The submission could not be written to disk; no run was started. Re-submit once.")
+    envelope = rewrite_input(
+        "PreToolUse",
+        {"scriptPath": str(script)},
+        f"Submitted to the engine as run {run_id}: its emit runs inside the background run, which then starts. "
+        "Its completion notification is your one wake. Do not re-submit. End the turn: no polling, dispatch or "
+        f"verification meanwhile. {_revise_hint(run_id)}",
+    )
+    hso = envelope["hookSpecificOutput"]
+    hso["permissionDecision"] = "allow"
+    hso["permissionDecisionReason"] = f"Engine submission: run {run_id}, deferred emit {script.name}."
+    return envelope
 
 
 def _deferred_envelope(root: Path, params: dict, over: _EmitOverran) -> dict:
@@ -889,7 +1054,7 @@ def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session
             reply = _emit_within_budget(_default_emit, params, root, max(deadline - time.monotonic(), 0.0))
         except _EmitOverran as over:
             spent = over.message
-            reply = {"error": over.message} if over.minted else _deferred_child_reply(root, child, params, over.message)
+            reply = {"error": over.message} if over.minted or over.stalled else _deferred_child_reply(root, child, params, over.message)
         except Exception as exc:  # a refused child is named in the launcher; siblings still start
             reply = {"error": str(exc)}
         emitted.append(reply)
@@ -907,9 +1072,36 @@ def _deferred_child_reply(root: Path, child: Any, params: dict, note: str) -> di
 
 
 def _default_fanout(params: dict, repo_root: Path) -> dict:
-    from coordinator_core.ops.dispatch_emit.ask_fanout import fanout
+    """`fanout` held to the emit budget: past it the writer rolls back what it created and the submit is denied,
+    so a submission the caller never saw taken leaves no sizing behind."""
+    import time
 
-    return fanout(params, repo_root)
+    from coordinator_core.ops.dispatch_emit.ask_fanout import FANOUT_ABORTED, FanoutLedger, fanout
+
+    deadline = time.monotonic() + _caller_budget_s() * _EMIT_BUDGET_SHARE
+    ledger = FanoutLedger()
+    box: list = []
+
+    def work() -> None:
+        try:
+            box.append((True, fanout(params, repo_root, lambda: ledger.closed or time.monotonic() > deadline, ledger)))
+        except BaseException as exc:
+            box.append((False, exc))
+
+    thread = threading.Thread(target=_in_scope(work), daemon=True)
+    thread.start()
+    thread.join(max(deadline - time.monotonic(), 0.0))
+    if thread.is_alive():
+        # Removed here, on the hook thread: the worker may not outlive the process to unlink its own writes.
+        if ledger.rollback():
+            raise RuntimeError(FANOUT_ABORTED)
+        thread.join(_FANOUT_TAIL_GRACE_S)
+        if thread.is_alive() or not box:
+            raise RuntimeError(FANOUT_ABORTED)
+    ok, value = box[0]
+    if not ok:
+        raise value
+    return value
 
 
 def _declared_writes(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any]) -> list[str]:
@@ -1440,13 +1632,33 @@ def evaluate(
 
     A refusal is logged whole and leads with its cause (see `_durable_refusal`)."""
     global _BUDGET
+    import time
+
     _BUDGET = [_READ_DEADLINE_MS]
     try:
         if is_submission(payload):
             from coordinator_core.ops.dispatch_emit.sizing_fire import sizing_memo
 
-            with sizing_memo():  # the hook's and every child emit's reads of one slice sizing parse it once
-                envelope = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
+            call = {"t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": []}
+            box: dict = {}
+
+            def body() -> None:
+                _CALL.set(call)
+                try:
+                    with sizing_memo():  # the hook's and every child emit's reads of one slice sizing parse it once
+                        box["envelope"] = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
+                except BaseException as exc:  # re-raised on the caller's thread
+                    box["error"] = exc
+
+            worker = threading.Thread(target=_in_scope(body), daemon=True)
+            worker.start()
+            worker.join(_caller_budget_s() * _ANSWER_SHARE)
+            if worker.is_alive():
+                envelope = _answer_overran(call)
+            elif "error" in box:
+                raise box["error"]
+            else:
+                envelope = box["envelope"]
         else:
             envelope = _evaluate(payload, emit=emit, fanout=fanout, launch=launch)
     finally:
@@ -1555,8 +1767,10 @@ def _evaluate(
         return _refuse(f"{where} is in no git repo. Add `repo: \"<abs path>\"` to args.")
 
     target_root = root
+    _note_root(root)
     if (ask is not None or asks is not None) and repo_arg is None and brief.get("ask_context"):
         root = _context_home(root, brief["ask_context"])
+        _note_root(root)
     session_root: Optional[str] = None
     own: Optional[Path] = None
     if (ask is not None or asks is not None) and (repo_arg is not None or root != target_root):
@@ -1634,6 +1848,7 @@ def _evaluate(
         first = ready[0]
         # Trap: rebinding moves every later `root` use (cross-repo, live-run, overlap, emit target_root), not only sizing.
         root = writer_root
+        _note_root(root)
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
 
     try:
@@ -1737,14 +1952,27 @@ def _evaluate(
         )
         if resume_envelope is not None:
             return resume_envelope
+    if result is None and emit is None and _premintable(params, sizing_rel, asks, supersedes):
+        minted = None
+        try:
+            minted = _emit_within_budget(_premint_marker, params, root, scan=False)
+        except _EmitOverran as over:
+            return _refuse(over.message)
+        except (OSError, ValueError):  # no git dir to hold the marker: the inline emit hands the commit back to the EM
+            pass
+        if minted is not None:
+            _note_minted(minted["run_id"])
+            return _premint_deferred_envelope(root, params, minted["run_id"])
     if result is None:
         try:
             result = _emit_within_budget(emit or _default_emit, params, root)
         except _EmitOverran as over:
-            return _refuse(over.message) if over.minted else _deferred_envelope(root, params, over)
+            return _refuse(over.message) if over.minted or over.stalled else _deferred_envelope(root, params, over)
         except Exception as exc:  # the engine's refusal text is the whole message
             return _refuse(f"The engine refused the submission: {_cause(exc)}")
 
+    if isinstance(result, dict):
+        _note_minted(result.get("run_id"))
     script = result.get("path") if isinstance(result, dict) else None
     if not script or result.get("ok") is False:
         stale = result.get("run_id") if isinstance(result, dict) else None

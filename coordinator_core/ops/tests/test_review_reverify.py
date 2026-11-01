@@ -181,6 +181,57 @@ def test_id_implicating_nothing_is_unattributed(world):
     assert (root / "pkg/other.py").read_text(encoding="utf-8") == "OTHER = 2\n"
 
 
+def _export(root, name, *, red=(), export="ok", exit_code=1):
+    tail = json.dumps({"baseline_export": {"export": export, "runner_exit": exit_code}})
+    body = "".join(f"FAILED {i} - AssertionError\n" for i in red) + tail + "\n"
+    (root / name).write_text(body, encoding="utf-8")
+    return name
+
+
+def test_base_export_red_ids_are_pre_existing(world):
+    root, _orig, _ = world
+    (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
+    path = _export(root, "base.txt", red=["tests/test_plain.py::test_p"])
+    out = _revert(root, ["tests/test_plain.py::test_p"], base_export_path=path)
+    assert out["pre_existing"] == ["tests/test_plain.py::test_p"]
+    assert out["unattributed"] == [] and out["unmeasured"] == []
+    assert out["base_unmeasured"] is False
+
+
+@pytest.mark.parametrize("export,code", [("fail", 1), ("ok", 2), ("ok", 3)])
+def test_base_export_invalid_tail_moves_unattributed_to_unmeasured(world, export, code):
+    root, _orig, _ = world
+    (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
+    path = _export(root, "base.txt", red=["tests/test_plain.py::test_p"], export=export, exit_code=code)
+    out = _revert(root, ["tests/test_plain.py::test_p"], base_export_path=path)
+    assert out["base_unmeasured"] is True
+    assert out["pre_existing"] == [] and out["unattributed"] == []
+    assert out["unmeasured"] == ["tests/test_plain.py::test_p"]
+
+
+def test_base_export_missing_or_non_json_file_is_unmeasured(world):
+    root, _orig, _ = world
+    (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
+    (root / "junk.txt").write_text("FAILED x::y\nnot json\n", encoding="utf-8")
+    for path in ("absent.txt", "junk.txt"):
+        out = _revert(root, ["tests/test_plain.py::test_p"], base_export_path=path)
+        assert out["base_unmeasured"] is True
+        assert out["unmeasured"] == ["tests/test_plain.py::test_p"]
+
+
+def test_without_base_export_path_the_response_has_no_unmeasured_keys(world):
+    root, _orig, _ = world
+    out = _revert(root, ["tests/test_plain.py::test_p"])
+    assert "unmeasured" not in out and "base_unmeasured" not in out
+
+
+def test_handler_rejects_a_non_string_base_export_path(world):
+    root, _orig, _ = world
+    out = rr._handler({"failing": ["a::b"], "base_export_path": 5, "base": BASE,
+                       "slice_prefix": PREFIX, "session_id": SESSION}, repo_root=root)
+    assert out["error"] and "base_export_path" in out["error"]
+
+
 def test_second_identical_revert_reverts_nothing_and_keeps_the_record(world, monkeypatch):
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
@@ -388,6 +439,21 @@ def test_tripwire_list_mode_returns_test_naming_an_edited_file(world):
     _add_tripwire(root)
     (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
     assert _list(root)["tripwires"] == ["tests/test_tripwire.py"]
+
+
+def test_tripwire_list_mode_created_file_selects_own_dir_walker_not_shallow_walkers(world, monkeypatch):
+    root, _orig, _ = world
+    walk = 'from pathlib import Path\nfor p in Path("{}").rglob("*.py"):\n    pass\n'
+    (root / "tests/test_walk_root.py").write_text(walk.format("pkg"), encoding="utf-8")
+    (root / "tests/test_walk_own.py").write_text(walk.format("pkg/sub"), encoding="utf-8")
+    (root / "tests/test_names_mod.py").write_text('X = "pkg/mod.py"\n', encoding="utf-8")
+    stage(root, ["tests/test_walk_root.py", "tests/test_walk_own.py", "tests/test_names_mod.py"])
+    (root / "pkg/sub").mkdir()
+    (root / "pkg/sub/new.py").write_text("X = 1\n", encoding="utf-8")
+    (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {"pkg/sub/new.py": "a1"})
+    out = _list(root)
+    assert out["tripwires"] == ["tests/test_names_mod.py", "tests/test_walk_own.py"]
 
 
 def test_tripwire_list_mode_ignores_unrelated_edit_and_empty_edit_set(world):

@@ -141,9 +141,13 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
 from coordinator_core import timestamps
+from coordinator_core.group_em import box_registry
+from coordinator_core.group_em import remote_identity
+from coordinator_core.group_em import remote_roster
 from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import activity_epoch_from_reduced
 from coordinator_core.session.receiver_state import parse_iso_timestamp
@@ -237,16 +241,74 @@ def fetch_live_agents(
     ]
 
 
+def read_remote_snapshot(directory: Optional[Path] = None) -> dict[str, dict[str, Any]]:
+    """``remote_roster.read_snapshot`` over the primary ``state/group-em``; ``{}`` on any failure.
+
+    File reads only, never a spawn. ``{}`` is not "no remote boxes": a caller diffing
+    sessions across ticks must treat a box absent from the result as unreadable.
+    """
+    try:
+        base = Path(directory) if directory is not None else box_registry._group_em_dir()
+        return remote_roster.read_snapshot(base)
+    except Exception:
+        return {}
+
+
+def unreachable_boxes(snapshot: Mapping[str, Mapping[str, Any]]) -> frozenset:
+    """Box ids whose snapshot is present but not ``reachable``."""
+    return frozenset(box for box, entry in snapshot.items() if not entry.get("reachable"))
+
+
+def remote_peer_rows(snapshot: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """One roster row per session in every reachable box of ``snapshot``.
+
+    Rows share the local row shape (``sessionId``/``status``/``cwd``/``name``) plus
+    ``box_id``, ``peerKey``, ``address`` and ``remote: True``; a session without a usable
+    id is skipped.
+    """
+    rows: list[dict[str, Any]] = []
+    for box_id, entry in snapshot.items():
+        if not entry.get("reachable"):
+            continue
+        for session in entry.get("sessions") or []:
+            sid = session.get("session_id")
+            try:
+                key = remote_identity.peer_key(box_id, sid)
+            except ValueError:
+                continue
+            rows.append(
+                {
+                    "sessionId": sid,
+                    "status": session.get("status"),
+                    "cwd": session.get("cwd"),
+                    "name": session.get("name"),
+                    "address": session.get("address"),
+                    "box_id": box_id,
+                    "peerKey": key,
+                    "remote": True,
+                }
+            )
+    return rows
+
+
 def live_peers(
     repo_root: str,
     exclude_session_ids: Iterable[Optional[str]] = (),
     box_wide: bool = False,
+    include_remote: bool = True,
+    snapshot: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
     """The live roster both `watch` and `idle_report` enumerate peers from.
 
     Refuses an unreadable or empty snapshot (raises) so one bad read is never
     a fleet of departed peers. Eval-sandbox children are dropped; each
     `exclude_session_ids` entry is removed by exact session id.
+
+    Every row carries `box_id` and `peerKey` (`<box_id>:<session_id>`): local rows
+    the local box id, remote rows (`include_remote`, from `snapshot` or a fresh
+    `read_remote_snapshot()`) their own box id and `remote: True`. The local-registry
+    refusals above guard the local read only; an unreachable remote box contributes no
+    rows, and a caller diffing ticks must hold its sessions (see `unreachable_boxes`).
     """
     agents = fetch_live_agents(
         repo_root,
@@ -254,6 +316,16 @@ def live_peers(
         raise_on_empty_snapshot=True,
         **({"box_wide": True} if box_wide else {}),
     )
+    local_id = box_registry.local_box_id()
+    agents = [dict(agent, box_id=local_id) for agent in agents]
+    for agent in agents:
+        sid = agent.get("sessionId")
+        if isinstance(sid, str) and sid:
+            agent["peerKey"] = remote_identity.peer_key(local_id, sid)
+    if include_remote:
+        agents = agents + remote_peer_rows(
+            snapshot if snapshot is not None else read_remote_snapshot()
+        )
     peers = [a for a in agents if not is_eval_sandbox_peer(a)]
     for session_id in exclude_session_ids:
         if session_id is not None:
@@ -419,6 +491,37 @@ def classify_fallback_status(
     return STATE_UNKNOWN, f"unrecognized-status:{status}"
 
 
+def _classify_remote(peer: dict[str, Any], session_id: str) -> dict[str, Any]:
+    """A remote row's verdict from its snapshot status alone: its transcript is on another box.
+
+    Executing statuses read PRODUCING. `idle` stays UNKNOWN and never a candidate: the
+    local ladder separates a parked `idle` from a mid-turn one by the transcript tail,
+    which a remote row cannot offer, and the harness `idle` alone is the unreliable
+    signal that ladder exists to cross-check.
+    """
+    status = peer.get("status")
+    if status in EXECUTING_STATUSES:
+        state, reason = STATE_PRODUCING, f"remote-status-{status}"
+    elif status == "idle":
+        state, reason = STATE_UNKNOWN, "remote-status-idle-unverified"
+    elif not status:
+        state, reason = STATE_UNKNOWN, "status-absent"
+    else:
+        state, reason = STATE_UNKNOWN, f"unrecognized-status:{status}"
+    return {
+        "session_id": session_id,
+        "source": "remote",
+        "state": state,
+        "reason": reason,
+        "candidate": False,
+        "unclassifiable": False,
+        "contradicted": False,
+        "cwd": peer.get("cwd"),
+        "box_id": peer.get("box_id"),
+        "peerKey": peer.get("peerKey"),
+    }
+
+
 def classify_peer(
     repo_root: str,
     peer: dict[str, Any],
@@ -460,6 +563,9 @@ def classify_peer(
             "contradicted": False,
             "cwd": peer.get("cwd"),
         }
+
+    if peer.get("remote"):
+        return _classify_remote(peer, session_id)
 
     reader_record = read_receiver_state(session_id, repo_root)
     if reader_record is not None:

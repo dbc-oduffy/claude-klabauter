@@ -48,16 +48,63 @@ def test_identical_rerun_returns_path_without_token(tmp_path):
     assert "runToken" not in _twin_path(tmp_path).read_text(encoding="utf-8")
 
 
-def test_no_script_writes_nothing(tmp_path):
-    _call(tmp_path)
+def test_no_script_refuses_by_name_and_writes_nothing(tmp_path):
+    with pytest.raises(ValueError, match="staged twin write failed: run script 'run1.workflow.mjs' is absent"):
+        _call(tmp_path)
     assert not _twin_path(tmp_path).exists()
 
 
-@pytest.mark.parametrize("text", ["return 1;\n", SCRIPT + nrc.STAGED_INLINE_SLOT + "\n"])
-def test_zero_or_two_slot_lines_write_nothing(tmp_path, text):
-    _script(tmp_path, text)
-    _call(tmp_path)
+def test_missing_script_of_an_emitted_run_refuses_by_name(tmp_path):
+    (tmp_path / "state" / "warp" / "run1").mkdir(parents=True)
+    (tmp_path / "state" / "warp" / "run1" / "run.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="staged twin write failed: run script 'run1.workflow.mjs' is absent"):
+        _call(tmp_path)
     assert not _twin_path(tmp_path).exists()
+
+
+def test_zero_slot_script_is_a_standalone_run_and_writes_nothing(tmp_path):
+    _script(tmp_path, "return 1;\n")
+    assert twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError) is None
+    assert not _twin_path(tmp_path).exists()
+
+
+def test_two_slot_lines_refuse_by_name_and_write_nothing(tmp_path):
+    _script(tmp_path, SCRIPT + nrc.STAGED_INLINE_SLOT + "\n")
+    with pytest.raises(ValueError, match="staged twin write failed.*2 inline slots"):
+        _call(tmp_path)
+    assert not _twin_path(tmp_path).exists()
+
+
+def test_write_and_identical_paths_return_the_on_disk_twin(tmp_path):
+    _script(tmp_path)
+    rel = nrc.staged_twin_rel("run1", SHA)
+    for _ in range(2):
+        got = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError)
+        assert got == rel
+        assert "const _STAGED_INLINE = " in (tmp_path / got).read_text(encoding="utf-8")
+
+
+def test_unreadable_script_refuses_by_name(tmp_path):
+    p = tmp_path / "scratch" / "warp" / "run1.workflow.mjs"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"\xff\xfe\x00bad")
+    with pytest.raises(ValueError, match="staged twin write failed.*unreadable"):
+        _call(tmp_path)
+
+
+def test_write_oserror_refuses_by_name(tmp_path):
+    _script(tmp_path)
+    _twin_path(tmp_path).mkdir(parents=True)
+    with pytest.raises(ValueError, match="staged twin write failed"):
+        _call(tmp_path)
+    assert not list(_twin_path(tmp_path).parent.glob("*.tmp"))
+
+
+def test_uncontained_target_refuses_by_name(tmp_path, monkeypatch):
+    _script(tmp_path)
+    monkeypatch.setattr(twin._path_guard, "contained_path", lambda *a, **k: None)
+    with pytest.raises(ValueError, match="staged twin write failed.*outside"):
+        _call(tmp_path)
 
 
 @pytest.mark.parametrize("rel", ["state/warp/run1/other.json", "state/other/run1/manifest.json", "state/warp/../x/manifest.json"])
@@ -265,6 +312,7 @@ def test_after_consume_next_call_writes_tokenless_twin(tmp_path):
 
 def test_escrow_on_noop_branch_returns_none_quietly(tmp_path):
     _escrowed_run(tmp_path)
+    _script(tmp_path, "return 1;\n")
     assert twin.ensure_twin(tmp_path, "state/other/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError) is None
     got = _stage(tmp_path)
     assert got is None

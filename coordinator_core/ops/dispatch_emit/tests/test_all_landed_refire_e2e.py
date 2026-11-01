@@ -29,7 +29,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
 from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
-from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import (
     WORKFLOW_FAKE_JS,
@@ -119,6 +119,7 @@ def _example_game_repo_shape(root):
     _git(root, "add", "state")
     message = halted_record_message(_PRIOR_RUN, {"halted": "ledger-check", "plan": PLAN_REL})
     _git(root, "commit", "-q", "-m", message + "\nLands-Chunks: A1")
+    write_run_scripts(root, _RUN)
 
 
 def _run_composed(root, verify) -> dict:

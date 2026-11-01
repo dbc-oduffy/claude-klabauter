@@ -77,6 +77,31 @@ def test_gate_still_refuses_foreign_dirt_beside_predecessor_write(tmp_path, monk
     assert "pre-existing-dirt: a.py" not in json.dumps(out)
 
 
+def _commit_halted_predecessor(root, baseline):
+    """The 9bcc0b shape: a pass that halted at commit with an empty slice and one withheld path."""
+    run = _records(root, {"inline_review": {"prep": {"slice_files": []}}})
+    pred = root / "state" / "warp" / PRED
+    (pred / "halted.json").write_text(json.dumps({"run_artifacts": {"withheld": {"w.py": "blob"}}}))
+    (pred / "manifest.json").write_text(json.dumps({"write_baseline": baseline}))
+    return run
+
+
+def test_gate_credits_path_the_commit_halted_predecessor_wrote(tmp_path, monkeypatch):
+    run = _commit_halted_predecessor(tmp_path, {"a.py": "blob-before"})
+    (tmp_path / "a.py").write_text("after\n")
+    assert _land_gate(tmp_path, monkeypatch, ["a.py"], run) is None
+
+
+def test_gate_still_refuses_dirt_the_commit_halted_predecessor_never_baselined(tmp_path, monkeypatch):
+    run = _commit_halted_predecessor(tmp_path, {"a.py": "blob-before"})
+    for n in ("a.py", "foreign.py"):
+        (tmp_path / n).write_text("after\n")
+    out = _land_gate(tmp_path, monkeypatch, ["a.py", "foreign.py"], run)
+    assert out is not None and out["refused"] == "ledger-unmet"
+    assert "pre-existing-dirt: foreign.py" in json.dumps(out)
+    assert "pre-existing-dirt: a.py" not in json.dumps(out)
+
+
 def test_absent_path_is_not_dirt(tmp_path, monkeypatch):
     run = _records(tmp_path, SLICE)
     assert _land_gate(tmp_path, monkeypatch, ["absent_test.py"], run) is None

@@ -155,6 +155,72 @@ def test_rag_calls_counts_only_example_retrieval_repo_tools(tmp_path):
     assert row["tool_calls"] == 4
 
 
+def _bash(tid, command):
+    return {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": command}}
+
+
+def test_search_calls_and_rag_uptake_ratio(tmp_path):
+    def write(aid, blocks):
+        (tmp_path / f"agent-{aid}.jsonl").write_text(
+            json.dumps(_tool_msg("m1", "r1", blocks, _u(1, 1, 0, 0))) + "\n", encoding="utf-8")
+
+    write("g", [{"type": "tool_use", "id": "t1", "name": "Grep", "input": {}},
+                _bash("t2", "grep -rn x ."), _bash("t3", "git grep x"), _bash("t4", "ls")])
+    write("r", [_tu("t1", "mcp__project-rag__project_symbol"), _bash("t2", "rg foo")])
+    write("o", [_tu("t1", "Read", "/a"), _bash("t2", "pytest -k find")])
+    write("f", [_bash("t1", "find . -name x"), {"type": "tool_use", "id": "t2", "name": "Glob", "input": {}}])
+    _journal(tmp_path, [("g", "g"), ("r", "r"), ("o", "o"), ("f", "f")])
+    res = scan_run(str(tmp_path))
+    by_id = {a["agent_id"]: a for a in res["agents"]}
+    assert by_id["g"]["search_calls"] == 2
+    assert by_id["r"]["search_calls"] == 1 and by_id["r"]["rag_calls"] == 1
+    assert by_id["o"]["search_calls"] == 0
+    assert by_id["f"]["search_calls"] == 2
+    assert res["run_total"]["rag_uptake"] == {
+        "searching_agents": 3, "rag_agents": 1, "fallback_agents": 0, "ratio": 1 / 3}
+
+
+def _result(tid, is_error):
+    return {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tid, "is_error": is_error, "content": "x"}]}}
+
+
+def test_failed_rag_call_then_grep_records_fallback(tmp_path):
+    rag = "mcp__project-rag__project_symbol"
+    lines = [
+        _tool_msg("m1", "r1", [_tu("t1", rag)], _u(1, 1, 0, 0)),
+        _result("t1", True),
+        _tool_msg("m2", "r2", [{"type": "tool_use", "id": "t2", "name": "Grep", "input": {}}],
+                  _u(1, 1, 0, 0)),
+    ]
+    (tmp_path / "agent-f.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    ok = [_tool_msg("m1", "r1", [_tu("t1", rag)], _u(1, 1, 0, 0)), _result("t1", False),
+          _tool_msg("m2", "r2", [{"type": "tool_use", "id": "t2", "name": "Grep", "input": {}}],
+                    _u(1, 1, 0, 0))]
+    (tmp_path / "agent-k.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in ok) + "\n", encoding="utf-8")
+    grep_first = [_tool_msg("m1", "r1", [{"type": "tool_use", "id": "t2", "name": "Grep", "input": {}}],
+                            _u(1, 1, 0, 0)),
+                  _tool_msg("m2", "r2", [_tu("t1", rag)], _u(1, 1, 0, 0)), _result("t1", True)]
+    (tmp_path / "agent-o.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in grep_first) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("f", "f"), ("k", "k"), ("o", "o")])
+    res = scan_run(str(tmp_path))
+    by_id = {a["agent_id"]: a for a in res["agents"]}
+    assert by_id["f"]["rag_calls"] == 1 and by_id["f"]["rag_failed"] == 1
+    assert by_id["f"]["rag_fallback"] == 1
+    assert by_id["k"]["rag_failed"] == 0 and by_id["k"]["rag_fallback"] == 0
+    assert by_id["o"]["rag_failed"] == 1 and by_id["o"]["rag_fallback"] == 0
+    assert res["run_total"]["rag_uptake"]["fallback_agents"] == 1
+
+
+def test_rag_uptake_ratio_none_without_searchers(tmp_path):
+    _agent(tmp_path, "a", [("m1", "r1", OPUS, _u(1, 1, 0, 0))])
+    _journal(tmp_path, [("a", "a")])
+    assert scan_run(str(tmp_path))["run_total"]["rag_uptake"]["ratio"] is None
+
+
 def test_missing_transcript_zeroes_new_fields(tmp_path):
     _journal(tmp_path, [("ghost", "g")])
     row = scan_run(str(tmp_path))["agents"][0]

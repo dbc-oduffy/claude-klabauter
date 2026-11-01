@@ -48,10 +48,10 @@ def _no_spawn(monkeypatch):
 
 
 def test_tree_overlay_refs_untouched_zero_spawns(repo, monkeypatch):
-    (repo / "edit.txt").write_text("new\n")
+    (repo / "edit.txt").write_bytes(b"new\n")
     (repo / "gone.txt").unlink()
     (repo / "fresh").mkdir()
-    (repo / "fresh" / "n.txt").write_text("n\n")
+    (repo / "fresh" / "n.txt").write_bytes(b"n\n")
     head_before = _git(repo, "rev-parse", "HEAD")
     ref_before = (repo / ".git" / "refs" / "heads" / "main").read_bytes()
     index_before = (repo / ".git" / "index").read_bytes()
@@ -61,7 +61,7 @@ def test_tree_overlay_refs_untouched_zero_spawns(repo, monkeypatch):
     out = mr.measured_rev("run-1", ["edit.txt", "gone.txt", "fresh/n.txt"], repo_root=repo)
     monkeypatch.undo()
 
-    assert tuple(out) == MEASURED_REV_KEYS
+    assert tuple(out) == MEASURED_REV_KEYS + ("reach_dirt",)
     assert out["base_sha"] == head_before
     assert out["removed"] == ["gone.txt"]
     assert out["paths"] == ["edit.txt", "fresh/n.txt"]
@@ -90,7 +90,7 @@ def test_crlf_checkin_parity(repo):
 
 def test_new_dir_under_missing_parent(repo):
     (repo / "x" / "y").mkdir(parents=True)
-    (repo / "x" / "y" / "z.txt").write_text("z\n")
+    (repo / "x" / "y" / "z.txt").write_bytes(b"z\n")
     out = mr.measured_rev("run-3", ["x/y/z.txt"], repo_root=repo)
     assert "x/y/z.txt" in _tree(repo, out["sha"])
     assert "sub/deep.txt" in _tree(repo, out["sha"])
@@ -115,9 +115,85 @@ def test_handler_replies_typed_refusal_and_result(repo):
     assert bad["refused"] == "measured-rev"
     refused = mr._handler({"run_id": "run-h", "paths": ["../x"]}, repo)
     assert refused["refused"] == "measured-rev"
-    (repo / "edit.txt").write_text("new\n")
+    (repo / "edit.txt").write_bytes(b"new\n")
     ok = mr._handler({"run_id": "run-h", "paths": ["edit.txt"]}, repo)
-    assert tuple(ok) == MEASURED_REV_KEYS
+    assert tuple(ok) == MEASURED_REV_KEYS + ("reach_dirt",)
+
+
+def test_record_tree_is_candidate_tree(repo):
+    (repo / "edit.txt").write_bytes(b"new\n")
+    out = mr.measured_rev("run-t", ["edit.txt"], repo_root=repo)
+    assert out["tree"] == _git(repo, "rev-parse", out["sha"] + "^{tree}")
+    assert json.loads(measured_rev_record_path(repo, "run-t").read_text())["tree"] == out["tree"]
+
+
+def test_no_whole_tree_export_surface():
+    assert not hasattr(mr, "export_measured")
+    assert not hasattr(mr, "run_git")
+
+
+def test_handler_materialises_no_tree_and_spawns_nothing_even_with_export_param(repo, monkeypatch):
+    (repo / "edit.txt").write_bytes(b"new\n")
+    _no_spawn(monkeypatch)
+    out = mr._handler({"run_id": "run-x", "paths": ["edit.txt"], "export": True}, repo)
+    assert "export_dir" not in out and set(MEASURED_REV_KEYS) <= set(out)
+    assert not (repo / "scratch" / "measured-rev").exists()
+
+
+def test_drifted_write_set_blob_is_refused_by_the_drift_check(repo):
+    (repo / "edit.txt").write_bytes(b"new\n")
+    mr.measured_rev("run-d", ["edit.txt"], repo_root=repo)
+    run_dir = measured_rev_record_path(repo, "run-d").parent
+    assert mr.measured_rev_drift(run_dir, repo) == []
+    (repo / "edit.txt").write_bytes(b"drifted\n")
+    assert mr.measured_rev_drift(run_dir, repo) == ["edit.txt"]
+
+
+def _reach_repo(root):
+    (root / "pkg" / "tests" / "fixtures").mkdir(parents=True)
+    (root / "pkg" / "tests" / "test_a.py").write_bytes(b"def test_a():\n    pass\n")
+    (root / "pkg" / "tests" / "fixtures" / "data.json").write_bytes(b"{}\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "reach")
+
+
+def test_reach_dirt_names_dirty_fixture_outside_landing_set(repo, monkeypatch):
+    _reach_repo(repo)
+    (repo / "pkg" / "tests" / "test_a.py").write_bytes(b"def test_a():\n    assert True\n")
+    (repo / "pkg" / "tests" / "fixtures" / "data.json").write_bytes(b'{"dirty": 1}\n')
+    head_blob = _git(repo, "rev-parse", "HEAD:pkg/tests/fixtures/data.json")
+    _no_spawn(monkeypatch)
+    out = mr.measured_rev("run-rd", ["pkg/tests/test_a.py"], repo_root=repo)
+    monkeypatch.undo()
+    assert out["reach_dirt"] == {"pkg/tests/fixtures/data.json": head_blob}
+    rec = json.loads(measured_rev_record_path(repo, "run-rd").read_text())
+    assert rec["reach_dirt"] == out["reach_dirt"]
+
+
+def test_reach_dirt_empty_when_fixture_clean_or_in_landing_set(repo):
+    _reach_repo(repo)
+    test = "pkg/tests/test_a.py"
+    fixture = "pkg/tests/fixtures/data.json"
+    (repo / test).write_bytes(b"def test_a():\n    assert True\n")
+    assert mr.measured_rev("run-c", [test], repo_root=repo)["reach_dirt"] == {}
+    (repo / fixture).write_bytes(b'{"dirty": 1}\n')
+    assert mr.measured_rev("run-l", [test, fixture], repo_root=repo)["reach_dirt"] == {}
+
+
+def test_reach_dirt_seeds_from_landed_module_sibling_test(repo):
+    _reach_repo(repo)
+    (repo / "pkg" / "mod.py").write_bytes(b"X = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "mod")
+    (repo / "pkg" / "mod.py").write_bytes(b"X = 2\n")
+    (repo / "pkg" / "tests" / "fixtures" / "data.json").write_bytes(b'{"dirty": 1}\n')
+    out = mr.measured_rev("run-m", ["pkg/mod.py"], repo_root=repo)
+    assert list(out["reach_dirt"]) == []
+    (repo / "pkg" / "tests" / "test_mod.py").write_bytes(b"def test_m():\n    pass\n")
+    _git(repo, "add", "pkg/tests/test_mod.py")
+    _git(repo, "commit", "-q", "-m", "sibling")
+    out = mr.measured_rev("run-m2", ["pkg/mod.py"], repo_root=repo)
+    assert list(out["reach_dirt"]) == ["pkg/tests/fixtures/data.json"]
 
 
 def test_refuses_when_no_head(tmp_path):
@@ -131,3 +207,45 @@ def test_refuses_unsupported_filter(repo):
     (repo / "a.pin").write_bytes(b"x\r\n")
     with pytest.raises(mr.MeasuredRevRefused):
         mr.measured_rev("run-6", ["a.pin"], repo_root=repo)
+
+
+def test_unparseable_py_is_refused_and_parseable_py_is_accepted(repo):
+    (repo / "bad.py").write_bytes(b"def (:\n")
+    (repo / "ok.py").write_bytes(b"x = 1\n")
+    with pytest.raises(mr.MeasuredRevRefused, match="py-unparseable: bad.py"):
+        mr.measured_rev("run-py", ["bad.py", "ok.py"], repo_root=repo)
+    assert not measured_rev_record_path(repo, "run-py").exists()
+    out = mr.measured_rev("run-py", ["ok.py"], repo_root=repo)
+    assert out["paths"] == ["ok.py"]
+
+
+def test_blob_equal_to_head_entry_is_not_rewritten_and_changed_blob_is(repo, monkeypatch):
+    (repo / "same.txt").write_bytes(b"lf\n")
+    _git(repo, "add", "same.txt")
+    _git(repo, "commit", "-q", "-m", "same")
+    (repo / "edit.txt").write_bytes(b"new\n")
+    writes = []
+    real = mr.write_object
+
+    def spy(gitdir, kind, payload, **kw):
+        writes.append((kind, payload))
+        return real(gitdir, kind, payload, **kw)
+
+    monkeypatch.setattr(mr, "write_object", spy)
+    out = mr.measured_rev("run-same", ["same.txt", "edit.txt"], repo_root=repo)
+    assert out["blobs"]["same.txt"] == _tree(repo, "HEAD")["same.txt"]
+    blob_payloads = [p for k, p in writes if k == b"blob"]
+    assert blob_payloads == [b"new\n"]
+
+
+def test_unmeasurable_reach_is_a_typed_refusal_and_writes_no_record(repo, monkeypatch):
+    (repo / "edit.txt").write_bytes(b"new\n")
+
+    def boom(*a, **k):
+        raise RuntimeError("status unreadable")
+
+    monkeypatch.setattr(mr, "foreign_dirt", boom)
+    with pytest.raises(mr.MeasuredRevRefused, match="test reach"):
+        mr.measured_rev("run-reach", ["edit.txt"], repo_root=repo)
+    assert not measured_rev_record_path(repo, "run-reach").exists()
+    assert mr._handler({"run_id": "run-reach", "paths": ["edit.txt"]}, repo)["refused"] == "measured-rev"

@@ -21,11 +21,14 @@ from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
 PARAMS_FILE_NAME = "terminal-commit-params.json"
+LAND_PARAMS_FILE_NAME = "land-params.json"
 REFUSAL_FILE_NAME = "terminal-commit-params.refused"
 BLOCK_OPEN = "-----BEGIN TERMINAL-COMMIT PARAMS-----"
 BLOCK_CLOSE = "-----END TERMINAL-COMMIT PARAMS-----"
 RELAY_HEADER = "[Workflow harness — user request]"
 READ_CAP_BYTES = 64 * 1024
+# A spawn prompt embeds the plan row and brief, so a commit-stage record runs past READ_CAP_BYTES.
+PROMPT_RECORD_CAP_BYTES = 1024 * 1024
 MAX_PROMPT_RECORDS = 8
 
 # Emitted into the composed script; must stay byte-equal to `render_params_block`
@@ -44,6 +47,12 @@ def params_path(repo_root: object, run_id: object) -> Optional[Path]:
     if not isinstance(run_id, str) or not run_token._RUN_ID_RE.match(run_id):
         return None
     return Path(str(repo_root)) / RUN_DIR_ROOT / run_id / PARAMS_FILE_NAME
+
+
+def land_params_path(repo_root: object, run_id: object) -> Optional[Path]:
+    """Sibling of `params_path` holding the run's product params; None for an invalid run id."""
+    path = params_path(repo_root, run_id)
+    return None if path is None else path.with_name(LAND_PARAMS_FILE_NAME)
 
 
 def _canonical_run_id(path: str) -> Optional[str]:
@@ -174,12 +183,12 @@ def _read_record_content(fh: BinaryIO) -> tuple[bool, Optional[str]]:
 
     An over-cap line is drained unparsed and yields None content. `more` is False at EOF.
     """
-    line = fh.readline(READ_CAP_BYTES + 1)
+    line = fh.readline(PROMPT_RECORD_CAP_BYTES + 1)
     if not line:
         return False, None
-    if len(line) > READ_CAP_BYTES:
+    if len(line) > PROMPT_RECORD_CAP_BYTES:
         while not line.endswith(b"\n"):
-            line = fh.readline(READ_CAP_BYTES)
+            line = fh.readline(PROMPT_RECORD_CAP_BYTES)
             if not line:
                 return False, None
         return True, None
@@ -214,21 +223,60 @@ def read_spawn_prompt(transcript_path: object) -> Optional[str]:
         return None
 
 
-def materialize(path: Path, params: dict) -> bool:
-    """Write `params` as ASCII-only JSON via temp file plus `os.replace`; False on failure."""
+def _write_atomic(path: Path, data: bytes) -> bool:
     tmp_name = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = json.dumps(params, ensure_ascii=True).encode("ascii")
         fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".tcp-", suffix=".tmp")
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
         os.replace(tmp_name, path)
         return True
-    except (OSError, ValueError, TypeError):
+    except OSError:
         if tmp_name:
             try:
                 os.unlink(tmp_name)
             except OSError:
                 pass
         return False
+
+
+def materialize(path: Path, params: dict) -> bool:
+    """Write `params` as ASCII-only JSON via temp file plus `os.replace`; False on failure.
+
+    A product write (no `halted_by`, an `inline_review` dict) also records the same bytes at the
+    `land-params.json` sibling; a failed sibling write never changes the return.
+    """
+    try:
+        data = json.dumps(params, ensure_ascii=True).encode("ascii")
+    except (ValueError, TypeError):
+        return False
+    if not _write_atomic(path, data):
+        return False
+    if "halted_by" not in params and isinstance(params.get("inline_review"), dict):
+        _write_atomic(path.with_name(LAND_PARAMS_FILE_NAME), data)
+    return True
+
+
+def recorded_land_params(repo_root: object, run_id: object) -> Optional[dict]:
+    """The product params recorded for `run_id`, or None. Never raises.
+
+    Trap: a halt's params block lands on the same canonical params path and erased the product
+    params of a run cut by an engine stop; this sibling is written only by a product write, so a
+    halt leaves it. None unless its run_id matches, the required string keys are strings and
+    `inline_review` is a dict.
+    """
+    path = land_params_path(repo_root, run_id)
+    if path is None:
+        return None
+    try:
+        params = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(params, dict) or params.get("run_id") != run_id:
+        return None
+    if not all(isinstance(params.get(k), str) for k in REQUIRED_STR_KEYS):
+        return None
+    if not isinstance(params.get("inline_review"), dict):
+        return None
+    return params

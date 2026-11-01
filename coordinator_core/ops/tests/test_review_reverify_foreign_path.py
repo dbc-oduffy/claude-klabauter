@@ -15,6 +15,7 @@ from coordinator_core.ops import review_reverify_probe as probe
 from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun
+from coordinator_core.ops.tests.test_review_prep import _base, _write, repo  # noqa: F401  (repo is a fixture)
 from coordinator_core.ops.tests.test_review_reverify import (  # noqa: F401  (world is a fixture)
     BASE, PREFIX, SESSION, _ledger, _row, world as rr_world,
 )
@@ -106,13 +107,24 @@ def test_a_failed_restore_leaves_the_probe_open_naming_the_stuck_path(world, mon
     assert probe.is_open(snap)
 
 
-def test_review_prep_drops_withheld_paths_from_the_reviewed_set(tmp_path):
+def test_review_prep_names_a_withheld_path_peer_held_and_keeps_it_in_review(repo):
+    _write(repo, ["a/theirs.py"], 3)
     live = {"other": LiveRun(withheld=frozenset({"a/theirs.py"}))}
     reply = rp.review_prep(
-        tmp_path, base="abcd1234", paths=["a/theirs.py"], slice_prefix="p",
+        repo, base=_base(repo), paths=["a/theirs.py"], slice_prefix="p",
         plan_path="docs/plans/p.md", session_id="s", run_id="me", live_runs=live,
     )
-    assert reply["error"] is None and reply["product_files"] == 0 and not reply.get("slices")
+    assert reply["error"] is None and reply["peer_held"] == ["a/theirs.py"]
+    assert [f for s in reply["slices"] for f in s["files"]] == ["a/theirs.py"]
+
+
+def test_review_prep_answers_an_unresolvable_base_rather_than_slicing(repo):
+    _write(repo, ["a/theirs.py"], 3)
+    reply = rp.review_prep(
+        repo, base="abcd1234", paths=["a/theirs.py"], slice_prefix="p",
+        plan_path="docs/plans/p.md", session_id="s", run_id="me",
+    )
+    assert reply["error"] and "abcd1234" in reply["error"] and not reply.get("slices")
 
 
 def test_live_runs_from_params_parses_and_rejects_malformed():
@@ -186,7 +198,7 @@ def test_revert_skips_a_path_another_run_withholds(rr_world, monkeypatch):
 
 def test_review_reverify_entry_point_probes_when_no_foreign_run_holds_the_path(rr_world, monkeypatch):
     root, orig, _ = rr_world
-    (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
+    (root / "tests/test_plain.py").write_bytes(b"def test_p():\n    assert nope\n")
     sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))
     monkeypatch.setattr(land_run, "foreign_halted_withheld", lambda *_a, **_k: {})
     out = _probe_open(root, sidecars, ["tests/test_plain.py::test_p"], run_id="me")

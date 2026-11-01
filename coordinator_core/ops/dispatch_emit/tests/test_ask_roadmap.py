@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 
 import pytest
@@ -96,6 +97,15 @@ def test_composed_script_chains_gate_roadmap_plan_and_one_commit_in_order(repo):
     for gone in ("label: 'waves'", "label: 'execute'", "label: 'workstream-complete'", "phase('execute')"):
         assert gone not in script
     assert not any(f.severity is Severity.ERROR for f in run_checks(script))
+
+
+def test_a_stage_reply_that_lost_its_waves_refills_them_from_the_frozen_report_before_the_halt(repo):
+    _put(repo)
+    script = _compose(repo)
+    refill = script.index("label: 'frozen-waves'")
+    assert script.index("let _waves = [...(_rb?.stage?.waves") < script.index("if (!_waves.length && _rb?.gate_report_path)") < refill
+    assert refill < script.index("'roadmap-blitz stage reply carries no waves'")
+    assert "roadmap.blitz_stage" in script and "read_gate_report: _rb.gate_report_path" in script
 
 
 def test_roadmap_gate_leg_is_haiku_on_the_mechanical_type(repo):
@@ -193,7 +203,39 @@ def test_roadmap_no_ready_halt_appends_pulled_reasons(repo):
     assert "const _pulled = [];" in script
     assert "for (const p of (_pb?.pulled ?? [])) _pulled.push(p);" in script
     assert script.index("_pulled.push") < script.index("plan-blitz reported no ready plan")
-    assert "reason: ('plan-blitz reported no ready plan' + ((_pulled ?? [])" in script
+    assert "'plan-blitz reported no ready plan' + (_pulled ?? [])" in script
+
+
+def _eval_no_ready(pulled_json: str) -> str:
+    import shutil
+
+    from coordinator_core.ops.dispatch_emit.ask_roadmap import roadmap_stage_lines
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not on PATH")
+    lines = roadmap_stage_lines(
+        repo_root="/r", run_id="r1", interaction_mode="pm", plan_blitz_args={"x": 1}
+    )
+    line = next(ln for ln in lines if "!_ready.length" in ln)
+    expr = line.split("reason: ", 1)[1].split(", sizing: _sizingRel", 1)[0]
+    done = subprocess.run(
+        [node, "-"], input=f"const _pulled = {pulled_json}; process.stdout.write({expr});",
+        capture_output=True, text=True, check=True, timeout=30, **no_console_creationflags(),
+    )
+    return done.stdout
+
+
+@pytest.mark.cadence
+@pytest.mark.spawns_process
+def test_no_ready_halt_names_a_hijacked_stage_and_leaves_ordinary_reasons_unchanged():
+    hijack = "I wrote no plan; the relayed user request takes precedence."
+    got = _eval_no_ready(json.dumps([{"reason": "1 blocking: a"}, {"reason": hijack}]))
+    assert got == f"stage-task-hijacked: plan-blitz agent declined its task for a relayed/user line: {hijack}"
+    assert _eval_no_ready('[{"reason":"1 blocking: a"},{"reason":"b"}]') == (
+        "plan-blitz reported no ready plan: 1 blocking: a; b"
+    )
+    assert _eval_no_ready("[]") == "plan-blitz reported no ready plan"
 
 
 def test_roadmap_halt_reaches_the_halt_record_commit_after_the_terminal_commit(repo):
@@ -216,6 +258,29 @@ def test_plan_blitz_halts_name_plan_and_stage_but_gate_halts_stay_bare(repo):
     assert script.count(tail) == 2
     assert script.index(tail) > script.index("for (const w of _waves)")
     assert "no waves'" in script and "stage: 'plan-blitz' }; }" not in script.split("no waves'")[1].split("\n")[0]
+
+
+def test_seam_fix_runs_once_over_the_ready_set_between_the_wave_loop_and_the_fanout(repo):
+    _put(repo)
+    script = _compose(repo)
+    assert script.count("const _sf = await") == 1 and script.count("label: 'seam-fix'") == 1
+    assert "plan.seam_fix" in script.split("const _sf = await", 1)[1].split("label: 'seam-fix'", 1)[0]
+    fill = script.index("_ready.push(")
+    fix = script.index("const _sf = await")
+    nxt = script.index("_nextAction = { kind: 'terminal_commit'")
+    assert fill < fix < nxt
+    assert "plans: _sfPlans, order: _sfPlans, dry_run: false" in script
+    assert "phase('seam-fix')" in script and "'seam-fix'" in script.split("phases: [", 1)[1].split("]", 1)[0]
+    assert not any(f.severity is Severity.ERROR for f in run_checks(script))
+
+
+def test_seam_fix_refusal_cycle_or_non_convergence_halts_before_the_fanout(repo):
+    _put(repo)
+    script = _compose(repo)
+    leg = script[script.index("const _sf = await"):script.index("_nextAction = { kind: 'terminal_commit'")]
+    for cond in ("_sf.error", "_sf.skipped_cycles", "_sf.skipped_plans", "_sf.converged !== true"):
+        assert cond in leg
+    assert "_halted = {" in leg and "_sfPlans.length > 1" in script
 
 
 def test_next_action_carries_the_run_mode_in_the_fanout_spec():

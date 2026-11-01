@@ -13,4 +13,4 @@ consumers = [
 [[snippet.reviewer-calibration.conditional_consumer]]
 path           = "agents/file-exists-target.md"
 condition_type = "file-exists"
-condition_key  = "repos.example_game_workbench_repo"
+condition_key  = "repos.claude_unreal_holodeck"

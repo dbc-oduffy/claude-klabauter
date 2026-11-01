@@ -337,7 +337,7 @@ def test_measured_rev_constants_and_record_path(tmp_path):
     assert c.MEASURED_REV_OP == "dispatch.measured_rev"
     assert c.MEASURED_REV_ENV == "COORDINATOR_MEASURED_REV"
     assert c.MEASURED_REV_RECORD == "measured-rev.json"
-    assert c.MEASURED_REV_KEYS == ("sha", "base_sha", "paths", "removed", "blobs")
+    assert c.MEASURED_REV_KEYS == ("sha", "base_sha", "paths", "removed", "blobs", "tree")
     path = c.measured_rev_record_path(tmp_path, "rid")
     assert path.parent == tmp_path / f"{c.RECORD_DIR_ROOT}/rid"
     assert path.name == c.MEASURED_REV_RECORD

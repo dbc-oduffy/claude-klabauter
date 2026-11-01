@@ -703,8 +703,8 @@ def select_rows(
     repo_root = Path(repo_root)
 
     seen_stems: dict[str, Path] = {}
-    # (row_id, path, digest, normalised, pm_ruling)
-    rows: list[tuple[str, Path, str, dict[str, Any], str]] = []
+    # (row_id, path, digest, normalised, pm_ruling, parsed)
+    rows: list[tuple[str, Path, str, dict[str, Any], str, dict[str, Any]]] = []
 
     source_result: Optional[SourceOpResult] = None
     row_files: list[Path] = []
@@ -717,12 +717,16 @@ def select_rows(
     else:
         for queue_dir in queue:
             queue_dir = Path(queue_dir)
-            for name in sorted(os.listdir(queue_dir)):
-                if name.startswith(".") or not (name.endswith(".yaml") or name.endswith(".yml")):
-                    continue
-                row_path = queue_dir / name
-                if row_path.is_file():
-                    row_files.append(row_path)
+            # scandir's entry type comes with the listing: no per-row stat to ask is_file().
+            with os.scandir(queue_dir) as listing:
+                names = sorted(
+                    entry.name
+                    for entry in listing
+                    if not entry.name.startswith(".")
+                    and (entry.name.endswith(".yaml") or entry.name.endswith(".yml"))
+                    and entry.is_file()
+                )
+            row_files.extend(queue_dir / name for name in names)
 
     for row_path in row_files:
         raw_bytes = row_path.read_bytes()
@@ -753,7 +757,7 @@ def select_rows(
         normalised = _normalise_sentinels(parsed, absent_sentinels)
         raw_ruling = parsed.get("pm_ruling")
         pm_ruling = raw_ruling.strip() if isinstance(raw_ruling, str) else ""
-        rows.append((row_id, row_path, digest, normalised, pm_ruling))
+        rows.append((row_id, row_path, digest, normalised, pm_ruling, parsed))
 
     checked_where = _check_where(where, absent_sentinels)
     filtered = [r for r in rows if _matches_where(r[3], checked_where)]
@@ -818,7 +822,7 @@ def select_rows(
     entries: list[ManifestEntry] = []
     declined: list[DeclinedEntry] = []
     resolved_dirs: dict = {}
-    for row_id, row_path, digest, normalised, pm_ruling in filtered:
+    for row_id, row_path, digest, normalised, pm_ruling, raw_row in filtered:
         rel_path = _repo_relative(row_path, repo_root, resolved_dirs)
         mark = handback_marks.get(row_id, "")
         if mark.startswith("route-to-"):
@@ -852,9 +856,7 @@ def select_rows(
                 continue
         if row_schema_gate is not None:
             # The raw row: sentinel normalisation must not make a present field look missing.
-            malformed = _row_schema_decline_reason(
-                schema_validate.parse_yaml(row_path.read_text(encoding="utf-8")), row_schema_gate
-            )
+            malformed = _row_schema_decline_reason(raw_row, row_schema_gate)
             if malformed is not None:
                 declined.append(DeclinedEntry(row_id=row_id, path=rel_path, reason=malformed))
                 continue

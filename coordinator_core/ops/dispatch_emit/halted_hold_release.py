@@ -36,12 +36,13 @@ RELEASE_OWNER_NOT_LIVE = "owner-not-live"
 _LEGACY_RELEASE_PHANTOM = "phantom-no-own-hunk-owner-gone"
 RELEASE_WITHHELD_CLEAN = "withheld-clean-at-head"
 RELEASE_STALE_NOT_LIVE = "stale-not-live"
+RELEASE_TWIN_LANDED = "twin-of-landed-ask"
 _RECORDED_RELEASES = frozenset({RELEASE_CRITERION_MET, RELEASE_OWNER_NOT_LIVE, _LEGACY_RELEASE_PHANTOM})
 #: Releases that hold for every committer, so the run can leave the withheld index. The successor and
 #: plan-landing releases are absent: they free the run for one committer only.
 _RUN_INDEPENDENT_RELEASES = _RECORDED_RELEASES | frozenset({
     RELEASE_RECORDED_LANDED, RELEASE_MARKER_SUPERSEDED, RELEASE_SUPERSEDED, RELEASE_SIZING_SHIPPED,
-    RELEASE_KEPT_AT_HEAD, RELEASE_WITHHELD_CLEAN, RELEASE_STALE_NOT_LIVE,
+    RELEASE_KEPT_AT_HEAD, RELEASE_WITHHELD_CLEAN, RELEASE_STALE_NOT_LIVE, RELEASE_TWIN_LANDED,
 })
 
 #: A halted run that is neither live nor being refired cannot hold a path longer than this, counted from its
@@ -86,6 +87,9 @@ def released_path_reasons(root: Path, run_id: str) -> dict:
 
 def without_released_paths(root: Path, holds) -> list:
     """`holds` (`(path, holder_run_id)` pairs) minus those whose holder released that path per path."""
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    land_deadline.check("halted_hold_release.without_released_paths")
     memo: dict = {}
     out = []
     for path, holder in holds:
@@ -161,8 +165,9 @@ def record_stamps(root: Path) -> list:
     return out
 
 
-def _successor_landed(root: Path, run_id: str, sizing: str) -> bool:
+def _successor_landed(root: Path, run_id: str, sizing: str, *, any_stamp: bool = False) -> bool:
     """A later-stamped record dir binding `sizing` reads `landed`, or its spent token record carries a `landed` dict.
+    `any_stamp` weighs every other record dir of the sizing, earlier-minted twins included.
     Inside a `release_scope` the record-dir listing, each dir's `sizing_rel` and landed answer are read once, shared
     by every halted run weighed."""
     from coordinator_core.ops import warp_run_deliverable as wrd
@@ -170,7 +175,7 @@ def _successor_landed(root: Path, run_id: str, sizing: str) -> bool:
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     own = landing_halted_view.stamp(run_id)
-    if own is None or not sizing:
+    if not sizing or (own is None and not any_stamp):
         return False
     base = Path(root) / RECORD_DIR_ROOT
     state = _SCOPE.get()
@@ -181,7 +186,7 @@ def _successor_landed(root: Path, run_id: str, sizing: str) -> bool:
     if not stamped:
         return False
     for name, stamp in stamped:
-        if name == run_id or stamp is None or stamp <= own:
+        if name == run_id or (not any_stamp and (stamp is None or stamp <= own)):
             continue
         if name not in memo["sizing"]:
             memo["sizing"][name] = wrd._norm(str(wrd._read_json(base / name / "run.json").get("sizing_rel") or ""))
@@ -533,6 +538,8 @@ def _release_head(root: Path, halted_run_id: str) -> tuple:
         return (RELEASE_SUPERSEDED, marker, sizing, status, False)
     if sizing_status == "shipped":
         return (RELEASE_SIZING_SHIPPED, marker, sizing, status, False)
+    if status == halted_run.STATUS_HALTED and _successor_landed(root, halted_run_id, sizing, any_stamp=True):
+        return (RELEASE_TWIN_LANDED, marker, sizing, status, False)
     landed = status == halted_run.STATUS_RESUMED and _successor_landed(root, halted_run_id, sizing)
     return (None, marker, sizing, status, landed)
 
@@ -849,18 +856,64 @@ def _hunks_present(base: str, kept: str, head: str) -> bool:
     return state["memo"][key]
 
 
-def _hunks_present_uncached(base: str, kept: str, head: str) -> bool:
-    """The bounded diff is `run_hunk_claims.changed_opcodes` (prefix/suffix trim). Trap: past its bound it
-    returns one coarse span without signalling, so `exceeds_match_bound` is checked first and holds."""
+def _anchored_opcodes(base_b: list, kept_b: list) -> Optional[list]:
+    """Changed opcodes of `base_b` against `kept_b` in whole-file coordinates, or None when a changed span is
+    past the diff bound. A changed middle past `run_hunk_claims.MAX_MATCHED_MIDDLE` (edits near both ends of
+    a long file) is split at the lines unique to both sides that keep their order (patience anchors), so each
+    hunk is matched alone: linear in the file, never one coarse span. Trap: `changed_opcodes` returns a coarse
+    span without signalling past its bound, so `exceeds_match_bound` is checked per segment and holds."""
     from coordinator_core.ops.dispatch_emit.run_hunk_claims import changed_opcodes, exceeds_match_bound
 
+    if not exceeds_match_bound(base_b, kept_b):
+        return changed_opcodes(base_b, kept_b)
+    base_at: dict = {}
+    kept_at: dict = {}
+    for at, line in enumerate(base_b):
+        base_at[line] = -1 if line in base_at else at
+    for at, line in enumerate(kept_b):
+        kept_at[line] = -1 if line in kept_at else at
+    pairs = sorted((i, kept_at[line]) for line, i in base_at.items() if i >= 0 and kept_at.get(line, -1) >= 0)
+    tails: list = []  # tails[k]: index in `pairs` ending the best order-keeping chain of length k + 1
+    prev: list = []
+    for k, (_i, j) in enumerate(pairs):
+        lo, hi = 0, len(tails)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if pairs[tails[mid]][1] < j:
+                lo = mid + 1
+            else:
+                hi = mid
+        prev.append(tails[lo - 1] if lo else -1)
+        if lo == len(tails):
+            tails.append(k)
+        else:
+            tails[lo] = k
+    chain: list = []
+    cur = tails[-1] if tails else -1
+    while cur >= 0:
+        chain.append(pairs[cur])
+        cur = prev[cur]
+    chain.reverse()
+    out: list = []
+    cuts = [(-1, -1), *chain, (len(base_b), len(kept_b))]
+    for (ia, ja), (ib, jb) in zip(cuts, cuts[1:]):
+        seg_base, seg_kept = base_b[ia + 1:ib], kept_b[ja + 1:jb]
+        if exceeds_match_bound(seg_base, seg_kept):
+            return None
+        out += [(tag, i1 + ia + 1, i2 + ia + 1, j1 + ja + 1, j2 + ja + 1) for tag, i1, i2, j1, j2 in changed_opcodes(seg_base, seg_kept)]
+    return out
+
+
+def _hunks_present_uncached(base: str, kept: str, head: str) -> bool:
+    """The bounded diff is `_anchored_opcodes` (`run_hunk_claims.changed_opcodes` per anchored segment)."""
     base_lines, kept_lines = base.splitlines(), kept.splitlines()
     squashed_head = _squash(head)
     base_b = [line.encode("utf-8", "replace") for line in base_lines]
     kept_b = [line.encode("utf-8", "replace") for line in kept_lines]
-    if exceeds_match_bound(base_b, kept_b):
+    opcodes = _anchored_opcodes(base_b, kept_b)
+    if opcodes is None:
         return False
-    for tag, i1, i2, j1, j2 in changed_opcodes(base_b, kept_b):
+    for tag, i1, i2, j1, j2 in opcodes:
         if tag in ("insert", "replace"):
             added = _squash("\n".join(kept_lines[j1:j2]))
             if added and added not in squashed_head:
@@ -1007,6 +1060,7 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
     if blobs is None:
         return set()
     released: set = set()
+    pending: dict = {}
     for p in paths:
         head, keep = blobs[f"HEAD:{p}"], blobs[kept[p]]
         if head is None or keep is None:
@@ -1019,12 +1073,89 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
 
             spec = f"{base_sha}:{p}"
             base = landing_halted_view.shared("base_blob", (str(root), spec), lambda: _blob_fetch(root, [spec]))
-            if base is not None and _hunks_present(
-                (base[spec] or b"").decode("utf-8", "replace"),
-                keep.decode("utf-8", "replace"), head.decode("utf-8", "replace"),
-            ):
+            if base is None:
+                continue
+            base_text = (base[spec] or b"").decode("utf-8", "replace")
+            if _hunks_present(base_text, keep.decode("utf-8", "replace"), head.decode("utf-8", "replace")):
                 released.add(p)
+            else:
+                pending[p] = (base_text, keep)
+    if pending:
+        released |= _landed_in_history(root, base_sha, pending)
     return released
+
+
+#: Newest versions of one path probed for the kept hunks; bounds the blobs read for a long-lived path.
+_HISTORY_VERSIONS = 8
+
+
+#: Commits walked back from HEAD toward `base_sha`; a longer span is not probed and the hold stands.
+_HISTORY_COMMITS = 120
+
+
+def _history_blobs(root: Path, base_sha: str, paths: list) -> dict:
+    """`{path: [blob sha, ...]}` newest first: each distinct version of the path in the commits from HEAD back to
+    `base_sha`, read in process (no git spawn). Raises when a commit or tree is unreadable or the span exceeds
+    `_HISTORY_COMMITS`. Only `base_sha` itself bounds the walk: a merge parent older than it is walked to the
+    cap, and the hold stands."""
+    from coordinator_core.git import git_state
+    from coordinator_core.ops.dispatch_emit import landing_halted_view
+
+    head = git_state.head_sha(root)
+    if not head:
+        raise ValueError("no head")
+    found: dict = {p: [] for p in paths}
+    queue, seen = [head], {head, base_sha}
+    walked = 0
+    while queue:
+        sha = queue.pop(0)
+        walked += 1
+        if walked > _HISTORY_COMMITS:
+            raise ValueError("span too long")
+        commit = git_state.read_commit(root, sha)
+        entries = landing_halted_view.tree_entries(root, sha, paths) if commit is not None else None
+        if entries is None:
+            raise ValueError("unreadable commit")
+        for p in paths:
+            entry = entries.get(p)
+            if entry is not None and entry[1] not in found[p] and len(found[p]) < _HISTORY_VERSIONS:
+                found[p].append(entry[1])
+        for parent in commit.parents:
+            if parent not in seen:
+                seen.add(parent)
+                queue.append(parent)
+    return found
+
+
+def _landed_in_history(root: Path, base_sha: str, pending: dict) -> set:
+    """The `pending` paths (`{path: (base text, kept bytes)}`, kept hunks absent from HEAD) whose kept hunks sat
+    in a version a commit since `base_sha` gave the path: a hand landing a later commit then edited over is
+    still a landing. The same blob-equal or hunks-present test as HEAD, on each version. A path never
+    committed with the kept hunks is absent (still held). The history is read in process; at most one
+    `cat-file` spawn for the whole run, none for a scope that holds the object store in process."""
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    try:
+        versions = _history_blobs(root, base_sha, sorted(pending))
+        specs = list(dict.fromkeys(s for shas in versions.values() for s in shas[:_HISTORY_VERSIONS]))
+        blobs = _blob_batch(root, specs) if specs else {}
+        if blobs is None:
+            return set()
+        released: set = set()
+        for p, (base_text, keep) in pending.items():
+            keep_text = keep.decode("utf-8", "replace")
+            for sha in versions.get(p, [])[:_HISTORY_VERSIONS]:
+                version = blobs.get(sha)
+                if version is None:
+                    continue
+                if version == keep or kept_work.checkin_form(root, p, keep) == version or _hunks_present(
+                    base_text, keep_text, version.decode("utf-8", "replace"),
+                ):
+                    released.add(p)
+                    break
+        return released
+    except Exception:  # noqa: BLE001 -- unknown: the hold stands
+        return set()
 
 
 def _kept_at_head(root: Path, record: Path, marker: dict) -> bool:
@@ -1113,3 +1244,70 @@ def mark_plan_origins_landed(root: Path, plan_rel: str, sha: str, landed_paths, 
     except Exception:
         return done
     return done
+
+
+def _holder_hunks(root: Path, run_id: str, path: str, head_lines: list, common: Path) -> Optional[list]:
+    """The HEAD-coordinate hunks of `path` the halted `run_id` still keeps (its kept blob against HEAD), or
+    None when they cannot be named: not a halted marker, no single kept blob for the path, an unreadable
+    object, or a diff past the match bound. In process, no spawn."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.ops.dispatch_emit import halted_run, kept_work
+    from coordinator_core.ops.dispatch_emit.own_hunk_stage import _hunks_of
+    from coordinator_core.ops.dispatch_emit.run_hunk_claims import exceeds_match_bound
+
+    record = _record(root, run_id)
+    marker = halted_run._read(record)
+    if not marker or marker.get("status") != halted_run.STATUS_HALTED:
+        return None
+    plan = _kept_plan(record)
+    sha = plan[1].get(path) if plan is not None and path in plan[0] else None
+    if sha is None:
+        return None
+    obj = git_objects.read_object(common, sha)
+    if obj is None or obj[0] != "blob":
+        return None
+    form = kept_work.checkin_form(root, path, obj[1])
+    if form is None:
+        return None
+    kept_lines = form.splitlines(keepends=True)
+    if exceeds_match_bound(head_lines, kept_lines):
+        return None
+    return _hunks_of(path, head_lines, kept_lines)
+
+
+def hunks_clear_of_holders(root: Path, holders: dict) -> dict:
+    """`{path: (clear hunks, some_overlap)}` for each `holders` path (`{path: [halted run ids]}`) whose
+    worktree hunks against HEAD include some that overlap none of the holders' kept hunks.
+
+    `clear hunks` are the landing's hunks (HEAD coordinates, `own_hunk_stage` shape) that may be staged
+    while the holders' hunks stay in the tree; `some_overlap` is True when other hunks of the path
+    overlap a holder's and stay withheld. A path is absent (held whole) when any holder's kept hunks
+    cannot be named, the path is not in HEAD, or every hunk overlaps. Zero git spawn; never raises."""
+    out: dict = {}
+    try:
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.ops.dispatch_emit import own_hunk_stage
+
+        root = Path(root)
+        diffs = own_hunk_stage.read_diff(root, list(holders))
+        common = resolve_git_common_dir(root)
+        for path, rids in holders.items():
+            diff = diffs.get(path)
+            if diff is None:
+                continue
+            head_lines = diff.head_bytes.splitlines(keepends=True)
+            spans: list = []
+            for rid in rids:
+                kept = _holder_hunks(root, rid, path, head_lines, common)
+                if kept is None:
+                    spans = None
+                    break
+                spans += kept
+            if spans is None:
+                continue
+            clear = [h for h in diff.hunks if not any(h.overlaps(s) for s in spans)]
+            if clear:
+                out[path] = (clear, len(clear) < len(diff.hunks))
+    except Exception:  # noqa: BLE001 -- unknown holds the path whole
+        return {}
+    return out

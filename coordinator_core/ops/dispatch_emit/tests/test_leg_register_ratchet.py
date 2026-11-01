@@ -46,24 +46,42 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
         ("ask", "halt-commit"),
         ("ask", "commit:wave-"),
         ("ask", "blitz-stage-read"),
-        ("ask", "xs-plan-stage"),
         ("emit", "commit:wave-"),
         ("grind", "commit"),
         ("grind", "review-fix-commit"),
         ("grind", "verify-op"),
         ("grind", "ledger-sweep:drain"),
         ("ask", "already-delivered-close"),
-        ("ask", "sizing-probe"),
         ("ask", "late-rows-read"),
         ("ask", "chain-emit"),
-        ("ask", "plan-prep-gate"),
+        ("ask", "chain-abandon"),
+        ("ask", "seam-fix"),
+        ("ask", "frozen-waves"),
     }
 )
 _RUNTIME_FLOOR_MAX = 16
 
 #: Judgment legs that sit on the mechanical haiku type; every other such leg is refused.
 _JUDGMENT_ON_MECHANICAL_TYPE: frozenset[Key] = frozenset({("grind", "triage")})
-_MECHANICAL_TYPE, _MECHANICAL_MODEL = "general-purpose", "haiku"
+_OP_RELAY_TYPE = "coordinator:op-relay"
+_MECHANICAL_TYPES, _MECHANICAL_MODEL = frozenset({"general-purpose", _OP_RELAY_TYPE}), "haiku"
+_MECHANICAL_TYPE = "general-purpose"
+
+#: Floor legs whose whole prompt is one shell command and a relay; each must emit the Bash-only op-relay type.
+#: Every other floor leg stays put for a named reason: the commit guard admits only the commit agent (commit
+#: legs), the gate reads the sizing file with Read, verify-op needs an agent with no Edit/Write, and the
+#: drain runs several commands in order.
+_OP_ONLY_FLOOR: frozenset[Key] = frozenset(
+    {
+        ("ask", "blitz-stage-read"),
+        ("ask", "already-delivered-close"),
+        ("ask", "late-rows-read"),
+        ("ask", "chain-emit"),
+        ("ask", "chain-abandon"),
+        ("ask", "seam-fix"),
+        ("ask", "frozen-waves"),
+    }
+)
 
 
 def _declared(workflow: str, label: str) -> lr.LegDecl:
@@ -271,7 +289,7 @@ def _undeclared(keys: Iterable[Key], register: Iterable[lr.LegDecl]) -> list[Key
 def _earns_its_cost_refusal(key: Key, leg: lr.EmittedLeg) -> Optional[str]:
     if leg.agent_type == OP_RUNNER_AGENT_TYPE:
         return f"{key} runs on the op-runner, whose whole job is one op"
-    mechanical = leg.agent_type == _MECHANICAL_TYPE and leg.model == _MECHANICAL_MODEL
+    mechanical = leg.agent_type in _MECHANICAL_TYPES and leg.model == _MECHANICAL_MODEL
     if mechanical and key not in _JUDGMENT_ON_MECHANICAL_TYPE:
         return f"{key} runs on the mechanical haiku type, which only an op-wrapper may use"
     return None
@@ -431,6 +449,17 @@ def test_an_undeclared_leg_fails_by_name():
     assert _declared("ask", "gate").label == "gate"
 
 
+_FOLDED_ASK_LEGS = ("plan-prep-gate", "sizing-probe", "xs-plan-stage")
+
+
+def test_a_folded_ask_floor_leg_is_neither_composed_nor_declared(tmp_path):
+    emitted = _emitted(tmp_path)
+    declared = {(d.workflow, d.label) for d in lr.REGISTER}
+    for label in _FOLDED_ASK_LEGS:
+        assert ("ask", label) not in emitted, f"ask/{label} is composed again: its op belongs in the preceding agent's tail"
+        assert ("ask", label) not in declared, f"ask/{label} is declared again"
+
+
 def test_the_floor_only_shrinks():
     assert len(_RUNTIME_FLOOR) <= _RUNTIME_FLOOR_MAX
 
@@ -441,6 +470,27 @@ def test_every_floor_member_cites_the_ruling_and_emits_haiku(tmp_path):
         assert _declared(*key).runtime_floor == lr.RUNTIME_FLOOR_RULING, f"{key} does not cite the floor ruling"
         legs = emitted[key]
         assert {leg.model for leg in legs} == {"haiku"}, f"{key} is on the floor but does not emit haiku"
+
+
+def test_every_op_only_floor_leg_emits_op_relay_haiku_low(tmp_path):
+    assert _OP_ONLY_FLOOR <= _RUNTIME_FLOOR
+    emitted = _emitted(tmp_path, golden=False)
+    for key in sorted(_OP_ONLY_FLOOR):
+        for leg in emitted[key]:
+            assert (leg.agent_type, leg.model, leg.effort) == (_OP_RELAY_TYPE, "haiku", "low"), key
+
+
+def test_no_other_floor_leg_rides_op_relay(tmp_path):
+    emitted = _emitted(tmp_path, golden=False)
+    for key in sorted(_RUNTIME_FLOOR - _OP_ONLY_FLOOR):
+        assert all(leg.agent_type != _OP_RELAY_TYPE for leg in emitted[key]), key
+
+
+def test_a_mechanical_leg_on_op_relay_is_refused_outside_the_floor():
+    relay = lr.EmittedLeg("x", "p", _OP_RELAY_TYPE, "haiku")
+    assert _earns_its_cost_refusal(("ask", "stray"), relay)
+    assert _earns_its_cost_refusal(("grind", "triage"), relay) is None
+    assert _earns_its_cost_refusal(("ask", "stray"), lr.EmittedLeg("x", "p", _OP_RELAY_TYPE, "sonnet")) is None
 
 
 def test_only_floor_legs_carry_a_runtime_floor():

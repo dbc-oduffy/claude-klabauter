@@ -42,7 +42,7 @@ is largely redundant with `content_root()`'s own codename-free rungs (harmless:
 it simply wins first when it also resolves).
 
 Negative-spec: this module does NOT reimplement the content-root resolution
-chain (env REPO_CONTENT_ROOT -> machine-local repos.content_root -> raise). That
+chain (env REPO_DOE_CLAUDE -> machine-local repos.content_root -> raise). That
 chain lives in exactly one place, `coordinator_registry.content_root()`, and
 this module calls it rather than duplicating it. A caller that hand-rolls its
 own lookup instead of importing `data_root()` from here re-introduces the

@@ -307,7 +307,7 @@ KNOWN_UNCONVERTED_SITES: frozenset[str] = frozenset(
 # target) carries a repo-root `.coordinator-dev-repo` marker with
 # `slug: coordinator-content-repo`, so the CLI's rung-2 autodiscovery is a real,
 # load-bearing path for this exact key on a real machine -- the
-# `REPO_CONTENT_ROOT` env rung each site already preserved does not cover it.
+# `REPO_DOE_CLAUDE` env rung each site already preserved does not cover it.
 # the pointer generator's own module
 # docstring negative-spec ("does NOT reimplement the machine-local
 # registry.toml/registry.local.toml parser -- shells out to the

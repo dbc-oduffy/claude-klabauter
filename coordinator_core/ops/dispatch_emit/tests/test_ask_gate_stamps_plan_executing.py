@@ -11,6 +11,7 @@ from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler as gate_handler
 from coordinator_core.ops.dispatch_emit.ask_stage import PLAN_EXECUTING_STAMP_KEY, _handler, stamp_plan_executing
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL as GATE_PLAN_REL, _plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL
@@ -57,6 +58,7 @@ def _status_on_disk(repo, rel: str) -> str:
 @pytest.fixture
 def tree(tmp_path):
     (tmp_path / "state" / "sizings").mkdir(parents=True)
+    write_run_scripts(tmp_path, "r1")
     return tmp_path
 
 
@@ -81,6 +83,7 @@ def test_ask_gate_s_resume_flips_the_plan_executing_without_a_commit(repo, statu
     plan = repo / GATE_PLAN_REL
     plan.write_text(_with_status(plan.read_text(encoding="utf-8"), status), encoding="utf-8", newline="\n")
     _init(repo)
+    write_run_scripts(repo, "r1")
     head = _git(repo, "rev-parse", "HEAD")
 
     out = gate_handler({"sizing_path": REL, "run_id": "r1", "writes": ["a.py"]}, repo_root=repo)

@@ -26,7 +26,7 @@ Exit codes (parity-critical — callers branch on these):
 
 Testability override: if COORDINATOR_CODENAME_REGISTRY_KEYS is set (space- or
 newline-separated list of repos.* keys, e.g.
-"repos.example_cockpit_repo repos.project_rag"), those keys are used instead of
+"repos.project_opticon repos.project_rag"), those keys are used instead of
 calling machine-local. This allows fixture tests to inject a synthetic
 registry without a live machine-local installation.
 
