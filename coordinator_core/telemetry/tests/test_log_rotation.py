@@ -154,6 +154,79 @@ def test_rotate_on_cadence_checks_once_per_window_then_again(tmp_path: Path, mon
     assert len(calls) == 2
 
 
+def test_peer_holding_sink_open_never_holds_the_caller_past_the_bound(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+    import time
+
+    sink = tmp_path / "x.jsonl"
+    _write(sink, b"a" * 1000)
+    code = (
+        "import sys,time\n"
+        "f = open(sys.argv[1], 'ab')\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", code, str(sink)],
+        stdout=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        assert child.stdout.readline().strip() == b"ready"
+        t0 = time.monotonic()
+        result = rotate_if_needed(sink, threshold_bytes=1)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0
+        if os.name == "nt":
+            assert result is False
+            assert sink.exists()
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_stalled_chain_is_single_flight_and_later_call_returns_at_once(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import time
+
+    from coordinator_core.telemetry import log_rotation
+
+    sink = tmp_path / "x.jsonl"
+    _write(sink, b"a" * 1000)
+    release = threading.Event()
+    entered = threading.Event()
+    replaces = []
+    real_replace = os.replace
+
+    def stalled(src, dst):
+        replaces.append((src, dst))
+        entered.set()
+        release.wait(5)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", stalled)
+    t0 = time.monotonic()
+    assert rotate_if_needed(sink, threshold_bytes=1, max_generations=2) is False
+    assert time.monotonic() - t0 < 0.5
+    assert entered.wait(2)
+    n = len(replaces)
+
+    t1 = time.monotonic()
+    assert rotate_if_needed(sink, threshold_bytes=1, max_generations=2) is False
+    assert time.monotonic() - t1 < 0.05
+    assert len(replaces) == n
+
+    release.set()
+    deadline = time.monotonic() + 5
+    while str(sink) in log_rotation._in_flight and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert str(sink) not in log_rotation._in_flight
+    assert (tmp_path / "x.1.jsonl").read_bytes() == b"a" * 1000
+    _write(sink, b"b" * 1000)
+    assert rotate_if_needed(sink, threshold_bytes=1, max_generations=2) is True
+
+
 def test_detached_rotation_never_blocks_the_caller_and_starts_one_sweep_per_window(tmp_path: Path, monkeypatch) -> None:
     import threading
     import time

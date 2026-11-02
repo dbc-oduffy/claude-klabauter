@@ -24,11 +24,11 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, tshirt, research=None):
+def _put(repo, tshirt, research=None, intent="answer a question"):
     doc = {
         "schema": "sizing-object",
         "name": "research fixture",
-        "intent": "answer a question",
+        "intent": intent,
         "estimate": {"tshirt": tshirt, "provisional": True},
         "route": ROUTE[tshirt],
         "detents": [],
@@ -91,6 +91,18 @@ def test_pure_research_halt_carries_fire_and_no_split_the_chain_guard_keys_on(re
 def test_a_split_halt_carries_a_split_so_the_pure_research_leg_skips_it(repo):
     _put(repo, "S", RESEARCH)
     assert "split" in gate(repo, REL, writes=["a.py"]).halt
+
+
+def test_sibling_synthesis_with_one_write_halts_on_research(repo):
+    _put(repo, "S", RESEARCH, intent="A research synthesis over the 10 reports its sibling asks produced")
+    v = gate(repo, REL, writes=["docs/seam-pass.md"])
+    assert v.arm is None and v.halt["route"] == "research"
+
+
+def test_bounded_census_with_one_write_reaches_the_execute_arm(repo):
+    _put(repo, "S", RESEARCH, intent="Classify the 10 reports in the folder")
+    v = gate(repo, REL, writes=["docs/census.md"])
+    assert v.halt is None and v.arm is not None
 
 
 @pytest.mark.parametrize("research", [None, {}])

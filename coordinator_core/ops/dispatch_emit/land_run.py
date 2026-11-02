@@ -2671,9 +2671,10 @@ def _own_hunks(root: Path, rel: str, base_blob: str, content: bytes) -> Optional
     head = _head_sha(root)
     head_lines = _lines(common, _blob_at_commit(common, head, rel)) if head else None
     form = kept_work.checkin_form(root, rel, content)
-    if base_obj is None or head_lines is None or form is None:
+    base_form = None if base_obj is None else kept_work.checkin_form(root, rel, base_obj[1])
+    if base_form is None or head_lines is None or form is None:
         return None
-    base_lines = base_obj[1].splitlines(keepends=True)
+    base_lines = base_form.splitlines(keepends=True)
     return _hunk_blocks(base_lines, form.splitlines(keepends=True)) - _hunk_blocks(base_lines, head_lines)
 
 
@@ -2726,6 +2727,91 @@ def _peer_dirt_only(root: Path, rel: str, baseline: Mapping) -> bool:
     except Exception:
         return False
     return got is not None and not got
+
+
+def _drop_lost_baseline_verified(root: Path, refusals: list, measured: Optional[Mapping]) -> list:
+    """`refusals` minus each path whose only refusal is ``unreadable`` (its baseline blob is gone, so
+    no own/other split exists) and whose worktree still checks in to the blob the run measured and
+    verified: that path lands as measured, as a path with no baseline does. Any other refusal, or a
+    worktree that drifted from the measured blob, stays refused."""
+    if not refusals or measured is None or measured.get("unreadable"):
+        return refusals
+    blobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+    from coordinator_core.git.commit import checkin_blob_sha
+
+    other = {p for p, _run, header in refusals if header != "unreadable"}
+    kept = []
+    for p, run, header in refusals:
+        if header == "unreadable" and p not in other:
+            want = blobs.get(p)
+            try:
+                if isinstance(want, str) and checkin_blob_sha(root, p) == want:
+                    continue
+            except Exception:
+                pass
+        kept.append((p, run, header))
+    return kept
+
+
+def _verified_preexisting(root: Path, rel: str, measured_blob: object, baseline: Mapping) -> bool:
+    """True when *rel* holds none of the run's own hunks and its worktree still checks in to the
+    measured blob: pre-existing dirt the run measured and verified, which lands as measured."""
+    from coordinator_core.git.commit import checkin_blob_sha
+
+    if not isinstance(measured_blob, str) or not _peer_dirt_only(root, rel, baseline):
+        return False
+    try:
+        return checkin_blob_sha(root, rel) == measured_blob
+    except Exception:
+        return False
+
+
+def _measured_rev_call(run_id: Optional[str]) -> str:
+    """The invoke line that re-measures the run's landing set: `paths` is empty because the op unions
+    in the run's own recorded writes."""
+    return "coordinator-invoke dispatch.measured_rev '" + json.dumps({"run_id": run_id or "<run_id>", "paths": []}) + "'"
+
+
+def _mismatch_detail(root: Path, rel: str, blobs: Mapping, settled: Mapping, run_id: Optional[str] = None) -> str:
+    """One path's refusal line: measured vs landing blob, the first differing line, and the one
+    remedy for the cause (worktree drifted since measure, or the staged blob dropped measured bytes)."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.commit import checkin_blob_sha
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    measured, landing = blobs.get(rel), settled.get(rel)
+    try:
+        worktree = checkin_blob_sha(root, rel)
+    except Exception:
+        worktree = None
+    landing = landing or worktree
+    common = resolve_git_common_dir(root)
+
+    def lines(blob: object) -> Optional[list]:
+        obj = git_objects.read_object(common, blob) if isinstance(blob, str) else None
+        return None if obj is None else obj[1].splitlines()
+
+    old, new = lines(measured), lines(landing)
+    if new is None and not settled.get(rel):
+        try:
+            from coordinator_core.ops.dispatch_emit import kept_work
+
+            form = kept_work.checkin_form(root, rel, (root / rel).read_bytes())
+            new = None if form is None else form.splitlines()
+        except OSError:
+            pass
+    first = ""
+    if old is not None and new is not None:
+        at = next((i for i, (a, b) in enumerate(zip(old, new)) if a != b), min(len(old), len(new)))
+        def got(seq: list) -> str:
+            return seq[at].decode("utf-8", "replace")[:80] if at < len(seq) else "<end of file>"
+
+        first = f"; first difference at line {at + 1}: measured {got(old)!r}, landing {got(new)!r}"
+    if measured and worktree == measured:
+        remedy = "the worktree still holds the measured bytes, so hand-commit this path whole"
+    else:
+        remedy = f"re-run dispatch.measured_rev over the landing set with {_measured_rev_call(run_id)} and re-verify"
+    return f"{rel}: measured {str(measured)[:10]}, landing {str(landing)[:10]}{first}; remedy: {remedy}"
 
 
 def _measured_mismatch(
@@ -3390,7 +3476,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         return _error(
             f"landing refused: {', '.join(unmeasured)} changed outside the declared writes and the run's "
             "measured-rev record does not carry it, so the commit would differ from the tree that was tested. "
-            "Re-run dispatch.measured_rev over the landing set and re-verify, or revert the path",
+            f"Re-measure with {_measured_rev_call(measured_run)} and re-verify, or revert the path",
             refused=LANDING_TREE_DIFFERS, paths=unmeasured,
         )
     if (
@@ -3852,6 +3938,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 f"{moved} moved in HEAD while its own hunks were staged; re-fire the landing",
                 refused="own-hunk-head-moved",
             )
+        own_refusals = _drop_lost_baseline_verified(root, own_refusals, measured)
         if own_refusals:
             _remove(root, receipt_paths)
             return _error(
@@ -3859,6 +3946,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 + "; ".join(f"{p} ({run or 'unattributed'}): {header}" for p, run, header in own_refusals),
                 refused="own-hunk-stage-refused",
             )
+        if own_blobs and measured is not None and not measured.get("unreadable"):
+            verified = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+            own_blobs = {
+                p: b for p, b in own_blobs.items() if not _verified_preexisting(root, p, verified.get(p), unclaimed_base)
+            }
         if own_blobs and merge_plan is not None:
             _remove(root, receipt_paths)
             return _error(
@@ -3880,9 +3972,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if differing:
             _remove(root, receipt_paths)
             _reap_measured_export(root, measured_run)
+            mblobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
             return _error(
-                f"landing refused: the product changes this commit would introduce differ from the measured-rev "
-                f"record at {', '.join(differing)}. Re-run dispatch.measured_rev over the landing set and re-verify",
+                "landing refused: the product changes this commit would introduce differ from the measured-rev "
+                "record: " + " | ".join(
+                    d if measured.get("unreadable") else _mismatch_detail(root, d, mblobs, settled_blobs, measured_run)
+                    for d in differing
+                ),
                 refused=LANDING_TREE_DIFFERS, paths=differing,
             )
         reach_dirt = (
@@ -3896,7 +3992,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             _reap_measured_export(root, measured_run)
             return _error(
                 f"landing refused: the verified tests can read {', '.join(sorted(reach_dirt))}, dirty against "
-                f"HEAD outside the landing set. Revert or land them, then re-run dispatch.measured_rev and re-verify",
+                f"HEAD outside the landing set. Revert or land them, then re-measure with {_measured_rev_call(measured_run)} and re-verify",
                 refused=VERIFY_REACH_DIRTY, paths=sorted(reach_dirt),
             )
 
@@ -3992,6 +4088,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     _reap_measured_export(root, measured_run)
     review_gap: list = []
     declared_left: dict = {}
+    gap_dirty: set = set()
     review_code = list(manifest.review_code_paths) if manifest is not None else []
     gap_literals = list(dict.fromkeys([*review_code, *sorted(declared_writes)]))
     if gap_literals:
@@ -4008,6 +4105,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         except Exception:  # noqa: BLE001 -- the commit stands; an unreadable store reports no gap
             review_gap = []
             declared_left = {}
+            gap_dirty = set()
     review_gap = sorted({*review_gap, *declared_left})
     if review_gap:
         ledger_met = None
@@ -4153,6 +4251,18 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 "run artifact(s) still dirty after the landing: "
                 + ", ".join(f"{p} ({cls})" for p, cls in residue.items())
             )
+
+    from coordinator_core.ops.dispatch_emit.product_residue import declared_product_residue
+
+    product_residue = declared_product_residue(
+        {p for p in declared_writes if p not in named_out and not (p in halted_clear and p in settled_stage)},
+        gap_dirty, set(paths) | set(deleted),
+    )
+    if product_residue:
+        reply["product_residue"] = product_residue
+        reply["ok"] = False
+        product_error = "declared product write(s) still dirty after the landing: " + ", ".join(product_residue)
+        reply["error"] = f"{product_error}; {reply['error']}" if reply.get("error") else product_error
 
     from coordinator_core.git import residue_classes
 

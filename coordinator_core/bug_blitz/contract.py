@@ -24,6 +24,7 @@ OUTCOME_FAILED = "failed"
 OUTCOME_NOTHING_TO_RUN = "nothing-to-run"
 OUTCOME_REFUSED = "refused"
 OUTCOME_NO_RUNNER = "no-runner"
+OUTCOME_FOREIGN_UNCOMMITTED = "passed-on-foreign-uncommitted"
 
 OUTCOMES = (
     OUTCOME_PASSED,
@@ -31,6 +32,7 @@ OUTCOMES = (
     OUTCOME_NOTHING_TO_RUN,
     OUTCOME_REFUSED,
     OUTCOME_NO_RUNNER,
+    OUTCOME_FOREIGN_UNCOMMITTED,
 )
 
 # Exit 2 is reserved for usage errors and is not an outcome.
@@ -41,6 +43,7 @@ EXIT_CODES = {
     OUTCOME_NOTHING_TO_RUN: 3,
     OUTCOME_REFUSED: 4,
     OUTCOME_NO_RUNNER: 5,
+    OUTCOME_FOREIGN_UNCOMMITTED: 6,
 }
 
 TargetKind = Literal["dir", "file", "backlog"]
@@ -94,6 +97,7 @@ class RunnerRecord:
     exit_code: int | None
     failing_ids: tuple[str, ...] = ()
     process_s: float = 0.0
+    foreign_holders: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def to_json(self) -> dict:
         """JSON-ready dict in schema field order."""
@@ -105,6 +109,7 @@ class RunnerRecord:
             "outcome": self.outcome,
             "exit_code": self.exit_code,
             "failing_ids": list(self.failing_ids),
+            "foreign_holders": {p: list(h) for p, h in self.foreign_holders},
             "process_s": self.process_s,
         }
 

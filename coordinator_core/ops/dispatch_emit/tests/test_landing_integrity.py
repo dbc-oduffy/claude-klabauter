@@ -240,6 +240,40 @@ def test_fresh_retest_verdict_with_zero_run_refuses(tmp_path):
     assert check == "failed" and findings and "errored without running tests" in findings[0].detail
 
 
+@pytest.mark.parametrize("cause", ["budget-exhausted", "collection-failure", "empty-selection"])
+def test_errored_retest_naming_a_zero_run_cause_is_not_run_not_failed(tmp_path, cause):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, status="error")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**record, "zero_run_cause": cause, "reason": "why-text"}), encoding="utf-8")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == li.NOT_RUN_CHECK and not [f for f in findings if f.reason == li.TARGETED_TESTS_FAILED]
+    assert cause in findings.deleted_note and "why-text" in findings.deleted_note
+    assert "not a test failure" in findings.deleted_note
+
+
+def test_errored_retest_with_unknown_zero_run_cause_or_ran_tests_still_fails(tmp_path):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, status="error")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**record, "zero_run_cause": "bogus"}), encoding="utf-8")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and "errored without running tests" in findings[0].detail
+    path.write_text(json.dumps({**record, "zero_run_cause": "budget-exhausted", "tests_run": 3,
+                                "failed_tests": ["t.py::test_x"]}), encoding="utf-8")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def test_failed_retest_that_ran_tests_is_still_targeted_tests_failed(tmp_path):
+    root = _repo(tmp_path)
+    path = _write_fresh(root, status="fail")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**record, "failed_tests": ["t.py::test_x"]}), encoding="utf-8")
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
 def test_absent_verdict_is_no_verdict():
     assert li.failed_targeted_tests(None) == ([], "no-verdict")
 

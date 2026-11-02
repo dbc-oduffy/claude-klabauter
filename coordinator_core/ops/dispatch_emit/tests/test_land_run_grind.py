@@ -223,6 +223,41 @@ def test_grind_and_halted_by_together_are_refused(repo):
     assert _status(repo)["a.py"] == " M"
 
 
+ARCHIVE = "archive/backlog/2026-10/tracked.yaml"
+
+
+def _close_row(root: Path) -> None:
+    """What ``grind_rows close`` leaves on disk: the queue file gone, an archive copy in its place."""
+    (root / "state" / "backlog" / "tracked.yaml").unlink()
+    (root / ARCHIVE).parent.mkdir(parents=True)
+    (root / ARCHIVE).write_text("id: tracked\nstatus: done\n", encoding="utf-8")
+
+
+def test_product_dirty_unlanded_row_keeps_its_queue_file_and_loses_its_archive_move(repo):
+    _close_row(repo)
+    (repo / "b.py").unlink()
+    out = _call(repo, [
+        _row("r1", ["b.py", ARCHIVE], ["state/backlog/tracked.yaml"]),
+        _row("r2", ["a.py"]),
+    ])
+    assert out["committed"] is True
+    assert [u["row_id"] for u in out["unlanded"]] == ["r1"]
+    assert ARCHIVE not in _head_files(repo)
+    assert "state/backlog/tracked.yaml" not in _head_files(repo)
+    assert (repo / "state" / "backlog" / "tracked.yaml").read_text(encoding="utf-8") == "id: tracked\n"
+    assert not (repo / ARCHIVE).exists()
+    assert out["reopened"] == ["state/backlog/tracked.yaml"]
+
+
+def test_product_dirty_landed_row_keeps_its_archive_move(repo):
+    _close_row(repo)
+    out = _call(repo, [_row("r1", ["a.py", ARCHIVE], ["state/backlog/tracked.yaml"])])
+    assert out["committed"] is True
+    assert {ARCHIVE, "state/backlog/tracked.yaml"} <= _head_files(repo)
+    assert (repo / ARCHIVE).is_file()
+    assert out["reopened"] == []
+
+
 def test_landed_row_ledger_is_gone_and_unlanded_run_keeps_it(repo):
     ledger_dir = repo / "state" / "queue-grind" / PROFILE
     ledger_dir.mkdir(parents=True)

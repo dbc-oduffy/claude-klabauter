@@ -217,3 +217,175 @@ def test_a_co_declared_hold_on_an_inherited_path_is_recorded_as_provenance_and_l
     assert out.get("refused") is None, out
     assert out.get("committed") is True, out
     assert [e for e in out.get("provenance") or [] if e["reason"] == peer_hunk_gate.PEER_HUNKS_CO_DECLARED], out
+
+
+_PRE_SEED = "".join(f"line{i}\n" for i in range(1, 13))
+_PRE_FIX = _PRE_SEED.replace("line4\n", "fixed-four\n")
+_PRE_REL = "pkg/guard.py"
+
+
+def _crlf_repo(tmp_path):
+    import subprocess
+
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.win_portability import no_console_creationflags
+
+    for cmd in (("init", "-q"), ("config", "user.email", "t@e.com"), ("config", "user.name", "t"),
+                ("config", "commit.gpgsign", "false"), ("config", "core.autocrlf", "true")):
+        subprocess.run(["git", *cmd], cwd=str(tmp_path), check=True, capture_output=True, **no_console_creationflags())
+    (tmp_path / _PRE_REL).parent.mkdir()
+    (tmp_path / _PRE_REL).write_bytes(_PRE_SEED.encode())
+    for cmd in (("add", _PRE_REL), ("commit", "-q", "-m", "seed")):
+        subprocess.run(["git", *cmd], cwd=str(tmp_path), check=True, capture_output=True, **no_console_creationflags())
+    # The worktree carries a pre-existing CRLF hunk, as autocrlf checkouts do; the baseline is its raw hash.
+    (tmp_path / _PRE_REL).write_bytes(_PRE_FIX.replace("\n", "\r\n").encode())
+    common = resolve_git_common_dir(tmp_path)
+    raw = (tmp_path / _PRE_REL).read_bytes()
+    return {
+        "baseline": {_PRE_REL: git_objects.write_object(common, b"blob", raw)},
+        "measured": git_objects.write_object(common, b"blob", _PRE_FIX.encode()),
+    }
+
+
+def test_crlf_baseline_pre_existing_hunk_is_not_the_runs_own(tmp_path):
+    seen = _crlf_repo(tmp_path)
+
+    assert land_run._peer_dirt_only(tmp_path, _PRE_REL, seen["baseline"])
+
+
+def test_verified_pre_existing_hunk_is_recognised_only_while_the_worktree_matches_the_measure(tmp_path):
+    seen = _crlf_repo(tmp_path)
+
+    assert land_run._verified_preexisting(tmp_path, _PRE_REL, seen["measured"], seen["baseline"])
+    assert not land_run._verified_preexisting(tmp_path, _PRE_REL, "0" * 40, seen["baseline"])
+    assert not land_run._verified_preexisting(tmp_path, _PRE_REL, None, seen["baseline"])
+    (tmp_path / _PRE_REL).write_bytes(_PRE_FIX.replace("line9\n", "late-nine\n").replace("\n", "\r\n").encode())
+    assert not land_run._verified_preexisting(tmp_path, _PRE_REL, seen["measured"], seen["baseline"])
+
+
+def test_a_run_own_hunk_is_never_taken_for_a_verified_pre_existing_hunk(tmp_path):
+    seen = _crlf_repo(tmp_path)
+    own = _PRE_FIX.replace("line10\n", "own-ten\n")
+    (tmp_path / _PRE_REL).write_bytes(own.replace("\n", "\r\n").encode())
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    measured = git_objects.write_object(resolve_git_common_dir(tmp_path), b"blob", own.encode())
+
+    assert not land_run._verified_preexisting(tmp_path, _PRE_REL, measured, seen["baseline"])
+
+
+def test_mismatch_detail_names_the_differing_line_and_the_cause_specific_remedy(tmp_path):
+    seen = _crlf_repo(tmp_path)
+    blobs = {_PRE_REL: seen["measured"]}
+
+    held = land_run._mismatch_detail(tmp_path, _PRE_REL, blobs, {})
+    assert "hand-commit this path whole" in held and held.startswith(_PRE_REL)
+
+    (tmp_path / _PRE_REL).write_bytes(_PRE_FIX.replace("line9\n", "late-nine\n").replace("\n", "\r\n").encode())
+    drifted = land_run._mismatch_detail(tmp_path, _PRE_REL, blobs, {})
+    assert "first difference at line 9: measured 'line9', landing 'late-nine'" in drifted
+    assert "re-run dispatch.measured_rev" in drifted and "hand-commit" not in drifted
+
+
+def _declare_two_paths(root, first, second):
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+    from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
+
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t1", paths=(first, second)),), plan_path=prod.PLAN
+    )
+    prod._write(root, prod.SCRIPT, "// emitted\n" + render_marker(request) + "\n")
+
+
+def test_product_dirty_declared_write_left_after_landing_is_reported_with_its_path(product_repo, monkeypatch):
+    """A declared product write dirty after the commit and not landed names its path in product_residue and error."""
+    from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
+
+    prod._author(product_repo, "src/a.py", "a = 1\n")
+    _declare_two_paths(product_repo, "src/a.py", "src/late.py")
+    prod._record_dir(product_repo)
+    monkeypatch.setattr(
+        land_run, "_reap_measured_export",
+        lambda root, run: prod._write(root, "src/late.py", "late = 1\n"),
+    )
+
+    out = prod._land(product_repo)
+
+    assert out["committed"] is True, out
+    assert out["product_residue"] == {"src/late.py": "product_dirty"}, out
+    assert out["ok"] is False
+    assert "src/late.py" in out["error"]
+
+
+def test_product_dirty_landed_declared_write_reports_no_product_residue(product_repo):
+    """The other side: every declared write landed, so the reply carries no product_residue and no error."""
+    from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
+
+    prod._author(product_repo, "src/a.py", "a = 1\n")
+    prod._declare(product_repo, "src/a.py")
+    prod._record_dir(product_repo)
+
+    out = prod._land(product_repo)
+
+    assert out["committed"] is True, out
+    assert "product_residue" not in out and out["error"] is None, out
+
+
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo as ask_run_repo  # noqa: E402,F401
+
+
+def _stage_pre_existing_measured(root, rig):
+    """a.py tracked with a pre-existing dirty hunk the run never touched; its manifest baselines the
+    dirty bytes and the measured-rev record carries the dirty blob."""
+    import json
+
+    from coordinator_core.git import commit
+    from coordinator_core.ops.dispatch_emit import write_baseline as wb
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, measured_rev_record_path
+
+    rig._write(root, "a.py", _PRE_SEED)
+    rig._git(root, "add", "a.py")
+    rig._git(root, "commit", "-q", "-m", "seed a")
+    rig._put(root, "a.py", _PRE_FIX)
+    manifest_rel = f"{RUN_DIR_ROOT}/{rig.RUN}/manifest.json"
+    data = json.loads((root / manifest_rel).read_text(encoding="utf-8"))
+    data["write_baseline"] = wb.capture(root, ["a.py"])
+    (root / manifest_rel).write_text(json.dumps(data), encoding="utf-8")
+    record = measured_rev_record_path(root, rig.RUN)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(
+        json.dumps({
+            "sha": "0" * 40, "base_sha": "0" * 40, "paths": ["a.py"], "removed": [], "tree": "0" * 40,
+            "blobs": {"a.py": commit.checkin_blob_sha(root, "a.py")},
+        }),
+        encoding="utf-8",
+    )
+
+
+def test_land_run_lands_a_verified_pre_existing_hunk(ask_run_repo):
+    from coordinator_core.ops.dispatch_emit.tests import test_ask_run_product_commit as rig
+
+    root = ask_run_repo
+    _stage_pre_existing_measured(root, rig)
+
+    landed = rig._call(root)
+
+    assert landed.get("refused") is None and landed["committed"] is True, landed
+    assert "a.py" in rig._names(root, landed["sha"])
+
+
+def test_land_run_refuses_a_drifted_pre_existing_hunk_naming_the_differing_line(ask_run_repo):
+    from coordinator_core.ops.dispatch_emit.tests import test_ask_run_product_commit as rig
+
+    root = ask_run_repo
+    _stage_pre_existing_measured(root, rig)
+    rig._put(root, "a.py", _PRE_FIX.replace("line9\n", "late-nine\n"))
+    head = rig._git(root, "rev-parse", "HEAD")
+
+    refused = rig._call(root)
+
+    assert refused["committed"] is False and refused["refused"] == land_run.LANDING_TREE_DIFFERS, refused
+    assert "first difference at line 4: measured 'fixed-four', landing 'line4'" in refused["error"], refused
+    assert rig._git(root, "rev-parse", "HEAD") == head

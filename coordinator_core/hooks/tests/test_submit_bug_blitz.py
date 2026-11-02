@@ -345,12 +345,19 @@ def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch):
     assert seen_sid == ["sess-blitz"]
 
 
+@pytest.mark.parametrize("branch", ["work/machine-b/2026-10-29b", "work/box/feature-x"])
+def test_any_work_branch_is_admitted(repo, branch):
+    _head(repo, branch)
+    env = _call(repo, {"targets": "red-set"})
+    assert env["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
 @pytest.mark.parametrize("branch", ["main", "feature/foo"])
 def test_denies_off_a_work_branch(repo, branch):
     _head(repo, branch)
     env = _call(repo, {"targets": "red-set"})
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "work branch" in _reason(env)
+    assert "Check out a work/* branch" in _reason(env)[:60]
 
 
 def test_denies_a_detached_head(repo):

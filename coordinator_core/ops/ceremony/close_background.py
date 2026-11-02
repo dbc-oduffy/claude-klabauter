@@ -394,6 +394,34 @@ def _queue_review(ctx: JobContext, receipt_rel: str) -> None:
         pass
 
 
+_TRACKED_RECEIPT_DIR = "state/review-receipts"
+
+
+def _is_ignored(ctx: JobContext, rel: str) -> bool:
+    from coordinator_core.ops.ceremony import git_native
+
+    got = git_native.check_ignore(ctx.root, [rel])
+    return got.returncode == 0 and bool(got.stdout.strip())
+
+
+def _tracked_receipt(ctx: JobContext, record_rel: str) -> str:
+    """The minted inventory record's rel when git can carry it, else its copy under
+    ``state/review-receipts/`` -- a clone drops an ignored record, and the review leg reads the receipt."""
+    try:
+        if not _is_ignored(ctx, record_rel):
+            return record_rel
+        run_dir, _, name = record_rel.rpartition("/")
+        mirror_rel = f"{_TRACKED_RECEIPT_DIR}/{run_dir.rsplit('/', 1)[-1]}-{name}"
+        if _is_ignored(ctx, mirror_rel):
+            return record_rel
+        target = ctx.root / mirror_rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ctx.root / record_rel).read_bytes())
+    except Exception:  # noqa: BLE001 -- the stamp stands on the record; only its durability is lost
+        return record_rel
+    return mirror_rel
+
+
 def _review_stamp(ctx: JobContext) -> LegResult:
     """Mint the plan's ``review_stamp`` (a mise run: the receipt on its inventory record) against the
     terminal commit. A refusal is the leg's ``failed`` detail; the landed commit stands."""
@@ -424,7 +452,7 @@ def _review_stamp(ctx: JobContext) -> LegResult:
             if found is None:
                 return run_close.review_skipped("no-inventory-record", root=ctx.root)
             rs.mint_receipt(ctx.root / found[0], ctx.root, resolved=resolved)
-            stamped = found[0]
+            stamped = _tracked_receipt(ctx, found[0])
         else:
             rs.mint(
                 ctx.root / plan_rel, ctx.root, build_test_path=None, resolved=resolved, criterion_open_ok=True
@@ -787,7 +815,79 @@ def _plan_flip(ctx: JobContext) -> LegResult:
     )
     if deferred:
         return _leg("failed", "deferred rows unharvested: " + ", ".join(deferred), ctx)
-    return _leg("ran", "plan implemented")
+    folded = _fold_observations(ctx, plan_rel)
+    if folded.startswith("failed: "):
+        return _leg("failed", "plan implemented; fold-execution-observations " + folded, ctx)
+    return _leg("ran", f"plan implemented; {folded}")
+
+
+_FOLD_HARD_SKIPS = frozenset(
+    {"plan-not-found", "slug-derivation-failed", "invalid-slug", "repo-root-unresolvable"}
+)
+
+
+def _fold_observations(ctx: JobContext, plan_rel: str) -> str:
+    """Run ``ops/fold_execution_record`` on the plan in process (the ``d-fold-execution-observations``
+    directive's runner). Returns ``"folded N chunk observation(s)"``, ``"fold skipped: <why>"`` (a fold
+    with nothing to fold is not a failure) or ``"failed: <error>"``. The fold never edits the plan; this
+    leg writes its Part A (``## Execution Observations``) into the plan, replacing an existing section."""
+    import contextlib
+    import io
+
+    from coordinator_core.ops import fold_execution_record
+
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = fold_execution_record.main(["--plan", str(ctx.root / plan_rel)])
+    except Exception as exc:  # noqa: BLE001 -- a raising fold fails this leg by name
+        return f"failed: {type(exc).__name__}: {exc}"
+    if rc != 0:
+        return f"failed: exit {rc}: {err.getvalue().strip()}"
+    text = out.getvalue()
+    marker = "<!-- coordinator-fold-execution-record: SKIP"
+    if marker in text:
+        why = text.split(marker, 1)[1].split("-->", 1)[0].strip().split(" ", 1)[0]
+        why = why or "no observations"
+        if why in _FOLD_HARD_SKIPS:
+            return f"failed: {why}"
+        return f"fold skipped: {why}"
+    part_a = text.split("## Completion Entry Prose", 1)[0].strip()
+    try:
+        _write_observations(ctx, plan_rel, part_a)
+    except Exception as exc:  # noqa: BLE001 -- an unwritable plan fails this leg by name
+        return f"failed: observations not written: {type(exc).__name__}: {exc}"
+    _note_written(ctx, plan_rel)
+    return f"folded {text.count('### ')} chunk observation(s)"
+
+
+_OBS_HEADING = re.compile(r"^## Execution Observations[ \t]*$", re.MULTILINE)
+_H2 = re.compile(r"^## ", re.MULTILINE)
+
+
+def _write_observations(ctx: JobContext, plan_rel: str, section: str) -> None:
+    """Put ``section`` in the plan as its one ``## Execution Observations`` block: replace the existing
+    block (up to the next ``## `` heading) or append at the end. Keeps the plan's newline style."""
+    from coordinator_core.session.claimed_write import replace_text
+
+    path = ctx.root / plan_rel
+    raw = path.read_bytes().decode("utf-8")
+    newline = "\r\n" if "\r\n" in raw else "\n"
+    body = raw.replace("\r\n", "\n")
+    # Trap: the block ends at the next `## ` heading, so an inner `## ` from the sidecar would leave
+    # an orphan tail on the next close; demote inner level-2 headings to keep one block.
+    head, _, rest = section.replace("\r\n", "\n").partition("\n")
+    if rest:
+        section = head + "\n" + "\n".join("#" + ln if ln.startswith("## ") else ln for ln in rest.split("\n"))
+    found = _OBS_HEADING.search(body)
+    if found is None:
+        updated = body.rstrip("\n") + "\n\n" + section + "\n"
+    else:
+        nxt = _H2.search(body, found.end())
+        tail = "\n" + body[nxt.start():] if nxt else ""
+        updated = body[: found.start()] + section + "\n" + tail
+    if updated != body:
+        replace_text(path, updated, newline=newline)
 
 
 def _cited(ctx: JobContext, plan_rel: str) -> tuple:

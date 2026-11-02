@@ -314,7 +314,18 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/agent_pipe/__main__.py': ('outside-repo', 'relay worker result.json (tmp + os.replace), argv.json and agent log under <settings-home>/agent-pipe/runs/<run_id>, never the repo: _relay'),
+    'coordinator_core/agent_pipe/mailbox.py': ('outside-repo', 'O_APPEND mailbox lines, lock file and drain os.replace under <settings-home>/agent-pipe/mailboxes, never the repo: append, drain'),
+    'coordinator_core/ops/agent_pipe.py': ('outside-repo', 'run dir and request.json under <settings-home>/agent-pipe/runs/<run_id>, never the repo: agent_pipe.start/send'),
+    'coordinator_core/codex_runner/__main__.py': ('outside-repo', 'worker result.json (tmp + os.replace) under <settings-home>/codex-runs/<run_id>, never the repo: _write_result'),
+    'coordinator_core/codex_runner/agy.py': ('outside-repo', 'agy conversation events and stderr logs under <settings-home>/codex-runs/<run_id>, never the repo: AgyConversation.open'),
+    'coordinator_core/codex_runner/execute.py': ('outside-repo', 'codex stderr and events.jsonl under <settings-home>/codex-runs/<run_id>, never the repo: run'),
+    'coordinator_core/codex_runner/review.py': ('outside-repo', 'codex events and stderr logs under <settings-home>/codex-runs/<run_id>, never the repo: run'),
+    'coordinator_core/codex_runner/roster.py': ('outside-repo', 'roster record json via tmp + os.replace under <settings-home>/codex-runs, never the repo: write_record'),
+    'coordinator_core/ops/codex_runner.py': ('outside-repo', 'request.json, result and worker log under <settings-home>/codex-runs/<run_id>, never the repo: _codex_runner_start'),
     'coordinator_core/contract/emit_op_catalog.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: generated contract artifacts (op-catalog.json, mcp-tools.json, docs/reference/op-catalog.md)'),
+    'coordinator_core/ops/rea_ledger_write.py': ('in-repo-non-state', 'the rea-ledger writer op: claim and evidence files via atomic_write_bytes and unknown-revision lines raw-appended ("ab", one write, fsync) under the tracked state/rea-ledger/, the only module naming that root outside coordinator_core/rea_ledger: _rea_ledger_write'),
+    'coordinator_core/launch_records.py': ('outside-repo', 'workflow launch records move from the flat managed-temp name into <managed temp>/workflow-runs/<session>/ via os.replace, never the repo: migrate_flat_records'),
     'coordinator_core/ops/review_partition_slices.py': ('claims-explicitly', 'claim token in _write_slice'),
     'coordinator_core/index_distribution/newer_index_marker.py': ('in-repo-non-state', 'newer-index marker json via tmp + os.replace under the repo index-distribution dir, never state/: write_marker'),
     'coordinator_core/ops/_anchor_premise.py': ('outside-repo', 'baseline blobs from git show written into a tempfile.TemporaryDirectory, discarded on exit: the anchor-baseline evaluator'),
@@ -355,6 +366,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/git/commit.py': ('in-repo-non-state', 'published-tree classification file rewritten in place with the refused inclusions and added to the commit path list: write_text'),
     'coordinator_core/idle_compact/watcher.py': ('outside-repo', 'injections.jsonl append and armed.json tmp + os.replace under <settings>/state/idle-compact: append_log, save_armed'),
     'coordinator_core/ops/dispatch_emit/ask_fanout.py': ('claims-explicitly', 'ask records staged exclusive-create under .coordinator-local/fanout-staging, published by os.replace with ledger.claim and declare_write: _stage_text, the publish loop'),
+    'coordinator_core/ops/dispatch_emit/land_run_grind.py': ('in-repo-non-state', 'undo of grind_rows close for an unlanded row: restores the source row byte-identical to its HEAD blob (write_bytes) and unlinks the untracked archive copy, so the tree returns to HEAD for that row rather than recording new state: _reopen_held_rows'),
     'coordinator_core/ops/dispatch_emit/land_leg_record.py': ('in-repo-non-state', 'land-legs.json via tmp + os.replace under the tracked record dir state/warp/<run_id>/: write'),
     'coordinator_core/ops/dispatch_emit/landing_integrity.py': ('git-internal', 'parse-verdict cache json via tmp + os.replace under <git-common-dir>/coordinator-parse-verdicts: _write_verdict'),
     'coordinator_core/ops/fleet/terminal_sizing_drain.py': ('in-repo-non-state', 'sizing files moved by os.replace between tracked state/sizings dirs then committed through the head spine; commit message via a managed tempfile: drain'),

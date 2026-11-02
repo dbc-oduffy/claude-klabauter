@@ -1,4 +1,4 @@
-"""A small engine commit leaves the pack count unchanged; a large batch adds exactly one pack."""
+"""Engine commit and land-fetch routes leave the pack count unchanged, small batch or large."""
 
 import subprocess
 
@@ -62,16 +62,59 @@ def test_small_unsigned_commit_adds_no_pack_and_stays_loose(tmp_path):
     _git(repo, "fsck", "--no-dangling")
 
 
-def test_batch_over_the_threshold_writes_exactly_one_pack(tmp_path):
+def test_batch_over_the_threshold_adds_no_pack(tmp_path):
     repo = _repo(tmp_path)
-    paths = _add_files(repo, git_objects._LOOSE_BATCH_MAX + 2, sub="sub/")
+    paths = _add_files(repo, 50, sub="sub/")
     packs_before = _idx(repo)
 
     gcommit.commit_paths(repo, paths, "add files")
 
-    assert len(_idx(repo) - packs_before) == 1
+    # The first over-threshold batch mints the tail pack; every later one folds into it.
+    assert len(_idx(repo) - packs_before) <= 1
+    packs_after_first = _idx(repo)
+    more = _add_files(repo, 50, sub="more/")
+
+    gcommit.commit_paths(repo, more, "add more files")
+
+    assert len(_idx(repo)) == len(packs_after_first)
     _git(repo, "fsck", "--full", "--strict")
-    assert set(_git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()) == {"seed.txt", *paths}
+    assert set(_git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()) == {
+        "seed.txt", *paths, *more,
+    }
+
+
+def _land_fixture(tmp_path, count):
+    """A clone that fetches `count` new files pushed by a peer clone."""
+    origin = tmp_path / "origin.git"
+    origin.mkdir()
+    _git(origin, "init", "-q", "--bare")
+    seed = _repo(tmp_path)
+    _git(seed, "remote", "add", "origin", str(origin))
+    _git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", "--branch", "main", str(origin), str(clone)],
+        check=True, capture_output=True, **_NOWIN,
+    )
+    paths = _add_files(seed, count, sub="landed/")
+    _git(seed, "add", *paths)
+    _git(seed, "commit", "-q", "-m", "peer work")
+    _git(seed, "push", "-q", "origin", "HEAD:refs/heads/main")
+    return clone, paths
+
+
+@pytest.mark.parametrize("count", [50, 150])
+def test_land_fetch_adds_no_pack(tmp_path, count):
+    from coordinator_core.ops.ceremony import git_native
+
+    clone, paths = _land_fixture(tmp_path, count)
+    packs_before = _idx(clone)
+
+    res = git_native.fetch(clone, "origin")
+
+    assert res.returncode == 0, res.stderr
+    assert len(_idx(clone) - packs_before) == 0
+    assert set(_git(clone, "ls-tree", "-r", "--name-only", "origin/main").split()) >= set(paths)
 
 
 def test_signed_commit_keeps_flush_then_loose_write(tmp_path, monkeypatch):
@@ -85,7 +128,7 @@ def test_signed_commit_keeps_flush_then_loose_write(tmp_path, monkeypatch):
         order.append("flush")
         real_flush()
 
-    def sign(repo_, tree, parent, name, email, when, message):
+    def sign(repo_, tree, parent, name, email, when, message, **_kw):
         order.append("sign")
         return None, "stub signer declined"
 

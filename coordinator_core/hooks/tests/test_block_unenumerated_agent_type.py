@@ -638,3 +638,42 @@ def test_roster_load_failure_reasons_carry_no_machine_absolute_path_under_quaran
         assert reason is not None
         assert str(quarantine) not in reason and str(tmp_path) not in reason
         assert "subagent-sandbox-policy.yaml" in reason
+
+
+def _count_yaml_parses(monkeypatch: pytest.MonkeyPatch) -> list:
+    calls: list = []
+    real = mod.yaml.safe_load
+
+    def counting(stream):
+        calls.append(1)
+        return real(stream)
+
+    monkeypatch.setattr(mod.yaml, "safe_load", counting)
+    return calls
+
+
+def test_a_repeat_roster_resolve_parses_no_yaml_and_still_sees_an_edit(
+    content_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod._FRONTMATTER_CACHE.clear()
+    mod._POLICY_ROSTER_CACHE.clear()
+    calls = _count_yaml_parses(monkeypatch)
+
+    first, _ = mod.resolve_roster(content_root=str(content_root), home=None)
+    cold = len(calls)
+    assert cold > 0
+    for _ in range(3):
+        again, _ = mod.resolve_roster(content_root=str(content_root), home=None)
+        assert again == first
+    assert len(calls) == cold
+
+    new_agent = content_root / "coordinator" / "agents" / "late-addition.md"
+    _write_agent_md(new_agent, "late-addition")
+    edited, _ = mod.resolve_roster(content_root=str(content_root), home=None)
+    assert "coordinator:late-addition" in edited
+    assert len(calls) == cold + 1
+
+    executor_md = content_root / "coordinator" / "agents" / "executor.md"
+    executor_md.write_text("---\nname: renamed-executor\n---\nbody longer\n", encoding="utf-8")
+    renamed, _ = mod.resolve_roster(content_root=str(content_root), home=None)
+    assert "coordinator:renamed-executor" in renamed

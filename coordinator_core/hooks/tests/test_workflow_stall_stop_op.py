@@ -45,7 +45,8 @@ def _stale_run(tmp_path, tdir):
         "session_id": SID, "task_id": "t1", "tool_use_id": "tu1",
         "transcript_dir": str(run_dir),
     }
-    (tdir / f"workflow-run-{SID}-t1.json").write_text(json.dumps(rec), encoding="utf-8")
+    with open(pad._workflow_run_record_path(str(tdir), SID, "t1"), "w", encoding="utf-8") as fh:
+        json.dump(rec, fh)
 
 
 def _blocked(result):

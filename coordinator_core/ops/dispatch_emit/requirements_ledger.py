@@ -32,7 +32,7 @@ from typing import Collection, Iterable, Mapping, Optional, Sequence
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import MutateAbort
-from coordinator_core.ops import requirement_register as rr
+from coordinator_core.ops import method_step, requirement_register as rr
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_RELAYED,
@@ -203,7 +203,7 @@ def _design_failure(
 
 def _origin(anchor: object) -> tuple[str, str]:
     """(origin, at) from a row anchor; a row from a source document has origin ''."""
-    text = anchor if isinstance(anchor, str) else ""
+    text = method_step.split_anchor(anchor if isinstance(anchor, str) else "")[0]
     if text.startswith(ORIGIN_REVISION + "@"):
         return ORIGIN_REVISION, text[len(ORIGIN_REVISION) + 1:].partition(SENDER_SEP)[0]
     if text in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED):
@@ -842,7 +842,7 @@ def _append_rows(
             if reuse is not None and t in live_revisions and anchor.startswith(ORIGIN_REVISION + "@"):
                 reuse["id"] = live_revisions[t]
                 continue
-            if not t or (anchor in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED) and t in have):
+            if not t or (method_step.split_anchor(anchor)[0] in (ORIGIN_PM_VERBATIMS, ORIGIN_ASK, ORIGIN_RELAYED) and t in have):
                 continue
             have.add(t)
             rows.append({
@@ -1062,7 +1062,27 @@ def _lettered_entries(text: object) -> list[tuple[str, str]]:
     register already holds."""
     from coordinator_core.ops.dispatch_emit import stated_parts
 
-    return [(f"({p.label}) {p.text}", ORIGIN_RELAYED) for p in stated_parts.lettered_parts(str(text or ""))]
+    body = str(text or "")
+    slug = _method_slug(body)
+    return [
+        (f"({p.label}) {p.text}", method_step.mark_anchor(ORIGIN_RELAYED, slug, p.label) if slug else ORIGIN_RELAYED)
+        for p in stated_parts.lettered_parts(body)
+    ]
+
+
+_METHOD_LEAD_RE = re.compile(r"\b(?:method|steps?)\b", re.IGNORECASE)
+_LEAD_WORDS = 6
+
+
+def _method_slug(text: str) -> str:
+    """The slug of the lead-in before the first `(a)` when it names a method or steps, else ''
+    (a plain lettered list is not a method and mints unmarked rows)."""
+    m = re.search(r"(?<![\w(])\(a\)", text, re.IGNORECASE)
+    lead = text[: m.start()] if m else ""
+    if not _METHOD_LEAD_RE.search(lead):
+        return ""
+    words = re.findall(r"[a-z0-9]+", lead.lower())
+    return "-".join(words[-_LEAD_WORDS:])
 
 
 def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
@@ -1120,7 +1140,7 @@ def bind(
     entries.extend(_lettered_entries(read_em_brief(sizing)))
     register = (sizing.get(rr.REGISTER_KEY) if isinstance(sizing.get(rr.REGISTER_KEY), Mapping) else {}) or {}
     rows_now = [r for r in register.get(rr.ROWS_KEY) or [] if isinstance(r, Mapping)]
-    asked = any(r.get(rr.ROW_ANCHOR) in (ORIGIN_ASK, ORIGIN_RELAYED) for r in rows_now)
+    asked = any(method_step.split_anchor(r.get(rr.ROW_ANCHOR))[0] in (ORIGIN_ASK, ORIGIN_RELAYED) for r in rows_now)
     held = {str(r.get(rr.ROW_TEXT) or "").strip() for r in rows_now}
     # A reused sizing already holds its first ask: a later, different ask is a revision of it.
     for text, origin in ((ask_text, ORIGIN_ASK), (relayed_text, ORIGIN_RELAYED)):
@@ -1695,6 +1715,16 @@ def judge(
         if status == "met" and _hand_built(row):
             failures.append({"id": item.id, "reason": HAND_BUILT_REASON})
             status = "not_met"
+        if status == "met":
+            item_row = {rr.ROW_ID: item.id, rr.ROW_ANCHOR: item.anchor, rr.ROW_TEXT: item.text}
+            if method_step.is_method_step(item_row):
+                why = (
+                    f"method-step row {item.id}: no repo root to check its trace against" if repo_root is None
+                    else method_step.trace_refusal(item_row, plan_text or "", Path(repo_root))
+                )
+                if why is not None:
+                    failures.append({"id": item.id, "reason": why})
+                    status = "not_met"
         gated_open = status == "not_met" and isinstance(row.get("withheld_by"), str) and row["withheld_by"] in gated_ids
         if routed and item.id in routed and status in ("met", "not_met", "post_commit") and not gated_open:
             reason = _misrouted(row, routed[item.id])
@@ -1937,7 +1967,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     widen_refused: list[dict] = []
     halted_run.mark_revised(dir_, _now())
     halted = halted_run.revised_halt(dir_) is not None
-    live = run_token.is_live(root, params["run_id"]) and not halted
+    live = _run_driven(root, params["run_id"], ledger.sizing_rel, halted, run_token)
     out = {
         "ok": True,
         "run_id": params["run_id"],
@@ -2183,6 +2213,29 @@ def _sizing_shipped(root: Path, sizing_rel: Optional[str]) -> bool:
     except (LedgerRefused, OSError, yaml.YAMLError):
         return False
     return isinstance(doc, dict) and doc.get("status") == "shipped"
+
+
+def _run_driven(root: Path, run_id: str, sizing_rel: Optional[str], halted: bool, run_token) -> bool:
+    """True when any Workflow drives the run: a fresh stage receipt, an unredeemed run token, or
+    another run's unredeemed token for the run's sizing (a refire carries its own run id). A halted
+    run's own token does not count: nothing reads it. Token-dir reads only: no spawn."""
+    from coordinator_core.warm import live_runs
+
+    if live_runs.run_is_live(root, run_id):
+        return True
+    if not halted and run_token.is_live(root, run_id):
+        return True
+    if not sizing_rel:
+        return False
+    want = run_token.normalize_sizing_rel(root, sizing_rel)
+    try:
+        return any(
+            record["run_id"] != run_id
+            and run_token.normalize_sizing_rel(root, str(record.get("sizing_rel") or "")) == want
+            for record in run_token.live_records(root)
+        )
+    except OSError:
+        return False
 
 
 def _refire(

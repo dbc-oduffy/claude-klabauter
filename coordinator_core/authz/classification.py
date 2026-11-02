@@ -1279,6 +1279,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "plan.merge": OpClass.MUTATING,
     # criterion_evidence.record -- MUTATING: appends to <plan-stem>.evidence.yaml.
     "criterion_evidence.record": OpClass.MUTATING,
+    # rea_ledger.write -- MUTATING: creates claim/evidence files and appends unknown-revision lines in the rea ledger.
+    "rea_ledger.write": OpClass.MUTATING,
     # plan.tasks.grouping_digest — COMPUTE_ONLY, the read-only sibling of plan.tasks.mutate
     # immediately above. It computes the digest a PENDING resolve write is about to produce;
     # producing that write is plan.tasks.mutate's job, and the split is the whole point of
@@ -2532,6 +2534,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # 5 YES (persisted on disk).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.close_halted_run_superseded": OpClass.MUTATING,
+    # dispatch.run_terminality — COMPUTE_ONLY: reads one run dir's halted.json and run-outcome.json and returns
+    # terminal/resumable/reason; writes no file and spawns no process (ops/dispatch_emit/run_terminality.py).
+    # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.run_terminality": OpClass.COMPUTE_ONLY,
     # dispatch.land_combined_index — MUTATING: writes tree and commit objects, advances HEAD, and records
     # fully-landed halted runs (ops/dispatch_emit/combined_landing.py).
     # DR-208 five-question affirmation: 1 YES (git objects, HEAD ref, run markers); 2 No; 3 YES;
@@ -2849,6 +2856,18 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     #      Returns {"rows": [...]} only.
     "session.peer_roster": OpClass.COMPUTE_ONLY,
+    # codex_runner.start — MUTATING: creates <settings-home>/codex-runs/<run_id>/ with
+    # request.json, child.json and worker.log, and spawns the detached worker that
+    # writes result.json and a worker-roster record.
+    # codex_runner.result — COMPUTE_ONLY: reads result.json / child.json and probes the
+    # worker pid; writes nothing.
+    "codex_runner.start": OpClass.MUTATING,
+    "codex_runner.result": OpClass.COMPUTE_ONLY,
+    # agent_pipe.start / agent_pipe.send — MUTATING: each creates <settings-home>/agent-pipe/runs/<run_id>/
+    # (request.json, worker.log), spawns the detached relay worker, and the worker appends to
+    # <settings-home>/agent-pipe/mailboxes/<session>.jsonl.
+    "agent_pipe.start": OpClass.MUTATING,
+    "agent_pipe.send": OpClass.MUTATING,
     # groupem.enter — MUTATING, unlike every other op on this surface: it
     # composes session.peer_roster's own read (via read_pass) with two
     # writing legs -- nomination.claim() writes/refreshes

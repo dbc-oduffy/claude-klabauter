@@ -1,0 +1,87 @@
+{
+  "additionalProperties": false,
+  "description": "One revision of one unknown; revision N chains to N-1 by ``previous_revision_digest``.",
+  "properties": {
+    "unknown_id": {
+      "minLength": 1,
+      "title": "Unknown Id",
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "previous_revision_digest": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Previous Revision Digest"
+    },
+    "question": {
+      "minLength": 1,
+      "title": "Question",
+      "type": "string"
+    },
+    "coverage": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Coverage",
+      "type": "string"
+    },
+    "coverage_scope": {
+      "enum": [
+        "claim",
+        "section",
+        "output"
+      ],
+      "title": "Coverage Scope",
+      "type": "string"
+    },
+    "epistemic_mode": {
+      "enum": [
+        "observed",
+        "derived",
+        "inferred"
+      ],
+      "title": "Epistemic Mode",
+      "type": "string"
+    },
+    "source_authority": {
+      "enum": [
+        "shipped-artifact",
+        "controlled-replay",
+        "historical-reference",
+        "external-service",
+        "analyst-inference"
+      ],
+      "title": "Source Authority",
+      "type": "string"
+    },
+    "observed_at": {
+      "title": "Observed At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "unknown_id",
+    "revision",
+    "previous_revision_digest",
+    "question",
+    "coverage",
+    "coverage_scope",
+    "epistemic_mode",
+    "source_authority",
+    "observed_at"
+  ],
+  "title": "UnknownRevision",
+  "type": "object"
+}

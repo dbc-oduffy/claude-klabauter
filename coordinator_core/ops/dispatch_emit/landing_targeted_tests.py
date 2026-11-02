@@ -21,6 +21,17 @@ NOT_RUN_CHECK = "not-run"
 ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
 ZERO_FAIL_CHECK = "zero-fail-unattributed"
 
+#: Retest-record key naming why a verify run executed zero tests, and its values.
+ZERO_RUN_CAUSE_KEY = "zero_run_cause"
+ZERO_RUN_BUDGET = "budget-exhausted"
+ZERO_RUN_COLLECTION = "collection-failure"
+ZERO_RUN_EMPTY = "empty-selection"
+_ZERO_RUN_CAUSES = {
+    ZERO_RUN_BUDGET: "the verify budget was spent before any test ran",
+    ZERO_RUN_COLLECTION: "pytest collection failed, so no test ran",
+    ZERO_RUN_EMPTY: "the selection collected no tests",
+}
+
 RETEST_LAUNCHER = "emit-dispatch-workflow --retest-targeted"
 NO_NODE_RECORDED = "no node recorded"
 RETEST_ATTEMPTS_PARAM = "retest_attempts"
@@ -41,6 +52,17 @@ def tests_failed_finding(path: str, detail: str) -> Finding:
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
 
     return remedy_or_halt(TARGETED_TESTS_FAILED, _in_leg_attempt, lambda _f: Finding(path, TARGETED_TESTS_FAILED, detail), attempts=1)
+
+
+def zero_run_cause_note(record: Optional[Mapping], remedy: str) -> str:
+    """The not-run receipt line for a retest ``record`` that names a known ``zero_run_cause``
+    (cause, the record's ``reason``, ``remedy``); ``""`` when it names none, so the caller grades it as before."""
+    cause = record.get(ZERO_RUN_CAUSE_KEY) if isinstance(record, Mapping) else None
+    if not isinstance(cause, str) or cause not in _ZERO_RUN_CAUSES:
+        return ""
+    reason = record.get("reason") or record.get("note")
+    return (f"verify ran 0 tests ({cause}: {_ZERO_RUN_CAUSES[cause]}"
+            + (f"; {reason}" if reason else "") + f"); not a test failure; re-run: {remedy}")
 
 
 def _in_leg_attempt(_n: int) -> Finding:

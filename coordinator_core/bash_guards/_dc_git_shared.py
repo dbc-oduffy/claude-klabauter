@@ -251,40 +251,38 @@ def _orphan_c_cwd(c_dir: str, base_cwd: Optional[str] = None) -> Optional[str]:
 
 
 _BT_LEADING_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*(?:&&|;)")
+_BT_LEADING_ASSIGN_RE = re.compile(
+    r"""^\s*(?:export\s+)?([A-Za-z_]\w*)=("[^"$`]*"|'[^']*'|[^\s;&|"'$`]*)\s*(?:&&|;)"""
+)
+_BT_VAR_REF_RE = re.compile(r"^\$(?:([A-Za-z_]\w*)|\{([A-Za-z_]\w*)\})$")
 
 
 def _bt_leading_cd_prefix_cwd(cmd: str, base_cwd: Optional[str]) -> Optional[str]:
     """The effective cwd a repo-root-resolving guard should probe against
     when the COMMAND, not the guard process, changes directory first --
-    `cd <fixture> && git ...`.
+    `cd <fixture> && git ...`, optionally after literal `VAR=dir;`
+    assignments naming a `$VAR`/`${VAR}` target.
 
-    Bug row: state/bug-backlog/2026-08-27-destructive-git-and-scope-guards-
-    resolve-295928a71726.yaml. A guard resolving `os.getcwd()` (the guard
-    process's own cwd) or the payload's session-level `cwd` reads the WRONG
-    repo whenever the executed command's own leading `cd <dir> &&` moves it
-    elsewhere -- observed both directions: a scope guard warning about a
-    path from an unrelated repo, and a destructive-checkout guard blocking a
-    harmless command on a foreign repo's state.
-
-    NARROW BY DESIGN, matching the evidenced shape only: a `cd <dir>` at the
-    very START of the command, immediately followed by `&&` or `;`. This
-    does NOT track cwd across an arbitrary chain of segments (`git ... && cd
-    x && git ...`) -- that is `_bt_blanket_add_dash_c_cwd`'s sibling-shape
-    gap for a FUTURE widening, not this fix. Reuses that function's `-C`
-    resolution shape (last value wins is not applicable here since only the
-    leading form is matched at all).
-
-    Returns `None` -- never raises, never denies more -- when no leading
-    `cd` is present, the directory token cannot be resolved (a glob or an
-    unexpanded variable), or `base_cwd`/`os.getcwd()` resolution fails; the
-    caller falls back to its own prior `cwd` in every such case. A guard
-    whose root resolution only ever narrows on a hit and never widens on a
-    miss cannot turn an unrelated command into a false deny."""
-    m = _BT_LEADING_CD_RE.match(cmd)
+    Matches only a `cd <dir>` at the START of the command (after any leading
+    assignments), followed by `&&` or `;`. Returns `None` -- never raises --
+    when there is no such `cd`, the target is a glob or an unassigned/dynamic
+    variable, or resolution fails; callers fall back to their own cwd."""
+    env: Dict[str, str] = {}
+    rest = cmd
+    while True:
+        am = _BT_LEADING_ASSIGN_RE.match(rest)
+        if not am:
+            break
+        env[am.group(1)] = am.group(2).strip("'\"")
+        rest = rest[am.end():]
+    m = _BT_LEADING_CD_RE.match(rest)
     if not m:
         return None
     raw = m.group(1).strip("'\"")
-    if not raw or "*" in raw or "?" in raw or raw.startswith("$"):
+    vm = _BT_VAR_REF_RE.match(raw)
+    if vm:
+        raw = env.get(vm.group(1) or vm.group(2), "")
+    if not raw or "*" in raw or "?" in raw or "$" in raw or "`" in raw:
         return None
     if os.path.isabs(raw):
         return os.path.normpath(raw)

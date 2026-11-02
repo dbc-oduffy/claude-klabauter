@@ -95,6 +95,32 @@ _RAIL_KEYS = (b"status:", b"plan:", b"route:")
 REASON_FORWARD_PLAN_NOT_TERMINAL = "forward-plan-not-terminal"
 REASON_ROADMAP_STUBS_NOT_TERMINAL = "roadmap-stubs-not-terminal"
 REASON_ALREADY_ARCHIVED = "already-archived"
+REASON_UNREGISTERED_REPO = "repo-not-registered"
+
+
+def is_registered_repo(root: Path) -> bool:
+    """True when `root` equals a `repos.<key>` path of the machine registry (file read, no spawn).
+
+    A clone under a registered repo's `scratch/` is not equal to it, so never qualifies. An
+    unreadable registry fails closed. Registry membership only; owning-session liveness is not checked."""
+    try:
+        from coordinator_core import machine_resolver as mr
+
+        reg_dir = mr.registry_dir()
+        here = os.path.normcase(os.path.abspath(str(root)))
+        for fname in ("registry.toml", "registry.local.toml"):
+            for key, val in mr.load_flat_registry_file(reg_dir / fname).items():
+                if (
+                    key.startswith("repos.")
+                    and "." not in key[6:]
+                    and isinstance(val, str)
+                    and val.strip()
+                    and os.path.normcase(os.path.abspath(val.strip())) == here
+                ):
+                    return True
+    except Exception:
+        return False
+    return False
 
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 _UNSAFE_NAME_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]")
@@ -739,6 +765,12 @@ async def drain_async(
         return result
 
     skipped.extend(scan_skipped)
+    committer = commit if commit is not None else land_moves
+    # Only the real committer writes git history; an injected recording mover is not gated.
+    if moves and committer is land_moves and not is_registered_repo(root):
+        for m in moves:
+            skipped.append({"id": m.candidate_id, "reason": REASON_UNREGISTERED_REPO})
+        return result
     if moves:
         retained = (dirty or dirty_among)(root, [m.candidate_id for m in moves])
         for m in moves:
@@ -748,7 +780,6 @@ async def drain_async(
     if not moves:
         return result
 
-    committer = commit if commit is not None else land_moves
     subject = f"fleet: archive {len(moves)} terminal sizing-object(s) [fleet.archive_terminal_sizings]"
     raw_acted, raw_failed = await committer(root, moves, subject)
     acted_ids = {a["id"] for a in raw_acted}

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 
-from coordinator_core import warp_live
+from coordinator_core import launch_records, warp_live
 from coordinator_core.ops.dispatch_emit import run_token
 
 SIZING = "state/sizings/mine.yaml"
@@ -37,7 +38,7 @@ def managed(tmp_path, monkeypatch):
 
 def _record(directory, name, **fields):
     body = {"scriptPath": SCRIPT, **fields}
-    (directory / f"workflow-run-s1-{name}.json").write_text(json.dumps(body), encoding="utf-8")
+    Path(launch_records.record_path(str(directory), "s1", name)).write_text(json.dumps(body), encoding="utf-8")
 
 
 def _terminal(task):

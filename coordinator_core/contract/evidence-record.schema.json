@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/evidence-record.schema.json",
+  "title": "rea evidence record",
+  "description": "One reverse-engineer-anything evidence record written by the rea_ledger.write op: a located observation supporting or contesting one claim. Claude-Klabauter-owned (example-retrieval-repo conforms to it). Every field is required and nulls are explicit so canonical re-serialisation is total. id is the ledger filename stem.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "claim_id",
+    "stance",
+    "source_kind",
+    "source_ref",
+    "locator",
+    "excerpt",
+    "observed_at",
+    "observer"
+  ],
+  "properties": {
+    "schema_version": { "const": "evidence-record/v1" },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+      "maxLength": 128,
+      "description": "Unique record id; the op uses it as the filename stem, so it carries no path separator."
+    },
+    "claim_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "id of the claim this record bears on."
+    },
+    "stance": {
+      "type": "string",
+      "enum": ["supports", "contests", "context"]
+    },
+    "source_kind": {
+      "type": "string",
+      "enum": ["file", "url", "command-output", "document", "other"]
+    },
+    "source_ref": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path, URL, command line or document name the observation came from."
+    },
+    "locator": {
+      "type": ["string", "null"],
+      "description": "Position inside source_ref (line range, anchor, page); null when the whole source is the evidence."
+    },
+    "excerpt": {
+      "type": ["string", "null"],
+      "description": "Verbatim text observed; null when none was captured."
+    },
+    "observed_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "RFC 3339 timestamp of the observation, digested as emitted (no normalisation)."
+    },
+    "observer": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Session or agent id that made the observation."
+    }
+  }
+}

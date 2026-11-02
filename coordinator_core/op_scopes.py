@@ -570,6 +570,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "session.resolve_address":                "none",
     "session.whoami_live":                    "none",
     "session.peer_roster":                    "none",
+    # codex_runner.start / .result -- repo_root is a wire param and runs live under the
+    # machine-global settings home, never keyed off the engine-injected repo_root.
+    "codex_runner.start":                     "none",
+    "codex_runner.result":                    "none",
+    # agent_pipe.start / .send -- run dirs and mailboxes live under the machine-global settings home.
+    "agent_pipe.start":                       "none",
+    "agent_pipe.send":                        "none",
     "groupem.enter":                          "none",
     # groupem.stamp / groupem.resolve_addressee / groupem.idle_report / groupem.standing --
     # same resolution story as groupem.enter immediately above: each
@@ -621,6 +628,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.tasks.mutate":                     "common_dir",
     "plan.merge":                            "common_dir",
     "criterion_evidence.record":             "common_dir",
+    "rea_ledger.write":                      "common_dir",
     "plan.tasks.grouping_digest":             "common_dir",
     "plan.signoff":                           "common_dir",
     "signoff.digest":                         "common_dir",

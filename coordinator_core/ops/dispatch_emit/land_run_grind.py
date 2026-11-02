@@ -10,7 +10,8 @@ gitignored), a file gone from the worktree) is dropped, reported under
 ``dropped`` and ``stranded`` and named in the commit by one ``UNLANDED_ROW_TRAILER`` line; it is never a
 reason to refuse the call. A row with a dropped product path (any reason but a ledger-root path or an
 unseen deletion) lands none of its paths, gets no ``Grind-Row:`` trailer, is listed under ``unlanded`` and
-keeps its ledger. A landed row's ledger is settled afterwards. The run token is redeemed,
+keeps its ledger; its on-disk archive move is reversed (``reopened``). A landed row's ledger is
+settled afterwards. The run token is redeemed,
 consumed on a landed commit and released on every other return. A repeat call after a landing is
 answered from the run token's spent receipt and lands nothing.
 """
@@ -85,7 +86,7 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict) -> dict:
         )
     landed = None
     try:
-        reply = _land(main_root, grind, params.get("deliverable_id"), run_id)
+        reply = _land(main_root, repo_root, grind, params.get("deliverable_id"), run_id)
         if reply.get("committed") is True:
             landed = {"sha": reply.get("sha"), "rows": reply.get("rows") or [], "paths": reply.get("paths") or []}
         return reply
@@ -119,7 +120,35 @@ def _already_landed(receipt: dict, grind: dict) -> dict:
     }
 
 
-def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> dict:
+def _reopen_held_rows(main_root: Path, repo_root: Path, held_plans: list) -> list:
+    """Undo ``grind_rows close``'s on-disk archive move for each unlanded row: write the removed source
+    row back from HEAD's blob, then delete the untracked archive copy (same file name, absent from HEAD).
+    A source that cannot be restored leaves the archive copy in place. Returns the reopened source paths."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_state import head_blobs
+
+    reopened: list = []
+    for _row, paths, deleted in held_plans:
+        in_head = head_blobs(main_root, list(deleted) + list(paths))
+        for src in deleted:
+            target = main_root / src
+            if src not in in_head:
+                continue
+            if not target.exists():
+                obj = git_objects.read_object(repo_root, in_head[src][1])
+                if obj is None or obj[0] != "blob":
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(obj[1])
+            for p in paths:
+                copy = main_root / p
+                if p not in in_head and copy.name == target.name and copy.is_file():
+                    copy.unlink()
+            reopened.append(src)
+    return reopened
+
+
+def _land(main_root: Path, repo_root: Path, grind: dict, deliverable_id: object, run_id: str) -> dict:
     from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths, hash_worktree_blobs_via_spawn
     from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
 
@@ -201,7 +230,8 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
         {"row_id": i, "reason": "a declared product path was dropped from the landing; the row stays open"}
         for i in sorted(held)
     ]
-    base = {"dropped": dropped, "stranded": stranded, "rows": [], UNLANDED_KEY: unlanded}
+    reopened = _reopen_held_rows(main_root, repo_root, [(r, p, d) for r, p, d in plans if r["row_id"] in held])
+    base = {"dropped": dropped, "stranded": stranded, "rows": [], UNLANDED_KEY: unlanded, "reopened": reopened}
     if not landing:
         return {"committed": False, "sha": None, "nothing_to_commit": True, **base}
 
@@ -246,7 +276,7 @@ def _land(main_root: Path, grind: dict, deliverable_id: object, run_id: str) -> 
         settle_error = f"ledger settle failed after the commit landed: {err}"
     return {
         "committed": True, "sha": sha, "paths": commit_files + commit_deleted, "rows": rows,
-        "dropped": dropped, "stranded": stranded, UNLANDED_KEY: unlanded,
+        "dropped": dropped, "stranded": stranded, UNLANDED_KEY: unlanded, "reopened": reopened,
         **({"settle_error": settle_error} if settle_error else {}),
     }
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 
+from coordinator_core import launch_records
 from coordinator_core.hooks import postuse_advisory_dispatch as mod
 
 SID = "sess-1"
@@ -57,12 +58,12 @@ def _tmpdir(tmp_path):
 
 
 def _rec(tmpdir, name):
-    with open(os.path.join(tmpdir, f"workflow-run-{SID}-{name}.json"), encoding="utf-8") as fh:
+    with open(launch_records.record_path(tmpdir, SID, name), encoding="utf-8") as fh:
         return json.load(fh)
 
 
 def _exists(tmpdir, name):
-    return os.path.exists(os.path.join(tmpdir, f"workflow-run-{SID}-{name}.json"))
+    return os.path.exists(os.path.join(launch_records.session_dir(tmpdir, SID), f"{name}.json"))
 
 
 def test_previous_launch_is_not_attributed_to_the_newest_tool_use(tmp_path):
@@ -114,7 +115,7 @@ def test_error_result_removes_the_pending_record_only(tmp_path):
     mod.resolve_workflow_run_records(
         SID, _transcript(tmp_path, [_use("toolu_B", "scriptB"), _error("toolu_B")]), tdir
     )
-    assert sorted(os.listdir(tdir)) == []
+    assert launch_records.session_record_paths(tdir, SID) == []
 
 
 def test_two_parallel_calls_in_one_message_pair_by_id(tmp_path):
@@ -145,20 +146,45 @@ def test_resume_call_records_the_reused_run_id_under_its_new_task_id(tmp_path):
 
 def test_correct_record_replaces_a_skewed_legacy_one_idempotently(tmp_path):
     tdir = _tmpdir(tmp_path)
-    legacy = os.path.join(tdir, f"workflow-run-{SID}-tA.json")
+    legacy = launch_records.flat_record_path(tdir, SID, "tA")
     with open(legacy, "w", encoding="utf-8") as fh:
         json.dump({"run_id": "wrong", "scriptPath": "scriptB"}, fh)
     t = _transcript(tmp_path, [_use("toolu_A", "scriptA"), _launch("toolu_A", "tA", "rA")])
     mod.resolve_workflow_run_records(SID, t, tdir)
     mod.resolve_workflow_run_records(SID, t, tdir)
     assert (_rec(tdir, "tA")["run_id"], _rec(tdir, "tA")["scriptPath"]) == ("rA", "scriptA")
+    assert not os.path.exists(legacy)
+
+
+def test_flat_record_named_in_the_tail_moves_under_the_session_dir(tmp_path):
+    tdir = _tmpdir(tmp_path)
+    flat = launch_records.flat_record_path(tdir, SID, "toolu_B")
+    with open(flat, "w", encoding="utf-8") as fh:
+        json.dump({"run_id": None, "pending": True, "scriptPath": "scriptB"}, fh)
+    t = _transcript(tmp_path, [_use("toolu_B", "scriptB")])
+    mod.resolve_workflow_run_records(SID, t, tdir)
+    assert not os.path.exists(flat)
+    assert _rec(tdir, "toolu_B")["scriptPath"] == "scriptB"
+    assert os.path.dirname(launch_records.record_path(tdir, SID, "toolu_B")) == os.path.join(
+        tdir, "workflow-runs", SID
+    )
+
+
+def test_flat_record_absent_from_the_tail_is_left_alone(tmp_path):
+    tdir = _tmpdir(tmp_path)
+    flat = launch_records.flat_record_path(tdir, SID, "toolu_Z")
+    with open(flat, "w", encoding="utf-8") as fh:
+        json.dump({"run_id": None, "pending": True}, fh)
+    mod.resolve_workflow_run_records(SID, _transcript(tmp_path, [_use("toolu_B", "scriptB")]), tdir)
+    assert os.path.exists(flat)
+    assert not _exists(tdir, "toolu_Z")
 
 
 def test_reprocessing_a_launch_keeps_its_original_fired_at(tmp_path):
     tdir = _tmpdir(tmp_path)
     t = _transcript(tmp_path, [_use("toolu_A", "scriptA"), _launch("toolu_A", "tA", "rA")])
     mod.resolve_workflow_run_records(SID, t, tdir)
-    path = os.path.join(tdir, f"workflow-run-{SID}-tA.json")
+    path = launch_records.record_path(tdir, SID, "tA")
     rec = _rec(tdir, "tA")
     rec["fired_at"] = 1000
     with open(path, "w", encoding="utf-8") as fh:
@@ -174,7 +200,8 @@ def test_unsafe_ids_never_reach_a_path(tmp_path):
         _use("../x", "scriptX"),
     ])
     mod.resolve_workflow_run_records(SID, t, tdir)
-    assert not any("evil" in n or ".." in n for n in os.listdir(tdir))
+    names = os.listdir(tdir) + [os.path.basename(p) for p in launch_records.session_record_paths(tdir, SID)]
+    assert not any("evil" in n or ".." in n for n in names)
     assert not (tmp_path / "evil").exists()
 
 

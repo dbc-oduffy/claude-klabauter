@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core import warp_fire, warp_live
+from coordinator_core import launch_records, warp_fire, warp_live
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
 from coordinator_core.ops.dispatch_emit import run_token
@@ -240,7 +240,7 @@ def _launch_record(tmp_path: Path, monkeypatch, script: str, wf_dir: Path, task:
     launches.mkdir(exist_ok=True)
     monkeypatch.setattr(warp_live, "managed_tempdir", lambda: launches)
     monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda _name="": launches)
-    (launches / f"workflow-run-sess-1-{task}.json").write_text(
+    Path(launch_records.record_path(str(launches), "sess-1", task)).write_text(
         json.dumps({"scriptPath": script, "transcript_dir": str(wf_dir), "fired_at": 1.0}), encoding="utf-8"
     )
 
@@ -974,7 +974,7 @@ def test_op_door_answers_the_wrapped_payload(tmp_path, monkeypatch):
 
 
 def _launch(tmpdir: Path, session: str, task: str, script: str) -> None:
-    (tmpdir / f"workflow-run-{session}-{task}.json").write_text(
+    Path(launch_records.record_path(str(tmpdir), session, task)).write_text(
         json.dumps({"run_id": "wf_1", "scriptPath": script, "fired_at": int(time.time())}), encoding="utf-8"
     )
 

@@ -4540,9 +4540,10 @@ def _fire_flag_em_poll_in_flight_with(transcript_tools: List[str], run_in_flight
         with tempfile.TemporaryDirectory(prefix="guard-message-corpus-fepif-", dir=_neutral_scratch_parent()) as scratch:
             session_id = "sess-fepif"
             if run_in_flight:
-                (Path(scratch) / ("workflow-run-%s-t1.json" % session_id)).write_text(
-                    _json.dumps({"run_id": "run-1"}), encoding="utf-8"
-                )
+                from coordinator_core import launch_records
+
+                with open(launch_records.record_path(scratch, session_id, "t1"), "w", encoding="utf-8") as fh:
+                    fh.write(_json.dumps({"run_id": "run-1"}))
             transcript = Path(scratch) / "transcript.jsonl"
             transcript.write_text(
                 "".join(

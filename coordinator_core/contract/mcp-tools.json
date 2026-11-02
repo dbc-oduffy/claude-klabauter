@@ -3,6 +3,20 @@
   "name_mapping": "op name with '.' replaced by '__'",
   "tools": [
     {
+      "description": "Deliver `text` into an existing agent conversation through a new run.\n\nParams: agent, conversation (the id on a mailbox line's sender_conversation), text, reply_to;\ncwd optional.\nReturns: {\"run_id\", \"mailbox\", \"run_dir\", \"pid\"}.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "agent_pipe__send"
+    },
+    {
+      "description": "Start a headless agent session whose messages land in a Claude session's mailbox.\n\nParams: agent (\"antigravity\" | \"codex\"), prompt, reply_to (the receiving Claude session id);\ncwd optional (the agent's working directory; default the run dir).\nReturns: {\"run_id\", \"mailbox\", \"run_dir\", \"pid\"} -- the pid is the worker's, not the agent's.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "agent_pipe__start"
+    },
+    {
       "description": "JSON-RPC \"app_session.census\" handler.\n\nEnumerates from persisted handle state (never from in-memory session\nstate), so it naturally finds orphans left by sessions that have\nalready died — session death does not reap spawned workers, and a\npersisted handle survives its launching session regardless. Each\nrecorded PID is re-validated against its stored second identity signal\nbefore being reported live (see `_handle_is_live`).",
       "inputSchema": {
         "type": "object"
@@ -337,6 +351,20 @@
         "type": "object"
       },
       "name": "close__review"
+    },
+    {
+      "description": "Read one run's outcome.\n\nParams: run_id.\nReturns: the worker's RunResult dict, or {\"run_id\", \"status\": \"running\"} while the worker\nlives; a worker that died without a result reports status \"failed\".",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "codex_runner__result"
+    },
+    {
+      "description": "Start one detached codex run.\n\nParams: mode (\"review\" | \"agy-review\" | \"execute\"), repo_root, and artifact (review,\nagy-review) or plan+chunk (execute); parent_session_id optional. `allow_api_key` is not\na wire param: the op never forwards it.\nReturns: {\"run_id\", \"run_dir\", \"pid\"} -- the pid is the worker's, not codex's.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "codex_runner__start"
     },
     {
       "description": "JSON-RPC \"commit.anchors\" handler — COMPUTE_ONLY, sync.\n\nPurpose: Derives a git-trailer block from the staged diff and live read-model and\nreturns it as text. The prepare-commit-msg hook (DoE surface, D3) injects the block\ninto the commit message. Returns {\"trailers\": \"\"} when nothing is resolvable.\n\nSync (not async): all I/O in this handler and its full call tree is synchronous\n(subprocess.run + disk reads). ipc.py offloads sync handlers via asyncio.to_thread,\nkeeping the event loop live for other partitions and making DISPATCH_TIMEOUT_SECS\neffective. Review: code-reviewer — F1: AC-3 Gap-3 fix; converting to sync is the\ncorrect pattern when no `await` appears anywhere in the call tree.\n\nParams:\n    session_id  (str)      — composing session identity, used for Anchor resolution.\n    nature      (str|null) — EM-supplied Nature override. When non-null and a valid\n                             _NATURE_ENUM member, used verbatim. When null, Nature is\n                             derived from the COMMIT_EDITMSG subject prefix taxonomy.\n    governing_plan_slug (str|null) — caller-supplied plan slug this commit closes\n                             against (`docs/plans/<slug>.md`). AUTHORITATIVE over the\n                             staged-diff Plan/Plan-Id/Deliverable-Id scan whenever its\n                             own plan file exists at all (see\n                             `_resolve_plan_from_governing_slug`) — the staged-diff scan\n                             degrades to a whole-shared-index read on some scope shapes\n                             and a peer's unrelated staged plan can otherwise win by\n                             default. A staged-diff match whose PATH or deliverable_id\n                             DISAGREES with the resolved governing plan is logged loudly\n                             (never silently preferred) and then discarded in favor of\n                             the governing slug's own values. When the governing plan\n                             file exists but carries no valid plan_id/deliverable_id\n                             (a stub mid-enrichment, or a torn read), that is ALSO\n                             logged loudly and the staged-diff result is discarded\n                             rather than substituted — only Plan: (no ids) is emitted.\n\nReturns:\n    {\"trailers\": \"<newline-joined Key: value lines, or '' when nothing resolvable>\"}\n\nCOMPUTE_ONLY affirmation (five questions, authz/classification.py discipline):\n    1. No git write executed (no commit / add / notes / interpret-trailers --in-place).\n    2. No file written under state/, archive/, or any coordinator substrate path.\n    3. No temp file written that a caller reads back.\n    4. Returns computed text only; mutation is git's own mechanism via the hook.\n    5. Read-only git subprocesses (git diff --cached, git show :path) are permitted\n       (ipc.py:44 carve-out).\n\nKeying scope: common_dir — repo_root is the .git directory (git_common_dir result).",

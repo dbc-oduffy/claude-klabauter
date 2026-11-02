@@ -26,13 +26,19 @@ def _cleanup(session_id: str) -> None:
     for pattern in (
         f"em-poll-count-{session_id}.json",
         f".em-poll-count-*.tmp",
-        f"workflow-run-{session_id}-*.json",
     ):
         for path in glob.glob(os.path.join(tmpdir, pattern)):
             try:
                 os.unlink(path)
             except OSError:
                 pass
+    from coordinator_core import launch_records
+
+    for path in launch_records.session_record_paths(tmpdir, session_id):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 @pytest.fixture()
@@ -83,7 +89,9 @@ def _payload(session_id, transcript_path, tool_name, agent_id=None):
 
 def _seed_run_record(session_id: str, run_id: str) -> None:
     tmpdir = str(managed_tempdir())
-    path = os.path.join(tmpdir, f"workflow-run-{session_id}-task1.json")
+    from coordinator_core import launch_records
+
+    path = launch_records.record_path(tmpdir, session_id, "task1")
     with open(path, "w", encoding="utf-8") as fh:
         json.dump({"run_id": run_id, "session_id": session_id}, fh)
 

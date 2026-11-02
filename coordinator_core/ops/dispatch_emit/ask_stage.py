@@ -111,6 +111,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     EM_OWNED_REASONS,
     InvalidChangeKindError,
     NON_DISPATCHABLE_DISPOSITIONS,
+    SpineReadError,
     read_spine,
     with_canonical_disposition,
 )
@@ -1110,6 +1111,8 @@ def stage(
         parse = shared if shared is not None else _parse_plan(root, plan_path, plan_text)
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
+    except SpineReadError as exc:
+        raise AskStageError(f"SPINE-REFUSED: {plan_posix}: {type(exc).__name__}: {exc}") from exc
     raw_by_id, rows, sibling_roots = parse.raw_by_id, list(parse.rows), parse.sibling_roots
     exclusions = list(parse.exclusions)
     retired_resume: tuple[str, ...] = ()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -30,9 +31,21 @@ def _injected_session_liveness(monkeypatch):
     monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid in LIVE_SESSIONS)
 
 
-def _run(root, run_id, stage, minutes_ago, session_id="sess1"):
+def _token(root, run_id, kind="live"):
+    base = root / ".git" / "coordinator-warp-run-tokens"
+    if kind == "claimed":
+        base = base / "claimed"
+    base.mkdir(parents=True, exist_ok=True)
+    (base / f"{run_id}.json").write_text(
+        json.dumps({"run_id": run_id, "minted_at": time.time()}), encoding="utf-8"
+    )
+
+
+def _run(root, run_id, stage, minutes_ago, session_id="sess1", token="live"):
     d = root / "state" / "warp" / run_id
     d.mkdir(parents=True)
+    if token:
+        _token(root, run_id, token)
     data = {"stage": stage, "last_activity_at": _ts(minutes_ago)}
     if session_id is not None:
         data["session_id"] = session_id
@@ -62,25 +75,14 @@ def test_missing_repo_is_skipped(tmp_path):
     assert live_runs.find_live_runs({"repos.x": str(tmp_path / "nope")}, now=NOW) == []
 
 
-def test_format_refusal_names_each_run_and_alternative():
-    text = live_runs.format_refusal(
+def test_format_handover_is_one_line_per_run_and_carries_no_override_key():
+    lines = live_runs.format_handover(
         [live_runs.LiveRun("r1", "a", "staged", "t1"), live_runs.LiveRun("r2", "b", "x", "t2")]
     )
-    assert "r1  a  stage=staged" in text and "r2  b  stage=x" in text
-    assert "publish again once those runs finish" in text
-
-
-def test_unnamed_runs_returns_only_runs_not_named():
-    a = live_runs.LiveRun("r1", "a", "staged", "t1")
-    b = live_runs.LiveRun("r2", "b", "x", "t2")
-    assert live_runs.unnamed_runs([a, b], ["a"]) == [b]
-    assert live_runs.unnamed_runs([a, b], ["a", "b"]) == []
-    assert live_runs.unnamed_runs([a, b], None) == [a, b]
-
-
-def test_format_refusal_carries_no_override_key():
-    text = live_runs.format_refusal([live_runs.LiveRun("r1", "a", "staged", "t1")])
-    assert "--allow-mid-stage" not in text
+    assert len(lines) == 2
+    assert "r1 a stage=staged" in lines[0] and "r2 b stage=x" in lines[1]
+    assert all("--allow" not in line for line in lines)
+    assert live_runs.format_handover([]) == []
 
 
 def test_window_boundary_is_inclusive(tmp_path):
@@ -113,6 +115,83 @@ def test_unreadable_registry_reports_no_runs(monkeypatch):
 
 def _session_run(root, run_id, stage, minutes_ago, session_id="sess1"):
     _run(root, run_id, stage, minutes_ago, session_id)
+
+
+def test_hand_landed_run_without_token_is_not_live(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("subprocess spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    repo = tmp_path / "r1"
+    _run(repo, "hand", "staged", 1, token=None)
+    assert not live_runs.run_is_live(repo, "hand", now=NOW)
+    assert live_runs.find_live_runs({"repos.r1": str(repo)}, now=NOW) == []
+
+
+def test_live_token_makes_the_same_run_live(tmp_path):
+    repo = tmp_path / "r1"
+    _run(repo, "tok", "staged", 1)
+    assert live_runs.run_is_live(repo, "tok", now=NOW)
+    assert [r.run_id for r in live_runs.find_live_runs({"repos.r1": str(repo)}, now=NOW)] == ["tok"]
+
+
+def test_claimed_token_keeps_a_terminal_committing_run_live(tmp_path):
+    repo = tmp_path / "r1"
+    _run(repo, "mid", "staged", 1, token="claimed")
+    assert live_runs.run_is_live(repo, "mid", now=NOW)
+
+
+def test_unreadable_token_store_reads_as_held_but_malformed_does_not(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    repo = tmp_path / "r1"
+
+    def denied(_root):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(run_token, "held_records", denied)
+    assert live_runs._token_held(repo, "x") is True
+
+    def malformed(_root):
+        raise ValueError("bad")
+
+    monkeypatch.setattr(run_token, "held_records", malformed)
+    assert live_runs._token_held(repo, "x") is False
+
+
+def test_halted_run_is_not_live_with_a_token(tmp_path):
+    repo = tmp_path / "r1"
+    _run(repo, "h", "halted", 1)
+    assert not live_runs.run_is_live(repo, "h", now=NOW)
+
+
+def test_owner_holds_ignores_the_token(tmp_path, monkeypatch):
+    repo = tmp_path / "r1"
+    _run(repo, "hand", "staged", 120, token=None)
+    monkeypatch.setattr(live_runs, "_owner_live", lambda sid, memo=None: True)
+    assert live_runs.run_owner_holds(repo, "hand")
+
+
+def test_stage_only_predicate_keeps_a_tokenless_midstage_run_live(tmp_path):
+    repo = tmp_path / "r1"
+    _run(repo, "between", "staged", 1, token=None)
+    assert not live_runs.run_is_live(repo, "between", now=NOW)
+    assert live_runs.run_stage_live(repo, "between", now=NOW)
+
+
+def test_stage_only_predicate_still_refuses_terminal_and_stale_runs(tmp_path):
+    repo = tmp_path / "r1"
+    _run(repo, "done", "halted", 1, token=None)
+    _run(repo, "old", "staged", 120, token=None)
+    assert not live_runs.run_stage_live(repo, "done", now=NOW)
+    assert not live_runs.run_stage_live(repo, "old", now=NOW)
+
+
+def test_abandoned_runs_reaper_uses_the_stage_only_predicate():
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    assert abandoned_runs.run_stage_live is live_runs.run_stage_live
+    assert not hasattr(abandoned_runs, "run_is_live")
 
 
 def _journal(home, repo, session_id, name, text, minutes_ago):

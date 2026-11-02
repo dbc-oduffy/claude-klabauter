@@ -128,10 +128,43 @@ def _per_run_basetemp(rootpath: Path) -> Path:
 
 
 # tryfirst: pytest's tmpdir plugin reads option.basetemp in its own configure.
+_NEXT_NUMBER: "dict[tuple[str, str], int]" = {}
+
+
+def _counted_numbered_dir(root: Path, prefix: str, mode: int = 0o700) -> Path:
+    """`_pytest.pathlib.make_numbered_dir` without the per-call scan of `root`.
+
+    pytest's version lists all of `root` to find the next number and re-points a
+    `<prefix>current` symlink on every call; a worker's basetemp reaches ~27k entries over a
+    fast tier, so each tmp_path/mktemp grew to ~50ms of kernel time and workers crawled into
+    the 300s timeout. Trap: the counter is per process, which is safe only because each
+    xdist worker owns its basetemp; a name another process made is skipped on FileExistsError.
+    """
+    key = (str(root), prefix.lower())
+    number = _NEXT_NUMBER.get(key, 0)
+    while True:
+        path = root.joinpath(f"{prefix}{number}")
+        number += 1
+        try:
+            path.mkdir(mode=mode)
+        except FileExistsError:
+            continue
+        _NEXT_NUMBER[key] = number
+        return path
+
+
+def _install_counted_numbered_dir() -> None:
+    import _pytest.tmpdir as tmpdir_mod
+
+    if getattr(tmpdir_mod, "make_numbered_dir", None) is not None:
+        setattr(tmpdir_mod, "make_numbered_dir", _counted_numbered_dir)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _MINTED, _REDIRECT
     _MINTED = None
+    _install_counted_numbered_dir()
     controller = not hasattr(config, "workerinput")
     if config.option.basetemp is None and controller:
         basetemp = _per_run_basetemp(config.rootpath)

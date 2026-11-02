@@ -126,24 +126,16 @@ def _time_left(deadline: float) -> float:
     return deadline - time.monotonic()
 
 
-def _run_session(run, argv: list[str], root: Path, log: Path, deadline: float, append: bool):
+def _run_session(argv: list[str], run, root: Path, log: Path, deadline: float, append: bool):
     """``(code, error)`` for one session under the shared ``deadline`` (monotonic): ``_NOT_LAUNCHED``
-    when no time remains, ``(None, message)`` when the launcher could not start."""
+    when no time remains, ``(None, message)`` when the launcher could not start. ``argv`` leads so a
+    caller's per-session splice of its group is the first positional argument."""
     if _time_left(deadline) <= 0:
         return _NOT_LAUNCHED, None
     try:
         return run(argv, root, log=log, timeout=_time_left(deadline), append=append), None
     except OSError as exc:
         return None, str(exc)
-
-
-def _launch_argv(root: Path, tests: list[str], *, keep_tier: bool = False) -> "list[list[str]] | str":
-    """One argv per session of ``_launch_plan`` (prefix plus group); a str is the reason none could be built."""
-    plan = _launch_plan(root, tests, keep_tier=keep_tier)
-    if isinstance(plan, str):
-        return plan
-    base, groups = plan
-    return [[*base, *group] for group in groups]
 
 
 def _strip_collection_roots(root: Path, cmd: str) -> list[str]:
@@ -426,6 +418,7 @@ def _write_no_tests(root, path, run_id, dropped, note, dirty, head_sha, params) 
         "run_id": run_id, "head": head_sha(root), "tests": [], "tests_run": 0, "dropped": dropped,
         "covered": landing_retest.landing_fingerprint(root, covered_paths), "covered_source": covered_source,
         "status": NO_TESTS_STATUS, "note": reason, "at": datetime.now(timezone.utc).isoformat(),
+        landing_targeted_tests.ZERO_RUN_CAUSE_KEY: landing_targeted_tests.ZERO_RUN_EMPTY,
     })
     print(f"{path} {NO_TESTS_STATUS}: {reason}")
     return 0
@@ -479,15 +472,16 @@ def _collect_ids(run, root: Path, tests: list[str], log: Path, deadline: float) 
     log, when present, overrides that base. Fail closed: more than one distinct rootdir, one outside
     ``root``, or an id whose file is not under ``root`` is a reason. Exit 2 is accepted only when the log
     names the ``ERROR collecting`` file."""
-    argvs = _launch_argv(root, tests)
-    if isinstance(argvs, str):
-        return argvs
+    plan = _launch_plan(root, tests)
+    if isinstance(plan, str):
+        return plan
+    base, groups = plan
+    quiet_free = [t for t in base if t not in _QUIET_FLAGS]  # a second -q prints ``path: N``, not node ids
     log.write_bytes(b"")
     rcs: list = []
-    for n, argv in enumerate(argvs):
-        quiet_free = [t for t in argv if t not in _QUIET_FLAGS]  # a second -q prints ``path: N``, not node ids
+    for n, group in enumerate(groups):
         rc, err = _run_session(
-            run, [*quiet_free, "--collect-only", "-q", f"--rootdir={root}"], root, log, deadline, n > 0,
+            [*quiet_free, *group, "--collect-only", "-q", f"--rootdir={root}"], run, root, log, deadline, n > 0,
         )
         if err is not None or rc not in (0, NO_TESTS_COLLECTED, 2):
             return _COLLECT_UNAVAILABLE
@@ -644,26 +638,43 @@ def _start_detached(
     return 0
 
 
+def _zero_run_cause(status: str, codes: list, log: Path, log_used: bool) -> Optional[str]:
+    """Why a pass executed zero tests, or None when it ran some or failed for another reason: a
+    ``no-tests`` pass is an empty selection; an ``error`` pass with no session that finished (exit 0/1)
+    is budget exhaustion (session not launched or killed at the timeout) or a pytest collection failure."""
+    if status == NO_TESTS_STATUS:
+        return landing_targeted_tests.ZERO_RUN_EMPTY
+    if status != "error" or any(c in (0, 1) for c in codes):
+        return None
+    if any(c in (_NOT_LAUNCHED, LAUNCH_TIMED_OUT) for c in codes):
+        return landing_targeted_tests.ZERO_RUN_BUDGET
+    if log_used and 2 in codes and _collection_failed_since(log, 0):
+        return landing_targeted_tests.ZERO_RUN_COLLECTION
+    return None
+
+
 def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float):
     """One full pass of ``tests`` with cwd ``root`` under the shared ``deadline`` (monotonic):
     ``(status, reason, codes, log_used)``."""
-    argv_or_err = _launch_argv(root, tests)
-    if isinstance(argv_or_err, str):
-        return "error", argv_or_err, [], False
+    plan = _launch_plan(root, tests)
+    if isinstance(plan, str):
+        return "error", plan, [], False
+    base, groups = plan
     budget = RETEST_CHILD_TIMEOUT_SECS
     codes: list = []
     failed_cmds: list[str] = []
     broken_msgs: list[str] = []
-    kept: "list[list[str]] | str | None" = None  # the keep-tier fallback plan, built once for every session
-    for n, argv in enumerate(argv_or_err):
+    kept: "tuple[list[str], list[list[str]]] | str | None" = None  # keep-tier fallback plan, built once
+    for n, group in enumerate(groups):
         offset = _log_size(log_path) if n > 0 else 0
-        rc, err = _run_session(run, argv, root, log_path, deadline, n > 0)
+        argv = [*base, *group]
+        rc, err = _run_session(argv, run, root, log_path, deadline, n > 0)
         if rc == 2 and not _collection_failed_since(log_path, offset):
             if kept is None:
-                kept = _launch_argv(root, tests, keep_tier=True)
-            if isinstance(kept, list) and len(kept) == len(argv_or_err) and kept[n] != argv:
-                argv = kept[n]
-                rc, err = _run_session(run, argv, root, log_path, deadline, True)
+                kept = _launch_plan(root, tests, keep_tier=True)
+            if not isinstance(kept, str) and kept[1] == groups and kept[0] != base:
+                argv = [*kept[0], *group]
+                rc, err = _run_session([*kept[0], *group], run, root, log_path, deadline, True)
         codes.append(rc)
         cmd = shlex.join(argv)
         if err is not None:
@@ -962,6 +973,9 @@ def _write_dual(
         record["reason"] = reason
     if status == NO_TESTS_STATUS:
         record["tests_run"] = 0
+    cause = _zero_run_cause(status, codes, export_log, export_log_used)
+    if cause:
+        record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cause
     if status in ("fail", "error") and export_failed:
         record[landing_retest.FAILED_TESTS_PARAM] = export_failed
     if dropped:
@@ -1061,6 +1075,9 @@ def main(
         record["reason"] = reason
     if status == NO_TESTS_STATUS:
         record["tests_run"] = 0
+    cause = _zero_run_cause(status, codes, log_path, log_used)
+    if cause:
+        record[landing_targeted_tests.ZERO_RUN_CAUSE_KEY] = cause
     if log_used and status in ("fail", "error") and 1 in codes:
         record[landing_retest.FAILED_TESTS_PARAM] = _failed_node_ids(log_path, root)
     if dropped:

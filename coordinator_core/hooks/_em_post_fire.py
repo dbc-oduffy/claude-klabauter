@@ -291,13 +291,10 @@ def _engine_run_id_map(session_id: str) -> dict:
     the record count grows with every fire, and a per-run rescan put seconds on every Bash hook."""
     out: dict = {}
     try:
-        import glob
-
+        from coordinator_core import launch_records
         from coordinator_core.hooks import flag_em_poll_in_flight
 
-        pattern = os.path.join(
-            glob.escape(flag_em_poll_in_flight._tmpdir()), f"workflow-run-{glob.escape(session_id)}-*.json")
-        for name in glob.glob(pattern):
+        for name in launch_records.session_record_paths(flag_em_poll_in_flight._tmpdir(), session_id):
             record = flag_em_poll_in_flight.launch_record(name)
             if not record:
                 continue

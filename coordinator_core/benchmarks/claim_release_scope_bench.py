@@ -104,6 +104,9 @@ def measure(peers: int, agents: int, scratch_parent: Optional[str] = None) -> di
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--peers", type=int, default=200)
     ap.add_argument("--agents", type=int, default=50)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
 import pytest
@@ -170,3 +171,60 @@ def test_example_cap(tmp_path):
     rep = run.run_migration(root, ["improvement-queue"], True)["files"]["improvement-queue"]
     assert rep["skipped"]["already-migrated"] == 25
     assert len(rep["examples"]["skipped:already-migrated"]) == 20
+
+
+def test_create_path_bytes_equal_overwrite_path_and_leaves_no_temp(tmp_path):
+    a = queue_append._write_out_path_create(str(tmp_path / "a.yaml"), "k: v\nn: 1\n")
+    b = queue_append._write_out_path_overwrite(str(tmp_path / "b.yaml"), "k: v\nn: 1\n")
+    assert Path(a).read_bytes() == Path(b).read_bytes()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["a.yaml", "b.yaml"]
+
+
+def test_create_path_overwrites_an_existing_file_not_forks(tmp_path):
+    target = tmp_path / "a.yaml"
+    target.write_text("old\n", encoding="utf-8")
+    out = queue_append._write_out_path_create(str(target), "new\n")
+    assert out == str(target) and target.read_text(encoding="utf-8") == "new\n"
+    assert [p.name for p in tmp_path.iterdir()] == ["a.yaml"]
+
+
+def test_create_path_unlinks_partial_file_on_failed_write(tmp_path, monkeypatch):
+    class _Boom:
+        def __init__(self, fd):
+            self.fd = fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            os.close(self.fd)
+
+        def write(self, _):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(queue_append.os, "fdopen", lambda fd, *a, **k: _Boom(fd))
+    with pytest.raises(OSError):
+        queue_append._write_out_path_create(str(tmp_path / "a.yaml"), "x\n")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_default_write_prepared_entry_keeps_atomic_overwrite(tmp_path, monkeypatch):
+    prepared = queue_append.PreparedEntry(
+        fields={}, digest12="d", slug="s", out_path=str(tmp_path / "sub" / "e.yaml"),
+        yaml_content="a: 1\n", schema="improvement-queue", title="t",
+    )
+    calls = []
+    monkeypatch.setattr(queue_append, "_write_out_path_overwrite", lambda p, c: calls.append(p) or p)
+    queue_append.write_prepared_entry(prepared)
+    assert calls == [prepared.out_path]
+
+
+def test_a_torn_entry_from_a_killed_run_is_rewritten_not_skipped(tmp_path):
+    root = _repo(tmp_path, "improvement-queue", PIPE)
+    run.run_migration(root, ["improvement-queue"], False)
+    whole = {p: p.read_bytes() for p in _created(root)}
+    torn = sorted(whole)[0]
+    torn.write_bytes(whole[torn][:10])
+    again = run.run_migration(root, ["improvement-queue"], False)["files"]["improvement-queue"]
+    assert again["skipped"]["already-migrated"] == 1 and again["to-migrate"] == 1
+    assert {p: p.read_bytes() for p in _created(root)} == whole

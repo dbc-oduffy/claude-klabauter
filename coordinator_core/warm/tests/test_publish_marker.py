@@ -281,3 +281,84 @@ def test_wait_returns_true_when_marker_released_mid_wait(root):
         )
     assert got is True
     assert fake.slept < breadcrumb.DRAIN_WAIT_SECS
+
+
+def test_swap_wait_outlasts_drain_wait_and_returns_true_on_release(root):
+    fake = _FakeClock()
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+
+        def release_after_swap(secs):
+            fake.sleep(secs)
+            if fake.slept > 5 * breadcrumb.DRAIN_WAIT_SECS:
+                path.unlink()
+
+        got = breadcrumb.wait_for_publish_swap(root, sleep=release_after_swap, clock=fake.clock)
+    assert got is True
+    assert fake.slept > breadcrumb.DRAIN_WAIT_SECS
+
+
+def test_swap_wait_is_bounded_by_the_backstop_when_heartbeat_keeps_ticking(root):
+    fake = _FakeClock()
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+        got = breadcrumb.wait_for_publish_swap(
+            root, sleep=fake.sleep, clock=fake.clock, wall=lambda: os.stat(path).st_mtime
+        )
+        assert path.exists()
+    assert got is False
+    assert breadcrumb.PUBLISH_SWAP_BACKSTOP_SECS - 1 <= fake.slept <= breadcrumb.PUBLISH_SWAP_BACKSTOP_SECS + 1e-9
+
+
+def _age_marker(path, secs):
+    old = time.time() - secs
+    os.utime(path, (old, old))
+
+
+def test_swap_wait_returns_at_once_on_live_holder_with_stale_heartbeat(root):
+    fake = _FakeClock()
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+        _age_marker(path, breadcrumb.PUBLISH_HEARTBEAT_STALE_SECS + 5)
+        got = breadcrumb.wait_for_publish_swap(root, sleep=fake.sleep, clock=fake.clock)
+        assert path.exists(), "the waiter must never unlink the marker"
+    assert got is False
+    assert fake.slept == 0
+
+
+def test_swap_wait_keeps_waiting_on_a_fresh_heartbeat_then_drains(root):
+    fake = _FakeClock()
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+        _age_marker(path, breadcrumb.PUBLISH_HEARTBEAT_STALE_SECS - 10)
+
+        def release(secs):
+            fake.sleep(secs)
+            if fake.slept > 1.0:
+                path.unlink()
+
+        got = breadcrumb.wait_for_publish_swap(root, sleep=release, clock=fake.clock)
+    assert got is True
+
+
+def test_marker_without_heartbeat_field_is_never_wedged(root):
+    svc = breadcrumb.svc_dir(root)
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        del record["heartbeat_secs"]
+        path.write_text(json.dumps(record), encoding="utf-8")
+        _age_marker(path, 600)
+        assert breadcrumb.publish_marker_held(svc)
+        assert breadcrumb.publish_marker_wedged(svc) is False
+
+
+def test_holder_thread_refreshes_marker_mtime(root, monkeypatch):
+    monkeypatch.setattr(breadcrumb, "PUBLISH_HEARTBEAT_SECS", 0.05)
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+        _age_marker(path, 600)
+        deadline = time.time() + 5
+        while time.time() < deadline and breadcrumb.publish_marker_wedged(breadcrumb.svc_dir(root)):
+            time.sleep(0.02)
+        assert breadcrumb.publish_marker_wedged(breadcrumb.svc_dir(root)) is False
+
+
+def test_wedge_remedy_names_holder_pid_and_marker_path(root):
+    with breadcrumb.hold_publish_marker(root, holder="t") as path:
+        remedy = breadcrumb.publish_wedge_remedy(root)
+    assert str(os.getpid()) in remedy and str(path) in remedy

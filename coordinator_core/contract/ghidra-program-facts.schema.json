@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claude-klabauter/coordinator_core/contract/ghidra-program-facts.schema.json",
+  "title": "ghidra program facts export",
+  "description": "Headless Ghidra export of one caller-held binary: functions, xrefs, imports and strings. Addresses are lowercase hex strings (0x prefix). Every array is sorted ascending by the string comparison of its key fields in declared order: functions by entry; xrefs by from, to, ref_type; imports by library, symbol, address; strings by address, encoding. Sort order is enforced by the consumer, not by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "program", "functions", "xrefs", "imports", "strings"],
+  "$defs": {
+    "address": { "type": "string", "pattern": "^0x[0-9a-f]+$" }
+  },
+  "properties": {
+    "schema_version": { "const": "ghidra-program-facts/v1" },
+    "program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "name", "format", "language_id", "image_base", "ghidra_version"],
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "format": { "type": "string", "minLength": 1 },
+        "language_id": { "type": "string", "minLength": 1 },
+        "image_base": { "$ref": "#/$defs/address" },
+        "ghidra_version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["entry", "name", "size", "is_thunk", "is_external"],
+        "properties": {
+          "entry": { "$ref": "#/$defs/address" },
+          "name": { "type": "string" },
+          "size": { "type": "integer", "minimum": 0 },
+          "is_thunk": { "type": "boolean" },
+          "is_external": { "type": "boolean" }
+        }
+      }
+    },
+    "xrefs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "to", "ref_type"],
+        "properties": {
+          "from": { "$ref": "#/$defs/address" },
+          "to": { "$ref": "#/$defs/address" },
+          "ref_type": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "imports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["library", "symbol", "address"],
+        "properties": {
+          "library": { "type": "string" },
+          "symbol": { "type": "string", "minLength": 1 },
+          "address": { "$ref": "#/$defs/address" }
+        }
+      }
+    },
+    "strings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["address", "value", "encoding"],
+        "properties": {
+          "address": { "$ref": "#/$defs/address" },
+          "value": { "type": "string" },
+          "encoding": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

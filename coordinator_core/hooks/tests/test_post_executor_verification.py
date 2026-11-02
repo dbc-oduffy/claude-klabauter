@@ -62,6 +62,14 @@ def _denied(out) -> bool:
     return out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def _advised(out) -> bool:
+    """A Write/Edit verdict that is an allow carrying the advisory line, never a deny."""
+    if out is None:
+        return False
+    hso = out["hookSpecificOutput"]
+    return hso.get("permissionDecision") == "allow" and "test-runner" in hso.get("additionalContext", "")
+
+
 def test_no_executor_yet_pytest_is_free(repo) -> None:
     for _ in range(3):
         assert g.check(_bash(repo, "python -m pytest pkg")) is None
@@ -165,11 +173,31 @@ def test_reasoned_sentinel_allows_and_logs(repo) -> None:
     assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
-def test_scratch_py_write_denied_after_executor(repo) -> None:
+def test_scratch_py_verifying_write_after_executor_is_advisory_only(repo) -> None:
     _executor_ran(repo)
     out = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))
-    assert _denied(out)
-    assert "test-runner" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _advised(out)
+    assert not _denied(out)
+
+
+_STAGE_HELPER = (
+    "import subprocess\nimport pkg\n"
+    '"""Index-only staging helper; not a pytest or unittest run."""\n'
+    "# pytest is not invoked here\n"
+    "subprocess.run(['git', 'update-index', '--add', 'a.py'])\n"
+)
+
+
+def test_stage_helper_naming_runner_only_in_text_never_matches(repo) -> None:
+    _executor_ran(repo)
+    assert g.written_text_verifies(_write(repo, str(repo / "scratch" / "stage_own.py"), content=_STAGE_HELPER), "x", str(repo)) is False
+    assert nd.op(_write(repo, str(repo / "scratch" / "stage_own.py"), content=_STAGE_HELPER)) is None
+
+
+def test_post_executor_verification_is_not_a_deny_registry_guard() -> None:
+    from coordinator_core.deny_registry import GUARD_DENY_CLASS
+
+    assert g.GUARD_NAME not in GUARD_DENY_CLASS
 
 
 def test_scratch_launcher_config_edit_allowed_after_executor(repo, tmp_path) -> None:
@@ -196,20 +224,20 @@ def test_scratch_non_test_probe_write_allowed_after_executor(repo) -> None:
     assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"), content=probe)) is None
 
 
-def test_scratch_edit_adding_runner_to_repo_importing_file_denied(repo) -> None:
+def test_scratch_edit_adding_runner_to_repo_importing_file_advised(repo) -> None:
     _executor_ran(repo)
     path = repo / "scratch" / "probe.py"
     path.parent.mkdir()
     path.write_text("import pkg\n", encoding="utf-8")
     payload = _write(repo, str(path), tool="Edit")
     payload["tool_input"] = {"file_path": str(path), "old_string": "import pkg\n", "new_string": "import pkg\nimport pytest\npytest.main([])\n"}
-    assert _denied(nd.op(payload))
+    assert _advised(nd.op(payload))
 
 
-def test_scratch_write_running_measure_against_repo_denied(repo) -> None:
+def test_scratch_write_running_measure_against_repo_advised(repo) -> None:
     _executor_ran(repo)
     content = "import pkg\nimport subprocess\nsubprocess.run(['python', '-m', 'pkg.benchmarks.measure', '--', 'x'])\n"
-    assert _denied(nd.op(_write(repo, str(repo / "scratch" / "probe.py"), content=content)))
+    assert _advised(nd.op(_write(repo, str(repo / "scratch" / "probe.py"), content=content)))
 
 
 _GLOB_HELPER = "import glob, json\nprint(json.dumps(sorted(glob.glob('docs/plans/*.md'))))\n"
@@ -225,11 +253,11 @@ def test_scratch_py_write_not_naming_runner_and_repo_allowed_after_executor(repo
     assert nd.op(_write(repo, str(repo / "scratch" / "mise-plans.py"), content=content)) is None
 
 
-def test_scratch_py_edit_adding_verification_denied_after_executor(repo) -> None:
+def test_scratch_py_edit_adding_verification_advised_after_executor(repo) -> None:
     _executor_ran(repo)
     payload = _write(repo, str(repo / "scratch" / "probe.py"), tool="Edit")
     payload["tool_input"] = {"file_path": str(repo / "scratch" / "probe.py"), "new_string": _VERIFYING}
-    assert _denied(nd.op(payload))
+    assert _advised(nd.op(payload))
 
 
 def test_scratch_py_write_allowed_before_executor(repo) -> None:
@@ -248,7 +276,7 @@ def test_scratch_py_sentinel_allows_and_logs(repo) -> None:
     _sidecar(repo, "blocked")
     assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"))) is None
     assert len(list((repo / ".coordinator-local").rglob(ESCAPE_LOG_NAME))) == 1
-    assert _denied(nd.op(_write(repo, str(repo / "scratch" / "probe.py"))))
+    assert _advised(nd.op(_write(repo, str(repo / "scratch" / "probe.py"))))
 
 
 def test_free_first_run_does_not_spend_the_sentinel(repo) -> None:
@@ -540,7 +568,10 @@ def _workflow_run_record(monkeypatch, tmp_path) -> None:
 
     d = tmp_path / "wf"
     d.mkdir()
-    (d / f"workflow-run-{SID}-t1.json").write_text(json.dumps({"run_id": "run-1"}))
+    from coordinator_core import launch_records
+
+    with open(launch_records.record_path(str(d), SID, "t1"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"run_id": "run-1"}))
     monkeypatch.setattr(poll, "_tmpdir", lambda: str(d))
 
 
@@ -689,11 +720,11 @@ def test_both_deny_halves_name_the_measurement_route(repo) -> None:
     _executor_ran(repo)
     assert g.check(_bash(repo, "pytest pkg")) is None
     bash_reason = envelope_of(g.check(_bash(repo, "pytest pkg")), "em")["hookSpecificOutput"]["permissionDecisionReason"]
-    write_reason = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))["hookSpecificOutput"]["permissionDecisionReason"]
+    write_reason = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))["hookSpecificOutput"]["additionalContext"]
     for reason in (bash_reason, write_reason):
         assert "coordinator_core.benchmarks.measure -- <argv>" in reason
         assert "test-runner" in reason
-        assert "No self-escape" in reason and "honoured once." in reason
+    assert "No self-escape" in bash_reason and "honoured once." in bash_reason
 
 
 _SUITE = "with-suite-mutex -- python3 -m pytest coordinator/tests coordinator/bin/tests setup"

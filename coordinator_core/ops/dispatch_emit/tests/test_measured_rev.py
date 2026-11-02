@@ -251,6 +251,33 @@ def test_unmeasurable_reach_is_a_typed_refusal_and_writes_no_record(repo, monkey
     assert mr._handler({"run_id": "run-reach", "paths": ["edit.txt"]}, repo)["refused"] == "measured-rev"
 
 
+def _stage_manifest(repo, run_id, declared, row_writes):
+    run_dir = repo / "scratch" / "warp" / run_id
+    run_dir.mkdir(parents=True)
+    manifest = {"review_declared_paths": declared, "rows": [{"id": "C1", "writes": row_writes}]}
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_measure_unions_the_runs_own_manifest_writes_with_the_given_paths(repo):
+    """An empty `paths` re-measures the run's landing set: a row appended after the declared list was fixed
+    is carried; a dirty path the run never wrote stays out of the record."""
+    _stage_manifest(repo, "run-landing", ["edit.txt"], ["edit.txt", "sub/deep.txt", "scratch/warp/x.json"])
+    (repo / "edit.txt").write_bytes(b"new\n")
+    (repo / "sub" / "deep.txt").write_bytes(b"deeper\n")
+    (repo / "keep.txt").write_bytes(b"foreign\n")
+
+    out = mr.measured_rev("run-landing", [], repo_root=repo)
+
+    assert out["paths"] == ["edit.txt", "sub/deep.txt"]
+    assert "keep.txt" not in out["blobs"]
+
+
+def test_a_run_without_a_record_measures_exactly_the_given_paths(repo):
+    (repo / "edit.txt").write_bytes(b"new\n")
+
+    assert mr.measured_rev("run-bare", ["edit.txt"], repo_root=repo)["paths"] == ["edit.txt"]
+
+
 def test_handler_measures_the_worktree_when_ipc_passes_the_git_dir(repo):
     """IPC keys this common_dir op on `.git`; the handler must still find HEAD and measure the worktree."""
     (repo / "edit.txt").write_bytes(b"new\n")

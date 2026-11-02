@@ -294,3 +294,26 @@ def test_sessionfinish_restores_the_temp_environment(tmp_path, monkeypatch):
     fc.pytest_sessionfinish(sess, 0)
     assert os.environ["TMP"] == "before-tmp"
     assert tempfile.tempdir == "before-dir"
+
+
+def test_counted_numbered_dir_never_scans_the_root(tmp_path, monkeypatch):
+    (tmp_path / "work1").mkdir()
+    fc._NEXT_NUMBER.clear()
+
+    real_scandir = os.scandir
+
+    def _no_scan(path=".", *a, **k):
+        if Path(path) == tmp_path:
+            raise AssertionError("root was scanned")
+        return real_scandir(path, *a, **k)
+
+    monkeypatch.setattr(os, "scandir", _no_scan)
+    made = [fc._counted_numbered_dir(tmp_path, "work").name for _ in range(3)]
+    assert made == ["work0", "work2", "work3"]
+    assert not (tmp_path / "workcurrent").exists()
+
+
+def test_the_session_mktemp_uses_the_counted_maker():
+    import _pytest.tmpdir as tmpdir_mod
+
+    assert getattr(tmpdir_mod, "make_numbered_dir") is fc._counted_numbered_dir

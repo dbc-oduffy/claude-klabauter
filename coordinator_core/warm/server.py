@@ -1023,11 +1023,30 @@ def _frame_label(frame) -> str:
     return f"{rel}::{frame.f_code.co_name}:{frame.f_lineno}"
 
 
+def _handler_thread_ident(frames: dict) -> Optional[int]:
+    """The deepest thread running `ipc._run_handler_recording`: the op's own work thread.
+
+    The arming thread only parks in `_run_joining_handler`, so sampling it names the
+    same wait leg for every op.
+    """
+    best, best_depth = None, 0
+    for ident, frame in frames.items():
+        depth, cursor, hit = 0, frame, False
+        while cursor is not None:
+            depth += 1
+            hit = hit or cursor.f_code.co_name == "_run_handler_recording"
+            cursor = cursor.f_back
+        if hit and depth > best_depth:
+            best, best_depth = ident, depth
+    return best
+
+
 def _write_blocked_leg(claim: Path, op_ident: int, cpu_delta: float, elapsed: float) -> None:
     """Snapshot the op thread's stack to `<claim>.leg` (temp + `os.replace`: the
     accept process reads it, a torn read is impossible). Never raises."""
     try:
-        frame = sys._current_frames().get(op_ident)
+        frames = sys._current_frames()
+        frame = frames.get(_handler_thread_ident(frames) or op_ident)
         if frame is None:
             return
         chain = []
@@ -1052,10 +1071,76 @@ def _write_blocked_leg(claim: Path, op_ident: int, cpu_delta: float, elapsed: fl
         pass
 
 
+#: Seconds between handler-thread samples once an op is past its stall threshold,
+#: and the sample cap (120 s): bounds the post-stall timer's cost on a hung op.
+_LEG_SAMPLE_SECS = 0.5
+_LEG_SAMPLES_MAX = 240
+
+
+def _sample_leg(op_ident: int) -> Optional[str]:
+    """`<innermost coordinator_core frame> > <leaf frame>` (no line numbers, so
+    consecutive samples of one call compare equal) for the op's handler thread."""
+    try:
+        frames = sys._current_frames()
+        leaf = frames.get(_handler_thread_ident(frames) or op_ident)
+        if leaf is None:
+            return None
+        cursor, innermost = leaf, None
+        while cursor is not None:
+            if "coordinator_core" in Path(cursor.f_code.co_filename).parts:
+                innermost = cursor
+                break
+            cursor = cursor.f_back
+        strip = lambda f: _frame_label(f).rsplit(":", 1)[0]  # noqa: E731
+        label = strip(innermost or leaf)
+        return label if innermost is leaf or innermost is None else f"{label} > {strip(leaf)}"
+    except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+        return None
+
+
+class _LegTrace:
+    """Run-length encodes timed leg samples into `[start_ms, elapsed_ms, label]` rows:
+    the stall record's per-leg timing, naming the call an op sat in and for how long."""
+
+    def __init__(self) -> None:
+        self._rows: list = []
+
+    def note(self, at_s: float, label: Optional[str]) -> None:
+        if label is None:
+            return
+        if self._rows and self._rows[-1][2] == label:
+            self._rows[-1][1] = round(at_s * 1000) - self._rows[-1][0]
+            return
+        self._rows.append([round(at_s * 1000), 0, label])
+
+    def close(self, at_s: float) -> None:
+        if self._rows:
+            self._rows[-1][1] = round(at_s * 1000) - self._rows[-1][0]
+
+    def render(self) -> str:
+        return json.dumps(self._rows)
+
+
+def _append_legs(record: Optional[Path], trace: "_LegTrace") -> None:
+    """Insert a single-line `legs-ms:` header into the written stall record (temp +
+    `os.replace`). `legs-ms` rows are `[start_ms_since_armed, elapsed_ms, leg]`."""
+    if record is None or not trace._rows:
+        return
+    try:
+        head, sep, rest = record.read_text(encoding="utf-8").partition("--- threads ---")
+        tmp = record.with_name(record.name + ".legs.tmp")
+        tmp.write_text(
+            f"{head}legs-ms: {trace.render()}\n{sep}{rest}", encoding="utf-8", newline="\n"
+        )
+        os.replace(tmp, record)
+    except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+        pass
+
+
 #: Durable stall records under `<svc_dir>/stall-dumps/`; neither prune and no
 #: claim release touches them, so they outlive the worker and the claim.
 _STALL_DUMPS_DIRNAME = "stall-dumps"
-STALL_DUMP_KEEP = 20
+STALL_DUMP_KEEP = 200
 
 #: Set by `_worker_process_init`; None leaves only the per-pid stderr log.
 _WORKER_STALL_DIR: Optional[Path] = None
@@ -1071,9 +1156,53 @@ def _stall_record_for(stall_dir, pid: Optional[int], key: str) -> Optional[Path]
         return None
 
 
-def _write_stall_record(stall_dir, claim: Optional[Path]) -> None:
-    """One file per stall: sink line, blocked leg json, every thread's stack
-    (temp + `os.replace`), then keep the newest `STALL_DUMP_KEEP`. Never raises."""
+def _fs_probe_ms(stall_dir) -> str:
+    """Milliseconds for one create+unlink in `stall_dir`, or `error:<errno>`.
+
+    Answers "did the filesystem answer in milliseconds at stall time" from inside the
+    stalled process, the one place a box-wide measurement from outside cannot see.
+    """
+    path = Path(stall_dir) / f".probe-{os.getpid()}-{threading.get_ident()}"
+    t0 = time.perf_counter()
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600))
+        os.unlink(path)
+    except OSError as exc:
+        return f"error:{exc.errno}"
+    return f"{(time.perf_counter() - t0) * 1000:.2f}"
+
+
+def _stall_timing_lines(op_ident, elapsed, cpu_delta) -> str:
+    """`op-elapsed-s`, `process-cpu-s` and `thread-elapsed-s` header lines.
+
+    `thread-elapsed-s` maps each op thread (the arming thread and the handler thread
+    `_handler_thread_ident` names) to seconds since the op was armed.
+    """
+    if elapsed is None:
+        return ""
+    idents = {op_ident, _handler_thread_ident(sys._current_frames())} - {None}
+    per_thread = {f"0x{ident:x}": round(elapsed, 3) for ident in sorted(idents)}
+    cpu = "unknown" if cpu_delta is None else f"{cpu_delta:.3f}"
+    return (
+        f"op-elapsed-s: {elapsed:.3f}\nprocess-cpu-s: {cpu}\n"
+        f"thread-elapsed-s: {json.dumps(per_thread)}\n"
+    )
+
+
+def _write_stall_record(
+    stall_dir,
+    claim: Optional[Path],
+    *,
+    key: Optional[str] = None,
+    leg: Optional[str] = None,
+    op_ident: Optional[int] = None,
+    elapsed: Optional[float] = None,
+    cpu_delta: Optional[float] = None,
+) -> Optional[Path]:
+    """One file per stall: sink line, blocked leg json, fs probe, op timing, every
+    thread's stack (temp + `os.replace`), then keep the newest `STALL_DUMP_KEEP`.
+    `key`/`leg` name a record that has no claim (an accept-side hang). Returns the
+    record path, or None when nothing was written. Never raises."""
     try:
         import tempfile
 
@@ -1084,32 +1213,37 @@ def _write_stall_record(stall_dir, claim: Optional[Path]) -> None:
             sinks = str(atomic_append.in_flight_sinks())
         except Exception:  # noqa: BLE001
             pass
-        leg = ""
-        if claim is not None:
-            try:
-                leg = _leg_path(claim).read_text(encoding="utf-8").strip()
-            except OSError:
-                pass
+        if leg is None:
+            leg = ""
+            if claim is not None:
+                try:
+                    leg = _leg_path(claim).read_text(encoding="utf-8").strip()
+                except OSError:
+                    pass
         with tempfile.TemporaryFile(mode="w+b") as raw:
             faulthandler.dump_traceback(file=raw, all_threads=True)
             raw.seek(0)
             threads = raw.read().decode("utf-8", errors="replace")
         stall_dir = Path(stall_dir)
         stall_dir.mkdir(parents=True, exist_ok=True)
-        key = claim.name if claim is not None else "nokey"
+        probe = _fs_probe_ms(stall_dir)
+        if key is None:
+            key = claim.name if claim is not None else "nokey"
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
         tmp = final.with_name(final.name + ".tmp")
         tmp.write_text(
-            f"sinks: {sinks}\nleg: {leg}\n--- threads ---\n{threads}",
+            f"sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\n"
+            f"{_stall_timing_lines(op_ident, elapsed, cpu_delta)}--- threads ---\n{threads}",
             encoding="utf-8",
             newline="\n",
         )
         os.replace(tmp, final)
         for old in sorted(stall_dir.glob("*.txt"), reverse=True)[STALL_DUMP_KEEP:]:
             old.unlink(missing_ok=True)
+        return final
     except Exception:  # noqa: BLE001 -- diagnostics never stop an op
-        pass
+        return None
 
 
 def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable[[], None]:
@@ -1138,14 +1272,32 @@ def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable
     def _watch() -> None:
         if done.wait(stall_secs):
             return
+        trace = _LegTrace()
+        trace.note(time.monotonic() - t0, _sample_leg(op_ident))
+        record = _emit()
+        for _ in range(_LEG_SAMPLES_MAX):
+            if done.wait(_LEG_SAMPLE_SECS):
+                break
+            trace.note(time.monotonic() - t0, _sample_leg(op_ident))
+        trace.close(time.monotonic() - t0)
+        _append_legs(record, trace)
+
+    def _emit() -> Optional[Path]:
+        record = None
         if claim is not None:
             _write_blocked_leg(
                 claim, op_ident, time.process_time() - cpu0, time.monotonic() - t0
             )
         if stall_dir is not None:
-            _write_stall_record(stall_dir, claim)
+            record = _write_stall_record(
+                stall_dir,
+                claim,
+                op_ident=op_ident,
+                elapsed=time.monotonic() - t0,
+                cpu_delta=time.process_time() - cpu0,
+            )
         if stderr is None:
-            return
+            return record
         try:
             try:
                 from coordinator_core import atomic_append
@@ -1157,9 +1309,72 @@ def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable
             faulthandler.dump_traceback(file=stderr, all_threads=True)
         except Exception:  # noqa: BLE001 -- diagnostics never stop an op
             pass
+        return record
 
     try:
-        threading.Thread(target=_watch, name="stall-dump", daemon=True).start()
+        watcher = threading.Thread(target=_watch, name="stall-dump", daemon=True)
+        watcher.start()
+    except Exception:  # noqa: BLE001
+        return lambda: None
+
+    def _disarm() -> None:
+        """Stop the watcher; an armed-and-fired one is joined (bounded) so the
+        record's `legs-ms` is final when the op returns."""
+        done.set()
+        watcher.join(timeout=2.0)
+
+    return _disarm
+
+
+def _arm_accept_stall(
+    stall_dir, stall_secs: float, claim: Optional[Path], key: Optional[str], phase: list
+) -> Callable[[], None]:
+    """Accept-process twin of `_arm_stall_dump`: a request still without a worker
+    claim after `stall_secs` writes a record naming `phase[0]` (`gate`, `submit` or
+    `result`) and this connection thread's stack; the returned callable disarms it.
+
+    A request a worker has claimed is the worker's record, so a claimed one writes
+    nothing here. Never raises.
+    """
+    if stall_dir is None or stall_secs <= 0:
+        return lambda: None
+    done = threading.Event()
+    conn_ident = threading.get_ident()
+    t0 = time.monotonic()
+    cpu0 = time.process_time()
+
+    def _watch() -> None:
+        if done.wait(stall_secs):
+            return
+        try:
+            if claim is not None and claim.exists():
+                return
+            frame = sys._current_frames().get(conn_ident)
+            chain = []
+            while frame is not None:
+                chain.append(frame)
+                frame = frame.f_back
+            leg = json.dumps(
+                {
+                    "leg": f"coordinator_core/warm/server.py::_pool_dispatch:{phase[0]}",
+                    "kind": "wait",
+                    "frames": [_frame_label(f) for f in chain[:_LEG_MAX_FRAMES]],
+                }
+            )
+            _write_stall_record(
+                stall_dir,
+                None,
+                key=f"accept-{key or 'nokey'}",
+                leg=leg,
+                op_ident=conn_ident,
+                elapsed=time.monotonic() - t0,
+                cpu_delta=time.process_time() - cpu0,
+            )
+        except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+            pass
+
+    try:
+        threading.Thread(target=_watch, name="accept-stall", daemon=True).start()
     except Exception:  # noqa: BLE001
         return lambda: None
     return done.set
@@ -1984,11 +2199,47 @@ def _restore_worker_environ_to_pristine() -> None:
             os.environ[key] = value
 
 
-def _worker_process_init(stderr_dir=None, stall_dir=None) -> None:
+_FORWARD_QUEUE_MAX = 1024
+_FORWARD_DRAIN_POLL_SECS = 0.5
+
+
+def _start_telemetry_drain(q) -> threading.Event:
+    """Drain pool workers' forwarded telemetry into the parent's bounded writer; set the returned event to stop it.
+
+    The parent is the only process that opens the sinks, so `append_line_bounded`'s drop-on-stall governs.
+    """
+    from coordinator_core import atomic_append
+
+    stop = threading.Event()
+
+    def _drain() -> None:
+        while not stop.is_set():
+            try:
+                sink, encoded, retain = q.get(timeout=_FORWARD_DRAIN_POLL_SECS)
+            except queue.Empty:
+                continue
+            except (OSError, EOFError, ValueError):
+                return
+            except Exception:
+                continue
+            atomic_append.append_line_bounded(sink, encoded, retain)
+
+    threading.Thread(target=_drain, name="warm-telemetry-drain", daemon=True).start()
+    return stop
+
+
+def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) -> None:
     global _worker_pristine_environ, _WORKER_STALL_DIR
     _WORKER_STALL_DIR = Path(stall_dir) if stall_dir else None
 
     from coordinator_core.warm import polite_io
+
+    if forward_queue is not None:
+        from coordinator_core import atomic_append
+
+        # A worker must never block at exit flushing a queue whose reader is gone.
+        forward_queue.cancel_join_thread()
+        atomic_append.set_forwarder(lambda sink, encoded, retain: forward_queue.put_nowait((sink, encoded, retain)))
 
     polite_io.lower_own_priority()
     _bind_null_std_streams()
@@ -2876,10 +3127,17 @@ class _ServerContext:
                     self._stall_dir = breadcrumb.svc_dir(self.engine_root) / _STALL_DUMPS_DIRNAME
                     self._claim_dir = breadcrumb.svc_dir(self.engine_root) / _CLAIMS_DIRNAME
                     _prune_dispatch_claims(self._claim_dir)
+                    old_stop = self.__dict__.get("_telemetry_drain_stop")
+                    if old_stop is not None:
+                        old_stop.set()
+                    mp_context = multiprocessing.get_context()
+                    forward_queue = mp_context.Queue(maxsize=_FORWARD_QUEUE_MAX)
+                    self._telemetry_drain_stop = _start_telemetry_drain(forward_queue)
                     self._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
                         max_workers=DISPATCH_PROCESS_POOL_SIZE,
+                        mp_context=mp_context,
                         initializer=_worker_process_init,
-                        initargs=(str(stderr_dir), str(self._stall_dir)),
+                        initargs=(str(stderr_dir), str(self._stall_dir), forward_queue),
                     )
         return self._dispatch_pool
 
@@ -2929,6 +3187,7 @@ class _ServerContext:
         out on. `admit` runs in `_serve_line` before this method is ever
         called; this method only stamps.
         """
+        _disarm_accept = lambda: None  # noqa: E731
         try:
             pool = self._ensure_dispatch_pool()
             holders = self._stalled_holders()
@@ -2937,6 +3196,14 @@ class _ServerContext:
                     msg, holders, getattr(self, "_worker_stderr_dir", None)
                 )
             claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
+            _phase = ["gate"]
+            _disarm_accept = _arm_accept_stall(
+                getattr(self, "_stall_dir", None),
+                STALL_DUMP_SECS,
+                claim,
+                dispatch_key if _is_safe_dispatch_key(dispatch_key) else None,
+                _phase,
+            )
             gate = self._admission_gate()
             _method = msg.get("method")
             _deadline = _withdrawal_deadline_secs(_method, msg)
@@ -2956,6 +3223,7 @@ class _ServerContext:
                         "outstanding": self._pool_outstanding(),
                     },
                 )
+            _phase[0] = "submit"
             _t_submit = time.time()
             _stamp = time.monotonic()
             _wait_left = max(0.0, _deadline - _gate_wait)
@@ -2981,6 +3249,7 @@ class _ServerContext:
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:
                 future.add_done_callback(lambda _f: _stamp_pool_future(dispatch_key, _f))
+            _phase[0] = "result"
             try:
                 out = future.result(timeout=_wait_left)
                 _release_claim(claim)
@@ -3087,6 +3356,8 @@ class _ServerContext:
             if dispatch_key is not None:
                 return _run_dispatch(msg, caller=caller, isolated=False, dispatch_key=dispatch_key)
             return _run_dispatch(msg, caller=caller, isolated=False)
+        finally:
+            _disarm_accept()
 
     def _ctx_shutdown(self) -> None:
         self._idle_watchdog_stop.set()

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from coordinator_core import warp_live
+from coordinator_core import launch_records, warp_live
 from coordinator_core.ops.dispatch_emit import run_token
 
 SIZING = "state/sizings/mine.yaml"
@@ -67,7 +68,7 @@ def test_an_asker_never_adopts_an_ownerless_run(repo, dirs, tmp_path, monkeypatc
 
 def test_an_owned_launched_run_without_terminal_stays_live(repo, dirs, tmp_path, monkeypatch):
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    (dirs[0] / "workflow-run-s1-w1.json").write_text(
+    Path(launch_records.record_path(str(dirs[0]), "s1", "w1")).write_text(
         json.dumps({"scriptPath": SCRIPT, "fired_at": 1.0}), encoding="utf-8"
     )
     transcript = tmp_path / "t.jsonl"

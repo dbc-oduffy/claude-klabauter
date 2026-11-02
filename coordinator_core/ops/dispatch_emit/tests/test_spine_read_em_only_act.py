@@ -85,6 +85,19 @@ def test_eligibility_follows_the_derivation_and_the_disposition(tmp_path):
     assert em_discharge_eligible({**raw, "writes": ["a.cpp"]}) is False
 
 
+def test_ruling_ask_and_em_run_rows_are_excluded_em_performed(tmp_path):
+    ruling = (
+        "- id: C0\n  title: ruling\n  change_kind: verification\n  surface: setup/x.yaml\n"
+        "  writes: []\n  em_run: true\n  agent_type: coordinator:executor\n"
+        "  body: |\n    Ask coordinator:apm: may the engine row admit it?\n"
+    )
+    bare = ruling.replace("  em_run: true\n", "").replace("C0", "C3")
+    for rows, rid in ((ruling, "C0"), (bare, "C3")):
+        exclusions: list = []
+        assert read_spine(_plan(tmp_path, rows), exclusions=exclusions) == []
+        assert [(e["id"], e["reason"]) for e in exclusions] == [(rid, "em-performed")]
+
+
 def test_row_blocked_on_the_workflow_tool_is_excluded_em_performed(tmp_path):
     rows = (
         "- id: W1\n  title: fire\n  change_kind: code-edit\n  surface: pkg/a.py\n"

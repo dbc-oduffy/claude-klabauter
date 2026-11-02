@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, stop_after?, chatty?}` (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, stop_after?, chatty?}` (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params["em_size"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
 launcher (`fan_launcher.write_launcher`, given each run's pre-emitted reply) that starts each, with one ready run it fires
@@ -82,9 +82,25 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "repo", "route_preference", "sender", "sizing", "source", "stop_after", "supersedes",
+    "em_rationale", "em_size", "repo", "route_preference", "sender", "sizing", "source", "stop_after", "supersedes",
     "writes",
 )
+
+
+def _em_size_param(tool_input: Mapping[str, Any], multi_ask: bool) -> tuple[Optional[str], Optional[str]]:
+    """(normalised em_size or None, refusal) for the EM's optional `em_size` arg."""
+    args = tool_input.get("args")
+    value = args.get("em_size") if isinstance(args, dict) else None
+    if value is None:
+        return None, None
+    from coordinator_core.ops.dispatch_emit.ask_contract import VALID_SIZES
+
+    size = value.strip().upper() if isinstance(value, str) else None
+    if size not in VALID_SIZES:
+        return None, f"em_size must be one of {', '.join(VALID_SIZES)}, got {value!r}."
+    if multi_ask:
+        return None, "em_size rides one run, not a set of sibling runs. Submit each ask on its own."
+    return size, None
 
 
 _ARGS_SHAPE = ARGS_SHAPE.replace(
@@ -461,8 +477,12 @@ def _charge(started: float) -> None:
 
 
 #: The caller's child budget (DoE `_hook_boot.py` `_CHILD_BUDGET_S`); the caller kills the hook at it
-#: and denies with no run id, so the hook answers on its own at `_EMIT_BUDGET_SHARE` of it.
+#: and denies with no run id, so the hook answers on its own at `_EMIT_BUDGET_SHARE` of it. The
+#: effective budget is the lesser of the caller's and the door's `_DOOR_HOOK_READ_DEADLINE_S`.
 _CALLER_BUDGET_S = 12.0
+#: Twin of `DOOR_HOOK_READ_DEADLINE_MS` in warm/door/door.c and door_posix.c: past it the door gives
+#: up and relays no hook answer. Pinned equal by test_submit_engine_ask_door_deadline.py.
+_DOOR_HOOK_READ_DEADLINE_S = 8.0
 _EMIT_BUDGET_SHARE = 0.8
 _FANOUT_TAIL_GRACE_S = 0.25
 
@@ -481,8 +501,10 @@ def _caller_budget_s() -> float:
     try:
         value = float(os.environ.get("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", ""))
     except ValueError:
-        return _CALLER_BUDGET_S
-    return value if value > 0 else _CALLER_BUDGET_S
+        value = _CALLER_BUDGET_S
+    if not value > 0:
+        value = _CALLER_BUDGET_S
+    return min(value, _DOOR_HOOK_READ_DEADLINE_S)
 
 
 #: Fraction of the caller budget by which `evaluate` answers whatever it is doing; the emit join
@@ -1847,6 +1869,9 @@ def _evaluate(
         return _refuse(chatty_why)
     if call_chatty is True and asks is not None and len(asks) > 1:
         return _refuse("chatty is not carried by a multi-item asks fan-out; submit one ask per chatty run.")
+    em_size, em_size_refusal = _em_size_param(payload["tool_input"], asks is not None and len(asks) > 1)
+    if em_size_refusal:
+        return _refuse(em_size_refusal)
     if source is not None:
         if source not in ASK_SOURCES:
             return _refuse(f"source {source!r} is not one of: {', '.join(ASK_SOURCES)}.")
@@ -2086,6 +2111,8 @@ def _evaluate(
             params["stop_after"] = call_stop
         if call_chatty is True:
             params[_CHATTY_KEY] = True
+        if em_size is not None:
+            params["em_size"] = em_size
     if approved:
         params["cross_repo_approved"] = True
 
@@ -2224,6 +2251,22 @@ def sizing_scout_deny(payload: Mapping[str, Any]) -> Optional[dict]:
     return _scout_deny(payload, resolve_subagent_type(tool_input))
 
 
+def _denies(envelope: Any) -> bool:
+    hso = envelope.get("hookSpecificOutput") if isinstance(envelope, dict) else None
+    return isinstance(hso, dict) and hso.get("permissionDecision") == "deny"
+
+
+def _named_deny(envelope: dict) -> dict:
+    """The deny with a non-blank reason: the caller renders a blank one as "emitted no run: it said nothing"."""
+    hso = envelope["hookSpecificOutput"]
+    if not str(hso.get("permissionDecisionReason") or "").strip():
+        hso["permissionDecisionReason"] = (
+            "The submit hook denied the submission and recorded no reason. "
+            "Check for an existing run record before re-submitting."
+        )
+    return envelope
+
+
 @register_op("hooks.submit_engine_ask")
 def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) door onto `evaluate`; a deny resolves at the guard-level policy point."""
@@ -2235,11 +2278,17 @@ def _handler(params: dict, repo_root=None) -> dict:
     except Exception as exc:
         envelope = deny("PreToolUse", f"The submit hook failed: {type(exc).__name__}: {exc}. Check for an existing run record before re-submitting.")
     submission = is_submission(payload)
-    if submission and envelope.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
-        return envelope  # a refusal lowered to an allow carries no rewrite: the caller reports "emitted no run: it said nothing"
+    if submission and _denies(envelope):
+        return _named_deny(envelope)  # a deny skips apply_guard_level: warn/off lowers it to a rewrite-less allow
     resolved = apply_guard_level(GUARD_NAME, envelope)
     if not resolved and submission:
         return deny("PreToolUse", "The submit hook resolved to an empty reply. Check for an existing run record before re-submitting.")
+    if submission and resolved and resolved.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
+        if not resolved.get("hookSpecificOutput", {}).get("updatedInput"):
+            return deny(
+                "PreToolUse",
+                "The engine answered the submission with no run and no refusal. Check for an existing run record before re-submitting.",
+            )
     return resolved or no_advisory()
 
 

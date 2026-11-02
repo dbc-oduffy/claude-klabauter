@@ -1,0 +1,207 @@
+{
+  "contract": "unknown-revision",
+  "version": 1,
+  "canonicalisation": {
+    "digest_input": "UTF-8 bytes of the canonical JSON of the record: every UnknownRevision field (all nine) and nothing else. revision_digest is not a record field and is never part of the input; previous_revision_digest IS a field and is included.",
+    "key_order": "object keys sorted ascending by Unicode code point at every level (Python json.dumps sort_keys=True).",
+    "separators": "',' between members and ':' between key and value; no whitespace anywhere, no trailing newline.",
+    "unicode": "raw UTF-8: non-ASCII characters are emitted as themselves, never as backslash-u escapes (ensure_ascii=false). No Unicode normalisation of any kind (no NFC/NFD/NFKC): strings are hashed exactly as emitted. Only the JSON-mandatory escapes (quote, backslash, control characters below U+0020) are applied.",
+    "observed_at": "hashed as the emitted string, not normalised: 'Z' and '+00:00' spellings of one instant are different records with different digests; the emitter's string is canonical.",
+    "null": "previous_revision_digest is the JSON literal null on revision 1 and is included in the digest input.",
+    "digest_format": "'sha256:' followed by 64 lowercase hex characters of SHA-256 over the digest input.",
+    "chain": "revision 1 has previous_revision_digest null; revision N>1 carries the revision_digest of revision N-1, same unknown_id, revision contiguous from 1.",
+    "refusal_rule": "a writer must refuse an import whose bytes differ from the canonical re-serialisation of the record they parse to (the digest input above), even when the record is otherwise valid."
+  },
+  "valid": [
+    {
+      "name": "revision-1-non-ascii",
+      "record": {
+        "unknown_id": "u-1",
+        "revision": 1,
+        "previous_revision_digest": null,
+        "question": "Wie löst der Café-Parser „naïve“ Zeichen auf? 日本語",
+        "coverage": "partial",
+        "coverage_scope": "claim",
+        "epistemic_mode": "observed",
+        "source_authority": "shipped-artifact",
+        "observed_at": "2026-11-01T12:00:00+00:00"
+      },
+      "canonical_json": "{\"coverage\":\"partial\",\"coverage_scope\":\"claim\",\"epistemic_mode\":\"observed\",\"observed_at\":\"2026-11-01T12:00:00+00:00\",\"previous_revision_digest\":null,\"question\":\"Wie löst der Café-Parser „naïve“ Zeichen auf? 日本語\",\"revision\":1,\"source_authority\":\"shipped-artifact\",\"unknown_id\":\"u-1\"}",
+      "revision_digest": "sha256:1d75df68bd497cb48e8a804c42f6452eae66000d98f7f7ca1c9b288b500047e8"
+    },
+    {
+      "name": "revision-2",
+      "record": {
+        "unknown_id": "u-1",
+        "revision": 2,
+        "previous_revision_digest": "sha256:1d75df68bd497cb48e8a804c42f6452eae66000d98f7f7ca1c9b288b500047e8",
+        "question": "follow-up",
+        "coverage": "complete",
+        "coverage_scope": "claim",
+        "epistemic_mode": "observed",
+        "source_authority": "shipped-artifact",
+        "observed_at": "2026-11-01T12:00:00+00:00"
+      },
+      "canonical_json": "{\"coverage\":\"complete\",\"coverage_scope\":\"claim\",\"epistemic_mode\":\"observed\",\"observed_at\":\"2026-11-01T12:00:00+00:00\",\"previous_revision_digest\":\"sha256:1d75df68bd497cb48e8a804c42f6452eae66000d98f7f7ca1c9b288b500047e8\",\"question\":\"follow-up\",\"revision\":2,\"source_authority\":\"shipped-artifact\",\"unknown_id\":\"u-1\"}",
+      "revision_digest": "sha256:9e2133ff489bb00934873065f4e04cdae8f2a6986e6fc75c2ac9635073432107"
+    },
+    {
+      "name": "revision-3",
+      "record": {
+        "unknown_id": "u-1",
+        "revision": 3,
+        "previous_revision_digest": "sha256:9e2133ff489bb00934873065f4e04cdae8f2a6986e6fc75c2ac9635073432107",
+        "question": "third",
+        "coverage": "partial",
+        "coverage_scope": "claim",
+        "epistemic_mode": "observed",
+        "source_authority": "shipped-artifact",
+        "observed_at": "2026-11-01T12:00:00+00:00"
+      },
+      "canonical_json": "{\"coverage\":\"partial\",\"coverage_scope\":\"claim\",\"epistemic_mode\":\"observed\",\"observed_at\":\"2026-11-01T12:00:00+00:00\",\"previous_revision_digest\":\"sha256:9e2133ff489bb00934873065f4e04cdae8f2a6986e6fc75c2ac9635073432107\",\"question\":\"third\",\"revision\":3,\"source_authority\":\"shipped-artifact\",\"unknown_id\":\"u-1\"}",
+      "revision_digest": "sha256:2667aaa5a9f8fcf4b17197c58aea379d4b63d0dfb2214b885e727193df78391e"
+    },
+    {
+      "name": "coverage-unknown",
+      "record": {
+        "unknown_id": "u-cu",
+        "revision": 1,
+        "previous_revision_digest": null,
+        "question": "what does X do?",
+        "coverage": "unknown",
+        "coverage_scope": "output",
+        "epistemic_mode": "inferred",
+        "source_authority": "analyst-inference",
+        "observed_at": "2026-11-01T12:00:00+00:00"
+      },
+      "canonical_json": "{\"coverage\":\"unknown\",\"coverage_scope\":\"output\",\"epistemic_mode\":\"inferred\",\"observed_at\":\"2026-11-01T12:00:00+00:00\",\"previous_revision_digest\":null,\"question\":\"what does X do?\",\"revision\":1,\"source_authority\":\"analyst-inference\",\"unknown_id\":\"u-cu\"}",
+      "revision_digest": "sha256:573e93a183e1ad30b3c9f8165297c22e3f890f808b7d609b6a8e5d36c45f30f4"
+    }
+  ],
+  "chains": {
+    "valid": {
+      "name": "three-revision-chain",
+      "records": [
+        {
+          "unknown_id": "u-1",
+          "revision": 1,
+          "previous_revision_digest": null,
+          "question": "Wie löst der Café-Parser „naïve“ Zeichen auf? 日本語",
+          "coverage": "partial",
+          "coverage_scope": "claim",
+          "epistemic_mode": "observed",
+          "source_authority": "shipped-artifact",
+          "observed_at": "2026-11-01T12:00:00+00:00"
+        },
+        {
+          "unknown_id": "u-1",
+          "revision": 2,
+          "previous_revision_digest": "sha256:1d75df68bd497cb48e8a804c42f6452eae66000d98f7f7ca1c9b288b500047e8",
+          "question": "follow-up",
+          "coverage": "complete",
+          "coverage_scope": "claim",
+          "epistemic_mode": "observed",
+          "source_authority": "shipped-artifact",
+          "observed_at": "2026-11-01T12:00:00+00:00"
+        },
+        {
+          "unknown_id": "u-1",
+          "revision": 3,
+          "previous_revision_digest": "sha256:9e2133ff489bb00934873065f4e04cdae8f2a6986e6fc75c2ac9635073432107",
+          "question": "third",
+          "coverage": "partial",
+          "coverage_scope": "claim",
+          "epistemic_mode": "observed",
+          "source_authority": "shipped-artifact",
+          "observed_at": "2026-11-01T12:00:00+00:00"
+        }
+      ],
+      "expect": "verifies"
+    },
+    "broken": {
+      "name": "broken-previous-digest",
+      "records": [
+        {
+          "unknown_id": "u-1",
+          "revision": 1,
+          "previous_revision_digest": null,
+          "question": "Wie löst der Café-Parser „naïve“ Zeichen auf? 日本語",
+          "coverage": "partial",
+          "coverage_scope": "claim",
+          "epistemic_mode": "observed",
+          "source_authority": "shipped-artifact",
+          "observed_at": "2026-11-01T12:00:00+00:00"
+        },
+        {
+          "unknown_id": "u-1",
+          "revision": 2,
+          "previous_revision_digest": "sha256:1d75df68bd497cb48e8a804c42f6452eae66000d98f7f7ca1c9b288b500047e0",
+          "question": "follow-up",
+          "coverage": "partial",
+          "coverage_scope": "claim",
+          "epistemic_mode": "observed",
+          "source_authority": "shipped-artifact",
+          "observed_at": "2026-11-01T12:00:00+00:00"
+        }
+      ],
+      "expect": "refused",
+      "reason": "revision 2 previous_revision_digest does not match revision 1"
+    }
+  },
+  "observed_at_variants": {
+    "name": "z-vs-offset",
+    "a": {
+      "name": "z-spelling",
+      "record": {
+        "unknown_id": "u-z",
+        "revision": 1,
+        "previous_revision_digest": null,
+        "question": "what does X do?",
+        "coverage": "partial",
+        "coverage_scope": "claim",
+        "epistemic_mode": "observed",
+        "source_authority": "shipped-artifact",
+        "observed_at": "2026-11-01T12:00:00Z"
+      },
+      "canonical_json": "{\"coverage\":\"partial\",\"coverage_scope\":\"claim\",\"epistemic_mode\":\"observed\",\"observed_at\":\"2026-11-01T12:00:00Z\",\"previous_revision_digest\":null,\"question\":\"what does X do?\",\"revision\":1,\"source_authority\":\"shipped-artifact\",\"unknown_id\":\"u-z\"}",
+      "revision_digest": "sha256:e4bca1001b624b15b7c0f7b8f7d53a3941d21102090c388f851316a492732a44"
+    },
+    "b": {
+      "name": "offset-spelling",
+      "record": {
+        "unknown_id": "u-z",
+        "revision": 1,
+        "previous_revision_digest": null,
+        "question": "what does X do?",
+        "coverage": "partial",
+        "coverage_scope": "claim",
+        "epistemic_mode": "observed",
+        "source_authority": "shipped-artifact",
+        "observed_at": "2026-11-01T12:00:00+00:00"
+      },
+      "canonical_json": "{\"coverage\":\"partial\",\"coverage_scope\":\"claim\",\"epistemic_mode\":\"observed\",\"observed_at\":\"2026-11-01T12:00:00+00:00\",\"previous_revision_digest\":null,\"question\":\"what does X do?\",\"revision\":1,\"source_authority\":\"shipped-artifact\",\"unknown_id\":\"u-z\"}",
+      "revision_digest": "sha256:fa9acc667a52c73e7bdebf6b8ca0a999ed7212680dd39feeb0ee2b38f554131c"
+    },
+    "expect": "both valid; digests differ"
+  },
+  "refusal": [
+    {
+      "name": "non-canonical-import",
+      "import_text": "{\n  \"unknown_id\": \"u-1\",\n  \"revision\": 1,\n  \"previous_revision_digest\": null,\n  \"question\": \"Wie l\\u00f6st der Caf\\u00e9-Parser \\u201ena\\u00efve\\u201c Zeichen auf? \\u65e5\\u672c\\u8a9e\",\n  \"coverage\": \"partial\",\n  \"coverage_scope\": \"claim\",\n  \"epistemic_mode\": \"observed\",\n  \"source_authority\": \"shipped-artifact\",\n  \"observed_at\": \"2026-11-01T12:00:00+00:00\"\n}",
+      "parses_to": {
+        "unknown_id": "u-1",
+        "revision": 1,
+        "previous_revision_digest": null,
+        "question": "Wie löst der Café-Parser „naïve“ Zeichen auf? 日本語",
+        "coverage": "partial",
+        "coverage_scope": "claim",
+        "epistemic_mode": "observed",
+        "source_authority": "shipped-artifact",
+        "observed_at": "2026-11-01T12:00:00+00:00"
+      },
+      "canonical_json": "{\"coverage\":\"partial\",\"coverage_scope\":\"claim\",\"epistemic_mode\":\"observed\",\"observed_at\":\"2026-11-01T12:00:00+00:00\",\"previous_revision_digest\":null,\"question\":\"Wie löst der Café-Parser „naïve“ Zeichen auf? 日本語\",\"revision\":1,\"source_authority\":\"shipped-artifact\",\"unknown_id\":\"u-1\"}",
+      "expect": "refused",
+      "reason": "import bytes differ from canonical re-serialisation (indentation, newlines and escaped non-ASCII)"
+    }
+  ]
+}

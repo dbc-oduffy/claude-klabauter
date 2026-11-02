@@ -291,7 +291,9 @@ def _wf_session(em_repo, monkeypatch, script):
 
     tmp = em_repo / "tmpd"
     tmp.mkdir()
-    (tmp / "workflow-run-s1-t1.json").write_text(
+    from coordinator_core import launch_records
+
+    open(launch_records.record_path(str(tmp), "s1", "t1"), "w", encoding="utf-8").write(
         json.dumps({"run_id": "wf_8fd4e9da-2d4", "scriptPath": script}))
     monkeypatch.setattr(flag_em_poll_in_flight, "_tmpdir", lambda: str(tmp))
     _runs(monkeypatch, ["wf_8fd4e9da-2d4"])

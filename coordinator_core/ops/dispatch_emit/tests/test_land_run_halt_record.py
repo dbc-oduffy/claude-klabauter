@@ -289,6 +289,44 @@ def test_stalled_sibling_status_write_lands_with_a_named_reconcilable_outcome(re
     assert out["siblings"]["released"] == []
 
 
+class _Hang(BaseException):
+    """Stands in for a land that never returns: nothing after the raise runs."""
+
+
+def test_a_land_that_never_returns_leaves_a_halt_record_the_landed_op_accepts(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    monkeypatch.setattr(halted_run_landed, "_launch", lambda root, run_id: True)
+    _record(repo)
+    _chunks(repo, {"C1": ["done.py"]})
+
+    def hang(*_a, **_k):
+        raise _Hang
+
+    monkeypatch.setattr(land_run_halt, "done_chunks", hang)  # the first leg that used to precede the marker
+    with pytest.raises(_Hang):
+        _call(repo, LEDGER, **PASSING)
+    assert halted_run.read_strict_run(repo / RECORD_DIR_ROOT / RUN)["status"] == halted_run.STATUS_HALTED
+
+    sha = _git(repo, "rev-parse", "HEAD").strip()
+    out = halted_run_landed._handler({"run_id": RUN, "sha": sha}, repo)
+
+    assert "never ran" not in str(out.get("error")), out
+    assert out["ok"] is True, out
+
+
+def test_without_a_record_dir_a_hung_land_still_refuses_the_landed_op(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run_landed
+
+    monkeypatch.setattr(land_run_halt, "done_chunks", lambda *_a, **_k: (_ for _ in ()).throw(_Hang()))  # no record dir was seeded
+    with pytest.raises(_Hang):
+        _call(repo, LEDGER, **PASSING)
+
+    out = halted_run_landed._handler({"run_id": RUN, "sha": _git(repo, "rev-parse", "HEAD").strip()}, repo)
+
+    assert out["ok"] is False and "never ran" in out["error"]
+
+
 @pytest.mark.parametrize(
     "halted, expect",
     [

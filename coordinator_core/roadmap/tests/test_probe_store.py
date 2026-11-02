@@ -335,8 +335,13 @@ def _count_read_sites(path: Path, skip: str = "") -> int:
 def test_read_site_pin_prep_gate_and_upgrader():
     """C30 read-site pin: a new read site in prep_gate.py or mise-prep-upgrade.py must be
     checked against probe_store.input_paths (and the audit in its docstring) before this
-    count moves, or the store vouches for a verdict it cannot see the inputs of."""
+    count moves, or the store vouches for a verdict it cannot see the inputs of.
+
+    Audit at 12: _inherited_deviations reads each depends_on_plan target (a docs/plans frontmatter
+    leaf, plus archive/specs via plan_edge) and the decisions listing is a GLOBAL_INPUT. Known gap:
+    _roles_admitting_build_and_measure reads the agent-definitions dir outside the repo, which
+    input_paths cannot name."""
     gate = ENGINE_CHECKOUT_ROOT / "coordinator_core" / "roadmap" / "prep_gate.py"
     upgrader = ENGINE_CHECKOUT_ROOT / "coordinator" / "bin" / "mise-prep-upgrade.py"
-    assert _count_read_sites(gate, skip="_UPGRADE_SCRIPT") == 8
+    assert _count_read_sites(gate, skip="_UPGRADE_SCRIPT") == 12
     assert _count_read_sites(upgrader) == 7

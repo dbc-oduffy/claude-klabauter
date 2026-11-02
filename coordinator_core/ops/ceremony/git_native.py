@@ -5941,14 +5941,23 @@ def push_set_upstream(
     )
 
 
+_FETCH_UNPACK_LIMIT = 2000
+
+
 def fetch(
     cwd: Union[str, Path], remote_name: str, *, timeout: float = REMOTE_BUDGET_SECS
 ) -> GitResult:
     """`git fetch <remote_name>` — reject-detection preflight before rebase --onto.
 
-    Same default, same reasoning as `push` above: DR-349's remote runaway
-    guard, never a per-module literal that no caller could ever reach."""
-    return _git(["fetch", remote_name], cwd=cwd, timeout=timeout)
+    Same default, same reasoning as `push` above: DR-349's remote runaway guard, never a per-module literal that no caller could ever reach."""
+    # `fetch.unpackLimit` raised from git's 100 so a land-sized fetch unpacks
+    # loose instead of keeping a new pack per fetch (each pack is one more idx
+    # every object lookup must parse); a fetch past the limit still keeps a pack.
+    return _git(
+        ["-c", f"fetch.unpackLimit={_FETCH_UNPACK_LIMIT}", "fetch", remote_name],
+        cwd=cwd,
+        timeout=timeout,
+    )
 
 
 def merge_base(cwd: Union[str, Path], ref_a: str, ref_b: str) -> GitResult:

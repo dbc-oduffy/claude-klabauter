@@ -304,8 +304,23 @@ int door_repo_root_search_precheck(const char *cmd, size_t len, const char *cwd_
 
 int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name);
 
+/* Hook-mode answer after the request was delivered and the engine gave none in
+ * time: systemMessage + additionalContext naming `op` and the read deadline,
+ * no permissionDecision. Unlike the pass-loudly envelope it does not claim the
+ * guard never ran -- the op may have completed. */
+int build_hook_post_delivery_envelope(buf_t *out, const char *op, long deadline_ms, const char *event_name);
+
 
 int build_hook_deny_envelope(buf_t *out, const char *reason);
+
+/* 1 when `payload` is a PreToolUse Bash call whose `tool_input.command` has a
+ * segment running an irreversible-external verb (`door_irreversible_command_shapes`
+ * in door_core.c); 0 for anything else, including an unparseable payload. */
+int door_payload_is_irreversible(const char *payload, size_t plen);
+
+/* The deny reason for such a command when the engine gave no usable answer;
+ * `detail` is what `emit_post_delivery_failure` was handed. */
+void door_irreversible_deny_reason(char *dst, size_t cap, const char *detail);
 
 
 #define JSONRPC_PARSE_ERROR (-32700)

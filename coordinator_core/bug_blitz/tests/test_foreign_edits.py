@@ -99,6 +99,14 @@ def test_head_tree_is_head_plus_own_overlay(repo):
     assert not row.is_relative_to(repo)
 
 
+def test_head_tree_with_no_own_overlays_nothing(repo):
+    (repo / "pkg" / "own.py").write_text("OWN = 'edited'\n")
+    (repo / "pkg" / "fresh.py").write_text("FRESH = 1\n")
+    row = head_tree(repo, [])
+    assert (row / "pkg" / "own.py").read_text() == "OWN = 'head'\n"
+    assert not (row / "pkg" / "fresh.py").exists()
+
+
 def test_overlay_leaves_shared_base_at_head(repo):
     (repo / "pkg" / "own.py").write_text("OWN = 'edited'\n")
     row1 = head_tree(repo, ["pkg/own.py"])

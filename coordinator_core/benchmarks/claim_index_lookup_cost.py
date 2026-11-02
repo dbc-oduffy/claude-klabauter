@@ -207,6 +207,9 @@ def run(base: str, paths: Optional[Sequence[str]], npaths: int, threads: int) ->
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base", default=None, help="sessions dir; default the cwd repo's")
     ap.add_argument("--paths", type=int, default=3, help="how many claimed paths to sample")

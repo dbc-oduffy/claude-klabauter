@@ -202,8 +202,9 @@ def _git(worktree: Path, *args: str) -> str:
 
 
 @pytest.mark.spawns_process
-def test_land_moves_commits_once_and_leaves_the_index_clean_on_a_real_repo(tmp_path: Path) -> None:
+def test_land_moves_commits_once_and_leaves_the_index_clean_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path / "repo"
+    _registry(tmp_path, monkeypatch, worktree)
     _seed(worktree)
     for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
                  ["config", "user.name", "t"], ["config", "commit.gpgsign", "false"],
@@ -232,8 +233,9 @@ def test_land_moves_commits_once_and_leaves_the_index_clean_on_a_real_repo(tmp_p
 
 
 @pytest.mark.spawns_process
-def test_index_splice_keeps_an_unrelated_staged_change_and_dst_collision_is_refused(tmp_path: Path) -> None:
+def test_index_splice_keeps_an_unrelated_staged_change_and_dst_collision_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path / "repo"
+    _registry(tmp_path, monkeypatch, worktree)
     _seed(worktree)
     (worktree / "notes.txt").write_text("a\n", encoding="utf-8")
     for args in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
@@ -297,3 +299,78 @@ def test_scalar_reader_takes_the_first_parseable_top_level_key_and_ignores_neste
     assert (record.plan, record.status, record.route, record.xl_exit, record.title) == (
         "docs/plans/p.md", "shipped", "roadmap", "", "Quoted title",
     )
+
+
+def _registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *repos: Path) -> None:
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    lines = [f'{k} = "{p.as_posix()}"' for k, p in zip("abc", repos)]
+    (reg / "registry.local.toml").write_text(
+        "[repos]\n" + "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
+
+
+def _spy_land(monkeypatch: pytest.MonkeyPatch) -> list:
+    calls: list = []
+
+    async def fake_land(root, moves, subject):
+        calls.append((root, [m.candidate_id for m in moves]))
+        return [{"id": m.candidate_id} for m in moves], []
+
+    monkeypatch.setattr(terminal_sizing_drain, "land_moves", fake_land)
+    monkeypatch.setattr(terminal_sizing_drain, "dirty_among", lambda root, rels: set())
+    return calls
+
+
+def test_drain_refuses_a_scratch_clone_under_a_registered_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registered = tmp_path / "repo"
+    clone = registered / "scratch" / "pub-1"
+    _seed(clone)
+    _registry(tmp_path, monkeypatch, registered)
+    calls = _spy_land(monkeypatch)
+
+    result = terminal_sizing_drain.drain(clone)
+
+    assert calls == [] and result["acted"] == []
+    assert sorted(s["id"] for s in result["skipped"] if s["reason"] == "repo-not-registered") == [
+        f"state/sizings/2026-10-0{i + 1}-movable-{i}.yaml" for i in range(3)
+    ]
+
+
+def test_drain_refuses_a_checkout_absent_from_the_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(tmp_path / "elsewhere")
+    _registry(tmp_path, monkeypatch, tmp_path / "repo")
+    calls = _spy_land(monkeypatch)
+
+    result = terminal_sizing_drain.drain(tmp_path / "elsewhere")
+
+    assert calls == [] and result["acted"] == []
+    assert len([s for s in result["skipped"] if s["reason"] == "repo-not-registered"]) == 3
+
+
+def test_drain_archives_a_registered_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    _seed(repo)
+    _registry(tmp_path, monkeypatch, repo)
+    calls = _spy_land(monkeypatch)
+
+    result = terminal_sizing_drain.drain(repo)
+
+    assert len(calls) == 1 and len(result["acted"]) == 3
+
+
+def test_dry_run_is_unchanged_for_an_unregistered_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(tmp_path / "elsewhere")
+    _registry(tmp_path, monkeypatch, tmp_path / "repo")
+    calls = _spy_land(monkeypatch)
+
+    result = terminal_sizing_drain.drain(tmp_path / "elsewhere", dry_run=True)
+
+    assert calls == [] and len(result["candidates"]) == 3 and result["skipped"] == []

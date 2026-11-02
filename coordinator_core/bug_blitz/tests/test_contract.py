@@ -35,7 +35,9 @@ def test_names():
 
 def test_exit_codes_cover_outcomes_and_reserve_usage():
     assert set(c.EXIT_CODES) == set(c.OUTCOMES)
-    assert [c.EXIT_CODES[o] for o in c.OUTCOMES] == [0, 1, 3, 4, 5]
+    assert [c.EXIT_CODES[o] for o in c.OUTCOMES] == [0, 1, 3, 4, 5, 6]
+    assert c.EXIT_CODES[c.OUTCOME_FOREIGN_UNCOMMITTED] == 6
+    assert c.OUTCOMES[-1] == c.OUTCOME_FOREIGN_UNCOMMITTED == "passed-on-foreign-uncommitted"
     assert c.EXIT_USAGE == 2
     assert c.EXIT_USAGE not in c.EXIT_CODES.values()
 
@@ -59,6 +61,10 @@ def test_schema_enum_matches_outcomes():
         _rec("nothing-to-run", argv=(), selected=(), exit_code=None),
         _rec("refused", exit_code=None),
         _rec("no-runner", runner="", argv=(), exit_code=None),
+        _rec(
+            "passed-on-foreign-uncommitted",
+            foreign_holders=(("a/x.py", ("s1", "s2")), ("b/y.py", ("unattributed",))),
+        ),
     ],
     ids=lambda r: r.outcome,
 )
@@ -74,12 +80,26 @@ def test_record_validates_for_each_outcome(rec):
         _rec("refused", exit_code=0),
         _rec("nothing-to-run", exit_code=None),
         _rec("passed", selected=("a", "a")),
+        _rec("passed-on-foreign-uncommitted", exit_code=None),
     ],
-    ids=["bad-outcome", "passed-no-exit", "refused-with-exit", "nothing-with-selection", "dup-selected"],
+    ids=["bad-outcome", "passed-no-exit", "refused-with-exit", "nothing-with-selection", "dup-selected", "foreign-no-exit"],
 )
 def test_record_schema_rejects_inconsistent(rec):
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(rec.to_json(), _schema())
+
+
+def test_foreign_holders_serialized_as_object():
+    rec = _rec("passed-on-foreign-uncommitted", foreign_holders=(("a/x.py", ("s1",)),))
+    assert rec.to_json()["foreign_holders"] == {"a/x.py": ["s1"]}
+    assert _rec("passed").to_json()["foreign_holders"] == {}
+
+
+def test_schema_rejects_non_list_holders():
+    doc = _rec("passed").to_json()
+    doc["foreign_holders"] = {"a/x.py": "s1"}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(doc, _schema())
 
 
 def test_schema_rejects_extra_field():

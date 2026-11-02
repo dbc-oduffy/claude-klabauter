@@ -74,6 +74,7 @@ except ImportError:  # pragma: no cover
     from hashlib import sha1 as _sha1
 import json
 import os
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -114,6 +115,11 @@ __all__ = [
     "publish_marker_path",
     "publish_marker_held",
     "hold_publish_marker",
+    "DRAIN_WAIT_SECS",
+    "wait_for_publish_release",
+    "wait_for_publish_swap",
+    "publish_marker_wedged",
+    "publish_wedge_remedy",
 ]
 
 # The old `client.START_DEADLINE` value, reused for a different job now
@@ -150,6 +156,18 @@ BREADCRUMB_FILENAME = "warm.json"
 PUBLISH_MARKER_FILENAME = "publish.marker"
 #: A crashed publisher's marker stops blocking after this.
 PUBLISH_MARKER_MAX_AGE_SECS = 3600
+#: A live holder refreshes its marker's mtime this often (daemon thread).
+PUBLISH_HEARTBEAT_SECS = 2.0
+#: A heartbeating marker untouched this long is wedged (~7 missed beats).
+PUBLISH_HEARTBEAT_STALE_SECS = 15.0
+#: Longest an op waits on a live holder whose heartbeat still ticks: >5x the
+#: measured 170 s hold (docs/research/2026-11-02-publish-swap-duration.md).
+PUBLISH_SWAP_BACKSTOP_SECS = 900.0
+#: Longest a caller queues behind a held marker; under the 2s load norm.
+DRAIN_WAIT_SECS = 0.5
+DRAIN_POLL_SECS = 0.02
+#: Poll cadence of `wait_for_publish_swap` once a swap outlasts a second.
+DRAIN_SWAP_POLL_SECS = 0.25
 
 #: `transport` field values -- what shape the `pipe` field's endpoint is.
 #: See `write_breadcrumb` for why the field that carries the endpoint is
@@ -875,6 +893,101 @@ def publish_marker_held(svc: Path, *, now: Optional[float] = None) -> bool:
         return False
 
 
+def wait_for_publish_release(
+    engine_root: Optional[Path] = None,
+    max_secs: float = DRAIN_WAIT_SECS,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Drain gate: block a caller up to `max_secs` (clamped to
+    `DRAIN_WAIT_SECS`) while a publish marker is held. True iff the marker is
+    not held on return (immediately, or released during the wait); False if
+    still held at the deadline.
+
+    TRAP: hook-path reader. Polls `publish_marker_held` only -- no
+    subprocess, no unlink, never raises.
+    """
+    svc = svc_dir(engine_root)
+    budget = max(0.0, min(float(max_secs), DRAIN_WAIT_SECS))
+    deadline = clock() + budget
+    while True:
+        if not publish_marker_held(svc):
+            return True
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False
+        sleep(min(DRAIN_POLL_SECS, remaining))
+
+
+def publish_marker_wedged(svc: Path, *, now: Optional[float] = None) -> bool:
+    """True iff the marker belongs to a heartbeating holder (its record carries
+    `heartbeat_secs`) whose mtime is older than `PUBLISH_HEARTBEAT_STALE_SECS`.
+    A marker without the field (older publisher) is never wedged by this test.
+    Read-only, spawn-free, never raises; any error reads False."""
+    current = time.time() if now is None else now
+    try:
+        record, mtime = _read_marker(svc / PUBLISH_MARKER_FILENAME)
+        if record is None or "heartbeat_secs" not in record:
+            return False
+        return current - mtime > PUBLISH_HEARTBEAT_STALE_SECS
+    except Exception:  # noqa: BLE001 -- a hint reader never raises
+        return False
+
+
+def publish_wedge_remedy(engine_root: Optional[Path] = None) -> str:
+    """One runnable line naming the holder to kill so the marker frees (a dead
+    holder stops blocking at once). Never raises."""
+    path = publish_marker_path(engine_root)
+    try:
+        record, _ = _read_marker(path)
+        pid = record.get("pid") if record else None
+    except Exception:  # noqa: BLE001
+        pid = None
+    if isinstance(pid, int):
+        kill = f"taskkill /F /PID {pid}" if os.name == "nt" else f"kill -9 {pid}"
+        return f"publish holder pid {pid} is wedged (marker {path}); run `{kill}` then retry"
+    return f"publish marker {path} is stuck; delete it, then retry"
+
+
+def wait_for_publish_swap(
+    engine_root: Optional[Path] = None,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+    wall: Callable[[], float] = time.time,
+) -> bool:
+    """Op-path drain gate: block a caller for the swap window, i.e. until the
+    publish marker is released or its holder dies. True iff the marker is not
+    held on return; False when the holder is wedged (heartbeat stale past
+    `PUBLISH_HEARTBEAT_STALE_SECS`) or the backstop
+    `PUBLISH_SWAP_BACKSTOP_SECS` elapses; the caller names
+    `publish_wedge_remedy`.
+
+    An op must never run cold while a healthy marker is held: the cold
+    interpreter imports the tree being overwritten. A healthy swap lasts as
+    long as the publisher's round (~170 s measured), so only a stale heartbeat
+    frees a waiter early; `DRAIN_WAIT_SECS` bounds only the hook path.
+
+    TRAP: not for hook-path callers (use `wait_for_publish_release`, <=0.5s).
+    Read-only, spawn-free, never unlinks, never raises.
+    """
+    svc = svc_dir(engine_root)
+    started = clock()
+    deadline = started + PUBLISH_SWAP_BACKSTOP_SECS
+    while True:
+        if not publish_marker_held(svc):
+            return True
+        if publish_marker_wedged(svc, now=wall()):
+            return False
+        now = clock()
+        remaining = deadline - now
+        if remaining <= 0:
+            return False
+        poll = DRAIN_POLL_SECS if now - started < 1.0 else DRAIN_SWAP_POLL_SECS
+        sleep(min(poll, remaining))
+
+
 def _is_ancestor_pid(pid: int) -> bool:
     """Whether `pid` is a strict ancestor of this process. In-process
     psutil walk, no spawn; any failure reads False."""
@@ -952,6 +1065,7 @@ def hold_publish_marker(engine_root: Path, *, holder: str) -> Iterator[Path]:
         "stable_pid_start_epoch": epoch,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "holder": holder,
+        "heartbeat_secs": PUBLISH_HEARTBEAT_SECS,
     }
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(record), encoding="utf-8", newline="\n")
@@ -961,9 +1075,21 @@ def hold_publish_marker(engine_root: Path, *, holder: str) -> Iterator[Path]:
         except OSError:
             pass
         raise OSError(f"could not publish marker {path}")
+    stop = threading.Event()
+
+    def _beat() -> None:
+        while not stop.wait(PUBLISH_HEARTBEAT_SECS):
+            try:
+                os.utime(path)
+            except OSError:
+                pass
+
+    beat = threading.Thread(target=_beat, name="publish-marker-heartbeat", daemon=True)
+    beat.start()
     try:
         yield path
     finally:
+        stop.set()
         try:
             current, _ = _read_marker(path)
             if current is not None and current.get("pid") == os.getpid():

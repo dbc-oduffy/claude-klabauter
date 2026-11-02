@@ -17,14 +17,15 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _write_sidecar(tmp_path, *, baseline: dict, findings_count: int, rows: list) -> "object":
+def _write_sidecar(tmp_path, *, baseline: dict, findings_count: int, rows: list, verdict: str = "") -> "object":
     baseline_lines = "\n".join(f"  {path}: {digest}" for path, digest in baseline.items())
     findings_body = "\n".join(f"### Finding {i}\nSomething.\n" for i in range(1, findings_count + 1))
     text = (
         "---\n"
         "agent_type: coordinator:code-reviewer\n"
         f"baseline_sha256:\n{baseline_lines}\n"
-        "---\n"
+        + (f"verdict: {verdict}\n" if verdict else "")
+        + "---\n"
         "# Review\n\n"
         "## Findings\n\n"
         f"{findings_body}\n"
@@ -189,10 +190,28 @@ def test_verify_accepts_suspended_row_under_premise_verdict(tmp_path):
         baseline={"src.py": _sha256("x = 1\n")},
         findings_count=1,
         rows=[{"id": "finding-1", "file": "src.py", "before": "", "after": "", "status": "suspended"}],
+        verdict="PIVOT",
     )
     outcome = m.verify(sidecar, repo_root=tmp_path)
     assert outcome.ok, outcome.failures
     assert outcome.stamp["suspended"] == 1
+
+
+@pytest.mark.parametrize("verdict", ["", "PROCEED"])
+def test_verify_refuses_suspended_row_without_premise_verdict(tmp_path, verdict):
+    target = tmp_path / "src.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"src.py": _sha256("x = 1\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "src.py", "before": "", "after": "", "status": "suspended"}],
+        verdict=verdict,
+    )
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert not outcome.ok
+    assert any("suspended row needs" in f for f in outcome.failures), outcome.failures
+    assert "findings_ledger:" not in sidecar.read_text(encoding="utf-8")
 
 
 def test_verify_reruns_clean_after_a_prior_verify(tmp_path):

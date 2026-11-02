@@ -22,10 +22,6 @@ from typing import Optional
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from coordinator_core.benchmarks import declare_benchmark_origin
-
-declare_benchmark_origin()
-
 from coordinator_core.benchmarks.process_time import single_invocation_tree_process_time
 from coordinator_core.git.run import run_git
 
@@ -152,6 +148,9 @@ def run(files: int = DEFAULT_FILES, candidates: int = DEFAULT_CANDIDATES,
 
 
 def main(argv: Optional[list] = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--files", type=int, default=DEFAULT_FILES)
     ap.add_argument("--candidates", type=int, default=DEFAULT_CANDIDATES)

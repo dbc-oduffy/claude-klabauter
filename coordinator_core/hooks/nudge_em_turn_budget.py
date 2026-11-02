@@ -12,12 +12,14 @@ best-effort: state is an unlocked read-modify-write, so concurrent hooks may bot
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import re
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
-from coordinator_core.warp_fire import NAG_REPEAT_PREFIX, fire_step, nag_text
+from coordinator_core.warp_fire import NAG_REPEAT_PREFIX, fire_step, is_submit_name, nag_text
 
 GENERATES: list = []
 
@@ -40,6 +42,96 @@ def post_landing_text(turns: int, bar: int) -> str:
     )
 
 
+def _is_submit_payload(payload: dict) -> bool:
+    """True when this event is the engine-ask submit call itself (the transcript has not caught up)."""
+    if payload.get("tool_name") != "Workflow":
+        return False
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, str):
+        try:
+            tool_input = json.loads(tool_input)
+        except ValueError:
+            return False
+    return isinstance(tool_input, dict) and is_submit_name(tool_input.get("name"))
+
+
+_REASON_LINE = re.compile(
+    r"^\W*named reason(?:\s*\([^)]*\))?\s*[:–—-]\s*(\S.*)$", re.IGNORECASE | re.MULTILINE
+)
+_REASON_MIN_WORDS = 4
+
+
+def _reason_named(text: str) -> bool:
+    """True when `text` carries a `Named reason: <work-specific words>` line; a bare or nag-restating one is not a reason."""
+    for m in _REASON_LINE.finditer(text):
+        reason = m.group(1).strip()
+        if len(reason.split()) >= _REASON_MIN_WORDS and NAG_REPEAT_PREFIX not in reason and "engine-ask nag" not in reason.lower():
+            return True
+    return False
+
+
+def _text_of(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        b["text"] for b in content if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)
+    )
+
+
+def _genuine_user_turn(rec: dict) -> bool:
+    """A user-role record that is typed prose: not a tool_result, meta, sidechain, or harness-injected `<...>` block."""
+    if rec.get("isSidechain") is True or rec.get("isMeta") is True:
+        return False
+    msg = rec.get("message")
+    if not isinstance(msg, dict) or msg.get("role") != "user":
+        return False
+    text = _text_of(msg.get("content")).strip()
+    return bool(text) and not text.startswith("<")
+
+
+def _window_flag(transcript, start: int, end: int, flag: bool, cap: int) -> bool:
+    """The "a reason was named" flag after the transcript bytes [start, end): set by an EM prose
+    reason, cleared by a genuine user-role turn. Reads only the delta `advance` just consumed."""
+    if end <= start or end - start > cap:
+        return flag
+    try:
+        with open(transcript, "rb") as fh:
+            fh.seek(start)
+            data = fh.read(end - start)
+    except OSError:
+        return flag
+    for line in data.split(b"\n"):
+        user = b'"role":"user"' in line
+        assistant = b'"role":"assistant"' in line and b"named reason" in line.lower()
+        if not (user or assistant):
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if user and _genuine_user_turn(rec):
+            flag = False
+        elif assistant and rec.get("isSidechain") is not True:
+            msg = rec.get("message")
+            if isinstance(msg, dict) and msg.get("role") == "assistant" and _reason_named(_text_of(msg.get("content"))):
+                flag = True
+    return flag
+
+
+def _in_general_work_root(payload: dict) -> bool:
+    """cwd at or under `coordinator.general_work_root`; any failure or unset root is False (nag stands)."""
+    try:
+        from coordinator_core.session import general_work_scope
+
+        return bool(general_work_scope.in_general_work_session(field(payload, "cwd")))
+    except Exception:
+        return False
+
+
 def _advisory(params: dict) -> str:
     from coordinator_core.hooks.nudge_unrouted_sizing import _repo_root
     from coordinator_core.session import em_turn_count as etc
@@ -60,14 +152,29 @@ def _advisory(params: dict) -> str:
     if root is None:
         return ""
     path = etc.state_path(root, sid)
-    state = etc.advance(transcript, etc.load_state(path, transcript))
+    before = etc.load_state(path, transcript)
+    state = etc.advance(transcript, before)
+    state["reason_named"] = _window_flag(
+        transcript, int(before.get("offset") or 0), int(state.get("offset") or 0),
+        bool(before.get("reason_named")), etc.READ_CAP,
+    )
     turns = state["turns"]
+    if _is_submit_payload(payload):
+        if state.get("fire_turn") is None:
+            state["fire_turn"] = max(turns, 1)
+        etc.save_state(path, state)
+        return ""
     text = ""
     fired = state.get("fire_turn") is not None
     if fired or (turns > etc.PRE_FIRE_TURNS_MAX and not state.get("pre_fire_signalled")):
         phase = ers.session_route_phase(root, sid, state.get("last_engine_run_id"))
         if phase == ers.PHASE_UNFIRED and not fired:
-            if turns > etc.PRE_FIRE_TURNS_MAX and not state.get("pre_fire_signalled"):
+            if (
+                turns > etc.PRE_FIRE_TURNS_MAX
+                and not state.get("pre_fire_signalled")
+                and not state["reason_named"]
+                and not _in_general_work_root(payload)
+            ):
                 state["pre_fire_signalled"] = True
                 from coordinator_core.hooks._em_write_budget import arm_advised
 

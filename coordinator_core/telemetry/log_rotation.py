@@ -107,21 +107,17 @@ def _generation_path(sink: Path, generation: int) -> Path:
     return sink.with_name(f"{sink.stem}.{generation}{sink.suffix}")
 
 
-def rotate_if_needed(
-    sink: Path,
-    *,
-    threshold_bytes: int = _ROTATE_THRESHOLD_BYTES,
-    max_generations: int = _MAX_GENERATIONS,
-) -> bool:
+_JOIN_BOUND_SECS = 0.2
+
+_in_flight: set = set()
+_in_flight_lock = threading.Lock()
+
+
+def _run_chain(sink: Path, max_generations: int, out: list) -> None:
+    """The generation rename chain. Runs on a daemon thread; owns the sink's single-flight slot
+    until it finishes, so an abandoned (stalled) chain still blocks a second one from interleaving."""
+    key = str(sink)
     try:
-        try:
-            size = sink.stat().st_size
-        except OSError:
-            return False
-
-        if size < threshold_bytes:
-            return False
-
         oldest = _generation_path(sink, max_generations)
         try:
             oldest.unlink()
@@ -139,9 +135,70 @@ def rotate_if_needed(
         try:
             os.replace(sink, _generation_path(sink, 1))
         except OSError:
+            _log().debug(
+                "coordinator_core.telemetry.log_rotation: rename of %r refused (peer holds it open)",
+                sink, exc_info=True,
+            )
+            return
+        out.append(True)
+    except Exception:
+        try:
+            _log().debug(
+                "coordinator_core.telemetry.log_rotation: rotation chain failed for %r",
+                sink, exc_info=True,
+            )
+        except Exception:
+            pass
+    finally:
+        with _in_flight_lock:
+            _in_flight.discard(key)
+
+
+def rotate_if_needed(
+    sink: Path,
+    *,
+    threshold_bytes: int = _ROTATE_THRESHOLD_BYTES,
+    max_generations: int = _MAX_GENERATIONS,
+) -> bool:
+    """Rotate ``sink`` if at or above ``threshold_bytes``; True only when the rename chain finished.
+
+    Trap: the chain runs on a daemon thread joined for at most ``_JOIN_BOUND_SECS``, because a peer
+    holding the sink open stalls ``os.replace``. On expiry the thread is abandoned and keeps its
+    single-flight slot, so a later call returns False at once instead of interleaving renames."""
+    try:
+        try:
+            size = sink.stat().st_size
+        except OSError:
             return False
 
-        return True
+        if size < threshold_bytes:
+            return False
+
+        key = str(sink)
+        with _in_flight_lock:
+            if key in _in_flight:
+                return False
+            _in_flight.add(key)
+
+        out: list = []
+        try:
+            worker = threading.Thread(
+                target=_run_chain, args=(sink, max_generations, out),
+                name="log-rotation-chain", daemon=True,
+            )
+            worker.start()
+        except BaseException:
+            with _in_flight_lock:
+                _in_flight.discard(key)
+            raise
+        worker.join(_JOIN_BOUND_SECS)
+        if worker.is_alive():
+            _log().debug(
+                "coordinator_core.telemetry.log_rotation: rotation of %r exceeded %.0fms; abandoned",
+                sink, _JOIN_BOUND_SECS * 1000,
+            )
+            return False
+        return bool(out)
     except Exception:
         try:
             _log().debug(

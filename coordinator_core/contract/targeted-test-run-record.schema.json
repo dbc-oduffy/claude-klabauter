@@ -25,10 +25,15 @@
     },
     "outcome": {
       "type": "string",
-      "enum": ["passed", "failed", "nothing-to-run", "refused", "no-runner"]
+      "enum": ["passed", "failed", "nothing-to-run", "refused", "no-runner", "passed-on-foreign-uncommitted"]
     },
     "exit_code": { "type": ["integer", "null"] },
     "failing_ids": { "type": "array", "items": { "type": "string" } },
+    "foreign_holders": {
+      "type": "object",
+      "additionalProperties": { "type": "array", "items": { "type": "string" } },
+      "description": "Uncommitted foreign paths the passing run depended on, each mapped to its holder session ids (or unattributed). Non-empty only for passed-on-foreign-uncommitted."
+    },
     "process_s": { "type": "number", "minimum": 0 }
   },
   "allOf": [
@@ -37,7 +42,7 @@
       "then": { "properties": { "exit_code": { "type": "null" } } }
     },
     {
-      "if": { "properties": { "outcome": { "enum": ["passed", "failed"] } } },
+      "if": { "properties": { "outcome": { "enum": ["passed", "failed", "passed-on-foreign-uncommitted"] } } },
       "then": { "properties": { "exit_code": { "type": "integer" }, "argv": { "minItems": 1 } } }
     },
     {

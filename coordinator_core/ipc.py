@@ -150,6 +150,17 @@ Negative-spec (hard-won):
         relational store (dual-write ban); MUST NOT write any cross-repo index.
         Classification: both are MUTATING (DR-208, classification.py).
 
+      REA LEDGER write op (1) — sanctioned MUTATING additive-create plus append-only category,
+        in the queue.append shape:
+        - rea_ledger.write: validates a batch of canonical records, then creates
+          state/rea-ledger/claim/<sha256>.json and state/rea-ledger/evidence_record/<id>.json
+          (create-once, identical bytes a no-op) and appends lines to
+          state/rea-ledger/unknown_revision/<unknown_id>.jsonl (prior bytes never rewritten).
+        Write confinement (hard): rea_ledger.write MAY write ONLY those three path shapes under
+        the main worktree's state/rea-ledger/; MUST NOT write any other state/ path, archive/,
+        or rag's relational store (dual-write ban); MUST NOT spawn git or commit.
+        Classification: MUTATING (DR-208, classification.py).
+
       QUEUE CLOSURE (1, DR-270) — sanctioned MUTATING in-place-mutation-plus-self-commit
         category (deliberate DR-270 carve-out; a third write shape distinct from both
         DR-212's in-place-mutation-no-commit bound and DR-213's additive-create-no-commit
@@ -2109,21 +2120,15 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
     Resolution order:
       1. OP_MODULE_MAP[method] — if present, import that module and re-check the
          registry. Handles the common case in one targeted import.
-      2. HOOKS-SCOPED FALLBACK (C2, docs/plans/2026-08-06-windows-hot-path-less-
-         work-per-interpreter.md) — if *method* is a `hooks.*` op and step 1
+      2. HOOKS-SCOPED FALLBACK — if *method* is a `hooks.*` op and step 1
          didn't register it, force coordinator_core.hooks's own full-load
          routine (`coordinator_core.hooks._eager_import_all()`) and re-check.
-         Every `hooks.*` key in OP_MODULE_MAP maps to the shared
-         "coordinator_core.hooks" package value (one import registers all 15
-         hooks.* ops — see that map's header comment), so — lazy registration
-         now being unconditional — the step-1 import of "coordinator_core.hooks"
-         is always a no-op that never registers anything and would otherwise
-         always fall through to step 3.
-         This stage is ordered AHEAD of step 3 specifically so a hooks.* miss
-         is served by importing only the coordinator_core.hooks package (~15
-         modules) rather than escalating to all ~160 op modules (~562
-         sys.modules entries) — strictly cheaper, and it is what makes the C1
-         lazy-hooks channel a net win rather than a regression.
+         Every `hooks.*` key in OP_MODULE_MAP maps to its owning
+         coordinator_core.hooks.<module>, so step 1 serves it; a miss there
+         means the map drifted (and is recorded as a registry-fallback event).
+         This stage is ordered AHEAD of step 3 so a drifted hooks.* key is
+         served by importing only the coordinator_core.hooks package rather
+         than escalating to all ~160 op modules.
       3. SAFE FALLBACK — if the map has no entry for *method*, OR the targeted
          import in step 1 (and, for hooks.* ops, step 2) didn't actually
          register it (stale/drifted map entry), force a full import of every
@@ -2168,20 +2173,21 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
                 module_path, method,
             )
 
-    # HOOKS-SCOPED FALLBACK (C2): a hooks.* miss escalates to the hooks
+    # HOOKS-SCOPED FALLBACK (drift path): a hooks.* miss escalates to the hooks
     # package's own full-load routine BEFORE the ops-wide SAFE FALLBACK below,
     # so it never pays for a 562-module ops import to serve one hook.
     if method.startswith("hooks."):
         from coordinator_core.hooks import _eager_import_all as _hooks_eager_import_all
 
-        # DELIBERATELY NOT COUNTED HERE. Every `hooks.*` key in OP_MODULE_MAP
-        # maps to the shared "coordinator_core.hooks" package value, so step 1
-        # is ALWAYS a no-op for them and this stage is the designed resolution
-        # path, not a miss — measured firing on 100% of hooks.* dispatches.
-        # Counting it would put a record on every tool call and bury the
-        # ops-wide cliff this telemetry exists to surface. A hooks.* op that
-        # this stage fails to resolve still falls through to the safe fallback
-        # below, which does count it.
+        # Reaching here means step 1 missed: every hooks.* key maps to its
+        # owning module, so this is map drift — count it.
+        _caller_cwd = resolve_caller_cwd(msg) if isinstance(msg, dict) else None
+        _record_registry_fallback(
+            method,
+            "hooks-scoped",
+            mapped=module_path is not None,
+            cwd=str(_caller_cwd) if _caller_cwd is not None else None,
+        )
         _hooks_eager_import_all()
         handler = _REGISTRY.get(method)
         if handler is not None:

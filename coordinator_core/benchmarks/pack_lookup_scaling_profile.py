@@ -136,6 +136,9 @@ def profile(pack_counts=DEFAULT_PACK_COUNTS, real_repo: str | None = None) -> di
 
 
 def main(argv=None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--real-repo", default=None, help="repo root whose .git pack set is measured read-only")

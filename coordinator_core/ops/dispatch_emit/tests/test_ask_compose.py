@@ -660,6 +660,15 @@ def test_the_sizing_write_asks_for_json_and_the_ledger_check_schema_carries_met_
     assert "met_by" in script
 
 
+def test_the_ledger_charter_measures_size_requirements_on_lf_normalized_blobs_not_the_working_copy():
+    for relayed in (True, False):
+        charter = ask_compose._folded_ledger_charter(
+            relayed=relayed, ledger_rel="l.md", record_dir="r", run_dir="d", in_run_commit=False
+        )
+        assert ask_compose._LEDGER_SIZE_RULE in charter
+        assert charter.index(ask_compose._LEDGER_SIZE_RULE) < charter.index("HEAD-measured gate")
+
+
 def test_the_ask_script_return_carries_a_research_halts_fire_list():
     script = _compose(**_ratio_kw())
     assert "_halted.halted === 'research' && Array.isArray(_halted.fire) ? _halted.fire" in script

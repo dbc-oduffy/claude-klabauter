@@ -55,6 +55,7 @@ from typing import Mapping, Optional, Sequence
 
 from coordinator_core.bug_blitz.contract import (
     CLI_NAME as RUNNER_CLI_NAME,
+    OUTCOME_FOREIGN_UNCOMMITTED,
     OUTCOMES as RUNNER_OUTCOMES,
     tests_record_rel,
 )
@@ -314,6 +315,12 @@ def _evidence_path_parts(
 
 RUNNER_CMD = f'"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/{RUNNER_CLI_NAME}"'
 
+_FOREIGN_UNCOMMITTED_CLAUSE = (
+    f"`{OUTCOME_FOREIGN_UNCOMMITTED}` means it is live at HEAD and passes only on another "
+    "holder's uncommitted edits: never already-fixed; quote the record's `foreign_holders` "
+    "in `evidence`."
+)
+
 #: Outcomes that force a verify `fail`; `passed` and `nothing-to-run` keep the agent verdict.
 RUNNER_FAIL_OUTCOMES: tuple[str, ...] = tuple(
     o for o in RUNNER_OUTCOMES if o not in ("passed", "nothing-to-run")
@@ -336,9 +343,11 @@ def _runner_invocation_parts(
     run_id_part: tuple[str, str],
     row_id_part: tuple[str, str],
     repo_root_js: str,
+    committed_head: bool = False,
 ) -> list[tuple[str, str]]:
     """The one sanctioned test route: the runner runs only tests covering touched files,
-    so it never trips the suite guards. Never a bare test command."""
+    so it never trips the suite guards. Never a bare test command. ``committed_head``
+    appends ``--committed-head``: judge committed HEAD with no uncommitted overlay."""
     return [
         ("lit", "`" + RUNNER_CMD + " --repo "),
         _shq_part(repo_root_js),
@@ -348,7 +357,7 @@ def _runner_invocation_parts(
         *touched_parts,
         ("lit", " --record "),
         *_runner_record_parts(profile, run_id_part, row_id_part),
-        ("lit", "`"),
+        ("lit", " --committed-head`" if committed_head else "`"),
     ]
 
 
@@ -509,6 +518,7 @@ def compose_triage_call(
             run_id_part=run_id_part,
             row_id_part=("lit", "<its row_id>"),
             repo_root_js=repo_root_js,
+            committed_head=True,
         ))
         parts.append((
             "lit",
@@ -961,7 +971,12 @@ def compose_fix_call(
         parts.append((
             "lit",
             " -- never any other test command. The tests pass when its `outcome` is `passed` "
-            "or `nothing-to-run`; on any other outcome they do not pass, so do not close the row.",
+            "or `nothing-to-run`; on any other outcome they do not pass, so do not close the row. "
+            + _FOREIGN_UNCOMMITTED_CLAUSE
+            + " Before reporting NOT_REPRODUCED, run it again with the same arguments and "
+            "`--committed-head` (judges committed HEAD, no uncommitted file counts): report "
+            "NOT_REPRODUCED only when that `outcome` is `passed`; `failed` means the defect is "
+            "live at HEAD, so fix it.",
         ))
     if feedback_js:
         parts.append(("expr", feedback_js))

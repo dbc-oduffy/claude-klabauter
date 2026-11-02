@@ -490,6 +490,40 @@ def _kill_process_tree(process: "subprocess.Popen[bytes]") -> int:
     return len(victims)
 
 
+#: Per-process ceiling on one pre-kill stack dump; a wedged process must not stall the kill.
+_DUMP_TIMEOUT_SECS = 20
+
+
+def _dump_process_tree(process: "subprocess.Popen[bytes]") -> None:
+    """py-spy every process in the child's tree to stderr BEFORE the ceiling kills it.
+
+    A ceiling kill destroys the only evidence of WHICH test wedged: the
+    controller sits idle in ``loop_once`` and the stuck stack lives in a worker.
+    2026-11-02: a fast tier was killed at 99% with no worker stacks because the
+    dump was an operator step. Making it the kill path's first act means it
+    cannot be missed. Absent py-spy is reported, never fatal.
+    """
+    py_spy = shutil.which("py-spy")
+    if py_spy is None:
+        print("with-suite-mutex: py-spy not on PATH; no pre-kill stack dump.", file=sys.stderr)
+        return
+    try:
+        parent = psutil.Process(process.pid)
+        pids = [parent.pid] + [c.pid for c in parent.children(recursive=True)]
+    except psutil.Error:
+        return
+    for pid in pids:
+        try:
+            out = subprocess.run(
+                [py_spy, "dump", "--pid", str(pid)], capture_output=True, text=True,
+                timeout=_DUMP_TIMEOUT_SECS, **no_console_creationflags(),
+            )
+            body = (out.stdout or "") + (out.stderr or "")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            body = f"dump failed: {exc}"
+        print(f"with-suite-mutex: pre-kill dump pid {pid}:\n{body}", file=sys.stderr, flush=True)
+
+
 def _wait_interruptible(
     process: "subprocess.Popen[bytes]", max_runtime: float = 0.0
 ) -> int:
@@ -517,6 +551,7 @@ def _wait_interruptible(
             return process.wait(timeout=0.25)
         except subprocess.TimeoutExpired:
             if deadline is not None and time.monotonic() >= deadline:
+                _dump_process_tree(process)
                 killed = _kill_process_tree(process)
                 print(
                     "with-suite-mutex: killed the command after "

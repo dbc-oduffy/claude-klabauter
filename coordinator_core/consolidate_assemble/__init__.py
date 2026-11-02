@@ -79,7 +79,7 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from coordinator_core.contract.decision_object.envelope import build_envelope
 from coordinator_core.contract.decision_object.judgment import (
@@ -100,12 +100,15 @@ EXIT_TRANSPORT_FAIL = 3
 RECENCY_FLOOR_SECONDS = 24 * 3600
 
 
-def default_run_git(args: list[str], cwd: Path) -> "subprocess.CompletedProcess[str]":
+def default_run_git(
+    args: list[str], cwd: Path, input: Optional[str] = None
+) -> "subprocess.CompletedProcess[str]":
     from coordinator_core.win_portability import no_console_creationflags
 
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
+        input=input,
         capture_output=True,
         text=True,
         check=False,
@@ -292,10 +295,37 @@ def branch_reachable(run_git: RunGit, repo_root: Path, ref: str, target: str) ->
     return proc.returncode == 0
 
 
-def _is_ancestor_of_head(run_git: RunGit, repo_root: Path, sha: str) -> bool:
-    if not sha or sha.startswith("-"):
-        return False
-    return run_git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_root).returncode == 0
+def _ancestors_of_head(run_git: RunGit, repo_root: Path, shas: Iterable[str]) -> set[str]:
+    """The subset of `shas` that resolve to a commit already reachable from HEAD.
+    Two spawns whatever len(shas): one `cat-file --batch-check` resolve, one
+    `rev-list --stdin` with `^HEAD` first. A blank, `-`-led, unknown or
+    non-commit entry is never an ancestor. Both probes feed stdin, which
+    `run_git` must accept as an `input=` keyword."""
+    wanted = sorted({s for s in shas if s and not s.startswith("-") and "\n" not in s})
+    if not wanted:
+        return set()
+    resolve = run_git(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        repo_root,
+        input="".join(f"{s}^{{commit}}\n" for s in wanted),
+    )
+    if resolve.returncode != 0:
+        return set()
+    rows = resolve.stdout.splitlines()
+    if len(rows) != len(wanted):
+        return set()
+    oid_of = {s: row.split(" ", 1)[0] for s, row in zip(wanted, rows) if not row.endswith(" missing")}
+    if not oid_of:
+        return set()
+    walk = run_git(
+        ["rev-list", "--stdin"],
+        repo_root,
+        input="^HEAD\n" + "".join(f"{oid}\n" for oid in sorted(set(oid_of.values()))),
+    )
+    if walk.returncode != 0:
+        return set()
+    unmerged = set(walk.stdout.split())
+    return {s for s, oid in oid_of.items() if oid not in unmerged}
 
 
 def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[str]:
@@ -498,6 +528,10 @@ def brief(
 
     global_stats = inspect_commits(run_git, repo_root, list(dict.fromkeys(all_shas)))
 
+    superseding_ancestors = _ancestors_of_head(
+        run_git, repo_root, [superseded[s["name"]] for s in stale_branches if s["name"] in superseded]
+    )
+
     for stale in stale_branches:
         entry, name, commits, shas = stale["entry"], stale["name"], stale["commits"], stale["shas"]
         ref = entry["ref"]
@@ -553,7 +587,7 @@ def brief(
         supersede_resolves: list[str] = []
         supersede_guidance = f"re-run brief with --superseded {name}=<superseding-sha> to emit the merge-ours"
         if supersede_sha is not None:
-            if not _is_ancestor_of_head(run_git, repo_root, supersede_sha):
+            if supersede_sha not in superseding_ancestors:
                 superseded_refused.append(
                     {"branch": name, "sha": supersede_sha, "reason": "superseding sha is not an ancestor of HEAD"}
                 )

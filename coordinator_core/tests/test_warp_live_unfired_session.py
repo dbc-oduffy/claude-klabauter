@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from coordinator_core import warp_live
+from coordinator_core import launch_records, warp_live
 from coordinator_core.ops.dispatch_emit import run_token
 
 SCRIPT = "scratch/warp/x.mjs"
@@ -39,7 +40,7 @@ def test_an_unfired_token_is_not_the_sessions_live_run(repo, dirs, tmp_path):
 
 def test_a_launched_in_flight_token_is_still_the_sessions_live_run(repo, dirs, tmp_path):
     run_token.mint(repo, "r1", SCRIPT, session_id="sX", sizing_rel=None)
-    (dirs[0] / "workflow-run-sX-w1.json").write_text(
+    Path(launch_records.record_path(str(dirs[0]), "sX", "w1")).write_text(
         json.dumps({"scriptPath": SCRIPT, "fired_at": 1.0}), encoding="utf-8"
     )
     transcript = tmp_path / "t.jsonl"

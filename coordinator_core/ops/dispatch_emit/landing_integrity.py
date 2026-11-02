@@ -63,6 +63,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     ZERO_FAIL_UNATTRIBUTED,
     Finding,
     tests_failed_finding,
+    zero_run_cause_note,
     _FILE_LIKE,
     _GATE_BLOCKER,
     _imports_landed,
@@ -497,7 +498,9 @@ def _landing_test_gate_core(
     findings, check = _landing_test_gate(worktree_root, params, run_id)
     out = findings if isinstance(findings, GateFindings) else GateFindings(findings)
     if not findings and check in ("no-verdict", NOT_RUN_CHECK):
-        out.deleted_note = deleted_targets_receipt_note(worktree_root, params, run_id)
+        out.deleted_note = "; ".join(
+            n for n in (out.deleted_note, deleted_targets_receipt_note(worktree_root, params, run_id)) if n
+        )
     return out, check
 
 
@@ -529,13 +532,18 @@ def _landing_test_gate(
     if errored_unrun and _explicit_failed_tests(params):
         fresh = None
     elif errored_unrun:
+        cause_note = zero_run_cause_note(fresh, retest_remedy(params))
+        if cause_note:
+            return _not_run_with_cause(cause_note), NOT_RUN_CHECK
         reason = fresh.get("reason") or "launcher produced no test results"
         return [tests_failed_finding("",
                         f"the run's retest errored without running tests ({reason}); "
                         f"fix the launcher and re-run: {retest_remedy(params)}")], "failed"
     unrun_retest = False
+    empty_note = ""
     if fresh is not None and _ran_no_tests(fresh):
         unrun_retest = not _only_run_deleted_targets(worktree_root, params, run_id, fresh)
+        empty_note = zero_run_cause_note(fresh, retest_remedy(params)) if unrun_retest else ""
         fresh = None
     if fresh is not None and not isinstance(fresh.get("baseline"), Mapping) and (
         fresh.get("status") == "fail"
@@ -550,6 +558,8 @@ def _landing_test_gate(
         zero_run = check_now == NOT_RUN_CHECK or (
             check_now == "pass" and verdict.get("status") == "pass" and _ran_zero_int(verdict.get("tests_run"))
         )
+        if empty_note and check_now == "no-verdict":
+            return _not_run_with_cause(empty_note), NOT_RUN_CHECK
         if zero_run or (unrun_retest and check_now == "no-verdict"):
             if unrun_retest or _targeted_set_exists(worktree_root, params, verdict, run_id):
                 return [_ran_zero_finding(params, _renamed_detail(worktree_root, params, run_id))], "failed"
@@ -586,6 +596,13 @@ def _landing_test_gate(
     if check == "pass" and fresh.get("status") == "pass" and _ran_zero_int(fresh.get("tests_run")):
         return [_ran_zero_finding(params)], "failed"
     return findings, "pass-on-retest" if check == "pass" else check
+
+
+def _not_run_with_cause(note: str) -> GateFindings:
+    """No findings; ``deleted_note`` carries why zero tests ran, so the not-run result is visible on the receipt."""
+    out = GateFindings()
+    out.deleted_note = note
+    return out
 
 
 def _recorded_failed_nodes(worktree_root: Path, run_id: Optional[str]) -> list[str]:

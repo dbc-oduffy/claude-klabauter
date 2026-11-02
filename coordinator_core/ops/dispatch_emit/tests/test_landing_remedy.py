@@ -99,3 +99,29 @@ def test_review_only_anchor_prefers_recorded_at(tmp_path):
     side.write_text("---\nrecorded_at: '2026-10-21T00:00:00Z'\n---\n", encoding="utf-8")
     at, _ = lr.review_only_anchor(tmp_path, _request(True), {"prep_sidecar": "prep.md"})
     assert at == 1_792_540_800.0
+
+
+def test_blob_drift_remedy_names_the_review_pass_that_moves_the_expectation(tmp_path):
+    d = tmp_path / RECORD_DIR_ROOT / "run-a"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text("{}", encoding="utf-8")
+    out = lr.blob_drift_remedy(f"blob-drift. {GENERIC}", tmp_path, "run-a", "dispatch.land_run", None, ["a.py"])
+    assert "refire's own review pass" in out
+    assert "re-reads the current bytes" not in out
+
+
+def _fingerprints(tmp_path, events, started):
+    from coordinator_core.ops.dispatch_emit.terminal_commit_review import _recorded_fingerprints
+
+    (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+    return _recorded_fingerprints(
+        tmp_path, "sess-none", ["a.py"], ["a.py"], (), excluded=set(), review_events=events, run_started_at=started,
+    )
+
+
+def test_review_event_before_the_refire_submission_is_no_expectation(tmp_path):
+    assert _fingerprints(tmp_path, {"a.py": ("pre-halt-hash", 100.0)}, 200.0) == {}
+
+
+def test_review_event_after_the_refire_submission_is_the_expectation(tmp_path):
+    assert _fingerprints(tmp_path, {"a.py": ("refire-hash", 300.0)}, 200.0) == {"a.py": "refire-hash"}

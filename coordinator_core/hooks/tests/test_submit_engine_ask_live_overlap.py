@@ -195,6 +195,55 @@ def test_a_run_that_ended_on_harness_evidence_without_halted_json_denies_nothing
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None
 
 
+DEAD_RUN = "warp-2026-11-02-antigravity-reply-pipe-1b4dab-20261102T151348-56719e"
+
+
+def _deferred_run(tmp_path, monkeypatch, notification: str) -> Path:
+    """A minted run with no submission and no launch record under its own script (started inside a
+    deferred-emit script), plus its owner session's transcript holding `notification`."""
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    (tmp_path / ".git").mkdir()
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(warp_live, "managed_tempdir", lambda: managed)
+    monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: managed / name)
+    config = tmp_path / "config"
+    project = config / "projects" / "p"
+    project.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    (project / "s1.jsonl").write_text(notification + "\n", encoding="utf-8")
+    run_token.mint(tmp_path, DEAD_RUN, f"scratch/warp/{DEAD_RUN}.workflow.mjs", session_id="s1")
+    _live(tmp_path, {DEAD_RUN: {"pkg/mod.py"}})
+    return tmp_path
+
+
+def _notification(status: str, run_id: str) -> str:
+    import json
+
+    result = json.dumps({"arm": "m_plus", "run_id": run_id, "halted_by": {"halted": "ledger-check"}})
+    body = f"<task-notification>\n<task-id>w7vzsgr7g</task-id>\n<status>{status}</status>\n<result>{result}</result>\n</task-notification>"
+    return json.dumps({"type": "queue-operation", "content": body})
+
+
+def test_a_completed_workflow_whose_result_names_the_run_denies_nothing(tmp_path, monkeypatch):
+    root = _deferred_run(tmp_path, monkeypatch, _notification("completed", DEAD_RUN))
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    assert mod._live_write_overlap_deny(root, tool_input, {}) is None
+    assert mod._live_write_overlap_deny(root, tool_input, {}, "state/sizings/own.yaml") is None
+
+
+def test_a_workflow_still_running_or_naming_another_run_stays_live(tmp_path, monkeypatch):
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    root = _deferred_run(tmp_path, monkeypatch, _notification("running", DEAD_RUN))
+    assert mod._live_write_overlap_deny(root, tool_input, {})
+    (tmp_path / "config" / "projects" / "p" / "s1.jsonl").write_text(
+        _notification("completed", "warp-2026-11-02-other-20261102T151348-aaaaaa") + "\n", encoding="utf-8"
+    )
+    assert mod._live_write_overlap_deny(root, tool_input, {})
+
+
 def test_a_run_with_no_token_record_and_no_marker_stays_live(tmp_path, monkeypatch):
     from coordinator_core import warp_live
 

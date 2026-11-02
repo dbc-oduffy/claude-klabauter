@@ -63,6 +63,11 @@ def test_unreadable_review_record_is_unminted(tmp_path):
     )
 
 
+def _xs_spine(root):
+    (root / "state/warp/r1").mkdir(parents=True)
+    (root / "state/warp/r1/p.md").write_text("---\nrun_id: r1\nreview_stamp: x\n---\n", encoding="utf-8")
+
+
 def test_mint_refusal_is_unminted(tmp_path, monkeypatch):
     def refuse(*args, **kwargs):
         raise rs.MintRefusal("no review record for the plan")
@@ -71,3 +76,22 @@ def test_mint_refusal_is_unminted(tmp_path, monkeypatch):
     got = cb._review_stamp(_ctx(tmp_path))
     assert got.status == "failed"
     assert got.detail.startswith("review ran, stamp not minted: no review record for the plan")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("ignored", [True, False])
+def test_mirror_follows_a_real_gitignore(tmp_path, monkeypatch, ignored):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("state/warp/\n" if ignored else "unrelated/\n", encoding="utf-8")
+    _xs_spine(tmp_path)
+    monkeypatch.setattr(rs, "mint_receipt", lambda *a, **k: {})
+    monkeypatch.setattr(cb, "_queue_review", lambda ctx, rel: None)
+    ctx = _ctx(tmp_path, plan_rel="state/warp/r1/p.spine.md")
+    got = cb._review_stamp(ctx)
+    assert got.status == "ran"
+    want = "state/review-receipts/r1-p.md" if ignored else "state/warp/r1/p.md"
+    assert want in got.detail
+    assert want in ctx.written
+    assert (tmp_path / "state/review-receipts/r1-p.md").exists() is ignored

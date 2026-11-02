@@ -72,6 +72,32 @@ def test_note_without_lettered_part_adds_no_row(repo):
     assert _texts(repo) == before
 
 
+METHOD_BRIEF = "The method has three steps: (a) capture scans. (b) map into expected-value space. (c) apply."
+
+
+def _anchors(repo):
+    return [r["anchor"] for r in rr.read_register((repo / REL).read_text(encoding="utf-8")).rows]
+
+
+def test_method_lead_in_marks_every_lettered_part_and_origin_survives(repo):
+    _bound(repo, METHOD_BRIEF)
+    marked = [a for a in _anchors(repo) if "#method-step:" in a]
+    assert len(marked) == 3
+    assert {rl._origin(a)[0] for a in marked} == {"relayed"}
+
+
+def test_plain_lettered_list_marks_no_row(repo):
+    _bound(repo, BRIEF)
+    assert not [a for a in _anchors(repo) if "#method-step:" in a]
+
+
+def test_method_rows_are_not_duplicated_on_rebind(repo):
+    _bound(repo, METHOD_BRIEF)
+    once = _texts(repo)
+    rl.bind(repo, RUN, REL, ask_text="the ask")
+    assert _texts(repo) == once
+
+
 def test_bind_mints_a_row_per_lettered_part_of_the_em_brief_once(repo):
     _bound(repo, BRIEF)
     texts = _texts(repo)

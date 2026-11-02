@@ -281,6 +281,29 @@ def _extract_frontmatter(text: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+_POLICY_ROSTER_CACHE: "Dict[str, Tuple[Tuple[int, int], FrozenSet[str]]]" = {}
+_FRONTMATTER_CACHE: "Dict[str, Tuple[Tuple[int, int], Optional[dict]]]" = {}
+
+
+def _frontmatter_of(md_path: Path) -> Optional[dict]:
+    """Parsed frontmatter of `md_path`, memoized on its (mtime_ns, size).
+
+    A roster resolve re-reads every agent file (~160 pure-Python YAML parses
+    per Bash call from a subagent); the stat check keeps a peer's edit visible
+    on the next call. Raises OSError exactly as `read_text` did. The returned
+    dict is shared: callers must not mutate it.
+    """
+    st = md_path.stat()
+    sig = (st.st_mtime_ns, st.st_size)
+    key = str(md_path)
+    hit = _FRONTMATTER_CACHE.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    fm = _extract_frontmatter(md_path.read_text(encoding="utf-8"))
+    _FRONTMATTER_CACHE[key] = (sig, fm)
+    return fm
+
+
 def _content_candidates(content_root: str, leaf: str) -> "list[Path]":
     """`leaf` under each on-disk shape the plugin content root takes, in
     probe order: a dev clone nests it under `coordinator/`, a
@@ -333,6 +356,11 @@ def _load_policy_roster(content_root: str) -> FrozenSet[str]:
             + " do not exist."
         )
     try:
+        st = policy_path.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+        hit = _POLICY_ROSTER_CACHE.get(str(policy_path))
+        if hit is not None and hit[0] == sig:
+            return hit[1]
         raw = policy_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise _RosterError(
@@ -359,7 +387,9 @@ def _load_policy_roster(content_root: str) -> FrozenSet[str]:
             keys.update(str(k) for k in section.keys())
         elif isinstance(section, list):
             keys.update(str(v) for v in section)
-    return frozenset(keys)
+    roster = frozenset(keys)
+    _POLICY_ROSTER_CACHE[str(policy_path)] = (sig, roster)
+    return roster
 
 
 def _scan_agents_frontmatter(content_root: str) -> Dict[str, Tuple[dict, Path]]:
@@ -392,10 +422,9 @@ def _scan_agents_frontmatter(content_root: str) -> Dict[str, Tuple[dict, Path]]:
     entries: Dict[str, Tuple[dict, Path]] = {}
     for md_path in files:
         try:
-            text = md_path.read_text(encoding="utf-8")
+            fm = _frontmatter_of(md_path)
         except OSError:
             continue  # unreadable agent-md file; skip it
-        fm = _extract_frontmatter(text)
         if not fm:
             continue
         name = fm.get("name")
@@ -642,10 +671,9 @@ def _scan_plugin_agents_frontmatter(home: Optional[str]) -> Dict[str, Tuple[dict
     entries: Dict[str, Tuple[dict, Path]] = {}
     for key, md_path in pairs:
         try:
-            text = md_path.read_text(encoding="utf-8")
+            fm = _frontmatter_of(md_path)
         except OSError:
             continue  # unreadable agent-md file; skip it
-        fm = _extract_frontmatter(text)
         if not fm:
             continue
         entries[key] = (fm, md_path)
@@ -901,6 +929,9 @@ def resolve_model_pins(
             if effort is not None:
                 entry["effort"] = effort
             if entry:
+                sibling = fm.get("sonnet-sibling")
+                if isinstance(sibling, str) and sibling.strip():
+                    entry["sonnet-sibling"] = sibling.strip()
                 entry["_source_path"] = md_path.as_posix()
                 pins[key] = entry
     return pins, None

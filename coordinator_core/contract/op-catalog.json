@@ -2,6 +2,28 @@
   "generated_by": "python -m coordinator_core.contract.emit_op_catalog --write",
   "ops": [
     {
+      "description": "Deliver `text` into an existing agent conversation through a new run.\n\nParams: agent, conversation (the id on a mailbox line's sender_conversation), text, reply_to;\ncwd optional.\nReturns: {\"run_id\", \"mailbox\", \"run_dir\", \"pid\"}.",
+      "module": "coordinator_core.ops.agent_pipe",
+      "name": "agent_pipe.send",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Deliver `text` into an existing agent conversation through a new run.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Start a headless agent session whose messages land in a Claude session's mailbox.\n\nParams: agent (\"antigravity\" | \"codex\"), prompt, reply_to (the receiving Claude session id);\ncwd optional (the agent's working directory; default the run dir).\nReturns: {\"run_id\", \"mailbox\", \"run_dir\", \"pid\"} -- the pid is the worker's, not the agent's.",
+      "module": "coordinator_core.ops.agent_pipe",
+      "name": "agent_pipe.start",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Start a headless agent session whose messages land in a Claude session's mailbox.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"app_session.census\" handler.\n\nEnumerates from persisted handle state (never from in-memory session\nstate), so it naturally finds orphans left by sessions that have\nalready died — session death does not reap spawned workers, and a\npersisted handle survives its launching session regardless. Each\nrecorded PID is re-validated against its stored second identity signal\nbefore being reported live (see `_handle_is_live`).",
       "module": "coordinator_core.ops.app_session",
       "name": "app_session.census",
@@ -527,6 +549,28 @@
         "type": "object"
       },
       "summary": "JSON-RPC \"close.review\": pay the run's queued ``review`` leg.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Read one run's outcome.\n\nParams: run_id.\nReturns: the worker's RunResult dict, or {\"run_id\", \"status\": \"running\"} while the worker\nlives; a worker that died without a result reports status \"failed\".",
+      "module": "coordinator_core.ops.codex_runner",
+      "name": "codex_runner.result",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Read one run's outcome.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Start one detached codex run.\n\nParams: mode (\"review\" | \"agy-review\" | \"execute\"), repo_root, and artifact (review,\nagy-review) or plan+chunk (execute); parent_session_id optional. `allow_api_key` is not\na wire param: the op never forwards it.\nReturns: {\"run_id\", \"run_dir\", \"pid\"} -- the pid is the worker's, not codex's.",
+      "module": "coordinator_core.ops.codex_runner",
+      "name": "codex_runner.start",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Start one detached codex run.",
       "timeout_s": 30.0
     },
     {

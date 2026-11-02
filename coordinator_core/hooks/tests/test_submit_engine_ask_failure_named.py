@@ -125,6 +125,47 @@ def test_handler_never_returns_empty_for_a_submission(tmp_path, monkeypatch):
     assert _hso(env)["permissionDecisionReason"].strip()
 
 
+def test_handler_denies_a_submission_allow_that_carries_no_rewrite(tmp_path, monkeypatch):
+    allow = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
+    monkeypatch.setattr(mod, "evaluate", lambda _p: allow)
+    monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: env)
+    env = mod._handler(_params(tmp_path, {"ask": "x"}))
+    assert _hso(env)["permissionDecision"] == "deny"
+    assert "no run and no refusal" in _hso(env)["permissionDecisionReason"]
+
+
+def _blank_deny(reason):
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}
+
+
+def test_handler_names_a_submission_deny_that_carries_a_blank_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: env)
+    for blank in ("", "  \n", None):
+        monkeypatch.setattr(mod, "evaluate", lambda _p, blank=blank: _blank_deny(blank))
+        env = mod._handler(_params(tmp_path, {"sizing": "state/sizings/x.yaml"}))
+        assert _hso(env)["permissionDecision"] == "deny", blank
+        assert "recorded no reason" in _hso(env)["permissionDecisionReason"], blank
+
+
+def test_handler_keeps_the_reason_of_a_live_run_deny_at_every_guard_level(tmp_path, monkeypatch):
+    from coordinator_core import machine_profile as mp
+
+    live = "Run r1 is already working state/sizings/x.yaml; its completion is your one wake. End the turn."
+    monkeypatch.setattr(mod, "evaluate", lambda _p: _blank_deny(live))
+    for level in ("strict", "warn", "off"):
+        monkeypatch.setattr(mp, "guard_level", lambda _name, level=level: level)
+        env = mod._handler(_params(tmp_path, {"sizing": "state/sizings/x.yaml"}))
+        assert _hso(env)["permissionDecision"] == "deny", level
+        assert _hso(env)["permissionDecisionReason"] == live, level
+
+
+def test_handler_keeps_a_submission_allow_that_carries_a_rewrite(tmp_path, monkeypatch):
+    allow = {"hookSpecificOutput": {"permissionDecision": "allow", "updatedInput": {"scriptPath": "run.js"}}}
+    monkeypatch.setattr(mod, "evaluate", lambda _p: allow)
+    monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: env)
+    assert mod._handler(_params(tmp_path, {"ask": "x"})) == allow
+
+
 def test_retire_failure_is_named_in_the_rewrite_and_does_not_block(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     sizing = "state/sizings/x.yaml"

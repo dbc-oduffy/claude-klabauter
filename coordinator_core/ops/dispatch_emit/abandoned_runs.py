@@ -33,7 +33,7 @@ from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_chan
 from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_RESUMED
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.session.record_homes import home_dir
-from coordinator_core.warm.live_runs import run_is_live, run_owner_holds
+from coordinator_core.warm.live_runs import run_owner_holds, run_stage_live
 
 OP_NAME = "dispatch.reap_abandoned_runs"
 HALTED_KIND = "abandoned"
@@ -276,7 +276,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     now = time.time()
     active = [r for r in records if _token_active(root, r, newest, now)]
     live_ids = {r["run_id"] for r in active}
-    workflow_live = {r for r in run_ids - live_ids if run_is_live(root, r)}
+    workflow_live = {r for r in run_ids - live_ids if run_stage_live(root, r)}
     live_ids |= workflow_live
     idle_tokens = {r["run_id"] for r in records} - live_ids
     held_sizings = {str(r.get("sizing_rel") or "").replace("\\", "/") for r in active} - {""}
@@ -378,7 +378,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     bases = [b for run_id in reaped for b in landing_integrity.closing_bases(root, run_id, {})]
     for line in run_halted_trailer_lines(bases):
         message += "\n" + line
-    commit_params: dict = {"paths": paths + sizings, "message": message}
+    commit_params: dict = {
+        "paths": paths + sizings,
+        "message": message,
+        "ignored_untracked": snapshot.ignored_among(paths + sizings),
+    }
     if gone:
         commit_params["deleted_paths"] = gone
         commit_params["declared_reverts"] = gone

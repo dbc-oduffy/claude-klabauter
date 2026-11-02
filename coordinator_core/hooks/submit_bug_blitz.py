@@ -90,14 +90,18 @@ def _check_args(args: Any) -> tuple[Optional[dict], Optional[str]]:
 
 
 def _branch_refusal(root: Path) -> Optional[str]:
-    from coordinator_core.daily_branch import is_allowed_branch, read_configured_day_branch
+    # Remedy leads: the harness clips a deny reason to ~80 chars.
+    # Same oracle as day_branch_assert: any work/* branch is a work branch. The
+    # date-shape oracle refused suffixed day branches (work/m/2026-10-29b) that
+    # every other guard admits.
+    from coordinator_core.daily_branch import is_work_branch
     from coordinator_core.git.git_state import head_branch
 
     branch = head_branch(root)
     if not branch or branch == "HEAD":
-        return "HEAD is detached. Check out the day branch."
-    if branch.lower() == "main" or not is_allowed_branch(branch, read_configured_day_branch(root)):
-        return f"{branch} is not a work branch. Check out the day branch."
+        return "Check out the day branch: HEAD is detached."
+    if not is_work_branch(branch):
+        return f"Check out a work/* branch: {branch} is not one."
     return None
 
 

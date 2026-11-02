@@ -39,9 +39,11 @@ def test_c04f17_shape_is_all_foreign():
     assert r.foreign == tuple(sorted(_CASES[0]["failing"]))
 
 
-def test_write_set_file_is_owned_even_when_pre_existing():
+def test_write_set_file_pre_existing_red_is_foreign_unless_reverted():
     nid = "coordinator/bin/tests/test_with_tier_t_slot.py::t"
     r = sc.classify_reds([nid], _WS, pre_existing=[nid])
+    assert r.owned == () and r.foreign == (nid,)
+    r = sc.classify_reds([nid], _WS, pre_existing=[nid], reverted=[{"tests": [nid]}])
     assert r.owned == (nid,) and r.foreign == ()
 
 

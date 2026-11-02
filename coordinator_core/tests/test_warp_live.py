@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core import warp_live
+from coordinator_core import launch_records, warp_live
 from coordinator_core.ops.dispatch_emit import run_token
 
 SIZING = "state/sizings/mine.yaml"
@@ -36,7 +36,7 @@ def _launch(directory, session, task, script=SCRIPT, transcript_dir=None):
     record = {"scriptPath": script, "fired_at": 1.0}
     if transcript_dir is not None:
         record["transcript_dir"] = str(transcript_dir)
-    (directory / f"workflow-run-{session}-{task}.json").write_text(json.dumps(record), encoding="utf-8")
+    Path(launch_records.record_path(str(directory), session, task)).write_text(json.dumps(record), encoding="utf-8")
 
 
 def _transcript(tmp_path, body=""):

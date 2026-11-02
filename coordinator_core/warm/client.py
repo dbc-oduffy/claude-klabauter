@@ -712,9 +712,10 @@ def _drain_publish_hold() -> "Optional[bool]":
     """Queue this caller behind a publish copy instead of failing it.
 
     None: no publish marker held (caller proceeds to its normal spawn path).
-    True: marker was held and released within `breadcrumb.DRAIN_WAIT_SECS`
-    (caller retries the pipe once). False: still held at the deadline (caller
-    spawns nothing and goes cold). Never raises.
+    True: marker was held and released during the swap window (caller retries
+    the pipe once). False: the holder is wedged (stale heartbeat) or the swap
+    backstop elapsed; the runnable remedy goes to stderr, the caller spawns
+    nothing and goes cold. Never raises.
     """
     try:
         from coordinator_core.warm import breadcrumb
@@ -722,7 +723,13 @@ def _drain_publish_hold() -> "Optional[bool]":
         root = _engine_clone_root()
         if not breadcrumb.publish_marker_held(breadcrumb.svc_dir(root)):
             return None
-        return breadcrumb.wait_for_publish_release(root)
+        released = breadcrumb.wait_for_publish_swap(root)
+        if not released:
+            try:
+                sys.stderr.write(f"coordinator: {breadcrumb.publish_wedge_remedy(root)}\n")
+            except Exception:  # noqa: BLE001 -- the remedy line is best-effort
+                pass
+        return released
     except Exception:  # noqa: BLE001 -- the preamble never fails the op
         return None
 

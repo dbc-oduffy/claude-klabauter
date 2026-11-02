@@ -153,10 +153,12 @@ def classify_reds(
 ) -> RedSplit:
     """Split failing node ids into the run's own and foreign reds.
 
-    Owned: the id's file is in `own_paths`, or the id is in `reverted[].tests`, or it is in `caused`
-    and not in `foreign`, or it is in `passed_at_base` and not in `pre_existing` (green at base,
-    red with the diff). Everything else is foreign; `unverified` are the foreign ids that no list
-    proves foreign. With `caused` and `reverted` both None only write-set membership counts.
+    Red at base is foreign even in the write set: an id in `pre_existing`, or (outside
+    `own_paths`) absent from a non-empty `passed_at_base`, unless `reverted[].tests` lists it. Otherwise owned: the id's file is
+    in `own_paths`, or it is in `reverted[].tests`, or in `caused` and not in `foreign`, or in
+    `passed_at_base` and not in `pre_existing` (green at base, red with the diff). Everything else is
+    foreign; `unverified` are the foreign ids that no list proves foreign. With `caused` and
+    `reverted` both None only write-set membership counts.
     """
     base_s = {_posix(i) for i in passed_at_base or ()}
     own = {_posix(p) for p in own_paths or ()}
@@ -167,7 +169,17 @@ def classify_reds(
     owned, foreign_out, unverified = set(), set(), set()
     for raw in failing or ():
         nid = _posix(raw)
-        if _file_of(nid) in own or (reverted_s is not None and nid in reverted_s):
+        in_reverted = reverted_s is not None and nid in reverted_s
+        # A test the run itself added never ran at base, so absence from passed_at_base proves
+        # nothing for an own-path id; only an explicit pre_existing entry does.
+        red_at_base = not in_reverted and (
+            nid in pre_s or (bool(base_s) and nid not in base_s and _file_of(nid) not in own)
+        )
+        if red_at_base:
+            foreign_out.add(nid)
+            if nid not in foreign_s and nid not in pre_s:
+                unverified.add(nid)
+        elif _file_of(nid) in own or in_reverted:
             owned.add(nid)
         elif nid in base_s and nid not in pre_s:
             owned.add(nid)
@@ -230,7 +242,12 @@ const classifyReds = (failing, ownPaths, opts) => {
   const owned = new Set(), foreign = new Set(), unverified = new Set();
   for (const raw of failing || []) {
     const id = px(raw);
-    if (own.has(id.split('::')[0]) || (revertedS !== null && revertedS.has(id))) owned.add(id);
+    const inRev = revertedS !== null && revertedS.has(id);
+    const redAtBase = !inRev && (preS.has(id) || (baseS.size > 0 && !baseS.has(id) && !own.has(id.split('::')[0])));
+    if (redAtBase) {
+      foreign.add(id);
+      if (!foreignS.has(id) && !preS.has(id)) unverified.add(id);
+    } else if (own.has(id.split('::')[0]) || inRev) owned.add(id);
     else if (baseS.has(id) && !preS.has(id)) owned.add(id);
     else if (causedS !== null && causedS.has(id) && !foreignS.has(id)) owned.add(id);
     else {

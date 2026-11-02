@@ -504,3 +504,94 @@ def test_baton_drain_cascade_error_fails_the_leg_after_the_archive_step_ran(tmp_
 
     assert result.status == "failed" and "cascade: failed RuntimeError" in result.detail
     assert "archived 0 of 1 claimed baton(s)" in result.detail
+
+
+def _fold_with(monkeypatch, tmp_path, *, stdout="", rc=0, raises=None):
+    from coordinator_core.ops import fold_execution_record as fer
+
+    def main(argv):
+        assert argv[0] == "--plan" and argv[1].replace("\\", "/").endswith("docs/plans/p.md")
+        if raises:
+            raise raises
+        print(stdout, end="")
+        return rc
+
+    monkeypatch.setattr(fer, "main", main)
+    plan = tmp_path / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("# P\n", encoding="utf-8")
+    return cb._fold_observations(_ctx(tmp_path), "docs/plans/p.md")
+
+
+def test_fold_with_observations_is_reported_folded(tmp_path, monkeypatch):
+    out = _fold_with(monkeypatch, tmp_path, stdout="## Execution Observations\n\n### C1 - x\n\nobs\n\n### C2 - y\n\nobs\n")
+    assert out == "folded 2 chunk observation(s)"
+
+
+def test_fold_without_observations_is_not_a_failure(tmp_path, monkeypatch):
+    out = _fold_with(monkeypatch, tmp_path, stdout="<!-- coordinator-fold-execution-record: SKIP no-sidecars-in x/*/p.*.md -->\n")
+    assert out == "fold skipped: no-sidecars-in"
+
+
+def test_fold_hard_skip_is_failed(tmp_path, monkeypatch):
+    out = _fold_with(monkeypatch, tmp_path, stdout="<!-- coordinator-fold-execution-record: SKIP plan-not-found -->\n")
+    assert out == "failed: plan-not-found"
+
+
+def test_fold_error_and_raise_are_failed(tmp_path, monkeypatch):
+    assert _fold_with(monkeypatch, tmp_path, rc=1).startswith("failed: exit 1")
+    assert _fold_with(monkeypatch, tmp_path, raises=OSError("boom")).startswith("failed: OSError: boom")
+
+
+_SIDECAR = "---\nchunk: C1\n---\n\n## Observations\n\nthe fold saw a real divergence\n"
+
+
+def test_plan_flip_writes_one_observations_section_and_replaces_it_on_rerun(tmp_path, monkeypatch):
+    from coordinator_core.ops.ceremony.tests import test_close_background_land_run_legs as lr
+
+    root = tmp_path / "repo"
+    sha = lr._build(root)
+    lr._fake_mint(root / lr.PLAN, root)
+    from pathlib import Path
+
+    from coordinator_core.session.machinery_paths import share_root
+
+    side = Path(share_root(str(root))) / "sess1" / "landrun-legs.C1.md"
+    side.parent.mkdir(parents=True)
+    side.write_text(_SIDECAR, encoding="utf-8")
+    plan = root / lr.PLAN
+
+    ctx = lr._flip_ctx(root, sha)
+    result = lr.cb._plan_flip(ctx)
+    assert result.status == "ran", result
+    text = plan.read_text(encoding="utf-8")
+    assert text.count("## Execution Observations") == 1
+    assert "the fold saw a real divergence" in text
+    assert "coordinator-fold-execution-record: SKIP" not in text
+    assert "## Completion Entry Prose" not in text
+    assert lr.PLAN in ctx.written
+
+    side.write_text(_SIDECAR.replace("real divergence", "second-run divergence"), encoding="utf-8")
+    plan.write_text(text.replace("status: implemented", "status: approved"), encoding="utf-8")
+    result = lr.cb._plan_flip(lr._flip_ctx(root, sha))
+    assert result.status == "ran", result
+    again = plan.read_text(encoding="utf-8")
+    assert again.count("## Execution Observations") == 1
+    assert "second-run divergence" in again and "real divergence" not in again
+    assert "coordinator-fold-execution-record: SKIP" not in again
+
+
+def test_an_inner_h2_in_the_observations_leaves_no_orphan_tail_on_rerun(tmp_path):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.ceremony import close_background as cb
+
+    plan = tmp_path / "p.md"
+    plan.write_text("# P\n\nbody\n\n## Later\n\nkeep\n", encoding="utf-8")
+    ctx = SimpleNamespace(root=tmp_path)
+    cb._write_observations(ctx, "p.md", "## Execution Observations\n\nfirst\n## Inner\n\nold tail")
+    cb._write_observations(ctx, "p.md", "## Execution Observations\n\nsecond")
+    text = plan.read_text(encoding="utf-8")
+    assert text.count("## Execution Observations") == 1
+    assert "old tail" not in text and "Inner" not in text
+    assert "second" in text and "## Later\n\nkeep" in text

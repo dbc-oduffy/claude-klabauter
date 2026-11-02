@@ -12,7 +12,7 @@ TABLE = {
     ("scouts", "large"): "corpus",
     ("corpus", "small"): "scouts",
     ("corpus", "medium"): "corpus",
-    ("corpus", "large"): "deep",
+    ("corpus", "large"): "corpus",
     ("deep", "small"): "corpus",
     ("deep", "medium"): "deep",
     ("deep", "large"): "deep",
@@ -60,10 +60,15 @@ def test_deep_is_unblock():
     assert shape({"value_class": "deep", "appetite": "medium"})["pipelines"] == ["unblock"]
 
 
-def test_deep_runs_a_named_source_with_no_specialist_ahead_of_the_team():
+def test_corpus_large_stays_corpus_with_source_pipelines_never_unblock():
     r = shape({"value_class": "corpus", "appetite": "large", "sources": ["notebooklm", "web", "structured"]})
-    assert r["tier"] == "deep"
-    assert r["pipelines"] == ["nlm-preflight", "notebooklm", "structured", "unblock"]
+    assert r["tier"] == "corpus"
+    assert r["pipelines"] == ["nlm-preflight", "notebooklm", "web", "structured"]
+    assert "unblock" not in r["pipelines"]
+
+
+def test_deep_class_alone_reaches_unblock_at_large():
+    assert shape({"value_class": "deep", "appetite": "large"})["pipelines"] == ["unblock"]
 
 
 def test_unknown_value_class_refused():

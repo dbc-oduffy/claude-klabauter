@@ -1,4 +1,4 @@
-"""The size-stage write guard reaches only the live unsized run's own spawns: a run agent is denied
+"""The size-stage write guard reaches only the live unsized run's own spawns: a run agent is advised against
 a product write while an unrelated executor in the same session is allowed."""
 
 from __future__ import annotations
@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from coordinator_core import warp_live
+from coordinator_core import launch_records, warp_live
 from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
 from coordinator_core.ops.dispatch_emit import run_token
 
@@ -49,7 +49,7 @@ def _session(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
     session_transcript = tmp_path / f"{SESSION}.jsonl"
     _touch(session_transcript)
     run_dir = tmp_path / SESSION / "subagents" / "workflows" / "wf_run"
-    (launches / f"workflow-run-{SESSION}-task1.json").write_text(
+    Path(launch_records.record_path(str(launches), SESSION, "task1")).write_text(
         json.dumps({"scriptPath": str(script), "transcript_dir": str(run_dir), "fired_at": 1.0}),
         encoding="utf-8",
     )
@@ -67,7 +67,7 @@ def _edit(root: Path, session_transcript: Path, agent_id: str) -> dict | None:
     })
 
 
-def test_run_agent_is_denied_and_unrelated_executor_is_allowed(tmp_path, monkeypatch):
+def test_run_agent_is_advised_and_unrelated_executor_is_allowed(tmp_path, monkeypatch):
     root, session_transcript, run_dir = _session(tmp_path, monkeypatch)
     _touch(run_dir / f"agent-{AGENT_A}.jsonl")
     _touch(tmp_path / SESSION / "subagents" / f"agent-{AGENT_B}.jsonl")
@@ -75,8 +75,9 @@ def test_run_agent_is_denied_and_unrelated_executor_is_allowed(tmp_path, monkeyp
 
     denied = _edit(root, session_transcript, AGENT_A)
     assert denied is not None
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "Size stage: change no file but the sizing" in denied["hookSpecificOutput"]["permissionDecisionReason"]
+    out = denied["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
+    assert "Size stage: change no file but the sizing" in out["additionalContext"]
 
     assert _edit(root, session_transcript, AGENT_B) is None
     assert _edit(root, session_transcript, AGENT_C) is None

@@ -221,6 +221,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "bash_guards/chain_arrival_ledger.py", "_rotate_if_oversize", "os.replace", "os.replace(path, path.with_name(path.name + '.1'))", 1): "generation rotation of the chain-arrival ledger the guard owns; live -> `.1`, never a claimable working-tree path",
     ("coordinator_core", "bash_guards/chain_arrival_ledger.py", "_rotate_if_oversize", "os.replace", "os.replace(src, dst)", 1): "same rotation, the `.N` -> `.N+1` shift ahead of it; identical reasoning to the entry above",
     ("coordinator_core", "install/door_install.py", "_replace_possibly_running_image", "os.replace", "os.replace(dest, displaced)", 1): "installed door/forwarder image under the settings home, displaced so a RUNNING image can be replaced; outside the worktree entirely, so nothing claimable moves",
+    ("coordinator_core", "launch_records.py", "migrate_flat_records", "os.replace", "os.replace(src, dest)", 1): "moves a workflow launch record from the flat <managed temp>/workflow-run-<session>-<task>.json name into <managed temp>/workflow-runs/<session>/; both ends sit in the OS temp dir, outside every repo and claimable space, and the move is skipped when dest exists (ask-20261102T051316-eee780)",
     ("coordinator_core", "install/door_install.py", "_replace_possibly_running_image", "os.replace", "os.replace(displaced, dest)", 1): "the rollback leg of the displacement above; same installed-image reasoning",
     ("coordinator_core", "install/door_install.py", "install_named_forwarder", "os.replace", "os.replace(dest, displaced)", 1): "same installed-image displacement, at the named-forwarder call site",
     ("coordinator_core", "group_em/gem_home.py", "migrate_legacy_home", "os.rename", "os.rename(legacy, target)", 1): "renames the machine-local group-em home dir `<settings-home>/general-work` -> `group-em`; the home is never inside a checkout (inside_checkout refuses it first), so no session claims a path under it and nothing claimable moves",
@@ -347,14 +348,14 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "test fixture -- moves a notice into .delivered/ to set up the "
         "excluded-from-unread assertion; a fixture arranging its own tmp "
         "corpus has no claim to strand",
-    ('coordinator_core', 'telemetry/log_rotation.py', 'rotate_if_needed', 'os.replace', 'os.replace(sink, _generation_path(sink, 1))', 1):
+    ('coordinator_core', 'telemetry/log_rotation.py', '_run_chain', 'os.replace', 'os.replace(sink, _generation_path(sink, 1))', 1):
         "log-generation cascade under .git/coordinator-sessions/logs/ -- "
         "git-internal telemetry sinks, never a tracked repo path, so no "
         "T-claim can exist on either operand; this also runs on the "
         "op-latency hot path, where re-entering the session engine per "
         "rotation is exactly the amplification this repo's cost doctrine "
         "forbids",
-    ('coordinator_core', 'telemetry/log_rotation.py', 'rotate_if_needed', 'os.replace', 'os.replace(src, dst)', 1):
+    ('coordinator_core', 'telemetry/log_rotation.py', '_run_chain', 'os.replace', 'os.replace(src, dst)', 1):
         "log-generation cascade under .git/coordinator-sessions/logs/ -- "
         "git-internal telemetry sinks, never a tracked repo path, so no "
         "T-claim can exist on either operand; this also runs on the "

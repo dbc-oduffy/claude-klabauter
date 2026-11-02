@@ -289,7 +289,8 @@ RESEARCH_CLASSIFY_CLAUSE = (
     "and never in `targets`. "
     "An ask that declares one writes path and reads a bounded input set it names (files, "
     "transcripts, cells) is a change to files, not knowledge: return `research` null, even "
-    "when it says census or classify or is read-only."
+    "when it says census or classify or is read-only. A synthesis over the research outputs of "
+    "sibling asks is knowledge, not that census: return `research` set."
 )
 #: `ask_gate` halt route for a research sizing: the hand-back to the sizing door.
 RESEARCH_HANDBACK_ROUTE = "research"
@@ -297,18 +298,22 @@ _BOUNDED_INPUT_RE = re.compile(
     r"\b\d+\s+(?:cells?|files?|transcripts?|runs?|logs?|records?|rows?|reports?)\b"
     r"|\b(?:XXL|XS|XL|S|M|L)\s*[–—-]\s*(?:XXL|XS|XL|S|M|L)\b"
 )
+_SIBLING_SYNTHESIS_RE = re.compile(r"\bsynthes\w*\b(?=.*\bsiblings?\b)", re.IGNORECASE | re.DOTALL)
 
 
 def research_is_bounded_single_write(sizing: Mapping, writes: Sequence[str]) -> bool:
     """True when a research-carrying sizing declares exactly one writes path over a bounded, enumerated
     input set (a counted noun or a size range in its intent): a file change, so the execute arm, not research.
+    A synthesis over sibling asks' outputs is knowledge and stays False.
 
-    Trap: lexical; an input set described without a count or range is not recognised."""
+    Trap: lexical; an input set described without a count or range is not recognised, and a synthesis
+    is recognised by the word `synthesis` followed later by `sibling`."""
     paths = {str(w).strip() for w in writes if str(w).strip()}
     research = sizing.get("research")
     if len(paths) != 1 or not (isinstance(research, Mapping) and research):
         return False
-    return _BOUNDED_INPUT_RE.search(str(sizing.get("intent") or "")) is not None
+    intent = str(sizing.get("intent") or "")
+    return _BOUNDED_INPUT_RE.search(intent) is not None and _SIBLING_SYNTHESIS_RE.search(intent) is None
 
 
 ASSEMBLE_SCHEMA = {

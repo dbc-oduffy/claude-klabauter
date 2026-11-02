@@ -1,0 +1,28 @@
+{
+  "schema_version": "ghidra-program-facts/v1",
+  "program": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "name": "sample.exe",
+    "format": "Portable Executable (PE)",
+    "language_id": "x86:LE:64:default",
+    "image_base": "0x140000000",
+    "ghidra_version": "11.1.2"
+  },
+  "functions": [
+    { "entry": "0x140001000", "name": "entry", "size": 42, "is_thunk": false, "is_external": false },
+    { "entry": "0x140001040", "name": "FUN_140001040", "size": 128, "is_thunk": false, "is_external": false },
+    { "entry": "0x140001100", "name": "thunk_puts", "size": 6, "is_thunk": true, "is_external": false },
+    { "entry": "0x140003000", "name": "puts", "size": 0, "is_thunk": false, "is_external": true }
+  ],
+  "xrefs": [
+    { "from": "0x140001010", "to": "0x140001040", "ref_type": "UNCONDITIONAL_CALL" },
+    { "from": "0x140001050", "to": "0x140001100", "ref_type": "UNCONDITIONAL_CALL" },
+    { "from": "0x140001050", "to": "0x140002000", "ref_type": "DATA" }
+  ],
+  "imports": [
+    { "library": "msvcrt.dll", "symbol": "puts", "address": "0x140003000" }
+  ],
+  "strings": [
+    { "address": "0x140002000", "value": "hello", "encoding": "US-ASCII" }
+  ]
+}

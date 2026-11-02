@@ -148,6 +148,30 @@ def test_a_non_live_run_replies_the_refire_next_and_a_live_one_does_not(run):
     assert "late-row leg" in live["note"] and not live.get("lands_on_refire")
 
 
+def test_a_stage_receipt_or_a_live_sizing_launch_reads_live_and_names_no_refire(run, monkeypatch):
+    from coordinator_core.warm import live_runs
+
+    repo, _d = run
+    assert "next" in _revise(repo, verbatim="idle")
+    monkeypatch.setattr(live_runs, "run_is_live", lambda root, run_id: True)
+    stage = _revise(repo, verbatim="stage")
+    assert stage["run_live"] is True and "next" not in stage
+    monkeypatch.setattr(live_runs, "run_is_live", lambda root, run_id: False)
+    run_token.mint(repo, "ask-refire", "s.mjs", sizing_rel=REL)
+    refire = _revise(repo, verbatim="refire driver")
+    assert refire["run_live"] is True and "next" not in refire
+
+
+def test_a_halted_run_whose_only_live_signal_is_its_own_token_reads_not_live(run, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    repo, _d = run
+    run_token.mint(repo, RUN, "s.mjs", sizing_rel=REL)
+    monkeypatch.setattr(halted_run, "revised_halt", lambda d: {"halted": "x"})
+    out = _revise(repo, verbatim="after halt")
+    assert out["run_live"] is False and out["next"]["kind"] == "refire"
+
+
 def test_a_non_live_run_with_no_sizing_names_the_raw_ask_form(repo):
     rl.start(repo, RUN)
     out = _revise(repo, verbatim="early")

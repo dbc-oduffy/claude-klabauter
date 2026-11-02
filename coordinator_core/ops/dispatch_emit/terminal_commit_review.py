@@ -134,7 +134,8 @@ def _recorded_fingerprints(
     peer's claim on either already refused the call upstream, so no contest check runs here.
     ``review_events`` (``{path: (sha256, epoch)}``, ``_review_write_events``) is a review fix-pass
     agent's own newest write; it supplies the hash for a path whose session event is older or absent,
-    so the run's own fix-pass write is the expectation and a later foreign edit still refuses.
+    so the run's own fix-pass write is the expectation and a later foreign edit still refuses. An
+    event older than ``run_started_at`` is a pre-refire review's write and is no expectation.
     A hashless newest session event, or an unrecorded path outside the review, carries no entry."""
     from coordinator_core.session import touch_record
 
@@ -146,6 +147,8 @@ def _recorded_fingerprints(
     if run_started_at is not None:
         seen = {p: (None if e is not None and e[1] < run_started_at else e) for p, e in seen.items()}
     reviewed = reviewed if reviewed_at is not None and isinstance(reviewed, dict) else {}
+    if run_started_at is not None and review_events:
+        review_events = {p: e for p, e in review_events.items() if e[1] >= run_started_at}
     out: dict = {}
     for p in wanted:
         event = seen.get(p)

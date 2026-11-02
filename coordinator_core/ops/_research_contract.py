@@ -29,9 +29,10 @@ TIERS: Final = ("scouts", "corpus", "deep")
 DESTINATIONS: Final = ("repo", "local-only")
 
 # TIER_TABLE[value_class][appetite] -> tier: small moves down a notch, large up, clamped.
+# corpus never rises to deep: deep is the unblock diagnostic, reached only by value_class deep.
 TIER_TABLE: Final[dict[str, dict[str, str]]] = {
     "scouts": {"small": "scouts", "medium": "scouts", "large": "corpus"},
-    "corpus": {"small": "scouts", "medium": "corpus", "large": "deep"},
+    "corpus": {"small": "scouts", "medium": "corpus", "large": "corpus"},
     "deep": {"small": "corpus", "medium": "deep", "large": "deep"},
 }
 # spike is its own verdict class (procedure: /coordinator:spike, run by the EM); the engine has no

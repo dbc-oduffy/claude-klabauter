@@ -18,8 +18,9 @@ only stdlib/third-party and an in-repo ``.py`` tool are not counted. Package
 detection is one ``os.scandir`` of the repo root, memoized per root for the
 process; a package added mid-process is not seen. The Write/Edit half (a ``.py`` file under
 ``scratch/``) lives in ``hooks.nudge_em_code_dispatch.op`` and shares this
-module's ``after_executor_deny``; it denies only when the written text itself names a test
-runner or the measure harness and the file imports repo code (``written_text_verifies``).
+module's ``after_executor_deny``; it advises only (never denies) when the written code itself
+names a test runner outside strings and comments, or the measure harness, and the file imports
+repo code (``written_text_verifies``).
 
 Executor signal: only for a payload carrying its own ``session_id`` (the host-pid fallback
 id is shared by every session on a warm engine and never vouches for an executor); a ``coordinator:executor`` row in the session's
@@ -541,7 +542,7 @@ def written_text_verifies(payload: dict, file_path: str, repo_root: str) -> bool
     A write whose text carries no such call is configuration, not a verification run."""
     tool_input = payload.get("tool_input")
     added = "\n".join(_written_texts(tool_input))
-    if _RUNNER_RE.search(added) is None and _MEASURE_RE.search(added) is None:
+    if not _code_names_runner(added) and _MEASURE_RE.search(added) is None:
         return False
     source = added
     if isinstance(tool_input, dict) and "content" not in tool_input:
@@ -554,9 +555,10 @@ def written_text_verifies(payload: dict, file_path: str, repo_root: str) -> bool
 
 
 def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:
-    """Deny envelope when the EM has an executor behind it, the written text runs a test
-    runner or measurement against repo code, and no escape; else None. The Write/Edit
-    hook that calls this is not the Bash dispatcher, so the record is rendered here."""
+    """Advisory envelope when the EM has an executor behind it, the written code runs a test
+    runner or measurement against repo code, and no escape; else None. The guard is not a
+    ``deny_registry`` entry, so ``apply_guard_level`` clamps the rendered deny to a log-only
+    advisory here, as the Bash dispatcher does for the Bash half."""
     from coordinator_core.hooks import dispatch_escape as nd
 
     session_id, repo_root, verdict = _gate(payload, subject)
@@ -568,7 +570,14 @@ def after_executor_deny(payload: dict, subject: str) -> Optional[dict]:
     from coordinator_core.guard_messages.render import render
     from coordinator_core.session.dispatch_nudge_sentinel import sentinel_path
 
-    return render(_deny_record(str(sentinel_path(session_id))), Audience.EM)
+    from coordinator_core.machine_profile import apply_guard_level
+
+    return apply_guard_level(
+        GUARD_NAME,
+        render(_deny_record(str(sentinel_path(session_id))), Audience.EM),
+        session_id=session_id,
+        cwd=repo_root,
+    )
 
 
 _SUITE_MUTEX = "with-suite-mutex"

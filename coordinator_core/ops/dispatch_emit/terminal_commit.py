@@ -3974,6 +3974,21 @@ def _terminal_commit_inner(
                     + ", ".join(bad)
                     + ". The run token is spent: commit them through ceremony.commit_v2"
                 )
+        product_error = ""
+        if snapshot is not None:
+            from coordinator_core.ops.dispatch_emit.product_residue import declared_product_residue
+
+            product_residue = declared_product_residue(
+                declared_writes, snapshot.changed,
+                set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent)
+                | set(wh_map) | set(never_commit_dropped) | set(held_paths) | set(sibling_withheld)
+                | set(_local) | {p for ps in sibling_paths.values() for p in ps},
+            )
+            if product_residue:
+                reply["product_residue"] = product_residue
+                reply["ok"] = False
+                product_error = "declared product write(s) still dirty after the commit: " + ", ".join(product_residue)
+                reply["error"] = product_error + ". The run token is spent: commit them through ceremony.commit_v2"
         if artifacts is not None:
             landed_now = (
                 set(all_paths) | set(deleted_paths) | set(scope.get("landed", ()))
@@ -4006,7 +4021,8 @@ def _terminal_commit_inner(
                 reply["run_artifact_residue"] = art_residue
                 reply["ok"] = False
                 reply["error"] = (
-                    "run artifact(s) still dirty after the commit: "
+                    (product_error + "; " if product_error else "")
+                    + "run artifact(s) still dirty after the commit: "
                     + ", ".join(f"{p} ({cls})" for p, cls in art_residue.items())
                     + ". The run token is spent: commit them through ceremony.commit_v2"
                 )

@@ -149,7 +149,8 @@ def memo_row_slug(raw: dict) -> Optional[str]:
 
     ``receipt:`` (a ``.../sent/<slug>.md`` path or a bare slug) wins; then a
     ``disposition_ref`` that is a sent receipt; else the topic of a staged
-    ``memo-outbox/<topic>.md`` draft on ``surface:``/``writes:``.
+    ``memo-outbox/<topic>.md`` draft on ``surface:``/``writes:``; else the topic of a
+    ``memo-outbox/sent/<topic>.md`` receipt there.
     """
     from coordinator_core.ops.fleet.memo_wire import memo_outbox_topic
 
@@ -162,7 +163,7 @@ def memo_row_slug(raw: dict) -> Optional[str]:
         return resolved
     for path in (raw.get("surface"), *(raw.get("writes") or ())):
         if isinstance(path, str):
-            topic = memo_outbox_topic(path)
+            topic = memo_outbox_topic(path) or memo_receipt_slug(path)
             if topic:
                 return topic
     return None

@@ -16,10 +16,11 @@ BAR_S = 0.5
 repo = real.repo
 
 
-def test_listing_scope_lists_each_launch_dir_once(tmp_path, monkeypatch):
-    from coordinator_core import warp_live
+def test_listing_scope_lists_each_session_dir_once_and_never_the_parent(tmp_path, monkeypatch):
+    from coordinator_core import launch_records, warp_live
 
-    (tmp_path / "workflow-run-sess-a.json").write_text("{}", encoding="utf-8")
+    for session in ("sess", "other"):
+        Path(launch_records.record_path(str(tmp_path), session, "t1")).write_text("{}", encoding="utf-8")
     calls = []
     real_listdir = warp_live.os.listdir
     monkeypatch.setattr(warp_live.os, "listdir", lambda p: calls.append(p) or real_listdir(p))
@@ -27,10 +28,11 @@ def test_listing_scope_lists_each_launch_dir_once(tmp_path, monkeypatch):
     with warp_live.listing_scope():
         for session in ("sess", "other", "sess"):
             warp_live.LaunchSnapshot(session, dirs)
-    assert len(calls) == 1
+    assert sorted(calls) == sorted(launch_records.session_dir(str(tmp_path), s) for s in ("sess", "other"))
+    assert str(tmp_path) not in calls
     warp_live.LaunchSnapshot("sess", dirs)
     warp_live.LaunchSnapshot("sess", dirs)
-    assert len(calls) == 3  # outside a scope every snapshot lists afresh
+    assert len(calls) == 4  # outside a scope every snapshot lists afresh
 
 
 def test_worker_threads_join_the_open_sizing_memo_scope_and_only_that_scope():

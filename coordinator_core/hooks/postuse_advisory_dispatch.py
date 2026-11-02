@@ -1262,9 +1262,9 @@ def _workflow_run_record_path(tmpdir: str, session_id: str, task_id: str) -> str
     block for other reasons, so this raises rather than silently degrading to
     an unsafe path.
     """
-    if not _SAFE_ID_RE.fullmatch(session_id) or not _SAFE_ID_RE.fullmatch(task_id):
-        raise ValueError("unsafe session_id/task_id for workflow run record path")
-    return os.path.join(tmpdir, f"workflow-run-{session_id}-{task_id}.json")
+    from coordinator_core import launch_records
+
+    return launch_records.record_path(tmpdir, session_id, task_id)
 
 
 def _write_workflow_run_record(path: str, record: dict) -> None:
@@ -1358,7 +1358,7 @@ def resolve_workflow_run_records(session_id: str, transcript_path: str, tmpdir: 
       task-keyed path (overwriting any prior record) and removes its pending
       record.
     - A `tool_use` with no result persists a pending record at
-      `workflow-run-<session>-<tool_use_id>.json` (`run_id` null, `pending`
+      `workflow-runs/<session>/<tool_use_id>.json` (`run_id` null, `pending`
       true); an existing pending record is left as it was.
     - A non-launch result removes the pending record only.
     - A result whose `tool_use` fell out of the tail window takes scriptPath and
@@ -1378,6 +1378,21 @@ def resolve_workflow_run_records(session_id: str, transcript_path: str, tmpdir: 
         uses, results = _parse_workflow_tail(text)
     except Exception:
         return written
+
+    try:
+        from coordinator_core import launch_records
+        from coordinator_core.temp_layout import legacy_top_level_path
+
+        launch_task_ids = [
+            r.get("taskId") for r in results.values() if isinstance(r, dict)
+        ]
+        launch_records.migrate_flat_records(
+            [tmpdir, str(legacy_top_level_path(""))],
+            session_id,
+            [*uses, *results, *launch_task_ids],
+        )
+    except Exception:
+        pass
 
     def pending_path(tool_use_id: str) -> "str | None":
         try:
@@ -1564,15 +1579,14 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
     if not session_id or not isinstance(session_id, str) or not _SAFE_ID_RE.fullmatch(session_id):
         return ""
     try:
-        import glob
-
+        from coordinator_core import launch_records
         from coordinator_core.workflow_watch import stall
 
         tmpdir = _managed_tmpdir()
-        pattern = os.path.join(glob.escape(tmpdir), f"workflow-run-{session_id}-*.json")
 
         def load() -> list:
-            return [r for r in map(_read_workflow_run_record, glob.glob(pattern)) if r]
+            paths = launch_records.session_record_paths(tmpdir, session_id)
+            return [r for r in map(_read_workflow_run_record, paths) if r]
 
         records = load()
         if transcript_path and any(r.get("pending") for r in records):
@@ -1617,7 +1631,7 @@ def workflow_stall_resume_text(session_id: str, transcript_path: str, now: float
                 with open(marker, "a", encoding="utf-8"):
                     pass
                 _remove_workflow_run_record(
-                    os.path.join(tmpdir, f"workflow-run-{session_id}-{task_id}.json")
+                    _workflow_run_record_path(tmpdir, session_id, task_id)
                 )
                 continue
             stalled = stall.scan_for_stall(os.path.join(transcript_dir, "journal.jsonl"), now)

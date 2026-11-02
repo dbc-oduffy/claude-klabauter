@@ -439,6 +439,15 @@
       },
       "_rationale": "Staging a plan reads the spine, sizing and live run footprints and writes the briefs and manifest in process; a first stage starts no git and no process. A refire of a halted run reads the run-base blobs of the paths its prior manifest never baselined with one `git cat-file --batch --filters` (refire_base_blobs: 1, the eol/smudge conversion the raw-bytes fingerprint domain needs), counted by the refire test in the same file. The empty first-stage figure is counted over the size-L fixture and over a 26-row, 253-dirty-file repo by coordinator_core/ops/dispatch_emit/tests/test_ask_stage_spawn_count.py with exact equality; coordinator_core/ops/dispatch_emit/tests/test_ask_stage_26_row_budget.py holds stage() and the handler under 500ms process time on the 26-row dirty repo."
     },
+    "dispatch.run_terminality": {
+      "target_ms": 300,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {},
+      "_rationale": "Reads one run dir's halted.json and, with no marker, its run-outcome.json, in process; no git, no file written, no process started."
+    },
     "dispatch.sibling_status": {
       "target_ms": 300,
       "tolerance": {

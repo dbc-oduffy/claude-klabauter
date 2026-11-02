@@ -1,9 +1,11 @@
 """A halted fan-out slice refires from its own (fully sized) slice sizing; a live one does not."""
 
 import json
+from pathlib import Path
 
 import pytest
 
+from coordinator_core import launch_records
 from coordinator_core.ops.dispatch_emit import op
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import parent_record_rel, status_rel
 
@@ -133,7 +135,7 @@ def _real_token_run(tmp_path, monkeypatch, transcript_body):
         root, "r1", session_id="s1", transcript_path=str(transcript), script_path=_SCRIPT,
         sizing_rel=_SIZING_REL, tool_use_id="tu1",
     )
-    (managed / "workflow-run-s1-w1.json").write_text(
+    Path(launch_records.record_path(str(managed), "s1", "w1")).write_text(
         json.dumps({"scriptPath": _SCRIPT, "fired_at": 1.0}), encoding="utf-8"
     )
     _parent(root)
@@ -170,7 +172,7 @@ def _timed_out_hook_bind(tmp_path, monkeypatch, *, fired):
         from coordinator_core import warp_live
 
         warp_live._submission_path(root, "r1").unlink(missing_ok=True)
-        for rec in (tmp_path / "managed").glob("workflow-run-*.json"):
+        for rec in (tmp_path / "managed" / "workflow-runs").glob("*/*.json"):
             rec.unlink()
     return root
 

@@ -12,7 +12,8 @@ finding in its own sidecar under a `## Findings Ledger` heading (a fenced
     reviewer's declared findings count, confirm each row's evidence
     (`applied` rows: `after` present in `file` now, `before` present at a
     recorded baseline and absent now; `em-rejected` rows: a non-empty
-    `reason`; `suspended` rows: only accepted under a premise verdict),
+    `reason`; `suspended` rows: refused unless the sidecar frontmatter
+    carries `verdict: REJECTED` or `verdict: PIVOT`),
     and stamp `findings_ledger:` frontmatter plus `verified: true` per row on
     success.
   - `reject --sidecar <p> --finding <id> --reason <text>`: EM-only (denied to
@@ -68,6 +69,8 @@ _EXIT_INTERVIEW_HEADING = "## Exit interview"
 _STATUS_APPLIED = "applied"
 _STATUS_EM_REJECTED = "em-rejected"
 _STATUS_SUSPENDED = "suspended"
+#: Sidecar-frontmatter `verdict:` values under which `verify` accepts `suspended` rows.
+_SUSPENDING_VERDICTS = frozenset({"REJECTED", "PIVOT"})
 _VALID_STATUSES = (_STATUS_APPLIED, _STATUS_EM_REJECTED, _STATUS_SUSPENDED)
 _OUT_OF_ASK_STATUSES = ("open", "applied", "em_rejected", _STATUS_EM_REJECTED)
 
@@ -577,6 +580,7 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
     bounds = _frontmatter_bounds(text)
     head = text[: bounds[1]] if bounds else ""
     baseline_sha256 = _extract_baseline_sha256_block(head)
+    premise_verdict = (_extract_frontmatter_key(head, "verdict") or "").strip("\"'").upper()
 
     failures: List[str] = list(_reviewed_plan_parse_errors(rows, repo_root))
     failures.extend(_reviewed_plan_read_conflicts(rows, repo_root))
@@ -634,6 +638,13 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
                 continue
             em_rejected += 1
         elif status == _STATUS_SUSPENDED:
+            if premise_verdict not in _SUSPENDING_VERDICTS:
+                failures.append(
+                    f"{finding_id}: suspended row needs a sidecar frontmatter `verdict:` "
+                    f"of {'/'.join(sorted(_SUSPENDING_VERDICTS))}, found {premise_verdict or 'none'}"
+                )
+                new_rows.append(row)
+                continue
             suspended += 1
 
         stamped_row = dict(row)

@@ -61,6 +61,15 @@ def test_breach_path_the_record_omits_refuses_naming_it(halted):  # noqa: F811
     assert set(out["paths"]) == {LANE, LANE_TEST}
     assert _git(halted, "rev-parse", "HEAD") == head
     assert LANE in _git(halted, "status", "--porcelain", "--", LANE)
+    assert land_run._measured_rev_call(RUN2) in out["error"]
+
+
+def test_the_printed_remeasure_call_names_the_run_and_the_mismatch_remedy_carries_it(repo):  # noqa: F811
+    call = land_run._measured_rev_call(RUN2)
+    assert call == f"""coordinator-invoke dispatch.measured_rev '{{"run_id": "{RUN2}", "paths": []}}'"""
+    _write(repo, "p.py", "p = 1\n")
+    detail = land_run._mismatch_detail(repo, "p.py", {"p.py": "a" * 40}, {}, RUN2)
+    assert call in detail and "re-run dispatch.measured_rev" in detail
 
 
 def test_breach_path_the_record_carries_lands_and_is_disclosed(halted):  # noqa: F811

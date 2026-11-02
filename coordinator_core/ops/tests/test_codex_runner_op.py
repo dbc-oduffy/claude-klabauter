@@ -1,0 +1,133 @@
+"""codex_runner.start / codex_runner.result op tests (child process stubbed)."""
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+
+import pytest
+
+from coordinator_core.ipc import CallerFacingValidationError
+from coordinator_core.ops import codex_runner as op
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    return tmp_path / "home"
+
+
+class _FakeProc:
+    pid = 31337
+
+
+@pytest.fixture
+def popen(monkeypatch):
+    calls = []
+
+    def fake(argv, **kw):
+        calls.append((argv, kw))
+        return _FakeProc()
+
+    monkeypatch.setattr(op.subprocess, "Popen", fake)
+    return calls
+
+
+def _review(tmp_path, **kw):
+    return {"mode": "review", "repo_root": str(tmp_path), "artifact": "a.md", **kw}
+
+
+def test_start_writes_request_and_spawns_detached(home, popen, tmp_path):
+    out = op._codex_runner_start(_review(tmp_path, parent_session_id="s1"))
+
+    assert out["pid"] == 31337 and out["run_id"].startswith("review-")
+    run_dir = home / "codex-runs" / out["run_id"]
+    assert out["run_dir"] == str(run_dir)
+    req = json.loads((run_dir / "request.json").read_text(encoding="utf-8"))
+    assert req["mode"] == "review" and req["artifact"] == "a.md" and req["parent_session_id"] == "s1"
+    assert json.loads((run_dir / "child.json").read_text(encoding="utf-8")) == {"pid": 31337}
+
+    argv, kw = popen[0]
+    assert argv[1:] == ["-m", "coordinator_core.codex_runner", str(run_dir)]
+    assert kw.get("start_new_session") is True or "creationflags" in kw
+    assert kw["stdin"] is subprocess.DEVNULL
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"mode": "bogus"},
+        {"mode": "review"},
+        {"mode": "execute", "plan": "p.md"},
+        {"mode": "review", "artifact": 5},
+    ],
+)
+def test_start_rejects_invalid_params(home, popen, tmp_path, bad):
+    params = {"repo_root": str(tmp_path), **bad}
+    with pytest.raises(CallerFacingValidationError):
+        op._codex_runner_start(params)
+    assert popen == []
+
+
+def test_start_rejects_missing_repo_root_dir(home, popen, tmp_path):
+    with pytest.raises(CallerFacingValidationError):
+        op._codex_runner_start(_review(tmp_path, repo_root=str(tmp_path / "nope")))
+    assert popen == []
+
+
+def test_start_process_time_under_500ms_with_child_stubbed(home, popen, tmp_path):
+    t0 = time.process_time()
+    op._codex_runner_start(_review(tmp_path))
+    assert time.process_time() - t0 < 0.5
+
+
+def _started(tmp_path):
+    return op._codex_runner_start(_review(tmp_path))["run_id"]
+
+
+def test_result_running_while_worker_alive(home, popen, tmp_path, monkeypatch):
+    run_id = _started(tmp_path)
+    monkeypatch.setattr(op, "_pid_alive", lambda pid: True)
+    assert op._codex_runner_result({"run_id": run_id}) == {"run_id": run_id, "status": "running"}
+
+
+def test_result_reads_result_json(home, popen, tmp_path, monkeypatch):
+    run_id = _started(tmp_path)
+    monkeypatch.setattr(op, "_pid_alive", lambda pid: True)
+    body = {"run_id": run_id, "status": "ok", "findings": [], "verdict": "Ready"}
+    (home / "codex-runs" / run_id / "result.json").write_text(json.dumps(body), encoding="utf-8")
+    assert op._codex_runner_result({"run_id": run_id}) == body
+
+
+def test_result_dead_worker_without_result_is_failed(home, popen, tmp_path, monkeypatch):
+    run_id = _started(tmp_path)
+    monkeypatch.setattr(op, "_pid_alive", lambda pid: False)
+    out = op._codex_runner_result({"run_id": run_id})
+    assert out["status"] == "failed" and "result.json" in out["error"]
+
+
+def test_result_running_before_child_pid_recorded(home, popen, tmp_path):
+    run_id = _started(tmp_path)
+    (home / "codex-runs" / run_id / "child.json").unlink()
+    assert op._codex_runner_result({"run_id": run_id})["status"] == "running"
+
+
+@pytest.mark.parametrize("run_id", ["../x", "", None, 3])
+def test_result_rejects_bad_run_id(home, run_id):
+    with pytest.raises(CallerFacingValidationError):
+        op._codex_runner_result({"run_id": run_id})
+
+
+def test_result_unknown_run_id(home):
+    with pytest.raises(CallerFacingValidationError):
+        op._codex_runner_result({"run_id": "review-nope"})
+
+
+def test_ops_registered_and_classified():
+    from coordinator_core.authz.classification import OpClass, OP_CLASSIFICATION
+    from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+    assert OP_MODULE_MAP["codex_runner.start"] == "coordinator_core.ops.codex_runner"
+    assert OP_MODULE_MAP["codex_runner.result"] == "coordinator_core.ops.codex_runner"
+    assert OP_CLASSIFICATION["codex_runner.start"] is OpClass.MUTATING
+    assert OP_CLASSIFICATION["codex_runner.result"] is OpClass.COMPUTE_ONLY

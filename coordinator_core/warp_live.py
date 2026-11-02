@@ -6,7 +6,7 @@ redeemed when the in-run commit is attempted, inert after `TTL_SECONDS`) is pres
 session's transcript carries no terminal task notification for the harness task that ran it. The
 token alone over-reports: a run that halts at a gate never commits, so its record outlives it.
 The task is found through the submission record this module writes beside the run's briefs and
-the `workflow-run-<session>-<task>.json` record the PostToolUse(Workflow) capture
+the `workflow-runs/<session>/<task>.json` record the PostToolUse(Workflow) capture
 (`hooks.postuse_advisory_dispatch`) persists, matched on the script path.
 
 An ownerless token (no session id, or no script path, on its record or submission) has no launch to
@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 from typing import Iterator, Optional
 
+from coordinator_core import launch_records as _launch_records_mod
 from coordinator_core.ops.dispatch_emit import run_token as _run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir as _ask_record_dir
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED as _STATUS_HALTED
@@ -180,18 +181,18 @@ def _scoped(fn):
     return wrapper
 
 
-def _launch_names(tmpdir: str, prefix: str) -> list[str]:
-    """`workflow-run-<session>-*.json` names in `tmpdir`. Only the raw listing is cached per scope
-    (keyed by dir); the prefix filter runs on every call, since sessions differ."""
+def _launch_names(tmpdir: str, session_id: str) -> list[str]:
+    """`<task>.json` names in the session's own record dir; `tmpdir` itself is never listed. The
+    listing is cached per scope, keyed by (dir, session). Raises OSError when the dir is absent."""
     scope = _LISTING_SCOPE.get()
-    key = (tmpdir, "")  # second slot reserved by `_ScopeCache`'s tuple shape; always empty
+    key = (tmpdir, session_id)
     if scope is not None and key in scope:
         listed = scope[key]
     else:
-        listed = os.listdir(tmpdir)
+        listed = os.listdir(_launch_records_mod.session_dir(tmpdir, session_id))
         if scope is not None:
             scope[key] = listed
-    return [n for n in listed if n.startswith(prefix) and n.endswith(".json")]
+    return [n for n in listed if n.endswith(".json")]
 
 
 class LaunchSnapshot:
@@ -205,11 +206,10 @@ class LaunchSnapshot:
         self._records: dict[str, Optional[dict]] = {}
         self._tails: dict[str, str] = {}
         if _SAFE_ID_RE.match(session_id or ""):
-            prefix = f"workflow-run-{session_id}-"
             for tmpdir in self.dirs:
                 try:
-                    self._names[tmpdir] = _launch_names(tmpdir, prefix)
-                except OSError:
+                    self._names[tmpdir] = _launch_names(tmpdir, session_id)
+                except (OSError, ValueError):
                     continue
 
     def tail(self, path: str) -> str:
@@ -221,9 +221,9 @@ class LaunchSnapshot:
         return self._names.get(tmpdir, [])
 
     def read(self, tmpdir: str, name: str) -> Optional[dict]:
-        key = os.path.join(tmpdir, name)
+        key = os.path.join(_launch_records_mod.session_dir(tmpdir, self.session_id), name)
         if key not in self._records:
-            self._records[key] = _read_json(Path(tmpdir) / name)
+            self._records[key] = _read_json(Path(key))
         return self._records[key]
 
 
@@ -237,11 +237,10 @@ def _launch_records(
         snapshot = None
     if snapshot is None:
         snapshot = LaunchSnapshot(session_id, dirs)
-    prefix = f"workflow-run-{session_id}-"
     found: dict[str, tuple[float, dict]] = {}
     for tmpdir in dirs:
         for name in snapshot.names(tmpdir):
-            task_id = name[len(prefix):-len(".json")]
+            task_id = name[:-len(".json")]
             if not _SAFE_ID_RE.match(task_id):
                 continue
             record = snapshot.read(tmpdir, name)
@@ -322,6 +321,44 @@ def _owner_exited(session_id: str, minted_at: float) -> bool:
         return False
 
 
+def _terminal_result_names_run(text: str, run_id: str) -> bool:
+    """True when a terminal task notification in `text` carries a result with a `run_id` key set to `run_id`."""
+    if run_id not in text:
+        return False
+    from coordinator_core.workflow_watch.terminal import _TASK_NOTIFICATION_RE, _TERMINAL_STATUSES
+
+    key = re.compile(r'run_id\\*"\s*:\s*\\*"' + re.escape(run_id) + r'\\*"')
+    return any(
+        m.group("status") in _TERMINAL_STATUSES and m.group("result") and key.search(m.group("result"))
+        for m in _TASK_NOTIFICATION_RE.finditer(text)
+    )
+
+
+def _result_names_run(session_id: str, transcript_path: Optional[str], tail: str, run_id: str) -> bool:
+    """True when the owner session's transcript holds a terminal workflow notification whose result
+    names `run_id`: the end of a run whose task cannot be joined by script path or tool_use_id.
+    Reads the tail window, then the head window by `run_id`. Never raises."""
+    try:
+        if transcript_path:
+            paths = [transcript_path]
+        else:
+            if not _SAFE_ID_RE.match(session_id):
+                return False
+            from coordinator_core.group_em.human_entry import transcript_paths
+
+            paths = [str(p) for p in transcript_paths(session_id)]
+            tail = ""
+        for path in paths:
+            window = tail or _tail(path)
+            if _terminal_result_names_run(window, run_id):
+                return True
+            if _terminal_result_names_run(_earlier_lines(path, run_id), run_id):
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _run_ended(
     session_id: object,
     script_path: object,
@@ -330,10 +367,14 @@ def _run_ended(
     dirs: list[str],
     tool_use_id: object = None,
     snapshot: Optional[LaunchSnapshot] = None,
+    run_id: Optional[str] = None,
 ) -> Optional[str]:
     """Why the run is over, else None while it is live: `_EVIDENCE` once the harness reported the
     run's task terminal (halted returns included) or the submitting call was refused; `_TIMER`
-    once the unlaunched grace has passed, which is not evidence and never spends the token."""
+    once the unlaunched grace has passed, which is not evidence and never spends the token.
+
+    A run started inside a deferred-emit script has no launch record under its own script and no
+    submission: its terminal notification is found by the `run_id` its result names."""
     if not (isinstance(session_id, str) and session_id) or not isinstance(script_path, str):
         # An ownerless token is the unlaunched state with no owner to read: it ages out on the
         # same bound and is never spent.
@@ -355,6 +396,8 @@ def _run_ended(
             if recovered:
                 task_ids = [recovered]
         if not task_ids:
+            if run_id and _result_names_run(session_id, transcript_path if has_transcript else None, tail, run_id):
+                return _EVIDENCE
             return _TIMER if time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS else None
     if not tail:
         return None
@@ -554,6 +597,7 @@ def _record_live(
         dirs,
         submission.get("tool_use_id"),
         snapshot,
+        run_id,
     )
     if ended == _EVIDENCE:
         _run_token.consume(root, run_id)

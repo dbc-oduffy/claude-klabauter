@@ -940,6 +940,7 @@ static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
 
 static const char *g_hook_payload = NULL;
 static size_t g_hook_payload_len = 0;
+static char g_hook_op[128] = "";
 
 
 static int emit_hook_pass_loudly(const char *reason) {
@@ -1009,12 +1010,41 @@ static int emit_indeterminate(const char *detail) {
     return 1;
 }
 
+/* Hook mode, pre-check not armed: the twin of door.c's. */
+static int emit_hook_post_delivery(void) {
+    buf_t event, out;
+    const char *event_name = NULL;
+    int have_event = buf_init(&event, 32);
+    if (have_event && g_hook_payload &&
+        door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
+        event_name = event.data;
+    }
+    int built = buf_init(&out, 1024) &&
+        build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS, event_name);
+    if (have_event) free(event.data);
+    if (!built) {
+        fprintf(stderr, "door: engine gave no answer in time: %s\n", g_hook_op);
+        free(out.data);
+        return 1;
+    }
+    write_all_fd(STDOUT_FILENO, out.data, out.len);
+    free(out.data);
+    return 0;
+}
+
 /* Every post-delivery failure of the warm read; the twin of door.c's. */
 static int emit_post_delivery_failure(const char *detail) {
+    if (g_door_hook_mode && g_hook_payload &&
+        door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
+        char reason[640];
+        door_irreversible_deny_reason(reason, sizeof reason, detail);
+        return emit_hook_deny(reason);
+    }
     if (g_precheck_armed) {
         if (emit_precheck_if_matched()) return 0;
         return emit_hook_pass_loudly(detail);
     }
+    if (g_door_hook_mode) return emit_hook_post_delivery();
     return emit_indeterminate(detail);
 }
 
@@ -1491,6 +1521,13 @@ int main(int argc, char **argv) {
     }
 
     
+    if (g_door_hook_mode && argc >= 2) {
+        size_t n = 0;
+        for (const char *c = argv[1]; *c && n < sizeof g_hook_op - 1; c++) {
+            g_hook_op[n++] = (*c > 31 && *c < 127 && *c != '"' && *c != '\\') ? *c : '?';
+        }
+        g_hook_op[n] = '\0';
+    }
     if (g_door_hook_mode && argc >= 2 && strcmp(argv[1], DOOR_PRECHECK_ENTRYPOINT) == 0) {
         g_precheck_armed = 1;
         hook_precheck_prepare();
@@ -1925,7 +1962,8 @@ int main(int argc, char **argv) {
         long error_code = 0;
         int success = parse_response_envelope(resp.data, line_len, &rf,
                                               &have_error, &error_code);
-        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE && !g_precheck_armed) {
+        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE &&
+            !g_precheck_armed && !g_door_hook_mode) {
             write_all_fd(STDOUT_FILENO, resp.data, line_len);
             write_all_fd(STDOUT_FILENO, "\n", 1);
             free(resp.data);

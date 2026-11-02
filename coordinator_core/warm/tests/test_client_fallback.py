@@ -223,11 +223,9 @@ def test_live_tree_cold_names_the_ruling_once_and_never_spawns(
     assert "DR-326" in err and "DR-331" in err
 
 
-def test_no_pipe_under_held_marker_spawns_nothing_and_returns_within_drain_wait(
+def test_no_pipe_under_held_marker_spawns_nothing_when_the_swap_wait_expires(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import time
-
     from coordinator_core.warm import breadcrumb
 
     def _raise_enoent(pipe):
@@ -239,12 +237,12 @@ def test_no_pipe_under_held_marker_spawns_nothing_and_returns_within_drain_wait(
         client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
     )
     monkeypatch.setattr(breadcrumb, "should_spawn", lambda engine_root=None, **kw: True)
+    waits = []
+    monkeypatch.setattr(breadcrumb, "wait_for_publish_swap", lambda root=None, **kw: waits.append(1) or False)
     with breadcrumb.hold_publish_marker(client._engine_clone_root(), holder="t"):
-        started = time.monotonic()
         assert client.try_warm_dispatch(_MSG) is None
-        elapsed = time.monotonic() - started
+    assert waits == [1], "the op path must wait out the whole swap window, not the hook-path drain"
     assert spawns == [], "a held publish marker must suppress the spawn even if should_spawn says yes"
-    assert elapsed < breadcrumb.DRAIN_WAIT_SECS + 1.0
 
 
 def test_no_pipe_waits_out_a_marker_released_inside_the_drain_window(
@@ -957,3 +955,37 @@ def test_permanent_reason_folds_into_spawn_triggering_miss_bucket(
 ) -> None:
     monkeypatch.setattr(client, "_cold_reason", "some permanent reason")
     assert client._cold_bucket_for_row() == client.COLD_BUCKET_SPAWN_TRIGGERING_MISS
+
+
+def test_wedged_live_holder_returns_fast_with_runnable_remedy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    import os
+    import time
+
+    from coordinator_core.warm import breadcrumb
+
+    with breadcrumb.hold_publish_marker(client._engine_clone_root(), holder="t") as path:
+        old = time.time() - (breadcrumb.PUBLISH_HEARTBEAT_STALE_SECS + 5)
+        os.utime(path, (old, old))
+        started = time.monotonic()
+        outcome = client._drain_publish_hold()
+        elapsed = time.monotonic() - started
+    assert outcome is False
+    assert elapsed < 1.0
+    err = capsys.readouterr().err
+    assert f"kill -9 {os.getpid()}" in err or f"taskkill /F /PID {os.getpid()}" in err
+
+
+def test_healthy_swap_still_drains(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    from coordinator_core.warm import breadcrumb
+
+    with breadcrumb.hold_publish_marker(client._engine_clone_root(), holder="t") as path:
+        timer = threading.Timer(0.1, path.unlink)
+        timer.start()
+        try:
+            assert client._drain_publish_hold() is True
+        finally:
+            timer.join()

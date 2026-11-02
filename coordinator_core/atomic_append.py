@@ -47,6 +47,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Callable
 
 IS_WINDOWS = os.name == "nt"
 
@@ -61,6 +62,39 @@ _stalled: "dict[str, float]" = {}
 _RETAIN_MAX = 256
 _held: "dict[str, list[bytes]]" = {}
 _held_dropped: "dict[str, int]" = {}
+
+
+_forwarder: "Callable[[str, bytes, bool], None] | None" = None
+_forwarded_drops = 0
+_drops_lock = threading.Lock()
+
+
+def set_forwarder(put: "Callable[[str, bytes, bool], None] | None") -> None:
+    """Route droppable lines to ``put(sink, encoded, retain)`` instead of opening the sink; ``None`` restores in-process writes.
+
+    ``put`` must not block (pass a ``put_nowait``). Non-droppable ``append_line`` ignores it.
+    """
+    global _forwarder
+    _forwarder = put
+
+
+def forwarded_drops() -> int:
+    """Lines dropped because the forwarder's ``put`` raised (``queue.Full`` or otherwise)."""
+    return _forwarded_drops
+
+
+def _forward(sink_str: str, encoded: bytes, retain: bool) -> bool:
+    """True when a forwarder owns the line (delivered or dropped and counted); never raises."""
+    global _forwarded_drops
+    put = _forwarder
+    if put is None:
+        return False
+    try:
+        put(sink_str, encoded, retain)
+    except Exception:
+        with _drops_lock:
+            _forwarded_drops += 1
+    return True
 
 
 def _open_append_fd_windows(path: str) -> int:
@@ -171,6 +205,8 @@ def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False, *, 
     re-enqueued when the sink's writer returns.
     """
     sink_str = str(sink)
+    if droppable and _forward(sink_str, encoded, hold):
+        return
     job = _Job(encoded)
     with _registry_lock:
         if droppable and sink_str in _stalled:
@@ -339,6 +375,8 @@ def append_line_bounded(sink: "Path | str", encoded: bytes, retain: bool = False
     writer returns; any other is ``append_line``'s ``droppable``. Never raises.
     """
     try:
+        if _forward(str(sink), encoded, retain):
+            return
         if "pytest" in sys.modules and not _force_async:
             append_line(sink, encoded, droppable=not retain)
             return

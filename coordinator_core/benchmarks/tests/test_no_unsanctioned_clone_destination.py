@@ -212,6 +212,45 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ("coordinator_core/warm/tests/test_warm_telemetry.py", "mkdtemp"): (
         "same sun_path byte budget as the warm-door gate above; not an engine clone"
     ),
+    ("coordinator_core/benchmarks/claim_release_scope_bench.py", "mkdtemp"): (
+        "synthetic claim fixture in a caller-supplied scratch_parent (else default temp), removed after measure; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/distill_disposal_large_corpus.py", "mkdtemp"): (
+        "synthetic distill corpus under the repo's scratch/ (or caller base_dir), rmtree'd unless --keep; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/land_gate_reach_profile.py", "mkdtemp"): (
+        "work dir under the operator's --dir, else the default temp; removed in finally; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/land_run_leg_budget_profile.py", "mkdtemp"): (
+        "work dir under the operator's --dir, else the default temp; removed in finally; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/land_run_slow_disk_profile.py", "mkdtemp"): (
+        "work dir under the operator's --dir, else the default temp; rmtree'd in finally; synthetic, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/pack_lookup_scaling_profile.py", "mkdtemp"): (
+        "scratch under <repo>/scratch, removed per iteration; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/prefire_launch_lookup_cost.py", "mkdtemp"): (
+        "fixture under <repo>/scratch (or operator --workdir); synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/rea_ledger_write_bench.py", "mkdtemp"): (
+        "git-init fixture under <source_root>/scratch; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/submit_engine_ask_process_budget.py", "mkdtemp"): (
+        "scratch under _scratch_parent(), removed after measure; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/submit_hook_resume_emit.py", "mkdtemp"): (
+        "scratch under _scratch_parent(), removed after measure; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/terminal_sizing_drain_budget.py", "mkdtemp"): (
+        "scratch under <repo>/scratch; synthetic fixture, not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_door_refuses_foreign_engine_root.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
+    ("coordinator_core/warm/tests/test_door_sidecar_root_is_compared.py", "mkdtemp"): (
+        "same sun_path byte budget as the warm-door gate above; not an engine clone"
+    ),
 }
 
 

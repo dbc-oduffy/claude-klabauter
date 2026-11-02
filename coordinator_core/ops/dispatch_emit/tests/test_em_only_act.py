@@ -89,3 +89,23 @@ def test_blocked_on_an_ordinary_capability_stays_agent():
     raw = _row("Do it.", writes=["a.py"], blocked_on={"capability": "docker daemon", "probe": "docker ps"})
     assert row_is_em_performed(raw) is False
     assert row_is_em_performed(_row("Do it.", writes=["a.py"], blocked_on="Workflow")) is False
+
+
+def test_em_run_true_is_em_performed():
+    assert row_is_em_performed(_row("Do it.", writes=["a.py"], em_run=True)) is True
+    assert row_is_em_performed(_row("Do it.", writes=["a.py"], em_run=False)) is False
+    assert row_is_em_performed(_row("Do it.", writes=["a.py"], em_run="true")) is False
+
+
+def test_ruling_ask_row_is_em_performed():
+    body = "Ask coordinator:apm: may the engine row admit the closure?\n\nQuote the entry.\n"
+    assert row_is_em_performed(_row(body, writes=[])) is True
+    assert row_is_em_performed(_row("\n  ask `coordinator:apm`: may we?", writes=[])) is True
+    assert row_is_em_performed(_row(body)) is True
+
+
+def test_write_row_mentioning_the_apm_stays_agent():
+    assert row_is_em_performed(_row("Edit a.py. Ask coordinator:apm later.", writes=["a.py"])) is False
+    assert row_is_em_performed(_row("Ask coordinator:apm: may we?", writes=["a.py"])) is False
+    assert row_is_em_performed(_row("Ask coordinator:apm: may we?", writes=[], appends=["x.md"])) is False
+    assert row_is_em_performed(_row("Update the doc; coordinator:apm ruled it.", writes=[])) is False

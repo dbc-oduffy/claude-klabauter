@@ -106,6 +106,9 @@ def run(after_path: Path, baseline_path: Path) -> tuple[int, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("after_log", type=Path)
     parser.add_argument("--baseline", type=Path, required=True)

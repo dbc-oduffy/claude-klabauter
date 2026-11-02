@@ -1540,3 +1540,40 @@ def test_read_rel_serves_memo_until_file_changes(tmp_path, monkeypatch):
     assert len(calls) == 2
     (tmp_path / "plan.md").unlink()
     assert tc._read_rel(tmp_path, "plan.md") is None
+
+
+def _two_product_request(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    (repo / "b.py").write_text("b\n", encoding="utf-8")
+    return CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py", "b.py")),),
+        deliverable_id="dlv-prd001",
+        session_id=None,
+    )
+
+
+def test_a_declared_product_write_left_dirty_after_the_commit_is_not_ok(repo, monkeypatch):
+    script = _write_script(repo, _two_product_request(repo))
+    real = terminal_commit.canonical_repo_relative_path_refusal
+    monkeypatch.setattr(
+        terminal_commit, "canonical_repo_relative_path_refusal",
+        lambda p: "dropped" if p == "b.py" else real(p),
+    )
+    monkeypatch.setattr(terminal_commit.credit_gate, "uncommitted_credited", lambda *a, **k: {})
+
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+
+    assert out["committed"] is True, out
+    assert out["ok"] is False
+    assert out["product_residue"] == {"b.py": "product_dirty"}
+    assert "b.py" in out["error"] and "a.py" not in out["error"]
+
+
+def test_every_declared_product_write_landed_carries_no_product_residue(repo):
+    script = _write_script(repo, _two_product_request(repo))
+
+    out = _call(repo, {"script_path": script, "incomplete_chunks": []})
+
+    assert out["committed"] is True, out
+    assert "product_residue" not in out
+    assert out.get("ok") is not False

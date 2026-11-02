@@ -812,6 +812,11 @@ _LEDGER_ITEMS_RULES = (
     "or of its ratification file; a design-registry item judged 'met' with no met_by is 'not_met'. "
     "On every item copy its anchor from the ledger row into anchor. "
 )
+_LEDGER_SIZE_RULE = (
+    "For any size requirement (shrink, hold, byte or line cap), compare the LF-normalized committed or "
+    "staged blob bytes of the file with the base blob at run_base_sha (git show of each, or the staged "
+    "blob size); never the on-disk working-copy bytes, which core.autocrlf inflates with CRLF. "
+)
 _LEDGER_GATED_RULE = (
     ". An item whose only undelivered part is a gated chunk is 'not_met' with withheld_by set to "
     "that chunk id exactly; set withheld_by on no other item. An item whose only undelivered parts are "
@@ -2278,7 +2283,8 @@ def _folded_ledger_charter(
         "row not_met, even when the row defers that line: judge the row on the run's own diff and name "
         "that dirt in your verdict as an observation. Dirt the run wrote, or inside the footprint, keeps "
         "its judgement. "
-        "A HEAD-measured gate's result in this leg measures the run's candidate commit, so it is "
+        + _LEDGER_SIZE_RULE
+        + "A HEAD-measured gate's result in this leg measures the run's candidate commit, so it is "
         "evidence about this run's change, never \"no change\"; when the measured-rev op refused, that "
         "gate measured HEAD, not the change, so the row is unmet with the refusal as its reason, never "
         "\"no change\". "

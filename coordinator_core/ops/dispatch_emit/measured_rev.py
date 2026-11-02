@@ -51,20 +51,52 @@ def _blob_sha(data: bytes) -> str:
     return digest.hexdigest()
 
 
+def _run_landing_paths(root: Path, run_id: str) -> list[str]:
+    """The run's own recorded write set (`run_write_set`, in-run widened paths and every stage-manifest
+    row's `writes`, which a re-plan can append after `review_declared_paths` was fixed) as measurable
+    file paths. Run-owned artifacts, directories, globs, symlinks and malformed entries are skipped;
+    empty when the run has no record dir."""
+    from coordinator_core.ops.dispatch_emit import land_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
+    from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
+    from coordinator_core.ops.dispatch_emit.run_artifact_ownership import own_artifact_paths
+    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set
+
+    found = list(run_write_set(root, run_id, ""))
+    for home in dict.fromkeys((record_dir(root, run_id), root / RUN_DIR_ROOT / run_id)):
+        found.extend(widened_paths(home))
+        found.extend(land_run._manifest_declared(home / "manifest.json")[0])
+    if not found:
+        return []
+    owned = own_artifact_paths(root, run_id).covers
+    out: list[str] = []
+    for raw in found:
+        try:
+            rel = _normalise(raw)
+        except MeasuredRevRefused:
+            continue
+        target = root / rel
+        if _GLOB_CHARS & set(rel) or owned(rel) or target.is_symlink() or target.is_dir():
+            continue
+        out.append(rel)
+    return out
+
+
 def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None = None) -> Dict[str, Any]:
     """Params `run_id`, `paths`; returns a dict keyed by `MEASURED_REV_KEYS`
     (`sha`, `base_sha`, `paths`, `removed`, `blobs`, `tree`) plus `reach_dirt`: tracked
     paths the landing set's tests can read, outside the set, that differ from HEAD. Moves no ref, writes no index,
-    spawns nothing. The record is replaced per run_id: pass the run's whole write set in one
-    call. Raises `MeasuredRevRefused` for no HEAD, an unmeasurable test reach, a path outside the repo, a
-    directory, glob or submodule path, or an unsupported checkin filter. `repo_root`
-    defaults to the current directory."""
+    spawns nothing. The record is replaced per run_id and measures `paths` unioned with the run's own
+    recorded write set (`_run_landing_paths`), so a re-run re-measures the current landing set; a
+    path outside both stays unmeasured. Raises `MeasuredRevRefused` for no HEAD, an unmeasurable test reach, a
+    path outside the repo, a directory, glob or submodule path in `paths`, or an unsupported checkin filter.
+    `repo_root` defaults to the current directory."""
     root = Path(repo_root) if repo_root is not None else Path.cwd()
     record = measured_rev_record_path(root, run_id)
     base = head_sha(root, fresh=True)
     if base is None:
         raise MeasuredRevRefused("no HEAD commit to measure against")
-    rels = sorted({_normalise(p) for p in paths})
+    rels = sorted({_normalise(p) for p in paths} | set(_run_landing_paths(root, run_id)))
     from coordinator_core.ops.dispatch_emit import land_deadline
     from coordinator_core.ops.dispatch_emit.landing_integrity import _cached_parse_finding
 

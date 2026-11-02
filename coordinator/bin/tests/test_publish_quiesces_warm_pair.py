@@ -1,6 +1,6 @@
 """publish.py main quiesces the destination's warm pair under a publish marker.
 
-Live runs are read with the marker held; each must be named by --cut-run or the publish refuses unstopped.
+Live runs are read with the marker held and logged; they never refuse the publish.
 
 Run: python -m pytest coordinator/bin/tests/test_publish_quiesces_warm_pair.py -q
 """
@@ -91,27 +91,7 @@ def test_survivor_refuses_copy_and_releases_marker(tmp_path, monkeypatch):
     assert not bc.publish_marker_held(bc.svc_dir(dest))
 
 
-def test_live_midstage_run_refuses_before_stop_and_releases_marker(tmp_path, monkeypatch):
-    from coordinator_core.warm import live_runs
-
-    publish_mod, dest, calls, bc, ps = _setup(tmp_path, monkeypatch, True)
-    _refresh_ok(monkeypatch)
-    run = live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")
-    monkeypatch.setattr(live_runs, "find_live_runs", lambda *a, **k: [run])
-
-    def boom(*a, **k):
-        raise AssertionError("stop must not run")
-
-    monkeypatch.setattr(ps, "stop_warm_pair", boom)
-    rc, err = _run(publish_mod)
-    assert rc == 1
-    assert calls == []
-    assert "example-game-repo" in err and "ask-be779d" in err and "implement" in err
-    assert "2026-10-31T22:46:00Z" in err and "Alternative" in err
-    assert not bc.publish_marker_held(bc.svc_dir(dest))
-
-
-def test_allow_mid_stage_logs_reason_and_each_run_then_proceeds(tmp_path, monkeypatch):
+def test_live_midstage_runs_are_logged_then_publish_proceeds_without_override(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
     publish_mod, dest, calls, bc, ps = _setup(tmp_path, monkeypatch, True)
@@ -124,22 +104,17 @@ def test_allow_mid_stage_logs_reason_and_each_run_then_proceeds(tmp_path, monkey
     stops = []
     monkeypatch.setattr(
         ps, "stop_warm_pair",
-        lambda root, **k: stops.append(root) or ps.PairStopResult(stopped=(), survivors=()),
+        lambda root, **k: stops.append(bc.publish_marker_held(bc.svc_dir(dest)))
+        or ps.PairStopResult(stopped=(), survivors=()),
     )
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        with pytest.raises(_Stop):
-            publish_mod.main(
-                ["row-a", "--allow-mid-stage", "rollback of bad release",
-                 "--cut-run", "ask-be779d", "--cut-run", "ask-aaaaaa"]
-            )
-    text = err.getvalue()
-    assert "rollback of bad release" in text
+    rc, text = _run(publish_mod)
+    assert rc == "round-reached"
     assert "ask-be779d" in text and "ask-aaaaaa" in text and "FATAL" not in text
-    assert stops and calls == [("round", True)]
+    assert "--allow" not in text and "--cut-run" not in text
+    assert stops == [True] and calls == [("round", True)]
 
 
-def test_allow_mid_stage_does_not_bypass_survivor_refusal(tmp_path, monkeypatch):
+def test_live_midstage_run_does_not_bypass_survivor_refusal(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
     publish_mod, dest, calls, bc, ps = _setup(tmp_path, monkeypatch, True)
@@ -150,19 +125,16 @@ def test_allow_mid_stage_does_not_bypass_survivor_refusal(tmp_path, monkeypatch)
     monkeypatch.setattr(
         ps, "stop_warm_pair", lambda root, **k: ps.PairStopResult(stopped=(), survivors=(surv,))
     )
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        rc = publish_mod.main(["row-a", "--allow-mid-stage", "why", "--cut-run", "ask-be779d"])
-    assert rc == 1 and calls == [] and "pid=4242" in err.getvalue()
+    rc, err = _run(publish_mod)
+    assert rc == 1 and calls == [] and "pid=4242" in err
 
 
-@pytest.mark.parametrize("reason", ["", "   "])
-def test_allow_mid_stage_rejects_blank_reason(tmp_path, monkeypatch, reason):
+def test_override_flags_are_retired(tmp_path, monkeypatch):
     publish_mod, *_ = _setup(tmp_path, monkeypatch, True)
     err = io.StringIO()
     with contextlib.redirect_stderr(err), pytest.raises(SystemExit) as ei:
-        publish_mod.main(["row-a", "--allow-mid-stage", reason])
-    assert ei.value.code == 2 and "non-empty reason" in err.getvalue()
+        publish_mod.main(["row-a", "--cut-run", "ask-be779d"])
+    assert ei.value.code == 2
 
 
 def test_live_midstage_run_ignored_for_non_engine_root(tmp_path, monkeypatch):
@@ -278,28 +250,6 @@ def test_non_engine_root_dest_neither_marks_nor_stops(tmp_path, monkeypatch):
     rc, _ = _run(publish_mod)
     assert rc == "round-reached"
     assert calls == [("round", False)]
-
-
-def test_cut_run_naming_only_some_live_runs_refuses_listing_the_rest(tmp_path, monkeypatch):
-    from coordinator_core.warm import live_runs
-
-    publish_mod, dest, calls, bc, ps = _setup(tmp_path, monkeypatch, True)
-    _refresh_ok(monkeypatch)
-    runs = [
-        live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "t1"),
-        live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "t2"),
-    ]
-    monkeypatch.setattr(live_runs, "find_live_runs", lambda *a, **k: runs)
-    monkeypatch.setattr(
-        ps, "stop_warm_pair", lambda *a, **k: (_ for _ in ()).throw(AssertionError("stop"))
-    )
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        rc = publish_mod.main(["row-a", "--allow-mid-stage", "why", "--cut-run", "ask-be779d"])
-    text = err.getvalue()
-    assert rc == 1 and calls == []
-    assert "ask-aaaaaa" in text and "ask-be779d" not in text
-    assert not bc.publish_marker_held(bc.svc_dir(dest))
 
 
 def test_unsignalable_pair_pid_refuses_before_any_stop(tmp_path, monkeypatch):

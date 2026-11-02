@@ -1,0 +1,5 @@
+{"event":"system","session":{"conversation_id":"synth-1"}}
+{"event":"assistant","message":{"content":"reviewing"}}
+{"event":"result","result":{"status":"SUCCESS","response":"{\"verdict\": \"WARN\", \"findings\": [{\"severity\": \"high\", \"title\": \"add subtracts\", \"location\": \"artifact.py:2\", \"detail\": \"a - b\"}]}","usage":{"input_tokens":1000,"output_tokens":50},"finished_reason":"STOP","num_turns":1}}
+{"event":"assistant","message":{"content":"re-reviewing"}}
+{"event":"result","result":{"status":"SUCCESS","response":"{\"verdict\": \"OK\", \"findings\": []}","usage":{"input_tokens":1800,"output_tokens":90},"finished_reason":"STOP","num_turns":2}}

@@ -21,12 +21,14 @@ from typing import Sequence
 from coordinator_core.bug_blitz.contract import (
     EXIT_CODES,
     OUTCOME_FAILED,
+    OUTCOME_FOREIGN_UNCOMMITTED,
     OUTCOME_NO_RUNNER,
     OUTCOME_NOTHING_TO_RUN,
     OUTCOME_PASSED,
     OUTCOME_REFUSED,
     RunnerRecord,
 )
+from coordinator_core.bug_blitz.foreign_edits import foreign_dirty, head_tree, holders_of
 from coordinator_core.git.run import run_git
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -188,12 +190,12 @@ def _failing_ids(output: str) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
-def _spawn(argv: Sequence[str], repo_root: Path, timeout: int) -> tuple[int, str]:
+def _spawn(argv: Sequence[str], cwd: Path, timeout: int) -> tuple[int, str]:
     resolved = [shutil.which(argv[0]) or argv[0], *argv[1:]]
     try:
         proc = subprocess.run(
             resolved,
-            cwd=str(repo_root),
+            cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -220,15 +222,20 @@ def run(
     touched: Sequence[str] = (),
     *,
     timeout: int = DEFAULT_TIMEOUT,
+    committed_head: bool = False,
 ) -> RunnerRecord:
-    """Select, admit and run one row's targeted tests; the returned record carries the outcome."""
+    """Select, admit and run one row's targeted tests; the returned record carries the outcome.
+
+    `committed_head` judges committed HEAD with no uncommitted overlay (the already-fixed and
+    NOT_REPRODUCED question); the default judges HEAD plus the `touched` edits.
+    """
     from coordinator_core.testing import tier_t_slots
 
     start = time.monotonic()
     repo_root = Path(repo_root)
     row_id, _ = _load_row(Path(row_path))
 
-    def record(outcome, *, runner="", argv=(), selected=(), exit_code=None, failing=()):
+    def record(outcome, *, runner="", argv=(), selected=(), exit_code=None, failing=(), foreign_holders=()):
         return RunnerRecord(
             row_id=row_id,
             runner=runner,
@@ -237,6 +244,7 @@ def run(
             outcome=outcome,
             exit_code=exit_code,
             failing_ids=tuple(failing),
+            foreign_holders=tuple(foreign_holders),
             process_s=round(time.monotonic() - start, 3),
         )
 
@@ -269,23 +277,96 @@ def run(
         if slot is None:
             print("targeted-test-run: no Tier-T slot free within the wait", file=sys.stderr)
             return record(OUTCOME_NO_RUNNER, runner=runner, argv=flat_argv, selected=selected)
-        worst = 0
-        failing: list[str] = []
-        for _, argv in plans:
-            code, output = _spawn(argv, repo_root, timeout)
-            sys.stdout.write(output[-4000:])
-            if code != 0:
-                worst = worst or code
-                failing += _failing_ids(output)
-    outcome = OUTCOME_PASSED if worst == 0 else OUTCOME_FAILED
+        outcome, worst, failing, holders = _judge(repo_root, touched, plans, timeout, committed_head)
     return record(
         outcome,
         runner=runner,
         argv=flat_argv,
         selected=selected,
         exit_code=worst,
-        failing=list(dict.fromkeys(failing)),
+        failing=failing,
+        foreign_holders=holders,
     )
+
+
+def _judge_committed(repo_root, plans, timeout):
+    """Committed-HEAD verdict: no uncommitted content of any path, the row's own files included, is judged.
+
+    A clean tree is judged in place. A dirty one is judged in a HEAD tree with no overlay; when that
+    tree cannot be built the verdict is `no-runner`, never the live tree.
+    """
+    try:
+        status = run_git(["status", "--porcelain", "--untracked-files=all"], cwd=str(repo_root))
+        dirty = status.returncode != 0 or bool(status.stdout.strip())
+    except Exception:
+        dirty = True
+    if not dirty:
+        worst, failing = _run_plans(plans, repo_root, timeout)
+        return (OUTCOME_PASSED if worst == 0 else OUTCOME_FAILED), worst, failing, ()
+    try:
+        tree = head_tree(repo_root, ())
+    except Exception as exc:
+        print(f"targeted-test-run: HEAD tree unavailable, refusing to judge the live tree: {exc}", file=sys.stderr)
+        return OUTCOME_NO_RUNNER, None, [], ()
+    try:
+        worst, failing = _run_plans(plans, tree, timeout)
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
+    return (OUTCOME_PASSED if worst == 0 else OUTCOME_FAILED), worst, failing, ()
+
+
+def _judge(repo_root, touched, plans, timeout, committed_head=False):
+    """(outcome, exit code, failing ids, foreign holders): HEAD plus the row's own edits when foreign dirt exists.
+
+    No foreign dirty path (or no HEAD tree obtainable): the live tree is judged as before. A pass at
+    HEAD-plus-own is `passed`; a fail there that passes live is `passed-on-foreign-uncommitted`.
+    """
+    if committed_head:
+        return _judge_committed(repo_root, plans, timeout)
+    foreign: list[str] = []
+    try:
+        foreign = foreign_dirty(repo_root, touched)
+    except Exception:
+        foreign = []
+    if not foreign:
+        worst, failing = _run_plans(plans, repo_root, timeout)
+        return (OUTCOME_PASSED if worst == 0 else OUTCOME_FAILED), worst, failing, ()
+    try:
+        tree = head_tree(repo_root, touched)
+    except Exception as exc:
+        print(f"targeted-test-run: HEAD tree unavailable, judging the live tree: {exc}", file=sys.stderr)
+        worst, failing = _run_plans(plans, repo_root, timeout)
+        return (OUTCOME_PASSED if worst == 0 else OUTCOME_FAILED), worst, failing, ()
+    try:
+        worst, failing = _run_plans(plans, tree, timeout)
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
+    if worst == 0:
+        return OUTCOME_PASSED, 0, failing, ()
+    live_worst, _ = _run_plans(plans, repo_root, timeout)
+    if live_worst != 0:
+        return OUTCOME_FAILED, worst, failing, ()
+    from coordinator_core.session import core
+
+    holders = holders_of(repo_root, foreign, core.resolve_session_id(str(repo_root)))
+    return (
+        OUTCOME_FOREIGN_UNCOMMITTED,
+        worst,
+        failing,
+        tuple((p, tuple(h)) for p, h in holders.items()),
+    )
+
+
+def _run_plans(plans, cwd: Path, timeout: int) -> tuple[int, list[str]]:
+    worst = 0
+    failing: list[str] = []
+    for _, argv in plans:
+        code, output = _spawn(argv, cwd, timeout)
+        sys.stdout.write(output[-4000:])
+        if code != 0:
+            worst = worst or code
+            failing += _failing_ids(output)
+    return worst, list(dict.fromkeys(failing))
 
 
 def write_record(rec: RunnerRecord, path: Path) -> None:
@@ -305,6 +386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--touched", nargs="+", action="extend", default=[])
     ap.add_argument("--record", required=True)
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--committed-head", action="store_true")
     args = ap.parse_args(list(sys.argv[1:] if argv is None else argv))
 
     repo_root = Path(args.repo)
@@ -317,7 +399,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not row_path.is_file():
         ap.error(f"row not found: {row_path}")
 
-    rec = run(repo_root, row_path, args.touched, timeout=args.timeout)
+    rec = run(repo_root, row_path, args.touched, timeout=args.timeout, committed_head=args.committed_head)
     write_record(rec, record_path)
     print(f"targeted-test-run: {rec.outcome} ({len(rec.selected)} file(s)) -> {record_path}")
     return EXIT_CODES[rec.outcome]

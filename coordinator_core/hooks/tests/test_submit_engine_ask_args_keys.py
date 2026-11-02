@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ASKS_ITEM_KEYS
 
@@ -167,6 +169,54 @@ def test_sizing_with_invalid_source_still_refuses_naming_it(tmp_path):
 
 def test_hook_keeps_no_local_copy_of_the_moved_helpers():
     assert not hasattr(mod, "_with_em_context") and not hasattr(mod, "_is_path_shaped")
+
+
+def _emit_capture(tmp_path: Path, seen: list[dict]):
+    def emit(params: dict, root: Path) -> dict:
+        seen.append(params)
+        return {"path": str(tmp_path / "run.js"), "run_id": "r1", "fire_args": {}}
+
+    return emit
+
+
+def test_em_size_is_an_accepted_key_and_reaches_the_emit_normalised(tmp_path):
+    _repo(tmp_path)
+    assert "em_size" in mod._ARGS_KEYS
+    seen: list[dict] = []
+    env = mod.evaluate(_payload(tmp_path, {"ask": "x", "em_size": " m "}), emit=_emit_capture(tmp_path, seen))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert seen[0]["em_size"] == "M"
+
+
+def test_em_size_absent_adds_no_param(tmp_path):
+    _repo(tmp_path)
+    seen: list[dict] = []
+    mod.evaluate(_payload(tmp_path, {"ask": "x"}), emit=_emit_capture(tmp_path, seen))
+    assert seen and "em_size" not in seen[0]
+
+
+def test_em_size_carries_on_a_sizing_submission_and_a_one_element_asks(tmp_path):
+    _repo(tmp_path)
+    seen: list[dict] = []
+    emit = _emit_capture(tmp_path, seen)
+    mod.evaluate(_payload(tmp_path, {"sizing": "state/sizings/x.yaml", "em_size": "S"}), emit=emit, fanout=_boom)
+    mod.evaluate(_payload(tmp_path, {"asks": [{"ask": "a"}], "em_size": "L"}), emit=emit)
+    assert [p.get("em_size") for p in seen] == ["S", "L"]
+
+
+@pytest.mark.parametrize("bad", ["huge", "", 3, ["M"]])
+def test_em_size_outside_the_size_set_denies_naming_the_set(tmp_path, bad):
+    _repo(tmp_path)
+    env = mod.evaluate(_payload(tmp_path, {"ask": "x", "em_size": bad}), emit=_boom, fanout=_boom)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "em_size must be one of XS, S, M, L, XL, XXL" in _reason(env)
+
+
+def test_em_size_beside_a_multi_item_asks_denies(tmp_path):
+    _repo(tmp_path)
+    env = mod.evaluate(_payload(tmp_path, {"em_size": "M", "asks": [{"ask": "a"}, {"ask": "b"}]}), emit=_boom, fanout=_boom)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "em_size rides one run" in _reason(env)
 
 
 def test_top_level_sender_beside_a_one_element_asks_still_reaches_the_fanout(tmp_path):

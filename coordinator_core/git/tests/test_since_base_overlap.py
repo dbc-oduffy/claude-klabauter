@@ -253,6 +253,44 @@ def test_halt_record_commit_without_run_id_is_foreign(tmp_path: Path) -> None:
     assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None)) == 1
 
 
+_ASK = "ask-20261102T133847-486eca"
+_CHILD = "warp-2026-11-02-920e91-1-rea-ask-2-ghidra-ingest-20261102T133953-8413fc"
+_CHILD_OTHER_SIZING = "warp-2026-11-02-60ec97-2-refire-remeasures-landing-set-20261102T131916-b8162e"
+
+
+def _record_ask_run(root: Path, run_id: str, sizing_rel: str) -> None:
+    run_dir = root / "state" / "warp" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(f'{{"all_of_pm_ask": false, "sizing_rel": "{sizing_rel}"}}', encoding="utf-8")
+
+
+def test_ask_run_child_warp_halt_record_is_own(tmp_path: Path) -> None:
+    _record_ask_run(tmp_path, _ASK, "state/sizings/2026-11-02-920e91-1-rea-ask-2-ghidra-ingest.yaml")
+    base = _halt_record_setup(tmp_path, f"warp: record halted {_CHILD} run artifacts")
+
+    assert since_base_overlap.check(tmp_path, [PATH], base, run_id=_ASK, plan=PLAN) == ([], [])
+    assert since_base_overlap.check(tmp_path, [PATH], base, run_id=_ASK) == ([], [])
+
+
+def test_ask_run_halt_record_of_another_sizings_child_is_foreign(tmp_path: Path) -> None:
+    _record_ask_run(tmp_path, _ASK, "state/sizings/2026-11-02-920e91-1-rea-ask-2-ghidra-ingest.yaml")
+    base = _halt_record_setup(tmp_path, f"warp: record halted {_CHILD_OTHER_SIZING} run artifacts")
+
+    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=_ASK, plan=PLAN)) == 1
+
+
+def test_ask_run_without_recorded_sizing_has_no_child_lineage(tmp_path: Path) -> None:
+    base = _halt_record_setup(tmp_path, f"warp: record halted {_CHILD} run artifacts")
+
+    assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=_ASK, plan=PLAN)) == 1
+
+
+def test_ask_sizing_lineage_rejects_path_shaped_run_id(tmp_path: Path) -> None:
+    assert since_base_overlap._ask_sizing_lineage(tmp_path, "ask-../x") is None
+    assert since_base_overlap._ask_sizing_lineage(tmp_path, "ask-a/b") is None
+    assert since_base_overlap._ask_sizing_lineage(tmp_path, "ask-a\\b") is None
+
+
 def test_path_unchanged_since_base_is_skipped(tmp_path: Path) -> None:
     repo, base, base_lines = _setup(tmp_path)
     repo.commit({PATH: _join(base_lines), "other.txt": "x\n"}, "unrelated")

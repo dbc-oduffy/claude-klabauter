@@ -39,7 +39,9 @@ def _write_record(tmp_path, session_id, task_id, **overrides):
         "session_id": session_id,
     }
     record.update(overrides)
-    path = tmp_path / f"workflow-run-{session_id}-{task_id}.json"
+    from coordinator_core import launch_records
+
+    path = Path(launch_records.record_path(str(tmp_path), session_id, task_id))
     path.write_text(json.dumps(record), encoding="utf-8")
     return path
 
@@ -128,7 +130,9 @@ def test_build_workflow_runs_section_ignores_other_sessions(tmp_path):
 
 
 def test_build_workflow_runs_section_skips_malformed_record(tmp_path):
-    path = tmp_path / f"workflow-run-{SESSION}-task-bad.json"
+    from coordinator_core import launch_records
+
+    path = Path(launch_records.record_path(str(tmp_path), SESSION, "task-bad"))
     path.write_text("not json", encoding="utf-8")
 
     lines = cpp._build_workflow_runs_section(str(tmp_path), SESSION)
@@ -163,7 +167,9 @@ def test_run_carries_active_workflow_run_into_state_snapshot(tmp_path, monkeypat
 
 def test_run_never_raises_when_workflow_run_record_is_corrupt(tmp_path, monkeypatch):
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    bad = tmp_path / f"workflow-run-{SESSION}-task-x.json"
+    from coordinator_core import launch_records
+
+    bad = Path(launch_records.record_path(str(tmp_path), SESSION, "task-x"))
     bad.write_text("{not valid json", encoding="utf-8")
 
     raw = json.dumps({"session_id": SESSION, "transcript_path": ""})

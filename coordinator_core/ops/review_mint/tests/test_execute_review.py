@@ -699,7 +699,7 @@ def test_prep_scopes_foreign_claims_to_peer_commits_inside_the_footprint():
     assert "NOT in declared_paths under foreign_claims" not in prep_block
 
 
-def _run_prep_block(prep_result: dict, landed: dict | None = None) -> dict:
+def _run_prep_block(prep_result: dict, landed: dict | None = None, review_paths: list | None = None) -> dict:
     """Execute the emitted prep block under node with the agent call stubbed to
     return ``prep_result``; returns ``{"slices": [...]}`` or ``{"error": msg}``."""
     import shutil
@@ -720,6 +720,7 @@ def _run_prep_block(prep_result: dict, landed: dict | None = None) -> dict:
     script = (
         "(async () => { try { const _out = await (async () => {\n"
         + (f"const _landed = {json.dumps(landed)};\n" if landed is not None else "")
+        + (f"const _reviewPaths = {json.dumps(review_paths)};\n" if review_paths is not None else "")
         + "\n".join(body)
         + "\n return {slices: _reviewPrep.slices, verifyOnly: _verifyOnly}; })();"
         "\n console.log(JSON.stringify(_out));"
@@ -791,6 +792,24 @@ def test_zero_file_prep_with_no_error_is_nothing_to_review_not_a_refusal():
     assert _run_prep_block(dict(_ZERO_FILE_PREP))["halted"] == "no-op"
     result = _run_prep_block(dict(_ZERO_FILE_PREP), landed=_LANDED)
     assert "halted" not in result and result["verifyOnly"] is True
+
+
+def test_product_dirty_declared_product_write_never_halts_no_op():
+    # A freeze over an uncommitted product write reports product_files 0.
+    for prep in (dict(_ZERO_FILE_PREP), {**_PREP, "product_files": 0}):
+        result = _run_prep_block(prep, review_paths=["coordinator/skills/x/SKILL.md", "pkg/mod.py"])
+        assert "halted" not in result and result["verifyOnly"] is True
+
+
+def test_product_dirty_docs_only_declared_writes_still_halt_no_op():
+    for paths in ([], ["docs/plans/p.md", "state/x.yaml", "README.md", "scratch/a.py"]):
+        assert _run_prep_block(dict(_ZERO_FILE_PREP), review_paths=paths)["halted"] == "no-op"
+
+
+def test_product_dirty_emitted_gate_reads_review_paths_in_the_no_op_halt():
+    _, phases = _compose()
+    block = phases[0][1]
+    assert block.index("typeof _reviewPaths") < block.index("halted: 'no-op'")
 
 
 @pytest.mark.parametrize(
@@ -1753,8 +1772,18 @@ def test_reverify_prompt_measures_failing_at_base_once_and_passes_it(prefixes):
 
 
 @pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
+def test_reverify_saves_the_base_export_and_every_revert_call_passes_its_path(prefixes):
+    block = _reverify_phase_block("b" * 40, prefixes).replace('\\"', '"')
+    path = "scratch/reverify-base-export-prep1.txt"
+    assert f"<the failing ids above> > {path}`" in block
+    assert block.count(f'"base_export_path":"{path}"') == 1
+    assert block.count('"failing_at_base":[<failing_at_base ids>]') == 1
+
+
+@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
 def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
     block = _reverify_phase_block("run_base_sha", prefixes)
+    assert "base_export_path" not in block
     assert "baseline_export" not in block
     assert "failing_at_base" in block
 

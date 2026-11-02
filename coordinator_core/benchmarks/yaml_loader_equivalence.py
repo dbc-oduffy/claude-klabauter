@@ -136,6 +136,9 @@ def _malformed_items() -> list[tuple[str, str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--limit", type=int, default=0, help="first N tracked files only (0 = all)")
     parser.add_argument("--door", choices=sorted(_DOORS), action="append", help="restrict to a door")

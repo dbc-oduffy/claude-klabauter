@@ -2462,6 +2462,10 @@ def _dispatch_emit_body(
             ask_root, params["reserved_run_id"], sizing_doc, sizing_rel
         ):
             run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
+            from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+            predecessor = halted_run_to_resume(ask_root, sizing_rel)
+            resumed_from = predecessor if predecessor != run_id else None
         elif sizing_rel:
             from coordinator_core.ops.dispatch_emit.halted_run import (
                 halted_ask_run_for, halted_run_base, halted_run_for,

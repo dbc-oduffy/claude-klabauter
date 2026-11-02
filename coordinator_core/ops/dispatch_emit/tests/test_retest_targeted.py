@@ -829,6 +829,39 @@ def test_spent_deadline_launches_nothing_and_states_the_budget(repo, tmp_path, m
     assert "not started" in rec["reason"] and "0s budget" in rec["reason"]
 
 
+def test_spent_budget_records_budget_exhausted_and_gate_reads_not_run(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr(retest_targeted, "RETEST_CHILD_TIMEOUT_SECS", 0.0)
+    _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, 0, 0])
+    assert rec["zero_run_cause"] == "budget-exhausted"
+    findings, check = li.landing_test_gate(repo, {"run_id": RUN_ID}, RUN_ID)
+    assert check == li.NOT_RUN_CHECK and not findings and "budget-exhausted" in findings.deleted_note
+
+
+def test_first_session_timeout_records_budget_exhausted(repo, tmp_path, monkeypatch):
+    _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [retest_targeted.LAUNCH_TIMED_OUT, 0, 0])
+    assert rec["zero_run_cause"] == "budget-exhausted"
+
+
+def test_timeout_after_a_finished_session_names_no_zero_run_cause(repo, tmp_path, monkeypatch):
+    _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, retest_targeted.LAUNCH_TIMED_OUT, 0])
+    assert rec["status"] == "error" and "zero_run_cause" not in rec
+
+
+def test_collection_failure_records_its_cause(repo, tmp_path, monkeypatch):
+    _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, ["collect-error"], tests="test_a.py")
+    assert rec["status"] == "error" and rec["zero_run_cause"] == "collection-failure"
+
+
+def test_empty_selection_records_its_cause(repo, tmp_path, monkeypatch):
+    _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 5, 5])
+    assert rec["status"] == "no-tests" and rec["zero_run_cause"] == "empty-selection"
+
+
+def test_crashed_launcher_names_no_zero_run_cause(repo, tmp_path, monkeypatch):
+    _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [126, 126, 126])
+    assert rec["status"] == "error" and "zero_run_cause" not in rec
+
+
 def test_timeout_mid_sequence_skips_later_sessions(repo, tmp_path, monkeypatch):
     rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [retest_targeted.LAUNCH_TIMED_OUT, 0, 0])
     assert rc == 2 and len(calls) == 1 and "exceeded 1800s" in rec["reason"]
@@ -1083,3 +1116,34 @@ def test_release_spawn_frees_the_pair_and_never_raises():
             raise RuntimeError("boom")
 
     hcc.release_spawn("k", 7, Broken())
+
+
+def _sessions(repo, tmp_path, n_ids, entry):
+    seen = []
+
+    def run(argv, cwd, **kw):
+        seen.append(list(argv))
+        return 0
+
+    tests = [f"test_a.py::t{i}" for i in range(n_ids)]
+    log = tmp_path / "pass.log"
+    log.write_bytes(b"")
+    deadline = retest_targeted.time.monotonic() + 600
+    if entry == "run_pass":
+        retest_targeted._run_pass(run, repo, tests, log, deadline)
+    else:
+        retest_targeted._collect_ids(run, repo, tests, log, deadline)
+    return seen
+
+
+@pytest.mark.parametrize("entry", ["run_pass", "collect_ids"])
+def test_session_count_grows_with_groups_never_with_ids(repo, tmp_path, entry):
+    cap = retest_targeted.RETEST_MAX_NODES
+    counts = [len(_sessions(repo, tmp_path, n, entry)) for n in (1, cap, cap * 2, cap * 2 + 1)]
+    assert counts == [1, 1, 2, 3]
+
+
+def test_each_session_argv_carries_exactly_its_own_group(repo, tmp_path):
+    cap = retest_targeted.RETEST_MAX_NODES
+    seen = _sessions(repo, tmp_path, cap + 1, "run_pass")
+    assert [sum(a.startswith("test_a.py::") for a in argv) for argv in seen] == [cap, 1]

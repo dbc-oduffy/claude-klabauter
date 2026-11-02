@@ -500,6 +500,15 @@ _ANCESTRY_RULE = (
 #: a count there, and iterating it throws.
 REVIEW_PREP_SLICES_JS = "(Array.isArray(_reviewPrep?.slices) ? _reviewPrep.slices : [])"
 
+#: True when the composer's `_reviewPaths` (the run's declared writes) holds a product path. A freeze
+#: reports `product_files: 0` over a dirty uncommitted product write, so the count alone cannot
+#: certify "no product changed". Composers that bind no `_reviewPaths` read as no declared product.
+_DECLARED_PRODUCT_WRITE_JS = (
+    "(typeof _reviewPaths !== 'undefined' && (Array.isArray(_reviewPaths) ? _reviewPaths : []).some(p => "
+    "!/^(state|archive|scratch|tasks|cross-repo|docs|\\.coordinator-local)\\//.test(String(p)) && "
+    "!/\\.md$/.test(String(p))))"
+)
+
 _PREP_GUARDS_JS = (
     # A single-reviewer-ok verdict over product files is one slice of the
     # whole diff; prep that omitted it is synthesised here, never refused.
@@ -526,6 +535,7 @@ _PREP_GUARDS_JS = (
     "(typeof _landed === 'undefined' || !Object.keys(_landed).length) && "
     "(typeof _finished === 'undefined' || !_finished.size) && "
     "(_reviewPrep.product_files ?? 0) === 0 && !(_reviewPrep.foreign_claims ?? []).length && "
+    f"!{_DECLARED_PRODUCT_WRITE_JS} && "
     "!(Array.isArray(_reviewPrep.slices) ? _reviewPrep.slices : []).some(s => (s?.files ?? []).length)) { "
     "return { halted: 'no-op', reason: 'the run changed no product file; nothing to review or commit', "
     "prep: _reviewPrep, wave: null, integration: null }; }\n"
@@ -866,9 +876,16 @@ _PASSED_ALONE_CLAUSE = (
 )
 
 
-def _base_measure_clause(base_ref: str, owned_red_path: str = "") -> str:
+def _base_export_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
+    """Run-scoped scratch file the base-sha baseline_export output is saved to for ``base_export_path``."""
+    token = re.sub(r"[^A-Za-z0-9._-]", "_", run_key or run_id or prep_slice_id) or "run"
+    return f"scratch/reverify-base-export-{token}.txt"
+
+
+def _base_measure_clause(base_ref: str, owned_red_path: str = "", export_path: str = "") -> str:
     """Prompt step measuring ``failing_at_base``: one baseline-export run over the failing ids at the
-    snapshot base. Empty-set fallback when the base is the unset placeholder.
+    snapshot base, its stdout saved to ``export_path`` (revert calls pass it as ``base_export_path``).
+    Empty-set fallback when the base is the unset placeholder.
 
     Its id placeholder must differ from step 4's "<all failing node ids>", which must appear exactly once."""
     owned = _owned_red_clause(owned_red_path)
@@ -882,7 +899,8 @@ def _base_measure_clause(base_ref: str, owned_red_path: str = "") -> str:
     return owned + _PASSED_ALONE_CLAUSE + (
         "Then measure which of the failing ids also fail at the run base, ONCE for all of them "
         f"(never per test): `python -m coordinator_core.testing.baseline_export --sha {base_ref} -- "
-        "python -m pytest -rfE <the failing ids above>`. The ids on its `FAILED`/`ERROR` lines are "
+        f"python -m pytest -rfE <the failing ids above> > {export_path}` (create `scratch/` first if absent; "
+        "when you re-run it over the remaining ids, overwrite that same file). The ids on its `FAILED`/`ERROR` lines are "
         "`failing_at_base`, valid only when its trailing JSON line has `export` \"ok\" and "
         "`runner_exit` 0, 1 or 4. Exit 4 with a \"not found\" line naming ids means the run added "
         "them: they are never pre_existing; drop them and re-run that same command ONCE over the "
@@ -938,6 +956,8 @@ def _reverify_phase(
     base_args = f'"base":"{base_ref}","slice_prefix":"{prep_slice_id}"{key_args}'
     run_args = f',"run_id":{json.dumps(run_id)},"plan_path":{json.dumps(plan_path)}' if run_id else ""
     sidecars_js = _REVERIFY_SIDECARS_JS
+    export_path = _base_export_file(run_key, run_id, prep_slice_id)
+    base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
     if group_prefixes:
         prefixes = [*group_prefixes, prep_slice_id]
         list_calls = "; ".join(
@@ -995,11 +1015,11 @@ def _reverify_phase(
             f"'{{{sliced},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
             "returns an error, return it as the sidecar's finding and do not call revert for that "
             "prefix.\n"
-            f"4. {_base_measure_clause(base_ref, owned_red_path)}"
+            f"4. {_base_measure_clause(base_ref, owned_red_path, export_path)}"
             f"Call review.reverify in revert mode for EVERY prefix, each time with the same "
             f"failing set (all failing node ids) and the same `failing_at_base`: `{invoke} review.reverify '{{{sliced},"
             f"\"failing\":[<all failing node ids>],\"failing_before\":[<that prefix's "
-            f"failing_before ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<that prefix's review_sidecars paths below>]}}'"
+            f"failing_before ids>],\"failing_at_base\":[<failing_at_base ids>]{base_path_arg},\"sidecars\":[<that prefix's review_sidecars paths below>]}}'"
             f"{repo_pin}` (add `session_id` as in step 1). A prefix attributes a failure only to "
             "its own files, so make every call whether or not that prefix listed anything. The "
             "review_sidecars below is keyed by slice prefix: pass each call only its own prefix's "
@@ -1047,10 +1067,10 @@ def _reverify_phase(
         f"Then ALWAYS call `{invoke} review.reverify "
         f"'{{{base_args},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
         "returns an error, return it as the sidecar's finding and do not call revert.\n"
-        f"4. {_base_measure_clause(base_ref, owned_red_path)}"
+        f"4. {_base_measure_clause(base_ref, owned_red_path, export_path)}"
         f"Call review.reverify in revert mode: `{invoke} review.reverify "
         f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
-        f"ids>],\"failing_at_base\":[<failing_at_base ids>],\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
+        f"ids>],\"failing_at_base\":[<failing_at_base ids>]{base_path_arg},\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
         "as in step 1). Return its `reverted`, `pre_existing`, `kept`"
         + (", `owned_red`," if run_key else "")
         + " and `record` as given, "

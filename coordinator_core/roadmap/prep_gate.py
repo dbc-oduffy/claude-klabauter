@@ -2592,11 +2592,96 @@ def _register_citations(rows: Sequence[Any], claimed: set) -> Optional[Dict[str,
     return _defect("register-citations", "; ".join(parts) + "; set `register_rows` on each row")
 
 
+def _untraced_step_rows(register: Any, claimed: Sequence[Any], plan_text: str) -> List[str]:
+    """Claimed method-step row ids that have no `method-trace` fence in the plan body."""
+    from coordinator_core.ops import method_step
+    from coordinator_core.ops import requirement_register as rr
+
+    ids = {str(c) for c in claimed}
+    traced = method_step.parse_traces(plan_text)
+    return [
+        str(r[rr.ROW_ID])
+        for r in register.rows
+        if str(r[rr.ROW_ID]) in ids
+        and method_step.is_method_step(r)
+        and str(r[rr.ROW_ID]) not in traced
+    ]
+
+
+def _inherited_deviations(
+    fm: Dict[str, Any], repo_root: Path, cache: Optional[dict] = None
+) -> List[str]:
+    """`<plan> <row>` per predecessor `method-trace` carrying `deviation` that no
+    `anchor_premises` claim of this plan names (predecessor path and row id both)."""
+    from coordinator_core.ops import method_step
+    from coordinator_core.roadmap.plan_gate import archived_plan_path
+
+    edges = fm.get("depends_on_plan")
+    if not isinstance(edges, list):
+        return []
+    premises = fm.get("anchor_premises")
+    claims = [
+        str(p.get("claim") or "").replace("\\", "/")
+        for p in (premises if isinstance(premises, list) else [])
+        if isinstance(p, dict)
+    ]
+    cache = cache if cache is not None else {}
+    found: List[str] = []
+    for edge in edges:
+        rel = str(edge.get("plan") or "").replace("\\", "/") if isinstance(edge, dict) else ""
+        if not rel or ".." in rel.split("/") or rel.startswith("/"):
+            continue
+        key = (rel, "method-step-text")
+        if key not in cache:
+            target = repo_root / rel
+            if not target.is_file():
+                target = archived_plan_path(repo_root, rel) or target
+            try:
+                cache[key] = target.read_text(encoding="utf-8")
+            except OSError:
+                cache[key] = None
+        text = cache[key]
+        if text is None:
+            continue
+        for row_id, trace in method_step.parse_traces(text).items():
+            if trace.get("deviation") is None:
+                continue
+            if any(rel in c and row_id in c for c in claims):
+                continue
+            found.append(f"{rel} {row_id}")
+    return found
+
+
 def _register(
     fm: Dict[str, Any],
     repo_root: Optional[Path],
     spine_rows: Optional[Sequence[Any]] = None,
     sizing_cache: Optional[Dict[str, Optional[bytes]]] = None,
+    plan_text: Optional[str] = None,
+    plan_edge_cache: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """REGISTER: the claims resolve and cover the register (``_register_claims``); then, with
+    ``plan_text``, no predecessor plan's deviated method step is inherited unnamed."""
+    result = _register_claims(fm, repo_root, spine_rows, sizing_cache, plan_text)
+    if result["status"] != "PASS" or plan_text is None or repo_root is None:
+        return result
+    inherited = _inherited_deviations(fm, repo_root, plan_edge_cache)
+    if not inherited:
+        return result
+    return _defect(
+        "method-step-inherited-deviation",
+        "method-step-inherited-deviation: depends_on_plan predecessor delivers a method step by "
+        f"deviation: {', '.join(inherited)}; name each predecessor path and row id in an "
+        "`anchor_premises` claim, or re-deliver the step",
+    )
+
+
+def _register_claims(
+    fm: Dict[str, Any],
+    repo_root: Optional[Path],
+    spine_rows: Optional[Sequence[Any]] = None,
+    sizing_cache: Optional[Dict[str, Optional[bytes]]] = None,
+    plan_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     """REGISTER: `register_claims` resolves against, and covers, the sizing's register."""
     from coordinator_core.ops import requirement_register as rr
@@ -2678,6 +2763,16 @@ def _register(
             return _defect(
                 "register-rows-unclaimed",
                 f"register_claims.rows omit {len(missing)} row(s) of {sizing}: {', '.join(missing)}",
+            )
+    if plan_text is not None:
+        untraced = _untraced_step_rows(register, rows, plan_text)
+        if untraced:
+            from coordinator_core.ops import method_step
+
+            return _defect(
+                "register-method-trace-missing",
+                f"REGISTER: method-step row {', '.join(untraced)} has no method-trace block; "
+                + method_step.FENCE_SHAPE,
             )
     if spine_rows:
         defect = _register_citations(spine_rows, {str(r) for r in rows})
@@ -2854,7 +2949,9 @@ def evaluate_plan(
             "GITIGNORED_WRITES": _gitignored_writes(raw_spine_rows(text), gitignored_roots),
             "CAPABILITIES": _capabilities(fm),
             "SCHEMA": _schema(fm, prime_exit, parse_error),
-            "REGISTER": _register(fm, repo_root, raw_spine_rows(text), sizing_cache),
+            "REGISTER": _register(
+                fm, repo_root, raw_spine_rows(text), sizing_cache, text, plan_edge_cache
+            ),
             "DONE_CLAUSE": _done_clause(fm, repo_root, raw_spine_rows(text), sizing_cache),
         }
     except Exception as exc:  # noqa: BLE001 - defense in depth, see ENGINE_ERROR

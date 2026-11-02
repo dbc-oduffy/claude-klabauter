@@ -1951,6 +1951,7 @@ def sweep_warp_prompts(
     wd = _Watchdog(watchdog_ceiling_secs)
     total_bytes = 0
     total_items = 0
+    due: List[Tuple[Path, int]] = []
     try:
         with os.scandir(warp_root) as it:
             runs = sorted((e.path for e in it if e.is_dir(follow_symlinks=False)))
@@ -1971,8 +1972,14 @@ def sweep_warp_prompts(
             continue
         if now - outcome_mtime <= window or not prompts.is_dir():
             continue
-        size = _dir_size_bytes(prompts)
-        if not dry_run and not _delete_path(prompts):
+        due.append((prompts, _dir_size_bytes(prompts)))
+    if dry_run:
+        return sum(s for _, s in due), len(due)
+    if not due:
+        return 0, 0
+    results = _delete_paths_batch([p for p, _ in due], watchdog=wd)
+    for prompts, size in due:
+        if not results.get(str(prompts), False):
             _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {prompts}", quiet=quiet)
             continue
         total_bytes += size

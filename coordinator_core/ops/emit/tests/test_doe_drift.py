@@ -413,36 +413,36 @@ class TestTagIsAncestorOfPin:
 
     def test_returncode_0_returns_true(self) -> None:
         with patch(
-            "coordinator_core.ops.emit.doe_drift.subprocess.run",
-            return_value=MagicMock(returncode=0),
+            "coordinator_core.git_scope.run_git",
+            return_value=MagicMock(returncode=0, timed_out=False),
         ):
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is True
 
     def test_returncode_1_returns_false(self) -> None:
         with patch(
-            "coordinator_core.ops.emit.doe_drift.subprocess.run",
-            return_value=MagicMock(returncode=1),
+            "coordinator_core.git_scope.run_git",
+            return_value=MagicMock(returncode=1, timed_out=False),
         ):
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is False
 
     def test_returncode_2_returns_none(self) -> None:
         with patch(
-            "coordinator_core.ops.emit.doe_drift.subprocess.run",
-            return_value=MagicMock(returncode=2),
+            "coordinator_core.git_scope.run_git",
+            return_value=MagicMock(returncode=2, timed_out=False),
         ):
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 
     def test_returncode_128_returns_none(self) -> None:
         with patch(
-            "coordinator_core.ops.emit.doe_drift.subprocess.run",
-            return_value=MagicMock(returncode=128),
+            "coordinator_core.git_scope.run_git",
+            return_value=MagicMock(returncode=128, timed_out=False),
         ):
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 
     def test_file_not_found_returns_none(self) -> None:
         with patch(
-            "coordinator_core.ops.emit.doe_drift.subprocess.run",
-            side_effect=FileNotFoundError("git executable not found"),
+            "coordinator_core.git_scope.run_git",
+            return_value=MagicMock(returncode=127, timed_out=False),
         ):
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 
@@ -454,8 +454,8 @@ class TestTagIsAncestorOfPin:
         because subprocess.TimeoutExpired is only raised when timeout= is passed.
         """
         with patch(
-            "coordinator_core.ops.emit.doe_drift.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(["git", "merge-base"], 30),
+            "coordinator_core.git_scope.run_git",
+            return_value=MagicMock(returncode=-1, timed_out=True),
         ):
             assert _tag_is_ancestor_of_pin(self._DOE_CLONE, self._TAG_SHA, self._PIN_SHA) is None
 

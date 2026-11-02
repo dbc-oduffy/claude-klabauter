@@ -697,6 +697,27 @@ int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *
     return ok;
 }
 
+int build_hook_post_delivery_envelope(buf_t *out, const char *op, long deadline_ms, const char *event_name) {
+    char text[384];
+    snprintf(text, sizeof text,
+             "the engine did not answer %s within the %ld ms hook read deadline; the op may "
+             "have completed. Check for an existing run record before re-submitting.",
+             (op && *op) ? op : "this op", deadline_ms);
+    int ok = 1;
+    ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: ");
+    ok &= buf_append_json_escaped(out, text, strlen(text));
+    ok &= buf_append_cstr(out, "\",\"suppressOutput\":false");
+    if (event_name && *event_name && strcmp(event_name, "SessionEnd") != 0) {
+        ok &= buf_append_cstr(out, ",\"hookSpecificOutput\":{\"hookEventName\":\"");
+        ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
+        ok &= buf_append_cstr(out, "\",\"additionalContext\":\"coordinator: ");
+        ok &= buf_append_json_escaped(out, text, strlen(text));
+        ok &= buf_append_cstr(out, "\"}");
+    }
+    ok &= buf_append_cstr(out, "}\n");
+    return ok;
+}
+
 int build_hook_deny_envelope(buf_t *out, const char *reason) {
     int ok = 1;
     ok &= buf_append_cstr(out,
@@ -1394,4 +1415,198 @@ int door_repo_root_search_precheck_payload(const char *payload, size_t plen, buf
 out:
     free(key.data); free(tool.data); free(cwd.data); free(cmd.data); free(nc.data); free(others.data);
     return r;
+}
+
+/* IRREVERSIBLE-EXTERNAL COMMAND SHAPES -- the warm-timeout leg of the
+ * `_IRREVERSIBLE` matcher in `hooks/preuse_bash_dispatch.py`. DR-402's carve-out:
+ * a guard that cannot run allows and says so, except an irreversible-external
+ * class (DR-310 scope: push/PR to a remote, p4 submit/shelve, branch/stash
+ * destruction), which is denied and retryable. The table's names equal
+ * `_IRREVERSIBLE`'s names; `test_irreversible_precheck_table_parity.py` pins both
+ * directions. Row: {name, tool, verb, sub}; `sub` "" means no second verb. A
+ * `git branch` row's `sub` "-D" matches `-D`, or `--delete` with `--force`.
+ * Tokens, not substrings: `git commit -m "git push later"` is not a push. */
+typedef struct {
+    const char *name;
+    const char *tool;
+    const char *verb;
+    const char *sub;
+} door_irreversible_shape_t;
+
+static const door_irreversible_shape_t door_irreversible_command_shapes[] = {
+    { "git push", "git", "push", "" },
+    { "p4 submit", "p4", "submit", "" },
+    { "p4 shelve", "p4", "shelve", "" },
+    { "gh pr merge", "gh", "pr", "merge" },
+    { "gh release create", "gh", "release", "create" },
+    { "git branch -D", "git", "branch", "-D" },
+    { "git stash drop", "git", "stash", "drop" },
+    { "git stash clear", "git", "stash", "clear" },
+};
+
+#define DI_SHAPES_COUNT (sizeof(door_irreversible_command_shapes) / sizeof(door_irreversible_command_shapes[0]))
+
+static int di_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }
+
+static int di_eq_ci(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) {
+        char x = *a, y = *b;
+        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+        if (x != y) return 0;
+    }
+    return *a == *b;
+}
+
+static int di_is_assignment(const char *t) {
+    if (!((*t >= 'A' && *t <= 'Z') || (*t >= 'a' && *t <= 'z') || *t == '_')) return 0;
+    for (t++; *t; t++) {
+        if (*t == '=') return 1;
+        if (!((*t >= 'A' && *t <= 'Z') || (*t >= 'a' && *t <= 'z') || (*t >= '0' && *t <= '9') || *t == '_')) return 0;
+    }
+    return 0;
+}
+
+static int di_rest_has(char **tok, size_t from, size_t n, const char *want) {
+    for (size_t i = from; i < n; i++) if (di_eq(tok[i], want)) return 1;
+    return 0;
+}
+
+/* Tokens of one command segment (leading assignments not yet skipped). */
+static int di_segment_matches(char **tok, size_t n) {
+    size_t i = 0;
+    while (i < n && di_is_assignment(tok[i])) i++;
+    if (i >= n) return 0;
+    const char *tool = tok[i++];
+    const char *want_tool = NULL;
+    if (di_eq(tool, "git")) want_tool = "git";
+    else if (di_eq_ci(tool, "gh")) want_tool = "gh";
+    else if (di_eq_ci(tool, "p4")) want_tool = "p4";
+    if (!want_tool) return 0;
+    if (di_eq(want_tool, "git")) {
+        while (i < n && tok[i][0] == '-') {
+            if ((di_eq(tok[i], "-c") || di_eq(tok[i], "-C")) && i + 1 < n) i += 2;
+            else i++;
+        }
+    } else if (di_eq(want_tool, "p4")) {
+        while (i < n && tok[i][0] == '-') {
+            i++;
+            if (i < n && tok[i][0] != '-' && !di_eq_ci(tok[i], "submit") && !di_eq_ci(tok[i], "shelve")) i++;
+        }
+    }
+    if (i >= n) return 0;
+    int ci = !di_eq(want_tool, "git");
+    for (size_t s = 0; s < DI_SHAPES_COUNT; s++) {
+        const door_irreversible_shape_t *row = &door_irreversible_command_shapes[s];
+        if (!di_eq(row->tool, want_tool)) continue;
+        if (!(ci ? di_eq_ci(tok[i], row->verb) : di_eq(tok[i], row->verb))) continue;
+        if (row->sub[0] == '\0') return 1;
+        if (di_eq(row->sub, "-D")) {
+            if (di_rest_has(tok, i + 1, n, "-D")) return 1;
+            if (di_rest_has(tok, i + 1, n, "--delete") && di_rest_has(tok, i + 1, n, "--force")) return 1;
+            continue;
+        }
+        if (i + 1 < n && (ci ? di_eq_ci(tok[i + 1], row->sub) : di_eq(tok[i + 1], row->sub))) return 1;
+    }
+    return 0;
+}
+
+/* Splits `cmd` on `&&`, `||`, `;`, `|` (and the single `&`, newline and
+ * parentheses the Python matcher also splits on) outside quotes, tokenizes
+ * each segment, and asks `di_segment_matches`. */
+static int di_command_is_irreversible(const char *cmd, size_t len) {
+    char *work = (char *)malloc(len + 2);
+    char **tok = (char **)malloc(sizeof(char *) * (len + 2));
+    if (!work || !tok) { free(work); free(tok); return 0; }
+    size_t w = 0, nt = 0;
+    int in_tok = 0, found = 0;
+    char quote = 0;
+    for (size_t i = 0; i <= len && !found; i++) {
+        char ch = i < len ? cmd[i] : '\n';
+        if (quote) {
+            if (i >= len) { quote = 0; }
+            else if (ch == quote) { quote = 0; continue; }
+            else if (quote == '"' && ch == '\\' && i + 1 < len) { work[w++] = cmd[++i]; continue; }
+            else { work[w++] = ch; continue; }
+        }
+        if (ch == '\'' || ch == '"') {
+            quote = ch;
+            if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
+            continue;
+        }
+        if (ch == '\\' && i + 1 < len) {
+            if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
+            work[w++] = cmd[++i];
+            continue;
+        }
+        if (ch == ' ' || ch == '\t' || ch == '\r') {
+            if (in_tok) { work[w++] = '\0'; in_tok = 0; }
+            continue;
+        }
+        if (ch == ';' || ch == '|' || ch == '&' || ch == '\n' || ch == '(' || ch == ')') {
+            if (in_tok) { work[w++] = '\0'; in_tok = 0; }
+            if (nt && di_segment_matches(tok, nt)) found = 1;
+            nt = 0;
+            continue;
+        }
+        if (!in_tok) { tok[nt++] = work + w; in_tok = 1; }
+        work[w++] = ch;
+    }
+    free(work);
+    free(tok);
+    return found;
+}
+
+int door_payload_is_irreversible(const char *payload, size_t plen) {
+    if (!payload) return 0;
+    cursor_t c = { payload, payload + plen };
+    skip_ws(&c);
+    if (c.p >= c.end || *c.p != '{') return 0;
+    c.p++;
+    buf_t key, tool, event, cmd;
+    int have = buf_init(&key, 32) + buf_init(&tool, 16) + buf_init(&event, 16) + buf_init(&cmd, 128);
+    int r = 0;
+    if (have != 4) {
+        free(key.data); free(tool.data); free(event.data); free(cmd.data);
+        return 0;
+    }
+    const char *ti_s = NULL, *ti_e = NULL, *vs, *ve;
+    int pr;
+    while ((pr = pc_obj_next(&c, &key, &vs, &ve)) == 1) {
+        cursor_t sub = { vs, ve };
+        if (pc_key_is(&key, "tool_name") && *vs == '"') {
+            tool.len = 0;
+            if (!parse_json_string(&sub, &tool)) goto out;
+        } else if (pc_key_is(&key, "hook_event_name") && *vs == '"') {
+            event.len = 0;
+            if (!parse_json_string(&sub, &event)) goto out;
+        } else if (pc_key_is(&key, "tool_input")) {
+            ti_s = vs;
+            ti_e = ve;
+        }
+    }
+    if (pr != 0 || !ti_s || *ti_s != '{' || !pc_key_is(&tool, "Bash") || !pc_key_is(&event, "PreToolUse")) goto out;
+    {
+        cursor_t ti = { ti_s + 1, ti_e };
+        while ((pr = pc_obj_next(&ti, &key, &vs, &ve)) == 1) {
+            if (pc_key_is(&key, "command")) {
+                cursor_t sub = { vs, ve };
+                if (*vs != '"') goto out;
+                cmd.len = 0;
+                if (!parse_json_string(&sub, &cmd)) goto out;
+                r = di_command_is_irreversible(cmd.data, cmd.len);
+                break;
+            }
+        }
+    }
+out:
+    free(key.data); free(tool.data); free(event.data); free(cmd.data);
+    return r;
+}
+
+void door_irreversible_deny_reason(char *dst, size_t cap, const char *detail) {
+    snprintf(dst, cap,
+             "coordinator: the engine gave no usable answer after delivery (%s); an "
+             "irreversible-external command is not run unguarded. Retry once warm answers.",
+             (detail && *detail) ? detail : "no detail");
 }

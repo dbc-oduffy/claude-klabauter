@@ -1016,3 +1016,27 @@ def test_default_collection_is_a_valid_deterministic_slug():
     assert module._default_collection(None, ["/x/Python.EXE", "-c", "print(1)"]) == "python"
     assert module._default_collection("Release Gate", ["x"]) == "release-gate"
     assert module._default_collection(None, ["--", "-x"]) == "default"
+
+
+def test_ceiling_dumps_the_tree_before_it_kills(tmp_path):
+    """The pre-kill stack dump is the kill path's first act, so a ceiling kill always leaves stacks.
+
+    2026-11-02: a fast tier was killed at 99% with no worker dumps because the
+    dump was an operator step; the controller's own stack (idle in loop_once)
+    named nothing.
+    """
+    wrapper = _load_wrapper_module()
+    order = []
+    proc = mock.Mock()
+    proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
+    with mock.patch.object(wrapper, "_dump_process_tree", lambda p: order.append("dump")), \
+         mock.patch.object(wrapper, "_kill_process_tree", lambda p: order.append("kill") or 1):
+        assert wrapper._wait_interruptible(proc, max_runtime=0.01) == 124
+    assert order == ["dump", "kill"]
+
+
+def test_dump_without_py_spy_reports_and_does_not_raise(tmp_path, capsys):
+    wrapper = _load_wrapper_module()
+    with mock.patch.object(wrapper.shutil, "which", return_value=None):
+        wrapper._dump_process_tree(mock.Mock(pid=os.getpid()))
+    assert "py-spy not on PATH" in capsys.readouterr().err

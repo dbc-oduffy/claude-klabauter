@@ -350,10 +350,10 @@ def _launch_wf_run(repo, monkeypatch, tmp_path, engine_id, harness_id, plan_text
     tmpdir = tmp_path / "managed-tmp"
     tmpdir.mkdir()
     monkeypatch.setattr(flag_em_poll_in_flight, "_tmpdir", lambda: str(tmpdir))
-    (tmpdir / f"workflow-run-{SID}-1.json").write_text(
-        json.dumps({"run_id": harness_id, "scriptPath": f"/x/scratch/{engine_id}.workflow.mjs"}),
-        encoding="utf-8",
-    )
+    from coordinator_core import launch_records
+
+    with open(launch_records.record_path(str(tmpdir), SID, "1"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"run_id": harness_id, "scriptPath": f"/x/scratch/{engine_id}.workflow.mjs"}))
     run_dir = repo / "state" / "warp" / engine_id
     run_dir.mkdir(parents=True)
     (run_dir / "run.json").write_text("{}", encoding="utf-8")

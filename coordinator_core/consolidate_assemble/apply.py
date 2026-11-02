@@ -89,23 +89,21 @@ def _branch_exists_locally(name: str, repo_root: Path) -> bool:
 def _refuse_unmerged_tips(name: str, remote: bool, repo_root: Path) -> Optional[str]:
     """None when every tip about to be deleted is an ancestor of HEAD; else a
     refusal naming each tip that is not. Spawns: one ref lookup + one
-    `merge-base --is-ancestor` per distinct tip (local and remote usually
-    share one)."""
+    `rev-list <tips> --not HEAD` over all distinct tips (at most local + remote)."""
     wanted = [f"refs/heads/{name}"] + ([f"refs/remotes/origin/{name}"] if remote else [])
     probe = _run_git(["for-each-ref", "--format=%(refname) %(objectname)", *wanted], repo_root)
     _fail("for-each-ref", probe)
     refs = dict(line.split(" ", 1) for line in probe.stdout.splitlines() if " " in line)
     tips = {r: refs[r] for r in wanted if r in refs}
-    reachable: dict[str, bool] = {}
-    for sha in sorted(set(tips.values())):
-        proc = _run_git(["merge-base", "--is-ancestor", sha, "HEAD"], repo_root)
-        if proc.returncode not in (0, 1):
-            _fail("merge-base", proc)
-        reachable[sha] = proc.returncode == 0
+    unmerged: set[str] = set()
+    if tips:
+        walk = _run_git(["rev-list", *sorted(set(tips.values())), "--not", "HEAD"], repo_root)
+        _fail("rev-list", walk)
+        unmerged = set(walk.stdout.split())
     parts = [
         f"{ref.removeprefix('refs/')} {sha} is not an ancestor of HEAD"
         for ref, sha in tips.items()
-        if not reachable[sha]
+        if sha in unmerged
     ]
     return f"{name}: refusing delete: " + "; ".join(parts) if parts else None
 

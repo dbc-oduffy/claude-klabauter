@@ -152,8 +152,21 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
         # `required` fires only on that disposition, never on an open row.
         # 3.17.0 -> 3.18.0 (356a632daa) re-looked: version and bump-note only
         # (re-vendor of the 3.17.0 shape); no property or `required` delta.
+        # 3.18.0 -> 3.19.0 (6688a29e07) re-looked: no row-level `required` delta.
+        # 3.19.0 -> 3.20.0 (c7faca5846) re-looked: `closed` added to
+        # depends_on_plan[].status, signoff arms loosened; no row-level
+        # `required` delta.
+        # 3.20.0 -> 3.21.0 (4b95982bf6) re-looked: optional `acceptance`; no
+        # row-level `required` delta.
+        # 3.21.0 -> 3.22.0 (2d7c60d082) re-looked: optional `effort`; no
+        # row-level `required` delta.
+        # 3.22.0 -> 3.23.0 (900eac166a) re-looked: optional `premise_close`; a
+        # wont_do row carrying it is exempt from the legacy pm_approved rule;
+        # no row-level `required` delta.
+        # Two optional properties landed with no version bump: `disjoint_parallel`
+        # (aa613642fd) and `em_run` (29de62970c); no row-level `required` delta.
         # Equality, never a range -- see the docstring note.
-        self.assertEqual(schema.get("x-schema-version"), "3.18.0")
+        self.assertEqual(schema.get("x-schema-version"), "3.23.0")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

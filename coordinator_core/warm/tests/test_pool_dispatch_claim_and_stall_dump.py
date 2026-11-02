@@ -267,3 +267,142 @@ def test_stall_dump_without_a_log_or_with_zero_secs_is_a_noop(tmp_path, monkeypa
     server._arm_stall_dump(0)()
     assert not [t for t in threading.enumerate() if t.name == "stall-dump"]
     log.close()
+
+
+def _header(record: Path) -> dict:
+    head = record.read_text(encoding="utf-8").partition("--- threads ---")[0]
+    return dict(line.split(": ", 1) for line in head.strip().split("\n"))
+
+
+def test_stall_record_carries_fs_probe_and_per_thread_elapsed(tmp_path, monkeypatch):
+    import json
+
+    stall_dir = tmp_path / "stall-dumps"
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", None)
+    monkeypatch.setattr(server, "_WORKER_STALL_DIR", stall_dir)
+    claim = tmp_path / "k1"
+    claim.write_text("1")
+    disarm = server._arm_stall_dump(0.1, claim)
+    assert _wait_for(lambda: stall_dir.is_dir() and any(stall_dir.glob("*.txt")))
+    disarm()
+
+    (record,) = stall_dir.glob("*.txt")
+    header = _header(record)
+    assert float(header["fs-probe-ms"]) >= 0
+    assert float(header["op-elapsed-s"]) >= 0.1
+    assert float(header["process-cpu-s"]) >= 0
+    elapsed = json.loads(header["thread-elapsed-s"])
+    assert f"0x{threading.get_ident():x}" in elapsed
+    assert not list(stall_dir.glob(".probe-*"))
+
+
+def test_fs_probe_reports_an_error_not_a_time_when_the_dir_is_unusable(tmp_path):
+    assert server._fs_probe_ms(tmp_path / "missing").startswith("error:")
+
+
+def test_blocked_leg_names_the_handler_thread_not_the_parked_arming_thread(tmp_path):
+    import json
+
+    release = threading.Event()
+    entered = threading.Event()
+
+    def _run_handler_recording():
+        entered.set()
+        release.wait(30)
+
+    worker = threading.Thread(target=_run_handler_recording)
+    worker.start()
+    try:
+        assert entered.wait(10)
+        claim = tmp_path / "k1"
+        server._write_blocked_leg(claim, threading.get_ident(), 0.0, 1.0)
+        leg = json.loads(server._leg_path(claim).read_text(encoding="utf-8"))
+        assert any("_run_handler_recording" in f for f in leg["frames"])
+    finally:
+        release.set()
+        worker.join()
+
+
+def test_leg_trace_run_length_encodes_samples_into_timed_rows():
+    trace = server._LegTrace()
+    trace.note(0.0, "a.py::f")
+    trace.note(0.5, "a.py::f")
+    trace.note(1.0, None)
+    trace.note(1.5, "b.py::g > c.py::h")
+    trace.close(2.5)
+    assert trace._rows == [[0, 500, "a.py::f"], [1500, 1000, "b.py::g > c.py::h"]]
+
+
+def _slow_leg_one(release):
+    release.wait(30)
+
+
+def _slow_leg_two(release):
+    release.wait(30)
+
+
+def test_stall_record_times_each_leg_the_handler_thread_sat_in(tmp_path, monkeypatch):
+    import json
+
+    stall_dir = tmp_path / "stall-dumps"
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", None)
+    monkeypatch.setattr(server, "_WORKER_STALL_DIR", stall_dir)
+    monkeypatch.setattr(server, "_LEG_SAMPLE_SECS", 0.05)
+    leg_one, leg_two = threading.Event(), threading.Event()
+    entered = threading.Event()
+
+    def _run_handler_recording():
+        entered.set()
+        _slow_leg_one(leg_one)
+        _slow_leg_two(leg_two)
+
+    worker = threading.Thread(target=_run_handler_recording)
+    worker.start()
+    try:
+        assert entered.wait(10)
+        claim = tmp_path / "k1"
+        claim.write_text("1")
+        disarm = server._arm_stall_dump(0.1, claim)
+        assert _wait_for(lambda: stall_dir.is_dir() and any(stall_dir.glob("*.txt")))
+        time.sleep(0.4)
+        leg_one.set()
+        time.sleep(0.4)
+        disarm()
+        leg_two.set()
+        assert _wait_for(lambda: "legs-ms" in next(stall_dir.glob("*.txt")).read_text("utf-8"))
+    finally:
+        leg_one.set()
+        leg_two.set()
+        worker.join()
+
+    (record,) = stall_dir.glob("*.txt")
+    rows = json.loads(_header(record)["legs-ms"])
+    labels = [row[2] for row in rows]
+    assert any("_slow_leg_one" in label for label in labels)
+    assert any("_slow_leg_two" in label for label in labels)
+    first = next(row for row in rows if "_slow_leg_one" in row[2])
+    assert first[1] >= 200 and rows == sorted(rows, key=lambda r: r[0])
+    assert "--- threads ---" in record.read_text(encoding="utf-8")
+
+
+def test_a_hang_with_no_claim_still_writes_an_accept_record(tmp_path):
+    stall_dir = tmp_path / "stall-dumps"
+    phase = ["gate"]
+    disarm = server._arm_accept_stall(stall_dir, 0.1, tmp_path / "unclaimed", "k1", phase)
+    assert _wait_for(lambda: any(stall_dir.glob("*-accept-k1.txt")) if stall_dir.is_dir() else False)
+    disarm()
+
+    (record,) = stall_dir.glob("*-accept-k1.txt")
+    header = _header(record)
+    assert "_pool_dispatch:gate" in header["leg"]
+    assert float(header["fs-probe-ms"]) >= 0
+
+
+def test_a_claimed_or_disarmed_request_writes_no_accept_record(tmp_path):
+    stall_dir = tmp_path / "stall-dumps"
+    claim = tmp_path / "claimed"
+    claim.write_text("1")
+    server._arm_accept_stall(stall_dir, 0.1, claim, "k1", ["result"])
+    server._arm_accept_stall(stall_dir, 0.1, tmp_path / "other", "k2", ["gate"])()
+    time.sleep(0.6)
+    assert not list(stall_dir.glob("*.txt")) if stall_dir.exists() else True

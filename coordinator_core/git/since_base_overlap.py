@@ -14,6 +14,7 @@ same plan stamps it).
 from __future__ import annotations
 
 import difflib
+import json
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -23,6 +24,7 @@ from coordinator_core.git.commit_walk import commit_meta
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.git_objects import read_object, read_ref_loose_or_packed
 from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+from coordinator_core.session import record_homes
 
 WALK_CAP = 1000
 VERSIONS_PER_PATH_CAP = 64
@@ -80,6 +82,24 @@ def _base_ancestors(common_dir: Path, base: str) -> List[str]:
         out.append(parents[0])
         meta = commit_meta(common_dir, parents[0])
     return out
+
+
+def _ask_sizing_lineage(root: Path, run_id: Optional[str]) -> Optional[str]:
+    """``warp-<sizing stem>`` for an ``ask-`` run, read from its ``run.json``; None otherwise.
+
+    A child warp run id is ``warp-<sizing stem>-<stamp>`` (``run_lineage``), so this is the lineage
+    its halt records carry. One small file read, no spawn.
+    """
+    if not run_id or not run_id.startswith("ask-") or "/" in run_id or "\\" in run_id or ".." in run_id:
+        return None
+    try:
+        data = json.loads((Path(record_homes.home_dir(str(root), "warp")) / run_id / "run.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rel = data.get("sizing_rel") if isinstance(data, dict) else None
+    if not isinstance(rel, str) or not rel:
+        return None
+    return "warp-" + Path(rel).stem
 
 
 def _head_sha(worktree_root: Path) -> Optional[str]:
@@ -162,9 +182,10 @@ def check(
     ``SINCE_BASE_OVERLAP``; notes carry finding-free markers (``walk-capped``, ``unreadable:<path>``)
     the caller surfaces. ``run_id`` is accepted for the pinned signature; a commit whose subject
     ``ask_contract.halted_run_id`` parses to ``run_id`` or to a run id of the same sizing lineage
-    (``ask_contract.run_lineage``: a refire's predecessor), or whose ``Halt-Plan`` trailer names ``plan``
-    (an earlier run id of the same plan), is the caller's own halt record. ``plan``
-    narrows the own-commit test to this run's plan."""
+    (``ask_contract.run_lineage``: a refire's predecessor; for an ``ask-`` run, the lineage of the sizing
+    its ``state/warp/<run_id>/run.json`` names, so a child warp run's halt record is own), or whose
+    ``Halt-Plan`` trailer names ``plan`` (an earlier run id of the same plan), is the caller's own halt
+    record. ``plan`` narrows the own-commit test to this run's plan."""
     from coordinator_core.ops.dispatch_emit.landing_integrity import SINCE_BASE_OVERLAP, Finding
 
     root = Path(worktree_root)
@@ -189,7 +210,7 @@ def check(
         chain_walked = True
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id, run_lineage
 
-    lineage = run_lineage(run_id)
+    lineage = run_lineage(run_id) or _ask_sizing_lineage(root, run_id)
     halt_plan_re = re.compile(r"^" + re.escape(HALT_PLAN_TRAILER) + r":[ \t]*(\S+)[ \t]*$", re.M)
     own_cache: List[set] = []
 

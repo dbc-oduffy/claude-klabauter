@@ -172,20 +172,15 @@ def _compaction_boundary_is_most_recent_event(events: list) -> bool:
 
 def _run_ids_in_flight(tmpdir: str, session_id: str) -> list:
     """`run_id`s this session's own workflow-run records name, read off
-    `workflow-run-<session_id>-<task_id>.json` (`_capture_workflow_run_record_sync`'s own
-    persist shape). Best-effort glob; any I/O error yields an empty list (no in-flight run
-    seen), which is the fail-open direction — never claim a run is in flight on a read error."""
+    the session's `launch_records` dir. Best-effort scan; any I/O error yields an empty list (no
+    in-flight run seen), which is the fail-open direction — never claim a run is in flight on a
+    read error."""
     try:
-        prefix = f"workflow-run-{session_id}-"
+        from coordinator_core import launch_records
+
         ids = []
-        try:
-            names = os.listdir(tmpdir)
-        except OSError:
-            return []
-        for name in names:
-            if not (name.startswith(prefix) and name.endswith(".json")):
-                continue
-            record = launch_record(os.path.join(tmpdir, name))
+        for path in launch_records.session_record_paths(tmpdir, session_id):
+            record = launch_record(path)
             run_id = record.get("run_id") if record else None
             if isinstance(run_id, str) and run_id:
                 ids.append(run_id)

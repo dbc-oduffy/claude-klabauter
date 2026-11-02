@@ -37,6 +37,20 @@ def test_clause_routes_named_urls_to_seeds_not_targets() -> None:
         assert kind in clause
 
 
+def test_clause_keeps_sibling_synthesis_research_and_census_a_file_change() -> None:
+    clause = ac.RESEARCH_CLASSIFY_CLAUSE
+    assert "synthesis over the research outputs of sibling asks" in clause
+    assert "return `research` null" in clause
+
+
+def test_bounded_single_write_excludes_sibling_synthesis_keeps_census() -> None:
+    research = {"value_class": "corpus"}
+    census = {"research": research, "intent": "Classify the 10 reports in the folder"}
+    synth = {"research": research, "intent": "Synthesis over the ten outputs of the sibling asks, 10 reports"}
+    assert ac.research_is_bounded_single_write(census, ["out.md"]) is True
+    assert ac.research_is_bounded_single_write(synth, ["out.md"]) is False
+
+
 def test_halt_research_differs_from_room() -> None:
     assert ac.HALT_RESEARCH == "research"
     assert ac.HALT_RESEARCH != ac.HALT_ROOM

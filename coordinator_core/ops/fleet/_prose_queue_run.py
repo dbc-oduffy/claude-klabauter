@@ -61,6 +61,18 @@ def _existing_state(family_dir: Path) -> "tuple[List[str], Dict[str, str]]":
     return names, titles
 
 
+def _is_whole(path: Path, content: str) -> bool:
+    """True when ``path`` holds exactly ``content``'s byte length.
+
+    Trap: ``_write_out_path_create`` writes in place with no rename, so a hard kill can
+    leave a truncated entry under the final name; filename dedup alone would skip it forever.
+    """
+    try:
+        return path.stat().st_size == len(content.encode("utf-8"))
+    except OSError:
+        return False
+
+
 def _empty_report(outcome: str) -> dict:
     return {
         "outcome": outcome,
@@ -121,6 +133,7 @@ def _migrate_family(
     seen: Set[str] = set()
     # Every entry shares one output dir; resolve() is a per-call realpath, so memoise it per dirname.
     resolved_dirs: Dict[str, Path] = {}
+    made_dirs: Set[str] = set()
 
     for row in parsed.rows:
         cand = fill_fields(family, row)
@@ -145,15 +158,19 @@ def _migrate_family(
             continue
 
         suffix = f"-{prepared.slug}-{prepared.digest12}.yaml"
-        if any(n.endswith(suffix) for n in names):
+        hit = next((n for n in names if n.endswith(suffix)), None)
+        if hit is not None and _is_whole(family_dir / hit, prepared.yaml_content):
             _skip(report, REASON_ALREADY, cand)
             continue
+        # A size mismatch is a partial file left by a hard kill mid-create: replace it.
+        if hit is not None and not dry_run:
+            os.unlink(family_dir / hit)
         if prepared.digest12 in seen:
             _skip(report, REASON_DUPLICATE, cand)
             continue
         seen.add(prepared.digest12)
         match = existing_titles.get(_norm_title(str(cand.fields["title"])))
-        if match is not None:
+        if match is not None and match != hit:
             _skip(report, REASON_TITLE_MATCH, cand, path=f"state/{family}/{match}")
             continue
 
@@ -167,7 +184,10 @@ def _migrate_family(
                     f"queue entry path {prepared.out_path!r} is outside {str(confined_dir)!r}; "
                     "refusing to write (QUEUE_APPEND_OUTPUT_ROOT override or meta-repo route)"
                 )
-            write_prepared_entry(prepared)
+            if raw_dir not in made_dirs:
+                os.makedirs(raw_dir, exist_ok=True)
+                made_dirs.add(raw_dir)
+            write_prepared_entry(prepared, new_in_ready_dir=True)
 
         report[BUCKET_TO_MIGRATE] += 1
         if FLAG_AMBIGUOUS in cand.flags:

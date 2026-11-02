@@ -1,4 +1,4 @@
-"""Detect live mid-stage Workflow runs across registered repos, so a warm-pair stop can refuse first.
+"""Detect live mid-stage Workflow runs across registered repos, so a warm-pair handover can log them.
 
 Pure file reads: globs each registered repo's state/warp/*/run-stage.json; spawns nothing.
 """
@@ -89,23 +89,45 @@ def _owner_live(session_id: object, memo: Optional[dict] = None) -> bool:
     return live
 
 
+def _token_held(repo_root: Path, run_id: str) -> bool:
+    """True when the run holds a live run token or a claimed one (mid terminal-commit); pathlib reads only.
+
+    An unreadable token store (OSError) reads as held, so a live run is not dropped from the handover
+    log on a transient read failure; a malformed record reads as not held."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    try:
+        return any(r.get("run_id") == run_id for r in run_token.held_records(repo_root))
+    except OSError:
+        return True
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
 def _live_stage(
     data: dict,
     cutoff: datetime,
     owner_memo: Optional[dict] = None,
+    *,
+    repo_root: Path,
+    run_id: str,
+    require_token: bool = True,
 ) -> Optional[str]:
     """The run's stage when it is live under the shared predicate, else None.
 
     Liveness rests on the run's own `last_activity_at` stamp and a live owner; a workflow journal
     that merely names the run id is not evidence, since a journal embeds the ids it launched.
+    A run holding no run token (live or claimed) is hand-landed or abandoned, not live.
     """
     stage = data.get("stage")
     if not isinstance(stage, str) or not stage or stage in _TERMINAL_STAGES:
         return None
     ts = _parse_ts(data.get("last_activity_at"))
-    if ts is not None and ts >= cutoff and _owner_live(data.get("session_id"), owner_memo):
-        return stage
-    return None
+    if ts is None or ts < cutoff or not _owner_live(data.get("session_id"), owner_memo):
+        return None
+    if require_token and not _token_held(repo_root, run_id):
+        return None
+    return stage
 
 
 def run_is_live(
@@ -115,7 +137,7 @@ def run_is_live(
     now: Optional[datetime] = None,
     window: timedelta = FRESHNESS_WINDOW,
 ) -> bool:
-    """True when the run's stage is not halted/complete, its owning session is live, and its own `last_activity_at` is inside `window`.
+    """True when the run's stage is not halted/complete, its owning session is live, its own `last_activity_at` is inside `window`, and it holds a run token.
 
     Unreadable or missing records are not live.
     """
@@ -124,14 +146,33 @@ def run_is_live(
     if data is None:
         return False
     cutoff = (now or datetime.now(timezone.utc)) - window
-    return _live_stage(data, cutoff) is not None
+    return _live_stage(data, cutoff, repo_root=repo_root, run_id=run_id) is not None
+
+
+def run_stage_live(
+    repo_root: Path,
+    run_id: str,
+    *,
+    now: Optional[datetime] = None,
+    window: timedelta = FRESHNESS_WINDOW,
+) -> bool:
+    """run_is_live without the run-token test: stage, live owner and fresh activity only.
+
+    The reaper's bar: a mid-stage run between ops holds no active token and must not be reaped.
+    """
+    repo_root = Path(repo_root)
+    data = _read_stage(Path(record_homes.home_dir(str(repo_root), "warp")) / run_id / "run-stage.json")
+    if data is None:
+        return False
+    cutoff = (now or datetime.now(timezone.utc)) - window
+    return _live_stage(data, cutoff, repo_root=repo_root, run_id=run_id, require_token=False) is not None
 
 
 def run_owner_holds(repo_root: Path, run_id: str) -> bool:
     """True when the run's stage is non-terminal and its owning session is live, whatever the age
     of `last_activity_at`. A long stage (an executor, a review) stamps nothing for its whole length,
     so freshness alone reads a live run as abandoned. This is the reaper's bar, which is stricter
-    than run_is_live, because reaping a live run is not undone by a refire."""
+    than `run_stage_live` (no freshness window), because reaping a live run is not undone by a refire."""
     data = _read_stage(Path(record_homes.home_dir(str(Path(repo_root)), "warp")) / run_id / "run-stage.json")
     if data is None:
         return False
@@ -147,7 +188,7 @@ def find_live_runs(
     now: Optional[datetime] = None,
     window: timedelta = FRESHNESS_WINDOW,
 ) -> list[LiveRun]:
-    """Return runs `run_is_live` accepts: not halted/complete, owner session live, own stage activity inside the window.
+    """Return runs `run_is_live` accepts: not halted/complete, owner session live, own stage activity inside the window, run token held.
 
     `repos` maps registry key to repo root (default: the registry). Unreadable repos or
     records are skipped. Result is sorted by repo then run_id.
@@ -172,7 +213,7 @@ def find_live_runs(
             data = _read_stage(rec)
             if data is None:
                 continue
-            stage = _live_stage(data, cutoff, owner_memo)
+            stage = _live_stage(data, cutoff, owner_memo, repo_root=Path(root), run_id=rec.parent.name)
             if stage is None:
                 continue
             found.append(LiveRun(name, rec.parent.name, stage, str(data.get("last_activity_at") or "")))
@@ -180,35 +221,10 @@ def find_live_runs(
     return found
 
 
-def format_refusal(runs: list[LiveRun]) -> str:
-    """One line per live run plus a terse alternative."""
-    lines = ["Live Workflow runs mid-stage; the warm pair stop would cut them:"]
-    lines += [
-        f"  {r.repo}  {r.run_id}  stage={r.stage}  last_activity={r.last_activity_at}"
+def format_handover(runs: list[LiveRun]) -> list[str]:
+    """One log line per live run the warm-pair handover passes over; never a refusal."""
+    return [
+        f"warm handover: live run {r.repo} {r.run_id} stage={r.stage} "
+        f"last_activity={r.last_activity_at}; in-flight ops drain, run continues"
         for r in runs
     ]
-    lines.append("Alternative: publish again once those runs finish.")
-    return "\n".join(lines)
-
-
-def unnamed_runs(runs: list[LiveRun], names: Optional[list[str]]) -> list[LiveRun]:
-    """The runs in `runs` whose run_id is not in `names` (None or empty names no run)."""
-    named = set(names or ())
-    return [r for r in runs if r.run_id not in named]
-
-
-def require_reason(raw: object) -> str:
-    """Return the stripped override reason; raise ValueError when it is not a non-blank string."""
-    if not isinstance(raw, str) or not raw.strip():
-        raise ValueError("--allow-mid-stage needs a non-empty reason")
-    return raw.strip()
-
-
-def format_override(reason: str, runs: list[LiveRun]) -> str:
-    """The log record for an override: the reason, then one line per run the warm pair stop will cut."""
-    lines = [f"--allow-mid-stage: reason={reason!r}; cutting {len(runs)} live Workflow run(s):"]
-    lines += [
-        f"  {r.repo}  {r.run_id}  stage={r.stage}  last_activity={r.last_activity_at}"
-        for r in runs
-    ]
-    return "\n".join(lines)

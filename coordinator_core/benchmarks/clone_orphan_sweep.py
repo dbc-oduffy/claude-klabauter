@@ -180,6 +180,9 @@ def _still_running(proc) -> bool:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(prog="clone_orphan_sweep")
     ap.add_argument("--repo-root", required=True)
     args = ap.parse_args(argv)

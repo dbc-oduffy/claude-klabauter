@@ -151,6 +151,27 @@ def test_handler_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo)
     assert [r["id"] for r in reply["rows"]] == ["X1"]
 
 
+_UNKEYED_MEMO_PLAN = PLAN.split("```yaml plan-tasks")[0] + """```yaml plan-tasks
+- id: M1
+  title: send the memo
+  change_kind: doc-edit
+  kind: memo-send
+  memo_to: coordinator-content-repo-em
+  surface: docs/x.md
+  writes: []
+```
+"""
+
+
+def test_unkeyed_memo_send_row_is_a_named_refusal_not_an_internal_error(repo):
+    (repo / PLAN_REL).write_text(_UNKEYED_MEMO_PLAN, encoding="utf-8", newline="\n")
+    with pytest.raises(AskStageError, match=r"SPINE-REFUSED.*MemoRowNoReceiptError.*'M1'"):
+        stage(repo, run_id="r1", plan_rel=PLAN_REL)
+    (repo / ".git").mkdir()
+    reply = _handler({"run_id": "r2", "plan_path": PLAN_REL, "writes": []}, repo_root=repo / ".git")
+    assert "MemoRowNoReceiptError" in reply["error"] and "SPINE-REFUSED" in reply["error"]
+
+
 def test_xs_spine_and_manifest_carry_a_real_form_plan_id(repo):
     import re
 

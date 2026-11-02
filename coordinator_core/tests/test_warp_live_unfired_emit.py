@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from coordinator_core import warp_live
+from coordinator_core import launch_records, warp_live
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -55,7 +56,7 @@ def test_an_unfired_emit_inside_the_grace_window_is_not_live(repo, dirs, tmp_pat
 def test_a_launched_in_flight_run_for_the_same_sizing_is_still_live(repo, dirs, tmp_path):
     run_token.mint(repo, "r1", SCRIPT, session_id="s1", sizing_rel=SIZING)
     _unfired_run_dir(repo, "r1")
-    (dirs[0] / "workflow-run-s1-w1.json").write_text(
+    Path(launch_records.record_path(str(dirs[0]), "s1", "w1")).write_text(
         json.dumps({"scriptPath": SCRIPT, "fired_at": 1.0}), encoding="utf-8"
     )
     transcript = tmp_path / "t.jsonl"
@@ -67,7 +68,7 @@ def test_an_unfired_token_does_not_mask_a_launched_run_for_the_same_sizing(repo,
     run_token.mint(repo, "r-unfired", "scratch/warp/old.mjs", session_id="s0", sizing_rel=SIZING)
     _unfired_run_dir(repo, "r-unfired")
     run_token.mint(repo, "r-live", SCRIPT, session_id="s1", sizing_rel=SIZING)
-    (dirs[0] / "workflow-run-s1-w1.json").write_text(
+    Path(launch_records.record_path(str(dirs[0]), "s1", "w1")).write_text(
         json.dumps({"scriptPath": SCRIPT, "fired_at": 1.0}), encoding="utf-8"
     )
     transcript = tmp_path / "t.jsonl"

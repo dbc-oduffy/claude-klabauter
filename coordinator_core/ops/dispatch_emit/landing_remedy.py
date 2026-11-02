@@ -58,7 +58,8 @@ def blob_drift_remedy(
 
         remedy = (
             f"Real drift: call workflow.revise run_id={run_id} with a note, then make the refire call "
-            "its reply's next.call returns; the refire's review re-reads the current bytes. "
+            "its reply's next.call returns; the expectation moves to the bytes the refire's own review "
+            "pass reads or writes, so a land before that review repeats this refusal. "
             f"Or leave the path out: {WITHHOLD_CALL.format(run_id=run_id)}"
         )
     else:

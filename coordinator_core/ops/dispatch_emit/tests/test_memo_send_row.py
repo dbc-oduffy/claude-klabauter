@@ -113,6 +113,26 @@ def test_memo_row_naming_no_slug_is_refused(tmp_path):
         read_spine(_plan(tmp_path, row))
 
 
+def test_sent_receipt_surface_keys_the_row_on_its_topic(tmp_path):
+    row = _MEMO_ROW.replace(f"{_OUTBOX}/topic.md", f"{_OUTBOX}/sent/reply-topic.md")
+    rows = {r.id: r for r in read_spine(_plan(tmp_path, row, _CODE_ROW))}
+    assert rows["M1"].memo_send["slug"] == "reply-topic"
+
+
+def test_sent_receipt_in_writes_keys_the_row_on_its_topic(tmp_path):
+    row = _MEMO_ROW.replace("surface: " + f"{_OUTBOX}/topic.md", "surface: docs/x.md\n  kind: memo-send").replace(
+        "writes: []", f"writes:\n    - {_OUTBOX}\\sent\\reply-topic.md"
+    )
+    rows = {r.id: r for r in read_spine(_plan(tmp_path, row, _CODE_ROW))}
+    assert rows["M1"].memo_send["slug"] == "reply-topic"
+
+
+def test_malformed_sent_receipt_still_refuses_unkeyed(tmp_path):
+    row = _MEMO_ROW.replace(f"{_OUTBOX}/topic.md", f"{_OUTBOX}/sent/nested/x.md")
+    with pytest.raises(MemoRowNoReceiptError):
+        read_spine(_plan(tmp_path, row))
+
+
 def test_memo_row_without_memo_to_is_refused_naming_row_and_field(tmp_path):
     row = _MEMO_ROW.replace("  memo_to: example-game-repo-em\n", "")
     with pytest.raises(MemoRowNoReceiverError, match=r"'M1'.*memo_to"):

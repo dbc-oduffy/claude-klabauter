@@ -135,11 +135,31 @@ def executor_commit_act(raw: Dict[str, Any]) -> Optional[str]:
 EM_OWNED_AGENT_TYPES = frozenset({"coordinator:em"})
 
 
+_RULING_ASK = re.compile(r"^\s*ask\s+`?coordinator:apm\b", re.IGNORECASE)
+
+
+def ruling_ask_act(raw: Dict[str, Any]) -> bool:
+    """True when the row's act is asking the APM for a ruling: no write act, and the body's first
+    non-blank line opens `Ask coordinator:apm`. An executor holds no agent-spawn or SendMessage tool."""
+    if raw.get("writes") or raw.get("writes_under") or raw.get("appends"):
+        return False
+    body = raw.get("body")
+    if not isinstance(body, str):
+        return False
+    for line in body.splitlines():
+        if line.strip():
+            return _RULING_ASK.match(line) is not None
+    return False
+
+
 def row_is_em_performed(raw: Dict[str, Any]) -> bool:
-    """True for a declared `performer: em` row, an `agent_type` in `EM_OWNED_AGENT_TYPES`, one whose
-    only act is agent-forbidden, or one blocked on a capability only the EM session has."""
+    """True for a declared `performer: em` or `em_run: true` row, an `agent_type` in
+    `EM_OWNED_AGENT_TYPES`, a ruling-ask row, one whose only act is agent-forbidden, or one blocked on
+    a capability only the EM session has."""
     return (
         raw.get("performer") == "em"
+        or raw.get("em_run") is True
+        or ruling_ask_act(raw)
         or raw.get("agent_type") in EM_OWNED_AGENT_TYPES
         or forbidden_sole_act(raw) is not None
         or em_only_capability(raw) is not None

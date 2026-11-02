@@ -817,6 +817,7 @@ static int write_all(HANDLE h, const char *data, size_t len);
 
 static const char *g_hook_payload = NULL;
 static size_t g_hook_payload_len = 0;
+static char g_hook_op[128] = "";
 
 
 static int emit_hook_pass_loudly(const char *reason) {
@@ -1451,15 +1452,46 @@ static int emit_indeterminate(const char *detail) {
     return 1;
 }
 
+/* Hook mode, pre-check not armed: the op may have completed, so the caller
+ * gets a hook envelope naming the deadline and the op, never the JSON-RPC body. */
+static int emit_hook_post_delivery(void) {
+    buf_t event, out;
+    const char *event_name = NULL;
+    int have_event = buf_init(&event, 32);
+    if (have_event && g_hook_payload &&
+        door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
+        event_name = event.data;
+    }
+    int built = buf_init(&out, 1024) &&
+        build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS, event_name);
+    if (have_event) free(event.data);
+    if (!built) {
+        fwprintf(stderr, L"door: engine gave no answer in time: %hs\n", g_hook_op);
+        free(out.data);
+        return 1;
+    }
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), out.data, out.len);
+    free(out.data);
+    return 0;
+}
+
 /* Every post-delivery failure of the warm read. For the pre-checked hook
  * entrypoint the guard is idempotent, so the answer is the pre-check's
- * rewrite when it matched, else a loud pass; any other caller keeps the
+ * rewrite when it matched, else a loud pass; any other hook op gets a
+ * hook envelope naming the timeout; any other caller keeps the
  * indeterminate refusal (it may have mutated). */
 static int emit_post_delivery_failure(const char *detail) {
+    if (g_door_hook_mode && g_hook_payload &&
+        door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
+        char reason[640];
+        door_irreversible_deny_reason(reason, sizeof reason, detail);
+        return emit_hook_deny(reason);
+    }
     if (g_precheck_armed) {
         if (emit_precheck_if_matched()) return 0;
         return emit_hook_pass_loudly(detail);
     }
+    if (g_door_hook_mode) return emit_hook_post_delivery();
     return emit_indeterminate(detail);
 }
 
@@ -1722,6 +1754,13 @@ int main(void) {
         return fall_through(1, NULL, NULL);
     }
 
+    if (g_door_hook_mode && argc >= 2) {
+        size_t n = 0;
+        for (const wchar_t *w = wargv[1]; *w && n < sizeof g_hook_op - 1; w++) {
+            g_hook_op[n++] = (*w > 31 && *w < 127 && *w != '"' && *w != '\\') ? (char)*w : '?';
+        }
+        g_hook_op[n] = '\0';
+    }
     if (g_door_hook_mode && argc >= 2 && wcscmp(wargv[1], DOOR_PRECHECK_ENTRYPOINT_W) == 0) {
         g_precheck_armed = 1;
         hook_precheck_prepare();
@@ -2265,7 +2304,8 @@ int main(void) {
         int have_error = 0;
         long error_code = 0;
         int success = parse_response_envelope(resp.data, line_len, &rf, &have_error, &error_code);
-        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE && !g_precheck_armed) {
+        if (!success && have_error && error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE &&
+            !g_precheck_armed && !g_door_hook_mode) {
             HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
             write_all(hout, resp.data, line_len);
             write_all(hout, "\n", 1);

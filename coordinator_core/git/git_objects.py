@@ -38,8 +38,10 @@ from __future__ import annotations
 
 import binascii
 import hashlib
+import itertools
 import mmap
 import os
+import re
 import struct
 import threading
 import time
@@ -167,27 +169,38 @@ def flush_object_batch() -> None:
         for kind, payload in pending.values():
             write_object(gitdir, kind, payload)
         return
-    _write_pack(gitdir, pending)
+    _flush_pack(gitdir, pending)
+
+
+def _pack_entry(kind: bytes, payload: bytes) -> bytes:
+    size = len(payload)
+    first = (_PACK_TYPE_NUMS[kind.decode("ascii")] << 4) | (size & 0x0F)
+    size >>= 4
+    header = bytearray()
+    while size:
+        header.append(first | 0x80)
+        first = size & 0x7F
+        size >>= 7
+    header.append(first)
+    return bytes(header) + zlib.compress(payload)
 
 
 def _build_pack(pending: dict) -> tuple[bytes, bytes, str]:
-    entries = sorted((bytes.fromhex(sha), kind, payload) for sha, (kind, payload) in pending.items())
+    return _assemble_pack(
+        (bytes.fromhex(sha), entry, binascii.crc32(entry))
+        for sha, (kind, payload) in pending.items()
+        for entry in (_pack_entry(kind, payload),)
+    )
+
+
+def _assemble_pack(entries) -> tuple[bytes, bytes, str]:
+    """`(pack, idx, name)` from `(raw sha, pack entry bytes, entry crc32)` triples."""
+    entries = sorted(entries)
     out = bytearray(b"PACK" + struct.pack(">II", 2, len(entries)))
     meta = []
-    for raw_sha, kind, payload in entries:
-        offset = len(out)
-        size = len(payload)
-        first = (_PACK_TYPE_NUMS[kind.decode("ascii")] << 4) | (size & 0x0F)
-        size >>= 4
-        header = bytearray()
-        while size:
-            header.append(first | 0x80)
-            first = size & 0x7F
-            size >>= 7
-        header.append(first)
-        entry = bytes(header) + zlib.compress(payload)
+    for raw_sha, entry, crc in entries:
+        meta.append((raw_sha, crc, len(out)))
         out += entry
-        meta.append((raw_sha, binascii.crc32(entry), offset))
     pack_sum = hashlib.sha1(out).digest()
     out += pack_sum
     fanout = [0] * 256
@@ -212,7 +225,10 @@ def _write_pack(gitdir: Path, pending: dict) -> None:
     content hash, so a peer racing the same objects writes identical bytes and
     an idx already present is success."""
     pack, idx, name = _build_pack(pending)
-    pack_dir = Path(gitdir, "objects", "pack")
+    _place_pack(Path(gitdir, "objects", "pack"), pack, idx, name)
+
+
+def _place_pack(pack_dir: Path, pack: bytes, idx: bytes, name: str) -> None:
     base = pack_dir / f"pack-{name}"
     idx_path = base.with_suffix(".idx")
     if idx_path.exists():
@@ -229,6 +245,129 @@ def _write_pack(gitdir: Path, pending: dict) -> None:
                 tmp.unlink()
             except OSError:
                 pass
+
+
+#: A fold rewrites the whole tail pack, so its cost grows with the tail; a tail at or past this
+#: many bytes is left as it is and the next batch starts a new tail. Measured 34ms elapsed to fold
+#: 50 objects into a 4.15MB / 13k-object tail on the dev box (limit 200ms); cost is linear in the tail.
+_FOLD_MAX_BYTES = 4 * 1024 * 1024
+
+#: Names the pack this engine last minted (line 1, the tail a flush folds into), then packs a fold
+#: could not delete (a Windows lock), retried on the next flush. Not `.idx`/`.pack`, so git and
+#: `_pack_listing` ignore it.
+_TAIL_MARKER = "claude-klabauter-tail"
+_PACK_NAME_RE = re.compile(r"[0-9a-f]{40}")
+_REMOVE_RETRY_DELAYS_S = (0.01, 0.03, 0.1)
+
+
+def _read_tail_marker(pack_dir: Path) -> tuple[Optional[str], list[str]]:
+    try:
+        lines = (pack_dir / _TAIL_MARKER).read_text(encoding="ascii").split()
+    except (OSError, UnicodeError):
+        return None, []
+    names = [n for n in lines if _PACK_NAME_RE.fullmatch(n)]
+    return (names[0], names[1:]) if names else (None, [])
+
+
+def _write_tail_marker(pack_dir: Path, tail: str, leftovers: list[str]) -> None:
+    final = pack_dir / _TAIL_MARKER
+    tmp = final.with_name(f"{final.name}.tmp{os.getpid()}")
+    tmp.write_bytes("".join(n + "\n" for n in (tail, *leftovers)).encode("ascii"))
+    if not _replace_with_retry(tmp, final):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def _read_tail_entries(pack_dir: Path, name: str) -> Optional[list]:
+    """The `(raw sha, entry bytes, crc)` triples of a pack `_build_pack` wrote, copied verbatim
+    (no inflate, no deflate); `None` when the pair is missing, torn or not shaped like one of ours
+    (a delta, a large-offset table)."""
+    try:
+        base = pack_dir / f"pack-{name}"
+        idx = base.with_suffix(".idx").read_bytes()
+        pack = base.with_suffix(".pack").read_bytes()
+    except OSError:
+        return None
+    if len(idx) < 8 + 1024 + 40 or idx[:8] != b"\xfftOc\x00\x00\x00\x02":
+        return None
+    count = struct.unpack_from(">I", idx, 8 + 255 * 4)[0]
+    sha_pos = 8 + 1024
+    crc_pos = sha_pos + count * 20
+    off_pos = crc_pos + count * 4
+    if len(idx) != off_pos + count * 4 + 40:
+        return None
+    if pack[:4] != b"PACK" or struct.unpack_from(">I", pack, 8)[0] != count or pack[-20:] != idx[-40:-20]:
+        return None
+    if hashlib.sha1(memoryview(pack)[:-20]).digest() != pack[-20:]:
+        return None
+    offsets = struct.unpack_from(f">{count}I", idx, off_pos)
+    ends = dict(zip(sorted(offsets), (*sorted(offsets)[1:], len(pack) - 20)))
+    crcs = struct.unpack_from(f">{count}I", idx, crc_pos)
+    return [
+        (idx[sha_pos + 20 * i : sha_pos + 20 * i + 20], pack[offsets[i] : ends[offsets[i]]], crcs[i])
+        for i in range(count)
+    ]
+
+
+def _remove_pack_pair(pack_dir: Path, name: str) -> bool:
+    """Idx first, so a reader stops listing the pack before its bytes go. `False` when a
+    Windows lock outlasts the retries."""
+    for suffix in (".idx", ".pack"):
+        path = pack_dir / f"pack-{name}{suffix}"
+        for delay in (None, *_REMOVE_RETRY_DELAYS_S):
+            if delay is not None:
+                time.sleep(delay)
+            try:
+                path.unlink()
+                break
+            except FileNotFoundError:
+                break
+            except OSError:
+                continue
+        else:
+            return False
+    return True
+
+
+def _flush_pack(gitdir: Path, pending: dict) -> None:
+    """Pack `pending` together with the objects of the tail pack this engine last minted, place
+    the new pair, then delete the old one -- a commit leaves the pack count where it was instead
+    of adding a pack. No tail yet, or a tail at `_FOLD_MAX_BYTES`: `pending` becomes the new tail.
+
+    A peer may hold a listing that still names the deleted pair; its readers re-list on a missing
+    pack (`_search_packs_for_sha`). Two racing folds each keep every object they read, so the
+    worst case is an extra pack, never a lost object."""
+    pack_dir = Path(gitdir, "objects", "pack")
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    tail, stale = _read_tail_marker(pack_dir)
+    entries = [
+        (bytes.fromhex(sha), entry, binascii.crc32(entry))
+        for sha, (kind, payload) in pending.items()
+        for entry in (_pack_entry(kind, payload),)
+    ]
+    folded = None
+    if tail is not None:
+        try:
+            small = (pack_dir / f"pack-{tail}.pack").stat().st_size < _FOLD_MAX_BYTES
+        except OSError:
+            small = False
+        tail_entries = _read_tail_entries(pack_dir, tail) if small else None
+        if tail_entries is not None:
+            have = {e[0] for e in entries}
+            entries += [e for e in tail_entries if e[0] not in have]
+            folded = tail
+    if sum(len(e[1]) for e in entries) >= _PACK_OFFSET_LIMIT:
+        for kind, payload in pending.values():
+            write_object(gitdir, kind, payload)
+        return
+    pack, idx, name = _assemble_pack(entries)
+    _place_pack(pack_dir, pack, idx, name)
+    doomed = [n for n in (*stale, folded) if n is not None and n != name]
+    leftovers = [n for n in doomed if not _remove_pack_pair(pack_dir, n)]
+    if (name, leftovers) != (tail, stale):
+        _write_tail_marker(pack_dir, name, leftovers)
 
 
 def write_object(
@@ -451,7 +590,9 @@ def _pack_listing(common_dir: Path, *, revalidate: bool = True) -> _PackListing:
     result = _PackListing(pack_dir, kept, kept_mtimes)
     _PACK_LISTING_CACHE[key] = (generation, result)
     _PACK_INDEXES_BY_LISTING.pop(key, None)
-    _LOOKUP_SOURCES.pop(key, None)
+    retired = _LOOKUP_SOURCES.pop(key, None)
+    if retired is not None:
+        _RETIRED_SOURCES[key] = retired
     _LAST_HIT_PACK.pop(key, None)
     return result
 
@@ -716,15 +857,24 @@ class _LookupSource:
     """Where a sha lives, for one pack listing: the MIDX, then the packs the
     MIDX does not name (newer than it)."""
 
-    __slots__ = ("indexes", "midx", "midx_pos", "uncovered", "_merged", "_probes")
+    __slots__ = ("indexes", "midx", "midx_pos", "uncovered", "_merged", "_probes", "_pos_name", "_sids", "_sid_pos", "_prior")
 
-    #: Merged-table value: `(position << 32) | entry number`; the pack offset is read on a hit only.
+    #: Merged-table value: `(segment id << 32) | entry number`; the pack offset is read on a hit only.
+    #: A segment id names one pack for the life of the process, so it survives listing changes;
+    #: `_sid_pos` maps it to the pack's position in the current listing.
     _ENTRY_BITS = 32
 
-    def __init__(self, common_dir: Path, indexes: "_LazyPackIndexes") -> None:
+    def __init__(
+        self, common_dir: Path, indexes: "_LazyPackIndexes", prior: "Optional[_LookupSource]" = None
+    ) -> None:
         self.indexes = indexes
         self.midx = _parse_midx(common_dir)
         names = indexes.names() if isinstance(indexes, _LazyPackIndexes) else {e[0].name: i for i, e in enumerate(indexes)}
+        self._pos_name = {i: n for n, i in names.items()}
+        self._sids: "dict[str, int]" = {}
+        self._sid_pos: "dict[int, int]" = {}
+        # Only a prior source that built its table has segments worth carrying forward.
+        self._prior = prior if prior is not None and prior._merged is not None else None
         if self.midx is None:
             self.midx_pos: list = []
             self.uncovered = sorted(names.values())
@@ -736,20 +886,50 @@ class _LookupSource:
         self._probes = 0
 
     def _merged_table(self) -> "dict[bytes, int]":
-        """sha -> `(position << 32) | entry number` over every uncovered pack; the lowest position
-        (newest pack) wins a sha held by several, as the sorted-table bisect it replaces did."""
-        if self._merged is None:
-            table: dict = {}
-            for i in reversed(self.uncovered):
-                pidx = self.indexes[i][2]
-                if pidx is None:
-                    continue
-                shas = pidx.shas
-                count = len(shas) // 20
-                base = i << self._ENTRY_BITS
-                table.update(zip([shas[k : k + 20] for k in range(0, count * 20, 20)], range(base, base + count)))
-            self._merged = table
-        return self._merged
+        """sha -> `(segment id << 32) | entry number` over every uncovered pack; the lowest position
+        (newest pack) wins a sha held by several, as the sorted-table bisect it replaces did.
+
+        A table carried from the prior source (same repo, earlier pack listing) keeps its segments:
+        only packs absent from it are built and added. A removed pack forces a rebuild, since the
+        table cannot say which older pack its shas were shadowing."""
+        if self._merged is not None:
+            return self._merged
+        prior, self._prior = self._prior, None
+        pos_of = {self._pos_name[i]: i for i in self.uncovered}
+        if prior is not None and not (set(prior._sids) - pos_of.keys()):
+            table = prior._merged
+            # The prior source is retired; a straggler holding it rebuilds its own table.
+            prior._merged = None
+            self._sids = dict(prior._sids)
+            added = [n for n in pos_of if n not in self._sids]
+        else:
+            table = {}
+            added = list(pos_of)
+        floor = min((pos_of[n] for n in self._sids), default=None)
+        for n in added:
+            self._sids[n] = next(_SEGMENT_IDS)
+        self._sid_pos = {self._sids[n]: p for n, p in pos_of.items() if n in self._sids}
+        for n in sorted(added, key=pos_of.__getitem__, reverse=True):
+            i = pos_of[n]
+            sid = self._sids[n]
+            pidx = self.indexes[i][2]
+            if pidx is None:
+                continue
+            shas = pidx.shas
+            count = len(shas) // 20
+            base = sid << self._ENTRY_BITS
+            pairs = zip([shas[k : k + 20] for k in range(0, count * 20, 20)], range(base, base + count))
+            if floor is None or i < floor:
+                table.update(pairs)
+                floor = i
+            else:
+                sid_pos = self._sid_pos
+                for sha, packed in pairs:
+                    held = table.get(sha)
+                    if held is None or sid_pos.get(held >> self._ENTRY_BITS, i + 1) > i:
+                        table[sha] = packed
+        self._merged = table
+        return table
 
     def find(self, key: str, sha_hex: str, target: bytes) -> Optional[tuple[int, int]]:
         """`(position in indexes, offset)` or `None`."""
@@ -779,11 +959,14 @@ class _LookupSource:
         packed = self._merged_table().get(target)
         if packed is None:
             return None
-        i = packed >> self._ENTRY_BITS
+        i = self._sid_pos[packed >> self._ENTRY_BITS]
         return i, self.indexes[i][2].offsets[packed & ((1 << self._ENTRY_BITS) - 1)]
 
 
 _LOOKUP_SOURCES: "dict[str, _LookupSource]" = {}
+# The source a listing change retired, per `str(common_dir)`: its merged table seeds the next one.
+_RETIRED_SOURCES: "dict[str, _LookupSource]" = {}
+_SEGMENT_IDS = itertools.count()
 
 
 def _locate_packed(common_dir: Path, sha: str, *, revalidate: bool) -> "Optional[tuple[_LazyPackIndexes, int, int]]":
@@ -797,7 +980,7 @@ def _locate_packed(common_dir: Path, sha: str, *, revalidate: bool) -> "Optional
     indexes = _pack_indexes(common_dir, revalidate=revalidate)
     src = _LOOKUP_SOURCES.get(key)
     if src is None or src.indexes is not indexes:
-        src = _LookupSource(common_dir, indexes)
+        src = _LookupSource(common_dir, indexes, _RETIRED_SOURCES.pop(key, None))
         _LOOKUP_SOURCES[key] = src
     hit = src.find(key, sha, target)
     if hit is None:
@@ -995,15 +1178,22 @@ def packed_contains(common_dir: Path, sha: str) -> bool:
 def _search_packs_for_sha(
     common_dir: Path, sha: str, *, revalidate: bool
 ) -> Optional[tuple[Optional[tuple[str, bytes]]]]:
-    located = _locate_packed(common_dir, sha, revalidate=revalidate)
-    if located is None:
-        return None
-    indexes, pos, offset = located
-    pack_path = indexes.pack_path(pos) if isinstance(indexes, _LazyPackIndexes) else indexes[pos][1]
-    try:
-        pack_bytes = _pack_bytes_for_read(pack_path)
-    except OSError:
-        return None
+    for attempt in (0, 1):
+        located = _locate_packed(common_dir, sha, revalidate=revalidate)
+        if located is None:
+            return None
+        indexes, pos, offset = located
+        pack_path = indexes.pack_path(pos) if isinstance(indexes, _LazyPackIndexes) else indexes[pos][1]
+        try:
+            pack_bytes = _pack_bytes_for_read(pack_path)
+            break
+        except OSError:
+            # A fold deleted the pack this listing names; its objects live in the pack that
+            # replaced it, so re-list once and look again.
+            if attempt:
+                return None
+            _PACK_LISTING_CACHE.pop(str(common_dir), None)
+            revalidate = True
     type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
     type_name = _PACK_TYPE_NAMES.get(type_num)
     if type_name is None:

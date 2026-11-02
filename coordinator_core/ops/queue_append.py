@@ -136,6 +136,7 @@ import yaml
 from coordinator_core._claude_klabauter_root import _claude_home
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.frontmatter import schema_validate
+from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
@@ -549,7 +550,7 @@ def _build_yaml(schema_name: str, fields: dict) -> str:
 
     document = "\n".join(lines) + "\n"
     try:
-        yaml.load(document, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+        yaml.load(document, Loader=SAFE_LOADER)
     except yaml.YAMLError as exc:
         offending_field = _offending_field_for_yaml_error(exc, line_owners)
         raise ValueError(
@@ -908,6 +909,32 @@ def _write_out_path_overwrite(out_path: str, content: str) -> str:
     return out_path
 
 
+def _write_out_path_create(out_path: str, content: str) -> str:
+    """Create ``out_path`` exclusively with one open+write+close; no temp file, no rename.
+
+    How N prepared entries reach disk with fewer per-entry syscalls: a path the caller
+    just proved absent needs no temp+replace. A failed write unlinks its partial file.
+    A path that already exists (a race) falls back to the overwrite helper, so an
+    identical re-run still dedups to one file. A hard kill mid-write can leave a partial
+    file, which the atomic helper cannot; the migration re-run dedup matches on filename and
+    would then skip that partial entry as already-migrated.
+    """
+    try:
+        fd = os.open(out_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o644)
+    except FileExistsError:
+        return _write_out_path_overwrite(out_path, content)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(content)
+    except BaseException:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+        raise
+    return out_path
+
+
 def _write_out_path_excl(out_path: str, content: str) -> str:
     root, ext = os.path.splitext(out_path)
     candidate = out_path
@@ -1185,16 +1212,23 @@ def append_queue_entry(schema: str, **kwargs: object) -> dict:
     return write_prepared_entry(prepare_queue_entry(schema, **kwargs))
 
 
-def write_prepared_entry(prepared: "PreparedEntry") -> dict:
-    """Write an entry already returned by ``prepare_queue_entry``; same result shape as ``append_queue_entry``."""
+def write_prepared_entry(prepared: "PreparedEntry", *, new_in_ready_dir: bool = False) -> dict:
+    """Write an entry already returned by ``prepare_queue_entry``; same result shape as ``append_queue_entry``.
+
+    ``new_in_ready_dir``: the caller has created the output dir and checked that
+    ``out_path`` is absent; the entry is then created directly (``_write_out_path_create``).
+    """
     schema = prepared.schema
     out_path = prepared.out_path
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    if not new_in_ready_dir:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     # workstream-event is append-only (exclusive-create + retry-with-suffix); every
     # other schema keeps write-temp + atomic-rename overwrite.
     if schema == "workstream-event":
         final_path = _write_out_path_excl(out_path, prepared.yaml_content)
+    elif new_in_ready_dir:
+        final_path = _write_out_path_create(out_path, prepared.yaml_content)
     else:
         final_path = _write_out_path_overwrite(out_path, prepared.yaml_content)
 

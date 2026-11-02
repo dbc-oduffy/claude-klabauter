@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
-from coordinator_core import warp_live
+from coordinator_core import launch_records, warp_live
 from coordinator_core.ops.dispatch_emit import run_token
 
 SIZING = "state/sizings/mine.yaml"
@@ -29,7 +30,7 @@ def sessions(tmp_path, monkeypatch):
     legacy.mkdir()
     monkeypatch.setattr(warp_live, "managed_tempdir", lambda: managed)
     monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: legacy / name)
-    (managed / "workflow-run-s1-w1.json").write_text(
+    Path(launch_records.record_path(str(managed), "s1", "w1")).write_text(
         json.dumps({"scriptPath": SCRIPT, "fired_at": 1.0}), encoding="utf-8"
     )
     config = tmp_path / "claude"

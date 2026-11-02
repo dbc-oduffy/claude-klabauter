@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import time
 
@@ -44,6 +45,10 @@ def _run(tmp_path, name, *, settled=False, transcript_age=7200):
     return run_dir
 
 
+def _rec_path(tdir, session, task):
+    return pathlib.Path(mod._workflow_run_record_path(str(tdir), session, task))
+
+
 def _record(tdir, run_dir, *, session=SID, task="t1", run="wf_1", fired_at=NOW - 3600, args=None):
     rec = {
         "run_id": run, "scriptPath": "scripts/x.workflow.mjs",
@@ -51,7 +56,7 @@ def _record(tdir, run_dir, *, session=SID, task="t1", run="wf_1", fired_at=NOW -
         "fired_at": fired_at, "session_id": session, "task_id": task,
         "tool_use_id": "tu1", "transcript_dir": str(run_dir),
     }
-    (tdir / f"workflow-run-{session}-{task}.json").write_text(json.dumps(rec), encoding="utf-8")
+    _rec_path(tdir, session, task).write_text(json.dumps(rec), encoding="utf-8")
     return rec
 
 
@@ -107,7 +112,7 @@ def test_finished_task_yields_nothing_and_retires_record(tmp_path, tdir, status)
             "</task-notification>")
     tp = _transcript(tmp_path, json.dumps({"content": note}))
     assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
-    assert not (tdir / f"workflow-run-{SID}-t1.json").exists()
+    assert not _rec_path(tdir, SID, "t1").exists()
 
 
 def test_completion_seen_before_stall_stays_silent_after_it_leaves_the_tail(tmp_path, tdir):
@@ -128,7 +133,7 @@ def test_other_tasks_completion_leaves_live_run_advised(tmp_path, tdir):
     note = "<task-notification><task-id>zzz</task-id><status>completed</status></task-notification>"
     tp = _transcript(tmp_path, json.dumps({"content": note}))
     assert 'TaskStop({"task_id": "t1"})' in mod.workflow_stall_resume_text(SID, tp, NOW)
-    assert (tdir / f"workflow-run-{SID}-t1.json").exists()
+    assert _rec_path(tdir, SID, "t1").exists()
 
 
 def test_paused_task_yields_nothing(tmp_path, tdir):
@@ -160,7 +165,7 @@ def test_newer_run_of_other_script_does_not_supersede(tmp_path, tdir):
 def _sizing_record(tdir, run_dir, *, sizing, task, run, fired_at, script):
     rec = _record(tdir, run_dir, task=task, run=run, fired_at=fired_at, args={"sizing": sizing})
     rec["scriptPath"] = script
-    (tdir / f"workflow-run-{SID}-{task}.json").write_text(json.dumps(rec), encoding="utf-8")
+    _rec_path(tdir, SID, task).write_text(json.dumps(rec), encoding="utf-8")
 
 
 def test_refire_of_same_sizing_under_new_script_supersedes(tmp_path, tdir):
@@ -211,8 +216,8 @@ def test_stall_line_given_once_per_window_then_again_after_it(tmp_path, tdir):
 
 def test_record_naming_another_session_yields_nothing(tmp_path, tdir):
     _record(tdir, _run(tmp_path, "r1"), session="other")
-    (tdir / f"workflow-run-{SID}-t1.json").write_text(
-        (tdir / "workflow-run-other-t1.json").read_text(encoding="utf-8"), encoding="utf-8")
+    _rec_path(tdir, SID, "t1").write_text(
+        _rec_path(tdir, "other", "t1").read_text(encoding="utf-8"), encoding="utf-8")
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 

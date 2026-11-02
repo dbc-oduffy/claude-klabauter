@@ -101,6 +101,11 @@ _assert_engine_under_repo_root(_REPO_ROOT)
 
 from coordinator_core import memo_corpus
 from coordinator_core.benchmarks.isolated_clone import CloneTeardownLeak, rmtree_or_raise
+from coordinator_core.testing.fs_containment import _install_counted_numbered_dir
+
+# Here as well as in the fs_containment plugin: under `coordinator_core/pytest.ini` the
+# repo-root conftest that registers that plugin sits above confcutdir and never loads.
+_install_counted_numbered_dir()
 
 # Box-scoped, not directory-scoped: admission thresholds come from machine-local, so a
 # configured, loaded box would make every CLI-driving test hold up to `max_hold_s`

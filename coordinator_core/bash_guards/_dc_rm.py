@@ -41,7 +41,7 @@ from coordinator_core.bash_guards._dc_git_probe import (
     _new_dirty_paths_memo,
     _rm_peer_claim_of,
 )
-from coordinator_core.bash_guards._dc_git_shared import _new_git_memo
+from coordinator_core.bash_guards._dc_git_shared import _bt_leading_cd_prefix_cwd, _new_git_memo
 from coordinator_core.bash_guards._dc_shell_text import (
     _RM_WRAPPER_WORDS,
     _join_backslash_newlines,
@@ -694,7 +694,9 @@ def check_destructive_rm(
     rm_override = _override("COORDINATOR_ALLOW_RM", payload=payload)
     # A relative target is relative to the session's cwd: on the warm engine the process
     # cwd is wherever the server booted, and an unresolved target is silently skipped.
-    _rm_cwd = (payload or {}).get("cwd") or os.getcwd()
+    _rm_session_cwd = (payload or {}).get("cwd") or os.getcwd()
+    # A leading `cd <dir> &&` moves the executed command's cwd, and with it the repo.
+    _rm_cwd = _bt_leading_cd_prefix_cwd(cmd, _rm_session_cwd) or _rm_session_cwd
 
     # Per-call memo keyed on (cwd, args); deliberately NOT module-level (see
     # `_new_git_memo`).

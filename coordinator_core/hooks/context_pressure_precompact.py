@@ -265,11 +265,12 @@ def _build_workflow_runs_section(tmpdir: str, session_id: str) -> List[str]:
     if not session_id:
         lines.append("(none)")
         return lines
-    name_glob = f"workflow-run-{session_id}-*.json"
+    from coordinator_core import launch_records
+
     legacy_dir = str(legacy_top_level_path(""))
     roots = [tmpdir] if os.path.normcase(legacy_dir) == os.path.normcase(tmpdir) else [tmpdir, legacy_dir]
     try:
-        matches = sorted(m for root in roots for m in _glob.glob(os.path.join(root, name_glob)))
+        matches = sorted(m for root in roots for m in launch_records.session_record_paths(root, session_id))
     except Exception:
         matches = []
     rendered: List[str] = []

@@ -521,7 +521,43 @@ def test_guard_admits_the_composed_runner_line_and_denies_bare_suites(tmp_path, 
 
 
 def test_runner_fail_outcomes_are_the_non_passing_ones():
-    assert set(grind_stages.RUNNER_FAIL_OUTCOMES) == {"failed", "refused", "no-runner"}
+    assert set(grind_stages.RUNNER_FAIL_OUTCOMES) == {
+        "failed", "refused", "no-runner", "passed-on-foreign-uncommitted",
+    }
+
+
+def test_runner_prompts_name_foreign_uncommitted_as_live_and_require_the_holders():
+    from coordinator_core.bug_blitz.contract import OUTCOME_FOREIGN_UNCOMMITTED
+
+    calls = _runner_calls()
+    call = calls["fix"]
+    assert f"`{OUTCOME_FOREIGN_UNCOMMITTED}` means it is live at HEAD" in call
+    assert "never already-fixed" in call
+    assert "`foreign_holders`" in call
+    assert OUTCOME_FOREIGN_UNCOMMITTED not in calls["triage"]
+
+
+def test_triage_already_fixed_invocation_and_fix_not_reproduced_check_use_committed_head():
+    calls = _runner_calls()
+    assert " --committed-head`" in calls["triage"]
+    assert calls["triage"].count("--committed-head") == 1
+    fix = calls["fix"]
+    assert "Before reporting NOT_REPRODUCED" in fix
+    assert fix.index("--committed-head") > fix.index("Before reporting NOT_REPRODUCED")
+    assert fix.count("--committed-head") == 1
+
+
+def test_done_check_and_verify_keep_head_plus_own_not_committed_head():
+    calls = _runner_calls()
+    assert "--committed-head" not in calls["verify"]
+    fix = calls["fix"]
+    done_line = fix[fix.index("bin/targeted-test-run"):fix.index("`", fix.index("bin/targeted-test-run"))]
+    assert "--committed-head" not in done_line
+
+
+def test_runner_off_triage_and_fix_never_name_committed_head():
+    assert "--committed-head" not in grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r")
+    assert "--committed-head" not in grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r")
 
 
 def test_every_composer_carries_its_stage_model():
