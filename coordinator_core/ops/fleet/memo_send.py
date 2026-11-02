@@ -129,11 +129,13 @@ import logging
 import os
 import re
 import tempfile
+import threading
 import time
 from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.session.machinery_paths import (
     LEGACY_MEMO_OUTBOX_RELDIR,
@@ -908,6 +910,43 @@ def _finish_delivery(
     return sha, commit_result.cas_ref_relpath, None
 
 
+#: Deadline for the receiver-inbox mkdir + O_EXCL create. A kernel-blocked create (defrag pass,
+#: 2026-11-02, 113 s) would otherwise pin the pool worker; past it the send refuses as write-failed.
+_INBOX_CREATE_DEADLINE_SECS = 1.0
+
+
+def _create_inbox_file(inbox_dir: Path, target_file: Path, content: str) -> None:
+    """mkdir + O_EXCL write of `content` to `target_file`, bounded by `_INBOX_CREATE_DEADLINE_SECS`.
+
+    Raises `FileExistsError` on a collision and `TimeoutError` (an `OSError`) when the create
+    has not returned in time -- the mutation is refused, never dropped silently. Trap: the
+    abandoned worker may finish late; it unlinks its own file then, so a refused send leaves no
+    orphan for AC6's no-clobber guard to trip over."""
+    abandoned = threading.Event()
+
+    def _create() -> bool:
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(target_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+        if abandoned.is_set():
+            try:
+                target_file.unlink()
+            except OSError:
+                pass
+        return True
+
+    landed = run_bounded(
+        f"memo-inbox-create:{inbox_dir}", _create, deadline=_INBOX_CREATE_DEADLINE_SECS, default=False
+    )
+    if not landed:
+        abandoned.set()
+        raise TimeoutError(
+            f"inbox create did not return within {_INBOX_CREATE_DEADLINE_SECS}s "
+            f"(filesystem stalled): {target_file}"
+        )
+
+
 def _rollback_unwritten_file(target_file: Path) -> str:
     """Undo this call's own O_EXCL write when the commit that was supposed
     to follow it did not durably land — shared by both refusal arms in
@@ -1078,11 +1117,8 @@ def _deliver_cc_copy(
     landing = _receiver_landing.apply_receiver_landing(landing)
     ref_direct = landing.mode == _receiver_landing.MODE_REF_DIRECT
     if not ref_direct:
-        inbox_dir.mkdir(parents=True, exist_ok=True)
         try:
-            fd = os.open(str(target_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-                f.write(content)
+            _create_inbox_file(inbox_dir, target_file, content)
         except FileExistsError:
             return {
                 "ok": False, "id": str(target_file), "to": name,
@@ -2103,16 +2139,13 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         landing = _receiver_landing.apply_receiver_landing(landing)
         ref_direct = landing.mode == _receiver_landing.MODE_REF_DIRECT
         if not ref_direct:
-            inbox_dir.mkdir(parents=True, exist_ok=True)
             try:
                 # C1 (git_native.commit_authored_new_file) never writes the
                 # worktree itself — it commits bytes the caller already holds. This
                 # write IS that caller-side write. newline="\n" is pinned per the
                 # plan's own instruction: CR content is one of the two cases the
                 # zero-spawn commit arm refuses outright.
-                fd = os.open(str(target_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(content)
+                _create_inbox_file(inbox_dir, target_file, content)
             except FileExistsError:
                 # AC6 leg 2 — the race the pre-check above cannot close alone.
                 return build_act_result(_MODE, [], [], [{

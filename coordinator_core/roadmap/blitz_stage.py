@@ -73,9 +73,11 @@ _DOC_NEW = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "coordi
 _BAND = frozenset({"M", "L"})
 _SIZES = ("XS", "S", "M", "L", "XL", "XXL")
 _CLUSTER_HEAD_RE = re.compile(
-    r"^##\s+(?P<id>[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*)\s*[—–:\-]+\s*(?P<title>.+?)\s*$"
+    r"^##\s+(?P<id>[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*(?:-\d+[A-Za-z0-9]*)*)\s*[—–:\-]+\s*(?P<title>.+?)\s*$"
 )
-_ID_TOKEN_RE = re.compile(r"\b[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*\b")
+# A hyphen-joined numeric tail (`B2-01`) belongs to the id; stopping at `B2` gives every cluster of a
+# bucket one id, collapsing them into a single section.
+_ID_TOKEN_RE = re.compile(r"\b[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*(?:-\d+[A-Za-z0-9]*)*\b")
 _ID_FULL_RE = re.compile(_ID_TOKEN_RE.pattern.replace(r"\b", ""))
 _PAREN_RE = re.compile(r"\([^)]*\)?")
 _BLOCKED_BY_RE = re.compile(r"\*\*blocked_by:\*\*([^*\n]*)", re.IGNORECASE)

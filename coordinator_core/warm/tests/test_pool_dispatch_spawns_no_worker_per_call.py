@@ -5,6 +5,8 @@ from __future__ import annotations
 import concurrent.futures
 import os
 
+import threading
+
 import pytest
 
 from coordinator_core.warm import server
@@ -20,6 +22,7 @@ def test_sequential_calls_on_a_real_pool_start_one_worker(monkeypatch):
 
     monkeypatch.setattr(server, "_pool_dispatch_worker", _echo_pid)
     ctx = server._ServerContext.__new__(server._ServerContext)
+    ctx._dispatch_pool_lock = threading.Lock()
     ctx._pool_outstanding = server.InFlightCounter()
     pool = concurrent.futures.ProcessPoolExecutor(max_workers=server.DISPATCH_PROCESS_POOL_SIZE)
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: pool, raising=False)

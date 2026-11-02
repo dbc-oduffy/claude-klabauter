@@ -43,6 +43,8 @@ Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § C3
 
 from __future__ import annotations
 
+from coordinator_core.bounded_io import run_bounded
+
 import datetime
 import json
 import os
@@ -62,17 +64,18 @@ GENERATES: list = []
 def _append_audit_entry(log_file: str, entry: dict) -> None:
     log_dir = os.path.dirname(log_file)
     try:
-        os.makedirs(log_dir, exist_ok=True)
-    except OSError as exc:
-        print(f"agent_completion_log: cannot create log dir {log_dir}: {exc}", file=sys.stderr)
-        return
-    try:
         # separators=(",", ":") produces compact (no-whitespace) JSON — mirrors jq -c.
         # REQUIRED: downstream consumers grep for `"agentId":"<id>"` on a
         # single line; pretty-printing would break that consumer.
         line = json.dumps(entry, separators=(",", ":")) + "\n"
-        with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(line)
+
+        def _append() -> None:
+            os.makedirs(log_dir, exist_ok=True)
+            with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(line)
+
+        # A kernel-blocked mkdir/open drops the audit line; the hook is never held.
+        run_bounded(f"agent-audit:{log_file}", _append, deadline=0.4, default=None)
     except OSError as exc:
         print(f"agent_completion_log: cannot write {log_file}: {exc}", file=sys.stderr)
         return

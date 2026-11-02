@@ -1098,7 +1098,7 @@ def route(
             suppressed (ceo's single touchpoint is the exit criterion); in
             every mode it is also dropped wherever
             `sizing_acceptance_skipped(route, tshirt)` holds.
-        interaction_mode_source: "flag" | "fleet" | "default" — set by
+        interaction_mode_source: "flag" | "fleet" | "default" | "autonomous-sentinel" — set by
             `main()`; `route()` never resolves this itself and only echoes
             the value it is given back into the return payload.
 
@@ -1519,7 +1519,7 @@ def route(
         # the object is minted regardless of RESOLVED route; only D3's
         # short-circuit skips it. `--interaction-mode` is threaded onto the
         # directive only when the caller (main(), via interaction_mode_source)
-        # actually resolved one from a flag or the fleet record -- never
+        # actually resolved one from a flag, the fleet record or the autonomous sentinel -- never
         # merely route()'s own "hands-on" default, so a caller that never
         # asked about mode still gets today's byte-identical directive.
         "directives": [
@@ -1529,7 +1529,7 @@ def route(
                 exit_criterion=exit_criterion,
                 interaction_mode=(
                     interaction_mode
-                    if interaction_mode_source in ("flag", "fleet")
+                    if interaction_mode_source in ("flag", "fleet", _AUTONOMOUS_SOURCE)
                     else None
                 ),
                 tshirt=resized_tshirt,
@@ -2709,6 +2709,21 @@ def _resolve_interaction_mode_and_source(cli_value: Optional[str]) -> tuple[str,
     return _INTERACTION_MODE_DEFAULT, "default"
 
 
+_AUTONOMOUS_SOURCE = "autonomous-sentinel"
+
+
+def _autonomous_sentinel_live() -> bool:
+    """True when the calling session holds a live autonomous-run sentinel. Never raises."""
+    try:
+        from coordinator_core.session.autonomous_sentinel import sentinel_read_path
+        from coordinator_core.session.core import resolve_session_id
+
+        sid = resolve_session_id() or None
+        return bool(sid) and sentinel_read_path(sid) is not None
+    except Exception:  # noqa: BLE001 - no sentinel read means the resolved mode stands
+        return False
+
+
 def _open_routed_obligation(write_path: str) -> None:
     """Queue this session's sizing-routed watchdog obligation for the sizing just written.
 
@@ -3356,6 +3371,15 @@ def main(argv: list[str]) -> int:
     interaction_mode, interaction_mode_source = _resolve_interaction_mode_and_source(
         interaction_mode_flag
     )
+    interaction_mode_advisory = None
+    if interaction_mode in _INTERACTION_MODES_EXPECTED and _autonomous_sentinel_live():
+        if interaction_mode != "ceo":
+            interaction_mode_advisory = (
+                f"autonomous sentinel live: interaction_mode {interaction_mode!r} "
+                f"(source: {interaction_mode_source}) overridden to 'ceo' so the APM approves in-run"
+            )
+            interaction_mode, interaction_mode_source = "ceo", _AUTONOMOUS_SOURCE
+            print(f"{prog}: advisory: {interaction_mode_advisory}", file=sys.stderr)
 
     try:
         decision = route(
@@ -3391,6 +3415,9 @@ def main(argv: list[str]) -> int:
     except Exception as exc:  # noqa: BLE001 - structural backstop, mirrors pickup_assemble
         print(f"{prog}: unexpected failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL
+
+    if interaction_mode_advisory:
+        decision["interaction_mode_advisory"] = interaction_mode_advisory
 
     xs_sizing = decision["resolved_estimate"]["tshirt"] == "XS" and (express_lane or write_path is not None)
     if warp_run is not None and write_path is not None:

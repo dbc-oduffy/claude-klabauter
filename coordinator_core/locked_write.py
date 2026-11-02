@@ -538,6 +538,57 @@ def _plat_unlock(fd: int) -> None:
         msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
+#: Ceiling on the sidecar mkdir + open. A kernel-blocked create here (defrag pass, 2026-11-02)
+#: pinned the caller for minutes before any lock was taken.
+SIDECAR_OPEN_DEADLINE_SECS: float = 1.0
+
+
+def _open_sidecar_bounded(
+    make_dir: "Callable[[], Path]", filename: str, flags: int, timeout: float
+) -> int:
+    """mkdir + open the lock sidecar on a daemon thread; return the fd.
+
+    Raises LockTimeout past ``SIDECAR_OPEN_DEADLINE_SECS``: nothing has been read,
+    mutated or written, so the refusal is exact. Any other error propagates unchanged. An fd
+    opened after the caller gave up is closed by the worker, never leaked. Threading is imported
+    here, not at module top, to keep the cold-start import ceiling.
+    """
+    import threading
+
+    box: dict = {}
+    guard = threading.Lock()
+    done = threading.Event()
+
+    def _work() -> None:
+        try:
+            fd = os.open(str(make_dir() / filename), flags, 0o600)
+        except BaseException as exc:  # noqa: BLE001 -- handed to the waiting caller
+            box["err"] = exc
+            done.set()
+            return
+        with guard:
+            if box.get("abandoned"):
+                os.close(fd)
+                return
+            box["fd"] = fd
+        done.set()
+
+    threading.Thread(target=_work, name="lock-sidecar-open", daemon=True).start()
+    # Never min(timeout, ...): a try-once caller passes timeout=0 for lock *contention*, and an
+    # open is not contention -- a 0s wait refused every such lock as a stalled filesystem.
+    wait = SIDECAR_OPEN_DEADLINE_SECS
+    if not done.wait(wait):
+        with guard:
+            if "fd" not in box and "err" not in box:
+                box["abandoned"] = True
+                raise LockTimeout(
+                    f"Could not open coordinator lock sidecar within {wait}s (filesystem stalled)"
+                )
+    if "err" in box:
+        raise box["err"]
+    return box["fd"]
+
+
 def _acquire_flock(fd: int, timeout: float) -> None:
     """Acquire an exclusive lock on *fd*, polling with backoff up to *timeout* seconds.
 
@@ -683,7 +734,6 @@ def locked_rmw(
         )
 
     key = _lock_key(target)
-    lock_path = _lock_dir(repo_root) / f"{key}.lock"
 
     # Open (or create) the stable sidecar lock file.  Concurrent create is safe —
     # whichever process wins the kernel race just truncates an already-empty file,
@@ -691,7 +741,9 @@ def locked_rmw(
     # to lock a byte range, so open O_RDWR there; POSIX flock is content-agnostic
     # and keeps the historical O_WRONLY.
     _open_flags = os.O_CREAT | (os.O_WRONLY if _FCNTL_AVAILABLE else os.O_RDWR)
-    lock_fd = os.open(str(lock_path), _open_flags, 0o600)
+    lock_fd = _open_sidecar_bounded(
+        lambda: _lock_dir(repo_root), f"{key}.lock", _open_flags, timeout
+    )
     try:
         _acquire_flock(lock_fd, timeout)
         # Lock is held from here through the write (or abort).
@@ -991,13 +1043,16 @@ def _held_lock_gen(
         _machine_lock_dir() if anchor_root is None else _lock_dir_path(anchor_root)
     )
     _assert_anchor_outside_target(target, lock_dir)
-    lock_dir.mkdir(parents=True, exist_ok=True)
 
     key = _lock_key(target)
     lock_path = lock_dir / f"{key}.lock"
 
+    def _mkdir_lock_dir() -> "Path":
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        return lock_dir
+
     _open_flags = os.O_CREAT | (os.O_WRONLY if _FCNTL_AVAILABLE else os.O_RDWR)
-    lock_fd = os.open(str(lock_path), _open_flags, 0o600)
+    lock_fd = _open_sidecar_bounded(_mkdir_lock_dir, f"{key}.lock", _open_flags, timeout)
     try:
         try:
             _acquire_flock(lock_fd, timeout)

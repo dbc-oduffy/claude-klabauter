@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import threading
 
 import pytest
 
@@ -37,6 +38,7 @@ class _Pool:
 
 def _ctx_with(future, monkeypatch):
     ctx = server._ServerContext.__new__(server._ServerContext)
+    ctx._dispatch_pool_lock = threading.Lock()
     ctx._pool_outstanding = server.InFlightCounter()
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: _Pool(future), raising=False)
     return ctx
@@ -153,6 +155,7 @@ def test_a_result_inside_the_deadline_is_returned_untouched(monkeypatch):
 
 def _real_pool_ctx(monkeypatch, pool):
     ctx = server._ServerContext.__new__(server._ServerContext)
+    ctx._dispatch_pool_lock = threading.Lock()
     ctx._pool_outstanding = server.InFlightCounter()
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: pool, raising=False)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.05)

@@ -133,6 +133,7 @@ class _StuckPool:
 
 def test_server_side_no_reply_names_op_and_wait(monkeypatch):
     ctx = server._ServerContext.__new__(server._ServerContext)
+    ctx._dispatch_pool_lock = threading.Lock()
     ctx._pool_outstanding = server.InFlightCounter()
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: _StuckPool(), raising=False)
 

@@ -135,6 +135,10 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
+from coordinator_core.bounded_io import run_bounded
+
+#: Deadline for a dedupe-marker filesystem call on the hook path.
+_FS_DEADLINE_SECS = 0.4
 
 # Helper, not a dispatchable guard: it only silences repeat advisories and never denies.
 CLASS = "advisory"
@@ -383,8 +387,11 @@ def already_advised(gitdir: Optional[Path], session_id: str, shape_key: Optional
         return False
     if not _valid_session_id(session_id):
         return False
+    path = _session_dedupe_dir(gitdir, session_id) / shape_key
     try:
-        return (_session_dedupe_dir(gitdir, session_id) / shape_key).exists()
+        return run_bounded(
+            "advisory-dedupe-read:%s" % path.parent, path.exists, deadline=_FS_DEADLINE_SECS, default=False
+        )
     except OSError:
         return False
 
@@ -413,15 +420,25 @@ def mark_advised(gitdir: Optional[Path], session_id: str, shape_key: Optional[st
         return
     if not _valid_session_id(session_id):
         return
+    target_dir = _session_dedupe_dir(gitdir, session_id)
+
+    def _write_and_sweep() -> None:
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            (target_dir / shape_key).touch(exist_ok=True)
+        except OSError:
+            pass
+        try:
+            _maybe_sweep_stale_session_dirs(gitdir, session_id)
+        except OSError:
+            pass
+
+    # A kernel-blocked mkdir/touch drops the marker (an extra advisory later), never the hook.
     try:
-        target_dir = _session_dedupe_dir(gitdir, session_id)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        (target_dir / shape_key).touch(exist_ok=True)
-    except OSError:
-        pass
-    try:
-        _maybe_sweep_stale_session_dirs(gitdir, session_id)
-    except OSError:
+        run_bounded(
+            "advisory-dedupe-write:%s" % target_dir, _write_and_sweep, deadline=_FS_DEADLINE_SECS, default=None
+        )
+    except Exception:  # noqa: BLE001 -- fail open
         pass
 
 

@@ -21,6 +21,14 @@ from coordinator_core.session import fleet_mode as fleet_mode_module
 from coordinator_core.session import mode_resolution as mode_resolution_module
 
 
+_REAL_SENTINEL_LIVE = sa._autonomous_sentinel_live
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_sentinel(monkeypatch):
+    monkeypatch.setattr(sa, "_autonomous_sentinel_live", lambda: False)
+
+
 def _run(monkeypatch, capsys, argv):
     rc = sa.main(argv)
     captured = capsys.readouterr()
@@ -89,6 +97,57 @@ class TestDefaultWhenNeither:
         out = json.loads(capsys.readouterr().out)
         assert out["interaction_mode"] == "ceo"
         assert out["interaction_mode_source"] == "default"
+
+
+class TestAutonomousSentinelOverrides:
+    def _live(self, monkeypatch, live):
+        monkeypatch.setattr(sa, "_autonomous_sentinel_live", lambda: live)
+
+    def test_live_sentinel_overrides_hands_on_flag(self, monkeypatch, capsys):
+        _fleet_stub(monkeypatch, {})
+        self._live(monkeypatch, True)
+        rc = sa.main(["--tshirt", "M", "--interaction-mode", "hands-on"])
+        assert rc == sa.EXIT_OK
+        cap = capsys.readouterr()
+        out = json.loads(cap.out)
+        assert out["interaction_mode"] == "ceo"
+        assert out["interaction_mode_source"] == "autonomous-sentinel"
+        assert "hands-on" in out["interaction_mode_advisory"]
+        assert "advisory" in cap.err
+        assert "ceo" in json.dumps(out["directives"])
+
+    def test_live_sentinel_overrides_fleet_hands_on(self, monkeypatch, capsys):
+        _fleet_stub(monkeypatch, {"interaction_mode": "hands-on"})
+        self._live(monkeypatch, True)
+        assert sa.main(["--tshirt", "M"]) == sa.EXIT_OK
+        out = json.loads(capsys.readouterr().out)
+        assert (out["interaction_mode"], out["interaction_mode_source"]) == ("ceo", "autonomous-sentinel")
+
+    def test_no_sentinel_flag_still_wins(self, monkeypatch, capsys):
+        _fleet_stub(monkeypatch, {})
+        self._live(monkeypatch, False)
+        assert sa.main(["--tshirt", "M", "--interaction-mode", "hands-on"]) == sa.EXIT_OK
+        out = json.loads(capsys.readouterr().out)
+        assert (out["interaction_mode"], out["interaction_mode_source"]) == ("hands-on", "flag")
+        assert "interaction_mode_advisory" not in out
+
+    def test_live_sentinel_ceo_flag_unchanged(self, monkeypatch, capsys):
+        _fleet_stub(monkeypatch, {})
+        self._live(monkeypatch, True)
+        assert sa.main(["--tshirt", "M", "--interaction-mode", "ceo"]) == sa.EXIT_OK
+        out = json.loads(capsys.readouterr().out)
+        assert out["interaction_mode_source"] == "flag"
+        assert "interaction_mode_advisory" not in out
+
+    def test_sentinel_probe_reads_real_sentinel_file(self, monkeypatch, tmp_path):
+        from coordinator_core.session import autonomous_sentinel as sentinel
+        from coordinator_core.session import core as session_core
+
+        monkeypatch.setattr(session_core, "resolve_session_id", lambda: "sid-1")
+        monkeypatch.setattr(sentinel, "sentinel_read_path", lambda sid: tmp_path if sid == "sid-1" else None)
+        assert _REAL_SENTINEL_LIVE() is True
+        monkeypatch.setattr(sentinel, "sentinel_read_path", lambda sid: None)
+        assert _REAL_SENTINEL_LIVE() is False
 
 
 class TestUnknownModeExitsTwo:

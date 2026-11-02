@@ -14,6 +14,8 @@ Traps:
 
 from __future__ import annotations
 
+from coordinator_core.bounded_io import run_bounded
+
 import json
 import os
 import re
@@ -53,12 +55,17 @@ def record_agent_command(session_id: str, agent_id: str, command: str) -> None:
     )
     try:
         path = ledger_path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            os.write(fd, (row + "\n").encode("utf-8"))
-        finally:
-            os.close(fd)
+
+        def _append() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            try:
+                os.write(fd, (row + "\n").encode("utf-8"))
+            finally:
+                os.close(fd)
+
+        # A kernel-blocked mkdir/open drops the ledger row; the hook is never held.
+        run_bounded(f"agent-ledger:{path}", _append, deadline=0.4, default=None)
     except OSError:
         return
 

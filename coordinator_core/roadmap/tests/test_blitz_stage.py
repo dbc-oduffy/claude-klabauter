@@ -788,3 +788,38 @@ def test_no_run_mode_leaves_minted_sizings_without_one(tmp_path, roadmap):
     for s in reply["stubs"]:
         if s.get("sizing_object"):
             assert "interaction_mode" not in yaml.safe_load((tmp_path / s["sizing_object"]).read_text(encoding="utf-8"))
+
+
+def _bucket_clusters(n: int) -> str:
+    """`## B2-NN — Title` sections as a bucket roadmap writes them; every cluster blocked by B2-01."""
+    out = ["# Clusters: bucket 2\n\nStub slug prefix: `b2fit`\n"]
+    for i in range(1, n + 1):
+        blocked = "none" if i == 1 else "B2-01"
+        out.append(f"## B2-{i:02d} — Title number {i}\n\n**loe:** M\n**blocked_by:** {blocked}\n**external:** no\n")
+    return "\n".join(out)
+
+
+def _bucket_recon(n: int, defer: set, drop: set) -> str:
+    rows = ["| Cluster | Title | Verdict | Rows |", "|---|---|---|---|"]
+    for i in range(1, n + 1):
+        verdict = "DEFER" if i in defer else "DROP" if i in drop else "KEEP"
+        cell = verdict if verdict == "DEFER" else f"**{verdict}**" if verdict == "DROP" else "KEEP"
+        rows.append(f"| B2-{i:02d} | Title number {i} | {cell} | 3 | r |")
+    return "\n".join(rows) + "\n"
+
+
+def test_hyphenated_cluster_ids_parse_whole():
+    got = bs.parse_clusters(_bucket_clusters(3))
+    assert [s["id"] for s in got] == ["B2-01", "B2-02", "B2-03"]
+    assert got[1]["blocked_by_tokens"] == ["B2-01"]
+
+
+def test_bucket_roadmap_stages_one_distinct_stub_per_keep_cluster(tmp_path):
+    run = _make_roadmap(tmp_path, "2026-11-02-3aa3c0-2-bucket2-fit-solve", _bucket_clusters(18))
+    (run / "reconciliation.md").write_text(_bucket_recon(18, {5}, {17, 18}), encoding="utf-8")
+    reply = bs.stage_roadmap(tmp_path, str(run / "OVERVIEW.md"))
+    covered = {c for s in reply["stubs"] for c in s["covers"]}
+    assert covered == {f"B2-{i:02d}" for i in range(1, 19)} - {"B2-05", "B2-17", "B2-18"}
+    ids = [s["stub_id"] for s in reply["stubs"]]
+    assert len(ids) == len(set(ids)) and all(i.startswith("b2fit-") for i in ids)
+    assert len(list((tmp_path / "state" / "handoffs").glob("*roadmap-b2fit-*.md"))) == len(ids)

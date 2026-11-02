@@ -1571,6 +1571,10 @@ _LIGHT_MUTATING_OPS = frozenset({"memo.send"})
 #: Pool workers beyond `DISPATCH_PROCESS_POOL_SIZE` that only hook-class and light ops may use.
 _LIGHT_RESERVE_WORKERS = 2
 
+#: Ceiling on terminated-but-still-alive workers from recycled pools; at it, a stalled pool is
+#: not recycled again and requests are refused as saturated instead of spawning more workers.
+_MAX_RETIRED_WORKERS = DISPATCH_PROCESS_POOL_SIZE + _LIGHT_RESERVE_WORKERS
+
 
 def _is_light_mutating(method: Any) -> bool:
     """True for a hook-prefixed op the fail-closed mutation predicate classifies as mutating
@@ -3329,7 +3333,22 @@ class _ServerContext:
                 proc.terminate()
             except Exception:  # noqa: BLE001
                 pass
+        self.__dict__.setdefault("_retired_procs", []).extend(procs)
         self._write_recycle_line(holders, len(keys))
+
+    def _retired_workers_alive(self) -> int:
+        """Recycled-pool workers still alive. A worker blocked in a kernel call survives
+        `terminate()`; recycling again on top of them grows the process count without bound."""
+        retired = self.__dict__.setdefault("_retired_procs", [])
+        alive = []
+        for proc in list(retired):
+            try:
+                if proc.is_alive():
+                    alive.append(proc)
+            except Exception:  # noqa: BLE001 -- an unpollable handle is not counted
+                pass
+        retired[:] = alive
+        return len(alive)
 
     def _write_recycle_line(self, holders: list, key_count: int) -> None:
         """One line in the stall dir naming the holders and reconciled key count.
@@ -3378,7 +3397,7 @@ class _ServerContext:
             pool = self._ensure_dispatch_pool()
             holders = self._stalled_holders()
             saturated = len(holders) >= DISPATCH_PROCESS_POOL_SIZE
-            if self._saturation_confirmed(saturated):
+            if self._saturation_confirmed(saturated) and self._retired_workers_alive() < _MAX_RETIRED_WORKERS:
                 self._recycle_stalled_pool(pool, holders)
                 pool = self._ensure_dispatch_pool()
             elif saturated and not (

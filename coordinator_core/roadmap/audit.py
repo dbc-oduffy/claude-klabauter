@@ -333,7 +333,7 @@ _KEEP_ROW_COL2_RE = re.compile(r'^\|(?P<cid>[^|]*)\|\s*(?:\*\*KEEP\*\*|KEEP\s*\|
 _KEEP_ROW_COL3_RE = re.compile(r'^\|(?P<cid>[^|]*)\|[^|]*\|\s*(?:\*\*KEEP\*\*|KEEP\s*\|)')
 # Same id shape as blitz_stage's `## <id> — <title>` heading parse; a first cell
 # carrying "<id> <title>" must reduce to the id or KEEP ids never meet cluster ids.
-_LEADING_CLUSTER_ID_RE = re.compile(r"^[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*\b")
+_LEADING_CLUSTER_ID_RE = re.compile(r"^[A-Za-z]{1,6}-?\d+[A-Za-z0-9]*(?:-\d+[A-Za-z0-9]*)*\b")
 
 
 def _normalize_cluster_id(cid: Any) -> str:

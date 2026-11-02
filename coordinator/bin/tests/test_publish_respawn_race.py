@@ -1,7 +1,7 @@
 """publish.py main hands the warm pair over with live runs present.
 
-Falsifiers: (a) a live run reaches the stop and the round instead of refusing; (b) the live-run list is
-read with the publish marker already held.
+Falsifiers: (a) a live run reaches the stop and the land instead of refusing; (b) the live-run list is
+read with the publish marker not held, or not immediately before the land-time stop.
 
 Run: python -m pytest coordinator/bin/tests/test_publish_respawn_race.py -q
 """
@@ -21,37 +21,21 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _RUN = ("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")
 
 
-def test_live_run_hands_over_with_stop_called_and_round_reached(tmp_path, monkeypatch):
+def test_live_run_hands_over_with_stop_called_and_land_reached(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
-    publish_mod, dest, calls, bc, ps = _q._setup(tmp_path, monkeypatch, True)
-    _q._refresh_ok(monkeypatch)
-    monkeypatch.setattr(live_runs, "find_live_runs", lambda *a, **k: [live_runs.LiveRun(*_RUN)])
-    stops = []
-    monkeypatch.setattr(
-        ps, "stop_warm_pair",
-        lambda root, **k: stops.append(root) or ps.PairStopResult(stopped=(), survivors=()),
-    )
-    rc, err = _q._run(publish_mod)
-    assert rc == "round-reached", err
-    assert len(stops) == 1 and calls == [("round", True)]
+    env = _q._setup(tmp_path, monkeypatch, True)
+    env.live_runs[:] = [live_runs.LiveRun(*_RUN)]
+    rc, err = _q._run(env)
+    assert rc == 0, err
+    assert len(env.names("stop")) == 2 and env.names("land_diff") == [("land_diff", True)]
 
 
-def test_live_runs_are_read_after_the_publish_marker_is_held(tmp_path, monkeypatch):
-    from coordinator_core.warm import live_runs
-
-    publish_mod, dest, calls, bc, ps = _q._setup(tmp_path, monkeypatch, True)
-    _q._refresh_ok(monkeypatch)
-    held_at_read = []
-
-    def find(*a, **k):
-        held_at_read.append(bc.publish_marker_held(bc.svc_dir(dest)))
-        return []
-
-    monkeypatch.setattr(live_runs, "find_live_runs", find)
-    monkeypatch.setattr(
-        ps, "stop_warm_pair", lambda root, **k: ps.PairStopResult(stopped=(), survivors=())
-    )
-    _q._run(publish_mod)
-    assert held_at_read and held_at_read[-1] is True, held_at_read
-
+def test_live_runs_are_read_with_the_marker_held_immediately_before_the_land_stop(tmp_path, monkeypatch):
+    env = _q._setup(tmp_path, monkeypatch, True)
+    rc, err = _q._run(env)
+    assert rc == 0, err
+    reads = env.names("find_live_runs")
+    assert reads and all(held is True for _, held in reads), reads
+    assert env.events[-3:] == [("find_live_runs", True), ("stop", True), ("land_diff", True)], env.events
+    assert max(i for i, _ in env.gate_events()) < len(env.events) - 3

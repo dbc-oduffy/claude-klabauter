@@ -49,15 +49,22 @@ def _log_escape(payload: dict, session_id: str, file_path: str, reason: str) -> 
         if not repo_root:
             return
         d = share_dir(repo_root, session_id)
-        os.makedirs(d, exist_ok=True)
         entry = {
             "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "session_id": session_id,
             "path": file_path,
             "reason": reason,
         }
-        with open(os.path.join(d, ESCAPE_LOG_NAME), "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(json.dumps(entry) + "\n")
+        log_file = os.path.join(d, ESCAPE_LOG_NAME)
+
+        def _append() -> None:
+            os.makedirs(d, exist_ok=True)
+            with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(json.dumps(entry) + "\n")
+
+        from coordinator_core.bounded_io import run_bounded
+
+        run_bounded(f"escape-log:{log_file}", _append, deadline=0.4, default=None)
     except Exception:
         pass
 

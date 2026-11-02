@@ -53,7 +53,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.git import call_io_scope
+
+#: Ceiling on one loose-object placement; past it `write_object` raises TimeoutError.
+_WRITE_OBJECT_DEADLINE_SECS = 2.0
 
 
 #: Windows fails `os.replace` with `PermissionError` (WinError 5) when the
@@ -387,9 +391,9 @@ def write_object(
                 created.add(sha)
             state[1][sha] = (kind, payload)
         return sha
-    if not path.exists():
-        if created is not None:
-            created.add(sha)
+    def _place() -> bool:
+        if path.exists():
+            return False
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + f".tmp{os.getpid()}")
         tmp.write_bytes(zlib.compress(body))
@@ -409,6 +413,21 @@ def write_object(
                 tmp.unlink()
             except OSError:
                 pass
+        return True
+
+    # Bounded: a kernel-blocked stat/mkdir/write (defrag pass, 2026-11-02) refuses with
+    # TimeoutError. Safe to abandon -- the object is content-addressed, so a late finish is
+    # idempotent; the caller sees a refusal, never a half-written ref.
+    placed = run_bounded(
+        f"write-object:{path.parent}", _place, deadline=_WRITE_OBJECT_DEADLINE_SECS, default=None
+    )
+    if placed is None:
+        raise TimeoutError(
+            f"write_object: {sha} not placed within {_WRITE_OBJECT_DEADLINE_SECS}s "
+            f"(filesystem stalled): {path}"
+        )
+    if placed and created is not None:
+        created.add(sha)
     return sha
 
 

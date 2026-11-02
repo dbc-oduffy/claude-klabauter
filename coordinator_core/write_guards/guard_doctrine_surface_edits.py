@@ -93,6 +93,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core import machine_profile, machine_resolver
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_profile import feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
@@ -464,8 +465,9 @@ def _write_repo_identity_advisory_log(
     """
     if not repo_root or not session_id:
         return
-    try:
-        log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
+    log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
+
+    def _write() -> None:
         # NEVER mkdir here: an advisory log line minting a session directory
         # for whatever `session_id` it is handed manufactured phantom sessions
         # into the corpus `liveness.live_session_ids` reads (nine such dirs by
@@ -480,6 +482,10 @@ def _write_repo_identity_advisory_log(
                 f"{ts} | gates.repo_identity | verdict={gate_result['verdict']} | "
                 f"{gate_result['message']}\n"
             )
+
+    try:
+        # A kernel-blocked stat/open drops the log line; the hook is never held.
+        run_bounded(f"repo-identity-log:{log_dir}", _write, deadline=0.4, default=None)
     except OSError as exc:
         print(
             "guard_doctrine_surface_edits: repo-identity advisory-log write "

@@ -523,6 +523,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/guard_advisory_counter.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: record_advisory_fire, record_deny_fire'),
     'coordinator_core/handoff_creation_guard.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: assert_no_archived_twin'),
     'coordinator_core/hooks/agent_completion_log.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _append_audit_entry'),
+    'coordinator_core/hooks/dispatch_escape.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _log_escape (bounded append into the subagent-share dir)'),
     'coordinator_core/hooks/auto_push.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: log_failure'),
     'coordinator_core/hooks/cater_subagent_start.py': ('claims-explicitly', 'claim token in _write_miss_sentinel'),
     'coordinator_core/hooks/context_pressure_precompact.py': ('to-fix', "raw-write site(s): _write_sentinel, _write_state_snapshot; runtime observed=no (n=0), sample=n/a [static-only: flagged by census row 2, not exercised in C2's one run — gap stays visible, per C3 body]"),

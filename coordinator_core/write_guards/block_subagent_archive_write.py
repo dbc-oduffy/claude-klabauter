@@ -153,6 +153,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+from coordinator_core.bounded_io import run_bounded
+
 import os
 import re
 import sys
@@ -256,8 +258,14 @@ def _write_block_log(
             return
         log_dir = Path(resolved)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(log_dir / "archive-write-block.log", "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(f"{ts} | DENY | agent_id={agent_id} | path={file_path}\n")
+        log_file = log_dir / "archive-write-block.log"
+
+        def _append() -> None:
+            with open(log_file, "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"{ts} | DENY | agent_id={agent_id} | path={file_path}\n")
+
+        # A kernel-blocked open drops the audit line; the verdict is already decided.
+        run_bounded(f"deny-log:{log_file}", _append, deadline=0.4, default=None)
     except OSError as exc:
         print(
             f"block-subagent-archive-write: failed to write deny audit log "
