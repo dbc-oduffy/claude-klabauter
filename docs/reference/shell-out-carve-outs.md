@@ -91,6 +91,7 @@ is an optional verification-only tool. See the per-site table below.
 | `coordinator/bin/suite-verdict.py` `build_verdict()` | (f) | pytest, resolved with `importlib.util.find_spec("pytest")`, degrade-to-UNAVAILABLE verdict + exit 0; ruled 2026-10-25 (G-EM under PM delegation) | No — EM-launched background job under a live tier-u grant, outside the 500ms bar |
 | `coordinator/bin/suite-verdict.py` `_red_at()` | (f) | pytest bisect probe of one nodeid in a `git archive` export, same resolution and degrade path; ruled 2026-10-25 (G-EM under PM delegation) | No — same background job |
 | `coordinator/bin/statusline.py` `_run_inner()` (`shell=True` leg) | (h) | operator-supplied command string, shell parsing by definition | No — statusline delegation, outside the commit and session-start paths |
+| `coordinator_core/rea_ingest/ghidra_runner.py` `_spawn_headless()` (ghidra_runner) | (f) | 3rd-party analysis CLI (Ghidra `analyzeHeadless`), resolved via `GHIDRA_INSTALL_DIR` or PATH, degrade-to-UNAVAILABLE; static analysis only. **PM ruling 2026-11-02** (rea ask 2): "yes, you may use the headless analyzer, you can add it". Same ruling: permissive by design, so no forced process confinement and no forced project deletion ("we are not thinking about it for that use case") | No — rea ingest, operator- or skill-invoked; bulk analysis, outside the 500ms bar |
 
 ## Adversarial standard applied — no carve-out fails it
 
