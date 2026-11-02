@@ -1729,7 +1729,7 @@ def test_fix_not_reproduced_is_counted():
 
 def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_row_sized():
     """`triage_fix_verdict` refuses to pick a fix node when triage's own edges
-    reach TWO fix-kind targets, so a below-floor scout size is assembled."""
+    reach TWO fix-kind targets, so a plan-weight scout size is assembled."""
     routing = {
         "triage": {"kind": "triage", "edges": {"v1": "fixA", "v2": "fixB"}, "on_fail": None},
         "fixA": {"kind": "fix", "edges": {}, "on_fail": None},
@@ -1742,7 +1742,7 @@ def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_ro
 
     budget = _StubBudgetSpender()
     agent_fn = _agent_stub(
-        {"triage": triage, "size": lambda rid: _scout("S", exit_code=0)},
+        {"triage": triage, "size": lambda rid: _scout("M", exit_code=0)},
         budget,
     )
     result = gc.run_admission(
@@ -2907,7 +2907,68 @@ def test_fix_target_reached_through_verify_nodes_is_found_and_ambiguity_refused(
 
 def test_below_floor_size_collapse_only_for_a_row_whose_own_verdict_reaches_fix():
     script = _compose()
-    assert "_ownTarget === SIZE_FIX_TARGET" in script
+    assert 'const SIZE_FIX_ENTRIES = {"confirmed-bug": "fix"};' in script
+    assert "SIZE_FIX_ENTRIES[String(row.origin)" in script
+    assert "_belowFloor && _ownTarget && ROUTING[_ownTarget]" in script
+
+
+def _multi_fix_routing():
+    routing, triage_node = _fixture_routing()
+    routing[triage_node]["edges"]["regression"] = "vfix"
+    routing["vfix"] = {"kind": "verify", "edges": {"pass": "fix"}, "on_fail": None}
+    return routing, triage_node
+
+
+def _run_multi_fix(verdict, size_reply):
+    routing, triage_node = _multi_fix_routing()
+    budget = _StubBudgetSpender()
+    agent_fn = _agent_stub(
+        {
+            "triage": lambda bid: [{"row": "r0", "verdict": verdict, "tshirt_size": "M", "tradeoff": ""}],
+            "size": lambda rid: size_reply,
+            "verify": lambda rid: {"outcome": "pass"},
+            "fix": lambda rid: {"outcome": "NEEDS_PLAN", "has_tradeoff": False},
+        },
+        budget,
+    )
+    return gc.run_admission(
+        [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(4), budget=budget, agent=agent_fn
+    )
+
+
+def test_below_floor_size_fail_reply_reaches_fix_when_several_verdicts_reach_fix():
+    routing, triage_node = _multi_fix_routing()
+    assert gc.triage_fix_target(routing, triage_node) is None
+    assert gc.triage_fix_entries(routing, triage_node)["regression"] == "vfix"
+    reason = "Sized XS, below plan weight, so no size-chain was run"
+    for verdict in ("confirmed-bug", "regression"):
+        result = _run_multi_fix(verdict, _scout("XS", reason=reason))
+        assert result["by_triage_check"]["size_collapsed"] == 1
+        assert not any("size step failed" in str(h["reason"]) for h in result["handed_back"])
+
+
+def test_plan_weight_size_fail_reply_still_hands_back_when_several_verdicts_reach_fix():
+    result = _run_multi_fix("regression", _scout("M", reason="boom"))
+    assert result["by_triage_check"]["size_collapsed"] == 0
+    assert any("size step failed" in str(h["reason"]) for h in result["handed_back"])
+
+
+def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_back():
+    routing, triage_node = _multi_fix_routing()
+    routing[triage_node]["edges"]["not-reproduced"] = "close"
+    budget = _StubBudgetSpender()
+    agent_fn = _agent_stub(
+        {
+            "triage": lambda bid: [{"row": "r0", "verdict": "not-reproduced", "tshirt_size": "M", "tradeoff": ""}],
+            "size": lambda rid: _scout("XS", reason="below"),
+            "refute-close": lambda bid: {"confirmed": [], "refuted": []},
+        },
+        budget,
+    )
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(4), budget=budget, agent=agent_fn
+    )
+    assert result["by_triage_check"]["size_collapsed"] == 0
 
 
 def test_emitted_size_call_makes_the_scout_check_the_sizing_file_exists():

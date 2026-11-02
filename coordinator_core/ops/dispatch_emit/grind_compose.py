@@ -140,6 +140,7 @@ __all__ = [
     "route_after_triage",
     "triage_fix_verdict",
     "triage_fix_target",
+    "triage_fix_entries",
     "size_fail_reason",
     "follow_edge",
     "Row",
@@ -287,9 +288,9 @@ def route_after_triage(
         return ("handback", target or "stage-dead")
     return ("node", target)
 
-def triage_fix_target(routing: Mapping[str, dict], triage_node_id: str) -> Optional[str]:
-    """The one node a triage edge enters on the way to a fix node (directly, or through verify nodes' `pass`
-    edges); None when there are none or several. A below-plan-weight sizing re-enters the graph there."""
+def triage_fix_entries(routing: Mapping[str, dict], triage_node_id: str) -> dict[str, str]:
+    """Each triage verdict whose edge enters a fix node (directly, or through verify nodes' `pass` edges),
+    mapped to that edge's node. A below-plan-weight sizing re-enters the graph at its own row's entry."""
     def reaches_fix(node_id: str, seen: frozenset) -> bool:
         node = routing.get(node_id)
         if node is None or node_id in seen:
@@ -299,7 +300,12 @@ def triage_fix_target(routing: Mapping[str, dict], triage_node_id: str) -> Optio
         nxt = node["edges"].get("pass") if node["kind"] == "verify" else None
         return nxt is not None and reaches_fix(nxt, seen | {node_id})
 
-    targets = {t for t in routing[triage_node_id]["edges"].values() if reaches_fix(t, frozenset())}
+    return {v: t for v, t in routing[triage_node_id]["edges"].items() if reaches_fix(t, frozenset())}
+
+
+def triage_fix_target(routing: Mapping[str, dict], triage_node_id: str) -> Optional[str]:
+    """The one node every fix-reaching triage edge enters; None when there are none or several."""
+    targets = set(triage_fix_entries(routing, triage_node_id).values())
     return next(iter(targets)) if len(targets) == 1 else None
 
 
@@ -576,6 +582,7 @@ def run_admission(
     by_triage_check: dict[str, int] = {k: 0 for k in _SIZE_CHECK_KEYS}
     pre_fix_verify = pre_fix_verify_nodes(routing)
     fix_target = triage_fix_target(routing, triage_node_id)
+    fix_entries = triage_fix_entries(routing, triage_node_id)
 
     def _bump_refute_origin(origin: str, key: str) -> None:
         entry = by_refute_origin.setdefault(origin, {"confirmed": 0, "refuted": 0})
@@ -869,11 +876,11 @@ def run_admission(
             _handback(row, "baton", "size scout returned no size" + (f": {reason}" if reason else ""))
             return
         below_floor = _tshirt_rank(tshirt) < _PLAN_WEIGHT_FLOOR_RANK
-        own_target = routing[triage_node_id]["edges"].get(row.origin.removeprefix("triage:"))
-        if below_floor and fix_target and fix_target in routing and own_target == fix_target:
+        own_target = fix_entries.get(row.origin.removeprefix("triage:"))
+        if below_floor and own_target in routing:
             by_triage_check["size_collapsed"] += 1
             row.origin = "size:below-plan-weight"
-            row.node = fix_target
+            row.node = own_target
             return
         if not below_floor:
             by_triage_check["size_confirmed"] += 1
@@ -1910,6 +1917,7 @@ def compose_grind_script(
     lines.append(f"const MAX_SPLIT_ITEMS = {MAX_SPLIT_ITEMS};")
     lines.append(f"const RETIRE_VERDICTS = {json.dumps(sorted(vocab.RETIRE_VERDICTS))};")
     lines.append(f"const SIZE_FIX_TARGET = {json.dumps(size_fix_target)};")
+    lines.append(f"const SIZE_FIX_ENTRIES = {json.dumps(triage_fix_entries(routing_table, triage_node_id), sort_keys=True)};")
     lines.append(_MUTEX_HELPERS)
     lines.append(_ROUTING_HELPERS)
 
@@ -2348,11 +2356,11 @@ def compose_grind_script(
         "      continue;\n"
         "    }\n"
         "    const _belowFloor = _tshirtRank(scouted.tshirt) < PLAN_WEIGHT_FLOOR_RANK;\n"
-        "    const _ownTarget = ROUTING[TRIAGE_NODE_ID].edges[String(row.origin).replace(/^triage:/, '')];\n"
-        "    if (_belowFloor && SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET] && _ownTarget === SIZE_FIX_TARGET) {\n"
+        "    const _ownTarget = SIZE_FIX_ENTRIES[String(row.origin).replace(/^triage:/, '')];\n"
+        "    if (_belowFloor && _ownTarget && ROUTING[_ownTarget]) {\n"
         "      _byTriageCheck.size_collapsed += 1;\n"
         "      row.origin = 'size:below-plan-weight';\n"
-        "      row.node = SIZE_FIX_TARGET;\n"
+        "      row.node = _ownTarget;\n"
         "      continue;\n"
         "    }\n"
         "    if (!_belowFloor) { _byTriageCheck.size_confirmed += 1; }\n"

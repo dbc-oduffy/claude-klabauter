@@ -1430,3 +1430,4 @@ def test_triage_schema_admits_optional_items_and_does_not_require_them():
     assert '"required": ["title"]' in call
     assert "items" not in grind_stages.TRIAGE_RECORD_FIELDS
     assert "Fill `items`" in call
+    assert "share one root cause stay one row: leave `items` out" in call
