@@ -300,12 +300,81 @@ def _freshest_run_artifact_epoch(root: Path, run_id: str) -> Optional[float]:
     return newest
 
 
+def _own_activity_epoch(root: Path, run_id: str) -> Optional[float]:
+    """Later of a run's stage stamp (`last_activity_at`, else `started_at`) and its newest artifact
+    (`_freshest_run_artifact_epoch`); None when neither exists."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+    stage = read_run_stage(root, run_id) or {}
+    seen = _stamp_epoch(stage.get("last_activity_at"))
+    if seen is None:
+        seen = _stamp_epoch(stage.get("started_at"))
+    artifact = _freshest_run_artifact_epoch(root, run_id)
+    if artifact is not None and (seen is None or artifact > seen):
+        seen = artifact
+    return seen
+
+
+def _descends_from(root: Path, run_id: str, ancestor: str, ancestor_sizing: str) -> bool:
+    """Whether `run_id` is a descendant run of `ancestor`: its `run.json` `resumed_from` chain reaches
+    `ancestor` (a warp child names the ask run it continues there), or at any hop its `sizing_rel`
+    is `ancestor_sizing` (the child binds the ask run's sizing). Cycle-safe, capped at
+    `CARRIED_HOP_CAP`; run ids are compared, never parsed."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    seen: set = set()
+    cur = run_id
+    for _ in range(rl.CARRIED_HOP_CAP):
+        if cur in seen:
+            return False
+        seen.add(cur)
+        data = _run_json(root, cur)
+        sizing = data.get("sizing_rel")
+        if ancestor_sizing and isinstance(sizing, str) and _norm(sizing) == ancestor_sizing:
+            return True
+        prev = data.get(rl.RESUMED_FROM_FIELD)
+        if not (isinstance(prev, str) and safe_id(prev)):
+            return False
+        if prev == ancestor:
+            return True
+        cur = prev
+    return False
+
+
+def _descendant_activity_epoch(root: Path, run_id: str, now: float) -> Optional[float]:
+    """Newest activity epoch among live descendant runs of `run_id` (`_descends_from`), None when no
+    descendant was active within `MINTED_STALE_SECONDS` of `now`. A descendant that is halted or
+    landed does not count. Candidates are the `RECORD_DIR_ROOT` entries whose directory mtime falls
+    in the window (an atomic stage write or a new artifact bumps it), so the scan is one listing plus
+    reads for the few recent dirs; stat/read calls only."""
+    ask_sizing = _lineage_sizing(root, run_id)
+    newest: Optional[float] = None
+    try:
+        with os.scandir(Path(root) / RECORD_DIR_ROOT) as entries:
+            recent = [
+                e.name for e in entries
+                if e.name != run_id and e.is_dir() and now - e.stat().st_mtime <= MINTED_STALE_SECONDS
+            ]
+    except OSError:
+        return None
+    for name in recent:
+        if not safe_id(name) or not _descends_from(root, name, run_id, ask_sizing):
+            continue
+        if _halted(root, name) or _landed(root, name):
+            continue
+        seen = _own_activity_epoch(root, name)
+        if seen is not None and now - seen <= MINTED_STALE_SECONDS and (newest is None or seen > newest):
+            newest = seen
+    return newest
+
+
 def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bool:
     """True when the run's `run-stage.json` reads `minted` with its freshest activity older than
     `MINTED_STALE_SECONDS`. Freshest activity is the later of the stage stamp (`last_activity_at`,
-    else `started_at`) and the newest artifact the launcher left in the run's record/scratch dirs
-    (`_freshest_run_artifact_epoch`). An absent or malformed stage record, any other stage, or no
-    parseable stamp is not stale."""
+    else `started_at`), the newest artifact the launcher left in the run's record/scratch dirs
+    (`_freshest_run_artifact_epoch`), and, once those read stale, any live descendant run's activity
+    (`_descendant_activity_epoch`): an ask run driven through a child warp run stays at `minted`.
+    An absent or malformed stage record, any other stage, or no parseable stamp is not stale."""
     import time
 
     from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
@@ -321,7 +390,11 @@ def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bo
     artifact = _freshest_run_artifact_epoch(root, run_id)
     if artifact is not None and artifact > seen:
         seen = artifact
-    return (time.time() if now is None else now) - seen > MINTED_STALE_SECONDS
+    current = time.time() if now is None else now
+    if current - seen <= MINTED_STALE_SECONDS:
+        return False
+    child = _descendant_activity_epoch(root, run_id, current)
+    return child is None or current - child > MINTED_STALE_SECONDS
 
 
 def _halt_abandoned(root: Path, run_id: str) -> None:

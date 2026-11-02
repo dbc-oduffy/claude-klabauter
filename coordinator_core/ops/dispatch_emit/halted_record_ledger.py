@@ -214,7 +214,9 @@ def _record_kept(
             if returns_rel not in paths:
                 paths.append(returns_rel)
     owning = set(owner.values())
-    baseline = _manifest_baseline(record_dir, manifest_doc)
+    from coordinator_core.ops.dispatch_emit import write_baseline
+
+    baseline = write_baseline.without_carried(root, record_dir, _manifest_baseline(record_dir, manifest_doc))
     chunks = kept_work.kept_chunks(
         root, owner, withheld, baseline,
         returns=persisted,

@@ -11,7 +11,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional
 
-from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, checkin_form, fingerprint
+from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, checkin_form, fingerprint, kept_fingerprints
 
 NO_CHANGE_REFUSAL = "no-change"
 
@@ -74,6 +74,59 @@ def unwritten(root: Path, baseline: Mapping[str, Optional[str]], paths: Iterable
         seen.add(p)
         if p in baseline and fingerprint(root, p) == baseline[p]:
             out.append(p)
+    return out
+
+
+def without_carried(
+    root: Path, run_dir: Path, baseline: Optional[Mapping[str, Optional[str]]]
+) -> Optional[dict[str, Optional[str]]]:
+    """``baseline`` minus each path the run's own earlier pass or ``resumed_from`` predecessor wrote
+    (``run-outcome.json`` slice of the run's record, each predecessor's record, ``predecessor_wrote``,
+    and a path still equal to a blob the record's own earlier ``kept.json`` fingerprinted).
+    A refire stages its baseline over those carried bytes, so a row delivered earlier reads
+    ``unwritten`` there; dropping the key makes the path unknown, which ``unwritten`` never counts.
+    Trap: the run's own ``halted.json`` withheld map is read nowhere here; the halt being recorded
+    stamps it first, and crediting it would credit every withheld path. None and empty baselines
+    pass through unchanged."""
+    if not baseline:
+        return baseline if baseline is None else dict(baseline)
+    from coordinator_core.ops._path_guard import safe_id
+
+    carried: set = set(predecessor_wrote(root, run_dir, baseline))
+    carried.update(_outcome_slice(run_dir))
+    if safe_id(run_dir.name):
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+        from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+        for prev in _resumed_chain(root, run_dir.name):
+            try:
+                carried.update(_recorded_paths(record_dir(root, prev)))
+            except ValueError:
+                continue
+    for rel, blobs in kept_fingerprints(run_dir).items():
+        if fingerprint(root, rel) in blobs:
+            carried.add(rel)
+    credited = _clean_paths(carried)
+    return {p: v for p, v in baseline.items() if p not in credited}
+
+
+def _outcome_slice(home: Path) -> list:
+    """Review slice and test-runner edits listed in ``home/run-outcome.json`` (not its withheld map)."""
+    try:
+        data = json.loads((home / "run-outcome.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    review = data.get("inline_review") if isinstance(data, dict) else None
+    review = review if isinstance(review, dict) else {}
+    prep, tests = review.get("prep"), review.get("tests")
+    out: list = []
+    for listed in (
+        prep.get("slice_files") if isinstance(prep, dict) else None,
+        tests.get("edited") if isinstance(tests, dict) else None,
+        tests.get("created") if isinstance(tests, dict) else None,
+    ):
+        if isinstance(listed, list):
+            out.extend(p for p in listed if isinstance(p, str) and p)
     return out
 
 

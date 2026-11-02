@@ -3054,7 +3054,7 @@ def _objective_js(
         f"{session_tail}",
     )
     judge_call = _agent(
-        judge_prompt, label="objective-judge", phase=phase, agent_type=OBJECTIVE_JUDGE_AGENT, agent_model="sonnet",
+        judge_prompt, label="objective-judge", phase=phase, agent_type=OBJECTIVE_JUDGE_AGENT,
         schema=_obj(["delta_plan_path", "rows"], {
             "delta_plan_path": _STR, "rows": {"type": "array", "items": {"type": "object"}}, "reason": _STR,
             "cost_usd": {"type": "number"}, "tokens": {"type": "number"},
@@ -3068,7 +3068,7 @@ def _objective_js(
         f"{objective_rel}. Return `findings_path`.{session_tail}",
     )
     research_call = _agent(
-        research_prompt, label="objective-research", phase=phase, agent_type=OBJECTIVE_RESEARCH_AGENT, agent_model="haiku",
+        research_prompt, label="objective-research", phase=phase, agent_type=OBJECTIVE_RESEARCH_AGENT,
         schema=_obj(["findings_path"], {"findings_path": _STR, "cost_usd": {"type": "number"}, "tokens": {"type": "number"}}),
         run_id=run_id,
     ).replace("label: 'objective-research',", "label: 'objective-research:' + iteration,", 1)

@@ -314,6 +314,8 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 #: ============================================================================
 
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
+    'coordinator_core/contract/emit_op_catalog.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: generated contract artifacts (op-catalog.json, mcp-tools.json, docs/reference/op-catalog.md)'),
+    'coordinator_core/ops/review_partition_slices.py': ('claims-explicitly', 'claim token in _write_slice'),
     'coordinator_core/index_distribution/newer_index_marker.py': ('in-repo-non-state', 'newer-index marker json via tmp + os.replace under the repo index-distribution dir, never state/: write_marker'),
     'coordinator_core/ops/_anchor_premise.py': ('outside-repo', 'baseline blobs from git show written into a tempfile.TemporaryDirectory, discarded on exit: the anchor-baseline evaluator'),
     'coordinator_core/publish/dry_refire_gate.py': ('outside-repo', 'built-in sample sizing, plan and halted run written into the caller-given throwaway root, never the repo: write_sample'),
@@ -374,6 +376,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/research_close.py': ('in-repo-non-state', 'scouts digest.md in the gitignored run scratch dir (_build_digest); archived copies and the docs/research/trail record are written in-repo and committed by _close_committed'),
     'coordinator_core/ops/seam_baton_mint.py': ('claims-explicitly', 'exclusive-create staged batons under state/handoffs/ and state/seam-baton-index.json, declared through declare_write'),
     'coordinator_core/percolate/guard_cache.py': ('git-internal', 'publish parse cache under the destination repo git dir'),
+    'coordinator_core/percolate/gate_result_cache.py': ('git-internal', 'per-gate verdict cache json via tmp + os.replace under the publish destination repo git dir (.git/claude-klabauter-gate-result): GateResultCache.flush'),
     'coordinator_core/workstream_complete/apply.py': ('in-repo-non-state', 'review-notes section appended to the completion entry under archive/completed/'),
     'coordinator_core/content_root.py': ('outside-repo', 'content-root pointer under settings_home()/machine-local, outside every repo: migrate'),
     'coordinator_core/sizing_assemble/__init__.py': ('claims-explicitly', 'exclusive-create sizing scaffold under state/sizings/, declared through declare_write: _scaffold_missing'),

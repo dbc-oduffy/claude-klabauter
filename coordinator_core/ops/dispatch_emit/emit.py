@@ -549,6 +549,10 @@ _AGENT_MODELS = {
     "coordinator:vp-product": "opus",
     "coordinator:overengineering-reviewer": "opus",
     "coordinator:subtractive-adjudicator": "opus",
+    "coordinator:op-relay": "haiku",
+    "coordinator:docs-checker": "haiku",
+    "coordinator:exit-criterion-judge": "sonnet",
+    "coordinator:research-scout": "haiku",
 }
 
 
@@ -1014,8 +1018,9 @@ def _prose_contradicting_fields(raw_row: dict) -> Optional[tuple]:
 def shape_rows_for_emit(rows: list, raw_by_id: dict) -> tuple:
     """Run the spawn-tax chunk shaper over ``rows``; return ``(rows, raw_by_id, merges)``.
 
-    ``needs_slot`` rows are never merged: each carries a unique agent_model sentinel through
-    the shaper (its candidate test requires equal agent types and models) and gets its own
+    ``needs_slot`` rows, and rows carrying ``blocked_on`` or ``depends_on_plan``, are never
+    merged (a blocker must not strand an independent plan's row): each carries a unique
+    agent_model sentinel through the shaper (its candidate test requires equal agent types and models) and gets its own
     model back. ``raw_by_id`` is returned as a copy gaining one synthesized entry per merged
     id (union of the constituents' ``register_rows``/``writes``/``depends_on`` plus
     ``constituents:``); the constituents' own entries stay. ``merges`` is the shaper's
@@ -1023,7 +1028,13 @@ def shape_rows_for_emit(rows: list, raw_by_id: dict) -> tuple:
     """
     from coordinator_core.ops.dispatch_emit.chunk_shaper import shape_rows
 
-    slot_ids = {r.id for r in rows if (raw_by_id.get(r.id) or {}).get("needs_slot") is True}
+    slot_ids = {
+        r.id
+        for r in rows
+        if (raw := raw_by_id.get(r.id) or {}).get("needs_slot") is True
+        or raw.get("blocked_on")
+        or raw.get("depends_on_plan")
+    }
     models = {r.id: r.agent_model for r in rows}
     tagged = [r._replace(agent_model=f"\0slot:{r.id}") if r.id in slot_ids else r for r in rows]
     result = shape_rows(tagged)

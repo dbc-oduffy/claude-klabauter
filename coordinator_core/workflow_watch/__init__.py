@@ -131,6 +131,12 @@ def _emit_cost(journal_path: str) -> None:
 
 def _submitted_run(root, script_path: str):
     """(run_id, sizing_rel) of the newest submission under `root` naming `script_path`, else None."""
+    found = _submitted_launch(root, script_path)
+    return None if found is None else found[:2]
+
+
+def _submitted_launch(root, script_path: str):
+    """(run_id, sizing_rel, submitted_at) of the newest submission under `root` naming `script_path`, else None."""
     from pathlib import Path
 
     from coordinator_core import warp_live  # lazy: warp_live -> dispatch_emit -> this package
@@ -145,7 +151,7 @@ def _submitted_run(root, script_path: str):
         at = at if isinstance(at, (int, float)) else 0.0
         if best is None or at >= best[0]:
             best = (at, str(rec.get("run_id") or sub.parent.name), rec.get("sizing_rel") or None)
-    return None if best is None else (best[1], best[2])
+    return None if best is None else (best[1], best[2], best[0])
 
 
 def _write_usage_limit_halt(journal_path: str, script_path: str | None, root=None) -> None:
@@ -171,6 +177,34 @@ def _write_usage_limit_halt(journal_path: str, script_path: str | None, root=Non
             ask_contract.record_dir(base, run_id), journal_path,
             sizing_rel=sizing_rel, script_path=script_path, now=time.time(),
         )
+    except Exception:
+        pass
+
+
+def _write_returned_halt(result_text: str | None, script_path: str | None, root=None) -> None:
+    """Land `halted.json` when the finished run's script returned `halted_by` unrecorded; never raises."""
+    if not script_path or not result_text:
+        return
+    try:
+        from pathlib import Path
+
+        from coordinator_core.ops.dispatch_emit import ask_contract
+        from coordinator_core.ops.dispatch_emit.returned_halt import land_returned_halt
+        from coordinator_core.workflow_watch.stamp import _parse_result_payload
+
+        result = _parse_result_payload(result_text)
+        if result is None or not isinstance(result.get("halted_by"), dict):
+            return
+        base = Path(root) if root is not None else next(
+            (p for p in (Path.cwd(), *Path.cwd().parents) if (p / ask_contract.RUN_DIR_ROOT).is_dir()), None
+        )
+        if base is None:
+            return
+        found = _submitted_launch(base, script_path)
+        if found is None:
+            return
+        run_id, _sizing_rel, launched_at = found
+        land_returned_halt(ask_contract.record_dir(base, run_id), result, launched_at=launched_at)
     except Exception:
         pass
 
@@ -207,6 +241,7 @@ def _watch(
                 stamp_terminal(journal_path, task_id, record)
             except Exception:
                 pass
+            _write_returned_halt(record.result_text, script_path)
             print(f"terminal: {record.status}")
             sys.stdout.flush()
             _emit_cost(journal_path)

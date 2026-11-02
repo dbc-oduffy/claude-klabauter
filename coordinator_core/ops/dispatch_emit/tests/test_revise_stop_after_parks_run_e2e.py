@@ -116,6 +116,10 @@ def test_an_unrevised_run_stages_and_never_parks(repo):
     rl.bind(repo, RUN, SIZING, ask_text="plan then stop")
 
     (repo / STAGEABLE_REL).write_text(STAGEABLE_PLAN, encoding="utf-8", newline="\n")
+    # Staging leaves a twin of the run's own script and refuses when that script is absent.
+    script = repo / "scratch" / "warp" / f"{RUN}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("// script\n", encoding="utf-8")
 
     stage_reply = ask_stage._handler({"run_id": RUN, "plan_path": STAGEABLE_REL, "writes": []}, repo_root=repo)
 

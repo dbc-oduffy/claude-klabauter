@@ -10,6 +10,7 @@ from coordinator_core.workflow_watch import run_report
 
 class _Rec:
     status = "completed"
+    result_text = ""
 
 
 class _Watcher:

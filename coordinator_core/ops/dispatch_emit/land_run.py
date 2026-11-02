@@ -51,7 +51,7 @@ import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Collection, Optional, Sequence
+from typing import Collection, Mapping, Optional, Sequence
 
 from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.ipc import register_op
@@ -2639,10 +2639,102 @@ def _measured_strs(record: Optional[dict], key: str) -> list:
     return [p for p in value if isinstance(p, str)] if isinstance(value, list) else []
 
 
-def _measured_mismatch(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str], settled: dict) -> list:
+def _run_owned(root: Path, run_id: Optional[str]):
+    """The run's own artifacts (delivery note, sizings, record dir); written after the measured-rev
+    record, so never evidence of landing-tree drift."""
+    from coordinator_core.ops.dispatch_emit import run_artifact_ownership
+
+    return run_artifact_ownership.own_artifact_paths(root, run_id) if run_id else run_artifact_ownership.OwnArtifacts()
+
+
+def _hunk_blocks(base: list, new: list) -> "collections.Counter":
+    import collections
+
+    from coordinator_core.git.since_base_overlap import _opcodes
+
+    return collections.Counter(
+        (tuple(base[i1:i2]), tuple(new[j1:j2])) for tag, i1, i2, j1, j2 in _opcodes(base, new) if tag != "equal"
+    )
+
+
+def _own_hunks(root: Path, rel: str, base_blob: str, content: bytes) -> Optional["collections.Counter"]:
+    """The run's own hunks in *content*: its changes over the write baseline, minus the changes that
+    only revert the baseline's peer dirt toward HEAD. None when a side is unreadable."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import _blob_at_commit
+    from coordinator_core.git.since_base_overlap import _head_sha, _lines
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    common = resolve_git_common_dir(root)
+    base_obj = git_objects.read_object(common, base_blob)
+    head = _head_sha(root)
+    head_lines = _lines(common, _blob_at_commit(common, head, rel)) if head else None
+    form = kept_work.checkin_form(root, rel, content)
+    if base_obj is None or head_lines is None or form is None:
+        return None
+    base_lines = base_obj[1].splitlines(keepends=True)
+    return _hunk_blocks(base_lines, form.splitlines(keepends=True)) - _hunk_blocks(base_lines, head_lines)
+
+
+def _landed_bytes(root: Path, rel: str, settled: dict) -> Optional[bytes]:
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    blob = settled.get(rel)
+    if blob:
+        obj = git_objects.read_object(resolve_git_common_dir(root), blob)
+        return None if obj is None else obj[1]
+    try:
+        return (root / rel).read_bytes()
+    except OSError:
+        return None
+
+
+def _own_hunks_agree(root: Path, rel: str, measured_blob: object, baseline: Mapping, settled: dict) -> bool:
+    """True when every own hunk measured in *rel* is still landed unchanged, so the blob difference is
+    peer edits only (a peer hunk added after measure is not the run's and never refuses it). False on
+    a changed or missing own hunk, an unreadable side, or a path with no baseline."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    base_blob = baseline.get(rel)
+    if not base_blob or not isinstance(measured_blob, str):
+        return False
+    measured = git_objects.read_object(resolve_git_common_dir(root), measured_blob)
+    landed = _landed_bytes(root, rel, settled)
+    if measured is None or landed is None:
+        return False
+    try:
+        as_measured = _own_hunks(root, rel, base_blob, measured[1])
+        as_landed = _own_hunks(root, rel, base_blob, landed)
+        if as_measured is None or as_landed is None:
+            return False
+        return not (as_measured - as_landed) and (bool(as_measured) or as_measured == as_landed)
+    except Exception:
+        return False
+
+
+def _peer_dirt_only(root: Path, rel: str, baseline: Mapping) -> bool:
+    """True when the worktree file holds none of the run's own hunks (all of its difference from
+    HEAD predates the run), so there is nothing of the run's to measure. False without a baseline."""
+    base_blob = baseline.get(rel)
+    if not base_blob:
+        return False
+    try:
+        got = _own_hunks(root, rel, base_blob, (root / rel).read_bytes())
+    except Exception:
+        return False
+    return got is not None and not got
+
+
+def _measured_mismatch(
+    root: Path, record: dict, product: Sequence[str], deleted: Sequence[str], settled: dict, own=None,
+    baseline: Optional[Mapping] = None,
+) -> list:
     """Paths where the product changes a commit would introduce (``product`` path -> blob, ``deleted``
     removals) differ from the record's ``blobs``/``removed``. A record path the commit omits counts
-    unless HEAD already holds the recorded blob."""
+    unless HEAD already holds the recorded blob. Paths *own* (an ``OwnArtifacts``) covers never count."""
     from coordinator_core.git.commit import checkin_blob_sha
 
     blobs = record.get("blobs") if isinstance(record.get("blobs"), dict) else {}
@@ -2656,6 +2748,13 @@ def _measured_mismatch(root: Path, record: dict, product: Sequence[str], deleted
         if p not in landing and p not in gone and (head.get(p) or (None, None))[1] != blob
     }
     differing |= {p for p in removed if p not in gone and p in head}
+    if own is not None:
+        differing = {p for p in differing if not own.covers(p)}
+    if baseline:
+        differing = {
+            p for p in differing
+            if not (p in landing and _own_hunks_agree(root, p, blobs.get(p), baseline, settled))
+        }
     return sorted(differing)
 
 
@@ -3275,6 +3374,11 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     deleted = sorted(set(deleted) | set(art_deleted))
     paths = [p for p in paths if p not in deleted]
     if unmeasured:
+        own_covers = _run_owned(root, art_run_id).covers
+        unmeasured = [p for p in unmeasured if not own_covers(p)]
+        run_baseline = manifest.write_baseline if manifest is not None else {}
+        unmeasured = [p for p in unmeasured if not _peer_dirt_only(root, p, run_baseline)]
+    if unmeasured:
         held_now = _peer_held(
             root, unmeasured, session_id, rid, script_path,
             plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
@@ -3769,6 +3873,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             ["measured-rev.json (unreadable)"] if measured.get("unreadable") else _measured_mismatch(
                 root, measured, [p for p in commit_set if p not in non_product],
                 [p for p in commit_deleted if p not in set(art_deleted)], settled_blobs,
+                own=_run_owned(root, art_run_id),
+                baseline=manifest.write_baseline if manifest is not None else None,
             )
         )
         if differing:

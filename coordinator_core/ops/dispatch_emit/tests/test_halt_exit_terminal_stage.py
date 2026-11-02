@@ -1,9 +1,10 @@
 """Every halt exit of the ask script leaves a terminal stage and a halt record.
 
-Compose tests (1)-(2) evaluate the composed halt-record guard in node against the args a resume
-refire carries (no `runToken`; a launcher child's first script holds a null inline slot). Backstop
-tests (3)-(4) drive `returned_halt.land_returned_halt` on a tmp_path record dir. Each test is a
-strict xfail until the row that delivers it removes the marker.
+Compose tests (1)-(2) evaluate the composed halt-record guard in node: open when a run token is
+supplied (`args.runToken`, or a launcher child's staged inline slot), closed without one (that exit
+is the backstop's case, never a composed commit). Backstop
+tests (3)-(5) drive `returned_halt.land_returned_halt` on a tmp_path record dir, and through `_watch`'s
+terminal branch.
 """
 
 from __future__ import annotations
@@ -55,13 +56,17 @@ def _token_decl(script: str) -> str:
     return match.group(0)
 
 
-def _guard_opens_on_refire(script: str) -> bool:
-    """True when the composed halt-record guard is true for a pull halt reached by a resume refire."""
+_TOKEN = "a" * 32
+
+
+def _guard_opens_on_refire(script: str, *, args: dict, staged_inline: object = None) -> bool:
+    """True when the composed halt-record guard is true for a pull halt, given the launch `args` and the
+    launcher child's inline slot (`staged_inline`, None for a first script)."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
     code = (
-        f"const args = {json.dumps(_REFIRE_ARGS)}; const _STAGED_INLINE = null; const _commit = null;\n"
+        f"const args = {json.dumps(args)}; const _STAGED_INLINE = {json.dumps(staged_inline)}; const _commit = null;\n"
         f"const _halted = {json.dumps(_PULL_HALT)};\n"
         f"{_token_decl(script)}\n"
         f"console.log(JSON.stringify(!!({_halt_record_guard(script)})));\n"
@@ -74,21 +79,26 @@ def _guard_opens_on_refire(script: str) -> bool:
     return json.loads(out.stdout)
 
 
-def _assert_pull_halt_is_recorded(script: str) -> None:
+def _assert_pull_halt_precedes_the_commit(script: str) -> None:
     pull = script.index(NO_READY_LITERAL)
     ret = script.rindex("return { arm:")
     assert pull < script.index(_COMMIT_CALL) < ret
-    assert _guard_opens_on_refire(script)
 
 
-@pytest.mark.xfail(strict=True)
 def test_m_plus_pull_halt_composes_the_halt_record_commit_before_the_terminal_return(monkeypatch):
-    _assert_pull_halt_is_recorded(_compose(monkeypatch, launcher_child=False))
+    script = _compose(monkeypatch, launcher_child=False)
+    _assert_pull_halt_precedes_the_commit(script)
+    assert _guard_opens_on_refire(script, args={**_REFIRE_ARGS, "runToken": _TOKEN})
+    assert not _guard_opens_on_refire(script, args=_REFIRE_ARGS)
 
 
-@pytest.mark.xfail(strict=True)
 def test_launcher_child_pull_halt_composes_the_halt_record_commit_with_a_resolvable_token(monkeypatch):
-    _assert_pull_halt_is_recorded(_compose(monkeypatch, launcher_child=True))
+    script = _compose(monkeypatch, launcher_child=True)
+    _assert_pull_halt_precedes_the_commit(script)
+    staged = {"handle": {}, "text": "", "runToken": _TOKEN}
+    assert _guard_opens_on_refire(script, args=_REFIRE_ARGS, staged_inline=staged)
+    assert _guard_opens_on_refire(script, args={**_REFIRE_ARGS, "runToken": _TOKEN})
+    assert not _guard_opens_on_refire(script, args=_REFIRE_ARGS)
 
 
 def _record_dir(tmp_path: Path, stage: str = "minted") -> Path:
@@ -104,7 +114,6 @@ def _refusal_result() -> dict:
     return {"halted_by": dict(_PULL_HALT), "halt_commit": None, "sizing": _SIZING, "run_id": "run-1"}
 
 
-@pytest.mark.xfail(strict=True)
 def test_a_returned_refusal_halt_stamps_the_stage_halted_and_writes_the_marker(tmp_path):
     rd = _record_dir(tmp_path)
     marker = land_returned_halt(rd, _refusal_result(), launched_at=time.time() - 60)
@@ -113,7 +122,6 @@ def test_a_returned_refusal_halt_stamps_the_stage_halted_and_writes_the_marker(t
     assert json.loads((rd / "run-stage.json").read_text(encoding="utf-8"))["stage"] == "halted"
 
 
-@pytest.mark.xfail(strict=True)
 def test_a_halt_marker_newer_than_the_launch_is_left_untouched(tmp_path):
     rd = _record_dir(tmp_path)
     marker = rd / "halted.json"
@@ -123,3 +131,31 @@ def test_a_halt_marker_newer_than_the_launch_is_left_untouched(tmp_path):
     assert land_returned_halt(rd, _refusal_result(), launched_at=launched_at) is None
     assert marker.read_bytes() == before
     assert json.loads((rd / "run-stage.json").read_text(encoding="utf-8"))["stage"] == "minted"
+
+
+def test_watch_terminal_branch_lands_the_returned_halt(tmp_path, monkeypatch):
+    from coordinator_core import workflow_watch
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    rd = ask_contract.record_dir(tmp_path, "run-1")
+    rd.mkdir(parents=True)
+    (rd / "run-stage.json").write_text(json.dumps({"stage": "minted", "session_id": None}), encoding="utf-8")
+    sub_dir = tmp_path / ask_contract.RUN_DIR_ROOT / "run-1"
+    sub_dir.mkdir(parents=True)
+    (sub_dir / "submission.json").write_text(
+        json.dumps({"run_id": "run-1", "script_path": "scripts/wf.js", "sizing_rel": _SIZING, "submitted_at": 1.0}),
+        encoding="utf-8",
+    )
+    journal = tmp_path / "runs" / "wf_1" / "journal.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text("", encoding="utf-8")
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_text(
+        f"<task-notification><task-id>t1</task-id><status>completed</status>"
+        f"<result>{json.dumps(_refusal_result())}</result></task-notification>\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    assert workflow_watch._watch(str(transcript), str(journal), "t1", 0.01, 5.0, script_path="scripts/wf.js") == 0
+    assert json.loads((rd / "halted.json").read_text(encoding="utf-8"))["halted"] == "refusal"
+    assert json.loads((rd / "run-stage.json").read_text(encoding="utf-8"))["stage"] == "halted"
