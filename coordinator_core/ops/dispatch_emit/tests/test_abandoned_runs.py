@@ -616,3 +616,26 @@ def test_run_with_stale_owning_workflow_journal_is_still_reaped(bare, tmp_path, 
     out = _reap(bare)
 
     assert out["reaped"] == [run_id]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_run_ids_filter_reaps_only_the_named_run(repo):
+    """example-retrieval-repo-8f 2026-11-01: a run_ids filter was ignored and the dry run listed the whole sweep."""
+    out = _reap(repo, dry_run=True, run_ids=[STALE])
+    assert out["reaped"] == [STALE]
+    assert all(s["run_id"] != STALE2 for s in out["skipped"])
+
+
+def test_run_ids_must_be_a_non_empty_list_of_strings(repo):
+    assert "error" in _reap(repo, run_ids="x")
+    assert "error" in _reap(repo, run_ids=[])
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_stale_run_held_by_a_live_owner_is_never_reaped(repo, monkeypatch):
+    """A long stage stamps nothing; a live owner with a non-terminal stage keeps the run."""
+    monkeypatch.setattr(ar, "run_owner_holds", lambda root, r: r == STALE)
+    out = _reap(repo, dry_run=True)
+    assert STALE not in out["reaped"] and STALE2 in out["reaped"]

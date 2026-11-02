@@ -1956,6 +1956,9 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
 
 _REGISTRY: Dict[str, Callable] = {}
 
+# Descriptive only: read by contract.op_contract, never by dispatch (no params pass-through).
+_PARAMS_SCHEMA: Dict[str, dict] = {}
+
 
 def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     """Return the registered handler callable for *name*, or None if not registered.
@@ -2020,7 +2023,11 @@ def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
     return handler
 
 
-def register_op(name: str, handler: Optional[Callable] = None) -> Callable:
+def register_op(
+    name: str,
+    handler: Optional[Callable] = None,
+    params_schema: Optional[dict] = None,
+) -> Callable:
     """Register a JSON-RPC method handler in the op-registry.
 
     Supports two calling forms:
@@ -2046,9 +2053,16 @@ def register_op(name: str, handler: Optional[Callable] = None) -> Callable:
     are offloaded to asyncio.to_thread (thread-pool executor) so the event loop stays
     live for other partitions while sync work runs — do NOT add blocking I/O to async
     handlers without wrapping it in asyncio.to_thread at the call site (AC-3 Gap-3).
+
+    ``params_schema`` (optional JSON-Schema dict) is descriptive metadata for the op
+    contract; dispatch never reads it.
     """
     def _decorator(fn: Callable) -> Callable:
         _REGISTRY[name] = fn
+        if params_schema is not None:
+            _PARAMS_SCHEMA[name] = params_schema
+        else:
+            _PARAMS_SCHEMA.pop(name, None)
         _log().debug("coordinator_core.ipc: registered op %r", name)
         return fn
 

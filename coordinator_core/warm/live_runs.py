@@ -17,7 +17,9 @@ from coordinator_core.session import record_homes
 # A run-stage.json whose last_activity_at is older than this is abandoned, not live.
 FRESHNESS_WINDOW = timedelta(minutes=30)
 
-_TERMINAL_STAGES = frozenset({"halted", "complete"})
+# `landed` is terminal too (orphan_adopt agrees): a hand-landed run left at `landed` with fresh
+# activity otherwise blocks every warm stop for 30 minutes.
+_TERMINAL_STAGES = frozenset({"halted", "complete", "landed"})
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,20 @@ def run_is_live(
         return False
     cutoff = (now or datetime.now(timezone.utc)) - window
     return _live_stage(data, cutoff) is not None
+
+
+def run_owner_holds(repo_root: Path, run_id: str) -> bool:
+    """True when the run's stage is non-terminal and its owning session is live, whatever the age
+    of `last_activity_at`. A long stage (an executor, a review) stamps nothing for its whole length,
+    so freshness alone reads a live run as abandoned. This is the reaper's bar, which is stricter
+    than run_is_live, because reaping a live run is not undone by a refire."""
+    data = _read_stage(Path(record_homes.home_dir(str(Path(repo_root)), "warp")) / run_id / "run-stage.json")
+    if data is None:
+        return False
+    stage = data.get("stage")
+    if not isinstance(stage, str) or not stage or stage in _TERMINAL_STAGES:
+        return False
+    return _owner_live(data.get("session_id"))
 
 
 def find_live_runs(

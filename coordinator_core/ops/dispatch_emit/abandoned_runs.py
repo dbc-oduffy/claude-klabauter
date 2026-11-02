@@ -2,7 +2,7 @@
 record dirs of ask runs that died before any terminal or halted commit, and the stranded plan,
 handoff, sidecar, delivery note or sizing of a run whose record dir already landed.
 
-Params: ``{}`` or ``{"dry_run": bool}``.
+Params: ``{}``, ``{"dry_run": bool}``, ``{"run_ids": [str]}`` (reap only those; combinable with dry_run).
 Reply: ``{ok, reaped: [run_id], sizings: [rel], artifacts: {run_id: [rel]}, committed_sha | null,
 skipped: [{run_id, reason, path?}]}``.
 
@@ -33,7 +33,7 @@ from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_chan
 from coordinator_core.ops.dispatch_emit.halted_run import _STAMP, HALTED_FILE, STATUS_RESUMED
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.session.record_homes import home_dir
-from coordinator_core.warm.live_runs import run_is_live
+from coordinator_core.warm.live_runs import run_is_live, run_owner_holds
 
 OP_NAME = "dispatch.reap_abandoned_runs"
 HALTED_KIND = "abandoned"
@@ -229,6 +229,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         return {"error": f"{OP_NAME} requires repo_root"}
     params = params if isinstance(params, dict) else {}
+    wanted = params.get("run_ids")
+    if wanted is not None and not (isinstance(wanted, list) and wanted and all(isinstance(r, str) and r for r in wanted)):
+        return {"error": f"{OP_NAME}: run_ids must be a non-empty list of run id strings"}
     root = main_worktree_root(Path(repo_root))
     base: dict = {"ok": True, "reaped": [], "sizings": [], "committed_sha": None, "skipped": []}
 
@@ -300,6 +303,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         late_written=late_written,
         artifact_runs=artifact_runs,
     )
+    if wanted is not None:
+        reaped = [r for r in reaped if r in set(wanted)]
+        run_ids &= set(wanted)
+    # Asked only of runs already selected, so a call with nothing to reap pays no liveness probe.
+    owner_held = {r for r in reaped if run_owner_holds(root, r)}
+    reaped = [r for r in reaped if r not in owner_held]
+    workflow_live |= owner_held
     base["skipped"] = [
         {"run_id": r, "reason": "live-workflow" if r in workflow_live else "live-or-recent"}
         for r in sorted(run_ids)

@@ -675,8 +675,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     if args.describe:
         if args.op is None:
             parser.error("--describe requires <op>")
-        import inspect
-
+        from coordinator_core.contract.op_contract import build_contract
         from coordinator_core.ipc import get_op_handler
 
         try:
@@ -685,13 +684,11 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             handler = None
         if handler is None:
             _fatal_stderr(f"--describe: op {args.op!r} is not registered (see --list)")
-        doc = inspect.getdoc(handler) or inspect.getdoc(inspect.unwrap(handler))
-        if doc is None or "module docstring" in doc or "\n" not in doc.strip():
-            mod = sys.modules.get(getattr(inspect.unwrap(handler), "__module__", ""))
-            mod_doc = inspect.getdoc(mod) if mod is not None else None
-            if mod_doc:
-                doc = f"{doc}\n\n{mod_doc}" if doc else mod_doc
-        sys.stdout.write((doc or f"{args.op}: handler has no docstring") + "\n")
+        try:
+            contract = build_contract(args.op)
+        except LookupError as exc:
+            _fatal_stderr(f"--describe: no contract for op {args.op!r}: {exc} (see --list)")
+        sys.stdout.write(json.dumps(contract.to_dict(), indent=2, sort_keys=True) + "\n")
         sys.stdout.flush()
         raise SystemExit(0)
 

@@ -148,6 +148,13 @@ def test_terminal_stage_is_not_live_even_with_fresh_journal(tmp_path):
     assert not live_runs.run_is_live(repo, "done", now=NOW)
 
 
+def test_landed_stage_is_not_live_even_with_fresh_journal(tmp_path):
+    repo, home = tmp_path / "r1", tmp_path / "home"
+    _session_run(repo, "shipped", "landed", 1)
+    _journal(home, repo, "sess1", "wf_l.json", "shipped", 1)
+    assert not live_runs.run_is_live(repo, "shipped", now=NOW)
+
+
 def test_missing_record_or_session_id_is_not_live(tmp_path):
     repo = tmp_path / "r1"
     assert not live_runs.run_is_live(repo, "ghost", now=NOW)
@@ -213,3 +220,21 @@ def test_owner_liveness_is_checked_once_per_session_per_call(tmp_path, monkeypat
 
     assert len(got) == 5
     assert sorted(calls) == ["gone", "sess1"]
+
+
+def test_owner_holds_a_stale_non_terminal_run_while_the_owner_lives(tmp_path, monkeypatch):
+    repo = tmp_path / "r1"
+    _session_run(repo, "long", "staged", 120)
+    monkeypatch.setattr(live_runs, "_owner_live", lambda sid, memo=None: True)
+    assert live_runs.run_owner_holds(repo, "long")
+    assert not live_runs.run_is_live(repo, "long", now=NOW)
+
+
+def test_owner_does_not_hold_a_terminal_or_ownerless_run(tmp_path, monkeypatch):
+    repo = tmp_path / "r1"
+    _session_run(repo, "done", "landed", 120)
+    monkeypatch.setattr(live_runs, "_owner_live", lambda sid, memo=None: True)
+    assert not live_runs.run_owner_holds(repo, "done")
+    monkeypatch.setattr(live_runs, "_owner_live", lambda sid, memo=None: False)
+    _session_run(repo, "dead", "staged", 1)
+    assert not live_runs.run_owner_holds(repo, "dead")
