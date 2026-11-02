@@ -582,8 +582,11 @@ def _freeze_diff_worktree(
     diff_argv = ["diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--", *(_git_pathspec(p) for p in paths)]
     dr = _git(diff_argv, cwd=repo_root)
     if not dr.ok:
+        # Trap: git can exit non-zero with empty stderr (example-stats-repo 2026-11-01 got a bare base), so
+        # the exit code is the only fact left; never drop it.
         raise ValueError(
-            f"git diff failed while freezing worktree base {base!r}: {dr.stderr.strip()}"
+            f"git diff failed while freezing worktree base {base!r} over {len(paths)} path(s): "
+            f"exit {dr.returncode}: {dr.stderr.strip() or '(no stderr)'}"
         )
     diff_text = dr.stdout
 

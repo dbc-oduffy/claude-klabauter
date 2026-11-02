@@ -44,6 +44,7 @@ TABLE = [
     SimpleNamespace(pid=3, private_bytes=500 * MB),
 ]
 CMDLINE_CALLS: list = []
+CREATED = 1000.0
 
 
 def _cmdline(pid):
@@ -57,6 +58,8 @@ def _run(argv, **kw):
     kw.setdefault("cache_host_fn", _cache())
     kw.setdefault("proc_table_fn", lambda: TABLE)
     kw.setdefault("cmdline_fn", _cmdline)
+    kw.setdefault("create_time_fn", lambda p: CREATED)
+    kw.setdefault("image_fn", lambda p: "python.exe")
     CMDLINE_CALLS.clear()
     return mod.main(argv, platform="win32", **kw)
 
@@ -73,7 +76,7 @@ def _admission(tmp_path, *lines):
 
 
 def _start(pid, peak_mb=None, session="s", run="r"):
-    line = {"phase": "START", "session_id": session, "run": run, "pids": [pid]}
+    line = {"phase": "START", "session_id": session, "run": run, "pids": [pid], "create_time": CREATED}
     if peak_mb is not None:
         line["declared_peak_mb"] = peak_mb
     return line
@@ -90,7 +93,9 @@ def test_reserved_sums_live_unended_starts(tmp_path):
         _start(14, 1000, run="e"),
     )
     rss = {10: 1024.0, 12: 1024.0, 14: 5000.0}
-    got = host.reserved_bytes(path, rss_fn=lambda p: rss[p], alive_fn=lambda p: p != 12)
+    got = host.reserved_bytes(
+        path, rss_fn=lambda p: rss[p], alive_fn=lambda p: p != 12, create_time_fn=lambda p: CREATED,
+    )
     assert got == 3072 * 1024 * 1024
 
 
@@ -151,6 +156,37 @@ def test_recorded_peak_keeps_max_and_drives_admit(tmp_path, capsys):
     capsys.readouterr()
     assert _run(base) == 0
     assert "peak=3.0GiB" in capsys.readouterr().out
+
+
+def test_reservation_flag_prints_per_job_and_total_exited_adds_zero(tmp_path, capsys):
+    path = _admission(
+        tmp_path,
+        _start(10, 4096, run="a"),
+        _start(11, 8192, run="b"),
+        _start(12, 2048, run="c"),
+        {"phase": "END", "session_id": "s", "run": "c", "pids": []},
+    )
+    rss = {10: 1024.0, 11: 9000.0, 12: 0.0}
+    kw = dict(rss_fn=lambda p: rss[p], alive_fn=lambda p: p != 11)
+    assert _run(["--reservation", "--admission-file", path, "--json"], **kw) == 0
+    res = json.loads(capsys.readouterr().out)["reservation"]
+    assert [(j["pid"], j["reserved_gib"]) for j in res["jobs"]] == [(10, 3.0)] and res["total_gib"] == 3.0
+    kw["alive_fn"] = lambda p: p == 11 or p == 10
+    assert _run(["--reservation", "--admission-file", path], **kw) == 0
+    out = capsys.readouterr().out
+    assert "Reservation total: 3.0 GiB" in out and "ADMIT" not in out
+    kw["rss_fn"] = lambda p: 0.0
+    assert _run(["--reservation", "--admission-file", path, "--json"], **kw) == 0
+    res = json.loads(capsys.readouterr().out)["reservation"]
+    assert res["total_gib"] == 12.0 and len(res["jobs"]) == 2
+
+
+def test_reservation_with_admit_peak_keeps_hold_exit_4(tmp_path, capsys):
+    path = _admission(tmp_path, _start(10, 16 * 1024))
+    kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True)
+    rc = _run(["--reservation", "--admit-peak", "25", "--admission-file", path], **kw)
+    out = capsys.readouterr().out
+    assert rc == 4 and "Reservation total: 16.0 GiB" in out and "reserved=16.0GiB" in out
 
 
 def test_admit(capsys):

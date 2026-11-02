@@ -1076,3 +1076,14 @@ def test_worktree_generic_slice_id_still_refuses_on_changed_content(tmp_path: Pa
     assert second["error"] is not None
     assert "already names a frozen diff" in second["error"]
     assert not list(_diffs_dir(tmp_path).glob("*.attempt*"))
+
+
+def test_worktree_diff_failure_names_the_exit_code_when_stderr_is_empty(tmp_path, monkeypatch):
+    """example-stats-repo 2026-11-01: the freeze error ended at the base, carrying no stderr and no exit code."""
+    from coordinator_core.ops.ceremony.git_native import GitResult
+
+    monkeypatch.setattr(
+        review_freeze_diff, "_git", lambda argv, cwd: GitResult(returncode=128, stdout="", stderr="")
+    )
+    with pytest.raises(ValueError, match=r"exit 128: \(no stderr\)"):
+        review_freeze_diff._freeze_diff_worktree(tmp_path, "f9f0ae15d8", "s1", ["a.py"])

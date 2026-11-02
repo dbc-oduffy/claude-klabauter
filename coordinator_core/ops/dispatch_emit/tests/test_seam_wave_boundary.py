@@ -71,6 +71,20 @@ def test_two_plan_run_emits_the_leg_with_the_pinned_params():
     assert "'seam drift at wave ' + n + (finding[p] ? ': ' + finding[p] : '')" in script
 
 
+def test_a_spine_owned_row_never_puts_the_spine_in_the_leg_plans():
+    waves = [
+        [_row("P1-C1", ["a.py"], P1), _row("G0", ["g.py"])],
+        [_row("P2-C1", ["b.py"], P2, reads=["a.py"])],
+    ]
+    script = _compose(waves)
+    assert f'const _seamPlans = ["{P1}", "{P2}"];' in script
+
+
+def test_a_run_whose_rows_are_all_spine_owned_emits_no_leg():
+    waves = [[_row("G0", ["g.py"])], [_row("G1", ["h.py"], reads=["g.py"])]]
+    assert "plan.seam_record" not in _compose(waves)
+
+
 def test_only_the_row_with_something_to_falsify_waits_on_the_leg():
     script = _compose(_two_plan_waves())
     assert "_seamGates[1]" in _registration(script, "P2-C1")

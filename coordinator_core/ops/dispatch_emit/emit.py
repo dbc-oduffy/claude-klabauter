@@ -273,6 +273,7 @@ import ast
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import sys
@@ -5221,7 +5222,14 @@ def seam_leg_for(
     if seam is None or not run_base_sha:
         return None
     flat = [(n, row) for n, wave in enumerate(waves, start=1) for row in wave]
-    plans = sorted({p for _, row in flat if (p := _plan_of(row_plans.get(row.id), plan_path))})
+    # plan.seam_record records only beside docs/plans/ plans: an inventory spine (the fallback
+    # owner of a row carrying no Spec line) is not one, and naming it REFUSES every wave leg.
+    plans = sorted({
+        p for _, row in flat
+        if (p := _plan_of(row_plans.get(row.id), plan_path)) and posixpath.dirname(p) == "docs/plans"
+    })
+    if not plans:
+        return None
     has_edge = any(seam.plan_edges.get(p) for p in plans)
     if not (len(plans) > 1 or has_edge or seam.capabilities or len(waves) > 1):
         return None
